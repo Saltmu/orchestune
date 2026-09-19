@@ -155,6 +155,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "replan.snapshot",
             "status_snapshot",
             "symbol_verification",
+            "task_branch_resolution",
         }
     ),
     1: frozenset(

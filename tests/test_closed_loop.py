@@ -242,6 +242,9 @@ class DummyGitHub:
     ) -> list[PrRecord]:
         return list(self.prs.values())
 
+    def branch_exists(self, branch: str) -> bool:
+        return branch in self.prs
+
     def list_prs(
         self, state: str = "open", limit: int = 1000, paginate_files: bool = False
     ) -> list[PrRecord]:
@@ -374,6 +377,7 @@ def make_agent_scenario(dummy_github: DummyGitHub):
                 closes_issue_numbers=(task.issue_number,),
                 review_decision="",
                 is_ci_passing=False,  # CI failing initially
+                is_cross_repository=False,
             )
             dummy_github.add_comment(
                 task.issue_number,
@@ -410,6 +414,7 @@ def make_agent_scenario(dummy_github: DummyGitHub):
                 closes_issue_numbers=(task.issue_number,),
                 review_decision="",
                 is_ci_passing=True,  # Now CI passes
+                is_cross_repository=False,
             )
             dummy_github.add_comment(
                 task.issue_number,
@@ -671,6 +676,7 @@ def test_closed_loop_dag_recomputation_serialization():
                 closes_issue_numbers=(task.issue_number,),
                 review_decision="",
                 is_ci_passing=True,
+                is_cross_repository=False,
             )
             dummy_github.add_comment(
                 task.issue_number,

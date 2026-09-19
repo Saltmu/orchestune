@@ -594,6 +594,7 @@ class TestPreventDuplicateSessions:
                 closes_issue_numbers=(),
                 review_decision="",
                 is_ci_passing=True,
+                is_cross_repository=False,
             )
         ]
 
@@ -702,13 +703,13 @@ class TestPreventDuplicateSessions:
 
         def ls_remote_result(command, **_kwargs):
             stdout = (
-                "updated-sha\trefs/heads/claude/issue-1-human-authored\n"
+                "updated-sha\trefs/heads/codex/issue-1-task-1\n"
                 if command
                 == [
                     "git",
                     "ls-remote",
                     "origin",
-                    "refs/heads/claude/issue-1-human-authored",
+                    "refs/heads/codex/issue-1-task-1",
                 ]
                 else ""
             )
@@ -720,13 +721,15 @@ class TestPreventDuplicateSessions:
         fake_forge.list_open_prs.return_value = [
             PrRecord(
                 number=101,
-                head_ref="claude/issue-1-human-authored",
+                head_ref="codex/issue-1-task-1",
                 changed_files=(),
                 review_decision="",
                 is_ci_passing=False,
                 closes_issue_numbers=(1,),
+                is_cross_repository=False,
             )
         ]
+        fake_forge.branch_exists.return_value = False
         fake_forge.add_label.reset_mock(side_effect=True)
         mock_add_label = fake_forge.add_label
         fake_forge.remove_label.reset_mock(side_effect=True)
@@ -758,7 +761,7 @@ class TestPreventDuplicateSessions:
                 "git",
                 "ls-remote",
                 "origin",
-                "refs/heads/claude/issue-1-human-authored",
+                "refs/heads/codex/issue-1-task-1",
             ],
             cwd=None,
             capture_output=True,
@@ -813,6 +816,7 @@ class TestPreventDuplicateSessions:
                 review_decision="",
                 is_ci_passing=False,
                 closes_issue_numbers=(1,),
+                is_cross_repository=False,
             )
         ]
         fake_forge.add_label.reset_mock(side_effect=True)

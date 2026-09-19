@@ -309,15 +309,11 @@ _PRESELECTION_REASONS = {
 
 
 def _duplicate_detail(ctx: CycleContext, issue_number: int) -> str:
-    duplicate = next(
-        (
-            pr
-            for pr in ctx.pull_requests()
-            if issue_number in pr.closes_issue_numbers
-            or pr.head_ref == ctx.canonical_branch(issue_number)
-        ),
-        None,
-    )
+    # A duplicate skip is authorized by this same verified resolution. Do not
+    # rescan raw PRs just to enrich diagnostics: that would reintroduce unsafe
+    # closed/fork/shape-only candidates as if they were operational duplicates.
+    resolution = ctx.branch_resolution(issue_number)
+    duplicate = None if resolution is None else resolution.pr
     return "" if duplicate is None else f"PR #{duplicate.number}"
 
 

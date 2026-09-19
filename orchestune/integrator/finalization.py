@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 from orchestune.forge import Forge
 from orchestune.integrator.proofs import TaskIntegrationProof
+from orchestune.task_branch_resolution import ResolutionSource, is_commit_oid
 
 RECEIPT_MARKER = "<!-- orchestune:task-integration-proof -->"
-_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 def ensure_integration_receipt(
@@ -40,6 +39,7 @@ def _receipt_payload(proof: TaskIntegrationProof, base_branch: str) -> dict[str,
         "subtask_id": proof.subtask_id,
         "branch_name": proof.branch_name,
         "source_sha": proof.source_sha,
+        "source": proof.source.value,
         "base_branch": base_branch.removeprefix("origin/"),
     }
 
@@ -57,7 +57,6 @@ def find_integration_receipt(
     forge: Forge,
     issue_number: int,
     subtask_id: str,
-    branch_name: str,
     base_branch: str,
 ) -> TaskIntegrationProof | None:
     """Return an exact, syntactically valid proof receipt for a child Issue."""
@@ -73,17 +72,26 @@ def find_integration_receipt(
         if (
             payload.get("issue_number") != issue_number
             or payload.get("subtask_id") != subtask_id
-            or payload.get("branch_name") != branch_name
             or payload.get("base_branch") != base_branch.removeprefix("origin/")
         ):
             continue
         source_sha = payload.get("source_sha")
-        if isinstance(source_sha, str) and _SHA_PATTERN.fullmatch(source_sha):
+        if is_commit_oid(source_sha):
+            stored_branch = payload.get("branch_name")
+            if not isinstance(stored_branch, str) or not stored_branch:
+                continue
+            try:
+                source = ResolutionSource(
+                    payload.get("source", ResolutionSource.CANONICAL.value)
+                )
+            except ValueError:
+                continue
             return TaskIntegrationProof(
                 issue_number=issue_number,
                 subtask_id=subtask_id,
-                branch_name=branch_name,
+                branch_name=stored_branch,
                 source_sha=source_sha,
+                source=source,
             )
     return None
 

@@ -294,6 +294,7 @@ class TestBranchStacking:
                         changed_files=("src/a.py",),
                         review_decision="APPROVED",
                         is_ci_passing=True,
+                        is_cross_repository=False,
                     )
                 ],
             ),
@@ -391,6 +392,7 @@ class TestBranchStacking:
                         changed_files=("src/a.py",),
                         review_decision="APPROVED",
                         is_ci_passing=True,
+                        is_cross_repository=False,
                     )
                 ],
             ),
@@ -481,6 +483,7 @@ class TestBranchStacking:
                         changed_files=(),
                         review_decision="APPROVED",
                         is_ci_passing=True,
+                        is_cross_repository=False,
                     )
                 ],
             ),
@@ -602,6 +605,7 @@ class TestBranchStacking:
                         changed_files=(),
                         review_decision="APPROVED",
                         is_ci_passing=True,
+                        is_cross_repository=False,
                     )
                 ],
             ),
@@ -687,6 +691,7 @@ class TestBranchStacking:
                         changed_files=("src/a.py",),
                         review_decision="APPROVED",
                         is_ci_passing=True,
+                        is_cross_repository=False,
                     ),
                     PrRecord(
                         number=11,
@@ -694,6 +699,7 @@ class TestBranchStacking:
                         changed_files=("src/b.py",),
                         review_decision="APPROVED",
                         is_ci_passing=True,
+                        is_cross_repository=False,
                     ),
                 ],
             ),
@@ -775,6 +781,7 @@ class TestBranchStacking:
                         changed_files=("src/b.py",),
                         review_decision="APPROVED",
                         is_ci_passing=True,  # 依存先BのPRはCI通過済み
+                        is_cross_repository=False,
                     )
                 ],
             ),
@@ -896,6 +903,7 @@ class TestBranchStacking:
                         changed_files=(),
                         review_decision="APPROVED",
                         is_ci_passing=True,
+                        is_cross_repository=False,
                     )
                 ],
             ),
@@ -908,6 +916,7 @@ class TestBranchStacking:
                         changed_files=(),
                         review_decision="APPROVED",
                         is_ci_passing=True,
+                        is_cross_repository=False,
                     )
                 ],
             ),
@@ -1018,6 +1027,7 @@ class TestBranchStacking:
                         changed_files=(),
                         review_decision="CHANGES_REQUESTED",  # ここがポイント
                         is_ci_passing=True,
+                        is_cross_repository=False,
                     )
                 ],
             ),

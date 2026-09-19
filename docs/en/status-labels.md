@@ -205,9 +205,10 @@ independently of the lifecycle above (see "External lock" below).
   remote branch or PR that Orchestune does not manage (tasks already
   `status:done` are excluded).
   - Exception: for a task that is currently **`status:blocked`**, an
-    overlap with the exact canonical branch that
-    `orchestune.branch_naming.build_task_branch_name()` generates with its
-    default prefix for its own direct `depends_on` entry does not count
+    overlap with the verified operational branch of its own direct
+    `depends_on` entry does not count. That branch is either the canonical
+    branch or the upstream PR head selected by the single resolver after
+    confirmed canonical absence
     ([#796](https://github.com/Saltmu/orchestune/issues/796)) — this
     is the same branch name `_build_pr_mappings()`'s `subtask_branch_map`
     and stacked launches actually use. The exemption does not apply to a

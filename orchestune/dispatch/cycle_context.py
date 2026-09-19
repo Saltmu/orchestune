@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from orchestune.branch_naming import build_task_branch_name
@@ -23,6 +24,13 @@ from orchestune.integrator.coordinator import (
 from orchestune.issue_parsing import find_children_by_parent
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
+from orchestune.task_branch_resolution import (
+    BranchCapability,
+    CanonicalBranchState,
+    TaskBranchResolution,
+    TaskBranchResolver,
+    probe_canonical_state,
+)
 
 
 def _dispatch_not_needed_review(
@@ -286,31 +294,48 @@ def _build_task_mappings(
 
 
 def _build_pr_mappings(
-    tasks_by_issue: dict, prs: list
-) -> tuple[dict, set[int], set[int], dict[int, str]]:
-    pr_by_branch = {pr.head_ref: pr for pr in prs}
+    tasks_by_issue: dict,
+    prs: list,
+    *,
+    canonical_state: Callable[[str], bool] | None = None,
+) -> tuple[
+    set[int],
+    set[int],
+    dict[int, str],
+    dict[int, TaskBranchResolution],
+]:
     ci_passed_pr_issue_numbers: set[int] = set()
     changes_requested_issue_numbers: set[int] = set()
     branch_by_issue_number: dict[int, str] = {}
+    resolutions: dict[int, TaskBranchResolution] = {}
+    resolver = TaskBranchResolver(prs)
 
     for task in tasks_by_issue.values():
         if not task.subtask_id:
             continue
-        branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
-        branch_by_issue_number[task.issue_number] = branch_name
+        canonical = build_task_branch_name(task.issue_number, task.subtask_id)
+        has_candidate = resolver.has_verified_candidate(
+            task.issue_number, task.subtask_id
+        )
+        state = CanonicalBranchState.INDETERMINATE
+        if has_candidate and canonical_state is not None:
+            state = probe_canonical_state(canonical, canonical_state)
+        resolution = resolver.resolve(task.issue_number, task.subtask_id, state)
+        resolutions[task.issue_number] = resolution
+        branch_by_issue_number[task.issue_number] = resolution.branch_name
 
-        pr = pr_by_branch.get(branch_name)
-        if pr:
+        pr = resolution.pr
+        if pr and resolution.allows(BranchCapability.FETCH_MERGE):
             if pr.review_decision == "CHANGES_REQUESTED":
                 changes_requested_issue_numbers.add(task.issue_number)
             elif pr.is_ci_passing:
                 ci_passed_pr_issue_numbers.add(task.issue_number)
 
     return (
-        pr_by_branch,
         ci_passed_pr_issue_numbers,
         changes_requested_issue_numbers,
         branch_by_issue_number,
+        resolutions,
     )
 
 
@@ -333,11 +358,15 @@ def _build_cycle_context(
 
     prs = config.resolved_forge.list_open_prs(paginate_files=True)
     (
-        pr_by_branch,
         ci_passed_pr_issue_numbers,
         changes_requested_issue_numbers,
         branch_by_issue_number,
-    ) = _build_pr_mappings(tasks_by_issue, prs)
+        branch_resolutions_by_issue,
+    ) = _build_pr_mappings(
+        tasks_by_issue,
+        prs,
+        canonical_state=config.resolved_forge.branch_exists,
+    )
 
     return CycleContext(
         run_state=run_state,
@@ -350,8 +379,11 @@ def _build_cycle_context(
         changes_requested_issue_numbers=changes_requested_issue_numbers,
         branch_by_issue_number=branch_by_issue_number,
         prs=prs,
-        pr_by_branch=pr_by_branch,
+        # Compatibility-only constructor input. Operational PR identity is
+        # carried exclusively by the verified TaskBranchResolution.
+        pr_by_branch={},
         config=config,
+        branch_resolutions_by_issue=branch_resolutions_by_issue,
         not_needed_review_dispatcher=_dispatch_not_needed_review,
         issue_records_by_number={issue.number: issue for issue in all_issues},
         prior_parent_merge_hold_issue_numbers=prior_parent_merge_hold_issue_numbers,

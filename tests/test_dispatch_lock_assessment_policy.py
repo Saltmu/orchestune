@@ -29,6 +29,11 @@ from orchestune.dispatch.locks import (
 )
 from orchestune.dispatch.scoring import Task
 from orchestune.models import PrRecord
+from orchestune.task_branch_resolution import (
+    CanonicalBranchState,
+    TaskBranchResolution,
+    TaskBranchResolver,
+)
 
 
 def _task(
@@ -62,6 +67,7 @@ class _FakeLockDependencyView:
     tasks: dict[int, Task] = field(default_factory=dict)
     assessments: dict[int, DependencyAssessment | None] = field(default_factory=dict)
     branches: dict[int, str | None] = field(default_factory=dict)
+    resolutions: dict[int, TaskBranchResolution] = field(default_factory=dict)
 
     def task(self, issue_number: int) -> Task | None:
         return self.tasks.get(issue_number)
@@ -71,6 +77,9 @@ class _FakeLockDependencyView:
 
     def canonical_branch(self, issue_number: int) -> str | None:
         return self.branches.get(issue_number)
+
+    def branch_resolution(self, issue_number: int) -> TaskBranchResolution | None:
+        return self.resolutions.get(issue_number)
 
 
 class TestDirectDependencyCanonicalBranches:
@@ -184,6 +193,38 @@ class TestDirectDependencyCanonicalBranches:
             branches={2: "recovered/issue-2-dep-a"},
         )
         assert _direct_dependency_canonical_branches(task, view) == frozenset()
+
+    def test_includes_verified_upstream_fallback_branch(self):
+        task = _task(depends_on=("dep-a",))
+        dep_task = _task(issue_number=2, subtask_id="dep-a")
+        fallback_branch = "codex/issue-2-dep-a"
+        fallback_pr = PrRecord(
+            number=22,
+            head_ref=fallback_branch,
+            changed_files=(),
+            state="OPEN",
+            is_cross_repository=False,
+            closes_issue_numbers=(2,),
+        )
+        resolution = TaskBranchResolver([fallback_pr]).resolve(
+            dep_task.issue_number,
+            dep_task.subtask_id,
+            canonical_state=CanonicalBranchState.ABSENT,
+        )
+        view = _FakeLockDependencyView(
+            tasks={2: dep_task},
+            assessments={
+                1: DependencyAssessment(
+                    resolved=(AssessedDependency(2, DependencyState.WAITING),)
+                )
+            },
+            branches={2: fallback_branch},
+            resolutions={2: resolution},
+        )
+
+        assert _direct_dependency_canonical_branches(task, view) == frozenset(
+            {fallback_branch}
+        )
 
     def test_includes_only_the_matching_branch_among_multiple_dependencies(self):
         task = _task(depends_on=("dep-a", "dep-b"))

@@ -25,6 +25,7 @@ from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.dispatch.state import ActiveWorktree
 from orchestune.models import IssueRecord, PrRecord
+from orchestune.task_branch_resolution import TaskBranchResolution
 from orchestune.task_metadata import CycleTask, TaskMetadata
 
 
@@ -80,6 +81,8 @@ class CycleQueries(Protocol):
     def is_ci_passed(self, issue_number: int) -> bool: ...
 
     def canonical_branch(self, issue_number: int) -> str | None: ...
+
+    def branch_resolution(self, issue_number: int) -> TaskBranchResolution | None: ...
 
     def launch_fact(self, issue_number: int) -> LaunchFact | None: ...
 

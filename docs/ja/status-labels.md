@@ -201,10 +201,11 @@ stateDiagram-v2
 - 付与条件: タスクのfootprintが、Orchestune管理外のリモートブランチ・PRの
   変更ファイルと重なる場合（`status:done`のタスクは対象外）。
   - ただし、**`status:blocked`のタスク自身**の直接の`depends_on`が指す
-    依存元タスクの正規ブランチ（`orchestune.branch_naming.build_task_branch_name`
-    が既定prefixで生成するブランチ名そのもの。`_build_pr_mappings`の
-    `subtask_branch_map`やスタッキング起動が実際に使うブランチと完全一致
-    する場合に限る）との重なりは対象外（[#796](https://github.com/Saltmu/orchestune/issues/796)）。
+    依存元タスクの検証済み運用ブランチ（正規ブランチ、または正規ブランチの
+    不在確認後に単一Resolverが選んだupstream PRのhead_ref）との重なりは
+    対象外（[#796](https://github.com/Saltmu/orchestune/issues/796)）。これは
+    `_build_pr_mappings`とスタッキング起動が実際に使うブランチと完全一致する
+    場合に限る。
     スタッキング（`_get_stack_eligible_tasks`）がbaseを割り当てるのは
     `status:blocked`のタスクだけなので、`status:queued`のタスク（本来は
     依存解決済みのはずだが、`QUEUED_WITH_UNRESOLVED_DEPENDENCIES`が
