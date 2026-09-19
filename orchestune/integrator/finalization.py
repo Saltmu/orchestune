@@ -57,7 +57,6 @@ def find_integration_receipt(
     forge: Forge,
     issue_number: int,
     subtask_id: str,
-    branch_name: str | None,
     base_branch: str,
 ) -> TaskIntegrationProof | None:
     """Return an exact, syntactically valid proof receipt for a child Issue."""
@@ -73,7 +72,6 @@ def find_integration_receipt(
         if (
             payload.get("issue_number") != issue_number
             or payload.get("subtask_id") != subtask_id
-            or (branch_name is not None and payload.get("branch_name") != branch_name)
             or payload.get("base_branch") != base_branch.removeprefix("origin/")
         ):
             continue

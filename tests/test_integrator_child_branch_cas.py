@@ -323,7 +323,6 @@ def test_receipt_from_a_different_author_is_not_accepted(fake_forge):
         fake_forge,
         proof.issue_number,
         proof.subtask_id,
-        proof.branch_name,
         "parent/issue-100",
     )
 
@@ -348,7 +347,6 @@ def test_receipt_oid_validation_is_case_consistent(fake_forge):
         fake_forge,
         proof.issue_number,
         proof.subtask_id,
-        proof.branch_name,
         "parent/issue-100",
     )
 
@@ -374,7 +372,6 @@ def test_receipt_embedded_in_a_trusted_comment_is_not_accepted(fake_forge):
         fake_forge,
         proof.issue_number,
         proof.subtask_id,
-        proof.branch_name,
         "parent/issue-100",
     )
 

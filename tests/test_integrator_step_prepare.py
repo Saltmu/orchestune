@@ -148,6 +148,7 @@ class TestUnparsableDoneTask:
         assert res["unparsable_done_issues"] == [7]
         integrator_env.add_comment.assert_called_once()
         assert integrator_env.add_comment.call_args[0][0] == 7
+        integrator_env.list_open_prs.assert_not_called()
 
     def test_flagged_alongside_valid_merged_task(self, integrator_env: IntegratorEnv):
         # subtask_idの取れるタスクが他に存在する場合は、そちらは通常通り統合しつつ、

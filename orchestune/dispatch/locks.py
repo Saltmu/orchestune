@@ -188,7 +188,9 @@ def _direct_dependency_canonical_branches(
     Codexレビュー対応(PR#797 P2): 既定prefixと食い違う任意の実行中branchは
     スタッキング取り込みの証拠にならないため除外しない。ただし#783の共通
     Resolverが正規branch不在と一意なupstream OPEN PRを検証し、FETCH_MERGE能力を
-    与えたfallback branchは実際のstacking baseなので除外対象に含める。
+    与えたfallback branchは実際のstacking baseなので除外対象に含める。過去の
+    LaunchFact branchと現在のresolutionが一致しなくなった場合（候補の曖昧化等）は
+    証拠を再構築できないため、意図的に除外せず外部lockへ倒す。
 
     `depends_on`が指す依存が1件でも未解決（親不明・曖昧・候補集合に見つからない
     等）の場合は、他の依存が解決済みでも一切除外しない。fail closedのまま、

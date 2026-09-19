@@ -46,6 +46,7 @@ class TestDryRun:
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
         assert integrator_env.run.call_count == 0
+        integrator_env.list_open_prs.assert_not_called()
 
 
 class TestCreateTempBranchFailure:

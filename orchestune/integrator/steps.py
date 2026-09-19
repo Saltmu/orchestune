@@ -78,7 +78,6 @@ def _retry_file_lock(lock_path, attempts: int = 3) -> Iterator[None]:
 
 class PrepareTasksStep(IntegrationComponent):
     def execute(self, ctx: IntegrationContext) -> IntegrationReport:
-        ctx.task_branch_resolver = TaskBranchResolver(ctx.forge.list_open_prs())
         sorted_done_tasks, ctx.unparsable_done_tasks = get_sorted_done_tasks(
             ctx.config.parent_issue_number,
             forge=ctx.config.forge,
@@ -104,6 +103,9 @@ class PrepareTasksStep(IntegrationComponent):
 
         if not ctx.active_done_tasks:
             return {"status": IntegrationStatus.NO_DONE_TASKS}
+
+        if ctx.config.apply:
+            ctx.task_branch_resolver = TaskBranchResolver(ctx.forge.list_open_prs())
 
         return {"status": IntegrationStatus.SUCCESS}
 
@@ -183,7 +185,6 @@ class RetryChildIssueCloseStep(IntegrationComponent):
             ctx.forge,
             task.issue_number,
             task.subtask_id,
-            None,
             ctx.base_branch,
         )
         if proof is None or not self._proof_reaches_parent(ctx, proof):
@@ -643,7 +644,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             }
 
     def _finalize_merged_child_tasks(self, ctx: IntegrationContext) -> set[str]:
-        """Finalize only children whose proven branch tip was safely removed."""
+        """Finalize children after persisting proof and applying deletion policy."""
         finalized: set[str] = set()
         tasks_by_subtask = {
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id

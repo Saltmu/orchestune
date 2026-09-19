@@ -67,8 +67,10 @@ class TaskBranchResolution:
         operational = (
             self.canonical_state is CanonicalBranchState.PRESENT
             if self.source is ResolutionSource.CANONICAL
-            else self.canonical_state is CanonicalBranchState.ABSENT
-            and self.pr is not None
+            else (
+                self.canonical_state is CanonicalBranchState.ABSENT
+                and self.pr is not None
+            )
         )
         if capability is BranchCapability.LINK_PR:
             return operational and self.pr is not None
