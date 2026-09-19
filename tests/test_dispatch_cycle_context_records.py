@@ -9,12 +9,8 @@ CONFLICT時は状態を一切変更しない。ここではAPI単体の整合性
 
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_context_state import (
     REASON_EXECUTION_MISMATCH,
     REASON_INVALID_LAUNCH,
@@ -25,61 +21,9 @@ from orchestune.dispatch.cycle_context_state import (
     REASON_UNKNOWN_ISSUE,
     RecordStatus,
 )
-from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.dispatch.state import RunState
 from orchestune.labels import StatusLabel
-from orchestune.models import Task
-
-_TMP = Path(tempfile.mkdtemp(prefix="orchestune-test-cycle-context-records-"))
-
-
-def _task(issue_number, **overrides):
-    defaults = dict(
-        issue_number=issue_number,
-        subtask_id=f"task-{issue_number}",
-        footprint=(),
-        symbols=(),
-        risk=False,
-        priority="medium",
-        progress_partial=False,
-        status_labels=(StatusLabel.QUEUED,),
-        created_at="2026-01-01T00:00:00Z",
-        issue_state="OPEN",
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
-
-
-def _active(issue_number, **overrides):
-    defaults = dict(
-        issue_number=issue_number,
-        branch=f"claude/issue-{issue_number}-task",
-        worktree_path=f"worktrees/w{issue_number}",
-        pid=1000 + issue_number,
-        started_at=1_700_000_000.0,
-        declared_footprint=(),
-    )
-    defaults.update(overrides)
-    return ActiveWorktree(**defaults)
-
-
-def _ctx(**overrides):
-    defaults = dict(
-        run_state=RunState(active_worktrees={}),
-        tasks_by_issue={},
-        dependency_resolution={},
-        ci_passed_pr_issue_numbers=set(),
-        changes_requested_issue_numbers=set(),
-        branch_by_issue_number={},
-        prs=[],
-        config=DispatcherConfig(
-            events_log_path=_TMP / "events.jsonl",
-            run_state_path=_TMP / "run_state.json",
-            worktree_root=_TMP / "worktrees",
-        ),
-    )
-    defaults.update(overrides)
-    return CycleContext(**defaults)
+from tests.dispatch_cycle_context_test_support import _active, _ctx, _task
 
 
 class TestRecordCompletion:

@@ -21,7 +21,6 @@ from orchestune.dispatch.gc.completion import (
     _finalize_not_needed_worktree,
     _is_worktree_complete,
 )
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
@@ -29,37 +28,9 @@ from orchestune.dispatch.targets import (
 )
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeRecord
+from tests.dispatch_gc_test_support import _active, _task
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
-
-
-def _active(**overrides):
-    defaults = dict(
-        issue_number=280,
-        branch="claude/issue-280-task-a",
-        worktree_path="worktrees/w1",
-        pid=111,
-        started_at=1_699_999_000.0,
-        declared_footprint=("src/foo.py",),
-    )
-    defaults.update(overrides)
-    return ActiveWorktree(**defaults)
-
-
-def _task(**overrides):
-    defaults = dict(
-        issue_number=280,
-        subtask_id="task-a",
-        footprint=("src/foo.py",),
-        symbols=(),
-        risk=False,
-        priority="medium",
-        progress_partial=False,
-        status_labels=("status:not-needed",),
-        created_at="2026-01-01T00:00:00+00:00",
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
 
 
 class TestFinalizeCompletedWorktree:

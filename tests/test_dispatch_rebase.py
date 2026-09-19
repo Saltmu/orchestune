@@ -7,7 +7,6 @@ git rebase実行（apply層）は`test_dispatch_rebase_git.py`へそれぞれ分
 """
 
 import subprocess
-from contextlib import ExitStack, contextmanager
 from dataclasses import fields
 from inspect import signature
 from unittest.mock import ANY, MagicMock, patch
@@ -24,47 +23,10 @@ from orchestune.dispatch.state import (
 )
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.models import PrRecord
-from tests.conftest import make_issue
-
-
-@contextmanager
-def _patch_gc_process_alive(*, return_value: bool):
-    """Patch every consumer split from the former dispatch_gc dependency."""
-    with ExitStack() as stack:
-        for target in (
-            "orchestune.dispatch.gc.is_process_alive",
-            "orchestune.dispatch.gc.completion.is_process_alive",
-            "orchestune.dispatch.gc.zombies.is_process_alive",
-            "orchestune.dispatch.execution_repair.is_process_alive",
-        ):
-            stack.enter_context(patch(target, return_value=return_value))
-        yield
-
-
-def _issue(
-    number,
-    labels=("status:queued",),
-    footprint=("src/foo.py",),
-    symbols=("foo.Foo",),
-    subtask_id="task-a",
-    depends_on=(),
-    created_at="2026-01-01T00:00:00+00:00",
-    parent_number=181,
-):
-    """`tests/conftest.py`の`make_issue`に、このファイルの旧テスト群が前提と
-    する`parent_number`（既定181）とtitleを合わせた薄いラッパー。"""
-    parent = {"number": parent_number} if parent_number is not None else None
-    return make_issue(
-        number,
-        title="t",
-        labels=labels,
-        footprint=footprint,
-        symbols=symbols,
-        subtask_id=subtask_id,
-        depends_on=depends_on,
-        created_at=created_at,
-        parent=parent,
-    )
+from tests.dispatch_test_support import make_footprint_issue as _issue
+from tests.dispatch_test_support import (
+    patch_gc_process_alive as _patch_gc_process_alive,
+)
 
 
 class TestRebaseContext:

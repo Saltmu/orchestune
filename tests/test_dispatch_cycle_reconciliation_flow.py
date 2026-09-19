@@ -6,7 +6,6 @@ blocked昇格・自己修復・footprint逸脱recompute後の自動復帰系を�
 """
 
 import subprocess
-from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from unittest.mock import ANY, patch
 
@@ -26,7 +25,6 @@ from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
 from orchestune.dispatch.locks import ExternalLockScanResult
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
@@ -37,56 +35,11 @@ from orchestune.dispatch.status_repair import (
 )
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeRecord
-from tests.conftest import make_issue
-
-
-def _task(**overrides):
-    defaults = dict(
-        issue_number=1,
-        subtask_id="task-a",
-        footprint=(),
-        symbols=(),
-        risk=False,
-        priority="medium",
-        progress_partial=False,
-        status_labels=("status:in-progress",),
-        created_at="2026-01-01T00:00:00+00:00",
-        depends_on=(),
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
-
-
-def _full_issue(
-    number,
-    labels=("status:queued",),
-    footprint=("src/foo.py",),
-    symbols=("foo.Foo",),
-    subtask_id="task-a",
-    depends_on=(),
-    created_at="2026-01-01T00:00:00+00:00",
-    parent_number=181,
-):
-    """`_issue()`より詳細なFootprint YAMLブロックを持つIssueRecordを作る。
-
-    `run_dispatch_cycle`をエンドツーエンドで駆動する系のテスト（旧
-    `test_dispatcher.py`の`TestRunDispatchCycle*`群）が要求するフィールド
-    （footprint/symbols/subtask_id/depends_on/parent_number）を持つため、
-    より単純な`_issue()`とは別名にし、`tests/conftest.py`の`make_issue`に
-    委譲する薄いラッパーにしている。
-    """
-    parent = {"number": parent_number} if parent_number is not None else None
-    return make_issue(
-        number,
-        title="t",
-        labels=labels,
-        footprint=footprint,
-        symbols=symbols,
-        subtask_id=subtask_id,
-        depends_on=depends_on,
-        created_at=created_at,
-        parent=parent,
-    )
+from tests.dispatch_test_support import make_footprint_issue as _full_issue
+from tests.dispatch_test_support import (
+    patch_gc_process_alive as _patch_gc_process_alive,
+)
+from tests.dispatch_test_support import stub_label_actor_permission
 
 
 def _track_forge_labels(fake_forge, *issues: IssueRecord) -> None:
@@ -172,31 +125,10 @@ def _install_mutable_issue_snapshot(fake_forge, specs):
     return labels_by_issue
 
 
-@contextmanager
-def _patch_gc_process_alive(*, return_value: bool):
-    """Patch every consumer split from the former dispatch_gc dependency."""
-    with ExitStack() as stack:
-        for target in (
-            "orchestune.dispatch.execution_repair.is_process_alive",
-            "orchestune.dispatch.gc.is_process_alive",
-            "orchestune.dispatch.gc.completion.is_process_alive",
-            "orchestune.dispatch.gc.zombies.is_process_alive",
-        ):
-            stack.enter_context(patch(target, return_value=return_value))
-        yield
-
-
 @pytest.fixture(autouse=True)
 def _stub_label_actor_permission_by_default(fake_forge):
-    """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
-    `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
-    返すようスタブする。検証ロジック自体のテストは
-    tests/test_dispatch_actor_verification.py に集約する。"""
-    fake_forge.get_label_actor.reset_mock(side_effect=True)
-    fake_forge.get_label_actor.return_value = "trusted-actor"
-    fake_forge.get_actor_permission.reset_mock(side_effect=True)
-    fake_forge.get_actor_permission.return_value = "write"
-    yield
+    """#119のactor権限検証が実際の`gh api`を叩かないようスタブする。"""
+    stub_label_actor_permission(fake_forge)
 
 
 class TestRunDispatchCycleBlockedPromotion:

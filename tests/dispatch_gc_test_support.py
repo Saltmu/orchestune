@@ -4,11 +4,13 @@ test_dispatch_gc.py (1418行) を、ルール別・クリーンアップ別
 (#479: git primitives / stale entry rules / completed rule / integration)
 へ分割した際、各ファイルから共通利用される`_ctx`/`_active`/`_task`/`_issue`
 をこのモジュールへ切り出した。`test_`で始まらないためpytestには収集されない。
+
+#916以降、素の生成処理は`tests/dispatch_test_support.py`へ移し、本モジュールは
+「GC系テストの既定値」（Issue 280・`status:not-needed`・`src/foo.py`の
+footprint）への薄い上書きと、GC固有の実行ヘルパーだけを持つ。
 """
 
-import tempfile
 from collections.abc import Sequence
-from pathlib import Path
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc.zombies import (
@@ -20,13 +22,32 @@ from orchestune.dispatch.phase_gc import (
     _GcReclaimAdapter,
     run_gc_phase,
 )
-from orchestune.dispatch.rules import CycleContext, _RuleExecutionContext
+from orchestune.dispatch.rules import _RuleExecutionContext
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.dispatch.state import RunState
 from orchestune.models import PrRecord
-from tests.conftest import make_issue
+from tests.dispatch_test_support import make_footprint_issue as _issue
+from tests.dispatch_test_support import (
+    make_state_root,
+    make_test_active_worktree,
+    make_test_cycle_context,
+    make_test_dispatcher_config,
+    make_test_task,
+)
 
-tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
+tmp_path = make_state_root()
+
+__all__ = [
+    "_active",
+    "_ctx",
+    "_in_progress_task",
+    "_issue",
+    "_reclaim_active",
+    "_rule_ctx",
+    "_task",
+    "decide_gc_reclaims",
+    "run_gc_reclaims",
+]
 
 
 def run_gc_reclaims(
@@ -98,23 +119,10 @@ def decide_gc_reclaims(
 
 
 def _ctx(*, forge=None, **overrides):
-    defaults = dict(
-        run_state=RunState(active_worktrees={}),
-        tasks_by_issue={},
-        dependency_resolution={},
-        ci_passed_pr_issue_numbers=set(),
-        changes_requested_issue_numbers=set(),
-        branch_by_issue_number={},
-        prs=[],
-        config=DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            forge=forge,
-        ),
-    )
+    """GC系テストの既定CycleContext（action portは未bind）。"""
+    defaults = {"config": make_test_dispatcher_config(tmp_path, forge=forge)}
     defaults.update(overrides)
-    return CycleContext(**defaults)
+    return make_test_cycle_context(state_root=tmp_path, **defaults)
 
 
 class _TestRuleContext(_RuleExecutionContext):
@@ -128,15 +136,7 @@ def _rule_ctx(*, forge=None, **overrides):
     run_state = overrides.get("run_state", RunState(active_worktrees={}))
     tasks_by_issue = overrides.get("tasks_by_issue", {})
     prs = overrides.get("prs", [])
-    config = overrides.get(
-        "config",
-        DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            forge=forge,
-        ),
-    )
+    config = overrides.get("config", make_test_dispatcher_config(tmp_path, forge=forge))
     ctx_overrides = {
         k: v
         for k, v in overrides.items()
@@ -165,55 +165,45 @@ def _rule_ctx(*, forge=None, **overrides):
 
 
 def _active(**overrides):
-    defaults = dict(
-        issue_number=280,
-        branch="claude/issue-280-task-a",
-        worktree_path="worktrees/w1",
-        pid=111,
-        started_at=1_699_999_000.0,
-        declared_footprint=("src/foo.py",),
-    )
+    """GC系テストの既定ActiveWorktree（Issue 280・生存中）。
+
+    `branch`はIssue番号から導かず固定する。`issue_number`だけを差し替えて
+    「run_state上のキーとIssue番号がずれている」状況を作るテストがあるため。
+    """
+    defaults = {
+        "branch": "claude/issue-280-task-a",
+        "declared_footprint": ("src/foo.py",),
+    }
     defaults.update(overrides)
-    return ActiveWorktree(**defaults)
+    return make_test_active_worktree(defaults.pop("issue_number", 280), **defaults)
+
+
+def _reclaim_active(**overrides):
+    """回収（ゾンビ／タイムアウト）対象のActiveWorktree。
+
+    worktreeディレクトリが存在せず、pidも記録されていない状態を既定にする。
+    """
+    defaults = {
+        "worktree_path": "worktrees/missing-280",
+        "pid": None,
+        "started_at": 1_000.0,
+    }
+    defaults.update(overrides)
+    return _active(**defaults)
 
 
 def _task(**overrides):
-    defaults = dict(
-        issue_number=280,
-        subtask_id="task-a",
-        footprint=("src/foo.py",),
-        symbols=(),
-        risk=False,
-        priority="medium",
-        progress_partial=False,
-        status_labels=("status:not-needed",),
-        created_at="2026-01-01T00:00:00+00:00",
-    )
+    """GC系テストの既定Task（Issue 280・`status:not-needed`）。"""
+    defaults = {
+        "footprint": ("src/foo.py",),
+        "status_labels": ("status:not-needed",),
+    }
     defaults.update(overrides)
-    return Task(**defaults)
+    return make_test_task(defaults.pop("issue_number", 280), **defaults)
 
 
-def _issue(
-    number,
-    labels=("status:queued",),
-    footprint=("src/foo.py",),
-    symbols=("foo.Foo",),
-    subtask_id="task-a",
-    depends_on=(),
-    created_at="2026-01-01T00:00:00+00:00",
-    parent_number=181,
-):
-    """`tests/conftest.py`の`make_issue`に、このファイルの旧テスト群が前提と
-    する`parent_number`（既定181）とtitleを合わせた薄いラッパー。"""
-    parent = {"number": parent_number} if parent_number is not None else None
-    return make_issue(
-        number,
-        title="t",
-        labels=labels,
-        footprint=footprint,
-        symbols=symbols,
-        subtask_id=subtask_id,
-        depends_on=depends_on,
-        created_at=created_at,
-        parent=parent,
-    )
+def _in_progress_task(**overrides):
+    """回収系テストが使う`status:in-progress`なTask。"""
+    defaults = {"status_labels": ("status:in-progress",)}
+    defaults.update(overrides)
+    return _task(**defaults)

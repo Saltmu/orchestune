@@ -14,49 +14,20 @@ from orchestune.dispatch.cycle_context import (
     discard_reclaim_counts_for_closed_issues,
 )
 from orchestune.dispatch.gc import _rule_completed, _rule_not_needed
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
-    ActiveWorktree,
     RunState,
     TaskReclaimRecord,
     load_run_state,
 )
 from orchestune.models import IssueRecord
+from tests.dispatch_gc_test_support import _in_progress_task as _task
+from tests.dispatch_gc_test_support import _reclaim_active as _active
 from tests.dispatch_gc_test_support import _rule_ctx as _ctx
 from tests.dispatch_gc_test_support import (
     run_gc_reclaims as _collect_zombies_and_timeouts,
 )
 
 _NOW = 2_000.0
-
-
-def _active(**overrides):
-    defaults = dict(
-        issue_number=280,
-        branch="claude/issue-280-task-a",
-        worktree_path="worktrees/missing-280",
-        pid=None,
-        started_at=1_000.0,
-        declared_footprint=("src/foo.py",),
-    )
-    defaults.update(overrides)
-    return ActiveWorktree(**defaults)
-
-
-def _task(**overrides):
-    defaults = dict(
-        issue_number=280,
-        subtask_id="task-a",
-        footprint=("src/foo.py",),
-        symbols=(),
-        risk=False,
-        priority="medium",
-        progress_partial=False,
-        status_labels=("status:in-progress",),
-        created_at="2026-01-01T00:00:00+00:00",
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
 
 
 def _config(tmp_path, **overrides):

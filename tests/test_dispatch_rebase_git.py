@@ -12,36 +12,21 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.rebase import RebaseContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
+from tests.dispatch_test_support import make_test_active_worktree, make_test_task
 
 
 def _task(**overrides):
-    defaults = dict(
-        issue_number=1,
-        subtask_id="task-a",
-        footprint=("src/foo.py",),
-        symbols=(),
-        risk=False,
-        priority="medium",
-        progress_partial=False,
-        status_labels=("status:in-progress",),
-        created_at="2026-01-01T00:00:00+00:00",
-        depends_on=(),
-    )
+    """rebase系テストの既定Task（footprintを宣言した`status:in-progress`）。"""
+    defaults = {"footprint": ("src/foo.py",)}
     defaults.update(overrides)
-    return Task(**defaults)
+    return make_test_task(**defaults)
 
 
 def _active(**overrides):
-    defaults = dict(
-        issue_number=1,
-        branch="claude/issue-1-task-a",
-        worktree_path="worktrees/w1",
-        pid=111,
-        started_at=1_699_999_000.0,
-        declared_footprint=("src/foo.py",),
-    )
+    """rebase系テストの既定ActiveWorktree（footprintを宣言済み）。"""
+    defaults = {"declared_footprint": ("src/foo.py",)}
     defaults.update(overrides)
-    return ActiveWorktree(**defaults)
+    return make_test_active_worktree(**defaults)
 
 
 def _context(
