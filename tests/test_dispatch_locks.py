@@ -9,13 +9,26 @@ from orchestune.dispatch.cycle import CycleReport
 from orchestune.dispatch.locks import (
     ExternalLockConflict,
     check_footprint_deviation,
-    scan_external_locks,
+)
+from orchestune.dispatch.locks import (
+    scan_external_locks as _scan_external_locks,
 )
 from orchestune.dispatch.phase_rebase import _sync_external_locks
 from orchestune.dispatch.report import write_github_step_summary
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import RunState
 from orchestune.models import PrRecord
+from tests.dispatch_lock_test_support import LockDependencyTestView
+
+
+def scan_external_locks(queued_tasks, remote_branches, prs, active_branches):
+    return _scan_external_locks(
+        queued_tasks,
+        remote_branches,
+        prs,
+        active_branches,
+        LockDependencyTestView.from_tasks(queued_tasks),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -615,6 +628,7 @@ class TestSyncExternalLocks:
             prs=[],
             run_state=run_state,
             config=config,
+            view=LockDependencyTestView.from_tasks([done_task]),
         )
 
         assert res.to_lock == []

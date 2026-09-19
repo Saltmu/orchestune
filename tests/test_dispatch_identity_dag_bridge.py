@@ -1,18 +1,14 @@
-"""Tests for the identity-boundary DAG bridge (#888).
-
-Covers `DependencyDeclarations`, `build_legacy_dag_inputs`, the `derived_inputs`
-compat keyword on `compute_precedence_ranks`/`build_task_conflict_graph`, and
-`CycleContext.dag_inputs`.
-"""
+"""Tests for the identity-boundary DAG bridge (#888/#919)."""
 
 from __future__ import annotations
 
 import dataclasses
+import inspect
 
 import pytest
 
 from orchestune.dag.models import SubTask
-from orchestune.dispatch.conflicts import build_task_conflict_graph, subtasks_from_tasks
+from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.critical_path import compute_precedence_ranks
 from orchestune.dispatch.dependency_resolution import (
     DependencyDeclarations,
@@ -102,27 +98,6 @@ class TestLegacyMergedDependsOnUnchanged:
 
 
 class TestBuildLegacyDagInputs:
-    def test_matches_subtasks_from_tasks_field_values(self) -> None:
-        upstream = _task(1, "a")
-        downstream = _task(2, "b", depends_on=("a",), native_depends_on=(1,))
-        tasks = (upstream, downstream)
-
-        dict_form = subtasks_from_tasks(tasks)
-        tuple_form = build_legacy_dag_inputs(tasks)
-
-        by_id = {subtask.id: subtask for subtask in tuple_form}
-        assert set(by_id) == set(dict_form)
-        for subtask_id, expected in dict_form.items():
-            actual = by_id[subtask_id]
-            assert actual.depends_on == expected.depends_on
-            assert actual.footprint == expected.footprint
-            assert actual.symbols == expected.symbols
-            assert actual.risk == expected.risk
-            assert actual.priority == expected.priority
-            assert actual.shared_contract == expected.shared_contract
-            assert actual.writes_shared_contract == expected.writes_shared_contract
-            assert actual.issue_number == expected.issue_number
-
     def test_preserves_input_order(self) -> None:
         tasks = (_task(3, "c"), _task(1, "a"), _task(2, "b"))
         result = build_legacy_dag_inputs(tasks)
@@ -152,48 +127,40 @@ class TestBuildLegacyDagInputs:
 
 
 class TestComputePrecedenceRanksDerivedInputs:
-    def test_derived_inputs_matches_task_only_path(self) -> None:
-        upstream = _task(1, "a")
-        downstream = _task(2, "b", depends_on=("a",))
-        tasks = [upstream, downstream]
-        durations = {"a": 2.0, "b": 3.0}
+    def test_derived_inputs_are_the_only_dag_population(self) -> None:
+        tasks = (_task(1, "a"), _task(2, "b", depends_on=("a",)))
 
-        legacy = compute_precedence_ranks(tasks, durations)
-        derived = compute_precedence_ranks(
-            durations=durations,
-            derived_inputs=build_legacy_dag_inputs(tuple(tasks)),
+        ranks = compute_precedence_ranks(
+            build_legacy_dag_inputs(tasks), {"a": 2.0, "b": 3.0}
         )
 
-        assert derived.bottom_level == legacy.bottom_level
-        assert derived.unlocked == legacy.unlocked
-        assert derived.downstream == legacy.downstream
-        assert derived.exact_bottom_level == legacy.exact_bottom_level
-        assert derived.exact_downstream == legacy.exact_downstream
+        assert ranks.bottom_level == {"a": 5.0, "b": 3.0}
 
-    def test_existing_task_only_call_sites_are_unaffected(self) -> None:
+    def test_native_and_body_dependencies_are_already_merged(self) -> None:
         upstream = _task(1, "a")
         downstream = _task(2, "b", native_depends_on=(1,))
-        result = compute_precedence_ranks([upstream, downstream])
+        result = compute_precedence_ranks(
+            build_legacy_dag_inputs((upstream, downstream))
+        )
         assert result.unlocked_count("a") == 1
 
 
 class TestBuildTaskConflictGraphDerivedInputs:
-    def test_derived_inputs_matches_task_only_path(self) -> None:
+    def test_derived_inputs_are_required(self) -> None:
+        parameter = inspect.signature(build_task_conflict_graph).parameters[
+            "derived_inputs"
+        ]
+        assert parameter.default is inspect.Parameter.empty
+
+    def test_builds_from_derived_inputs(self) -> None:
         a = _task(1, "a", footprint=("x.py",))
         b = _task(2, "b", footprint=("x.py",))
         tasks = [a, b]
 
-        legacy = build_task_conflict_graph(tasks, threshold=0.5)
-        derived = build_task_conflict_graph(
+        graph = build_task_conflict_graph(
             tasks, threshold=0.5, derived_inputs=build_legacy_dag_inputs(tuple(tasks))
         )
 
-        assert derived.edges == legacy.edges
-
-    def test_existing_task_only_call_sites_are_unaffected(self) -> None:
-        a = _task(1, "a", footprint=("x.py",))
-        b = _task(2, "b", footprint=("x.py",))
-        graph = build_task_conflict_graph([a, b], threshold=0.5)
         assert graph.has_conflict("a", "b")
 
 
@@ -295,15 +262,13 @@ class TestBuildTaskConflictGraphDerivedInputPopulation:
         other = _task(3, "b", footprint=("y.py",))
         tasks = [first, duplicate, other]
 
-        legacy = build_task_conflict_graph(tasks, threshold=0.5)
         derived = build_task_conflict_graph(
             tasks,
             threshold=0.5,
             derived_inputs=build_legacy_dag_inputs((duplicate, first, other)),
         )
 
-        assert legacy.has_conflict("a", "b")
-        assert derived.edges == legacy.edges
+        assert derived.has_conflict("a", "b")
 
     def test_duplicate_subtask_ids_do_not_trip_the_population_check(self) -> None:
         first = _task(1, "a", footprint=("x.py",))
@@ -311,12 +276,10 @@ class TestBuildTaskConflictGraphDerivedInputPopulation:
         other = _task(3, "b", footprint=("y.py",))
         tasks = [first, duplicate, other]
 
-        legacy = build_task_conflict_graph(tasks, threshold=0.5)
         derived = build_task_conflict_graph(
             tasks, threshold=0.5, derived_inputs=build_legacy_dag_inputs(tuple(tasks))
         )
 
-        assert derived.edges == legacy.edges
         assert derived.edges == ()
 
     def test_tasks_without_subtask_id_are_excluded_from_the_population(self) -> None:
@@ -325,12 +288,10 @@ class TestBuildTaskConflictGraphDerivedInputPopulation:
         unnamed = _task(3, "", footprint=("z.py",))
         tasks = [a, b, unnamed]
 
-        legacy = build_task_conflict_graph(tasks, threshold=0.5)
         derived = build_task_conflict_graph(
             tasks, threshold=0.5, derived_inputs=build_legacy_dag_inputs(tuple(tasks))
         )
 
-        assert derived.edges == legacy.edges
         assert derived.edges == ()
 
 

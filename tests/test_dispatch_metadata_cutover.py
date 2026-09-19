@@ -102,11 +102,8 @@ def test_task_and_cycle_task_have_identical_rank_conflicts_and_selection() -> No
     dag_inputs = build_legacy_dag_inputs(tuple(raw))
     durations = {"a": 2.0, "b": 1.0}
 
-    raw_ranks = compute_precedence_ranks(raw, durations, derived_inputs=dag_inputs)
-    metadata_ranks = compute_precedence_ranks(
-        metadata, durations, derived_inputs=dag_inputs
-    )
-    assert metadata_ranks == raw_ranks
+    ranks = compute_precedence_ranks(dag_inputs, durations)
+    assert ranks.unlocked_count("a") == 1
 
     raw_conflicts = build_task_conflict_graph(
         raw, threshold=0.5, derived_inputs=dag_inputs
@@ -153,7 +150,7 @@ def test_duplicate_subtask_edges_union_and_conflict_metadata_last_wins() -> None
     metadata = [CycleTask.from_task(task) for task in raw]
     dag_inputs = build_legacy_dag_inputs(tuple(raw))
 
-    ranks = compute_precedence_ranks(metadata, derived_inputs=dag_inputs)
+    ranks = compute_precedence_ranks(dag_inputs)
     assert ranks.unlocked_count("dup") == 2
 
     conflicts = build_task_conflict_graph(
@@ -170,7 +167,7 @@ def test_empty_subtask_id_is_ignored_for_rank_and_conflicts() -> None:
     metadata = [CycleTask.from_task(task) for task in raw]
     dag_inputs = build_legacy_dag_inputs(tuple(raw))
 
-    ranks = compute_precedence_ranks(metadata, derived_inputs=dag_inputs)
+    ranks = compute_precedence_ranks(dag_inputs)
     conflicts = build_task_conflict_graph(
         metadata, threshold=0.5, derived_inputs=dag_inputs
     )

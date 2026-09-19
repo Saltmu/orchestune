@@ -62,15 +62,12 @@ _COMPAT = "Explicit legacy raw-Task compatibility boundary."
 PRODUCTION_EXCEPTIONS = frozenset(
     {
         _exception("orchestune.task_metadata", "<module>", "Task", _COMPAT),
-        _exception("orchestune.dispatch.conflicts", "<module>", "Task", _COMPAT),
-        _exception("orchestune.dispatch.critical_path", "<module>", "Task", _COMPAT),
         _exception(
             "orchestune.dispatch.cycle_context_state", "<module>", "Task", _IDENTITY
         ),
         _exception(
             "orchestune.dispatch.dependency_resolution", "<module>", "Task", _IDENTITY
         ),
-        _exception("orchestune.dispatch.locks", "<module>", "Task", _COMPAT),
         _exception("orchestune.dispatch.recovery", "<module>", "Task", _LOW_LEVEL),
         _exception("orchestune.dispatch.rules", "<module>", "Task", _IDENTITY),
         _exception("orchestune.dispatch.scoring", "<module>", "Task", _COMPAT),

@@ -6,9 +6,20 @@
 """
 
 from orchestune.branch_naming import build_task_branch_name
-from orchestune.dispatch.locks import scan_external_locks
+from orchestune.dispatch.locks import scan_external_locks as _scan_external_locks
 from orchestune.dispatch.scoring import Task
 from orchestune.models import PrRecord
+from tests.dispatch_lock_test_support import LockDependencyTestView
+
+
+def scan_external_locks(queued_tasks, remote_branches, prs, active_branches):
+    return _scan_external_locks(
+        queued_tasks,
+        remote_branches,
+        prs,
+        active_branches,
+        LockDependencyTestView.from_tasks(queued_tasks),
+    )
 
 
 def _task(

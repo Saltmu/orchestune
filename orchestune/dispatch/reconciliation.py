@@ -165,10 +165,8 @@ def _handle_blocked_recompute_recovery(
     if not blocked_recompute_issues:
         return recompute_resolved_promoted_events
 
-    tasks_by_issue = {task.issue_number: task for task in ctx.tasks()}
     subtasks_for_recompute = _build_subtasks_for_recompute(
-        tasks_by_issue,
-        ctx.dag_inputs(tuple(task.issue_number for task in ctx.tasks())),
+        ctx.dag_inputs(tuple(task.issue_number for task in ctx.tasks()))
     )
     active_conflict_subtask_ids = _collect_active_conflict_subtask_ids(
         run_state, ctx, subtasks_for_recompute, config
