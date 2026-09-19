@@ -40,8 +40,7 @@ class CycleContext(_CycleState):
     The constructor still accepts the observation containers produced by
     ``cycle_context.py`` so the ownership boundary stays explicit, but none of
     them is retained as a public attribute.  Phases can observe state only via
-    semantic queries and perform effects only through the seven delegated
-    action ports.
+    semantic queries and perform effects only through delegated action ports.
     """
 
     def __init__(
@@ -121,8 +120,9 @@ class _RuleExecutionContext:
     `issue_number_by_subtask_id`はfootprint逸脱時に対象Issueを遷移させるための
     逆引きで、依存解決や表示のための値ではない。
 
-    Rule実装がL2にあるため、このadapterもL2の`rules.py`に置き、L2からL3への
-    importと循環依存を避ける。
+    Rule実装がL2にあり、`gc`は`escalation`をimportするため、このadapterも
+    `rules.py`に置く。`gc`、`escalation`、`rebase`のいずれかへ置くと、Ruleが
+    importするadapterを通じてL2内の循環依存を作る。
     """
 
     run_state: RunState

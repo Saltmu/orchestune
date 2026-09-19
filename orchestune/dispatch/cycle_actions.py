@@ -460,6 +460,10 @@ class CycleActionAdapter:
         completion evidenceとrecord状態は束縛済みcontextに保持する。その他の
         commandは明示的なhandlerが無ければfail-closedとし、任意commandの実行や
         独自retry loopは持たない。
+
+        task mappingは`cycle_context`の`_fetch_issues`と`_build_task_mappings`で
+        再構築する。`cycle.py`は`phase_reconciliation`経由でこのモジュールをimport
+        するため、そこにあるconsistency adapterを再利用すると循環importになる。
         """
         ctx = self._bound_view()
         if command.code == COMMAND_RECLAIM:
