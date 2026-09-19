@@ -54,9 +54,10 @@ Loop (up to 5 rounds):
      - Exit 20: timeout (default 1800s); retry once with --no-post --timeout 1800. If still timed out, post an Outcome Record with result: "blocked", reason: "review-timeout", review.bot set to the reviewer bot, and attempt count (automatically re-queued with exponential backoff; escalates to human review after 2 attempts).
      - Exit 21: stalled — the "in progress" tracker comment stopped changing
        for over the stall grace window (default 600s); a live job keeps
-       editing it, so this means the owning workflow run likely already ended
-       without posting a result. Retry immediately (repost the trigger, no
-       `--no-post`); a repeat stall in the same round escalates like Exit 20.
+       editing it, so this already confirms the workflow run ended without
+       posting a result (skip the Exit-20 `--no-post` re-check). Call
+       `wait_for_review.py` again normally (no `--round`/`--no-post`) for a
+       fresh next-round trigger; Exit 12 (max rounds) escalates as usual.
      - Exit 30: ambiguous verdict; inspect summary and inline findings before
        requesting another review or escalating. Exit 2 or 12: record and escalate.
      - Exit 10:
