@@ -31,7 +31,7 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 from orchestune.consistency.desired import TaskLifecycle
@@ -355,30 +355,14 @@ def _owned_dependencies(deps: TaskDependencies) -> TaskDependencies:
     )
 
 
-@dataclass
 class _CycleState:
     """1サイクル分のLifecycle実効状態を所有する、`CycleContext`専用の内部型。
 
     公開窓口は`CycleContext`のメソッドのみ。この型を他モジュールへ公開しない。
     """
 
-    _tasks: dict[int, Task] = field(default_factory=dict)
-    _dependency_resolution: dict[int, TaskDependencies] = field(default_factory=dict)
-    _ci_passed: set[int] = field(default_factory=set)
-    _changes_requested: set[int] = field(default_factory=set)
-    _branch_by_issue: dict[int, str] = field(default_factory=dict)
-    _branch_resolutions: dict[int, TaskBranchResolution] = field(default_factory=dict)
-    _prior_completed: frozenset[int] = frozenset()
-    _prior_held: frozenset[int] = frozenset()
-    _issue_records: tuple[IssueRecord, ...] = ()
-    _pull_requests: tuple[PrRecord, ...] = ()
-    _effective_labels: dict[int, tuple[str, ...]] = field(default_factory=dict)
-    _launch_states: dict[int, _LaunchState] = field(default_factory=dict)
-    _recorded_completions: set[int] = field(default_factory=set)
-
-    @classmethod
-    def from_observations(
-        cls,
+    def __init__(
+        self,
         *,
         tasks_by_issue: Mapping[int, Task],
         dependency_resolution: Mapping[int, TaskDependencies],
@@ -391,40 +375,38 @@ class _CycleState:
         issue_records_by_number: Mapping[int, IssueRecord],
         prs: Iterable[PrRecord],
         branch_resolutions_by_issue: Mapping[int, TaskBranchResolution],
-    ) -> _CycleState:
-        return cls(
-            _tasks={
-                number: _owned_task(task) for number, task in tasks_by_issue.items()
-            },
-            _dependency_resolution={
-                number: _owned_dependencies(deps)
-                for number, deps in dependency_resolution.items()
-            },
-            _ci_passed=set(ci_passed_pr_issue_numbers),
-            _changes_requested=set(changes_requested_issue_numbers),
-            _branch_by_issue=dict(branch_by_issue_number),
-            _branch_resolutions=dict(branch_resolutions_by_issue),
-            _prior_completed=frozenset(prior_parent_merge_completed_issue_numbers),
-            _prior_held=frozenset(prior_parent_merge_hold_issue_numbers),
-            _issue_records=tuple(
-                sorted(
-                    (
-                        _owned_issue_record(record)
-                        for record in issue_records_by_number.values()
-                    ),
-                    key=lambda record: record.number,
-                )
-            ),
-            _pull_requests=tuple(
-                sorted(
-                    (_owned_pull_request(pr) for pr in prs),
-                    key=lambda pr: pr.number,
-                )
-            ),
-            # Labels are read from the shared observation until a record supplies
-            # a delta. Do not keep a second mutable copy of the observed labels.
-            _launch_states=_build_launch_states(active_worktrees),
+    ) -> None:
+        self._tasks = {
+            number: _owned_task(task) for number, task in tasks_by_issue.items()
+        }
+        self._dependency_resolution = {
+            number: _owned_dependencies(deps)
+            for number, deps in dependency_resolution.items()
+        }
+        self._ci_passed = set(ci_passed_pr_issue_numbers)
+        self._changes_requested = set(changes_requested_issue_numbers)
+        self._branch_by_issue = dict(branch_by_issue_number)
+        self._branch_resolutions = dict(branch_resolutions_by_issue)
+        self._prior_completed = frozenset(prior_parent_merge_completed_issue_numbers)
+        self._prior_held = frozenset(prior_parent_merge_hold_issue_numbers)
+        self._issue_records = tuple(
+            sorted(
+                (
+                    _owned_issue_record(record)
+                    for record in issue_records_by_number.values()
+                ),
+                key=lambda record: record.number,
+            )
         )
+        self._pull_requests = tuple(
+            sorted(
+                (_owned_pull_request(pr) for pr in prs),
+                key=lambda pr: pr.number,
+            )
+        )
+        self._effective_labels: dict[int, tuple[str, ...]] = {}
+        self._recorded_completions: set[int] = set()
+        self._launch_states = _build_launch_states(active_worktrees)
 
     # ---- read-only queries -------------------------------------------------
 

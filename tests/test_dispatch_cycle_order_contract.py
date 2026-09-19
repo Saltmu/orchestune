@@ -92,21 +92,15 @@ def _context(config: DispatcherConfig, tasks: list[Task], **overrides) -> CycleC
     ctx = CycleContext(
         run_state=run_state,
         tasks_by_issue=tasks_by_issue,
-        issue_number_by_subtask_id=overrides.get(
-            "issue_number_by_subtask_id",
-            {task.subtask_id: task.issue_number for task in tasks},
-        ),
         dependency_resolution=overrides.get(
             "dependency_resolution", resolve_all_dependencies(tasks_by_issue)
         ),
-        done_issue_numbers=overrides.get("done_issue_numbers", set()),
         ci_passed_pr_issue_numbers=overrides.get("ci_passed_pr_issue_numbers", set()),
         changes_requested_issue_numbers=overrides.get(
             "changes_requested_issue_numbers", set()
         ),
         branch_by_issue_number=overrides.get("branch_by_issue_number", {}),
         prs=overrides.get("prs", []),
-        pr_by_branch=overrides.get("pr_by_branch", {}),
         config=config,
         prior_parent_merge_hold_issue_numbers=overrides.get(
             "prior_parent_merge_hold_issue_numbers", frozenset()
@@ -132,7 +126,6 @@ def test_cycle_phase_order_and_batch_selection_contract(tmp_path, fake_forge) ->
     ctx = _context(
         config,
         [_task(5, status="status:in-progress")],
-        done_issue_numbers={7},
         prior_parent_merge_completed_issue_numbers=frozenset({7}),
     )
     lock_result = ExternalLockScanResult([], [])

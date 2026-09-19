@@ -15,6 +15,7 @@ record系（`record_completion` / `record_launch` / `record_transition`）は
 
 from __future__ import annotations
 
+import inspect
 import tempfile
 from pathlib import Path
 
@@ -70,14 +71,11 @@ def _ctx(**overrides):
     defaults = dict(
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
-        issue_number_by_subtask_id={},
         dependency_resolution={},
-        done_issue_numbers=set(),
         ci_passed_pr_issue_numbers=set(),
         changes_requested_issue_numbers=set(),
         branch_by_issue_number={},
         prs=[],
-        pr_by_branch={},
         config=DispatcherConfig(
             events_log_path=_TMP / "events.jsonl",
             run_state_path=_TMP / "run_state.json",
@@ -86,6 +84,22 @@ def _ctx(**overrides):
     )
     defaults.update(overrides)
     return CycleContext(**defaults)
+
+
+class TestConstructorCleanup:
+    """Issue #915: CycleContext.__init__ から不要な互換引数が撤去されていること。"""
+
+    def test_obsolete_compatibility_arguments_are_removed_from_signature(self):
+        sig = inspect.signature(CycleContext.__init__)
+        params = sig.parameters
+        for removed in (
+            "issue_number_by_subtask_id",
+            "done_issue_numbers",
+            "pr_by_branch",
+        ):
+            assert (
+                removed not in params
+            ), f"{removed} should be removed from CycleContext.__init__"
 
 
 class TestOwnership:

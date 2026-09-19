@@ -22,7 +22,6 @@ from orchestune.dispatch.cycle_action_contracts import (
     StackBase,
 )
 from orchestune.dispatch.cycle_context_state import (
-    LaunchFact,
     RecordResult,
     _CycleState,
 )
@@ -32,12 +31,12 @@ from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord, Task
 from orchestune.task_branch_resolution import TaskBranchResolution
-from orchestune.task_metadata import CycleTask, TaskMetadata
+from orchestune.task_metadata import TaskMetadata
 
 NotNeededReviewDispatcher = Callable[[int, str, DispatcherConfig], None]
 
 
-class CycleContext:
+class CycleContext(_CycleState):
     """One cycle's semantic query/record/action boundary.
 
     The constructor still accepts the observation containers produced by
@@ -51,14 +50,11 @@ class CycleContext:
         self,
         run_state: RunState,
         tasks_by_issue: dict[int, Task],
-        issue_number_by_subtask_id: dict[str, int],
         dependency_resolution: dict[int, TaskDependencies],
-        done_issue_numbers: set[int],
         ci_passed_pr_issue_numbers: set[int],
         changes_requested_issue_numbers: set[int],
         branch_by_issue_number: dict[int, str],
         prs: list[PrRecord],
-        pr_by_branch: dict[str, PrRecord],
         config: DispatcherConfig,
         branch_resolutions_by_issue: dict[int, TaskBranchResolution] | None = None,
         not_needed_review_dispatcher: NotNeededReviewDispatcher | None = None,
@@ -67,13 +63,7 @@ class CycleContext:
         prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset(),
         actions: CycleActions | None = None,
     ) -> None:
-        # Compatibility constructor inputs that are now derivable or owned by
-        # the state/action boundaries are intentionally not retained.
-        del issue_number_by_subtask_id, done_issue_numbers, pr_by_branch
-        self.config = config
-        self.not_needed_review_dispatcher = not_needed_review_dispatcher
-        self._actions = actions
-        self._state = _CycleState.from_observations(
+        super().__init__(
             tasks_by_issue=tasks_by_issue,
             dependency_resolution=dependency_resolution,
             ci_passed_pr_issue_numbers=ci_passed_pr_issue_numbers,
@@ -86,92 +76,9 @@ class CycleContext:
             prs=prs,
             branch_resolutions_by_issue=branch_resolutions_by_issue or {},
         )
-
-    # ---- semantic query API (#868) ------------------------------------------
-    #
-    # 実効状態を返す。取得済みの戻り値(Task/tuple/Assessment)は後からContextが
-    # 更新されても変化しない——再問い合わせで最新状態を反映する。
-
-    def task(self, issue_number: int) -> CycleTask | None:
-        return self._state.task(issue_number)
-
-    def dependencies_of(self, issue_number: int) -> TaskDependencies | None:
-        return self._state.dependencies_of(issue_number)
-
-    def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None:
-        return self._state.assess_dependencies(issue_number)
-
-    def is_effectively_done(self, issue_number: int) -> bool:
-        return self._state.is_effectively_done(issue_number)
-
-    def is_completion_confirmed(self, issue_number: int) -> bool:
-        return self._state.is_completion_confirmed(issue_number)
-
-    def has_changes_requested(self, issue_number: int) -> bool:
-        return self._state.has_changes_requested(issue_number)
-
-    def is_ci_passed(self, issue_number: int) -> bool:
-        return self._state.is_ci_passed(issue_number)
-
-    def canonical_branch(self, issue_number: int) -> str | None:
-        return self._state.canonical_branch(issue_number)
-
-    def branch_resolution(self, issue_number: int) -> TaskBranchResolution | None:
-        return self._state.branch_resolution(issue_number)
-
-    def launch_fact(self, issue_number: int) -> LaunchFact | None:
-        return self._state.launch_fact(issue_number)
-
-    def queued_tasks(self) -> tuple[CycleTask, ...]:
-        return self._state.queued_tasks()
-
-    def blocked_tasks(self) -> tuple[CycleTask, ...]:
-        return self._state.blocked_tasks()
-
-    # ---- all-task / observation queries (#881) ------------------------------
-    #
-    # `tasks`はrecord反映後の実効値、`issue_records`/`pull_requests`は初期Forge
-    # 観測。いずれもIssue/PR番号昇順で、取得済みのtupleは後から変化しない。
-
-    def tasks(self) -> tuple[CycleTask, ...]:
-        return self._state.tasks()
-
-    def issue_records(self) -> tuple[IssueRecord, ...]:
-        return self._state.issue_records()
-
-    def pull_requests(self) -> tuple[PrRecord, ...]:
-        return self._state.pull_requests()
-
-    def is_prior_merge_held(self, issue_number: int) -> bool:
-        return self._state.is_prior_merge_held(issue_number)
-
-    def dag_inputs(self, issue_numbers: tuple[int, ...]) -> tuple[SubTask, ...]:
-        return self._state.dag_inputs(issue_numbers)
-
-    # ---- record API (#868) --------------------------------------------------
-    #
-    # 外部I/Oを行わない。呼出側が既に成功を確認した事実だけを反映する。
-
-    def record_completion(self, issue_number: int) -> RecordResult:
-        return self._state.record_completion(issue_number)
-
-    def record_launch(self, active: ActiveWorktree) -> RecordResult:
-        return self._state.record_launch(active)
-
-    def record_transition(
-        self,
-        issue_number: int,
-        *,
-        expected_labels: tuple[str, ...],
-        verified_labels: tuple[str, ...],
-        execution_active: bool,
-    ) -> RecordResult:
-        return self._state.record_transition(
-            issue_number,
-            expected_labels=expected_labels,
-            verified_labels=verified_labels,
-            execution_active=execution_active,
-        )
+        self.config = config
+        self.not_needed_review_dispatcher = not_needed_review_dispatcher
+        self._actions = actions
 
     # ---- action API (#873) -------------------------------------------------
 

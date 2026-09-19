@@ -35,14 +35,11 @@ def _context(tasks: list[Task]) -> CycleContext:
     return CycleContext(
         run_state=RunState(),
         tasks_by_issue={task.issue_number: task for task in tasks},
-        issue_number_by_subtask_id={},
         dependency_resolution={},
-        done_issue_numbers=set(),
         ci_passed_pr_issue_numbers=set(),
         changes_requested_issue_numbers=set(),
         branch_by_issue_number={},
         prs=[],
-        pr_by_branch={},
         config=None,  # type: ignore[arg-type]
     )
 

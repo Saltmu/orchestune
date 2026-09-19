@@ -390,13 +390,9 @@ def test_repair_mode_applies_simultaneous_allowlisted_repairs_and_reobserves(
     ctx = CycleContext(
         run_state=run_state,
         tasks_by_issue=tasks,
-        issue_number_by_subtask_id={
-            task.subtask_id: issue_number for issue_number, task in tasks.items()
-        },
         dependency_resolution={
             issue_number: TaskDependencies() for issue_number in tasks
         },
-        done_issue_numbers=set(),
         ci_passed_pr_issue_numbers=set(),
         changes_requested_issue_numbers=set(),
         branch_by_issue_number={
@@ -404,7 +400,6 @@ def test_repair_mode_applies_simultaneous_allowlisted_repairs_and_reobserves(
             for issue_number, task in tasks.items()
         },
         prs=[],
-        pr_by_branch={},
         config=config,
         actions=actions,
     )
@@ -522,14 +517,11 @@ def test_repair_failure_is_reported_and_intent_remains_resumable(tmp_path, fake_
     ctx = CycleContext(
         run_state=run_state,
         tasks_by_issue={709: task},
-        issue_number_by_subtask_id={task.subtask_id: 709},
         dependency_resolution={709: TaskDependencies()},
-        done_issue_numbers=set(),
         ci_passed_pr_issue_numbers=set(),
         changes_requested_issue_numbers=set(),
         branch_by_issue_number={709: "codex/issue-709"},
         prs=[],
-        pr_by_branch={},
         config=config,
         actions=actions,
     )

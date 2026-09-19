@@ -79,14 +79,11 @@ def _ctx(**overrides):
     defaults = dict(
         run_state=RunState(active_worktrees={}),
         tasks_by_issue={},
-        issue_number_by_subtask_id={},
         dependency_resolution={},
-        done_issue_numbers=set(),
         ci_passed_pr_issue_numbers=set(),
         changes_requested_issue_numbers=set(),
         branch_by_issue_number={},
         prs=[],
-        pr_by_branch={},
         config=DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -635,7 +632,7 @@ class TestHandleBlockedRecomputeRecovery:
             status_labels=(),
         )
         run_state = RunState(active_worktrees={})
-        ctx = _ctx(tasks_by_issue={1: task}, done_issue_numbers=set())
+        ctx = _ctx(tasks_by_issue={1: task})
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -671,7 +668,6 @@ class TestHandleBlockedRecomputeRecovery:
         run_state = RunState(active_worktrees={})
         ctx = _ctx(
             tasks_by_issue={1: task, 2: dep},
-            done_issue_numbers=set(),
             prior_parent_merge_completed_issue_numbers=frozenset({dep.issue_number}),
         )
         config = DispatcherConfig(

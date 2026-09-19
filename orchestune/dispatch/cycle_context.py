@@ -349,11 +349,7 @@ def _build_cycle_context(
     actions: CycleActions | None = None,
 ) -> CycleContext:
     all_issues = issues.all()
-    (
-        tasks_by_issue,
-        issue_number_by_subtask_id,
-        done_issue_numbers,
-    ) = _build_task_mappings(all_issues)
+    tasks_by_issue, _, _ = _build_task_mappings(all_issues)
     dependency_resolution = resolve_all_dependencies(tasks_by_issue)
 
     prs = config.resolved_forge.list_open_prs(paginate_files=True)
@@ -371,17 +367,11 @@ def _build_cycle_context(
     return CycleContext(
         run_state=run_state,
         tasks_by_issue=tasks_by_issue,
-        issue_number_by_subtask_id=issue_number_by_subtask_id,
         dependency_resolution=dependency_resolution,
-        done_issue_numbers=done_issue_numbers
-        | set(prior_parent_merge_completed_issue_numbers),
         ci_passed_pr_issue_numbers=ci_passed_pr_issue_numbers,
         changes_requested_issue_numbers=changes_requested_issue_numbers,
         branch_by_issue_number=branch_by_issue_number,
         prs=prs,
-        # Compatibility-only constructor input. Operational PR identity is
-        # carried exclusively by the verified TaskBranchResolution.
-        pr_by_branch={},
         config=config,
         branch_resolutions_by_issue=branch_resolutions_by_issue,
         not_needed_review_dispatcher=_dispatch_not_needed_review,
