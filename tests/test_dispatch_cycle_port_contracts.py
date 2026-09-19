@@ -18,7 +18,6 @@ from __future__ import annotations
 import dataclasses
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -31,7 +30,6 @@ from orchestune.consistency.models import (
 )
 from orchestune.consistency.supervisor import ConsistencyCycleReport, ConsistencyMode
 from orchestune.dispatch import phase_gc
-from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_action_contracts import (
     ActivePhaseResult,
     CycleActions,
@@ -40,32 +38,14 @@ from orchestune.dispatch.cycle_action_contracts import (
     StackBase,
 )
 from orchestune.dispatch.locks import ExternalLockScanResult
-from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.labels import StatusLabel
-from orchestune.models import IssueRecord, PrRecord, Task
+from orchestune.models import IssueRecord, PrRecord
 from orchestune.task_metadata import TaskMetadata
+from tests.dispatch_cycle_context_test_support import _ctx, _task
 
-_TMP = Path(tempfile.mkdtemp(prefix="orchestune-test-cycle-port-contracts-"))
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _task(issue_number, **overrides):
-    defaults = dict(
-        issue_number=issue_number,
-        subtask_id=f"task-{issue_number}",
-        footprint=(),
-        symbols=(),
-        risk=False,
-        priority="medium",
-        progress_partial=False,
-        status_labels=(StatusLabel.QUEUED,),
-        created_at="2026-01-01T00:00:00Z",
-        issue_state="OPEN",
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
 
 
 def _issue(issue_number, **overrides):
@@ -88,25 +68,6 @@ def _pr(number, **overrides):
     )
     defaults.update(overrides)
     return PrRecord(**defaults)
-
-
-def _ctx(**overrides):
-    defaults = dict(
-        run_state=RunState(active_worktrees={}),
-        tasks_by_issue={},
-        dependency_resolution={},
-        ci_passed_pr_issue_numbers=set(),
-        changes_requested_issue_numbers=set(),
-        branch_by_issue_number={},
-        prs=[],
-        config=DispatcherConfig(
-            events_log_path=_TMP / "events.jsonl",
-            run_state_path=_TMP / "run_state.json",
-            worktree_root=_TMP / "worktrees",
-        ),
-    )
-    defaults.update(overrides)
-    return CycleContext(**defaults)
 
 
 class _FakeCycleActions:

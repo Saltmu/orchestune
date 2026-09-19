@@ -13,14 +13,14 @@ from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
 )
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
-    ActiveWorktree,
     RunState,
     TaskReclaimRecord,
     load_run_state,
 )
 from tests.conftest import FakeForge
+from tests.dispatch_gc_test_support import _in_progress_task as _task
+from tests.dispatch_gc_test_support import _reclaim_active as _active
 from tests.dispatch_gc_test_support import (
     decide_gc_reclaims as _decide_zombie_or_timeout_reclaims,
 )
@@ -29,35 +29,6 @@ from tests.dispatch_gc_test_support import (
 )
 
 _NOW = 2_000.0
-
-
-def _active(**overrides):
-    defaults = dict(
-        issue_number=280,
-        branch="claude/issue-280-task-a",
-        worktree_path="worktrees/missing-280",
-        pid=None,
-        started_at=1_000.0,
-        declared_footprint=("src/foo.py",),
-    )
-    defaults.update(overrides)
-    return ActiveWorktree(**defaults)
-
-
-def _task(**overrides):
-    defaults = dict(
-        issue_number=280,
-        subtask_id="task-a",
-        footprint=("src/foo.py",),
-        symbols=(),
-        risk=False,
-        priority="medium",
-        progress_partial=False,
-        status_labels=("status:in-progress",),
-        created_at="2026-01-01T00:00:00+00:00",
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
 
 
 def _config(tmp_path, **overrides):

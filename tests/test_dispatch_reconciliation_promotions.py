@@ -21,15 +21,15 @@ from orchestune.dag.models import (
 )
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import _DispatchConsistencyAdapter
-from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.reconciliation import (
     _collect_active_conflict_subtask_ids,
     _handle_blocked_recompute_recovery,
 )
-from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import ActiveWorktree, RunState
-from orchestune.models import IssueRecord
+from orchestune.dispatch.state import RunState
+from tests.dispatch_test_support import make_plain_issue as _issue
+from tests.dispatch_test_support import make_test_active_worktree as _active
+from tests.dispatch_test_support import make_test_cycle_context
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-reconciliation-"))
 
@@ -62,50 +62,9 @@ def _dependency_task(issue_number=2, subtask_id="task-x", **overrides):
     )
 
 
-def _active(**overrides):
-    defaults = dict(
-        issue_number=1,
-        branch="claude/issue-1-task-a",
-        worktree_path="worktrees/w1",
-        pid=111,
-        started_at=1_699_999_000.0,
-        declared_footprint=(),
-    )
-    defaults.update(overrides)
-    return ActiveWorktree(**defaults)
-
-
 def _ctx(**overrides):
-    defaults = dict(
-        run_state=RunState(active_worktrees={}),
-        tasks_by_issue={},
-        dependency_resolution={},
-        ci_passed_pr_issue_numbers=set(),
-        changes_requested_issue_numbers=set(),
-        branch_by_issue_number={},
-        prs=[],
-        config=DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-        ),
-    )
-    defaults.update(overrides)
-    if "dependency_resolution" not in overrides and "tasks_by_issue" in overrides:
-        defaults["dependency_resolution"] = resolve_all_dependencies(
-            overrides["tasks_by_issue"]
-        )
-    return CycleContext(**defaults)
-
-
-def _issue(number, labels=(), state="OPEN"):
-    return IssueRecord(
-        number=number,
-        title=f"Issue {number}",
-        body="",
-        labels=labels,
-        created_at="2026-01-01T00:00:00+00:00",
-        state=state,
+    return make_test_cycle_context(
+        state_root=tmp_path, resolve_dependencies=True, **overrides
     )
 
 

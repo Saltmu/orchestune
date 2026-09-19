@@ -13,11 +13,9 @@ from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.dependency_resolution import (
     TaskDependencies,
     UnresolvedDependency,
-    resolve_all_dependencies,
 )
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
 from orchestune.dispatch.phase_scheduling import _determine_candidate_tasks
-from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.dispatch.summary import (
     REASON_DEPENDENCY,
@@ -25,8 +23,9 @@ from orchestune.dispatch.summary import (
     REASON_REVIEW_TIMEOUT_BACKOFF,
     merge_skips,
 )
-from orchestune.models import IssueRecord, Task
+from orchestune.models import Task
 from orchestune.task_metadata import CycleTask
+from tests.dispatch_test_support import make_test_cycle_context
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -48,38 +47,10 @@ def _task(**overrides):
     return Task(**defaults)
 
 
-def _issue(number, labels=(), state="OPEN"):
-    return IssueRecord(
-        number=number,
-        title=f"Issue {number}",
-        body="",
-        labels=labels,
-        created_at="2026-01-01T00:00:00+00:00",
-        state=state,
-    )
-
-
 def _ctx(**overrides):
-    defaults = dict(
-        run_state=RunState(active_worktrees={}),
-        tasks_by_issue={},
-        dependency_resolution={},
-        ci_passed_pr_issue_numbers=set(),
-        changes_requested_issue_numbers=set(),
-        branch_by_issue_number={},
-        prs=[],
-        config=DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-        ),
+    return make_test_cycle_context(
+        state_root=tmp_path, resolve_dependencies=True, **overrides
     )
-    defaults.update(overrides)
-    if "dependency_resolution" not in overrides and "tasks_by_issue" in overrides:
-        defaults["dependency_resolution"] = resolve_all_dependencies(
-            overrides["tasks_by_issue"]
-        )
-    return CycleContext(**defaults)
 
 
 class TestDetermineCandidateTaskSkips:

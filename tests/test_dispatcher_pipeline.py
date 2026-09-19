@@ -43,70 +43,27 @@ from orchestune.dispatch.summary import (
     SUMMARY_PREFIX,
     SkipRecord,
 )
-from orchestune.models import IssueRecord, PrRecord, Task
+from orchestune.models import PrRecord, Task
 from orchestune.outcome_record import OutcomeRecord
+from tests.dispatch_test_support import make_footprint_issue as _issue
+from tests.dispatch_test_support import (
+    stub_forge_check_auth,
+    stub_label_actor_permission,
+)
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 @pytest.fixture(autouse=True)
 def _stub_forge_check_auth_by_default(fake_forge):
-    """テスト環境において GitHubForge.check_auth() が実際の gh 認証エラーを
-    投げないように、デフォルトで pass するようにスタブする。"""
-    fake_forge.check_auth.reset_mock(side_effect=True)
-    mock_check = fake_forge.check_auth
-    yield mock_check
+    """`GitHubForge.check_auth()`が実際のgh認証エラーを投げないようスタブする。"""
+    return stub_forge_check_auth(fake_forge)
 
 
 @pytest.fixture(autouse=True)
 def _stub_label_actor_permission_by_default(fake_forge):
-    """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
-    `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
-    返すようスタブする。検証ロジック自体のテストは
-    tests/test_dispatch_actor_verification.py に集約する。"""
-    fake_forge.get_label_actor.reset_mock(side_effect=True)
-    fake_forge.get_label_actor.return_value = "trusted-actor"
-    fake_forge.get_actor_permission.reset_mock(side_effect=True)
-    fake_forge.get_actor_permission.return_value = "write"
-    yield
-
-
-def _issue(
-    number,
-    labels=("status:queued",),
-    footprint=("src/foo.py",),
-    symbols=("foo.Foo",),
-    subtask_id="task-a",
-    depends_on=(),
-    created_at="2026-01-01T00:00:00+00:00",
-    parent_number=181,
-):
-    footprint_lines = "\n".join(f"  - {f}" for f in footprint) if footprint else "  []"
-    symbols_lines = "\n".join(f"  - {s}" for s in symbols) if symbols else "  []"
-    depends_on_lines = (
-        "\n".join(f"  - {d}" for d in depends_on) if depends_on else "  []"
-    )
-    body = (
-        "## Footprint\n"
-        "```yaml\n"
-        f"subtask_id: {subtask_id}\n"
-        "footprint:\n"
-        f"{footprint_lines}\n"
-        "symbols:\n"
-        f"{symbols_lines}\n"
-        "depends_on:\n"
-        f"{depends_on_lines}\n"
-        "```\n"
-    )
-    parent = {"number": parent_number} if parent_number is not None else None
-    return IssueRecord(
-        number=number,
-        title="t",
-        body=body,
-        labels=labels,
-        created_at=created_at,
-        parent=parent,
-    )
+    """#119のactor権限検証が実際の`gh api`を叩かないようスタブする。"""
+    stub_label_actor_permission(fake_forge)
 
 
 def _task(

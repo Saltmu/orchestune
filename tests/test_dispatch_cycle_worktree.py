@@ -7,7 +7,6 @@ dispatch_escalation/dispatch_rebase）にあるため、patch対象はそれら�
 
 import subprocess
 import tempfile
-from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,73 +14,27 @@ import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_context import _group_by_status
-from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.locks import ExternalLockScanResult
-from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
-    ActiveWorktree,
     RunState,
 )
 from orchestune.models import PrRecord
-
-
-def _task(**overrides):
-    defaults = dict(
-        issue_number=1,
-        subtask_id="task-a",
-        footprint=(),
-        symbols=(),
-        risk=False,
-        priority="medium",
-        progress_partial=False,
-        status_labels=("status:in-progress",),
-        created_at="2026-01-01T00:00:00+00:00",
-        depends_on=(),
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
-
-
-def _active(**overrides):
-    defaults = dict(
-        issue_number=1,
-        branch="claude/issue-1-task-a",
-        worktree_path="worktrees/w1",
-        pid=111,
-        started_at=1_699_999_000.0,
-        declared_footprint=(),
-    )
-    defaults.update(overrides)
-    return ActiveWorktree(**defaults)
+from tests.dispatch_test_support import make_test_active_worktree as _active
+from tests.dispatch_test_support import (
+    make_test_cycle_context,
+    stub_label_actor_permission,
+)
+from tests.dispatch_test_support import make_test_task as _task
+from tests.dispatch_test_support import (
+    patch_gc_process_alive as _patch_gc_process_alive,
+)
 
 
 def _ctx(**overrides):
-    defaults = dict(
-        run_state=RunState(active_worktrees={}),
-        tasks_by_issue={},
-        dependency_resolution={},
-        ci_passed_pr_issue_numbers=set(),
-        changes_requested_issue_numbers=set(),
-        branch_by_issue_number={},
-        prs=[],
-        config=DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-        ),
+    return make_test_cycle_context(
+        state_root=tmp_path, resolve_dependencies=True, action_now=0.0, **overrides
     )
-    defaults.update(overrides)
-    if "dependency_resolution" not in overrides and "tasks_by_issue" in overrides:
-        defaults["dependency_resolution"] = resolve_all_dependencies(
-            overrides["tasks_by_issue"]
-        )
-    actions = CycleActionAdapter(defaults["run_state"], defaults["config"], now=0.0)
-    ctx = CycleContext(**defaults, actions=actions)
-    actions.bind_context(ctx)
-    return ctx
 
 
 def _process_active_worktrees(ctx):
@@ -102,31 +55,10 @@ def _process_active_worktrees(ctx):
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
-@contextmanager
-def _patch_gc_process_alive(*, return_value: bool):
-    """Patch every consumer split from the former dispatch_gc dependency."""
-    with ExitStack() as stack:
-        for target in (
-            "orchestune.dispatch.execution_repair.is_process_alive",
-            "orchestune.dispatch.gc.is_process_alive",
-            "orchestune.dispatch.gc.completion.is_process_alive",
-            "orchestune.dispatch.gc.zombies.is_process_alive",
-        ):
-            stack.enter_context(patch(target, return_value=return_value))
-        yield
-
-
 @pytest.fixture(autouse=True)
 def _stub_label_actor_permission_by_default(fake_forge):
-    """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
-    `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
-    返すようスタブする。検証ロジック自体のテストは
-    tests/test_dispatch_actor_verification.py に集約する。"""
-    fake_forge.get_label_actor.reset_mock(side_effect=True)
-    fake_forge.get_label_actor.return_value = "trusted-actor"
-    fake_forge.get_actor_permission.reset_mock(side_effect=True)
-    fake_forge.get_actor_permission.return_value = "write"
-    yield
+    """#119のactor権限検証が実際の`gh api`を叩かないようスタブする。"""
+    stub_label_actor_permission(fake_forge)
 
 
 class TestProcessActiveWorktrees:

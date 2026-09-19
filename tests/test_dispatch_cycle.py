@@ -12,7 +12,6 @@ import json
 import subprocess
 import tempfile
 import time
-from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -20,19 +19,15 @@ import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_context import (
     _fetch_issues,
     _group_by_status,
 )
-from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase_scheduling import (
     _determine_candidate_tasks,
     run_scheduling_phase,
 )
-from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
@@ -42,125 +37,32 @@ from orchestune.dispatch.state import (
 )
 from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.models import IssueRecord, PrRecord
-from tests.conftest import make_issue
-
-
-@contextmanager
-def _patch_gc_process_alive(*, return_value: bool):
-    """Patch every consumer split from the former dispatch_gc dependency."""
-    with ExitStack() as stack:
-        for target in (
-            "orchestune.dispatch.execution_repair.is_process_alive",
-            "orchestune.dispatch.gc.is_process_alive",
-            "orchestune.dispatch.gc.completion.is_process_alive",
-            "orchestune.dispatch.gc.zombies.is_process_alive",
-        ):
-            stack.enter_context(patch(target, return_value=return_value))
-        yield
-
+from tests.dispatch_test_support import make_footprint_issue as _full_issue
+from tests.dispatch_test_support import (
+    make_test_cycle_context,
+    stub_label_actor_permission,
+)
+from tests.dispatch_test_support import make_test_task as _task
+from tests.dispatch_test_support import (
+    patch_gc_process_alive as _patch_gc_process_alive,
+)
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
 @pytest.fixture(autouse=True)
 def _stub_label_actor_permission_by_default(fake_forge):
-    """#119で追加したactor権限検証ステップが、既存の大半のテストで実際の
-    `gh api`呼び出しを行わないよう、デフォルトで許可された actor/permission を
-    返すようスタブする。検証ロジック自体のテストは
-    tests/test_dispatch_actor_verification.py に集約する。"""
-    fake_forge.get_label_actor.reset_mock(side_effect=True)
-    fake_forge.get_label_actor.return_value = "trusted-actor"
-    fake_forge.get_actor_permission.reset_mock(side_effect=True)
-    fake_forge.get_actor_permission.return_value = "write"
-    yield
-
-
-def _task(**overrides):
-    defaults = dict(
-        issue_number=1,
-        subtask_id="task-a",
-        footprint=(),
-        symbols=(),
-        risk=False,
-        priority="medium",
-        progress_partial=False,
-        status_labels=("status:in-progress",),
-        created_at="2026-01-01T00:00:00+00:00",
-        depends_on=(),
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
+    """#119のactor権限検証が実際の`gh api`を叩かないようスタブする。"""
+    stub_label_actor_permission(fake_forge)
 
 
 def _ctx(**overrides):
     action_now = overrides.pop("action_now", 2.0)
-    defaults = dict(
-        run_state=RunState(active_worktrees={}),
-        tasks_by_issue={},
-        dependency_resolution={},
-        ci_passed_pr_issue_numbers=set(),
-        changes_requested_issue_numbers=set(),
-        branch_by_issue_number={},
-        prs=[],
-        config=DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-        ),
-    )
-    defaults.update(overrides)
-    if "dependency_resolution" not in overrides and "tasks_by_issue" in overrides:
-        defaults["dependency_resolution"] = resolve_all_dependencies(
-            overrides["tasks_by_issue"]
-        )
-    actions = CycleActionAdapter(
-        defaults["run_state"], defaults["config"], now=action_now
-    )
-    ctx = CycleContext(**defaults, actions=actions)
-    actions.bind_context(ctx)
-    return ctx
-
-
-def _issue(number, labels=(), state="OPEN"):
-    return IssueRecord(
-        number=number,
-        title=f"Issue {number}",
-        body="",
-        labels=labels,
-        created_at="2026-01-01T00:00:00+00:00",
-        state=state,
-    )
-
-
-def _full_issue(
-    number,
-    labels=("status:queued",),
-    footprint=("src/foo.py",),
-    symbols=("foo.Foo",),
-    subtask_id="task-a",
-    depends_on=(),
-    created_at="2026-01-01T00:00:00+00:00",
-    parent_number=181,
-):
-    """`_issue()`より詳細なFootprint YAMLブロックを持つIssueRecordを作る。
-
-    `run_dispatch_cycle`をエンドツーエンドで駆動する系のテスト（旧
-    `test_dispatcher.py`の`TestRunDispatchCycle*`群）が要求するフィールド
-    （footprint/symbols/subtask_id/depends_on/parent_number）を持つため、
-    より単純な`_issue()`とは別名にし、`tests/conftest.py`の`make_issue`に
-    委譲する薄いラッパーにしている。
-    """
-    parent = {"number": parent_number} if parent_number is not None else None
-    return make_issue(
-        number,
-        title="t",
-        labels=labels,
-        footprint=footprint,
-        symbols=symbols,
-        subtask_id=subtask_id,
-        depends_on=depends_on,
-        created_at=created_at,
-        parent=parent,
+    return make_test_cycle_context(
+        state_root=tmp_path,
+        resolve_dependencies=True,
+        action_now=action_now,
+        **overrides,
     )
 
 

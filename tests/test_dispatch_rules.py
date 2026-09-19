@@ -1,48 +1,19 @@
 import tempfile
 from pathlib import Path
 
-from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.rules import (
     ActiveWorktreeRuleOutcome,
-    CycleContext,
     RuleChain,
     _ActiveWorktreeAggregates,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from tests.dispatch_test_support import make_test_active_worktree as _active
+from tests.dispatch_test_support import make_test_cycle_context
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
-def _active(**overrides):
-    defaults = dict(
-        issue_number=1,
-        branch="claude/issue-1-task-a",
-        worktree_path="worktrees/w1",
-        pid=111,
-        started_at=1_699_999_000.0,
-        declared_footprint=(),
-    )
-    defaults.update(overrides)
-    return ActiveWorktree(**defaults)
-
-
 def _ctx(**overrides):
-    defaults = dict(
-        run_state=RunState(active_worktrees={}),
-        tasks_by_issue={},
-        dependency_resolution={},
-        ci_passed_pr_issue_numbers=set(),
-        changes_requested_issue_numbers=set(),
-        branch_by_issue_number={},
-        prs=[],
-        config=DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-        ),
-    )
-    defaults.update(overrides)
-    return CycleContext(**defaults)
+    return make_test_cycle_context(state_root=tmp_path, **overrides)
 
 
 class TestRuleChainRun:
