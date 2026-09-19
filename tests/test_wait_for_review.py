@@ -7,6 +7,8 @@ from unittest.mock import patch
 import pytest
 
 from scripts.wait_for_review import (
+    EXIT_NO_FINDINGS,
+    StalledReviewError,
     _build_snapshot,
     _extract_review_result,
     _filter_bot_items,
@@ -710,6 +712,60 @@ def test_wait_for_review_detects_codex_review_and_inlines(mock_post, mock_get_da
 
 @patch("scripts.wait_for_review._get_pr_data", autospec=True)
 @patch("scripts.wait_for_review.post_review_trigger", autospec=True)
+def test_wait_for_review_excludes_inline_comments_from_earlier_rounds(
+    mock_post, mock_get_data
+):
+    # Regression for a live issue found while running this very review loop on
+    # PR #927 round 3: `pulls/{pr}/comments` returns every inline comment ever
+    # posted on the PR, so an earlier round's already-addressed findings kept
+    # being reported as "current" every subsequent round even after the bot
+    # posted a clean summary this round -- the loop could never reach Exit 0.
+    mock_post.return_value = {
+        "id": 300,
+        "created_at": "2026-09-19T10:04:00Z",
+        "body": "@codex review",
+    }
+    stale_inline_from_round_1 = {
+        "id": 4052816762,
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "created_at": "2026-09-19T09:55:52Z",
+        "path": "scripts/wait_for_review.py",
+        "line": 592,
+        "body": "Scope stall detection to the latest trigger (already fixed)",
+    }
+    clean_summary_this_round = {
+        "id": 301,
+        "user": {"login": "chatgpt-codex-connector[bot]"},
+        "submitted_at": "2026-09-19T10:07:50Z",
+        "body": "Codex Review: Didn't find any major issues.",
+    }
+    mock_get_data.side_effect = [
+        {
+            "issue_comments": [],
+            "reviews": [],
+            "inline_comments": [stale_inline_from_round_1],
+        },
+        {
+            "issue_comments": [],
+            "reviews": [clean_summary_this_round],
+            "inline_comments": [stale_inline_from_round_1],
+        },
+    ]
+
+    result = wait_for_review(
+        pr_number=927,
+        timeout=10,
+        interval=0,
+        bot_name="codex",
+        post_trigger=True,
+    )
+
+    assert result["inline_comments"] == []
+    assert result["verdict"] == EXIT_NO_FINDINGS
+
+
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
 def test_wait_for_review_times_out(mock_post, mock_get_data):
     mock_post.return_value = {"id": 300, "created_at": "2026-08-20T07:00:00Z"}
     mock_get_data.return_value = {
@@ -725,6 +781,180 @@ def test_wait_for_review_times_out(mock_post, mock_get_data):
             bot_name="claude",
             post_trigger=True,
         )
+
+
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
+def test_wait_for_review_ignores_stale_tracker_from_earlier_round(
+    mock_post, mock_get_data
+):
+    # Regression for a Codex review finding on PR #927: an in-progress tracker
+    # comment left over from an earlier round (created before the *current*
+    # trigger) must not be attributed to this round's stall tracking, or a
+    # brand-new trigger that hasn't drawn any bot response yet would be
+    # misdiagnosed as a stall instead of staying on the plain-timeout path.
+    mock_post.return_value = {
+        "id": 200,
+        "created_at": "2026-09-19T02:00:00Z",
+        "body": "@claude review",
+    }
+    stale_prior_round_tracker = {
+        "id": 101,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-09-19T01:05:05Z",
+        "updated_at": "2026-09-19T01:05:05Z",
+        "body": "### Review in progress\n- [ ] Kick off review\n- [ ] Post findings",
+    }
+    mock_get_data.return_value = {
+        "issue_comments": [stale_prior_round_tracker],
+        "reviews": [],
+        "inline_comments": [],
+    }
+
+    with pytest.raises(TimeoutError):
+        wait_for_review(
+            pr_number=927,
+            timeout=0,
+            interval=1,
+            bot_name="claude",
+            post_trigger=True,
+            stall_grace_seconds=0,
+        )
+
+
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
+def test_wait_for_review_detects_stalled_in_progress_tracker(mock_post, mock_get_data):
+    # Reproduces PR #923 round 4 (workflow run 35411499375): the action posts an
+    # in-progress tracker comment, then the job ends without ever editing it again.
+    # A live job keeps editing the same comment as it ticks off checklist items, so
+    # an unchanged tracker signature that persists past the stall grace window means
+    # the owning job most likely already ended.
+    mock_post.return_value = {
+        "id": 100,
+        "created_at": "2026-09-19T01:05:00Z",
+        "body": "@claude review",
+    }
+    in_progress = {
+        "id": 101,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-09-19T01:05:05Z",
+        "updated_at": "2026-09-19T01:05:05Z",
+        "body": (
+            "### Review in progress\n"
+            "- [x] Kick off review\n"
+            "- [ ] Verify findings\n"
+            "- [ ] Post findings"
+        ),
+    }
+    mock_get_data.side_effect = [
+        {"issue_comments": [], "reviews": [], "inline_comments": []},
+        {"issue_comments": [in_progress], "reviews": [], "inline_comments": []},
+        {"issue_comments": [in_progress], "reviews": [], "inline_comments": []},
+        {"issue_comments": [in_progress], "reviews": [], "inline_comments": []},
+    ]
+
+    with pytest.raises(StalledReviewError, match="923"):
+        wait_for_review(
+            pr_number=923,
+            timeout=10,
+            interval=0,
+            bot_name="claude",
+            post_trigger=True,
+            stall_grace_seconds=0,
+        )
+
+
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
+def test_wait_for_review_unchanged_in_progress_within_grace_keeps_waiting(
+    mock_post, mock_get_data
+):
+    # Same tracker signature observed twice in a row, but still within the
+    # (generously large) stall grace window: this must NOT raise, and must
+    # keep waiting for the eventual completed comment.
+    mock_post.return_value = {
+        "id": 100,
+        "created_at": "2026-09-19T01:05:00Z",
+        "body": "@claude review",
+    }
+    in_progress = {
+        "id": 101,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-09-19T01:05:05Z",
+        "updated_at": "2026-09-19T01:05:05Z",
+        "body": "### Review in progress\n- [ ] Working...",
+    }
+    completed = {
+        **in_progress,
+        "updated_at": "2026-09-19T01:08:00Z",
+        "body": "### Review complete\nAll checks passed.",
+    }
+    mock_get_data.side_effect = [
+        {"issue_comments": [], "reviews": [], "inline_comments": []},
+        {"issue_comments": [in_progress], "reviews": [], "inline_comments": []},
+        {"issue_comments": [in_progress], "reviews": [], "inline_comments": []},
+        {"issue_comments": [completed], "reviews": [], "inline_comments": []},
+    ]
+
+    result = wait_for_review(
+        pr_number=923,
+        timeout=10,
+        interval=0,
+        bot_name="claude",
+        post_trigger=True,
+        stall_grace_seconds=1000,
+    )
+
+    assert "### Review complete" in result["review_body"]
+
+
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
+def test_wait_for_review_in_progress_edits_reset_stall_tracking(
+    mock_post, mock_get_data
+):
+    # A live job keeps editing the tracker comment (checklist items ticking off);
+    # each edit must reset the stall clock so it never fires while genuinely working.
+    mock_post.return_value = {
+        "id": 100,
+        "created_at": "2026-09-19T01:05:00Z",
+        "body": "@claude review",
+    }
+    step1 = {
+        "id": 101,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-09-19T01:05:05Z",
+        "updated_at": "2026-09-19T01:05:05Z",
+        "body": "### Review in progress\n- [ ] Step 1",
+    }
+    step2 = {
+        **step1,
+        "updated_at": "2026-09-19T01:06:05Z",
+        "body": "### Review in progress\n- [x] Step 1\n- [ ] Step 2",
+    }
+    completed = {
+        **step1,
+        "updated_at": "2026-09-19T01:07:05Z",
+        "body": "### Review complete\nAll checks passed.",
+    }
+    mock_get_data.side_effect = [
+        {"issue_comments": [], "reviews": [], "inline_comments": []},
+        {"issue_comments": [step1], "reviews": [], "inline_comments": []},
+        {"issue_comments": [step2], "reviews": [], "inline_comments": []},
+        {"issue_comments": [completed], "reviews": [], "inline_comments": []},
+    ]
+
+    result = wait_for_review(
+        pr_number=923,
+        timeout=10,
+        interval=0,
+        bot_name="claude",
+        post_trigger=True,
+        stall_grace_seconds=0,
+    )
+
+    assert "### Review complete" in result["review_body"]
 
 
 def test_wait_for_review_polling_catches_exception_and_continues():

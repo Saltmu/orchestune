@@ -51,7 +51,13 @@ Loop (up to 5 rounds):
        comment**, even with a boilerplate summary such as "Here are some automated
        review suggestions". Read every `Inline Finding` block (path, line, full body).
      - Exit 0: clean pass / no findings. Exit 11: reviewer still in progress.
-     - Exit 20: timeout; retry once with --no-post --timeout 300. If still timed out, post an Outcome Record with result: "blocked", reason: "review-timeout", review.bot set to the reviewer bot, and attempt count (automatically re-queued with exponential backoff; escalates to human review after 2 attempts).
+     - Exit 20: timeout (default 1800s); retry once with --no-post --timeout 1800. If still timed out, post an Outcome Record with result: "blocked", reason: "review-timeout", review.bot set to the reviewer bot, and attempt count (automatically re-queued with exponential backoff; escalates to human review after 2 attempts).
+     - Exit 21: stalled — the "in progress" tracker comment stopped changing
+       for over the stall grace window (default 600s); a live job keeps
+       editing it, so this already confirms the workflow run ended without
+       posting a result (skip the Exit-20 `--no-post` re-check). Call
+       `wait_for_review.py` again normally (no `--round`/`--no-post`) for a
+       fresh next-round trigger; Exit 12 (max rounds) escalates as usual.
      - Exit 30: ambiguous verdict; inspect summary and inline findings before
        requesting another review or escalating. Exit 2 or 12: record and escalate.
      - Exit 10:
@@ -68,11 +74,15 @@ Use `/tmp/review_reply.md` with `Round X/5`, addressed findings and commit hashe
 declined findings and reasons, and any follow-up Issue links. Pass it with `--body-file`
 to `wait_for_review.py`; do not post a separate trigger comment.
 
-### Diagnosing Exit 20 vs Exit 30 (Bot-Authored Trigger Failures)
+### Diagnosing Exit 20 vs Exit 21 vs Exit 30 (Bot-Authored Trigger Failures)
 
-`Exit 20` (no review activity / timeout) and `Exit 30` (activity exists but the
+`Exit 20` (no review activity at all within the timeout), `Exit 21` (an in-progress
+tracker comment was seen but stopped changing), and `Exit 30` (activity exists but the
 verdict could not be determined) look similar from the caller's side but have
-different root causes and require different diagnosis:
+different root causes and require different diagnosis. `Exit 21` specifically means the
+trigger *did* work (the bot acknowledged and started, unlike `Exit 20`) but its own
+workflow run ended without ever posting a final result — see the Exit 21 row above for
+the retry/escalation handling.
 
 - **Exit 20 (no activity at all)**: if the trigger comment was posted from a
   bot-authored execution environment (e.g. Claude Code on the Web, where GitHub
@@ -94,8 +104,9 @@ different root causes and require different diagnosis:
   actual review body / inline comments returned by `wait_for_review.py`
   instead of the Actions run.
 
-In both cases, `gh run list --workflow claude-code-review.yml --json databaseId,event,status,conclusion`
-finds the run, then `gh api repos/{owner}/{repo}/actions/runs/<run-id> --jq '.actor.login'`
-shows the triggering actor (neither `gh run list --json` nor `gh run view --json`
-exposes an actor field) and `gh run view <run-id> --json jobs` shows each job's
-conclusion.
+In all three cases (Exit 21 included — a `success`/`failure` conclusion there confirms
+the job already ended), `gh run list --workflow claude-code-review.yml --json
+databaseId,event,status,conclusion` finds the run, then `gh api
+repos/{owner}/{repo}/actions/runs/<run-id> --jq '.actor.login'` shows the triggering
+actor (neither `gh run list --json` nor `gh run view --json` exposes an actor field) and
+`gh run view <run-id> --json jobs` shows each job's conclusion.

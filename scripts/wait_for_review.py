@@ -52,12 +52,34 @@ from scripts.review_verdict import (
 EXIT_INTERNAL_ERROR = 2  # Internal error / Unexpected exception / Arg error
 EXIT_MAX_ROUNDS = 12  # Maximum review rounds exceeded
 EXIT_TIMEOUT = 20  # Timeout waiting for review activity
+EXIT_STALLED = 21  # In-progress tracker comment stopped changing; job likely ended
 
 GH_COMMAND_TIMEOUT_SECONDS = 30
+
+# How long a bot's own "in progress" tracker comment may report the same
+# unchanged content before it is treated as stalled rather than merely slow.
+# A live job keeps editing that same comment (ticking off checklist items) as
+# it works, so a signature that never changes past this window most likely
+# means the workflow run that owns it already ended without posting a final
+# result (observed directly on PR #923 round 4, run 35411499375: the action
+# posted a "Review in progress" tracker, then finished successfully 2m26s
+# later without ever editing it again). See Issue #926.
+DEFAULT_STALL_GRACE_SECONDS = 600
 
 
 class MaxRoundsExceededError(RuntimeError):
     """Raised when the maximum number of review rounds is exceeded."""
+
+
+class StalledReviewError(RuntimeError):
+    """Raised when a bot's in-progress tracker comment stops changing.
+
+    This is distinct from a plain timeout: it means the review polling loop
+    positively observed the same "in progress" tracker signature for longer
+    than the stall grace window, which is strong evidence the workflow run
+    that owns the comment already ended (success or failure) without ever
+    posting a final result, rather than merely being slow.
+    """
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -302,9 +324,25 @@ def _extract_review_result(
     bot_name: str,
     exclude_ids: set[int | str] | None = None,
     latest_item: dict[str, Any] | None = None,
+    latest_trigger_time: str = "",
 ) -> dict[str, Any] | None:
+    # Scope inline comments to the current round, same as the summary/tracker
+    # gating above: `pulls/{pr}/comments` returns every inline comment ever
+    # posted on the PR, so an unfiltered fetch would keep resurfacing a prior
+    # round's already-addressed findings as "current" forever, even after the
+    # bot reports a clean pass this round (see Issue #926 PR #927 round 3).
+    scoped_data = current_data
+    if latest_trigger_time:
+        scoped_data = {
+            **current_data,
+            "inline_comments": [
+                item
+                for item in current_data.get("inline_comments", [])
+                if _get_item_created_timestamp(item) >= latest_trigger_time
+            ],
+        }
     result = extract_review_result(
-        normalize_review_state(current_data),
+        normalize_review_state(scoped_data),
         bot_name,
         exclude_ids=exclude_ids,
         latest_item=latest_item,
@@ -412,7 +450,10 @@ def _check_immediate_review_result(
         )
     ):
         result = _extract_review_result(
-            initial_data, bot_name, latest_item=latest_bot_item
+            initial_data,
+            bot_name,
+            latest_item=latest_bot_item,
+            latest_trigger_time=latest_trigger_time,
         )
         if result is not None:
             result["verdict"] = evaluate_review_verdict(
@@ -439,10 +480,59 @@ def _resolve_current_round(
     return latest_existing_round + 1
 
 
+def _track_stall(
+    current_bot_activity: dict[str, Any] | None,
+    last_signature: str | None,
+    since: float | None,
+    *,
+    stall_grace_seconds: int,
+    bot_name: str,
+    pr_number: int,
+    latest_trigger_time: str = "",
+) -> tuple[str | None, float | None]:
+    """Update in-progress tracker staleness state for one poll iteration.
+
+    Returns the (signature, since) state to carry into the next iteration.
+    Raises StalledReviewError once the same signature has persisted for at
+    least stall_grace_seconds while still reporting in-progress.
+
+    A tracker comment created before latest_trigger_time belongs to an
+    earlier round (e.g. the current round's trigger hasn't drawn any bot
+    response yet); it must not be attributed to the current round's stall
+    tracking, or a still-unanswered new trigger would be misdiagnosed as a
+    stall of a round that never actually started (should stay Exit 20 /
+    the no-activity recovery path instead).
+    """
+    if (
+        current_bot_activity is None
+        or not _is_explicitly_in_progress(current_bot_activity)
+        or (
+            latest_trigger_time
+            and _get_item_created_timestamp(current_bot_activity) < latest_trigger_time
+        )
+    ):
+        return None, None
+
+    signature = (
+        f"{_get_item_timestamp(current_bot_activity)}:"
+        f"{len(str(current_bot_activity.get('body') or ''))}"
+    )
+    if signature != last_signature:
+        return signature, time.time()
+    if since is not None and time.time() - since >= stall_grace_seconds:
+        raise StalledReviewError(
+            f"@{bot_name}'s in-progress tracker comment on PR #{pr_number} has "
+            f"not changed in over {stall_grace_seconds}s while still reporting "
+            "in-progress; the workflow run that owns it most likely already "
+            "ended without posting a final result (see review-loop.md)."
+        )
+    return last_signature, since
+
+
 def wait_for_review(
     pr_number: int,
     *,
-    timeout: int = 300,
+    timeout: int = 1800,
     interval: int = 5,
     bot_name: str = "claude",
     post_trigger: bool = True,
@@ -451,6 +541,7 @@ def wait_for_review(
     max_rounds: int = 5,
     max_retries: int = 1,
     round_num: int | None = None,
+    stall_grace_seconds: int = DEFAULT_STALL_GRACE_SECONDS,
 ) -> dict[str, Any]:
     with ThreadPoolExecutor(max_workers=3) as executor:
         initial_data = _get_initial_pr_data(
@@ -499,11 +590,35 @@ def wait_for_review(
         )
         start_time = time.time()
         consecutive_errors = 0
+        last_in_progress_signature: str | None = None
+        in_progress_since: float | None = None
 
         while True:
             try:
                 current_data = _get_pr_data(pr_number, executor=executor)
                 consecutive_errors = 0
+
+                # Track staleness of the current "in progress" tracker comment
+                # independent of `has_changes` below: a comment that keeps
+                # reporting in-progress with an *unchanged* signature across
+                # polls never trips the snapshot-diff gate (nothing about it
+                # looks "new"), so a genuinely dead tracker would otherwise be
+                # invisible until the full timeout elapses. Raises
+                # StalledReviewError once the signature has been unchanged for
+                # longer than stall_grace_seconds.
+                current_bot_activity = _latest_bot_activity_item(
+                    current_data, bot_name, exclude_ids=excluded_ids
+                )
+                last_in_progress_signature, in_progress_since = _track_stall(
+                    current_bot_activity,
+                    last_in_progress_signature,
+                    in_progress_since,
+                    stall_grace_seconds=stall_grace_seconds,
+                    bot_name=bot_name,
+                    pr_number=pr_number,
+                    latest_trigger_time=latest_trigger_time,
+                )
+
                 current_snapshot = _build_snapshot(
                     current_data, bot_name, exclude_ids=excluded_ids
                 )
@@ -514,11 +629,8 @@ def wait_for_review(
                 )
 
                 if has_changes:
-                    latest_bot_activity = _latest_bot_activity_item(
-                        current_data, bot_name, exclude_ids=excluded_ids
-                    )
-                    if latest_bot_activity is not None and _is_explicitly_in_progress(
-                        latest_bot_activity
+                    if current_bot_activity is not None and _is_explicitly_in_progress(
+                        current_bot_activity
                     ):
                         initial_snapshot = current_snapshot
                         print(f"@{bot_name} is still working; continuing to wait...")
@@ -536,6 +648,7 @@ def wait_for_review(
                                 bot_name,
                                 exclude_ids=excluded_ids,
                                 latest_item=latest_bot_item,
+                                latest_trigger_time=latest_trigger_time,
                             )
                             if result is not None:
                                 result["verdict"] = evaluate_review_verdict(
@@ -552,6 +665,8 @@ def wait_for_review(
                                 "continuing to wait..."
                             )
 
+            except StalledReviewError:
+                raise
             except Exception as e:
                 consecutive_errors += 1
                 print(f"Warning: Error checking PR review data: {e}", file=sys.stderr)
@@ -591,8 +706,17 @@ def main() -> None:
     parser.add_argument(
         "--timeout",
         type=int,
-        default=300,
-        help="Maximum time to wait in seconds (default: 300)",
+        default=1800,
+        help="Maximum time to wait in seconds (default: 1800)",
+    )
+    parser.add_argument(
+        "--stall-grace",
+        type=int,
+        default=DEFAULT_STALL_GRACE_SECONDS,
+        help=(
+            "Seconds an in-progress tracker comment may stay unchanged before "
+            f"it is treated as stalled rather than slow (default: {DEFAULT_STALL_GRACE_SECONDS})"
+        ),
     )
     parser.add_argument(
         "--interval",
@@ -662,6 +786,7 @@ def main() -> None:
             max_rounds=args.max_rounds,
             max_retries=args.max_retries,
             round_num=args.round,
+            stall_grace_seconds=args.stall_grace,
         )
         verdict = result.get("verdict")
         if verdict is None:
@@ -674,6 +799,9 @@ def main() -> None:
     except MaxRoundsExceededError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(EXIT_MAX_ROUNDS)
+    except StalledReviewError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(EXIT_STALLED)
     except TimeoutError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(EXIT_TIMEOUT)
