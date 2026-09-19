@@ -730,6 +730,45 @@ def test_wait_for_review_times_out(mock_post, mock_get_data):
 
 @patch("scripts.wait_for_review._get_pr_data", autospec=True)
 @patch("scripts.wait_for_review.post_review_trigger", autospec=True)
+def test_wait_for_review_ignores_stale_tracker_from_earlier_round(
+    mock_post, mock_get_data
+):
+    # Regression for a Codex review finding on PR #927: an in-progress tracker
+    # comment left over from an earlier round (created before the *current*
+    # trigger) must not be attributed to this round's stall tracking, or a
+    # brand-new trigger that hasn't drawn any bot response yet would be
+    # misdiagnosed as a stall instead of staying on the plain-timeout path.
+    mock_post.return_value = {
+        "id": 200,
+        "created_at": "2026-09-19T02:00:00Z",
+        "body": "@claude review",
+    }
+    stale_prior_round_tracker = {
+        "id": 101,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-09-19T01:05:05Z",
+        "updated_at": "2026-09-19T01:05:05Z",
+        "body": "### Review in progress\n- [ ] Kick off review\n- [ ] Post findings",
+    }
+    mock_get_data.return_value = {
+        "issue_comments": [stale_prior_round_tracker],
+        "reviews": [],
+        "inline_comments": [],
+    }
+
+    with pytest.raises(TimeoutError):
+        wait_for_review(
+            pr_number=927,
+            timeout=0,
+            interval=1,
+            bot_name="claude",
+            post_trigger=True,
+            stall_grace_seconds=0,
+        )
+
+
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+@patch("scripts.wait_for_review.post_review_trigger", autospec=True)
 def test_wait_for_review_detects_stalled_in_progress_tracker(mock_post, mock_get_data):
     # Reproduces PR #923 round 4 (workflow run 35411499375): the action posts an
     # in-progress tracker comment, then the job ends without ever editing it again.

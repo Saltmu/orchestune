@@ -469,15 +469,28 @@ def _track_stall(
     stall_grace_seconds: int,
     bot_name: str,
     pr_number: int,
+    latest_trigger_time: str = "",
 ) -> tuple[str | None, float | None]:
     """Update in-progress tracker staleness state for one poll iteration.
 
     Returns the (signature, since) state to carry into the next iteration.
     Raises StalledReviewError once the same signature has persisted for at
     least stall_grace_seconds while still reporting in-progress.
+
+    A tracker comment created before latest_trigger_time belongs to an
+    earlier round (e.g. the current round's trigger hasn't drawn any bot
+    response yet); it must not be attributed to the current round's stall
+    tracking, or a still-unanswered new trigger would be misdiagnosed as a
+    stall of a round that never actually started (should stay Exit 20 /
+    the no-activity recovery path instead).
     """
-    if current_bot_activity is None or not _is_explicitly_in_progress(
-        current_bot_activity
+    if (
+        current_bot_activity is None
+        or not _is_explicitly_in_progress(current_bot_activity)
+        or (
+            latest_trigger_time
+            and _get_item_created_timestamp(current_bot_activity) < latest_trigger_time
+        )
     ):
         return None, None
 
@@ -584,6 +597,7 @@ def wait_for_review(
                     stall_grace_seconds=stall_grace_seconds,
                     bot_name=bot_name,
                     pr_number=pr_number,
+                    latest_trigger_time=latest_trigger_time,
                 )
 
                 current_snapshot = _build_snapshot(
