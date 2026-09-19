@@ -1,13 +1,8 @@
-"""1サイクル分の実行portと状態queryの型契約（#823 接続契約v3 / #881）。
+"""1 dispatch cycleの状態queryと実行portの型契約。
 
 `CycleQueries`は`CycleContext`が公開する意味付きの状態窓口、`CycleActions`は
-各フェーズが呼ぶ実行portで、L3 `cycle_actions.py`が実装する（#884〜#886）。
-本モジュールは署名と値型だけを固定し、実装adapterは持たない。
-
-Protocolのために**L2からL3をimportしない**。`GcPhaseResult`はそのために
-L3 `phase_gc`から内容を変えずここへ移設したもので、`phase_gc`が再exportして
-既存importを維持する。`ExternalLockScanResult`や`SchedulingResult`のような
-既存の結果型は再利用し、共有状態のSnapshotへ転用しない。
+各phaseが呼ぶ実行portである。本モジュールは署名と値型だけを定義し、実装adapterを
+持たない。L2 contractはL3 implementationをimportせず、既存の結果型を再利用する。
 """
 
 from __future__ import annotations

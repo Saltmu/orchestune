@@ -1,29 +1,9 @@
-"""`CycleContext`が公開するsemantic query/record APIの内部所有者（#868）。
+"""`CycleContext`の意味付きquery/record状態を所有する。
 
-`CycleContext`自身はコンストラクタ引数（既存フィールド）を一切変更しない公開窓口
-のまま、初期観測・成功確認後の差分・起動事実の3種を`_CycleState`へ集約する。
-フェーズ側から見えるのは`CycleContext`のメソッドだけで、別のDispatchSnapshot型は
-作らない。
-
-- **初期観測**: コンストラクタ入力（`tasks_by_issue`, `dependency_resolution`,
-  `ci_passed_pr_issue_numbers`, `changes_requested_issue_numbers`,
-  `branch_by_issue_number`, `run_state.active_worktrees`,
-  `prior_parent_merge_completed_issue_numbers`,
-  `prior_parent_merge_hold_issue_numbers`, `issue_records_by_number`, `prs`）から、
-  必要なスカラー値だけをコピーして所有する。入力コンテナや`ActiveWorktree`自体への
-  参照は保持しない。`issue_records`/`pull_requests`が返すのはこの初期Forge観測で
-  あり、`record_*`の差分は反映しない（#881: 生ラベルをrecordで偽装しない）。
-- **成功確認後の差分**: `record_completion` / `record_launch` /
-  `record_transition`が反映する、Issue番号別の実効ラベル・起動事実・実行中
-  フラグ。外部I/Oは行わず、呼出側が既に成功を確認した事実だけを反映する。
-- **RunState**: 従来通り`CycleContext.run_state`が正本であり、本モジュールは
-  構築時にスカラーを一度読むだけで、保存・履歴追加を行わない（#868の移行例外）。
-
-Identity（依存先Issue番号の解決）は`dependency_resolution`が担い、本モジュールは
-Lifecycle（実効状態）だけを扱う。`_CycleState`は#867の`DependencyStateView`を
-構造的に満たし、`assess_dependencies`はその`assess_dependency_lifecycle`へ委譲する。
-
-`_CycleState`は`rules`や構築モジュール（`cycle_context.py`）へ逆importしない。
+入力観測は構築時に値として取り込み、queryは不変な値だけを返す。`record_*`は
+外部操作が成功した後の確認済み事実だけを実効状態へ反映し、外部I/Oは行わない。
+依存先の識別は`dependency_resolution`、依存のライフサイクル判定は
+`assess_dependency_lifecycle`の責務とする。
 """
 
 from __future__ import annotations
@@ -57,7 +37,7 @@ from orchestune.models import IssueRecord, PrRecord, Task
 from orchestune.task_branch_resolution import TaskBranchResolution
 from orchestune.task_metadata import CycleTask
 
-# record_*が返す競合理由の固定文字列（Issue本文セクションD/E）。
+# record_*が返す競合理由の固定文字列。
 REASON_UNKNOWN_ISSUE = "unknown-issue"
 REASON_TERMINAL_STATE = "terminal-state"
 REASON_LAUNCH_MISMATCH = "launch-mismatch"
@@ -77,25 +57,24 @@ _ESCALATION_TARGETS = (
 )
 _TERMINAL_LIFECYCLE = (TaskLifecycle.DONE, TaskLifecycle.NOT_NEEDED)
 
-# 終端を表す主状態ラベル。既に実効完了しているタスクについては、これらへの
-# 遷移は「巻き戻し」ではなく確定済みの完了にラベルが追いつくだけなので許可する
-# (#868レビュー対応)。逆に、まだ完了していないタスクをこれらへ遷移させて完了を
-# 新規に確立することはできない——それは`record_completion`の責務。
+# 終端を表す主状態ラベル。確認済みの完了に後からラベルが追いつく遷移は許可する。
+# 未完了タスクをこの遷移で完了にすることはできず、完了の記録は`record_completion`
+# だけが行う。
 _TERMINAL_TARGETS = (StatusLabel.DONE, StatusLabel.NOT_NEEDED)
 
-# execution_active=trueが意味を持つ遷移先はこの3状態だけ(Issue本文セクション
-# E: IN_PROGRESSへの遷移、およびエスカレーションで起動継続する場合)。
+# execution_active=trueが意味を持つ遷移先はIN_PROGRESSと起動継続中の
+# エスカレーション状態だけ。
 # それ以外(QUEUED/BLOCKED、DONE等の終端)への遷移でexecution_active=trueを
 # 主張すると、record_completionが履歴として残したLaunchFactを使って
 # 「DONEなのに実行中」という不変条件違反(consistency.invariants.status.
-# _done_findings参照)を作り出せてしまう(#868レビュー対応)。ブラックリスト
-# ではなくホワイトリストとすることで、将来の主状態追加時にも安全側に倒す。
+# _done_findings参照)を作り出せてしまう。ホワイトリストにより、将来の主状態追加も
+# 安全側に倒す。
 _EXECUTION_ACTIVE_ALLOWED_TARGETS = (
     StatusLabel.IN_PROGRESS,
     *_ESCALATION_TARGETS,
 )
 
-# 非終端主状態間の許可遷移(Issue本文セクションE)。IN_PROGRESSへの遷移は
+# 非終端主状態間の許可遷移。IN_PROGRESSへの遷移は
 # 「既に記録済みの起動事実があり、execution_active=true」が別途必要——それは
 # `_CycleState.record_transition`の実行時チェックが担い、この表自体には
 # 含めない(遷移先として許可されているかどうかだけをここで表す)。
@@ -147,7 +126,7 @@ def _launch_fact_from_active(active: ActiveWorktree) -> LaunchFact:
     そのまま型付きの`LaunchFact`へ載せると、`external_id is not None`だけを
     見る消費側がプロバイダAPIへbooleanを送ったり、pid消費側がプロセスグループ
     宛のpidを受け取ったりする。使えない値は`None`へ倒し、`LaunchFact`が常に
-    宣言どおりの型であることを保証する(#868レビュー対応)。
+    宣言どおりの型であることを保証する。
 
     branch / worktree_pathは`_has_valid_launch_handle`が非空`str`を必須と
     しているため、ここへ到達する時点で健全な値であることが保証されている。
@@ -168,7 +147,7 @@ def _usable_started_at_or_none(value: object) -> float | None:
 
     `bool`は`int`のサブクラスなので除外する。`math.isfinite`は任意長の巨大整数
     （例: `10**1000`）を受け取るとC double型変換時に`OverflowError`を送出するため、
-    型変換例外を安全に捕捉して`None`へ正規化する(#868レビュー対応)。
+    型変換例外を安全に捕捉して`None`へ正規化する。
     """
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
@@ -212,7 +191,7 @@ def _usable_str_or_none(value: object) -> str | None:
 
 
 def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
-    """`record_launch`のinvalid-launch判定と同じ基準(#868レビュー対応)。
+    """`record_launch`と同じinvalid-launch判定基準を使う。
 
     branch/worktree_pathが空、またはpidも(空文字列でない)external_idも無い
     (生存確認もプロバイダへの照会もできない)場合は、有効な起動として扱わない。
@@ -312,7 +291,7 @@ def _owned_issue_record(record: IssueRecord) -> IssueRecord:
     """可変な`parent`を切り離し、コレクションをtupleへ正規化したコピーを返す。
 
     所有時と返却時の両方で使う。`IssueRecord`自体はfrozenだが`parent`はdictなので、
-    共有したままにすると呼出側の変更が内部観測へ伝わる（#881）。すでに
+    共有したままにすると呼出側の変更が内部観測へ伝わる。すでに
     `parent is None`かつコレクションがtupleなら、値全体が不変なのでそのまま返す。
     """
     if (
@@ -513,7 +492,7 @@ class _CycleState:
         return self._candidate_tasks(StatusLabel.BLOCKED)
 
     def tasks(self) -> tuple[CycleTask, ...]:
-        """全タスクの実効値をIssue番号昇順で返す（#881）。
+        """全タスクの実効値をIssue番号昇順で返す。
 
         `queued_tasks`/`blocked_tasks`は起動候補のviewなので実効完了・実行中・
         非OPENを除外するが、こちらはquota・critical path・conflictが必要とする
@@ -527,7 +506,7 @@ class _CycleState:
         return tuple(effective)
 
     def issue_records(self) -> tuple[IssueRecord, ...]:
-        """初期Forge観測をIssue番号昇順で返す（#881）。
+        """初期Forge観測をIssue番号昇順で返す。
 
         `record_*`の差分は反映しない——実効ラベルは`task()`が返し、ここは観測
         されたままの生ラベルを保つ。
@@ -535,11 +514,11 @@ class _CycleState:
         return tuple(_owned_issue_record(record) for record in self._issue_records)
 
     def pull_requests(self) -> tuple[PrRecord, ...]:
-        """初期Forge観測をPR番号昇順で返す（#881）。"""
+        """初期Forge観測をPR番号昇順で返す。"""
         return self._pull_requests
 
     def is_prior_merge_held(self, issue_number: int) -> bool:
-        """検証済み先行マージ等による起動保留集合への所属を返す（#881）。
+        """検証済み先行マージ等による起動保留集合への所属を返す。
 
         既存`phase_scheduling`の判定と同じ素の所属であり、タスク母集団に無い
         Issueの保留も保留として扱う（判定条件を増やさない）。
@@ -547,7 +526,7 @@ class _CycleState:
         return issue_number in self._prior_held
 
     def dag_inputs(self, issue_numbers: tuple[int, ...]) -> tuple[SubTask, ...]:
-        """指定順のIssue番号を実効`Task`へ解決し、レガシーDAG入力へ変換する（#888）。
+        """指定順のIssue番号を実効`Task`へ解決し、派生`SubTask`入力を返す。
 
         `task()`と同じ実効値（record反映後）を使う。未知のIssue番号は母集団を
         黙って縮めず`ValueError`にする。raw宣言を返すqueryではない
@@ -661,7 +640,7 @@ class _CycleState:
     ) -> RecordResult | None:
         """`execution_active=true`の主張が成立するかを検証する。
 
-        呼出側は**NOOP判定より前に**これを通す(#868レビュー対応)。NOOP判定を
+        呼出側は**NOOP判定より前に**これを通す。NOOP判定を
         先に行うと、handle欠如の不確定起動(構築時からactive=Trueだが
         launch_fact=None)に対して同じラベル・`execution_active=true`をそのまま
         再送するだけで、起動事実の検証を経ずにNOOPが返ってしまう。
@@ -693,7 +672,7 @@ class _CycleState:
         # 終端(DONE/NOT_NEEDED)から**非終端**への巻き戻しは、表の内外を問わず
         # terminal-stateとして拒否する。終端ラベルへの遷移は巻き戻しではなく
         # 「確定済みの完了にラベルが追いつく」ケースなので、ここでは弾かず
-        # `_allowed_transition`の判断に委ねる(#868レビュー対応)。
+        # `_allowed_transition`の判断に委ねる。
         if lifecycle in _TERMINAL_LIFECYCLE and target not in _TERMINAL_TARGETS:
             return RecordResult(RecordStatus.CONFLICT, REASON_TERMINAL_STATE)
         if not self._allowed_transition(current_primary, target, lifecycle):
