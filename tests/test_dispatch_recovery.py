@@ -650,7 +650,7 @@ class TestRestorationCandidateProjection:
             patch(
                 "fake_forge_proxy.active_fake_forge.branch_exists",
                 return_value=False,
-            ),
+            ) as mock_branch_exists,
         ):
             result = _project_restoration_candidates(
                 run_state,
@@ -660,6 +660,7 @@ class TestRestorationCandidateProjection:
 
         active_by_key = {key: active for key, _, active in result}
         assert active_by_key["710"].base_branch == "codex/issue-709-task-a"
+        mock_branch_exists.assert_called_once_with("claude/issue-709-task-a")
 
 
 class TestBookkeepingRepairCommand:

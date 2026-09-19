@@ -101,11 +101,28 @@ class TaskMergeReceipt:
     ) -> TaskMergeReceipt:
         if not resolution.allows(BranchCapability.FETCH_MERGE):
             raise ValueError("branch resolution does not permit fetch/merge")
-        return cls(
+        return cls.from_verified_merge(
             issue_number=resolution.issue_number,
             branch_name=resolution.branch_name,
             fetched_commit_oid=fetched_commit_oid,
             source=resolution.source,
+        )
+
+    @classmethod
+    def from_verified_merge(
+        cls,
+        *,
+        issue_number: int,
+        branch_name: str,
+        fetched_commit_oid: str,
+        source: ResolutionSource,
+    ) -> TaskMergeReceipt:
+        """Reconstruct a receipt from trusted, already-integrated proof data."""
+        return cls(
+            issue_number=issue_number,
+            branch_name=branch_name,
+            fetched_commit_oid=fetched_commit_oid,
+            source=source,
         )
 
     def allows(self, capability: BranchCapability) -> bool:

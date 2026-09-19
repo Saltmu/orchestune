@@ -73,6 +73,7 @@ from orchestune.models import IssueRecord, PrRecord
 from orchestune.task_branch_resolution import (
     BranchCapability,
     CanonicalBranchState,
+    TaskBranchResolution,
     TaskBranchResolver,
     probe_canonical_state,
 )
@@ -338,6 +339,7 @@ def _restored_base_branch(
     issue_to_subtask_id: dict[int, str],
     dependency_resolution: dict[int, TaskDependencies],
     resolver: TaskBranchResolver,
+    resolutions: dict[int, TaskBranchResolution],
     config: DispatcherConfig,
 ) -> str:
     """Issueの親・依存関係から自己修復時のbase branchを決定する。
@@ -356,13 +358,9 @@ def _restored_base_branch(
         subtask_id = issue_to_subtask_id.get(dep_num)
         if subtask_id is None:
             continue
-        canonical = build_task_branch_name(dep_num, subtask_id)
-        state = (
-            probe_canonical_state(canonical, config.resolved_forge.branch_exists)
-            if resolver.has_verified_candidate(dep_num, subtask_id)
-            else CanonicalBranchState.INDETERMINATE
+        resolution = _resolve_recovery_branch(
+            dep_num, subtask_id, resolver, resolutions, config
         )
-        resolution = resolver.resolve(dep_num, subtask_id, state)
         if resolution.allows(BranchCapability.FETCH_MERGE):
             return resolution.branch_name
 
@@ -444,15 +442,13 @@ def _resolve_recovery_pr_and_branch(
     issue: IssueRecord,
     subtask_id: str,
     resolver: TaskBranchResolver,
+    resolutions: dict[int, TaskBranchResolution],
     config: DispatcherConfig,
 ) -> tuple[str, str | None, str | None]:
     canonical = build_task_branch_name(issue.number, subtask_id)
-    state = (
-        probe_canonical_state(canonical, config.resolved_forge.branch_exists)
-        if resolver.has_verified_candidate(issue.number, subtask_id)
-        else CanonicalBranchState.INDETERMINATE
+    resolution = _resolve_recovery_branch(
+        issue.number, subtask_id, resolver, resolutions, config
     )
-    resolution = resolver.resolve(issue.number, subtask_id, state)
     if resolution.allows(BranchCapability.LINK_PR) and resolution.pr is not None:
         return (
             resolution.branch_name,
@@ -462,11 +458,34 @@ def _resolve_recovery_pr_and_branch(
     return canonical, None, None
 
 
+def _resolve_recovery_branch(
+    issue_number: int,
+    subtask_id: str,
+    resolver: TaskBranchResolver,
+    resolutions: dict[int, TaskBranchResolution],
+    config: DispatcherConfig,
+) -> TaskBranchResolution:
+    """Resolve once per Issue for one recovery pass, including its API probe."""
+    cached = resolutions.get(issue_number)
+    if cached is not None:
+        return cached
+    canonical = build_task_branch_name(issue_number, subtask_id)
+    state = (
+        probe_canonical_state(canonical, config.resolved_forge.branch_exists)
+        if resolver.has_verified_candidate(issue_number, subtask_id)
+        else CanonicalBranchState.INDETERMINATE
+    )
+    resolution = resolver.resolve(issue_number, subtask_id, state)
+    resolutions[issue_number] = resolution
+    return resolution
+
+
 def _build_restored_active_worktree(
     issue: IssueRecord,
     subtask_id: str,
     declared_footprint: tuple[str, ...],
     resolver: TaskBranchResolver,
+    resolutions: dict[int, TaskBranchResolution],
     issue_to_subtask_id: dict[int, str],
     dependency_resolution: dict[int, TaskDependencies],
     config: DispatcherConfig,
@@ -476,12 +495,17 @@ def _build_restored_active_worktree(
         return active_from_attempt(attempt, parse_task_from_issue(issue), config)
     recompute_count, forced_serial = _recovery_counters_for_issue(issue)
     branch_name, external_id, external_url = _resolve_recovery_pr_and_branch(
-        issue, subtask_id, resolver, config
+        issue, subtask_id, resolver, resolutions, config
     )
     slug = branch_name.replace("/", "-")
     worktree_path = Path(config.worktree_root) / slug
     restored_base = _restored_base_branch(
-        issue, issue_to_subtask_id, dependency_resolution, resolver, config
+        issue,
+        issue_to_subtask_id,
+        dependency_resolution,
+        resolver,
+        resolutions,
+        config,
     )
 
     task = parse_task_from_issue(issue, issue_to_subtask_id)
@@ -522,6 +546,7 @@ def _restoration_candidates(
     }
     dependency_resolution = resolve_all_dependencies(tasks_by_issue)
     resolver = TaskBranchResolver(open_prs)
+    resolutions: dict[int, TaskBranchResolution] = {}
     candidates = []
     for issue in issues:
         subtask_id, declared_footprint = _parse_subtask_info_from_issue(issue)
@@ -530,6 +555,7 @@ def _restoration_candidates(
             subtask_id,
             declared_footprint,
             resolver,
+            resolutions,
             issue_to_subtask_id,
             dependency_resolution,
             config,

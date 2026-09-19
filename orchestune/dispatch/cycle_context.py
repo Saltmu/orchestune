@@ -365,7 +365,7 @@ def _build_cycle_context(
     ) = _build_pr_mappings(
         tasks_by_issue,
         prs,
-        canonical_state=getattr(config.resolved_forge, "branch_exists", None),
+        canonical_state=config.resolved_forge.branch_exists,
     )
 
     return CycleContext(

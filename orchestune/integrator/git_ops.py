@@ -653,6 +653,7 @@ class IntegrationMerger:
             branch_name=resolution.branch_name,
             source_sha=source_sha,
             source=resolution.source,
+            resolution=resolution,
         )
 
     def _merge_verified_task(
@@ -692,6 +693,7 @@ class IntegrationMerger:
             branch_name=resolution.branch_name,
             source_sha=source_sha,
             source=resolution.source,
+            resolution=resolution,
         )
         return pre_merge_sha
 

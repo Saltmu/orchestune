@@ -447,6 +447,7 @@ class TestFetchTaskBranch:
         assert failed == []
         assert merger.merged_task_proofs[42].source_sha == "a" * 40
         assert merger.merged_task_proofs[42].source is ResolutionSource.PR_FALLBACK
+        assert merger.merged_task_proofs[42].resolution is resolution
 
     def test_fetch_failure_not_merged(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
