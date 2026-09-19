@@ -17,18 +17,32 @@ from orchestune.dispatch.dependency_resolution import (
     REASON_MISSING,
     TaskDependencies,
     UnresolvedDependency,
+    build_legacy_dag_inputs,
 )
 from orchestune.dispatch.rebase import (
     FootprintDeviationDecision,
     RebaseContext,
     _apply_footprint_deviation_outcome,
-    _decide_footprint_deviation_outcome,
+    _build_subtasks_for_recompute,
     _decide_rebase_needed,
     _decide_rebase_target,
     _try_auto_rebase,
 )
+from orchestune.dispatch.rebase import (
+    _decide_footprint_deviation_outcome as _decide_footprint_deviation_outcome_impl,
+)
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState
+
+
+def _decide_footprint_deviation_outcome(
+    active, deviated, tasks_by_issue, config, derived_inputs=None
+):
+    if derived_inputs is None:
+        derived_inputs = build_legacy_dag_inputs(tuple(tasks_by_issue.values()))
+    return _decide_footprint_deviation_outcome_impl(
+        active, deviated, tasks_by_issue, config, derived_inputs
+    )
 
 
 class _PolicyView:
@@ -122,6 +136,14 @@ def _context(
 class TestDecideFootprintDeviationOutcome:
     """decide層: DAG再計算自体は純粋計算で、githubへの通知やactive/run_stateの
     変更は行わない。"""
+
+    def test_recompute_builder_accepts_only_derived_inputs(self):
+        task = _task()
+        derived_inputs = build_legacy_dag_inputs((task,))
+
+        assert _build_subtasks_for_recompute(derived_inputs) == {
+            task.subtask_id: derived_inputs[0]
+        }
 
     def test_already_forced_serial_is_noop(self, tmp_path):
         active = _active(forced_serial=True)

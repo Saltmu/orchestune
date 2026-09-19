@@ -268,8 +268,8 @@ def build_legacy_dag_inputs(tasks: tuple[Task, ...]) -> tuple[SubTask, ...]:
     Issue番号→subtask_id変換、重複排除）をそのまま使う。`subtask_id`を
     持たない`Task`はスキップするが、同名`subtask_id`が複数あっても
     このtupleの段階では**潰さない**——`Task`ごとに1件、入力順を保つ
-    （`conflicts.subtasks_from_tasks`のような`dict[str, SubTask]`化は、
-    それを必要とする消費者側の責務として残す）。`issue_to_subtask_id`は
+    （`dict[str, SubTask]`化は、それを必要とする消費者側の責務として残す）。
+    `issue_to_subtask_id`は
     渡された`tasks`だけで閉じたスコープで構築するため、
     cross-EPICの衝突安全性は元々の`legacy_merged_depends_on`と同様に対象外。
     """

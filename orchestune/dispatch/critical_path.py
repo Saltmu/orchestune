@@ -3,7 +3,8 @@
 #660: 従来のディスパッチ選出はbase priority・待ち時間・partial progressしか見て
 いなかったため、「短時間で多くの後続を解放する共有契約タスク」よりも、下流への
 影響が小さいタスクが先に選ばれることがあった。ここではPrecedence DAG
-（`Task.depends_on`）から、価値関数が使う次の3つのrankを決定論的に求める。
+（identity境界で解決済みの`SubTask.depends_on`）から、価値関数が使う次の3つの
+rankを決定論的に求める。
 
 - **bottom level**: そのタスク自身の推定所要時間に、後続チェーンのうち最長のものを
   足した値。古典的なlist schedulingのbottom level（＝critical-path rank）であり、
@@ -38,10 +39,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from orchestune.dag.models import SubTask
-from orchestune.dispatch.dependency_resolution import legacy_merged_depends_on
 from orchestune.labels import StatusLabel
-from orchestune.models import Task
-from orchestune.task_metadata import TaskMetadata, require_raw_tasks
+from orchestune.task_metadata import TaskMetadata
 
 # 推定所要時間が渡されなかったノードの既定値。1.0にすることで、履歴が無い
 # （＝全ノードが既定値になる）状況ではbottom levelがそのまま「残りチェーン長」
@@ -90,40 +89,12 @@ class PrecedenceRanks:
         return self.downstream.get(subtask_id, 0)
 
 
-def _successor_map(tasks: list[Task]) -> tuple[list[str], dict[str, list[str]]]:
-    """`depends_on`を後続方向の隣接リストへ反転する。
-
-    ディスパッチャーが見るのはIssue一覧のスナップショットであり、既に完了して
-    一覧から消えた依存先や、手編集で壊れた自己参照が混じり得る。ここでは既知の
-    ノードを指す辺だけを採用し、未知の依存先と自己参照は捨てる。
-
-    #799レビュー指摘(Codex P2): `Task.depends_on`は本文由来の文字列のみを
-    保持するため、ネイティブ`blocked_by`しか宣言していない依存は
-    `legacy_merged_depends_on`で復元してから辺を張る（`tasks`集合内で
-    完結するrank計算であり、cross-EPICの衝突安全性は対象外）。
-    """
-    node_ids = sorted({task.subtask_id for task in tasks if task.subtask_id})
-    known = set(node_ids)
-    issue_to_subtask_id = {
-        task.issue_number: task.subtask_id for task in tasks if task.subtask_id
-    }
-    successors: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
-    for task in tasks:
-        if not task.subtask_id:
-            continue
-        for dependency in legacy_merged_depends_on(task, issue_to_subtask_id):
-            if dependency in known and dependency != task.subtask_id:
-                successors[dependency].add(task.subtask_id)
-    return node_ids, {node: sorted(targets) for node, targets in successors.items()}
-
-
 def _successor_map_from_subtasks(
     subtasks: tuple[SubTask, ...],
 ) -> tuple[list[str], dict[str, list[str]]]:
-    """`_successor_map`のSubTask版（#888）。派生DAG入力を直接使う消費者向けに、
-    `Task`から`legacy_merged_depends_on`で再導出せず`SubTask.depends_on`を
-    そのまま辺として使う。既知ノードだけを採用し自己参照は捨てる規則は
-    `_successor_map`と同一。
+    """派生済み依存を後続方向の隣接リストへ反転する。
+
+    既知ノードだけを採用し、未知の依存先と自己参照は捨てる。
     """
     node_ids = sorted({subtask.id for subtask in subtasks if subtask.id})
     known = set(node_ids)
@@ -208,26 +179,18 @@ def _downstream_counts(
 
 
 def compute_precedence_ranks(
-    tasks: Iterable[TaskMetadata] = (),
+    derived_inputs: tuple[SubTask, ...],
     durations: Mapping[str, float] | None = None,
-    *,
-    derived_inputs: tuple[SubTask, ...] | None = None,
 ) -> PrecedenceRanks:
     """Precedence DAGのbottom level・直接後続数・到達可能後続数を求める。
 
     `durations`はsubtask_id -> 推定所要時間（秒）。欠けているノードは
     `DEFAULT_UNIT_DURATION`として扱う。同じ入力からは常に同じ結果を返す。
 
-    `derived_inputs`（#888）を渡すと、`tasks`からの`legacy_merged_depends_on`
-    再導出をせず、その`SubTask`列を直接ノード・辺として使う。省略時（既存の
-    Task-onlyな呼び出し）の挙動はこのPRで変更しない——互換用の呼び出し経路
-    として残す。
+    `derived_inputs`はidentity境界で解決済みの`SubTask`列であり、raw `Task`
+    から依存宣言を再導出しない。
     """
-    if derived_inputs is not None:
-        node_ids, successors = _successor_map_from_subtasks(derived_inputs)
-    else:
-        legacy_tasks = require_raw_tasks(tasks, operation="compute_precedence_ranks")
-        node_ids, successors = _successor_map(legacy_tasks)
+    node_ids, successors = _successor_map_from_subtasks(derived_inputs)
     order, has_cycle = _topological_order(node_ids, successors)
     exact = len(node_ids) <= MAX_TRANSITIVE_CLOSURE_NODES and not has_cycle
     return PrecedenceRanks(

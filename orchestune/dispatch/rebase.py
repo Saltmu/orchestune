@@ -16,7 +16,6 @@ from orchestune.dag.graph import recompute_dag_for_footprint_change
 from orchestune.dag.models import FootprintConflict, SubTask
 from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.conflicts import subtasks_from_tasks
 from orchestune.dispatch.dependency_policy import (
     DependencyPolicyView,
     decide_stack_target,
@@ -32,7 +31,7 @@ from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.infra.process_utils import default_ci_command, is_process_alive
 from orchestune.issue_parsing import backfill_recovery_counters
 from orchestune.labels import StatusLabel
-from orchestune.task_metadata import TaskMetadata, require_raw_tasks
+from orchestune.task_metadata import TaskMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -121,15 +120,9 @@ def notify_force_serial(
 
 
 def _build_subtasks_for_recompute(
-    tasks_by_issue: Mapping[int, TaskMetadata],
-    derived_inputs: tuple[SubTask, ...] | None = None,
+    derived_inputs: tuple[SubTask, ...],
 ) -> dict[str, SubTask]:
-    if derived_inputs is not None:
-        return {subtask.id: subtask for subtask in derived_inputs if subtask.id}
-    legacy_tasks = require_raw_tasks(
-        tasks_by_issue.values(), operation="_build_subtasks_for_recompute"
-    )
-    return subtasks_from_tasks(legacy_tasks)
+    return {subtask.id: subtask for subtask in derived_inputs if subtask.id}
 
 
 @dataclass
@@ -167,7 +160,7 @@ def _decide_footprint_deviation_outcome(
     deviated: list[str],
     tasks_by_issue: Mapping[int, TaskMetadata],
     config: DispatcherConfig,
-    derived_inputs: tuple[SubTask, ...] | None = None,
+    derived_inputs: tuple[SubTask, ...],
 ) -> FootprintDeviationDecision:
     """#192/#200: footprint逸脱への対応方針を判定する（githubへの通知・
     active/run_stateの変更は行わない）。Conflict Graph再計算自体は純粋な計算のためここに含む。
@@ -192,7 +185,7 @@ def _decide_footprint_deviation_outcome(
 
     merged_footprint = tuple(dict.fromkeys([*active.declared_footprint, *deviated]))
     _, conflicts = recompute_dag_for_footprint_change(
-        _build_subtasks_for_recompute(tasks_by_issue, derived_inputs),
+        _build_subtasks_for_recompute(derived_inputs),
         active_task.subtask_id,
         updated_footprint=merged_footprint,
         threshold=config.dag_similarity_threshold,
@@ -280,7 +273,7 @@ def _handle_footprint_deviation(
     tasks_by_issue: Mapping[int, TaskMetadata],
     issue_number_by_subtask_id: dict[str, int],
     config: DispatcherConfig,
-    derived_inputs: tuple[SubTask, ...] | None = None,
+    derived_inputs: tuple[SubTask, ...],
 ) -> dict:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
     decision = _decide_footprint_deviation_outcome(

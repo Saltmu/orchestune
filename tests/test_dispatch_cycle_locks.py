@@ -17,8 +17,10 @@ from orchestune.dispatch.locks import (
 )
 from orchestune.dispatch.phase_rebase import (
     _apply_external_lock_sync,
-    _decide_external_lock_sync,
     _is_base_or_parent_branch,
+)
+from orchestune.dispatch.phase_rebase import (
+    _decide_external_lock_sync as _decide_external_lock_sync_impl,
 )
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import (
@@ -29,6 +31,17 @@ from orchestune.dispatch.state import (
 from orchestune.issue_notice import notice_marker, render_notice
 from orchestune.models import PrRecord
 from tests.conftest import make_issue
+from tests.dispatch_lock_test_support import LockDependencyTestView
+
+
+def _decide_external_lock_sync(tasks_by_issue, prs, run_state, config=None):
+    return _decide_external_lock_sync_impl(
+        tasks_by_issue,
+        prs,
+        run_state,
+        config,
+        view=LockDependencyTestView.from_tasks(list(tasks_by_issue.values())),
+    )
 
 
 def _task(**overrides):

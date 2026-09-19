@@ -2,10 +2,18 @@
 
 from orchestune.dispatch.critical_path import (
     MAX_TRANSITIVE_CLOSURE_NODES,
-    compute_precedence_ranks,
     pending_tasks,
 )
+from orchestune.dispatch.critical_path import (
+    compute_precedence_ranks as _compute_precedence_ranks,
+)
+from orchestune.dispatch.dependency_resolution import build_legacy_dag_inputs
 from orchestune.models import Task
+
+
+def compute_precedence_ranks(tasks, durations=None):
+    """Build the identity-boundary inputs before exercising rank semantics."""
+    return _compute_precedence_ranks(build_legacy_dag_inputs(tuple(tasks)), durations)
 
 
 def _task(subtask_id, depends_on=(), status_labels=("status:queued",), state="OPEN"):

@@ -28,12 +28,13 @@ from orchestune.dispatch.critical_path import (
     compute_precedence_ranks,
     pending_tasks,
 )
+from orchestune.dispatch.dependency_resolution import build_legacy_dag_inputs
 from orchestune.dispatch.state import RunState
 from orchestune.issue_parsing import BASE_PRIORITY, parse_task_from_issue
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN as _FOOTPRINT_BLOCK_PATTERN
 from orchestune.labels import StatusLabel
 from orchestune.models import Task
-from orchestune.task_metadata import TaskMetadata
+from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 
 # 以下3つは#286/#287(rewire-dispatch-imports/rewire-integrator-imports)で
 # 呼び出し側の付け替えが完了するまでの後方互換再エクスポート。実体は
@@ -328,6 +329,17 @@ def _normalized(value: float, maximum: float) -> float:
     return value / maximum if maximum > 0 else 0.0
 
 
+def _rank_inputs(
+    graph_tasks: list[TaskMetadata],
+    derived_inputs: tuple[SubTask, ...] | None,
+) -> tuple[SubTask, ...]:
+    """Adapt legacy direct selectors once before the canonical rank consumer."""
+    if derived_inputs is not None:
+        return derived_inputs
+    raw_tasks = require_raw_tasks(graph_tasks, operation="select_tasks_with_decisions")
+    return build_legacy_dag_inputs(tuple(raw_tasks))
+
+
 def _build_scoring_inputs(
     eligible: Sequence[TaskMetadata],
     candidate_tasks: Sequence[TaskMetadata],
@@ -344,14 +356,14 @@ def _build_scoring_inputs(
         if task.subtask_id
     }
     graph_tasks = pending_tasks(graph_tasks_by_id.values())
+    rank_inputs = _rank_inputs(graph_tasks, derived_inputs)
     estimates = {task.subtask_id: cost_model.estimate(task) for task in graph_tasks}
     ranks = compute_precedence_ranks(
-        graph_tasks,
+        rank_inputs,
         {
             subtask_id: estimate.duration_seconds
             for subtask_id, estimate in estimates.items()
         },
-        derived_inputs=derived_inputs,
     )
     token_values = [
         estimate.tokens

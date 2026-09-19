@@ -1,8 +1,7 @@
 """#869: `LockDependencyView`(共通`DependencyAssessment`)を読む
 `_direct_dependency_canonical_branches`の決定表を単体で固定する。
 
-`tests/test_dispatch_locks_dependency_exclusion.py`は`scan_external_locks`が
-組み立てる既定view（`CycleContext`を介さない標準ラベルのみの意味論）を経由した
+`tests/test_dispatch_locks_dependency_exclusion.py`は明示的な標準ラベルviewを経由した
 end-to-endの回帰群であるのに対し、本ファイルは`view`を直接差し替えられる
 テスト専用double（`_FakeLockDependencyView`）で、既定viewでは再現できない
 「実行中branchが既定prefix名と食い違う」ケースを含む決定表そのものを検証する。
@@ -10,6 +9,7 @@ end-to-endの回帰群であるのに対し、本ファイルは`view`を直接�
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 
 from orchestune.branch_naming import build_task_branch_name
@@ -18,12 +18,8 @@ from orchestune.dispatch.dependency_assessment import (
     DependencyAssessment,
     DependencyState,
 )
-from orchestune.dispatch.dependency_resolution import (
-    TaskDependencies,
-    UnresolvedDependency,
-)
+from orchestune.dispatch.dependency_resolution import UnresolvedDependency
 from orchestune.dispatch.locks import (
-    _DefaultLockDependencyView,
     _direct_dependency_canonical_branches,
     scan_external_locks,
 )
@@ -248,24 +244,13 @@ class TestDirectDependencyCanonicalBranches:
         )
 
 
-class TestDefaultLockDependencyView:
-    """`view`省略時のフォールバック(`_default_lock_dependency_view`が組み立てる
-    `_DefaultLockDependencyView`)自体のNone境界。`_direct_dependency_canonical_
-    branches`からは`queued_tasks`に実在するissue_numberしか渡らないため
-    通常到達しないが、Protocol実装として単体で健全であることを固定する。"""
-
-    def test_assess_dependencies_is_none_for_unknown_issue(self):
-        view = _DefaultLockDependencyView({}, {})
-        assert view.assess_dependencies(999) is None
-
-    def test_canonical_branch_is_none_for_unknown_issue(self):
-        view = _DefaultLockDependencyView({}, {2: TaskDependencies(resolved=(999,))})
-        assert view.canonical_branch(999) is None
-
-
 class TestScanExternalLocksWithExplicitView:
     """`scan_external_locks`が`view`引数をそのまま
     `_direct_dependency_canonical_branches`へ引き継ぐことをend-to-endで確認する。"""
+
+    def test_view_is_required(self):
+        parameter = inspect.signature(scan_external_locks).parameters["view"]
+        assert parameter.default is inspect.Parameter.empty
 
     def test_still_locks_against_pr_when_dependency_branch_was_renamed(self):
         task = _task(depends_on=("dep-a",))
