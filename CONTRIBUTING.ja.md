@@ -33,7 +33,7 @@ uv sync
 
 ### 前提条件
 
-[uv](https://docs.astral.sh/uv/getting-started/installation/) が必要です（`.mcp.json` は `uvx` でSerenaを起動します）。
+[uv](https://docs.astral.sh/uv/getting-started/installation/) が必要です（`.mcp.json` と `.codex/config.toml` は `uvx` でSerenaを起動します）。
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh

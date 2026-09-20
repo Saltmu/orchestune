@@ -33,7 +33,7 @@ The connection settings are checked in and pinned to `serena-agent==1.7.0`. Clie
 
 ### Prerequisite
 
-[uv](https://docs.astral.sh/uv/getting-started/installation/) is required, since `.mcp.json` launches Serena through `uvx`.
+[uv](https://docs.astral.sh/uv/getting-started/installation/) is required, since both `.mcp.json` and `.codex/config.toml` launch Serena through `uvx`.
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
