@@ -950,3 +950,124 @@ class TestRestorationPreservesClaimOwnership:
         assert active.owner_kind == "dispatch"
         assert active.claim_id is None
         assert active.reservation_kind == "footprint"
+
+    def test_restored_active_worktree_with_launched_attempt_preserves_interactive_claim(
+        self, tmp_path
+    ):
+        from orchestune.dispatch.dependency_resolution import EMPTY_DEPENDENCIES
+        from orchestune.dispatch.recovery import _build_restored_active_worktree
+        from orchestune.task_branch_resolution import TaskBranchResolver
+
+        body = (
+            "## Footprint\n```yaml\n"
+            "subtask_id: interactive-task\n"
+            "owner_kind: interactive\n"
+            "claim_id: claim-recovery-launched-123\n"
+            "reservation_kind: footprint\n"
+            "footprint:\n"
+            "  - src/interactive.py\n"
+            "```\n\n"
+            "<!-- orchestune:launch-attempt -->\n"
+            "```json\n"
+            "{\n"
+            '  "attempt_id": "attempt-old-cloud-999",\n'
+            '  "phase": "launched",\n'
+            '  "target": "claude",\n'
+            '  "branch": "task/subtask-942",\n'
+            '  "base_branch": "main",\n'
+            '  "external_id": "ext-job-12345",\n'
+            '  "external_url": "https://example.com/job/12345",\n'
+            '  "started_at": 1000.0\n'
+            "}\n"
+            "```\n"
+        )
+        issue = IssueRecord(
+            number=942,
+            title="Interactive Task with Prior Cloud Attempt",
+            body=body,
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        resolver = TaskBranchResolver([])
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=str(tmp_path / "worktrees"),
+        )
+
+        active = _build_restored_active_worktree(
+            issue=issue,
+            subtask_id="interactive-task",
+            declared_footprint=("src/interactive.py",),
+            resolver=resolver,
+            resolutions={},
+            issue_to_subtask_id={942: "interactive-task"},
+            dependency_resolution={942: EMPTY_DEPENDENCIES},
+            config=config,
+        )
+
+        assert active.owner_kind == "interactive"
+        assert active.claim_id == "claim-recovery-launched-123"
+        assert active.reservation_kind == "footprint"
+        assert active.external_id is None
+        assert active.launch_attempt_id is None
+        assert active.launch_phase is None
+
+    def test_restored_active_worktree_with_launched_attempt_defaults_to_dispatch(
+        self, tmp_path
+    ):
+        from orchestune.dispatch.dependency_resolution import EMPTY_DEPENDENCIES
+        from orchestune.dispatch.recovery import _build_restored_active_worktree
+        from orchestune.task_branch_resolution import TaskBranchResolver
+
+        body = (
+            "## Footprint\n```yaml\n"
+            "subtask_id: dispatch-task\n"
+            "footprint:\n"
+            "  - src/dispatch.py\n"
+            "```\n\n"
+            "<!-- orchestune:launch-attempt -->\n"
+            "```json\n"
+            "{\n"
+            '  "attempt_id": "attempt-cloud-888",\n'
+            '  "phase": "launched",\n'
+            '  "target": "claude",\n'
+            '  "branch": "task/subtask-943",\n'
+            '  "base_branch": "main",\n'
+            '  "external_id": "ext-job-88888",\n'
+            '  "external_url": "https://example.com/job/88888",\n'
+            '  "started_at": 2000.0\n'
+            "}\n"
+            "```\n"
+        )
+        issue = IssueRecord(
+            number=943,
+            title="Dispatch Task with Cloud Attempt",
+            body=body,
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        resolver = TaskBranchResolver([])
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=str(tmp_path / "worktrees"),
+        )
+
+        active = _build_restored_active_worktree(
+            issue=issue,
+            subtask_id="dispatch-task",
+            declared_footprint=("src/dispatch.py",),
+            resolver=resolver,
+            resolutions={},
+            issue_to_subtask_id={943: "dispatch-task"},
+            dependency_resolution={943: EMPTY_DEPENDENCIES},
+            config=config,
+        )
+
+        assert active.owner_kind == "dispatch"
+        assert active.claim_id is None
+        assert active.reservation_kind == "footprint"
+        assert active.external_id == "ext-job-88888"
+        assert active.launch_attempt_id == "attempt-cloud-888"
+        assert active.launch_phase == "launched"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -39,7 +39,12 @@ from orchestune.consistency.repairs.execution import (
     COMMAND_REQUEUE,
     plan_execution_repairs,
 )
-from orchestune.dispatch.attempt_record import MARKER, attempt_from_body, read_attempt
+from orchestune.dispatch.attempt_record import (
+    MARKER,
+    LaunchAttempt,
+    attempt_from_body,
+    read_attempt,
+)
 from orchestune.dispatch.dependency_resolution import (
     EMPTY_DEPENDENCIES,
     TaskDependencies,
@@ -508,7 +513,35 @@ def _parse_claim_info_from_issue(
     return owner_kind, claim_id, reservation_kind
 
 
-def _build_restored_active_worktree(
+def _build_restored_from_attempt(
+    issue: IssueRecord,
+    attempt: LaunchAttempt,
+    owner_kind: str,
+    claim_id: str | None,
+    reservation_kind: str,
+    config: DispatcherConfig,
+) -> ActiveWorktree:
+    active = active_from_attempt(attempt, parse_task_from_issue(issue), config)
+    if owner_kind == "interactive":
+        return replace(
+            active,
+            owner_kind=owner_kind,
+            claim_id=claim_id,
+            reservation_kind=reservation_kind,
+            external_id=None,
+            external_url=None,
+            launch_attempt_id=None,
+            launch_phase=None,
+        )
+    return replace(
+        active,
+        owner_kind=owner_kind,
+        claim_id=claim_id,
+        reservation_kind=reservation_kind,
+    )
+
+
+def _build_restored_standard_worktree(
     issue: IssueRecord,
     subtask_id: str,
     declared_footprint: tuple[str, ...],
@@ -516,11 +549,11 @@ def _build_restored_active_worktree(
     resolutions: dict[int, TaskBranchResolution],
     issue_to_subtask_id: dict[int, str],
     dependency_resolution: dict[int, TaskDependencies],
+    owner_kind: str,
+    claim_id: str | None,
+    reservation_kind: str,
     config: DispatcherConfig,
 ) -> ActiveWorktree:
-    attempt = attempt_from_body(issue.body)
-    if attempt is not None and attempt.phase == "launched":
-        return active_from_attempt(attempt, parse_task_from_issue(issue), config)
     recompute_count, forced_serial = _recovery_counters_for_issue(issue)
     branch_name, external_id, external_url = _resolve_recovery_pr_and_branch(
         issue, subtask_id, resolver, resolutions, config
@@ -538,7 +571,6 @@ def _build_restored_active_worktree(
 
     task = parse_task_from_issue(issue, issue_to_subtask_id)
     execution_selection = resolve_task_execution_selection(task, config)
-    owner_kind, claim_id, reservation_kind = _parse_claim_info_from_issue(issue)
 
     return ActiveWorktree(
         issue_number=issue.number,
@@ -559,6 +591,37 @@ def _build_restored_active_worktree(
         owner_kind=owner_kind,
         claim_id=claim_id,
         reservation_kind=reservation_kind,
+    )
+
+
+def _build_restored_active_worktree(
+    issue: IssueRecord,
+    subtask_id: str,
+    declared_footprint: tuple[str, ...],
+    resolver: TaskBranchResolver,
+    resolutions: dict[int, TaskBranchResolution],
+    issue_to_subtask_id: dict[int, str],
+    dependency_resolution: dict[int, TaskDependencies],
+    config: DispatcherConfig,
+) -> ActiveWorktree:
+    owner_kind, claim_id, reservation_kind = _parse_claim_info_from_issue(issue)
+    attempt = attempt_from_body(issue.body)
+    if attempt is not None and attempt.phase == "launched":
+        return _build_restored_from_attempt(
+            issue, attempt, owner_kind, claim_id, reservation_kind, config
+        )
+    return _build_restored_standard_worktree(
+        issue,
+        subtask_id,
+        declared_footprint,
+        resolver,
+        resolutions,
+        issue_to_subtask_id,
+        dependency_resolution,
+        owner_kind,
+        claim_id,
+        reservation_kind,
+        config,
     )
 
 
