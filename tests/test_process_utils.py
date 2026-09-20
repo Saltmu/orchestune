@@ -317,12 +317,14 @@ class TestRunStateLock:
         mock_fcntl.LOCK_NB = 2
         mock_fcntl.flock.side_effect = BlockingIOError
 
+        import itertools
+
         with (
             patch("orchestune.infra.process_utils.fcntl", mock_fcntl),
             patch("orchestune.infra.process_utils.msvcrt", None),
             patch(
                 "orchestune.infra.process_utils.time.monotonic",
-                side_effect=[10.0, 10.0, 10.5],
+                side_effect=itertools.count(10.0, 0.3),
             ),
             patch("orchestune.infra.process_utils.time.sleep"),
             pytest.raises(RuntimeError) as exc_info,
@@ -340,3 +342,44 @@ class TestRunStateLock:
         lock_path = tmp_path / "unheld.lock"
         with pytest.raises(RuntimeError, match="run_state lock must be held"):
             assert_run_state_lock_held(lock_path)
+
+    @pytest.mark.uses_real_file_lock
+    def test_cross_thread_contention_raises_runtime_error(self, tmp_path: Path):
+        """別スレッドがロック保持中、同一プロセス内の別スレッドは再入せず競合として扱われること。"""
+        import threading
+
+        lock_path = tmp_path / "run_state.lock"
+        thread_acquired = threading.Event()
+        thread_release = threading.Event()
+
+        def worker():
+            with run_state_lock(lock_path):
+                thread_acquired.set()
+                thread_release.wait(timeout=5.0)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        try:
+            assert thread_acquired.wait(timeout=5.0) is True
+
+            # メインスレッドからは未保持に見える
+            assert is_run_state_lock_held(lock_path) is False
+            with pytest.raises(RuntimeError, match="run_state lock must be held"):
+                assert_run_state_lock_held(lock_path)
+
+            # 別スレッドが保持中にメインスレッドが取得しようとすると即座に競合エラー
+            with pytest.raises(RuntimeError) as exc_info:
+                with run_state_lock(lock_path, timeout=0.0):
+                    pass
+
+            error_msg = str(exc_info.value)
+            assert str(lock_path) in error_msg
+            assert "another process is currently holding the lock" in error_msg
+        finally:
+            thread_release.set()
+            t.join(timeout=5.0)
+
+        # 解放後はメインスレッドが正常に取得できること
+        assert is_run_state_lock_held(lock_path) is False
+        with run_state_lock(lock_path):
+            assert is_run_state_lock_held(lock_path) is True

@@ -6,6 +6,7 @@ import contextlib
 import re
 import subprocess
 import sys
+import threading
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -915,23 +916,30 @@ def _stub_file_lock_by_default(request: pytest.FixtureRequest):
         *args: Any,
         **kwargs: Any,
     ) -> Iterator[None]:
-        from orchestune.infra.process_utils import (
-            _RUN_STATE_HELD_COUNTS,
-            _RUN_STATE_MUTEX,
-        )
+        from orchestune.infra.process_utils import _get_run_state_lock_state
 
         norm_path = Path(lock_path).resolve()
-        with _RUN_STATE_MUTEX:
-            _RUN_STATE_HELD_COUNTS[norm_path] = (
-                _RUN_STATE_HELD_COUNTS.get(norm_path, 0) + 1
-            )
+        state = _get_run_state_lock_state(norm_path)
+        current_thread = threading.get_ident()
+
+        with state.cond:
+            while (
+                state.owner_thread is not None and state.owner_thread != current_thread
+            ):
+                state.cond.wait()
+            if state.owner_thread == current_thread:
+                state.count += 1
+            else:
+                state.owner_thread = current_thread
+                state.count = 1
         try:
             yield
         finally:
-            with _RUN_STATE_MUTEX:
-                _RUN_STATE_HELD_COUNTS[norm_path] -= 1
-                if _RUN_STATE_HELD_COUNTS[norm_path] == 0:
-                    del _RUN_STATE_HELD_COUNTS[norm_path]
+            with state.cond:
+                state.count -= 1
+                if state.count == 0:
+                    state.owner_thread = None
+                    state.cond.notify_all()
 
     with (
         patch(

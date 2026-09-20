@@ -163,9 +163,26 @@ def file_lock(
         yield
 
 
-_RUN_STATE_HELD_COUNTS: dict[Path, int] = {}
-_RUN_STATE_LOCK_OBJS: dict[Path, FileLock] = {}
-_RUN_STATE_MUTEX = threading.Lock()
+class _RunStateLockState:
+    """Track in-process ownership and reentrancy count for a run_state lock path."""
+
+    def __init__(self) -> None:
+        self.owner_thread: int | None = None
+        self.count: int = 0
+        self.file_lock: FileLock | None = None
+        self.cond = threading.Condition(threading.Lock())
+
+
+_RUN_STATE_LOCK_STATES: dict[Path, _RunStateLockState] = {}
+_RUN_STATE_REGISTRY_LOCK = threading.Lock()
+
+
+def _get_run_state_lock_state(norm_path: Path) -> _RunStateLockState:
+    """Get or create the lock state record for a canonical lock path."""
+    with _RUN_STATE_REGISTRY_LOCK:
+        if norm_path not in _RUN_STATE_LOCK_STATES:
+            _RUN_STATE_LOCK_STATES[norm_path] = _RunStateLockState()
+        return _RUN_STATE_LOCK_STATES[norm_path]
 
 
 def format_run_state_lock_contention_message(lock_path: Path) -> str:
@@ -177,6 +194,45 @@ def format_run_state_lock_contention_message(lock_path: Path) -> str:
     )
 
 
+def _acquire_run_state_lock_in_process(
+    state: _RunStateLockState,
+    norm_path: Path,
+    current_thread: int,
+    deadline: float,
+    poll_interval: float,
+) -> bool:
+    """Acquire the in-process run_state lock slot, returning True if nested."""
+    with state.cond:
+        while state.owner_thread is not None and state.owner_thread != current_thread:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(format_run_state_lock_contention_message(norm_path))
+            state.cond.wait(timeout=min(poll_interval, remaining))
+
+        if state.owner_thread == current_thread:
+            state.count += 1
+            return True
+        state.owner_thread = current_thread
+        state.count = 1
+        return False
+
+
+def _release_run_state_lock_in_process(
+    state: _RunStateLockState, *, release_outermost: bool
+) -> FileLock | None:
+    """Release one recursion level of the in-process run_state lock."""
+    with state.cond:
+        state.count -= 1
+        if release_outermost or state.count <= 0:
+            state.count = 0
+            active_obj = state.file_lock
+            state.file_lock = None
+            state.owner_thread = None
+            state.cond.notify_all()
+            return active_obj
+        return None
+
+
 @contextlib.contextmanager
 def run_state_lock(
     lock_path: Path,
@@ -186,64 +242,63 @@ def run_state_lock(
 ) -> Iterator[None]:
     """Hold a reentrant exclusive file lock for run_state operations.
 
-    Nested acquisitions on the same path within the same process increment
+    Nested acquisitions on the same path within the same thread increment
     a recursion counter without deadlocking, releasing the underlying
-    FileLock only when the outermost context exits.
+    FileLock only when the outermost context exits. Concurrent calls from
+    different threads or processes block or raise on contention.
     """
     norm_path = Path(lock_path).resolve()
-    with _RUN_STATE_MUTEX:
-        count = _RUN_STATE_HELD_COUNTS.get(norm_path, 0)
-        if count > 0:
-            _RUN_STATE_HELD_COUNTS[norm_path] = count + 1
-            is_nested = True
-        else:
-            is_nested = False
+    state = _get_run_state_lock_state(norm_path)
+    deadline = time.monotonic() + timeout
 
+    is_nested = _acquire_run_state_lock_in_process(
+        state, norm_path, threading.get_ident(), deadline, poll_interval
+    )
     if is_nested:
         try:
             yield
         finally:
-            with _RUN_STATE_MUTEX:
-                _RUN_STATE_HELD_COUNTS[norm_path] -= 1
-                if _RUN_STATE_HELD_COUNTS[norm_path] == 0:
-                    del _RUN_STATE_HELD_COUNTS[norm_path]
+            _release_run_state_lock_in_process(state, release_outermost=False)
         return
 
-    # Outermost acquisition: acquire the underlying FileLock
-    lock_obj = FileLock(norm_path, timeout=timeout, poll_interval=poll_interval)
+    remaining_timeout = max(0.0, deadline - time.monotonic())
+    lock_obj = FileLock(
+        norm_path, timeout=remaining_timeout, poll_interval=poll_interval
+    )
     try:
         lock_obj.acquire()
-    except RuntimeError as exc:
-        raise RuntimeError(format_run_state_lock_contention_message(norm_path)) from exc
+    except BaseException as exc:
+        _release_run_state_lock_in_process(state, release_outermost=True)
+        if isinstance(exc, RuntimeError):
+            raise RuntimeError(
+                format_run_state_lock_contention_message(norm_path)
+            ) from exc
+        raise
 
-    with _RUN_STATE_MUTEX:
-        _RUN_STATE_HELD_COUNTS[norm_path] = 1
-        _RUN_STATE_LOCK_OBJS[norm_path] = lock_obj
+    with state.cond:
+        state.file_lock = lock_obj
 
     try:
         yield
     finally:
-        with _RUN_STATE_MUTEX:
-            _RUN_STATE_HELD_COUNTS[norm_path] -= 1
-            if _RUN_STATE_HELD_COUNTS[norm_path] == 0:
-                del _RUN_STATE_HELD_COUNTS[norm_path]
-                active_obj = _RUN_STATE_LOCK_OBJS.pop(norm_path, None)
-            else:
-                active_obj = None
-
+        active_obj = _release_run_state_lock_in_process(state, release_outermost=True)
         if active_obj is not None:
             active_obj.release()
 
 
 def is_run_state_lock_held(lock_path: Path) -> bool:
-    """Check if the current process holds the run_state lock for the given path."""
+    """Check if the current thread holds the run_state lock for the given path."""
     norm_path = Path(lock_path).resolve()
-    with _RUN_STATE_MUTEX:
-        return _RUN_STATE_HELD_COUNTS.get(norm_path, 0) > 0
+    with _RUN_STATE_REGISTRY_LOCK:
+        state = _RUN_STATE_LOCK_STATES.get(norm_path)
+    if state is None:
+        return False
+    with state.cond:
+        return state.owner_thread == threading.get_ident() and state.count > 0
 
 
 def assert_run_state_lock_held(lock_path: Path) -> None:
-    """Assert that the current process holds the run_state lock for the given path."""
+    """Assert that the current thread holds the run_state lock for the given path."""
     if not is_run_state_lock_held(lock_path):
         norm_path = Path(lock_path).resolve()
         raise RuntimeError(f"run_state lock must be held: {norm_path}")
