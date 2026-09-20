@@ -14,6 +14,7 @@ def main() -> None:
         print("  bootstrap Verify gh auth and ensure required GitHub labels exist")
         print("  provision Provision GitHub Issues from decomposition_plan.md")
         print("  replan    Preview or replace an unstarted decomposition generation")
+        print("  claim     Claim a task issue (--no-apply for a read-only preview)")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -53,6 +54,10 @@ def main() -> None:
         from orchestune.replan.cli import main as replan_main
 
         sys.exit(replan_main())
+    elif cmd == "claim":
+        from orchestune.claim.cli import main as claim_main
+
+        sys.exit(claim_main())
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
