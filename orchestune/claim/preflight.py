@@ -13,7 +13,10 @@ from orchestune.claim.contracts import (
     ClaimFailureReason,
     ReservationKind,
 )
-from orchestune.dispatch.dependency_assessment import DependencyAssessment
+from orchestune.dispatch.dependency_assessment import (
+    DependencyAssessment,
+    DependencyState,
+)
 from orchestune.dispatch.dependency_policy import (
     DependencyPolicyView,
     decide_stack_target,
@@ -38,9 +41,13 @@ from orchestune.models import IssueRecord
 class ClaimBaseResolutionView(DependencyPolicyView, Protocol):
     """Protocol for resolving stack target, dependencies, and parent issue bases."""
 
+    default_base: str
+
     def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None: ...
 
     def canonical_branch(self, issue_number: int) -> str | None: ...
+
+    def parent_issue_number(self, issue_number: int) -> int | None: ...
 
 
 @dataclass(frozen=True)
@@ -85,7 +92,7 @@ def resolve_claim_subtask_id(issue: IssueRecord) -> str:
             subtask_id = str(data.get("subtask_id") or "").strip()
             if subtask_id:
                 return subtask_id
-    except Exception:
+    except yaml.YAMLError:
         pass
 
     return fallback_id
@@ -109,13 +116,7 @@ def resolve_claim_base(
         )
 
     if decision.reason == "no-stack-dependency":
-        parent_num = None
-        if hasattr(view, "parent_issue_number"):
-            parent_num = view.parent_issue_number(issue_number)
-        elif hasattr(view, "task"):
-            t = view.task(issue_number)
-            parent_num = t.parent_number if t is not None else None
-
+        parent_num = view.parent_issue_number(issue_number)
         base_ref = (
             f"parent/issue-{parent_num}"
             if parent_num is not None
@@ -215,7 +216,7 @@ def _resolve_reservation_kind(issue: IssueRecord) -> ReservationKind:
             data = yaml.safe_load(match.group(1))
             if isinstance(data, dict) and bool(data.get("footprint")):
                 return ReservationKind.FOOTPRINT
-        except Exception:
+        except yaml.YAMLError:
             pass
     return ReservationKind.REPOSITORY
 
@@ -245,9 +246,21 @@ def _resolve_dependencies_and_base(
             )
         return None, base_decision.base_ref, base_decision.target_issue_number
 
+    if StatusLabel.BLOCKED in label_set:
+        return (
+            ClaimFailure(
+                reason=ClaimFailureReason.UNRESOLVED_DEPENDENCIES,
+                message=f"Issue #{issue_number} is status:blocked but no resolution view is provided to verify stack eligibility.",
+            ),
+            None,
+            None,
+        )
+
     if assessment is not None and has_pending_dependencies(assessment):
         unresolved = [
-            d.issue_number for d in assessment.resolved if d.state.value != "completed"
+            d.issue_number
+            for d in assessment.resolved
+            if d.state is not DependencyState.COMPLETED
         ]
         return (
             ClaimFailure(

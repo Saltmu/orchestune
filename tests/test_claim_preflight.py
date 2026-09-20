@@ -435,3 +435,21 @@ class TestEvaluateClaimPreflight:
         assert decision.base_ref is None
         assert decision.failure is not None
         assert decision.failure.reason == ClaimFailureReason.UNRESOLVED_DEPENDENCIES
+
+    def test_claim_base_resolution_view_protocol_conformance(self) -> None:
+        view = DummyBaseView()
+        from orchestune.claim.preflight import ClaimBaseResolutionView
+
+        assert isinstance(view, ClaimBaseResolutionView)
+
+    def test_assessment_only_with_status_blocked_rejected(self) -> None:
+        issue = _make_issue(number=800, labels=(StatusLabel.BLOCKED,))
+        assessment = DependencyAssessment(
+            resolved=(AssessedDependency(799, DependencyState.COMPLETED),)
+        )
+        # Even if assessment dependencies are completed, status:blocked without view cannot verify stacking
+        decision = evaluate_claim_preflight(issue, assessment=assessment)
+        assert decision.allowed is False
+        assert decision.failure is not None
+        assert decision.failure.reason == ClaimFailureReason.UNRESOLVED_DEPENDENCIES
+        assert "no resolution view" in decision.failure.message
