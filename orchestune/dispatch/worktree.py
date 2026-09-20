@@ -162,10 +162,16 @@ def _read_claim_marker(worktree_path: Path) -> dict[str, Any] | None:
     except OSError:
         return None
     try:
-        marker: dict[str, Any] = json.loads(raw)
+        decoded = json.loads(raw)
     except ValueError:
         return None
-    return marker
+    # #935レビュー対応(P2, round4): 破損・手動編集されたマーカーが`[]`や
+    # `"claim"`のような構文的に妥当な非オブジェクトJSONだった場合、
+    # 呼び出し側の`marker.get(...)`がAttributeErrorで落ちる。所有権を
+    # 確認できないマーカーとしてfail-closedにNoneを返す。
+    if not isinstance(decoded, dict):
+        return None
+    return decoded
 
 
 def _write_claim_marker(
@@ -594,8 +600,13 @@ def _rollback_blocking_reason_for_missing_worktree(
     理由に確認自体を省略すると、再試行のあいだにbranchが進んだ場合、その
     新しいコミットごと`git branch -D`で失ってしまう。"""
     try:
+        # #935レビュー対応(P1, round4): 未修飾のrevisionはbranchと同名のtagが
+        # あると曖昧になり、Gitはwarningを出すだけで成功してしまう。実際に
+        # `git branch -D`が削除する参照（refs/heads/配下）を明示的に指定する。
         result = run_git(
-            ["rev-parse", "--verify", preparation.branch], cwd=None, check=False
+            ["rev-parse", "--verify", f"refs/heads/{preparation.branch}"],
+            cwd=None,
+            check=False,
         )
     except OSError as e:
         return f"branch_sha_check_failed: {e}"

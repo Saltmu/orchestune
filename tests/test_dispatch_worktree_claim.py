@@ -415,6 +415,27 @@ class TestPrepareTaskWorktree:
         finally:
             held_lock.release()
 
+    def test_treats_non_object_marker_as_unclaimed(self, tmp_path):
+        """#935レビュー対応(P2, round4): 破損・手動編集されたマーカーが
+        `[]`のような構文的に妥当な非オブジェクトJSONだった場合でも、
+        AttributeErrorで落ちずfail-closedに拒否しなければならない。"""
+        worktree_root = tmp_path / "worktrees"
+        worktree_root.mkdir()
+        worktree_path = worktree_root / "claim-issue-23-task-23"
+        worktree_path.mkdir()
+        _claim_marker_path(worktree_path).write_text(json.dumps(["not", "a", "dict"]))
+
+        with patch(
+            "orchestune.dispatch.worktree.run_git", autospec=True
+        ) as mock_run_git:
+            result = prepare_task_worktree(
+                "claim/issue-23-task-23", worktree_root, None, "claim-x"
+            )
+
+        assert result.accepted is False
+        assert result.rejection_reason == "unclaimed_existing_worktree"
+        mock_run_git.assert_not_called()
+
 
 class TestRollbackTaskWorktree:
     """#935: prepare_task_worktreeが新規作成したworktree/branchの後始末。"""
@@ -775,3 +796,68 @@ class TestRollbackTaskWorktree:
 
         assert result == "stale_marker_unverified_worktree"
         assert preparation.worktree_path.exists()
+
+    def test_retry_rejects_advance_even_with_a_same_named_tag(
+        self, tmp_path, monkeypatch
+    ):
+        """#935レビュー対応(P1, round4): 未修飾のrevisionはbranchと同名のtagが
+        あると曖昧になり、base_shaを指すtagの方を拾ってしまうと、実際には
+        進んでいるbranchの削除を誤って許してしまう。`refs/heads/`を明示する
+        ことで、実際に削除対象となる参照を検査しなければならない。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+        worktree_root = tmp_path / "worktrees"
+        preparation = prepare_task_worktree(
+            "claim/issue-22-task-22", worktree_root, None, "claim-22"
+        )
+
+        def failing_branch_delete(args, **kwargs):
+            if args[:2] == ["branch", "-D"]:
+                return GitResult(
+                    returncode=1, stdout="", stderr="error: branch is checked out"
+                )
+            return real_run_git(args, **kwargs)
+
+        with patch(
+            "orchestune.dispatch.worktree.run_git", side_effect=failing_branch_delete
+        ):
+            first_attempt = rollback_task_worktree(preparation, "claim-22")
+        assert first_attempt == "branch_deletion_failed"
+
+        # base_shaを指す、branchと同名のtagを作る（曖昧な参照を模す）
+        subprocess.run(
+            ["git", "tag", "claim/issue-22-task-22", preparation.base_sha],
+            cwd=repo_dir,
+            check=True,
+        )
+        # branchの方は実際に進める
+        other_worktree = tmp_path / "other"
+        subprocess.run(
+            ["git", "worktree", "add", str(other_worktree), "claim/issue-22-task-22"],
+            cwd=repo_dir,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "progress"],
+            cwd=other_worktree,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(other_worktree)],
+            cwd=repo_dir,
+            check=True,
+        )
+
+        second_attempt = rollback_task_worktree(preparation, "claim-22")
+
+        assert second_attempt == "advanced_beyond_base_sha"
+        branches = subprocess.run(
+            ["git", "branch", "--list", "claim/issue-22-task-22"],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert "claim/issue-22-task-22" in branches
