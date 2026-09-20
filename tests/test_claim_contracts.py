@@ -18,7 +18,6 @@ from orchestune.claim import (
     failure_reason_to_exit_code,
 )
 from orchestune.claim import cli as claim_cli
-from orchestune.claim import service as claim_service
 
 
 class TestClaimContracts:
@@ -117,12 +116,6 @@ class TestClaimContracts:
 
 class TestClaimStubs:
     """Verify that remaining scaffolded functions raise NotImplementedError when called."""
-
-    def test_service_stubs_raise_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError):
-            claim_service.claim_task()
-        with pytest.raises(NotImplementedError):
-            claim_service.resume_claim()
 
     def test_cli_stubs_raise_not_implemented(self) -> None:
         with pytest.raises(NotImplementedError):
