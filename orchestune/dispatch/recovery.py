@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 from orchestune.branch_naming import build_task_branch_name
+from orchestune.claim.preflight import resolve_claim_subtask_id
 from orchestune.consistency.invariants.execution import (
     RUN_STATE_MISSING,
     execution_invariants,
@@ -39,7 +40,12 @@ from orchestune.consistency.repairs.execution import (
     COMMAND_REQUEUE,
     plan_execution_repairs,
 )
-from orchestune.dispatch.attempt_record import MARKER, attempt_from_body, read_attempt
+from orchestune.dispatch.attempt_record import (
+    MARKER,
+    LaunchAttempt,
+    attempt_from_body,
+    read_attempt,
+)
 from orchestune.dispatch.dependency_resolution import (
     EMPTY_DEPENDENCIES,
     TaskDependencies,
@@ -284,6 +290,34 @@ def _extract_raw_subtask_id(issue: IssueRecord) -> str | None:
     return str(subtask_id) if subtask_id else None
 
 
+def _parse_claim_info_from_issue(
+    issue: IssueRecord,
+) -> tuple[str, str | None, str]:
+    """Issueの本文から owner_kind, claim_id, reservation_kind を抽出する。
+    欠落時は (owner_kind='dispatch', claim_id=None, reservation_kind='footprint') を返す。
+    """
+    owner_kind = "dispatch"
+    claim_id = None
+    reservation_kind = "footprint"
+    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
+    if match:
+        try:
+            data = yaml.safe_load(match.group(1))
+            if isinstance(data, dict):
+                raw_owner_kind = data.get("owner_kind")
+                if raw_owner_kind in {"interactive", "dispatch"}:
+                    owner_kind = raw_owner_kind
+                raw_claim_id = data.get("claim_id")
+                if isinstance(raw_claim_id, str) and raw_claim_id:
+                    claim_id = raw_claim_id
+                raw_res_kind = data.get("reservation_kind")
+                if raw_res_kind in {"footprint", "repository"}:
+                    reservation_kind = raw_res_kind
+        except Exception:
+            pass
+    return owner_kind, claim_id, reservation_kind
+
+
 def _parse_subtask_info_from_issue(
     issue: IssueRecord,
 ) -> tuple[str, tuple[str, ...]]:
@@ -302,7 +336,11 @@ def _parse_subtask_info_from_issue(
             pass
 
     if not subtask_id:
-        subtask_id = f"issue-{issue.number}"
+        owner_kind, _, _ = _parse_claim_info_from_issue(issue)
+        if owner_kind == "interactive":
+            subtask_id = resolve_claim_subtask_id(issue)
+        else:
+            subtask_id = f"issue-{issue.number}"
 
     return subtask_id, declared_footprint
 
@@ -480,6 +518,90 @@ def _resolve_recovery_branch(
     return resolution
 
 
+def _build_restored_from_attempt(
+    issue: IssueRecord,
+    attempt: LaunchAttempt,
+    owner_kind: str,
+    claim_id: str | None,
+    reservation_kind: str,
+    config: DispatcherConfig,
+) -> ActiveWorktree:
+    active = active_from_attempt(attempt, parse_task_from_issue(issue), config)
+    return replace(
+        active,
+        owner_kind=owner_kind,
+        claim_id=claim_id,
+        reservation_kind=reservation_kind,
+    )
+
+
+def _restored_worktree_workspace(
+    issue: IssueRecord,
+    subtask_id: str,
+    resolver: TaskBranchResolver,
+    resolutions: dict[int, TaskBranchResolution],
+    config: DispatcherConfig,
+) -> tuple[str, str, str | None, str | None]:
+    branch_name, external_id, external_url = _resolve_recovery_pr_and_branch(
+        issue, subtask_id, resolver, resolutions, config
+    )
+    slug = branch_name.replace("/", "-")
+    worktree_path = Path(config.worktree_root) / slug
+    return branch_name, str(worktree_path), external_id, external_url
+
+
+def _build_restored_standard_worktree(
+    issue: IssueRecord,
+    subtask_id: str,
+    declared_footprint: tuple[str, ...],
+    resolver: TaskBranchResolver,
+    resolutions: dict[int, TaskBranchResolution],
+    issue_to_subtask_id: dict[int, str],
+    dependency_resolution: dict[int, TaskDependencies],
+    owner_kind: str,
+    claim_id: str | None,
+    reservation_kind: str,
+    config: DispatcherConfig,
+) -> ActiveWorktree:
+    if owner_kind == "interactive" and subtask_id == f"issue-{issue.number}":
+        subtask_id = resolve_claim_subtask_id(issue)
+    recompute_count, forced_serial = _recovery_counters_for_issue(issue)
+    branch, worktree_path, external_id, external_url = _restored_worktree_workspace(
+        issue, subtask_id, resolver, resolutions, config
+    )
+    restored_base = _restored_base_branch(
+        issue,
+        issue_to_subtask_id,
+        dependency_resolution,
+        resolver,
+        resolutions,
+        config,
+    )
+    task = parse_task_from_issue(issue, issue_to_subtask_id)
+    selection = resolve_task_execution_selection(task, config)
+
+    return ActiveWorktree(
+        issue_number=issue.number,
+        branch=branch,
+        worktree_path=worktree_path,
+        pid=None,
+        started_at=None,
+        declared_footprint=declared_footprint,
+        recompute_count=recompute_count,
+        forced_serial=forced_serial,
+        external_id=external_id,
+        external_url=external_url,
+        base_branch=restored_base,
+        profile=selection.profile,
+        model=selection.model,
+        reasoning_effort=selection.reasoning_effort,
+        selection_reason=selection.reason,
+        owner_kind=owner_kind,
+        claim_id=claim_id,
+        reservation_kind=reservation_kind,
+    )
+
+
 def _build_restored_active_worktree(
     issue: IssueRecord,
     subtask_id: str,
@@ -490,43 +612,28 @@ def _build_restored_active_worktree(
     dependency_resolution: dict[int, TaskDependencies],
     config: DispatcherConfig,
 ) -> ActiveWorktree:
+    owner_kind, claim_id, reservation_kind = _parse_claim_info_from_issue(issue)
     attempt = attempt_from_body(issue.body)
-    if attempt is not None and attempt.phase == "launched":
-        return active_from_attempt(attempt, parse_task_from_issue(issue), config)
-    recompute_count, forced_serial = _recovery_counters_for_issue(issue)
-    branch_name, external_id, external_url = _resolve_recovery_pr_and_branch(
-        issue, subtask_id, resolver, resolutions, config
-    )
-    slug = branch_name.replace("/", "-")
-    worktree_path = Path(config.worktree_root) / slug
-    restored_base = _restored_base_branch(
+    if (
+        owner_kind != "interactive"
+        and attempt is not None
+        and attempt.phase == "launched"
+    ):
+        return _build_restored_from_attempt(
+            issue, attempt, owner_kind, claim_id, reservation_kind, config
+        )
+    return _build_restored_standard_worktree(
         issue,
-        issue_to_subtask_id,
-        dependency_resolution,
+        subtask_id,
+        declared_footprint,
         resolver,
         resolutions,
+        issue_to_subtask_id,
+        dependency_resolution,
+        owner_kind,
+        claim_id,
+        reservation_kind,
         config,
-    )
-
-    task = parse_task_from_issue(issue, issue_to_subtask_id)
-    execution_selection = resolve_task_execution_selection(task, config)
-
-    return ActiveWorktree(
-        issue_number=issue.number,
-        branch=branch_name,
-        worktree_path=str(worktree_path),
-        pid=None,
-        started_at=None,
-        declared_footprint=declared_footprint,
-        recompute_count=recompute_count,
-        forced_serial=forced_serial,
-        external_id=external_id,
-        external_url=external_url,
-        base_branch=restored_base,
-        profile=execution_selection.profile,
-        model=execution_selection.model,
-        reasoning_effort=execution_selection.reasoning_effort,
-        selection_reason=execution_selection.reason,
     )
 
 
@@ -780,8 +887,19 @@ def _persist_recovery_snapshot(
     )
 
 
+def _is_interactive_restoration(
+    subject_id: str | None, snapshot: RecoveryBookkeepingSnapshot
+) -> bool:
+    if subject_id is None:
+        return False
+    return any(
+        item[0] == subject_id and item[2].owner_kind == "interactive"
+        for item in snapshot.restorations
+    )
+
+
 def _restorable(candidate: ActiveWorktree) -> bool:
-    return candidate.external_id is not None
+    return candidate.external_id is not None or candidate.owner_kind == "interactive"
 
 
 def _skipped(command: RepairCommand, detail: str) -> RepairResult:
@@ -790,6 +908,26 @@ def _skipped(command: RepairCommand, detail: str) -> RepairResult:
         status=RepairStatus.SKIPPED,
         diagnostics=(detail,),
     )
+
+
+def _reconcile_durable_attempt_for_requeue(
+    command: RepairCommand,
+    task: Task | None,
+    run_state: RunState,
+    snapshot: RecoveryBookkeepingSnapshot,
+    config: DispatcherConfig,
+) -> bool:
+    if _is_interactive_restoration(command.subject_id, snapshot):
+        return False
+    if (
+        task is not None
+        and config.dispatch_target is not None
+        and config.dispatch_target.launch_capabilities.durable_attempt
+    ):
+        attempt = read_attempt(config.resolved_forge, task.issue_number)
+        if attempt is not None and reconcile_attempt(attempt, task, run_state, config):
+            return True
+    return False
 
 
 def execute_recovery_requeue_command(
@@ -808,16 +946,10 @@ def execute_recovery_requeue_command(
     if not config.apply:
         return _skipped(command, "requeue is disabled in dry-run mode")
     task = snapshot.tasks_by_issue.get(int(command.subject_id or "0"))
-    if (
-        task is not None
-        and config.dispatch_target is not None
-        and config.dispatch_target.launch_capabilities.durable_attempt
+    if _reconcile_durable_attempt_for_requeue(
+        command, task, run_state, snapshot, config
     ):
-        attempt = read_attempt(config.resolved_forge, task.issue_number)
-        if attempt is not None and reconcile_attempt(attempt, task, run_state, config):
-            return _skipped(
-                command, "durable launch attempt restored or held; no requeue"
-            )
+        return _skipped(command, "durable launch attempt restored or held; no requeue")
     selected = tuple(
         item for item in snapshot.restorations if item[0] == command.subject_id
     )
@@ -942,6 +1074,34 @@ def _apply_missing_entry_bookkeeping(
     return RepairResult(command=command, status=RepairStatus.APPLIED)
 
 
+def _reconcile_attempt_for_bookkeeping(
+    command: RepairCommand,
+    run_state: RunState,
+    snapshot: RecoveryBookkeepingSnapshot,
+    config: DispatcherConfig,
+    finding_codes: set[str],
+) -> bool:
+    if _is_interactive_restoration(command.subject_id, snapshot):
+        return False
+    if not (
+        config.apply and (finding_codes & {LAUNCH_ATTEMPT_PENDING, RUN_STATE_MISSING})
+    ):
+        return False
+    task = next(
+        (
+            task
+            for task in snapshot.attempt_tasks
+            if str(task.issue_number) == command.subject_id
+        ),
+        None,
+    )
+    if task is not None:
+        attempt = read_attempt(config.resolved_forge, task.issue_number)
+        if attempt is not None and reconcile_attempt(attempt, task, run_state, config):
+            return True
+    return False
+
+
 def execute_bookkeeping_repair_command(
     command: RepairCommand,
     run_state: RunState,
@@ -956,22 +1116,10 @@ def execute_bookkeeping_repair_command(
             diagnostics=(f"unsupported recovery repair command: {command.code}",),
         )
     finding_codes = set(command_finding_codes(command))
-    task = next(
-        (
-            task
-            for task in snapshot.attempt_tasks
-            if str(task.issue_number) == command.subject_id
-        ),
-        None,
-    )
-    if (
-        task is not None
-        and config.apply
-        and finding_codes & {LAUNCH_ATTEMPT_PENDING, RUN_STATE_MISSING}
+    if _reconcile_attempt_for_bookkeeping(
+        command, run_state, snapshot, config, finding_codes
     ):
-        attempt = read_attempt(config.resolved_forge, task.issue_number)
-        if attempt is not None and reconcile_attempt(attempt, task, run_state, config):
-            return RepairResult(command=command, status=RepairStatus.APPLIED)
+        return RepairResult(command=command, status=RepairStatus.APPLIED)
     if (
         LAUNCH_HISTORY_STALE in finding_codes
         and command.scope is ConsistencyScope.REPOSITORY
