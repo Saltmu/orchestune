@@ -151,7 +151,13 @@ def reconcile_attempt(
         return True
     key = str(task.issue_number)
     existing = state.active_worktrees.get(key)
-    if existing is None:
+    # #943レビュー対応(Codex P1): dispatchの起動がclaim_task経由になったことで、
+    # 実際の起動より前にclaim自身の予約（`launch_attempt_id`未設定のプレース
+    # ホルダー）が`run_state.active_worktrees`へ同期されるようになった。この
+    # プレースホルダーは「まだ確定したattemptを持たない」ことを表すだけで、
+    # 別の起動に属するものではないため、既存の「別attemptに属する」拒否と
+    # 区別し、確認済みのattemptで採用できるようにする。
+    if existing is None or existing.launch_attempt_id is None:
         state.active_worktrees[key] = active_from_attempt(attempt, task, config)
     elif existing.launch_attempt_id != attempt.attempt_id:
         _hold(task, config, "local state belongs to a different launch attempt")

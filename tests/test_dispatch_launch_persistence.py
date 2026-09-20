@@ -674,6 +674,56 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         assert selected == []
         assert launch_history_from_body(bodies["current"]) == []
 
+    def test_held_claim_does_not_consume_run_state_launch_history_quota(self, tmp_path):
+        """#943レビュー対応(Codex P1): claim_task自体がACTIVE_SAVED段階で
+        held（providerを一度も呼んでいない）になったケースでは、
+        `run_state.launch_history`（`max_launches_per_window`が参照するquota）
+        を消費してはならない。誤って消費すると、既定
+        （`max_launches_per_window=1`）では他の全タスクが1時間ブロックされる。
+        """
+        from unittest.mock import MagicMock
+
+        from orchestune.claim.contracts import (
+            ClaimFailure,
+            ClaimFailureReason,
+            ClaimOutcome,
+            ClaimStage,
+        )
+        from orchestune.dispatch.launch import _apply_task_launches
+
+        now = 5_000_000.0
+        forge = MagicMock()
+        forge.get_issue.return_value = MagicMock(body="EPIC body")
+
+        plans, dispatch_target = self._launch_plan(tmp_path)
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+            forge=forge,
+        )
+
+        def _held_claim_fn(request, default_base):
+            return ClaimOutcome(
+                success=False,
+                issue_number=request.issue_number,
+                stage=ClaimStage.ACTIVE_SAVED,
+                failure=ClaimFailure(
+                    reason=ClaimFailureReason.LABEL_UPDATE_FAILED,
+                    message="label update failed",
+                ),
+            )
+
+        run_state = RunState(active_worktrees={})
+        selected = _apply_task_launches(
+            plans, run_state, now, config, claim_fn=_held_claim_fn
+        )
+
+        assert selected == []
+        assert run_state.launch_history == []
+        assert not forge.add_label.called
+
     def test_releases_the_reservation_before_reporting_to_the_forge(self, tmp_path):
         """#519レビュー7巡目(P2): 解放をGitHubへの報告より**後**に置くと、
         `transition_status_label`/`add_comment`が一時的なforgeエラーで送出した

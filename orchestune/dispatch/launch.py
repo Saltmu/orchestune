@@ -232,7 +232,16 @@ def _decide_task_launch_plan(
     """選出されたタスクごとに、起動時のブランチ名・ベースブランチを決定する（副作用なし）。"""
     plans = []
     for task in selected:
-        branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
+        # #943レビュー対応(Codex P2): subtask_idが未指定/空の場合、
+        # `build_task_branch_name`自体の既定フォールバックは`"task"`だが、
+        # claim_task側の`orchestune.claim.preflight.resolve_claim_subtask_id`は
+        # `f"task-{issue_number}"`にフォールバックする。両者が食い違うと、
+        # dispatchの計画・重複PR検出・launch-attempt journalが想定する
+        # ブランチ名と、claim_task経由で実際に起動されるブランチ名が
+        # 一致しなくなる（二重起動やjournal不整合の原因になる）。claimと
+        # 同じフォールバックへ揃える。
+        subtask_id = task.subtask_id or f"task-{task.issue_number}"
+        branch_name = build_task_branch_name(task.issue_number, subtask_id)
         base_branch = task_to_base_branch.get(task.issue_number)
         if base_branch is None:
             if config.parent_issue_number is not None:
@@ -451,11 +460,15 @@ def _record_successful_launch(
 
 def _resolve_claim_failure_launch_result(
     plan: TaskLaunchPlan[TTask], outcome: ClaimOutcome
-) -> LaunchResult | None:
+) -> LaunchResult:
     """claim_taskの失敗outcomeを、既存のLaunchResultベースの失敗処理へ変換する。
 
-    STATE_LOCK_FAILEDは一時的な競合であり、`LaunchOutcomeUnknown`と同様に
-    次サイクルへ持ち越す（Noneを返す）。それ以外の拒否理由は、branch/subtask_id
+    STATE_LOCK_FAILEDやACTIVE_SAVED段階の失敗はagent（provider）を一度も
+    呼んでいないため、`held=True`の`LaunchResult`を返す（#943レビュー対応
+    (Codex P1): 呼び出し元はこれを見てlaunch_history（quotaの消費記録）へ
+    計上しない——providerを呼んでいないのにquotaを消費したことにすると、
+    既定の`max_launches_per_window=1`では他の全タスクが1時間ブロックされる）。
+    それ以外の拒否理由は、branch/subtask_id
     の不正（`INVALID_BRANCH_NAME`）だけを`validation_error`として
     `status:blocked-human-review`へ、それ以外（`WORKTREE_CREATION_FAILED`を
     含む、OSError/git実行エラーのような一時的なインフラ障害や所有権拒否）は
@@ -489,7 +502,16 @@ def _resolve_claim_failure_launch_result(
             f"Holding launch of issue #{plan.task.issue_number}: {failure.message}; retry next cycle",
             file=sys.stderr,
         )
-        return None
+        return LaunchResult(
+            issue_number=plan.task.issue_number,
+            branch=plan.branch_name,
+            worktree_path="",
+            pid=None,
+            launched=False,
+            error_message=failure.message,
+            execution_selection=plan.execution_selection,
+            held=True,
+        )
     return LaunchResult(
         issue_number=plan.task.issue_number,
         branch=plan.branch_name,
@@ -603,7 +625,20 @@ def _apply_single_task_launch(
 
         launch = _try_planned_launch(plan, target, config, run_state, claim_fn)
         if launch is None:
+            # LaunchOutcomeUnknown: providerを実際に呼んだかどうか不明なため、
+            # 安全側に倒してquotaを消費したものとして扱う（既存挙動）。
             run_state.launch_history.append(now)
+            return None
+        if launch.held is True:
+            # `is True`（真偽値としての緩い評価ではなく）で比較する: 既存の
+            # 多くのテストが`_launch_on_prepared_worktree`を素の`MagicMock`
+            # （`held`属性を明示しない）で置き換えており、緩い真偽評価だと
+            # 未設定属性への自動生成MagicMock（常にtruthy）を誤ってheld扱い
+            # してしまう。
+            # #943レビュー対応(Codex P1): claim_task自体がhold（provider未呼出）
+            # されたケース。quotaは消費しておらず、`_handle_launch_failure`の
+            # 独自ラベル遷移も適用しない（claim側の状態をそのまま次サイクルの
+            # 整合性回復に委ねる）。
             return None
         if not launch.launched:
             _handle_launch_failure(task, launch, config)

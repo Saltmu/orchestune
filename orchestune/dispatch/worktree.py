@@ -56,6 +56,13 @@ class LaunchResult:
     base_ref: str | None = None
     claim_id: str | None = None
     reservation_kind: str | None = None
+    # #943レビュー対応(Codex P1): claim_task自体がholdされた（provider=agentは
+    # 一度も呼ばれていない: STATE_LOCK_FAILEDや、ACTIVE_SAVED段階での
+    # ラベル更新/所有権メタデータ公開失敗）ケースを表す。`launched=False`だが
+    # `held=True`の場合、`_apply_single_task_launch`はlaunch_history（quota消費）
+    # への計上も`_handle_launch_failure`によるエスカレーションも行わない
+    # ——providerを一度も呼んでいない以上、quotaは消費していないため。
+    held: bool = False
 
 
 @dataclass(frozen=True)

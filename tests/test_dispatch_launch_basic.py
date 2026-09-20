@@ -145,6 +145,29 @@ class TestDecideTaskLaunchPlan:
         assert plans[0].base_branch_for_launch == "parent/issue-99"
         assert plans[0].base_branch_for_state == "parent/issue-99"
 
+    def test_empty_subtask_id_matches_claims_canonical_fallback(self, tmp_path):
+        """#943レビュー対応(Codex P2): 空subtask_idのフォールバックを
+        claim_task側の`resolve_claim_subtask_id`（`task-{issue}`）に揃える。"""
+        task = Task(
+            issue_number=1,
+            subtask_id="",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:queued",),
+            created_at="2023-01-01T00:00:00+00:00",
+            depends_on=(),
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        plans = _decide_task_launch_plan([task], {}, config)
+        assert plans[0].branch_name == "claude/issue-1-task-1"
+
     def test_resolves_execution_selection_in_plan(self, tmp_path):
         from orchestune.dispatch.execution_profiles import (
             ExecutionProfileConfig,
@@ -197,54 +220,39 @@ class TestDecideTaskLaunchPlan:
 
 
 class TestResolveClaimFailureLaunchResult:
-    """#943レビュー対応(Codex P2): claim失敗理由に応じたvalidation_error振り分け。"""
+    """#943レビュー対応(Codex P2): INVALID_BRANCH_NAMEのみvalidation_error。"""
 
     def _plan(self, tmp_path):
         task = _task(1)
         return TaskLaunchPlan(task, "claude/issue-1-task-1", None, "origin/main")
 
-    def test_invalid_branch_name_is_a_validation_error(self, tmp_path):
-        from orchestune.claim.contracts import (
-            ClaimFailure,
-            ClaimFailureReason,
-            ClaimOutcome,
-        )
-        from orchestune.dispatch.launch import _resolve_claim_failure_launch_result
+    def _outcome(self, reason, message):
+        from orchestune.claim.contracts import ClaimFailure, ClaimOutcome
 
-        outcome = ClaimOutcome(
+        return ClaimOutcome(
             success=False,
             issue_number=1,
-            failure=ClaimFailure(
-                reason=ClaimFailureReason.INVALID_BRANCH_NAME,
-                message="invalid branch name",
-            ),
+            failure=ClaimFailure(reason=reason, message=message),
+        )
+
+    def test_invalid_branch_name_is_a_validation_error(self, tmp_path):
+        from orchestune.claim.contracts import ClaimFailureReason
+        from orchestune.dispatch.launch import _resolve_claim_failure_launch_result
+
+        outcome = self._outcome(
+            ClaimFailureReason.INVALID_BRANCH_NAME, "invalid branch name"
         )
         result = _resolve_claim_failure_launch_result(self._plan(tmp_path), outcome)
-        assert result is not None
         assert result.validation_error is True
 
     def test_worktree_creation_failed_is_not_a_validation_error(self, tmp_path):
-        """一時的なインフラ障害（OSError/git実行エラー由来）は
-        `status:blocked-human-review`ではなく再試行可能な`status:blocked`
-        へ振り分けられるべき（恒久的な入力不備のINVALID_BRANCH_NAMEとは
-        区別する）。"""
-        from orchestune.claim.contracts import (
-            ClaimFailure,
-            ClaimFailureReason,
-            ClaimOutcome,
-        )
+        from orchestune.claim.contracts import ClaimFailureReason
         from orchestune.dispatch.launch import _resolve_claim_failure_launch_result
 
-        outcome = ClaimOutcome(
-            success=False,
-            issue_number=1,
-            failure=ClaimFailure(
-                reason=ClaimFailureReason.WORKTREE_CREATION_FAILED,
-                message="prepare_task_worktree raised exception: disk full",
-            ),
+        outcome = self._outcome(
+            ClaimFailureReason.WORKTREE_CREATION_FAILED, "disk full"
         )
         result = _resolve_claim_failure_launch_result(self._plan(tmp_path), outcome)
-        assert result is not None
         assert result.validation_error is False
 
 

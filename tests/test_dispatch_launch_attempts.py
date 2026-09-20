@@ -114,6 +114,52 @@ def test_saved_handle_restored_after_crash_without_pr(launch_env, stop):
     assert load_run_state(config.run_state_path).active_worktrees["1"] == active
 
 
+def test_reconcile_attempt_adopts_confirmed_launch_over_claim_placeholder(launch_env):
+    """#943レビュー対応(Codex P1): dispatchの起動がclaim_task経由になったことで、
+    実際の起動より前にclaim自身の予約（`launch_attempt_id`未設定のプレース
+    ホルダー）が`run_state.active_worktrees`へ同期されるようになった
+    （`_sync_claim_reservation_into_run_state`）。このプレースホルダーが
+    残ったまま次サイクルでjournalが確認済みの`launched`フェーズを報告した
+    場合、既存の「別attemptに属する」拒否ロジックがこれを誤って別attempt
+    扱いし、実際には成功しているagent実行をhuman-reviewへエスカレーション
+    してはならない——プレースホルダーは採用してよい。"""
+    from orchestune.dispatch.attempt_record import LaunchAttempt
+    from orchestune.dispatch.launch_attempts import reconcile_attempt
+    from orchestune.dispatch.state import ActiveWorktree, RunState
+
+    forge, config, plan, launch = launch_env
+    task = plan.task
+    key = str(task.issue_number)
+    state = RunState(
+        active_worktrees={
+            key: ActiveWorktree(
+                issue_number=task.issue_number,
+                branch=plan.branch_name,
+                worktree_path="worktrees/w1",
+                pid=None,
+                started_at=None,
+                declared_footprint=task.footprint,
+                launch_attempt_id=None,
+            )
+        }
+    )
+    attempt = LaunchAttempt(
+        attempt_id="confirmed-attempt-1",
+        phase="launched",
+        target=config.dispatch_target.target_name,
+        branch=plan.branch_name,
+        base_branch=plan.base_branch_for_state,
+        started_at=100.0,
+        external_id="ext-1",
+    )
+
+    consumed = reconcile_attempt(attempt, task, state, config)
+
+    assert consumed is True
+    assert state.active_worktrees[key].launch_attempt_id == "confirmed-attempt-1"
+    assert state.active_worktrees[key].external_id == "ext-1"
+
+
 def test_unknown_launch_is_not_retried_after_state_loss(launch_env):
     forge, config, plan, launch = launch_env
     launch.side_effect = OSError("response lost after acceptance")
