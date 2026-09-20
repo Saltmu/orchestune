@@ -395,6 +395,41 @@ class TestQueries:
         assert fact is not None
         assert fact.started_at is None
 
+    def test_launch_fact_exposes_ownership_and_reservation_fields(self):
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+            run_state=RunState(
+                active_worktrees={
+                    "1": _active(
+                        1,
+                        owner_kind="interactive",
+                        claim_id="claim-abc",
+                        reservation_kind="repository",
+                    )
+                }
+            ),
+        )
+
+        fact = ctx.launch_fact(1)
+
+        assert fact is not None
+        assert fact.owner_kind == "interactive"
+        assert fact.claim_id == "claim-abc"
+        assert fact.reservation_kind == "repository"
+
+    def test_launch_fact_defaults_ownership_and_reservation_fields(self):
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
+            run_state=RunState(active_worktrees={"1": _active(1)}),
+        )
+
+        fact = ctx.launch_fact(1)
+
+        assert fact is not None
+        assert fact.owner_kind == "dispatch"
+        assert fact.claim_id is None
+        assert fact.reservation_kind == "footprint"
+
 
 class TestIsEffectivelyDone:
     """`is_effectively_done`の統合規則（F段3）。"""

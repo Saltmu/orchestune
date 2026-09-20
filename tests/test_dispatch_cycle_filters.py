@@ -10,12 +10,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from orchestune.claim.contracts import ClaimStage, ReservationKind
 from orchestune.dag.models import FootprintConflict
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
-from orchestune.dispatch.filters import _filter_deviation_blocked_candidates
+from orchestune.dispatch.filters import (
+    _filter_candidates_for_forced_serial,
+    _filter_deviation_blocked_candidates,
+)
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
@@ -23,6 +27,8 @@ from orchestune.dispatch.state import (
 from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.models import IssueRecord
 from tests.dispatch_test_support import make_footprint_issue as _full_issue
+from tests.dispatch_test_support import make_test_active_worktree as _active
+from tests.dispatch_test_support import make_test_cycle_context as _cycle_context
 from tests.dispatch_test_support import make_test_task as _task
 from tests.dispatch_test_support import (
     patch_gc_process_alive as _patch_gc_process_alive,
@@ -544,3 +550,98 @@ class TestRunDispatchCycleFootprintRecompute:
         mock_add_label.assert_not_called()
         assert report.selected == []
         assert report.deviation_events[0]["action"] == "already_forced_serial"
+
+
+class TestFilterCandidatesForReservationActives:
+    def test_repository_reservation_blocks_all_candidates_despite_empty_footprint(
+        self,
+    ):
+        reservation_active = _active(
+            issue_number=1,
+            declared_footprint=(),
+            reservation_kind=ReservationKind.REPOSITORY,
+            forced_serial=False,
+        )
+        run_state = RunState(active_worktrees={"1": reservation_active})
+        reserved_task = _task(issue_number=1, subtask_id="task-a", footprint=())
+        candidate_a = _task(
+            issue_number=2, subtask_id="task-b", footprint=("src/a.py",)
+        )
+        candidate_b = _task(
+            issue_number=3, subtask_id="task-c", footprint=("src/b.py",)
+        )
+        view = _cycle_context(
+            tasks_by_issue={1: reserved_task, 2: candidate_a, 3: candidate_b},
+            resolve_dependencies=True,
+        )
+
+        result = _filter_candidates_for_forced_serial(
+            [candidate_a, candidate_b], run_state, view
+        )
+
+        assert result == []
+
+    def test_reservation_stage_active_blocks_same_issue_and_conflicting_footprint(
+        self,
+    ):
+        reservation_active = _active(
+            issue_number=5,
+            declared_footprint=("src/x.py",),
+            claim_stage=ClaimStage.RESERVED,
+            forced_serial=False,
+        )
+        run_state = RunState(active_worktrees={"5": reservation_active})
+        reserved_task = _task(
+            issue_number=5, subtask_id="task-x", footprint=("src/x.py",)
+        )
+        same_issue_candidate = _task(
+            issue_number=5, subtask_id="task-x", footprint=("src/x.py",)
+        )
+        conflicting_candidate = _task(
+            issue_number=6, subtask_id="task-y", footprint=("src/x.py",)
+        )
+        independent_candidate = _task(
+            issue_number=7, subtask_id="task-z", footprint=("src/y.py",)
+        )
+        view = _cycle_context(
+            tasks_by_issue={
+                5: reserved_task,
+                6: conflicting_candidate,
+                7: independent_candidate,
+            },
+            resolve_dependencies=True,
+        )
+
+        result = _filter_candidates_for_forced_serial(
+            [same_issue_candidate, conflicting_candidate, independent_candidate],
+            run_state,
+            view,
+        )
+
+        assert result == [independent_candidate]
+
+    def test_ordinary_active_without_forced_serial_or_reservation_does_not_block(
+        self,
+    ):
+        ordinary_active = _active(
+            issue_number=10,
+            declared_footprint=("src/x.py",),
+            forced_serial=False,
+        )
+        run_state = RunState(active_worktrees={"10": ordinary_active})
+        active_task = _task(
+            issue_number=10, subtask_id="task-x", footprint=("src/x.py",)
+        )
+        conflicting_candidate = _task(
+            issue_number=11, subtask_id="task-y", footprint=("src/x.py",)
+        )
+        view = _cycle_context(
+            tasks_by_issue={10: active_task, 11: conflicting_candidate},
+            resolve_dependencies=True,
+        )
+
+        result = _filter_candidates_for_forced_serial(
+            [conflicting_candidate], run_state, view
+        )
+
+        assert result == [conflicting_candidate]
