@@ -591,6 +591,19 @@ def prepare_task_worktree(
         )
 
 
+def _worktree_is_verified_clean(worktree_path: Path) -> bool:
+    """#935レビュー対応(P1, round5): `dispatch_gc.worktree_has_uncommitted_changes`
+    はGC用途上、status確認自体が失敗した場合にクオータ解放を優先してclean側に
+    倒す設計（意図的な既存挙動）。rollbackの破壊的削除の可否判定としては
+    安全方向が逆（確認できなければdirty扱いでblockすべき）なため、専用に
+    fail-closedな確認を行う。"""
+    try:
+        result = run_git(["status", "--porcelain"], cwd=worktree_path, check=True)
+    except (subprocess.CalledProcessError, OSError):
+        return False
+    return not result.stdout.strip()
+
+
 def _rollback_blocking_reason_for_missing_worktree(
     preparation: WorktreePreparation,
 ) -> str | None:
@@ -632,7 +645,7 @@ def _rollback_blocking_reason(
     # サブディレクトリが置かれた場合等）。削除前に必ず身元を確認する。
     if not _verify_worktree_identity(preparation.worktree_path, preparation.branch):
         return "stale_marker_unverified_worktree"
-    if dispatch_gc.worktree_has_uncommitted_changes(preparation.worktree_path):
+    if not _worktree_is_verified_clean(preparation.worktree_path):
         return "worktree_dirty"
     try:
         head_sha = _resolve_worktree_head_sha(preparation.worktree_path)
@@ -678,7 +691,12 @@ def rollback_task_worktree(
             branch_delete = run_git(
                 ["branch", "-D", preparation.branch], cwd=None, check=False
             )
-            if branch_delete.returncode != 0:
+            # #935レビュー対応(P2, round5): branchが既に削除済み（前回試行が
+            # worktree削除とbranch削除の両方を終えた後、marker削除の前に
+            # クラッシュしたケース等）の場合、`git branch -D`は対象が無く
+            # 失敗する。削除後もbranchが実在するかで真の失敗と区別しないと、
+            # markerが永久に残り、以後このpathを誰も所有できなくなる。
+            if branch_delete.returncode != 0 and _branch_exists(preparation.branch):
                 return "branch_deletion_failed"
         _remove_claim_marker(preparation.worktree_path)
         return None

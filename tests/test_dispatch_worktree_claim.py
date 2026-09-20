@@ -861,3 +861,61 @@ class TestRollbackTaskWorktree:
             text=True,
         ).stdout
         assert "claim/issue-22-task-22" in branches
+
+    def test_rollback_fails_closed_when_dirty_check_errors(self, tmp_path, monkeypatch):
+        """#935レビュー対応(P1, round5): `git status --porcelain`自体が失敗した
+        場合、確認不能をclean扱いにして削除してはならない（GC用途の
+        `worktree_has_uncommitted_changes`はclean側に倒す設計だが、rollbackの
+        破壊的削除判定としては逆に倒す必要がある）。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+        worktree_root = tmp_path / "worktrees"
+        preparation = prepare_task_worktree(
+            "claim/issue-24-task-24", worktree_root, None, "claim-24"
+        )
+
+        def failing_status(args, **kwargs):
+            if args[:2] == ["status", "--porcelain"]:
+                raise subprocess.CalledProcessError(
+                    128, args, stderr="fatal: index file corrupt"
+                )
+            return real_run_git(args, **kwargs)
+
+        with patch("orchestune.dispatch.worktree.run_git", side_effect=failing_status):
+            result = rollback_task_worktree(preparation, "claim-24")
+
+        assert result == "worktree_dirty"
+        assert preparation.worktree_path.exists()
+        assert _claim_marker_path(preparation.worktree_path).exists()
+
+    def test_rollback_treats_already_deleted_branch_as_cleanup_complete(
+        self, tmp_path, monkeypatch
+    ):
+        """#935レビュー対応(P2, round5): worktree削除・branch削除の両方が完了
+        した後、marker削除の前にクラッシュしたケースの再試行では、既に消えて
+        いるbranchに対する`git branch -D`の失敗を「真の失敗」と混同して
+        markerを永久に残してはならない。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+        worktree_root = tmp_path / "worktrees"
+        preparation = prepare_task_worktree(
+            "claim/issue-25-task-25", worktree_root, None, "claim-25"
+        )
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(preparation.worktree_path)],
+            cwd=repo_dir,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "branch", "-D", "claim/issue-25-task-25"], cwd=repo_dir, check=True
+        )
+        assert _claim_marker_path(preparation.worktree_path).exists()
+
+        result = rollback_task_worktree(preparation, "claim-25")
+
+        assert result is None
+        assert not _claim_marker_path(preparation.worktree_path).exists()
