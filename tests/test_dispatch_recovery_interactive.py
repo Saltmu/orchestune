@@ -181,6 +181,71 @@ class TestRestorationPreservesClaimOwnership:
         assert active.owner_kind == "interactive"
         assert active.claim_id == "claim-recovery-launched-123"
         assert active.reservation_kind == "footprint"
+        assert active.branch == "claude/issue-942-interactive-task"
+        assert active.worktree_path == str(
+            tmp_path / "worktrees" / "claude-issue-942-interactive-task"
+        )
+        assert active.external_id is None
+        assert active.launch_attempt_id is None
+        assert active.launch_phase is None
+
+    def test_restored_active_worktree_with_launched_attempt_and_omitted_subtask_id_restores_claim_workspace(
+        self, tmp_path
+    ):
+        body = (
+            "## Footprint\n```yaml\n"
+            "owner_kind: interactive\n"
+            "claim_id: claim-recovery-launched-943\n"
+            "reservation_kind: footprint\n"
+            "footprint:\n"
+            "  - src/interactive.py\n"
+            "```\n\n"
+            "<!-- orchestune:launch-attempt -->\n"
+            "```json\n"
+            "{\n"
+            '  "attempt_id": "attempt-old-cloud-888",\n'
+            '  "phase": "launched",\n'
+            '  "target": "claude",\n'
+            '  "branch": "task/old-cloud-branch",\n'
+            '  "base_branch": "main",\n'
+            '  "external_id": "ext-job-88888",\n'
+            '  "external_url": "https://example.com/job/88888",\n'
+            '  "started_at": 1000.0\n'
+            "}\n"
+            "```\n"
+        )
+        issue = IssueRecord(
+            number=943,
+            title="Interactive Task with Prior Cloud Attempt and No Subtask ID",
+            body=body,
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        resolver = TaskBranchResolver([])
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=str(tmp_path / "worktrees"),
+        )
+
+        active = _build_restored_active_worktree(
+            issue=issue,
+            subtask_id="issue-943",
+            declared_footprint=("src/interactive.py",),
+            resolver=resolver,
+            resolutions={},
+            issue_to_subtask_id={},
+            dependency_resolution={},
+            config=config,
+        )
+
+        assert active.owner_kind == "interactive"
+        assert active.claim_id == "claim-recovery-launched-943"
+        assert active.reservation_kind == "footprint"
+        assert active.branch == "claude/issue-943-task-943"
+        assert active.worktree_path == str(
+            tmp_path / "worktrees" / "claude-issue-943-task-943"
+        )
         assert active.external_id is None
         assert active.launch_attempt_id is None
         assert active.launch_phase is None

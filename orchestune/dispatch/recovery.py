@@ -527,17 +527,6 @@ def _build_restored_from_attempt(
     config: DispatcherConfig,
 ) -> ActiveWorktree:
     active = active_from_attempt(attempt, parse_task_from_issue(issue), config)
-    if owner_kind == "interactive":
-        return replace(
-            active,
-            owner_kind=owner_kind,
-            claim_id=claim_id,
-            reservation_kind=reservation_kind,
-            external_id=None,
-            external_url=None,
-            launch_attempt_id=None,
-            launch_phase=None,
-        )
     return replace(
         active,
         owner_kind=owner_kind,
@@ -625,7 +614,11 @@ def _build_restored_active_worktree(
 ) -> ActiveWorktree:
     owner_kind, claim_id, reservation_kind = _parse_claim_info_from_issue(issue)
     attempt = attempt_from_body(issue.body)
-    if attempt is not None and attempt.phase == "launched":
+    if (
+        owner_kind != "interactive"
+        and attempt is not None
+        and attempt.phase == "launched"
+    ):
         return _build_restored_from_attempt(
             issue, attempt, owner_kind, claim_id, reservation_kind, config
         )
