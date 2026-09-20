@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 from orchestune.branch_naming import build_task_branch_name
+from orchestune.claim.preflight import resolve_claim_subtask_id
 from orchestune.consistency.invariants.execution import (
     RUN_STATE_MISSING,
     execution_invariants,
@@ -289,6 +290,34 @@ def _extract_raw_subtask_id(issue: IssueRecord) -> str | None:
     return str(subtask_id) if subtask_id else None
 
 
+def _parse_claim_info_from_issue(
+    issue: IssueRecord,
+) -> tuple[str, str | None, str]:
+    """Issueの本文から owner_kind, claim_id, reservation_kind を抽出する。
+    欠落時は (owner_kind='dispatch', claim_id=None, reservation_kind='footprint') を返す。
+    """
+    owner_kind = "dispatch"
+    claim_id = None
+    reservation_kind = "footprint"
+    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
+    if match:
+        try:
+            data = yaml.safe_load(match.group(1))
+            if isinstance(data, dict):
+                raw_owner_kind = data.get("owner_kind")
+                if raw_owner_kind in {"interactive", "dispatch"}:
+                    owner_kind = raw_owner_kind
+                raw_claim_id = data.get("claim_id")
+                if isinstance(raw_claim_id, str) and raw_claim_id:
+                    claim_id = raw_claim_id
+                raw_res_kind = data.get("reservation_kind")
+                if raw_res_kind in {"footprint", "repository"}:
+                    reservation_kind = raw_res_kind
+        except Exception:
+            pass
+    return owner_kind, claim_id, reservation_kind
+
+
 def _parse_subtask_info_from_issue(
     issue: IssueRecord,
 ) -> tuple[str, tuple[str, ...]]:
@@ -307,7 +336,11 @@ def _parse_subtask_info_from_issue(
             pass
 
     if not subtask_id:
-        subtask_id = f"issue-{issue.number}"
+        owner_kind, _, _ = _parse_claim_info_from_issue(issue)
+        if owner_kind == "interactive":
+            subtask_id = resolve_claim_subtask_id(issue)
+        else:
+            subtask_id = f"issue-{issue.number}"
 
     return subtask_id, declared_footprint
 
@@ -485,34 +518,6 @@ def _resolve_recovery_branch(
     return resolution
 
 
-def _parse_claim_info_from_issue(
-    issue: IssueRecord,
-) -> tuple[str, str | None, str]:
-    """Issueの本文から owner_kind, claim_id, reservation_kind を抽出する。
-    欠落時は (owner_kind='dispatch', claim_id=None, reservation_kind='footprint') を返す。
-    """
-    owner_kind = "dispatch"
-    claim_id = None
-    reservation_kind = "footprint"
-    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
-    if match:
-        try:
-            data = yaml.safe_load(match.group(1))
-            if isinstance(data, dict):
-                raw_owner_kind = data.get("owner_kind")
-                if raw_owner_kind in {"interactive", "dispatch"}:
-                    owner_kind = raw_owner_kind
-                raw_claim_id = data.get("claim_id")
-                if isinstance(raw_claim_id, str) and raw_claim_id:
-                    claim_id = raw_claim_id
-                raw_res_kind = data.get("reservation_kind")
-                if raw_res_kind in {"footprint", "repository"}:
-                    reservation_kind = raw_res_kind
-        except Exception:
-            pass
-    return owner_kind, claim_id, reservation_kind
-
-
 def _build_restored_from_attempt(
     issue: IssueRecord,
     attempt: LaunchAttempt,
@@ -541,6 +546,21 @@ def _build_restored_from_attempt(
     )
 
 
+def _restored_worktree_workspace(
+    issue: IssueRecord,
+    subtask_id: str,
+    resolver: TaskBranchResolver,
+    resolutions: dict[int, TaskBranchResolution],
+    config: DispatcherConfig,
+) -> tuple[str, str, str | None, str | None]:
+    branch_name, external_id, external_url = _resolve_recovery_pr_and_branch(
+        issue, subtask_id, resolver, resolutions, config
+    )
+    slug = branch_name.replace("/", "-")
+    worktree_path = Path(config.worktree_root) / slug
+    return branch_name, str(worktree_path), external_id, external_url
+
+
 def _build_restored_standard_worktree(
     issue: IssueRecord,
     subtask_id: str,
@@ -554,12 +574,12 @@ def _build_restored_standard_worktree(
     reservation_kind: str,
     config: DispatcherConfig,
 ) -> ActiveWorktree:
+    if owner_kind == "interactive" and subtask_id == f"issue-{issue.number}":
+        subtask_id = resolve_claim_subtask_id(issue)
     recompute_count, forced_serial = _recovery_counters_for_issue(issue)
-    branch_name, external_id, external_url = _resolve_recovery_pr_and_branch(
+    branch, worktree_path, external_id, external_url = _restored_worktree_workspace(
         issue, subtask_id, resolver, resolutions, config
     )
-    slug = branch_name.replace("/", "-")
-    worktree_path = Path(config.worktree_root) / slug
     restored_base = _restored_base_branch(
         issue,
         issue_to_subtask_id,
@@ -568,14 +588,13 @@ def _build_restored_standard_worktree(
         resolutions,
         config,
     )
-
     task = parse_task_from_issue(issue, issue_to_subtask_id)
-    execution_selection = resolve_task_execution_selection(task, config)
+    selection = resolve_task_execution_selection(task, config)
 
     return ActiveWorktree(
         issue_number=issue.number,
-        branch=branch_name,
-        worktree_path=str(worktree_path),
+        branch=branch,
+        worktree_path=worktree_path,
         pid=None,
         started_at=None,
         declared_footprint=declared_footprint,
@@ -584,10 +603,10 @@ def _build_restored_standard_worktree(
         external_id=external_id,
         external_url=external_url,
         base_branch=restored_base,
-        profile=execution_selection.profile,
-        model=execution_selection.model,
-        reasoning_effort=execution_selection.reasoning_effort,
-        selection_reason=execution_selection.reason,
+        profile=selection.profile,
+        model=selection.model,
+        reasoning_effort=selection.reasoning_effort,
+        selection_reason=selection.reason,
         owner_kind=owner_kind,
         claim_id=claim_id,
         reservation_kind=reservation_kind,

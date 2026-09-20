@@ -14,7 +14,9 @@ from orchestune.dispatch.dependency_resolution import EMPTY_DEPENDENCIES
 from orchestune.dispatch.recovery import (
     RecoveryBookkeepingSnapshot,
     _build_restored_active_worktree,
+    _parse_subtask_info_from_issue,
     _restorable,
+    _restoration_candidates,
     execute_bookkeeping_repair_command,
     execute_recovery_requeue_command,
 )
@@ -356,3 +358,154 @@ class TestRestorationPreservesClaimOwnership:
             mock_reconcile.assert_not_called()
             assert result.status is RepairStatus.APPLIED
             assert run_state.active_worktrees["106"].owner_kind == "interactive"
+
+
+class TestInteractiveClaimSubtaskIdAlignment:
+    """#940: Footprint YAML で subtask_id が省略された interactive claim は、
+    claim preflight の resolve_claim_subtask_id と同じフォールバック (task-<issue>)
+    を使ってブランチ名・worktreeパスを復元する。"""
+
+    def test_parse_subtask_info_from_issue_uses_claim_resolver_for_interactive_when_omitted(
+        self,
+    ):
+        body = (
+            "## Footprint\n```yaml\n"
+            "owner_kind: interactive\n"
+            "claim_id: claim-recovery-subtask-test\n"
+            "reservation_kind: footprint\n"
+            "footprint:\n"
+            "  - src/interactive.py\n"
+            "```\n"
+        )
+        issue = IssueRecord(
+            number=940,
+            title="Interactive Task Without Subtask ID",
+            body=body,
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        subtask_id, footprint = _parse_subtask_info_from_issue(issue)
+        assert subtask_id == "task-940"
+        assert footprint == ("src/interactive.py",)
+
+    def test_parse_subtask_info_from_issue_preserves_explicit_subtask_id_for_interactive(
+        self,
+    ):
+        body = (
+            "## Footprint\n```yaml\n"
+            "subtask_id: custom-subtask-940\n"
+            "owner_kind: interactive\n"
+            "claim_id: claim-recovery-subtask-test\n"
+            "footprint:\n"
+            "  - src/interactive.py\n"
+            "```\n"
+        )
+        issue = IssueRecord(
+            number=940,
+            title="Interactive Task With Explicit Subtask ID",
+            body=body,
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        subtask_id, footprint = _parse_subtask_info_from_issue(issue)
+        assert subtask_id == "custom-subtask-940"
+        assert footprint == ("src/interactive.py",)
+
+    def test_parse_subtask_info_from_issue_uses_synthetic_fallback_for_dispatch_when_omitted(
+        self,
+    ):
+        body = (
+            "## Footprint\n```yaml\n"
+            "owner_kind: dispatch\n"
+            "footprint:\n"
+            "  - src/dispatch.py\n"
+            "```\n"
+        )
+        issue = IssueRecord(
+            number=941,
+            title="Dispatch Task Without Subtask ID",
+            body=body,
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        subtask_id, footprint = _parse_subtask_info_from_issue(issue)
+        assert subtask_id == "issue-941"
+        assert footprint == ("src/dispatch.py",)
+
+    def test_restoration_candidates_for_interactive_without_subtask_id_uses_claim_workspace(
+        self, tmp_path
+    ):
+        body = (
+            "## Footprint\n```yaml\n"
+            "owner_kind: interactive\n"
+            "claim_id: claim-recovery-candidate-940\n"
+            "reservation_kind: footprint\n"
+            "footprint:\n"
+            "  - src/interactive.py\n"
+            "```\n"
+        )
+        issue = IssueRecord(
+            number=940,
+            title="Interactive Task Without Subtask ID",
+            body=body,
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        config = DispatcherConfig(
+            worktree_root=str(tmp_path / "worktrees"),
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+        )
+
+        candidates = _restoration_candidates([issue], open_prs=(), config=config)
+        assert len(candidates) == 1
+        subject_id, subtask_id, active = candidates[0]
+        assert subject_id == "940"
+        assert subtask_id == "task-940"
+        assert active.branch == "claude/issue-940-task-940"
+        assert active.worktree_path == str(
+            tmp_path / "worktrees" / "claude-issue-940-task-940"
+        )
+        assert active.owner_kind == "interactive"
+        assert active.claim_id == "claim-recovery-candidate-940"
+
+    def test_build_restored_active_worktree_aligns_subtask_id_for_interactive(
+        self, tmp_path
+    ):
+        body = (
+            "## Footprint\n```yaml\n"
+            "owner_kind: interactive\n"
+            "claim_id: claim-recovery-active-940\n"
+            "reservation_kind: footprint\n"
+            "footprint:\n"
+            "  - src/interactive.py\n"
+            "```\n"
+        )
+        issue = IssueRecord(
+            number=940,
+            title="Interactive Task Without Subtask ID",
+            body=body,
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        resolver = TaskBranchResolver([])
+        config = DispatcherConfig(
+            worktree_root=str(tmp_path / "worktrees"),
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+        )
+
+        active = _build_restored_active_worktree(
+            issue=issue,
+            subtask_id="issue-940",
+            declared_footprint=("src/interactive.py",),
+            resolver=resolver,
+            resolutions={},
+            issue_to_subtask_id={},
+            dependency_resolution={},
+            config=config,
+        )
+        assert active.branch == "claude/issue-940-task-940"
+        assert active.worktree_path == str(
+            tmp_path / "worktrees" / "claude-issue-940-task-940"
+        )
