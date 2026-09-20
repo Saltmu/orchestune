@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import time
 from collections.abc import Sequence
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -203,6 +204,26 @@ def _perform_git_fetch(repo_root: Path, issue_number: int) -> ClaimFailure | Non
     return None
 
 
+def _worktree_reservation_failure(
+    reason: ClaimFailureReason,
+    message: str,
+    *,
+    issue_number: int,
+    claim_id: str | None,
+    canonical_branch: str,
+    raw_token: str,
+) -> ClaimOutcome:
+    return ClaimOutcome(
+        success=False,
+        issue_number=issue_number,
+        claim_id=claim_id,
+        branch=canonical_branch,
+        stage=ClaimStage.RESERVED,
+        failure=ClaimFailure(reason=reason, message=message),
+        owner_token=raw_token,
+    )
+
+
 def _prepare_worktree_for_reservation(
     workspace: ClaimWorkspace,
     canonical_branch: str,
@@ -212,6 +233,13 @@ def _prepare_worktree_for_reservation(
     claim_id: str | None,
 ) -> tuple[WorktreePreparation | None, ClaimOutcome | None]:
     """Execute worktree preparation, returning structured failure on exception or rejection."""
+    fail = partial(
+        _worktree_reservation_failure,
+        issue_number=issue_number,
+        claim_id=claim_id,
+        canonical_branch=canonical_branch,
+        raw_token=raw_token,
+    )
     try:
         prep = prepare_task_worktree(
             canonical_branch,
@@ -228,32 +256,26 @@ def _prepare_worktree_for_reservation(
             # ことを理由に永久拒否されないようにする。
             trust_unclaimed_branch=True,
         )
+    except ValueError as e:
+        # #943レビュー対応(Codex P2): `validate_ref_name`が送出する不正な
+        # branch/subtask_id名は恒久的な入力不備（人手の修正が必要）であり、
+        # OSError/git実行エラーのような一時的なインフラ障害とは扱いを分ける
+        # 必要がある——launch.py側でこの理由だけを`status:blocked-human-review`
+        # へ振り分け、それ以外の`WORKTREE_CREATION_FAILED`は再試行可能な
+        # `status:blocked`のままにするため。
+        return None, fail(
+            ClaimFailureReason.INVALID_BRANCH_NAME, f"invalid branch name: {e}"
+        )
     except Exception as e:
-        return None, ClaimOutcome(
-            success=False,
-            issue_number=issue_number,
-            claim_id=claim_id,
-            branch=canonical_branch,
-            stage=ClaimStage.RESERVED,
-            failure=ClaimFailure(
-                reason=ClaimFailureReason.WORKTREE_CREATION_FAILED,
-                message=f"prepare_task_worktree raised exception: {e}",
-            ),
-            owner_token=raw_token,
+        return None, fail(
+            ClaimFailureReason.WORKTREE_CREATION_FAILED,
+            f"prepare_task_worktree raised exception: {e}",
         )
 
     if not prep.accepted:
-        return None, ClaimOutcome(
-            success=False,
-            issue_number=issue_number,
-            claim_id=claim_id,
-            branch=canonical_branch,
-            stage=ClaimStage.RESERVED,
-            failure=ClaimFailure(
-                reason=ClaimFailureReason.WORKTREE_CREATION_FAILED,
-                message=f"prepare_task_worktree rejected: {prep.rejection_reason}",
-            ),
-            owner_token=raw_token,
+        return None, fail(
+            ClaimFailureReason.WORKTREE_CREATION_FAILED,
+            f"prepare_task_worktree rejected: {prep.rejection_reason}",
         )
     return prep, None
 

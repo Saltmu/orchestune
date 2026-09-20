@@ -456,9 +456,14 @@ def _resolve_claim_failure_launch_result(
 
     STATE_LOCK_FAILEDは一時的な競合であり、`LaunchOutcomeUnknown`と同様に
     次サイクルへ持ち越す（Noneを返す）。それ以外の拒否理由は、branch/subtask_id
-    の不正（`WORKTREE_CREATION_FAILED`）だけを`validation_error`として
-    `status:blocked-human-review`へ、それ以外は`status:blocked`へ振り分ける
-    既存の`_handle_launch_failure`分岐へそのまま乗せる。
+    の不正（`INVALID_BRANCH_NAME`）だけを`validation_error`として
+    `status:blocked-human-review`へ、それ以外（`WORKTREE_CREATION_FAILED`を
+    含む、OSError/git実行エラーのような一時的なインフラ障害や所有権拒否）は
+    再試行可能な`status:blocked`へ振り分ける既存の`_handle_launch_failure`
+    分岐へそのまま乗せる（#943レビュー対応(Codex P2):
+    `WORKTREE_CREATION_FAILED`を一律`validation_error`扱いすると、一時的な
+    worktree作成失敗まで恒久的な`status:blocked-human-review`へ誤って
+    エスカレーションしてしまうため分離した）。
 
     #943: `outcome.stage is ClaimStage.ACTIVE_SAVED`は、claim_task内部の
     finalize段階（issue再検証・所有権メタデータ公開・ラベル遷移・完了保存の
@@ -492,7 +497,7 @@ def _resolve_claim_failure_launch_result(
         pid=None,
         launched=False,
         error_message=failure.message,
-        validation_error=failure.reason is ClaimFailureReason.WORKTREE_CREATION_FAILED,
+        validation_error=failure.reason is ClaimFailureReason.INVALID_BRANCH_NAME,
         execution_selection=plan.execution_selection,
     )
 

@@ -139,12 +139,20 @@ def remove_worktree(worktree_path: str | Path) -> None:
     のsiblingに残る所有権マーカー（`orchestune.dispatch.claim_marker`参照）を
     ここで一緒に片付けないと、撤去済みIssueを後日再度claimしようとした際に
     古い`claim_id`との不一致で永久に拒否されてしまう。
+    ただし#943レビュー対応(Codex P2): `git worktree remove`が失敗した場合
+    （dirty化等で意図的に例外を握り潰している既存挙動）、worktree本体は
+    実際にはまだ残っている可能性がある。その状態でマーカーだけ消すと、
+    所有権を証明できないworktreeが`unclaimed_existing_worktree`として
+    残り続けてしまう。worktreeが実際に消えたことを確認できた場合のみ
+    マーカーを片付ける。
     """
+    path = Path(worktree_path)
     try:
-        run_git(["worktree", "remove", str(worktree_path)], cwd=None, check=True)
+        run_git(["worktree", "remove", str(path)], cwd=None, check=True)
     except (subprocess.CalledProcessError, OSError):
         pass
-    remove_claim_marker(Path(worktree_path))
+    if not path.exists():
+        remove_claim_marker(path)
 
 
 def _list_remote_temp_refs(root: Path, forge: Forge) -> tuple[str, set[str]] | None:

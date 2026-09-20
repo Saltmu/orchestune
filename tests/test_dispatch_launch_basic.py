@@ -6,6 +6,7 @@ from orchestune.branch_naming import build_task_branch_name, parse_task_branch_n
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.launch import (
+    TaskLaunchPlan,
     _decide_duplicate_candidates,
     _decide_task_launch_plan,
     _decide_yaml_error_tasks,
@@ -193,6 +194,58 @@ class TestDecideTaskLaunchPlan:
         assert plans[0].execution_selection.profile == "deep"
         assert plans[0].execution_selection.model == "claude-3-7-sonnet-20250219"
         assert plans[0].execution_selection.reasoning_effort == "high"
+
+
+class TestResolveClaimFailureLaunchResult:
+    """#943レビュー対応(Codex P2): claim失敗理由に応じたvalidation_error振り分け。"""
+
+    def _plan(self, tmp_path):
+        task = _task(1)
+        return TaskLaunchPlan(task, "claude/issue-1-task-1", None, "origin/main")
+
+    def test_invalid_branch_name_is_a_validation_error(self, tmp_path):
+        from orchestune.claim.contracts import (
+            ClaimFailure,
+            ClaimFailureReason,
+            ClaimOutcome,
+        )
+        from orchestune.dispatch.launch import _resolve_claim_failure_launch_result
+
+        outcome = ClaimOutcome(
+            success=False,
+            issue_number=1,
+            failure=ClaimFailure(
+                reason=ClaimFailureReason.INVALID_BRANCH_NAME,
+                message="invalid branch name",
+            ),
+        )
+        result = _resolve_claim_failure_launch_result(self._plan(tmp_path), outcome)
+        assert result is not None
+        assert result.validation_error is True
+
+    def test_worktree_creation_failed_is_not_a_validation_error(self, tmp_path):
+        """一時的なインフラ障害（OSError/git実行エラー由来）は
+        `status:blocked-human-review`ではなく再試行可能な`status:blocked`
+        へ振り分けられるべき（恒久的な入力不備のINVALID_BRANCH_NAMEとは
+        区別する）。"""
+        from orchestune.claim.contracts import (
+            ClaimFailure,
+            ClaimFailureReason,
+            ClaimOutcome,
+        )
+        from orchestune.dispatch.launch import _resolve_claim_failure_launch_result
+
+        outcome = ClaimOutcome(
+            success=False,
+            issue_number=1,
+            failure=ClaimFailure(
+                reason=ClaimFailureReason.WORKTREE_CREATION_FAILED,
+                message="prepare_task_worktree raised exception: disk full",
+            ),
+        )
+        result = _resolve_claim_failure_launch_result(self._plan(tmp_path), outcome)
+        assert result is not None
+        assert result.validation_error is False
 
 
 class TestDecideDuplicateCandidates:

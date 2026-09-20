@@ -47,6 +47,7 @@ class ClaimExitCode(IntEnum):
     UNRESOLVED_DEPENDENCIES = 14
     EXTERNAL_LOCK_CONFLICT = 15
     INVALID_RESUME = 16
+    INVALID_BRANCH_NAME = 17
 
     # Concurrency / State errors (20-29)
     CLAIM_CONFLICT = 20
@@ -71,6 +72,7 @@ class ClaimFailureReason(str, Enum):
     UNRESOLVED_DEPENDENCIES = "unresolved_dependencies"
     EXTERNAL_LOCK_CONFLICT = "external_lock_conflict"
     INVALID_RESUME = "invalid_resume"
+    INVALID_BRANCH_NAME = "invalid_branch_name"
     CLAIM_CONFLICT = "claim_conflict"
     EXISTING_CLAIM_UNRECOVERED = "existing_claim_unrecovered"
     STATE_LOCK_FAILED = "state_lock_failed"
@@ -89,6 +91,7 @@ _FAILURE_REASON_TO_EXIT_CODE: dict[ClaimFailureReason, ClaimExitCode] = {
     ClaimFailureReason.UNRESOLVED_DEPENDENCIES: ClaimExitCode.UNRESOLVED_DEPENDENCIES,
     ClaimFailureReason.EXTERNAL_LOCK_CONFLICT: ClaimExitCode.EXTERNAL_LOCK_CONFLICT,
     ClaimFailureReason.INVALID_RESUME: ClaimExitCode.INVALID_RESUME,
+    ClaimFailureReason.INVALID_BRANCH_NAME: ClaimExitCode.INVALID_BRANCH_NAME,
     ClaimFailureReason.CLAIM_CONFLICT: ClaimExitCode.CLAIM_CONFLICT,
     ClaimFailureReason.EXISTING_CLAIM_UNRECOVERED: ClaimExitCode.EXISTING_CLAIM_UNRECOVERED,
     ClaimFailureReason.STATE_LOCK_FAILED: ClaimExitCode.STATE_LOCK_FAILED,
