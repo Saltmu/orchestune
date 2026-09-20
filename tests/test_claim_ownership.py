@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from orchestune.claim.contracts import ClaimRequest, OwnerKind, ReservationKind
 from orchestune.claim.ownership import (
     ClaimConflictReason,
@@ -96,7 +98,11 @@ def test_generated_claim_ids_are_unique_and_owner_token_repr_is_masked() -> None
 
 
 def test_build_reservation_uses_footprint_or_explicit_repository_scope() -> None:
-    request = ClaimRequest(issue_number=10, owner_kind=OwnerKind.INTERACTIVE)
+    request = ClaimRequest(
+        issue_number=10,
+        owner_kind=OwnerKind.INTERACTIVE,
+        owner_token=new_owner_token().value,
+    )
     footprint = build_reservation(request, _task(10, footprint=("a.py",)))
     repository = build_reservation(request, _task(10))
 
@@ -106,6 +112,11 @@ def test_build_reservation_uses_footprint_or_explicit_repository_scope() -> None
     assert repository.reservation_kind == ReservationKind.REPOSITORY.value
     assert footprint.claim_id and footprint.claim_stage == "reserved"
     assert footprint.owner_token_digest is not None
+
+
+def test_build_reservation_requires_the_caller_to_retain_an_owner_token() -> None:
+    with pytest.raises(ValueError, match="owner token"):
+        build_reservation(ClaimRequest(issue_number=10), _task(10))
 
 
 def test_same_issue_and_overlapping_footprints_conflict() -> None:

@@ -72,9 +72,9 @@ def build_reservation(
 ) -> ActiveWorktree:
     """Build a pre-worktree reservation without persisting it or performing I/O."""
     footprint = tuple(task_metadata.footprint)
-    token = (
-        OwnerToken(request.owner_token) if request.owner_token else new_owner_token()
-    )
+    if request.owner_token is None:
+        raise ValueError("owner token must be generated and retained by the caller")
+    token = OwnerToken(request.owner_token)
     reservation_kind = (
         ReservationKind.FOOTPRINT if footprint else ReservationKind.REPOSITORY
     )
