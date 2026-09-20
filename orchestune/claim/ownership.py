@@ -21,6 +21,10 @@ class OwnerToken:
 
     value: str
 
+    def __post_init__(self) -> None:
+        if not self.value or not self.value.strip():
+            raise ValueError("owner token must not be empty")
+
     def __repr__(self) -> str:
         return "OwnerToken(***redacted***)"
 
@@ -65,6 +69,8 @@ def new_owner_token() -> OwnerToken:
 def owner_token_digest(token: OwnerToken | str) -> str:
     """Return a one-way digest suitable for durable owner-token comparison."""
     value = token.value if isinstance(token, OwnerToken) else token
+    if not value or not value.strip():
+        raise ValueError("owner token must not be empty")
     return sha256(value.encode("utf-8")).hexdigest()
 
 
@@ -73,7 +79,7 @@ def build_reservation(
 ) -> ActiveWorktree:
     """Build a pre-worktree reservation without persisting it or performing I/O."""
     footprint = tuple(task_metadata.footprint)
-    if request.owner_token is None:
+    if not request.owner_token or not request.owner_token.strip():
         raise ValueError("owner token must be generated and retained by the caller")
     token = OwnerToken(request.owner_token)
     reservation_kind = (

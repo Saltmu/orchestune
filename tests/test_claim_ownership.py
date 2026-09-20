@@ -14,6 +14,7 @@ from orchestune.claim.contracts import (
 )
 from orchestune.claim.ownership import (
     ClaimConflictReason,
+    OwnerToken,
     build_reservation,
     evaluate_claim_conflicts,
     new_claim_id,
@@ -130,6 +131,21 @@ def test_build_reservation_uses_footprint_or_explicit_repository_scope() -> None
 def test_build_reservation_requires_the_caller_to_retain_an_owner_token() -> None:
     with pytest.raises(ValueError, match="owner token"):
         build_reservation(ClaimRequest(issue_number=10), _task(10))
+
+
+def test_build_reservation_and_owner_token_reject_empty_or_whitespace() -> None:
+    with pytest.raises(ValueError, match="owner token"):
+        build_reservation(ClaimRequest(issue_number=10, owner_token=""), _task(10))
+    with pytest.raises(ValueError, match="owner token"):
+        build_reservation(ClaimRequest(issue_number=10, owner_token="   "), _task(10))
+    with pytest.raises(ValueError, match="owner token"):
+        OwnerToken("")
+    with pytest.raises(ValueError, match="owner token"):
+        OwnerToken("   ")
+    with pytest.raises(ValueError, match="owner token"):
+        owner_token_digest("")
+    with pytest.raises(ValueError, match="owner token"):
+        owner_token_digest("   ")
 
 
 def test_same_issue_and_overlapping_footprints_conflict() -> None:
