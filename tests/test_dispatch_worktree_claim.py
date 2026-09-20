@@ -12,12 +12,14 @@ import pytest
 
 from orchestune.dispatch.worktree import (
     WorktreePreparation,
+    _claim_lock_path,
     _claim_marker_path,
     prepare_task_worktree,
     rollback_task_worktree,
 )
 from orchestune.infra.git_cli import GitResult
 from orchestune.infra.git_cli import run_git as real_run_git
+from orchestune.infra.process_utils import FileLock, FileLockContentionError
 
 
 def _init_repo(path):
@@ -292,6 +294,75 @@ class TestPrepareTaskWorktree:
         assert result.accepted is False
         assert result.rejection_reason == "stale_marker_unverified_worktree"
 
+    def test_rejects_resume_when_directory_is_unrelated_repo_with_same_branch_name(
+        self, tmp_path, monkeypatch
+    ):
+        """#935レビュー対応(P2, round2): symbolic-refだけの検証では、同名branchを
+        持つ無関係な別リポジトリを見分けられない。共有git-dirの一致も確認する。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+        worktree_root = tmp_path / "worktrees"
+
+        preparation = prepare_task_worktree(
+            "claim/issue-16-task-16", worktree_root, None, "claim-16"
+        )
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(preparation.worktree_path)],
+            cwd=repo_dir,
+            check=True,
+        )
+        # markerは残るが、同じpathへ「同名branchを持つ別リポジトリ」が
+        # 後から作られたケースを模す
+        unrelated_repo = preparation.worktree_path
+        unrelated_repo.mkdir()
+        _init_repo(unrelated_repo)
+        subprocess.run(
+            ["git", "checkout", "-b", "claim/issue-16-task-16"],
+            cwd=unrelated_repo,
+            check=True,
+        )
+
+        result = prepare_task_worktree(
+            "claim/issue-16-task-16", worktree_root, None, "claim-16"
+        )
+
+        assert result.accepted is False
+        assert result.rejection_reason == "stale_marker_unverified_worktree"
+
+    def test_prepare_and_rollback_share_a_mutual_exclusion_lock(
+        self, tmp_path, monkeypatch
+    ):
+        """#935レビュー対応(P1, round2): force奪取とrollbackが同一branchに
+        対して同じロックを取ることを、ロック競合の検出で直接確認する。
+        これにより、奪取の「作成→旧マーカー無効化」の中間状態を並行する
+        rollbackが観測できてしまうTOCTOUが塞がれていることを保証する。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+        worktree_root = tmp_path / "worktrees"
+        preparation = prepare_task_worktree(
+            "claim/issue-17-task-17", worktree_root, None, "claim-17"
+        )
+
+        held_lock = FileLock(_claim_lock_path(preparation.worktree_path))
+        held_lock.acquire()
+        try:
+            with pytest.raises(FileLockContentionError):
+                rollback_task_worktree(preparation, "claim-17")
+            with pytest.raises(FileLockContentionError):
+                prepare_task_worktree(
+                    "claim/issue-17-task-17",
+                    worktree_root,
+                    None,
+                    "dispatch:17",
+                    allow_force=True,
+                )
+        finally:
+            held_lock.release()
+
 
 class TestRollbackTaskWorktree:
     """#935: prepare_task_worktreeが新規作成したworktree/branchの後始末。"""
@@ -510,3 +581,45 @@ class TestRollbackTaskWorktree:
         assert result == "branch_deletion_failed"
         assert not preparation.worktree_path.exists()
         assert _claim_marker_path(preparation.worktree_path).exists()
+
+    def test_retrying_rollback_after_branch_deletion_failure_completes(
+        self, tmp_path, monkeypatch
+    ):
+        """#935レビュー対応(P2, round2): worktree削除は既に完了済みの状態で
+        再試行した場合、dirty/base_sha確認がworktree不在で誤ってブロックせず、
+        branch削除を再試行して最終的に完了できる。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+        worktree_root = tmp_path / "worktrees"
+        preparation = prepare_task_worktree(
+            "claim/issue-18-task-18", worktree_root, None, "claim-18"
+        )
+
+        def failing_branch_delete(args, **kwargs):
+            if args[:2] == ["branch", "-D"]:
+                return GitResult(
+                    returncode=1, stdout="", stderr="error: branch is checked out"
+                )
+            return real_run_git(args, **kwargs)
+
+        with patch(
+            "orchestune.dispatch.worktree.run_git", side_effect=failing_branch_delete
+        ):
+            first_attempt = rollback_task_worktree(preparation, "claim-18")
+        assert first_attempt == "branch_deletion_failed"
+        assert not preparation.worktree_path.exists()
+
+        second_attempt = rollback_task_worktree(preparation, "claim-18")
+
+        assert second_attempt is None
+        assert not _claim_marker_path(preparation.worktree_path).exists()
+        branches = subprocess.run(
+            ["git", "branch", "--list", "claim/issue-18-task-18"],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert branches.strip() == ""

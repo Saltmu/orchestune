@@ -195,6 +195,15 @@ def _remove_claim_marker(worktree_path: Path) -> None:
     _claim_marker_path(worktree_path).unlink(missing_ok=True)
 
 
+def _claim_lock_path(worktree_path: Path) -> Path:
+    """#935レビュー対応(P1): 同一branch/worktreeに対する`prepare_task_worktree`と
+    `rollback_task_worktree`を相互排他にするロックファイル。forceによる奪取
+    （worktree再作成→旧マーカー無効化）の途中状態を、並行するrollbackが
+    「旧claim_idがまだ有効」として観測し、奪取直後のworktreeを削除してしまう
+    TOCTOUを防ぐ。"""
+    return _claim_marker_path(worktree_path).with_suffix(".lock")
+
+
 def _resolve_worktree_head_sha(worktree_path: Path) -> str:
     return run_git(["rev-parse", "HEAD"], cwd=worktree_path, check=True).stdout.strip()
 
@@ -410,6 +419,30 @@ def _worktree_checked_out_branch(worktree_path: Path) -> str | None:
     return result.stdout.strip()
 
 
+def _git_common_dir(path: Path) -> str | None:
+    try:
+        result = run_git(["rev-parse", "--git-common-dir"], cwd=path, check=False)
+    except OSError:
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    return str((path / result.stdout.strip()).resolve())
+
+
+def _verify_worktree_identity(worktree_path: Path, branch: str) -> bool:
+    """#935レビュー対応(P2): `symbolic-ref`だけでは、同名branchを持つ無関係な
+    別リポジトリがstale markerと同じpathへ偶然存在するケースを見分けられない。
+    共有git-dir（`rev-parse --git-common-dir`）が現在のリポジトリと一致する
+    ことも確認し、そのworktreeが本当に「このリポジトリ」の一部であることを
+    保証する。"""
+    if _worktree_checked_out_branch(worktree_path) != branch:
+        return False
+    this_repo_git_dir = _git_common_dir(Path("."))
+    return this_repo_git_dir is not None and this_repo_git_dir == _git_common_dir(
+        worktree_path
+    )
+
+
 def _prepare_worktree_from_marker(
     worktree_path: Path,
     worktree_root: Path,
@@ -423,10 +456,11 @@ def _prepare_worktree_from_marker(
     base_sha = marker.get("base_sha")
     if worktree_path.exists():
         # #935レビュー対応(P2): マーカーが一致していても、そのパスが実際に
-        # `branch`をチェックアウトした有効なgit worktreeである保証はない
-        # （手動削除後に無関係/破損したディレクトリが同じpathへ作られた場合
-        # 等）。所有権が確認できないstaleなマーカーを信用して受理しない。
-        if _worktree_checked_out_branch(worktree_path) != branch:
+        # このリポジトリの`branch`をチェックアウトした有効なgit worktreeで
+        # ある保証はない（手動削除後に無関係/破損したディレクトリや、同名
+        # branchを持つ別リポジトリが同じpathへ作られた場合等）。所有権が
+        # 確認できないstaleなマーカーを信用して受理しない。
+        if not _verify_worktree_identity(worktree_path, branch):
             return WorktreePreparation(
                 worktree_path=worktree_path,
                 branch=branch,
@@ -509,27 +543,31 @@ def prepare_task_worktree(
     worktree_root_path = Path(worktree_root)
     worktree_path = _resolve_worktree_path(worktree_root_path, branch)
 
-    if allow_force:
-        return _prepare_worktree_forced(
-            worktree_path, worktree_root_path, branch, base_branch
-        )
-
-    marker = _read_claim_marker(worktree_path)
-    if marker is not None:
-        if marker.get("claim_id") != claim_id or marker.get("branch") != branch:
-            return WorktreePreparation(
-                worktree_path=worktree_path,
-                branch=branch,
-                accepted=False,
-                rejection_reason="claim_id_mismatch",
+    # #935レビュー対応(P1): force奪取の「作成→旧マーカー無効化」と、安全経路の
+    # 「マーカー確認→作成/再利用」を同一branchに対して相互排他にし、並行する
+    # rollback_task_worktreeが奪取の中間状態を観測できないようにする。
+    with file_lock(_claim_lock_path(worktree_path)):
+        if allow_force:
+            return _prepare_worktree_forced(
+                worktree_path, worktree_root_path, branch, base_branch
             )
-        return _prepare_worktree_from_marker(
-            worktree_path, worktree_root_path, branch, base_branch, marker
-        )
 
-    return _prepare_worktree_unclaimed(
-        worktree_path, branch, worktree_root_path, base_branch, claim_id
-    )
+        marker = _read_claim_marker(worktree_path)
+        if marker is not None:
+            if marker.get("claim_id") != claim_id or marker.get("branch") != branch:
+                return WorktreePreparation(
+                    worktree_path=worktree_path,
+                    branch=branch,
+                    accepted=False,
+                    rejection_reason="claim_id_mismatch",
+                )
+            return _prepare_worktree_from_marker(
+                worktree_path, worktree_root_path, branch, base_branch, marker
+            )
+
+        return _prepare_worktree_unclaimed(
+            worktree_path, branch, worktree_root_path, base_branch, claim_id
+        )
 
 
 def _rollback_blocking_reason(
@@ -539,6 +577,13 @@ def _rollback_blocking_reason(
     marker = _read_claim_marker(preparation.worktree_path)
     if marker is None or marker.get("claim_id") != claim_id:
         return "ownership_marker_missing_or_reassigned"
+    if not preparation.worktree_path.exists():
+        # #935レビュー対応(P2): worktree本体は前回のロールバックで既に削除済み
+        # （branch削除だけが失敗して再試行されたケース）。dirty/base_sha確認は
+        # worktree実体があってこそ意味を持つため、所有権確認のみで先へ進める。
+        # 再試行を許さないと、branch削除の一時的失敗が branch を永久に
+        # 取り残してしまう。
+        return None
     if dispatch_gc.worktree_has_uncommitted_changes(preparation.worktree_path):
         return "worktree_dirty"
     try:
@@ -564,27 +609,31 @@ def rollback_task_worktree(
     if not preparation.created:
         return "reused_existing_worktree_not_rolled_back"
 
-    blocking_reason = _rollback_blocking_reason(preparation, claim_id)
-    if blocking_reason is not None:
-        return blocking_reason
+    # #935レビュー対応(P1): prepare_task_worktreeのforce奪取と同一のロックを
+    # 取ることで、奪取直後の中間状態（新worktree作成済み・旧マーカー未削除）を
+    # rollbackが観測して誤って削除することを防ぐ。
+    with file_lock(_claim_lock_path(preparation.worktree_path)):
+        blocking_reason = _rollback_blocking_reason(preparation, claim_id)
+        if blocking_reason is not None:
+            return blocking_reason
 
-    # #935レビュー対応(P2): `_cleanup_failed_worktree`は削除失敗を握り潰す
-    # fire-and-forgetのため、実際に消えたかどうかを自前で検証する。branchの
-    # 削除も`check=False`の戻り値を無視せず確認する。いずれかが未完了なら
-    # マーカーを残し、以後も所有権を保持したまま診断できるようにする
-    # （中途半端に削除してmarkerだけ消すと、残ったpath/branchが以後
-    # 「所有者不明」として拒否対象になり、復旧できなくなるため）。
-    _cleanup_failed_worktree(preparation.worktree_path)
-    if preparation.worktree_path.exists():
-        return "worktree_removal_failed"
-    if preparation.branch_created:
-        branch_delete = run_git(
-            ["branch", "-D", preparation.branch], cwd=None, check=False
-        )
-        if branch_delete.returncode != 0:
-            return "branch_deletion_failed"
-    _remove_claim_marker(preparation.worktree_path)
-    return None
+        # #935レビュー対応(P2): `_cleanup_failed_worktree`は削除失敗を握り潰す
+        # fire-and-forgetのため、実際に消えたかどうかを自前で検証する。branchの
+        # 削除も`check=False`の戻り値を無視せず確認する。いずれかが未完了なら
+        # マーカーを残し、以後も所有権を保持したまま診断できるようにする
+        # （中途半端に削除してmarkerだけ消すと、残ったpath/branchが以後
+        # 「所有者不明」として拒否対象になり、復旧できなくなるため）。
+        _cleanup_failed_worktree(preparation.worktree_path)
+        if preparation.worktree_path.exists():
+            return "worktree_removal_failed"
+        if preparation.branch_created:
+            branch_delete = run_git(
+                ["branch", "-D", preparation.branch], cwd=None, check=False
+            )
+            if branch_delete.returncode != 0:
+                return "branch_deletion_failed"
+        _remove_claim_marker(preparation.worktree_path)
+        return None
 
 
 def _handle_backup_error(
