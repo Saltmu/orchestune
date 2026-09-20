@@ -64,18 +64,21 @@ def test_cli_delegates_to_replan():
 def test_cli_delegates_to_claim():
     from orchestune.cli import main
 
+    captured_argv: list[list[str]] = []
     with (
         patch("sys.argv", ["orchestune", "claim", "123", "--no-apply"]),
         patch(
-            "orchestune.claim.cli.main", autospec=True, return_value=0
+            "orchestune.claim.cli.main",
+            autospec=True,
+            side_effect=lambda: captured_argv.append(list(sys.argv)) or 0,
         ) as mock_claim_main,
         pytest.raises(SystemExit) as exc_info,
     ):
         main()
-        assert sys.argv == ["orchestune", "123", "--no-apply"]
 
     assert exc_info.value.code == 0
     mock_claim_main.assert_called_once()
+    assert captured_argv == [["orchestune", "123", "--no-apply"]]
 
 
 def test_cli_delegates_to_status():
