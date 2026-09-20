@@ -617,3 +617,62 @@ class TestInteractiveOwnershipGcExclusion:
                 e.get("action") == "gc_reclaim_excluded_interactive"
                 for e in res2.completion_events
             )
+
+    def test_resolve_completion_guards_interactive_claims_before_routing(
+        self, tmp_path, fake_forge
+    ):
+        """owner_kind=interactive は started_at=None や external_id の有無に関わらず、
+        completion のあらゆるルーティング（クラウド判定・PR復元判定・ローカル判定）から除外され pending となる。
+        """
+        from orchestune.dispatch.gc import _resolve_completion
+        from orchestune.dispatch.rules import _RuleExecutionContext
+        from orchestune.models import PrRecord
+
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=str(tmp_path / "worktrees"),
+            forge=fake_forge,
+        )
+        from unittest.mock import MagicMock
+
+        run_state = RunState(active_worktrees={})
+        ctx = _RuleExecutionContext(
+            run_state=run_state,
+            queries=MagicMock(),
+            config=config,
+            prs=(),
+        )
+
+        # ケース1: external_id が付与されている（例: recovered PR）場合でも cloud completion に進まず pending
+        active_with_external = _active(
+            issue_number=301,
+            started_at=None,
+            external_id="recovered-pr:999",
+            owner_kind="interactive",
+            claim_id="claim-guard-1",
+        )
+        res1 = _resolve_completion(ctx, "301", active_with_external, None)
+        assert res1.state == "pending"
+
+        # ケース2: started_at=None, external_id=None で CLOSED PR が存在する場合でも
+        # _resolve_recovered_completion に進んで abandoned 終了せず pending
+        closed_pr = PrRecord(
+            number=888,
+            title="Old PR [skip ci]",
+            body="fixes #302",
+            state="CLOSED",
+            head_ref="claude/issue-302-task",
+            base_ref="main",
+            changed_files=(),
+        )
+        fake_forge._prs = [closed_pr]
+        active_recovered_pr = _active(
+            issue_number=302,
+            started_at=None,
+            external_id=None,
+            owner_kind="interactive",
+            claim_id="claim-guard-2",
+        )
+        res2 = _resolve_completion(ctx, "302", active_recovered_pr, None)
+        assert res2.state == "pending"
