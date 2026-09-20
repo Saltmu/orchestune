@@ -429,13 +429,28 @@ def _git_common_dir(path: Path) -> str | None:
     return str((path / result.stdout.strip()).resolve())
 
 
+def _git_toplevel(path: Path) -> str | None:
+    try:
+        result = run_git(["rev-parse", "--show-toplevel"], cwd=path, check=False)
+    except OSError:
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    return str(Path(result.stdout.strip()).resolve())
+
+
 def _verify_worktree_identity(worktree_path: Path, branch: str) -> bool:
-    """#935レビュー対応(P2): `symbolic-ref`だけでは、同名branchを持つ無関係な
-    別リポジトリがstale markerと同じpathへ偶然存在するケースを見分けられない。
-    共有git-dir（`rev-parse --git-common-dir`）が現在のリポジトリと一致する
-    ことも確認し、そのworktreeが本当に「このリポジトリ」の一部であることを
-    保証する。"""
+    """#935レビュー対応(P2, round2/3): `symbolic-ref`とbranch名だけでは、
+    (1) 同名branchを持つ無関係な別リポジトリがstale markerと同じpathへ
+    偶然存在するケースや、(2) このリポジトリの別checkoutの単なるサブ
+    ディレクトリ（それ自身は独立したworktreeとして登録されていない）を
+    誤って受理してしまうケースを見分けられない。共有git-dirが現在の
+    リポジトリと一致すること（別リポジトリでない）に加え、`worktree_path`
+    自身がそのcheckoutのtoplevel（＝それ自体が独立したworktree registration
+    の根）であること（単なるサブディレクトリでない）も確認する。"""
     if _worktree_checked_out_branch(worktree_path) != branch:
+        return False
+    if _git_toplevel(worktree_path) != str(worktree_path.resolve()):
         return False
     this_repo_git_dir = _git_common_dir(Path("."))
     return this_repo_git_dir is not None and this_repo_git_dir == _git_common_dir(
@@ -570,6 +585,27 @@ def prepare_task_worktree(
         )
 
 
+def _rollback_blocking_reason_for_missing_worktree(
+    preparation: WorktreePreparation,
+) -> str | None:
+    """#935レビュー対応(P1, round3): worktree本体は既に削除済み（branch削除
+    だけが失敗して再試行されたケース）でも、branch自体が前回の確認以降に
+    base_shaから進んでいないことは改めて確認する。worktree実体が無いことを
+    理由に確認自体を省略すると、再試行のあいだにbranchが進んだ場合、その
+    新しいコミットごと`git branch -D`で失ってしまう。"""
+    try:
+        result = run_git(
+            ["rev-parse", "--verify", preparation.branch], cwd=None, check=False
+        )
+    except OSError as e:
+        return f"branch_sha_check_failed: {e}"
+    if result.returncode != 0:
+        return None  # branchが既に無ければ保護対象も無いので進めてよい
+    if result.stdout.strip() != preparation.base_sha:
+        return "advanced_beyond_base_sha"
+    return None
+
+
 def _rollback_blocking_reason(
     preparation: WorktreePreparation, claim_id: str
 ) -> str | None:
@@ -578,12 +614,13 @@ def _rollback_blocking_reason(
     if marker is None or marker.get("claim_id") != claim_id:
         return "ownership_marker_missing_or_reassigned"
     if not preparation.worktree_path.exists():
-        # #935レビュー対応(P2): worktree本体は前回のロールバックで既に削除済み
-        # （branch削除だけが失敗して再試行されたケース）。dirty/base_sha確認は
-        # worktree実体があってこそ意味を持つため、所有権確認のみで先へ進める。
-        # 再試行を許さないと、branch削除の一時的失敗が branch を永久に
-        # 取り残してしまう。
-        return None
+        return _rollback_blocking_reason_for_missing_worktree(preparation)
+    # #935レビュー対応(P2, round3): markerとdirty/SHAが一致していても、その
+    # pathが実際にこのリポジトリの`branch`をチェックアウトした、それ自体が
+    # 独立したworktreeであるとは限らない（手動削除後に別checkoutのクローンや
+    # サブディレクトリが置かれた場合等）。削除前に必ず身元を確認する。
+    if not _verify_worktree_identity(preparation.worktree_path, preparation.branch):
+        return "stale_marker_unverified_worktree"
     if dispatch_gc.worktree_has_uncommitted_changes(preparation.worktree_path):
         return "worktree_dirty"
     try:

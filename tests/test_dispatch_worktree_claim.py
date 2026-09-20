@@ -331,6 +331,58 @@ class TestPrepareTaskWorktree:
         assert result.accepted is False
         assert result.rejection_reason == "stale_marker_unverified_worktree"
 
+    def test_rejects_resume_when_path_is_subdirectory_of_another_checkout(
+        self, tmp_path, monkeypatch
+    ):
+        """#935レビュー対応(P2, round3): branch名とgit-common-dirの一致だけでは、
+        このリポジトリの別checkoutの単なるサブディレクトリ（それ自体は独立した
+        worktree登録を持たない）を誤って受理してしまう。candidate pathが
+        自分自身のcheckoutのtoplevelであることも確認する。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+
+        # 先に「別のworktree」を用意し、claimed branchへswitchしておく
+        other_checkout = tmp_path / "other-checkout"
+        subprocess.run(
+            [
+                "git",
+                "worktree",
+                "add",
+                "-b",
+                "claim/issue-21-task-21",
+                str(other_checkout),
+            ],
+            cwd=repo_dir,
+            check=True,
+        )
+
+        # stale markerが指すpathは、その別checkout内部の単なるサブ
+        # ディレクトリであり、それ自体は独立したworktree registrationを
+        # 持たない。
+        worktree_root = other_checkout / "worktrees"
+        worktree_root.mkdir()
+        stale_slug_dir = worktree_root / "claim-issue-21-task-21"
+        stale_slug_dir.mkdir()
+        _claim_marker_path(stale_slug_dir).write_text(
+            json.dumps(
+                {
+                    "claim_id": "claim-21",
+                    "branch": "claim/issue-21-task-21",
+                    "base_sha": "irrelevant",
+                    "branch_created": True,
+                }
+            )
+        )
+
+        result = prepare_task_worktree(
+            "claim/issue-21-task-21", worktree_root, None, "claim-21"
+        )
+
+        assert result.accepted is False
+        assert result.rejection_reason == "stale_marker_unverified_worktree"
+
     def test_prepare_and_rollback_share_a_mutual_exclusion_lock(
         self, tmp_path, monkeypatch
     ):
@@ -623,3 +675,103 @@ class TestRollbackTaskWorktree:
             text=True,
         ).stdout
         assert branches.strip() == ""
+
+    def test_retry_after_branch_deletion_failure_rejects_if_branch_advanced_meanwhile(
+        self, tmp_path, monkeypatch
+    ):
+        """#935レビュー対応(P1, round3): worktree不在で再試行する経路でも、
+        branch自体がbase_shaから進んでいれば削除を拒否しなければならない。
+        そうしないと、再試行までの間に積まれた正当なコミットごと
+        `git branch -D`で失ってしまう。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+        worktree_root = tmp_path / "worktrees"
+        preparation = prepare_task_worktree(
+            "claim/issue-19-task-19", worktree_root, None, "claim-19"
+        )
+
+        def failing_branch_delete(args, **kwargs):
+            if args[:2] == ["branch", "-D"]:
+                return GitResult(
+                    returncode=1, stdout="", stderr="error: branch is checked out"
+                )
+            return real_run_git(args, **kwargs)
+
+        with patch(
+            "orchestune.dispatch.worktree.run_git", side_effect=failing_branch_delete
+        ):
+            first_attempt = rollback_task_worktree(preparation, "claim-19")
+        assert first_attempt == "branch_deletion_failed"
+        assert not preparation.worktree_path.exists()
+
+        # worktreeが無い間に、別のcheckoutからbranchへ新しいコミットを積む
+        other_worktree = tmp_path / "other"
+        subprocess.run(
+            ["git", "worktree", "add", str(other_worktree), "claim/issue-19-task-19"],
+            cwd=repo_dir,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "progress"],
+            cwd=other_worktree,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(other_worktree)],
+            cwd=repo_dir,
+            check=True,
+        )
+
+        second_attempt = rollback_task_worktree(preparation, "claim-19")
+
+        assert second_attempt == "advanced_beyond_base_sha"
+        branches = subprocess.run(
+            ["git", "branch", "--list", "claim/issue-19-task-19"],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert "claim/issue-19-task-19" in branches
+
+    def test_rollback_refuses_deletion_when_worktree_identity_unverified(
+        self, tmp_path, monkeypatch
+    ):
+        """#935レビュー対応(P2, round3): dirty/base_sha確認だけでは、markerの
+        pathへ後から置かれた「branch/base_shaまで完全一致する独立クローン」を
+        見分けられない。削除前にworktreeの身元も確認しなければならない。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+        worktree_root = tmp_path / "worktrees"
+        preparation = prepare_task_worktree(
+            "claim/issue-20-task-20", worktree_root, None, "claim-20"
+        )
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(preparation.worktree_path)],
+            cwd=repo_dir,
+            check=True,
+        )
+
+        # markerは残るが、同じpathへ「branch/base_shaまで一致する独立クローン」
+        # が後から置かれたケースを模す（clone元と同一の履歴なのでSHAも一致する）
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--branch",
+                "claim/issue-20-task-20",
+                str(repo_dir),
+                str(preparation.worktree_path),
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        result = rollback_task_worktree(preparation, "claim-20")
+
+        assert result == "stale_marker_unverified_worktree"
+        assert preparation.worktree_path.exists()
