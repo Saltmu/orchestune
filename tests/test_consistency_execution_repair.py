@@ -40,11 +40,12 @@ from orchestune.dispatch.execution_repair import (
 )
 from orchestune.dispatch.phase_gc import _gc_supervisor, _GcReclaimAdapter
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.models import PrRecord
 from tests.dispatch_gc_test_support import (
     run_gc_reclaims as _collect_zombies_and_timeouts,
 )
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
 def _task(issue_number: int, *labels: str) -> Task:

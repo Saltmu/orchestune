@@ -15,9 +15,9 @@ from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
     load_run_state,
-    save_run_state,
 )
 from tests.dispatch_gc_test_support import _issue
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
 class TestGC:

@@ -11,7 +11,7 @@ import os
 import pytest
 
 import orchestune.status_snapshot as status_snapshot_module
-from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.status_snapshot import (
     MonitorState,
     StatusSnapshot,
@@ -24,6 +24,7 @@ from orchestune.status_snapshot import (
     build_status_snapshot,
     format_status_report,
 )
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
 @pytest.fixture(autouse=True)

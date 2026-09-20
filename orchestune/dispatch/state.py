@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.infra.json_state import read_json_with_recovery, write_json_atomic
+from orchestune.infra.process_utils import assert_run_state_lock_held
 from orchestune.models import Usage
 
 
@@ -38,6 +39,18 @@ class ActiveWorktree:
     selection_reason: str | None = None
     launch_attempt_id: str | None = None
     launch_phase: str | None = None
+    # #936: interactive claim と dispatcher 起動を同じ台帳で識別する。
+    # 既存の dispatcher が生成するエントリは、すべて下記の既定値と同義である。
+    owner_kind: str = "dispatch"
+    claim_id: str | None = None
+    claim_stage: str | None = None
+    base_ref: str | None = None
+    base_sha: str | None = None
+    reservation_kind: str = "footprint"
+    repository_id: str | None = None
+    claimed_at: float | None = None
+    # owner token 自体は絶対に台帳へ保存しない。照合用途には一方向digestだけを使う。
+    owner_token_digest: str | None = None
 
 
 @dataclass
@@ -133,6 +146,24 @@ def _parse_finite_float(value: object, default: float = 0.0) -> float:
     ):
         return float(value)
     return default
+
+
+def _parse_optional_finite_float(value: object) -> float | None:
+    if (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    ):
+        return float(value)
+    return None
+
+
+def _parse_optional_string(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _parse_choice(value: object, allowed: set[str], default: str) -> str:
+    return value if isinstance(value, str) and value in allowed else default
 
 
 def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
@@ -242,6 +273,21 @@ def _parse_active_worktrees(data: dict) -> dict[str, ActiveWorktree]:
             selection_reason=value.get("selection_reason"),
             launch_attempt_id=value.get("launch_attempt_id"),
             launch_phase=value.get("launch_phase"),
+            owner_kind=_parse_choice(
+                value.get("owner_kind"), {"interactive", "dispatch"}, "dispatch"
+            ),
+            claim_id=_parse_optional_string(value.get("claim_id")),
+            claim_stage=_parse_optional_string(value.get("claim_stage")),
+            base_ref=_parse_optional_string(value.get("base_ref")),
+            base_sha=_parse_optional_string(value.get("base_sha")),
+            reservation_kind=_parse_choice(
+                value.get("reservation_kind"),
+                {"footprint", "repository"},
+                "footprint",
+            ),
+            repository_id=_parse_optional_string(value.get("repository_id")),
+            claimed_at=_parse_optional_finite_float(value.get("claimed_at")),
+            owner_token_digest=_parse_optional_string(value.get("owner_token_digest")),
         )
         for key, value in data.get("active_worktrees", {}).items()
     }
@@ -420,6 +466,8 @@ def save_run_state(
     open_prs: Sequence[Any] | None = None,
     max_completed_worktrees: int = 500,
 ) -> None:
+    path = Path(path)
+    assert_run_state_lock_held(path.with_suffix(".lock"))
     state = prune_run_state(
         state,
         now=now,

@@ -19,7 +19,6 @@ from orchestune.dispatch.filters import _filter_deviation_blocked_candidates
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
-    save_run_state,
 )
 from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.models import IssueRecord
@@ -28,6 +27,7 @@ from tests.dispatch_test_support import make_test_task as _task
 from tests.dispatch_test_support import (
     patch_gc_process_alive as _patch_gc_process_alive,
 )
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 from tests.dispatch_test_support import stub_label_actor_permission
 
 

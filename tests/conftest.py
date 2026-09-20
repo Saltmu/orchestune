@@ -959,6 +959,17 @@ def _stub_file_lock_by_default(request: pytest.FixtureRequest):
 
 
 @pytest.fixture(autouse=True)
+def _stub_run_state_lock_assertion_by_default(request: pytest.FixtureRequest):
+    """Keep focused unit tests independent of cycle-level lock orchestration."""
+    if request.node.get_closest_marker("uses_run_state_lock_assertion") is not None:
+        yield
+        return
+
+    with patch("orchestune.dispatch.state.assert_run_state_lock_held"):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _guard_events_log_path(monkeypatch: pytest.MonkeyPatch):
     """Ensure tests do not create or modify 'events.jsonl' in the repository root."""
     orig_init = DispatcherConfig.__init__

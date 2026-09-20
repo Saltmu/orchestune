@@ -12,8 +12,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.monitor import main
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
 @pytest.fixture(autouse=True)

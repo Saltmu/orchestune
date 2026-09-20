@@ -24,7 +24,6 @@ from orchestune.dispatch.phase_rebase import (
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
-    save_run_state,
 )
 from orchestune.infra.process_utils import (
     assert_run_state_lock_held,
@@ -39,6 +38,7 @@ from tests.dispatch_test_support import make_test_task as _task
 from tests.dispatch_test_support import (
     patch_gc_process_alive as _patch_gc_process_alive,
 )
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 from tests.dispatch_test_support import stub_label_actor_permission
 
 
