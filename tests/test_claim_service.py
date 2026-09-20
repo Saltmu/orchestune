@@ -38,7 +38,9 @@ class MockForge(FakeForge):
         self.issues = dict(issues or {})
         self.labels_added: list[tuple[int, str]] = []
         self.labels_removed: list[tuple[int, str]] = []
+        self.bodies_updated: list[tuple[int, str]] = []
         self.fail_add_label: bool = False
+        self.fail_update_body: bool = False
 
     def get_issue(self, issue_number: int | str) -> IssueRecord | None:
         return self.issues.get(int(issue_number))
@@ -52,6 +54,12 @@ class MockForge(FakeForge):
     def remove_label(self, issue_number: int | str, label: str) -> None:
         self.labels_removed.append((int(issue_number), label))
         super().remove_label(issue_number, label)
+
+    def update_issue_body(self, issue_number: int | str, body: str) -> None:
+        if self.fail_update_body:
+            raise RuntimeError("GitHub API error: update_issue_body failed")
+        self.bodies_updated.append((int(issue_number), body))
+        super().update_issue_body(issue_number, body)
 
 
 def _make_issue(
@@ -999,3 +1007,144 @@ class TestAdditionalClaimServiceEdgeCases:
         assert outcome.failure is not None
         assert outcome.failure.reason == ClaimFailureReason.CLAIM_CONFLICT
         assert "metadata lookup failure" in outcome.failure.message
+
+    def test_claim_task_publishes_claim_ownership_to_issue_body(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        from orchestune.dispatch.recovery import _parse_claim_info_from_issue
+
+        repo_root = claim_env["repo_root"]
+        state_path = claim_env["state_path"]
+        issue = _make_issue(number=125)
+        forge = MockForge({125: issue})
+        worktree_path = claim_env["worktrees_dir"] / "claude-issue-125-task"
+
+        def mock_prepare_worktree(*args, **kwargs):
+            worktree_path.mkdir(parents=True, exist_ok=True)
+            return WorktreePreparation(
+                worktree_path=worktree_path,
+                branch="claude/issue-125-task",
+                accepted=True,
+                created=True,
+                base_sha="sha125",
+            )
+
+        with (
+            patch(
+                "orchestune.claim.service.run_git",
+                return_value=MagicMock(returncode=0),
+            ),
+            patch(
+                "orchestune.claim.service.prepare_task_worktree",
+                side_effect=mock_prepare_worktree,
+            ),
+        ):
+            request = ClaimRequest(issue_number=125, state_path=state_path)
+            outcome = claim_task(request, forge=forge, cwd=repo_root)
+
+        assert outcome.success is True
+        assert outcome.stage == ClaimStage.COMPLETED
+        assert len(forge.bodies_updated) > 0
+
+        updated_issue = forge.get_issue(125)
+        assert updated_issue is not None
+        owner_kind, claim_id, res_kind = _parse_claim_info_from_issue(updated_issue)
+        assert owner_kind == "interactive"
+        assert claim_id == outcome.claim_id
+        assert res_kind in {"footprint", "repository"}
+
+    def test_claim_task_publishes_metadata_fails_returns_state_save_failed(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        repo_root = claim_env["repo_root"]
+        state_path = claim_env["state_path"]
+        issue = _make_issue(number=126)
+        forge = MockForge({126: issue})
+        forge.fail_update_body = True
+        worktree_path = claim_env["worktrees_dir"] / "claude-issue-126-task"
+
+        def mock_prepare_worktree(*args, **kwargs):
+            worktree_path.mkdir(parents=True, exist_ok=True)
+            return WorktreePreparation(
+                worktree_path=worktree_path,
+                branch="claude/issue-126-task",
+                accepted=True,
+                created=True,
+                base_sha="sha126",
+            )
+
+        with (
+            patch(
+                "orchestune.claim.service.run_git",
+                return_value=MagicMock(returncode=0),
+            ),
+            patch(
+                "orchestune.claim.service.prepare_task_worktree",
+                side_effect=mock_prepare_worktree,
+            ),
+        ):
+            request = ClaimRequest(issue_number=126, state_path=state_path)
+            outcome = claim_task(request, forge=forge, cwd=repo_root)
+
+        assert outcome.success is False
+        assert outcome.failure is not None
+        assert outcome.failure.reason == ClaimFailureReason.STATE_SAVE_FAILED
+        assert outcome.stage == ClaimStage.ACTIVE_SAVED
+        assert outcome.owner_token is not None
+
+    def test_claim_task_revalidates_issue_before_labeling_rejects_closed_issue(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        repo_root = claim_env["repo_root"]
+        state_path = claim_env["state_path"]
+        issue = _make_issue(number=127, state="open")
+        forge = MockForge({127: issue})
+        worktree_path = claim_env["worktrees_dir"] / "claude-issue-127-task"
+
+        def mock_prepare_worktree(*args, **kwargs):
+            worktree_path.mkdir(parents=True, exist_ok=True)
+            forge.issues[127] = _make_issue(number=127, state="closed")
+            return WorktreePreparation(
+                worktree_path=worktree_path,
+                branch="claude/issue-127-task",
+                accepted=True,
+                created=True,
+                base_sha="sha127",
+            )
+
+        with (
+            patch(
+                "orchestune.claim.service.run_git",
+                return_value=MagicMock(returncode=0),
+            ),
+            patch(
+                "orchestune.claim.service.prepare_task_worktree",
+                side_effect=mock_prepare_worktree,
+            ),
+        ):
+            request = ClaimRequest(issue_number=127, state_path=state_path)
+            outcome = claim_task(request, forge=forge, cwd=repo_root)
+
+        assert outcome.success is False
+        assert outcome.failure is not None
+        assert outcome.failure.reason == ClaimFailureReason.ISSUE_CLOSED
+        assert outcome.stage == ClaimStage.ACTIVE_SAVED
+        assert len(forge.labels_added) == 0
+
+    def test_claim_task_runtime_error_inside_lock_is_not_swallowed_as_state_lock_failed(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        repo_root = claim_env["repo_root"]
+        state_path = claim_env["state_path"]
+        issue = _make_issue(number=128)
+        forge = MockForge({128: issue})
+
+        with (
+            patch(
+                "orchestune.claim.service._execute_claim_in_lock",
+                side_effect=RuntimeError("internal arbitrary runtime error"),
+            ),
+            pytest.raises(RuntimeError, match="internal arbitrary runtime error"),
+        ):
+            request = ClaimRequest(issue_number=128, state_path=state_path)
+            claim_task(request, forge=forge, cwd=repo_root)

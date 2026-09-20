@@ -8,6 +8,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.claim.contracts import (
     ClaimFailure,
@@ -51,7 +53,7 @@ from orchestune.dispatch.worktree import WorktreePreparation, prepare_task_workt
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
-from orchestune.issue_parsing import parse_task_from_issue
+from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
 from orchestune.labels import STATUS_LABEL_PREFIX, StatusLabel
 from orchestune.models import IssueRecord
 from orchestune.task_metadata import TaskMetadata
@@ -313,6 +315,86 @@ def _apply_status_label(
         )
 
 
+def _update_issue_claim_metadata(
+    body: str,
+    owner_kind: str,
+    claim_id: str,
+    reservation_kind: str,
+) -> str:
+    """Inject or update owner_kind, claim_id, and reservation_kind in Issue body."""
+    match = FOOTPRINT_BLOCK_PATTERN.search(body)
+    if match:
+        try:
+            data = yaml.safe_load(match.group(1))
+            if not isinstance(data, dict):
+                data = {}
+        except Exception:
+            data = {}
+        data["owner_kind"] = owner_kind
+        data["claim_id"] = claim_id
+        data["reservation_kind"] = reservation_kind
+        new_block = yaml.dump(data, allow_unicode=True, default_flow_style=False)
+        start, end = match.span(1)
+        return body[:start] + new_block + body[end:]
+
+    new_yaml = yaml.dump(
+        {
+            "owner_kind": owner_kind,
+            "claim_id": claim_id,
+            "reservation_kind": reservation_kind,
+        },
+        allow_unicode=True,
+        default_flow_style=False,
+    )
+    separator = "" if body.endswith("\n") else "\n"
+    return f"{body}{separator}\n## Footprint\n```yaml\n{new_yaml}```\n"
+
+
+def _publish_claim_ownership_to_issue(
+    forge: Forge,
+    issue: IssueRecord,
+    owner_kind: OwnerKind,
+    claim_id: str,
+    reservation_kind: ReservationKind,
+) -> ClaimFailure | None:
+    """Persist non-secret recovery metadata to the Issue body before completion."""
+    try:
+        new_body = _update_issue_claim_metadata(
+            issue.body,
+            owner_kind.value,
+            claim_id,
+            reservation_kind.value,
+        )
+        if new_body != issue.body:
+            forge.update_issue_body(issue.number, new_body)
+        return None
+    except Exception as e:
+        return ClaimFailure(
+            reason=ClaimFailureReason.STATE_SAVE_FAILED,
+            message=f"Failed to publish claim ownership metadata to issue #{issue.number}: {e}",
+        )
+
+
+def _make_active_saved_failure(
+    reservation: ActiveWorktree,
+    failure: ClaimFailure,
+    raw_token: str,
+) -> ClaimOutcome:
+    """Construct a standardized active-saved failure outcome with owner token."""
+    return ClaimOutcome(
+        success=False,
+        issue_number=reservation.issue_number,
+        claim_id=reservation.claim_id,
+        branch=reservation.branch,
+        worktree_path=Path(reservation.worktree_path)
+        if reservation.worktree_path
+        else None,
+        stage=ClaimStage.ACTIVE_SAVED,
+        failure=failure,
+        owner_token=raw_token,
+    )
+
+
 def _build_success_outcome(
     reservation: ActiveWorktree,
     raw_token: str,
@@ -336,51 +418,73 @@ def _build_success_outcome(
     )
 
 
+def _validate_and_publish_issue_finalization(
+    forge: Forge,
+    reservation: ActiveWorktree,
+    owner_kind: OwnerKind,
+    reservation_kind: ReservationKind,
+    raw_token: str,
+) -> tuple[IssueRecord | None, ClaimOutcome | None]:
+    """Fetch fresh issue, revalidate status, and publish recovery metadata."""
+    fresh_issue = forge.get_issue(reservation.issue_number)
+    if fresh_issue is None:
+        failure = ClaimFailure(
+            reason=ClaimFailureReason.ISSUE_NOT_FOUND,
+            message=f"Issue #{reservation.issue_number} was not found during finalization.",
+        )
+        return None, _make_active_saved_failure(reservation, failure, raw_token)
+
+    validation_error = _validate_issue_for_resume(fresh_issue)
+    if validation_error is not None:
+        return None, _make_active_saved_failure(
+            reservation, validation_error, raw_token
+        )
+
+    publish_error = _publish_claim_ownership_to_issue(
+        forge,
+        fresh_issue,
+        owner_kind,
+        reservation.claim_id or "",
+        reservation_kind,
+    )
+    if publish_error is not None:
+        return None, _make_active_saved_failure(reservation, publish_error, raw_token)
+
+    return fresh_issue, None
+
+
 def _transition_labels_and_finalize(
     workspace: ClaimWorkspace,
     reservation: ActiveWorktree,
     run_state: RunState,
     forge: Forge,
-    issue: IssueRecord,
     raw_token: str,
     owner_kind: OwnerKind,
     reservation_kind: ReservationKind,
 ) -> ClaimOutcome:
     """Transition status:in-progress label and mark claim stage as COMPLETED."""
-    label_failure = _apply_status_label(forge, reservation.issue_number, issue.labels)
+    fresh_issue, prep_outcome = _validate_and_publish_issue_finalization(
+        forge, reservation, owner_kind, reservation_kind, raw_token
+    )
+    if prep_outcome is not None or fresh_issue is None:
+        assert prep_outcome is not None
+        return prep_outcome
+
+    label_failure = _apply_status_label(
+        forge, reservation.issue_number, fresh_issue.labels
+    )
     if label_failure is not None:
-        return ClaimOutcome(
-            success=False,
-            issue_number=reservation.issue_number,
-            claim_id=reservation.claim_id,
-            branch=reservation.branch,
-            worktree_path=Path(reservation.worktree_path)
-            if reservation.worktree_path
-            else None,
-            stage=ClaimStage.ACTIVE_SAVED,
-            failure=label_failure,
-            owner_token=raw_token,
-        )
+        return _make_active_saved_failure(reservation, label_failure, raw_token)
 
     reservation.claim_stage = ClaimStage.COMPLETED.value
     try:
         save_run_state(run_state, workspace.run_state_path)
     except Exception as e:
-        return ClaimOutcome(
-            success=False,
-            issue_number=reservation.issue_number,
-            claim_id=reservation.claim_id,
-            branch=reservation.branch,
-            worktree_path=Path(reservation.worktree_path)
-            if reservation.worktree_path
-            else None,
-            stage=ClaimStage.ACTIVE_SAVED,
-            failure=ClaimFailure(
-                reason=ClaimFailureReason.STATE_SAVE_FAILED,
-                message=f"Failed to persist run_state on completion: {e}",
-            ),
-            owner_token=raw_token,
+        failure = ClaimFailure(
+            reason=ClaimFailureReason.STATE_SAVE_FAILED,
+            message=f"Failed to persist run_state on completion: {e}",
         )
+        return _make_active_saved_failure(reservation, failure, raw_token)
     return _build_success_outcome(reservation, raw_token, owner_kind, reservation_kind)
 
 
@@ -509,7 +613,6 @@ def _apply_claim_side_effects(
         reservation,
         run_state,
         forge,
-        issue,
         raw_token,
         request.owner_kind,
         preflight.reservation_kind,
@@ -577,16 +680,8 @@ def claim_task(
 
     timeout = request.timeout_seconds if request.timeout_seconds is not None else 0.0
     try:
-        with run_state_lock(workspace.lock_path, timeout=timeout):
-            return _execute_claim_in_lock(
-                effective_request,
-                raw_token,
-                workspace,
-                active_forge,
-                effective_apply,
-                view,
-                default_base,
-            )
+        cm = run_state_lock(workspace.lock_path, timeout=timeout)
+        cm.__enter__()
     except (FileLockContentionError, RuntimeError) as e:
         return ClaimOutcome(
             success=False,
@@ -596,6 +691,19 @@ def claim_task(
                 message=f"Could not acquire run_state lock: {e}",
             ),
         )
+
+    try:
+        return _execute_claim_in_lock(
+            effective_request,
+            raw_token,
+            workspace,
+            active_forge,
+            effective_apply,
+            view,
+            default_base,
+        )
+    finally:
+        cm.__exit__(None, None, None)
 
 
 def _check_resume_identity(
@@ -717,7 +825,6 @@ def _resume_from_active(
         active,
         run_state,
         forge,
-        issue,
         owner_token,
         owner_kind,
         reservation_kind,
@@ -791,15 +898,8 @@ def resume_claim(
     timeout = timeout_seconds if timeout_seconds is not None else 0.0
 
     try:
-        with run_state_lock(workspace.lock_path, timeout=timeout):
-            run_state = load_run_state(workspace.run_state_path)
-            active, auth_error = _validate_resume_active(claim_id, raw_token, run_state)
-            if auth_error is not None or active is None:
-                assert auth_error is not None
-                return auth_error
-            return _resume_from_active(
-                active, workspace, run_state, active_forge, raw_token
-            )
+        cm = run_state_lock(workspace.lock_path, timeout=timeout)
+        cm.__enter__()
     except (FileLockContentionError, RuntimeError) as e:
         return ClaimOutcome(
             success=False,
@@ -809,6 +909,18 @@ def resume_claim(
                 message=f"Could not acquire run_state lock: {e}",
             ),
         )
+
+    try:
+        run_state = load_run_state(workspace.run_state_path)
+        active, auth_error = _validate_resume_active(claim_id, raw_token, run_state)
+        if auth_error is not None or active is None:
+            assert auth_error is not None
+            return auth_error
+        return _resume_from_active(
+            active, workspace, run_state, active_forge, raw_token
+        )
+    finally:
+        cm.__exit__(None, None, None)
 
 
 __all__ = ["claim_task", "resume_claim"]
