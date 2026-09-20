@@ -449,3 +449,30 @@ re-running a completed replacement makes no GitHub mutations. Exit codes are
 `0` (safe preview/success), `2` (configuration), `3` (missing or invalid
 approval), `4` (partial application), `5` (already-active no-op), and `6`
 (preview contains conflicts or manual-review targets).
+
+---
+
+## 7. Claiming a Task and Preparing a Worktree (`orchestune claim`)
+
+To begin work on a provisioned subtask issue, use the `orchestune claim` command. It safely validates prerequisites (such as dependency completion), fetches the base branch, prepares an isolated task worktree, records the active state in the local ledger, and updates the task issue's status labels in a single atomic flow.
+
+```bash
+# Claim a task by specifying its issue number
+orchestune claim 123
+```
+
+Upon success, the command prints the issue number, claim ID, branch name, prepared worktree path, and base reference, and exits with code `0`. Navigate to the prepared worktree path (`cd <worktree_path>`) and start development.
+
+### Major Options
+
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `--no-apply` | disabled | Dry-run mode: validates prerequisites and previews planned values without modifying Git, GitHub, or local state. |
+| `--resume <claim_id>` | none | Resumes an interrupted claim using protected local credentials. |
+| `--state <path>` | `run_state.json` | Path to the run-state ledger file. |
+| `--timeout <seconds>` | none | Timeout in seconds for acquiring the run-state lock. |
+
+### Failure Handling
+
+If a claim cannot proceed due to unmet dependencies, conflicts, or environmental errors, the command exits with a non-zero exit code and outputs the failure reason along with recommended next actions to stderr. Follow the diagnostic instructions to resolve conflicts or resume an interrupted claim using `--resume`.
+
