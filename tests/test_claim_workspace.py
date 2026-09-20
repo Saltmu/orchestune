@@ -140,6 +140,25 @@ class TestResolveClaimWorkspace:
         assert ws_primary.lock_path == abs_path.with_suffix(".lock")
         assert ws_linked.lock_path == abs_path.with_suffix(".lock")
 
+    def test_resolve_with_explicit_worktree_root(
+        self, git_repo_with_worktree: tuple[Path, Path], tmp_path: Path
+    ) -> None:
+        """#943レビュー対応(Codex P1, round4): dispatchが`--worktree-root`で
+        既定値以外を設定した場合、claimも同じディレクトリを使わないと、
+        agentの起動先とdispatch自身が参照するディレクトリが食い違う。"""
+        primary_repo, linked_worktree = git_repo_with_worktree
+        custom_root = (tmp_path / "custom" / "worktrees").resolve()
+
+        ws_primary = resolve_claim_workspace(
+            cwd=primary_repo, explicit_worktree_root=custom_root
+        )
+        ws_linked = resolve_claim_workspace(
+            cwd=linked_worktree, explicit_worktree_root=custom_root
+        )
+
+        assert ws_primary.worktree_root == custom_root
+        assert ws_linked.worktree_root == custom_root
+
     def test_resolve_outside_git_repository_raises(self, tmp_path: Path) -> None:
         not_a_repo = tmp_path / "not_git"
         not_a_repo.mkdir()

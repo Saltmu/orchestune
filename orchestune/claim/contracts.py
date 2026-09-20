@@ -142,6 +142,11 @@ class ClaimRequest:
     dry_run: bool = False
     timeout_seconds: float | None = None
     state_path: Path | None = None
+    # #943レビュー対応(Codex P1, round4): dispatchは`worktree_root`を既定値
+    # （`<repo>/worktrees`）以外へ設定できる。未指定の場合、claimは既定値へ
+    # 固定してしまい、実際にagentが起動されるディレクトリとdispatch自身が
+    # 参照する`config.worktree_root`が食い違う。
+    worktree_root: Path | None = None
 
 
 @dataclass(frozen=True)

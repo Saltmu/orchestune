@@ -64,6 +64,45 @@ class TestResolveClaimFailureLaunchResult:
         assert result.validation_error is False
 
 
+class TestTryPlannedLaunchPassesWorktreeRoot:
+    """#943レビュー対応(Codex P1, round4): dispatchが`--worktree-root`で
+    既定値以外を設定した場合、claimへの`ClaimRequest`にもそれを渡さないと、
+    claimは`<repo>/worktrees`へ固定してしまい、agentの起動先とdispatch自身の
+    journal復元・GCが参照するディレクトリが食い違う。"""
+
+    def test_claim_request_carries_configured_worktree_root(self, tmp_path):
+        from orchestune.claim.contracts import (
+            ClaimFailure,
+            ClaimFailureReason,
+            ClaimOutcome,
+        )
+        from orchestune.dispatch.launch import TaskLaunchPlan, _try_planned_launch
+        from orchestune.dispatch.state import RunState
+
+        custom_root = tmp_path / "custom-worktrees"
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=custom_root,
+        )
+        plan = TaskLaunchPlan(_task(1), "claude/issue-1-task-1", None, "origin/main")
+        captured = {}
+
+        def _spy_claim_fn(request, default_base):
+            captured["worktree_root"] = request.worktree_root
+            return ClaimOutcome(
+                success=False,
+                issue_number=1,
+                failure=ClaimFailure(
+                    reason=ClaimFailureReason.ISSUE_NOT_FOUND, message="n/a"
+                ),
+            )
+
+        _try_planned_launch(plan, object(), config, RunState(), _spy_claim_fn)
+
+        assert captured["worktree_root"] == custom_root
+
+
 class TestHandleLaunchFailureStripsClaimLabel:
     """#943レビュー対応(Codex P1, r3): claim成功後にagent起動が失敗した場合、
     IN_PROGRESSを剥がさないと`status:blocked`と併存してしまう。"""

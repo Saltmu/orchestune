@@ -20,15 +20,35 @@ class ClaimWorkspace:
     common_dir: Path
 
 
+def _resolve_relative_to(
+    primary_root: Path, explicit_path: str | Path | None, default: str
+) -> Path:
+    if explicit_path is None:
+        return primary_root / default
+    path_obj = Path(explicit_path)
+    return (
+        path_obj.resolve()
+        if path_obj.is_absolute()
+        else (primary_root / path_obj).resolve()
+    )
+
+
 def resolve_claim_workspace(
     cwd: str | Path | None = None,
     *,
     explicit_state_path: str | Path | None = None,
+    explicit_worktree_root: str | Path | None = None,
 ) -> ClaimWorkspace:
     """Resolve the repository root and shared state directory for claim operations.
 
     Resolves primary checkout, linked worktrees, and subdirectories to the same
     canonical repository identity, run_state.json path, and run_state.lock path.
+
+    `explicit_worktree_root`（#943レビュー対応(Codex P1, round4)）: dispatchは
+    `DispatcherConfig.worktree_root`をデフォルト値（`<repo>/worktrees`）以外へ
+    設定できる。指定しない場合、claimは既定値へ固定してしまい、実際にagentが
+    起動されるディレクトリと、dispatch自身のjournal復元・GCが参照する
+    `config.worktree_root`が食い違ってしまう。
 
     Note:
         Assumes common_dir is located directly inside the primary checkout
@@ -39,17 +59,13 @@ def resolve_claim_workspace(
     primary_root = common_dir.parent
     repository_identity = common_dir.as_posix()
 
-    if explicit_state_path is None:
-        run_state_path = primary_root / "run_state.json"
-    else:
-        path_obj = Path(explicit_state_path)
-        if path_obj.is_absolute():
-            run_state_path = path_obj.resolve()
-        else:
-            run_state_path = (primary_root / path_obj).resolve()
-
+    run_state_path = _resolve_relative_to(
+        primary_root, explicit_state_path, "run_state.json"
+    )
     lock_path = run_state_path.with_suffix(".lock")
-    worktree_root = primary_root / "worktrees"
+    worktree_root = _resolve_relative_to(
+        primary_root, explicit_worktree_root, "worktrees"
+    )
 
     return ClaimWorkspace(
         repository_identity=repository_identity,

@@ -797,7 +797,11 @@ def claim_task(
     """Execute the sequential lifecycle to claim an issue."""
     effective_apply = apply and not request.dry_run
     effective_request, raw_token = _resolve_owner_token(request)
-    workspace = resolve_claim_workspace(cwd, explicit_state_path=request.state_path)
+    workspace = resolve_claim_workspace(
+        cwd,
+        explicit_state_path=request.state_path,
+        explicit_worktree_root=request.worktree_root,
+    )
     active_forge = forge or GitHubForge()
 
     timeout = request.timeout_seconds if request.timeout_seconds is not None else 0.0

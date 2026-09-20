@@ -577,6 +577,11 @@ def _try_planned_launch(
         issue_number=task.issue_number,
         owner_kind=OwnerKind.DISPATCH,
         state_path=config.run_state_path,
+        # #943レビュー対応(Codex P1, round4): `config.worktree_root`が既定値
+        # （`<repo>/worktrees`）以外の場合、指定しないとclaimが既定値へ固定
+        # してしまい、実際にagentが起動されるディレクトリとdispatch自身の
+        # journal復元・GCが参照するディレクトリが食い違う。
+        worktree_root=config.worktree_root,
     )
     outcome = claim_fn(request, plan.base_branch_for_launch or "origin/main")
     if outcome.claim_id is not None:
