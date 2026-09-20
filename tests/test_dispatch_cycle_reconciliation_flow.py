@@ -28,7 +28,6 @@ from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
-    save_run_state,
 )
 from orchestune.dispatch.status_repair import (
     execute_status_repair_command as execute_status_repair_command_real,
@@ -39,6 +38,7 @@ from tests.dispatch_test_support import make_footprint_issue as _full_issue
 from tests.dispatch_test_support import (
     patch_gc_process_alive as _patch_gc_process_alive,
 )
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 from tests.dispatch_test_support import stub_label_actor_permission
 
 

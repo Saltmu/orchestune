@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from orchestune.dispatch.state import (
     MAX_PENDING_LOCK_RELEASE_NOTICES,
     ActiveWorktree,
@@ -8,11 +10,78 @@ from orchestune.dispatch.state import (
     TaskReclaimRecord,
     load_run_state,
     prune_run_state,
-    save_run_state,
 )
+from orchestune.dispatch.state import save_run_state as save_run_state_unlocked
+from orchestune.infra.process_utils import run_state_lock
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
 class TestRunState:
+    def test_new_claim_ownership_fields_round_trip_without_owner_token(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        active = ActiveWorktree(
+            issue_number=10,
+            branch="claim/10",
+            worktree_path="worktrees/claim-10",
+            pid=123,
+            started_at=1.0,
+            declared_footprint=(),
+            owner_kind="interactive",
+            claim_id="claim-10",
+            claim_stage="active_saved",
+            base_ref="parent/issue-893",
+            base_sha="a" * 40,
+            reservation_kind="repository",
+            repository_id="Saltmu/orchestune",
+            claimed_at=2.0,
+            owner_token_digest="sha256:abc123",
+        )
+
+        with run_state_lock(path.with_suffix(".lock")):
+            save_run_state_unlocked(RunState(active_worktrees={"10": active}), path)
+
+        persisted = json.loads(path.read_text(encoding="utf-8"))
+        assert "owner_token" not in persisted["active_worktrees"]["10"]
+        assert persisted["active_worktrees"]["10"]["reservation_kind"] == "repository"
+        assert load_run_state(path).active_worktrees["10"] == active
+
+    def test_legacy_active_worktree_defaults_to_dispatch_footprint_reservation(
+        self, tmp_path
+    ):
+        path = tmp_path / "run_state.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "active_worktrees": {
+                        "10": {
+                            "issue_number": 10,
+                            "branch": "claude/issue-10-x",
+                            "worktree_path": "worktrees/claude-issue-10-x",
+                            "pid": 123,
+                            "started_at": 1.0,
+                            "declared_footprint": [],
+                            "owner_kind": "unknown-owner",
+                            "reservation_kind": "unknown-reservation",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        active = load_run_state(path).active_worktrees["10"]
+
+        assert active.owner_kind == "dispatch"
+        assert active.reservation_kind == "footprint"
+        assert active.claim_id is None
+
+    @pytest.mark.uses_run_state_lock_assertion
+    def test_save_run_state_rejects_write_without_sibling_lock(self, tmp_path):
+        path = tmp_path / "run_state.json"
+
+        with pytest.raises(RuntimeError, match="run_state lock must be held"):
+            save_run_state_unlocked(RunState(), path)
+
     def test_load_missing_file_returns_empty_state(self, tmp_path):
         state = load_run_state(tmp_path / "run_state.json")
         assert state.active_worktrees == {}

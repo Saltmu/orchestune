@@ -23,7 +23,8 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
+from orchestune.infra.process_utils import run_state_lock
 from orchestune.models import IssueRecord, Task
 from tests.conftest import make_issue
 
@@ -51,6 +52,15 @@ def make_state_root(prefix: str = "orchestune-test-state-") -> Path:
 
 
 _DEFAULT_STATE_ROOT = make_state_root()
+
+
+def save_locked_run_state(
+    state: RunState, path: str | Path, *args: Any, **kwargs: Any
+) -> None:
+    """Persist test fixture state under the same lock required in production."""
+    run_state_path = Path(path)
+    with run_state_lock(run_state_path.with_suffix(".lock")):
+        save_run_state(state, run_state_path, *args, **kwargs)
 
 
 def make_test_dispatcher_config(

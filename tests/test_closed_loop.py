@@ -12,7 +12,7 @@ import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
-from orchestune.dispatch.state import RunState, save_run_state
+from orchestune.dispatch.state import RunState
 from orchestune.dispatch.targets import DispatchHandle, DispatchTarget
 from orchestune.integrator import Integrator, IntegratorConfig
 from orchestune.issue_parsing import PARENT_MARKER
@@ -20,6 +20,7 @@ from orchestune.models import IssueRecord, PrRecord, Task
 from orchestune.outcome_record import OutcomeRecord
 from orchestune.task_metadata import TaskMetadata
 from tests.conftest import get_clean_git_env
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 pytestmark = pytest.mark.integration
 

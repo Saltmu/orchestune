@@ -10,6 +10,7 @@ from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, CompletedWorktree, RunState
 from orchestune.models import PrRecord, Usage
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -159,7 +160,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
         from unittest.mock import MagicMock, patch
 
         from orchestune.dispatch.launch import _apply_task_launches
-        from orchestune.dispatch.state import load_run_state, save_run_state
+        from orchestune.dispatch.state import load_run_state
 
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"

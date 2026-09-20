@@ -22,7 +22,6 @@ from orchestune.dispatch.state import (
     RunState,
     TaskReclaimRecord,
     load_run_state,
-    save_run_state,
 )
 from orchestune.outcome_record import OutcomeRecord, ReviewSummary
 from tests.dispatch_test_support import make_footprint_issue as _full_issue
@@ -30,6 +29,7 @@ from tests.dispatch_test_support import make_test_active_worktree as _active
 from tests.dispatch_test_support import (
     patch_gc_process_alive as _patch_gc_process_alive,
 )
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 from tests.dispatch_test_support import stub_label_actor_permission
 
 

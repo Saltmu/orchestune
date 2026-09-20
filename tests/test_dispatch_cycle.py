@@ -33,7 +33,6 @@ from orchestune.dispatch.state import (
     RunState,
     TaskReclaimRecord,
     load_run_state,
-    save_run_state,
 )
 from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.models import IssueRecord, PrRecord
@@ -46,6 +45,7 @@ from tests.dispatch_test_support import make_test_task as _task
 from tests.dispatch_test_support import (
     patch_gc_process_alive as _patch_gc_process_alive,
 )
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
