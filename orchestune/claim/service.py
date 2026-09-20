@@ -37,14 +37,17 @@ from orchestune.claim.workspace import (
     check_repository_identity_match,
     resolve_claim_workspace,
 )
-from orchestune.dispatch.labels import transition_status_label
+from orchestune.dispatch.labels import (
+    TERMINAL_ESCALATION_LABELS,
+    transition_status_label,
+)
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
     load_run_state,
     save_run_state,
 )
-from orchestune.dispatch.worktree import prepare_task_worktree
+from orchestune.dispatch.worktree import WorktreePreparation, prepare_task_worktree
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
@@ -66,14 +69,11 @@ class _DefaultConflictView:
     def task(self, issue_number: int) -> TaskMetadata | None:
         if issue_number in self._cache:
             return self._cache[issue_number]
-        try:
-            issue = self._forge.get_issue(issue_number)
-            if issue is not None:
-                parsed = parse_task_from_issue(issue)
-                self._cache[issue_number] = parsed
-                return parsed
-        except Exception:
-            pass
+        issue = self._forge.get_issue(issue_number)
+        if issue is not None:
+            parsed = parse_task_from_issue(issue)
+            self._cache[issue_number] = parsed
+            return parsed
         return None
 
 
@@ -101,6 +101,29 @@ def _conflict_to_outcome(issue_number: int, conflict: ClaimConflict) -> ClaimOut
         else None,
     )
     return ClaimOutcome(success=False, issue_number=issue_number, failure=failure)
+
+
+def _evaluate_conflict_step(
+    reservation: ActiveWorktree,
+    run_state: RunState,
+    conflict_view: Any,
+    issue_number: int,
+) -> ClaimOutcome | None:
+    """Evaluate conflict rules, returning a structured rejection outcome on conflict or error."""
+    try:
+        conflict = evaluate_claim_conflicts(reservation, run_state, conflict_view)
+    except Exception as e:
+        return ClaimOutcome(
+            success=False,
+            issue_number=issue_number,
+            failure=ClaimFailure(
+                reason=ClaimFailureReason.CLAIM_CONFLICT,
+                message=f"Failed to evaluate claim conflicts due to metadata lookup failure: {e}",
+            ),
+        )
+    if conflict is not None:
+        return _conflict_to_outcome(issue_number, conflict)
+    return None
 
 
 def _validate_preflight_and_conflict(
@@ -148,11 +171,13 @@ def _validate_preflight_and_conflict(
     conflict_view = (
         view
         if (view is not None and hasattr(view, "task"))
-        else _DefaultConflictView(forge)
+        else _DefaultConflictView(forge, cache={issue.number: task_meta})
     )
-    conflict = evaluate_claim_conflicts(reservation, run_state, conflict_view)
-    if conflict is not None:
-        return None, issue, _conflict_to_outcome(request.issue_number, conflict)
+    conflict_outcome = _evaluate_conflict_step(
+        reservation, run_state, conflict_view, request.issue_number
+    )
+    if conflict_outcome is not None:
+        return None, issue, conflict_outcome
 
     return preflight, issue, None
 
@@ -175,29 +200,29 @@ def _perform_git_fetch(repo_root: Path, issue_number: int) -> ClaimFailure | Non
     return None
 
 
-def _prepare_and_persist_worktree(
+def _prepare_worktree_for_reservation(
     workspace: ClaimWorkspace,
-    reservation: ActiveWorktree,
     canonical_branch: str,
     base_ref: str,
-    run_state: RunState,
     raw_token: str,
-) -> ClaimOutcome | None:
-    """Create the worktree and update reservation to WORKTREE_PREPARED/ACTIVE_SAVED."""
+    issue_number: int,
+    claim_id: str | None,
+) -> tuple[WorktreePreparation | None, ClaimOutcome | None]:
+    """Execute worktree preparation, returning structured failure on exception or rejection."""
     try:
         prep = prepare_task_worktree(
             canonical_branch,
             workspace.worktree_root,
             base_ref,
-            reservation.claim_id or "",
+            claim_id or "",
             allow_force=False,
             cwd=workspace.repository_root,
         )
     except Exception as e:
-        return ClaimOutcome(
+        return None, ClaimOutcome(
             success=False,
-            issue_number=reservation.issue_number,
-            claim_id=reservation.claim_id,
+            issue_number=issue_number,
+            claim_id=claim_id,
             branch=canonical_branch,
             stage=ClaimStage.RESERVED,
             failure=ClaimFailure(
@@ -208,10 +233,10 @@ def _prepare_and_persist_worktree(
         )
 
     if not prep.accepted:
-        return ClaimOutcome(
+        return None, ClaimOutcome(
             success=False,
-            issue_number=reservation.issue_number,
-            claim_id=reservation.claim_id,
+            issue_number=issue_number,
+            claim_id=claim_id,
             branch=canonical_branch,
             stage=ClaimStage.RESERVED,
             failure=ClaimFailure(
@@ -220,11 +245,47 @@ def _prepare_and_persist_worktree(
             ),
             owner_token=raw_token,
         )
+    return prep, None
+
+
+def _prepare_and_persist_worktree(
+    workspace: ClaimWorkspace,
+    reservation: ActiveWorktree,
+    canonical_branch: str,
+    base_ref: str,
+    run_state: RunState,
+    raw_token: str,
+) -> ClaimOutcome | None:
+    """Create the worktree and update reservation to ACTIVE_SAVED."""
+    prep, prep_failure = _prepare_worktree_for_reservation(
+        workspace,
+        canonical_branch,
+        base_ref,
+        raw_token,
+        reservation.issue_number,
+        reservation.claim_id,
+    )
+    if prep_failure is not None or prep is None:
+        return prep_failure
 
     reservation.worktree_path = str(prep.worktree_path)
     reservation.base_sha = prep.base_sha
     reservation.claim_stage = ClaimStage.ACTIVE_SAVED.value
-    save_run_state(run_state, workspace.run_state_path)
+    try:
+        save_run_state(run_state, workspace.run_state_path)
+    except Exception as e:
+        return ClaimOutcome(
+            success=False,
+            issue_number=reservation.issue_number,
+            claim_id=reservation.claim_id,
+            branch=canonical_branch,
+            stage=ClaimStage.RESERVED,
+            failure=ClaimFailure(
+                reason=ClaimFailureReason.STATE_SAVE_FAILED,
+                message=f"Failed to persist run_state after worktree creation: {e}",
+            ),
+            owner_token=raw_token,
+        )
     return None
 
 
@@ -302,7 +363,24 @@ def _transition_labels_and_finalize(
         )
 
     reservation.claim_stage = ClaimStage.COMPLETED.value
-    save_run_state(run_state, workspace.run_state_path)
+    try:
+        save_run_state(run_state, workspace.run_state_path)
+    except Exception as e:
+        return ClaimOutcome(
+            success=False,
+            issue_number=reservation.issue_number,
+            claim_id=reservation.claim_id,
+            branch=reservation.branch,
+            worktree_path=Path(reservation.worktree_path)
+            if reservation.worktree_path
+            else None,
+            stage=ClaimStage.ACTIVE_SAVED,
+            failure=ClaimFailure(
+                reason=ClaimFailureReason.STATE_SAVE_FAILED,
+                message=f"Failed to persist run_state on completion: {e}",
+            ),
+            owner_token=raw_token,
+        )
     return _build_success_outcome(reservation, raw_token, owner_kind, reservation_kind)
 
 
@@ -406,7 +484,19 @@ def _apply_claim_side_effects(
         request, issue, preflight.subtask_id, base_ref, workspace.repository_identity
     )
     run_state.active_worktrees[str(issue.number)] = reservation
-    save_run_state(run_state, workspace.run_state_path)
+    try:
+        save_run_state(run_state, workspace.run_state_path)
+    except Exception as e:
+        return ClaimOutcome(
+            success=False,
+            issue_number=issue.number,
+            stage=ClaimStage.VALIDATING,
+            failure=ClaimFailure(
+                reason=ClaimFailureReason.STATE_SAVE_FAILED,
+                message=f"Failed to persist initial reservation: {e}",
+            ),
+            owner_token=raw_token,
+        )
 
     prep_error = _prepare_and_persist_worktree(
         workspace, reservation, canonical_branch, base_ref, run_state, raw_token
@@ -530,6 +620,63 @@ def _check_resume_identity(
     return None
 
 
+def _validate_issue_for_resume(issue: IssueRecord) -> ClaimFailure | None:
+    """Revalidate issue state (open, non-terminal, no external lock) on resume."""
+    if issue.state.upper() != "OPEN":
+        return ClaimFailure(
+            reason=ClaimFailureReason.ISSUE_CLOSED,
+            message=f"Issue #{issue.number} is closed.",
+        )
+    label_set = set(issue.labels)
+    terminal = [lbl for lbl in label_set if lbl in TERMINAL_ESCALATION_LABELS]
+    if terminal:
+        return ClaimFailure(
+            reason=ClaimFailureReason.TERMINAL_ESCALATION,
+            message=f"Issue #{issue.number} has terminal escalation: {', '.join(terminal)}.",
+        )
+    if StatusLabel.DONE in label_set or StatusLabel.NOT_NEEDED in label_set:
+        return ClaimFailure(
+            reason=ClaimFailureReason.CLAIM_CONFLICT,
+            message=f"Issue #{issue.number} is already marked done/not-needed.",
+        )
+    if StatusLabel.EXTERNAL_LOCK in label_set:
+        return ClaimFailure(
+            reason=ClaimFailureReason.EXTERNAL_LOCK_CONFLICT,
+            message=f"Issue #{issue.number} is locked against external branches/PRs.",
+        )
+    return None
+
+
+def _fetch_and_validate_resume_issue(
+    forge: Forge, active: ActiveWorktree, owner_token: str
+) -> tuple[IssueRecord | None, ClaimOutcome | None]:
+    """Fetch issue and validate it is eligible for resume."""
+    issue = forge.get_issue(active.issue_number)
+    if issue is None:
+        return None, ClaimOutcome(
+            success=False,
+            issue_number=active.issue_number,
+            failure=ClaimFailure(
+                reason=ClaimFailureReason.ISSUE_NOT_FOUND,
+                message=f"Issue #{active.issue_number} was not found on resume.",
+            ),
+            owner_token=owner_token,
+        )
+
+    resume_issue_error = _validate_issue_for_resume(issue)
+    if resume_issue_error is not None:
+        return None, ClaimOutcome(
+            success=False,
+            issue_number=active.issue_number,
+            claim_id=active.claim_id,
+            branch=active.branch,
+            stage=ClaimStage(active.claim_stage),
+            failure=resume_issue_error,
+            owner_token=owner_token,
+        )
+    return issue, None
+
+
 def _resume_from_active(
     active: ActiveWorktree,
     workspace: ClaimWorkspace,
@@ -548,6 +695,11 @@ def _resume_from_active(
     if active.claim_stage == ClaimStage.COMPLETED.value:
         return _build_success_outcome(active, owner_token, owner_kind, reservation_kind)
 
+    issue, issue_error = _fetch_and_validate_resume_issue(forge, active, owner_token)
+    if issue_error is not None or issue is None:
+        assert issue_error is not None
+        return issue_error
+
     if active.claim_stage == ClaimStage.RESERVED.value:
         prep_error = _prepare_and_persist_worktree(
             workspace,
@@ -559,18 +711,6 @@ def _resume_from_active(
         )
         if prep_error is not None:
             return prep_error
-
-    issue = forge.get_issue(active.issue_number)
-    if issue is None:
-        return ClaimOutcome(
-            success=False,
-            issue_number=active.issue_number,
-            failure=ClaimFailure(
-                reason=ClaimFailureReason.ISSUE_NOT_FOUND,
-                message=f"Issue #{active.issue_number} was not found on resume.",
-            ),
-            owner_token=owner_token,
-        )
 
     return _transition_labels_and_finalize(
         workspace,
