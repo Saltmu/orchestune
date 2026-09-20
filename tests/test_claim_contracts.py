@@ -21,7 +21,6 @@ from orchestune.claim import cli as claim_cli
 from orchestune.claim import ownership as claim_ownership
 from orchestune.claim import preflight as claim_preflight
 from orchestune.claim import service as claim_service
-from orchestune.claim import workspace as claim_workspace
 
 
 class TestClaimContracts:
@@ -119,11 +118,7 @@ class TestClaimContracts:
 
 
 class TestClaimStubs:
-    """Verify that all scaffolded functions raise NotImplementedError when called."""
-
-    def test_workspace_stubs_raise_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError):
-            claim_workspace.resolve_claim_workspace()
+    """Verify that remaining scaffolded functions raise NotImplementedError when called."""
 
     def test_ownership_stubs_raise_not_implemented(self) -> None:
         with pytest.raises(NotImplementedError):

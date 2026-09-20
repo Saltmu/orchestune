@@ -396,3 +396,22 @@ def normalize_remote_branch_name(branch: str) -> str:
     if branch.startswith("origin/"):
         branch = branch.removeprefix("origin/")
     return _validate_ref_name(branch)
+
+
+def get_git_repository_paths(cwd: str | Path | None = None) -> tuple[Path, Path]:
+    """Return (show_toplevel, git_common_dir) for the repository containing cwd.
+
+    Raises subprocess.CalledProcessError or OSError if cwd is not in a git repository.
+    """
+    res = run_git(["rev-parse", "--show-toplevel", "--git-common-dir"], cwd=cwd)
+    lines = res.stdout.strip().splitlines()
+    if len(lines) < 2:
+        raise RuntimeError(f"Unexpected git rev-parse output: {res.stdout!r}")
+    toplevel = Path(lines[0]).resolve()
+    common_dir_raw = Path(lines[1])
+    if common_dir_raw.is_absolute():
+        common_dir = common_dir_raw.resolve()
+    else:
+        base_dir = Path(cwd).resolve() if cwd is not None else Path.cwd().resolve()
+        common_dir = (base_dir / common_dir_raw).resolve()
+    return toplevel, common_dir

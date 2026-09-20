@@ -8,6 +8,7 @@ from orchestune.infra.git_cli import (
     GitResult,
     branch_changed_files,
     ensure_parent_branch,
+    get_git_repository_paths,
     is_ancestor_commit,
     list_remote_branches,
     resolve_local_or_remote_branch,
@@ -882,3 +883,19 @@ class TestIsAncestorCommit:
         subprocess.run(["git", "checkout", "main"], cwd=str(repo), check=True)
 
         assert is_ancestor_commit(repo, diverged_sha) is False
+
+
+class TestGetGitRepositoryPaths:
+    def test_get_git_repository_paths_success(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        run_git(["init", "-b", "main"], cwd=repo)
+        toplevel, common_dir = get_git_repository_paths(repo)
+        assert toplevel == repo.resolve()
+        assert common_dir == (repo / ".git").resolve()
+
+    def test_get_git_repository_paths_not_a_repo(self, tmp_path):
+        not_repo = tmp_path / "not_repo"
+        not_repo.mkdir()
+        with pytest.raises(subprocess.CalledProcessError):
+            get_git_repository_paths(not_repo)
