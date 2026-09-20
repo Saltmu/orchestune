@@ -251,7 +251,7 @@ class TestRestorationPreservesClaimOwnership:
         assert active.launch_phase is None
 
     def test_restored_active_worktree_with_launched_attempt_defaults_to_dispatch(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         body = (
             "## Footprint\n```yaml\n"
@@ -286,6 +286,7 @@ class TestRestorationPreservesClaimOwnership:
             run_state_path=tmp_path / "run_state.json",
             worktree_root=str(tmp_path / "worktrees"),
         )
+        fake_forge.get_issue.return_value = issue
 
         active = _build_restored_active_worktree(
             issue=issue,
@@ -304,6 +305,7 @@ class TestRestorationPreservesClaimOwnership:
         assert active.external_id == "ext-job-88888"
         assert active.launch_attempt_id == "attempt-cloud-888"
         assert active.launch_phase == "launched"
+        fake_forge.get_issue.assert_called_once_with(943)
 
     def test_interactive_candidate_without_external_id_is_restorable_and_persisted(
         self, tmp_path, fake_forge

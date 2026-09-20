@@ -61,6 +61,26 @@ def test_cli_delegates_to_replan():
     mock_replan_main.assert_called_once()
 
 
+def test_cli_delegates_to_claim():
+    from orchestune.cli import main
+
+    captured_argv: list[list[str]] = []
+    with (
+        patch("sys.argv", ["orchestune", "claim", "123", "--no-apply"]),
+        patch(
+            "orchestune.claim.cli.main",
+            autospec=True,
+            side_effect=lambda: captured_argv.append(list(sys.argv)) or 0,
+        ) as mock_claim_main,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 0
+    mock_claim_main.assert_called_once()
+    assert captured_argv == [["orchestune", "123", "--no-apply"]]
+
+
 def test_cli_delegates_to_status():
     from orchestune.cli import main
 
@@ -146,6 +166,7 @@ def test_cli_no_args_exits(capsys):
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "Usage: orchestune <command>" in captured.out
+    assert "claim" in captured.out
 
 
 def test_cli_invalid_command_exits(capsys):

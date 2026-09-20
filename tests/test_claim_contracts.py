@@ -1,4 +1,4 @@
-"""Tests for orchestune.claim contracts and package scaffolding invariants."""
+"""Tests for orchestune.claim contracts."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from orchestune.claim import (
     ReservationKind,
     failure_reason_to_exit_code,
 )
-from orchestune.claim import cli as claim_cli
 
 
 class TestClaimContracts:
@@ -112,11 +111,3 @@ class TestClaimContracts:
         assert fail_outcome.success is False
         assert fail_outcome.failure is not None
         assert fail_outcome.failure.reason == ClaimFailureReason.ALREADY_IN_PROGRESS
-
-
-class TestClaimStubs:
-    """Verify that remaining scaffolded functions raise NotImplementedError when called."""
-
-    def test_cli_stubs_raise_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError):
-            claim_cli.main()
