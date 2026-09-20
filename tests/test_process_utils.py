@@ -383,3 +383,21 @@ class TestRunStateLock:
         assert is_run_state_lock_held(lock_path) is False
         with run_state_lock(lock_path):
             assert is_run_state_lock_held(lock_path) is True
+
+    def test_unsupported_platform_propagates_original_message(self, tmp_path: Path):
+        """プラットフォーム非対応の例外は競合診断メッセージに書き換えられずそのまま伝播すること。"""
+        lock_path = tmp_path / "unsupported.lock"
+        with (
+            patch("orchestune.infra.process_utils.fcntl", None),
+            patch("orchestune.infra.process_utils.msvcrt", None),
+            pytest.raises(
+                RuntimeError, match="Neither fcntl nor msvcrt is supported"
+            ) as exc_info,
+        ):
+            with run_state_lock(lock_path):
+                pass
+
+        assert "another process is currently holding the lock" not in str(
+            exc_info.value
+        )
+        assert is_run_state_lock_held(lock_path) is False

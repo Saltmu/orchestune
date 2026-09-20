@@ -8,6 +8,7 @@ from orchestune.infra.json_state import (
 )
 from orchestune.infra.process_utils import (
     FileLock,
+    FileLockContentionError,
     assert_run_state_lock_held,
     default_ci_command,
     file_lock,
@@ -18,6 +19,7 @@ from orchestune.infra.process_utils import (
 
 __all__ = [
     "FileLock",
+    "FileLockContentionError",
     "assert_run_state_lock_held",
     "default_ci_command",
     "file_lock",

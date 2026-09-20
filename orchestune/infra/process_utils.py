@@ -50,6 +50,10 @@ class _LockContention(Exception):
     """Internal signal for backend-specific lock contention."""
 
 
+class FileLockContentionError(RuntimeError):
+    """Raised when native file lock acquisition times out due to contention."""
+
+
 class FileLock:
     """Cross-platform exclusive file lock with bounded non-blocking retries."""
 
@@ -112,7 +116,7 @@ class FileLock:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     lock_fd.close()
-                    raise RuntimeError(
+                    raise FileLockContentionError(
                         "Another instance is already running "
                         f"(locked on {self.lock_path})"
                     ) from None
@@ -267,12 +271,11 @@ def run_state_lock(
     )
     try:
         lock_obj.acquire()
-    except BaseException as exc:
+    except FileLockContentionError as exc:
         _release_run_state_lock_in_process(state, release_outermost=True)
-        if isinstance(exc, RuntimeError):
-            raise RuntimeError(
-                format_run_state_lock_contention_message(norm_path)
-            ) from exc
+        raise RuntimeError(format_run_state_lock_contention_message(norm_path)) from exc
+    except BaseException:
+        _release_run_state_lock_in_process(state, release_outermost=True)
         raise
 
     with state.cond:
