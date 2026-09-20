@@ -21,6 +21,7 @@ from orchestune.claim.contracts import (
 from orchestune.claim.ownership import (
     ClaimConflict,
     ClaimConflictReason,
+    OwnerToken,
     build_reservation,
     evaluate_claim_conflicts,
     new_owner_token,
@@ -31,7 +32,11 @@ from orchestune.claim.preflight import (
     PreflightDecision,
     evaluate_claim_preflight,
 )
-from orchestune.claim.workspace import ClaimWorkspace, resolve_claim_workspace
+from orchestune.claim.workspace import (
+    ClaimWorkspace,
+    check_repository_identity_match,
+    resolve_claim_workspace,
+)
 from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.state import (
     ActiveWorktree,
@@ -176,15 +181,32 @@ def _prepare_and_persist_worktree(
     canonical_branch: str,
     base_ref: str,
     run_state: RunState,
+    raw_token: str,
 ) -> ClaimOutcome | None:
     """Create the worktree and update reservation to WORKTREE_PREPARED/ACTIVE_SAVED."""
-    prep = prepare_task_worktree(
-        canonical_branch,
-        workspace.worktree_root,
-        base_ref,
-        reservation.claim_id or "",
-        allow_force=False,
-    )
+    try:
+        prep = prepare_task_worktree(
+            canonical_branch,
+            workspace.worktree_root,
+            base_ref,
+            reservation.claim_id or "",
+            allow_force=False,
+            cwd=workspace.repository_root,
+        )
+    except Exception as e:
+        return ClaimOutcome(
+            success=False,
+            issue_number=reservation.issue_number,
+            claim_id=reservation.claim_id,
+            branch=canonical_branch,
+            stage=ClaimStage.RESERVED,
+            failure=ClaimFailure(
+                reason=ClaimFailureReason.WORKTREE_CREATION_FAILED,
+                message=f"prepare_task_worktree raised exception: {e}",
+            ),
+            owner_token=raw_token,
+        )
+
     if not prep.accepted:
         return ClaimOutcome(
             success=False,
@@ -196,6 +218,7 @@ def _prepare_and_persist_worktree(
                 reason=ClaimFailureReason.WORKTREE_CREATION_FAILED,
                 message=f"prepare_task_worktree rejected: {prep.rejection_reason}",
             ),
+            owner_token=raw_token,
         )
 
     reservation.worktree_path = str(prep.worktree_path)
@@ -275,6 +298,7 @@ def _transition_labels_and_finalize(
             else None,
             stage=ClaimStage.ACTIVE_SAVED,
             failure=label_failure,
+            owner_token=raw_token,
         )
 
     reservation.claim_stage = ClaimStage.COMPLETED.value
@@ -385,7 +409,7 @@ def _apply_claim_side_effects(
     save_run_state(run_state, workspace.run_state_path)
 
     prep_error = _prepare_and_persist_worktree(
-        workspace, reservation, canonical_branch, base_ref, run_state
+        workspace, reservation, canonical_branch, base_ref, run_state, raw_token
     )
     if prep_error is not None:
         return prep_error
@@ -484,6 +508,28 @@ def claim_task(
         )
 
 
+def _check_resume_identity(
+    workspace: ClaimWorkspace, active: ActiveWorktree, owner_token: str
+) -> ClaimOutcome | None:
+    """Validate that the active reservation belongs to the current repository."""
+    if not check_repository_identity_match(
+        workspace.repository_identity, active.repository_id
+    ):
+        return ClaimOutcome(
+            success=False,
+            issue_number=active.issue_number,
+            failure=ClaimFailure(
+                reason=ClaimFailureReason.INVALID_RESUME,
+                message=(
+                    f"Repository identity mismatch for claim {active.claim_id}: "
+                    f"expected '{workspace.repository_identity}', got '{active.repository_id}'"
+                ),
+            ),
+            owner_token=owner_token,
+        )
+    return None
+
+
 def _resume_from_active(
     active: ActiveWorktree,
     workspace: ClaimWorkspace,
@@ -492,6 +538,10 @@ def _resume_from_active(
     owner_token: str,
 ) -> ClaimOutcome:
     """Resume an active claim from its current progression stage."""
+    identity_error = _check_resume_identity(workspace, active, owner_token)
+    if identity_error is not None:
+        return identity_error
+
     owner_kind = OwnerKind(active.owner_kind)
     reservation_kind = ReservationKind(active.reservation_kind)
 
@@ -505,6 +555,7 @@ def _resume_from_active(
             active.branch,
             active.base_ref or "origin/main",
             run_state,
+            owner_token,
         )
         if prep_error is not None:
             return prep_error
@@ -518,6 +569,7 @@ def _resume_from_active(
                 reason=ClaimFailureReason.ISSUE_NOT_FOUND,
                 message=f"Issue #{active.issue_number} was not found on resume.",
             ),
+            owner_token=owner_token,
         )
 
     return _transition_labels_and_finalize(
@@ -532,18 +584,59 @@ def _resume_from_active(
     )
 
 
-def resume_claim(
+def _validate_resume_active(
     claim_id: str,
     owner_token: str,
+    run_state: RunState,
+) -> tuple[ActiveWorktree | None, ClaimOutcome | None]:
+    """Find active reservation matching claim_id and authenticate owner token."""
+    matching = [
+        a for a in run_state.active_worktrees.values() if a.claim_id == claim_id
+    ]
+    if not matching:
+        return None, ClaimOutcome(
+            success=False,
+            issue_number=0,
+            failure=ClaimFailure(
+                reason=ClaimFailureReason.INVALID_RESUME,
+                message=f"No active claim found with ID {claim_id}",
+            ),
+        )
+
+    active = matching[0]
+    expected_digest = owner_token_digest(owner_token)
+    if active.owner_token_digest != expected_digest:
+        return None, ClaimOutcome(
+            success=False,
+            issue_number=active.issue_number,
+            failure=ClaimFailure(
+                reason=ClaimFailureReason.INVALID_RESUME,
+                message="Owner token does not match active claim.",
+            ),
+        )
+    return active, None
+
+
+def _normalize_owner_token(owner_token: str | OwnerToken) -> str | None:
+    """Extract stripped string representation of owner token, or None if empty."""
+    raw = owner_token.value if isinstance(owner_token, OwnerToken) else str(owner_token)
+    return raw if raw.strip() else None
+
+
+def resume_claim(
+    claim_id: str,
+    owner_token: str | OwnerToken,
     *,
     forge: Forge | None = None,
     cwd: str | Path | None = None,
     state_path: str | Path | None = None,
     view: Any = None,
     default_base: str = "origin/main",
+    timeout_seconds: float | None = None,
 ) -> ClaimOutcome:
     """Resume an interrupted claim session matching a claim_id and owner token."""
-    if not owner_token or not owner_token.strip():
+    raw_token = _normalize_owner_token(owner_token)
+    if raw_token is None:
         return ClaimOutcome(
             success=False,
             issue_number=0,
@@ -555,36 +648,26 @@ def resume_claim(
 
     workspace = resolve_claim_workspace(cwd, explicit_state_path=state_path)
     active_forge = forge or GitHubForge()
+    timeout = timeout_seconds if timeout_seconds is not None else 0.0
 
-    with run_state_lock(workspace.lock_path):
-        run_state = load_run_state(workspace.run_state_path)
-        matching = [
-            a for a in run_state.active_worktrees.values() if a.claim_id == claim_id
-        ]
-        if not matching:
-            return ClaimOutcome(
-                success=False,
-                issue_number=0,
-                failure=ClaimFailure(
-                    reason=ClaimFailureReason.INVALID_RESUME,
-                    message=f"No active claim found with ID {claim_id}",
-                ),
+    try:
+        with run_state_lock(workspace.lock_path, timeout=timeout):
+            run_state = load_run_state(workspace.run_state_path)
+            active, auth_error = _validate_resume_active(claim_id, raw_token, run_state)
+            if auth_error is not None or active is None:
+                assert auth_error is not None
+                return auth_error
+            return _resume_from_active(
+                active, workspace, run_state, active_forge, raw_token
             )
-
-        active = matching[0]
-        expected_digest = owner_token_digest(owner_token)
-        if active.owner_token_digest != expected_digest:
-            return ClaimOutcome(
-                success=False,
-                issue_number=active.issue_number,
-                failure=ClaimFailure(
-                    reason=ClaimFailureReason.INVALID_RESUME,
-                    message="Owner token does not match active claim.",
-                ),
-            )
-
-        return _resume_from_active(
-            active, workspace, run_state, active_forge, owner_token
+    except (FileLockContentionError, RuntimeError) as e:
+        return ClaimOutcome(
+            success=False,
+            issue_number=0,
+            failure=ClaimFailure(
+                reason=ClaimFailureReason.STATE_LOCK_FAILED,
+                message=f"Could not acquire run_state lock: {e}",
+            ),
         )
 
 

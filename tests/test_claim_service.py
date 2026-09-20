@@ -24,7 +24,7 @@ from orchestune.dispatch.state import (
     save_run_state,
 )
 from orchestune.dispatch.worktree import WorktreePreparation
-from orchestune.infra.process_utils import run_state_lock
+from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
 from tests.conftest import FakeForge
@@ -342,6 +342,7 @@ class TestInterruptionAndPreservation:
         assert outcome.failure is not None
         assert outcome.failure.reason == ClaimFailureReason.WORKTREE_CREATION_FAILED
         assert outcome.stage == ClaimStage.RESERVED
+        assert outcome.owner_token is not None
 
         # Acceptance Criteria: 予約は保持され、queued に戻されない
         persisted = load_run_state(state_path)
@@ -351,6 +352,32 @@ class TestInterruptionAndPreservation:
         )
         assert len(forge.labels_added) == 0
         assert len(forge.labels_removed) == 0
+
+    def test_worktree_exception_converted_to_claim_failure(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        repo_root = claim_env["repo_root"]
+        state_path = claim_env["state_path"]
+        issue = _make_issue(number=120)
+        forge = MockForge({120: issue})
+
+        with (
+            patch(
+                "orchestune.claim.service.run_git", return_value=MagicMock(returncode=0)
+            ),
+            patch(
+                "orchestune.claim.service.prepare_task_worktree",
+                side_effect=RuntimeError("disk full or git fatal"),
+            ),
+        ):
+            request = ClaimRequest(issue_number=120, state_path=state_path)
+            outcome = claim_task(request, forge=forge, cwd=repo_root)
+
+        assert outcome.success is False
+        assert outcome.failure is not None
+        assert outcome.failure.reason == ClaimFailureReason.WORKTREE_CREATION_FAILED
+        assert outcome.stage == ClaimStage.RESERVED
+        assert outcome.owner_token is not None
 
     def test_label_update_failure_preserves_reservation_and_worktree(
         self, claim_env: dict[str, Path]
@@ -391,6 +418,7 @@ class TestInterruptionAndPreservation:
         assert outcome.failure is not None
         assert outcome.failure.reason == ClaimFailureReason.LABEL_UPDATE_FAILED
         assert outcome.stage == ClaimStage.ACTIVE_SAVED
+        assert outcome.owner_token is not None
 
         # Acceptance Criteria: 予約と worktree は保持され、queued に戻されない
         persisted = load_run_state(state_path)
@@ -736,3 +764,64 @@ class TestAdditionalClaimServiceEdgeCases:
         assert outcome.success is False
         assert outcome.failure is not None
         assert outcome.failure.reason == ClaimFailureReason.INVALID_RESUME
+
+    def test_resume_claim_repository_identity_mismatch_rejected(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        repo_root = claim_env["repo_root"]
+        state_path = claim_env["state_path"]
+
+        token = new_owner_token()
+        claim_id = new_claim_id()
+
+        active = ActiveWorktree(
+            issue_number=115,
+            branch="claude/issue-115-test",
+            worktree_path="",
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+            owner_kind=OwnerKind.INTERACTIVE.value,
+            claim_id=claim_id,
+            claim_stage=ClaimStage.RESERVED.value,
+            reservation_kind=ReservationKind.FOOTPRINT.value,
+            owner_token_digest=owner_token_digest(token),
+            repository_id="other-owner/other-repo",
+        )
+        with run_state_lock(state_path.with_suffix(".lock")):
+            save_run_state(RunState(active_worktrees={"115": active}), state_path)
+
+        outcome = resume_claim(
+            claim_id=claim_id,
+            owner_token=token,
+            cwd=repo_root,
+            state_path=state_path,
+        )
+
+        assert outcome.success is False
+        assert outcome.failure is not None
+        assert outcome.failure.reason == ClaimFailureReason.INVALID_RESUME
+        assert "Repository identity mismatch" in outcome.failure.message
+        assert outcome.owner_token == token.value
+
+    def test_resume_claim_lock_contention_returns_state_lock_failed(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        repo_root = claim_env["repo_root"]
+        state_path = claim_env["state_path"]
+
+        with patch(
+            "orchestune.claim.service.run_state_lock",
+            side_effect=FileLockContentionError("lock is busy"),
+        ):
+            outcome = resume_claim(
+                claim_id="claim-test",
+                owner_token="valid-token",
+                cwd=repo_root,
+                state_path=state_path,
+            )
+
+        assert outcome.success is False
+        assert outcome.failure is not None
+        assert outcome.failure.reason == ClaimFailureReason.STATE_LOCK_FAILED
+        assert "Could not acquire run_state lock" in outcome.failure.message
