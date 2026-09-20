@@ -357,7 +357,10 @@ class TestDispatcherLocking:
                     ),
                 ):
                     run_dispatch_cycle(config)
-            assert "Another instance is already running" in str(exc_info.value)
+            assert "another process is currently holding the lock" in str(
+                exc_info.value
+            )
+            assert str(lock_path) in str(exc_info.value)
 
 
 class TestLaunchOrderingCrashSafety:

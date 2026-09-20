@@ -6,6 +6,7 @@ import contextlib
 import re
 import subprocess
 import sys
+import threading
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -908,10 +909,42 @@ def _stub_file_lock_by_default(request: pytest.FixtureRequest):
     if request.node.get_closest_marker("uses_real_file_lock") is not None:
         yield
         return
+
+    @contextlib.contextmanager
+    def _in_memory_run_state_lock(
+        lock_path: Path,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Iterator[None]:
+        from orchestune.infra.process_utils import _get_run_state_lock_state
+
+        norm_path = Path(lock_path).resolve()
+        state = _get_run_state_lock_state(norm_path)
+        current_thread = threading.get_ident()
+
+        with state.cond:
+            while (
+                state.owner_thread is not None and state.owner_thread != current_thread
+            ):
+                state.cond.wait()
+            if state.owner_thread == current_thread:
+                state.count += 1
+            else:
+                state.owner_thread = current_thread
+                state.count = 1
+        try:
+            yield
+        finally:
+            with state.cond:
+                state.count -= 1
+                if state.count == 0:
+                    state.owner_thread = None
+                    state.cond.notify_all()
+
     with (
         patch(
-            "orchestune.dispatch.cycle.file_lock",
-            lambda _lock_path: contextlib.nullcontext(),
+            "orchestune.dispatch.cycle.run_state_lock",
+            _in_memory_run_state_lock,
         ),
         patch(
             "orchestune.integrator.coordinator.file_lock",
