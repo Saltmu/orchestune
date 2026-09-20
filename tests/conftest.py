@@ -28,7 +28,10 @@ from orchestune.infra.git_cli import (
 from orchestune.integrator.types import IntegratorConfig
 from orchestune.models import IssueRecord, PrRecord
 
-pytest_plugins = ["tests.test_provisioning_support"]
+pytest_plugins = [
+    "tests.test_provisioning_support",
+    "tests.claim_helpers",
+]
 
 GIT_ENV_VARS_TO_CLEAR = DANGEROUS_GIT_ENV_VARS
 SUITE_MARKERS = frozenset({"unit", "integration", "e2e"})
