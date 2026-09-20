@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import inspect
-import json
 import shutil
 import subprocess
 import sys
@@ -11,6 +10,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from orchestune.dispatch import gc as dispatch_gc
+from orchestune.dispatch.claim_marker import (
+    claim_lock_path,
+    claim_marker_path,
+    read_claim_marker,
+    remove_claim_marker,
+    write_claim_marker,
+)
 from orchestune.dispatch.targets import (
     BranchReachabilityError,
     DispatchHandle,
@@ -44,6 +50,12 @@ class LaunchResult:
     dispatch_started_at: float | None = None
     execution_selection: ExecutionSelection | None = None
     launch_attempt_id: str | None = None
+    # #943: dispatch launchがclaim_task経由になった際、共通着手サービスの結果
+    # （実際のbase_ref/claim_id/reservation_kind）を運ぶ。dispatch以外の既存
+    # 呼び出し元・テストは常にNoneのままで、既存挙動に影響しない。
+    base_ref: str | None = None
+    claim_id: str | None = None
+    reservation_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -150,67 +162,25 @@ def _create_worktree(
     run_git(cmd, cwd=cwd, check=True)
 
 
-def _claim_marker_path(worktree_path: Path) -> Path:
-    """#935: worktree本体の外側（sibling）に置く所有権マーカーのパス。
-
-    worktree内部に置くと`git status --porcelain`にuntrackedとして現れ、
-    所有権確認用のファイル自体がdirty判定を汚染してしまうため、常に
-    worktree_path.parent側に置く。"""
-    return worktree_path.parent / f"{worktree_path.name}.claim.json"
+_claim_marker_path = claim_marker_path
+_read_claim_marker = read_claim_marker
+_write_claim_marker = write_claim_marker
+_remove_claim_marker = remove_claim_marker
+_claim_lock_path = claim_lock_path
 
 
-def _read_claim_marker(worktree_path: Path) -> dict[str, Any] | None:
-    try:
-        raw = _claim_marker_path(worktree_path).read_text(encoding="utf-8")
-    except OSError:
-        return None
-    try:
-        decoded = json.loads(raw)
-    except ValueError:
-        return None
-    # #935レビュー対応(P2, round4): 破損・手動編集されたマーカーが`[]`や
-    # `"claim"`のような構文的に妥当な非オブジェクトJSONだった場合、
-    # 呼び出し側の`marker.get(...)`がAttributeErrorで落ちる。所有権を
-    # 確認できないマーカーとしてfail-closedにNoneを返す。
-    if not isinstance(decoded, dict):
-        return None
-    return decoded
+def clear_claim_ownership_marker(worktree_path: str | Path) -> None:
+    """#943: worktree撤去時（GC完了処理）に、claim_task（`allow_force=False`の
+    安全経路）が発行した所有権マーカーも一緒に取り除く公開ラッパー。
 
-
-def _write_claim_marker(
-    worktree_path: Path,
-    *,
-    claim_id: str,
-    branch: str,
-    base_sha: str | None,
-    branch_created: bool,
-) -> None:
-    marker_path = _claim_marker_path(worktree_path)
-    marker_path.parent.mkdir(parents=True, exist_ok=True)
-    marker_path.write_text(
-        json.dumps(
-            {
-                "claim_id": claim_id,
-                "branch": branch,
-                "base_sha": base_sha,
-                "branch_created": branch_created,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
-def _remove_claim_marker(worktree_path: Path) -> None:
-    _claim_marker_path(worktree_path).unlink(missing_ok=True)
-
-
-def _claim_lock_path(worktree_path: Path) -> Path:
-    """#935レビュー対応(P1): 同一branch/worktreeに対する`prepare_task_worktree`と
-    `rollback_task_worktree`を相互排他にするロックファイル。forceによる奪取
-    （worktree再作成→旧マーカー無効化）の途中状態を、並行するrollbackが
-    「旧claim_idがまだ有効」として観測し、奪取直後のworktreeを削除してしまう
-    TOCTOUを防ぐ。"""
-    return _claim_marker_path(worktree_path).with_suffix(".lock")
+    マーカーはworktree本体のsibling（`claim_marker_path`参照）に置かれるため、
+    `git worktree remove`ではworktree自体しか消えず、マーカーだけが残り続ける。
+    残ったマーカーは以後の`claim_id`（呼び出しごとに新規生成）と一致しなくなり、
+    完了・撤去済みのIssueを再度claimしようとした際に`claim_id_mismatch`として
+    永久に拒否されてしまう——このシステムがdispatch起動をclaim_task経由に
+    一本化したことで新たに露見した経路のため、撤去側でも対で片付ける。
+    """
+    remove_claim_marker(Path(worktree_path))
 
 
 def _resolve_worktree_head_sha(worktree_path: Path) -> str:
@@ -537,9 +507,22 @@ def _prepare_worktree_unclaimed(
     base_branch: str | None,
     claim_id: str,
     cwd: str | Path | None = None,
+    *,
+    trust_unclaimed_branch: bool = False,
 ) -> WorktreePreparation:
     """#935: 所有権マーカーが存在しない場合の経路。既存パス／既存ブランチのいずれかが
-    残っていれば、所有権を証明できないため削除もforceも行わず拒否する。"""
+    残っていれば、所有権を証明できないため削除もforceも行わず拒否するのが既定。
+
+    #943: `trust_unclaimed_branch=True`は、呼び出し元（`claim_task`）が本呼び出し
+    直前に`run_state`全体を走査する`evaluate_claim_conflicts`（SAME_ISSUE等）で
+    「この`issue_number`を現在保持しているactiveは存在しない」ことを既に確認
+    済みの場合のみ渡される。stale markerより強い根拠（run_state全体の最新
+    スキャン）が既にあるため、このケースに限り、ブランチだけが残っている
+    （worktree本体は既に無い）既存ブランチの再利用を許可する——完了・巻き戻し
+    後に再claimする正当なリトライ（例:Integratorによる巻き戻し後の再起動）を
+    ブロックしないため。worktree本体が残っている`unclaimed_existing_worktree`
+    は、この根拠だけでは安全性を判断できないため対象外のまま拒否し続ける。
+    """
     if worktree_path.exists():
         return WorktreePreparation(
             worktree_path=worktree_path,
@@ -548,11 +531,31 @@ def _prepare_worktree_unclaimed(
             rejection_reason="unclaimed_existing_worktree",
         )
     if _branch_exists(branch, cwd=cwd):
+        if not trust_unclaimed_branch:
+            return WorktreePreparation(
+                worktree_path=worktree_path,
+                branch=branch,
+                accepted=False,
+                rejection_reason="unclaimed_existing_branch",
+            )
+        run_git(["worktree", "prune"], cwd=cwd, check=False)
+        worktree_root.mkdir(parents=True, exist_ok=True)
+        run_git(["worktree", "add", str(worktree_path), branch], cwd=cwd, check=True)
+        base_sha = _resolve_worktree_head_sha(worktree_path)
+        _write_claim_marker(
+            worktree_path,
+            claim_id=claim_id,
+            branch=branch,
+            base_sha=base_sha,
+            branch_created=False,
+        )
         return WorktreePreparation(
             worktree_path=worktree_path,
             branch=branch,
-            accepted=False,
-            rejection_reason="unclaimed_existing_branch",
+            accepted=True,
+            created=True,
+            branch_created=False,
+            base_sha=base_sha,
         )
     return _create_and_claim_worktree(
         worktree_path, worktree_root, branch, base_branch, claim_id, cwd=cwd
@@ -567,13 +570,19 @@ def prepare_task_worktree(
     *,
     allow_force: bool = False,
     cwd: str | Path | None = None,
+    trust_unclaimed_branch: bool = False,
 ) -> WorktreePreparation:
     """#935: 所有権を確認したうえで安全にworktreeを準備する。
 
     `allow_force=True`は既存dispatch経路専用の後方互換パスであり、所有権を
     問わず既存の force cleanup セマンティクスをそのまま実行する。
     `allow_force=False`（既定）では、claim_idが一致するマーカーがない既存の
-    パス／ブランチを一切削除・強制せず拒否する。"""
+    パス／ブランチを一切削除・強制せず拒否する。
+
+    `trust_unclaimed_branch`（#943）は、呼び出し元が本呼び出しより前に
+    `run_state`全体から「この所有権を現在保持しているactiveは存在しない」ことを
+    既に確認済みの場合のみ`True`を渡すこと。詳細は`_prepare_worktree_unclaimed`
+    を参照。"""
     worktree_root_path = Path(worktree_root)
     worktree_path = _resolve_worktree_path(worktree_root_path, branch)
 
@@ -600,7 +609,13 @@ def prepare_task_worktree(
             )
 
         return _prepare_worktree_unclaimed(
-            worktree_path, branch, worktree_root_path, base_branch, claim_id, cwd=cwd
+            worktree_path,
+            branch,
+            worktree_root_path,
+            base_branch,
+            claim_id,
+            cwd=cwd,
+            trust_unclaimed_branch=trust_unclaimed_branch,
         )
 
 

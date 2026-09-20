@@ -129,10 +129,23 @@ def evaluate_claim_conflicts(
             active
         ):
             return ClaimConflict(ClaimConflictReason.REPOSITORY_RESERVATION, active)
-        if set(reservation.declared_footprint) & set(active.declared_footprint):
-            return ClaimConflict(ClaimConflictReason.FOOTPRINT_OVERLAP, active)
-        if active.forced_serial:
+        footprint_overlap = bool(
+            set(reservation.declared_footprint) & set(active.declared_footprint)
+        )
+        if active.forced_serial and footprint_overlap:
+            # #943: dispatchのlaunchはclaim_task経由に一本化されたが、dispatch自身の
+            # スケジューラ（`orchestune.dispatch.filters._candidate_conflicts_with_forced_serial_active`）
+            # は既に「force-serialは衝突範囲（footprintの重なり／依存関係）だけを
+            # 直列化し、無関係な候補の起動は妨げない」という、より精密な既存の
+            # テスト済み挙動を持つ。ここでのblanket block（footprintの重なりを
+            # 問わず、forced_serialなactiveが1件でもあれば他の全claimを拒否する）
+            # はこの既存挙動と衝突し、無関係タスクの起動を不当にブロックしていた。
+            # `claim_task`の呼び出し元は現時点でdispatchのみ（`claim/cli.py`は
+            # 未実装のスタブ）のため、この絞り込みによる既存の対話型claim挙動への
+            # 影響は無い。
             return ClaimConflict(ClaimConflictReason.FORCED_SERIAL, active)
+        if footprint_overlap:
+            return ClaimConflict(ClaimConflictReason.FOOTPRINT_OVERLAP, active)
         if _shared_contract_conflicts(reservation_task, view.task(active.issue_number)):
             return ClaimConflict(ClaimConflictReason.SHARED_CONTRACT, active)
     return None

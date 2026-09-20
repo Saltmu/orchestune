@@ -657,6 +657,7 @@ _FAKE_FORGE_MIGRATION_TESTS = frozenset(
         "test_dispatch_reconciliation_promotions.py",
         "test_dispatch_rebase.py",
         "test_dispatch_rebase_git.py",
+        "test_dispatch_rebase_stacking.py",
         "test_dispatch_recovery.py",
         "test_dispatch_locks.py",
         "test_dispatch_launch_basic.py",
@@ -688,6 +689,132 @@ def inject_fake_forge_for_dispatch_migration(
         module = sys.modules.get(module_name)
         if module is not None:
             monkeypatch.setattr(module, "GitHubForge", lambda: fake_forge)
+
+
+_CLAIM_WORKSPACE_STUB_TESTS = frozenset(
+    {
+        "test_dispatch_launch_basic.py",
+        "test_dispatch_launch_persistence.py",
+        "test_dispatch_launch_attempts.py",
+        "test_dispatch_cycle.py",
+        # #943: these exercise `run_dispatch_cycle` end-to-end (real launch path,
+        # now claim_task-backed) against a plain `tmp_path` that is not a real git
+        # checkout; they need the same workspace/git-fetch stubbing as above.
+        "test_dispatch_cycle_completion.py",
+        "test_dispatch_rebase_stacking.py",
+        "test_dispatcher_pipeline.py",
+        "test_execution_profile_e2e.py",
+        "test_dispatch_cycle_reconciliation_flow.py",
+    }
+)
+
+
+@pytest.fixture(autouse=True)
+def stub_claim_workspace_git_repo(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """#943: dispatchのlaunchがclaim_task経由になったことで、これらのテストは
+    `orchestune.claim.workspace.resolve_claim_workspace`（内部で
+    `get_git_repository_paths`によるgit rev-parse呼び出しを伴う）と、claimの
+    `git fetch origin`（`orchestune.claim.service`内の`run_git`呼び出し）も
+    通過するようになった。
+
+    これらのテストの多くは`orchestune.dispatch.worktree.subprocess.run`を汎用的な
+    `MagicMock(returncode=0, stdout="", stderr="")`でグローバルに差し替えており
+    （同じ`subprocess`モジュールオブジェクト経由で`orchestune.infra.git_cli.run_git`
+    にも波及する）、`rev-parse --show-toplevel --git-common-dir`の空stdoutは
+    `get_git_repository_paths`の`RuntimeError`を招く。さらに実プロセスのcwdから
+    解決される`primary_root`は、これらのテストが`config.worktree_root`/
+    `config.run_state_path`として使う`tmp_path`とも一致しない。一部のテストは
+    `_branch_exists`のみを個別にモックし、subprocessを汎用的には差し替えて
+    いないため、claimの`git fetch origin`はreal git（リモートoriginを持たない
+    `tmp_path`）に対して実行され失敗する。
+    `get_git_repository_paths`をこのモジュール境界でスタブして`tmp_path`を
+    リポジトリrootとして返し（claimが解決するworktree_rootをテストの既存の
+    `tmp_path`前提と一致させる）、`orchestune.claim.service.run_git`（claimの
+    fetchステップのみ。worktree.py側のgit呼び出しは各テスト個別のモックのまま）
+    を常に成功させる。
+    """
+    if request.path.name not in _CLAIM_WORKSPACE_STUB_TESTS:
+        return
+
+    from orchestune.claim import service as claim_service
+    from orchestune.claim import workspace as claim_workspace
+    from orchestune.infra.git_cli import GitResult
+
+    monkeypatch.setattr(
+        claim_workspace,
+        "get_git_repository_paths",
+        lambda cwd=None: (tmp_path, tmp_path / ".git"),
+    )
+    monkeypatch.setattr(
+        claim_service,
+        "run_git",
+        lambda *args, **kwargs: GitResult(returncode=0, stdout="", stderr=""),
+    )
+
+
+def real_claim_fn(config: DispatcherConfig) -> Callable[[Any, str], Any]:
+    """#943: `orchestune.dispatch.launch`はL2、`orchestune.claim.service`はL3の
+    ため、本番コードは`orchestune.dispatch.cycle_actions`（L3）でclaim_taskを
+    束縛したcallableをDIで渡す（`tests/test_architecture.py`のレイヤー境界を
+    参照）。テストは同じ理由で`_apply_task_launches`/`LaunchContext`へ
+    `claim_fn=`を明示的に渡す必要があるため、本番と同じ束縛をここに集約する。
+    """
+
+    def _claim_fn(request: Any, default_base: str) -> Any:
+        from orchestune.claim.service import claim_task
+
+        return claim_task(
+            request,
+            apply=True,
+            forge=config.resolved_forge,
+            default_base=default_base,
+        )
+
+    return _claim_fn
+
+
+def register_task_issue(issue_number: int, subtask_id: str, **overrides: Any) -> None:
+    """#943: dispatch launchはclaim_taskを経由してforgeからIssueを再取得する
+    ようになったため、`_apply_task_launches`を通す既存テストが引き続き成功する
+    には、テストが手で組み立てた`Task`と一致するIssueRecord（同じsubtask_id/
+    status:queuedラベル）が共有fake forgeへ登録されている必要がある。純粋な
+    decide層テスト（forgeを使わない、または`spec=Forge`のMagicMockでない
+    forgeを使う）では何もしない。"""
+    from fake_forge_proxy import active_fake_forge
+
+    forge = active_fake_forge.forge
+    if not isinstance(forge, MagicMock):
+        return
+    try:
+        existing = forge.get_issue.side_effect
+    except AttributeError:
+        return
+    registry = (
+        existing.__self__
+        if callable(existing) and hasattr(existing, "__self__")
+        else None
+    )
+    if not isinstance(registry, dict):
+        registry = {}
+        forge.get_issue.side_effect = registry.get
+    if issue_number in registry:
+        return
+    # #943: 空のfootprintはclaimのpreflight(`_resolve_reservation_kind`)から
+    # reservation_kind=repository（全面予約）として扱われ、他issueの並行起動を
+    # すべてブロックしてしまう。これらのテストの`Task`は`footprint=()`のまま
+    # 複数タスクを同時に起動する前提のものが多いため、登録するIssue側には
+    # 実際の予約範囲を狭めるダミーのfootprintをissueごとに用意する。
+    registry[issue_number] = make_issue(
+        number=issue_number,
+        subtask_id=subtask_id,
+        footprint=overrides.pop("footprint", (f"src/task-{issue_number}.py",)),
+        depends_on=overrides.pop("depends_on", ()),
+        **overrides,
+    )
 
 
 @pytest.fixture

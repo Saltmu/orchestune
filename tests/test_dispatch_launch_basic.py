@@ -19,6 +19,7 @@ from orchestune.task_branch_resolution import (
     CanonicalBranchState,
     TaskBranchResolver,
 )
+from tests.conftest import real_claim_fn, register_task_issue
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -75,9 +76,11 @@ def _stack_view(
 
 
 def _task(issue_number, subtask_id=None, yaml_error=False):
+    resolved_subtask_id = subtask_id or f"task-{issue_number}"
+    register_task_issue(issue_number, resolved_subtask_id)
     return Task(
         issue_number=issue_number,
-        subtask_id=subtask_id or f"task-{issue_number}",
+        subtask_id=resolved_subtask_id,
         footprint=(),
         symbols=(),
         risk=False,
@@ -375,7 +378,9 @@ class TestApplyTaskLaunches:
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
-            selected = _apply_task_launches(plans, run_state, 1000.0, config)
+            selected = _apply_task_launches(
+                plans, run_state, 1000.0, config, claim_fn=real_claim_fn(config)
+            )
 
         assert selected == [ok_task]
         assert mock_add_label.called
@@ -435,7 +440,9 @@ class TestApplyTaskLaunches:
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
-            _apply_task_launches(plans, run_state, cycle_now, config)
+            _apply_task_launches(
+                plans, run_state, cycle_now, config, claim_fn=real_claim_fn(config)
+            )
 
         active = run_state.active_worktrees["1"]
         assert active.started_at == dispatch_boundary_time
@@ -447,6 +454,7 @@ class TestApplyTaskLaunches:
         from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
         from orchestune.dispatch.targets import LocalProcessDispatchTarget
 
+        register_task_issue(1, "task-1")
         task = Task(
             issue_number=1,
             subtask_id="task-1",
@@ -489,7 +497,9 @@ class TestApplyTaskLaunches:
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
-            _apply_task_launches(plans, run_state, 1000.0, config)
+            _apply_task_launches(
+                plans, run_state, 1000.0, config, claim_fn=real_claim_fn(config)
+            )
 
         assert mock_popen.call_args[0][0] == [
             "runner",
@@ -509,6 +519,7 @@ class TestApplyTaskLaunches:
             default_dry_run_command_builder,
         )
 
+        register_task_issue(1, "task-1")
         task = Task(
             issue_number=1,
             subtask_id="task-1",
@@ -558,7 +569,9 @@ class TestApplyTaskLaunches:
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
-            _apply_task_launches(plans, run_state, 1000.0, config)
+            _apply_task_launches(
+                plans, run_state, 1000.0, config, claim_fn=real_claim_fn(config)
+            )
 
         active = run_state.active_worktrees["1"]
         assert active.profile == "deep"
@@ -638,7 +651,9 @@ class TestApplyTaskLaunches:
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
-            selected = _apply_task_launches(plans, run_state, 1000.0, config)
+            selected = _apply_task_launches(
+                plans, run_state, 1000.0, config, claim_fn=real_claim_fn(config)
+            )
 
         assert selected == []
         assert (2, "status:blocked-human-review") in added_labels
@@ -696,9 +711,18 @@ class TestApplyTaskLaunchesLabelOrdering:
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
-            _apply_task_launches(plans, run_state, 1000.0, config)
+            _apply_task_launches(
+                plans, run_state, 1000.0, config, claim_fn=real_claim_fn(config)
+            )
 
+        # #943: dispatch launchはclaim_task経由で一度in-progressへ遷移し
+        # （claim自体の成功境界）、agent起動が実際に成功したのを確認してから
+        # `_record_successful_launch`が#871の成功境界として同じ遷移を独立に
+        # 再確認する。両方とも個別にadd→removeの安全な順序を守るため、
+        # 重複はしても「どのstatus:*ラベルも無い」瞬間は生まれない。
         assert call_order == [
+            ("add", "status:in-progress"),
+            ("remove", "status:queued"),
             ("add", "status:in-progress"),
             ("remove", "status:queued"),
         ]
@@ -746,7 +770,9 @@ class TestApplyTaskLaunchesLabelOrdering:
             ),
             patch("fake_forge_proxy.active_fake_forge.add_comment"),
         ):
-            _apply_task_launches(plans, run_state, 1000.0, config)
+            _apply_task_launches(
+                plans, run_state, 1000.0, config, claim_fn=real_claim_fn(config)
+            )
 
         assert call_order == [
             ("add", "status:blocked-human-review"),
@@ -817,6 +843,7 @@ class TestLaunchSelectedTasks:
             now=1000.0,
             config=config,
             open_prs=[],
+            claim_fn=real_claim_fn(config),
         )
 
         with (
@@ -856,6 +883,7 @@ class TestLaunchSelectedTasks:
             run_state=run_state,
             now=1000.0,
             config=config,
+            claim_fn=real_claim_fn(config),
         )
 
         with (

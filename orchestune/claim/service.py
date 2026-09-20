@@ -220,6 +220,13 @@ def _prepare_worktree_for_reservation(
             claim_id or "",
             allow_force=False,
             cwd=workspace.repository_root,
+            # #943: この時点で`_validate_preflight_and_conflict`
+            # (`evaluate_claim_conflicts`)が同じロック内で`run_state`全体を
+            # 走査済みであり、`issue_number`を現在保持しているactiveが無いことを
+            # 既に確認している。staleなマーカーより強い根拠が既にあるため、
+            # 完了・巻き戻し後の正当な再claimが、ブランチだけが残っている
+            # ことを理由に永久拒否されないようにする。
+            trust_unclaimed_branch=True,
         )
     except Exception as e:
         return None, ClaimOutcome(

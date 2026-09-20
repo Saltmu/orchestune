@@ -396,6 +396,10 @@ class TestLaunchOrderingCrashSafety:
         mock_add_label = fake_forge.add_label
         fake_forge.remove_label.reset_mock(side_effect=True)
         fake_forge.remove_label.side_effect = remove_label_side_effect
+        # #943: dispatchのlaunchはclaim_task経由になり、起動対象issueを
+        # `forge.get_issue`で再取得・再検証する。
+        fake_forge.get_issue.reset_mock(side_effect=True)
+        fake_forge.get_issue.return_value = queued_issue
         with (
             patch(
                 "orchestune.dispatch.worktree._branch_exists",
@@ -418,17 +422,25 @@ class TestLaunchOrderingCrashSafety:
             )
             mock_popen.return_value.pid = 555
 
-            with pytest.raises(RuntimeError, match="simulated crash"):
-                run_dispatch_cycle(config)
+            # #943: dispatchの起動はclaim_task経由になった。claim_task自身が
+            # ラベルAPI失敗を`ClaimFailure(LABEL_UPDATE_FAILED)`として捕捉し、
+            # `stage=ACTIVE_SAVED`（予約・worktreeは既に永続化済み）で
+            # 失敗outcomeを返す（生の例外は外へ伝播しない、#943の設計）。
+            # dispatch側は、claimが既に部分的に触れたラベル状態の上へ
+            # 独自の`status:blocked`遷移を重ねて矛盾を増やすことをせず、
+            # 次サイクルの整合性回復に委ねて保留する（クラッシュしない）。
+            run_dispatch_cycle(config)
 
         # #381: status:in-progressの付与はstatus:queuedの除去より先に行われる
-        # ため（transition_status_label）、除去でクラッシュしてもstatus:in-progress
-        # は既に付与済みになっている。クラッシュ後もIssueは常にどちらかの
-        # status:*ラベルを持ち続ける（この場合は両方が一時的に併存する）。
+        # ため（transition_status_label、claim_task内部でも同じ関数を使う）、
+        # 除去で失敗してもstatus:in-progressは既に付与済みになっている。
+        # Issueは常にどちらかのstatus:*ラベルを持ち続ける
+        # （この場合は両方が一時的に併存する）。
         mock_add_label.assert_called_once_with(1, "status:in-progress")
 
         # しかし、run_state.json にはactive_worktreeエントリが既に永続化されている
-        # （ラベル更新より前にsave_run_stateが呼ばれる順序になっているため）。
+        # （claim_taskが予約・worktree準備を先に確定し、ラベル遷移はその後の
+        # 段階であるため、dispatch側の共有run_stateへも同期される）。
         assert (tmp_path / "run_state.json").exists()
         persisted = json.loads((tmp_path / "run_state.json").read_text())
         assert "1" in persisted["active_worktrees"]
@@ -577,12 +589,18 @@ class TestPreventDuplicateSessions:
         autospec=True,
         return_value=[],
     )
+    @patch(
+        "orchestune.dispatch.worktree._branch_exists",
+        autospec=True,
+        return_value=False,
+    )
     @patch("orchestune.dispatch.worktree.subprocess.run")
     @patch("orchestune.dispatch.targets.subprocess.Popen")
     def test_run_dispatch_cycle_ignores_unrelated_closes_issue_pr(
         self,
         mock_popen,
         mock_subproc_run,
+        mock_branch_exists,
         mock_list_branches,
         tmp_path,
         fake_forge,
@@ -607,6 +625,10 @@ class TestPreventDuplicateSessions:
         mock_list_issues.side_effect = lambda label, **_: (
             [queued_issue] if label == "status:queued" else []
         )
+        # #943: dispatchのlaunchはclaim_task経由になり、起動対象issueを
+        # `forge.get_issue`で再取得・再検証する。
+        fake_forge.get_issue.reset_mock(side_effect=True)
+        fake_forge.get_issue.return_value = queued_issue
 
         # unrelated open PR closes issue 1, but head_ref does not follow Orchestune launch branch naming
         mock_list_prs.return_value = [
@@ -620,6 +642,9 @@ class TestPreventDuplicateSessions:
             )
         ]
         mock_popen.return_value.pid = 12345
+        mock_subproc_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
 
         report = run_dispatch_cycle(config)
 

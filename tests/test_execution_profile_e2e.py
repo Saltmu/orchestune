@@ -258,6 +258,11 @@ Testing full lifecycle of execution profiles.
         # 5. Run Dispatch Cycle 1: Launch all 3 tasks
         with (
             patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
+            patch(
+                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                autospec=True,
+                return_value="deadbeefcafe",
+            ),
             patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
                 "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
@@ -374,6 +379,11 @@ Testing full lifecycle of execution profiles.
 
         with (
             patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
+            patch(
+                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                autospec=True,
+                return_value="deadbeefcafe",
+            ),
             patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
                 "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
@@ -504,6 +514,11 @@ Testing full lifecycle of execution profiles.
 
         with (
             patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
+            patch(
+                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                autospec=True,
+                return_value="deadbeefcafe",
+            ),
             patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
@@ -584,6 +599,11 @@ Testing full lifecycle of execution profiles.
 
         with (
             patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
+            patch(
+                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                autospec=True,
+                return_value="deadbeefcafe",
+            ),
             patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
@@ -716,6 +736,11 @@ model_tier: strong
 
         with (
             patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
+            patch(
+                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                autospec=True,
+                return_value="deadbeefcafe",
+            ),
             patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
@@ -756,9 +781,23 @@ model_tier: strong
         # overrides. Clear the first launch's durable active record as well
         # as resetting its Forge label.
         config.run_state_path.unlink()
+        # #943: dispatchのlaunchはclaim_task（`allow_force=False`の安全経路）
+        # 経由になった。1回目のlaunchが（`_create_worktree`をno-opでmockして
+        # いるため実際のworktreeディレクトリを作らずに）実ファイルとして残した
+        # 所有権マーカーは、run_state.jsonのリセットだけでは消えない。marker
+        # が残ったままだと、2回目のlaunchが発行する新しいclaim_idと一致せず
+        # `claim_id_mismatch`で拒否される——実運用ではGCの`remove_worktree`が
+        # 同様にマーカーを片付ける（`clear_claim_ownership_marker`参照）。
+        for marker in config.worktree_root.glob("*.claim.json"):
+            marker.unlink()
 
         with (
             patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
+            patch(
+                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                autospec=True,
+                return_value="deadbeefcafe",
+            ),
             patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",

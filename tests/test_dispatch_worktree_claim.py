@@ -157,6 +157,48 @@ class TestPrepareTaskWorktree:
         assert result.rejection_reason == "unclaimed_existing_branch"
         mock_run_git.assert_not_called()
 
+    def test_trust_unclaimed_branch_reuses_existing_branch_without_marker(
+        self, tmp_path, monkeypatch
+    ):
+        """#943: `trust_unclaimed_branch=True`は、呼び出し元(`claim_task`)が
+        `evaluate_claim_conflicts`で既にこのissueの所有者が無いことを確認済み
+        の場合専用の経路。完了・巻き戻し後に既存の正規ブランチだけが残った
+        レガシーな再claim（マーカーは消えている/無い）を、拒否せず安全に
+        再利用できることを確認する（デフォルト(False)は既存の
+        `test_rejects_unclaimed_existing_branch_without_reusing_it`が保証する
+        通り、引き続き拒否のまま）。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+        worktree_root = tmp_path / "worktrees"
+
+        first = prepare_task_worktree(
+            "claim/issue-8-task-8", worktree_root, None, "claim-original"
+        )
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(first.worktree_path)],
+            cwd=repo_dir,
+            check=True,
+        )
+        _claim_marker_path(first.worktree_path).unlink(missing_ok=True)
+        assert not first.worktree_path.exists()
+
+        second = prepare_task_worktree(
+            "claim/issue-8-task-8",
+            worktree_root,
+            None,
+            "claim-fresh-retry",
+            trust_unclaimed_branch=True,
+        )
+
+        assert second.accepted is True
+        assert second.created is True
+        assert second.branch_created is False
+        assert second.worktree_path.exists()
+        marker = json.loads(_claim_marker_path(second.worktree_path).read_text())
+        assert marker["claim_id"] == "claim-fresh-retry"
+
     def test_recreates_worktree_from_owned_branch_after_directory_removed(
         self, tmp_path, monkeypatch
     ):

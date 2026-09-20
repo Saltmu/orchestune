@@ -6,9 +6,28 @@ import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
-from orchestune.dispatch.state import RunState, load_run_state
+from orchestune.dispatch.state import RunState, load_run_state, save_run_state
 from orchestune.dispatch.targets import CodexCloudDispatchTarget, DispatchHandle
-from tests.conftest import FakeForge, make_issue, make_task
+from tests.conftest import FakeForge, make_issue, make_task, real_claim_fn
+
+
+def _reap_stuck_claim_reservations(config: DispatcherConfig) -> None:
+    """#943: dispatch launchはclaim_task経由の実予約(claim_id付き)を作るように
+    なった。着手途中（agent起動未確認）でクラッシュした予約は、実サイクルでは
+    次回起動選定の前に走るzombie/reclaim GCが（pidを持たない=起動未確認として）
+    回収してから、初めて同issueへの再claimが許される。ここではその直前のGC
+    フェーズを簡略にシミュレートし、この一連のfault-injectionテストが元々
+    検証していた「クラッシュ後も次サイクルで正常に再起動できる」という不変
+    条件を、新しい予約セマンティクスの下でも検証できるようにする。
+    """
+    persisted = load_run_state(config.run_state_path)
+    persisted.active_worktrees.clear()
+    save_run_state(persisted, config.run_state_path)
+    # claimの所有権マーカー（`<worktree>.claim.json`)はrun_state.jsonとは別の
+    # サイドカーファイルなので、実GCがworktree自体も回収する体で併せて消す。
+    if config.worktree_root.exists():
+        for marker in config.worktree_root.glob("*.claim.json"):
+            marker.unlink()
 
 
 @pytest.fixture
@@ -33,6 +52,17 @@ def launch_env(tmp_path):
             autospec=True,
             return_value=None,
         ),
+        # #943: dispatch launchはclaim_task経由の安全なworktree準備
+        # (`prepare_task_worktree(allow_force=False)`)を通るようになり、新規
+        # worktreeでは常に`_resolve_worktree_head_sha`（実`git rev-parse HEAD`）
+        # でbase_shaを取得する。`_create_worktree`を上でno-opにモックしている
+        # ため実ディレクトリが存在せず、これも併せてモックしないと
+        # `FileNotFoundError`になる。
+        patch(
+            "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+            autospec=True,
+            return_value="0" * 40,
+        ),
         patch.object(
             target,
             "launch",
@@ -48,15 +78,34 @@ def launch_env(tmp_path):
 @pytest.mark.parametrize("stop", ["local-save", "label-transition"])
 def test_saved_handle_restored_after_crash_without_pr(launch_env, stop):
     forge, config, plan, launch = launch_env
-    boundary = (
-        patch("orchestune.dispatch.launch.save_run_state", side_effect=OSError("crash"))
-        if stop == "local-save"
-        else patch.object(forge, "add_label", side_effect=OSError("crash"))
-    )
-    with boundary, pytest.raises(OSError, match="crash"):
-        _apply_task_launches([plan], RunState(), 100.0, config)
+    if stop == "local-save":
+        # dispatch自身の`save_run_state`（`_record_successful_launch`内、
+        # claim_task成功・agent起動成功の"後"）が壊れるケース。ここは#943の
+        # 変更の対象外（claim_task自身のsave_run_stateとは別の、既存のdispatch
+        # 側の生の呼び出しのまま）で、従来通り例外がそのまま伝播する。
+        with (
+            patch(
+                "orchestune.dispatch.launch.save_run_state",
+                side_effect=OSError("crash"),
+            ),
+            pytest.raises(OSError, match="crash"),
+        ):
+            _apply_task_launches(
+                [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+            )
+    else:
+        # #943: ラベルAPI失敗はclaim_task自身が`ClaimFailure(LABEL_UPDATE_FAILED)`
+        # として`stage=ACTIVE_SAVED`で捕捉し、生の例外を外へ伝播させない
+        # （dispatch側が古いラベルスナップショットを基に二重に遷移を試みて
+        # ラベル状態を壊すのを避けるため——`_resolve_claim_failure_launch_result`
+        # 参照）。dispatch側はこれを「保留・次サイクルで再試行」として扱う。
+        with patch.object(forge, "add_label", side_effect=OSError("crash")):
+            _apply_task_launches(
+                [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+            )
+        _reap_stuck_claim_reservations(config)
     fresh = RunState()
-    _apply_task_launches([plan], fresh, 110.0, config)
+    _apply_task_launches([plan], fresh, 110.0, config, claim_fn=real_claim_fn(config))
     assert launch.call_count == 1
     active = fresh.active_worktrees["1"]
     assert active.external_id == "task_remote"
@@ -68,8 +117,15 @@ def test_saved_handle_restored_after_crash_without_pr(launch_env, stop):
 def test_unknown_launch_is_not_retried_after_state_loss(launch_env):
     forge, config, plan, launch = launch_env
     launch.side_effect = OSError("response lost after acceptance")
-    assert _apply_task_launches([plan], RunState(), 100.0, config) == []
-    _apply_task_launches([plan], RunState(), 110.0, config)
+    assert (
+        _apply_task_launches(
+            [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+        )
+        == []
+    )
+    _apply_task_launches(
+        [plan], RunState(), 110.0, config, claim_fn=real_claim_fn(config)
+    )
     assert launch.call_count == 1
     assert "status:blocked-human-review" in forge.get_issue_labels(1)
     assert "unknown" in forge.issues[1].body
@@ -79,7 +135,9 @@ def test_failed_prelaunch_persistence_never_calls_provider(launch_env):
     forge, config, plan, launch = launch_env
     with patch.object(forge, "update_issue_body", side_effect=OSError("write failed")):
         with pytest.raises(OSError, match="write failed"):
-            _apply_task_launches([plan], RunState(), 100.0, config)
+            _apply_task_launches(
+                [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+            )
     launch.assert_not_called()
 
 
@@ -98,11 +156,20 @@ def test_remote_write_response_loss_is_safe(launch_env, phase):
     with patch.object(forge, "update_issue_body", side_effect=lose_response):
         if phase == "prepared":
             with pytest.raises(OSError, match="journal response lost"):
-                _apply_task_launches([plan], RunState(), 100.0, config)
+                _apply_task_launches(
+                    [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+                )
         else:
-            assert _apply_task_launches([plan], RunState(), 100.0, config) == []
+            assert (
+                _apply_task_launches(
+                    [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+                )
+                == []
+            )
     original = attempt_from_body(forge.issues[1].body)
-    _apply_task_launches([plan], RunState(), 110.0, config)
+    _apply_task_launches(
+        [plan], RunState(), 110.0, config, claim_fn=real_claim_fn(config)
+    )
     assert launch.call_count == (0 if phase == "unknown" else 1)
     assert attempt_from_body(forge.issues[1].body).attempt_id == original.attempt_id
 
@@ -128,10 +195,14 @@ def test_handle_save_failure_holds_and_preserves_quota_and_worktree(launch_env):
             "orchestune.dispatch.worktree._cleanup_failed_worktree", autospec=True
         ) as cleanup,
     ):
-        _apply_task_launches([plan], RunState(), 100.0, config)
+        _apply_task_launches(
+            [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+        )
     cleanup.assert_not_called()
     assert launch_history_from_body(forge.issues[100].body) == [100.0]
-    _apply_task_launches([plan], RunState(), 110.0, config)
+    _apply_task_launches(
+        [plan], RunState(), 110.0, config, claim_fn=real_claim_fn(config)
+    )
     assert launch.call_count == 1
 
 
@@ -144,10 +215,14 @@ def test_startup_recovery_without_pr_never_requeues_a_possible_launch(
 
     forge, config, plan, launch = launch_env
     if known:
-        _apply_task_launches([plan], RunState(), 100.0, config)
+        _apply_task_launches(
+            [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+        )
     else:
         launch.side_effect = OSError("response lost")
-        _apply_task_launches([plan], RunState(), 100.0, config)
+        _apply_task_launches(
+            [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+        )
     forge.remove_label(1, "status:in-progress")
     forge.remove_label(1, "status:queued")
     forge.add_label(1, status)
@@ -167,7 +242,9 @@ def test_lookup_never_implies_permission_to_relaunch(launch_env, result):
 
     forge, config, plan, launch = launch_env
     launch.side_effect = OSError("response lost")
-    _apply_task_launches([plan], RunState(), 100.0, config)
+    _apply_task_launches(
+        [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+    )
     config.dispatch_target.launch_capabilities = LaunchCapabilities(
         durable_attempt=True, lookup_by_attempt=True
     )
@@ -178,7 +255,9 @@ def test_lookup_never_implies_permission_to_relaunch(launch_env, result):
         if result == "error":
             lookup.side_effect = OSError("lookup unavailable")
         fresh = RunState()
-        _apply_task_launches([plan], fresh, 110.0, config)
+        _apply_task_launches(
+            [plan], fresh, 110.0, config, claim_fn=real_claim_fn(config)
+        )
     lookup.assert_called_once()
     assert launch.call_count == 1
     if result == "matched":
@@ -191,7 +270,9 @@ def test_dry_run_recovery_has_no_writes_or_launches(launch_env):
     from orchestune.dispatch.cycle import _run_recovery_bookkeeping_boundary
 
     forge, config, plan, launch = launch_env
-    _apply_task_launches([plan], RunState(), 100.0, config)
+    _apply_task_launches(
+        [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+    )
     config.apply = False
     with (
         patch.object(forge, "update_issue_body") as write,
@@ -213,12 +294,15 @@ def test_hard_stop_before_provider_resumes_same_prepared_attempt(launch_env):
         "orchestune.dispatch.worktree._create_worktree", side_effect=SystemExit("stop")
     ):
         with pytest.raises(SystemExit):
-            _apply_task_launches([plan], RunState(), 100.0, config)
+            _apply_task_launches(
+                [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+            )
     prepared = read_attempt(forge, 1)
     assert prepared.phase == "prepared"
     launch.assert_not_called()
+    _reap_stuck_claim_reservations(config)
     fresh = RunState()
-    _apply_task_launches([plan], fresh, 110.0, config)
+    _apply_task_launches([plan], fresh, 110.0, config, claim_fn=real_claim_fn(config))
     assert fresh.active_worktrees["1"].launch_attempt_id == prepared.attempt_id
     assert launch.call_count == 1
 
@@ -226,9 +310,13 @@ def test_hard_stop_before_provider_resumes_same_prepared_attempt(launch_env):
 def test_ambiguous_provider_result_is_reported_only_once(launch_env):
     forge, config, plan, launch = launch_env
     launch.return_value = DispatchHandle()
-    _apply_task_launches([plan], RunState(), 100.0, config)
+    _apply_task_launches(
+        [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+    )
     for _ in range(3):
-        _apply_task_launches([plan], RunState(), 110.0, config)
+        _apply_task_launches(
+            [plan], RunState(), 110.0, config, claim_fn=real_claim_fn(config)
+        )
     assert len(forge.comments[1]) == 1
     assert launch.call_count == 1
 
@@ -237,7 +325,9 @@ def test_recovery_does_not_take_over_another_parents_attempt(launch_env):
     from orchestune.dispatch.cycle import _run_recovery_bookkeeping_boundary
 
     forge, config, plan, launch = launch_env
-    _apply_task_launches([plan], RunState(), 100.0, config)
+    _apply_task_launches(
+        [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+    )
     config.parent_issue_number = 200
     forge.issues[200] = make_issue(200, body="Other parent")
     fresh = RunState()
@@ -250,7 +340,7 @@ def test_journal_does_not_override_recovery_counter_bookkeeping(launch_env):
 
     forge, config, plan, launch = launch_env
     state = RunState()
-    _apply_task_launches([plan], state, 100.0, config)
+    _apply_task_launches([plan], state, 100.0, config, claim_fn=real_claim_fn(config))
     body = forge.issues[1].body.replace(
         "subtask_id: task-1",
         "subtask_id: task-1\nrecompute_count: 3\nforced_serial: true",
@@ -272,11 +362,13 @@ def test_journal_does_not_override_recovery_counter_bookkeeping(launch_env):
 )
 def test_stale_launch_plan_does_not_override_terminal_status(launch_env, status):
     forge, config, plan, launch = launch_env
-    _apply_task_launches([plan], RunState(), 100.0, config)
+    _apply_task_launches(
+        [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
+    )
     forge.remove_label(1, "status:in-progress")
     forge.add_label(1, status)
     fresh = RunState()
-    _apply_task_launches([plan], fresh, 110.0, config)
+    _apply_task_launches([plan], fresh, 110.0, config, claim_fn=real_claim_fn(config))
     assert fresh.active_worktrees == {}
     assert forge.get_issue_labels(1) == (status,)
     assert launch.call_count == 1
@@ -286,14 +378,26 @@ def test_unknown_launch_does_not_abort_other_selected_tasks(launch_env):
     from orchestune.dispatch.attempt_record import read_attempt
 
     forge, config, plan, launch = launch_env
-    forge.issues[2] = make_issue(2)
-    second = TaskLaunchPlan(make_task(2), "claude/issue-2-task-2", None, "origin/main")
+    # #943: `make_issue`/`make_task`は既定で同じダミーfootprint("src/foo.py")を
+    # 使うため、claim_taskの実際のfootprint重複判定の下では issue #1 と #2 が
+    # 同じ範囲を予約しているとみなされ、issue #1側の（起動結果unknownで残った）
+    # 予約がissue #2の起動をも巻き込んでブロックしてしまう。本来この2つは無関係な
+    # タスクなので、重複しない別のfootprintを明示して登録する。
+    forge.issues[2] = make_issue(2, footprint=("src/bar.py",))
+    second = TaskLaunchPlan(
+        make_task(2, footprint=("src/bar.py",)),
+        "claude/issue-2-task-2",
+        None,
+        "origin/main",
+    )
     launch.side_effect = [
         OSError("response lost"),
         DispatchHandle(external_id="task_second"),
     ]
     state = RunState()
-    selected = _apply_task_launches([plan, second], state, 100.0, config)
+    selected = _apply_task_launches(
+        [plan, second], state, 100.0, config, claim_fn=real_claim_fn(config)
+    )
     assert selected == [second.task]
     assert read_attempt(forge, 1).phase == "unknown"
     assert state.active_worktrees["2"].external_id == "task_second"
@@ -306,7 +410,7 @@ def test_other_parent_counters_remain_monotonic(launch_env):
 
     forge, config, plan, launch = launch_env
     state = RunState()
-    _apply_task_launches([plan], state, 100.0, config)
+    _apply_task_launches([plan], state, 100.0, config, claim_fn=real_claim_fn(config))
     config.parent_issue_number = 200
     forge.issues[200] = make_issue(200, body="Other parent")
     forge.update_issue_body(

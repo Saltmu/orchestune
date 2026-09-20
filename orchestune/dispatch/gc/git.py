@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+from orchestune.dispatch.claim_marker import remove_claim_marker
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import (
     fetch_remote_branch,
@@ -131,11 +132,19 @@ def remote_branch_commit_sha_if_ahead(
 
 def remove_worktree(worktree_path: str | Path) -> None:
     """#193: 完了したworktreeを撤去する。既に手動削除済み等の失敗は無視する
-    （run_stateからのクオータ解放を妨げないことを優先する）。"""
+    （run_stateからのクオータ解放を妨げないことを優先する）。
+
+    #943: `git worktree remove`はworktree本体しか消さない。dispatch起動が
+    claim_task（`allow_force=False`の安全経路）経由になったことで、worktree
+    のsiblingに残る所有権マーカー（`orchestune.dispatch.claim_marker`参照）を
+    ここで一緒に片付けないと、撤去済みIssueを後日再度claimしようとした際に
+    古い`claim_id`との不一致で永久に拒否されてしまう。
+    """
     try:
         run_git(["worktree", "remove", str(worktree_path)], cwd=None, check=True)
     except (subprocess.CalledProcessError, OSError):
         pass
+    remove_claim_marker(Path(worktree_path))
 
 
 def _list_remote_temp_refs(root: Path, forge: Forge) -> tuple[str, set[str]] | None:

@@ -10,6 +10,7 @@ from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, CompletedWorktree, RunState
 from orchestune.models import PrRecord, Usage
+from tests.conftest import make_issue, real_claim_fn, register_task_issue
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
@@ -38,9 +39,11 @@ def _ctx(**overrides):
 
 
 def _task(issue_number, subtask_id=None, yaml_error=False):
+    resolved_subtask_id = subtask_id or f"task-{issue_number}"
+    register_task_issue(issue_number, resolved_subtask_id)
     return Task(
         issue_number=issue_number,
-        subtask_id=subtask_id or f"task-{issue_number}",
+        subtask_id=resolved_subtask_id,
         footprint=(),
         symbols=(),
         risk=False,
@@ -195,7 +198,9 @@ class TestApplyTaskLaunchesRunStatePersistence:
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
-            _apply_task_launches(plans, run_state, now, config)
+            _apply_task_launches(
+                plans, run_state, now, config, claim_fn=real_claim_fn(config)
+            )
 
         # 起動ループ内の中間saveでも、48時間の設定ウィンドウが尊重され、
         # デフォルト24時間で誤って刈り込まれていないこと。
@@ -242,7 +247,9 @@ class TestApplyTaskLaunchesRunStatePersistence:
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
-            _apply_task_launches(plans, run_state, 1000.0, config)
+            _apply_task_launches(
+                plans, run_state, 1000.0, config, claim_fn=real_claim_fn(config)
+            )
 
         active = load_run_state(run_state_path).active_worktrees["1"]
         assert active.estimated_tokens == 400
@@ -295,7 +302,14 @@ class TestApplyTaskLaunchesRunStatePersistence:
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
-            _apply_task_launches(plans, run_state, now, config, open_prs=open_prs)
+            _apply_task_launches(
+                plans,
+                run_state,
+                now,
+                config,
+                open_prs=open_prs,
+                claim_fn=real_claim_fn(config),
+            )
 
         # open PRに紐づく重複判定用の完了履歴が、中間saveの30日retentionで
         # 消えてしまわないこと（open_prsが正しく伝播していること）。
@@ -349,7 +363,9 @@ class TestApplyTaskLaunchesPersistsLaunchHistoryToParentIssue:
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
-            _apply_task_launches(plans, run_state, now, config)
+            _apply_task_launches(
+                plans, run_state, now, config, claim_fn=real_claim_fn(config)
+            )
 
     def test_writes_the_launch_timestamp_into_the_parent_issue_body(self, tmp_path):
         from unittest.mock import MagicMock
@@ -375,9 +391,10 @@ class TestApplyTaskLaunchesPersistsLaunchHistoryToParentIssue:
         assert "EPIC body" in written_body
 
     def test_does_not_touch_the_parent_issue_in_flat_mode(self, tmp_path):
-        from unittest.mock import MagicMock
+        from unittest.mock import MagicMock, call
 
         forge = MagicMock()
+        forge.get_issue.return_value = make_issue(number=1, subtask_id="task-1")
 
         self._run(
             tmp_path,
@@ -387,8 +404,16 @@ class TestApplyTaskLaunchesPersistsLaunchHistoryToParentIssue:
             forge=forge,
         )
 
-        forge.get_issue.assert_not_called()
-        forge.update_issue_body.assert_not_called()
+        # #943: claim_task経由になったことで、起動対象タスク自身のIssue(#1)は
+        # claimのpreflight取得・finalize前の再検証取得で複数回取得され、claimの
+        # 所有権メタデータ公開のためにbodyも更新される。ここで検証したい不変
+        # 条件は「（存在しない）親Issueには一切触れない」ことなので、いずれの
+        # 呼び出しもtask自身(#1)向けであり、他のIssue番号（親Issue）が対象に
+        # なっていないことを確認する。
+        for call_args in forge.get_issue.call_args_list:
+            assert call_args == call(1)
+        for call_args in forge.update_issue_body.call_args_list:
+            assert call_args.args[0] == 1
 
     def test_persists_only_in_window_timestamps(self, tmp_path):
         """ウィンドウ外の古い起動は書き込まない（本文の単調肥大化を防ぐ）。"""
@@ -458,7 +483,9 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
-            _apply_task_launches(plans, run_state, now, config)
+            _apply_task_launches(
+                plans, run_state, now, config, claim_fn=real_claim_fn(config)
+            )
 
     def test_reserves_the_slot_before_launching(self, tmp_path):
         """#519レビュー2巡目(P1): レート制限の永続化は「使う前に予約する」
@@ -469,13 +496,19 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         """
         from unittest.mock import MagicMock, patch
 
-        import orchestune.dispatch.worktree as dw
+        import orchestune.dispatch.launch as launch_module
         from orchestune.dispatch.launch import _apply_task_launches
 
         calls: list[str] = []
         forge = MagicMock()
-        forge.get_issue.return_value = MagicMock(body="EPIC body")
-        forge.update_issue_body.side_effect = lambda *a, **k: calls.append("persist")
+        forge.get_issue.side_effect = lambda n: (
+            make_issue(number=1, subtask_id="task-1")
+            if int(n) == 1
+            else MagicMock(body="EPIC body")
+        )
+        forge.update_issue_body.side_effect = lambda n, *a, **k: calls.append(
+            "persist" if int(n) == 100 else "claim-metadata"
+        )
 
         plans, dispatch_target = self._launch_plan(tmp_path)
         config = DispatcherConfig(
@@ -486,7 +519,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             parent_issue_number=100,
             forge=forge,
         )
-        real_launch = dw.create_worktree_and_launch
+        real_launch = launch_module._launch_on_prepared_worktree
 
         def _record_launch(*args, **kwargs):
             calls.append("launch")
@@ -501,7 +534,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
-                "orchestune.dispatch.launch.create_worktree_and_launch",
+                "orchestune.dispatch.launch._launch_on_prepared_worktree",
                 autospec=True,
                 side_effect=_record_launch,
             ),
@@ -509,10 +542,20 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
             _apply_task_launches(
-                plans, RunState(active_worktrees={}), 5_000_000.0, config
+                plans,
+                RunState(active_worktrees={}),
+                5_000_000.0,
+                config,
+                claim_fn=real_claim_fn(config),
             )
 
-        assert calls[:2] == ["persist", "launch"]
+        # #943: claim_task経由になったことで、実際のagent起動("launch")の前に
+        # claim自身の所有権メタデータ公開("claim-metadata")が挟まるようになった。
+        # 検証したい不変条件（起動窓の予約("persist")が実際の起動より先に行われる
+        # こと）自体は変わらない。
+        assert calls[0] == "persist"
+        assert "launch" in calls
+        assert calls.index("persist") < calls.index("launch")
 
     def test_fails_closed_and_does_not_launch_when_the_reservation_fails(
         self, tmp_path
@@ -539,6 +582,11 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         )
         run_state = RunState(active_worktrees={})
 
+        def _unexpected_claim_fn(*args, **kwargs):
+            raise AssertionError(
+                "claim_fn must not be called when the launch-history reservation fails"
+            )
+
         with (
             patch(
                 "orchestune.dispatch.worktree._branch_exists",
@@ -547,15 +595,17 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             ),
             patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
-            patch(
-                "orchestune.dispatch.launch.create_worktree_and_launch", autospec=True
-            ) as mock_launch,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 1234
-            selected = _apply_task_launches(plans, run_state, 5_000_000.0, config)
+            selected = _apply_task_launches(
+                plans,
+                run_state,
+                5_000_000.0,
+                config,
+                claim_fn=_unexpected_claim_fn,
+            )
 
-        mock_launch.assert_not_called()
         assert selected == []
         assert run_state.active_worktrees == {}
         assert run_state.launch_history == []
@@ -571,10 +621,14 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         さもないと既定(max_launches_per_window=1)では、1件の失敗が同じ親配下の
         全タスクを1時間ブロックしてしまう。
         """
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
+        from orchestune.claim.contracts import (
+            ClaimFailure,
+            ClaimFailureReason,
+            ClaimOutcome,
+        )
         from orchestune.dispatch.launch import _apply_task_launches
-        from orchestune.dispatch.worktree import LaunchResult
         from orchestune.issue_parsing import launch_history_from_body
 
         now = 5_000_000.0
@@ -597,21 +651,25 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             forge=forge,
         )
 
-        with patch(
-            "orchestune.dispatch.launch.create_worktree_and_launch",
-            autospec=True,
-            return_value=LaunchResult(
-                issue_number=1,
-                branch="claude/issue-1-task-1",
-                worktree_path=str(tmp_path / "worktrees" / "w1"),
-                pid=None,
-                launched=False,
-                error_message="worktree creation failed",
-            ),
-        ):
-            selected = _apply_task_launches(
-                plans, RunState(active_worktrees={}), now, config
+        # #943: worktree/branch決定論的失敗はclaim_task自体の失敗
+        # （WORKTREE_CREATION_FAILED）として現れるようになった。
+        def _failing_claim_fn(request, default_base):
+            return ClaimOutcome(
+                success=False,
+                issue_number=request.issue_number,
+                failure=ClaimFailure(
+                    reason=ClaimFailureReason.WORKTREE_CREATION_FAILED,
+                    message="worktree creation failed",
+                ),
             )
+
+        selected = _apply_task_launches(
+            plans,
+            RunState(active_worktrees={}),
+            now,
+            config,
+            claim_fn=_failing_claim_fn,
+        )
 
         assert selected == []
         assert launch_history_from_body(bodies["current"]) == []
@@ -623,10 +681,14 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         既定(max_launches_per_window=1)では、その1件が同じ親配下の全タスクを
         1ウィンドウぶんブロックしてしまう。
         """
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
+        from orchestune.claim.contracts import (
+            ClaimFailure,
+            ClaimFailureReason,
+            ClaimOutcome,
+        )
         from orchestune.dispatch.launch import _apply_task_launches
-        from orchestune.dispatch.worktree import LaunchResult
         from orchestune.issue_parsing import launch_history_from_body
 
         now = 5_000_000.0
@@ -649,20 +711,24 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             forge=forge,
         )
 
-        with patch(
-            "orchestune.dispatch.launch.create_worktree_and_launch",
-            autospec=True,
-            return_value=LaunchResult(
-                issue_number=1,
-                branch="claude/issue-1-task-1",
-                worktree_path=str(tmp_path / "worktrees" / "w1"),
-                pid=None,
-                launched=False,
-                error_message="worktree creation failed",
-            ),
-        ):
-            with pytest.raises(RuntimeError):
-                _apply_task_launches(plans, RunState(active_worktrees={}), now, config)
+        def _failing_claim_fn(request, default_base):
+            return ClaimOutcome(
+                success=False,
+                issue_number=request.issue_number,
+                failure=ClaimFailure(
+                    reason=ClaimFailureReason.WORKTREE_CREATION_FAILED,
+                    message="worktree creation failed",
+                ),
+            )
+
+        with pytest.raises(RuntimeError):
+            _apply_task_launches(
+                plans,
+                RunState(active_worktrees={}),
+                now,
+                config,
+                claim_fn=_failing_claim_fn,
+            )
 
         # 報告が失敗してもクオータは解放済み（次サイクルで再試行できる）
         assert launch_history_from_body(bodies["current"]) == []
@@ -670,10 +736,11 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
     def test_releases_the_reservation_when_launch_raises_unexpected_exception(
         self, tmp_path
     ):
-        """#568: create_worktree_and_launch 自体が予期せぬ例外（OSErrorやクラッシュ等）
-        を送出した場合でも、try/finally (コンテキストマネージャ) により確実に予約が解放される。
+        """#568: 起動処理自体（#943以降はclaim_task）が予期せぬ例外（OSErrorや
+        クラッシュ等）を送出した場合でも、try/finally (コンテキストマネージャ)
+        により確実に予約が解放される。
         """
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.issue_parsing import launch_history_from_body
@@ -696,15 +763,19 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             forge=forge,
         )
 
-        with patch(
-            "orchestune.dispatch.launch.create_worktree_and_launch",
-            autospec=True,
-            side_effect=RuntimeError("unexpected crash during worktree creation"),
+        def _crashing_claim_fn(request, default_base):
+            raise RuntimeError("unexpected crash during worktree creation")
+
+        with pytest.raises(
+            RuntimeError, match="unexpected crash during worktree creation"
         ):
-            with pytest.raises(
-                RuntimeError, match="unexpected crash during worktree creation"
-            ):
-                _apply_task_launches(plans, RunState(active_worktrees={}), now, config)
+            _apply_task_launches(
+                plans,
+                RunState(active_worktrees={}),
+                now,
+                config,
+                claim_fn=_crashing_claim_fn,
+            )
 
         # 予期せぬ例外で脱出しても、finally でクオータは解放される
         assert launch_history_from_body(bodies["current"]) == []
@@ -718,10 +789,17 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         now = 5_000_000.0
         bodies = {"current": "EPIC body"}
         forge = MagicMock()
-        forge.get_issue.side_effect = lambda _n: MagicMock(body=bodies["current"])
-        forge.update_issue_body.side_effect = lambda _n, body: bodies.update(
-            current=body
+        forge.get_issue.side_effect = lambda n: (
+            make_issue(number=1, subtask_id="task-1")
+            if int(n) == 1
+            else MagicMock(body=bodies["current"])
         )
+
+        def _update_issue_body(n, body):
+            if int(n) == 100:
+                bodies["current"] = body
+
+        forge.update_issue_body.side_effect = _update_issue_body
 
         self._run(tmp_path, RunState(active_worktrees={}), now, forge)
 
@@ -736,7 +814,11 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         from orchestune.issue_parsing import launch_history_from_body
 
         forge = MagicMock()
-        forge.get_issue.return_value = MagicMock(body="EPIC body")
+        forge.get_issue.side_effect = lambda n: (
+            make_issue(number=1, subtask_id="task-1")
+            if int(n) == 1
+            else MagicMock(body="EPIC body")
+        )
         now = 5_000_000.0
         other_parents_launch = now - 60.0
 
@@ -747,7 +829,16 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             forge,
         )
 
-        _, written_body = forge.update_issue_body.call_args.args
+        # #943: claim_task経由になったことで、起動対象タスク自身(#1)にも
+        # 所有権メタデータ公開のためのupdate_issue_body呼び出しが挟まる。
+        # ここで検証したいのは親Issue(#100)の本文なので、その呼び出しを
+        # 明示的に選び出す。
+        parent_call = next(
+            call
+            for call in forge.update_issue_body.call_args_list
+            if call.args[0] == 100
+        )
+        written_body = parent_call.args[1]
         assert launch_history_from_body(written_body) == [now]
 
     def test_appends_to_the_parents_own_persisted_history(self, tmp_path):
@@ -759,16 +850,25 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         now = 5_000_000.0
         prior = now - 30.0
         forge = MagicMock()
-        forge.get_issue.return_value = MagicMock(
-            body=(
-                "EPIC\n\n<!-- orchestune:launch-history -->\n"
-                f"```yaml\nlaunch_history:\n- {prior}\n```\n"
+        forge.get_issue.side_effect = lambda n: (
+            make_issue(number=1, subtask_id="task-1")
+            if int(n) == 1
+            else MagicMock(
+                body=(
+                    "EPIC\n\n<!-- orchestune:launch-history -->\n"
+                    f"```yaml\nlaunch_history:\n- {prior}\n```\n"
+                )
             )
         )
 
         self._run(tmp_path, RunState(active_worktrees={}), now, forge)
 
-        _, written_body = forge.update_issue_body.call_args.args
+        parent_call = next(
+            call
+            for call in forge.update_issue_body.call_args_list
+            if call.args[0] == 100
+        )
+        written_body = parent_call.args[1]
         assert launch_history_from_body(written_body) == [prior, now]
 
 
