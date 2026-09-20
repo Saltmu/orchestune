@@ -1,0 +1,21 @@
+# Codex reads project-scoped MCP servers from this trusted-project configuration.
+# Keep this command in sync with .mcp.json for clients that use that format.
+[mcp_servers.serena]
+command = "uvx"
+args = [
+  "--python",
+  "3.13",
+  "--from",
+  "serena-agent==1.7.0",
+  "serena",
+  "start-mcp-server",
+  "--context",
+  "ide",
+  "--mode",
+  "planning",
+  "--mode",
+  "no-onboarding",
+  "--project-from-cwd",
+  "--enable-web-dashboard",
+  "false",
+]

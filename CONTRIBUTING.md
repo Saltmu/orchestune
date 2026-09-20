@@ -29,7 +29,7 @@ Then install the local Git pre-commit hook to prevent force-added `.gitignore` f
 
 We use [Serena](https://github.com/oraios/serena) as an MCP server for pre-implementation impact analysis ([#822](https://github.com/Saltmu/orchestune/issues/822)). It provides type-aware symbol and reference search through a Python language server, so a field such as `depends_on` — which exists on several distinct types in this repository — can be tracked per type rather than as one undifferentiated text match.
 
-The connection settings live in the repository at [`.mcp.json`](.mcp.json), pinned to `serena-agent==1.7.0`. Adoption is **optional**; every other development task works without it.
+The connection settings are checked in and pinned to `serena-agent==1.7.0`. Clients that use JSON MCP configuration read [`.mcp.json`](.mcp.json); Codex reads [`.codex/config.toml`](.codex/config.toml). Keep the two command definitions identical. Adoption is **optional**; every other development task works without it.
 
 ### Prerequisite
 
@@ -39,7 +39,7 @@ The connection settings live in the repository at [`.mcp.json`](.mcp.json), pinn
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Afterwards, restart your agent session inside the repository (or inside a worktree under it) and the project-scoped MCP server is picked up. MCP servers are loaded only at session start, so a change to `.mcp.json` requires a session restart.
+Afterwards, restart your agent session inside the repository (or inside a worktree under it) and the project-scoped MCP server is picked up. MCP servers are loaded only at session start, so a configuration change requires a session restart. In Codex, confirm the server is visible with `codex mcp list` (or `/mcp` in the TUI); `.mcp.json` alone does not configure Codex.
 
 ### Worktrees and the index
 

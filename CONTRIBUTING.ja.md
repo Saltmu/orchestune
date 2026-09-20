@@ -29,7 +29,7 @@ uv sync
 
 実装着手前の影響範囲調査に、[Serena](https://github.com/oraios/serena) をMCPサーバとして利用します（[#822](https://github.com/Saltmu/orchestune/issues/822)）。Pythonの言語サーバ（LSP）を介した型認識のシンボル・参照検索を提供するため、`depends_on` のように複数の型に同名で存在するフィールドを、テキスト検索と違って型ごとに区別して追跡できます。
 
-接続設定はリポジトリ管理下の [`.mcp.json`](.mcp.json) にあり、バージョンは `serena-agent==1.7.0` に固定されています。**任意の導入**であり、未導入でも他の開発作業は行えます。
+接続設定はリポジトリ管理下で、バージョンは `serena-agent==1.7.0` に固定されています。JSON形式のMCP設定を読むクライアントは [`.mcp.json`](.mcp.json) を、Codexは [`.codex/config.toml`](.codex/config.toml) を読みます。両方の起動コマンドは同一に保ってください。**任意の導入**であり、未導入でも他の開発作業は行えます。
 
 ### 前提条件
 
@@ -39,7 +39,7 @@ uv sync
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-導入後、リポジトリ（またはその配下の worktree）でエージェントのセッションを開始し直すと、プロジェクトスコープのMCPサーバとして読み込まれます。MCPサーバはセッション開始時にのみロードされるため、`.mcp.json` を変更した場合はセッションの再起動が必要です。
+導入後、リポジトリ（またはその配下の worktree）でエージェントのセッションを開始し直すと、プロジェクトスコープのMCPサーバとして読み込まれます。MCPサーバはセッション開始時にのみロードされるため、設定を変更した場合はセッションの再起動が必要です。Codexでは `codex mcp list`（TUIでは `/mcp`）で検出を確認してください。`.mcp.json` だけでは Codex は設定されません。
 
 ### worktree と索引の対応
 

@@ -13,11 +13,13 @@
 import json
 import pathlib
 import re
+import tomllib
 
 import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 MCP_CONFIG = REPO_ROOT / ".mcp.json"
+CODEX_CONFIG = REPO_ROOT / ".codex" / "config.toml"
 GITIGNORE = REPO_ROOT / ".gitignore"
 AGENT_RULES = REPO_ROOT / ".agents" / "AGENTS.md"
 SKILL_DIR = REPO_ROOT / "skills" / "local-ci-developer"
@@ -42,6 +44,16 @@ def _serena_args() -> list[str]:
     return args
 
 
+def _codex_serena_config() -> dict:
+    assert CODEX_CONFIG.is_file(), "Codex 用の .codex/config.toml が存在しません"
+    config = tomllib.loads(CODEX_CONFIG.read_text(encoding="utf-8"))
+    servers = config.get("mcp_servers")
+    assert isinstance(servers, dict), "config.toml に mcp_servers テーブルが必要です"
+    serena = servers.get("serena")
+    assert isinstance(serena, dict), "config.toml に Serena サーバーが必要です"
+    return serena
+
+
 def _option_values(args: list[str], option: str) -> list[str]:
     """`--option value` 形式で与えられた値をすべて取り出す。"""
     return [
@@ -56,6 +68,17 @@ def test_serena_mcp_server_is_declared_for_the_project():
     assert "serena" in servers, ".mcp.json に serena サーバが宣言されていません"
     assert servers["serena"].get("command"), "serena サーバに起動コマンドが必要です"
     assert "start-mcp-server" in _serena_args()
+
+
+def test_codex_declares_the_same_read_only_serena_server():
+    """Codex は .mcp.json ではなく .codex/config.toml から MCP を読む。"""
+    codex_serena = _codex_serena_config()
+
+    assert codex_serena.get("command") == _mcp_servers()["serena"].get("command")
+    assert codex_serena.get("args") == _serena_args()
+
+    modes = _option_values(codex_serena["args"], "--mode")
+    assert "planning" in modes, "Codex 側でも Serena を読み取り専用にしてください"
 
 
 def test_serena_dependency_version_is_strictly_pinned():
@@ -115,6 +138,7 @@ def test_contributing_documents_setup_and_fallback(document: pathlib.Path):
 
     assert "serena-agent==" in text, f"{document.name} に固定バージョンの記載が必要です"
     assert ".mcp.json" in text
+    assert ".codex/config.toml" in text
     assert "uv" in text, f"{document.name} に前提ツールの記載が必要です"
     assert (
         "ripgrep" in text or "rg " in text or "grep" in text
