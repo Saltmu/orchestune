@@ -19,6 +19,7 @@ import contextlib
 import ctypes
 import os
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from ctypes import wintypes
@@ -160,6 +161,92 @@ def file_lock(
     """Hold an exclusive file lock for the duration of the context."""
     with FileLock(lock_path, timeout=timeout, poll_interval=poll_interval):
         yield
+
+
+_RUN_STATE_HELD_COUNTS: dict[Path, int] = {}
+_RUN_STATE_LOCK_OBJS: dict[Path, FileLock] = {}
+_RUN_STATE_MUTEX = threading.Lock()
+
+
+def format_run_state_lock_contention_message(lock_path: Path) -> str:
+    """Format a consistent diagnostic message when run_state lock acquisition fails."""
+    return (
+        f"Could not acquire run_state lock on '{lock_path}': another process is currently holding the lock.\n"
+        "A concurrent dispatch cycle or interactive claim session may be in progress.\n"
+        "Wait for the active process to finish, or verify that no orphaned process is running, then retry."
+    )
+
+
+@contextlib.contextmanager
+def run_state_lock(
+    lock_path: Path,
+    *,
+    timeout: float = 0.0,
+    poll_interval: float = 0.05,
+) -> Iterator[None]:
+    """Hold a reentrant exclusive file lock for run_state operations.
+
+    Nested acquisitions on the same path within the same process increment
+    a recursion counter without deadlocking, releasing the underlying
+    FileLock only when the outermost context exits.
+    """
+    norm_path = Path(lock_path).resolve()
+    with _RUN_STATE_MUTEX:
+        count = _RUN_STATE_HELD_COUNTS.get(norm_path, 0)
+        if count > 0:
+            _RUN_STATE_HELD_COUNTS[norm_path] = count + 1
+            is_nested = True
+        else:
+            is_nested = False
+
+    if is_nested:
+        try:
+            yield
+        finally:
+            with _RUN_STATE_MUTEX:
+                _RUN_STATE_HELD_COUNTS[norm_path] -= 1
+                if _RUN_STATE_HELD_COUNTS[norm_path] == 0:
+                    del _RUN_STATE_HELD_COUNTS[norm_path]
+        return
+
+    # Outermost acquisition: acquire the underlying FileLock
+    lock_obj = FileLock(norm_path, timeout=timeout, poll_interval=poll_interval)
+    try:
+        lock_obj.acquire()
+    except RuntimeError as exc:
+        raise RuntimeError(format_run_state_lock_contention_message(norm_path)) from exc
+
+    with _RUN_STATE_MUTEX:
+        _RUN_STATE_HELD_COUNTS[norm_path] = 1
+        _RUN_STATE_LOCK_OBJS[norm_path] = lock_obj
+
+    try:
+        yield
+    finally:
+        with _RUN_STATE_MUTEX:
+            _RUN_STATE_HELD_COUNTS[norm_path] -= 1
+            if _RUN_STATE_HELD_COUNTS[norm_path] == 0:
+                del _RUN_STATE_HELD_COUNTS[norm_path]
+                active_obj = _RUN_STATE_LOCK_OBJS.pop(norm_path, None)
+            else:
+                active_obj = None
+
+        if active_obj is not None:
+            active_obj.release()
+
+
+def is_run_state_lock_held(lock_path: Path) -> bool:
+    """Check if the current process holds the run_state lock for the given path."""
+    norm_path = Path(lock_path).resolve()
+    with _RUN_STATE_MUTEX:
+        return _RUN_STATE_HELD_COUNTS.get(norm_path, 0) > 0
+
+
+def assert_run_state_lock_held(lock_path: Path) -> None:
+    """Assert that the current process holds the run_state lock for the given path."""
+    if not is_run_state_lock_held(lock_path):
+        norm_path = Path(lock_path).resolve()
+        raise RuntimeError(f"run_state lock must be held: {norm_path}")
 
 
 def default_ci_command() -> list[str]:

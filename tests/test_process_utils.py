@@ -3,7 +3,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.infra.process_utils import FileLock, file_lock, is_process_alive
+from orchestune.infra.process_utils import (
+    FileLock,
+    assert_run_state_lock_held,
+    file_lock,
+    is_process_alive,
+    is_run_state_lock_held,
+    run_state_lock,
+)
 
 
 class TestFileLock:
@@ -261,3 +268,75 @@ class TestIsProcessAliveWindows:
         with patch("orchestune.infra.process_utils._kernel32", mock_kernel32):
             is_process_alive(12345)
         mock_kernel32.CloseHandle.assert_called_once_with(4242)
+
+
+class TestRunStateLock:
+    @pytest.mark.uses_real_file_lock
+    def test_reentrant_lock_within_same_process(self, tmp_path: Path):
+        lock_path = tmp_path / "run_state.lock"
+        assert is_run_state_lock_held(lock_path) is False
+
+        with run_state_lock(lock_path):
+            assert is_run_state_lock_held(lock_path) is True
+            assert_run_state_lock_held(lock_path)
+
+            # Nested reentrant acquisition should succeed without deadlock
+            with run_state_lock(lock_path):
+                assert is_run_state_lock_held(lock_path) is True
+                assert_run_state_lock_held(lock_path)
+
+            # Still held by the outer context
+            assert is_run_state_lock_held(lock_path) is True
+            assert_run_state_lock_held(lock_path)
+
+        # Released after outer context exits
+        assert is_run_state_lock_held(lock_path) is False
+        with pytest.raises(RuntimeError, match="run_state lock must be held"):
+            assert_run_state_lock_held(lock_path)
+
+    @pytest.mark.uses_real_file_lock
+    def test_native_lock_released_only_after_outermost_exit(self, tmp_path: Path):
+        lock_path = tmp_path / "run_state.lock"
+
+        with run_state_lock(lock_path):
+            with run_state_lock(lock_path):
+                pass
+            # An independent FileLock cannot acquire while outer run_state_lock is held
+            with pytest.raises(RuntimeError):
+                with file_lock(lock_path, timeout=0.0):
+                    pass
+
+        # Now that outer run_state_lock has exited, FileLock can acquire
+        with file_lock(lock_path, timeout=0.0):
+            pass
+
+    def test_contention_diagnostic_message_on_timeout(self, tmp_path: Path):
+        lock_path = tmp_path / "contended.lock"
+        mock_fcntl = MagicMock()
+        mock_fcntl.LOCK_EX = 1
+        mock_fcntl.LOCK_NB = 2
+        mock_fcntl.flock.side_effect = BlockingIOError
+
+        with (
+            patch("orchestune.infra.process_utils.fcntl", mock_fcntl),
+            patch("orchestune.infra.process_utils.msvcrt", None),
+            patch(
+                "orchestune.infra.process_utils.time.monotonic",
+                side_effect=[10.0, 10.0, 10.5],
+            ),
+            patch("orchestune.infra.process_utils.time.sleep"),
+            pytest.raises(RuntimeError) as exc_info,
+        ):
+            with run_state_lock(lock_path, timeout=0.5, poll_interval=0.2):
+                pass
+
+        error_msg = str(exc_info.value)
+        assert str(lock_path) in error_msg
+        assert "run_state lock" in error_msg
+        assert "another process is currently holding the lock" in error_msg
+        assert "retry" in error_msg
+
+    def test_assert_run_state_lock_held_raises_when_not_held(self, tmp_path: Path):
+        lock_path = tmp_path / "unheld.lock"
+        with pytest.raises(RuntimeError, match="run_state lock must be held"):
+            assert_run_state_lock_held(lock_path)

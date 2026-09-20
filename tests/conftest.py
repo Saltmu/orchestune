@@ -908,10 +908,35 @@ def _stub_file_lock_by_default(request: pytest.FixtureRequest):
     if request.node.get_closest_marker("uses_real_file_lock") is not None:
         yield
         return
+
+    @contextlib.contextmanager
+    def _in_memory_run_state_lock(
+        lock_path: Path,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Iterator[None]:
+        from orchestune.infra.process_utils import (
+            _RUN_STATE_HELD_COUNTS,
+            _RUN_STATE_MUTEX,
+        )
+
+        norm_path = Path(lock_path).resolve()
+        with _RUN_STATE_MUTEX:
+            _RUN_STATE_HELD_COUNTS[norm_path] = (
+                _RUN_STATE_HELD_COUNTS.get(norm_path, 0) + 1
+            )
+        try:
+            yield
+        finally:
+            with _RUN_STATE_MUTEX:
+                _RUN_STATE_HELD_COUNTS[norm_path] -= 1
+                if _RUN_STATE_HELD_COUNTS[norm_path] == 0:
+                    del _RUN_STATE_HELD_COUNTS[norm_path]
+
     with (
         patch(
-            "orchestune.dispatch.cycle.file_lock",
-            lambda _lock_path: contextlib.nullcontext(),
+            "orchestune.dispatch.cycle.run_state_lock",
+            _in_memory_run_state_lock,
         ),
         patch(
             "orchestune.integrator.coordinator.file_lock",
