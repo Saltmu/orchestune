@@ -894,6 +894,32 @@ class TestGetGitRepositoryPaths:
         assert toplevel == repo.resolve()
         assert common_dir == (repo / ".git").resolve()
 
+    def test_get_git_repository_paths_from_subdirectory(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        run_git(["init", "-b", "main"], cwd=repo)
+        subdir = repo / "sub" / "dir"
+        subdir.mkdir(parents=True)
+
+        toplevel, common_dir = get_git_repository_paths(subdir)
+        assert toplevel == repo.resolve()
+        assert common_dir == (repo / ".git").resolve()
+
+    def test_get_git_repository_paths_from_linked_worktree(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        run_git(["init", "-b", "main"], cwd=repo)
+        run_git(["config", "user.name", "Test"], cwd=repo)
+        run_git(["config", "user.email", "test@example.com"], cwd=repo)
+        run_git(["commit", "--allow-empty", "-m", "init"], cwd=repo)
+
+        worktree = tmp_path / "worktree"
+        run_git(["worktree", "add", "-b", "feat/wt", str(worktree)], cwd=repo)
+
+        toplevel, common_dir = get_git_repository_paths(worktree)
+        assert toplevel == worktree.resolve()
+        assert common_dir == (repo / ".git").resolve()
+
     def test_get_git_repository_paths_not_a_repo(self, tmp_path):
         not_repo = tmp_path / "not_repo"
         not_repo.mkdir()

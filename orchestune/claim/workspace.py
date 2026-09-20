@@ -29,9 +29,14 @@ def resolve_claim_workspace(
 
     Resolves primary checkout, linked worktrees, and subdirectories to the same
     canonical repository identity, run_state.json path, and run_state.lock path.
+
+    Note:
+        Assumes common_dir is located directly inside the primary checkout
+        (e.g., `<primary_root>/.git`). Repositories with detached or external git
+        directories are not relocated.
     """
     toplevel, common_dir = get_git_repository_paths(cwd)
-    primary_root = common_dir.parent.resolve()
+    primary_root = common_dir.parent
     repository_identity = common_dir.as_posix()
 
     if explicit_state_path is None:
