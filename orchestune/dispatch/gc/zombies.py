@@ -69,6 +69,51 @@ def _resolve_reclaim_count(run_state: RunState, issue_number: int) -> int:
     return previous_record.count + 1
 
 
+def build_interactive_exclusion_event(
+    active: ActiveWorktree,
+    task: TaskMetadata | None = None,
+    reason: str = "interactive claim ownership is excluded from automatic GC reclaim",
+    *,
+    subtask_id: str | None = None,
+) -> dict:
+    """owner_kind=interactive の active が GC 回収から除外された診断イベントを構築する。"""
+    resolved_subtask_id = subtask_id or (task.subtask_id if task else "")
+    return {
+        "issue_number": active.issue_number,
+        "subtask_id": resolved_subtask_id,
+        "action": "gc_reclaim_excluded_interactive",
+        "reason": reason,
+        "owner_kind": active.owner_kind,
+    }
+
+
+def list_unattended_interactive_claims(
+    run_state: RunState,
+    tasks_by_issue: Mapping[int, TaskMetadata] | None = None,
+) -> list[dict]:
+    """レポート・診断向けに、放置された（activeに存在する）interactive claimを列挙する。"""
+    results: list[dict] = []
+    for key, active in sorted(
+        run_state.active_worktrees.items(), key=lambda item: item[1].issue_number
+    ):
+        if active.owner_kind == "interactive":
+            task = tasks_by_issue.get(active.issue_number) if tasks_by_issue else None
+            results.append(
+                {
+                    "key": key,
+                    "issue_number": active.issue_number,
+                    "subtask_id": task.subtask_id if task else "",
+                    "worktree_path": active.worktree_path,
+                    "branch": active.branch,
+                    "claim_id": active.claim_id,
+                    "reservation_kind": active.reservation_kind,
+                    "started_at": active.started_at,
+                    "reason": "interactive claim requires manual completion or inspection",
+                }
+            )
+    return results
+
+
 def _build_reclaim_candidate(
     key: str,
     active: ActiveWorktree,
@@ -78,8 +123,12 @@ def _build_reclaim_candidate(
     reclaim_count: int,
     max_task_reclaims: int,
     now: float,
-) -> ZombieOrTimeoutReclaim:
-    """判定結果からZombieOrTimeoutReclaimインスタンスを構築する。"""
+) -> ZombieOrTimeoutReclaim | None:
+    """判定結果からZombieOrTimeoutReclaimインスタンスを構築する。
+    owner_kind=interactive の場合は回収候補から除外し None を返す。
+    """
+    if active.owner_kind == "interactive":
+        return None
     is_timeout = EXECUTION_TIMED_OUT in finding_codes
     if is_timeout:
         reason = "timeout exceeded"
@@ -526,6 +575,11 @@ def _apply_zombie_or_timeout_reclaim(
     open_prs: Sequence[PrRecord] | None = None,
 ) -> dict | None:
     """decide層が判定した回収対象に基づき、安全に副作用を適用する。"""
+    if reclaim.active.owner_kind == "interactive":
+        return build_interactive_exclusion_event(
+            reclaim.active,
+            subtask_id=reclaim.subtask_id,
+        )
     already_escalated = any(
         label in reclaim.status_labels for label in TERMINAL_ESCALATION_LABELS
     )
@@ -590,6 +644,50 @@ def _skipped_reclaim(command: RepairCommand, diagnostic: str) -> RepairResult:
     )
 
 
+def _handle_interactive_reclaim_exclusion(
+    command: RepairCommand,
+    reclaim: ZombieOrTimeoutReclaim,
+    event_sink: Callable[[dict], None] | None,
+) -> RepairResult:
+    exclusion_event = build_interactive_exclusion_event(
+        reclaim.active,
+        subtask_id=reclaim.subtask_id,
+    )
+    if event_sink is not None:
+        event_sink(exclusion_event)
+    return RepairResult(
+        command=command,
+        status=RepairStatus.SKIPPED,
+        diagnostics=(
+            "interactive claim ownership is excluded from automatic GC reclaim",
+        ),
+    )
+
+
+def _apply_validated_reclaim(
+    command: RepairCommand,
+    run_state: RunState,
+    reclaim: ZombieOrTimeoutReclaim,
+    precondition: ReclaimPrecondition,
+    config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None,
+    event_sink: Callable[[dict], None] | None,
+) -> RepairResult:
+    refreshed = _refresh_reclaim(run_state, reclaim, config, precondition)
+    event = _apply_zombie_or_timeout_reclaim(run_state, refreshed, config, open_prs)
+    if event is not None and event_sink is not None:
+        event_sink(event)
+    return RepairResult(
+        command=command,
+        status=RepairStatus.APPLIED if event is not None else RepairStatus.SKIPPED,
+        diagnostics=(
+            ()
+            if event is not None
+            else ("reclaim deferred by existing safety boundary",)
+        ),
+    )
+
+
 def execute_reclaim_repair_command(
     command: RepairCommand,
     run_state: RunState,
@@ -610,6 +708,8 @@ def execute_reclaim_repair_command(
         )
     if not config.apply:
         return RepairResult(command=command, status=RepairStatus.SKIPPED)
+    if reclaim.active.owner_kind == "interactive":
+        return _handle_interactive_reclaim_exclusion(command, reclaim, event_sink)
     precondition = revalidate_reclaim_preconditions(
         command,
         run_state,
@@ -625,16 +725,6 @@ def execute_reclaim_repair_command(
             command,
             f"reclaim precondition no longer holds for subject {command.subject_id}",
         )
-    refreshed = _refresh_reclaim(run_state, reclaim, config, precondition)
-    event = _apply_zombie_or_timeout_reclaim(run_state, refreshed, config, open_prs)
-    if event is not None and event_sink is not None:
-        event_sink(event)
-    return RepairResult(
-        command=command,
-        status=RepairStatus.APPLIED if event is not None else RepairStatus.SKIPPED,
-        diagnostics=(
-            ()
-            if event is not None
-            else ("reclaim deferred by existing safety boundary",)
-        ),
+    return _apply_validated_reclaim(
+        command, run_state, reclaim, precondition, config, open_prs, event_sink
     )

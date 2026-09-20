@@ -480,6 +480,34 @@ def _resolve_recovery_branch(
     return resolution
 
 
+def _parse_claim_info_from_issue(
+    issue: IssueRecord,
+) -> tuple[str, str | None, str]:
+    """Issueの本文から owner_kind, claim_id, reservation_kind を抽出する。
+    欠落時は (owner_kind='dispatch', claim_id=None, reservation_kind='footprint') を返す。
+    """
+    owner_kind = "dispatch"
+    claim_id = None
+    reservation_kind = "footprint"
+    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
+    if match:
+        try:
+            data = yaml.safe_load(match.group(1))
+            if isinstance(data, dict):
+                raw_owner_kind = data.get("owner_kind")
+                if raw_owner_kind in {"interactive", "dispatch"}:
+                    owner_kind = raw_owner_kind
+                raw_claim_id = data.get("claim_id")
+                if isinstance(raw_claim_id, str) and raw_claim_id:
+                    claim_id = raw_claim_id
+                raw_res_kind = data.get("reservation_kind")
+                if raw_res_kind in {"footprint", "repository"}:
+                    reservation_kind = raw_res_kind
+        except Exception:
+            pass
+    return owner_kind, claim_id, reservation_kind
+
+
 def _build_restored_active_worktree(
     issue: IssueRecord,
     subtask_id: str,
@@ -510,6 +538,7 @@ def _build_restored_active_worktree(
 
     task = parse_task_from_issue(issue, issue_to_subtask_id)
     execution_selection = resolve_task_execution_selection(task, config)
+    owner_kind, claim_id, reservation_kind = _parse_claim_info_from_issue(issue)
 
     return ActiveWorktree(
         issue_number=issue.number,
@@ -527,6 +556,9 @@ def _build_restored_active_worktree(
         model=execution_selection.model,
         reasoning_effort=execution_selection.reasoning_effort,
         selection_reason=execution_selection.reason,
+        owner_kind=owner_kind,
+        claim_id=claim_id,
+        reservation_kind=reservation_kind,
     )
 
 

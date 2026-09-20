@@ -860,3 +860,93 @@ class TestRecoveryCounterTargets:
         run_state = RunState(active_worktrees={"101": active})
 
         assert _counter_targets(run_state, []) == ()
+
+
+class TestRestorationPreservesClaimOwnership:
+    """#940: recovery による active 再構築で owner_kind / claim_id / reservation_kind を保持し、
+    欠落時は dispatch として扱う。"""
+
+    def test_restored_active_worktree_preserves_claim_ownership(self, tmp_path):
+        from orchestune.dispatch.dependency_resolution import EMPTY_DEPENDENCIES
+        from orchestune.dispatch.recovery import _build_restored_active_worktree
+        from orchestune.task_branch_resolution import TaskBranchResolver
+
+        body = (
+            "## Footprint\n```yaml\n"
+            "subtask_id: interactive-task\n"
+            "footprint:\n"
+            "  - src/interactive.py\n"
+            "owner_kind: interactive\n"
+            "claim_id: claim-recovery-999\n"
+            "reservation_kind: repository\n"
+            "```\n"
+        )
+        issue = IssueRecord(
+            number=940,
+            title="Interactive Task",
+            body=body,
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        resolver = TaskBranchResolver([])
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=str(tmp_path / "worktrees"),
+        )
+
+        active = _build_restored_active_worktree(
+            issue=issue,
+            subtask_id="interactive-task",
+            declared_footprint=("src/interactive.py",),
+            resolver=resolver,
+            resolutions={},
+            issue_to_subtask_id={940: "interactive-task"},
+            dependency_resolution={940: EMPTY_DEPENDENCIES},
+            config=config,
+        )
+
+        assert active.owner_kind == "interactive"
+        assert active.claim_id == "claim-recovery-999"
+        assert active.reservation_kind == "repository"
+
+    def test_restored_active_worktree_defaults_missing_to_dispatch(self, tmp_path):
+        from orchestune.dispatch.dependency_resolution import EMPTY_DEPENDENCIES
+        from orchestune.dispatch.recovery import _build_restored_active_worktree
+        from orchestune.task_branch_resolution import TaskBranchResolver
+
+        body = (
+            "## Footprint\n```yaml\n"
+            "subtask_id: ordinary-task\n"
+            "footprint:\n"
+            "  - src/ordinary.py\n"
+            "```\n"
+        )
+        issue = IssueRecord(
+            number=941,
+            title="Ordinary Task",
+            body=body,
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        resolver = TaskBranchResolver([])
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=str(tmp_path / "worktrees"),
+        )
+
+        active = _build_restored_active_worktree(
+            issue=issue,
+            subtask_id="ordinary-task",
+            declared_footprint=("src/ordinary.py",),
+            resolver=resolver,
+            resolutions={},
+            issue_to_subtask_id={941: "ordinary-task"},
+            dependency_resolution={941: EMPTY_DEPENDENCIES},
+            config=config,
+        )
+
+        assert active.owner_kind == "dispatch"
+        assert active.claim_id is None
+        assert active.reservation_kind == "footprint"

@@ -383,3 +383,237 @@ class TestDecideZombieOrTimeoutReclaims:
             )
 
         assert reclaims[0].key == "custom-key"
+
+
+class TestInteractiveOwnershipGcExclusion:
+    """#940: owner_kind=interactive をPID死亡・early-death・timeout強制回収から除外する。"""
+
+    def test_interactive_active_is_excluded_from_gc_reclaims(
+        self, tmp_path, fake_forge
+    ):
+        """owner_kind=interactive の active はプロセス死亡やタイムアウトでも回収候補から除外され、
+        run_gc_reclaims で回収・削除されず除外診断イベントが記録される。"""
+        active_interactive = _active(
+            started_at=1_000.0,
+            worktree_path=str(tmp_path / "interactive-worktree"),
+            pid=111,
+            owner_kind="interactive",
+            claim_id="claim-interactive-1",
+        )
+        run_state = RunState(active_worktrees={"280": active_interactive})
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=True,
+            zombie_gc=True,
+            task_timeout_seconds=60,
+            forge=fake_forge,
+        )
+
+        with (
+            patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
+            patch(
+                "orchestune.dispatch.execution_repair.is_process_alive",
+                autospec=True,
+                return_value=False,
+            ),
+        ):
+            # decide層: 回収候補から除外され、空リストになる
+            reclaims = _decide_zombie_or_timeout_reclaims(
+                run_state,
+                {active_interactive.issue_number: task},
+                config,
+                None,
+                now=2_000.0,
+            )
+            assert reclaims == []
+
+            # collect/apply層: 回収実行されず、active_worktreesに残り、除外診断イベントが記録される
+            events = _collect_zombies_and_timeouts(
+                run_state, {active_interactive.issue_number: task}, config
+            )
+
+        assert "280" in run_state.active_worktrees
+        assert run_state.active_worktrees["280"].owner_kind == "interactive"
+        fake_forge.remove_label.assert_not_called()
+        fake_forge.add_label.assert_not_called()
+        assert len(events) == 1
+        assert events[0]["action"] == "gc_reclaim_excluded_interactive"
+        assert events[0]["issue_number"] == 280
+
+    def test_dispatch_active_is_reclaimed_as_usual(self, tmp_path, fake_forge):
+        """owner_kind=dispatch の active は従来どおりプロセス死亡で回収される（対で検証）。"""
+        active_dispatch = _active(
+            started_at=1_000.0,
+            worktree_path=str(tmp_path / "dispatch-worktree"),
+            pid=111,
+            owner_kind="dispatch",
+        )
+        run_state = RunState(active_worktrees={"280": active_dispatch})
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=True,
+            zombie_gc=True,
+            task_timeout_seconds=60,
+            forge=fake_forge,
+        )
+
+        with (
+            patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
+            patch(
+                "orchestune.dispatch.execution_repair.is_process_alive",
+                autospec=True,
+                return_value=False,
+            ),
+        ):
+            reclaims = _decide_zombie_or_timeout_reclaims(
+                run_state,
+                {active_dispatch.issue_number: task},
+                config,
+                None,
+                now=2_000.0,
+            )
+            assert len(reclaims) == 1
+            assert reclaims[0].active.owner_kind == "dispatch"
+
+            events = _collect_zombies_and_timeouts(
+                run_state, {active_dispatch.issue_number: task}, config
+            )
+
+        assert run_state.active_worktrees == {}
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:queued")
+        assert len(events) == 1
+        assert events[0]["action"] == "gc_reclaimed"
+
+    def test_list_unattended_interactive_claims_helper(self):
+        """list_unattended_interactive_claims は active 内の owner_kind=interactive をレポート向けに列挙する。"""
+        from orchestune.dispatch.gc.zombies import list_unattended_interactive_claims
+
+        active_interactive = _active(
+            issue_number=280,
+            owner_kind="interactive",
+            claim_id="claim-123",
+            reservation_kind="repository",
+        )
+        active_dispatch = _active(
+            issue_number=281,
+            owner_kind="dispatch",
+        )
+        run_state = RunState(
+            active_worktrees={"280": active_interactive, "281": active_dispatch}
+        )
+        task = _task(subtask_id="interactive-task")
+
+        unattended = list_unattended_interactive_claims(
+            run_state, tasks_by_issue={280: task}
+        )
+        assert len(unattended) == 1
+        item = unattended[0]
+        assert item["issue_number"] == 280
+        assert item["subtask_id"] == "interactive-task"
+        assert item["claim_id"] == "claim-123"
+        assert item["reservation_kind"] == "repository"
+        assert "interactive" in item["reason"]
+
+    def test_interactive_active_is_excluded_from_completion_and_retries(self, tmp_path):
+        """owner_kind=interactive は _is_worktree_complete で未完了扱いとなり、
+        early-death および review-timeout 再投入からも除外される。"""
+        from orchestune.dispatch.gc.completion import (
+            _apply_early_death_retry,
+            _apply_review_timeout_retry,
+            _is_worktree_complete,
+        )
+
+        active = _active(
+            started_at=100.0,
+            pid=111,
+            owner_kind="interactive",
+            claim_id="claim-test-1",
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            early_death_window_seconds=120,
+            max_early_death_retries=2,
+            max_review_timeout_retries=2,
+        )
+        run_state = RunState(active_worktrees={"280": active})
+
+        with patch(
+            "orchestune.dispatch.gc.completion.is_process_alive",
+            autospec=True,
+            return_value=False,
+        ):
+            # プロセス死亡でも _is_worktree_complete は False（作業中・生存扱い）
+            assert _is_worktree_complete(active, config) is False
+
+        # early-death 再投入からも除外される
+        early_death = _apply_early_death_retry(
+            active, _task(), config, run_state, now=110.0
+        )
+        assert early_death is None
+
+        # review-timeout 再投入からも除外される
+        review_timeout = _apply_review_timeout_retry(
+            active, _task(), config, run_state, now=110.0
+        )
+        assert review_timeout is None
+
+    def test_interactive_claim_process_exit_survives_across_cycles(
+        self, tmp_path, fake_forge
+    ):
+        """短命なclaimプロセスが終了した直後の active（PID死亡）が、
+        GCサイクルを複数回実行しても生存扱いとなり消えずに残る。"""
+        from orchestune.dispatch.phase_gc import run_gc_phase
+
+        worktree_path = tmp_path / "interactive-wt"
+        worktree_path.mkdir(parents=True)
+        active = _active(
+            issue_number=280,
+            started_at=1_000.0,
+            worktree_path=str(worktree_path),
+            pid=99999,  # 終了した短命claimプロセスのPID
+            owner_kind="interactive",
+            claim_id="claim-h2-test",
+        )
+        run_state = RunState(active_worktrees={"280": active})
+        task = _task(
+            issue_number=280,
+            status_labels=("status:in-progress",),
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=str(tmp_path / "worktrees"),
+            apply=True,
+            zombie_gc=True,
+            task_timeout_seconds=60,
+            forge=fake_forge,
+        )
+
+        with patch(
+            "orchestune.dispatch.execution_repair.is_process_alive",
+            autospec=True,
+            return_value=False,
+        ):
+            # 1サイクル目
+            res1 = run_gc_phase(run_state, {280: task}, config, [], now=1_050.0)
+            assert "280" in run_state.active_worktrees
+            assert worktree_path.exists()
+            assert any(
+                e.get("action") == "gc_reclaim_excluded_interactive"
+                for e in res1.completion_events
+            )
+
+            # 2サイクル目（さらに時間が経過しても消えず、worktreeも残る）
+            res2 = run_gc_phase(run_state, {280: task}, config, [], now=1_200.0)
+            assert "280" in run_state.active_worktrees
+            assert worktree_path.exists()
+            assert any(
+                e.get("action") == "gc_reclaim_excluded_interactive"
+                for e in res2.completion_events
+            )
