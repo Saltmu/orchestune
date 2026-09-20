@@ -19,7 +19,6 @@ from orchestune.claim import (
 )
 from orchestune.claim import cli as claim_cli
 from orchestune.claim import ownership as claim_ownership
-from orchestune.claim import preflight as claim_preflight
 from orchestune.claim import service as claim_service
 
 
@@ -125,14 +124,6 @@ class TestClaimStubs:
             claim_ownership.build_reservation()
         with pytest.raises(NotImplementedError):
             claim_ownership.evaluate_claim_conflicts()
-
-    def test_preflight_stubs_raise_not_implemented(self) -> None:
-        with pytest.raises(NotImplementedError):
-            claim_preflight.evaluate_claim_preflight()
-        with pytest.raises(NotImplementedError):
-            claim_preflight.resolve_claim_base()
-        with pytest.raises(NotImplementedError):
-            claim_preflight.resolve_claim_subtask_id()
 
     def test_service_stubs_raise_not_implemented(self) -> None:
         with pytest.raises(NotImplementedError):
