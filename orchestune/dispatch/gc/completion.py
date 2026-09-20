@@ -537,7 +537,8 @@ def _apply_early_death_retry(
 ) -> dict | None:
     """起動直後・コミットなし終了を指数バックオフ付きで再投入する。"""
     if (
-        active.external_id is not None
+        active.owner_kind == "interactive"
+        or active.external_id is not None
         or active.started_at is None
         or not 0 <= now - active.started_at <= config.early_death_window_seconds
     ):
@@ -565,6 +566,8 @@ def _apply_review_timeout_retry(
     on_requeue_applied: Callable[[], None] | None = None,
 ) -> dict | None:
     """AIレビュー待機タイムアウトを指数バックオフ付きで再投入する。"""
+    if active.owner_kind == "interactive":
+        return None
     spec = (
         "review_timeout_retry",
         config.max_review_timeout_retries - 1,
@@ -1125,6 +1128,8 @@ def _finalize_abandoned_cloud_worktree(
 
 
 def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> bool:
+    if active.owner_kind == "interactive":
+        return False
     if active.external_id is not None:
         assert config.dispatch_target is not None
         handle = _active_dispatch_handle(active)

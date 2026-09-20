@@ -804,3 +804,83 @@ class TestApplyZombieOrTimeoutReclaim:
         )
         assert run_state.active_worktrees == {}
         assert event is not None
+
+    def test_apply_zombie_reclaim_skips_interactive_ownership(
+        self, tmp_path, fake_forge
+    ):
+        """owner_kind=interactive の active は _apply_zombie_or_timeout_reclaim で
+        副作用（プロセスkill、worktree削除、ラベル変更）を実行せず除外イベントを返す。"""
+        active = _active(
+            worktree_path=str(tmp_path / "interactive-worktree"),
+            owner_kind="interactive",
+            claim_id="claim-apply-1",
+        )
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(active, finding_codes=(LOCAL_PROCESS_DEAD,))
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=True,
+            forge=fake_forge,
+        )
+
+        with (
+            patch(
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", autospec=True
+            ) as mock_backup,
+            patch(
+                "orchestune.dispatch.gc.zombies.remove_worktree", autospec=True
+            ) as mock_remove,
+            patch("os.kill") as mock_kill,
+        ):
+            event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
+
+        mock_backup.assert_not_called()
+        mock_remove.assert_not_called()
+        mock_kill.assert_not_called()
+        fake_forge.remove_label.assert_not_called()
+        fake_forge.add_label.assert_not_called()
+        assert "280" in run_state.active_worktrees
+        assert event is not None
+        assert event["action"] == "gc_reclaim_excluded_interactive"
+        assert event["issue_number"] == 280
+
+    def test_execute_reclaim_repair_command_skips_interactive_ownership(
+        self, tmp_path, fake_forge
+    ):
+        """execute_reclaim_repair_command は owner_kind=interactive を安全にスキップし
+        event_sink に除外イベントを通知する。"""
+        active = _active(
+            worktree_path=str(tmp_path / "interactive-worktree"),
+            owner_kind="interactive",
+        )
+        run_state = RunState(active_worktrees={"280": active})
+        reclaim = self._reclaim(active, finding_codes=(LOCAL_PROCESS_DEAD,))
+        command = RepairCommand(
+            code=COMMAND_RECLAIM,
+            scope=ConsistencyScope.TASK,
+            subject_id="280",
+            idempotency_key="execution:280:reclaim",
+            parameters=(("finding_codes", (LOCAL_PROCESS_DEAD,)),),
+        )
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=True,
+            forge=fake_forge,
+        )
+        sink_events: list[dict] = []
+
+        result = execute_reclaim_repair_command(
+            command,
+            run_state,
+            reclaim,
+            config,
+            event_sink=sink_events.append,
+        )
+
+        assert result.status is RepairStatus.SKIPPED
+        assert "interactive" in result.diagnostics[0]
+        assert len(sink_events) == 1
+        assert sink_events[0]["action"] == "gc_reclaim_excluded_interactive"
+        assert "280" in run_state.active_worktrees
