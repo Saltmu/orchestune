@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from pathlib import Path
 
@@ -135,7 +135,7 @@ class ClaimRequest:
     owner_kind: OwnerKind = OwnerKind.INTERACTIVE
     owner_id: str | None = None
     resume_claim_id: str | None = None
-    owner_token: str | None = None
+    owner_token: str | None = field(default=None, repr=False)
     dry_run: bool = False
     timeout_seconds: float | None = None
     state_path: Path | None = None
@@ -155,4 +155,4 @@ class ClaimOutcome:
     reservation_kind: ReservationKind | None = None
     stage: ClaimStage | None = None
     failure: ClaimFailure | None = None
-    owner_token: str | None = None
+    owner_token: str | None = field(default=None, repr=False)

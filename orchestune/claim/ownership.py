@@ -10,6 +10,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from orchestune.claim.contracts import ClaimRequest, ClaimStage, ReservationKind
+from orchestune.dag.contracts import is_contract_writer
 from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.task_metadata import TaskMetadata
 
@@ -103,8 +104,8 @@ def _shared_contract_conflicts(
     if reservation_task is None or active_task is None:
         return False
     return (
-        reservation_task.writes_shared_contract
-        and active_task.writes_shared_contract
+        is_contract_writer(reservation_task)
+        and is_contract_writer(active_task)
         and reservation_task.shared_contract is not None
         and reservation_task.shared_contract == active_task.shared_contract
     )

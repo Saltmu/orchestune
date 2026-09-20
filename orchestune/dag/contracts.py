@@ -28,6 +28,7 @@ from __future__ import annotations
 import posixpath
 import re
 from collections.abc import Iterable
+from typing import Protocol
 
 from orchestune.dag.models import (
     ConflictEdge,
@@ -60,11 +61,21 @@ def _categorize(path: str) -> str | None:
     return None
 
 
-def _touches_hotspot_category(subtask: SubTask) -> bool:
+class SharedContractTask(Protocol):
+    """The metadata required to identify a shared-contract writer."""
+
+    @property
+    def footprint(self) -> tuple[str, ...]: ...
+
+    @property
+    def writes_shared_contract(self) -> bool: ...
+
+
+def _touches_hotspot_category(subtask: SharedContractTask) -> bool:
     return any(_categorize(path) is not None for path in subtask.footprint)
 
 
-def _is_contract_writer(subtask: SubTask) -> bool:
+def is_contract_writer(subtask: SharedContractTask) -> bool:
     """サブタスクが共有拡張ポイントの「書き込み者」かどうかを判定する。
 
     `shared_contract`タグは「同一の契約に関与している」ことしか意味しない —
@@ -118,7 +129,7 @@ def build_shared_contract_conflicts(
     conflicts: dict[tuple[str, str], ConflictEdge] = {}
     explicit_groups: dict[str, list[str]] = {}
     for subtask in subtasks:
-        if subtask.shared_contract and _is_contract_writer(subtask):
+        if subtask.shared_contract and is_contract_writer(subtask):
             explicit_groups.setdefault(subtask.shared_contract, []).append(subtask.id)
 
     for contract_id, ids in sorted(explicit_groups.items()):
@@ -215,7 +226,7 @@ def _check_explicit_contract_warnings(
 ) -> None:
     explicit_groups: dict[str, list[tuple[str, str]]] = {}
     for subtask in subtasks:
-        if not subtask.shared_contract or not _is_contract_writer(subtask):
+        if not subtask.shared_contract or not is_contract_writer(subtask):
             continue
         explicit_groups.setdefault(subtask.shared_contract, []).append(
             (subtask.id, _representative_path(subtask))
@@ -283,7 +294,7 @@ def find_unowned_shared_contract_hotspots(
     2段階で検出する:
     1. 明示的な`shared_contract`タグ（プラン作成者が同一の未確立コントラクトだと
        明示したサブタスク群）のうち、実際に共有ファイルへ「書き込む」サブタスク
-       同士（`_is_contract_writer`参照）。
+       同士（`is_contract_writer`参照）。
     2. カテゴリとディレクトリスコープに基づくヒューリスティックなフォールバック。
     """
     reachable = _forward_reachable((subtask.id for subtask in subtasks), edges)

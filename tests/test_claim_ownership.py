@@ -6,7 +6,12 @@ from dataclasses import dataclass
 
 import pytest
 
-from orchestune.claim.contracts import ClaimRequest, OwnerKind, ReservationKind
+from orchestune.claim.contracts import (
+    ClaimOutcome,
+    ClaimRequest,
+    OwnerKind,
+    ReservationKind,
+)
 from orchestune.claim.ownership import (
     ClaimConflictReason,
     build_reservation,
@@ -97,6 +102,14 @@ def test_generated_claim_ids_are_unique_and_owner_token_repr_is_masked() -> None
     assert owner_token_digest(token) == owner_token_digest(token)
 
 
+def test_request_and_outcome_repr_do_not_expose_owner_token() -> None:
+    raw_token = new_owner_token().value
+    assert raw_token not in repr(ClaimRequest(issue_number=10, owner_token=raw_token))
+    assert raw_token not in repr(
+        ClaimOutcome(success=True, issue_number=10, owner_token=raw_token)
+    )
+
+
 def test_build_reservation_uses_footprint_or_explicit_repository_scope() -> None:
     request = ClaimRequest(
         issue_number=10,
@@ -171,6 +184,15 @@ def test_forced_serial_and_shared_contract_writers_conflict() -> None:
             _active(11, footprint=("z.py",)),
             _task(10, footprint=("a.py",), contract="claim", writer=True),
             _task(11, footprint=("z.py",), contract="claim", writer=True),
+        )
+        == ClaimConflictReason.SHARED_CONTRACT
+    )
+    assert (
+        _conflict(
+            candidate,
+            _active(11, footprint=("formats/b_registry.py",)),
+            _task(10, footprint=("plugins/a_registry.py",), contract="claim"),
+            _task(11, footprint=("formats/b_registry.py",), contract="claim"),
         )
         == ClaimConflictReason.SHARED_CONTRACT
     )
