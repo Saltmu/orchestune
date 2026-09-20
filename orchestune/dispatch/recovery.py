@@ -875,8 +875,19 @@ def _persist_recovery_snapshot(
     )
 
 
+def _is_interactive_restoration(
+    subject_id: str | None, snapshot: RecoveryBookkeepingSnapshot
+) -> bool:
+    if subject_id is None:
+        return False
+    return any(
+        item[0] == subject_id and item[2].owner_kind == "interactive"
+        for item in snapshot.restorations
+    )
+
+
 def _restorable(candidate: ActiveWorktree) -> bool:
-    return candidate.external_id is not None
+    return candidate.external_id is not None or candidate.owner_kind == "interactive"
 
 
 def _skipped(command: RepairCommand, detail: str) -> RepairResult:
@@ -885,6 +896,26 @@ def _skipped(command: RepairCommand, detail: str) -> RepairResult:
         status=RepairStatus.SKIPPED,
         diagnostics=(detail,),
     )
+
+
+def _reconcile_durable_attempt_for_requeue(
+    command: RepairCommand,
+    task: Task | None,
+    run_state: RunState,
+    snapshot: RecoveryBookkeepingSnapshot,
+    config: DispatcherConfig,
+) -> bool:
+    if _is_interactive_restoration(command.subject_id, snapshot):
+        return False
+    if (
+        task is not None
+        and config.dispatch_target is not None
+        and config.dispatch_target.launch_capabilities.durable_attempt
+    ):
+        attempt = read_attempt(config.resolved_forge, task.issue_number)
+        if attempt is not None and reconcile_attempt(attempt, task, run_state, config):
+            return True
+    return False
 
 
 def execute_recovery_requeue_command(
@@ -903,16 +934,10 @@ def execute_recovery_requeue_command(
     if not config.apply:
         return _skipped(command, "requeue is disabled in dry-run mode")
     task = snapshot.tasks_by_issue.get(int(command.subject_id or "0"))
-    if (
-        task is not None
-        and config.dispatch_target is not None
-        and config.dispatch_target.launch_capabilities.durable_attempt
+    if _reconcile_durable_attempt_for_requeue(
+        command, task, run_state, snapshot, config
     ):
-        attempt = read_attempt(config.resolved_forge, task.issue_number)
-        if attempt is not None and reconcile_attempt(attempt, task, run_state, config):
-            return _skipped(
-                command, "durable launch attempt restored or held; no requeue"
-            )
+        return _skipped(command, "durable launch attempt restored or held; no requeue")
     selected = tuple(
         item for item in snapshot.restorations if item[0] == command.subject_id
     )
@@ -1037,6 +1062,34 @@ def _apply_missing_entry_bookkeeping(
     return RepairResult(command=command, status=RepairStatus.APPLIED)
 
 
+def _reconcile_attempt_for_bookkeeping(
+    command: RepairCommand,
+    run_state: RunState,
+    snapshot: RecoveryBookkeepingSnapshot,
+    config: DispatcherConfig,
+    finding_codes: set[str],
+) -> bool:
+    if _is_interactive_restoration(command.subject_id, snapshot):
+        return False
+    if not (
+        config.apply and (finding_codes & {LAUNCH_ATTEMPT_PENDING, RUN_STATE_MISSING})
+    ):
+        return False
+    task = next(
+        (
+            task
+            for task in snapshot.attempt_tasks
+            if str(task.issue_number) == command.subject_id
+        ),
+        None,
+    )
+    if task is not None:
+        attempt = read_attempt(config.resolved_forge, task.issue_number)
+        if attempt is not None and reconcile_attempt(attempt, task, run_state, config):
+            return True
+    return False
+
+
 def execute_bookkeeping_repair_command(
     command: RepairCommand,
     run_state: RunState,
@@ -1051,22 +1104,10 @@ def execute_bookkeeping_repair_command(
             diagnostics=(f"unsupported recovery repair command: {command.code}",),
         )
     finding_codes = set(command_finding_codes(command))
-    task = next(
-        (
-            task
-            for task in snapshot.attempt_tasks
-            if str(task.issue_number) == command.subject_id
-        ),
-        None,
-    )
-    if (
-        task is not None
-        and config.apply
-        and finding_codes & {LAUNCH_ATTEMPT_PENDING, RUN_STATE_MISSING}
+    if _reconcile_attempt_for_bookkeeping(
+        command, run_state, snapshot, config, finding_codes
     ):
-        attempt = read_attempt(config.resolved_forge, task.issue_number)
-        if attempt is not None and reconcile_attempt(attempt, task, run_state, config):
-            return RepairResult(command=command, status=RepairStatus.APPLIED)
+        return RepairResult(command=command, status=RepairStatus.APPLIED)
     if (
         LAUNCH_HISTORY_STALE in finding_codes
         and command.scope is ConsistencyScope.REPOSITORY
