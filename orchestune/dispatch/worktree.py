@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import shutil
 import subprocess
 import sys
@@ -43,6 +44,19 @@ class LaunchResult:
     dispatch_started_at: float | None = None
     execution_selection: ExecutionSelection | None = None
     launch_attempt_id: str | None = None
+
+
+@dataclass(frozen=True)
+class WorktreePreparation:
+    """`prepare_task_worktree`の結果。後段のロールバック可否判定に使う。"""
+
+    worktree_path: Path
+    branch: str
+    accepted: bool
+    created: bool = False
+    branch_created: bool = False
+    base_sha: str | None = None
+    rejection_reason: str | None = None
 
 
 def _branch_exists(branch_name: str) -> bool:
@@ -133,6 +147,58 @@ def _create_worktree(
     run_git(cmd, cwd=None, check=True)
 
 
+def _claim_marker_path(worktree_path: Path) -> Path:
+    """#935: worktree本体の外側（sibling）に置く所有権マーカーのパス。
+
+    worktree内部に置くと`git status --porcelain`にuntrackedとして現れ、
+    所有権確認用のファイル自体がdirty判定を汚染してしまうため、常に
+    worktree_path.parent側に置く。"""
+    return worktree_path.parent / f"{worktree_path.name}.claim.json"
+
+
+def _read_claim_marker(worktree_path: Path) -> dict[str, Any] | None:
+    try:
+        raw = _claim_marker_path(worktree_path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        marker: dict[str, Any] = json.loads(raw)
+    except ValueError:
+        return None
+    return marker
+
+
+def _write_claim_marker(
+    worktree_path: Path,
+    *,
+    claim_id: str,
+    branch: str,
+    base_sha: str | None,
+    branch_created: bool,
+) -> None:
+    marker_path = _claim_marker_path(worktree_path)
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(
+        json.dumps(
+            {
+                "claim_id": claim_id,
+                "branch": branch,
+                "base_sha": base_sha,
+                "branch_created": branch_created,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _remove_claim_marker(worktree_path: Path) -> None:
+    _claim_marker_path(worktree_path).unlink(missing_ok=True)
+
+
+def _resolve_worktree_head_sha(worktree_path: Path) -> str:
+    return run_git(["rev-parse", "HEAD"], cwd=worktree_path, check=True).stdout.strip()
+
+
 def _target_supports_param(dispatch_target: DispatchTarget, param_name: str) -> bool:
     try:
         sig = inspect.signature(dispatch_target.launch)
@@ -207,19 +273,18 @@ def _handle_launch_error(
     )
 
 
-def _prepare_and_launch(
+def _launch_on_prepared_worktree(
     task: TaskMetadata,
     branch_name: str,
     worktree_path: Path,
-    worktree_root: str | Path,
     dispatch_target: DispatchTarget,
     base_branch: str | None,
     execution_selection: ExecutionSelection | None = None,
 ) -> LaunchResult:
-    worktree_created = False
+    """`prepare_task_worktree`が既に用意したworktreeへdispatch_targetを起動する。
+    起動失敗時は、このworktreeを本呼び出しが用意したものとみなして補償削除する
+    （#935: 作成自体は`prepare_task_worktree`側の責務に切り出し済み）。"""
     try:
-        _create_worktree(worktree_path, Path(worktree_root), branch_name, base_branch)
-        worktree_created = True
         handle, dispatch_started_at = _provision_and_launch(
             dispatch_target,
             task,
@@ -246,13 +311,242 @@ def _prepare_and_launch(
             task,
             branch_name,
             worktree_path,
-            worktree_created,
+            True,
             execution_selection,
         )
 
 
+def _force_create_worktree(
+    worktree_path: Path,
+    worktree_root: Path,
+    branch: str,
+    base_branch: str | None,
+) -> tuple[str | None, bool]:
+    """dirtyなら退避のうえ強制再作成する（既存セマンティクス）。
+    戻り値は`(backup_error, branch_created)`。"""
+    backup_error = _cleanup_existing_worktree(worktree_path, 0)
+    if backup_error is not None:
+        return backup_error, False
+    branch_created = not _branch_exists(branch)
+    _create_worktree(worktree_path, worktree_root, branch, base_branch)
+    return None, branch_created
+
+
+def _prepare_worktree_forced(
+    worktree_path: Path,
+    worktree_root: Path,
+    branch: str,
+    base_branch: str | None,
+) -> WorktreePreparation:
+    """#935: 既存のforce cleanup経路（`create_worktree_and_launch`のdispatch専用
+    互換パス）。所有権マーカーやbase_shaは記録しない: 既存テストの多くが
+    `_create_worktree`自体をまるごとpatchして実worktreeを作らない前提のため、
+    ここで追加のgit呼び出し（rev-parse等）を必須にするとそれらのテストダブルと
+    衝突する。所有権追跡は`allow_force=False`の安全経路専用の機能とする。"""
+    backup_error, branch_created = _force_create_worktree(
+        worktree_path, worktree_root, branch, base_branch
+    )
+    if backup_error is not None:
+        return WorktreePreparation(
+            worktree_path=worktree_path,
+            branch=branch,
+            accepted=False,
+            rejection_reason=backup_error,
+        )
+    return WorktreePreparation(
+        worktree_path=worktree_path,
+        branch=branch,
+        accepted=True,
+        created=True,
+        branch_created=branch_created,
+    )
+
+
+def _create_and_claim_worktree(
+    worktree_path: Path,
+    worktree_root: Path,
+    branch: str,
+    base_branch: str | None,
+    claim_id: str,
+) -> WorktreePreparation:
+    """#935: 安全経路（`allow_force=False`）専用。新規worktreeを作成し、
+    所有権マーカーとbase_shaを発行する。"""
+    branch_created = not _branch_exists(branch)
+    _create_worktree(worktree_path, worktree_root, branch, base_branch)
+    base_sha = _resolve_worktree_head_sha(worktree_path)
+    _write_claim_marker(
+        worktree_path,
+        claim_id=claim_id,
+        branch=branch,
+        base_sha=base_sha,
+        branch_created=branch_created,
+    )
+    return WorktreePreparation(
+        worktree_path=worktree_path,
+        branch=branch,
+        accepted=True,
+        created=True,
+        branch_created=branch_created,
+        base_sha=base_sha,
+    )
+
+
+def _prepare_worktree_from_marker(
+    worktree_path: Path,
+    worktree_root: Path,
+    branch: str,
+    base_branch: str | None,
+    marker: dict[str, Any],
+) -> WorktreePreparation:
+    """#935: claim_idが一致するマーカーが既にある場合の安全な再開経路。
+    既存パスは無条件では削除も強制もしない。"""
+    claim_id = marker["claim_id"]
+    base_sha = marker.get("base_sha")
+    if worktree_path.exists():
+        return WorktreePreparation(
+            worktree_path=worktree_path,
+            branch=branch,
+            accepted=True,
+            created=False,
+            base_sha=base_sha,
+        )
+    if not _branch_exists(branch):
+        return _create_and_claim_worktree(
+            worktree_path, worktree_root, branch, base_branch, claim_id
+        )
+    run_git(["worktree", "prune"], cwd=None, check=False)
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    run_git(["worktree", "add", str(worktree_path), branch], cwd=None, check=True)
+    _write_claim_marker(
+        worktree_path,
+        claim_id=claim_id,
+        branch=branch,
+        base_sha=base_sha,
+        branch_created=False,
+    )
+    return WorktreePreparation(
+        worktree_path=worktree_path,
+        branch=branch,
+        accepted=True,
+        created=True,
+        branch_created=False,
+        base_sha=base_sha,
+    )
+
+
+def _prepare_worktree_unclaimed(
+    worktree_path: Path,
+    branch: str,
+    worktree_root: Path,
+    base_branch: str | None,
+    claim_id: str,
+) -> WorktreePreparation:
+    """#935: 所有権マーカーが存在しない場合の経路。既存パス／既存ブランチのいずれかが
+    残っていれば、所有権を証明できないため削除もforceも行わず拒否する。"""
+    if worktree_path.exists():
+        return WorktreePreparation(
+            worktree_path=worktree_path,
+            branch=branch,
+            accepted=False,
+            rejection_reason="unclaimed_existing_worktree",
+        )
+    if _branch_exists(branch):
+        return WorktreePreparation(
+            worktree_path=worktree_path,
+            branch=branch,
+            accepted=False,
+            rejection_reason="unclaimed_existing_branch",
+        )
+    return _create_and_claim_worktree(
+        worktree_path, worktree_root, branch, base_branch, claim_id
+    )
+
+
+def prepare_task_worktree(
+    branch: str,
+    worktree_root: str | Path,
+    base_branch: str | None,
+    claim_id: str,
+    *,
+    allow_force: bool = False,
+) -> WorktreePreparation:
+    """#935: 所有権を確認したうえで安全にworktreeを準備する。
+
+    `allow_force=True`は既存dispatch経路専用の後方互換パスであり、所有権を
+    問わず既存の force cleanup セマンティクスをそのまま実行する。
+    `allow_force=False`（既定）では、claim_idが一致するマーカーがない既存の
+    パス／ブランチを一切削除・強制せず拒否する。"""
+    worktree_root_path = Path(worktree_root)
+    worktree_path = _resolve_worktree_path(worktree_root_path, branch)
+
+    if allow_force:
+        return _prepare_worktree_forced(
+            worktree_path, worktree_root_path, branch, base_branch
+        )
+
+    marker = _read_claim_marker(worktree_path)
+    if marker is not None:
+        if marker.get("claim_id") != claim_id or marker.get("branch") != branch:
+            return WorktreePreparation(
+                worktree_path=worktree_path,
+                branch=branch,
+                accepted=False,
+                rejection_reason="claim_id_mismatch",
+            )
+        return _prepare_worktree_from_marker(
+            worktree_path, worktree_root_path, branch, base_branch, marker
+        )
+
+    return _prepare_worktree_unclaimed(
+        worktree_path, branch, worktree_root_path, base_branch, claim_id
+    )
+
+
+def _rollback_blocking_reason(
+    preparation: WorktreePreparation, claim_id: str
+) -> str | None:
+    """ロールバック実行可否を判定する。実行してよい場合のみNoneを返す。"""
+    marker = _read_claim_marker(preparation.worktree_path)
+    if marker is None or marker.get("claim_id") != claim_id:
+        return "ownership_marker_missing_or_reassigned"
+    if dispatch_gc.worktree_has_uncommitted_changes(preparation.worktree_path):
+        return "worktree_dirty"
+    try:
+        head_sha = _resolve_worktree_head_sha(preparation.worktree_path)
+    except (subprocess.CalledProcessError, OSError) as e:
+        return f"head_sha_check_failed: {e}"
+    if head_sha != preparation.base_sha:
+        return "advanced_beyond_base_sha"
+    return None
+
+
+def rollback_task_worktree(
+    preparation: WorktreePreparation, claim_id: str
+) -> str | None:
+    """#935: `prepare_task_worktree`が新規作成したworktree/branchの後始末。
+
+    このclaim_idが証明できなくなった（他の所有者に渡った）・dirty・base_shaから
+    進んでいる、のいずれかに該当する場合は一切削除せず、診断文字列を返して
+    復旧のため状態を保持する。すべて満たす場合のみNoneを返し実際に削除する。
+    """
+    if not preparation.accepted:
+        return None
+    if not preparation.created:
+        return "reused_existing_worktree_not_rolled_back"
+
+    blocking_reason = _rollback_blocking_reason(preparation, claim_id)
+    if blocking_reason is not None:
+        return blocking_reason
+
+    _cleanup_failed_worktree(preparation.worktree_path)
+    if preparation.branch_created:
+        run_git(["branch", "-D", preparation.branch], cwd=None, check=False)
+    _remove_claim_marker(preparation.worktree_path)
+    return None
+
+
 def _handle_backup_error(
-    worktree_path: Path, issue_number: int, branch_name: str, backup_error: str
+    worktree_path: Path, issue_number: int, branch_name: str, backup_error: str | None
 ) -> LaunchResult:
     error_message = (
         f"Uncommitted changes in {worktree_path} could not be "
@@ -273,15 +567,15 @@ def _handle_backup_error(
     )
 
 
-def create_worktree_and_launch(
+def _resolve_worktree_or_early_result(
     task: TaskMetadata,
     branch_name: str,
     worktree_root: str | Path,
-    dispatch_target: DispatchTarget,
     apply: bool,
-    base_branch: str | None = None,
-    execution_selection: ExecutionSelection | None = None,
-) -> LaunchResult:
+    execution_selection: ExecutionSelection | None,
+) -> tuple[Path | None, LaunchResult | None]:
+    """ブランチ名検証とdry-run早期returnをまとめる。続行時は`(path, None)`、
+    早期returnすべき場合は`(None, result)`を返す。"""
     try:
         worktree_path = _resolve_worktree_path(worktree_root, branch_name)
     except ValueError as e:
@@ -289,7 +583,7 @@ def create_worktree_and_launch(
             f"Error: Invalid branch name {branch_name!r} for issue #{task.issue_number}: {e}",
             file=sys.stderr,
         )
-        return LaunchResult(
+        return None, LaunchResult(
             issue_number=task.issue_number,
             branch=branch_name,
             worktree_path="",
@@ -301,7 +595,7 @@ def create_worktree_and_launch(
         )
 
     if not apply:
-        return LaunchResult(
+        return None, LaunchResult(
             issue_number=task.issue_number,
             branch=branch_name,
             worktree_path=str(worktree_path),
@@ -310,17 +604,76 @@ def create_worktree_and_launch(
             execution_selection=execution_selection,
         )
 
-    backup_error = _cleanup_existing_worktree(worktree_path, task.issue_number)
-    if backup_error is not None:
-        return _handle_backup_error(
-            worktree_path, task.issue_number, branch_name, backup_error
+    return worktree_path, None
+
+
+def _acquire_dispatch_worktree(
+    task: TaskMetadata,
+    branch_name: str,
+    worktree_root: str | Path,
+    worktree_path: Path,
+    base_branch: str | None,
+    execution_selection: ExecutionSelection | None,
+) -> tuple[WorktreePreparation | None, LaunchResult | None]:
+    """#935: `prepare_task_worktree`のforce互換経路を呼び出し、成功時は
+    `(preparation, None)`、失敗時は`(None, result)`を返す。"""
+    try:
+        preparation = prepare_task_worktree(
+            branch_name,
+            worktree_root,
+            base_branch,
+            claim_id=f"dispatch:{task.issue_number}",
+            allow_force=True,
+        )
+    except (subprocess.CalledProcessError, OSError) as e:
+        return None, _handle_launch_error(
+            e,
+            task,
+            branch_name,
+            worktree_path,
+            worktree_path.exists(),
+            execution_selection,
         )
 
-    return _prepare_and_launch(
+    if not preparation.accepted:
+        return None, _handle_backup_error(
+            worktree_path, task.issue_number, branch_name, preparation.rejection_reason
+        )
+    return preparation, None
+
+
+def create_worktree_and_launch(
+    task: TaskMetadata,
+    branch_name: str,
+    worktree_root: str | Path,
+    dispatch_target: DispatchTarget,
+    apply: bool,
+    base_branch: str | None = None,
+    execution_selection: ExecutionSelection | None = None,
+) -> LaunchResult:
+    worktree_path, early_result = _resolve_worktree_or_early_result(
+        task, branch_name, worktree_root, apply, execution_selection
+    )
+    if early_result is not None:
+        return early_result
+    assert worktree_path is not None
+
+    preparation, prep_error = _acquire_dispatch_worktree(
         task,
         branch_name,
-        worktree_path,
         worktree_root,
+        worktree_path,
+        base_branch,
+        execution_selection,
+    )
+    if prep_error is not None:
+        return prep_error
+    assert preparation is not None
+
+    return _launch_on_prepared_worktree(
+        task,
+        branch_name,
+        preparation.worktree_path,
         dispatch_target,
         base_branch,
         execution_selection=execution_selection,
