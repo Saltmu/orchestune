@@ -17,6 +17,7 @@ from orchestune.dispatch.worktree import (
     rollback_task_worktree,
 )
 from orchestune.infra.git_cli import GitResult
+from orchestune.infra.git_cli import run_git as real_run_git
 
 
 def _init_repo(path):
@@ -228,6 +229,69 @@ class TestPrepareTaskWorktree:
         with pytest.raises(ValueError, match="ブランチ名が不正です"):
             prepare_task_worktree("--evil", tmp_path / "worktrees", None, "claim-x")
 
+    def test_allow_force_invalidates_stale_marker_from_previous_claim(
+        self, tmp_path, monkeypatch
+    ):
+        """#935レビュー対応(P1): forceで奪取した後、旧claimがマーカー一致を
+        根拠に自分のものだと誤認してresumeできてはならない。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+        worktree_root = tmp_path / "worktrees"
+
+        original = prepare_task_worktree(
+            "claim/issue-12-task-12", worktree_root, None, "claim-original"
+        )
+        assert _claim_marker_path(original.worktree_path).exists()
+
+        result = prepare_task_worktree(
+            "claim/issue-12-task-12",
+            worktree_root,
+            None,
+            "dispatch:12",
+            allow_force=True,
+        )
+
+        assert result.accepted is True
+        assert not _claim_marker_path(result.worktree_path).exists()
+
+        stale_attempt = prepare_task_worktree(
+            "claim/issue-12-task-12", worktree_root, None, "claim-original"
+        )
+        assert stale_attempt.accepted is False
+        assert stale_attempt.rejection_reason == "unclaimed_existing_worktree"
+
+    def test_rejects_resume_when_directory_is_not_the_claimed_branch_checkout(
+        self, tmp_path, monkeypatch
+    ):
+        """#935レビュー対応(P2): マーカーは一致していても、実際にそのbranchを
+        checkoutした有効なworktreeでなければresumeを受理しない。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+        worktree_root = tmp_path / "worktrees"
+
+        preparation = prepare_task_worktree(
+            "claim/issue-15-task-15", worktree_root, None, "claim-15"
+        )
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(preparation.worktree_path)],
+            cwd=repo_dir,
+            check=True,
+        )
+        # markerは残るが、同じpathへ手動で無関係なディレクトリが作られたケースを模す
+        preparation.worktree_path.mkdir()
+        (preparation.worktree_path / "unrelated.txt").write_text("not a worktree")
+
+        result = prepare_task_worktree(
+            "claim/issue-15-task-15", worktree_root, None, "claim-15"
+        )
+
+        assert result.accepted is False
+        assert result.rejection_reason == "stale_marker_unverified_worktree"
+
 
 class TestRollbackTaskWorktree:
     """#935: prepare_task_worktreeが新規作成したworktree/branchの後始末。"""
@@ -393,3 +457,56 @@ class TestRollbackTaskWorktree:
             text=True,
         ).stdout
         assert "claim/issue-11-task-11" in branches
+
+    def test_withholds_marker_removal_when_worktree_removal_fails(
+        self, tmp_path, monkeypatch
+    ):
+        """#935レビュー対応(P2): `_cleanup_failed_worktree`が実際には削除
+        できなかった場合、マーカーを消して所有権を手放してはならない。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+        worktree_root = tmp_path / "worktrees"
+        preparation = prepare_task_worktree(
+            "claim/issue-13-task-13", worktree_root, None, "claim-13"
+        )
+
+        with patch(
+            "orchestune.dispatch.worktree._cleanup_failed_worktree", autospec=True
+        ):
+            result = rollback_task_worktree(preparation, "claim-13")
+
+        assert result == "worktree_removal_failed"
+        assert preparation.worktree_path.exists()
+        assert _claim_marker_path(preparation.worktree_path).exists()
+
+    def test_withholds_marker_removal_when_branch_deletion_fails(
+        self, tmp_path, monkeypatch
+    ):
+        """#935レビュー対応(P2): branch削除が失敗した場合、worktree自体は
+        削除済みでもマーカーを消してはならない（他所有者なし判定に必要な
+        情報を失い、以後の復旧診断ができなくなるため）。"""
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+        _init_repo(repo_dir)
+        monkeypatch.chdir(repo_dir)
+        worktree_root = tmp_path / "worktrees"
+        preparation = prepare_task_worktree(
+            "claim/issue-14-task-14", worktree_root, None, "claim-14"
+        )
+        assert preparation.branch_created is True
+
+        def fake_run_git(args, **kwargs):
+            if args[:2] == ["branch", "-D"]:
+                return GitResult(
+                    returncode=1, stdout="", stderr="error: branch is checked out"
+                )
+            return real_run_git(args, **kwargs)
+
+        with patch("orchestune.dispatch.worktree.run_git", side_effect=fake_run_git):
+            result = rollback_task_worktree(preparation, "claim-14")
+
+        assert result == "branch_deletion_failed"
+        assert not preparation.worktree_path.exists()
+        assert _claim_marker_path(preparation.worktree_path).exists()

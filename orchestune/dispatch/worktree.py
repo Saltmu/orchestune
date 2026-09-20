@@ -353,6 +353,11 @@ def _prepare_worktree_forced(
             accepted=False,
             rejection_reason=backup_error,
         )
+    # #935レビュー対応(P1): このpathに以前の安全経路が残した所有権マーカーが
+    # 残っていると、強制再作成後もその旧claim_idが「一致する」と誤認され、
+    # 元の所有者がresume/rollbackした際にdispatchが今使っているworktreeを
+    # 削除してしまいかねない。forceで実際に再作成した場合は必ず無効化する。
+    _remove_claim_marker(worktree_path)
     return WorktreePreparation(
         worktree_path=worktree_path,
         branch=branch,
@@ -391,6 +396,20 @@ def _create_and_claim_worktree(
     )
 
 
+def _worktree_checked_out_branch(worktree_path: Path) -> str | None:
+    """worktree_pathが実際にチェックアウトしているブランチ名を返す。
+    gitワークツリーとして無効な場合はNoneを返す。"""
+    try:
+        result = run_git(
+            ["symbolic-ref", "--short", "HEAD"], cwd=worktree_path, check=False
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
 def _prepare_worktree_from_marker(
     worktree_path: Path,
     worktree_root: Path,
@@ -403,6 +422,17 @@ def _prepare_worktree_from_marker(
     claim_id = marker["claim_id"]
     base_sha = marker.get("base_sha")
     if worktree_path.exists():
+        # #935レビュー対応(P2): マーカーが一致していても、そのパスが実際に
+        # `branch`をチェックアウトした有効なgit worktreeである保証はない
+        # （手動削除後に無関係/破損したディレクトリが同じpathへ作られた場合
+        # 等）。所有権が確認できないstaleなマーカーを信用して受理しない。
+        if _worktree_checked_out_branch(worktree_path) != branch:
+            return WorktreePreparation(
+                worktree_path=worktree_path,
+                branch=branch,
+                accepted=False,
+                rejection_reason="stale_marker_unverified_worktree",
+            )
         return WorktreePreparation(
             worktree_path=worktree_path,
             branch=branch,
@@ -538,9 +568,21 @@ def rollback_task_worktree(
     if blocking_reason is not None:
         return blocking_reason
 
+    # #935レビュー対応(P2): `_cleanup_failed_worktree`は削除失敗を握り潰す
+    # fire-and-forgetのため、実際に消えたかどうかを自前で検証する。branchの
+    # 削除も`check=False`の戻り値を無視せず確認する。いずれかが未完了なら
+    # マーカーを残し、以後も所有権を保持したまま診断できるようにする
+    # （中途半端に削除してmarkerだけ消すと、残ったpath/branchが以後
+    # 「所有者不明」として拒否対象になり、復旧できなくなるため）。
     _cleanup_failed_worktree(preparation.worktree_path)
+    if preparation.worktree_path.exists():
+        return "worktree_removal_failed"
     if preparation.branch_created:
-        run_git(["branch", "-D", preparation.branch], cwd=None, check=False)
+        branch_delete = run_git(
+            ["branch", "-D", preparation.branch], cwd=None, check=False
+        )
+        if branch_delete.returncode != 0:
+            return "branch_deletion_failed"
     _remove_claim_marker(preparation.worktree_path)
     return None
 
