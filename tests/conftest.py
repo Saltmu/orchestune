@@ -662,6 +662,7 @@ _FAKE_FORGE_MIGRATION_TESTS = frozenset(
         "test_dispatch_locks.py",
         "test_dispatch_launch_basic.py",
         "test_dispatch_launch_persistence.py",
+        "test_dispatch_launch_claim_mapping.py",
     }
 )
 _FAKE_FORGE_MIGRATION_MODULES = (

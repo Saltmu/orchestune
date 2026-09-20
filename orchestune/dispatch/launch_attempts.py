@@ -122,6 +122,33 @@ def _lookup_attempt(
     return attempt
 
 
+def _adopt_confirmed_attempt(
+    attempt: LaunchAttempt,
+    task: TaskMetadata,
+    config: DispatcherConfig,
+    existing: ActiveWorktree | None,
+) -> ActiveWorktree:
+    """確認済みattemptから新規`ActiveWorktree`を組み立てる。
+
+    #943レビュー対応(Codex P1, round3): `existing`（claim_task由来の
+    プレースホルダー）がある場合、`active_from_attempt`は持たないclaim由来の
+    所有権・予約範囲（`owner_kind`/`claim_id`/`reservation_kind`。footprintが
+    空のissueは`reservation_kind="repository"`＝全面予約になり得る）を
+    引き継ぐ。引き継がないと全面予約が既定の"footprint"へ黙って縮小し、
+    以後の同時実行排他が緩んでしまう。
+    """
+    adopted = active_from_attempt(attempt, task, config)
+    if existing is None:
+        return adopted
+    return replace(
+        adopted,
+        owner_kind=existing.owner_kind,
+        claim_id=existing.claim_id,
+        reservation_kind=existing.reservation_kind,
+        base_ref=existing.base_ref,
+    )
+
+
 def reconcile_attempt(
     attempt: LaunchAttempt,
     task: TaskMetadata,
@@ -151,14 +178,16 @@ def reconcile_attempt(
         return True
     key = str(task.issue_number)
     existing = state.active_worktrees.get(key)
-    # #943レビュー対応(Codex P1): dispatchの起動がclaim_task経由になったことで、
-    # 実際の起動より前にclaim自身の予約（`launch_attempt_id`未設定のプレース
-    # ホルダー）が`run_state.active_worktrees`へ同期されるようになった。この
-    # プレースホルダーは「まだ確定したattemptを持たない」ことを表すだけで、
-    # 別の起動に属するものではないため、既存の「別attemptに属する」拒否と
-    # 区別し、確認済みのattemptで採用できるようにする。
+    # #943: dispatchの起動がclaim_task経由になったことで、実際の起動より前に
+    # claim自身の予約（`launch_attempt_id`未設定のプレースホルダー）が
+    # `run_state.active_worktrees`へ同期されるようになった。このプレース
+    # ホルダーは別の起動に属するものではないため、既存の「別attemptに属する」
+    # 拒否と区別し、確認済みのattemptで採用できるようにする
+    # （`_adopt_confirmed_attempt`参照）。
     if existing is None or existing.launch_attempt_id is None:
-        state.active_worktrees[key] = active_from_attempt(attempt, task, config)
+        state.active_worktrees[key] = _adopt_confirmed_attempt(
+            attempt, task, config, existing
+        )
     elif existing.launch_attempt_id != attempt.attempt_id:
         _hold(task, config, "local state belongs to a different launch attempt")
         return True

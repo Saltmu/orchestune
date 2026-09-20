@@ -140,6 +140,11 @@ def test_reconcile_attempt_adopts_confirmed_launch_over_claim_placeholder(launch
                 started_at=None,
                 declared_footprint=task.footprint,
                 launch_attempt_id=None,
+                # #943レビュー対応(Codex P1, round3): footprintの無いissueは
+                # claim_taskがreservation_kind="repository"（全面予約）で
+                # 予約する。採用後もこれが保たれるべき。
+                reservation_kind="repository",
+                claim_id="claim-xyz",
             )
         }
     )
@@ -156,8 +161,13 @@ def test_reconcile_attempt_adopts_confirmed_launch_over_claim_placeholder(launch
     consumed = reconcile_attempt(attempt, task, state, config)
 
     assert consumed is True
-    assert state.active_worktrees[key].launch_attempt_id == "confirmed-attempt-1"
-    assert state.active_worktrees[key].external_id == "ext-1"
+    adopted = state.active_worktrees[key]
+    assert adopted.launch_attempt_id == "confirmed-attempt-1"
+    assert adopted.external_id == "ext-1"
+    # 全面予約が黙って"footprint"へ縮小し、以後の同時実行排他が緩んでは
+    # ならない。
+    assert adopted.reservation_kind == "repository"
+    assert adopted.claim_id == "claim-xyz"
 
 
 def test_unknown_launch_is_not_retried_after_state_loss(launch_env):

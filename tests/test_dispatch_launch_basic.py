@@ -219,43 +219,6 @@ class TestDecideTaskLaunchPlan:
         assert plans[0].execution_selection.reasoning_effort == "high"
 
 
-class TestResolveClaimFailureLaunchResult:
-    """#943レビュー対応(Codex P2): INVALID_BRANCH_NAMEのみvalidation_error。"""
-
-    def _plan(self, tmp_path):
-        task = _task(1)
-        return TaskLaunchPlan(task, "claude/issue-1-task-1", None, "origin/main")
-
-    def _outcome(self, reason, message):
-        from orchestune.claim.contracts import ClaimFailure, ClaimOutcome
-
-        return ClaimOutcome(
-            success=False,
-            issue_number=1,
-            failure=ClaimFailure(reason=reason, message=message),
-        )
-
-    def test_invalid_branch_name_is_a_validation_error(self, tmp_path):
-        from orchestune.claim.contracts import ClaimFailureReason
-        from orchestune.dispatch.launch import _resolve_claim_failure_launch_result
-
-        outcome = self._outcome(
-            ClaimFailureReason.INVALID_BRANCH_NAME, "invalid branch name"
-        )
-        result = _resolve_claim_failure_launch_result(self._plan(tmp_path), outcome)
-        assert result.validation_error is True
-
-    def test_worktree_creation_failed_is_not_a_validation_error(self, tmp_path):
-        from orchestune.claim.contracts import ClaimFailureReason
-        from orchestune.dispatch.launch import _resolve_claim_failure_launch_result
-
-        outcome = self._outcome(
-            ClaimFailureReason.WORKTREE_CREATION_FAILED, "disk full"
-        )
-        result = _resolve_claim_failure_launch_result(self._plan(tmp_path), outcome)
-        assert result.validation_error is False
-
-
 class TestDecideDuplicateCandidates:
     """decide層: git ls-remoteの読み取りのみで重複判定し、githubへの書き込みは行わない。"""
 
@@ -399,7 +362,7 @@ class TestApplyTaskLaunches:
     def test_invalid_subtask_id_blocks_only_affected_task(self, tmp_path):
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
@@ -465,7 +428,7 @@ class TestApplyTaskLaunches:
         既存PRまで新sessionの成果物と誤認する窓が生まれるため）。"""
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
@@ -512,7 +475,7 @@ class TestApplyTaskLaunches:
     def test_apply_task_launches_passes_base_branch_to_target(self, tmp_path):
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.dispatch.targets import LocalProcessDispatchTarget
 
         register_task_issue(1, "task-1")
@@ -574,7 +537,7 @@ class TestApplyTaskLaunches:
         from unittest.mock import MagicMock, patch
 
         from orchestune.dispatch.execution_profiles import ExecutionSelection
-        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
@@ -651,7 +614,7 @@ class TestApplyTaskLaunches:
         from unittest.mock import MagicMock, patch
 
         from orchestune.consistency.desired import TaskLifecycle
-        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.dispatch.status_repair import task_lifecycle
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
@@ -733,7 +696,7 @@ class TestApplyTaskLaunchesLabelOrdering:
     def test_success_path_adds_in_progress_before_removing_queued(self, tmp_path):
         from unittest.mock import MagicMock, patch
 
-        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
@@ -791,7 +754,7 @@ class TestApplyTaskLaunchesLabelOrdering:
     def test_failure_path_adds_new_status_before_removing_queued(self, tmp_path):
         from unittest.mock import patch
 
-        from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+        from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,

@@ -344,10 +344,23 @@ def _launch_reservation(
 def _handle_launch_failure(
     task: TaskMetadata, launch, config: DispatcherConfig
 ) -> None:
+    # #943レビュー対応(Codex P1): `launch.claim_id`が設定されているのは
+    # claim_task自身が成功し（既に`status:in-progress`へ遷移済み）、その後の
+    # 実際のagent起動が失敗したケースのみ（claim失敗時のLaunchResultは
+    # `claim_id`を設定しない）。`task.status_labels`はclaim実行前のstale
+    # スナップショットのため、IN_PROGRESSを含まない——ここで除去対象へ
+    # 明示的に加えないと、失敗後の遷移がIN_PROGRESSを剥がさず、
+    # `status:in-progress`と`status:blocked`が同時に付いた矛盾状態のまま
+    # 残ってしまう。
+    stale_labels = (
+        (*task.status_labels, StatusLabel.IN_PROGRESS)
+        if launch.claim_id is not None
+        else task.status_labels
+    )
     old_labels = tuple(
         label
-        for label in (StatusLabel.QUEUED, StatusLabel.BLOCKED)
-        if label in task.status_labels
+        for label in (StatusLabel.QUEUED, StatusLabel.BLOCKED, StatusLabel.IN_PROGRESS)
+        if label in stale_labels
     )
     if launch.validation_error:
         transition_status_label(
