@@ -42,12 +42,11 @@ from tests.dispatch_test_support import save_locked_run_state as save_run_state
 from tests.dispatch_test_support import stub_label_actor_permission
 
 
-def _decide_external_lock_sync(tasks_by_issue, prs, run_state, config=None):
+def _decide_external_lock_sync(tasks_by_issue, prs, run_state):
     return _decide_external_lock_sync_impl(
         tasks_by_issue,
         prs,
         run_state,
-        config,
         view=LockDependencyTestView.from_tasks(list(tasks_by_issue.values())),
     )
 
@@ -154,7 +153,7 @@ class TestDecideExternalLockSync:
         assert result.to_unlock == []
         assert [t.issue_number for t in result.to_lock] == [2]
 
-    def test_parent_branch_diff_does_not_lock_overlapping_child_task(self, tmp_path):
+    def test_parent_branch_diff_does_not_lock_overlapping_child_task(self):
         """#677: 先行サブタスクのマージで親ブランチ（parent/issue-*）に差分が
         生じても、footprintが重なる後続タスクをexternal-lockしない。
 
@@ -162,9 +161,6 @@ class TestDecideExternalLockSync:
         る陽性ケース: 同じ重なるfootprintでも、ブランチが親ブランチであれば
         ロックされないことを確認する。"""
         run_state = RunState(active_worktrees={})
-        config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", parent_issue_number=181
-        )
         queued_task = _task(issue_number=2, footprint=("src/shared.py",))
         with (
             patch(
@@ -176,7 +172,7 @@ class TestDecideExternalLockSync:
                 "orchestune.dispatch.phase_rebase.branch_changed_files", autospec=True
             ) as mock_branch_files,
         ):
-            result = _decide_external_lock_sync({2: queued_task}, [], run_state, config)
+            result = _decide_external_lock_sync({2: queued_task}, [], run_state)
         mock_branch_files.assert_not_called()
         assert result.to_lock == []
         assert result.to_unlock == []
@@ -348,11 +344,7 @@ class TestRunDispatchCycleBranchNormalization:
         `status:external-lock`で永久ブロックされず、正常にスケジュール対象
         であり続けることをエンドツーエンドで検証する回帰テスト。
 
-        `config.parent_issue_number`は設定しない: `_is_base_or_parent_branch`の
-        汎用`parent/issue-*`プレフィックス除外はconfig非依存で効くうえ、
-        `parent_issue_number`を設定すると`_fetch_issues`がネイティブSub-issue
-        API経由（`find_children_by_parent`）に切り替わり、本テストがモックして
-        いる`list_issues_by_label`ベースの取得経路を素通りしてしまう。"""
+        親ブランチの除外は常に`parent/issue-*`プレフィックスで判定する。"""
         config = DispatcherConfig(
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",

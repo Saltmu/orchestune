@@ -44,7 +44,6 @@ def _decide_external_lock_sync(
     tasks_by_issue: Mapping[int, TaskMetadata],
     prs: list[PrRecord],
     run_state: RunState,
-    config: DispatcherConfig | None = None,
     *,
     view: LockDependencyView,
 ) -> ExternalLockScanResult:
@@ -170,9 +169,7 @@ def _sync_external_locks(
     view: LockDependencyView,
 ) -> ExternalLockScanResult:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
-    lock_result = _decide_external_lock_sync(
-        tasks_by_issue, prs, run_state, config, view=view
-    )
+    lock_result = _decide_external_lock_sync(tasks_by_issue, prs, run_state, view=view)
     _apply_external_lock_sync(lock_result, config, run_state)
     return lock_result
 
