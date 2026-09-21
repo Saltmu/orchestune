@@ -620,6 +620,8 @@ def fake_forge(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
     def list_sub_issues_from_status_queries(_parent_issue_number):
         """Adapt legacy status-query fixtures to the parent-child Forge API."""
+        if configured := forge.list_sub_issues.return_value:
+            return configured
         labels = (
             "status:queued",
             "external-lock",
@@ -1170,9 +1172,12 @@ def _guard_dispatch_cycle_ensure_parent_branch(
     monkeypatch.setattr(
         "orchestune.dispatch.phase_rebase.ensure_parent_branch", guarded_ensure
     )
-    monkeypatch.setattr(
-        "orchestune.dispatch.cycle.ensure_parent_branch_ready", guarded_ensure
-    )
+    if request.node.cls is None or (
+        request.node.cls.__name__ != "TestRunDispatchCycleParentIssueValidation"
+    ):
+        monkeypatch.setattr(
+            "orchestune.dispatch.cycle.ensure_parent_branch_ready", guarded_ensure
+        )
     yield
 
 

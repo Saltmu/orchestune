@@ -44,7 +44,7 @@ def _ctx(**overrides: Any) -> CycleContext:
         branch_by_issue_number={},
         prs=[],
         config=DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -142,7 +142,7 @@ class TestFinalConsistencyRepairExecutor:
             applied=False,
         )
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

@@ -141,7 +141,9 @@ class TestApplyActorVerification:
             )
         ]
         config = DispatcherConfig(
-            parent_issue_number=1, events_log_path=tmp_path / "events.jsonl", apply=True
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
         )
         with patch(
             "orchestune.dispatch.actor_verification.apply_human_review_escalation",
@@ -161,7 +163,9 @@ class TestApplyActorVerification:
             )
         ]
         config = DispatcherConfig(
-            parent_issue_number=1, events_log_path=tmp_path / "events.jsonl", apply=True
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
         )
         with patch(
             "orchestune.dispatch.actor_verification.apply_human_review_escalation",
@@ -186,7 +190,7 @@ class TestApplyActorVerification:
             )
         ]
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=False,
         )
@@ -210,7 +214,9 @@ class TestApplyActorVerification:
             ),
         ]
         config = DispatcherConfig(
-            parent_issue_number=1, events_log_path=tmp_path / "events.jsonl", apply=True
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
         )
         with patch(
             "orchestune.dispatch.actor_verification.apply_human_review_escalation",

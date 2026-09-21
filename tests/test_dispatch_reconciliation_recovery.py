@@ -182,7 +182,7 @@ class TestBaseBranchRedRecovery:
         fake_forge.get_issue_state.return_value = "OPEN"
         fake_forge.get_issue_labels.return_value = ("status:queued",)
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -208,7 +208,7 @@ class TestBaseBranchRedRecovery:
         )
         fake_forge = MagicMock()
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -228,7 +228,7 @@ class TestBaseBranchRedRecovery:
         issues_mock.all.return_value = [_issue(1, labels=("status:blocked",))]
         ctx = MagicMock()
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
         )
@@ -252,7 +252,7 @@ class TestBaseBranchRedRecovery:
             {"body": outcome.render(), "created_at": "2026-01-01T00:00:10Z"}
         ]
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -330,12 +330,12 @@ class TestBaseBranchRedRecovery:
 
 
 class TestResolveBaseBranchForTask:
-    def test_when_sole_dependency_is_done_returns_origin_main(self, tmp_path):
+    def test_when_sole_dependency_is_done_returns_parent_branch(self, tmp_path):
         task = _task(issue_number=2, subtask_id="task-b", depends_on=("task-a",))
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
-            parent_issue_number=None,
+            parent_issue_number=100,
         )
         branch_by_issue_number = {1: "claude/issue-1-task-a"}
         done_issue_numbers = {1}
@@ -350,7 +350,7 @@ class TestResolveBaseBranchForTask:
                 branches=branch_by_issue_number,
             ),
         )
-        assert base_branch == "origin/main"
+        assert base_branch == "parent/issue-100"
 
     def test_when_sole_dependency_is_done_with_parent_returns_parent_branch(
         self, tmp_path

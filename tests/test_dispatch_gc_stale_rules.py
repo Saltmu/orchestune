@@ -28,7 +28,9 @@ class TestApplyStaleActiveEntryDiscard:
         active = _active(worktree_path=str(tmp_path), pid=12345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
-            parent_issue_number=1, events_log_path=tmp_path / "events.jsonl", apply=True
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
         )
 
         with (
@@ -63,7 +65,9 @@ class TestApplyStaleActiveEntryDiscard:
         active = _active(worktree_path=str(tmp_path), pid=12345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
-            parent_issue_number=1, events_log_path=tmp_path / "events.jsonl", apply=True
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
         )
 
         with (
@@ -95,7 +99,9 @@ class TestApplyStaleActiveEntryDiscard:
         active = _active(worktree_path="worktrees/does-not-exist", pid=12345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
-            parent_issue_number=1, events_log_path=tmp_path / "events.jsonl", apply=True
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
         )
 
         with (
@@ -129,7 +135,7 @@ class TestApplyStaleActiveEntryDiscard:
         active = _active(worktree_path=str(tmp_path), pid=12345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             forge=fake_forge,
@@ -167,7 +173,7 @@ class TestApplyStaleActiveEntryDiscard:
         active = _active(worktree_path=str(tmp_path), pid=12345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=False,
         )
@@ -203,7 +209,7 @@ class TestSupervisorOwnedStaleEntry:
         fake_forge.get_issue_state.return_value = "OPEN"
         fake_forge.get_issue_labels.return_value = ("status:blocked",)
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             apply=True,
             run_state_path=tmp_path / "state.json",
             events_log_path=tmp_path / "events.jsonl",
@@ -253,7 +259,7 @@ class TestSupervisorOwnedStaleEntry:
         fake_forge.get_issue_state.return_value = "OPEN"
         fake_forge.get_issue_labels.return_value = ("status:in-progress",)
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             apply=True,
             run_state_path=tmp_path / "state.json",
             events_log_path=tmp_path / "events.jsonl",
@@ -297,7 +303,7 @@ class TestSupervisorOwnedStaleEntry:
         fake_forge.branch_exists.return_value = True
         fake_forge.get_issue_state.side_effect = RuntimeError("Forge unavailable")
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             apply=True,
             run_state_path=tmp_path / "state.json",
             events_log_path=tmp_path / "events.jsonl",

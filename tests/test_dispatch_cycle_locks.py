@@ -194,7 +194,7 @@ class TestApplyExternalLockSync:
         _apply_external_lock_sync(
             lock_result,
             DispatcherConfig(
-                parent_issue_number=1,
+                parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
                 apply=True,
             ),
@@ -214,7 +214,7 @@ class TestApplyExternalLockSync:
         _apply_external_lock_sync(
             lock_result,
             DispatcherConfig(
-                parent_issue_number=1,
+                parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
                 apply=True,
             ),
@@ -234,7 +234,7 @@ class TestApplyExternalLockSync:
         _apply_external_lock_sync(
             lock_result,
             DispatcherConfig(
-                parent_issue_number=1,
+                parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
                 apply=True,
             ),
@@ -310,7 +310,7 @@ class TestRunDispatchCycleBranchNormalization:
         self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
@@ -354,7 +354,7 @@ class TestRunDispatchCycleBranchNormalization:
         API経由（`find_children_by_parent`）に切り替わり、本テストがモックして
         いる`list_issues_by_label`ベースの取得経路を素通りしてしまう。"""
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
@@ -433,7 +433,7 @@ class TestExternalLockNotice:
 
     def _config(self, tmp_path, apply=True):
         return DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=apply,
         )
@@ -573,7 +573,9 @@ class TestExternalLockReleaseNoticeRetry:
 
     def _config(self, tmp_path):
         return DispatcherConfig(
-            parent_issue_number=1, events_log_path=tmp_path / "events.jsonl", apply=True
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
         )
 
     def test_failed_release_notice_is_queued_for_retry(self, tmp_path, fake_forge):
@@ -657,6 +659,7 @@ class TestDispatchCycleRunStateLock:
         run_state_path = tmp_path / "run_state.json"
         lock_path = run_state_path.with_suffix(".lock")
         config = DispatcherConfig(
+            parent_issue_number=100,
             run_state_path=run_state_path,
             events_log_path=tmp_path / "events.jsonl",
             apply=False,
@@ -698,6 +701,7 @@ class TestDispatchCycleRunStateLock:
         run_state_path = tmp_path / "run_state.json"
         lock_path = run_state_path.with_suffix(".lock")
         config = DispatcherConfig(
+            parent_issue_number=100,
             run_state_path=run_state_path,
             events_log_path=tmp_path / "events.jsonl",
             apply=False,

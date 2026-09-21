@@ -137,7 +137,7 @@ class TestDecideFootprintDeviationOutcome:
             ["src/foo.py"],
             {},
             DispatcherConfig(
-                parent_issue_number=1,
+                parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
             ),
         )
@@ -150,7 +150,7 @@ class TestDecideFootprintDeviationOutcome:
             ["src/foo.py"],
             {},
             DispatcherConfig(
-                parent_issue_number=1,
+                parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
             ),
         )
@@ -160,7 +160,7 @@ class TestDecideFootprintDeviationOutcome:
         active = _active(recompute_count=2)
         task = _task()
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_recompute_retries=2,
         )
@@ -176,7 +176,7 @@ class TestDecideFootprintDeviationOutcome:
         active = _active(recompute_count=0)
         task = _task()
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_recompute_retries=2,
         )
@@ -196,7 +196,7 @@ class TestDecideFootprintDeviationOutcome:
         task_a = _task(subtask_id="task-a", footprint=("src/only_a.py",))
         task_b = _task(issue_number=2, subtask_id="task-b", footprint=("package.json",))
         config = DispatcherConfig(
-            parent_issue_number=1, events_log_path=tmp_path / "events.jsonl"
+            parent_issue_number=100, events_log_path=tmp_path / "events.jsonl"
         )
         decision = _decide_footprint_deviation_outcome(
             active, ["package.json"], {1: task_a, 2: task_b}, config
@@ -212,7 +212,7 @@ class TestDecideFootprintDeviationOutcome:
         task_a = _task(subtask_id="task-a", footprint=("src/only_a.py",))
         task_b = _task(issue_number=2, subtask_id="task-b", footprint=("package.json",))
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             dag_ignore_patterns=compile_extra_ignore_patterns([r"(^|/)package\.json$"]),
         )
@@ -230,7 +230,7 @@ class TestDecideFootprintDeviationOutcome:
         active = _active(recompute_count=0, declared_footprint=("src/only_a.py",))
         task_a = _task(subtask_id="task-a", footprint=("src/only_a.py",))
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             dag_similarity_threshold=0.1,
         )
@@ -436,7 +436,7 @@ class TestTryAutoRebase:
 
         run_state = RunState(active_worktrees={})
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -480,7 +480,7 @@ class TestTryAutoRebase:
 
         run_state = RunState(active_worktrees={})
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -529,7 +529,7 @@ class TestApplyFootprintDeviationOutcomePersistsRecoveryCounters:
         body = "```yaml\nsubtask_id: task-a\nrecompute_count: 1\n```\n"
         forge = self._forge_with_body(body)
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -554,7 +554,7 @@ class TestApplyFootprintDeviationOutcomePersistsRecoveryCounters:
         body = "```yaml\nsubtask_id: task-a\nrecompute_count: 2\n```\n"
         forge = self._forge_with_body(body)
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -578,7 +578,7 @@ class TestApplyFootprintDeviationOutcomePersistsRecoveryCounters:
         )
         forge = MagicMock()
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -602,7 +602,7 @@ class TestApplyFootprintDeviationOutcomePersistsRecoveryCounters:
         body = "```yaml\nsubtask_id: task-a\nrecompute_count: 2\n```\n"
         forge = self._forge_with_body(body)
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -636,7 +636,7 @@ class TestApplyFootprintDeviationOutcomePersistsRecoveryCounters:
         forge = self._forge_with_body(body)
         forge.add_label.side_effect = RuntimeError("simulated crash after persist")
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -665,7 +665,7 @@ class TestApplyFootprintDeviationOutcomePersistsRecoveryCounters:
         forge = MagicMock()
         forge.get_issue.return_value = None
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

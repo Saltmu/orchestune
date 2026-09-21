@@ -337,7 +337,7 @@ class TestForgeProtocols:
     def test_dispatcher_config_creates_default_github_forge(self, tmp_path):
         assert isinstance(
             DispatcherConfig(
-                parent_issue_number=1,
+                parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
             ).forge,
             GitHubForge,
@@ -360,7 +360,7 @@ class TestForgeProtocols:
 
         fake_forge = FakeForge()
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             forge=fake_forge,
         )

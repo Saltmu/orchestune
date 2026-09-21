@@ -206,7 +206,7 @@ class TestProcessActiveWorktrees:
         task = _task()
         run_state = RunState(active_worktrees={"1": active})
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -463,7 +463,7 @@ class TestProcessActiveWorktrees:
             run_state=run_state,
             tasks_by_issue={1: task},
             config=DispatcherConfig(
-                parent_issue_number=1,
+                parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
                 run_state_path=Path("dummy.json"),
                 worktree_root=Path("worktrees"),
@@ -511,7 +511,7 @@ class TestProcessActiveWorktrees:
             ci_passed_pr_issue_numbers={2},
             branch_by_issue_number={2: "parent-branch"},
             config=DispatcherConfig(
-                parent_issue_number=1,
+                parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
                 run_state_path=Path("dummy.json"),
                 worktree_root=Path("worktrees"),
@@ -581,7 +581,7 @@ class TestProcessActiveWorktrees:
             run_state=run_state,
             tasks_by_issue={1: task},
             config=DispatcherConfig(
-                parent_issue_number=1,
+                parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
                 run_state_path=Path("dummy.json"),
                 worktree_root=Path("worktrees"),
@@ -621,7 +621,7 @@ class TestProcessActiveWorktrees:
             run_state=run_state_two,
             tasks_by_issue={1: task_early, 2: task_keep},
             config=DispatcherConfig(
-                parent_issue_number=1,
+                parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
                 run_state_path=Path("dummy.json"),
                 worktree_root=Path("worktrees"),

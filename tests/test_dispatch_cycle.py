@@ -112,7 +112,7 @@ class TestConflictAwareSchedulingPhase:
             }
         )
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             apply=False,
             max_concurrent=3,
             max_launches_per_window=3,
@@ -160,7 +160,7 @@ class TestConflictAwareSchedulingPhase:
             ),
         ]
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             apply=False,
             max_concurrent=3,
             max_launches_per_window=3,
@@ -212,7 +212,7 @@ class TestConflictAwareSchedulingPhase:
             ),
         ]
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             apply=False,
             max_concurrent=2,
             max_launches_per_window=4,
@@ -406,26 +406,6 @@ class TestFetchIssues:
         mock_sub_issues.assert_called_once_with(100)
         assert [i.number for i in result.queued] == [1]
 
-    def test_uses_list_issues_by_label_when_parent_issue_number_is_none(
-        self, tmp_path, fake_forge
-    ):
-        config = DispatcherConfig(
-            parent_issue_number=1,
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-        )
-        fake_forge.list_issues_by_label.reset_mock(side_effect=True)
-        fake_forge.list_issues_by_label.return_value = []
-        mock_list = fake_forge.list_issues_by_label
-        fake_forge.list_sub_issues.reset_mock(side_effect=True)
-        fake_forge.list_sub_issues.side_effect = AssertionError(
-            "Should not use the parent fast path"
-        )
-        _fetch_issues(config)
-
-        assert mock_list.call_count == 6
-
 
 class TestFetchIssuesWithFakeForge:
     """#292: `mock.patch`によるグローバルなクラスメソッド差し替えではなく、
@@ -459,7 +439,7 @@ class TestFinalizeLaunch:
         self, tmp_path
     ):
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -488,7 +468,7 @@ class TestFinalizeLaunch:
 class TestRunDispatchCycle:
     def test_dry_run_makes_no_write_calls(self, tmp_path, fake_forge):
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
@@ -533,7 +513,7 @@ class TestRunDispatchCycle:
         self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
@@ -586,7 +566,7 @@ class TestRunDispatchCycle:
 
     def test_apply_updates_last_reconciled_at(self, tmp_path, fake_forge):
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
@@ -617,7 +597,7 @@ class TestRunDispatchCycle:
 
     def test_dry_run_does_not_update_last_reconciled_at(self, tmp_path, fake_forge):
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
@@ -655,7 +635,7 @@ class TestRunDispatchCycle:
             run_state_path,
         )
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=5,
@@ -882,7 +862,7 @@ class TestRunDispatchCycleActorVerification:
 
     def test_unauthorized_actor_skips_launch_and_escalates(self, tmp_path, fake_forge):
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
@@ -932,7 +912,7 @@ class TestRunDispatchCycleActorVerification:
         self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,

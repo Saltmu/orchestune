@@ -540,7 +540,7 @@ class TestProvisionSubtask:
             plan_path=plan_path,
             existing_by_subtask_id={},
             dependencies_done={},
-            parent_issue_number=1,
+            parent_issue_number=100,
         )
         assert is_reused is False
         assert is_done is False
@@ -578,7 +578,7 @@ class TestProvisionSubtask:
             plan_path=plan_path,
             existing_by_subtask_id={},
             dependencies_done={},
-            parent_issue_number=1,
+            parent_issue_number=100,
         )
         assert number == existing_number
         assert is_reused is True
@@ -628,7 +628,7 @@ class TestProvisionSubtask:
             plan_path=plan_path,
             existing_by_subtask_id={},
             dependencies_done={},
-            parent_issue_number=1,
+            parent_issue_number=100,
         )
         assert forge.update_issue_body_calls == []
 
@@ -667,7 +667,7 @@ class TestProvisionSubtask:
             plan_path=plan_path,
             existing_by_subtask_id={},
             dependencies_done={},
-            parent_issue_number=1,
+            parent_issue_number=100,
         )
         assert number == existing_number
         assert is_reused is True
@@ -713,7 +713,7 @@ class TestProvisionSubtask:
             plan_path=plan_path,
             existing_by_subtask_id={},
             dependencies_done={},
-            parent_issue_number=1,
+            parent_issue_number=100,
         )
         assert has_parent_metadata is True
         assert "parent_issue_number: 1\n" in forge.issues[existing_number]["body"]

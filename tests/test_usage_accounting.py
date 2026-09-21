@@ -365,7 +365,7 @@ class TestTaskTokenLimitEscalation:
             model="claude-3-7-sonnet",
         )
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -432,7 +432,7 @@ class TestTaskTokenLimitEscalation:
             model="claude-3-7-sonnet",
         )
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,

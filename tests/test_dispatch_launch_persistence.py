@@ -26,7 +26,7 @@ def _ctx(**overrides):
         branch_by_issue_number={},
         prs=[],
         config=DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -63,7 +63,7 @@ class TestFinalizeLaunchContextRecording:
 
         task = _task(1, subtask_id="task-a")
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -107,7 +107,7 @@ class TestFinalizeLaunchContextRecording:
         from unittest.mock import patch
 
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -171,7 +171,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
@@ -220,7 +220,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
@@ -269,7 +269,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
@@ -678,6 +678,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
 
         plans, dispatch_target = self._launch_plan(tmp_path)
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

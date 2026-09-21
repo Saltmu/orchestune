@@ -75,7 +75,7 @@ def test_recovery_boundary_restores_missing_run_state_and_reobserves(
     )
     run_state = RunState()
     config = DispatcherConfig(
-        parent_issue_number=1,
+        parent_issue_number=100,
         apply=True,
         max_concurrent=0,
         run_state_path=tmp_path / "run_state.json",
@@ -112,7 +112,7 @@ def test_recovery_boundary_requeues_missing_execution_without_restorable_resourc
     in_memory_forge.seed_issue(issue)
     run_state = RunState()
     config = DispatcherConfig(
-        parent_issue_number=1,
+        parent_issue_number=100,
         apply=True,
         max_concurrent=0,
         run_state_path=tmp_path / "run_state.json",
@@ -307,7 +307,7 @@ def test_gc_reclaim_runs_as_a_supervisor_typed_repair(tmp_path, fake_forge) -> N
         status_labels=("status:in-progress",),
     )
     config = DispatcherConfig(
-        parent_issue_number=1,
+        parent_issue_number=100,
         apply=True,
         zombie_gc=True,
         run_state_path=tmp_path / "state.json",
@@ -474,7 +474,7 @@ def test_repair_mode_with_empty_allowlist_remains_report_only(tmp_path, fake_for
     )
     fake_forge.list_open_prs.return_value = []
     config = DispatcherConfig(
-        parent_issue_number=1,
+        parent_issue_number=100,
         apply=False,
         consistency_mode=ConsistencyMode.REPAIR,
         run_state_path=tmp_path / "state.json",
@@ -505,7 +505,7 @@ def test_repair_failure_is_reported_and_intent_remains_resumable(tmp_path, fake_
     task = make_task(709, status_labels=issue.labels)
     run_state = RunState()
     config = DispatcherConfig(
-        parent_issue_number=1,
+        parent_issue_number=100,
         apply=True,
         consistency_mode=ConsistencyMode.REPAIR,
         consistency_repair_allowlist=frozenset({PRIMARY_STATUS_CONFLICT}),
@@ -634,7 +634,7 @@ def test_cycle_resumes_partial_forge_failure_once_on_the_next_cycle(
     fake_forge.add_label.side_effect = add_label
     fake_forge.remove_label.side_effect = remove_label
     config = DispatcherConfig(
-        parent_issue_number=1,
+        parent_issue_number=100,
         apply=True,
         max_concurrent=0,
         run_state_path=tmp_path / "state.json",
@@ -730,7 +730,7 @@ def test_user_allowlisted_status_repair_resumes_when_first_forge_write_fails(
     fake_forge.add_label.side_effect = fail_first_add
     fake_forge.remove_label.side_effect = remove_label
     config = DispatcherConfig(
-        parent_issue_number=1,
+        parent_issue_number=100,
         apply=True,
         consistency_mode=ConsistencyMode.REPAIR,
         consistency_repair_allowlist=frozenset({QUEUED_WITH_UNRESOLVED_DEPENDENCIES}),
@@ -832,7 +832,7 @@ def test_applied_status_intent_is_verified_next_cycle_after_read_failure(
     fake_forge.add_label.side_effect = add_label
     fake_forge.remove_label.side_effect = remove_label
     config = DispatcherConfig(
-        parent_issue_number=1,
+        parent_issue_number=100,
         apply=True,
         consistency_mode=ConsistencyMode.REPAIR,
         consistency_repair_allowlist=frozenset({QUEUED_WITH_UNRESOLVED_DEPENDENCIES}),

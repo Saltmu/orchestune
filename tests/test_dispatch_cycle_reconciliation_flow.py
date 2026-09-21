@@ -796,13 +796,13 @@ class TestBaseBranchRedCycleReconciliation:
         self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
         )
         issue = _full_issue(
-            1, labels=("status:blocked", "ci:base-branch-red"), parent_number=None
+            1, labels=("status:blocked", "ci:base-branch-red"), parent_number=100
         )
         outcome = OutcomeRecord(
             result="blocked",

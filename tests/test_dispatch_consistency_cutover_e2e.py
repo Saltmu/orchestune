@@ -67,7 +67,7 @@ def test_default_self_healing_allowlist_is_stable_and_separate(tmp_path) -> None
         }
     )
     config = DispatcherConfig(
-        parent_issue_number=1,
+        parent_issue_number=100,
         run_state_path=tmp_path / "state.json",
         events_log_path=tmp_path / "events.jsonl",
         worktree_root=tmp_path / "worktrees",
@@ -87,7 +87,7 @@ def test_unbound_execution_command_fails_closed_without_phase_owned_skip(
     )
     executor = _DispatchRepairExecutor(
         config=DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             run_state_path=tmp_path / "state.json",
             events_log_path=tmp_path / "events.jsonl",
             worktree_root=tmp_path / "worktrees",
@@ -157,7 +157,7 @@ def test_user_allowlisted_execution_requeue_uses_a_bound_handler(
     )
     in_memory_forge.seed_issue(issue)
     config = DispatcherConfig(
-        parent_issue_number=1,
+        parent_issue_number=100,
         apply=True,
         consistency_mode=ConsistencyMode.REPAIR,
         consistency_repair_allowlist=frozenset({COMMAND_REQUEUE}),
@@ -205,7 +205,7 @@ def test_no_apply_off_mode_reports_default_status_repair_as_deferred(
     )
     fake_forge.list_open_prs.return_value = []
     config = DispatcherConfig(
-        parent_issue_number=1,
+        parent_issue_number=100,
         apply=False,
         consistency_mode=ConsistencyMode.OFF,
         max_concurrent=0,

@@ -46,7 +46,7 @@ class TestFinalizeCompletedWorktree:
         )
         run_state = RunState(task_reclaim_counts={280: record})
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             apply=False,
             max_early_death_retries=2,
             early_death_window_seconds=120,
@@ -66,7 +66,7 @@ class TestFinalizeCompletedWorktree:
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             forge=fake_forge,
@@ -102,7 +102,7 @@ class TestFinalizeCompletedWorktree:
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             forge=fake_forge,
@@ -145,7 +145,7 @@ class TestFinalizeCompletedWorktree:
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             forge=fake_forge,
@@ -188,7 +188,7 @@ class TestFinalizeCompletedWorktree:
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             forge=fake_forge,
@@ -229,7 +229,7 @@ class TestFinalizeCompletedWorktree:
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             forge=fake_forge,
@@ -259,7 +259,7 @@ class TestFinalizeCompletedWorktree:
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:queued", "status:in-progress"))
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             forge=fake_forge,
@@ -299,7 +299,7 @@ class TestFinalizeCompletedWorktree:
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             forge=fake_forge,
@@ -347,7 +347,7 @@ class TestFinalizeNotNeededWorktree:
         active = _active()
         task = _task()
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             forge=fake_forge,
@@ -382,7 +382,7 @@ class TestFinalizeNotNeededWorktree:
         active = _active()
         task = _task()
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             forge=fake_forge,
@@ -408,7 +408,7 @@ class TestFinalizeNotNeededWorktree:
         active = _active()
         task = _task()
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=False,
             forge=fake_forge,
@@ -433,7 +433,7 @@ class TestFinalizeNotNeededWorktree:
     def test_none_task_defaults_subtask_id_to_empty_string(self, tmp_path, fake_forge):
         active = _active()
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             forge=fake_forge,
@@ -782,7 +782,7 @@ class TestIsWorktreeComplete:
         fake_target = MagicMock()
         fake_target.completion_status.return_value = "completed"
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             dispatch_target=fake_target,
@@ -808,7 +808,7 @@ class TestIsWorktreeComplete:
     def test_codex_cloud_active_worktree_waits_for_pr(self, tmp_path, fake_forge):
         target = CodexCloudDispatchTarget("env_123")
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             dispatch_target=target,
@@ -838,7 +838,7 @@ class TestIsWorktreeComplete:
     ):
         target = CodexCloudDispatchTarget("env_123")
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             dispatch_target=target,
@@ -865,7 +865,7 @@ class TestIsWorktreeComplete:
         self, tmp_path
     ):
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
         )
@@ -898,7 +898,7 @@ class TestFinalizeBaseBranchRedWorktree:
         ]
         fake_forge.list_prs.return_value = []
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -945,7 +945,7 @@ class TestFinalizeBaseBranchRedWorktree:
         ]
         fake_forge.list_prs.return_value = []
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

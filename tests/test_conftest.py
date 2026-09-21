@@ -19,7 +19,7 @@ def test_guard_events_log_path_fails_on_default_init():
     """`DispatcherConfig` initialized with default `Path('events.jsonl')` should fail immediately in tests."""
     with pytest.raises(pytest.fail.Exception) as exc_info:
         DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
         )
 
     assert (
@@ -31,7 +31,7 @@ def test_guard_events_log_path_fails_on_default_init():
 def test_guard_events_log_path_succeeds_with_explicit_tmp_path(tmp_path: Path):
     """`DispatcherConfig` initialized with explicit isolated `events_log_path` should succeed."""
     config = DispatcherConfig(
-        parent_issue_number=1, events_log_path=tmp_path / "events.jsonl"
+        parent_issue_number=100, events_log_path=tmp_path / "events.jsonl"
     )
     assert config.events_log_path == tmp_path / "events.jsonl"
 

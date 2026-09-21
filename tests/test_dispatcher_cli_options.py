@@ -41,31 +41,32 @@ def _stub_label_actor_permission_by_default(fake_forge):
 
 
 class TestBuildArgParser:
+    def _parse_args(self, args=()):
+        from orchestune.dispatch.dispatcher import _build_arg_parser
+
+        return _build_arg_parser().parse_args(["--parent-issue", "100", *args])
+
     """#328: dispatch-cycleの既定挙動をapplyに変更（--no-applyでdry-run）。"""
 
     def test_apply_defaults_to_true(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args([])
+        args = self._parse_args([])
         assert args.apply is True
 
     def test_no_apply_flag_disables_apply(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(["--no-apply"])
+        args = self._parse_args(["--no-apply"])
         assert args.apply is False
 
     def test_max_tokens_args_defaults_to_none(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args([])
+        args = self._parse_args([])
         assert args.max_tokens_per_window is None
         assert args.max_tokens_per_task is None
 
     def test_max_tokens_args_are_parsed(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(
+        args = self._parse_args(
             [
                 "--max-tokens-per-window",
                 "50000",
@@ -77,83 +78,70 @@ class TestBuildArgParser:
         assert args.max_tokens_per_task == 10000
 
     def test_explicit_apply_flag_still_works(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(["--apply"])
+        args = self._parse_args(["--apply"])
         assert args.apply is True
 
     def test_dispatch_target_defaults_to_none_when_unspecified(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args([])
+        args = self._parse_args([])
         assert args.dispatch_target is None
 
     def test_dispatch_target_explicit_local_is_preserved(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(["--dispatch-target", "local"])
+        args = self._parse_args(["--dispatch-target", "local"])
         assert args.dispatch_target == "local"
 
     def test_dispatch_target_explicit_auto_is_preserved(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(["--dispatch-target", "auto"])
+        args = self._parse_args(["--dispatch-target", "auto"])
         assert args.dispatch_target == "auto"
 
     def test_dispatch_target_explicit_codex_cli_is_preserved(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(["--dispatch-target", "codex-cli"])
+        args = self._parse_args(["--dispatch-target", "codex-cli"])
         assert args.dispatch_target == "codex-cli"
 
     def test_dispatch_target_explicit_codex_cloud_is_preserved(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(["--dispatch-target", "codex-cloud"])
+        args = self._parse_args(["--dispatch-target", "codex-cloud"])
         assert args.dispatch_target == "codex-cloud"
 
     def test_reviewer_bot_defaults_to_auto(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args([])
+        args = self._parse_args([])
         assert args.reviewer_bot == "auto"
 
     @pytest.mark.parametrize("reviewer_bot", ["auto", "claude", "codex"])
     def test_reviewer_bot_is_parsed(self, reviewer_bot):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(["--reviewer-bot", reviewer_bot])
+        args = self._parse_args(["--reviewer-bot", reviewer_bot])
         assert args.reviewer_bot == reviewer_bot
 
     def test_codex_cloud_env_option_is_parsed(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(["--codex-cloud-env", "env_123"])
+        args = self._parse_args(["--codex-cloud-env", "env_123"])
         assert args.codex_cloud_env == "env_123"
 
     def test_task_timeout_seconds_defaults_to_zero(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args([])
+        args = self._parse_args([])
         assert args.task_timeout_seconds == 0
 
     def test_task_timeout_seconds_arg_is_parsed(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(["--task-timeout-seconds", "3600"])
+        args = self._parse_args(["--task-timeout-seconds", "3600"])
         assert args.task_timeout_seconds == 3600
 
     def test_max_task_reclaims_defaults_to_a_finite_value(self):
         """#512: 「無制限」を表す既定値を持たない（終端のない経路を作らない）。"""
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args([])
+        args = self._parse_args([])
         assert args.max_task_reclaims == 3
 
     def test_max_task_reclaims_arg_is_parsed(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(["--max-task-reclaims", "5"])
+        args = self._parse_args(["--max-task-reclaims", "5"])
         assert args.max_task_reclaims == 5
 
     def test_max_task_reclaims_rejects_negative_values(self):
@@ -162,15 +150,13 @@ class TestBuildArgParser:
         status:blocked-human-reviewへ落ちてしまう）。"""
         import pytest
 
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         with pytest.raises(SystemExit):
-            _build_arg_parser().parse_args(["--max-task-reclaims", "-1"])
+            self._parse_args(["--max-task-reclaims", "-1"])
 
     def test_early_death_retry_options_have_bounded_defaults(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args([])
+        args = self._parse_args([])
         assert args.early_death_window_seconds == 120
         assert args.max_early_death_retries == 2
         assert args.early_death_backoff_seconds == 60
@@ -178,9 +164,8 @@ class TestBuildArgParser:
     def test_early_death_retry_options_are_parsed_and_reject_negative_values(self):
         import pytest
 
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(
+        args = self._parse_args(
             [
                 "--early-death-window-seconds",
                 "30",
@@ -196,21 +181,17 @@ class TestBuildArgParser:
         )
         assert args.early_death_backoff_seconds == 15
         with pytest.raises(SystemExit):
-            _build_arg_parser().parse_args(["--max-early-death-retries", "-1"])
+            self._parse_args(["--max-early-death-retries", "-1"])
 
     def test_not_needed_review_timeout_seconds_defaults_to_a_finite_value(self):
         """#511: 「無制限」を表す既定値を持たない（終端のない経路を作らない）。"""
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args([])
+        args = self._parse_args([])
         assert args.not_needed_review_timeout_seconds == 86400
 
     def test_not_needed_review_timeout_seconds_arg_is_parsed(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(
-            ["--not-needed-review-timeout-seconds", "1800"]
-        )
+        args = self._parse_args(["--not-needed-review-timeout-seconds", "1800"])
         assert args.not_needed_review_timeout_seconds == 1800
 
     def test_not_needed_review_timeout_seconds_rejects_negative_values(self):
@@ -219,23 +200,18 @@ class TestBuildArgParser:
         status:blocked-human-reviewへ落ちてしまう）。"""
         import pytest
 
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         with pytest.raises(SystemExit):
-            _build_arg_parser().parse_args(
-                ["--not-needed-review-timeout-seconds", "-1"]
-            )
+            self._parse_args(["--not-needed-review-timeout-seconds", "-1"])
 
     def test_zombie_gc_defaults_to_true(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args([])
+        args = self._parse_args([])
         assert args.zombie_gc is True
 
     def test_no_zombie_gc_disables_zombie_gc(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        args = _build_arg_parser().parse_args(["--no-zombie-gc"])
+        args = self._parse_args(["--no-zombie-gc"])
         assert args.zombie_gc is False
 
 
@@ -313,7 +289,7 @@ class TestConfigDefaults:
         parser = _build_arg_parser()
         parser.set_defaults(**_config_defaults(parser, {"reviewer-bot": "claude"}))
 
-        args = parser.parse_args(["--reviewer-bot", "codex"])
+        args = parser.parse_args(["--parent-issue", "100", "--reviewer-bot", "codex"])
 
         assert args.reviewer_bot == "codex"
 

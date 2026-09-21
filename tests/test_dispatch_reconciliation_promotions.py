@@ -87,7 +87,7 @@ class TestCollectActiveConflictSubtaskIds:
         run_state = RunState(active_worktrees={"w1": active})
         ctx = _ctx(tasks_by_issue={})
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -108,7 +108,7 @@ class TestCollectActiveConflictSubtaskIds:
         run_state = RunState(active_worktrees={"w1": active})
         ctx = _ctx(tasks_by_issue={1: task})
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -131,7 +131,7 @@ class TestCollectActiveConflictSubtaskIds:
         ctx = _ctx(tasks_by_issue={1: task})
         subtasks_for_recompute = {"task-a": object(), "task-b": object()}
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -159,7 +159,7 @@ class TestCollectActiveConflictSubtaskIds:
         ctx = _ctx(tasks_by_issue={1: task})
         subtasks_for_recompute = {"task-a": object(), "task-b": object()}
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -204,7 +204,7 @@ class TestCollectActiveConflictSubtaskIds:
         run_state = RunState(active_worktrees={"w1": active})
         ctx = _ctx(tasks_by_issue={1: task})
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -241,7 +241,7 @@ class TestCollectActiveConflictSubtaskIds:
         ctx = _ctx(tasks_by_issue={1: task})
         subtasks_for_recompute = {"task-a": object(), "task-b": object()}
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -290,7 +290,7 @@ class TestCollectActiveConflictSubtaskIds:
         }
 
         config_without_ignore = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -306,7 +306,7 @@ class TestCollectActiveConflictSubtaskIds:
         assert result_without_ignore == {"task-b"}
 
         config_with_ignore = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -331,7 +331,7 @@ class TestCollectActiveConflictSubtaskIds:
         ctx = _ctx(tasks_by_issue={1: task})
         subtasks_for_recompute = {"task-a": object(), "task-b": object()}
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -362,7 +362,7 @@ class TestHandleBlockedRecomputeRecovery:
         run_state = RunState(active_worktrees={})
         ctx = _ctx()
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -381,7 +381,7 @@ class TestHandleBlockedRecomputeRecovery:
         run_state = RunState(active_worktrees={})
         ctx = _ctx(tasks_by_issue={})
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -412,7 +412,7 @@ class TestHandleBlockedRecomputeRecovery:
         run_state = RunState(active_worktrees={})
         ctx = _ctx(tasks_by_issue={1: task})
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -450,7 +450,7 @@ class TestHandleBlockedRecomputeRecovery:
             prior_parent_merge_completed_issue_numbers=frozenset({dep.issue_number}),
         )
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -500,7 +500,7 @@ class TestHandleBlockedRecomputeRecovery:
             prior_parent_merge_completed_issue_numbers=frozenset(confirmed),
         )
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -568,7 +568,7 @@ class TestHandleBlockedRecomputeRecovery:
             prior_parent_merge_completed_issue_numbers=frozenset({dep.issue_number}),
         )
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -611,7 +611,7 @@ class TestHandleBlockedRecomputeRecovery:
         run_state = RunState(active_worktrees={})
         ctx = _ctx(tasks_by_issue={1: task})
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -649,7 +649,7 @@ class TestHandleBlockedRecomputeRecovery:
             prior_parent_merge_completed_issue_numbers=frozenset({dep.issue_number}),
         )
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

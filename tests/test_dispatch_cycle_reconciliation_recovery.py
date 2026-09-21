@@ -39,7 +39,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         run_state_path.write_text("{}")
 
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
@@ -153,7 +153,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         run_state_path.write_text("{}")
 
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
@@ -237,7 +237,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         run_state_path.write_text("{}")
 
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
@@ -355,7 +355,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         run_state_path.write_text("{}")
 
         config = DispatcherConfig(
-            parent_issue_number=1,
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",

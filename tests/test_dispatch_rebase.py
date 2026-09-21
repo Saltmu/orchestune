@@ -166,17 +166,6 @@ class TestNotifyForceSerial:
             )
         mock_comment.assert_called_once_with(181, ANY)
 
-    def test_apply_without_parent_issue_skips_comment(self):
-        with patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment:
-            notify_force_serial(
-                "task-a",
-                issue_number=1,
-                parent_issue_number=None,
-                retry_count=2,
-                apply=True,
-            )
-        mock_comment.assert_not_called()
-
 
 class TestNotifyForceSerialWithFakeForge:
     """#293: `mock.patch`によるグローバルなクラスメソッド差し替えではなく、

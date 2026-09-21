@@ -70,6 +70,7 @@ class TestRestorationPreservesClaimOwnership:
         )
         resolver = TaskBranchResolver([])
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=str(tmp_path / "worktrees"),
@@ -107,6 +108,7 @@ class TestRestorationPreservesClaimOwnership:
         )
         resolver = TaskBranchResolver([])
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=str(tmp_path / "worktrees"),
@@ -162,6 +164,7 @@ class TestRestorationPreservesClaimOwnership:
         )
         resolver = TaskBranchResolver([])
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=str(tmp_path / "worktrees"),
@@ -223,6 +226,7 @@ class TestRestorationPreservesClaimOwnership:
         )
         resolver = TaskBranchResolver([])
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=str(tmp_path / "worktrees"),
@@ -282,6 +286,7 @@ class TestRestorationPreservesClaimOwnership:
         )
         resolver = TaskBranchResolver([])
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=str(tmp_path / "worktrees"),
@@ -326,6 +331,7 @@ class TestRestorationPreservesClaimOwnership:
         run_state = RunState(active_worktrees={})
         command = _bookkeeping_command("105")
         config = DispatcherConfig(
+            parent_issue_number=100,
             apply=True,
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",
@@ -386,6 +392,7 @@ class TestRestorationPreservesClaimOwnership:
         target = MagicMock()
         target.launch_capabilities.durable_attempt = True
         config = DispatcherConfig(
+            parent_issue_number=100,
             apply=True,
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",
@@ -519,6 +526,7 @@ class TestInteractiveClaimSubtaskIdAlignment:
             created_at="2026-01-01T00:00:00+00:00",
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             worktree_root=str(tmp_path / "worktrees"),
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
@@ -557,6 +565,7 @@ class TestInteractiveClaimSubtaskIdAlignment:
         )
         resolver = TaskBranchResolver([])
         config = DispatcherConfig(
+            parent_issue_number=100,
             worktree_root=str(tmp_path / "worktrees"),
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
