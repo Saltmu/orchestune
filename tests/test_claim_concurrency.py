@@ -33,6 +33,9 @@ class _NoDependencyView:
     def canonical_branch(self, _issue_number: int) -> str | None:
         return None
 
+    def task(self, _issue_number: int):
+        return None
+
 
 def _issue(number: int, footprint: Sequence[str]) -> IssueRecord:
     footprint_yaml = ", ".join(footprint)
@@ -70,7 +73,7 @@ def _fake_preparation(branch: str, worktree_root: Path, *_args: Any, **_kwargs: 
 
 def _claim_process(
     repo_root: str,
-    state_path: str,
+    state_path: str | None,
     issue_number: int,
     footprint: tuple[str, ...],
     owner_kind: str,
@@ -82,7 +85,7 @@ def _claim_process(
     from orchestune.claim.service import claim_task
 
     repo = Path(repo_root)
-    state = Path(state_path)
+    state = Path(state_path) if state_path is not None else None
     forge = MockForge({issue_number: _issue(issue_number, footprint)})
     ready.put(issue_number)
     if not start.wait(timeout=_PROCESS_TIMEOUT):
@@ -97,6 +100,7 @@ def _claim_process(
         ),
     ):
         if owner_kind == OwnerKind.DISPATCH.value:
+            assert state is not None
             outcome = _run_dispatch_claim(repo, state, forge, issue_number, footprint)
         else:
             outcome = claim_task(
@@ -163,6 +167,12 @@ def _run_dispatch_claim(
         apply=True,
     )
     dispatch_claim = _bind_dispatch_claim_fn(config, _NoDependencyView())
+    captured_outcomes = []
+
+    def observed_dispatch_claim(*args: Any, **kwargs: Any):
+        outcome = dispatch_claim(*args, **kwargs)
+        captured_outcomes.append(outcome)
+        return outcome
 
     def launched(*_args: Any, **_kwargs: Any) -> LaunchResult:
         return LaunchResult(
@@ -176,39 +186,15 @@ def _run_dispatch_claim(
     with patch("orchestune.dispatch.launch._launch_on_prepared_worktree", launched):
         os.chdir(repo)
         launch = _try_planned_launch(
-            plan, cast(Any, object()), config, load_run_state(state), dispatch_claim
+            plan,
+            cast(Any, object()),
+            config,
+            load_run_state(state),
+            observed_dispatch_claim,
         )
     assert launch is not None
-    if launch.claim_id is None:
-        from orchestune.claim.contracts import ClaimFailure, ClaimOutcome
-
-        return ClaimOutcome(
-            success=False,
-            issue_number=issue_number,
-            failure=ClaimFailure(
-                reason=_failure_reason(launch.error_message),
-                message=launch.error_message or "dispatch claim failed",
-            ),
-        )
-    from orchestune.claim.contracts import ClaimOutcome, ReservationKind
-
-    return ClaimOutcome(
-        success=True,
-        issue_number=issue_number,
-        claim_id=launch.claim_id,
-        owner_kind=OwnerKind.DISPATCH,
-        reservation_kind=ReservationKind(launch.reservation_kind or "footprint"),
-    )
-
-
-def _failure_reason(message: str | None):
-    from orchestune.claim.contracts import ClaimFailureReason
-
-    if message and "conflict" in message.lower():
-        return ClaimFailureReason.CLAIM_CONFLICT
-    if message and "lock" in message.lower():
-        return ClaimFailureReason.STATE_LOCK_FAILED
-    return ClaimFailureReason.WORKTREE_CREATION_FAILED
+    assert len(captured_outcomes) == 1
+    return captured_outcomes[0]
 
 
 def _run_claimers(
@@ -223,7 +209,7 @@ def _run_claimers(
 
 
 def _run_claimers_from_repos(
-    state: Path,
+    state: Path | None,
     workers: Sequence[tuple[Path, int, tuple[str, ...], str]],
 ) -> list[dict[str, Any]]:
     ctx = multiprocessing.get_context("spawn")
@@ -233,7 +219,16 @@ def _run_claimers_from_repos(
     processes = [
         ctx.Process(
             target=_claim_process,
-            args=(str(repo), str(state), issue, footprint, kind, ready, start, results),
+            args=(
+                str(repo),
+                str(state) if state is not None else None,
+                issue,
+                footprint,
+                kind,
+                ready,
+                start,
+                results,
+            ),
         )
         for repo, issue, footprint, kind in workers
     ]
@@ -353,6 +348,19 @@ def test_both_entry_paths_reject_repository_and_forced_serial_conflicts(
     assert result["success"] is False
     assert result["failure"] == "claim_conflict"
     assert set(load_run_state(state_path).active_worktrees) == {"90"}
+    if active_overrides.get("forced_serial"):
+        from orchestune.claim.ownership import (
+            ClaimConflictReason,
+            evaluate_claim_conflicts,
+        )
+
+        conflict = evaluate_claim_conflicts(
+            _active(105, declared_footprint=candidate_footprint),
+            load_run_state(state_path),
+            _NoDependencyView(),
+        )
+        assert conflict is not None
+        assert conflict.reason is ClaimConflictReason.FORCED_SERIAL
 
 
 def test_primary_and_linked_worktree_share_one_ledger_without_lost_updates(
@@ -363,7 +371,7 @@ def test_primary_and_linked_worktree_share_one_ledger_without_lost_updates(
     run_git(["worktree", "add", "-b", "linked-test", str(linked), "main"], cwd=primary)
 
     results = _run_claimers_from_repos(
-        claim_env["state_path"],
+        None,
         [
             (primary, 106, ("first.py",), "interactive"),
             (linked, 107, ("second.py",), "interactive"),
