@@ -24,13 +24,14 @@ class TestApplyStaleActiveEntryDiscard:
     """#382: 帳簿(run_state)破棄の前に、実際に稼働中かもしれない物理
     worktree・プロセスの後始末を行うことを検証する。"""
 
-    def test_kills_live_process_and_removes_worktree(self, tmp_path):
+    def test_kills_live_process_and_removes_worktree(self, tmp_path, fake_forge):
         active = _active(worktree_path=str(tmp_path), pid=12345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -61,13 +62,16 @@ class TestApplyStaleActiveEntryDiscard:
         mock_remove.assert_called_once_with(str(tmp_path))
         assert run_state.active_worktrees == {}
 
-    def test_dead_process_skips_kill_but_still_removes_worktree(self, tmp_path):
+    def test_dead_process_skips_kill_but_still_removes_worktree(
+        self, tmp_path, fake_forge
+    ):
         active = _active(worktree_path=str(tmp_path), pid=12345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -95,13 +99,14 @@ class TestApplyStaleActiveEntryDiscard:
         mock_remove.assert_called_once_with(str(tmp_path))
         assert run_state.active_worktrees == {}
 
-    def test_missing_worktree_skips_backup_and_removal(self, tmp_path):
+    def test_missing_worktree_skips_backup_and_removal(self, tmp_path, fake_forge):
         active = _active(worktree_path="worktrees/does-not-exist", pid=12345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -169,13 +174,14 @@ class TestApplyStaleActiveEntryDiscard:
         # バックアップ失敗時は帳簿を温存し、次サイクルでの再試行に委ねる。
         assert run_state.active_worktrees == {"280": active}
 
-    def test_dry_run_does_not_touch_anything(self, tmp_path):
+    def test_dry_run_does_not_touch_anything(self, tmp_path, fake_forge):
         active = _active(worktree_path=str(tmp_path), pid=12345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=False,
+            forge=fake_forge,
         )
 
         with (

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from typing import get_type_hints
+from unittest.mock import MagicMock
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.launch import _decide_task_launch_plan
@@ -11,6 +12,7 @@ from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     default_dry_run_command_builder,
 )
+from orchestune.forge import Forge
 from orchestune.models import Task
 from orchestune.task_metadata import CycleTask, TaskMetadata
 
@@ -84,6 +86,7 @@ def test_legacy_and_cycle_task_have_identical_branch_and_launch_plan(tmp_path) -
         run_state_path=tmp_path / "run_state.json",
         worktree_root=tmp_path / "worktrees",
         parent_issue_number=823,
+        forge=MagicMock(spec=Forge),
     )
 
     legacy_plan = _decide_task_launch_plan([legacy_task], {}, config)

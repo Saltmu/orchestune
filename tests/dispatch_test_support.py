@@ -24,6 +24,7 @@ from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
+from orchestune.forge import Forge
 from orchestune.infra.process_utils import run_state_lock
 from orchestune.models import IssueRecord, Task
 from tests.conftest import make_issue
@@ -74,6 +75,9 @@ def make_test_dispatcher_config(
         "worktree_root": root / "worktrees",
     }
     values.update(overrides)
+    if "forge" not in values or values["forge"] is None:
+        if getattr(DispatcherConfig.__init__, "__name__", "") != "init_with_fake_forge":
+            values["forge"] = MagicMock(spec=Forge)
     return DispatcherConfig(parent_issue_number=100, **values)
 
 

@@ -91,7 +91,7 @@ def _task(
 
 
 @pytest.fixture
-def config(tmp_path):
+def config(tmp_path, fake_forge):
     return DispatcherConfig(
         events_log_path=tmp_path / "events.jsonl",
         run_state_path=tmp_path / "run_state.json",

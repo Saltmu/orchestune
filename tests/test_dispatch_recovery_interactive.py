@@ -50,7 +50,9 @@ class TestRestorationPreservesClaimOwnership:
     """#940: recovery による active 再構築で owner_kind / claim_id / reservation_kind を保持し、
     欠落時は dispatch として扱う。"""
 
-    def test_restored_active_worktree_preserves_claim_ownership(self, tmp_path):
+    def test_restored_active_worktree_preserves_claim_ownership(
+        self, tmp_path, fake_forge
+    ):
         body = (
             "## Footprint\n```yaml\n"
             "subtask_id: interactive-task\n"
@@ -74,6 +76,7 @@ class TestRestorationPreservesClaimOwnership:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=str(tmp_path / "worktrees"),
+            forge=fake_forge,
         )
 
         active = _build_restored_active_worktree(
@@ -91,7 +94,9 @@ class TestRestorationPreservesClaimOwnership:
         assert active.claim_id == "claim-recovery-999"
         assert active.reservation_kind == "repository"
 
-    def test_restored_active_worktree_defaults_missing_to_dispatch(self, tmp_path):
+    def test_restored_active_worktree_defaults_missing_to_dispatch(
+        self, tmp_path, fake_forge
+    ):
         body = (
             "## Footprint\n```yaml\n"
             "subtask_id: ordinary-task\n"
@@ -112,6 +117,7 @@ class TestRestorationPreservesClaimOwnership:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=str(tmp_path / "worktrees"),
+            forge=fake_forge,
         )
 
         active = _build_restored_active_worktree(
@@ -130,7 +136,7 @@ class TestRestorationPreservesClaimOwnership:
         assert active.reservation_kind == "footprint"
 
     def test_restored_active_worktree_with_launched_attempt_preserves_interactive_claim(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         body = (
             "## Footprint\n```yaml\n"
@@ -168,6 +174,7 @@ class TestRestorationPreservesClaimOwnership:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=str(tmp_path / "worktrees"),
+            forge=fake_forge,
         )
 
         active = _build_restored_active_worktree(
@@ -193,7 +200,7 @@ class TestRestorationPreservesClaimOwnership:
         assert active.launch_phase is None
 
     def test_restored_active_worktree_with_launched_attempt_and_omitted_subtask_id_restores_claim_workspace(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         body = (
             "## Footprint\n```yaml\n"
@@ -230,6 +237,7 @@ class TestRestorationPreservesClaimOwnership:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=str(tmp_path / "worktrees"),
+            forge=fake_forge,
         )
 
         active = _build_restored_active_worktree(
@@ -290,6 +298,7 @@ class TestRestorationPreservesClaimOwnership:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=str(tmp_path / "worktrees"),
+            forge=fake_forge,
         )
         fake_forge.get_issue.return_value = issue
 
@@ -507,7 +516,7 @@ class TestInteractiveClaimSubtaskIdAlignment:
         assert footprint == ("src/dispatch.py",)
 
     def test_restoration_candidates_for_interactive_without_subtask_id_uses_claim_workspace(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         body = (
             "## Footprint\n```yaml\n"
@@ -530,6 +539,7 @@ class TestInteractiveClaimSubtaskIdAlignment:
             worktree_root=str(tmp_path / "worktrees"),
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
+            forge=fake_forge,
         )
 
         candidates = _restoration_candidates([issue], open_prs=(), config=config)
@@ -545,7 +555,7 @@ class TestInteractiveClaimSubtaskIdAlignment:
         assert active.claim_id == "claim-recovery-candidate-940"
 
     def test_build_restored_active_worktree_aligns_subtask_id_for_interactive(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         body = (
             "## Footprint\n```yaml\n"
@@ -569,6 +579,7 @@ class TestInteractiveClaimSubtaskIdAlignment:
             worktree_root=str(tmp_path / "worktrees"),
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
+            forge=fake_forge,
         )
 
         active = _build_restored_active_worktree(

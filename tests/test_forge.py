@@ -23,6 +23,7 @@ from orchestune.forge import (
 from orchestune.forge.admin import GitHubRepoAdminMixin
 from orchestune.forge.issues import GitHubIssueMixin
 from orchestune.forge.prs import GitHubPullRequestMixin
+from orchestune.integrator.types import IntegratorConfig
 from orchestune.models import IssueRecord
 from orchestune.validation import validate_label as _validate_label
 
@@ -334,11 +335,21 @@ class TestForgeProtocols:
         assert isinstance(forge, RepoAdminForge)
         assert isinstance(forge, Forge)
 
+    @pytest.mark.uses_real_forge
     def test_dispatcher_config_creates_default_github_forge(self, tmp_path):
         assert isinstance(
             DispatcherConfig(
                 parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
+            ).forge,
+            GitHubForge,
+        )
+
+    @pytest.mark.uses_real_forge
+    def test_integrator_config_creates_default_github_forge(self):
+        assert isinstance(
+            IntegratorConfig(
+                parent_issue_number=100,
             ).forge,
             GitHubForge,
         )

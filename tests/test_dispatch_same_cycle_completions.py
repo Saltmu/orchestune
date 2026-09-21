@@ -14,6 +14,7 @@ from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.forge import Forge
 from orchestune.models import Task
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-same-cycle-"))
@@ -48,6 +49,7 @@ def _ctx(**overrides: Any) -> CycleContext:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
+            forge=MagicMock(spec=Forge),
         ),
     )
     defaults.update(overrides)
@@ -148,6 +150,7 @@ class TestFinalConsistencyRepairExecutor:
             worktree_root=tmp_path / "worktrees",
             consistency_mode=ConsistencyMode.REPAIR,
             apply=False,
+            forge=MagicMock(spec=Forge),
         )
 
         with patch("orchestune.dispatch.cycle._ContextRepairExecutor") as factory:

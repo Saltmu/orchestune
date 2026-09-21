@@ -7,12 +7,14 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.forge import (
     BootstrapResult,
     Forge,
+    GitHubForge,
     IssueForge,
     LabelSpec,
     PullRequestForge,
     RepoAdminForge,
 )
-from tests.conftest import FakeForge
+from orchestune.integrator.types import IntegratorConfig
+from tests.conftest import FakeForge, IntegratorEnv
 
 
 def test_guard_events_log_path_fails_on_default_init():
@@ -28,7 +30,9 @@ def test_guard_events_log_path_fails_on_default_init():
     )
 
 
-def test_guard_events_log_path_succeeds_with_explicit_tmp_path(tmp_path: Path):
+def test_guard_events_log_path_succeeds_with_explicit_tmp_path(
+    tmp_path: Path, fake_forge: MagicMock
+):
     """`DispatcherConfig` initialized with explicit isolated `events_log_path` should succeed."""
     config = DispatcherConfig(
         parent_issue_number=100, events_log_path=tmp_path / "events.jsonl"
@@ -42,6 +46,77 @@ def test_guard_dispatch_cycle_ensure_parent_branch_is_isolated_in_unit_tests():
 
     with pytest.raises(pytest.fail.Exception, match="unmocked `ensure_parent_branch"):
         orchestune.dispatch.phase_rebase.ensure_parent_branch(181)
+
+
+def test_guard_forge_fallback_fails_on_default_dispatcher_init(tmp_path: Path):
+    """`DispatcherConfig` initialized without explicit forge should fail immediately in tests."""
+    with pytest.raises(pytest.fail.Exception) as exc_info:
+        DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+        )
+
+    assert "DispatcherConfig initialized with real GitHubForge" in str(exc_info.value)
+
+
+def test_guard_forge_fallback_fails_on_default_integrator_init():
+    """`IntegratorConfig` initialized without explicit forge should fail immediately in tests."""
+    with pytest.raises(pytest.fail.Exception) as exc_info:
+        IntegratorConfig(
+            parent_issue_number=100,
+        )
+
+    assert "IntegratorConfig initialized with real GitHubForge" in str(exc_info.value)
+
+
+def test_guard_forge_fallback_succeeds_with_explicit_mock_forge(tmp_path: Path):
+    """Explicitly passing a mock Forge allows DispatcherConfig and IntegratorConfig creation."""
+    mock_forge = MagicMock(spec=Forge)
+    d_cfg = DispatcherConfig(
+        parent_issue_number=100,
+        events_log_path=tmp_path / "events.jsonl",
+        forge=mock_forge,
+    )
+    assert d_cfg.forge is mock_forge
+
+    i_cfg = IntegratorConfig(
+        parent_issue_number=100,
+        forge=mock_forge,
+    )
+    assert i_cfg.forge is mock_forge
+
+
+def test_guard_forge_fallback_succeeds_with_fake_forge_fixture(
+    tmp_path: Path, fake_forge: MagicMock
+):
+    """Using fake_forge fixture automatically injects mock forge into DispatcherConfig."""
+    d_cfg = DispatcherConfig(
+        parent_issue_number=100,
+        events_log_path=tmp_path / "events.jsonl",
+    )
+    assert d_cfg.forge is fake_forge
+
+
+def test_guard_forge_fallback_succeeds_with_integrator_env_fixture(
+    integrator_env: IntegratorEnv,
+):
+    """Using integrator_env fixture automatically injects mock forge into IntegratorConfig."""
+    i_cfg = IntegratorConfig(parent_issue_number=100)
+    assert i_cfg.forge is not None
+    assert type(i_cfg.forge) is not GitHubForge
+
+
+@pytest.mark.uses_real_forge
+def test_guard_forge_fallback_bypassed_with_uses_real_forge_marker(tmp_path: Path):
+    """Tests marked with uses_real_forge can construct unmocked configs."""
+    d_cfg = DispatcherConfig(
+        parent_issue_number=100,
+        events_log_path=tmp_path / "events.jsonl",
+    )
+    assert type(d_cfg.forge) is GitHubForge
+
+    i_cfg = IntegratorConfig(parent_issue_number=100)
+    assert type(i_cfg.forge) is GitHubForge
 
 
 class TestFakeForgeFixture:

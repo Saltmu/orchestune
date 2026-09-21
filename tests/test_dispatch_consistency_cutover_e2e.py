@@ -56,7 +56,9 @@ def _outcome(disposition: RepairDisposition) -> ConsistencyRepairOutcome:
     )
 
 
-def test_default_self_healing_allowlist_is_stable_and_separate(tmp_path) -> None:
+def test_default_self_healing_allowlist_is_stable_and_separate(
+    tmp_path, fake_forge
+) -> None:
     assert DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST == frozenset(
         {
             BLOCKED_WITH_RESOLVED_DEPENDENCIES,
@@ -71,12 +73,13 @@ def test_default_self_healing_allowlist_is_stable_and_separate(tmp_path) -> None
         run_state_path=tmp_path / "state.json",
         events_log_path=tmp_path / "events.jsonl",
         worktree_root=tmp_path / "worktrees",
+        forge=fake_forge,
     )
     assert config.consistency_repair_allowlist == frozenset()
 
 
 def test_unbound_execution_command_fails_closed_without_phase_owned_skip(
-    tmp_path,
+    tmp_path, fake_forge
 ) -> None:
     command = RepairCommand(
         code=COMMAND_RECLAIM,
@@ -91,6 +94,7 @@ def test_unbound_execution_command_fails_closed_without_phase_owned_skip(
             run_state_path=tmp_path / "state.json",
             events_log_path=tmp_path / "events.jsonl",
             worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
         ),
         adapter=Mock(),
     )

@@ -130,7 +130,7 @@ class TestDecideFootprintDeviationOutcome:
             task.subtask_id: derived_inputs[0]
         }
 
-    def test_already_forced_serial_is_noop(self, tmp_path):
+    def test_already_forced_serial_is_noop(self, tmp_path, fake_forge):
         active = _active(forced_serial=True)
         decision = _decide_footprint_deviation_outcome(
             active,
@@ -139,11 +139,12 @@ class TestDecideFootprintDeviationOutcome:
             DispatcherConfig(
                 parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
+                forge=fake_forge,
             ),
         )
         assert decision.action == "already_forced_serial"
 
-    def test_unknown_subtask_is_skipped(self, tmp_path):
+    def test_unknown_subtask_is_skipped(self, tmp_path, fake_forge):
         active = _active()
         decision = _decide_footprint_deviation_outcome(
             active,
@@ -152,17 +153,19 @@ class TestDecideFootprintDeviationOutcome:
             DispatcherConfig(
                 parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
+                forge=fake_forge,
             ),
         )
         assert decision.action == "skipped_unknown_subtask"
 
-    def test_retry_limit_exceeded_forces_serial(self, tmp_path):
+    def test_retry_limit_exceeded_forces_serial(self, tmp_path, fake_forge):
         active = _active(recompute_count=2)
         task = _task()
         config = DispatcherConfig(
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_recompute_retries=2,
+            forge=fake_forge,
         )
         decision = _decide_footprint_deviation_outcome(
             active, ["src/foo.py"], {1: task}, config
@@ -172,13 +175,14 @@ class TestDecideFootprintDeviationOutcome:
         # decide層はactive.forced_serialを書き換えない
         assert active.forced_serial is False
 
-    def test_under_retry_limit_recomputes(self, tmp_path):
+    def test_under_retry_limit_recomputes(self, tmp_path, fake_forge):
         active = _active(recompute_count=0)
         task = _task()
         config = DispatcherConfig(
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_recompute_retries=2,
+            forge=fake_forge,
         )
         decision = _decide_footprint_deviation_outcome(
             active, ["src/bar.py"], {1: task}, config
@@ -188,7 +192,9 @@ class TestDecideFootprintDeviationOutcome:
         # decide層はactive.recompute_countを書き換えない
         assert active.recompute_count == 0
 
-    def test_recompute_reports_conflict_for_shared_manifest_by_default(self, tmp_path):
+    def test_recompute_reports_conflict_for_shared_manifest_by_default(
+        self, tmp_path, fake_forge
+    ):
         # #398/#404: dag_ignore_patterns未指定時は既存挙動どおり、
         # 実行中に新たに触れたファイル（package.json）が既存の他サブタスクと
         # 衝突すれば競合として検知されること（後方互換の確認）
@@ -196,7 +202,9 @@ class TestDecideFootprintDeviationOutcome:
         task_a = _task(subtask_id="task-a", footprint=("src/only_a.py",))
         task_b = _task(issue_number=2, subtask_id="task-b", footprint=("package.json",))
         config = DispatcherConfig(
-            parent_issue_number=100, events_log_path=tmp_path / "events.jsonl"
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            forge=fake_forge,
         )
         decision = _decide_footprint_deviation_outcome(
             active, ["package.json"], {1: task_a, 2: task_b}, config
@@ -204,7 +212,9 @@ class TestDecideFootprintDeviationOutcome:
         assert decision.action == "recomputed"
         assert len(decision.conflicts) == 1
 
-    def test_dag_ignore_patterns_suppresses_recompute_conflict(self, tmp_path):
+    def test_dag_ignore_patterns_suppresses_recompute_conflict(
+        self, tmp_path, fake_forge
+    ):
         # #398/#404: orchestune-dag向けに設定したdag_ignore_patternsは、
         # dispatcherの実行時DAG再計算（footprint逸脱時）にも適用され、
         # 初回検証で無視される設定のファイルの衝突を誤って競合検知しないこと
@@ -215,6 +225,7 @@ class TestDecideFootprintDeviationOutcome:
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             dag_ignore_patterns=compile_extra_ignore_patterns([r"(^|/)package\.json$"]),
+            forge=fake_forge,
         )
         decision = _decide_footprint_deviation_outcome(
             active, ["package.json"], {1: task_a, 2: task_b}, config
@@ -222,7 +233,9 @@ class TestDecideFootprintDeviationOutcome:
         assert decision.action == "recomputed"
         assert decision.conflicts == []
 
-    def test_dag_similarity_threshold_is_forwarded_to_recompute(self, tmp_path):
+    def test_dag_similarity_threshold_is_forwarded_to_recompute(
+        self, tmp_path, fake_forge
+    ):
         """#407/#415レビュー指摘: dag_similarity_thresholdもdag_ignore_patterns
         と同様に実行時DAG再計算（footprint逸脱時）へ伝搬させること。伝搬しないと、
         orchestune-dagで意図的に低い閾値へ変更したエッジがrecompute側の
@@ -233,6 +246,7 @@ class TestDecideFootprintDeviationOutcome:
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             dag_similarity_threshold=0.1,
+            forge=fake_forge,
         )
 
         with patch(
@@ -423,7 +437,7 @@ class TestDecideRebaseNeeded:
 
 
 class TestTryAutoRebase:
-    def test_rebase_not_needed_returns_false(self, tmp_path):
+    def test_rebase_not_needed_returns_false(self, tmp_path, fake_forge):
         active = _active(branch="feature")
         task = _task(depends_on=("task-parent",))
 
@@ -440,6 +454,7 @@ class TestTryAutoRebase:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
         )
 
         with (
@@ -467,7 +482,7 @@ class TestTryAutoRebase:
         assert result is False
         mock_apply.assert_not_called()
 
-    def test_rebase_needed_returns_true(self, tmp_path):
+    def test_rebase_needed_returns_true(self, tmp_path, fake_forge):
         active = _active(branch="feature")
         task = _task(depends_on=("task-parent",))
 
@@ -484,6 +499,7 @@ class TestTryAutoRebase:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
         )
 
         with (

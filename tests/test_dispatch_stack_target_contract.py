@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -13,6 +14,7 @@ from orchestune.dispatch.dependency_assessment import (
 from orchestune.dispatch.launch import _is_task_stack_eligible
 from orchestune.dispatch.rebase import _decide_rebase_target
 from orchestune.dispatch.reconciliation import _resolve_base_branch_for_task
+from orchestune.forge import Forge
 from tests.conftest import make_task
 
 
@@ -58,6 +60,7 @@ def test_launch_rebase_and_base_wrappers_return_the_same_safe_stack_branch(
         parent_issue_number=823,
         events_log_path=tmp_path / "events.jsonl",
         run_state_path=tmp_path / "state.json",
+        forge=MagicMock(spec=Forge),
     )
 
     launch = _is_task_stack_eligible(_task(), view)
@@ -91,6 +94,7 @@ def test_no_safe_target_means_no_rebase_and_parent_base_fallback(
         parent_issue_number=823,
         events_log_path=tmp_path / "events.jsonl",
         run_state_path=tmp_path / "state.json",
+        forge=MagicMock(spec=Forge),
     )
 
     assert _is_task_stack_eligible(_task(), view).target is None

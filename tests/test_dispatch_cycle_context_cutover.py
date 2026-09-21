@@ -15,6 +15,7 @@ from orchestune.dispatch.cycle_action_contracts import (
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.dispatch.state import RunState
+from orchestune.forge import Forge
 
 
 def _context(actions: MagicMock, tmp_path: Path) -> CycleContext:
@@ -31,6 +32,7 @@ def _context(actions: MagicMock, tmp_path: Path) -> CycleContext:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
+            forge=MagicMock(spec=Forge),
         ),
         actions=actions,
     )
