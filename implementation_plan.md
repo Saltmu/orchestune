@@ -82,3 +82,5 @@ Codex reviewed the corrected SHA `91010a309985fad9dd54d5c798c96fc7f72d3f07` in r
 Round 3 reported a P2 for external Git common directories. The resolver now detects linked-worktree metadata explicitly and falls back to `git rev-parse --show-toplevel` for separate-git-dir/submodule layouts, with a focused regression test. This is a classification miss against the original out-of-scope decision; no dispatcher consumer changes were needed.
 
 Round 4 identified the external-git-dir linked-worktree variant. The linked-worktree metadata check now applies regardless of the common directory basename and honors the external repository's optional `core.worktree` declaration; a regression test covers a separate-git-dir repository with a linked worktree.
+
+Round 5 confirmed that Git does not record the original checkout path for an external common dir when `core.worktree` is absent. The resolver now fails closed for that ambiguous linked-worktree case instead of allowing divergent shared state, and resolves relative `core.worktree` values from the common Git directory.

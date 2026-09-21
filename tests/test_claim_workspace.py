@@ -226,6 +226,37 @@ class TestResolveClaimWorkspace:
         assert ws_linked.run_state_path == ws_primary.run_state_path
         assert ws_linked.worktree_root == ws_primary.worktree_root
 
+    def test_external_git_dir_linked_worktree_without_primary_metadata_fails_closed(
+        self, tmp_path: Path
+    ) -> None:
+        checkout = tmp_path / "checkout"
+        checkout.mkdir()
+        external_git_dir = tmp_path / "git-dir"
+        run_git(
+            [
+                "init",
+                "-b",
+                "main",
+                "--separate-git-dir",
+                str(external_git_dir),
+                str(checkout),
+            ],
+            cwd=tmp_path,
+        )
+        run_git(["config", "user.name", "Test User"], cwd=checkout)
+        run_git(["config", "user.email", "test@example.com"], cwd=checkout)
+        (checkout / "README.md").write_text("hello")
+        run_git(["add", "README.md"], cwd=checkout)
+        run_git(["commit", "-m", "initial commit"], cwd=checkout)
+        linked = tmp_path / "linked"
+        run_git(
+            ["worktree", "add", "-b", "linked", str(linked), "main"],
+            cwd=checkout,
+        )
+
+        with pytest.raises(ValueError, match="external git directory"):
+            resolve_claim_workspace(cwd=linked)
+
     def test_claim_workspace_is_frozen(
         self, git_repo_with_worktree: tuple[Path, Path]
     ) -> None:

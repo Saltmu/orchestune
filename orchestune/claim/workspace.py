@@ -64,10 +64,14 @@ def _resolve_primary_root(toplevel: Path, common_dir: Path) -> Path:
             return configured_worktree
         if common_dir.name == ".git":
             return common_dir.parent
+        raise ValueError(
+            "cannot determine the primary checkout for an external git directory; "
+            "configure core.worktree or provide absolute shared paths"
+        )
     return toplevel
 
 
-def _read_core_worktree(common_dir: Path, toplevel: Path) -> Path | None:
+def _read_core_worktree(common_dir: Path, _toplevel: Path) -> Path | None:
     """Read an optional external-git-dir ``core.worktree`` declaration."""
     config_path = common_dir / "config"
     try:
@@ -87,7 +91,7 @@ def _read_core_worktree(common_dir: Path, toplevel: Path) -> Path | None:
             continue
         worktree = Path(value)
         return (
-            (toplevel / worktree).resolve()
+            (common_dir / worktree).resolve()
             if not worktree.is_absolute()
             else worktree.resolve()
         )
@@ -112,8 +116,10 @@ def resolve_claim_workspace(
     `config.worktree_root`が食い違ってしまう。
 
     Relative shared paths use the primary checkout for linked worktrees. For
-    submodules and external git directories, they use the checkout returned by
-    ``git rev-parse --show-toplevel`` so separate repositories do not share state.
+    submodules and standalone external git directories, they use the checkout
+    returned by ``git rev-parse --show-toplevel``. An external common directory
+    with linked worktrees must declare ``core.worktree`` (or use absolute paths)
+    so the primary checkout can be identified without guessing.
     """
     toplevel, common_dir = get_git_repository_paths(cwd)
     primary_root = _resolve_primary_root(toplevel, common_dir)
