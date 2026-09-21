@@ -54,7 +54,7 @@ def _with_merged_depends_on(task: Task, issue_to_subtask_id: dict[int, str]) -> 
 
 
 def get_sorted_done_tasks(
-    parent_issue_number: int | None,
+    parent_issue_number: int,
     forge: Forge | None = None,
     ignore_patterns: Iterable[re.Pattern[str]] = (),
     threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
@@ -91,7 +91,7 @@ def get_sorted_done_tasks(
 
 
 def _load_integration_issues(
-    forge: Forge, done: list[IssueRecord], parent_number: int | None
+    forge: Forge, done: list[IssueRecord], parent_number: int
 ) -> tuple[list[IssueRecord], list[IssueRecord]]:
     labels = (
         StatusLabel.QUEUED,
@@ -105,8 +105,6 @@ def _load_integration_issues(
         for issue in forge.list_issues_by_label(label, state="open")
     ]
     issues.extend(done)
-    if parent_number is None:
-        return done, issues
     return (
         [issue for issue in done if effective_parent_number(issue) == parent_number],
         [issue for issue in issues if effective_parent_number(issue) == parent_number],

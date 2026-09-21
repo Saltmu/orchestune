@@ -160,6 +160,7 @@ def _run_dispatch_claim(
         "main",
     )
     config = DispatcherConfig(
+        parent_issue_number=100,
         run_state_path=state,
         worktree_root=repo / "worktrees",
         events_log_path=repo / "events.jsonl",

@@ -31,17 +31,12 @@ from orchestune.models import PrRecord
 from orchestune.task_metadata import TaskMetadata
 
 
-def _is_base_or_parent_branch(
-    branch_name: str, config: DispatcherConfig | None = None
-) -> bool:
+def _is_base_or_parent_branch(branch_name: str) -> bool:
     name = _strip_remote_prefix(branch_name)
     if name in {"main", "master", "HEAD"} or name.endswith("/HEAD"):
         return True
     if name.startswith("parent/issue-"):
         return True
-    if config and config.parent_issue_number is not None:
-        if name == f"parent/issue-{config.parent_issue_number}":
-            return True
     return False
 
 
@@ -49,7 +44,6 @@ def _decide_external_lock_sync(
     tasks_by_issue: Mapping[int, TaskMetadata],
     prs: list[PrRecord],
     run_state: RunState,
-    config: DispatcherConfig | None = None,
     *,
     view: LockDependencyView,
 ) -> ExternalLockScanResult:
@@ -68,7 +62,7 @@ def _decide_external_lock_sync(
         for b in remote_branch_names
         if _strip_remote_prefix(b) not in pr_head_refs
         and _strip_remote_prefix(b) not in active_branches
-        and not _is_base_or_parent_branch(b, config)
+        and not _is_base_or_parent_branch(b)
     ]
     # #245: 差分取得不能(None)はtupleへ潰さずそのまま渡し、
     # scan_external_locks側でfail closed（lock維持・新規lock）に判定させる。
@@ -175,21 +169,18 @@ def _sync_external_locks(
     view: LockDependencyView,
 ) -> ExternalLockScanResult:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
-    lock_result = _decide_external_lock_sync(
-        tasks_by_issue, prs, run_state, config, view=view
-    )
+    lock_result = _decide_external_lock_sync(tasks_by_issue, prs, run_state, view=view)
     _apply_external_lock_sync(lock_result, config, run_state)
     return lock_result
 
 
 def ensure_parent_branch_ready(config: DispatcherConfig) -> None:
-    """`--parent-issue`指定時、対象IssueがEPICとして正しい構造を持つことを
+    """対象IssueがEPICとして正しい構造を持つことを
     検証した上で、対応する`parent/issue-<N>`ブランチが存在することを保証する。
 
-    `config.apply`がFalseの場合は何もしない（既存の`run_dispatch_cycle`の
-    条件`config.parent_issue_number is not None and config.apply`と同一）。
+    `config.apply`がFalseの場合は何もしない。
     """
-    if config.parent_issue_number is None or not config.apply:
+    if not config.apply:
         return
     issue = config.resolved_forge.get_issue(config.parent_issue_number)
     if issue is None:

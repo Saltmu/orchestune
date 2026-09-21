@@ -39,6 +39,7 @@ def _active(tmp_path, **overrides):
 
 def _config(tmp_path, forge):
     return DispatcherConfig(
+        parent_issue_number=100,
         events_log_path=tmp_path / "events.jsonl",
         run_state_path=tmp_path / "run_state.json",
         worktree_root=tmp_path / "worktrees",

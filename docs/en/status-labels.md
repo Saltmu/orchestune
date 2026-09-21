@@ -252,9 +252,8 @@ independently of the lifecycle above (see "External lock" below).
 
 The transitions above cover `status:*` label changes on an *open* Issue. This
 section covers the two places where Orchestune actually closes an Issue for
-a normally-completed (non-`not-needed`) subtask, both added in
-[#170](https://github.com/Saltmu/orchestune/issues/170) and both gated on the
-dispatcher having been run with `--parent-issue <N>` (see
+a normally-completed (non-`not-needed`) subtask. The required dispatcher
+`--parent-issue <N>` selects the parent branch (see
 [Integration Pipeline (architecture/integration.md)](./architecture/integration.md)).
 
 ### Child Issue: `status:done` (still open) → closed (`completed`)
@@ -264,10 +263,6 @@ dispatcher having been run with `--parent-issue <N>` (see
   immediately afterward with `reason=completed`, with no human involved. If
   the auto-merge itself fails (e.g. a conflict the temp-branch CI run didn't
   catch), the PR is left open and the Issue is **not** closed.
-- Does not apply when the dispatcher runs without `--parent-issue`: in that
-  flat/single-tier mode the integration PR still targets `main` directly, and
-  per the "final merge is always by a human" rule, `AutoMergeChildIntegrationStep`
-  is a no-op.
 
 ### Parent Issue: open → closed (`completed`)
 - Source: `process_parent_completion` in `orchestune/integrator/parent_completion.py`,

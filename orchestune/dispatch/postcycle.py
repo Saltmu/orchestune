@@ -283,9 +283,6 @@ def _post_event_log_comment(
     """
 
     def work() -> dict:
-        if config.parent_issue_number is None:
-            return {"posted": False, "reason": "no parent issue configured"}
-
         deviation_events = _noteworthy_deviation_events(report)
         has_events = bool(
             report.selected

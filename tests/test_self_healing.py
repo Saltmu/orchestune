@@ -11,6 +11,7 @@ from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 def _recovery_config(tmp_path, forge) -> DispatcherConfig:
     return DispatcherConfig(
+        parent_issue_number=100,
         apply=True,
         max_concurrent=0,
         run_state_path=tmp_path / "run_state.json",

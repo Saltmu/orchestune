@@ -181,21 +181,6 @@ class TestLabelIncludedStep:
 
 
 class TestAutoMergeChildIntegration:
-    def test_no_auto_merge_when_parent_issue_number_is_none(
-        self, integrator_env: IntegratorEnv
-    ):
-        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
-
-        res = Integrator(IntegratorConfig(apply=True)).run()
-
-        assert res["status"] == "success"
-        create_pr_body = integrator_env.create_pull_request.call_args.kwargs["body"]
-        assert "人間が行ってください" in create_pr_body
-        integrator_env.merge_pull_request.assert_not_called()
-        integrator_env.close_issue.assert_not_called()
-        assert res.get("auto_merged") is None
-        assert res.get("closed_issues") is None
-
     def test_no_auto_merge_when_pr_creation_failed(self, integrator_env: IntegratorEnv):
         # immutableなreceipt OIDの到達性はデフォルトでFalse（integrator_env
         # フィクスチャ側の既定値）なので、実際にはまだ統合済みでないケース。
@@ -792,18 +777,6 @@ class TestRetryChildIssueCloseStep:
         assert not res.get("merged")
         assert not res.get("closed_issues")
         integrator_env.close_issue.assert_called_once()
-
-    def test_no_retry_when_parent_issue_number_is_none(
-        self, integrator_env: IntegratorEnv
-    ):
-        integrator_env.set_done_issues(self._included(1, "task-1"))
-
-        res = Integrator(IntegratorConfig(apply=True)).run()
-
-        assert res["status"] == "success"
-        assert res["merged"] == ["task-1"]
-        integrator_env.close_issue.assert_not_called()
-        assert not res.get("retried_closed_issues")
 
     def test_next_cycle_retries_close_after_label_persisted_from_crash(
         self, integrator_env: IntegratorEnv

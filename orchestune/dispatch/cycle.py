@@ -197,9 +197,7 @@ class _DispatchConsistencyAdapter:
     def _source_records(self):
         if not self._fresh:
             return self._cached_issues, self._cached_prs
-        issues = _fetch_issues(self._config).filtered_by_parent(
-            self._config.parent_issue_number
-        )
+        issues = _fetch_issues(self._config)
         prs = self._config.resolved_forge.list_open_prs(paginate_files=True)
         return issues, prs
 
@@ -851,7 +849,7 @@ def _prepare_cycle_issues(run_state, config: DispatcherConfig, _now: float):
     # #512: 完了・クローズ済みIssueの回収回数を台帳から落とす。親Issueでの
     # 絞り込み前の一覧で判定し、他の親配下のIssueも取り漏らさないようにする。
     discard_reclaim_counts_for_closed_issues(run_state, issues, config)
-    return issues.filtered_by_parent(config.parent_issue_number)
+    return issues
 
 
 def _notify_pr_links(ctx, config: DispatcherConfig) -> None:
@@ -994,7 +992,7 @@ def _prepare_cycle_context(run_state, config: DispatcherConfig, now: float):
     reconcile_status_repair_intents(config, now=datetime.fromtimestamp(now, UTC))
     recovery_report = _run_recovery_bookkeeping_boundary(run_state, config, now=now)
     if _recovery_requeued(recovery_report):
-        issues = _fetch_issues(config).filtered_by_parent(config.parent_issue_number)
+        issues = _fetch_issues(config)
     tasks_by_issue, _, _ = _build_task_mappings(issues.all())
     prior_merges = reconcile_prior_parent_merges(
         config.resolved_forge,

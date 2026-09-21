@@ -61,13 +61,13 @@ class IntegrationReport(TypedDict, total=False):
     details: dict[str, IntegrationReport]
 
 
-@dataclass
+@dataclass(kw_only=True)
 class IntegratorConfig:
+    parent_issue_number: int
     repository_root: Path = Path(".")
-    base_branch: str = "origin/main"
-    temp_branch: str = "integration/temp-main"
+    base_branch: str = ""
+    temp_branch: str = ""
     ci_command: list[str] | None = None
-    parent_issue_number: int | None = None
     integration_run_id: str = field(default_factory=_default_integration_run_id)
     apply: bool = False
     enable_semantic_review: bool = True
@@ -81,14 +81,11 @@ class IntegratorConfig:
     dag_similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD
 
     def __post_init__(self) -> None:
-        if self.parent_issue_number is not None:
-            self.base_branch = f"origin/parent/issue-{self.parent_issue_number}"
-            self.temp_branch = (
-                "integration/temp-parent-issue-"
-                f"{self.parent_issue_number}-{self.integration_run_id}"
-            )
-        else:
-            self.temp_branch = f"{self.temp_branch}-{self.integration_run_id}"
+        self.base_branch = f"origin/parent/issue-{self.parent_issue_number}"
+        self.temp_branch = (
+            "integration/temp-parent-issue-"
+            f"{self.parent_issue_number}-{self.integration_run_id}"
+        )
         if self.forge is None:
             self.forge = GitHubForge()
 

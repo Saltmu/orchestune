@@ -202,9 +202,8 @@ If you build a workflow that runs `orchestune dispatch` on a GitHub Actions cron
 
 ```yaml
 concurrency:
-  # Group by parent Issue. In flat mode (no --parent-issue), integration/temp-main
-  # is a shared resource, so serialize under the fixed key 'flat' instead.
-  group: orchestune-integrate-${{ github.repository }}-${{ inputs.parent_issue || 'flat' }}
+  # Group by the required parent Issue.
+  group: orchestune-integrate-${{ github.repository }}-${{ inputs.parent_issue }}
   # Required: setting this to true would let a run cancel an in-flight integrator,
   # leaving the temp branch and worktree behind (`dispatch_gc` picks up more orphans,
   # and depending on when the cancel lands, the parent branch could end up partially

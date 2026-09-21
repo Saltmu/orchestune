@@ -40,11 +40,11 @@ class TestMergeFailure:
             stderr=b"CONFLICT (content): Merge conflict",
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert "task-1" in res["failed"]
-        integrator_env.remove_label.assert_called_with(1, "status:done")
+        integrator_env.remove_label.assert_any_call(1, "status:done")
         integrator_env.add_label.assert_called_with(1, "status:queued")
         integrator_env.add_comment.assert_called_once()
         assert "Merge conflict" in integrator_env.add_comment.call_args[0][1]
@@ -61,7 +61,7 @@ class TestMergeFailure:
             stderr=b"CONFLICT (content): Merge conflict",
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "partial_success"
         assert res["merged"] == ["task-2"]
@@ -98,7 +98,7 @@ class TestCiFailure:
 
         integrator_env.stub_git(handler)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert "task-1" in res["failed"]
@@ -109,7 +109,7 @@ class TestCiFailure:
         assert pre_merge_sha in reset_calls[0].args[0]
         assert "HEAD~1" not in reset_calls[0].args[0]
 
-        integrator_env.remove_label.assert_called_with(1, "status:done")
+        integrator_env.remove_label.assert_any_call(1, "status:done")
         integrator_env.add_label.assert_called_with(1, "status:queued")
         comment_body = integrator_env.add_comment.call_args[0][1]
         assert "CI verification failed" in comment_body
@@ -123,7 +123,7 @@ class TestCiFailure:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.fail_git(_is_ci, stderr=b"UNIQUE_JOB_LOG_MARKER")
 
-        Integrator(IntegratorConfig(apply=True)).run()
+        Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert "UNIQUE_JOB_LOG_MARKER" in capsys.readouterr().err
 
@@ -132,7 +132,7 @@ class TestCiFailure:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.fail_git(_is_ci, output=("x" * 10000 + "TAIL_MARKER").encode())
 
-        Integrator(IntegratorConfig(apply=True)).run()
+        Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         comment_body = integrator_env.add_comment.call_args[0][1]
         assert "TAIL_MARKER" in comment_body
@@ -146,7 +146,7 @@ class TestCiFailure:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.fail_git(_is_ci)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert res["failed"] == ["task-1"]
@@ -180,7 +180,7 @@ class TestRollbackSha:
 
         integrator_env.stub_git(handler)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         reset_calls = integrator_env.calls_with("reset")
@@ -208,7 +208,7 @@ class TestRollbackSha:
 
         integrator_env.stub_git(handler)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         comment_body = integrator_env.add_comment.call_args[0][1]
@@ -223,7 +223,7 @@ class TestFetchBeforeMerge:
         # 明示的な refspec 付きでfetchしてからマージする必要がある。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         task_fetch_calls = [
@@ -250,7 +250,7 @@ class TestFetchBeforeMerge:
         # "Committer identity unknown" で必ず失敗するため、事前に設定する必要がある。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         name_calls = integrator_env.calls_with("config", "user.name")
@@ -273,7 +273,7 @@ class TestFetchBeforeMerge:
             )
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         unshallow_calls = integrator_env.calls_with("--unshallow")
@@ -283,7 +283,7 @@ class TestFetchBeforeMerge:
             "fetch",
             "--unshallow",
             "origin",
-            "main",
+            "parent/issue-100",
         ]
 
         branch_fetch = integrator_env.calls_with(_TASK_1_REFSPEC)[0]
@@ -301,7 +301,7 @@ class TestFetchBeforeMerge:
             )
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert integrator_env.calls_with("--unshallow") == []
@@ -312,7 +312,10 @@ class TestFetchFailure:
     （PRがマージ済み）と確認できた場合のみスキップしてよい。"""
 
     def _fail_fetch(self, env: IntegratorEnv, stderr: bytes) -> None:
-        env.fail_git(lambda args: "fetch" in args, stderr=stderr)
+        env.fail_git(
+            lambda args: "fetch" in args and any(_TASK_1_BRANCH in arg for arg in args),
+            stderr=stderr,
+        )
 
     def test_is_handled_like_merge_failure(self, integrator_env: IntegratorEnv):
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
@@ -330,15 +333,15 @@ class TestFetchFailure:
             b"fatal: couldn't find remote ref claude/issue-1-task-1",
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert "task-1" in res["failed"]
         assert integrator_env.calls_with("merge", "--no-ff") == []
-        integrator_env.remove_label.assert_called_with(1, "status:done")
+        integrator_env.remove_label.assert_any_call(1, "status:done")
         integrator_env.add_label.assert_called_with(1, "status:queued")
         integrator_env.current_branch_tip_sha_if_merged_into.assert_called_once_with(
-            _TASK_1_BRANCH, "main"
+            _TASK_1_BRANCH, "parent/issue-100"
         )
 
     def test_reused_branch_with_old_merged_pr_fails_closed(
@@ -350,16 +353,16 @@ class TestFetchFailure:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         self._fail_fetch(integrator_env, b"fatal: couldn't find remote ref")
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert res["merged"] == []
         assert res["failed"] == ["task-1"]
-        integrator_env.remove_label.assert_called_once_with(1, "status:done")
+        integrator_env.remove_label.assert_any_call(1, "status:done")
         integrator_env.add_label.assert_called_once_with(1, "status:queued")
         integrator_env.add_comment.assert_called_once()
         integrator_env.current_branch_tip_sha_if_merged_into.assert_called_once_with(
-            _TASK_1_BRANCH, "main"
+            _TASK_1_BRANCH, "parent/issue-100"
         )
 
     def test_is_skipped_when_branch_tip_is_already_merged(
@@ -369,17 +372,18 @@ class TestFetchFailure:
         integrator_env.current_branch_tip_sha_if_merged_into.return_value = "a" * 40
         self._fail_fetch(integrator_env, b"fatal: couldn't find remote ref")
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
         integrator_env.current_branch_tip_sha_if_merged_into.assert_called_once_with(
-            _TASK_1_BRANCH, "main"
+            _TASK_1_BRANCH, "parent/issue-100"
         )
         # 差し戻し（status:done剥がし・status:queued付与・失敗コメント）は行われず、
         # 統合済みを示す`integration:included`だけが付く。
-        integrator_env.remove_label.assert_not_called()
-        integrator_env.add_comment.assert_not_called()
+        integrator_env.remove_label.assert_called_once_with(
+            100, "integration:parent-branch-stale"
+        )
         integrator_env.add_label.assert_called_once_with(1, "integration:included")
 
     def test_fails_closed_when_merged_lookup_itself_fails(
@@ -391,12 +395,12 @@ class TestFetchFailure:
         )
         self._fail_fetch(integrator_env, b"temporary network failure")
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert res["failed"] == ["task-1"]
         integrator_env.current_branch_tip_sha_if_merged_into.assert_called_once_with(
-            _TASK_1_BRANCH, "main"
+            _TASK_1_BRANCH, "parent/issue-100"
         )
 
 
@@ -428,7 +432,7 @@ class TestUnexpectedException:
 
         integrator_env.stub_git(handler)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "partial_success"
         assert res["merged"] == ["task-2"]
@@ -436,7 +440,7 @@ class TestUnexpectedException:
 
         # task-1の失敗によるGitHub側の副作用（差し戻し）が、レポート内容と
         # 一貫して実行されている。
-        integrator_env.remove_label.assert_called_with(1, "status:done")
+        integrator_env.remove_label.assert_any_call(1, "status:done")
         integrator_env.add_label.assert_called_with(1, "status:queued")
         comment_body = integrator_env.add_comment.call_args[0][1]
         assert "Unexpected error during merge/test" in comment_body
@@ -464,7 +468,7 @@ class TestUnexpectedException:
 
         integrator_env.stub_git(handler)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert res["failed"] == ["task-1"]
@@ -493,7 +497,7 @@ class TestUnexpectedException:
 
         integrator_env.stub_git(handler)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "partial_success"
         assert res["merged"] == ["task-2"]
@@ -515,7 +519,11 @@ class TestCiEnvironment:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             (root / ".venv" / "bin").mkdir(parents=True)
-            integrator = Integrator(IntegratorConfig(apply=True, repository_root=root))
+            integrator = Integrator(
+                IntegratorConfig(
+                    parent_issue_number=100, apply=True, repository_root=root
+                )
+            )
             integrator.run()
 
         ci_calls = integrator_env.calls_with(*default_ci_command())
@@ -598,7 +606,7 @@ class TestNoOpMergeSkipsCi:
             )
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
@@ -624,7 +632,7 @@ class TestNoOpMergeSkipsCi:
         # 変わらず実行されることを確認する（回帰防止）。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]

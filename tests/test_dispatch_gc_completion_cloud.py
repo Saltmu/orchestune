@@ -36,7 +36,10 @@ class TestFinalizeAbandonedCloudWorktree:
         active = _active()
         task = _task(status_labels=("status:blocked", "status:in-progress"))
         config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -64,7 +67,10 @@ class TestFinalizeAbandonedCloudWorktree:
             status_labels=("status:blocked-human-review", "status:in-progress")
         )
         config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", apply=True, forge=fake_forge
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            forge=fake_forge,
         )
 
         with (
@@ -88,6 +94,7 @@ class TestFinalizeAbandonedCloudWorktree:
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             max_task_reclaims=3,
@@ -125,6 +132,7 @@ class TestFinalizeAbandonedCloudWorktree:
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             max_task_reclaims=2,
@@ -160,6 +168,7 @@ class TestFinalizeAbandonedCloudWorktree:
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             max_task_reclaims=1,
@@ -202,6 +211,7 @@ class TestFinalizeAbandonedCloudWorktree:
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             max_task_reclaims=3,
@@ -247,6 +257,7 @@ class TestFinalizeAbandonedCloudWorktree:
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             max_task_reclaims=3,
@@ -293,6 +304,7 @@ class TestFinalizeAbandonedCloudWorktree:
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             max_task_reclaims=3,
@@ -331,6 +343,7 @@ class TestFinalizeAbandonedCloudWorktree:
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             max_task_reclaims=3,
@@ -378,6 +391,7 @@ class TestFinalizeAbandonedCloudWorktree:
         active = _active()
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             max_task_reclaims=3,
@@ -423,7 +437,10 @@ class TestFinalizeAbandonedCloudWorktree:
 
         active = _active()
         config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", apply=True, max_task_reclaims=3
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            max_task_reclaims=3,
         )
         run_state = RunState(
             active_worktrees={"w1": active},
@@ -465,6 +482,7 @@ class TestLocalPrCompletionStatusWithFakeForge:
             )
         ]
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -496,6 +514,7 @@ class TestLocalPrCompletionStatusWithFakeForge:
         ]
         fake_forge.list_comments.return_value = []
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -529,6 +548,7 @@ class TestLocalPrCompletionStatusWithFakeForge:
             {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
         ]
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -559,6 +579,7 @@ class TestLocalPrCompletionStatusWithFakeForge:
         ]
         fake_forge.list_comments.side_effect = RuntimeError("network error")
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -601,6 +622,7 @@ class TestLocalPrCompletionStatusWithFakeForge:
             }
         ]
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

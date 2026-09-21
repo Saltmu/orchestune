@@ -202,9 +202,8 @@ orchestune dispatch --dispatch-target auto
 
 ```yaml
 concurrency:
-  # 親Issue単位でグループ化する。--parent-issueを指定しないフラットモードでは
-  # integration/temp-mainが共有資源になるため、'flat'という固定キーで直列化する。
-  group: orchestune-integrate-${{ github.repository }}-${{ inputs.parent_issue || 'flat' }}
+  # 必須の親Issue単位でグループ化する。
+  group: orchestune-integrate-${{ github.repository }}-${{ inputs.parent_issue }}
   # 必須: trueにするとCI実行中のIntegratorが中断され、temp branchとworktreeが
   # 残留する（`dispatch_gc`側の回収対象は増えるが、中断タイミング次第で親ブランチが
   # 中途半端に進む可能性がある）。

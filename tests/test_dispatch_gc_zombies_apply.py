@@ -65,6 +65,7 @@ class TestApplyZombieOrTimeoutReclaim:
             parameters=(("finding_codes", (LOCAL_PROCESS_DEAD,)),),
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -115,6 +116,7 @@ class TestApplyZombieOrTimeoutReclaim:
             parameters=(("finding_codes", (LOCAL_PROCESS_DEAD,)),),
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -151,6 +153,7 @@ class TestApplyZombieOrTimeoutReclaim:
             parameters=(("finding_codes", (LOCAL_PROCESS_DEAD,)),),
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -203,6 +206,7 @@ class TestApplyZombieOrTimeoutReclaim:
             parameters=(("finding_codes", (EXECUTION_TIMED_OUT,)),),
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -244,6 +248,7 @@ class TestApplyZombieOrTimeoutReclaim:
             parameters=(("finding_codes", (LOCAL_PROCESS_DEAD,)),),
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=False,
@@ -270,6 +275,7 @@ class TestApplyZombieOrTimeoutReclaim:
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(active)
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -316,6 +322,7 @@ class TestApplyZombieOrTimeoutReclaim:
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(active)
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -356,6 +363,7 @@ class TestApplyZombieOrTimeoutReclaim:
             active, status_labels=("status:blocked", "status:in-progress")
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -389,6 +397,7 @@ class TestApplyZombieOrTimeoutReclaim:
             status_labels=("status:manual-merge-required", "status:in-progress"),
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -419,6 +428,7 @@ class TestApplyZombieOrTimeoutReclaim:
             active, reason="timeout exceeded", is_timeout=True, process_alive=True
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -451,6 +461,7 @@ class TestApplyZombieOrTimeoutReclaim:
             active, reason="timeout exceeded", is_timeout=True, process_alive=True
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -488,6 +499,7 @@ class TestApplyZombieOrTimeoutReclaim:
             active, reason="timeout exceeded", is_timeout=True, process_alive=False
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -514,6 +526,7 @@ class TestApplyZombieOrTimeoutReclaim:
             active, reason="timeout exceeded", is_timeout=True, process_alive=True
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -540,6 +553,7 @@ class TestApplyZombieOrTimeoutReclaim:
             active, reason="timeout exceeded", is_timeout=True, process_alive=True
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -575,6 +589,7 @@ class TestApplyZombieOrTimeoutReclaim:
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(active)
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -607,6 +622,7 @@ class TestApplyZombieOrTimeoutReclaim:
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(active)
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -640,6 +656,7 @@ class TestApplyZombieOrTimeoutReclaim:
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(active)
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=False,
@@ -678,6 +695,7 @@ class TestApplyZombieOrTimeoutReclaim:
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(active)
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=False,
@@ -703,6 +721,7 @@ class TestApplyZombieOrTimeoutReclaim:
         active = _active(worktree_path=str(worktree_dir), pid=111, started_at=1_000.0)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -757,6 +776,7 @@ class TestApplyZombieOrTimeoutReclaim:
         active = _active(worktree_path=str(worktree_dir), pid=111, started_at=None)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -818,6 +838,7 @@ class TestApplyZombieOrTimeoutReclaim:
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(active, finding_codes=(LOCAL_PROCESS_DEAD,))
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -864,6 +885,7 @@ class TestApplyZombieOrTimeoutReclaim:
             parameters=(("finding_codes", (LOCAL_PROCESS_DEAD,)),),
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,

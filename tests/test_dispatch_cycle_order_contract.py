@@ -82,7 +82,7 @@ def _config(tmp_path, forge: MagicMock, **overrides) -> DispatcherConfig:
         "forge": forge,
     }
     values.update(overrides)
-    return DispatcherConfig(**values)
+    return DispatcherConfig(parent_issue_number=100, **values)
 
 
 def _context(config: DispatcherConfig, tasks: list[Task], **overrides) -> CycleContext:

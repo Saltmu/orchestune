@@ -51,7 +51,7 @@ class RebaseContext:
 def notify_recompute(
     conflict: FootprintConflict,
     work_summary: str,
-    parent_issue_number: int | None,
+    parent_issue_number: int,
     apply: bool,
     issue_number_by_subtask_id: dict[str, int],
     forge: Forge | None = None,
@@ -72,11 +72,10 @@ def notify_recompute(
     other_issue = issue_number_by_subtask_id.get(conflict.other_subtask_id)
     blocked_issue = issue_number_by_subtask_id.get(conflict.blocked_subtask_id)
 
-    if parent_issue_number is not None:
-        bodies.append(
-            f"[自動記録] サブタスク {conflict.subtask_id} と {conflict.other_subtask_id} の"
-            f"間でfootprint逸脱によるConflict Graph再計算が発生しました。\n\n{detail}"
-        )
+    bodies.append(
+        f"[自動記録] サブタスク {conflict.subtask_id} と {conflict.other_subtask_id} の"
+        f"間でfootprint逸脱によるConflict Graph再計算が発生しました。\n\n{detail}"
+    )
 
     if apply:
         forge = forge or GitHubForge()
@@ -84,8 +83,7 @@ def notify_recompute(
             forge.add_comment(subtask_issue, detail)
         if other_issue is not None:
             forge.add_comment(other_issue, detail)
-        if parent_issue_number is not None:
-            forge.add_comment(parent_issue_number, bodies[-1])
+        forge.add_comment(parent_issue_number, bodies[-1])
         if blocked_issue is not None:
             transition_status_label(
                 forge, blocked_issue, StatusLabel.BLOCKED, (StatusLabel.QUEUED,)
@@ -98,7 +96,7 @@ def notify_recompute(
 def notify_force_serial(
     subtask_id: str,
     issue_number: int,
-    parent_issue_number: int | None,
+    parent_issue_number: int,
     retry_count: int,
     apply: bool,
     forge: Forge | None = None,
@@ -113,7 +111,7 @@ def notify_force_serial(
         "フォールバックに切り替えます。新規タスクのdispatchは、このサブタスクが"
         "完了するまで一時停止します。\n"
     )
-    if apply and parent_issue_number is not None:
+    if apply:
         forge = forge or GitHubForge()
         forge.add_comment(parent_issue_number, body)
     return body

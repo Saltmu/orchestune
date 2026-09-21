@@ -23,6 +23,7 @@ from tests.dispatch_test_support import save_locked_run_state as save_run_state
 class TestGC:
     def test_gc_reclaim_zombie(self, tmp_path, fake_forge):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -116,6 +117,7 @@ class TestGC:
 
     def test_gc_reclaim_zombie_only(self, tmp_path, fake_forge):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -199,6 +201,7 @@ class TestGC:
 
     def test_gc_reclaim_zombie_disabled(self, tmp_path, fake_forge):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -276,6 +279,7 @@ class TestGC:
 
     def test_gc_reclaim_timeout(self, tmp_path, fake_forge):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -356,6 +360,7 @@ class TestGC:
 
     def test_gc_reclaim_backup_failure_skips_deletion(self, tmp_path, fake_forge):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

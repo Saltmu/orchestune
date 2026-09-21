@@ -97,7 +97,7 @@ def _add_execution_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-concurrent", type=int, default=2)
     parser.add_argument("--max-launches-per-window", type=int, default=1)
     parser.add_argument("--window-seconds", type=int, default=3600)
-    parser.add_argument("--parent-issue", type=int, default=None)
+    parser.add_argument("--parent-issue", type=int)
     parser.add_argument(
         "--deviation-buffer-lines",
         type=int,
@@ -525,6 +525,11 @@ def _load_dispatcher_inputs(
         else DEFAULT_SIMILARITY_THRESHOLD
     )
     args = parser.parse_args(argv)
+    if args.parent_issue is None:
+        parser.error(
+            "the following argument is required: --parent-issue "
+            "(or parent-issue in the configuration file)"
+        )
     if (repair_codes := _explicit_repair_codes(argv)) is not None:
         args.consistency_repair_code = repair_codes
     return _DispatcherInputs(
@@ -612,13 +617,12 @@ def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
         )
         post_cycle_results.append(result)
         integrator_run_report = result.report
-        if config.parent_issue_number is not None:
-            post_cycle_results.append(
-                _process_parent_completion(config, auth_error=auth_error)
-            )
-            post_cycle_results.append(
-                _post_event_log_comment(config, report, auth_error=auth_error)
-            )
+        post_cycle_results.append(
+            _process_parent_completion(config, auth_error=auth_error)
+        )
+        post_cycle_results.append(
+            _post_event_log_comment(config, report, auth_error=auth_error)
+        )
 
     return _DispatcherRunResult(
         report=report,

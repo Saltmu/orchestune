@@ -37,8 +37,9 @@ DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST = frozenset(
 )
 
 
-@dataclass
+@dataclass(kw_only=True)
 class DispatcherConfig:
+    parent_issue_number: int
     max_concurrent: int = 2
     max_launches_per_window: int = 1
     window_seconds: int = 3600
@@ -46,7 +47,6 @@ class DispatcherConfig:
     worktree_root: Path = Path("worktrees")
     log_dir: Path = Path("logs")
     events_log_path: Path = Path("events.jsonl")
-    parent_issue_number: int | None = None
     apply: bool = False
     dispatch_target: DispatchTarget | None = None
     forge: Forge | None = None

@@ -540,7 +540,7 @@ class TestProvisionSubtask:
             plan_path=plan_path,
             existing_by_subtask_id={},
             dependencies_done={},
-            parent_issue_number=1,
+            parent_issue_number=100,
         )
         assert is_reused is False
         assert is_done is False
@@ -578,7 +578,7 @@ class TestProvisionSubtask:
             plan_path=plan_path,
             existing_by_subtask_id={},
             dependencies_done={},
-            parent_issue_number=1,
+            parent_issue_number=100,
         )
         assert number == existing_number
         assert is_reused is True
@@ -607,7 +607,7 @@ class TestProvisionSubtask:
         forge = RecordingForge()
         existing_number = forge.create_issue(
             "[FEAT] task-a: d",
-            "```yaml\nsubtask_id: task-a\nparent_issue_number: 1\n```\n",
+            "```yaml\nsubtask_id: task-a\nparent_issue_number: 100\n```\n",
             labels=("status:queued",),
         )
         subtask = SubTask(
@@ -628,7 +628,7 @@ class TestProvisionSubtask:
             plan_path=plan_path,
             existing_by_subtask_id={},
             dependencies_done={},
-            parent_issue_number=1,
+            parent_issue_number=100,
         )
         assert forge.update_issue_body_calls == []
 
@@ -667,7 +667,7 @@ class TestProvisionSubtask:
             plan_path=plan_path,
             existing_by_subtask_id={},
             dependencies_done={},
-            parent_issue_number=1,
+            parent_issue_number=100,
         )
         assert number == existing_number
         assert is_reused is True
@@ -681,8 +681,8 @@ class TestProvisionSubtask:
         self, tmp_path: Path, template_path: Path
     ):
         """#485 review round 9 (P2): `parent_issue_number: true` in the
-        body must actually be rewritten for parent #1, not skipped as
-        "already correct" just because `True == 1` in Python — the strict
+        body must actually be rewritten for parent #100, not skipped as
+        "already correct" just because `True == 100` in Python — the strict
         parser (`parent_issue_number_from_body`) rejects booleans, so
         skipping the write here would leave the body permanently
         undiscoverable while `has_parent_metadata` wrongly reports True."""
@@ -713,10 +713,10 @@ class TestProvisionSubtask:
             plan_path=plan_path,
             existing_by_subtask_id={},
             dependencies_done={},
-            parent_issue_number=1,
+            parent_issue_number=100,
         )
         assert has_parent_metadata is True
-        assert "parent_issue_number: 1\n" in forge.issues[existing_number]["body"]
+        assert "parent_issue_number: 100\n" in forge.issues[existing_number]["body"]
 
 
 class TestLinkSubtaskRelationships:

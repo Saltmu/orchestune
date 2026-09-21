@@ -77,7 +77,7 @@ def build_review_routine_prompt(
     temp_branch: str,
     base_branch: str,
     pr_number: int,
-    parent_issue_number: int | None,
+    parent_issue_number: int,
     merged_subtask_ids: Sequence[str],
 ) -> str:
     """意味的レビューを実行させるためのルーチン指示テキストを構築する。
@@ -86,11 +86,9 @@ def build_review_routine_prompt(
     （新規セッションが毎回まっさらな状態でレビューする）。
     """
     subtask_list = ", ".join(merged_subtask_ids) if merged_subtask_ids else "(不明)"
-    parent_ref = f"#{parent_issue_number}" if parent_issue_number else "(親Issue不明)"
+    parent_ref = f"#{parent_issue_number}"
     merge_statement = (
         "本PRは統合システムのパイプラインによって自動マージ・管理されます。"
-        if parent_issue_number is not None
-        else "最終的なマージ判断は人間が行います。"
     )
     return (
         "あなたは複数の並列実装タスクを統合した統合PRの最終レビュアーです。\n"
@@ -164,7 +162,7 @@ class IntegrationCoordinator:
         temp_branch: str,
         base_branch: str,
         pr_number: int,
-        parent_issue_number: int | None,
+        parent_issue_number: int,
         merged_subtask_ids: Sequence[str],
     ) -> DispatchHandle:
         prompt = build_review_routine_prompt(

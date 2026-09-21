@@ -484,6 +484,7 @@ class TestResolveExecutionProfile:
         self, sample_config: ExecutionProfileConfig, tmp_path: Path
     ) -> None:
         dispatcher_config = DispatcherConfig(
+            parent_issue_number=100,
             execution_profile_config=sample_config,
             events_log_path=tmp_path / "events.jsonl",
         )
@@ -891,6 +892,7 @@ class TestResolveTaskExecutionSelection:
         )
         target = LocalProcessDispatchTarget(local_cmd=local_cmd)
         config = DispatcherConfig(
+            parent_issue_number=100,
             max_concurrent=1,
             max_launches_per_window=1,
             window_seconds=60,
@@ -924,6 +926,7 @@ class TestResolveTaskExecutionSelection:
         )
         target = LocalProcessDispatchTarget(local_cmd="claude-cli")
         config = DispatcherConfig(
+            parent_issue_number=100,
             max_concurrent=1,
             max_launches_per_window=1,
             window_seconds=60,
@@ -955,6 +958,7 @@ class TestResolveTaskExecutionSelection:
         )
         target = LocalProcessDispatchTarget(local_cmd="claude-cli")
         config = DispatcherConfig(
+            parent_issue_number=100,
             max_concurrent=1,
             max_launches_per_window=1,
             window_seconds=60,

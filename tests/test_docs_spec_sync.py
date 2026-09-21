@@ -127,7 +127,7 @@ class TestDocsCliConsistency:
 
     @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
     def test_documented_defaults_match_parser(self, lang):
-        parser_defaults = vars(_build_arg_parser().parse_args([]))
+        parser_defaults = vars(_build_arg_parser().parse_args(["--parent-issue", "1"]))
         documented = _documented_options(lang)
         assert documented, f"{lang}のUsageからオプション表を抽出できませんでした"
 
@@ -559,7 +559,7 @@ class TestOrchestuneTomlExample:
             (REPO_ROOT / "orchestune.toml.example").read_text(encoding="utf-8")
         )
         parser = _build_arg_parser()
-        runtime_defaults = vars(parser.parse_args([]))
+        runtime_defaults = vars(parser.parse_args(["--parent-issue", "1"]))
 
         for key, configured_value in _config_defaults(parser, data).items():
             assert configured_value == runtime_defaults[key], (

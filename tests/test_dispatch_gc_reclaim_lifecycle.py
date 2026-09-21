@@ -38,7 +38,7 @@ def _config(tmp_path, **overrides):
         task_timeout_seconds=60,
     )
     defaults.update(overrides)
-    return DispatcherConfig(**defaults)
+    return DispatcherConfig(parent_issue_number=100, **defaults)
 
 
 def _run_timeout_cycles(run_state, config, cycles, task=None, tmp_path=None):
@@ -350,7 +350,7 @@ class TestDiscardReclaimCountsForClosedIssues:
             forge=MagicMock(),
         )
         defaults.update(overrides)
-        return DispatcherConfig(**defaults)
+        return DispatcherConfig(parent_issue_number=100, **defaults)
 
     def test_closed_issue_loses_its_reclaim_count(self, tmp_path):
         run_state = RunState(

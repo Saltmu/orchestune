@@ -206,6 +206,7 @@ class TestRunSemanticIntegrator:
 
     def test_enables_semantic_review_for_cloud_routine_target(self, tmp_path):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -234,6 +235,7 @@ class TestRunSemanticIntegrator:
 
     def test_disables_semantic_review_when_flag_off(self, tmp_path):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -255,6 +257,7 @@ class TestRunSemanticIntegrator:
 
     def test_disables_semantic_review_for_non_cloud_routine_target(self, tmp_path):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -278,6 +281,7 @@ class TestRunSemanticIntegrator:
         """#394: `DispatcherConfig.ci_command`が`IntegratorConfig.ci_command`
         へそのまま伝播すること。"""
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -304,6 +308,7 @@ class TestRunSemanticIntegrator:
         誘発しうる（dispatch_rebase.py/provisioning.pyと同じ回帰）。"""
         ignore_patterns = compile_extra_ignore_patterns([r"(^|/)package\.json$"])
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -326,6 +331,7 @@ class TestRunSemanticIntegrator:
         """#407: `DispatcherConfig.dag_ignore_patterns`未設定時は
         `IntegratorConfig.dag_ignore_patterns`も空タプルのまま。"""
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -347,6 +353,7 @@ class TestRunSemanticIntegrator:
         """#407/#415レビュー指摘: `DispatcherConfig.dag_similarity_threshold`が
         `IntegratorConfig.dag_similarity_threshold`へそのまま伝播すること。"""
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -372,6 +379,7 @@ class TestRunSemanticIntegrator:
         from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -395,6 +403,7 @@ class TestRunSemanticIntegrator:
         """#394: `DispatcherConfig.ci_command`未設定時は`IntegratorConfig.ci_command`
         も`None`のままで、Integrator側の既定値フォールバックに委ねる。"""
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -414,6 +423,7 @@ class TestRunSemanticIntegrator:
 
     def test_returns_none_and_warns_on_failure(self, capsys, tmp_path):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -433,6 +443,7 @@ class TestRunSemanticIntegrator:
 
     def test_returns_retryable_failure_when_report_has_failed_tasks(self, tmp_path):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -468,6 +479,7 @@ class TestRunSemanticIntegrator:
         伴わないため、ホワイトリスト方式（success/no_done_tasks以外は失敗）で
         判定されなければならない。"""
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -489,6 +501,7 @@ class TestRunSemanticIntegrator:
     @pytest.mark.parametrize("success_status", ["success", "no_done_tasks"])
     def test_returns_success_for_whitelisted_statuses(self, success_status, tmp_path):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -508,6 +521,7 @@ class TestRunSemanticIntegrator:
 
     def test_returns_fatal_failure_on_forge_auth_error(self, capsys, tmp_path):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

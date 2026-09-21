@@ -49,23 +49,25 @@ class _RecordingCoordinator(IntegrationCoordinator):
 
 class TestEnsureIntegrationPr:
     def test_reuses_existing_open_pr(self, integrator_env: IntegratorEnv):
-        # 既にintegration/temp-main→mainのopenなPRがある場合は重複作成しない。
+        # 既に親ブランチ向けのopenな統合PRがある場合は重複作成しない。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         # #243: identityを検証できたPR（upstream上の正規head・指定base向け）
         # だけが再利用対象になる。
-        temp_branch = "integration/temp-main-test-run"
+        temp_branch = "integration/temp-parent-issue-100-test-run"
         integrator_env.list_open_prs.return_value = [
             PrRecord(
                 number=777,
                 head_ref=temp_branch,
                 changed_files=(),
-                base_ref="main",
+                base_ref="parent/issue-100",
                 is_cross_repository=False,
             )
         ]
 
         res = Integrator(
-            IntegratorConfig(apply=True, integration_run_id="test-run")
+            IntegratorConfig(
+                parent_issue_number=100, apply=True, integration_run_id="test-run"
+            )
         ).run()
 
         assert res["status"] == "success"
@@ -80,7 +82,7 @@ class TestEnsureIntegrationPr:
             "no commits between main and branch"
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
@@ -102,7 +104,7 @@ class TestPushTempBranchFailure:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.fail_git(lambda args: "push" in args, stderr="remote rejected")
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         # push失敗をPR作成の前提条件にし、成功扱いにしない。
         assert res["status"] == "failed_to_push_temp_branch"
@@ -126,7 +128,11 @@ class TestPushTempBranchFailure:
         ]
 
         coordinator = Mock(spec=["dispatch_review"])
-        res = Integrator(IntegratorConfig(apply=True, coordinator=coordinator)).run()
+        res = Integrator(
+            IntegratorConfig(
+                parent_issue_number=100, apply=True, coordinator=coordinator
+            )
+        ).run()
 
         assert res["status"] == "failed_to_push_temp_branch"
         assert "integration_pr_number" not in res
@@ -143,7 +149,7 @@ class TestPushTempBranchFailure:
             lambda args: "push" in args, stderr="拒否されました: non-fast-forward"
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failed_to_push_temp_branch"
         assert isinstance(res["error"], str)
@@ -212,7 +218,9 @@ class TestSemanticReview:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.create_pull_request.return_value = 315
 
-        config = IntegratorConfig(apply=True)  # coordinator=None, enable=既定True
+        config = IntegratorConfig(
+            parent_issue_number=100, apply=True
+        )  # coordinator=None, enable=既定True
         assert config.enable_semantic_review is True
         res = Integrator(config).run()
 

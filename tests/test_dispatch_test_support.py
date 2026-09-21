@@ -178,11 +178,8 @@ class TestMakeFootprintIssue:
             subtask_id="task-a",
             depends_on=(),
             created_at=DEFAULT_CREATED_AT,
-            parent={"number": 181},
+            parent={"number": 100},
         )
-
-    def test_a_none_parent_number_drops_the_parent_relation(self):
-        assert make_footprint_issue(1, parent_number=None).parent is None
 
     def test_footprint_yaml_carries_the_given_fields(self):
         issue = make_footprint_issue(

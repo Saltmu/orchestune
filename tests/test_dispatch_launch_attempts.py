@@ -33,9 +33,11 @@ def _reap_stuck_claim_reservations(config: DispatcherConfig) -> None:
 @pytest.fixture
 def launch_env(tmp_path):
     forge = FakeForge()
-    forge.issues[1] = make_issue()
+    forge.issues[100] = make_issue(100, body="Parent")
+    forge.issues[1] = make_issue(1, parent={"number": 100})
     target = CodexCloudDispatchTarget("env-test")
     config = DispatcherConfig(
+        parent_issue_number=100,
         forge=forge,
         dispatch_target=target,
         apply=True,
@@ -43,7 +45,12 @@ def launch_env(tmp_path):
         run_state_path=tmp_path / "state.json",
         worktree_root=tmp_path / "worktrees",
     )
-    plan = TaskLaunchPlan(make_task(), "claude/issue-1-task-1", None, "origin/main")
+    plan = TaskLaunchPlan(
+        make_task(1, parent_number=100),
+        "claude/issue-1-task-1",
+        None,
+        "parent/issue-100",
+    )
     with (
         patch.object(target, "completion_status", return_value="pending"),
         patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
@@ -189,7 +196,14 @@ def test_unknown_launch_is_not_retried_after_state_loss(launch_env):
 
 def test_failed_prelaunch_persistence_never_calls_provider(launch_env):
     forge, config, plan, launch = launch_env
-    with patch.object(forge, "update_issue_body", side_effect=OSError("write failed")):
+    update = forge.update_issue_body
+
+    def fail_child_write(number, body):
+        if number == 1:
+            raise OSError("write failed")
+        update(number, body)
+
+    with patch.object(forge, "update_issue_body", side_effect=fail_child_write):
         with pytest.raises(OSError, match="write failed"):
             _apply_task_launches(
                 [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
@@ -206,7 +220,8 @@ def test_remote_write_response_loss_is_safe(launch_env, phase):
 
     def lose_response(number, body):
         update(number, body)
-        if attempt_from_body(body).phase == phase:
+        attempt = attempt_from_body(body)
+        if number == 1 and attempt and attempt.phase == phase:
             raise OSError("journal response lost")
 
     with patch.object(forge, "update_issue_body", side_effect=lose_response):

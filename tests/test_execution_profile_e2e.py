@@ -437,6 +437,7 @@ Testing full lifecycle of execution profiles.
             labels=("status:queued",),
         )
         in_memory_forge.set_label_actor(num, "status:queued", "bot")
+        in_memory_forge.add_sub_issue(100, num)
 
         # 2. Config with codex-cli target
         profile_config_dict = {
@@ -500,6 +501,7 @@ Testing full lifecycle of execution profiles.
         worktree_root = tmp_path / "worktrees"
 
         config = DispatcherConfig(
+            parent_issue_number=100,
             max_concurrent=2,
             max_launches_per_window=5,
             window_seconds=3600,
@@ -579,12 +581,14 @@ Testing full lifecycle of execution profiles.
             labels=("status:queued",),
         )
         in_memory_forge.set_label_actor(num, "status:queued", "bot")
+        in_memory_forge.add_sub_issue(100, num)
 
         # Empty ExecutionProfileConfig
         empty_profile_config = ExecutionProfileConfig()
         target = RecordingDispatchTarget(target_name="claude-cli")
 
         config = DispatcherConfig(
+            parent_issue_number=100,
             max_concurrent=2,
             max_launches_per_window=5,
             window_seconds=3600,
@@ -709,6 +713,7 @@ model_tier: strong
             labels=["status:queued", "priority:medium"],
         )
         in_memory_forge.set_label_actor(num, "status:queued", "bot")
+        in_memory_forge.add_sub_issue(100, num)
 
         profile_config_dict = {
             "model_tiers": {
@@ -722,6 +727,7 @@ model_tier: strong
         target = RecordingDispatchTarget(target_name="claude-cli")
 
         config = DispatcherConfig(
+            parent_issue_number=100,
             max_concurrent=2,
             max_launches_per_window=5,
             window_seconds=3600,
@@ -759,6 +765,7 @@ model_tier: strong
         # Now test with CLI overrides
         target.launched_tasks.clear()
         config_override = DispatcherConfig(
+            parent_issue_number=100,
             max_concurrent=2,
             max_launches_per_window=5,
             window_seconds=3600,

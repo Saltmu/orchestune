@@ -140,7 +140,11 @@ class TestApplyActorVerification:
                 task=task, actor="alice", permission="write", is_authorized=True
             )
         ]
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
         with patch(
             "orchestune.dispatch.actor_verification.apply_human_review_escalation",
             autospec=True,
@@ -158,7 +162,11 @@ class TestApplyActorVerification:
                 task=task, actor="mallory", permission="read", is_authorized=False
             )
         ]
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
         with patch(
             "orchestune.dispatch.actor_verification.apply_human_review_escalation",
             autospec=True,
@@ -182,7 +190,9 @@ class TestApplyActorVerification:
             )
         ]
         config = DispatcherConfig(
-            events_log_path=tmp_path / "events.jsonl", apply=False
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=False,
         )
         with patch(
             "orchestune.dispatch.actor_verification.apply_human_review_escalation",
@@ -203,7 +213,11 @@ class TestApplyActorVerification:
                 task=task_bad, actor="mallory", permission="read", is_authorized=False
             ),
         ]
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
         with patch(
             "orchestune.dispatch.actor_verification.apply_human_review_escalation",
             autospec=True,

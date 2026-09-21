@@ -26,6 +26,7 @@ def _ctx(**overrides):
         branch_by_issue_number={},
         prs=[],
         config=DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -62,6 +63,7 @@ class TestFinalizeLaunchContextRecording:
 
         task = _task(1, subtask_id="task-a")
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -105,6 +107,7 @@ class TestFinalizeLaunchContextRecording:
         from unittest.mock import patch
 
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -168,6 +171,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
@@ -216,6 +220,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
@@ -264,6 +269,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
@@ -389,31 +395,6 @@ class TestApplyTaskLaunchesPersistsLaunchHistoryToParentIssue:
         assert issue_number == 100
         assert launch_history_from_body(written_body) == [now]
         assert "EPIC body" in written_body
-
-    def test_does_not_touch_the_parent_issue_in_flat_mode(self, tmp_path):
-        from unittest.mock import MagicMock, call
-
-        forge = MagicMock()
-        forge.get_issue.return_value = make_issue(number=1, subtask_id="task-1")
-
-        self._run(
-            tmp_path,
-            RunState(active_worktrees={}),
-            5_000_000.0,
-            parent_issue_number=None,
-            forge=forge,
-        )
-
-        # #943: claim_task経由になったことで、起動対象タスク自身のIssue(#1)は
-        # claimのpreflight取得・finalize前の再検証取得で複数回取得され、claimの
-        # 所有権メタデータ公開のためにbodyも更新される。ここで検証したい不変
-        # 条件は「（存在しない）親Issueには一切触れない」ことなので、いずれの
-        # 呼び出しもtask自身(#1)向けであり、他のIssue番号（親Issue）が対象に
-        # なっていないことを確認する。
-        for call_args in forge.get_issue.call_args_list:
-            assert call_args == call(1)
-        for call_args in forge.update_issue_body.call_args_list:
-            assert call_args.args[0] == 1
 
     def test_persists_only_in_window_timestamps(self, tmp_path):
         """ウィンドウ外の古い起動は書き込まない（本文の単調肥大化を防ぐ）。"""
@@ -697,6 +678,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
 
         plans, dispatch_target = self._launch_plan(tmp_path)
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

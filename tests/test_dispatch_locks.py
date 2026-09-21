@@ -621,7 +621,11 @@ class TestSyncExternalLocks:
         )
 
         run_state = RunState(active_worktrees={})
-        config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
 
         res = _sync_external_locks(
             tasks_by_issue={1: done_task},

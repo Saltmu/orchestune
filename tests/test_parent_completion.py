@@ -20,10 +20,6 @@ def _issue(number: int, state: str) -> IssueRecord:
 
 
 class TestProcessParentCompletion:
-    def test_skips_when_parent_issue_number_is_none(self):
-        res = process_parent_completion(None, apply=True)
-        assert res == {"status": "skipped"}
-
     def test_skips_when_not_apply(self):
         res = process_parent_completion(100, apply=False)
         assert res == {"status": "skipped"}

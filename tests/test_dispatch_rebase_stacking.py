@@ -24,6 +24,7 @@ from tests.dispatch_test_support import save_locked_run_state as save_run_state
 class TestBranchStacking:
     def test_stacking_blocked_task_when_dependency_pr_ci_passes(self, tmp_path):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
@@ -161,6 +162,7 @@ class TestBranchStacking:
 
     def test_stacking_depth_limit_of_one(self, tmp_path):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=3,
             max_launches_per_window=3,
@@ -295,6 +297,7 @@ class TestBranchStacking:
 
     def test_auto_rebase_success(self, tmp_path):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -414,6 +417,7 @@ class TestBranchStacking:
             pid=8888, branch_name="claude/issue-2-task-2"
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -511,6 +515,7 @@ class TestBranchStacking:
 
     def test_stacking_blocked_when_multiple_dependencies_unmerged(self, tmp_path):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=3,
             max_launches_per_window=3,
@@ -586,6 +591,7 @@ class TestBranchStacking:
         self, tmp_path
     ):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=3,
             max_launches_per_window=3,
@@ -756,6 +762,7 @@ class TestBranchStacking:
 
     def test_auto_rebase_conflict(self, tmp_path):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -879,6 +886,7 @@ class TestBranchStacking:
 
     def test_changes_requested_escalation(self, tmp_path):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

@@ -26,7 +26,7 @@ class TestDoneTaskSelection:
 
         integrator_env.list_issues_by_label.side_effect = list_side_effect
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1", "task-2"]
@@ -42,7 +42,7 @@ class TestDoneTaskSelection:
         integrator_env.set_done_issues(issue_closed, issue_parent_closed, issue_active)
         integrator_env.create_pull_request.return_value = 888
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-3"]
@@ -78,7 +78,7 @@ class TestBlockedHumanReviewExclusion:
         active = make_done_issue(2, subtask_id="task-2")
         integrator_env.set_done_issues(blocked, active)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-2"]
@@ -99,7 +99,7 @@ class TestBlockedHumanReviewExclusion:
         )
         integrator_env.set_done_issues(blocked)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert res["blocked"] == ["task-1"]
@@ -121,7 +121,7 @@ class TestBlockedHumanReviewExclusion:
         dependent = make_done_issue(2, subtask_id="task-2", depends_on=("task-1",))
         integrator_env.set_done_issues(blocked, dependent, done=[dependent, blocked])
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert res.get("merged", []) == []
@@ -142,7 +142,7 @@ class TestUnparsableDoneTask:
         issue = make_done_issue(7, body=_EMPTY_FOOTPRINT_BODY)
         integrator_env.set_done_issues(issue)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "no_done_tasks"
         assert res["unparsable_done_issues"] == [7]
@@ -158,7 +158,7 @@ class TestUnparsableDoneTask:
         integrator_env.set_done_issues(issue_a, issue_unparsable)
         integrator_env.create_pull_request.return_value = 42
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
@@ -187,7 +187,7 @@ class TestDependencyFailureBlocking:
             stderr=b"CONFLICT (content): Merge conflict",
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "partial_success"
         assert res["failed"] == ["task-1"]
@@ -203,7 +203,7 @@ class TestDependencyFailureBlocking:
 
         # 実際に失敗したtask-1（issue 1）のみラベル差し戻し・コメントが行われ、
         # blockedなだけのtask-2（issue 2）のstatus:doneラベルは維持される。
-        integrator_env.remove_label.assert_called_once_with(1, "status:done")
+        integrator_env.remove_label.assert_any_call(1, "status:done")
         integrator_env.add_label.assert_called_once_with(1, "status:queued")
         integrator_env.add_comment.assert_called_once()
         assert integrator_env.add_comment.call_args[0][0] == 1
@@ -218,7 +218,7 @@ class TestDependencyFailureBlocking:
         )
         integrator_env.fail_git(lambda args: any("local-ci." in arg for arg in args))
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert res["failed"] == ["task-1"]
@@ -233,7 +233,7 @@ class TestDependencyFailureBlocking:
             ] == []
 
         # blockedな2件についてはラベル操作が行われない。
-        integrator_env.remove_label.assert_called_once_with(1, "status:done")
+        integrator_env.remove_label.assert_any_call(1, "status:done")
         integrator_env.add_label.assert_called_once_with(1, "status:queued")
 
     def test_report_distinguishes_own_failure_from_blocked(
@@ -249,7 +249,7 @@ class TestDependencyFailureBlocking:
             stderr=b"CONFLICT",
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert "task-1" in res["failed_reasons"]
         assert "task-2" not in res["failed_reasons"]

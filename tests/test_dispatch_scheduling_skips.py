@@ -345,6 +345,7 @@ class TestInProgressTasksAreNotSkipCandidates:
         fake_forge.get_label_actor.return_value = "authorized-user"
         fake_forge.get_actor_permission.return_value = "write"
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
