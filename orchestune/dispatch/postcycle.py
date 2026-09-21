@@ -355,13 +355,16 @@ _EXCLUDED_FINDING_PREFIXES: tuple[str, ...] = (
 
 _EXCLUDED_FINDING_CODES: frozenset[str] = frozenset(
     {
+        "execution.observation-unknown",
         "execution.forge-observation-unknown",
+        "status.observation-unknown",
+        "status.forge-observation-unknown",
     }
 )
 
 
 def _should_skip_finding_notice(finding: ConsistencyFinding) -> bool:
-    if finding.code in _EXCLUDED_FINDING_CODES:
+    if finding.code in _EXCLUDED_FINDING_CODES or "observation-unknown" in finding.code:
         return True
     if any(finding.code.startswith(prefix) for prefix in _EXCLUDED_FINDING_PREFIXES):
         return True

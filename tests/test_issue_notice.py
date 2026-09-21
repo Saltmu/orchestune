@@ -336,9 +336,15 @@ class TestPostFindingNotices:
 
     def test_skips_unknown_fact_and_forge_observation_findings(self):
         forge = FakeForge()
-        obs_finding = _make_finding(code="observation.git-branch-state")
-        unknown_finding = _make_finding(code="execution.forge-observation-unknown")
-        report = _make_cycle_report(findings=(obs_finding, unknown_finding))
+        findings = (
+            _make_finding(code="observation.git-branch-state"),
+            _make_finding(code="execution.forge-observation-unknown"),
+            _make_finding(code="execution.observation-unknown"),
+            _make_finding(code="status.forge-observation-unknown"),
+            _make_finding(code="status.observation-unknown"),
+            _make_finding(code="supervisor.cycle-budget-exceeded"),
+        )
+        report = _make_cycle_report(findings=findings)
 
         outcomes = post_finding_notices(forge, report)
 
