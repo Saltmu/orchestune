@@ -67,6 +67,38 @@ def test_ci_workflow_uses_setup_uv_and_frozen_sync():
     ), "ci.yml must not contain any reference to poetry"
 
 
+def test_ci_workflow_caches_gitleaks_binary():
+    ci_workflow_path = os.path.join(
+        os.path.dirname(__file__), "..", ".github", "workflows", "ci.yml"
+    )
+    assert os.path.exists(ci_workflow_path), f"{ci_workflow_path} does not exist"
+
+    with open(ci_workflow_path, encoding="utf-8") as f:
+        workflow = yaml.safe_load(f)
+
+    job = workflow["jobs"]["ci"]
+    steps = job["steps"]
+
+    cache_steps = [
+        s
+        for s in steps
+        if isinstance(s, dict)
+        and "actions/cache" in s.get("uses", "")
+        and "gitleaks" in s.get("name", "").lower()
+    ]
+    assert cache_steps, "expected actions/cache step for gitleaks in ci.yml"
+    cache_step = cache_steps[0]
+    with_block = cache_step.get("with", {})
+    path = with_block.get("path", "")
+    assert (
+        ".local" in path and "gitleaks" in path
+    ), f"cache path should target .local/bin/gitleaks*: {path}"
+    key = with_block.get("key", "")
+    assert (
+        "runner.os" in key and "gitleaks" in key
+    ), f"cache key should reference runner.os and gitleaks: {key}"
+
+
 def test_pytest_addopts_caps_worker_count():
     """`-n auto` alone oversubscribes on many-core hosts (e.g. 16 workers on a
     16-core WSL2 box), which measurably increases both wall time and peak

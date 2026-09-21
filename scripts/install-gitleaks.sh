@@ -49,8 +49,12 @@ tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
 echo "Installing gitleaks v${GITLEAKS_VERSION} (${os_name}/${arch_name}) to ${INSTALL_DIR}..."
-curl -fsSL "${base_url}/${archive}" -o "${tmp_dir}/${archive}"
-curl -fsSL "${base_url}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o "${tmp_dir}/checksums.txt"
+curl_opts=(-fsSL --retry 3 --retry-delay 2)
+if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
+  curl_opts+=(--retry-all-errors)
+fi
+curl "${curl_opts[@]}" "${base_url}/${archive}" -o "${tmp_dir}/${archive}"
+curl "${curl_opts[@]}" "${base_url}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o "${tmp_dir}/checksums.txt"
 
 expected_checksum="$(grep " ${archive}\$" "${tmp_dir}/checksums.txt" | awk '{print $1}')"
 if [ -z "$expected_checksum" ]; then
