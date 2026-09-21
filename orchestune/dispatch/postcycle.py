@@ -14,6 +14,17 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from orchestune.consistency.models import (
+    ConsistencyFinding,
+    ConsistencyScope,
+    FindingSeverity,
+)
+from orchestune.consistency.supervisor import (
+    ConsistencyCycleReport,
+    ConsistencyMode,
+    RepairDisposition,
+    extract_evaluated_findings,
+)
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import CycleReport
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
@@ -31,6 +42,7 @@ from orchestune.integrator.coordinator import (
     process_pending_not_needed_reviews,
 )
 from orchestune.integrator.parent_completion import process_parent_completion
+from orchestune.issue_notice import NoticeOutcome, post_notice_if_changed
 
 
 def _decide_semantic_review_enabled() -> bool:
@@ -327,4 +339,160 @@ def _process_parent_completion(
         auth_error=auth_error,
         auth_error_message="authentication failed while processing parent completion",
         failure_message="failed to process parent completion",
+    )
+
+
+_SEVERITY_ORDER: dict[FindingSeverity, int] = {
+    FindingSeverity.INFO: 0,
+    FindingSeverity.WARNING: 1,
+    FindingSeverity.ERROR: 2,
+    FindingSeverity.CRITICAL: 3,
+}
+
+_EXCLUDED_FINDING_PREFIXES: tuple[str, ...] = (
+    "observation.",
+    "supervisor.",
+)
+
+_EXCLUDED_FINDING_CODES: frozenset[str] = frozenset(
+    {
+        "execution.observation-unknown",
+        "execution.forge-observation-unknown",
+        "status.observation-unknown",
+        "status.forge-observation-unknown",
+    }
+)
+
+
+def _should_skip_finding_notice(finding: ConsistencyFinding) -> bool:
+    if finding.code in _EXCLUDED_FINDING_CODES or "observation-unknown" in finding.code:
+        return True
+    if any(finding.code.startswith(prefix) for prefix in _EXCLUDED_FINDING_PREFIXES):
+        return True
+    severity_order = _SEVERITY_ORDER.get(finding.severity, 0)
+    if severity_order < _SEVERITY_ORDER[FindingSeverity.WARNING]:
+        return True
+    return False
+
+
+def render_finding_notice(
+    finding: ConsistencyFinding,
+    disposition: RepairDisposition | None = None,
+) -> str:
+    """整合性チェックで検出された未解決 finding の通知本文を生成する。"""
+    lines = [
+        f"### ⚠️ 整合性チェック警告: `{finding.code}`",
+        "",
+        f"- **重大度**: `{finding.severity.value}`",
+        f"- **スコープ**: `{finding.scope.value}`",
+        f"- **概要**: {finding.observed.summary}",
+    ]
+    if disposition is not None:
+        lines.append(f"- **修復状況**: `{disposition.value}`")
+    if finding.observed.details:
+        lines.append("")
+        lines.append("#### 詳細")
+        for detail in finding.observed.details:
+            lines.append(f"- {detail}")
+    return "\n".join(lines)
+
+
+def render_finding_resolved_notice(finding_code: str) -> str:
+    """整合性チェック警告の解消通知本文を生成する。"""
+    return (
+        f"### ✅ 整合性チェック警告の解消: `{finding_code}`\n\n"
+        f"検出されていた整合性チェック警告 `{finding_code}` は解消されました。"
+    )
+
+
+def post_finding_notices(
+    forge: Forge,
+    report: ConsistencyCycleReport,
+    *,
+    parent_issue_number: int | None = None,
+) -> tuple[NoticeOutcome, ...]:
+    """#790: ConsistencyCycleReport の findings を判定し、対象 Issue へ通知を投稿する。"""
+    evaluated_findings = extract_evaluated_findings(report)
+    outcomes: list[NoticeOutcome] = []
+
+    for item in evaluated_findings:
+        finding = item.finding
+        if _should_skip_finding_notice(finding):
+            continue
+
+        target_issue_number: int | None = None
+        if finding.scope is ConsistencyScope.TASK:
+            if finding.subject_id is not None:
+                try:
+                    candidate = int(finding.subject_id)
+                except ValueError:
+                    candidate = None
+                if candidate is not None and candidate > 0:
+                    target_issue_number = candidate
+        elif finding.scope in (ConsistencyScope.REPOSITORY, ConsistencyScope.PARENT):
+            if parent_issue_number is not None and parent_issue_number > 0:
+                target_issue_number = parent_issue_number
+
+        if target_issue_number is None:
+            continue
+
+        kind = f"finding:{finding.code}"
+        if item.disposition is RepairDisposition.RESOLVED:
+            body = render_finding_resolved_notice(finding.code)
+            outcome = post_notice_if_changed(
+                forge,
+                target_issue_number,
+                kind=kind,
+                body=body,
+                update_only=True,
+            )
+        else:
+            body = render_finding_notice(finding, disposition=item.disposition)
+            outcome = post_notice_if_changed(
+                forge,
+                target_issue_number,
+                kind=kind,
+                body=body,
+                update_only=False,
+            )
+        outcomes.append(outcome)
+
+    return tuple(outcomes)
+
+
+def _post_finding_notices(
+    config: DispatcherConfig,
+    report: CycleReport,
+    auth_error: ForgeAuthError | None = None,
+) -> PhaseResult:
+    """#790: 整合性スーパーバイザの finding を issue_notice 経由で Issue に通知する。
+
+    ベストエフォート処理: 失敗しても警告を出すだけで main() は続行する。
+    """
+
+    def work() -> dict:
+        if config.consistency_mode is ConsistencyMode.OFF:
+            return {
+                "total_evaluated": 0,
+                "outcomes": [],
+                "skipped": "consistency_mode is off",
+            }
+        evaluated_findings = extract_evaluated_findings(report.consistency)
+        outcomes = post_finding_notices(
+            config.resolved_forge,
+            report.consistency,
+            parent_issue_number=config.parent_issue_number,
+        )
+        return {
+            "total_evaluated": len(evaluated_findings),
+            "outcomes": [outcome.value for outcome in outcomes],
+        }
+
+    return _run_best_effort_phase(
+        phase_name="post_finding_notices",
+        report_label="Consistency Finding Notices Report",
+        work=work,
+        auth_error=auth_error,
+        auth_error_message="authentication failed while posting finding notices",
+        failure_message="failed to post finding notices",
     )

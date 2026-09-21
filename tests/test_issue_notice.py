@@ -4,6 +4,27 @@ from __future__ import annotations
 
 import pytest
 
+from orchestune.consistency.models import (
+    ConsistencyFinding,
+    ConsistencyReport,
+    ConsistencyScope,
+    Evidence,
+    FindingSeverity,
+    Repairability,
+)
+from orchestune.consistency.supervisor import (
+    ConsistencyCycleReport,
+    ConsistencyMode,
+    ConsistencyRepairOutcome,
+    ConsistencyScanResult,
+    RepairDisposition,
+    ScanKind,
+)
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_report import CycleReport
+from orchestune.dispatch.postcycle import _post_finding_notices, post_finding_notices
+from orchestune.dispatch.result import PhaseStatus
+from orchestune.forge import ForgeAuthError
 from orchestune.issue_notice import (
     NoticeOutcome,
     latest_notice_body,
@@ -163,3 +184,372 @@ class TestNoticeOutcome:
         assert NoticeOutcome.UNCHANGED.settled
         assert NoticeOutcome.NO_PRIOR_NOTICE.settled
         assert not NoticeOutcome.FAILED.settled
+
+
+def _make_finding(
+    code: str = "execution.branch-ownership-conflict",
+    scope: ConsistencyScope = ConsistencyScope.TASK,
+    subject_id: str | None = "101",
+    severity: FindingSeverity = FindingSeverity.WARNING,
+    summary: str = "Branch conflict",
+    details: tuple[str, ...] = ("detail 1",),
+) -> ConsistencyFinding:
+    return ConsistencyFinding(
+        code=code,
+        scope=scope,
+        severity=severity,
+        expected=Evidence(summary="no conflict"),
+        observed=Evidence(summary=summary, details=details),
+        repairability=Repairability.MANUAL,
+        subject_id=subject_id,
+    )
+
+
+def _make_cycle_report(
+    findings: tuple[ConsistencyFinding, ...] = (),
+    outcomes: tuple[ConsistencyRepairOutcome, ...] = (),
+) -> ConsistencyCycleReport:
+    scan = ConsistencyScanResult(
+        boundary="test",
+        kind=ScanKind.FULL,
+        report=ConsistencyReport(repository_id="repo", findings=findings),
+    )
+    return ConsistencyCycleReport(
+        mode=ConsistencyMode.REPAIR,
+        scans=(scan,),
+        repair_outcomes=outcomes,
+    )
+
+
+class TestPostFindingNotices:
+    def test_posts_task_scope_finding_to_subject_issue(self):
+        forge = FakeForge()
+        finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="101",
+            severity=FindingSeverity.WARNING,
+            summary="Branch ownership conflict detected",
+            details=("branch fix/101 conflicts with fix/102",),
+        )
+        report = _make_cycle_report(findings=(finding,))
+
+        outcomes = post_finding_notices(forge, report)
+
+        assert len(outcomes) == 1
+        assert outcomes[0] is NoticeOutcome.POSTED
+        body = latest_notice_body(
+            forge.list_comments(101), "finding:execution.branch-ownership-conflict"
+        )
+        assert body is not None
+        assert "execution.branch-ownership-conflict" in body
+        assert "Branch ownership conflict detected" in body
+        assert "branch fix/101 conflicts with fix/102" in body
+
+    def test_posts_task_scope_finding_with_repair_disposition_to_subject_issue(self):
+        forge = FakeForge()
+        finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="101",
+            severity=FindingSeverity.WARNING,
+            summary="Branch ownership conflict detected",
+        )
+        outcome = ConsistencyRepairOutcome(
+            finding_code="execution.branch-ownership-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="101",
+            disposition=RepairDisposition.DEFERRED,
+        )
+        report = _make_cycle_report(findings=(finding,), outcomes=(outcome,))
+
+        outcomes = post_finding_notices(forge, report)
+
+        assert len(outcomes) == 1
+        assert outcomes[0] is NoticeOutcome.POSTED
+        body = latest_notice_body(
+            forge.list_comments(101), "finding:execution.branch-ownership-conflict"
+        )
+        assert body is not None
+        assert "修復状況" in body
+        assert "deferred" in body
+
+    def test_posts_repository_and_parent_scope_findings_to_parent_issue(self):
+        forge = FakeForge()
+        repo_finding = _make_finding(
+            code="repository.clean",
+            scope=ConsistencyScope.REPOSITORY,
+            subject_id=None,
+            severity=FindingSeverity.WARNING,
+        )
+        parent_finding = _make_finding(
+            code="parent.subtask-consistency",
+            scope=ConsistencyScope.PARENT,
+            subject_id="100",
+            severity=FindingSeverity.ERROR,
+        )
+        report = _make_cycle_report(findings=(repo_finding, parent_finding))
+
+        outcomes = post_finding_notices(forge, report, parent_issue_number=100)
+
+        assert len(outcomes) == 2
+        assert all(o is NoticeOutcome.POSTED for o in outcomes)
+        assert (
+            latest_notice_body(forge.list_comments(100), "finding:repository.clean")
+            is not None
+        )
+        assert (
+            latest_notice_body(
+                forge.list_comments(100), "finding:parent.subtask-consistency"
+            )
+            is not None
+        )
+
+    def test_skips_repository_or_parent_scope_findings_when_parent_issue_unspecified(
+        self,
+    ):
+        forge = FakeForge()
+        finding = _make_finding(
+            code="repository.clean",
+            scope=ConsistencyScope.REPOSITORY,
+            subject_id=None,
+        )
+        report = _make_cycle_report(findings=(finding,))
+
+        outcomes = post_finding_notices(forge, report, parent_issue_number=None)
+
+        assert outcomes == ()
+        assert forge.comments == {}
+
+    def test_skips_task_scope_finding_when_subject_id_is_not_positive_integer(self):
+        forge = FakeForge()
+        zero_finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="0",
+        )
+        neg_finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="-10",
+        )
+        non_num_finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="not-a-number",
+        )
+        report = _make_cycle_report(
+            findings=(zero_finding, neg_finding, non_num_finding)
+        )
+
+        outcomes = post_finding_notices(forge, report)
+
+        assert outcomes == ()
+        assert forge.comments == {}
+
+    def test_skips_finding_with_severity_below_warning(self):
+        forge = FakeForge()
+        info_finding = _make_finding(
+            code="execution.info-notice",
+            severity=FindingSeverity.INFO,
+        )
+        report = _make_cycle_report(findings=(info_finding,))
+
+        outcomes = post_finding_notices(forge, report)
+
+        assert outcomes == ()
+        assert forge.comments == {}
+
+    def test_skips_unknown_fact_and_forge_observation_findings(self):
+        forge = FakeForge()
+        findings = (
+            _make_finding(code="observation.git-branch-state"),
+            _make_finding(code="execution.forge-observation-unknown"),
+            _make_finding(code="execution.observation-unknown"),
+            _make_finding(code="status.forge-observation-unknown"),
+            _make_finding(code="status.observation-unknown"),
+            _make_finding(code="supervisor.cycle-budget-exceeded"),
+        )
+        report = _make_cycle_report(findings=findings)
+
+        outcomes = post_finding_notices(forge, report)
+
+        assert outcomes == ()
+        assert forge.comments == {}
+
+    def test_posts_resolution_notice_with_update_only_when_finding_is_resolved(self):
+        forge = FakeForge()
+        finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            subject_id="101",
+        )
+        # 1st cycle: finding is unresolved -> posted
+        report1 = _make_cycle_report(findings=(finding,))
+        post_finding_notices(forge, report1)
+        assert len(forge.list_comments(101)) == 1
+
+        # 2nd cycle: finding is resolved
+        outcome = ConsistencyRepairOutcome(
+            finding_code="execution.branch-ownership-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="101",
+            disposition=RepairDisposition.RESOLVED,
+        )
+        scan = ConsistencyScanResult(
+            boundary="test",
+            kind=ScanKind.FULL,
+            report=ConsistencyReport(repository_id="repo", findings=()),
+        )
+        report2 = ConsistencyCycleReport(
+            mode=ConsistencyMode.REPAIR,
+            scans=(scan,),
+            repair_outcomes=(outcome,),
+        )
+        outcomes2 = post_finding_notices(forge, report2)
+
+        assert len(outcomes2) == 1
+        assert outcomes2[0] is NoticeOutcome.POSTED
+        assert len(forge.list_comments(101)) == 2
+        body = latest_notice_body(
+            forge.list_comments(101), "finding:execution.branch-ownership-conflict"
+        )
+        assert body is not None
+        assert "解消されました" in body
+
+    def test_resolution_notice_skipped_if_issue_had_no_prior_notice(self):
+        forge = FakeForge()
+        outcome = ConsistencyRepairOutcome(
+            finding_code="execution.branch-ownership-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="101",
+            disposition=RepairDisposition.RESOLVED,
+        )
+        scan = ConsistencyScanResult(
+            boundary="test",
+            kind=ScanKind.FULL,
+            report=ConsistencyReport(repository_id="repo", findings=()),
+        )
+        report = ConsistencyCycleReport(
+            mode=ConsistencyMode.REPAIR,
+            scans=(scan,),
+            repair_outcomes=(outcome,),
+        )
+        outcomes = post_finding_notices(forge, report)
+
+        assert len(outcomes) == 1
+        assert outcomes[0] is NoticeOutcome.NO_PRIOR_NOTICE
+        assert forge.comments == {}
+
+    def test_does_not_repost_when_finding_content_is_unchanged(self):
+        forge = FakeForge()
+        finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            subject_id="101",
+        )
+        report = _make_cycle_report(findings=(finding,))
+
+        outcomes1 = post_finding_notices(forge, report)
+        assert outcomes1[0] is NoticeOutcome.POSTED
+        assert len(forge.list_comments(101)) == 1
+
+        outcomes2 = post_finding_notices(forge, report)
+        assert outcomes2[0] is NoticeOutcome.UNCHANGED
+        assert len(forge.list_comments(101)) == 1
+
+
+class TestPostFindingNoticesPhase:
+    def _dummy_cycle_report(
+        self, consistency: ConsistencyCycleReport | None = None
+    ) -> CycleReport:
+        return CycleReport(
+            selected=[],
+            quota_slots_available=2,
+            lock_changes={},
+            deviation_events=[],
+            completion_events=[],
+            promotion_events=[],
+            applied=True,
+            consistency=consistency
+            if consistency is not None
+            else ConsistencyCycleReport(mode=ConsistencyMode.OFF),
+        )
+
+    def test_phase_success_with_evaluated_findings(self, tmp_path):
+        forge = FakeForge()
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            apply=True,
+            forge=forge,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            consistency_mode=ConsistencyMode.REPAIR,
+        )
+        finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            subject_id="101",
+        )
+        consistency_report = _make_cycle_report(findings=(finding,))
+        report = self._dummy_cycle_report(consistency=consistency_report)
+
+        result = _post_finding_notices(config, report)
+
+        assert result.status is PhaseStatus.SUCCESS
+        assert result.retryable is False
+        assert result.report == {
+            "total_evaluated": 1,
+            "outcomes": ["posted"],
+        }
+        assert len(forge.list_comments(101)) == 1
+
+    def test_phase_skipped_when_consistency_mode_is_off(self, tmp_path):
+        forge = FakeForge()
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            apply=True,
+            forge=forge,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            consistency_mode=ConsistencyMode.OFF,
+        )
+        finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            subject_id="101",
+        )
+        consistency_report = _make_cycle_report(findings=(finding,))
+        report = self._dummy_cycle_report(consistency=consistency_report)
+
+        result = _post_finding_notices(config, report)
+
+        assert result.status is PhaseStatus.SUCCESS
+        assert result.retryable is False
+        assert result.report == {
+            "total_evaluated": 0,
+            "outcomes": [],
+            "skipped": "consistency_mode is off",
+        }
+        assert forge.comments == {}
+
+    def test_phase_handles_auth_error(self, tmp_path):
+        forge = FakeForge()
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            apply=True,
+            forge=forge,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+        )
+        report = self._dummy_cycle_report()
+
+        result = _post_finding_notices(
+            config, report, auth_error=ForgeAuthError("unauthorized")
+        )
+
+        assert result.status is PhaseStatus.FATAL_FAILURE
+        assert result.retryable is False
+        assert "unauthorized" in (result.error_message or "")

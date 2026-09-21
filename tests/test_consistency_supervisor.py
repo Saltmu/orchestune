@@ -25,11 +25,15 @@ from orchestune.consistency.models import (
     StateChanged,
 )
 from orchestune.consistency.supervisor import (
+    ConsistencyCycleReport,
     ConsistencyMode,
+    ConsistencyRepairOutcome,
+    ConsistencyScanResult,
     ConsistencySupervisor,
     RepairDisposition,
     ScanKind,
     consistency_cycle_to_dict,
+    extract_evaluated_findings,
 )
 
 NOW = datetime(2026, 8, 29, 10, 0, tzinfo=UTC)
@@ -653,3 +657,136 @@ def test_repair_mode_fails_closed_when_command_omits_finding_code() -> None:
     report = supervisor.cycle_report(mode=ConsistencyMode.REPAIR)
     assert report.repair_passes == ()
     assert report.repair_outcomes[0].disposition is RepairDisposition.DEFERRED
+
+
+def test_extract_evaluated_findings_correlates_disposition_for_active_finding() -> None:
+    finding = ConsistencyFinding(
+        code="execution.branch-ownership-conflict",
+        scope=ConsistencyScope.TASK,
+        severity=FindingSeverity.WARNING,
+        expected=Evidence(summary="no conflict"),
+        observed=Evidence(summary="branch conflict observed"),
+        repairability=Repairability.MANUAL,
+        subject_id="101",
+    )
+    outcome = ConsistencyRepairOutcome(
+        finding_code="execution.branch-ownership-conflict",
+        scope=ConsistencyScope.TASK,
+        subject_id="101",
+        disposition=RepairDisposition.DEFERRED,
+    )
+    scan = ConsistencyScanResult(
+        boundary="end",
+        kind=ScanKind.FULL,
+        report=ConsistencyReport(repository_id="repo", findings=(finding,)),
+    )
+    report = ConsistencyCycleReport(
+        mode=ConsistencyMode.REPAIR,
+        scans=(scan,),
+        repair_outcomes=(outcome,),
+    )
+
+    evaluated = extract_evaluated_findings(report)
+
+    assert len(evaluated) == 1
+    assert evaluated[0].finding == finding
+    assert evaluated[0].disposition is RepairDisposition.DEFERRED
+
+
+def test_extract_evaluated_findings_preserves_original_finding_for_resolved_outcome() -> (
+    None
+):
+    finding = ConsistencyFinding(
+        code="execution.branch-ownership-conflict",
+        scope=ConsistencyScope.TASK,
+        severity=FindingSeverity.WARNING,
+        expected=Evidence(summary="no conflict"),
+        observed=Evidence(
+            summary="original observed summary", details=("detail 1", "detail 2")
+        ),
+        repairability=Repairability.AUTOMATIC,
+        subject_id="101",
+    )
+    outcome = ConsistencyRepairOutcome(
+        finding_code="execution.branch-ownership-conflict",
+        scope=ConsistencyScope.TASK,
+        subject_id="101",
+        disposition=RepairDisposition.RESOLVED,
+    )
+    scan1 = ConsistencyScanResult(
+        boundary="start",
+        kind=ScanKind.FULL,
+        report=ConsistencyReport(repository_id="repo", findings=(finding,)),
+    )
+    scan2 = ConsistencyScanResult(
+        boundary="end",
+        kind=ScanKind.FULL,
+        report=ConsistencyReport(repository_id="repo", findings=()),
+    )
+    report = ConsistencyCycleReport(
+        mode=ConsistencyMode.REPAIR,
+        scans=(scan1, scan2),
+        repair_outcomes=(outcome,),
+    )
+
+    evaluated = extract_evaluated_findings(report)
+
+    assert len(evaluated) == 1
+    assert evaluated[0].disposition is RepairDisposition.RESOLVED
+    assert evaluated[0].finding.observed.summary == "original observed summary"
+    assert evaluated[0].finding.observed.details == ("detail 1", "detail 2")
+
+
+def test_extract_evaluated_findings_retains_active_finding_when_final_scan_is_boundary() -> (
+    None
+):
+    full_finding = ConsistencyFinding(
+        code="execution.branch-ownership-conflict",
+        scope=ConsistencyScope.TASK,
+        severity=FindingSeverity.WARNING,
+        expected=Evidence(summary="no conflict"),
+        observed=Evidence(summary="branch conflict"),
+        repairability=Repairability.MANUAL,
+        subject_id="101",
+    )
+    deferred_outcome = ConsistencyRepairOutcome(
+        finding_code="execution.branch-ownership-conflict",
+        scope=ConsistencyScope.TASK,
+        subject_id="101",
+        disposition=RepairDisposition.DEFERRED,
+    )
+    boundary_finding = ConsistencyFinding(
+        code="status.blocked-resolved",
+        scope=ConsistencyScope.TASK,
+        severity=FindingSeverity.WARNING,
+        expected=Evidence(summary="unblocked"),
+        observed=Evidence(summary="blocked"),
+        repairability=Repairability.AUTOMATIC,
+        subject_id="102",
+    )
+    scan_full = ConsistencyScanResult(
+        boundary="main",
+        kind=ScanKind.FULL,
+        report=ConsistencyReport(repository_id="repo", findings=(full_finding,)),
+    )
+    scan_boundary = ConsistencyScanResult(
+        boundary="status",
+        kind=ScanKind.TARGETED,
+        report=ConsistencyReport(repository_id="repo", findings=(boundary_finding,)),
+    )
+    report = ConsistencyCycleReport(
+        mode=ConsistencyMode.REPAIR,
+        scans=(scan_full, scan_boundary),
+        repair_outcomes=(deferred_outcome,),
+    )
+
+    evaluated = extract_evaluated_findings(report)
+
+    evaluated_by_code = {e.finding.code: e for e in evaluated}
+    assert "execution.branch-ownership-conflict" in evaluated_by_code
+    assert (
+        evaluated_by_code["execution.branch-ownership-conflict"].disposition
+        is RepairDisposition.DEFERRED
+    )
+    assert "status.blocked-resolved" in evaluated_by_code
+    assert evaluated_by_code["status.blocked-resolved"].disposition is None

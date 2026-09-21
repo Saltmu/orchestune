@@ -295,6 +295,10 @@ def _finding_key(finding: ConsistencyFinding) -> tuple[str, str, str]:
     return (finding.scope.value, finding.subject_id or "", finding.code)
 
 
+def _finding_key_for_outcome(outcome: ConsistencyRepairOutcome) -> tuple[str, str, str]:
+    return (outcome.scope.value, outcome.subject_id or "", outcome.finding_code)
+
+
 def repair_command_finding_codes(command: RepairCommand) -> tuple[str, ...]:
     """Return the finding codes attributed to one typed repair command."""
     parameters = dict(command.parameters)
@@ -768,6 +772,71 @@ def consistency_cycle_to_dict(report: ConsistencyCycleReport) -> dict:
     }
 
 
+@dataclass(frozen=True, slots=True)
+class EvaluatedFinding:
+    """A consistency finding paired with its eventual repair disposition in the cycle."""
+
+    finding: ConsistencyFinding
+    disposition: RepairDisposition | None = None
+
+
+def extract_evaluated_findings(
+    report: ConsistencyCycleReport,
+) -> tuple[EvaluatedFinding, ...]:
+    """Extract findings and their disposition from a cycle report for notification.
+
+    Collects all unique findings observed during the cycle (indexed by finding key).
+    For each finding:
+    - If the finding was marked resolved (disposition == RESOLVED), it is returned
+      with RepairDisposition.RESOLVED so callers can emit resolution notices.
+    - Otherwise, if the finding remains in the final scan's findings, it is returned
+      with its latest repair disposition (or None if no repair outcome exists).
+    """
+    if not report.scans and not report.repair_outcomes:
+        return ()
+
+    all_findings_by_key: dict[tuple[str, str, str], ConsistencyFinding] = {}
+    for scan in report.scans:
+        for finding in scan.report.findings:
+            all_findings_by_key[_finding_key(finding)] = finding
+
+    outcomes_by_key = {
+        _finding_key_for_outcome(outcome): outcome.disposition
+        for outcome in report.repair_outcomes
+    }
+
+    results: list[EvaluatedFinding] = []
+    seen_keys: set[tuple[str, str, str]] = set()
+
+    # 1. Findings observed across all scans in the cycle
+    for key, finding in all_findings_by_key.items():
+        disposition = outcomes_by_key.get(key)
+        results.append(EvaluatedFinding(finding=finding, disposition=disposition))
+        seen_keys.add(key)
+
+    # 2. Findings that were recorded in repair_outcomes but not in scans
+    for outcome in report.repair_outcomes:
+        key = _finding_key_for_outcome(outcome)
+        if key not in seen_keys and outcome.disposition is RepairDisposition.RESOLVED:
+            results.append(
+                EvaluatedFinding(
+                    finding=ConsistencyFinding(
+                        code=outcome.finding_code,
+                        scope=outcome.scope,
+                        severity=FindingSeverity.WARNING,
+                        expected=Evidence(summary=""),
+                        observed=Evidence(summary=""),
+                        repairability=Repairability.AUTOMATIC,
+                        subject_id=outcome.subject_id,
+                    ),
+                    disposition=RepairDisposition.RESOLVED,
+                )
+            )
+            seen_keys.add(key)
+
+    return tuple(results)
+
+
 __all__ = [
     "ConsistencyCycleReport",
     "ConsistencyMode",
@@ -777,11 +846,13 @@ __all__ = [
     "ConsistencySupervisor",
     "ConsistencyUnknownFact",
     "DesiredStateDeriver",
+    "EvaluatedFinding",
     "FunctionRepairPlanner",
     "MAX_REPAIR_PASSES",
     "RepairDisposition",
     "ScanKind",
     "consistency_cycle_to_dict",
     "diff_snapshots",
+    "extract_evaluated_findings",
     "repair_command_finding_codes",
 ]
