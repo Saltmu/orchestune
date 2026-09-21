@@ -1,8 +1,11 @@
 # Task Claim and Worktree Preparation (Step 2.5)
 
-Before modifying source files, claim the task issue to validate prerequisites,
-resolve the base branch, prepare an isolated worktree, record active state,
-and update issue labels:
+If you are already inside the task worktree (e.g. launched directly into the
+task workspace), the task is already claimed—proceed directly to Step 2.6.
+
+Otherwise, from the repository root, claim the task issue before modifying
+source files to validate prerequisites, resolve the base branch, prepare an
+isolated worktree, record active state, and update issue labels:
 
 ```bash
 orchestune claim <issue_number>
@@ -29,11 +32,12 @@ create the PR, and handle review feedback entirely from within this worktree.
 
 If `orchestune claim` fails (non-zero exit code):
 1. Review the diagnostic output printed to stderr for the reason and conflicting issues or branches.
-2. If an existing claim was interrupted, resume it using the reported claim ID:
+2. If already in the task worktree and the command reports `already_in_progress`, the task was already claimed—proceed with the current worktree.
+3. If an existing claim was interrupted, resume it using the reported claim ID:
    ```bash
    orchestune claim <issue_number> --resume <claim_id>
    ```
-3. For unresolved dependencies or conflict rejections, resolve the conflicting task or wait until dependencies complete before retrying.
+4. For unresolved dependencies or conflict rejections, resolve the conflicting task or wait until dependencies complete before retrying.
 
 ## Worktree completion and lifecycle
 

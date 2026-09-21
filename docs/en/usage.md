@@ -474,5 +474,5 @@ Upon success, the command prints the issue number, claim ID, branch name, prepar
 
 ### Failure Handling
 
-If a claim cannot proceed due to unmet dependencies, conflicts, or environmental errors, the command exits with a non-zero exit code and outputs the failure reason along with recommended next actions to stderr. Follow the diagnostic instructions to resolve conflicts or resume an interrupted claim using `--resume`.
+If a claim cannot proceed due to unmet dependencies, conflicts, or environmental errors, the command exits with a non-zero exit code and outputs the failure reason along with recommended next actions to stderr. Follow the diagnostic instructions to resolve conflicts or resume an interrupted claim using `--resume`. If already working inside the claimed task worktree, running claim again is not needed.
 

@@ -21,7 +21,7 @@ This skill acts as a router orchestrating the standard development workflow: des
 | :--- | :--- | :--- |
 | **Plan Approval & Reviewer Selection (Step 1)** | Present to user and wait for approval; ask user to select reviewer bot (Claude/Codex) alongside plan approval | When invoked with an existing Issue or Auto-Dispatch, bypass user approval after writing `implementation_plan.md` and proceed directly to implementation; resolve reviewer bot from prompt/dispatch (Claude targets → Codex; Codex and `agy` targets → Claude, or explicit `reviewer-bot` setting) |
 | **Issue Creation (Step 2)** | Create via selected backend (`gh` CLI or GitHub MCP/Web UI) if needed | Use issue number provided in prompt (skip creation) |
-| **Worktree (Step 2.5)** | Run `orchestune claim <issue_number>` to prepare and enter task worktree | Run `orchestune claim <issue_number>` to prepare and enter task worktree |
+| **Worktree (Step 2.5)** | Run `orchestune claim <issue_number>` to prepare and enter task worktree (proceed directly if already inside task worktree) | Run `orchestune claim <issue_number>` to prepare and enter task worktree (proceed directly if already inside task worktree) |
 | **Review Execution (Step 11)** | Execute review using reviewer bot selected in Step 1 | Execute review using reviewer bot resolved in Step 1 |
 | **Escalation** | Prompt user for decision | Post an outcome record (`blocked`) and terminate safely |
 
@@ -43,7 +43,7 @@ before Step 2.6 and maintain its record through Steps 10–12, including zero-fi
 | **0** | **Preflight & Requirement Check** | Verify uv, lockfile, gitleaks, `gh auth status`, and GitHub MCP; fix backend. If requirements are met on `main`, post outcome record (`result: not-needed`) and exit. | - |
 | **1** | **Design & Implementation Plan** | Write `implementation_plan.md` (preflight, backend, reviewer bot, design). Ask user for plan & reviewer approval (bypass approval for existing Issue / Auto-Dispatch). | - |
 | **2** | **GitHub Issue Creation** | Skip if issue number was provided in prompt. When filing new: use selected backend (`gh issue create --title "..." --body "..."` or GitHub MCP/Web UI). | - |
-| **2.5** | **Worktree Preparation** | Run `orchestune claim <issue_number>` to validate, prepare task worktree, and work there. | [references/worktree.md](references/worktree.md) |
+| **2.5** | **Worktree Preparation** | Run `orchestune claim <issue_number>` to validate, prepare task worktree, and work there (proceed directly if already inside task worktree). | [references/worktree.md](references/worktree.md) |
 | **2.6** | **Impact Scope Determination** | Before writing code, enumerate the references of every symbol you intend to change, classify each as in scope / out of scope with a stated reason, and record the table in `implementation_plan.md` and the PR body. | [references/impact-scope.md](references/impact-scope.md) |
 | **3–9** | **TDD & Local CI** | Reproducer test, baseline recording, test-driven implementation, local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`). | [references/tdd.md](references/tdd.md) |
 | **10** | **Pull Request Creation** | Fill `.github/pull_request_template.md` and submit via selected backend (`gh pr create` or GitHub MCP/Web UI). | [references/pr.md](references/pr.md) |
