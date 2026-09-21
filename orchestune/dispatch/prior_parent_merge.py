@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from functools import cache
 from typing import cast
 
 from orchestune.branch_naming import branch_matches_task, parse_task_branch_name
@@ -41,6 +42,7 @@ class PriorParentMergeEvidence:
 
 
 MergeReachabilityProbe = Callable[[str, str], bool | None]
+ReopenTimestampProvider = Callable[[], str | None]
 
 #: #862: terminal status labels that already reflect a completed lifecycle;
 #: their presence means label normalization is a no-op.
@@ -101,7 +103,7 @@ def _validated_candidate(
     issue_number: int,
     subtask_id: str,
     expected_base: str,
-    last_reopened_at: str | None,
+    get_last_reopened_at: ReopenTimestampProvider,
     merge_commit_is_reachable: MergeReachabilityProbe,
 ) -> tuple[PrRecord | None, str]:
     """Return a verified PR or the reason why a plausible candidate is unsafe."""
@@ -120,7 +122,7 @@ def _validated_candidate(
         )
     if not pr.merged_at or not pr.merge_commit_oid:
         return None, "missing merged timestamp or merge commit metadata"
-    after_reopen = _is_after_reopen(pr.merged_at, last_reopened_at)
+    after_reopen = _is_after_reopen(pr.merged_at, get_last_reopened_at())
     if after_reopen is None:
         return None, "unparseable reopen or merge timestamp"
     if not after_reopen:
@@ -140,7 +142,7 @@ def evaluate_prior_parent_merge(
     parent_issue_number: int | None,
     subtask_id: str,
     prs: Iterable[PrRecord],
-    last_reopened_at: str | None,
+    get_last_reopened_at: ReopenTimestampProvider,
     merge_commit_is_reachable: MergeReachabilityProbe,
 ) -> PriorParentMergeEvidence:
     """Evaluate historical PR records without allowing broad association.
@@ -156,13 +158,14 @@ def evaluate_prior_parent_merge(
             reason="missing real child parent or subtask identity",
         )
     expected_base = f"parent/issue-{parent_issue_number}"
+    cached_get_last_reopened_at = cache(get_last_reopened_at)
     candidates = [
         _validated_candidate(
             pr,
             issue_number=issue_number,
             subtask_id=subtask_id,
             expected_base=expected_base,
-            last_reopened_at=last_reopened_at,
+            get_last_reopened_at=cached_get_last_reopened_at,
             merge_commit_is_reachable=merge_commit_is_reachable,
         )
         for pr in prs
@@ -246,13 +249,12 @@ def inspect_prior_parent_merge(
         prs = _merged_prs_for_parent_base(
             forge, f"parent/issue-{actual_parent}", merged_prs_by_base
         )
-        reopened_at = forge.get_issue_last_reopened_at(issue_number)
         evidence = evaluate_prior_parent_merge(
             issue_number=issue_number,
             parent_issue_number=actual_parent,
             subtask_id=task.subtask_id,
             prs=prs,
-            last_reopened_at=reopened_at,
+            get_last_reopened_at=lambda: forge.get_issue_last_reopened_at(issue_number),
             merge_commit_is_reachable=forge.is_merge_commit_reachable_from,
         )
         return evidence, issue
@@ -407,6 +409,7 @@ __all__ = [
     "PriorParentMergeEvidence",
     "PriorParentMergeReconciliation",
     "PriorParentMergeStatus",
+    "ReopenTimestampProvider",
     "evaluate_prior_parent_merge",
     "inspect_prior_parent_merge",
     "reconcile_prior_parent_merges",

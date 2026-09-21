@@ -39,7 +39,7 @@ def _evaluate(
         parent_issue_number=100,
         subtask_id="child-task",
         prs=prs,
-        last_reopened_at=reopened_at,
+        get_last_reopened_at=lambda: reopened_at,
         merge_commit_is_reachable=lambda _sha, _base: reachable,
     )
 
@@ -408,3 +408,107 @@ def test_initial_scan_shares_parent_history_failure_and_holds_siblings():
     forge.list_merged_prs_for_base.assert_called_once_with("parent/issue-100")
     forge.add_label.assert_not_called()
     forge.close_issue.assert_not_called()
+
+
+def test_lazy_reopen_provider_not_called_when_pr_list_is_empty():
+    issue = _issue()
+    forge = _forge_for_reconciliation(issue)
+    forge.list_merged_prs_for_base.return_value = []
+
+    result = reconcile_prior_parent_merges(
+        forge, {101: _task()}, apply=True, issues_by_number={101: issue}
+    )
+
+    assert result.held_issue_numbers == set()
+    forge.get_issue_last_reopened_at.assert_not_called()
+
+
+def test_lazy_reopen_provider_not_called_when_prs_do_not_match_issue():
+    issue = _issue()
+    forge = _forge_for_reconciliation(issue)
+    forge.list_merged_prs_for_base.return_value = [
+        _merged_pr(head_ref="claude/issue-999-other", closes_issue_numbers=(999,))
+    ]
+
+    result = reconcile_prior_parent_merges(
+        forge, {101: _task()}, apply=True, issues_by_number={101: issue}
+    )
+
+    assert result.held_issue_numbers == set()
+    forge.get_issue_last_reopened_at.assert_not_called()
+
+
+def test_lazy_reopen_provider_not_called_when_candidate_fails_earlier_validation():
+    provider = MagicMock(return_value=None)
+    # PR with cross_repository=True, missing merged_at, or conflicting head/closing
+    prs = [
+        _merged_pr(is_cross_repository=True),
+        _merged_pr(merged_at=""),
+        _merged_pr(
+            head_ref="claude/issue-999-other",
+            closes_issue_numbers=(101,),
+        ),
+    ]
+
+    result = evaluate_prior_parent_merge(
+        issue_number=101,
+        parent_issue_number=100,
+        subtask_id="child-task",
+        prs=prs,
+        get_last_reopened_at=provider,
+        merge_commit_is_reachable=lambda _sha, _base: True,
+    )
+
+    provider.assert_not_called()
+    assert result.status is PriorParentMergeStatus.INDETERMINATE
+
+
+def test_lazy_reopen_provider_called_at_most_once_per_evaluation_with_multiple_candidates():
+    provider = MagicMock(return_value="2026-08-01T00:00:00Z")
+    prs = [
+        _merged_pr(number=301, merged_at="2026-09-01T12:00:00Z"),
+        _merged_pr(number=302, merged_at="2026-09-01T13:00:00Z"),
+    ]
+
+    result = evaluate_prior_parent_merge(
+        issue_number=101,
+        parent_issue_number=100,
+        subtask_id="child-task",
+        prs=prs,
+        get_last_reopened_at=provider,
+        merge_commit_is_reachable=lambda _sha, _base: True,
+    )
+
+    assert result.status is PriorParentMergeStatus.ALREADY_MERGED
+    assert result.pr_number == 302
+    assert provider.call_count == 1
+
+
+def test_lazy_reopen_provider_failure_fails_closed_as_indeterminate_without_mutation():
+    issue = _issue()
+    forge = _forge_for_reconciliation(issue)
+    forge.get_issue_last_reopened_at.side_effect = RuntimeError("API error on events")
+
+    result = reconcile_prior_parent_merges(
+        forge, {101: _task()}, apply=True, issues_by_number={101: issue}
+    )
+
+    assert result.held_issue_numbers == {101}
+    assert result.completed_issue_numbers == set()
+    assert result.events[0]["action"] == "indeterminate"
+    forge.add_label.assert_not_called()
+    forge.close_issue.assert_not_called()
+
+
+def test_repair_refetches_reopen_timestamp_on_pre_mutation_revalidation():
+    issue = _issue()
+    forge = _forge_for_reconciliation(issue)
+
+    result = reconcile_prior_parent_merges(
+        forge, {101: _task()}, apply=True, issues_by_number={101: issue}
+    )
+
+    assert result.held_issue_numbers == {101}
+    assert result.completed_issue_numbers == {101}
+    # First call during initial scan, second call during _apply_or_preview_verified_repair re-verification
+    assert forge.get_issue_last_reopened_at.call_count == 2
