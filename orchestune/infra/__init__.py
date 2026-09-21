@@ -8,16 +8,24 @@ from orchestune.infra.json_state import (
 )
 from orchestune.infra.process_utils import (
     FileLock,
+    FileLockContentionError,
+    assert_run_state_lock_held,
     default_ci_command,
     file_lock,
     is_process_alive,
+    is_run_state_lock_held,
+    run_state_lock,
 )
 
 __all__ = [
     "FileLock",
+    "FileLockContentionError",
+    "assert_run_state_lock_held",
     "default_ci_command",
     "file_lock",
     "is_process_alive",
+    "is_run_state_lock_held",
     "read_json_with_recovery",
+    "run_state_lock",
     "write_json_atomic",
 ]

@@ -9,6 +9,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 from orchestune.branch_naming import build_task_branch_name
+from orchestune.claim.contracts import (
+    ClaimFailureReason,
+    ClaimOutcome,
+    ClaimRequest,
+    ClaimStage,
+    OwnerKind,
+)
 from orchestune.dispatch.cost_model import build_cost_model
 from orchestune.dispatch.cycle_action_contracts import CycleQueries
 from orchestune.dispatch.dependency_policy import (
@@ -30,9 +37,10 @@ from orchestune.dispatch.state import (
     ActiveWorktree,
     CompletedWorktree,
     RunState,
+    load_run_state,
     save_run_state,
 )
-from orchestune.dispatch.worktree import LaunchResult, create_worktree_and_launch
+from orchestune.dispatch.worktree import LaunchResult, _launch_on_prepared_worktree
 from orchestune.infra.git_cli import run_git
 from orchestune.issue_parsing import (
     backfill_launch_history,
@@ -51,6 +59,13 @@ if TYPE_CHECKING:
 
 LaunchCommitted = Callable[[ActiveWorktree], None]
 TTask = TypeVar("TTask", bound=TaskMetadata)
+
+# #943: `orchestune.claim.service`はL3（`dispatch.launch`はL2）のため、この
+# モジュールは`claim_task`を直接importしない（`tests/test_architecture.py`の
+# レイヤー境界を参照）。呼び出し元のL3層（`orchestune.dispatch.cycle_actions`）
+# が`claim_task`を束縛した`ClaimFn`をDIで渡す。第2引数は`plan.base_branch_for_launch`
+# 由来のdefault_base。
+ClaimFn = Callable[[ClaimRequest, str], ClaimOutcome]
 
 
 def _is_task_stack_eligible(
@@ -217,7 +232,16 @@ def _decide_task_launch_plan(
     """選出されたタスクごとに、起動時のブランチ名・ベースブランチを決定する（副作用なし）。"""
     plans = []
     for task in selected:
-        branch_name = build_task_branch_name(task.issue_number, task.subtask_id)
+        # #943レビュー対応(Codex P2): subtask_idが未指定/空の場合、
+        # `build_task_branch_name`自体の既定フォールバックは`"task"`だが、
+        # claim_task側の`orchestune.claim.preflight.resolve_claim_subtask_id`は
+        # `f"task-{issue_number}"`にフォールバックする。両者が食い違うと、
+        # dispatchの計画・重複PR検出・launch-attempt journalが想定する
+        # ブランチ名と、claim_task経由で実際に起動されるブランチ名が
+        # 一致しなくなる（二重起動やjournal不整合の原因になる）。claimと
+        # 同じフォールバックへ揃える。
+        subtask_id = task.subtask_id or f"task-{task.issue_number}"
+        branch_name = build_task_branch_name(task.issue_number, subtask_id)
         base_branch = task_to_base_branch.get(task.issue_number)
         if base_branch is None:
             if config.parent_issue_number is not None:
@@ -320,10 +344,23 @@ def _launch_reservation(
 def _handle_launch_failure(
     task: TaskMetadata, launch, config: DispatcherConfig
 ) -> None:
+    # #943レビュー対応(Codex P1): `launch.claim_id`が設定されているのは
+    # claim_task自身が成功し（既に`status:in-progress`へ遷移済み）、その後の
+    # 実際のagent起動が失敗したケースのみ（claim失敗時のLaunchResultは
+    # `claim_id`を設定しない）。`task.status_labels`はclaim実行前のstale
+    # スナップショットのため、IN_PROGRESSを含まない——ここで除去対象へ
+    # 明示的に加えないと、失敗後の遷移がIN_PROGRESSを剥がさず、
+    # `status:in-progress`と`status:blocked`が同時に付いた矛盾状態のまま
+    # 残ってしまう。
+    stale_labels = (
+        (*task.status_labels, StatusLabel.IN_PROGRESS)
+        if launch.claim_id is not None
+        else task.status_labels
+    )
     old_labels = tuple(
         label
-        for label in (StatusLabel.QUEUED, StatusLabel.BLOCKED)
-        if label in task.status_labels
+        for label in (StatusLabel.QUEUED, StatusLabel.BLOCKED, StatusLabel.IN_PROGRESS)
+        if label in stale_labels
     )
     if launch.validation_error:
         transition_status_label(
@@ -366,14 +403,14 @@ def _build_active_worktree_from_launch(
 
     return ActiveWorktree(
         issue_number=task.issue_number,
-        branch=plan.branch_name,
+        branch=launch.branch,
         worktree_path=launch.worktree_path,
         pid=launch.pid,
         started_at=launch.dispatch_started_at or now,
         declared_footprint=task.footprint,
         external_id=launch.external_id,
         external_url=launch.external_url,
-        base_branch=plan.base_branch_for_state,
+        base_branch=launch.base_ref or plan.base_branch_for_state,
         estimated_tokens=build_cost_model(run_state).tokens_for_issue(
             task.issue_number
         ),
@@ -384,6 +421,14 @@ def _build_active_worktree_from_launch(
         selection_reason=selection_reason,
         launch_attempt_id=launch.launch_attempt_id,
         launch_phase="launched" if launch.launch_attempt_id else None,
+        # #943: dispatch launchはclaim_task（owner_kind=dispatch）経由で予約される。
+        # `launch.reservation_kind`はclaim outcomeから`_try_planned_launch`が
+        # 設定するが、未設定（None）の場合はActiveWorktreeの既定値
+        # （reservation_kind="footprint"）へ安全にフォールバックする。
+        owner_kind=OwnerKind.DISPATCH.value,
+        claim_id=launch.claim_id,
+        base_ref=launch.base_ref,
+        reservation_kind=launch.reservation_kind or "footprint",
     )
 
 
@@ -426,17 +471,134 @@ def _record_successful_launch(
     )
 
 
+def _resolve_claim_failure_launch_result(
+    plan: TaskLaunchPlan[TTask], outcome: ClaimOutcome
+) -> LaunchResult:
+    """claim_taskの失敗outcomeを、既存のLaunchResultベースの失敗処理へ変換する。
+
+    STATE_LOCK_FAILEDやACTIVE_SAVED段階の失敗はagent（provider）を一度も
+    呼んでいないため、`held=True`の`LaunchResult`を返す（#943レビュー対応
+    (Codex P1): 呼び出し元はこれを見てlaunch_history（quotaの消費記録）へ
+    計上しない——providerを呼んでいないのにquotaを消費したことにすると、
+    既定の`max_launches_per_window=1`では他の全タスクが1時間ブロックされる）。
+    それ以外の拒否理由は、branch/subtask_id
+    の不正（`INVALID_BRANCH_NAME`）だけを`validation_error`として
+    `status:blocked-human-review`へ、それ以外（`WORKTREE_CREATION_FAILED`を
+    含む、OSError/git実行エラーのような一時的なインフラ障害や所有権拒否）は
+    再試行可能な`status:blocked`へ振り分ける既存の`_handle_launch_failure`
+    分岐へそのまま乗せる（#943レビュー対応(Codex P2):
+    `WORKTREE_CREATION_FAILED`を一律`validation_error`扱いすると、一時的な
+    worktree作成失敗まで恒久的な`status:blocked-human-review`へ誤って
+    エスカレーションしてしまうため分離した）。
+
+    #943: `outcome.stage is ClaimStage.ACTIVE_SAVED`は、claim_task内部の
+    finalize段階（issue再検証・所有権メタデータ公開・ラベル遷移・完了保存の
+    いずれか）で失敗したことを意味する——つまりclaim_task自身が既に
+    `status:in-progress`への遷移を試み、場合によっては部分的に成功させて
+    いる可能性がある。この場合に`_handle_launch_failure`の汎用フォールバック
+    （dispatch自身が起動前のstale統な`task.status_labels`を元に、もう一度
+    独立した`transition_status_label`を試みる）を重ねて適用すると、claimが
+    既に付与済みの`status:in-progress`の上へさらに`status:blocked`を重ねて
+    付与し、`status:queued`の除去も二重に試行してしまう——ラベルが混在した
+    まま矛盾した状態になりかねない。claim_task自身の設計
+    （「ラベル更新API失敗時に予約とworktreeが保持され、再選出させない」）が
+    既に安全側に倒しているため、この段階の失敗は次サイクルの整合性回復
+    （reconciliation）に委ね、dispatch側で重ねて手を加えない。
+    """
+    failure = outcome.failure
+    assert failure is not None
+    if (
+        failure.reason is ClaimFailureReason.STATE_LOCK_FAILED
+        or outcome.stage is ClaimStage.ACTIVE_SAVED
+    ):
+        print(
+            f"Holding launch of issue #{plan.task.issue_number}: {failure.message}; retry next cycle",
+            file=sys.stderr,
+        )
+        return LaunchResult(
+            issue_number=plan.task.issue_number,
+            branch=plan.branch_name,
+            worktree_path="",
+            pid=None,
+            launched=False,
+            error_message=failure.message,
+            execution_selection=plan.execution_selection,
+            held=True,
+        )
+    return LaunchResult(
+        issue_number=plan.task.issue_number,
+        branch=plan.branch_name,
+        worktree_path="",
+        pid=None,
+        launched=False,
+        error_message=failure.message,
+        validation_error=failure.reason is ClaimFailureReason.INVALID_BRANCH_NAME,
+        execution_selection=plan.execution_selection,
+    )
+
+
+def _sync_claim_reservation_into_run_state(
+    run_state: RunState, config: DispatcherConfig, issue_number: int
+) -> None:
+    """#943: claim_taskが自前のload/save往復でdiskへ直接永続化した予約を、
+    サイクルが保持し続ける共有run_stateオブジェクトへも反映する。
+
+    反映しないと、後続のagent起動が失敗した場合に`_apply_task_launches`末尾の
+    `save_run_state`（サイクル全体で保持している古いin-memoryスナップショット）が
+    claimの予約を上書き消去してしまう——GitHub上は`status:in-progress`なのに
+    run_state.jsonにactiveエントリが無い孤児状態が生まれる。
+    """
+    fresh = load_run_state(config.run_state_path)
+    key = str(issue_number)
+    reservation = fresh.active_worktrees.get(key)
+    if reservation is not None:
+        run_state.active_worktrees[key] = reservation
+
+
 def _try_planned_launch(
-    plan: TaskLaunchPlan[TTask], target: DispatchTarget, config: DispatcherConfig
+    plan: TaskLaunchPlan[TTask],
+    target: DispatchTarget,
+    config: DispatcherConfig,
+    run_state: RunState,
+    claim_fn: ClaimFn,
 ) -> LaunchResult | None:
+    """#943: worktree/所有権の取得をclaim_task（owner_kind=dispatch）経由に一本化する。
+
+    実際のagentプロセス起動（`_launch_on_prepared_worktree`）はworktree.py側の
+    既存実装をそのまま再利用し、claim_taskが用意したworktree_path/branch/base_ref
+    に対して行う。dispatch固有の責務（quota起動履歴・launch_attempt・target設定）は
+    このモジュール（`_apply_task_launches`/`launch_attempts.py`）に残す。
+
+    `claim_fn`はL3層（`orchestune.dispatch.cycle_actions`）が`claim_task`を
+    束縛して渡すDI境界（このモジュールの`ClaimFn`定義を参照）。
+    """
+    task = plan.task
+    request = ClaimRequest(
+        issue_number=task.issue_number,
+        owner_kind=OwnerKind.DISPATCH,
+        state_path=config.run_state_path,
+        # #943レビュー対応(Codex P1, round4): `config.worktree_root`が既定値
+        # （`<repo>/worktrees`）以外の場合、指定しないとclaimが既定値へ固定
+        # してしまい、実際にagentが起動されるディレクトリとdispatch自身の
+        # journal復元・GCが参照するディレクトリが食い違う。
+        worktree_root=config.worktree_root,
+    )
+    outcome = claim_fn(request, plan.base_branch_for_launch or "origin/main")
+    if outcome.claim_id is not None:
+        _sync_claim_reservation_into_run_state(run_state, config, task.issue_number)
+
+    if not outcome.success:
+        return _resolve_claim_failure_launch_result(plan, outcome)
+
+    assert outcome.worktree_path is not None
+    assert outcome.branch is not None
     try:
-        return create_worktree_and_launch(
-            plan.task,
-            plan.branch_name,
-            config.worktree_root,
+        launch = _launch_on_prepared_worktree(
+            task,
+            outcome.branch,
+            outcome.worktree_path,
             target,
-            apply=True,
-            base_branch=plan.base_branch_for_launch,
+            outcome.base_ref,
             execution_selection=plan.execution_selection,
         )
     except LaunchOutcomeUnknown as exc:
@@ -446,6 +608,66 @@ def _try_planned_launch(
         )
         return None
 
+    launch.base_ref = outcome.base_ref
+    launch.claim_id = outcome.claim_id
+    launch.reservation_kind = (
+        outcome.reservation_kind.value if outcome.reservation_kind else None
+    )
+    return launch
+
+
+def _apply_single_task_launch(
+    plan: TaskLaunchPlan[TTask],
+    run_state: RunState,
+    now: float,
+    config: DispatcherConfig,
+    claim_fn: ClaimFn,
+    open_prs: Sequence[PrRecord] | None,
+    on_launch_committed: LaunchCommitted | None,
+) -> TTask | None:
+    """1件のplanに対する予約→起動→記録の一連の流れ。成功時のみtaskを返す。"""
+    task = plan.task
+    assert config.dispatch_target is not None
+
+    with _launch_reservation(
+        now, config, issue_number=task.issue_number
+    ) as commit_reservation:
+        if commit_reservation is None:
+            return None
+
+        target = prepare_journaled_target(
+            plan, run_state, now, config, commit_reservation
+        )
+        if target is None:
+            return None
+
+        launch = _try_planned_launch(plan, target, config, run_state, claim_fn)
+        if launch is None:
+            # LaunchOutcomeUnknown: providerを実際に呼んだかどうか不明なため、
+            # 安全側に倒してquotaを消費したものとして扱う（既存挙動）。
+            run_state.launch_history.append(now)
+            return None
+        if launch.held is True:
+            # `is True`（真偽値としての緩い評価ではなく）で比較する: 既存の
+            # 多くのテストが`_launch_on_prepared_worktree`を素の`MagicMock`
+            # （`held`属性を明示しない）で置き換えており、緩い真偽評価だと
+            # 未設定属性への自動生成MagicMock（常にtruthy）を誤ってheld扱い
+            # してしまう。
+            # #943レビュー対応(Codex P1): claim_task自体がhold（provider未呼出）
+            # されたケース。quotaは消費しておらず、`_handle_launch_failure`の
+            # 独自ラベル遷移も適用しない（claim側の状態をそのまま次サイクルの
+            # 整合性回復に委ねる）。
+            return None
+        if not launch.launched:
+            _handle_launch_failure(task, launch, config)
+            return None
+
+        commit_reservation()
+        _record_successful_launch(
+            task, plan, launch, run_state, now, config, open_prs, on_launch_committed
+        )
+        return task
+
 
 def _apply_task_launches(
     plans: Sequence[TaskLaunchPlan[TTask]],
@@ -454,44 +676,19 @@ def _apply_task_launches(
     config: DispatcherConfig,
     open_prs: Sequence[PrRecord] | None = None,
     on_launch_committed: LaunchCommitted | None = None,
+    *,
+    claim_fn: ClaimFn,
 ) -> list[TTask]:
-    actually_selected: list[TTask] = []
-    for plan in plans:
-        task = plan.task
-        assert config.dispatch_target is not None
-
-        with _launch_reservation(
-            now, config, issue_number=task.issue_number
-        ) as commit_reservation:
-            if commit_reservation is None:
-                continue
-
-            target = prepare_journaled_target(
-                plan, run_state, now, config, commit_reservation
+    actually_selected = [
+        task
+        for plan in plans
+        if (
+            task := _apply_single_task_launch(
+                plan, run_state, now, config, claim_fn, open_prs, on_launch_committed
             )
-            if target is None:
-                continue
-
-            launch = _try_planned_launch(plan, target, config)
-            if launch is None:
-                run_state.launch_history.append(now)
-                continue
-            if not launch.launched:
-                _handle_launch_failure(task, launch, config)
-                continue
-
-            commit_reservation()
-            _record_successful_launch(
-                task,
-                plan,
-                launch,
-                run_state,
-                now,
-                config,
-                open_prs,
-                on_launch_committed,
-            )
-            actually_selected.append(task)
+        )
+        is not None
+    ]
 
     save_run_state(
         run_state,
@@ -515,6 +712,10 @@ class LaunchContext(Generic[TTask]):
     config: DispatcherConfig
     open_prs: Sequence[PrRecord] | None = None
     on_launch_committed: LaunchCommitted | None = None
+    # #943: `orchestune.claim.service`はL3のため、`claim_task`を束縛した
+    # `ClaimFn`をL3層（`orchestune.dispatch.cycle_actions`）からDIで受け取る
+    # （このモジュールの`ClaimFn`定義を参照）。
+    claim_fn: ClaimFn | None = None
 
 
 def _launch_selected_tasks(ctx: LaunchContext[TTask]) -> list[TTask]:
@@ -523,6 +724,7 @@ def _launch_selected_tasks(ctx: LaunchContext[TTask]) -> list[TTask]:
     _apply_yaml_error_blocking(yaml_error_tasks, ctx.config)
 
     plans = _decide_task_launch_plan(ctx.selected, ctx.task_to_base_branch, ctx.config)
+    assert ctx.claim_fn is not None
     return _apply_task_launches(
         plans,
         ctx.run_state,
@@ -530,4 +732,5 @@ def _launch_selected_tasks(ctx: LaunchContext[TTask]) -> list[TTask]:
         ctx.config,
         open_prs=ctx.open_prs,
         on_launch_committed=ctx.on_launch_committed,
+        claim_fn=ctx.claim_fn,
     )

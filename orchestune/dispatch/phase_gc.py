@@ -47,6 +47,7 @@ from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _preview_reclaim_event,
     _reclaim_candidate_from_command,
+    build_interactive_exclusion_event,
     execute_reclaim_repair_command,
 )
 from orchestune.dispatch.state import ActiveWorktree, RunState
@@ -252,6 +253,36 @@ def _execute_stale_reclaim(
     )
 
 
+def _check_interactive_exclusion(
+    command: RepairCommand,
+    run_state: RunState,
+    tasks_by_issue: Mapping[int, TaskMetadata],
+    events: list[dict],
+) -> RepairResult | None:
+    subject_id = command.subject_id
+    if subject_id is None:
+        return None
+    active_entry = next(
+        (
+            (k, a)
+            for k, a in run_state.active_worktrees.items()
+            if str(a.issue_number) == subject_id
+        ),
+        None,
+    )
+    if active_entry is not None and active_entry[1].owner_kind == "interactive":
+        task = tasks_by_issue.get(active_entry[1].issue_number)
+        events.append(build_interactive_exclusion_event(active_entry[1], task))
+        return RepairResult(
+            command=command,
+            status=RepairStatus.SKIPPED,
+            diagnostics=(
+                "interactive claim ownership is excluded from automatic GC reclaim",
+            ),
+        )
+    return None
+
+
 def build_gc_reclaim_handler(
     run_state: RunState,
     tasks_by_issue: Mapping[int, TaskMetadata],
@@ -274,6 +305,11 @@ def build_gc_reclaim_handler(
         )
         if stale_result is not None:
             return stale_result
+        interactive_result = _check_interactive_exclusion(
+            command, run_state, tasks_by_issue, events
+        )
+        if interactive_result is not None:
+            return interactive_result
         planned = _planned_reclaims(
             (command,), run_state, tasks_by_issue, config, observed_now
         )

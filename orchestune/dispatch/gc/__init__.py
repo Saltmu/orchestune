@@ -639,6 +639,8 @@ def _resolve_completion(
     active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     """完了候補・保留・早期終端を明示的な値として解決する。"""
+    if active.owner_kind == "interactive":
+        return CompletionResolution.pending()
     if active.started_at is None and active.external_id is None:
         return _resolve_recovered_completion(ctx, key, active, active_task)
     if active.external_id is not None:

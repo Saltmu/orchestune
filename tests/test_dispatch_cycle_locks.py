@@ -24,7 +24,11 @@ from orchestune.dispatch.phase_rebase import (
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
-    save_run_state,
+)
+from orchestune.infra.process_utils import (
+    assert_run_state_lock_held,
+    is_run_state_lock_held,
+    run_state_lock,
 )
 from orchestune.issue_notice import notice_marker, render_notice
 from orchestune.models import PrRecord
@@ -34,6 +38,7 @@ from tests.dispatch_test_support import make_test_task as _task
 from tests.dispatch_test_support import (
     patch_gc_process_alive as _patch_gc_process_alive,
 )
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 from tests.dispatch_test_support import stub_label_actor_permission
 
 
@@ -617,3 +622,78 @@ class TestExternalLockReleaseNoticeRetry:
 
         assert run_state.pending_lock_release_notices == []
         assert "ロック中" in fake_forge.add_comment.call_args.args[1]
+
+
+class TestDispatchCycleRunStateLock:
+    """Issue #933: run_dispatch_cycle が run_state_lock を通じて排他制御を行うことの検証。"""
+
+    @pytest.mark.uses_real_file_lock
+    def test_run_dispatch_cycle_holds_run_state_lock_during_execution(
+        self, tmp_path, fake_forge
+    ):
+        """サイクル実行中は run_state_lock が保持され、ネストした取得も再入可能であること。"""
+        run_state_path = tmp_path / "run_state.json"
+        lock_path = run_state_path.with_suffix(".lock")
+        config = DispatcherConfig(
+            run_state_path=run_state_path,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=False,
+            forge=fake_forge,
+        )
+
+        observed_held_inside = False
+        observed_nested_held = False
+
+        def hook_load_run_state(path):
+            nonlocal observed_held_inside, observed_nested_held
+            observed_held_inside = is_run_state_lock_held(lock_path)
+            assert_run_state_lock_held(lock_path)
+
+            # ネストした再入取得を検証
+            with run_state_lock(lock_path):
+                observed_nested_held = is_run_state_lock_held(lock_path)
+                assert_run_state_lock_held(lock_path)
+
+            return RunState()
+
+        with patch(
+            "orchestune.dispatch.cycle.load_run_state", side_effect=hook_load_run_state
+        ):
+            run_dispatch_cycle(config)
+
+        assert observed_held_inside is True
+        assert observed_nested_held is True
+        # サイクル完了後は解放されていること
+        assert is_run_state_lock_held(lock_path) is False
+        with pytest.raises(RuntimeError, match="run_state lock must be held"):
+            assert_run_state_lock_held(lock_path)
+
+    @pytest.mark.uses_real_file_lock
+    def test_run_dispatch_cycle_fails_with_contention_diagnostic_when_lock_held(
+        self, tmp_path, fake_forge
+    ):
+        """外部プロセスがロック保持中の場合、即座に競合診断メッセージを伴って失敗すること。"""
+        run_state_path = tmp_path / "run_state.json"
+        lock_path = run_state_path.with_suffix(".lock")
+        config = DispatcherConfig(
+            run_state_path=run_state_path,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=False,
+            forge=fake_forge,
+        )
+
+        from orchestune.infra.process_utils import FileLock
+
+        external_lock = FileLock(lock_path)
+        external_lock.acquire()
+        try:
+            with pytest.raises(RuntimeError) as exc_info:
+                run_dispatch_cycle(config)
+
+            error_msg = str(exc_info.value)
+            assert str(lock_path) in error_msg
+            assert "run_state lock" in error_msg
+            assert "another process is currently holding the lock" in error_msg
+            assert "retry" in error_msg
+        finally:
+            external_lock.release()

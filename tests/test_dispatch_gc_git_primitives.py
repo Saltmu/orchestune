@@ -277,7 +277,7 @@ class TestRemoveWorktree:
             )
             remove_worktree("worktrees/w1")
         args = mock_run.call_args.args[0]
-        assert args == ["git", "worktree", "remove", "worktrees/w1"]
+        assert args == ["git", "worktree", "remove", str(Path("worktrees/w1"))]
         assert "--force" not in args
 
     def test_swallows_error_when_already_removed(self):
@@ -286,6 +286,62 @@ class TestRemoveWorktree:
             side_effect=subprocess.CalledProcessError(1, []),
         ):
             remove_worktree("worktrees/already-gone")  # 例外を送出しないこと
+
+    def test_keeps_claim_marker_when_worktree_removal_actually_fails(self, tmp_path):
+        """#943レビュー対応(Codex P2): `git worktree remove`が失敗し、worktree
+        本体が実際にはまだディスク上に残っている場合、所有権マーカーを
+        消してはならない。マーカーを消すと、所有権を証明できないworktreeが
+        `unclaimed_existing_worktree`として残り続けてしまう。"""
+        from orchestune.dispatch.claim_marker import (
+            claim_marker_path,
+            write_claim_marker,
+        )
+
+        worktree_path = tmp_path / "worktrees" / "w-still-here"
+        worktree_path.mkdir(parents=True)
+        write_claim_marker(
+            worktree_path,
+            claim_id="claim-1",
+            branch="claude/issue-1-task-1",
+            base_sha="deadbeef",
+            branch_created=True,
+        )
+
+        with patch(
+            "orchestune.dispatch.gc.git.subprocess.run",
+            side_effect=subprocess.CalledProcessError(1, []),
+        ):
+            remove_worktree(worktree_path)
+
+        assert worktree_path.exists()
+        assert claim_marker_path(worktree_path).exists()
+
+    def test_removes_claim_marker_when_worktree_removal_succeeds(self, tmp_path):
+        """撤去が実際に成功した場合（=worktreeが消えた場合）は、対で
+        所有権マーカーも片付けて、後日の正当な再claimを妨げないこと。"""
+        from orchestune.dispatch.claim_marker import (
+            claim_marker_path,
+            write_claim_marker,
+        )
+
+        worktree_path = tmp_path / "worktrees" / "w-removed"
+        write_claim_marker(
+            worktree_path,
+            claim_id="claim-1",
+            branch="claude/issue-1-task-1",
+            base_sha="deadbeef",
+            branch_created=True,
+        )
+
+        with patch(
+            "orchestune.dispatch.gc.git.subprocess.run",
+            return_value=subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            ),
+        ):
+            remove_worktree(worktree_path)
+
+        assert not claim_marker_path(worktree_path).exists()
 
 
 class TestWorktreeHasNewCommitsIntegration:

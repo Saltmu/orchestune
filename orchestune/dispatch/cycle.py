@@ -120,8 +120,7 @@ from orchestune.dispatch.status_repair_dependencies import (
     DependencyAssessmentView,
 )
 from orchestune.dispatch.targets import DispatchHandle
-from orchestune.dispatch.worktree import file_lock
-from orchestune.infra.process_utils import is_process_alive
+from orchestune.infra.process_utils import is_process_alive, run_state_lock
 from orchestune.labels import StatusLabel
 from orchestune.pr_link_notice import (
     notice_expected_bases,
@@ -1021,7 +1020,7 @@ def _prepare_cycle_context(run_state, config: DispatcherConfig, now: float):
 
 def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
     lock_path = Path(config.run_state_path).with_suffix(".lock")
-    with file_lock(lock_path):
+    with run_state_lock(lock_path):
         run_state = load_run_state(config.run_state_path)
         now = time.time()
         issues, ctx, recovery_report, prior_merges = _prepare_cycle_context(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol, TypeVar
 
+from orchestune.claim.contracts import ClaimStage, ReservationKind
 from orchestune.dispatch.dependency_resolution import (
     EMPTY_DEPENDENCIES,
     TaskDependencies,
@@ -31,6 +32,9 @@ def _candidate_conflicts_with_forced_serial_active(
     `active_task`が特定できない場合は、従来通り依存関係による判定は行わず
     footprintの重なりのみで判定する。
     """
+    if active.reservation_kind == ReservationKind.REPOSITORY:
+        return True
+
     active_footprint = active.declared_footprint
     if active_task is not None:
         active_footprint = active_task.footprint or active.declared_footprint
@@ -49,17 +53,26 @@ def _candidate_conflicts_with_forced_serial_active(
     return active_task.issue_number in candidate_deps.resolved
 
 
+def _is_serializing_active(active: ActiveWorktree) -> bool:
+    """他候補の起動を止める対象として扱うactiveかどうか。"""
+    return (
+        active.forced_serial
+        or active.reservation_kind == ReservationKind.REPOSITORY
+        or active.claim_stage == ClaimStage.RESERVED
+    )
+
+
 def _filter_candidates_for_forced_serial(
     candidate_tasks: list[TTask],
     run_state: RunState,
     view: ForcedSerialDependencyView,
 ) -> list[TTask]:
-    forced_serial_actives = [
+    serializing_actives = [
         (active, view.task(active.issue_number))
         for active in run_state.active_worktrees.values()
-        if active.forced_serial
+        if _is_serializing_active(active)
     ]
-    if not forced_serial_actives:
+    if not serializing_actives:
         return candidate_tasks
 
     return [
@@ -69,7 +82,7 @@ def _filter_candidates_for_forced_serial(
             _candidate_conflicts_with_forced_serial_active(
                 candidate, active, active_task, view
             )
-            for active, active_task in forced_serial_actives
+            for active, active_task in serializing_actives
         )
     ]
 

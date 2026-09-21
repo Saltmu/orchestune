@@ -105,7 +105,7 @@ class RecordResult:
 class LaunchFact:
     """`ActiveWorktree`から投影した、起動の確定事実。
 
-    `ActiveWorktree`自体への参照ではなく、必要な7フィールドだけの不変値。
+    `ActiveWorktree`自体への参照ではなく、必要なフィールドだけの不変値。
     """
 
     issue_number: int
@@ -115,6 +115,9 @@ class LaunchFact:
     started_at: float | None
     external_id: str | None
     launch_attempt_id: str | None
+    owner_kind: str = "dispatch"
+    claim_id: str | None = None
+    reservation_kind: str = "footprint"
 
 
 def _launch_fact_from_active(active: ActiveWorktree) -> LaunchFact:
@@ -139,6 +142,9 @@ def _launch_fact_from_active(active: ActiveWorktree) -> LaunchFact:
         started_at=_usable_started_at_or_none(active.started_at),
         external_id=_usable_str_or_none(active.external_id),
         launch_attempt_id=_usable_str_or_none(active.launch_attempt_id),
+        owner_kind=active.owner_kind,
+        claim_id=_usable_str_or_none(active.claim_id),
+        reservation_kind=active.reservation_kind,
     )
 
 

@@ -4,8 +4,9 @@ from orchestune.consistency.models import RepairStatus
 from orchestune.consistency.repairs.execution import COMMAND_BOOKKEEPING
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import _run_recovery_bookkeeping_boundary
-from orchestune.dispatch.state import RunState, load_run_state, save_run_state
+from orchestune.dispatch.state import RunState, load_run_state
 from tests.conftest import make_issue, make_pr
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
 def _recovery_config(tmp_path, forge) -> DispatcherConfig:

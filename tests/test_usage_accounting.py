@@ -11,7 +11,6 @@ from orchestune.dispatch.state import (
     CompletedWorktree,
     RunState,
     load_run_state,
-    save_run_state,
 )
 from orchestune.dispatch.targets import (
     CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
@@ -23,6 +22,7 @@ from orchestune.models import Task, Usage
 from orchestune.outcome_record import OutcomeRecord
 from orchestune.task_metadata import TaskMetadata
 from tests.dispatch_gc_test_support import _rule_ctx
+from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
 class _DummyDispatchTarget(DispatchTarget):
