@@ -31,17 +31,12 @@ from orchestune.models import PrRecord
 from orchestune.task_metadata import TaskMetadata
 
 
-def _is_base_or_parent_branch(
-    branch_name: str, config: DispatcherConfig | None = None
-) -> bool:
+def _is_base_or_parent_branch(branch_name: str) -> bool:
     name = _strip_remote_prefix(branch_name)
     if name in {"main", "master", "HEAD"} or name.endswith("/HEAD"):
         return True
     if name.startswith("parent/issue-"):
         return True
-    if config:
-        if name == f"parent/issue-{config.parent_issue_number}":
-            return True
     return False
 
 
@@ -68,7 +63,7 @@ def _decide_external_lock_sync(
         for b in remote_branch_names
         if _strip_remote_prefix(b) not in pr_head_refs
         and _strip_remote_prefix(b) not in active_branches
-        and not _is_base_or_parent_branch(b, config)
+        and not _is_base_or_parent_branch(b)
     ]
     # #245: 差分取得不能(None)はtupleへ潰さずそのまま渡し、
     # scan_external_locks側でfail closed（lock維持・新規lock）に判定させる。
