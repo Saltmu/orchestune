@@ -39,8 +39,19 @@ If `orchestune claim` fails (non-zero exit code):
    ```
 4. For unresolved dependencies or conflict rejections, resolve the conflicting task or wait until dependencies complete before retrying.
 
-## Worktree completion and lifecycle
+## Worktree completion and cleanup
 
-Do not manually remove the worktree (`git worktree remove`) after submitting
-the PR and posting the outcome record. Orchestune manages the task lifecycle
-and will clean up the worktree automatically during reconciliation.
+For dispatcher-launched worktrees (`owner_kind=dispatch`), do not manually
+remove the worktree; Orchestune's GC phase manages lifecycle transitions.
+
+For worktrees created via `orchestune claim` (`owner_kind=interactive`),
+the worktree is preserved by default. Once the PR is submitted and the outcome
+record is posted (or after PR merge), clean up the worktree from the primary
+repository root:
+
+```bash
+git worktree remove worktree/<BRANCH_SLUG>
+git worktree prune
+```
+
+Do not use `--force`; resolve or preserve uncommitted work first.
