@@ -69,6 +69,7 @@ from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
+    effective_parent_number,
     launch_history_from_body,
     launch_history_in_window,
     parse_task_from_issue,
@@ -733,7 +734,7 @@ def _include_queued_attempts(
         issue
         for issue in combined.values()
         if MARKER not in issue.body
-        or (issue.parent or {}).get("number") == config.parent_issue_number
+        or effective_parent_number(issue) == config.parent_issue_number
     )
 
 

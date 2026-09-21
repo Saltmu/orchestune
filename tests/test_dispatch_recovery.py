@@ -12,6 +12,7 @@ from orchestune.dispatch.recovery import (
     RecoveryBookkeepingSnapshot,
     _counter_targets,
     _extract_raw_subtask_id,
+    _include_queued_attempts,
     _parse_subtask_info_from_issue,
     _restoration_candidates,
     execute_bookkeeping_repair_command,
@@ -96,6 +97,61 @@ def _issue_with_footprint(
         blocked_by=blocked_by,
         parent=parent,
     )
+
+
+def _journal_body(parent_issue_number: int) -> str:
+    return (
+        "<!-- orchestune:launch-attempt -->\n"
+        "```json\n"
+        '{"attempt_id":"attempt-1","phase":"prepared","target":"local",'
+        '"branch":"codex/issue-1-task","base_branch":"parent/issue-100",'
+        '"started_at":1}\n'
+        "```\n"
+        "## Footprint\n"
+        "```yaml\n"
+        "subtask_id: task\n"
+        f"parent_issue_number: {parent_issue_number}\n"
+        "footprint: []\n"
+        "depends_on: []\n"
+        "```\n"
+    )
+
+
+class TestIncludeQueuedAttempts:
+    def test_includes_journal_with_parent_from_body_metadata(
+        self, tmp_path, fake_forge
+    ):
+        in_progress = IssueRecord(
+            number=1,
+            title="in progress",
+            body="",
+            labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        body_parent = IssueRecord(
+            number=2,
+            title="queued",
+            body=_journal_body(100),
+            labels=("status:queued",),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        other_parent = IssueRecord(
+            number=3,
+            title="other queued",
+            body=_journal_body(200),
+            labels=("status:queued",),
+            created_at="2026-01-01T00:00:00Z",
+        )
+        fake_forge.list_issues_by_label.return_value = [body_parent, other_parent]
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            forge=fake_forge,
+            events_log_path=tmp_path / "events.jsonl",
+        )
+
+        included = _include_queued_attempts([in_progress], config)
+
+        assert [issue.number for issue in included] == [1, 2]
 
 
 class TestExtractRawSubtaskId:
