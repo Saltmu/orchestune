@@ -432,7 +432,9 @@ class TestFinalizeAbandonedCloudWorktree:
         assert run_state.task_reclaim_counts[280].pending is False
         assert run_state.task_reclaim_counts[280].count == 2
 
-    def test_stale_active_entry_discard_settles_pending_reservation(self, tmp_path):
+    def test_stale_active_entry_discard_settles_pending_reservation(
+        self, tmp_path, fake_forge
+    ):
         from orchestune.dispatch.gc import _apply_stale_active_entry_discard
 
         active = _active()
@@ -441,6 +443,7 @@ class TestFinalizeAbandonedCloudWorktree:
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
             max_task_reclaims=3,
+            forge=fake_forge,
         )
         run_state = RunState(
             active_worktrees={"w1": active},

@@ -204,6 +204,10 @@ class TestRunSemanticIntegrator:
     """#150: Integrator実行と、クラウドルーチン利用時のみ意味的レビューを
     有効化する分岐（ベストエフォート）。"""
 
+    @pytest.fixture(autouse=True)
+    def _inject_fake_forge(self, fake_forge):
+        pass
+
     def test_enables_semantic_review_for_cloud_routine_target(self, tmp_path):
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -542,6 +546,10 @@ class TestRunSemanticIntegrator:
 class TestProcessParentCompletion:
     """#170: 親Issue完了検知（best-effort）の配線を確認する。"""
 
+    @pytest.fixture(autouse=True)
+    def _inject_fake_forge(self, fake_forge):
+        pass
+
     def test_returns_report_on_success(self, tmp_path):
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -613,6 +621,10 @@ class TestPostEventLogComment:
     全実行環境で共通の`gh`（Forge.add_comment）経由で親Issueへ投稿する
     方式に変更した（issue #396のコメント参照）。ベストエフォート処理。
     """
+
+    @pytest.fixture(autouse=True)
+    def _inject_fake_forge(self, fake_forge):
+        pass
 
     def _report_with_events(self) -> CycleReport:
         return CycleReport(

@@ -122,7 +122,9 @@ class TestCollectZombiesAndTimeouts:
 class TestDecideZombieOrTimeoutReclaims:
     """#233: decide層は副作用（github/os.kill/subprocess呼び出し）を一切行わない。"""
 
-    def test_zombie_dead_process_with_dirty_worktree_is_reclaimed(self, tmp_path):
+    def test_zombie_dead_process_with_dirty_worktree_is_reclaimed(
+        self, tmp_path, fake_forge
+    ):
         active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
@@ -132,6 +134,7 @@ class TestDecideZombieOrTimeoutReclaims:
             apply=True,
             zombie_gc=True,
             task_timeout_seconds=0,
+            forge=fake_forge,
         )
 
         with (
@@ -155,7 +158,9 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaim.is_timeout is False
         assert reclaim.process_alive is False
 
-    def test_dead_process_with_clean_worktree_is_reclaimed_as_zombie(self, tmp_path):
+    def test_dead_process_with_clean_worktree_is_reclaimed_as_zombie(
+        self, tmp_path, fake_forge
+    ):
         active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
@@ -165,6 +170,7 @@ class TestDecideZombieOrTimeoutReclaims:
             apply=True,
             zombie_gc=True,
             task_timeout_seconds=0,
+            forge=fake_forge,
         )
 
         with (
@@ -188,7 +194,9 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaim.is_timeout is False
         assert reclaim.process_alive is False
 
-    def test_cloud_handle_without_pid_is_not_reclaimed_as_zombie(self, tmp_path):
+    def test_cloud_handle_without_pid_is_not_reclaimed_as_zombie(
+        self, tmp_path, fake_forge
+    ):
         """クラウド実行はローカルPIDを持たないため、進行中のセッションを
         process disappeared と誤認してはならない。"""
         active = _active(worktree_path=str(tmp_path), pid=None, started_at=1_000.0)
@@ -200,6 +208,7 @@ class TestDecideZombieOrTimeoutReclaims:
             apply=True,
             zombie_gc=True,
             task_timeout_seconds=0,
+            forge=fake_forge,
         )
 
         reclaims = _decide_zombie_or_timeout_reclaims(
@@ -208,7 +217,7 @@ class TestDecideZombieOrTimeoutReclaims:
 
         assert reclaims == []
 
-    def test_timeout_exceeded_reclaims_with_reason_timeout(self, tmp_path):
+    def test_timeout_exceeded_reclaims_with_reason_timeout(self, tmp_path, fake_forge):
         active = _active(started_at=1_000.0, pid=111)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
@@ -217,6 +226,7 @@ class TestDecideZombieOrTimeoutReclaims:
             run_state_path=tmp_path / "run_state.json",
             apply=True,
             task_timeout_seconds=60,
+            forge=fake_forge,
         )
 
         with patch(
@@ -238,7 +248,7 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaim.is_timeout is True
         assert reclaim.process_alive is True
 
-    def test_unknown_start_time_is_not_timed_out(self, tmp_path):
+    def test_unknown_start_time_is_not_timed_out(self, tmp_path, fake_forge):
         active = _active(started_at=None, pid=111)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
@@ -247,6 +257,7 @@ class TestDecideZombieOrTimeoutReclaims:
             run_state_path=tmp_path / "run_state.json",
             apply=True,
             task_timeout_seconds=60,
+            forge=fake_forge,
         )
 
         with patch(
@@ -261,7 +272,7 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaims == []
 
     def test_self_healed_entry_without_worktree_or_start_time_is_reclaimed(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         """#383の孤立entryはカーネルfindingから回収される。"""
         active = _active(
@@ -277,6 +288,7 @@ class TestDecideZombieOrTimeoutReclaims:
             apply=True,
             zombie_gc=True,
             task_timeout_seconds=0,
+            forge=fake_forge,
         )
 
         reclaims = _decide_zombie_or_timeout_reclaims(
@@ -293,7 +305,7 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaim.is_timeout is False
         assert reclaim.process_alive is False
 
-    def test_held_worktree_path_is_excluded(self, tmp_path):
+    def test_held_worktree_path_is_excluded(self, tmp_path, fake_forge):
         active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
@@ -303,6 +315,7 @@ class TestDecideZombieOrTimeoutReclaims:
             apply=True,
             zombie_gc=True,
             task_timeout_seconds=0,
+            forge=fake_forge,
         )
 
         with (
@@ -322,7 +335,9 @@ class TestDecideZombieOrTimeoutReclaims:
 
         assert reclaims == []
 
-    def test_zombie_and_timeout_disabled_returns_empty_immediately(self, tmp_path):
+    def test_zombie_and_timeout_disabled_returns_empty_immediately(
+        self, tmp_path, fake_forge
+    ):
         active = _active()
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
@@ -332,6 +347,7 @@ class TestDecideZombieOrTimeoutReclaims:
             apply=True,
             zombie_gc=False,
             task_timeout_seconds=0,
+            forge=fake_forge,
         )
 
         with patch(
@@ -344,7 +360,7 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaims == []
         mock_is_alive.assert_not_called()
 
-    def test_subtask_id_resolved_from_tasks_by_issue(self, tmp_path):
+    def test_subtask_id_resolved_from_tasks_by_issue(self, tmp_path, fake_forge):
         active = _active(started_at=1_000.0, pid=111)
         task = _task(status_labels=("status:in-progress",))
         run_state = RunState(active_worktrees={"280": active})
@@ -354,6 +370,7 @@ class TestDecideZombieOrTimeoutReclaims:
             run_state_path=tmp_path / "run_state.json",
             apply=True,
             task_timeout_seconds=60,
+            forge=fake_forge,
         )
 
         with patch(
@@ -371,7 +388,7 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaims_with_task[0].subtask_id == task.subtask_id
         assert reclaims_without_task[0].subtask_id == ""
 
-    def test_key_field_matches_active_worktrees_dict_key(self, tmp_path):
+    def test_key_field_matches_active_worktrees_dict_key(self, tmp_path, fake_forge):
         active = _active(started_at=1_000.0, pid=111)
         run_state = RunState(active_worktrees={"custom-key": active})
         config = DispatcherConfig(
@@ -380,6 +397,7 @@ class TestDecideZombieOrTimeoutReclaims:
             run_state_path=tmp_path / "run_state.json",
             apply=True,
             task_timeout_seconds=60,
+            forge=fake_forge,
         )
 
         with patch(
@@ -534,7 +552,9 @@ class TestInteractiveOwnershipGcExclusion:
         assert item["reservation_kind"] == "repository"
         assert "interactive" in item["reason"]
 
-    def test_interactive_active_is_excluded_from_completion_and_retries(self, tmp_path):
+    def test_interactive_active_is_excluded_from_completion_and_retries(
+        self, tmp_path, fake_forge
+    ):
         """owner_kind=interactive は _is_worktree_complete で未完了扱いとなり、
         early-death および review-timeout 再投入からも除外される。"""
         from orchestune.dispatch.gc.completion import (
@@ -556,6 +576,7 @@ class TestInteractiveOwnershipGcExclusion:
             early_death_window_seconds=120,
             max_early_death_retries=2,
             max_review_timeout_retries=2,
+            forge=fake_forge,
         )
         run_state = RunState(active_worktrees={"280": active})
 

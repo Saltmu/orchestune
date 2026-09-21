@@ -133,7 +133,7 @@ class TestDecideActorVerificationWithFakeForge:
 
 
 class TestApplyActorVerification:
-    def test_authorized_task_stays_in_candidates(self, tmp_path):
+    def test_authorized_task_stays_in_candidates(self, tmp_path, fake_forge):
         task = _task(1)
         decisions = [
             ActorVerificationDecision(
@@ -144,6 +144,7 @@ class TestApplyActorVerification:
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
+            forge=fake_forge,
         )
         with patch(
             "orchestune.dispatch.actor_verification.apply_human_review_escalation",
@@ -154,7 +155,7 @@ class TestApplyActorVerification:
         mock_escalate.assert_not_called()
 
     def test_unauthorized_task_is_excluded_and_escalated_when_apply_true(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         task = _task(1, status_labels=("status:queued",))
         decisions = [
@@ -166,6 +167,7 @@ class TestApplyActorVerification:
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
+            forge=fake_forge,
         )
         with patch(
             "orchestune.dispatch.actor_verification.apply_human_review_escalation",
@@ -181,7 +183,7 @@ class TestApplyActorVerification:
         assert "read" in args[2]
 
     def test_unauthorized_task_excluded_but_not_escalated_when_apply_false(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         task = _task(1)
         decisions = [
@@ -193,6 +195,7 @@ class TestApplyActorVerification:
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=False,
+            forge=fake_forge,
         )
         with patch(
             "orchestune.dispatch.actor_verification.apply_human_review_escalation",
@@ -202,7 +205,7 @@ class TestApplyActorVerification:
         assert result == []
         mock_escalate.assert_not_called()
 
-    def test_mixed_decisions_keep_only_authorized(self, tmp_path):
+    def test_mixed_decisions_keep_only_authorized(self, tmp_path, fake_forge):
         task_ok = _task(1)
         task_bad = _task(2)
         decisions = [
@@ -217,6 +220,7 @@ class TestApplyActorVerification:
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
+            forge=fake_forge,
         )
         with patch(
             "orchestune.dispatch.actor_verification.apply_human_review_escalation",

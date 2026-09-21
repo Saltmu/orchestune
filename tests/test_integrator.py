@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import ANY, MagicMock
 
+from orchestune.forge import Forge
 from orchestune.integrator import (
     AutoMergeChildIntegrationStep,
     EnsureIntegrationPrStep,
@@ -72,6 +74,16 @@ def _context(config: IntegratorConfig) -> IntegrationContext:
     )
 
 
+def _config(**overrides: Any) -> IntegratorConfig:
+    defaults: dict[str, Any] = {
+        "parent_issue_number": 100,
+        "apply": True,
+        "forge": MagicMock(spec=Forge),
+    }
+    defaults.update(overrides)
+    return IntegratorConfig(**defaults)
+
+
 class TestIntegratorRun:
     def test_no_done_tasks(self, integrator_env: IntegratorEnv):
         res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
@@ -124,7 +136,7 @@ class TestIntegratorRun:
 
 class TestIntegrationContext:
     def test_carries_config_and_branch_names(self):
-        config = IntegratorConfig(apply=True, parent_issue_number=100)
+        config = _config(apply=True, parent_issue_number=100)
         ctx = IntegrationContext(
             config=config,
             repository_root=Path("/tmp/repo"),
@@ -152,7 +164,7 @@ class TestIntegrationPipeline:
                 ctx.merged_tasks.append("task-2")
                 return {"unparsable_done_issues": [7]}
 
-        ctx = _context(IntegratorConfig(parent_issue_number=100, apply=True))
+        ctx = _context(_config())
         res = IntegrationPipeline([DummyStep1(), DummyStep2()]).execute(ctx)
 
         assert res == {
@@ -179,7 +191,7 @@ class TestIntegrationPipeline:
                 ctx.merged_tasks.append("task-skipped")
                 return {}
 
-        ctx = _context(IntegratorConfig(parent_issue_number=100, apply=True))
+        ctx = _context(_config())
         res = IntegrationPipeline([FailStep(), DummyStep()]).execute(ctx)
 
         assert res["status"] == IntegrationStatus.FAILURE
@@ -233,9 +245,7 @@ class TestMultiIssueIntegrator:
                 }
 
         runner = MultiIssueIntegrator([DummyIntegrator(100), DummyIntegrator(200)])
-        res = runner.execute(
-            _context(IntegratorConfig(parent_issue_number=100, apply=True))
-        )
+        res = runner.execute(_context(_config(parent_issue_number=100)))
 
         assert res["status"] == IntegrationStatus.COMPOSITE_SUCCESS
         assert res["details"]["issue_100"] == {
@@ -257,9 +267,7 @@ class TestMultiIssueIntegrator:
                 return {"status": IntegrationStatus.FAILURE}
 
         runner = MultiIssueIntegrator([SuccessDummy(), FailDummy()])
-        res = runner.execute(
-            _context(IntegratorConfig(parent_issue_number=100, apply=True))
-        )
+        res = runner.execute(_context(_config(parent_issue_number=100)))
 
         assert res["status"] == IntegrationStatus.COMPOSITE_PARTIAL_SUCCESS
 
@@ -269,9 +277,7 @@ class TestMultiIssueIntegrator:
                 return {"status": IntegrationStatus.FAILED_TO_PUSH_TEMP_BRANCH}
 
         runner = MultiIssueIntegrator([FailDummy(), FailDummy()])
-        res = runner.execute(
-            _context(IntegratorConfig(parent_issue_number=100, apply=True))
-        )
+        res = runner.execute(_context(_config(parent_issue_number=100)))
 
         assert res["status"] == IntegrationStatus.COMPOSITE_FAILURE
 

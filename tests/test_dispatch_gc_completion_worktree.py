@@ -36,7 +36,9 @@ tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 class TestFinalizeCompletedWorktree:
     """#74: プロセス終了検知後の完了処理。空コミット完了を実完了と誤判定しないこと。"""
 
-    def test_pending_early_death_retry_reuses_reserved_count(self, tmp_path):
+    def test_pending_early_death_retry_reuses_reserved_count(
+        self, tmp_path, fake_forge
+    ):
         """GitHub反映失敗後の再試行は最後の自動再投入枠を二重消費しない。"""
         active = _active(started_at=100.0)
         record = TaskReclaimRecord(
@@ -52,6 +54,7 @@ class TestFinalizeCompletedWorktree:
             early_death_window_seconds=120,
             run_state_path=tmp_path / "state.json",
             events_log_path=tmp_path / "events.jsonl",
+            forge=fake_forge,
         )
 
         event = _apply_early_death_retry(active, _task(), config, run_state, now=110.0)
@@ -495,12 +498,13 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
         assert event["action"] == "not_needed_review_dispatched"
         assert event["subtask_id"] == "task-a"
 
-    def test_dirty_worktree_does_not_dispatch_review(self, tmp_path):
+    def test_dirty_worktree_does_not_dispatch_review(self, tmp_path, fake_forge):
         active = _active()
         task = _task()
         config = self._cloud_config(
             tmp_path,
             not_needed_review_state_path=tmp_path / "state.json",
+            forge=fake_forge,
         )
         with (
             patch(
@@ -778,7 +782,7 @@ class TestDecideNotNeededDirtyWorktree:
 class TestIsWorktreeComplete:
     """#239: external_id経由の完了判定に、issue_numberが正しく引き渡されること。"""
 
-    def test_passes_issue_number_to_dispatch_target_handle(self, tmp_path):
+    def test_passes_issue_number_to_dispatch_target_handle(self, tmp_path, fake_forge):
         fake_target = MagicMock()
         fake_target.completion_status.return_value = "completed"
         config = DispatcherConfig(
@@ -786,6 +790,7 @@ class TestIsWorktreeComplete:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             dispatch_target=fake_target,
+            forge=fake_forge,
         )
         active = ActiveWorktree(
             issue_number=218,
@@ -862,12 +867,13 @@ class TestIsWorktreeComplete:
             assert _cloud_worktree_completion_status(active, config) == "abandoned"
 
     def test_recovered_local_active_worktree_waits_for_pid_reconciliation(
-        self, tmp_path
+        self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
+            forge=fake_forge,
         )
         active = ActiveWorktree(
             issue_number=1,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -30,6 +31,7 @@ from orchestune.dispatch.targets import (
     CodexCloudDispatchTarget,
     LocalProcessDispatchTarget,
 )
+from orchestune.forge import Forge
 
 
 class TestValidationAndAllowlist:
@@ -487,6 +489,7 @@ class TestResolveExecutionProfile:
             parent_issue_number=100,
             execution_profile_config=sample_config,
             events_log_path=tmp_path / "events.jsonl",
+            forge=MagicMock(spec=Forge),
         )
         selection = resolve_execution_profile(
             profile="deep",
@@ -904,6 +907,7 @@ class TestResolveTaskExecutionSelection:
             execution_profile_config=ExecutionProfileConfig(
                 model_tiers={"weak": {expected_target: expected_model}}
             ),
+            forge=MagicMock(spec=Forge),
         )
 
         assert _extract_target_name(target) == expected_target
@@ -935,6 +939,7 @@ class TestResolveTaskExecutionSelection:
             worktree_root=Path("/tmp/wt"),
             apply=False,
             dispatch_target=target,
+            forge=MagicMock(spec=Forge),
         )
         sel = resolve_task_execution_selection(task, config)
         assert sel.model == "claude-3-7-sonnet"
@@ -969,6 +974,7 @@ class TestResolveTaskExecutionSelection:
             dispatch_target=target,
             model="custom-cli-model",
             reasoning_effort="high",
+            forge=MagicMock(spec=Forge),
         )
         sel = resolve_task_execution_selection(task, config)
         assert sel.model == "custom-cli-model"

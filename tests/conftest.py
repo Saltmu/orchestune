@@ -1158,6 +1158,45 @@ def _guard_events_log_path(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _guard_forge_fallback(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+):
+    """Ensure tests do not construct DispatcherConfig or IntegratorConfig with real GitHubForge."""
+    if request.node.get_closest_marker("uses_real_forge") is not None:
+        yield
+        return
+
+    orig_dispatcher_init = DispatcherConfig.__init__
+    orig_integrator_init = IntegratorConfig.__init__
+
+    def guarded_dispatcher_init(
+        self: DispatcherConfig, *args: Any, **kwargs: Any
+    ) -> None:
+        orig_dispatcher_init(self, *args, **kwargs)
+        if type(self.forge) is GitHubForge:
+            pytest.fail(
+                "DispatcherConfig initialized with real GitHubForge (forge=None fallback). "
+                "Specify forge=fake_forge or use the fake_forge fixture in tests for isolation, "
+                "or mark with @pytest.mark.uses_real_forge if intentionally testing real forge creation."
+            )
+
+    def guarded_integrator_init(
+        self: IntegratorConfig, *args: Any, **kwargs: Any
+    ) -> None:
+        orig_integrator_init(self, *args, **kwargs)
+        if type(self.forge) is GitHubForge:
+            pytest.fail(
+                "IntegratorConfig initialized with real GitHubForge (forge=None fallback). "
+                "Specify forge=fake_forge or use the integrator_env fixture in tests for isolation, "
+                "or mark with @pytest.mark.uses_real_forge if intentionally testing real forge creation."
+            )
+
+    monkeypatch.setattr(DispatcherConfig, "__init__", guarded_dispatcher_init)
+    monkeypatch.setattr(IntegratorConfig, "__init__", guarded_integrator_init)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _guard_dispatch_cycle_ensure_parent_branch(
     request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
 ):

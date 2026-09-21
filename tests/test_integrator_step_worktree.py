@@ -78,26 +78,40 @@ class TestWorktreeIsolation:
 class TestWorktreeSafety:
     """#435: 統合ラン同士がworktreeを共有しないことの回帰テスト。"""
 
-    def test_different_parent_issues_use_distinct_worktree_and_lock_paths(self):
+    def test_different_parent_issues_use_distinct_worktree_and_lock_paths(
+        self, fake_forge
+    ):
         # 親Issueごとに一意なworktree/lockパスが割り当てられ、異なる親Issueの
         # Integrator同士が互いのworktreeを踏みつけないことを確認する。
-        integrator_a = Integrator(IntegratorConfig(apply=True, parent_issue_number=100))
-        integrator_b = Integrator(IntegratorConfig(apply=True, parent_issue_number=200))
+        integrator_a = Integrator(
+            IntegratorConfig(apply=True, parent_issue_number=100, forge=fake_forge)
+        )
+        integrator_b = Integrator(
+            IntegratorConfig(apply=True, parent_issue_number=200, forge=fake_forge)
+        )
 
         assert integrator_a._temp_worktree_path() != integrator_b._temp_worktree_path()
         assert integrator_a._worktree_lock_path() != integrator_b._worktree_lock_path()
 
-    def test_same_parent_runs_have_distinct_branch_worktree_and_lock_paths(self):
+    def test_same_parent_runs_have_distinct_branch_worktree_and_lock_paths(
+        self, fake_forge
+    ):
         # 同じ親Issueに対する同時実行でも、run idが異なれば作業用リソースは
         # すべて別になる。CI中に全体ロックを保持する必要はない。
         integrator_a = Integrator(
             IntegratorConfig(
-                apply=True, parent_issue_number=42, integration_run_id="run-a"
+                apply=True,
+                parent_issue_number=42,
+                integration_run_id="run-a",
+                forge=fake_forge,
             )
         )
         integrator_b = Integrator(
             IntegratorConfig(
-                apply=True, parent_issue_number=42, integration_run_id="run-b"
+                apply=True,
+                parent_issue_number=42,
+                integration_run_id="run-b",
+                forge=fake_forge,
             )
         )
 
@@ -105,15 +119,23 @@ class TestWorktreeSafety:
         assert integrator_a._temp_worktree_path() != integrator_b._temp_worktree_path()
         assert integrator_a._worktree_lock_path() != integrator_b._worktree_lock_path()
 
-    def test_flat_mode_runs_have_distinct_branch_worktree_and_lock_paths(self):
+    def test_flat_mode_runs_have_distinct_branch_worktree_and_lock_paths(
+        self, fake_forge
+    ):
         integrator_a = Integrator(
             IntegratorConfig(
-                parent_issue_number=100, apply=True, integration_run_id="a"
+                parent_issue_number=100,
+                apply=True,
+                integration_run_id="a",
+                forge=fake_forge,
             )
         )
         integrator_b = Integrator(
             IntegratorConfig(
-                parent_issue_number=100, apply=True, integration_run_id="b"
+                parent_issue_number=100,
+                apply=True,
+                integration_run_id="b",
+                forge=fake_forge,
             )
         )
 
@@ -166,13 +188,16 @@ class TestWorktreeSafety:
             for arg in fetch_call.args[0]
         )
 
-    def test_reclaim_refuses_to_delete_unrecognized_directory(self):
+    def test_reclaim_refuses_to_delete_unrecognized_directory(self, fake_forge):
         # git worktreeとして認識できない（`.git`ポインタファイルを持たない）
         # 既存ディレクトリは、所有権を確認できないため削除してはならない。
         with tempfile.TemporaryDirectory() as tmp:
             integrator = Integrator(
                 IntegratorConfig(
-                    parent_issue_number=100, apply=True, repository_root=Path(tmp)
+                    parent_issue_number=100,
+                    apply=True,
+                    repository_root=Path(tmp),
+                    forge=fake_forge,
                 )
             )
             foreign_dir = integrator._temp_worktree_path()
@@ -185,13 +210,16 @@ class TestWorktreeSafety:
 
             assert important_file.exists()
 
-    def test_reclaim_removes_recognized_leftover_worktree(self):
+    def test_reclaim_removes_recognized_leftover_worktree(self, fake_forge):
         # `.git`ポインタファイルを持つ、以前の実行が残した正規のリンクワークツリー
         # であれば`git worktree remove`経由で安全に除去できる。
         with tempfile.TemporaryDirectory() as tmp:
             integrator = Integrator(
                 IntegratorConfig(
-                    parent_issue_number=100, apply=True, repository_root=Path(tmp)
+                    parent_issue_number=100,
+                    apply=True,
+                    repository_root=Path(tmp),
+                    forge=fake_forge,
                 )
             )
             leftover = integrator._temp_worktree_path()

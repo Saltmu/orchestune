@@ -76,6 +76,7 @@ addopts = "-n auto --maxprocesses=8"
 markers = [
     "uses_run_state_lock_assertion: exercises save_run_state's real lock-ownership assertion",
     "uses_real_file_lock: exercises the real fcntl-based Integrator worktree lock instead of the autouse no-op stub",
+    "uses_real_forge: exercises real GitHubForge without mocking (integration tests)",
     "integration: shells out to a real git binary via subprocess instead of mocking it, so it's slower than the unit-test default",
     "unit: exercises an isolated module, class, or function without crossing a real infrastructure boundary",
     "e2e: exercises a public CLI or major workflow from its entry point through the resulting outcome",

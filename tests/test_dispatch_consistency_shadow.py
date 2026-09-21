@@ -157,7 +157,7 @@ def test_consistency_mode_is_exposed_by_cli_and_defaults_off(
     assert direct.consistency_mode is ConsistencyMode.SHADOW
 
 
-def test_repair_configuration_is_bounded(tmp_path) -> None:
+def test_repair_configuration_is_bounded(tmp_path, fake_forge) -> None:
     config = DispatcherConfig(
         parent_issue_number=100,
         consistency_mode="repair",  # type: ignore[arg-type]

@@ -690,7 +690,7 @@ class TestApplyZombieOrTimeoutReclaim:
             "reclaim_count": 1,
         }
 
-    def test_event_shape_omits_worktree_path(self, tmp_path):
+    def test_event_shape_omits_worktree_path(self, tmp_path, fake_forge):
         active = _active(worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(active)
@@ -699,6 +699,7 @@ class TestApplyZombieOrTimeoutReclaim:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=False,
+            forge=fake_forge,
         )
 
         event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)

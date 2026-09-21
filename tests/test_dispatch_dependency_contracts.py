@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -24,6 +25,7 @@ from orchestune.dispatch.launch import _is_task_stack_eligible
 from orchestune.dispatch.phase_reconciliation import _MAIN_ACTIVE_WORKTREE_RULES
 from orchestune.dispatch.rebase import _decide_rebase_target
 from orchestune.dispatch.reconciliation import _resolve_base_branch_for_task
+from orchestune.forge import Forge
 from orchestune.models import IssueRecord, PrRecord, Task
 from orchestune.task_branch_resolution import (
     BranchCapability,
@@ -246,6 +248,7 @@ def _stack_consumer_results(
         parent_issue_number=823,
         events_log_path=tmp_path / "events.jsonl",
         run_state_path=tmp_path / "run_state.json",
+        forge=MagicMock(spec=Forge),
     )
     view = _ContractPolicyView(resolution, branches)
     launch = _is_task_stack_eligible(task, view)
