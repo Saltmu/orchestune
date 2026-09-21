@@ -805,37 +805,34 @@ def extract_evaluated_findings(
         for outcome in report.repair_outcomes
     }
 
-    final_findings = report.scans[-1].report.findings if report.scans else ()
-    final_keys = frozenset(_finding_key(f) for f in final_findings)
-
     results: list[EvaluatedFinding] = []
+    seen_keys: set[tuple[str, str, str]] = set()
 
-    # 1. Findings present in the final scan (unresolved / active findings)
-    for finding in final_findings:
-        key = _finding_key(finding)
+    # 1. Findings observed across all scans in the cycle
+    for key, finding in all_findings_by_key.items():
         disposition = outcomes_by_key.get(key)
         results.append(EvaluatedFinding(finding=finding, disposition=disposition))
+        seen_keys.add(key)
 
-    # 2. Findings that were resolved during repair passes
+    # 2. Findings that were recorded in repair_outcomes but not in scans
     for outcome in report.repair_outcomes:
         key = _finding_key_for_outcome(outcome)
-        if key not in final_keys and outcome.disposition is RepairDisposition.RESOLVED:
-            resolved_finding = all_findings_by_key.get(key)
-            if resolved_finding is None:
-                resolved_finding = ConsistencyFinding(
-                    code=outcome.finding_code,
-                    scope=outcome.scope,
-                    severity=FindingSeverity.WARNING,
-                    expected=Evidence(summary=""),
-                    observed=Evidence(summary=""),
-                    repairability=Repairability.AUTOMATIC,
-                    subject_id=outcome.subject_id,
-                )
+        if key not in seen_keys and outcome.disposition is RepairDisposition.RESOLVED:
             results.append(
                 EvaluatedFinding(
-                    finding=resolved_finding, disposition=RepairDisposition.RESOLVED
+                    finding=ConsistencyFinding(
+                        code=outcome.finding_code,
+                        scope=outcome.scope,
+                        severity=FindingSeverity.WARNING,
+                        expected=Evidence(summary=""),
+                        observed=Evidence(summary=""),
+                        repairability=Repairability.AUTOMATIC,
+                        subject_id=outcome.subject_id,
+                    ),
+                    disposition=RepairDisposition.RESOLVED,
                 )
             )
+            seen_keys.add(key)
 
     return tuple(results)
 

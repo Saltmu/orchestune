@@ -735,3 +735,58 @@ def test_extract_evaluated_findings_preserves_original_finding_for_resolved_outc
     assert evaluated[0].disposition is RepairDisposition.RESOLVED
     assert evaluated[0].finding.observed.summary == "original observed summary"
     assert evaluated[0].finding.observed.details == ("detail 1", "detail 2")
+
+
+def test_extract_evaluated_findings_retains_active_finding_when_final_scan_is_boundary() -> (
+    None
+):
+    full_finding = ConsistencyFinding(
+        code="execution.branch-ownership-conflict",
+        scope=ConsistencyScope.TASK,
+        severity=FindingSeverity.WARNING,
+        expected=Evidence(summary="no conflict"),
+        observed=Evidence(summary="branch conflict"),
+        repairability=Repairability.MANUAL,
+        subject_id="101",
+    )
+    deferred_outcome = ConsistencyRepairOutcome(
+        finding_code="execution.branch-ownership-conflict",
+        scope=ConsistencyScope.TASK,
+        subject_id="101",
+        disposition=RepairDisposition.DEFERRED,
+    )
+    boundary_finding = ConsistencyFinding(
+        code="status.blocked-resolved",
+        scope=ConsistencyScope.TASK,
+        severity=FindingSeverity.WARNING,
+        expected=Evidence(summary="unblocked"),
+        observed=Evidence(summary="blocked"),
+        repairability=Repairability.AUTOMATIC,
+        subject_id="102",
+    )
+    scan_full = ConsistencyScanResult(
+        boundary="main",
+        kind=ScanKind.FULL,
+        report=ConsistencyReport(repository_id="repo", findings=(full_finding,)),
+    )
+    scan_boundary = ConsistencyScanResult(
+        boundary="status",
+        kind=ScanKind.TARGETED,
+        report=ConsistencyReport(repository_id="repo", findings=(boundary_finding,)),
+    )
+    report = ConsistencyCycleReport(
+        mode=ConsistencyMode.REPAIR,
+        scans=(scan_full, scan_boundary),
+        repair_outcomes=(deferred_outcome,),
+    )
+
+    evaluated = extract_evaluated_findings(report)
+
+    evaluated_by_code = {e.finding.code: e for e in evaluated}
+    assert "execution.branch-ownership-conflict" in evaluated_by_code
+    assert (
+        evaluated_by_code["execution.branch-ownership-conflict"].disposition
+        is RepairDisposition.DEFERRED
+    )
+    assert "status.blocked-resolved" in evaluated_by_code
+    assert evaluated_by_code["status.blocked-resolved"].disposition is None

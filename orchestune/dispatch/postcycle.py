@@ -477,13 +477,14 @@ def _post_finding_notices(
                 "outcomes": [],
                 "skipped": "consistency_mode is off",
             }
+        evaluated_findings = extract_evaluated_findings(report.consistency)
         outcomes = post_finding_notices(
             config.resolved_forge,
             report.consistency,
             parent_issue_number=config.parent_issue_number,
         )
         return {
-            "total_evaluated": len(outcomes),
+            "total_evaluated": len(evaluated_findings),
             "outcomes": [outcome.value for outcome in outcomes],
         }
 
