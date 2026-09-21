@@ -37,10 +37,11 @@ def test_guard_events_log_path_succeeds_with_explicit_tmp_path(tmp_path: Path):
 
 
 def test_guard_dispatch_cycle_ensure_parent_branch_is_isolated_in_unit_tests():
-    """Unit tests isolate parent branch provisioning from the cycle under test."""
+    """The low-level parent branch guard still rejects unmocked calls."""
     import orchestune.dispatch.phase_rebase
 
-    orchestune.dispatch.phase_rebase.ensure_parent_branch(181)
+    with pytest.raises(pytest.fail.Exception, match="unmocked `ensure_parent_branch"):
+        orchestune.dispatch.phase_rebase.ensure_parent_branch(181)
 
 
 class TestFakeForgeFixture:

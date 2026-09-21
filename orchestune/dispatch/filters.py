@@ -8,8 +8,6 @@ from orchestune.dispatch.dependency_resolution import (
     TaskDependencies,
 )
 from orchestune.dispatch.state import ActiveWorktree, RunState
-from orchestune.issue_parsing import effective_parent_number
-from orchestune.models import IssueRecord
 from orchestune.task_metadata import TaskMetadata
 
 TTask = TypeVar("TTask", bound=TaskMetadata)
@@ -111,10 +109,3 @@ def _filter_deviation_blocked_candidates(
         for task in candidate_tasks
         if task.issue_number not in newly_blocked_recompute_issues
     ]
-
-
-def _filter_by_parent(
-    issues: list[IssueRecord], parent_issue_number: int
-) -> list[IssueRecord]:
-    """親Issueが一致するIssueだけに絞る。"""
-    return [i for i in issues if effective_parent_number(i) == parent_issue_number]

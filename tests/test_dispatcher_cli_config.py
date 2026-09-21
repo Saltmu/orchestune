@@ -21,7 +21,7 @@ import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import CycleReport, run_dispatch_cycle
-from orchestune.dispatch.dispatcher import _build_arg_parser, main
+from orchestune.dispatch.dispatcher import main
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.state import RunState, load_run_state
 from orchestune.forge import ForgeAuthError
@@ -61,9 +61,9 @@ class TestDispatcherConfigLoading:
             applied=False,
         )
 
-    def test_parent_issue_is_required_by_the_cli(self):
+    def test_parent_issue_is_required_when_absent_from_cli_and_config(self, tmp_path):
         with pytest.raises(SystemExit) as error:
-            _build_arg_parser().parse_args(["--no-apply"])
+            main(["--no-apply"], cwd=tmp_path)
 
         assert error.value.code == 2
 
@@ -74,6 +74,7 @@ class TestDispatcherConfigLoading:
     def test_load_config_from_orchestune_toml(self, tmp_path):
         config_path = tmp_path / "orchestune.toml"
         config_path.write_text(
+            "parent-issue = 181\n"
             "max-concurrent = 5\n"
             "dispatch-target = 'local'\n"
             "run-state-path = 'custom_state.json'\n"
@@ -91,13 +92,14 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(["--no-apply"], cwd=tmp_path)
 
         mock_build.assert_called_once()
         assert mock_build.call_args.args[0].dispatch_target_name == "local"
         assert mock_run.called
         config_arg = mock_run.call_args.args[0]
         assert config_arg.max_concurrent == 5
+        assert config_arg.parent_issue_number == 181
         assert config_arg.run_state_path == Path("custom_state.json")
 
     def test_scheduling_mode_in_the_config_file_is_rejected_as_unknown(self, tmp_path):
