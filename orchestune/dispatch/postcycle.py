@@ -21,6 +21,7 @@ from orchestune.consistency.models import (
 )
 from orchestune.consistency.supervisor import (
     ConsistencyCycleReport,
+    ConsistencyMode,
     RepairDisposition,
     extract_evaluated_findings,
 )
@@ -423,9 +424,11 @@ def post_finding_notices(
         if finding.scope is ConsistencyScope.TASK:
             if finding.subject_id is not None:
                 try:
-                    target_issue_number = int(finding.subject_id)
+                    candidate = int(finding.subject_id)
                 except ValueError:
-                    target_issue_number = None
+                    candidate = None
+                if candidate is not None and candidate > 0:
+                    target_issue_number = candidate
         elif finding.scope in (ConsistencyScope.REPOSITORY, ConsistencyScope.PARENT):
             if parent_issue_number is not None and parent_issue_number > 0:
                 target_issue_number = parent_issue_number
@@ -468,6 +471,12 @@ def _post_finding_notices(
     """
 
     def work() -> dict:
+        if config.consistency_mode is ConsistencyMode.OFF:
+            return {
+                "total_evaluated": 0,
+                "outcomes": [],
+                "skipped": "consistency_mode is off",
+            }
         outcomes = post_finding_notices(
             config.resolved_forge,
             report.consistency,

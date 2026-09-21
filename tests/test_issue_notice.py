@@ -321,6 +321,32 @@ class TestPostFindingNotices:
         assert outcomes == ()
         assert forge.comments == {}
 
+    def test_skips_task_scope_finding_when_subject_id_is_not_positive_integer(self):
+        forge = FakeForge()
+        zero_finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="0",
+        )
+        neg_finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="-10",
+        )
+        non_num_finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="not-a-number",
+        )
+        report = _make_cycle_report(
+            findings=(zero_finding, neg_finding, non_num_finding)
+        )
+
+        outcomes = post_finding_notices(forge, report)
+
+        assert outcomes == ()
+        assert forge.comments == {}
+
     def test_skips_finding_with_severity_below_warning(self):
         forge = FakeForge()
         info_finding = _make_finding(
@@ -458,6 +484,7 @@ class TestPostFindingNoticesPhase:
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",
             events_log_path=tmp_path / "events.jsonl",
+            consistency_mode=ConsistencyMode.REPAIR,
         )
         finding = _make_finding(
             code="execution.branch-ownership-conflict",
@@ -475,6 +502,36 @@ class TestPostFindingNoticesPhase:
             "outcomes": ["posted"],
         }
         assert len(forge.list_comments(101)) == 1
+
+    def test_phase_skipped_when_consistency_mode_is_off(self, tmp_path):
+        forge = FakeForge()
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            apply=True,
+            forge=forge,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            events_log_path=tmp_path / "events.jsonl",
+            consistency_mode=ConsistencyMode.OFF,
+        )
+        finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            subject_id="101",
+        )
+        consistency_report = _make_cycle_report(findings=(finding,))
+        report = self._dummy_cycle_report(consistency=consistency_report)
+
+        result = _post_finding_notices(config, report)
+
+        assert result.status is PhaseStatus.SUCCESS
+        assert result.retryable is False
+        assert result.report == {
+            "total_evaluated": 0,
+            "outcomes": [],
+            "skipped": "consistency_mode is off",
+        }
+        assert forge.comments == {}
 
     def test_phase_handles_auth_error(self, tmp_path):
         forge = FakeForge()
