@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.dispatch.cycle import CycleReport
 from orchestune.dispatch.dispatcher import main
 from tests.dispatch_test_support import (
@@ -35,10 +36,14 @@ def _empty_report() -> CycleReport:
     )
 
 
+def _test_workspace_roots() -> tuple[Path, Path]:
+    workspace = resolve_claim_workspace(Path.cwd())
+    return workspace.repository_root, workspace.common_dir.parent
+
+
 @pytest.mark.parametrize("cwd_suffix", [Path("."), Path("orchestune")])
 def test_shared_relative_paths_use_primary_repository_root(cwd_suffix):
-    worktree_root = Path(__file__).resolve().parents[1]
-    repository_root = Path(__file__).resolve().parents[3]
+    worktree_root, repository_root = _test_workspace_roots()
     with (
         patch("orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True),
         patch(
@@ -68,7 +73,7 @@ def test_shared_relative_paths_use_primary_repository_root(cwd_suffix):
 
 
 def test_absolute_shared_paths_are_preserved(tmp_path):
-    repository_root = Path(__file__).resolve().parents[3]
+    _, repository_root = _test_workspace_roots()
     state_path = (tmp_path / "state.json").resolve()
     worktree_root = (tmp_path / "worktrees").resolve()
     with (
@@ -100,7 +105,7 @@ def test_absolute_shared_paths_are_preserved(tmp_path):
 
 
 def test_config_file_shared_paths_use_primary_repository_root():
-    repository_root = Path(__file__).resolve().parents[3]
+    _, repository_root = _test_workspace_roots()
     with (
         patch(
             "orchestune.dispatch.dispatcher.load_config_file",

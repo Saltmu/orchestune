@@ -71,3 +71,7 @@ This task used the `rg`/text-search impact fallback because Serena was unavailab
 | Initial diff | 7 files, +283 / -7 lines; behavior + regression tests + docs |
 | Reviewer / provider | Codex via `scripts/wait_for_review.py` |
 | Change type | Dispatcher startup path-contract feature/fix |
+
+## Review round 1 reconciliation
+
+Codex reported one P1 test portability finding: fixed-parent indexing (`parents[3]`) assumed this linked-worktree directory depth and fails in a standard checkout. The tests now derive linked and primary roots through `resolve_claim_workspace(Path.cwd())` and `common_dir.parent`; the production implementation was unchanged. This was a test-enumeration/fixture portability issue, not a production scope miss.

@@ -61,7 +61,7 @@ def _resolve_legacy_temp_cwds(monkeypatch):
     from orchestune.dispatch import dispatcher
 
     resolve = dispatcher._resolve_dispatch_shared_paths
-    repository_cwd = Path(__file__).resolve().parents[1]
+    repository_cwd = Path.cwd()
 
     def _resolve(args, cwd):
         if cwd is not None and not cwd.resolve().is_relative_to(repository_cwd):
@@ -122,7 +122,9 @@ class TestDispatcherConfigLoading:
         config_arg = mock_run.call_args.args[0]
         assert config_arg.max_concurrent == 5
         assert config_arg.parent_issue_number == 181
-        repository_root = Path(__file__).resolve().parents[3]
+        from orchestune.claim.workspace import resolve_claim_workspace
+
+        repository_root = resolve_claim_workspace(Path.cwd()).common_dir.parent
         assert (
             config_arg.run_state_path
             == (repository_root / "custom_state.json").resolve()
