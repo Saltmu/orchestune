@@ -58,9 +58,40 @@ def _resolve_primary_root(toplevel: Path, common_dir: Path) -> Path:
         return toplevel
 
     worktree_metadata = common_dir / "worktrees"
-    if git_dir.parent == worktree_metadata and common_dir.name == ".git":
-        return common_dir.parent
+    if git_dir.is_relative_to(worktree_metadata):
+        configured_worktree = _read_core_worktree(common_dir, toplevel)
+        if configured_worktree is not None:
+            return configured_worktree
+        if common_dir.name == ".git":
+            return common_dir.parent
     return toplevel
+
+
+def _read_core_worktree(common_dir: Path, toplevel: Path) -> Path | None:
+    """Read an optional external-git-dir ``core.worktree`` declaration."""
+    config_path = common_dir / "config"
+    try:
+        lines = config_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    in_core = False
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            in_core = line[1:-1].strip().lower() == "core"
+            continue
+        if not in_core or "=" not in line:
+            continue
+        key, value = (part.strip() for part in line.split("=", 1))
+        if key.lower() != "worktree" or not value:
+            continue
+        worktree = Path(value)
+        return (
+            (toplevel / worktree).resolve()
+            if not worktree.is_absolute()
+            else worktree.resolve()
+        )
+    return None
 
 
 def resolve_claim_workspace(

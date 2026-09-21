@@ -173,7 +173,14 @@ class TestResolveClaimWorkspace:
         checkout.mkdir()
         external_git_dir = tmp_path / "git-dir"
         run_git(
-            ["init", "--separate-git-dir", str(external_git_dir), str(checkout)],
+            [
+                "init",
+                "-b",
+                "main",
+                "--separate-git-dir",
+                str(external_git_dir),
+                str(checkout),
+            ],
             cwd=tmp_path,
         )
 
@@ -182,6 +189,42 @@ class TestResolveClaimWorkspace:
         assert ws.repository_root == checkout.resolve()
         assert ws.run_state_path == checkout / "run_state.json"
         assert ws.worktree_root == checkout / "worktrees"
+
+    def test_external_git_dir_linked_worktree_shares_primary_paths(
+        self, tmp_path: Path
+    ) -> None:
+        checkout = tmp_path / "checkout"
+        checkout.mkdir()
+        external_git_dir = tmp_path / "git-dir"
+        run_git(
+            [
+                "init",
+                "-b",
+                "main",
+                "--separate-git-dir",
+                str(external_git_dir),
+                str(checkout),
+            ],
+            cwd=tmp_path,
+        )
+        run_git(["config", "user.name", "Test User"], cwd=checkout)
+        run_git(["config", "user.email", "test@example.com"], cwd=checkout)
+        run_git(["config", "core.worktree", str(checkout)], cwd=checkout)
+        (checkout / "README.md").write_text("hello")
+        run_git(["add", "README.md"], cwd=checkout)
+        run_git(["commit", "-m", "initial commit"], cwd=checkout)
+        linked = tmp_path / "linked"
+        run_git(
+            ["worktree", "add", "-b", "linked", str(linked), "main"],
+            cwd=checkout,
+        )
+
+        ws_primary = resolve_claim_workspace(cwd=checkout)
+        ws_linked = resolve_claim_workspace(cwd=linked)
+
+        assert ws_linked.repository_identity == ws_primary.repository_identity
+        assert ws_linked.run_state_path == ws_primary.run_state_path
+        assert ws_linked.worktree_root == ws_primary.worktree_root
 
     def test_claim_workspace_is_frozen(
         self, git_repo_with_worktree: tuple[Path, Path]

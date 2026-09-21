@@ -80,3 +80,5 @@ Codex reported one P1 test portability finding: fixed-parent indexing (`parents[
 Codex reviewed the corrected SHA `91010a309985fad9dd54d5c798c96fc7f72d3f07` in round 2 and reported no inline findings or major issues. Final local CI passed at 95.25% coverage (`4079 passed, 2 skipped`); gitleaks and bloat checks also passed.
 
 Round 3 reported a P2 for external Git common directories. The resolver now detects linked-worktree metadata explicitly and falls back to `git rev-parse --show-toplevel` for separate-git-dir/submodule layouts, with a focused regression test. This is a classification miss against the original out-of-scope decision; no dispatcher consumer changes were needed.
+
+Round 4 identified the external-git-dir linked-worktree variant. The linked-worktree metadata check now applies regardless of the common directory basename and honors the external repository's optional `core.worktree` declaration; a regression test covers a separate-git-dir repository with a linked worktree.
