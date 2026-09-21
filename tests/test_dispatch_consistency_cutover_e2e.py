@@ -153,7 +153,7 @@ def test_user_allowlisted_execution_requeue_uses_a_bound_handler(
         746,
         labels=("status:in-progress",),
         subtask_id="supervisor-rollout",
-        parent={"number": 1},
+        parent={"number": 100},
     )
     in_memory_forge.seed_issue(issue)
     config = DispatcherConfig(
