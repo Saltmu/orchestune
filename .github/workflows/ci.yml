@@ -46,6 +46,14 @@ jobs:
         run: |
           uv sync --frozen
 
+      - name: Cache gitleaks binary
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/bin/gitleaks
+            ~/.local/bin/gitleaks.exe
+          key: ${{ runner.os }}-gitleaks-${{ hashFiles('scripts/install-gitleaks.*') }}
+
       - name: Run CI checks (Linux)
         if: runner.os == 'Linux'
         run: |

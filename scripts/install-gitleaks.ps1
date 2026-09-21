@@ -25,13 +25,37 @@ $baseUrl = "https://github.com/gitleaks/gitleaks/releases/download/v${GitleaksVe
 $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
 
+function Invoke-DownloadWithRetry {
+    param(
+        [Parameter(Mandatory=$true)][string]$Uri,
+        [Parameter(Mandatory=$true)][string]$OutFile,
+        [int]$MaxRetries = 3,
+        [int]$InitialDelaySec = 2
+    )
+    $delay = $InitialDelaySec
+    for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+            return
+        } catch {
+            if ($attempt -ge $MaxRetries) {
+                Write-Error "Download failed after $MaxRetries attempts from $Uri: $_"
+                throw
+            }
+            Write-Warning "Download from $Uri failed (attempt $attempt/$MaxRetries): $_. Retrying in ${delay}s..."
+            Start-Sleep -Seconds $delay
+            $delay *= 2
+        }
+    }
+}
+
 try {
     Write-Host "Installing gitleaks v${GitleaksVersion} (windows/${archName}) to ${InstallDir}..."
     $archivePath = Join-Path $tmpDir $archive
-    Invoke-WebRequest -Uri "${baseUrl}/${archive}" -OutFile $archivePath
+    Invoke-DownloadWithRetry -Uri "${baseUrl}/${archive}" -OutFile $archivePath
 
     $checksumsPath = Join-Path $tmpDir "checksums.txt"
-    Invoke-WebRequest -Uri "${baseUrl}/gitleaks_${GitleaksVersion}_checksums.txt" -OutFile $checksumsPath
+    Invoke-DownloadWithRetry -Uri "${baseUrl}/gitleaks_${GitleaksVersion}_checksums.txt" -OutFile $checksumsPath
 
     $checksumLine = Select-String -Path $checksumsPath -Pattern " $archive$"
     if (-not $checksumLine) {
