@@ -246,6 +246,34 @@ class TestPostFindingNotices:
         assert "Branch ownership conflict detected" in body
         assert "branch fix/101 conflicts with fix/102" in body
 
+    def test_posts_task_scope_finding_with_repair_disposition_to_subject_issue(self):
+        forge = FakeForge()
+        finding = _make_finding(
+            code="execution.branch-ownership-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="101",
+            severity=FindingSeverity.WARNING,
+            summary="Branch ownership conflict detected",
+        )
+        outcome = ConsistencyRepairOutcome(
+            finding_code="execution.branch-ownership-conflict",
+            scope=ConsistencyScope.TASK,
+            subject_id="101",
+            disposition=RepairDisposition.DEFERRED,
+        )
+        report = _make_cycle_report(findings=(finding,), outcomes=(outcome,))
+
+        outcomes = post_finding_notices(forge, report)
+
+        assert len(outcomes) == 1
+        assert outcomes[0] is NoticeOutcome.POSTED
+        body = latest_notice_body(
+            forge.list_comments(101), "finding:execution.branch-ownership-conflict"
+        )
+        assert body is not None
+        assert "修復状況" in body
+        assert "deferred" in body
+
     def test_posts_repository_and_parent_scope_findings_to_parent_issue(self):
         forge = FakeForge()
         repo_finding = _make_finding(

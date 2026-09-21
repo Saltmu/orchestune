@@ -295,6 +295,10 @@ def _finding_key(finding: ConsistencyFinding) -> tuple[str, str, str]:
     return (finding.scope.value, finding.subject_id or "", finding.code)
 
 
+def _finding_key_for_outcome(outcome: ConsistencyRepairOutcome) -> tuple[str, str, str]:
+    return (outcome.scope.value, outcome.subject_id or "", outcome.finding_code)
+
+
 def repair_command_finding_codes(command: RepairCommand) -> tuple[str, ...]:
     """Return the finding codes attributed to one typed repair command."""
     parameters = dict(command.parameters)
@@ -797,11 +801,7 @@ def extract_evaluated_findings(
             all_findings_by_key[_finding_key(finding)] = finding
 
     outcomes_by_key = {
-        (
-            outcome.finding_code,
-            outcome.scope.value,
-            outcome.subject_id or "",
-        ): outcome.disposition
+        _finding_key_for_outcome(outcome): outcome.disposition
         for outcome in report.repair_outcomes
     }
 
@@ -818,7 +818,7 @@ def extract_evaluated_findings(
 
     # 2. Findings that were resolved during repair passes
     for outcome in report.repair_outcomes:
-        key = (outcome.finding_code, outcome.scope.value, outcome.subject_id or "")
+        key = _finding_key_for_outcome(outcome)
         if key not in final_keys and outcome.disposition is RepairDisposition.RESOLVED:
             resolved_finding = all_findings_by_key.get(key)
             if resolved_finding is None:
