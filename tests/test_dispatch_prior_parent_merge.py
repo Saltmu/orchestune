@@ -167,6 +167,7 @@ def test_reconciliation_repairs_verified_merge_and_excludes_same_cycle_launch():
     forge.add_label.assert_called_once_with(101, StatusLabel.DONE)
     forge.remove_label.assert_called_once_with(101, StatusLabel.QUEUED)
     forge.close_issue.assert_called_once_with(101, "completed")
+    assert forge.list_merged_prs_for_base.call_count == 2
 
 
 def test_reconciliation_dry_run_does_not_mutate_and_reports_the_repair():
@@ -330,4 +331,80 @@ def test_active_worktree_defers_repair_without_closing_or_marking_done():
     assert result.completed_issue_numbers == set()
     assert result.events == ()
     forge.list_merged_prs_for_base.assert_not_called()
+    forge.close_issue.assert_not_called()
+
+
+def test_initial_scan_shares_empty_parent_history_between_sibling_tasks():
+    first = _issue()
+    second = dataclasses.replace(first, number=102)
+    forge = _forge_for_reconciliation(first)
+    forge.list_merged_prs_for_base.return_value = []
+    tasks = {
+        101: _task(),
+        102: dataclasses.replace(_task(), issue_number=102, subtask_id="second-child"),
+    }
+
+    result = reconcile_prior_parent_merges(
+        forge,
+        tasks,
+        apply=False,
+        issues_by_number={101: first, 102: second},
+    )
+
+    assert result.held_issue_numbers == set()
+    forge.list_merged_prs_for_base.assert_called_once_with("parent/issue-100")
+
+
+def test_initial_scan_separates_parent_histories_and_refetches_next_cycle():
+    first = _issue()
+    second = dataclasses.replace(_issue(), number=102, parent={"number": 200})
+    forge = _forge_for_reconciliation(first)
+    forge.list_merged_prs_for_base.return_value = []
+    tasks = {
+        101: _task(),
+        102: dataclasses.replace(
+            _task(), issue_number=102, subtask_id="second-child", parent_number=200
+        ),
+    }
+
+    for _ in range(2):
+        reconcile_prior_parent_merges(
+            forge,
+            tasks,
+            apply=False,
+            issues_by_number={101: first, 102: second},
+        )
+
+    assert forge.list_merged_prs_for_base.call_args_list == [
+        (("parent/issue-100",), {}),
+        (("parent/issue-200",), {}),
+        (("parent/issue-100",), {}),
+        (("parent/issue-200",), {}),
+    ]
+
+
+def test_initial_scan_shares_parent_history_failure_and_holds_siblings():
+    first = _issue()
+    second = dataclasses.replace(first, number=102)
+    forge = _forge_for_reconciliation(first)
+    forge.list_merged_prs_for_base.side_effect = RuntimeError("temporary API failure")
+    tasks = {
+        101: _task(),
+        102: dataclasses.replace(_task(), issue_number=102, subtask_id="second-child"),
+    }
+
+    result = reconcile_prior_parent_merges(
+        forge,
+        tasks,
+        apply=True,
+        issues_by_number={101: first, 102: second},
+    )
+
+    assert result.held_issue_numbers == {101, 102}
+    assert [event["action"] for event in result.events] == [
+        "indeterminate",
+        "indeterminate",
+    ]
+    forge.list_merged_prs_for_base.assert_called_once_with("parent/issue-100")
+    forge.add_label.assert_not_called()
     forge.close_issue.assert_not_called()

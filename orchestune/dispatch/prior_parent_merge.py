@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import cast
 
 from orchestune.branch_naming import branch_matches_task, parse_task_branch_name
 from orchestune.dispatch.labels import PRIMARY_STATUS_LABELS, transition_status_label
@@ -184,8 +185,42 @@ def evaluate_prior_parent_merge(
     return PriorParentMergeEvidence(PriorParentMergeStatus.NOT_FOUND)
 
 
+def _merged_prs_for_parent_base(
+    forge,
+    base: str,
+    merged_prs_by_base: dict[str, list[PrRecord] | Exception] | None,
+) -> list[PrRecord]:
+    if merged_prs_by_base is None:
+        return cast(list[PrRecord], forge.list_merged_prs_for_base(base))
+    cached = merged_prs_by_base.get(base)
+    if cached is None:
+        try:
+            cached = forge.list_merged_prs_for_base(base)
+        except Exception as error:  # noqa: BLE001 - cache lookup failures fail closed
+            cached = error
+        merged_prs_by_base[base] = cached
+    if isinstance(cached, Exception):
+        raise cached
+    return cached
+
+
+def _matching_current_parent(
+    issue: IssueRecord, task: TaskMetadata
+) -> tuple[int | None, str]:
+    actual_parent = effective_parent_number(issue)
+    if actual_parent != task.parent_number:
+        return None, "current Issue parent differs from dispatch task parent"
+    if actual_parent is None:
+        return None, "current Issue has no verifiable parent"
+    return actual_parent, ""
+
+
 def inspect_prior_parent_merge(
-    forge, issue_number: int, task: TaskMetadata, issue: IssueRecord | None = None
+    forge,
+    issue_number: int,
+    task: TaskMetadata,
+    issue: IssueRecord | None = None,
+    merged_prs_by_base: dict[str, list[PrRecord] | Exception] | None = None,
 ) -> tuple[PriorParentMergeEvidence, IssueRecord | None]:
     """Read a current Issue and its parent-scoped PR history without mutation."""
     try:
@@ -198,24 +233,19 @@ def inspect_prior_parent_merge(
                 ),
                 None,
             )
-        actual_parent = effective_parent_number(issue)
-        if actual_parent != task.parent_number:
+        actual_parent, parent_error = _matching_current_parent(issue, task)
+        if parent_error:
             return (
                 PriorParentMergeEvidence(
                     PriorParentMergeStatus.INDETERMINATE,
-                    reason="current Issue parent differs from dispatch task parent",
+                    reason=parent_error,
                 ),
                 issue,
             )
-        if actual_parent is None:
-            return (
-                PriorParentMergeEvidence(
-                    PriorParentMergeStatus.INDETERMINATE,
-                    reason="current Issue has no verifiable parent",
-                ),
-                issue,
-            )
-        prs = forge.list_merged_prs_for_base(f"parent/issue-{actual_parent}")
+        assert actual_parent is not None
+        prs = _merged_prs_for_parent_base(
+            forge, f"parent/issue-{actual_parent}", merged_prs_by_base
+        )
         reopened_at = forge.get_issue_last_reopened_at(issue_number)
         evidence = evaluate_prior_parent_merge(
             issue_number=issue_number,
@@ -335,6 +365,7 @@ def reconcile_prior_parent_merges(
     held: set[int] = set()
     completed: set[int] = set()
     events: list[dict[str, object]] = []
+    merged_prs_by_base: dict[str, list[PrRecord] | Exception] = {}
     for issue_number, task in tasks_by_issue.items():
         if task.parent_number is None or not task.subtask_id:
             continue
@@ -348,6 +379,7 @@ def reconcile_prior_parent_merges(
             issue_number,
             task,
             (issues_by_number or {}).get(issue_number),
+            merged_prs_by_base,
         )
         evidence_by_issue[issue_number] = evidence
         if evidence.status is PriorParentMergeStatus.NOT_FOUND:
