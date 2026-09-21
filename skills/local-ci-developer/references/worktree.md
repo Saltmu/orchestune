@@ -50,7 +50,7 @@ record is posted (or after PR merge), clean up the worktree from the primary
 repository root:
 
 ```bash
-git worktree remove worktree/<BRANCH_SLUG>
+git worktree remove <worktree_path>
 git worktree prune
 ```
 
