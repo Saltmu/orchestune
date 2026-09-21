@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -76,7 +77,8 @@ def test_success_renders_claim_details_and_persists_token(tmp_path, capsys):
         token_record.read_text(encoding="utf-8")
         == "owner-token-should-not-be-printed\n"
     )
-    assert token_record.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert token_record.stat().st_mode & 0o777 == 0o600
 
 
 def test_failure_uses_reason_exit_code_and_recovery_diagnostic(capsys):
