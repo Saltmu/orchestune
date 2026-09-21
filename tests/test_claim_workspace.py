@@ -257,6 +257,16 @@ class TestResolveClaimWorkspace:
         with pytest.raises(ValueError, match="external git directory"):
             resolve_claim_workspace(cwd=linked)
 
+        state_path = (tmp_path / "absolute-state.json").resolve()
+        worktree_root = (tmp_path / "absolute-worktrees").resolve()
+        ws = resolve_claim_workspace(
+            cwd=linked,
+            explicit_state_path=state_path,
+            explicit_worktree_root=worktree_root,
+        )
+        assert ws.run_state_path == state_path
+        assert ws.worktree_root == worktree_root
+
     def test_claim_workspace_is_frozen(
         self, git_repo_with_worktree: tuple[Path, Path]
     ) -> None:

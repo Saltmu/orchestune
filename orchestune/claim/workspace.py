@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestune.infra.git_cli import get_git_repository_paths
+from orchestune.infra.git_cli import get_git_repository_paths, run_git
 
 
 @dataclass(frozen=True)
@@ -71,31 +71,28 @@ def _resolve_primary_root(toplevel: Path, common_dir: Path) -> Path:
     return toplevel
 
 
-def _read_core_worktree(common_dir: Path, _toplevel: Path) -> Path | None:
+def _read_core_worktree(common_dir: Path, toplevel: Path) -> Path | None:
     """Read an optional external-git-dir ``core.worktree`` declaration."""
     config_path = common_dir / "config"
     try:
-        lines = config_path.read_text(encoding="utf-8").splitlines()
+        result = run_git(
+            ["config", "--file", str(config_path), "--get", "core.worktree"],
+            cwd=toplevel,
+            check=False,
+        )
     except OSError:
         return None
-    in_core = False
-    for raw_line in lines:
-        line = raw_line.strip()
-        if line.startswith("[") and line.endswith("]"):
-            in_core = line[1:-1].strip().lower() == "core"
-            continue
-        if not in_core or "=" not in line:
-            continue
-        key, value = (part.strip() for part in line.split("=", 1))
-        if key.lower() != "worktree" or not value:
-            continue
-        worktree = Path(value)
-        return (
-            (common_dir / worktree).resolve()
-            if not worktree.is_absolute()
-            else worktree.resolve()
-        )
-    return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    if not value:
+        return None
+    worktree = Path(value)
+    return (
+        (common_dir / worktree).resolve()
+        if not worktree.is_absolute()
+        else worktree.resolve()
+    )
 
 
 def resolve_claim_workspace(
@@ -122,7 +119,15 @@ def resolve_claim_workspace(
     so the primary checkout can be identified without guessing.
     """
     toplevel, common_dir = get_git_repository_paths(cwd)
-    primary_root = _resolve_primary_root(toplevel, common_dir)
+    explicit_paths_are_absolute = all(
+        path is not None and Path(path).is_absolute()
+        for path in (explicit_state_path, explicit_worktree_root)
+    )
+    primary_root = (
+        toplevel
+        if explicit_paths_are_absolute
+        else _resolve_primary_root(toplevel, common_dir)
+    )
     repository_identity = common_dir.as_posix()
 
     run_state_path = _resolve_relative_to(

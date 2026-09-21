@@ -84,3 +84,5 @@ Round 3 reported a P2 for external Git common directories. The resolver now dete
 Round 4 identified the external-git-dir linked-worktree variant. The linked-worktree metadata check now applies regardless of the common directory basename and honors the external repository's optional `core.worktree` declaration; a regression test covers a separate-git-dir repository with a linked worktree.
 
 Round 5 confirmed that Git does not record the original checkout path for an external common dir when `core.worktree` is absent. The resolver now fails closed for that ambiguous linked-worktree case instead of allowing divergent shared state, and resolves relative `core.worktree` values from the common Git directory.
+
+Round 6 additionally required absolute shared paths to bypass primary-root discovery, and required Git config decoding for quoted `core.worktree` values. Both are now covered: absolute paths are accepted in the otherwise ambiguous layout, and `git config --file --get` supplies the decoded value.
