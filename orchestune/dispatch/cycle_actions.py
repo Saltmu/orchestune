@@ -8,9 +8,12 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from orchestune.claim.contracts import ClaimOutcome, ClaimRequest
+from orchestune.claim.preflight import ClaimBaseResolutionView
+from orchestune.claim.service import claim_task
 from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.consistency.repairs.execution import (
     COMMAND_BOOKKEEPING,
@@ -37,6 +40,8 @@ from orchestune.dispatch.cycle_context import (
 )
 from orchestune.dispatch.cycle_context_state import RecordStatus
 from orchestune.dispatch.cycle_records import _on_status_transition_verified
+from orchestune.dispatch.dependency_assessment import DependencyAssessment
+from orchestune.dispatch.dependency_policy import DependencyPolicyView
 from orchestune.dispatch.escalation import _rule_changes_requested
 from orchestune.dispatch.execution_repair import DispatchRepairExecutorAdapter
 from orchestune.dispatch.filters import _filter_candidates_for_forced_serial
@@ -251,6 +256,60 @@ def _scheduling_dag_inputs(
     return rank_inputs, conflict_inputs
 
 
+class _DispatchClaimBaseView:
+    """#943: `CycleContext`を`ClaimBaseResolutionView`へ適合させる薄いadapter。
+
+    `CycleContext`は`assess_dependencies`/`canonical_branch`（`DependencyPolicyView`）
+    は既に持つが、`parent_issue_number`/`default_base`は持たない。dispatch起動が
+    claim_taskのpreflightを経由しても、既存の「stack-eligibleなstatus:blockedタスク」
+    を誤って拒否しないために必要な最小限の橋渡しに留める（CycleContext自体の拡張は
+    本Issueの対象外）。`parent_issue_number`は`config.parent_issue_number`という単一の
+    epicルートを返す — `orchestune.dispatch.launch._decide_task_launch_plan`の既存
+    フォールバックと同じ意味。
+    """
+
+    default_base = "origin/main"
+
+    def __init__(
+        self, ctx: DependencyPolicyView, parent_issue_number: int | None
+    ) -> None:
+        self._ctx = ctx
+        self._parent_issue_number = parent_issue_number
+
+    def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None:
+        return self._ctx.assess_dependencies(issue_number)
+
+    def canonical_branch(self, issue_number: int) -> str | None:
+        return self._ctx.canonical_branch(issue_number)
+
+    def parent_issue_number(self, issue_number: int) -> int | None:
+        return self._parent_issue_number
+
+
+def _bind_dispatch_claim_fn(
+    config: DispatcherConfig, view: DependencyPolicyView
+) -> Callable[[ClaimRequest, str], ClaimOutcome]:
+    """#943: dispatchのlaunchフローから呼ぶ`claim_task`（owner_kind=dispatch）を
+    束縛する。`orchestune.claim.service`はL3、`orchestune.dispatch.launch`はL2
+    のため、L2はこのcallableをDIで受け取るだけで`claim_task`を直接importしない
+    （`tests/test_architecture.py`のレイヤー境界を参照）。
+    """
+    claim_view: ClaimBaseResolutionView = _DispatchClaimBaseView(
+        view, config.parent_issue_number
+    )
+
+    def _claim_fn(request: ClaimRequest, default_base: str) -> ClaimOutcome:
+        return claim_task(
+            request,
+            apply=True,
+            forge=config.resolved_forge,
+            view=claim_view,
+            default_base=default_base,
+        )
+
+    return _claim_fn
+
+
 class CycleActionAdapter:
     """L3 `CycleActions`の全port実装。
 
@@ -429,6 +488,7 @@ class CycleActionAdapter:
                 self._config,
                 open_prs=view.pull_requests(),
                 on_launch_committed=_record_launch,
+                claim_fn=_bind_dispatch_claim_fn(self._config, view),
             )
         )
         self._run_state.last_reconciled_at = self._now

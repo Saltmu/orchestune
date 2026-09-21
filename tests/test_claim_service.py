@@ -299,6 +299,37 @@ class TestInterruptionAndPreservation:
         assert outcome.stage == ClaimStage.RESERVED
         assert outcome.owner_token is not None
 
+    def test_invalid_branch_name_is_distinguished_from_infra_failure(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        """#943レビュー対応(Codex P2): 不正なbranch/subtask_id名（恒久的な
+        入力不備、人手の修正が必要）は、OSError/gitエラーのような一時的な
+        インフラ障害（`WORKTREE_CREATION_FAILED`のまま）とは異なる理由
+        （`INVALID_BRANCH_NAME`）で報告され、呼び出し側が
+        `status:blocked-human-review`と再試行可能な`status:blocked`とを
+        正しく区別できるようにする。"""
+        repo_root = claim_env["repo_root"]
+        state_path = claim_env["state_path"]
+        issue = _make_issue(number=121)
+        forge = MockForge({121: issue})
+
+        with (
+            patch(
+                "orchestune.claim.service.run_git", return_value=MagicMock(returncode=0)
+            ),
+            patch(
+                "orchestune.claim.service.prepare_task_worktree",
+                side_effect=ValueError("branch name is invalid"),
+            ),
+        ):
+            request = ClaimRequest(issue_number=121, state_path=state_path)
+            outcome = claim_task(request, forge=forge, cwd=repo_root)
+
+        assert outcome.success is False
+        assert outcome.failure is not None
+        assert outcome.failure.reason == ClaimFailureReason.INVALID_BRANCH_NAME
+        assert outcome.stage == ClaimStage.RESERVED
+
     def test_label_update_failure_preserves_reservation_and_worktree(
         self, claim_env: dict[str, Path]
     ) -> None:

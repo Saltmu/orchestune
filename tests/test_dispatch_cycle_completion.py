@@ -755,6 +755,12 @@ class TestRunDispatchCycleCompletion:
                 return []
 
             mock_list.side_effect = _list
+            # #943: dispatchのlaunchはclaim_task経由になり、起動対象issue(#2)を
+            # `forge.get_issue`で再取得・再検証する。
+            fake_forge.get_issue.reset_mock(side_effect=True)
+            fake_forge.get_issue.side_effect = lambda n: (
+                queued_issue if int(n) == 2 else in_progress_issue
+            )
             mock_subproc_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )

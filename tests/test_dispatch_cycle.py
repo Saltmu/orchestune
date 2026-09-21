@@ -544,6 +544,9 @@ class TestRunDispatchCycle:
         fake_forge.add_label.reset_mock(side_effect=True)
         mock_add_label = fake_forge.add_label
         fake_forge.remove_label.reset_mock(side_effect=True)
+        # #943: dispatch launchはclaim_task経由になり、claimのpreflightのために
+        # 起動対象Issue自身をforgeから再取得する。
+        fake_forge.get_issue.return_value = queued_issue
         with (
             patch(
                 "orchestune.dispatch.worktree._branch_exists",

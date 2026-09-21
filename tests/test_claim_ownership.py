@@ -185,12 +185,15 @@ def test_repository_reservation_conflicts_symmetrically() -> None:
 
 def test_forced_serial_and_shared_contract_writers_conflict() -> None:
     candidate = _active(10, footprint=("a.py",))
+    # #943: forced_serialは、dispatch自身のスケジューラ
+    # （`_candidate_conflicts_with_forced_serial_active`）と同じく、footprintが
+    # 重なる場合のみ衝突として報告する（無関係な候補まで一律ブロックしない）。
     assert (
         _conflict(
             candidate,
-            _active(11, forced_serial=True),
+            _active(11, forced_serial=True, footprint=("a.py",)),
             _task(10, footprint=("a.py",)),
-            _task(11),
+            _task(11, footprint=("a.py",)),
         )
         == ClaimConflictReason.FORCED_SERIAL
     )
@@ -203,6 +206,20 @@ def test_forced_serial_and_shared_contract_writers_conflict() -> None:
         )
         == ClaimConflictReason.SHARED_CONTRACT
     )
+
+
+def test_forced_serial_without_footprint_overlap_does_not_conflict() -> None:
+    """#943: dispatchが自身のスケジューラで既に「無関係」と判定した候補まで、
+    claimのforced_serial判定が一律にブロックしてはならない
+    （dispatch/filters.pyの既存の絞り込み挙動と揃える）。"""
+    candidate = _active(10, footprint=("a.py",))
+    active = _active(11, forced_serial=True, footprint=("z.py",))
+    result = evaluate_claim_conflicts(
+        candidate,
+        RunState(active_worktrees={str(active.issue_number): active}),
+        _View({10: _task(10, footprint=("a.py",)), 11: _task(11, footprint=("z.py",))}),
+    )
+    assert result is None
     assert (
         _conflict(
             candidate,
