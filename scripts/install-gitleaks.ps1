@@ -39,7 +39,7 @@ function Invoke-DownloadWithRetry {
             return
         } catch {
             if ($attempt -ge $MaxRetries) {
-                Write-Error "Download failed after $MaxRetries attempts from $Uri: $_"
+                Write-Error "Download failed after $MaxRetries attempts from ${Uri}: $_"
                 throw
             }
             Write-Warning "Download from $Uri failed (attempt $attempt/$MaxRetries): $_. Retrying in ${delay}s..."

@@ -109,6 +109,17 @@ def test_gitleaks_installers_support_download_retries():
     ), "install-gitleaks.ps1 must implement download retries with delay"
 
 
+def test_powershell_retry_error_message_uses_valid_variable_interpolation():
+    install_ps1 = (PROJECT_ROOT / "scripts" / "install-gitleaks.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "$Uri:" not in install_ps1, (
+        "PowerShell interprets `$Uri:` as an invalid scoped variable reference; "
+        "the URI must be delimited before the colon"
+    )
+
+
 def test_setup_git_hooks_proactively_installs_gitleaks():
     setup_hooks_sh = PROJECT_ROOT / "scripts" / "setup-git-hooks.sh"
     setup_hooks_ps1 = PROJECT_ROOT / "scripts" / "setup-git-hooks.ps1"
