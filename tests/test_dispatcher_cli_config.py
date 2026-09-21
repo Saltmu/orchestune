@@ -49,6 +49,28 @@ def _stub_label_actor_permission_by_default(fake_forge):
     stub_label_actor_permission(fake_forge)
 
 
+@pytest.fixture(autouse=True)
+def _resolve_legacy_temp_cwds(monkeypatch):
+    """Keep isolated config fixtures while exercising the repository contract.
+
+    Most pre-#966 tests put their temporary config file outside Git and pass that
+    directory as ``cwd``. The production contract now rejects that arrangement;
+    route those legacy tests' workspace lookup through this linked checkout while
+    leaving the dedicated outside-repository regression test in its own module untouched.
+    """
+    from orchestune.dispatch import dispatcher
+
+    resolve = dispatcher._resolve_dispatch_shared_paths
+    repository_cwd = Path(__file__).resolve().parents[1]
+
+    def _resolve(args, cwd):
+        if cwd is not None and not cwd.resolve().is_relative_to(repository_cwd):
+            cwd = repository_cwd
+        return resolve(args, cwd)
+
+    monkeypatch.setattr(dispatcher, "_resolve_dispatch_shared_paths", _resolve)
+
+
 class TestDispatcherConfigLoading:
     def _empty_report(self):
         return CycleReport(
@@ -100,7 +122,11 @@ class TestDispatcherConfigLoading:
         config_arg = mock_run.call_args.args[0]
         assert config_arg.max_concurrent == 5
         assert config_arg.parent_issue_number == 181
-        assert config_arg.run_state_path == Path("custom_state.json")
+        repository_root = Path(__file__).resolve().parents[3]
+        assert (
+            config_arg.run_state_path
+            == (repository_root / "custom_state.json").resolve()
+        )
 
     def test_scheduling_mode_in_the_config_file_is_rejected_as_unknown(self, tmp_path):
         """#752: scheduling-mode は削除されたため設定ファイルにあると未知キーとして拒否される。"""

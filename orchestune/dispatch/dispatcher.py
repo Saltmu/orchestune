@@ -5,11 +5,13 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
+from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.consistency.supervisor import MAX_REPAIR_PASSES, ConsistencyMode
 from orchestune.dag.models import (
     DAG_TOOL_CONFIG_KEYS,
@@ -479,6 +481,8 @@ class _DispatcherInputs:
     dag_ignore_patterns: tuple[re.Pattern[str], ...]
     dag_similarity_threshold: float
     execution_profile_config: ExecutionProfileConfig
+    run_state_path: Path
+    worktree_root: Path
 
 
 @dataclass(frozen=True)
@@ -533,12 +537,31 @@ def _load_dispatcher_inputs(
         )
     if (repair_codes := _explicit_repair_codes(argv)) is not None:
         args.consistency_repair_code = repair_codes
+    try:
+        run_state_path, worktree_root = _resolve_dispatch_shared_paths(args, cwd)
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as e:
+        _config_error(parser, f"unable to resolve repository workspace: {e}")
     return _DispatcherInputs(
         args=args,
         dag_ignore_patterns=dag_ignore_patterns,
         dag_similarity_threshold=dag_similarity_threshold,
         execution_profile_config=execution_profile_config,
+        run_state_path=run_state_path,
+        worktree_root=worktree_root,
     )
+
+
+def _resolve_dispatch_shared_paths(
+    args: argparse.Namespace,
+    cwd: Path | None,
+) -> tuple[Path, Path]:
+    """Resolve claim-shared paths against the primary checkout root (#966)."""
+    workspace = resolve_claim_workspace(
+        cwd,
+        explicit_state_path=args.run_state_path,
+        explicit_worktree_root=args.worktree_root,
+    )
+    return workspace.run_state_path, workspace.worktree_root
 
 
 def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
@@ -550,8 +573,8 @@ def _build_dispatcher_config(inputs: _DispatcherInputs) -> DispatcherConfig:
         max_concurrent=args.max_concurrent,
         max_launches_per_window=args.max_launches_per_window,
         window_seconds=args.window_seconds,
-        run_state_path=args.run_state_path,
-        worktree_root=args.worktree_root,
+        run_state_path=inputs.run_state_path,
+        worktree_root=inputs.worktree_root,
         log_dir=args.log_dir,
         events_log_path=args.events_log_path,
         parent_issue_number=args.parent_issue,

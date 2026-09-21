@@ -276,7 +276,8 @@ orchestune-dispatch
 | `--model <name>` | - | Override the concrete model name to use at runtime (e.g. `sonnet`, `gpt-5.6-terra`, `gemini-2.5-pro`). When omitted, follows profile/tier settings. |
 | `--reasoning-effort <effort>` / `--effort <effort>` | - | Override the reasoning effort at runtime (e.g. `low`, `medium`, `high`). When omitted, follows profile settings. |
 | `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`). When omitted (default `False`), attempting to execute a local CLI target fails closed with a configuration error at startup for safety. In configuration files (`orchestune.toml`, etc.), it can be specified as `allow-unsafe-agent-execution = true` (or `allow_unsafe_agent_execution = true`). |
-| `--run-state-path <path>` | `run_state.json` | Where the run state carried across dispatch cycles (active tasks, launch history) is persisted. |
+| `--run-state-path <path>` | `run_state.json` | Where the run state carried across dispatch cycles (active tasks, launch history) is persisted. Relative paths are resolved from the primary checkout root (derived from Git's common directory when running from a linked worktree); configuration-file values follow the same rule. |
+| `--worktree-root <path>` | `worktrees` | Root for agent worktrees. Relative paths use the same primary-checkout-root rule as `--run-state-path`, including values from configuration files. |
 
 The default self-healing allowlist is intentionally separate from `--consistency-repair-code`. It contains `status.blocked-with-resolved-dependencies`, `status.primary-status-conflict`, `execution.requeue`, `execution.update-bookkeeping`, and `execution.reclaim`, preserving the status promotion/reconciliation, state recovery, and GC behavior that predates the optional loop. Codes that reached a built-in repair pass are not attempted again by the later repository-wide repair loop; commands that appeared only as planner candidates remain eligible for the user allowlist. Opted-in execution commands use the same guarded GC and recovery handlers as the built-in boundaries.
 
@@ -470,4 +471,3 @@ Upon success, the command prints the issue number, claim ID, branch name, prepar
 ### Failure Handling
 
 If a claim cannot proceed due to unmet dependencies, conflicts, or environmental errors, the command exits with a non-zero exit code and outputs the failure reason along with recommended next actions to stderr. Follow the diagnostic instructions to resolve conflicts or resume an interrupted claim using `--resume`. If already working inside the claimed task worktree, running claim again is not needed.
-

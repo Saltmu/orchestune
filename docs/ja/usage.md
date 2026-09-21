@@ -269,7 +269,8 @@ orchestune-dispatch
 | `--model <name>` | - | 実行時に使用する具象モデル名をオーバーライドします（例: `sonnet`, `gpt-5.6-terra`, `gemini-2.5-pro`）。未指定時はプロファイル／能力ランクの設定に従います。 |
 | `--reasoning-effort <effort>` / `--effort <effort>` | - | 実行時の推論強度をオーバーライドします（例: `low`, `medium`, `high`）。未指定時はプロファイルの設定に従います。 |
 | `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。未指定（デフォルト `False`）でローカルCLIターゲットを実行しようとした場合は、安全のため起動時に設定エラーとなり拒否されます（Fail-Closed）。設定ファイル（`orchestune.toml`等）では `allow-unsafe-agent-execution = true`（または `allow_unsafe_agent_execution = true`）として指定できます。 |
-| `--run-state-path <path>` | `run_state.json` | ディスパッチサイクル間で引き継ぐ実行状態（起動中タスク・起動履歴等）の永続化先。 |
+| `--run-state-path <path>` | `run_state.json` | ディスパッチサイクル間で引き継ぐ実行状態（起動中タスク・起動履歴等）の永続化先。相対パスは、primary checkout（linked worktreeを使用している場合はGit common dirから求めたprimary checkout）のルート基準で解決されます。設定ファイルの値も同じ規則です。 |
+| `--worktree-root <path>` | `worktrees` | agent worktreeのルート。相対パスは`--run-state-path`と同じprimary checkoutルート基準で解決され、設定ファイルの値にも適用されます。 |
 
 default self-healing allowlistは`--consistency-repair-code`から意図的に分離されています。内容は`status.blocked-with-resolved-dependencies`、`status.primary-status-conflict`、`execution.requeue`、`execution.update-bookkeeping`、`execution.reclaim`であり、追加loopより前から存在するstatus promotion／reconciliation、state recovery、GCの動作を維持します。組み込みrepair passへ到達したcodeを後段のrepository-wide repair loopが再試行することはなく、Planner候補に現れただけのcommandはuser allowlistの対象に残ります。opt-inしたexecution commandは、組み込み境界と同じguard付きGC／recovery handlerを使用します。
 
@@ -458,4 +459,3 @@ orchestune claim 123
 ### 失敗時の対応
 
 前提条件の未達（先行タスク未完了など）や競合、環境エラーが発生した場合は、非ゼロの終了コードとともにエラー理由と推奨される次のアクションが標準エラー出力に表示されます。指示に従って競合を解消するか、中断された claim を `--resume` で復旧してください。なお、すでに着手済みで作業ツリー内にいる場合は、再度の claim は不要です。
-
