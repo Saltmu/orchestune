@@ -66,7 +66,7 @@ def test_success_renders_claim_details_and_persists_token(tmp_path, capsys):
     assert "Issue: #123" in output
     assert "Claim ID: claim-123" in output
     assert "Branch: codex/issue-123-example" in output
-    assert "Worktree: /tmp/worktrees/claim-123" in output
+    assert f"Worktree: {_success().worktree_path}" in output
     assert "Base: origin/main" in output
     assert "Owner kind: interactive" in output
     assert "owner-token-should-not-be-printed" not in output
@@ -98,7 +98,7 @@ def test_failure_uses_reason_exit_code_and_recovery_diagnostic(capsys):
     assert "reason=claim_conflict" in stderr
     assert "conflicting_issue=#99" in stderr
     assert "conflicting_branch=codex/issue-99-active" in stderr
-    assert "conflicting_path=/tmp/worktrees/active" in stderr
+    assert f"conflicting_path={failure.conflicting_path}" in stderr
     assert "Next action: Resume the existing claim" in stderr
 
 
@@ -131,3 +131,14 @@ def test_resume_uses_protected_token_record(tmp_path, capsys):
     assert resume.call_args.args == ("claim-123", "stored-owner-token")
     assert resume.call_args.kwargs["timeout_seconds"] == 3.0
     assert "stored-owner-token" not in capsys.readouterr().out
+
+
+def test_read_owner_token_uses_windows_acl_instead_of_posix_mode_bits(tmp_path):
+    from orchestune.claim.cli import _read_owner_token
+
+    token_record = tmp_path / "claim-123.token"
+    token_record.write_text("stored-owner-token\n", encoding="utf-8")
+    token_record.chmod(0o644)
+
+    with patch("orchestune.claim.cli.os.name", "nt"):
+        assert _read_owner_token(tmp_path, "claim-123") == "stored-owner-token"

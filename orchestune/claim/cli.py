@@ -68,7 +68,8 @@ def _write_owner_token(token_dir: Path, claim_id: str, owner_token: str) -> None
 def _read_owner_token(token_dir: Path, claim_id: str) -> str | None:
     path = _token_record_path(token_dir, claim_id)
     try:
-        if path.stat().st_mode & 0o077:
+        # Windows file modes do not represent the ACL that protects this token.
+        if os.name != "nt" and path.stat().st_mode & 0o077:
             return None
         value = path.read_text(encoding="utf-8").strip()
     except OSError:

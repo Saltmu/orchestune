@@ -277,7 +277,7 @@ class TestRemoveWorktree:
             )
             remove_worktree("worktrees/w1")
         args = mock_run.call_args.args[0]
-        assert args == ["git", "worktree", "remove", "worktrees/w1"]
+        assert args == ["git", "worktree", "remove", str(Path("worktrees/w1"))]
         assert "--force" not in args
 
     def test_swallows_error_when_already_removed(self):
