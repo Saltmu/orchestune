@@ -313,6 +313,7 @@ class TestDispatchCycleWiring:
 
     def _config(self, tmp_path: Any, *, apply: bool) -> DispatcherConfig:
         return DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

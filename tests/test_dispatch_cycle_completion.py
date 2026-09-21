@@ -54,7 +54,7 @@ class TestRunDispatchCycleCompletion:
             apply=True,
         )
         defaults.update(overrides)
-        return DispatcherConfig(**defaults)
+        return DispatcherConfig(parent_issue_number=100, **defaults)
 
     def _seed_active(self, tmp_path, run_state_path, **overrides):
         defaults = dict(
@@ -790,7 +790,7 @@ class TestRunDispatchCycleNotNeeded:
             apply=True,
         )
         defaults.update(overrides)
-        return DispatcherConfig(**defaults)
+        return DispatcherConfig(parent_issue_number=100, **defaults)
 
     def _seed_active(self, tmp_path, run_state_path, **overrides):
         defaults = dict(

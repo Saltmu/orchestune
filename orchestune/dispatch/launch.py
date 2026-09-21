@@ -244,12 +244,8 @@ def _decide_task_launch_plan(
         branch_name = build_task_branch_name(task.issue_number, subtask_id)
         base_branch = task_to_base_branch.get(task.issue_number)
         if base_branch is None:
-            if config.parent_issue_number is not None:
-                base_branch_for_launch = f"parent/issue-{config.parent_issue_number}"
-                base_branch_for_state = base_branch_for_launch
-            else:
-                base_branch_for_launch = None
-                base_branch_for_state = "origin/main"
+            base_branch_for_launch = f"parent/issue-{config.parent_issue_number}"
+            base_branch_for_state = base_branch_for_launch
         else:
             base_branch_for_launch = base_branch
             base_branch_for_state = base_branch
@@ -270,8 +266,6 @@ def _decide_task_launch_plan(
 
 def _persist_launch_history(now: float, config: DispatcherConfig) -> None:
     """#514: 今回の起動タイムスタンプを親Issue本文へ起動前に追記する（スロット予約）。"""
-    if config.parent_issue_number is None:
-        return
     issue = config.resolved_forge.get_issue(config.parent_issue_number)
     if issue is None:
         return
@@ -288,8 +282,6 @@ def _persist_launch_history(now: float, config: DispatcherConfig) -> None:
 
 def _release_launch_reservation(now: float, config: DispatcherConfig) -> None:
     """#519: _persist_launch_historyで確保した予約を1件分解放する。"""
-    if config.parent_issue_number is None:
-        return
     try:
         issue = config.resolved_forge.get_issue(config.parent_issue_number)
         if issue is None:

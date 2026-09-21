@@ -35,7 +35,9 @@ class TestWorktreeIsolation:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.create_pull_request.return_value = 1
 
-        config = IntegratorConfig(apply=True, repository_root=_CUSTOM_ROOT)
+        config = IntegratorConfig(
+            parent_issue_number=100, apply=True, repository_root=_CUSTOM_ROOT
+        )
         res = Integrator(config).run()
 
         assert res["status"] == "success"
@@ -49,7 +51,9 @@ class TestWorktreeIsolation:
             lambda args: "merge" in args and "--abort" not in args, stderr=b""
         )
 
-        config = IntegratorConfig(apply=True, repository_root=_CUSTOM_ROOT)
+        config = IntegratorConfig(
+            parent_issue_number=100, apply=True, repository_root=_CUSTOM_ROOT
+        )
         res = Integrator(config).run()
 
         assert res["status"] == "failure"
@@ -65,7 +69,7 @@ class TestWorktreeIsolation:
             lambda args: "worktree" in args and "add" in args, stderr=b""
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failed_to_create_temp_worktree"
         assert _worktree_remove_calls(integrator_env) == []
@@ -102,8 +106,16 @@ class TestWorktreeSafety:
         assert integrator_a._worktree_lock_path() != integrator_b._worktree_lock_path()
 
     def test_flat_mode_runs_have_distinct_branch_worktree_and_lock_paths(self):
-        integrator_a = Integrator(IntegratorConfig(apply=True, integration_run_id="a"))
-        integrator_b = Integrator(IntegratorConfig(apply=True, integration_run_id="b"))
+        integrator_a = Integrator(
+            IntegratorConfig(
+                parent_issue_number=100, apply=True, integration_run_id="a"
+            )
+        )
+        integrator_b = Integrator(
+            IntegratorConfig(
+                parent_issue_number=100, apply=True, integration_run_id="b"
+            )
+        )
 
         assert integrator_a.config.temp_branch != integrator_b.config.temp_branch
         assert integrator_a._temp_worktree_path() != integrator_b._temp_worktree_path()
@@ -159,7 +171,9 @@ class TestWorktreeSafety:
         # 既存ディレクトリは、所有権を確認できないため削除してはならない。
         with tempfile.TemporaryDirectory() as tmp:
             integrator = Integrator(
-                IntegratorConfig(apply=True, repository_root=Path(tmp))
+                IntegratorConfig(
+                    parent_issue_number=100, apply=True, repository_root=Path(tmp)
+                )
             )
             foreign_dir = integrator._temp_worktree_path()
             foreign_dir.mkdir(parents=True)
@@ -176,7 +190,9 @@ class TestWorktreeSafety:
         # であれば`git worktree remove`経由で安全に除去できる。
         with tempfile.TemporaryDirectory() as tmp:
             integrator = Integrator(
-                IntegratorConfig(apply=True, repository_root=Path(tmp))
+                IntegratorConfig(
+                    parent_issue_number=100, apply=True, repository_root=Path(tmp)
+                )
             )
             leftover = integrator._temp_worktree_path()
             leftover.mkdir(parents=True)
@@ -260,10 +276,12 @@ class TestRelativeRepositoryRoot:
             )
         self._git(repo_path, "push", "-u", "origin", "main")
 
+        self._git(repo_path, "checkout", "-b", "parent/issue-100")
+        self._git(repo_path, "push", "-u", "origin", "parent/issue-100")
         self._git(repo_path, "checkout", "-b", "claude/issue-1-task-1")
         self._commit_file(repo_path, "feature.txt", "feature\n", "Add feature")
         self._git(repo_path, "push", "-u", "origin", "claude/issue-1-task-1")
-        self._git(repo_path, "checkout", "main")
+        self._git(repo_path, "checkout", "parent/issue-100")
         return repo_path
 
     def test_relative_repository_root_succeeds_with_real_git_repo(
@@ -284,7 +302,10 @@ class TestRelativeRepositoryRoot:
             os.chdir(str(workspace))
             try:
                 config = IntegratorConfig(
-                    repository_root=Path("repo"), apply=True, forge=fake_forge
+                    parent_issue_number=100,
+                    repository_root=Path("repo"),
+                    apply=True,
+                    forge=fake_forge,
                 )
                 res = Integrator(config).run()
             finally:

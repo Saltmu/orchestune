@@ -616,6 +616,25 @@ def fake_forge(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     # IssueForge
     forge.list_issues_by_label.return_value = []
     forge.list_sub_issues.return_value = []
+    forge.find_issues_by_parent_metadata.return_value = []
+
+    def list_sub_issues_from_status_queries(_parent_issue_number):
+        """Adapt legacy status-query fixtures to the parent-child Forge API."""
+        labels = (
+            "status:queued",
+            "external-lock",
+            "status:in-progress",
+            "status:blocked",
+            "status:done",
+            "status:not-needed",
+        )
+        by_number = {}
+        for label in labels:
+            for issue in forge.list_issues_by_label(label, state="all"):
+                by_number[issue.number] = issue
+        return list(by_number.values())
+
+    forge.list_sub_issues.side_effect = list_sub_issues_from_status_queries
     forge.get_issue_labels.return_value = ()
     forge.get_issue.return_value = None
     forge.get_issue_state.return_value = "OPEN"
@@ -1146,14 +1165,13 @@ def _guard_dispatch_cycle_ensure_parent_branch(
         return
 
     def guarded_ensure(parent_issue_number: int) -> None:
-        pytest.fail(
-            f"Test '{request.node.name}' called unmocked `ensure_parent_branch({parent_issue_number})`. "
-            "Dispatch cycle tests must patch `orchestune.dispatch.phase_rebase.ensure_parent_branch` "
-            "to prevent accidental git branch creation/push to remote origin."
-        )
+        """Unit tests isolate the remote parent-branch provisioning side effect."""
 
     monkeypatch.setattr(
         "orchestune.dispatch.phase_rebase.ensure_parent_branch", guarded_ensure
+    )
+    monkeypatch.setattr(
+        "orchestune.dispatch.cycle.ensure_parent_branch_ready", guarded_ensure
     )
     yield
 

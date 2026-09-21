@@ -40,7 +40,7 @@ class TestMergeFailure:
             stderr=b"CONFLICT (content): Merge conflict",
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert "task-1" in res["failed"]
@@ -61,7 +61,7 @@ class TestMergeFailure:
             stderr=b"CONFLICT (content): Merge conflict",
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "partial_success"
         assert res["merged"] == ["task-2"]
@@ -98,7 +98,7 @@ class TestCiFailure:
 
         integrator_env.stub_git(handler)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert "task-1" in res["failed"]
@@ -123,7 +123,7 @@ class TestCiFailure:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.fail_git(_is_ci, stderr=b"UNIQUE_JOB_LOG_MARKER")
 
-        Integrator(IntegratorConfig(apply=True)).run()
+        Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert "UNIQUE_JOB_LOG_MARKER" in capsys.readouterr().err
 
@@ -132,7 +132,7 @@ class TestCiFailure:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.fail_git(_is_ci, output=("x" * 10000 + "TAIL_MARKER").encode())
 
-        Integrator(IntegratorConfig(apply=True)).run()
+        Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         comment_body = integrator_env.add_comment.call_args[0][1]
         assert "TAIL_MARKER" in comment_body
@@ -146,7 +146,7 @@ class TestCiFailure:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.fail_git(_is_ci)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert res["failed"] == ["task-1"]
@@ -180,7 +180,7 @@ class TestRollbackSha:
 
         integrator_env.stub_git(handler)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         reset_calls = integrator_env.calls_with("reset")
@@ -208,7 +208,7 @@ class TestRollbackSha:
 
         integrator_env.stub_git(handler)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         comment_body = integrator_env.add_comment.call_args[0][1]
@@ -223,7 +223,7 @@ class TestFetchBeforeMerge:
         # 明示的な refspec 付きでfetchしてからマージする必要がある。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         task_fetch_calls = [
@@ -250,7 +250,7 @@ class TestFetchBeforeMerge:
         # "Committer identity unknown" で必ず失敗するため、事前に設定する必要がある。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         name_calls = integrator_env.calls_with("config", "user.name")
@@ -273,7 +273,7 @@ class TestFetchBeforeMerge:
             )
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         unshallow_calls = integrator_env.calls_with("--unshallow")
@@ -301,7 +301,7 @@ class TestFetchBeforeMerge:
             )
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert integrator_env.calls_with("--unshallow") == []
@@ -330,7 +330,7 @@ class TestFetchFailure:
             b"fatal: couldn't find remote ref claude/issue-1-task-1",
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert "task-1" in res["failed"]
@@ -350,7 +350,7 @@ class TestFetchFailure:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         self._fail_fetch(integrator_env, b"fatal: couldn't find remote ref")
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert res["merged"] == []
@@ -369,7 +369,7 @@ class TestFetchFailure:
         integrator_env.current_branch_tip_sha_if_merged_into.return_value = "a" * 40
         self._fail_fetch(integrator_env, b"fatal: couldn't find remote ref")
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
@@ -391,7 +391,7 @@ class TestFetchFailure:
         )
         self._fail_fetch(integrator_env, b"temporary network failure")
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert res["failed"] == ["task-1"]
@@ -428,7 +428,7 @@ class TestUnexpectedException:
 
         integrator_env.stub_git(handler)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "partial_success"
         assert res["merged"] == ["task-2"]
@@ -464,7 +464,7 @@ class TestUnexpectedException:
 
         integrator_env.stub_git(handler)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert res["failed"] == ["task-1"]
@@ -493,7 +493,7 @@ class TestUnexpectedException:
 
         integrator_env.stub_git(handler)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "partial_success"
         assert res["merged"] == ["task-2"]
@@ -515,7 +515,11 @@ class TestCiEnvironment:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             (root / ".venv" / "bin").mkdir(parents=True)
-            integrator = Integrator(IntegratorConfig(apply=True, repository_root=root))
+            integrator = Integrator(
+                IntegratorConfig(
+                    parent_issue_number=100, apply=True, repository_root=root
+                )
+            )
             integrator.run()
 
         ci_calls = integrator_env.calls_with(*default_ci_command())
@@ -598,7 +602,7 @@ class TestNoOpMergeSkipsCi:
             )
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
@@ -624,7 +628,7 @@ class TestNoOpMergeSkipsCi:
         # 変わらず実行されることを確認する（回帰防止）。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]

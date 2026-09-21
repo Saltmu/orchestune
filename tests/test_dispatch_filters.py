@@ -18,10 +18,6 @@ def _issue(number, parent=None, body=""):
 
 
 class TestFilterByParent:
-    def test_returns_all_issues_when_parent_number_is_none(self):
-        issues = [_issue(1), _issue(2)]
-        assert _filter_by_parent(issues, None) == issues
-
     def test_matches_on_native_parent_relationship(self):
         issues = [_issue(1, parent={"number": 100}), _issue(2, parent={"number": 200})]
         assert [i.number for i in _filter_by_parent(issues, 100)] == [1]

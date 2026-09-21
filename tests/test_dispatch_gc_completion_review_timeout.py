@@ -30,6 +30,7 @@ class TestDispatchGcCompletionReviewTimeout:
         ]
         fake_forge.list_prs.return_value = []
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -85,6 +86,7 @@ class TestDispatchGcCompletionReviewTimeout:
         ]
         fake_forge.list_prs.return_value = []
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -141,6 +143,7 @@ class TestDispatchGcCompletionReviewTimeout:
         ]
         fake_forge.list_prs.return_value = []
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -187,6 +190,7 @@ class TestDispatchGcCompletionReviewTimeout:
         ]
         fake_forge.list_prs.return_value = []
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -238,6 +242,7 @@ class TestDispatchGcCompletionReviewTimeout:
         ]
         fake_forge.list_prs.return_value = []
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -297,6 +302,7 @@ class TestDispatchGcCompletionReviewTimeout:
         ]
         fake_forge.list_prs.return_value = []
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

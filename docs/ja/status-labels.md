@@ -251,10 +251,6 @@ Orchestuneが実際にIssueをクローズする2箇所を説明する。いず�
   介さず`reason=completed`で子Issueをクローズする。自動マージ自体が
   失敗した場合（一時ブランチのCIでは検出できなかったコンフリクト等）は、
   PRはオープンのまま残り、Issueは**クローズされない**。
-- ディスパッチャーが`--parent-issue`無しで実行された場合は適用されない:
-  そのフラット（単層）モードでは統合PRは引き続き`main`を直接の対象とし、
-  「最終マージは常に人間が行う」という原則により、
-  `AutoMergeChildIntegrationStep`は何もしない。
 
 ### 親Issue: オープン → クローズ（`completed`）
 - 発生元: `orchestune/integrator/parent_completion.py`の`process_parent_completion`。

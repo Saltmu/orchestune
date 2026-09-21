@@ -67,6 +67,7 @@ def test_default_self_healing_allowlist_is_stable_and_separate(tmp_path) -> None
         }
     )
     config = DispatcherConfig(
+        parent_issue_number=1,
         run_state_path=tmp_path / "state.json",
         events_log_path=tmp_path / "events.jsonl",
         worktree_root=tmp_path / "worktrees",
@@ -86,6 +87,7 @@ def test_unbound_execution_command_fails_closed_without_phase_owned_skip(
     )
     executor = _DispatchRepairExecutor(
         config=DispatcherConfig(
+            parent_issue_number=1,
             run_state_path=tmp_path / "state.json",
             events_log_path=tmp_path / "events.jsonl",
             worktree_root=tmp_path / "worktrees",
@@ -151,10 +153,11 @@ def test_user_allowlisted_execution_requeue_uses_a_bound_handler(
         746,
         labels=("status:in-progress",),
         subtask_id="supervisor-rollout",
-        parent=None,
+        parent={"number": 1},
     )
     in_memory_forge.seed_issue(issue)
     config = DispatcherConfig(
+        parent_issue_number=1,
         apply=True,
         consistency_mode=ConsistencyMode.REPAIR,
         consistency_repair_allowlist=frozenset({COMMAND_REQUEUE}),
@@ -195,13 +198,14 @@ def test_no_apply_off_mode_reports_default_status_repair_as_deferred(
     issue = make_issue(
         746,
         labels=("status:queued", "status:done"),
-        parent=None,
+        parent={"number": 1},
     )
     fake_forge.list_issues_by_label.side_effect = lambda label, *args, **kwargs: (
         [issue] if label in issue.labels else []
     )
     fake_forge.list_open_prs.return_value = []
     config = DispatcherConfig(
+        parent_issue_number=1,
         apply=False,
         consistency_mode=ConsistencyMode.OFF,
         max_concurrent=0,

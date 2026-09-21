@@ -74,7 +74,7 @@ def make_test_dispatcher_config(
         "worktree_root": root / "worktrees",
     }
     values.update(overrides)
-    return DispatcherConfig(**values)
+    return DispatcherConfig(parent_issue_number=100, **values)
 
 
 def make_test_task(issue_number: int = 1, **overrides: Any) -> Task:
@@ -173,14 +173,14 @@ def make_footprint_issue(
     subtask_id: str | None = "task-a",
     depends_on: tuple[str, ...] = (),
     created_at: str = DEFAULT_CREATED_AT,
-    parent_number: int | None = 181,
+    parent_number: int | None = 100,
 ) -> IssueRecord:
     """Footprint YAMLブロックを持つ`IssueRecord`。
 
     `run_dispatch_cycle`をエンドツーエンドで駆動する系のテストが要求する
     フィールド（footprint/symbols/subtask_id/depends_on/parent_number）を持つ。
     YAML本文の組み立ては`tests/conftest.py`の`make_issue`へ委譲し、旧テスト群が
-    前提とする`title="t"`と`parent_number`既定181だけをここで揃えている。
+    前提とする`title="t"`と`parent_number`既定100だけをここで揃えている。
     """
     parent = {"number": parent_number} if parent_number is not None else None
     return make_issue(

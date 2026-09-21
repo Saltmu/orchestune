@@ -385,30 +385,25 @@ The `orchestune-dispatch` command **handles both dispatching new tasks and integ
 3. If CI passes, it pushes the temporary integration branch to `origin` and creates (or reuses) an integration PR targeting the base branch.
 4. Child issues that were included in the integration are labeled `integration:included`.
 
-The base branch and the temporary integration branch depend on whether `--parent-issue` is given:
+The required `--parent-issue` selects the parent branch and temporary integration branch:
 
 | `--parent-issue` | Base branch | Temporary integration branch |
 | :--- | :--- | :--- |
-| Given (`N`) | `origin/parent/issue-{N}` | `integration/temp-parent-issue-{N}` |
-| Not given | `origin/main` | `integration/temp-main` |
+| `N` | `origin/parent/issue-{N}` | `integration/temp-parent-issue-{N}` |
 
-### 4.2 With `--parent-issue` (two-tier integration via a parent branch)
+### 4.2 Two-tier integration via a parent branch
 
-When a parent issue number is given, integration is two-tiered: "child branches → parent branch" and "parent branch → main".
+Integration is two-tiered: "child branches → parent branch" and "parent branch → main".
 
 1. **Child branches → parent branch (automatic)**: Child PRs are automatically integrated into the `parent/issue-{N}` branch. Once the integration PR passes CI it is auto-merged without waiting for human approval, and the corresponding child issues are closed automatically. The individual child PRs opened by agents therefore do not need to be merged by a human; they remain as a review record.
    - If the auto-merge fails (branch protection, permissions, and so on), a comment is posted on the affected issues and the merge is retried automatically on the next dispatch cycle.
 2. **Parent branch → main (merged by a human)**: Once every child issue under the parent is closed, a final integration PR from `parent/issue-{N}` to `main` is prepared automatically. **Deciding whether to merge that final PR, and performing the merge, is always done by a human.** When the final PR's merge is detected, the parent issue is closed automatically.
 
-### 4.3 Without `--parent-issue`
-
-Without a parent issue, the Integrator is responsible only up to creating an integration PR targeting `main`. **That integration PR is never auto-merged; a human reviews and merges it into `main`.**
-
-### 4.4 Auto-Rebase
+### 4.3 Auto-Rebase
 
 Downstream dependent task branches are rebased automatically depending on the state of the tasks they depend on. The rebase target is **the branch of the dependency whose PR has already passed CI** (stacking), not "the latest main". No auto-rebase happens when the dependency cannot be narrowed down to a single branch, or when the dependency has not passed CI yet.
 
-### 4.5 Issue ↔ PR link notices
+### 4.4 Issue ↔ PR link notices
 
 GitHub's `Closes #N` auto-linking and the "Development" sidebar on an issue only work when the PR targets the default branch (`main`). Under the parent-branch workflow that leaves a child issue with no visible trace of the PR that implemented it, so Orchestune fills the gap with comments:
 

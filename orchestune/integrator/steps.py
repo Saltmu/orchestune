@@ -137,7 +137,7 @@ class RetryChildIssueCloseStep(IntegrationComponent):
     """Retry closing child issues whose integration was already merged."""
 
     def execute(self, ctx: IntegrationContext) -> IntegrationReport:
-        if not ctx.config.apply or ctx.config.parent_issue_number is None:
+        if not ctx.config.apply:
             return {"status": IntegrationStatus.SUCCESS}
 
         remaining_tasks = []
@@ -280,8 +280,6 @@ class SetupWorktreeStep(IntegrationComponent):
     def _fetch_parent_base_if_needed(
         manager: IntegrationWorktree, ctx: IntegrationContext
     ) -> None:
-        if ctx.config.parent_issue_number is None:
-            return
         base_name = ctx.base_branch.removeprefix("origin/")
         with _retry_file_lock(manager.base_ref_lock_path(ctx.base_branch)):
             run_git(
@@ -447,23 +445,9 @@ class LabelIncludedStep(IntegrationComponent):
     def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         if not ctx.config.apply:
             return {"status": IntegrationStatus.SUCCESS}
-        if ctx.config.parent_issue_number is not None:
-            return {
-                "status": IntegrationStatus.SUCCESS,
-                "newly_included": ctx.newly_included,
-            }
-        if (
-            ctx.failed_tasks
-            or not ctx.merged_tasks
-            or ctx.integration_pr_number is None
-        ):
-            return {"status": ctx.status}
-
-        newly_included = _mark_tasks_included(ctx)
-        ctx.newly_included = newly_included
         return {
             "status": IntegrationStatus.SUCCESS,
-            "newly_included": newly_included,
+            "newly_included": ctx.newly_included,
         }
 
 
@@ -570,8 +554,6 @@ def clear_parent_branch_stale_marker(ctx: IntegrationContext) -> None:
     レース＝上記の既知の限度とは異なり、これは書き込みの単純な失敗であり、
     リトライで解消できる）。少数回・短い間隔でリトライする。
     """
-    if ctx.config.parent_issue_number is None:
-        return
     last_error: Exception | None = None
     for attempt in range(_CLEAR_STALE_MARKER_ATTEMPTS):
         try:
@@ -595,7 +577,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
     """non-force pushで子統合を親へ確定し、最終mainマージは人に委ねる。"""
 
     def execute(self, ctx: IntegrationContext) -> IntegrationReport:
-        if not ctx.config.apply or ctx.config.parent_issue_number is None:
+        if not ctx.config.apply:
             return {"status": IntegrationStatus.SUCCESS}
         if ctx.failed_tasks or not ctx.merged_tasks:
             return {"status": ctx.status}
@@ -770,9 +752,6 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
         ラベルという、ランナーをまたいでも失われない場所に状態を置くことで
         この問題を回避する。2サイクル連続で検知した場合のみ、対象の子Issueを
         `status:blocked-human-review`へエスカレーションする。"""
-        if ctx.config.parent_issue_number is None:
-            return
-
         self._record_parent_branch_staleness(ctx, error)
 
         already_stale = self._parent_is_already_stale(ctx)
@@ -829,8 +808,6 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
         ctx: IntegrationContext, error: Exception
     ) -> None:
         parent_issue_number = ctx.config.parent_issue_number
-        if parent_issue_number is None:
-            return
         try:
             ctx.forge.add_comment(
                 parent_issue_number,
@@ -849,8 +826,6 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
     @staticmethod
     def _parent_is_already_stale(ctx: IntegrationContext) -> bool | None:
         parent_issue_number = ctx.config.parent_issue_number
-        if parent_issue_number is None:
-            return None
         try:
             return _PARENT_BRANCH_STALE_LABEL in ctx.forge.get_issue_labels(
                 parent_issue_number
@@ -865,8 +840,6 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
     @staticmethod
     def _mark_parent_branch_stale(ctx: IntegrationContext) -> None:
         parent_issue_number = ctx.config.parent_issue_number
-        if parent_issue_number is None:
-            return
         try:
             ctx.forge.ensure_labels((_PARENT_BRANCH_STALE_LABEL_SPEC,))
         except Exception as error:

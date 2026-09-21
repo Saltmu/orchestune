@@ -146,6 +146,7 @@ class TestRunDispatchCycleFootprintRecompute:
             footprint=("src/foo.py",),
             symbols=("foo.Foo",),
             subtask_id="task-a",
+            parent_number=181,
         )
         conflict = FootprintConflict(
             subtask_id="task-a",

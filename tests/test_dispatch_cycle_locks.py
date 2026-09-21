@@ -193,7 +193,11 @@ class TestApplyExternalLockSync:
         mock_remove_label = fake_forge.remove_label
         _apply_external_lock_sync(
             lock_result,
-            DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True),
+            DispatcherConfig(
+                parent_issue_number=1,
+                events_log_path=tmp_path / "events.jsonl",
+                apply=True,
+            ),
         )
 
         mock_remove_label.assert_called_once_with(1, "status:external-lock")
@@ -209,7 +213,11 @@ class TestApplyExternalLockSync:
         mock_remove_label = fake_forge.remove_label
         _apply_external_lock_sync(
             lock_result,
-            DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True),
+            DispatcherConfig(
+                parent_issue_number=1,
+                events_log_path=tmp_path / "events.jsonl",
+                apply=True,
+            ),
         )
 
         mock_remove_label.assert_called_once_with(1, "status:external-lock")
@@ -225,7 +233,11 @@ class TestApplyExternalLockSync:
         mock_remove_label = fake_forge.remove_label
         _apply_external_lock_sync(
             lock_result,
-            DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True),
+            DispatcherConfig(
+                parent_issue_number=1,
+                events_log_path=tmp_path / "events.jsonl",
+                apply=True,
+            ),
         )
 
         mock_remove_label.assert_called_once_with(1, "status:external-lock")
@@ -254,6 +266,7 @@ class TestRunDispatchCycleBranchNormalization:
             run_state_path,
         )
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
@@ -297,6 +310,7 @@ class TestRunDispatchCycleBranchNormalization:
         self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
@@ -340,6 +354,7 @@ class TestRunDispatchCycleBranchNormalization:
         API経由（`find_children_by_parent`）に切り替わり、本テストがモックして
         いる`list_issues_by_label`ベースの取得経路を素通りしてしまう。"""
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
@@ -378,6 +393,7 @@ class TestRunDispatchCycleBranchNormalization:
         self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
+            parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
             max_concurrent=2,
             max_launches_per_window=2,
@@ -416,7 +432,11 @@ class TestExternalLockNotice:
     """#787: ロック理由（衝突相手・衝突ファイル）を対象Issueのコメントへ残す。"""
 
     def _config(self, tmp_path, apply=True):
-        return DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=apply)
+        return DispatcherConfig(
+            parent_issue_number=1,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=apply,
+        )
 
     def test_posts_conflict_detail_for_newly_locked_task(self, tmp_path, fake_forge):
         task = _task(status_labels=("status:queued",))
@@ -552,7 +572,9 @@ class TestExternalLockReleaseNoticeRetry:
     """
 
     def _config(self, tmp_path):
-        return DispatcherConfig(events_log_path=tmp_path / "events.jsonl", apply=True)
+        return DispatcherConfig(
+            parent_issue_number=1, events_log_path=tmp_path / "events.jsonl", apply=True
+        )
 
     def test_failed_release_notice_is_queued_for_retry(self, tmp_path, fake_forge):
         task = _task(status_labels=("status:queued", "status:external-lock"))

@@ -59,8 +59,9 @@ def _evidence(issue_numbers=()) -> _CompletionEvidence:
     return _CompletionEvidence(frozenset(issue_numbers))
 
 
-def _config(tmp_path, forge, *, apply=True) -> DispatcherConfig:
+def _config(tmp_path, forge, *, apply=True, parent_issue_number=1) -> DispatcherConfig:
     return DispatcherConfig(
+        parent_issue_number=parent_issue_number,
         run_state_path=tmp_path / "run_state.json",
         events_log_path=tmp_path / "events.jsonl",
         worktree_root=tmp_path / "worktrees",
@@ -111,7 +112,11 @@ def _plan(tasks_by_issue, *, completed_subtask_ids=(), intents=()):
                     labels=task.status_labels,
                     subtask_id=task.subtask_id,
                     depends_on=task.depends_on,
-                    parent=None,
+                    parent=(
+                        {"number": task.parent_number}
+                        if task.parent_number is not None
+                        else None
+                    ),
                 )
                 for task in tasks_by_issue.values()
             ),

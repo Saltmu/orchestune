@@ -21,7 +21,7 @@ import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import CycleReport, run_dispatch_cycle
-from orchestune.dispatch.dispatcher import main
+from orchestune.dispatch.dispatcher import _build_arg_parser, main
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.state import RunState, load_run_state
 from orchestune.forge import ForgeAuthError
@@ -61,6 +61,16 @@ class TestDispatcherConfigLoading:
             applied=False,
         )
 
+    def test_parent_issue_is_required_by_the_cli(self):
+        with pytest.raises(SystemExit) as error:
+            _build_arg_parser().parse_args(["--no-apply"])
+
+        assert error.value.code == 2
+
+    def test_dispatcher_config_requires_parent_issue_number(self):
+        with pytest.raises(TypeError, match="parent_issue_number"):
+            DispatcherConfig()
+
     def test_load_config_from_orchestune_toml(self, tmp_path):
         config_path = tmp_path / "orchestune.toml"
         config_path.write_text(
@@ -81,7 +91,7 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
         mock_build.assert_called_once()
         assert mock_build.call_args.args[0].dispatch_target_name == "local"
@@ -98,7 +108,7 @@ class TestDispatcherConfigLoading:
         )
 
         with pytest.raises(SystemExit):
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
     def test_consistency_repair_is_configurable_from_the_config_file(self, tmp_path):
         (tmp_path / "orchestune.toml").write_text(
@@ -119,7 +129,7 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
         config = mock_run.call_args.args[0]
         assert config.consistency_mode.value == "repair"
@@ -135,7 +145,7 @@ class TestDispatcherConfigLoading:
         )
 
         with pytest.raises(SystemExit):
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
     def test_cli_repair_allowlist_replaces_config_file_allowlist(self, tmp_path):
         (tmp_path / "orchestune.toml").write_text(
@@ -157,6 +167,8 @@ class TestDispatcherConfigLoading:
         ):
             main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--consistency-repair-code",
                     "status.from-cli",
@@ -192,7 +204,7 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
         assert mock_run.called
         config_arg = mock_run.call_args.args[0]
@@ -224,7 +236,7 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
         config_arg = mock_run.call_args.args[0]
         assert config_arg.dag_similarity_threshold == 0.1
@@ -246,6 +258,8 @@ class TestDispatcherConfigLoading:
         ):
             main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--run-state-path",
                     str(tmp_path / "rs.json"),
@@ -268,7 +282,7 @@ class TestDispatcherConfigLoading:
         )
 
         with pytest.raises(SystemExit) as excinfo:
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
         assert excinfo.value.code == 2
         assert "[0, 1]" in capsys.readouterr().err
@@ -296,7 +310,7 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
         config_arg = mock_run.call_args.args[0]
         assert len(config_arg.dag_ignore_patterns) == 1
@@ -314,7 +328,7 @@ class TestDispatcherConfigLoading:
         )
 
         with pytest.raises(SystemExit) as error:
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
         assert error.value.code == 2
         assert "dag_ignore_patterns" in capsys.readouterr().err
@@ -339,7 +353,7 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
         mock_build.assert_called_once()
         assert mock_build.call_args.args[0].dispatch_target_name == "claude-cli"
@@ -366,6 +380,8 @@ class TestDispatcherConfigLoading:
         ):
             main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--max-concurrent",
                     "3",
@@ -398,6 +414,8 @@ class TestDispatcherConfigLoading:
         ):
             main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--ci-command",
                     "make ci",
@@ -425,6 +443,8 @@ class TestDispatcherConfigLoading:
         ):
             main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--events-log-path",
                     str(tmp_path / "events.jsonl"),
@@ -455,6 +475,8 @@ class TestDispatcherConfigLoading:
         ):
             main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--events-log-path",
                     str(tmp_path / "events.jsonl"),
@@ -484,7 +506,7 @@ class TestDispatcherConfigLoading:
         (tmp_path / "orchestune.toml").write_text(config, encoding="utf-8")
 
         with pytest.raises(SystemExit) as error:
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
         assert error.value.code == 2
         assert expected_error in capsys.readouterr().err
@@ -500,7 +522,7 @@ class TestDispatcherConfigLoading:
         )
 
         with pytest.raises(SystemExit) as error:
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
         assert error.value.code == 2
         assert "failed to load" in capsys.readouterr().err
@@ -533,7 +555,7 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ),
         ):
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
         assert mock_build.call_args.args[0].dispatch_target_name == dispatch_target
 
@@ -715,9 +737,7 @@ class TestDispatcherConfigLoading:
                 assert res["status"] == "fatal_failure"
                 assert "main-auth-failed" in res["error_message"]
 
-    def test_post_event_log_comment_not_called_without_parent_issue(self, tmp_path):
-        """#396: `--parent-issue`未指定時は`_post_event_log_comment`自体が
-        呼ばれない（投稿先の単一Issueが定まらないため、既存挙動と同じガード）。"""
+    def test_post_event_log_comment_is_called_for_parent_issue(self, tmp_path):
         with (
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
@@ -739,11 +759,15 @@ class TestDispatcherConfigLoading:
                 ),
             ),
             patch(
-                "orchestune.dispatch.dispatcher._post_event_log_comment", autospec=True
+                "orchestune.dispatch.dispatcher._post_event_log_comment",
+                autospec=True,
+                return_value=PhaseResult("post_event_log_comment", PhaseStatus.SUCCESS),
             ) as mock_post,
         ):
             code = main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--apply",
                     "--allow-unsafe-agent-execution",
                     "--events-log-path",
@@ -753,7 +777,7 @@ class TestDispatcherConfigLoading:
             )
 
         assert code == 0
-        mock_post.assert_not_called()
+        mock_post.assert_called_once()
 
     def test_post_event_log_comment_receives_cycle_report(self, tmp_path):
         """#396: `run_dispatch_cycle`が返した`CycleReport`が、そのまま
@@ -814,6 +838,7 @@ class TestDispatcherConfigLoading:
         now = time.time()
         # window_seconds = 172800 (48時間)
         config = DispatcherConfig(
+            parent_issue_number=181,
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=172800,
@@ -862,7 +887,10 @@ class TestDispatcherConfigLoading:
         self, tmp_path, capsys
     ):
         with pytest.raises(SystemExit) as excinfo:
-            main(["--dispatch-target", "claude-cli"], cwd=tmp_path)
+            main(
+                ["--parent-issue", "100", "--dispatch-target", "claude-cli"],
+                cwd=tmp_path,
+            )
         assert excinfo.value.code == 2
         err = capsys.readouterr().err
         assert "invalid dispatcher config" in err
@@ -876,6 +904,8 @@ class TestDispatcherConfigLoading:
         ):
             code = main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--dispatch-target",
                     "claude-cli",
                     "--allow-unsafe-agent-execution",
@@ -901,6 +931,8 @@ class TestDispatcherConfigLoading:
         ):
             code = main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--dispatch-target",
                     "claude-cli",
                     "--no-apply",
@@ -940,6 +972,8 @@ reasoning_effort = "low"
         ):
             code = main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--events-log-path",
                     str(tmp_path / "events.jsonl"),
@@ -977,7 +1011,7 @@ model = "--dangerous-injected-flag"
             encoding="utf-8",
         )
         with pytest.raises(SystemExit) as exc_info:
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
         assert exc_info.value.code == 2
         assert "invalid model name" in capsys.readouterr().err

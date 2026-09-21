@@ -146,7 +146,7 @@ class TestRunDispatchCycleBlockedPromotion:
             apply=True,
         )
         defaults.update(overrides)
-        return DispatcherConfig(**defaults)
+        return DispatcherConfig(parent_issue_number=100, **defaults)
 
     def test_promotes_blocked_task_when_dependency_already_done(
         self, tmp_path, fake_forge
@@ -202,6 +202,7 @@ class TestRunDispatchCycleBlockedPromotion:
             body=blocked.body,
             labels=blocked.labels,
             created_at=blocked.created_at,
+            parent=blocked.parent,
             blocked_by=(1,),
         )
         fake_forge.list_issues_by_label.reset_mock(side_effect=True)
@@ -638,6 +639,7 @@ class TestRunDispatchCycleBlockedPromotion:
 
     def test_yaml_error_transitions_to_blocked(self, tmp_path, fake_forge):
         config = DispatcherConfig(
+            parent_issue_number=100,
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
@@ -687,6 +689,7 @@ class TestRunDispatchCycleBlockedPromotion:
 
     def test_worktree_launch_failure_transitions_to_blocked(self, tmp_path, fake_forge):
         config = DispatcherConfig(
+            parent_issue_number=100,
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
@@ -735,12 +738,13 @@ class TestBaseBranchRedCycleReconciliation:
         self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
+            parent_issue_number=100,
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",
             apply=True,
         )
         issue = _full_issue(
-            1, labels=("status:blocked", "ci:base-branch-red"), parent_number=None
+            1, labels=("status:blocked", "ci:base-branch-red"), parent_number=100
         )
         outcome = OutcomeRecord(
             result="blocked",
@@ -792,6 +796,7 @@ class TestBaseBranchRedCycleReconciliation:
         self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
+            parent_issue_number=1,
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",
             apply=True,

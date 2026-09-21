@@ -194,6 +194,7 @@ class TestRecoveredActiveTask:
     ):
         """Supervisor の typed repair が実行資源のないタスクを再キューする。"""
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -261,6 +262,7 @@ class TestRecoveredActiveTask:
         self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -336,6 +338,7 @@ class TestDispatcherLocking:
         self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=False,
@@ -373,6 +376,7 @@ class TestLaunchOrderingCrashSafety:
         self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
+            parent_issue_number=1,
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
@@ -472,6 +476,7 @@ class TestStaleActiveEntryReconciliation:
             run_state_path,
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             max_concurrent=0,
             max_launches_per_window=0,
             window_seconds=3600,
@@ -544,6 +549,7 @@ class TestPreventDuplicateSessions:
         mock_list_prs = fake_forge.list_open_prs
         mock_list_issues = fake_forge.list_issues_by_label
         config = DispatcherConfig(
+            parent_issue_number=1,
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
@@ -611,6 +617,7 @@ class TestPreventDuplicateSessions:
         mock_list_prs = fake_forge.list_open_prs
         mock_list_issues = fake_forge.list_issues_by_label
         config = DispatcherConfig(
+            parent_issue_number=1,
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
@@ -659,6 +666,7 @@ class TestPreventDuplicateSessions:
         self, tmp_path, fake_forge
     ):
         config = DispatcherConfig(
+            parent_issue_number=1,
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
@@ -767,6 +775,7 @@ class TestPreventDuplicateSessions:
     ):
         """ls-remoteが例外等で失敗した場合は、安全のため重複とみなして起動をスキップする。"""
         config = DispatcherConfig(
+            parent_issue_number=1,
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,

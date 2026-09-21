@@ -119,6 +119,7 @@ class TestApplyAutoRebase:
             pid=222, external_id="ext-1", external_url="url-1"
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -179,6 +180,7 @@ class TestApplyAutoRebase:
             ],
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -225,6 +227,7 @@ class TestApplyAutoRebase:
 
         mock_target = MagicMock()
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -268,6 +271,7 @@ class TestApplyAutoRebase:
         from unittest.mock import MagicMock
 
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -352,6 +356,7 @@ class TestApplyAutoRebase:
         from unittest.mock import MagicMock
 
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -419,6 +424,7 @@ class TestApplyAutoRebase:
         from unittest.mock import MagicMock
 
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -483,6 +489,7 @@ class TestApplyAutoRebase:
         from unittest.mock import MagicMock
 
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -531,6 +538,7 @@ class TestApplyAutoRebase:
             pid=222, external_id="ext-1", external_url="url-1"
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -572,6 +580,7 @@ class TestApplyAutoRebase:
 
         mock_target = MagicMock()
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -622,6 +631,7 @@ class TestApplyAutoRebase:
         from unittest.mock import MagicMock
 
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

@@ -139,20 +139,19 @@ class MultiIssueIntegrator(IntegrationComponent):
 
 
 class SingleIssueIntegrator(IntegrationComponent):
-    def __init__(self, parent_issue: int | None, pipeline: IntegrationComponent):
+    def __init__(self, parent_issue: int, pipeline: IntegrationComponent):
         self.parent_issue = parent_issue
         self.pipeline = pipeline
 
     def execute(self, ctx: IntegrationContext) -> IntegrationReport:
-        if self.parent_issue is not None:
-            ctx.config.parent_issue_number = self.parent_issue
-            ctx.base_branch = f"origin/parent/issue-{self.parent_issue}"
-            ctx.temp_branch = (
-                f"integration/temp-parent-issue-{self.parent_issue}-"
-                f"{ctx.config.integration_run_id}"
-            )
-            ctx.config.base_branch = ctx.base_branch
-            ctx.config.temp_branch = ctx.temp_branch
+        ctx.config.parent_issue_number = self.parent_issue
+        ctx.base_branch = f"origin/parent/issue-{self.parent_issue}"
+        ctx.temp_branch = (
+            f"integration/temp-parent-issue-{self.parent_issue}-"
+            f"{ctx.config.integration_run_id}"
+        )
+        ctx.config.base_branch = ctx.base_branch
+        ctx.config.temp_branch = ctx.temp_branch
 
         # #435: runごとに一意なworktreeを使うため、CIを含むサイクル全体は
         # ロックしない。worktree操作だけを各Stepで短く保護する。

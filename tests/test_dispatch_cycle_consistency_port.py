@@ -52,10 +52,23 @@ class TestExecuteRepair:
         fresh/cached split.
         """
         before = (StatusLabel.DONE, StatusLabel.QUEUED)
-        task = make_task(1, status_labels=before, parent_number=None)
-        in_memory_forge.seed_issue(make_issue(1, labels=before))
+        parent_issue_number = 100
+        task = make_task(1, status_labels=before, parent_number=parent_issue_number)
+        in_memory_forge.seed_issue(
+            make_issue(
+                1,
+                labels=before,
+                parent={"number": parent_issue_number},
+                body=(
+                    "```yaml\nsubtask_id: task-1\n"
+                    f"parent_issue_number: {parent_issue_number}\n```\n"
+                ),
+            )
+        )
         run_state = RunState(active_worktrees={})
-        config = _config(tmp_path, in_memory_forge)
+        config = _config(
+            tmp_path, in_memory_forge, parent_issue_number=parent_issue_number
+        )
         ctx = _ctx(tasks_by_issue={1: task}, run_state=run_state, config=config)
         adapter = CycleActionAdapter(run_state, config, now=0.0)
         adapter.bind_context(ctx)
@@ -119,10 +132,15 @@ class TestExecuteRepair:
         self, tmp_path, in_memory_forge
     ):
         before = (StatusLabel.DONE, StatusLabel.QUEUED)
-        task = make_task(1, status_labels=before, parent_number=None)
-        in_memory_forge.seed_issue(make_issue(1, labels=before))
+        parent_issue_number = 100
+        task = make_task(1, status_labels=before, parent_number=parent_issue_number)
+        in_memory_forge.seed_issue(
+            make_issue(1, labels=before, parent={"number": parent_issue_number})
+        )
         run_state = RunState(active_worktrees={})
-        config = _config(tmp_path, in_memory_forge)
+        config = _config(
+            tmp_path, in_memory_forge, parent_issue_number=parent_issue_number
+        )
         # A ctx that does not know issue #1 forces record_transition to
         # CONFLICT (unknown-issue) once the callback runs.
         ctx = _ctx(tasks_by_issue={}, run_state=run_state, config=config)
@@ -147,10 +165,15 @@ class TestExecuteRepair:
         ctxへ反映しない（コールバックが呼ばれない）。
         """
         before = (StatusLabel.DONE, StatusLabel.QUEUED)
-        task = make_task(1, status_labels=before, parent_number=None)
-        in_memory_forge.seed_issue(make_issue(1, labels=before))
+        parent_issue_number = 100
+        task = make_task(1, status_labels=before, parent_number=parent_issue_number)
+        in_memory_forge.seed_issue(
+            make_issue(1, labels=before, parent={"number": parent_issue_number})
+        )
         run_state = RunState(active_worktrees={})
-        config = _config(tmp_path, in_memory_forge)
+        config = _config(
+            tmp_path, in_memory_forge, parent_issue_number=parent_issue_number
+        )
         ctx = _ctx(tasks_by_issue={1: task}, run_state=run_state, config=config)
         adapter = CycleActionAdapter(run_state, config, now=0.0)
         adapter.bind_context(ctx)

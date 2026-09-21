@@ -252,9 +252,7 @@ def _resolve_base_branch_for_task(
     decision = decide_stack_target(task.issue_number, view)
     if decision.target is not None:
         return decision.target.branch
-    if config.parent_issue_number is not None:
-        return f"parent/issue-{config.parent_issue_number}"
-    return "origin/main"
+    return f"parent/issue-{config.parent_issue_number}"
 
 
 def _has_pending_dependencies(
@@ -450,11 +448,7 @@ def _resolve_recovery_base_sha(
     if decision.target is not None:
         base_branch = decision.target.branch
     elif decision.reason == "no-stack-dependency":
-        base_branch = (
-            f"parent/issue-{config.parent_issue_number}"
-            if config.parent_issue_number is not None
-            else "origin/main"
-        )
+        base_branch = f"parent/issue-{config.parent_issue_number}"
     else:
         return None
     return _get_branch_commit_sha(base_branch, repo_root)

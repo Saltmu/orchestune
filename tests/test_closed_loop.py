@@ -431,7 +431,17 @@ def test_closed_loop_flow():
     repo = DummyGitRepo()
     dummy_github = DummyGitHub(repo.local_path)
 
-    # 1. Register status:queued issue
+    dummy_github.add_issue(
+        IssueRecord(
+            number=100,
+            title="[EPIC] Closed-loop dispatch scenario",
+            body=PARENT_MARKER,
+            labels=(),
+            created_at="2026-07-07T00:00:00Z",
+        )
+    )
+
+    # 1. Register status:queued child issue
     issue_body = "```yaml\nsubtask_id: task-1\nfootprint:\n  - src/main.py\n```\n"
     issue = IssueRecord(
         number=1,
@@ -439,6 +449,7 @@ def test_closed_loop_flow():
         body=issue_body,
         labels=("status:queued",),
         created_at="2026-07-07T00:00:00Z",
+        parent={"number": 100},
     )
     dummy_github.add_issue(issue)
 
@@ -450,6 +461,7 @@ def test_closed_loop_flow():
     save_run_state(RunState(), run_state_path)
 
     config = DispatcherConfig(
+        parent_issue_number=100,
         max_concurrent=1,
         max_launches_per_window=5,
         window_seconds=3600,
@@ -502,6 +514,7 @@ def test_closed_loop_flow():
 
         # ---- Integrator Phase: Temp Merge and CI Error Reversion ----
         int_config = IntegratorConfig(
+            parent_issue_number=100,
             repository_root=repo.local_path,
             base_branch="origin/main",
             temp_branch="integration/temp-main",
@@ -544,6 +557,7 @@ def test_closed_loop_flow():
 
         # ---- Integrator Phase: Re-Merge (Success) ----
         int_config2 = IntegratorConfig(
+            parent_issue_number=100,
             repository_root=repo.local_path,
             base_branch="origin/main",
             temp_branch="integration/temp-main",

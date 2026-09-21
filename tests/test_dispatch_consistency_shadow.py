@@ -98,12 +98,14 @@ def test_consistency_mode_is_exposed_by_cli_and_defaults_off(
     tmp_path, fake_forge
 ) -> None:
     parser = _build_arg_parser()
-    assert parser.parse_args([]).consistency_mode == "off"
-    assert (
-        parser.parse_args(["--consistency-mode", "shadow"]).consistency_mode == "shadow"
-    )
+    assert parser.parse_args(["--parent-issue", "1"]).consistency_mode == "off"
+    assert parser.parse_args(
+        ["--parent-issue", "1", "--consistency-mode", "shadow"]
+    ).consistency_mode
     repair_args = parser.parse_args(
         [
+            "--parent-issue",
+            "1",
             "--consistency-mode",
             "repair",
             "--consistency-repair-code",
@@ -130,6 +132,8 @@ def test_consistency_mode_is_exposed_by_cli_and_defaults_off(
         assert (
             main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--dispatch-target",
                     "local",
@@ -146,6 +150,7 @@ def test_consistency_mode_is_exposed_by_cli_and_defaults_off(
 
     assert captured[0].consistency_mode is ConsistencyMode.SHADOW
     direct = DispatcherConfig(
+        parent_issue_number=1,
         events_log_path=tmp_path / "direct-events.jsonl",
         consistency_mode="shadow",  # type: ignore[arg-type]
     )
@@ -154,6 +159,7 @@ def test_consistency_mode_is_exposed_by_cli_and_defaults_off(
 
 def test_repair_configuration_is_bounded(tmp_path) -> None:
     config = DispatcherConfig(
+        parent_issue_number=1,
         consistency_mode="repair",  # type: ignore[arg-type]
         consistency_repair_allowlist=("status.primary-conflict",),  # type: ignore[arg-type]
         consistency_max_repair_passes=2,
@@ -165,6 +171,7 @@ def test_repair_configuration_is_bounded(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="consistency_max_repair_passes"):
         DispatcherConfig(
+            parent_issue_number=1,
             consistency_max_repair_passes=0,
             events_log_path=tmp_path / "invalid-events.jsonl",
         )
@@ -188,6 +195,7 @@ def test_real_pipeline_shadow_is_read_only_and_keeps_scheduling(
     }
     off = run_dispatch_cycle(
         DispatcherConfig(
+            parent_issue_number=1,
             **common,
             consistency_mode=ConsistencyMode.OFF,
             events_log_path=tmp_path / "off-events.jsonl",
@@ -196,6 +204,7 @@ def test_real_pipeline_shadow_is_read_only_and_keeps_scheduling(
     )
     shadow = run_dispatch_cycle(
         DispatcherConfig(
+            parent_issue_number=1,
             **common,
             consistency_mode=ConsistencyMode.SHADOW,
             events_log_path=tmp_path / "shadow-events.jsonl",
@@ -227,14 +236,18 @@ def test_off_and_shadow_preserve_existing_pipeline_outcome(
         "worktree_root": tmp_path / "worktrees",
     }
     off = _run_patched_cycle(
-        DispatcherConfig(**common, consistency_mode=ConsistencyMode.OFF),
+        DispatcherConfig(
+            parent_issue_number=1, **common, consistency_mode=ConsistencyMode.OFF
+        ),
         issue=issue,
         task=task,
         run_state=copy.deepcopy(original_state),
         pipeline_report=_report(applied=False),
     )
     shadow = _run_patched_cycle(
-        DispatcherConfig(**common, consistency_mode=ConsistencyMode.SHADOW),
+        DispatcherConfig(
+            parent_issue_number=1, **common, consistency_mode=ConsistencyMode.SHADOW
+        ),
         issue=issue,
         task=task,
         run_state=copy.deepcopy(original_state),
@@ -264,6 +277,7 @@ def test_shadow_dry_run_ignores_state_changes_that_were_not_applied(
     issue = make_issue(706, labels=("status:queued",), parent=None)
     task = make_task(706, subtask_id="shadow-supervisor")
     config = DispatcherConfig(
+        parent_issue_number=1,
         apply=False,
         consistency_mode=ConsistencyMode.SHADOW,
         events_log_path=tmp_path / "events.jsonl",
@@ -298,6 +312,7 @@ def test_shadow_records_targeted_events_and_authoritative_end_diff(
     task = make_task(706, subtask_id="shadow-supervisor")
     run_state = RunState()
     config = DispatcherConfig(
+        parent_issue_number=1,
         apply=True,
         consistency_mode=ConsistencyMode.SHADOW,
         events_log_path=tmp_path / "events.jsonl",
@@ -347,6 +362,7 @@ def test_shadow_observation_failure_is_reported_without_failing_cycle(
     issue = make_issue(706, labels=("status:queued",), parent=None)
     task = make_task(706, subtask_id="shadow-supervisor")
     config = DispatcherConfig(
+        parent_issue_number=1,
         apply=False,
         consistency_mode=ConsistencyMode.SHADOW,
         events_log_path=tmp_path / "events.jsonl",
@@ -375,6 +391,7 @@ def test_consistency_data_is_in_cycle_json_and_event_log(tmp_path, fake_forge) -
     issue = make_issue(706, labels=("status:queued",), parent=None)
     task = make_task(706, subtask_id="shadow-supervisor")
     config = DispatcherConfig(
+        parent_issue_number=1,
         apply=False,
         consistency_mode=ConsistencyMode.SHADOW,
         events_log_path=tmp_path / "events.jsonl",

@@ -143,6 +143,7 @@ class TestRestorationCandidateProjection:
             101, subtask_id="task-a", footprint=["src/foo.py"]
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -174,6 +175,7 @@ class TestRestorationCandidateProjection:
             forced_serial=True,
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -194,6 +196,7 @@ class TestRestorationCandidateProjection:
             101, subtask_id="task-a", footprint=["src/foo.py"]
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -224,6 +227,7 @@ class TestRestorationCandidateProjection:
             created_at=issue.created_at,
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -244,6 +248,7 @@ class TestRestorationCandidateProjection:
             created_at="2020-01-01T00:00:00+00:00",
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -270,6 +275,7 @@ class TestRestorationCandidateProjection:
             is_cross_repository=False,
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -348,6 +354,7 @@ class TestRestorationCandidateProjection:
             is_cross_repository=False,
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -391,6 +398,7 @@ class TestRestorationCandidateProjection:
             is_cross_repository=False,
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -418,6 +426,7 @@ class TestRestorationCandidateProjection:
             parent={"number": 100},
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -468,6 +477,7 @@ class TestRestorationCandidateProjection:
             is_cross_repository=False,
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -512,6 +522,7 @@ class TestRestorationCandidateProjection:
             is_cross_repository=False,
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -550,6 +561,7 @@ class TestRestorationCandidateProjection:
             is_cross_repository=False,
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -587,6 +599,7 @@ class TestRestorationCandidateProjection:
             is_cross_repository=False,
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -637,6 +650,7 @@ class TestRestorationCandidateProjection:
             is_cross_repository=False,
         )
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -681,6 +695,7 @@ class TestBookkeepingRepairCommand:
         )
         command = _bookkeeping_command("101")
         config = DispatcherConfig(
+            parent_issue_number=1,
             apply=True,
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",
@@ -705,6 +720,7 @@ class TestBookkeepingRepairCommand:
         run_state = RunState(active_worktrees={})
         command = _bookkeeping_command("102")
         config = DispatcherConfig(
+            parent_issue_number=1,
             apply=True,
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",
@@ -743,6 +759,7 @@ class TestBookkeepingRepairCommand:
         run_state = RunState(active_worktrees={"101": occupied})
         command = _bookkeeping_command("101")
         config = DispatcherConfig(
+            parent_issue_number=1,
             apply=True,
             run_state_path=tmp_path / "run_state.json",
             events_log_path=tmp_path / "events.jsonl",

@@ -41,7 +41,7 @@ class TestDryRun:
     ):
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
 
-        res = Integrator(IntegratorConfig(apply=False)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=False)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
@@ -59,7 +59,7 @@ class TestCreateTempBranchFailure:
             stderr=b"fatal: unable to create temp branch",
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failed_to_create_temp_branch"
         # マージ・CI検証には一切進んでいないことを確認する
@@ -76,7 +76,7 @@ class TestEnsureFullHistoryFailure:
             stderr=b"fatal: not a git repository",
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
@@ -100,7 +100,7 @@ class TestEnsureFullHistoryFailure:
 
         integrator_env.stub_git(handler)
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
@@ -118,7 +118,7 @@ class TestPreMergeShaCaptureFailure:
             stderr=b"fatal: ambiguous argument 'HEAD'",
         )
 
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "failure"
         assert res["failed"] == ["task-1"]

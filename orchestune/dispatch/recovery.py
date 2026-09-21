@@ -733,7 +733,6 @@ def _include_queued_attempts(
         issue
         for issue in combined.values()
         if MARKER not in issue.body
-        or config.parent_issue_number is None
         or (issue.parent or {}).get("number") == config.parent_issue_number
     )
 
@@ -770,11 +769,7 @@ class RecoveryBookkeepingAdapter:
         in_progress = tuple(forge.list_issues_by_label(StatusLabel.IN_PROGRESS))
         issues = _include_queued_attempts(in_progress, self._config)
         open_prs = tuple(forge.list_open_prs())
-        parent_issue = (
-            forge.get_issue(self._config.parent_issue_number)
-            if self._config.parent_issue_number is not None
-            else None
-        )
+        parent_issue = forge.get_issue(self._config.parent_issue_number)
         self._snapshot = RecoveryBookkeepingSnapshot(
             tasks_by_issue=_tasks_from_issues(issues),
             open_prs=open_prs,

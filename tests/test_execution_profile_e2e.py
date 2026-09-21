@@ -500,6 +500,7 @@ Testing full lifecycle of execution profiles.
         worktree_root = tmp_path / "worktrees"
 
         config = DispatcherConfig(
+            parent_issue_number=1,
             max_concurrent=2,
             max_launches_per_window=5,
             window_seconds=3600,
@@ -585,6 +586,7 @@ Testing full lifecycle of execution profiles.
         target = RecordingDispatchTarget(target_name="claude-cli")
 
         config = DispatcherConfig(
+            parent_issue_number=1,
             max_concurrent=2,
             max_launches_per_window=5,
             window_seconds=3600,
@@ -722,6 +724,7 @@ model_tier: strong
         target = RecordingDispatchTarget(target_name="claude-cli")
 
         config = DispatcherConfig(
+            parent_issue_number=1,
             max_concurrent=2,
             max_launches_per_window=5,
             window_seconds=3600,
@@ -759,6 +762,7 @@ model_tier: strong
         # Now test with CLI overrides
         target.launched_tasks.clear()
         config_override = DispatcherConfig(
+            parent_issue_number=1,
             max_concurrent=2,
             max_launches_per_window=5,
             window_seconds=3600,

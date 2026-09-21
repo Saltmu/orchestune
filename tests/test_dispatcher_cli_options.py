@@ -465,6 +465,8 @@ class TestMainDispatchTargetAutoDetection:
         ):
             main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--run-state-path",
                     str(tmp_path / "rs.json"),
@@ -490,6 +492,8 @@ class TestMainDispatchTargetAutoDetection:
         ):
             main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--run-state-path",
                     str(tmp_path / "rs.json"),
@@ -517,6 +521,8 @@ class TestMainDispatchTargetAutoDetection:
         ):
             main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--dispatch-target",
                     "local",
@@ -543,6 +549,8 @@ class TestMainDispatchTargetAutoDetection:
         ):
             main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--reviewer-bot",
                     "codex",
@@ -566,6 +574,8 @@ class TestMainDispatchTargetAutoDetection:
         ) as mock_cycle:
             main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--dispatch-target",
                     "local",
@@ -593,6 +603,8 @@ class TestMainDispatchTargetAutoDetection:
         ) as mock_cycle:
             main(
                 [
+                    "--parent-issue",
+                    "100",
                     "--no-apply",
                     "--dispatch-target",
                     "local",

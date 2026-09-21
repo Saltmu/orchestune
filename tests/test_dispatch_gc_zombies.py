@@ -33,6 +33,7 @@ class TestCollectZombiesAndTimeouts:
         run_state = RunState(active_worktrees={"280": active})
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -66,6 +67,7 @@ class TestCollectZombiesAndTimeouts:
         run_state = RunState(active_worktrees={"280": active})
         task = _task(status_labels=("status:in-progress",))
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -95,6 +97,7 @@ class TestCollectZombiesAndTimeouts:
         active = _active(pid=None)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -123,6 +126,7 @@ class TestDecideZombieOrTimeoutReclaims:
         active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -155,6 +159,7 @@ class TestDecideZombieOrTimeoutReclaims:
         active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -189,6 +194,7 @@ class TestDecideZombieOrTimeoutReclaims:
         active = _active(worktree_path=str(tmp_path), pid=None, started_at=1_000.0)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -206,6 +212,7 @@ class TestDecideZombieOrTimeoutReclaims:
         active = _active(started_at=1_000.0, pid=111)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -235,6 +242,7 @@ class TestDecideZombieOrTimeoutReclaims:
         active = _active(started_at=None, pid=111)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -263,6 +271,7 @@ class TestDecideZombieOrTimeoutReclaims:
         )
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -288,6 +297,7 @@ class TestDecideZombieOrTimeoutReclaims:
         active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -316,6 +326,7 @@ class TestDecideZombieOrTimeoutReclaims:
         active = _active()
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -338,6 +349,7 @@ class TestDecideZombieOrTimeoutReclaims:
         task = _task(status_labels=("status:in-progress",))
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,
@@ -363,6 +375,7 @@ class TestDecideZombieOrTimeoutReclaims:
         active = _active(started_at=1_000.0, pid=111)
         run_state = RunState(active_worktrees={"custom-key": active})
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             apply=True,

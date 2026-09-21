@@ -182,6 +182,7 @@ class TestBaseBranchRedRecovery:
         fake_forge.get_issue_state.return_value = "OPEN"
         fake_forge.get_issue_labels.return_value = ("status:queued",)
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -207,6 +208,7 @@ class TestBaseBranchRedRecovery:
         )
         fake_forge = MagicMock()
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
@@ -226,6 +228,7 @@ class TestBaseBranchRedRecovery:
         issues_mock.all.return_value = [_issue(1, labels=("status:blocked",))]
         ctx = MagicMock()
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
         )
@@ -249,6 +252,7 @@ class TestBaseBranchRedRecovery:
             {"body": outcome.render(), "created_at": "2026-01-01T00:00:10Z"}
         ]
         config = DispatcherConfig(
+            parent_issue_number=1,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

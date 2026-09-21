@@ -527,9 +527,7 @@ class CycleActionAdapter:
         """
         ctx = self._bound_view()
         if command.code == COMMAND_RECLAIM:
-            fresh_issues = _fetch_issues(self._config).filtered_by_parent(
-                self._config.parent_issue_number
-            )
+            fresh_issues = _fetch_issues(self._config)
             tasks_by_issue, _, _ = _build_task_mappings(fresh_issues.all())
             handler = build_gc_reclaim_handler(
                 self._run_state,
@@ -558,9 +556,7 @@ class CycleActionAdapter:
         if not command.code.startswith("status."):
             return DispatchRepairExecutorAdapter({}).execute(command)
 
-        fresh_issues = _fetch_issues(self._config).filtered_by_parent(
-            self._config.parent_issue_number
-        )
+        fresh_issues = _fetch_issues(self._config)
         tasks_by_issue, _, _ = _build_task_mappings(fresh_issues.all())
         return execute_status_repair_command(
             command,

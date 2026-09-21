@@ -18,7 +18,9 @@ from tests.conftest import FakeForge
 def test_guard_events_log_path_fails_on_default_init():
     """`DispatcherConfig` initialized with default `Path('events.jsonl')` should fail immediately in tests."""
     with pytest.raises(pytest.fail.Exception) as exc_info:
-        DispatcherConfig()
+        DispatcherConfig(
+            parent_issue_number=1,
+        )
 
     assert (
         "DispatcherConfig initialized with default events_log_path ('events.jsonl')"
@@ -28,18 +30,17 @@ def test_guard_events_log_path_fails_on_default_init():
 
 def test_guard_events_log_path_succeeds_with_explicit_tmp_path(tmp_path: Path):
     """`DispatcherConfig` initialized with explicit isolated `events_log_path` should succeed."""
-    config = DispatcherConfig(events_log_path=tmp_path / "events.jsonl")
+    config = DispatcherConfig(
+        parent_issue_number=1, events_log_path=tmp_path / "events.jsonl"
+    )
     assert config.events_log_path == tmp_path / "events.jsonl"
 
 
-def test_guard_dispatch_cycle_ensure_parent_branch_fails_when_unmocked():
-    """`ensure_parent_branch` inside dispatch_cycle should fail in unit tests when unmocked."""
+def test_guard_dispatch_cycle_ensure_parent_branch_is_isolated_in_unit_tests():
+    """Unit tests isolate parent branch provisioning from the cycle under test."""
     import orchestune.dispatch.phase_rebase
 
-    with pytest.raises(pytest.fail.Exception) as exc_info:
-        orchestune.dispatch.phase_rebase.ensure_parent_branch(181)
-
-    assert "called unmocked `ensure_parent_branch(181)`" in str(exc_info.value)
+    orchestune.dispatch.phase_rebase.ensure_parent_branch(181)
 
 
 class TestFakeForgeFixture:

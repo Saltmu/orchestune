@@ -136,9 +136,9 @@ def _migrate_legacy_final_pr_before_completion(
 
 
 def process_parent_completion(
-    parent_issue_number: int | None, apply: bool, forge: Forge | None = None
+    parent_issue_number: int, apply: bool, forge: Forge | None = None
 ) -> dict:
-    if parent_issue_number is None or not apply:
+    if not apply:
         return {"status": "skipped"}
 
     forge = forge or GitHubForge()

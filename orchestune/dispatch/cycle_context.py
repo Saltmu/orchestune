@@ -11,7 +11,6 @@ from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_action_contracts import CycleActions
 from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
-from orchestune.dispatch.filters import _filter_by_parent
 from orchestune.dispatch.recovery import _extract_raw_subtask_id
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import parse_task_from_issue
@@ -80,17 +79,6 @@ class IssuesByStatus:
             *self.done,
             *self.not_needed,
         ]
-
-    def filtered_by_parent(self, parent_issue_number: int | None) -> IssuesByStatus:
-        """`parent_issue_number`が指定されている場合、親Issueが一致する子Issueのみに絞る。"""
-        return IssuesByStatus(
-            queued=_filter_by_parent(self.queued, parent_issue_number),
-            locked=_filter_by_parent(self.locked, parent_issue_number),
-            in_progress=_filter_by_parent(self.in_progress, parent_issue_number),
-            blocked=_filter_by_parent(self.blocked, parent_issue_number),
-            done=_filter_by_parent(self.done, parent_issue_number),
-            not_needed=_filter_by_parent(self.not_needed, parent_issue_number),
-        )
 
 
 # #512/PR#520レビュー8巡目対応(Codex P2): 台帳に残るIssueの状態を一括で解決する
@@ -245,22 +233,8 @@ def _group_by_status(issues: list[IssueRecord]) -> IssuesByStatus:
 
 
 def _fetch_issues(config: DispatcherConfig) -> IssuesByStatus:
-    if config.parent_issue_number is not None:
-        result = find_children_by_parent(
-            config.resolved_forge, config.parent_issue_number
-        )
-        return _group_by_status(result.issues)
-
-    return IssuesByStatus(
-        queued=config.resolved_forge.list_issues_by_label(StatusLabel.QUEUED),
-        locked=config.resolved_forge.list_issues_by_label(StatusLabel.EXTERNAL_LOCK),
-        in_progress=config.resolved_forge.list_issues_by_label(StatusLabel.IN_PROGRESS),
-        blocked=config.resolved_forge.list_issues_by_label(StatusLabel.BLOCKED),
-        done=config.resolved_forge.list_issues_by_label(StatusLabel.DONE, state="all"),
-        not_needed=config.resolved_forge.list_issues_by_label(
-            StatusLabel.NOT_NEEDED, state="all"
-        ),
-    )
+    result = find_children_by_parent(config.resolved_forge, config.parent_issue_number)
+    return _group_by_status(result.issues)
 
 
 def _build_task_mappings(

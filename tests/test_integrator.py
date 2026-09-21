@@ -74,7 +74,7 @@ def _context(config: IntegratorConfig) -> IntegrationContext:
 
 class TestIntegratorRun:
     def test_no_done_tasks(self, integrator_env: IntegratorEnv):
-        res = Integrator(IntegratorConfig(apply=True)).run()
+        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
 
         assert res["status"] == "no_done_tasks"
 
@@ -152,7 +152,7 @@ class TestIntegrationPipeline:
                 ctx.merged_tasks.append("task-2")
                 return {"unparsable_done_issues": [7]}
 
-        ctx = _context(IntegratorConfig(apply=True))
+        ctx = _context(IntegratorConfig(parent_issue_number=100, apply=True))
         res = IntegrationPipeline([DummyStep1(), DummyStep2()]).execute(ctx)
 
         assert res == {
@@ -179,7 +179,7 @@ class TestIntegrationPipeline:
                 ctx.merged_tasks.append("task-skipped")
                 return {}
 
-        ctx = _context(IntegratorConfig(apply=True))
+        ctx = _context(IntegratorConfig(parent_issue_number=100, apply=True))
         res = IntegrationPipeline([FailStep(), DummyStep()]).execute(ctx)
 
         assert res["status"] == IntegrationStatus.FAILURE
@@ -233,7 +233,9 @@ class TestMultiIssueIntegrator:
                 }
 
         runner = MultiIssueIntegrator([DummyIntegrator(100), DummyIntegrator(200)])
-        res = runner.execute(_context(IntegratorConfig(apply=True)))
+        res = runner.execute(
+            _context(IntegratorConfig(parent_issue_number=100, apply=True))
+        )
 
         assert res["status"] == IntegrationStatus.COMPOSITE_SUCCESS
         assert res["details"]["issue_100"] == {
@@ -255,7 +257,9 @@ class TestMultiIssueIntegrator:
                 return {"status": IntegrationStatus.FAILURE}
 
         runner = MultiIssueIntegrator([SuccessDummy(), FailDummy()])
-        res = runner.execute(_context(IntegratorConfig(apply=True)))
+        res = runner.execute(
+            _context(IntegratorConfig(parent_issue_number=100, apply=True))
+        )
 
         assert res["status"] == IntegrationStatus.COMPOSITE_PARTIAL_SUCCESS
 
@@ -265,7 +269,9 @@ class TestMultiIssueIntegrator:
                 return {"status": IntegrationStatus.FAILED_TO_PUSH_TEMP_BRANCH}
 
         runner = MultiIssueIntegrator([FailDummy(), FailDummy()])
-        res = runner.execute(_context(IntegratorConfig(apply=True)))
+        res = runner.execute(
+            _context(IntegratorConfig(parent_issue_number=100, apply=True))
+        )
 
         assert res["status"] == IntegrationStatus.COMPOSITE_FAILURE
 
@@ -284,7 +290,9 @@ class TestMultiIssueIntegrator:
         runner = MultiIssueIntegrator(
             [CaptureForgeIntegrator(), CaptureForgeIntegrator()]
         )
-        ctx = _context(IntegratorConfig(apply=True, forge=injected_forge))
+        ctx = _context(
+            IntegratorConfig(parent_issue_number=100, apply=True, forge=injected_forge)
+        )
         res = runner.execute(ctx)
 
         assert res["status"] == IntegrationStatus.COMPOSITE_SUCCESS

@@ -107,7 +107,7 @@ def _config(tmp_path, fake_forge, **overrides) -> DispatcherConfig:
         "task_timeout_seconds": 0,
     }
     values.update(overrides)
-    return DispatcherConfig(**values)
+    return DispatcherConfig(parent_issue_number=100, **values)
 
 
 def _evaluate_execution_plan(

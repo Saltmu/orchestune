@@ -114,9 +114,7 @@ def _filter_deviation_blocked_candidates(
 
 
 def _filter_by_parent(
-    issues: list[IssueRecord], parent_issue_number: int | None
+    issues: list[IssueRecord], parent_issue_number: int
 ) -> list[IssueRecord]:
-    """`parent_issue_number`が指定されている場合、親Issueが一致するものだけに絞る。"""
-    if parent_issue_number is None:
-        return issues
+    """親Issueが一致するIssueだけに絞る。"""
     return [i for i in issues if effective_parent_number(i) == parent_issue_number]
