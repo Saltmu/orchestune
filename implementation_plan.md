@@ -75,3 +75,5 @@ This task used the `rg`/text-search impact fallback because Serena was unavailab
 ## Review round 1 reconciliation
 
 Codex reported one P1 test portability finding: fixed-parent indexing (`parents[3]`) assumed this linked-worktree directory depth and fails in a standard checkout. The tests now derive linked and primary roots through `resolve_claim_workspace(Path.cwd())` and `common_dir.parent`; the production implementation was unchanged. This was a test-enumeration/fixture portability issue, not a production scope miss.
+
+Codex reviewed the corrected SHA `91010a309985fad9dd54d5c798c96fc7f72d3f07` in round 2 and reported no inline findings or major issues. Final local CI passed at 95.25% coverage (`4079 passed, 2 skipped`); gitleaks and bloat checks also passed.
