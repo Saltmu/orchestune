@@ -768,6 +768,78 @@ def consistency_cycle_to_dict(report: ConsistencyCycleReport) -> dict:
     }
 
 
+@dataclass(frozen=True, slots=True)
+class EvaluatedFinding:
+    """A consistency finding paired with its eventual repair disposition in the cycle."""
+
+    finding: ConsistencyFinding
+    disposition: RepairDisposition | None = None
+
+
+def extract_evaluated_findings(
+    report: ConsistencyCycleReport,
+) -> tuple[EvaluatedFinding, ...]:
+    """Extract findings and their disposition from a cycle report for notification.
+
+    Collects all unique findings observed during the cycle (indexed by finding key).
+    For each finding:
+    - If the finding was marked resolved (disposition == RESOLVED), it is returned
+      with RepairDisposition.RESOLVED so callers can emit resolution notices.
+    - Otherwise, if the finding remains in the final scan's findings, it is returned
+      with its latest repair disposition (or None if no repair outcome exists).
+    """
+    if not report.scans and not report.repair_outcomes:
+        return ()
+
+    all_findings_by_key: dict[tuple[str, str, str], ConsistencyFinding] = {}
+    for scan in report.scans:
+        for finding in scan.report.findings:
+            all_findings_by_key[_finding_key(finding)] = finding
+
+    outcomes_by_key = {
+        (
+            outcome.finding_code,
+            outcome.scope.value,
+            outcome.subject_id or "",
+        ): outcome.disposition
+        for outcome in report.repair_outcomes
+    }
+
+    final_findings = report.scans[-1].report.findings if report.scans else ()
+    final_keys = frozenset(_finding_key(f) for f in final_findings)
+
+    results: list[EvaluatedFinding] = []
+
+    # 1. Findings present in the final scan (unresolved / active findings)
+    for finding in final_findings:
+        key = _finding_key(finding)
+        disposition = outcomes_by_key.get(key)
+        results.append(EvaluatedFinding(finding=finding, disposition=disposition))
+
+    # 2. Findings that were resolved during repair passes
+    for outcome in report.repair_outcomes:
+        key = (outcome.finding_code, outcome.scope.value, outcome.subject_id or "")
+        if key not in final_keys and outcome.disposition is RepairDisposition.RESOLVED:
+            resolved_finding = all_findings_by_key.get(key)
+            if resolved_finding is None:
+                resolved_finding = ConsistencyFinding(
+                    code=outcome.finding_code,
+                    scope=outcome.scope,
+                    severity=FindingSeverity.WARNING,
+                    expected=Evidence(summary=""),
+                    observed=Evidence(summary=""),
+                    repairability=Repairability.AUTOMATIC,
+                    subject_id=outcome.subject_id,
+                )
+            results.append(
+                EvaluatedFinding(
+                    finding=resolved_finding, disposition=RepairDisposition.RESOLVED
+                )
+            )
+
+    return tuple(results)
+
+
 __all__ = [
     "ConsistencyCycleReport",
     "ConsistencyMode",
@@ -777,11 +849,13 @@ __all__ = [
     "ConsistencySupervisor",
     "ConsistencyUnknownFact",
     "DesiredStateDeriver",
+    "EvaluatedFinding",
     "FunctionRepairPlanner",
     "MAX_REPAIR_PASSES",
     "RepairDisposition",
     "ScanKind",
     "consistency_cycle_to_dict",
     "diff_snapshots",
+    "extract_evaluated_findings",
     "repair_command_finding_codes",
 ]

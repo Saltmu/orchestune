@@ -30,6 +30,7 @@ from orchestune.dispatch.postcycle import (
     _decide_semantic_review_enabled,
     _poll_pending_not_needed_reviews,
     _post_event_log_comment,
+    _post_finding_notices,
     _process_parent_completion,
     _run_semantic_integrator,
 )
@@ -622,6 +623,9 @@ def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
         )
         post_cycle_results.append(
             _post_event_log_comment(config, report, auth_error=auth_error)
+        )
+        post_cycle_results.append(
+            _post_finding_notices(config, report, auth_error=auth_error)
         )
 
     return _DispatcherRunResult(

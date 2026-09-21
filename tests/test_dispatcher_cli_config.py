@@ -577,6 +577,7 @@ class TestDispatcherConfigLoading:
         )
         r3 = PhaseResult("process_parent_completion", PhaseStatus.SUCCESS)
         r4 = PhaseResult("post_event_log_comment", PhaseStatus.SUCCESS)
+        r5 = PhaseResult("post_finding_notices", PhaseStatus.SUCCESS)
 
         # ケース1: すべて成功
         with (
@@ -605,6 +606,11 @@ class TestDispatcherConfigLoading:
                 autospec=True,
                 return_value=r4,
             ),
+            patch(
+                "orchestune.dispatch.dispatcher._post_finding_notices",
+                autospec=True,
+                return_value=r5,
+            ),
         ):
             code = main(
                 [
@@ -620,7 +626,7 @@ class TestDispatcherConfigLoading:
             assert code == 0
             out = json.loads(capsys.readouterr().out)
             assert "post_cycle_results" in out
-            assert len(out["post_cycle_results"]) == 4
+            assert len(out["post_cycle_results"]) == 5
             assert out["post_cycle_results"][0]["status"] == "success"
 
         # ケース2: RETRYABLE_FAILURE
@@ -649,6 +655,11 @@ class TestDispatcherConfigLoading:
                 "orchestune.dispatch.dispatcher._post_event_log_comment",
                 autospec=True,
                 return_value=r4,
+            ),
+            patch(
+                "orchestune.dispatch.dispatcher._post_finding_notices",
+                autospec=True,
+                return_value=r5,
             ),
         ):
             code = main(
@@ -694,6 +705,11 @@ class TestDispatcherConfigLoading:
                 autospec=True,
                 return_value=r4,
             ),
+            patch(
+                "orchestune.dispatch.dispatcher._post_finding_notices",
+                autospec=True,
+                return_value=r5,
+            ),
         ):
             code = main(
                 [
@@ -734,7 +750,7 @@ class TestDispatcherConfigLoading:
             assert code == 1
             out = json.loads(capsys.readouterr().out)
             assert "post_cycle_results" in out
-            assert len(out["post_cycle_results"]) == 4
+            assert len(out["post_cycle_results"]) == 5
             for res in out["post_cycle_results"]:
                 assert res["status"] == "fatal_failure"
                 assert "main-auth-failed" in res["error_message"]
@@ -833,6 +849,64 @@ class TestDispatcherConfigLoading:
         assert code == 0
         mock_post.assert_called_once()
         assert mock_post.call_args.args[1] is cycle_report
+
+    def test_post_finding_notices_receives_cycle_report(self, tmp_path):
+        """#790: `run_dispatch_cycle`が返した`CycleReport`が、そのまま
+        `_post_finding_notices`へ渡されること。"""
+        cycle_report = self._empty_report()
+        with (
+            patch(
+                "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+                autospec=True,
+                return_value=cycle_report,
+            ),
+            patch(
+                "orchestune.dispatch.dispatcher._poll_pending_not_needed_reviews",
+                autospec=True,
+                return_value=PhaseResult(
+                    "poll_pending_not_needed_reviews", PhaseStatus.SUCCESS
+                ),
+            ),
+            patch(
+                "orchestune.dispatch.dispatcher._run_semantic_integrator",
+                autospec=True,
+                return_value=PhaseResult(
+                    "run_semantic_integrator", PhaseStatus.SUCCESS
+                ),
+            ),
+            patch(
+                "orchestune.dispatch.dispatcher._process_parent_completion",
+                autospec=True,
+                return_value=PhaseResult(
+                    "process_parent_completion", PhaseStatus.SUCCESS
+                ),
+            ),
+            patch(
+                "orchestune.dispatch.dispatcher._post_event_log_comment",
+                autospec=True,
+                return_value=PhaseResult("post_event_log_comment", PhaseStatus.SUCCESS),
+            ),
+            patch(
+                "orchestune.dispatch.dispatcher._post_finding_notices",
+                autospec=True,
+                return_value=PhaseResult("post_finding_notices", PhaseStatus.SUCCESS),
+            ) as mock_post_findings,
+        ):
+            code = main(
+                [
+                    "--apply",
+                    "--parent-issue",
+                    "100",
+                    "--allow-unsafe-agent-execution",
+                    "--events-log-path",
+                    str(tmp_path / "events.jsonl"),
+                ],
+                cwd=tmp_path,
+            )
+
+        assert code == 0
+        mock_post_findings.assert_called_once()
+        assert mock_post_findings.call_args.args[1] is cycle_report
 
     def test_custom_window_seconds_preserves_launch_history_quota(
         self, tmp_path, fake_forge
