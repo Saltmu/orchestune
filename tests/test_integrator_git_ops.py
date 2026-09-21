@@ -122,7 +122,7 @@ class TestPreMergeShaCaptureFailure:
 
         assert res["status"] == "failure"
         assert res["failed"] == ["task-1"]
-        integrator_env.remove_label.assert_called_with(1, "status:done")
+        integrator_env.remove_label.assert_any_call(1, "status:done")
         integrator_env.add_label.assert_called_with(1, "status:queued")
         comment_body = integrator_env.add_comment.call_args[0][1]
         assert "Failed to capture pre-merge HEAD" in comment_body

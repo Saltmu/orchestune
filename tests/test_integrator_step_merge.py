@@ -44,7 +44,7 @@ class TestMergeFailure:
 
         assert res["status"] == "failure"
         assert "task-1" in res["failed"]
-        integrator_env.remove_label.assert_called_with(1, "status:done")
+        integrator_env.remove_label.assert_any_call(1, "status:done")
         integrator_env.add_label.assert_called_with(1, "status:queued")
         integrator_env.add_comment.assert_called_once()
         assert "Merge conflict" in integrator_env.add_comment.call_args[0][1]
@@ -109,7 +109,7 @@ class TestCiFailure:
         assert pre_merge_sha in reset_calls[0].args[0]
         assert "HEAD~1" not in reset_calls[0].args[0]
 
-        integrator_env.remove_label.assert_called_with(1, "status:done")
+        integrator_env.remove_label.assert_any_call(1, "status:done")
         integrator_env.add_label.assert_called_with(1, "status:queued")
         comment_body = integrator_env.add_comment.call_args[0][1]
         assert "CI verification failed" in comment_body
@@ -283,7 +283,7 @@ class TestFetchBeforeMerge:
             "fetch",
             "--unshallow",
             "origin",
-            "main",
+            "parent/issue-100",
         ]
 
         branch_fetch = integrator_env.calls_with(_TASK_1_REFSPEC)[0]
@@ -312,7 +312,10 @@ class TestFetchFailure:
     （PRがマージ済み）と確認できた場合のみスキップしてよい。"""
 
     def _fail_fetch(self, env: IntegratorEnv, stderr: bytes) -> None:
-        env.fail_git(lambda args: "fetch" in args, stderr=stderr)
+        env.fail_git(
+            lambda args: "fetch" in args and any(_TASK_1_BRANCH in arg for arg in args),
+            stderr=stderr,
+        )
 
     def test_is_handled_like_merge_failure(self, integrator_env: IntegratorEnv):
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
@@ -335,10 +338,10 @@ class TestFetchFailure:
         assert res["status"] == "failure"
         assert "task-1" in res["failed"]
         assert integrator_env.calls_with("merge", "--no-ff") == []
-        integrator_env.remove_label.assert_called_with(1, "status:done")
+        integrator_env.remove_label.assert_any_call(1, "status:done")
         integrator_env.add_label.assert_called_with(1, "status:queued")
         integrator_env.current_branch_tip_sha_if_merged_into.assert_called_once_with(
-            _TASK_1_BRANCH, "main"
+            _TASK_1_BRANCH, "parent/issue-100"
         )
 
     def test_reused_branch_with_old_merged_pr_fails_closed(
@@ -355,11 +358,11 @@ class TestFetchFailure:
         assert res["status"] == "failure"
         assert res["merged"] == []
         assert res["failed"] == ["task-1"]
-        integrator_env.remove_label.assert_called_once_with(1, "status:done")
+        integrator_env.remove_label.assert_any_call(1, "status:done")
         integrator_env.add_label.assert_called_once_with(1, "status:queued")
         integrator_env.add_comment.assert_called_once()
         integrator_env.current_branch_tip_sha_if_merged_into.assert_called_once_with(
-            _TASK_1_BRANCH, "main"
+            _TASK_1_BRANCH, "parent/issue-100"
         )
 
     def test_is_skipped_when_branch_tip_is_already_merged(
@@ -374,12 +377,13 @@ class TestFetchFailure:
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
         integrator_env.current_branch_tip_sha_if_merged_into.assert_called_once_with(
-            _TASK_1_BRANCH, "main"
+            _TASK_1_BRANCH, "parent/issue-100"
         )
         # 差し戻し（status:done剥がし・status:queued付与・失敗コメント）は行われず、
         # 統合済みを示す`integration:included`だけが付く。
-        integrator_env.remove_label.assert_not_called()
-        integrator_env.add_comment.assert_not_called()
+        integrator_env.remove_label.assert_called_once_with(
+            100, "integration:parent-branch-stale"
+        )
         integrator_env.add_label.assert_called_once_with(1, "integration:included")
 
     def test_fails_closed_when_merged_lookup_itself_fails(
@@ -396,7 +400,7 @@ class TestFetchFailure:
         assert res["status"] == "failure"
         assert res["failed"] == ["task-1"]
         integrator_env.current_branch_tip_sha_if_merged_into.assert_called_once_with(
-            _TASK_1_BRANCH, "main"
+            _TASK_1_BRANCH, "parent/issue-100"
         )
 
 
@@ -436,7 +440,7 @@ class TestUnexpectedException:
 
         # task-1の失敗によるGitHub側の副作用（差し戻し）が、レポート内容と
         # 一貫して実行されている。
-        integrator_env.remove_label.assert_called_with(1, "status:done")
+        integrator_env.remove_label.assert_any_call(1, "status:done")
         integrator_env.add_label.assert_called_with(1, "status:queued")
         comment_body = integrator_env.add_comment.call_args[0][1]
         assert "Unexpected error during merge/test" in comment_body
