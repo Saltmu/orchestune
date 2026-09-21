@@ -33,6 +33,36 @@ def _resolve_relative_to(
     )
 
 
+def _resolve_primary_root(toplevel: Path, common_dir: Path) -> Path:
+    """Return the primary checkout root for normal and linked worktrees.
+
+    ``git-common-dir`` points at the primary checkout's ``.git`` directory for
+    linked worktrees. For submodules and repositories created with
+    ``--separate-git-dir`` it points elsewhere, so their checkout ``toplevel``
+    remains the only safe root for relative shared paths.
+    """
+    git_marker = toplevel / ".git"
+    if not git_marker.is_file():
+        return toplevel
+    try:
+        marker = git_marker.read_text(encoding="utf-8").strip()
+        prefix, _, raw_git_dir = marker.partition(":")
+        if prefix != "gitdir" or not raw_git_dir.strip():
+            return toplevel
+        git_dir = Path(raw_git_dir.strip())
+        if not git_dir.is_absolute():
+            git_dir = (toplevel / git_dir).resolve()
+        else:
+            git_dir = git_dir.resolve()
+    except OSError:
+        return toplevel
+
+    worktree_metadata = common_dir / "worktrees"
+    if git_dir.parent == worktree_metadata and common_dir.name == ".git":
+        return common_dir.parent
+    return toplevel
+
+
 def resolve_claim_workspace(
     cwd: str | Path | None = None,
     *,
@@ -50,13 +80,12 @@ def resolve_claim_workspace(
     起動されるディレクトリと、dispatch自身のjournal復元・GCが参照する
     `config.worktree_root`が食い違ってしまう。
 
-    Note:
-        Assumes common_dir is located directly inside the primary checkout
-        (e.g., `<primary_root>/.git`). Repositories with detached or external git
-        directories are not relocated.
+    Relative shared paths use the primary checkout for linked worktrees. For
+    submodules and external git directories, they use the checkout returned by
+    ``git rev-parse --show-toplevel`` so separate repositories do not share state.
     """
     toplevel, common_dir = get_git_repository_paths(cwd)
-    primary_root = common_dir.parent
+    primary_root = _resolve_primary_root(toplevel, common_dir)
     repository_identity = common_dir.as_posix()
 
     run_state_path = _resolve_relative_to(

@@ -27,14 +27,14 @@ Normalize only the two paths shared with claim at the dispatcher boundary, after
 | `orchestune/dispatch/dispatcher.py:_load_dispatcher_inputs` | in scope | Has the merged CLI/config values and the caller-provided `cwd`; this is the single normalization boundary. |
 | `orchestune/dispatch/dispatcher.py:_build_dispatcher_config` | in scope | Must write resolved paths into `DispatcherConfig`. |
 | `orchestune/dispatch/dispatcher.py:main` | in scope | Passes `cwd` into the normalization flow and preserves parser error handling. |
-| `orchestune/claim/workspace.py:resolve_claim_workspace` | still out of scope | Existing primary-root contract is reused unchanged. |
+| `orchestune/claim/workspace.py:resolve_claim_workspace` | in scope | The existing resolver is reused by dispatch and now distinguishes linked-worktree common dirs from external git dirs so separate repositories cannot share state. |
 | `orchestune/dispatch/config.py:DispatcherConfig` | still out of scope | Type/default contract remains unchanged; only construction inputs are normalized. |
 | `orchestune/dispatch/cycle_actions.py:_bind_dispatch_claim_fn` | still out of scope | It already forwards `config.run_state_path` and `config.worktree_root`; normalized config makes those values consistent. |
 | `orchestune/dispatch/launch.py` and GC/recovery consumers of `DispatcherConfig` | still out of scope | They consume config values and require no path-resolution logic once config is absolute. |
 | `tests/test_dispatcher_shared_paths.py` | in scope | Verifies config-file and CLI-derived paths, primary/linked-worktree resolution, absolute preservation, and repository-outside failure. |
 | `tests/test_dispatcher_cli_config.py` / `tests/test_dispatcher_cli_options.py` | in scope | Updated existing expectations/fixtures for the new repository-root contract. |
 | `tests/test_dispatch_launch_claim_mapping.py` | still out of scope | Existing absolute-config forwarding coverage remains valid; the claim mapping code itself is unchanged. |
-| `tests/test_claim_workspace.py` | still out of scope | Existing resolver contract is regression coverage and should remain unchanged. |
+| `tests/test_claim_workspace.py` | in scope | Adds regression coverage for external `--separate-git-dir` roots. |
 | `docs/en/usage.md` / `docs/ja/usage.md` | in scope | Publicly document relative path semantics for both CLI and config-file values. |
 
 Supplementary searches covered `getattr`/`setattr`/`**kwargs`, string-based patches, serialized config keys, and docs/skills references for `run_state_path` and `worktree_root`; no additional dispatcher boundary required changes were found.
@@ -50,7 +50,8 @@ Supplementary searches covered `getattr`/`setattr`/`**kwargs`, string-based patc
 | Reference | Result |
 | :--- | :--- |
 | `_DispatcherInputs`, `_load_dispatcher_inputs`, `_build_dispatcher_config`, `main` | done — resolved paths are carried explicitly and written into `DispatcherConfig`. |
-| `resolve_claim_workspace`, `DispatcherConfig`, claim/launch/GC consumers | still out of scope — reused/consumed unchanged. |
+| `resolve_claim_workspace` | done — linked worktrees still use common-dir primary root; external git dirs/submodules use checkout top-level. |
+| `DispatcherConfig`, claim/launch/GC consumers | still out of scope — config type and consumers remain unchanged. |
 | dispatcher shared-path tests | done — primary, linked-worktree/subdirectory, config, absolute, and outside-repository cases covered. |
 | claim workspace tests and claim mapping | still out of scope — existing tests pass unchanged; mapping receives config's normalized values. |
 | English/Japanese usage docs | done — relative-path primary-root semantics documented. |
@@ -77,3 +78,5 @@ This task used the `rg`/text-search impact fallback because Serena was unavailab
 Codex reported one P1 test portability finding: fixed-parent indexing (`parents[3]`) assumed this linked-worktree directory depth and fails in a standard checkout. The tests now derive linked and primary roots through `resolve_claim_workspace(Path.cwd())` and `common_dir.parent`; the production implementation was unchanged. This was a test-enumeration/fixture portability issue, not a production scope miss.
 
 Codex reviewed the corrected SHA `91010a309985fad9dd54d5c798c96fc7f72d3f07` in round 2 and reported no inline findings or major issues. Final local CI passed at 95.25% coverage (`4079 passed, 2 skipped`); gitleaks and bloat checks also passed.
+
+Round 3 reported a P2 for external Git common directories. The resolver now detects linked-worktree metadata explicitly and falls back to `git rev-parse --show-toplevel` for separate-git-dir/submodule layouts, with a focused regression test. This is a classification miss against the original out-of-scope decision; no dispatcher consumer changes were needed.

@@ -166,6 +166,23 @@ class TestResolveClaimWorkspace:
         with pytest.raises((RuntimeError, subprocess.CalledProcessError)):
             resolve_claim_workspace(cwd=not_a_repo)
 
+    def test_resolve_with_external_git_dir_anchors_to_checkout(
+        self, tmp_path: Path
+    ) -> None:
+        checkout = tmp_path / "checkout"
+        checkout.mkdir()
+        external_git_dir = tmp_path / "git-dir"
+        run_git(
+            ["init", "--separate-git-dir", str(external_git_dir), str(checkout)],
+            cwd=tmp_path,
+        )
+
+        ws = resolve_claim_workspace(cwd=checkout)
+
+        assert ws.repository_root == checkout.resolve()
+        assert ws.run_state_path == checkout / "run_state.json"
+        assert ws.worktree_root == checkout / "worktrees"
+
     def test_claim_workspace_is_frozen(
         self, git_repo_with_worktree: tuple[Path, Path]
     ) -> None:
