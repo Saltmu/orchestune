@@ -81,6 +81,22 @@ def test_cli_delegates_to_claim():
     assert captured_argv == [["orchestune", "123", "--no-apply"]]
 
 
+def test_cli_delegates_to_complete_with_its_exit_code():
+    from orchestune.cli import main
+
+    with (
+        patch("sys.argv", ["orchestune", "complete", "123"]),
+        patch(
+            "orchestune.complete.cli.main", autospec=True, return_value=32
+        ) as mock_complete_main,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 32
+    mock_complete_main.assert_called_once()
+
+
 def test_cli_delegates_to_status():
     from orchestune.cli import main
 

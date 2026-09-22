@@ -50,7 +50,7 @@ from orchestune.dispatch.scoring import (
     ScoreComponents,
     Task,
 )
-from orchestune.dispatch.state import RunState, TaskReclaimRecord
+from orchestune.dispatch.state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.dispatch.summary import merge_skips
 from orchestune.dispatch.worktree import LaunchResult
 from tests.conftest import make_task
@@ -351,7 +351,27 @@ def test_successful_launch_partial_update_contract(
     )
     forge = fake_forge
     config = _config(tmp_path, forge, apply=True)
-    run_state = RunState()
+    run_state = RunState(
+        active_worktrees={
+            "10": ActiveWorktree(
+                issue_number=10,
+                branch=plan.branch_name,
+                worktree_path="",
+                pid=None,
+                started_at=None,
+                declared_footprint=task.footprint,
+                owner_kind="dispatch",
+                claim_id="claim-10",
+                claim_stage="reserved",
+                base_ref="origin/main",
+                base_sha=None,
+                reservation_kind="footprint",
+                repository_id="repository-10",
+                claimed_at=99.0,
+                owner_token_digest="digest-10",
+            )
+        }
+    )
     save_error = RuntimeError("run-state failed")
     label_error = RuntimeError("forge label failed")
     committed = MagicMock()

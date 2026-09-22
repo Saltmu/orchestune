@@ -832,7 +832,7 @@ class TestCompleteFailureAndExitCodes:
             issue_number=997,
         )
         assert failure.exit_code == CompleteExitCode.CLAIM_NOT_FOUND
-        assert failure.exit_code == 11
+        assert failure.exit_code == 41
 
     def test_all_failure_reasons_mapped(self):
         for reason in CompleteFailureReason:

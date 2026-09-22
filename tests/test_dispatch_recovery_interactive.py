@@ -132,7 +132,8 @@ class TestRestorationPreservesClaimOwnership:
         )
 
         assert active.owner_kind == "dispatch"
-        assert active.claim_id is None
+        assert active.claim_id == "recovered-941"
+        assert active.owner_token_digest is not None
         assert active.reservation_kind == "footprint"
 
     def test_restored_active_worktree_with_launched_attempt_preserves_interactive_claim(
@@ -314,7 +315,8 @@ class TestRestorationPreservesClaimOwnership:
         )
 
         assert active.owner_kind == "dispatch"
-        assert active.claim_id is None
+        assert active.claim_id == "recovered-943"
+        assert active.owner_token_digest is not None
         assert active.reservation_kind == "footprint"
         assert active.external_id == "ext-job-88888"
         assert active.launch_attempt_id == "attempt-cloud-888"

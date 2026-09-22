@@ -387,6 +387,12 @@ def _build_active_worktree_from_launch(
     run_state: RunState,
     now: float,
 ) -> ActiveWorktree:
+    reservation = run_state.active_worktrees.get(str(task.issue_number))
+    if reservation is None:
+        raise ValueError(
+            f"Cannot record launch for issue #{task.issue_number} without its claim reservation"
+        )
+
     selection = plan.execution_selection
     profile = selection.profile if selection else task.execution_profile
     model = selection.model if selection else None
@@ -413,14 +419,18 @@ def _build_active_worktree_from_launch(
         selection_reason=selection_reason,
         launch_attempt_id=launch.launch_attempt_id,
         launch_phase="launched",
-        # #943: dispatch launchはclaim_task（owner_kind=dispatch）経由で予約される。
-        # `launch.reservation_kind`はclaim outcomeから`_try_planned_launch`が
-        # 設定するが、未設定（None）の場合はActiveWorktreeの既定値
-        # （reservation_kind="footprint"）へ安全にフォールバックする。
-        owner_kind=OwnerKind.DISPATCH.value,
-        claim_id=launch.claim_id,
-        base_ref=launch.base_ref,
-        reservation_kind=launch.reservation_kind or "footprint",
+        # The claim reservation is the only authoritative source for durable
+        # ownership and identity.  Reconstructing any of these defaults here
+        # would produce a ledger that the strict state reader must reject.
+        owner_kind=reservation.owner_kind,
+        claim_id=reservation.claim_id,
+        claim_stage=reservation.claim_stage,
+        base_ref=reservation.base_ref,
+        base_sha=reservation.base_sha,
+        reservation_kind=reservation.reservation_kind,
+        repository_id=reservation.repository_id,
+        claimed_at=reservation.claimed_at,
+        owner_token_digest=reservation.owner_token_digest,
     )
 
 

@@ -46,6 +46,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
         {
             "bootstrap",
             "claim.cli",
+            "complete.cli",
             "cli",
             "dag.cli",
             "dispatch.dispatcher",
@@ -57,6 +58,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     3: frozenset(
         {
             "claim.service",
+            "complete.service",
             "dispatch.cycle",
             "dispatch.cycle_actions",
             "dispatch.cycle_context",
@@ -81,6 +83,10 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "claim.ownership",
             "claim.preflight",
             "claim.workspace",
+            "complete.ci_evidence",
+            "complete.journal",
+            "complete.posting",
+            "complete.preflight",
             "consistency",
             "consistency.desired",
             "consistency.engine",
@@ -153,6 +159,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "provisioning.plan",
             "provisioning.plan_loading",
             "provisioning.rendering",
+            "provisioning.retry",
             "provisioning.subtasks",
             "replan.audit",
             "replan.operations",
@@ -182,6 +189,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "claim.contracts",
             "complete",
             "complete.contracts",
+            "exit_codes",
             "consistency.contracts",
             "consistency.models",
             "consistency.vocabulary",
@@ -210,6 +218,7 @@ L4_MODULES = EXPECTED_LAYERS[4]
 ALLOWED_L4_DEPENDENTS = {
     "bootstrap": frozenset({"cli"}),
     "claim.cli": frozenset({"cli"}),
+    "complete.cli": frozenset({"cli"}),
     "dag.cli": frozenset({"cli"}),
     "dispatch.dispatcher": frozenset({"cli"}),
     "monitor": frozenset({"cli"}),
