@@ -415,3 +415,40 @@ def get_git_repository_paths(cwd: str | Path | None = None) -> tuple[Path, Path]
         base_dir = Path(cwd).resolve() if cwd is not None else Path.cwd().resolve()
         common_dir = (base_dir / common_dir_raw).resolve()
     return toplevel, common_dir
+
+
+class WorktreeStatus(StrEnum):
+    """Observed state of a completion worktree."""
+
+    CLEAN = "clean"
+    DIRTY = "dirty"
+    UNKNOWN = "unknown"
+
+
+def inspect_worktree_status(worktree_path: Path | str | None) -> WorktreeStatus:
+    """Inspect a worktree and observe its status as CLEAN, DIRTY, or UNKNOWN.
+
+    Failures to run git or non-existent directories return UNKNOWN and are
+    never rounded to CLEAN.
+    """
+    if worktree_path is None:
+        return WorktreeStatus.UNKNOWN
+    path = Path(worktree_path)
+    if not path.is_dir():
+        return WorktreeStatus.UNKNOWN
+
+    try:
+        res = run_git(
+            ["status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=path,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return WorktreeStatus.UNKNOWN
+
+    if res.returncode != 0:
+        return WorktreeStatus.UNKNOWN
+
+    if not res.stdout.strip():
+        return WorktreeStatus.CLEAN
+    return WorktreeStatus.DIRTY
