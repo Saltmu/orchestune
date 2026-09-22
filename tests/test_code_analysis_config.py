@@ -153,7 +153,7 @@ def test_workflow_requires_impact_scope_before_implementation():
     assert "references/impact-scope.md" in skill_text
 
     reference_text = IMPACT_SCOPE_REFERENCE.read_text(encoding="utf-8")
-    assert "implementation_plan.md" in reference_text
+    assert "<session-dir>/implementation-plan.md" in reference_text
     # 検索結果なしを影響なしの証明にしない補完調査
     assert "dynamic" in reference_text.lower()
     # 実装後の照合

@@ -99,3 +99,68 @@ def test_agent_rules_bloat_autonomous_refactoring():
     assert "自律的リファクタリング" in instructions
     assert "承認" not in instructions
     assert "エスカレーション" in instructions
+
+
+def test_agent_rules_define_collision_safe_repository_local_scratch_space():
+    instructions = (REPOSITORY_ROOT / ".agents" / "AGENTS.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert ".orchestune/tmp/" in instructions
+    assert "UTC" in instructions
+    assert "random" in instructions.lower()
+    assert "OS グローバルの `/tmp`" in instructions
+
+
+def test_gitignore_excludes_the_agent_scratch_directory():
+    ignore_rules = (REPOSITORY_ROOT / ".gitignore").read_text(encoding="utf-8")
+
+    assert ".orchestune/tmp/" in ignore_rules.splitlines()
+
+
+def test_fixed_name_implementation_plan_is_not_tracked():
+    tracked_plan = REPOSITORY_ROOT / "implementation_plan.md"
+
+    assert not tracked_plan.exists()
+
+
+def test_workflow_skills_use_unique_scratch_paths_instead_of_fixed_tmp_files():
+    skill_paths = [
+        REPOSITORY_ROOT / "skills" / "local-ci-developer" / "SKILL.md",
+        REPOSITORY_ROOT / "skills" / "workflow-template" / "SKILL.md",
+        REPOSITORY_ROOT / "skills" / "orchestune" / "SKILL.md",
+    ]
+    reference_paths = list(
+        (REPOSITORY_ROOT / "skills" / "local-ci-developer" / "references").glob("*.md")
+    ) + list(
+        (REPOSITORY_ROOT / "skills" / "workflow-template" / "references").glob("*.md")
+    )
+
+    combined = "\n".join(
+        path.read_text(encoding="utf-8") for path in skill_paths + reference_paths
+    )
+    assert ".orchestune/tmp/" in combined
+    assert "<UTC timestamp>" in combined
+    assert "<random>" in combined
+    assert "/tmp/pr_body.md" not in combined
+    assert "/tmp/review_reply.md" not in combined
+
+
+def test_orchestune_skill_verifies_target_ignore_before_writing_plan():
+    instructions = (REPOSITORY_ROOT / "skills" / "orchestune" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "git check-ignore" in instructions
+    assert "before creating" in instructions.lower()
+    assert ".gitignore" in instructions
+
+
+def test_local_ci_skill_migrates_preclaim_plan_into_task_worktree():
+    instructions = (
+        REPOSITORY_ROOT / "skills" / "local-ci-developer" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "<planning-session-dir>" in instructions
+    assert "worktree-local" in instructions
+    assert "migrate" in instructions.lower()

@@ -22,7 +22,7 @@ This skill acts as a router orchestrating the standard development workflow: des
 
 | Item | Interactive Mode | Non-Interactive Mode (Auto-Dispatch / Existing Issue) |
 | :--- | :--- | :--- |
-| **Plan Approval & Reviewer Selection (Step 1)** | Present to user and wait for approval; ask user to select reviewer bot (Claude/Codex) alongside plan approval | When invoked with an existing Issue or Auto-Dispatch, bypass user approval after writing `implementation_plan.md` and proceed directly to implementation; resolve reviewer bot from prompt/dispatch or select cross-model distinct from author |
+| **Plan Approval & Reviewer Selection (Step 1)** | Present to user and wait for approval; ask user to select reviewer bot (Claude/Codex) alongside plan approval | When invoked with an existing Issue or Auto-Dispatch, bypass user approval after writing `<session-dir>/implementation-plan.md` and proceed directly to implementation; resolve reviewer bot from prompt/dispatch or select cross-model distinct from author |
 | **Issue Creation (Step 2)** | Create via selected backend (`gh` CLI or GitHub MCP/Web UI) if needed | Use issue number provided in prompt (skip creation) |
 | **Worktree (Step 2.5)** | Create and clean up a task worktree | Use dispatcher-provisioned worktree (or create task worktree if standalone issue); skip cleanup if dispatcher-managed |
 | **Review Execution (Step 11)** | Execute review using reviewer bot selected in Step 1 | Execute review using reviewer bot resolved in Step 1 |
@@ -31,17 +31,23 @@ This skill acts as a router orchestrating the standard development workflow: des
 ## Fast-Path for Minor Changes (Typo / Docs)
 For documentation updates or typo fixes that do not alter code logic, **Steps 3–8 (TDD) may be skipped**. However, to prevent secret leaks and ensure quality, **Step 9 Local CI (`<CI_ENTRYPOINT>`) must always be executed** before proceeding to Step 10 (PR creation).
 
+## Session Scratch Directory
+
+Before writing any plan or CLI body file, follow
+[references/scratch.md](references/scratch.md). In the remainder of this skill,
+`<session-dir>` means the unique directory defined there.
+
 ## Preflight & GitHub Backend Selection (Step 0)
 At session start, inspect and record the execution environment:
 1. **Tooling Availability**: Check `<PREFLIGHT_CHECK_COMMAND>` (e.g. package manager, lockfile consistency, secret scanner).
-2. **GitHub Backend Selection**: Check `gh auth status` and GitHub MCP capabilities. Select either `gh` CLI or GitHub MCP as the fixed backend for all downstream GitHub operations throughout the session (Step 2 Issue Creation, Step 10 PR Creation, Step 12 Outcome Declaration), and record the choice in `implementation_plan.md`. If `gh` CLI is unauthenticated or unavailable, use GitHub MCP (or Web UI) without stalling.
+2. **GitHub Backend Selection**: Check `gh auth status` and GitHub MCP capabilities. Select either `gh` CLI or GitHub MCP as the fixed backend for all downstream GitHub operations throughout the session (Step 2 Issue Creation, Step 10 PR Creation, Step 12 Outcome Declaration), and record the choice in `<session-dir>/implementation-plan.md`. If `gh` CLI is unauthenticated or unavailable, use GitHub MCP (or Web UI) without stalling.
 
 ## Development Steps
 
 | Step | Item | Summary / Command | Reference |
 | :--- | :--- | :--- | :--- |
 | **0** | **Preflight & Requirement Check** | Verify environment and tools via `<PREFLIGHT_CHECK_COMMAND>`, `gh auth status`, and GitHub MCP; fix backend. If requirements are met on `main`, post outcome record (`result: not-needed`) and exit. | - |
-| **1** | **Design & Implementation Plan** | Write `implementation_plan.md` (preflight, backend, reviewer bot, design). Ask user for plan & reviewer approval (bypass approval for existing Issue / Auto-Dispatch). | - |
+| **1** | **Design & Implementation Plan** | Write `<session-dir>/implementation-plan.md` (preflight, backend, reviewer bot, design). Ask user for plan & reviewer approval (bypass approval for existing Issue / Auto-Dispatch). | - |
 | **2** | **GitHub Issue Creation** | Skip if issue number was provided in prompt. When filing new: use selected backend (`gh issue create --title "..." --body "..."` or GitHub MCP/Web UI). | - |
 | **2.5** | **Worktree Preparation** | For a requested change or existing Issue fix, create `worktree/<BRANCH_SLUG>` and perform all remaining work there. | [references/worktree.md](references/worktree.md) |
 | **3–9** | **TDD & Local CI** | Reproducer test, baseline recording, test-driven implementation, local CI (`<CI_ENTRYPOINT>`). | [references/tdd.md](references/tdd.md) |
@@ -88,5 +94,3 @@ Upon task completion, satisfaction, or escalation, post the appropriate machine-
 }
 ```
 ````
-
-
