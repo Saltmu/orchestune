@@ -217,6 +217,10 @@ class _DispatchConsistencyAdapter:
                     if active.pid is not None
                     else None
                 ),
+                owner_kind=active.owner_kind,
+                claim_id=active.claim_id,
+                claim_stage=active.claim_stage,
+                launch_phase=active.launch_phase,
             )
             for _, active in sorted(self._run_state.active_worktrees.items())
         )

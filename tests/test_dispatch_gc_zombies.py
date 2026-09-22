@@ -9,6 +9,8 @@
 
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.state import RunState
 from tests.dispatch_gc_test_support import _active, _task
@@ -53,6 +55,84 @@ class TestCollectZombiesAndTimeouts:
         assert run_state.active_worktrees == {}
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
+
+    @pytest.mark.parametrize("launch_phase", [None, "failed"])
+    def test_dispatch_prelaunch_orphan_with_physical_worktree_is_safely_reclaimed(
+        self, tmp_path, fake_forge, launch_phase
+    ):
+        """#964: dispatch claim成功後・provider未呼出の孤児予約（worktreeあり）は安全に回収される。"""
+        worktree_path = tmp_path / f"prelaunch-worktree-{launch_phase}"
+        worktree_path.mkdir(parents=True)
+        active = _active(
+            started_at=None,
+            worktree_path=str(worktree_path),
+            pid=None,
+            owner_kind="dispatch",
+            claim_id="claim-test-123",
+            claim_stage="ACTIVE_SAVED",
+            launch_phase=launch_phase,
+        )
+        run_state = RunState(active_worktrees={"280": active})
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=True,
+            task_timeout_seconds=60,
+            forge=fake_forge,
+        )
+
+        with (
+            patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
+            patch(
+                "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
+            ),
+            patch("orchestune.dispatch.gc.zombies.remove_worktree") as mock_remove,
+        ):
+            events = _collect_zombies_and_timeouts(
+                run_state, {active.issue_number: task}, config
+            )
+
+        assert len(events) == 1
+        assert run_state.active_worktrees == {}
+        assert mock_remove.called
+        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:queued")
+
+    def test_dispatch_prelaunch_orphan_not_reclaimed_when_launching_or_launched(
+        self, tmp_path, fake_forge
+    ):
+        """#964: launch_phaseがlaunchingまたはlaunchedの場合は回収されない。"""
+        worktree_path = tmp_path / "launching-worktree"
+        worktree_path.mkdir(parents=True)
+        active = _active(
+            started_at=None,
+            worktree_path=str(worktree_path),
+            pid=None,
+            owner_kind="dispatch",
+            claim_id="claim-test-456",
+            claim_stage="ACTIVE_SAVED",
+            launch_phase="launching",
+        )
+        run_state = RunState(active_worktrees={"280": active})
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=True,
+            task_timeout_seconds=60,
+            forge=fake_forge,
+        )
+
+        with patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0):
+            events = _collect_zombies_and_timeouts(
+                run_state, {active.issue_number: task}, config
+            )
+
+        assert events == []
+        assert "280" in run_state.active_worktrees
 
     def test_timeout_without_physical_worktree_requeues_issue(
         self, tmp_path, fake_forge

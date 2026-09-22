@@ -412,7 +412,7 @@ def _build_active_worktree_from_launch(
         reasoning_effort=reasoning_effort,
         selection_reason=selection_reason,
         launch_attempt_id=launch.launch_attempt_id,
-        launch_phase="launched" if launch.launch_attempt_id else None,
+        launch_phase="launched",
         # #943: dispatch launchはclaim_task（owner_kind=dispatch）経由で予約される。
         # `launch.reservation_kind`はclaim outcomeから`_try_planned_launch`が
         # 設定するが、未設定（None）の場合はActiveWorktreeの既定値
@@ -547,6 +547,45 @@ def _sync_claim_reservation_into_run_state(
         run_state.active_worktrees[key] = reservation
 
 
+def _persist_launching_phase(
+    issue_number: int,
+    outcome: ClaimOutcome,
+    run_state: RunState,
+    config: DispatcherConfig,
+) -> LaunchResult | None:
+    """#964: provider呼出直前にlaunch_phase="launching"を永続化する。
+
+    保存失敗時はproviderを呼ばず起動を保留する。
+    """
+    active_entry = run_state.active_worktrees.get(str(issue_number))
+    if active_entry is None:
+        return None
+    prev_phase = active_entry.launch_phase
+    active_entry.launch_phase = "launching"
+    try:
+        save_run_state(
+            run_state,
+            config.run_state_path,
+            launch_window_seconds=config.window_seconds,
+        )
+        return None
+    except Exception as exc:
+        active_entry.launch_phase = prev_phase
+        print(
+            f"Holding launch of issue #{issue_number}: failed to persist launching phase: {exc}",
+            file=sys.stderr,
+        )
+        return LaunchResult(
+            issue_number=issue_number,
+            branch=outcome.branch or "",
+            worktree_path=str(outcome.worktree_path or ""),
+            pid=None,
+            launched=False,
+            held=True,
+            error_message=f"failed to persist launching phase: {exc}",
+        )
+
+
 def _try_planned_launch(
     plan: TaskLaunchPlan[TTask],
     target: DispatchTarget,
@@ -554,25 +593,12 @@ def _try_planned_launch(
     run_state: RunState,
     claim_fn: ClaimFn,
 ) -> LaunchResult | None:
-    """#943: worktree/所有権の取得をclaim_task（owner_kind=dispatch）経由に一本化する。
-
-    実際のagentプロセス起動（`_launch_on_prepared_worktree`）はworktree.py側の
-    既存実装をそのまま再利用し、claim_taskが用意したworktree_path/branch/base_ref
-    に対して行う。dispatch固有の責務（quota起動履歴・launch_attempt・target設定）は
-    このモジュール（`_apply_task_launches`/`launch_attempts.py`）に残す。
-
-    `claim_fn`はL3層（`orchestune.dispatch.cycle_actions`）が`claim_task`を
-    束縛して渡すDI境界（このモジュールの`ClaimFn`定義を参照）。
-    """
+    """#943: worktree/所有権の取得をclaim_task（owner_kind=dispatch）経由に一本化する。"""
     task = plan.task
     request = ClaimRequest(
         issue_number=task.issue_number,
         owner_kind=OwnerKind.DISPATCH,
         state_path=config.run_state_path,
-        # #943レビュー対応(Codex P1, round4): `config.worktree_root`が既定値
-        # （`<repo>/worktrees`）以外の場合、指定しないとclaimが既定値へ固定
-        # してしまい、実際にagentが起動されるディレクトリとdispatch自身の
-        # journal復元・GCが参照するディレクトリが食い違う。
         worktree_root=config.worktree_root,
     )
     outcome = claim_fn(request, plan.base_branch_for_launch or "origin/main")
@@ -584,6 +610,11 @@ def _try_planned_launch(
 
     assert outcome.worktree_path is not None
     assert outcome.branch is not None
+
+    hold = _persist_launching_phase(task.issue_number, outcome, run_state, config)
+    if hold is not None:
+        return hold
+
     try:
         launch = _launch_on_prepared_worktree(
             task,
@@ -651,6 +682,21 @@ def _apply_single_task_launch(
             # 整合性回復に委ねる）。
             return None
         if not launch.launched:
+            active_entry = run_state.active_worktrees.get(str(task.issue_number))
+            if active_entry is not None:
+                active_entry.launch_phase = "failed"
+                try:
+                    save_run_state(
+                        run_state,
+                        config.run_state_path,
+                        launch_window_seconds=config.window_seconds,
+                        open_prs=open_prs,
+                    )
+                except Exception as exc:
+                    print(
+                        f"Warning: failed to persist failed launch phase for issue #{task.issue_number}: {exc}",
+                        file=sys.stderr,
+                    )
             _handle_launch_failure(task, launch, config)
             return None
 

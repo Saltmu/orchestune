@@ -23,6 +23,7 @@ from orchestune.consistency.desired import (
     derive_desired_repository_state,
 )
 from orchestune.consistency.invariants.execution import (
+    DISPATCH_PRELAUNCH_ORPHAN,
     EXECUTION_TIMED_OUT,
     HANDLELESS_EXECUTION_ORPHAN,
     LOCAL_PROCESS_DEAD,
@@ -262,6 +263,10 @@ def _execution_records(run_state: RunState) -> tuple[ExecutionRecord, ...]:
                 if active.pid is not None
                 else None
             ),
+            owner_kind=active.owner_kind,
+            claim_id=active.claim_id,
+            claim_stage=active.claim_stage,
+            launch_phase=active.launch_phase,
         )
         for _, active in sorted(run_state.active_worktrees.items())
     )
@@ -359,6 +364,26 @@ def _handleless_orphan(
     )
 
 
+def _dispatch_prelaunch_orphan(
+    active: ActiveWorktree,
+    finding_codes: frozenset[str],
+    config: DispatcherConfig,
+) -> bool:
+    return bool(
+        DISPATCH_PRELAUNCH_ORPHAN in finding_codes
+        and config.zombie_gc
+        and active.pid is None
+        and active.external_id is None
+        and active.started_at is None
+        and os.path.exists(active.worktree_path)
+        and active.owner_kind == "dispatch"
+        and bool(active.claim_id and active.claim_id.strip())
+        and isinstance(active.claim_stage, str)
+        and active.claim_stage.lower() in {"active_saved", "completed"}
+        and active.launch_phase in {None, "failed"}
+    )
+
+
 def revalidate_reclaim_preconditions(
     command: RepairCommand,
     run_state: RunState,
@@ -388,6 +413,7 @@ def revalidate_reclaim_preconditions(
         timed_out
         or _dead_local_process(active, finding_codes, config, process_alive)
         or _handleless_orphan(active, finding_codes, config)
+        or _dispatch_prelaunch_orphan(active, finding_codes, config)
     ):
         return None
     return ReclaimPrecondition(active, observed_at, process_alive, timed_out)

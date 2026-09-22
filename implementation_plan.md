@@ -1,88 +1,108 @@
-# Issue #966 implementation plan
+# Issue #964 implementation plan
 
-## Preflight
+## Preflight & Environment
 
-- Issue: #966, existing issue (non-interactive workflow)
-- Worktree: `claude/issue-966-task-966`
-- GitHub backend: `gh` CLI (`gh auth status` succeeded)
-- Reviewer: Codex (requested by the user)
-- `uv lock --check`, `uv sync`, and the baseline record completed before implementation.
-- Serena symbol indexing was unavailable in this environment. Impact enumeration uses `rg`/text search fallback, with dynamic/config/documentation searches recorded below.
+- Issue: #964, existing issue (non-interactive workflow)
+- Worktree: `/home/micro/orchestune/worktrees/claude-issue-964-task-964`
+- Base: `origin/main` (commit `d860f56`)
+- GitHub backend: `gh` CLI (`gh auth status` verified)
+- Reviewer: Claude (Codex and agy targets -> Claude per `local-ci-developer`)
+- Preflight checks: `uv --version` (0.12.10), `uv lock --check`, `gitleaks version` (8.30.1) verified.
+- Symbol indexing tool: Serena MCP (`find_symbol`, `find_referencing_symbols`, `get_symbols_overview`). Supplementary text searches via `git grep` for dynamic access, string-addressed test doubles, and serialized fields.
 
 ## Design
 
-Normalize only the two paths shared with claim at the dispatcher boundary, after CLI/config merging and before constructing `DispatcherConfig`:
+1. **既存 finding の不変**:
+   - `HANDLELESS_EXECUTION_ORPHAN`（worktree 不存在必須）の定義・挙動は維持する。
+   - 新規 finding `DISPATCH_PRELAUNCH_ORPHAN = "execution.dispatch-prelaunch-orphan"` を追加。
+   - `orchestune/consistency/repairs/execution.py` で `COMMAND_RECLAIM` と `COMMAND_REQUEUE` へマッピングし、既存の回収・エスカレーション機構を再利用。
 
-1. Reuse `resolve_claim_workspace(cwd, explicit_state_path, explicit_worktree_root)`.
-2. Carry its resolved absolute paths through `_DispatcherInputs`.
-3. Store those paths in `DispatcherConfig`; leave log/event/not-needed paths unchanged.
-4. Preserve repository-outside failure from `get_git_repository_paths` (fail closed).
-5. Document the primary checkout root rule in English and Japanese usage docs.
+2. **provider 境界での `launch_phase` 永続化**:
+   - claim placeholder を in-memory run_state へ同期後、provider 呼出直前に該当 active entry の `launch_phase="launching"` を保存。保存失敗時は provider を呼ばず起動を保留する。
+   - provider 起動成功時は local/cloud 問わず `launch_phase="launched"` を保存。
+   - 明確な起動失敗時は `launch_phase="failed"` を保存。
+   - `LaunchOutcomeUnknown` や例外時は `launch_phase="launching"` を維持。
 
-## Impact scope (text-search fallback)
+3. **consistency 観測の拡張**:
+   - `orchestune/consistency/vocabulary.py` に `FACT_EXECUTION_OWNER_KIND`, `FACT_EXECUTION_CLAIM_ID`, `FACT_EXECUTION_CLAIM_STAGE`, `FACT_EXECUTION_LAUNCH_PHASE` を追加。
+   - `ExecutionRecord` に上記 4 フィールドを追加。
+   - `dispatch/execution_repair.py` および `dispatch/cycle.py` のアダプタで `ActiveWorktree` から写す。consistency kernel が `dispatch.state` を直接 import しないレイヤー境界を維持。
+
+4. **新 finding の判定条件**:
+   - `zombie_gc_enabled is True`
+   - `execution_kind == "unknown"`
+   - `pid is None`, `external_id is None`, `started_at is None`
+   - `worktree_exists is True`
+   - `owner_kind == "dispatch"`
+   - `claim_id` が非空文字列
+   - `claim_stage in {"active_saved", "completed"}`
+   - `launch_phase in {None, "failed"}`
+   - 上記 facts がすべて `_KNOWN` であること。欠落・UNKNOWN・条件不一致時は finding なし。
+   - `owner_kind == "interactive"`、`launch_phase in {"launching", "unknown", "launched"}`、pid/external_id/started_at 存在時は除外。
+
+5. **修復直前の fresh precondition 再検証**:
+   - `revalidate_reclaim_preconditions` に `_dispatch_prelaunch_orphan` を追加し、run_state とファイルシステムの最新状態を再確認。不一致時は `SKIPPED`。
+
+## Impact scope (Serena MCP + supplementary text search)
 
 | Reference | Decision | Rationale |
 | :--- | :--- | :--- |
-| `orchestune/dispatch/dispatcher.py:_DispatcherInputs` | in scope | Carries resolved shared paths from the CLI boundary to config construction. |
-| `orchestune/dispatch/dispatcher.py:_load_dispatcher_inputs` | in scope | Has the merged CLI/config values and the caller-provided `cwd`; this is the single normalization boundary. |
-| `orchestune/dispatch/dispatcher.py:_build_dispatcher_config` | in scope | Must write resolved paths into `DispatcherConfig`. |
-| `orchestune/dispatch/dispatcher.py:main` | in scope | Passes `cwd` into the normalization flow and preserves parser error handling. |
-| `orchestune/claim/workspace.py:resolve_claim_workspace` | in scope | The existing resolver is reused by dispatch and now distinguishes linked-worktree common dirs from external git dirs so separate repositories cannot share state. |
-| `orchestune/dispatch/config.py:DispatcherConfig` | still out of scope | Type/default contract remains unchanged; only construction inputs are normalized. |
-| `orchestune/dispatch/cycle_actions.py:_bind_dispatch_claim_fn` | still out of scope | It already forwards `config.run_state_path` and `config.worktree_root`; normalized config makes those values consistent. |
-| `orchestune/dispatch/launch.py` and GC/recovery consumers of `DispatcherConfig` | still out of scope | They consume config values and require no path-resolution logic once config is absolute. |
-| `tests/test_dispatcher_shared_paths.py` | in scope | Verifies config-file and CLI-derived paths, primary/linked-worktree resolution, absolute preservation, and repository-outside failure. |
-| `tests/test_dispatcher_cli_config.py` / `tests/test_dispatcher_cli_options.py` | in scope | Updated existing expectations/fixtures for the new repository-root contract. |
-| `tests/test_dispatch_launch_claim_mapping.py` | still out of scope | Existing absolute-config forwarding coverage remains valid; the claim mapping code itself is unchanged. |
-| `tests/test_claim_workspace.py` | in scope | Adds regression coverage for external `--separate-git-dir` roots. |
-| `docs/en/usage.md` / `docs/ja/usage.md` | in scope | Publicly document relative path semantics for both CLI and config-file values. |
+| `orchestune/consistency/vocabulary.py` | in scope | 新規 Fact キー（4種）および finding 名定数を定義。 |
+| `orchestune/consistency/observation.py:ExecutionRecord` | in scope | `owner_kind`, `claim_id`, `claim_stage`, `launch_phase` フィールドを追加。 |
+| `orchestune/consistency/observation.py:_read_*` & `_execution_observations` | in scope | 追加フィールドを読み取り Fact として emit する。 |
+| `orchestune/consistency/invariants/execution.py` | in scope | `DISPATCH_PRELAUNCH_ORPHAN` の純粋判定関数を追加し、invariant 検査に登録。 |
+| `orchestune/consistency/repairs/execution.py` | in scope | `DISPATCH_PRELAUNCH_ORPHAN` を `COMMAND_RECLAIM`, `COMMAND_REQUEUE` へマッピング。 |
+| `orchestune/dispatch/execution_repair.py:_execution_records` | in scope | `ActiveWorktree` から `ExecutionRecord` への新規 4 フィールドマッピングを追加。 |
+| `orchestune/dispatch/execution_repair.py:revalidate_reclaim_preconditions` | in scope | `_dispatch_prelaunch_orphan` helper による修復直前の fresh precondition 再検証を追加。 |
+| `orchestune/dispatch/cycle.py:_DispatchConsistencyAdapter._executions` | in scope | サイクル内の `ExecutionRecord` 生成箇所に 4 フィールドマッピングを追加。 |
+| `orchestune/dispatch/launch.py:_try_planned_launch` | in scope | provider 境界直前での `launching` 永続化と、失敗時の provider 呼出抑止。 |
+| `orchestune/dispatch/launch.py:_apply_single_task_launch` / `_record_successful_launch` | in scope | 成功時の `launched` 永続化、明確な失敗時の `failed` 永続化。 |
+| `orchestune/dispatch/gc/zombies.py` | in scope | `_build_reclaim_candidate` および `_reclaim_candidate_from_command` に `DISPATCH_PRELAUNCH_ORPHAN` を追加し、GC 回収対象に組み込み。 |
+| `orchestune/claim/service.py` | still out of scope | claim の既存保存順序・契約は変更しない。 |
+| `orchestune/dispatch/recovery.py` | still out of scope | durable unknown/launched attempt の復旧契約を変更しない。 |
+| `tests/test_consistency_observation.py` | in scope | 新規 Fact および `ExecutionRecord` 拡張の観測テスト。 |
+| `tests/test_consistency_execution_policy.py` | in scope | `DISPATCH_PRELAUNCH_ORPHAN` の生成・除外条件テスト（TDD 手順 1〜4）。 |
+| `tests/test_consistency_execution_repair.py` | in scope | 修復マッピングと fresh revalidation のテスト（TDD 手順 8）。 |
+| `tests/test_dispatch_launch_attempts.py` | in scope | provider 境界での `launch_phase` 永続化・結果不明時の保持テスト（TDD 手順 5〜7）。 |
+| `tests/test_dispatch_gc_zombies.py` | in scope | 統合回収テストと既存 orphan テストの無変更通過確認（TDD 手順 9, 10）。 |
 
-Supplementary searches covered `getattr`/`setattr`/`**kwargs`, string-based patches, serialized config keys, and docs/skills references for `run_state_path` and `worktree_root`; no additional dispatcher boundary required changes were found.
+### Supplementary search coverage
+- Dynamic access (`getattr`/`setattr`/`**kwargs`): `ActiveWorktree` および `ExecutionRecord` のフィールドアクセスを検証。動的アクセスなし。
+- String-addressed test doubles: `test_consistency_*.py`, `test_dispatch_*.py` 内の mock/patch 対象を確認。
+- Serialized names: `run_state.json` の `launch_phase`, `owner_kind`, `claim_id`, `claim_stage` のキー名と既存 `ActiveWorktree` シリアライズ/デシリアライズとの整合性を確認。
+- Documentation/skills: レイヤー境界（consistency から dispatch.state への非依存）を確認。
 
-## Verification
+## TDD Plan
 
-- Add failing tests first for primary root, subdirectory, absolute values, config values, and outside-repository failure.
-- Run focused pytest, then coverage/edge-case tests and baseline-aware local CI.
-- Reconcile this impact table before review; any unplanned changed reference will be recorded in the PR body.
-
-## Reconciliation
-
-| Reference | Result |
-| :--- | :--- |
-| `_DispatcherInputs`, `_load_dispatcher_inputs`, `_build_dispatcher_config`, `main` | done — resolved paths are carried explicitly and written into `DispatcherConfig`. |
-| `resolve_claim_workspace` | done — linked worktrees still use common-dir primary root; external git dirs/submodules use checkout top-level. |
-| `DispatcherConfig`, claim/launch/GC consumers | still out of scope — config type and consumers remain unchanged. |
-| dispatcher shared-path tests | done — primary, linked-worktree/subdirectory, config, absolute, and outside-repository cases covered. |
-| claim workspace tests and claim mapping | still out of scope — existing tests pass unchanged; mapping receives config's normalized values. |
-| English/Japanese usage docs | done — relative-path primary-root semantics documented. |
-
-No unplanned production reference required changes. The only additional test edits were compatibility setup for pre-existing tests that intentionally place config fixtures outside Git; their workspace lookup is routed through the linked checkout, while the dedicated outside-repository test exercises the fail-closed behavior directly.
+1. **Step 1: Invariants & Policy テスト (TDD 1, 2, 3, 4)**
+   - `test_consistency_observation.py`: `ExecutionRecord` と Fact emit のテスト追加。
+   - `test_consistency_execution_policy.py`:
+     - worktree あり、dispatch owner、completed claim、handle なし、launch_phase=None で `DISPATCH_PRELAUNCH_ORPHAN` が出るテスト追加。
+     - interactive owner で finding が出ないテスト追加。
+     - launching, unknown, launched の各 phase で finding が出ないテスト追加。
+     - owner_kind, claim_id, claim_stage, launch_phase が UNKNOWN / 欠落時に自動修復しないテスト追加。
+2. **Step 2: Repairs & Preconditions テスト (TDD 8)**
+   - `test_consistency_execution_repair.py`:
+     - `DISPATCH_PRELAUNCH_ORPHAN` が `COMMAND_RECLAIM`, `COMMAND_REQUEUE` へマップされるテスト。
+     - fresh revalidation: finding 作成後に active が `launched` 等へ変わった場合、回収を SKIP するテスト。
+3. **Step 3: Dispatch Launch 永続化テスト (TDD 5, 6, 7)**
+   - `test_dispatch_launch_attempts.py`:
+     - provider 呼出直前に `launching` が保存され、保存失敗時は provider が呼ばれないテスト。
+     - 明確な起動失敗で `failed` が保存されるテスト。
+     - `LaunchOutcomeUnknown` では `launching` が残り、worktree と active entry が保持されるテスト。
+4. **Step 4: 統合回収 & 既存回帰テスト (TDD 9, 10)**
+   - `test_dispatch_gc_zombies.py`:
+     - 回収成功時に worktree 削除、queue 復帰、active 解放が既存回数制御を通る統合テスト。
+     - 既存 `HANDLELESS_EXECUTION_ORPHAN`、dead local process、timeout、interactive 除外テストが無変更で通ることを確認。
+5. **Step 5: ローカル CI 検証**
+   - `./scripts/local-ci.sh` の実行とエラーゼロ確認。
 
 ## #822 observation record
 
-This task used the `rg`/text-search impact fallback because Serena was unavailable. Environment: Linux, Python 3.13.15, uv 0.12.13, ruff 0.4.10, mypy 1.20.2; base `origin/main` at the worktree claim point. Tokens: unavailable (no token counter exposed). Initial review record will be appended before requesting Codex review with the reviewed SHA and diff size.
-
-## Initial review request record
-
-| Field | Value |
-| :--- | :--- |
-| PR / status | #995 / ready for Codex review |
-| Requested SHA | `ae363630c1ade8bb10061896eff6d4ba415bd51b` |
-| Base | `origin/main` (`e7ebb0c`) |
-| Initial diff | 7 files, +283 / -7 lines; behavior + regression tests + docs |
-| Reviewer / provider | Codex via `scripts/wait_for_review.py` |
-| Change type | Dispatcher startup path-contract feature/fix |
-
-## Review round 1 reconciliation
-
-Codex reported one P1 test portability finding: fixed-parent indexing (`parents[3]`) assumed this linked-worktree directory depth and fails in a standard checkout. The tests now derive linked and primary roots through `resolve_claim_workspace(Path.cwd())` and `common_dir.parent`; the production implementation was unchanged. This was a test-enumeration/fixture portability issue, not a production scope miss.
-
-Codex reviewed the corrected SHA `91010a309985fad9dd54d5c798c96fc7f72d3f07` in round 2 and reported no inline findings or major issues. Final local CI passed at 95.25% coverage (`4079 passed, 2 skipped`); gitleaks and bloat checks also passed.
-
-Round 3 reported a P2 for external Git common directories. The resolver now detects linked-worktree metadata explicitly and falls back to `git rev-parse --show-toplevel` for separate-git-dir/submodule layouts, with a focused regression test. This is a classification miss against the original out-of-scope decision; no dispatcher consumer changes were needed.
-
-Round 4 identified the external-git-dir linked-worktree variant. The linked-worktree metadata check now applies regardless of the common directory basename and honors the external repository's optional `core.worktree` declaration; a regression test covers a separate-git-dir repository with a linked worktree.
-
-Round 5 confirmed that Git does not record the original checkout path for an external common dir when `core.worktree` is absent. The resolver now fails closed for that ambiguous linked-worktree case instead of allowing divergent shared state, and resolves relative `core.worktree` values from the common Git directory.
-
-Round 6 additionally required absolute shared paths to bypass primary-root discovery, and required Git config decoding for quoted `core.worktree` values. Both are now covered: absolute paths are accepted in the otherwise ambiguous layout, and `git config --file --get` supplies the decoded value.
+- Start date: 2026-09-22
+- Environment: Linux, Python 3.13.15, uv 0.12.10, ruff 0.4.10, mypy 1.20.2
+- Base SHA: `d860f56`
+- Tool: Serena MCP (`find_symbol`, `find_referencing_symbols`, `get_symbols_overview`)
+- Actual use: Enumerate `ExecutionRecord`, `HANDLELESS_EXECUTION_ORPHAN`, `revalidate_reclaim_preconditions`, `launch_phase` references; supplemented by `git grep`.
+- Tokens: unavailable (no counter exposed).
+- Scope snapshot permalink: https://github.com/Saltmu/orchestune/issues/964#issuecomment-5769389411

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.consistency.invariants.execution import (
+    DISPATCH_PRELAUNCH_ORPHAN,
     EXECUTION_TIMED_OUT,
     HANDLELESS_EXECUTION_ORPHAN,
     LOCAL_PROCESS_DEAD,
@@ -136,6 +137,8 @@ def _build_reclaim_candidate(
         reason = "process disappeared"
     elif HANDLELESS_EXECUTION_ORPHAN in finding_codes:
         reason = "process disappeared"
+    elif DISPATCH_PRELAUNCH_ORPHAN in finding_codes:
+        reason = "process disappeared"
     else:
         raise ValueError(f"unsupported reclaim findings: {finding_codes!r}")
     return ZombieOrTimeoutReclaim(
@@ -173,6 +176,7 @@ def _reclaim_candidate_from_command(
     key, active = resolved
     finding_codes = command_finding_codes(command)
     reclaim_codes = {
+        DISPATCH_PRELAUNCH_ORPHAN,
         EXECUTION_TIMED_OUT,
         HANDLELESS_EXECUTION_ORPHAN,
         LOCAL_PROCESS_DEAD,

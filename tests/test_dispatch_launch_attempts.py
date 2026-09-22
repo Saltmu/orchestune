@@ -86,14 +86,20 @@ def launch_env(tmp_path):
 def test_saved_handle_restored_after_crash_without_pr(launch_env, stop):
     forge, config, plan, launch = launch_env
     if stop == "local-save":
-        # dispatch自身の`save_run_state`（`_record_successful_launch`内、
-        # claim_task成功・agent起動成功の"後"）が壊れるケース。ここは#943の
-        # 変更の対象外（claim_task自身のsave_run_stateとは別の、既存のdispatch
-        # 側の生の呼び出しのまま）で、従来通り例外がそのまま伝播する。
+        # dispatch自身の`save_run_state`（`_apply_task_launches`末尾、
+        # claim_task成功・agent起動成功の"後"）が壊れるケース。
+        original_save = save_run_state
+
+        def fail_after_launch(rs, path, **kwargs):
+            active = rs.active_worktrees.get("1")
+            if active is not None and active.launch_phase == "launched":
+                raise OSError("crash")
+            return original_save(rs, path, **kwargs)
+
         with (
             patch(
                 "orchestune.dispatch.launch.save_run_state",
-                side_effect=OSError("crash"),
+                side_effect=fail_after_launch,
             ),
             pytest.raises(OSError, match="crash"),
         ):
@@ -494,3 +500,76 @@ def test_other_parent_counters_remain_monotonic(launch_env):
     _run_recovery_bookkeeping_boundary(state, config, now=110.0)
     assert state.active_worktrees["1"].recompute_count == 3
     assert state.active_worktrees["1"].forced_serial
+
+
+def test_launch_phase_launching_persisted_before_provider_and_failure_holds_launch(
+    launch_env,
+):
+    # TDD 5: provider呼出直前にlaunchingが保存され、保存失敗時はproviderが呼ばれない
+    forge, config, plan, launch = launch_env
+    state = RunState()
+
+    original_save = save_run_state
+    save_calls = []
+
+    def mock_save(rs, path, **kwargs):
+        active = rs.active_worktrees.get("1")
+        if active is not None:
+            save_calls.append(active.launch_phase)
+            if active.launch_phase == "launching":
+                raise OSError("disk full during launching save")
+        return original_save(rs, path, **kwargs)
+
+    with patch("orchestune.dispatch.launch.save_run_state", side_effect=mock_save):
+        selected = _apply_task_launches(
+            [plan], state, 100.0, config, claim_fn=real_claim_fn(config)
+        )
+
+    assert selected == []
+    assert launch.call_count == 0
+    assert "launching" in save_calls
+
+
+def test_clear_launch_failure_persists_failed_phase(launch_env):
+    # TDD 6: 明確な起動失敗ではfailedが保存される
+    from orchestune.dispatch.worktree import LaunchResult
+
+    forge, config, plan, launch = launch_env
+    state = RunState()
+
+    failed_result = LaunchResult(
+        issue_number=1,
+        branch=plan.branch_name,
+        worktree_path=str(config.worktree_root / "claude-issue-1-task-1"),
+        pid=None,
+        launched=False,
+        error_message="process spawn failed",
+    )
+
+    with patch(
+        "orchestune.dispatch.launch._launch_on_prepared_worktree",
+        return_value=failed_result,
+    ):
+        selected = _apply_task_launches(
+            [plan], state, 100.0, config, claim_fn=real_claim_fn(config)
+        )
+
+    assert selected == []
+    persisted = load_run_state(config.run_state_path)
+    assert persisted.active_worktrees["1"].launch_phase == "failed"
+
+
+def test_launch_outcome_unknown_preserves_launching_phase_and_worktree(launch_env):
+    # TDD 7: LaunchOutcomeUnknownではlaunchingが残り、worktreeとactive entryが保持される
+    forge, config, plan, launch = launch_env
+    launch.side_effect = OSError("response lost")
+    state = RunState()
+
+    selected = _apply_task_launches(
+        [plan], state, 100.0, config, claim_fn=real_claim_fn(config)
+    )
+
+    assert selected == []
+    persisted = load_run_state(config.run_state_path)
+    assert "1" in persisted.active_worktrees
+    assert persisted.active_worktrees["1"].launch_phase == "launching"
