@@ -144,3 +144,23 @@ def test_workflow_skills_use_unique_scratch_paths_instead_of_fixed_tmp_files():
     assert "<random>" in combined
     assert "/tmp/pr_body.md" not in combined
     assert "/tmp/review_reply.md" not in combined
+
+
+def test_orchestune_skill_verifies_target_ignore_before_writing_plan():
+    instructions = (REPOSITORY_ROOT / "skills" / "orchestune" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "git check-ignore" in instructions
+    assert "before creating" in instructions.lower()
+    assert ".gitignore" in instructions
+
+
+def test_local_ci_skill_migrates_preclaim_plan_into_task_worktree():
+    instructions = (
+        REPOSITORY_ROOT / "skills" / "local-ci-developer" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert "<planning-session-dir>" in instructions
+    assert "worktree-local" in instructions
+    assert "migrate" in instructions.lower()
