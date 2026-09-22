@@ -135,9 +135,11 @@ class DonePayload:
 
 @dataclass(frozen=True)
 class NotNeededPayload:
-    """Input payload specific to not-needed outcomes."""
+    """Input payload specific to not-needed outcomes.
 
-    note: str | None = None
+    not-needed outcomes carry no additional fields; the canonical OutcomeRecord
+    schema for not-needed consists solely of issue and result.
+    """
 
 
 @dataclass(frozen=True)
@@ -227,20 +229,18 @@ class CompleteRequest:
         owner_token: str | None = None,
         claim_id: str | None = None,
         owner_kind: OwnerKind = OwnerKind.INTERACTIVE,
-        note: str | None = None,
         dry_run: bool = False,
         state_path: Path | None = None,
         worktree_root: Path | None = None,
     ) -> CompleteRequest:
         """Construct a validated request for not-needed outcomes."""
-        payload = NotNeededPayload(note=note)
         return cls(
             issue_number=issue_number,
             result=RESULT_NOT_NEEDED,
             owner_token=owner_token,
             claim_id=claim_id,
             owner_kind=owner_kind,
-            payload=payload,
+            payload=NotNeededPayload(),
             dry_run=dry_run,
             state_path=state_path,
             worktree_root=worktree_root,

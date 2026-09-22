@@ -62,12 +62,10 @@ class TestCompletePayloadsAndRequests:
             issue_number=997,
             owner_token="token-123",
             claim_id="claim-abc",
-            note="Already satisfied on main branch",
         )
         assert req.issue_number == 997
         assert req.result == RESULT_NOT_NEEDED
         assert isinstance(req.payload, NotNeededPayload)
-        assert req.payload.note == "Already satisfied on main branch"
 
         # Validation succeeds
         req.validate()
