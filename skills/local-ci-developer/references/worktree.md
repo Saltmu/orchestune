@@ -25,7 +25,8 @@ cd <worktree_path>
 uv sync
 ```
 
-Write `implementation_plan.md`, implement, test, run local CI, commit, push,
+Create the unique `<session-dir>` defined by the parent skill. Write
+`<session-dir>/implementation-plan.md`, implement, test, run local CI, commit, push,
 create the PR, and handle review feedback entirely from within this worktree.
 
 ## Claim failures and recovery

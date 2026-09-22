@@ -36,6 +36,16 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 
 * The `uv run orchestune-dag` or `orchestune-dag` command must be installed on the system.
 
+## Decomposition Scratch Path
+
+Create the draft in the repository-local, Git-ignored directory
+`.orchestune/tmp/decomposition-<issue-or-task>-<UTC timestamp>-<random>/`, using
+UTC `YYYYMMDDTHHMMSSZ` and a UUID or equivalent unpredictable `<random>` value.
+Use `decomposition-plan.md` inside that session directory and reuse its explicit
+path for every DAG, provision, restore, and replan command. Never use a fixed
+repository-root `decomposition_plan.md` or the OS-global `/tmp`. In the workflow
+below, `<plan-path>` means the resulting collision-safe path.
+
 ## Workflow
 
 ### Stage 1: Analyze Task and Create Decomposition Plan
@@ -49,7 +59,7 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
    - The tag alone only means "participates in this contract," not "writes to the shared file" — `orchestune-dag` only compares subtasks that actually *write* to it (their own `footprint` contains a path matching a shared-extension-point pattern, or they explicitly set `writes_shared_contract: true`). Prefer designing dependents as pure consumers: keep their `footprint` limited to their own adapter implementation and tests, and let them only read/import the contract the owning subtask created. Tagged consumers that never touch the shared file are never compared against each other and don't need to be mutually ordered.
    - If two or more subtasks *do* need to write to the shared file themselves (not just the owner), make sure they're actually *ordered* relative to each other, not just each dependent on the owner: `csv` and `yaml` both `depends_on: [shared-contract]` but not on each other can still run in parallel and race on the file. Add an explicit `depends_on` between them (e.g. `yaml` also `depends_on: [csv]`) if they truly must both edit it.
    This is a distinct failure mode from ordinary footprint overlap (see Stage 2): the shared file is often *absent* from every subtask's declared `footprint` in the first place, since it doesn't exist yet and each subtask may independently assume a different name/path for it — so `orchestune-dag`'s similarity-based overlap detection cannot catch it by itself. Declaring and tagging the shared-contract subtask up front is the primary defense; `orchestune-dag`'s hotspot-category warning (Stage 2) is a secondary, heuristic safety net that only catches same-directory naming mismatches, not the `shared_contract` tag's full coverage.
-5. Create a `decomposition_plan.md` in the repository root. Use the YAML frontmatter format as follows:
+5. Create `<plan-path>` in the session scratch directory. Use the YAML frontmatter format as follows:
 
    ```markdown
    ---
@@ -89,13 +99,13 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 
 ### Stage 2: Validate DAG
 
-1. Delegate consistency validation of the `decomposition_plan.md` to the `orchestune-dag` CLI (this is the "ask orchestune-dag to decompose/validate" step — `orchestune` never re-implements DAG validation itself):
+1. Delegate consistency validation of `<plan-path>` to the `orchestune-dag` CLI (this is the "ask orchestune-dag to decompose/validate" step — `orchestune` never re-implements DAG validation itself):
 
    ```bash
-   uv run orchestune-dag --plan decomposition_plan.md
+   uv run orchestune-dag --plan <plan-path>
    ```
 
-   * If validation errors (such as circular dependencies `DagCycleError`) occur, revise `decomposition_plan.md` and re-run this command until it passes.
+   * If validation errors (such as circular dependencies `DagCycleError`) occur, revise `<plan-path>` and re-run this command until it passes.
    * A single `Warnings:` output can combine more than one of the following warning types at once — check each entry against its own wording below rather than assuming they're all the same kind:
      - **Shared-contract warning**: `orchestune-dag` has detected two or more subtasks that both actually *write* to the same shared extension point and are not ordered relative to each other in the DAG (neither is reachable from the other via `depends_on`/inferred edges — having a common ancestor task is not enough, since siblings of a common ancestor can still run in parallel). "Both write to it" is checked two ways, and either can trigger the warning: (a) subtasks tagged with the same `shared_contract` where each is judged a writer per the footprint/`writes_shared_contract` check in Stage 1, or (b) regardless of tagging — including a tagged subtask paired with one that was never tagged at all, e.g. a declaration was simply missed — any subtasks whose declared `footprint` entries fall into the same shared-extension-point category *and* directory (registry, CLI wiring, public API index, dependency manifest). Pairs already flagged by (a) aren't re-flagged by (b). Tagged subtasks that only depend on the contract without writing to it (pure consumers) are never part of this warning. This is not a blocking error, but it should normally be resolved by revising `decomposition_plan.md` (add a `depends_on` edge directly between the affected writer subtasks, turn a writer into a pure consumer if it doesn't actually need to touch the shared file, add the missing `shared_contract` tag, or confirm the paths genuinely refer to unrelated files) before moving to Stage 3.
      - **Existence-verification warning** (#393/#400): an entry indicating missing paths in footprint or missing symbols in codebase. This is a distinct check from the shared-contract warning above — `orchestune-dag` checked whether the declared path/symbol is actually present in today's codebase, not whether it collides with another subtask. Do not treat it as a shared-contract warning (it is not about ordering two writers), and do not silently skip past it either — triage each occurrence:
@@ -108,11 +118,11 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 ### Stage 3: Present Plan and Iterate with the User
 
 1. Organize the validation results of `orchestune-dag` (topological order, parallel leaf subtasks, conflict risks, etc.) and present them to the user.
-2. Ask for approval. If the user requests changes instead (feedback), revise `decomposition_plan.md` accordingly and return to **Stage 2** to re-validate — repeat this loop until the user explicitly approves the plan.
+2. Ask for approval. If the user requests changes instead (feedback), revise `<plan-path>` accordingly and return to **Stage 2** to re-validate — repeat this loop until the user explicitly approves the plan.
 
 ### Stage 4: Hand Off to Provision and Dispatch
 
-1. Once the user approves the plan, load and follow the [orchestune-provision skill](../orchestune-provision/SKILL.md) with the approved `decomposition_plan.md` as input. That skill creates the parent and child GitHub Issues (with Footprint metadata and status/priority/risk labels) and synchronizes the plan into the parent issue body via the `orchestune provision` CLI.
+1. Once the user approves the plan, load and follow the [orchestune-provision skill](../orchestune-provision/SKILL.md) with the approved `<plan-path>` as input. That skill creates the parent and child GitHub Issues (with Footprint metadata and status/priority/risk labels) and synchronizes the plan into the parent issue body via the `orchestune provision` CLI.
 2. **Determine next step (default: continue to dispatch)**:
    - **Explicit provisioning-only request**: If the user explicitly instructed to stop after creating Issues (e.g., "stop after filing issues" / "plan or provision only"), report the created Issues back to the user and conclude the task.
    - **Default / execution request**: Otherwise (the default flow promised in Trigger Conditions), immediately hand off to the [orchestune-dispatch skill](../orchestune-dispatch/SKILL.md) with the provisioned parent Issue number (`--parent-issue <N>`) to configure and run the dispatcher. Note that `orchestune-dispatch` reconstructs its task graph directly from the child Issues' Footprint YAML and does not require `decomposition_plan.md` to remain present. Report the outcome (created Issues, dispatched tasks) back to the user.

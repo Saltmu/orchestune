@@ -11,7 +11,7 @@
   ファイルやスキルの編集・更新時、またはOSに対応するローカルCI実行時に肥大化警告を検知した場合は、ユーザーへの確認のために作業を中断せず、エージェント自身が自律的にモジュールやプロンプトの分割リファクタリングを実施して警告を解消してください（3回試行しても解消できない場合は作業を中断しエスカレーションすること）。
   - **意図**: 無人実行や自律的な開発サイクルを止めずに、LLM のコンテキスト長制限による処理品質の低下（ハルシネーションや応答途切れ）を防ぎ、コードとプロンプトの保守性を保つため。
 - **実装着手前の影響範囲確定**:
-  コードの修正に着手する前に、変更予定のシンボル（関数・型・フィールド・設定キー等）の利用先をコード解析ツール（Serena MCP、[導入手順](../CONTRIBUTING.ja.md#コード解析ツールserena-mcp)）で列挙し、各利用先を「修正対象／対象外」へ根拠付きで仕分けて `implementation_plan.md` とPR本文に記録してください。検索結果が空であることを影響なしの証明として扱わず、動的アクセス・文字列指定のmock対象・設定・ドキュメントはテキスト検索で補完すること。ツールが利用できない場合は既存のテキスト検索へフォールバックし、その旨を計画に明記して作業を止めないこと。手順の詳細は [impact-scope.md](../skills/local-ci-developer/references/impact-scope.md) を参照。
+  コードの修正に着手する前に、変更予定のシンボル（関数・型・フィールド・設定キー等）の利用先をコード解析ツール（Serena MCP、[導入手順](../CONTRIBUTING.ja.md#コード解析ツールserena-mcp)）で列挙し、各利用先を「修正対象／対象外」へ根拠付きで仕分けてセッション固有の implementation plan とPR本文に記録してください。検索結果が空であることを影響なしの証明として扱わず、動的アクセス・文字列指定のmock対象・設定・ドキュメントはテキスト検索で補完すること。ツールが利用できない場合は既存のテキスト検索へフォールバックし、その旨を計画に明記して作業を止めないこと。手順の詳細は [impact-scope.md](../skills/local-ci-developer/references/impact-scope.md) を参照。
   - **意図**: 変更が別経路・利用側へ伝搬していない状態でPRを出し、レビューで初めて漏れが発覚する手戻りを減らすため。仕分けの根拠を残すことで、漏れの原因が「列挙できていなかった」のか「列挙した上で誤って対象外と判断した」のかを事後に切り分けられる。
 - **開発ワークフローの厳格な適用（調査タスクからの移行時）**:
   当初が質問や技術調査などの対話から始まった場合でも、実ファイル（コードや設定ファイル）の新規作成・修正を伴う作業フェーズへ移行する際は、必ず [local-ci-developer スキル](../skills/local-ci-developer/SKILL.md) をロードし、GitHub Issueの起票およびPRの作成を含む標準開発ワークフローを例外なく適用してください。
@@ -29,6 +29,8 @@
   - **ボット名義でのレビュー依頼時の注意（`.github/workflows/claude-code-review.yml`）**: `claude-code-action` は既定で GitHub App/Bot 名義のワークフロー起動を拒否する。Claude Code on the Web などボット実行環境から `wait_for_review.py --bot-name claude` を実行する場合、起動が成立するのは actor が `allowed_bots` で許可された `claude[bot]` であり、かつ投稿コメントに `wait_for_review.py` が付与する Orchestune trigger marker（`<!-- orchestune:review-trigger bot=claude -->`）が含まれる場合のみである。許可外の actor やマーカー欠落時は job が `skipped` となり、`wait_for_review.py` は Exit 20（レビュー活動なし・timeout）を返す。この場合はまず GitHub Actions の実行履歴で actor・job conclusion・認可エラーの有無を確認すること（詳細は [review-loop.md](../skills/local-ci-developer/references/review-loop.md) を参照）。
 
 ## セキュリティ & リソース制限
+- **一時成果物の配置と衝突回避**: エージェントが作る implementation plan、decomposition plan、PR本文、review reply、Outcome Record 下書きなどは、OS グローバルの `/tmp` やリポジトリ直下の固定名へ置かず、Git 管理外の `.orchestune/tmp/<artifact>-<issue-or-task>-<UTC timestamp>-<random>/` 配下へ置く。`<issue-or-task>` は Issue 番号（未採番なら短い task slug）、`<UTC timestamp>` は UTC の `YYYYMMDDTHHMMSSZ`、`<random>` は UUID 等の衝突回避値とする。同じ作業内では作成した session directory を再利用し、CLI にはその配下の明示パスを渡す。既存ファイルを削除して固定名で再作成してはならない。
+  - **意図**: 一時成果物の誤 push、並行エージェント間の上書き、削除・再作成に伴う不要な許可要求を防ぐため。
 - **機密情報のコミット防止**: APIキーや認証情報をコミット、ログ、チャットに露出させない。
   - **意図**: セキュリティの侵害や漏洩のリスクを極小化し、プロジェクト全体の安全性を保つため。
 - **ドキュメント・設定ファイルに絶対ローカルパスを書かない**: 他ファイルへの参照は常に相対パスで記述し、`file:///home/<user>/...` のようなローカル環境固有の絶対パスをコミットしない。

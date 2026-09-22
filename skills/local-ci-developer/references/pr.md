@@ -3,7 +3,7 @@
 Prepare and submit from the task worktree after local CI passes.
 
 ## Description
-Copy `.github/pull_request_template.md` to a temporary body file and complete:
+Copy `.github/pull_request_template.md` to `<session-dir>/pr-body.md` and complete:
 - Acceptance Criteria: transcribe the Issue criteria and check those actually satisfied.
 - Scope Guard: confirm the change fulfills the Issue without speculative additions.
 - Walkthrough: architectural/module changes and the impact-scope table with reconciliation.
@@ -24,7 +24,7 @@ Use the selected GitHub backend from Step 0. Base precedence:
 2. Orchestune parent mode (`parent_issue_number` in Footprint/prompt or worktree branched
    from `parent/issue-{N}`): `parent/issue-{parent_issue_number}`.
 3. Independent task: `main`. A GitHub Sub-Issue relationship alone does not select parent mode.
-For CLI, run `gh pr create --base <resolved-base> --title "PR Title" --body-file <body-file>`.
+For CLI, run `gh pr create --base <resolved-base> --title "PR Title" --body-file <session-dir>/pr-body.md`.
 For MCP, pass the same head/base/title/body via `create_pull_request`; Web UI is a fallback.
 See [worktree.md](worktree.md) for branch naming; never assume a prefix.
 

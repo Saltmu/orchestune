@@ -32,7 +32,7 @@ Orchestuneの各CLIコマンド（`orchestune dag`、`orchestune provision`、`o
 
 ## 1. タスク分解計画（Decomposition Plan）の仕様
 
-メインとなる大きな開発タスク（「大きな石」）を並列実行可能なサブタスクに分解するために、リポジトリのルートに `decomposition_plan.md` というファイルを配置します。
+メインとなる大きな開発タスク（「大きな石」）を並列実行可能なサブタスクに分解する際は、`.orchestune/tmp/decomposition-my-task-20260922T120000Z-550e8400/decomposition-plan.md` のような一意で Git 管理外のパスを作成します。セッションディレクトリは `<artifact>-<issue-or-task>-<UTC timestamp>-<random>` 形式とし、random には UUID 等を使い、生成したパスを `--plan` で明示してください。CLI の従来の `decomposition_plan.md` デフォルトは後方互換のため維持しますが、エージェントはリポジトリ直下や OS グローバルの `/tmp` に固定名の下書きを作成してはいけません。
 このファイルは、上部にYAMLフロントマター形式でメタデータを記述し、下部（ボディ）に補足説明を記載する構成をとります。
 
 ### フォーマット例

@@ -10,7 +10,7 @@ worktree, so the PR contains only that worktree branch's commits.
 ## 10. PR Creation Procedure (Pull Request Finalization)
 
 ### 1. Preparing the PR Description File
-Copy the project's PR template (e.g. `.github/pull_request_template.md`) to a temporary working file (e.g. `/tmp/pr_body.md`) and complete all sections:
+Copy the project's PR template to `<session-dir>/pr-body.md` and complete all sections:
 - **Acceptance Criteria & Scope Guard**:
   - Transcribe all acceptance criteria defined in the target Issue into the checklist (`- [x] ...`).
   - Perform a self-check on the **Scope Guard (YAGNI)** item, confirming that the PR contains only the minimal changes required to satisfy the Issue and introduces no speculative features or unrequested automatic recovery mechanisms.
@@ -38,10 +38,10 @@ Submit the PR using the fixed backend selected during Step 0 Preflight:
 
 - **When using `gh` CLI**:
   ```bash
-  gh pr create --title "PR Title" --body-file /tmp/pr_body.md
+  gh pr create --title "PR Title" --body-file <session-dir>/pr-body.md
   ```
 - **When using GitHub MCP (or if `gh` CLI is unauthenticated/unavailable)**:
-  - Call the GitHub MCP tool (e.g., `create_pull_request`) using the branch name, title, and body content from `/tmp/pr_body.md`.
+  - Call the GitHub MCP tool (e.g., `create_pull_request`) using the branch name, title, and body content from `<session-dir>/pr-body.md`.
   - Or create the PR via the GitHub Web UI with the same title and body content.
 
 ### 4. Post-Creation PR Head Diff Verification

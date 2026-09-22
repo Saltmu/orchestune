@@ -5,9 +5,9 @@ During [#822](https://github.com/Saltmu/orchestune/issues/822) observation, reco
 If absent, propose these in the current record; do not silently infer historical coverage.
 Include every PR in that environment and period, including docs-only, tool-unused, fallback, zero-finding, and unsuccessful PRs. Log exclusion reasons; count only reviewed PRs toward the 5/20 milestones. Missing reviews are not zero findings.
 
-Keep the working record in implementation_plan.md, then the PR body under `#822 observation`.
+Keep the working record in `<session-dir>/implementation-plan.md`, then the PR body under `#822 observation`.
 Before production edits, preserve the original scope table in an immutable task-Issue comment or a committed, tracked observation artifact and save its permalink in the plan.
-Never rely on ignored implementation_plan.md alone or rewrite the snapshot; append corrections elsewhere.
+Never rely on the ignored scratch plan alone or rewrite the snapshot; append corrections elsewhere.
 External writes require task authorization. Without a durable store, pause observed work, hand off the pending snapshot and retain its worktree.
 The #822 ledger links each PR once with status and its detailed record; update it on retries.
 
