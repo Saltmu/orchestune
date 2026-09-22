@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.consistency.invariants.execution import (
+    DISPATCH_PRELAUNCH_ORPHAN,
     EXECUTION_TIMED_OUT,
     HANDLELESS_EXECUTION_ORPHAN,
     LOCAL_PROCESS_DEAD,
@@ -114,6 +115,24 @@ def list_unattended_interactive_claims(
     return results
 
 
+def _resolve_reclaim_reason(
+    finding_codes: tuple[str, ...],
+    *,
+    timed_out: bool = False,
+) -> str:
+    """finding_codes とタイムアウト判定から適切な回収理由文字列を導出する。"""
+    if timed_out or EXECUTION_TIMED_OUT in finding_codes:
+        return "timeout exceeded"
+    if (
+        LOCAL_PROCESS_DEAD in finding_codes
+        or HANDLELESS_EXECUTION_ORPHAN in finding_codes
+    ):
+        return "process disappeared"
+    if DISPATCH_PRELAUNCH_ORPHAN in finding_codes:
+        return "claimed but never launched"
+    raise ValueError(f"unsupported reclaim findings: {finding_codes!r}")
+
+
 def _build_reclaim_candidate(
     key: str,
     active: ActiveWorktree,
@@ -130,14 +149,7 @@ def _build_reclaim_candidate(
     if active.owner_kind == "interactive":
         return None
     is_timeout = EXECUTION_TIMED_OUT in finding_codes
-    if is_timeout:
-        reason = "timeout exceeded"
-    elif LOCAL_PROCESS_DEAD in finding_codes:
-        reason = "process disappeared"
-    elif HANDLELESS_EXECUTION_ORPHAN in finding_codes:
-        reason = "process disappeared"
-    else:
-        raise ValueError(f"unsupported reclaim findings: {finding_codes!r}")
+    reason = _resolve_reclaim_reason(finding_codes, timed_out=is_timeout)
     return ZombieOrTimeoutReclaim(
         key=key,
         active=active,
@@ -173,6 +185,7 @@ def _reclaim_candidate_from_command(
     key, active = resolved
     finding_codes = command_finding_codes(command)
     reclaim_codes = {
+        DISPATCH_PRELAUNCH_ORPHAN,
         EXECUTION_TIMED_OUT,
         HANDLELESS_EXECUTION_ORPHAN,
         LOCAL_PROCESS_DEAD,
@@ -623,8 +636,9 @@ def _refresh_reclaim(
         key=reclaim.key,
         active=precondition.active,
         subtask_id=reclaim.subtask_id,
-        reason=(
-            "timeout exceeded" if precondition.timed_out else "process disappeared"
+        reason=_resolve_reclaim_reason(
+            reclaim.finding_codes,
+            timed_out=precondition.timed_out,
         ),
         is_timeout=precondition.timed_out,
         process_alive=precondition.process_alive,

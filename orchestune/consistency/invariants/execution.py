@@ -31,9 +31,13 @@ from orchestune.consistency.vocabulary import (
     DESIRED_ZOMBIE_GC_ENABLED,
     FACT_BRANCH_EXISTS,
     FACT_BRANCH_NAME,
+    FACT_EXECUTION_CLAIM_ID,
+    FACT_EXECUTION_CLAIM_STAGE,
     FACT_EXECUTION_EXTERNAL_ID,
     FACT_EXECUTION_EXTERNAL_STATUS,
     FACT_EXECUTION_KIND,
+    FACT_EXECUTION_LAUNCH_PHASE,
+    FACT_EXECUTION_OWNER_KIND,
     FACT_EXECUTION_PID,
     FACT_EXECUTION_PROCESS_ALIVE,
     FACT_EXECUTION_STARTED_AT,
@@ -52,6 +56,7 @@ from orchestune.consistency.vocabulary import (
 ACTIVE_EXECUTION_OWNERSHIP_CONFLICT = "execution.active-execution-ownership-conflict"
 BRANCH_MISSING = "execution.branch-missing"
 BRANCH_OWNERSHIP_CONFLICT = "execution.branch-ownership-conflict"
+DISPATCH_PRELAUNCH_ORPHAN = "execution.dispatch-prelaunch-orphan"
 EXECUTION_OBSERVATION_UNKNOWN = "execution.observation-unknown"
 EXECUTION_TIMED_OUT = "execution.timed-out"
 FORGE_OBSERVATION_UNKNOWN = "execution.forge-observation-unknown"
@@ -76,9 +81,13 @@ REQUIRED_OBSERVED_FACT_NAMES_BY_SCOPE = {
         {
             FACT_BRANCH_EXISTS,
             FACT_BRANCH_NAME,
+            FACT_EXECUTION_CLAIM_ID,
+            FACT_EXECUTION_CLAIM_STAGE,
             FACT_EXECUTION_EXTERNAL_ID,
             FACT_EXECUTION_EXTERNAL_STATUS,
             FACT_EXECUTION_KIND,
+            FACT_EXECUTION_LAUNCH_PHASE,
+            FACT_EXECUTION_OWNER_KIND,
             FACT_EXECUTION_PID,
             FACT_EXECUTION_PROCESS_ALIVE,
             FACT_EXECUTION_STARTED_AT,
@@ -522,6 +531,74 @@ def _self_healed_orphan_findings(
     )
 
 
+def _is_dispatch_prelaunch_orphan(task: ScopedObservations) -> bool:
+    kind = _fact(task, FACT_EXECUTION_KIND)
+    if kind is None or kind.value != EXECUTION_KIND_UNKNOWN:
+        return False
+
+    expected_values = {
+        FACT_EXECUTION_PID: None,
+        FACT_EXECUTION_EXTERNAL_ID: None,
+        FACT_EXECUTION_STARTED_AT: None,
+        FACT_WORKTREE_EXISTS: True,
+    }
+    for name, expected in expected_values.items():
+        fact = _fact(task, name)
+        if fact is None or fact.certainty is not _KNOWN or fact.value != expected:
+            return False
+
+    owner = _fact(task, FACT_EXECUTION_OWNER_KIND)
+    if owner is None or owner.certainty is not _KNOWN or owner.value != "dispatch":
+        return False
+
+    claim_id = _fact(task, FACT_EXECUTION_CLAIM_ID)
+    if (
+        claim_id is None
+        or claim_id.certainty is not _KNOWN
+        or not isinstance(claim_id.value, str)
+        or not claim_id.value.strip()
+    ):
+        return False
+
+    claim_stage = _fact(task, FACT_EXECUTION_CLAIM_STAGE)
+    if (
+        claim_stage is None
+        or claim_stage.certainty is not _KNOWN
+        or not isinstance(claim_stage.value, str)
+        or claim_stage.value.lower() not in {"active_saved", "completed"}
+    ):
+        return False
+
+    launch_phase = _fact(task, FACT_EXECUTION_LAUNCH_PHASE)
+    return bool(
+        launch_phase is not None
+        and launch_phase.certainty is _KNOWN
+        and launch_phase.value in {None, "failed"}
+    )
+
+
+def _dispatch_prelaunch_orphan_findings(
+    task: ScopedObservations, *, zombie_gc_enabled: bool
+) -> tuple[ConsistencyFinding, ...]:
+    """Recognize a dispatch prelaunch orphan placeholder before agent startup."""
+    if not zombie_gc_enabled or not _is_dispatch_prelaunch_orphan(task):
+        return ()
+
+    worktree = _fact(task, FACT_WORKTREE_EXISTS)
+    assert worktree is not None
+    return (
+        _task_finding(
+            DISPATCH_PRELAUNCH_ORPHAN,
+            task,
+            worktree,
+            expected="no prelaunch dispatch orphan",
+            expected_summary="dispatch placeholder has reached launching or provider",
+            observed_summary="dispatch claim succeeded but provider was never launched or clearly failed",
+            repairability=Repairability.AUTOMATIC,
+        ),
+    )
+
+
 def _run_state_findings(
     task: ScopedObservations, desired: DesiredRepositoryState
 ) -> tuple[ConsistencyFinding, ...]:
@@ -655,6 +732,7 @@ def _one_task_findings(
         *_local_process_findings(task, zombie_gc_enabled=zombie_gc_enabled),
         *_timeout_findings(task, observed, desired),
         *_self_healed_orphan_findings(task, zombie_gc_enabled=zombie_gc_enabled),
+        *_dispatch_prelaunch_orphan_findings(task, zombie_gc_enabled=zombie_gc_enabled),
         *_missing_resource_finding(
             task,
             FACT_BRANCH_EXISTS,
@@ -726,6 +804,7 @@ __all__ = [
     "ACTIVE_EXECUTION_OWNERSHIP_CONFLICT",
     "BRANCH_MISSING",
     "BRANCH_OWNERSHIP_CONFLICT",
+    "DISPATCH_PRELAUNCH_ORPHAN",
     "EXECUTION_OBSERVATION_UNKNOWN",
     "EXECUTION_TIMED_OUT",
     "FACT_PULL_REQUEST_BASE_REF",

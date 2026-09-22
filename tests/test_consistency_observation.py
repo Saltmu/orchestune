@@ -21,10 +21,14 @@ from orchestune.consistency.observation import (
     FACT_BRANCH_EXISTS,
     FACT_BRANCH_NAME,
     FACT_CHILD_ISSUE_NUMBERS,
+    FACT_EXECUTION_CLAIM_ID,
+    FACT_EXECUTION_CLAIM_STAGE,
     FACT_EXECUTION_COUNT,
     FACT_EXECUTION_EXTERNAL_ID,
     FACT_EXECUTION_EXTERNAL_STATUS,
     FACT_EXECUTION_KIND,
+    FACT_EXECUTION_LAUNCH_PHASE,
+    FACT_EXECUTION_OWNER_KIND,
     FACT_EXECUTION_PID,
     FACT_EXECUTION_PROCESS_ALIVE,
     FACT_FORGE_REACHABLE,
@@ -1238,3 +1242,21 @@ def test_build_observed_repository_state_matches_the_collector() -> None:
     )
 
     assert built == collected
+
+
+def test_execution_claim_and_launch_facts_are_observed_from_execution_record() -> None:
+    execution = ExecutionRecord(
+        issue_number=964,
+        branch="claude/issue-964",
+        worktree_path="worktree/964",
+        owner_kind="dispatch",
+        claim_id="claim-964",
+        claim_stage="completed",
+        launch_phase="failed",
+    )
+    state = _collector().collect(executions=(execution,))
+
+    assert _task_fact(state, 964, FACT_EXECUTION_OWNER_KIND).value == "dispatch"
+    assert _task_fact(state, 964, FACT_EXECUTION_CLAIM_ID).value == "claim-964"
+    assert _task_fact(state, 964, FACT_EXECUTION_CLAIM_STAGE).value == "completed"
+    assert _task_fact(state, 964, FACT_EXECUTION_LAUNCH_PHASE).value == "failed"

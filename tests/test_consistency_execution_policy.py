@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from orchestune.consistency import (
     ConsistencyEngine,
     ConsistencyReport,
@@ -18,6 +20,7 @@ from orchestune.consistency.invariants.execution import (
     ACTIVE_EXECUTION_OWNERSHIP_CONFLICT,
     BRANCH_MISSING,
     BRANCH_OWNERSHIP_CONFLICT,
+    DISPATCH_PRELAUNCH_ORPHAN,
     EXECUTION_OBSERVATION_UNKNOWN,
     FORGE_OBSERVATION_UNKNOWN,
     ISSUE_OWNERSHIP_CONFLICT,
@@ -41,13 +44,19 @@ from orchestune.consistency.observation import (
     EXECUTION_KIND_CLOUD,
     EXECUTION_KIND_LOCAL,
     EXECUTION_KIND_NONE,
+    EXECUTION_KIND_UNKNOWN,
     FACT_BRANCH_EXISTS,
     FACT_BRANCH_NAME,
+    FACT_EXECUTION_CLAIM_ID,
+    FACT_EXECUTION_CLAIM_STAGE,
     FACT_EXECUTION_EXTERNAL_ID,
     FACT_EXECUTION_EXTERNAL_STATUS,
     FACT_EXECUTION_KIND,
+    FACT_EXECUTION_LAUNCH_PHASE,
+    FACT_EXECUTION_OWNER_KIND,
     FACT_EXECUTION_PID,
     FACT_EXECUTION_PROCESS_ALIVE,
+    FACT_EXECUTION_STARTED_AT,
     FACT_FORGE_REACHABLE,
     FACT_ISSUE_STATE,
     FACT_PARENT_ISSUE_NUMBER,
@@ -509,3 +518,144 @@ def test_manual_or_unknown_findings_cannot_be_smuggled_into_repair_plan() -> Non
     report = ConsistencyReport(repository_id=REPOSITORY_ID, findings=findings)
 
     assert plan_execution_repairs(report) == ()
+
+
+def test_dispatch_prelaunch_orphan_finding_generated_when_eligible() -> None:
+    # TDD 1: worktree exists, dispatch owner, completed claim, handleless, launch_phase=None
+    task = _task_scope(
+        "964",
+        kind=EXECUTION_KIND_UNKNOWN,
+        pid=None,
+        external_id=None,
+        process_alive=None,
+        worktree_exists=True,
+        extra=(
+            _observation(FACT_EXECUTION_STARTED_AT, None, source="run-state"),
+            _observation(FACT_EXECUTION_OWNER_KIND, "dispatch", source="run-state"),
+            _observation(FACT_EXECUTION_CLAIM_ID, "claim-964", source="run-state"),
+            _observation(FACT_EXECUTION_CLAIM_STAGE, "completed", source="run-state"),
+            _observation(FACT_EXECUTION_LAUNCH_PHASE, None, source="run-state"),
+        ),
+    )
+    report = _evaluate(_state(task), _desired())
+    findings = [f for f in report.findings if f.code == DISPATCH_PRELAUNCH_ORPHAN]
+    assert len(findings) == 1
+    assert findings[0].repairability == Repairability.AUTOMATIC
+
+
+def test_dispatch_prelaunch_orphan_generated_for_active_saved_and_failed_phase() -> (
+    None
+):
+    # active_saved claim stage and failed launch phase are also eligible
+    task = _task_scope(
+        "964",
+        kind=EXECUTION_KIND_UNKNOWN,
+        pid=None,
+        external_id=None,
+        process_alive=None,
+        worktree_exists=True,
+        extra=(
+            _observation(FACT_EXECUTION_STARTED_AT, None, source="run-state"),
+            _observation(FACT_EXECUTION_OWNER_KIND, "dispatch", source="run-state"),
+            _observation(FACT_EXECUTION_CLAIM_ID, "claim-964", source="run-state"),
+            _observation(
+                FACT_EXECUTION_CLAIM_STAGE, "active_saved", source="run-state"
+            ),
+            _observation(FACT_EXECUTION_LAUNCH_PHASE, "failed", source="run-state"),
+        ),
+    )
+    report = _evaluate(_state(task), _desired())
+    findings = [f for f in report.findings if f.code == DISPATCH_PRELAUNCH_ORPHAN]
+    assert len(findings) == 1
+
+
+def test_dispatch_prelaunch_orphan_not_generated_for_interactive_owner() -> None:
+    # TDD 2: interactive owner must NOT generate finding
+    task = _task_scope(
+        "964",
+        kind=EXECUTION_KIND_UNKNOWN,
+        pid=None,
+        external_id=None,
+        process_alive=None,
+        worktree_exists=True,
+        extra=(
+            _observation(FACT_EXECUTION_STARTED_AT, None, source="run-state"),
+            _observation(FACT_EXECUTION_OWNER_KIND, "interactive", source="run-state"),
+            _observation(FACT_EXECUTION_CLAIM_ID, "claim-964", source="run-state"),
+            _observation(FACT_EXECUTION_CLAIM_STAGE, "completed", source="run-state"),
+            _observation(FACT_EXECUTION_LAUNCH_PHASE, None, source="run-state"),
+        ),
+    )
+    report = _evaluate(_state(task), _desired())
+    findings = [f for f in report.findings if f.code == DISPATCH_PRELAUNCH_ORPHAN]
+    assert len(findings) == 0
+
+
+@pytest.mark.parametrize("phase", ["launching", "unknown", "launched"])
+def test_dispatch_prelaunch_orphan_not_generated_for_ineligible_phases(
+    phase: str,
+) -> None:
+    # TDD 3: launching, unknown, launched must NOT generate finding
+    task = _task_scope(
+        "964",
+        kind=EXECUTION_KIND_UNKNOWN,
+        pid=None,
+        external_id=None,
+        process_alive=None,
+        worktree_exists=True,
+        extra=(
+            _observation(FACT_EXECUTION_STARTED_AT, None, source="run-state"),
+            _observation(FACT_EXECUTION_OWNER_KIND, "dispatch", source="run-state"),
+            _observation(FACT_EXECUTION_CLAIM_ID, "claim-964", source="run-state"),
+            _observation(FACT_EXECUTION_CLAIM_STAGE, "completed", source="run-state"),
+            _observation(FACT_EXECUTION_LAUNCH_PHASE, phase, source="run-state"),
+        ),
+    )
+    report = _evaluate(_state(task), _desired())
+    findings = [f for f in report.findings if f.code == DISPATCH_PRELAUNCH_ORPHAN]
+    assert len(findings) == 0
+
+
+@pytest.mark.parametrize(
+    "unknown_fact_name",
+    [
+        FACT_EXECUTION_OWNER_KIND,
+        FACT_EXECUTION_CLAIM_ID,
+        FACT_EXECUTION_CLAIM_STAGE,
+        FACT_EXECUTION_LAUNCH_PHASE,
+    ],
+)
+def test_dispatch_prelaunch_orphan_not_generated_when_facts_unknown(
+    unknown_fact_name: str,
+) -> None:
+    # TDD 4: UNKNOWN owner_kind, claim_id, claim_stage, or launch_phase must NOT generate finding
+    defaults = {
+        FACT_EXECUTION_STARTED_AT: None,
+        FACT_EXECUTION_OWNER_KIND: "dispatch",
+        FACT_EXECUTION_CLAIM_ID: "claim-964",
+        FACT_EXECUTION_CLAIM_STAGE: "completed",
+        FACT_EXECUTION_LAUNCH_PHASE: None,
+    }
+    extra = tuple(
+        _observation(
+            name,
+            defaults[name],
+            certainty=ObservationCertainty.UNKNOWN
+            if name == unknown_fact_name
+            else ObservationCertainty.KNOWN,
+            source="run-state",
+        )
+        for name in defaults
+    )
+    task = _task_scope(
+        "964",
+        kind=EXECUTION_KIND_UNKNOWN,
+        pid=None,
+        external_id=None,
+        process_alive=None,
+        worktree_exists=True,
+        extra=extra,
+    )
+    report = _evaluate(_state(task), _desired())
+    findings = [f for f in report.findings if f.code == DISPATCH_PRELAUNCH_ORPHAN]
+    assert len(findings) == 0

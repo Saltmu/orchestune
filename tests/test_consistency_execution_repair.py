@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import orchestune.dispatch.execution_repair as execution_repair
 from orchestune.consistency.invariants.execution import (
+    DISPATCH_PRELAUNCH_ORPHAN,
     EXECUTION_OBSERVATION_UNKNOWN,
     EXECUTION_TIMED_OUT,
     LOCAL_PROCESS_DEAD,
@@ -504,3 +505,86 @@ def test_dispatch_cycle_uses_supervisor_for_execution_consistency(tmp_path, fake
     ]
     assert "gc-reclaim" in boundaries
     assert report is not None
+
+
+def test_dispatch_prelaunch_orphan_is_mapped_to_reclaim_and_requeue(
+    tmp_path, fake_forge
+):
+    worktree_path = tmp_path / "worktrees" / "task-964"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+    active = ActiveWorktree(
+        issue_number=964,
+        branch="claude/issue-964",
+        worktree_path=str(worktree_path),
+        pid=None,
+        started_at=None,
+        declared_footprint=(),
+        owner_kind="dispatch",
+        claim_id="claim-964",
+        claim_stage="completed",
+        launch_phase=None,
+    )
+    run_state = RunState(active_worktrees={"964": active})
+    config = _config(tmp_path, fake_forge)
+
+    evaluation = _evaluate_execution_plan(
+        run_state,
+        {964: _task(964)},
+        config,
+        now=2_000.0,
+    )
+
+    assert DISPATCH_PRELAUNCH_ORPHAN in _codes(evaluation)
+    assert _command_codes(evaluation, 964) == [COMMAND_RECLAIM, COMMAND_REQUEUE]
+
+
+def test_revalidate_preconditions_skips_when_active_changes_to_launched(
+    tmp_path, fake_forge
+):
+    worktree_path = tmp_path / "worktrees" / "task-964"
+    worktree_path.mkdir(parents=True, exist_ok=True)
+    active_at_finding = ActiveWorktree(
+        issue_number=964,
+        branch="claude/issue-964",
+        worktree_path=str(worktree_path),
+        pid=None,
+        started_at=None,
+        declared_footprint=(),
+        owner_kind="dispatch",
+        claim_id="claim-964",
+        claim_stage="completed",
+        launch_phase=None,
+    )
+    active_now = ActiveWorktree(
+        issue_number=964,
+        branch="claude/issue-964",
+        worktree_path=str(worktree_path),
+        pid=1234,
+        started_at=2000.0,
+        declared_footprint=(),
+        owner_kind="dispatch",
+        claim_id="claim-964",
+        claim_stage="completed",
+        launch_phase="launched",
+    )
+    run_state = RunState(active_worktrees={"964": active_now})
+    config = _config(tmp_path, fake_forge)
+    command = RepairCommand(
+        code=COMMAND_RECLAIM,
+        scope=ConsistencyScope.TASK,
+        subject_id="964",
+        idempotency_key="test:reclaim:964",
+    )
+
+    result = execution_repair.revalidate_reclaim_preconditions(
+        command,
+        run_state,
+        key="964",
+        expected_active=active_at_finding,
+        expected_finding_codes=(DISPATCH_PRELAUNCH_ORPHAN,),
+        config=config,
+        held_worktree_paths=frozenset(),
+        now=2000.0,
+    )
+
+    assert result is None

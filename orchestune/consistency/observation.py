@@ -39,10 +39,14 @@ from orchestune.consistency.vocabulary import (
     FACT_BRANCH_EXISTS,
     FACT_BRANCH_NAME,
     FACT_CHILD_ISSUE_NUMBERS,
+    FACT_EXECUTION_CLAIM_ID,
+    FACT_EXECUTION_CLAIM_STAGE,
     FACT_EXECUTION_COUNT,
     FACT_EXECUTION_EXTERNAL_ID,
     FACT_EXECUTION_EXTERNAL_STATUS,
     FACT_EXECUTION_KIND,
+    FACT_EXECUTION_LAUNCH_PHASE,
+    FACT_EXECUTION_OWNER_KIND,
     FACT_EXECUTION_PID,
     FACT_EXECUTION_PROCESS_ALIVE,
     FACT_EXECUTION_STARTED_AT,
@@ -163,6 +167,10 @@ class ExecutionRecord:
     external_id: str | None = None
     started_at: float | None = None
     kind: str | None = None
+    owner_kind: str | None = None
+    claim_id: str | None = None
+    claim_stage: str | None = None
+    launch_phase: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -653,6 +661,22 @@ def _read_started_at(record: ExecutionRecord) -> FactValue:
     return record.started_at
 
 
+def _read_owner_kind(record: ExecutionRecord) -> FactValue:
+    return record.owner_kind
+
+
+def _read_claim_id(record: ExecutionRecord) -> FactValue:
+    return record.claim_id
+
+
+def _read_claim_stage(record: ExecutionRecord) -> FactValue:
+    return record.claim_stage
+
+
+def _read_launch_phase(record: ExecutionRecord) -> FactValue:
+    return record.launch_phase
+
+
 def _branch_exists(probe: GitProbe, branch: str) -> FactValue:
     return probe.branch_exists(branch)
 
@@ -987,6 +1011,16 @@ class ObservationCollector:
             ),
             run_state(
                 FACT_EXECUTION_EXTERNAL_ID, _execution_field(view, _read_external_id)
+            ),
+            run_state(
+                FACT_EXECUTION_OWNER_KIND, _execution_field(view, _read_owner_kind)
+            ),
+            run_state(FACT_EXECUTION_CLAIM_ID, _execution_field(view, _read_claim_id)),
+            run_state(
+                FACT_EXECUTION_CLAIM_STAGE, _execution_field(view, _read_claim_stage)
+            ),
+            run_state(
+                FACT_EXECUTION_LAUNCH_PHASE, _execution_field(view, _read_launch_phase)
             ),
             _emitter(SOURCE_PROCESS, now)(
                 FACT_EXECUTION_PROCESS_ALIVE, self._process_reading(view)
