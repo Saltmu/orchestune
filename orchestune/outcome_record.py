@@ -8,6 +8,7 @@ resultはdone/not-needed/blockedの3値。blockedはreasonを持つ
 
 from __future__ import annotations
 
+import enum
 import json
 import math
 from collections.abc import Mapping, Sequence
@@ -62,6 +63,12 @@ class OutcomeRecord:
     review: ReviewSummary = field(default_factory=ReviewSummary)
     ci: str | None = None
     baseline_regressions: tuple[str, ...] = ()
+    # #998: Issue正本の同一作業試行を識別する任意フィールド。旧形式（PR
+    # コメント時代）のレコードはこれらを持たないため、いずれも省略可能とし、
+    # 既存の呼び出し元（GCなど、本Issueのスコープ外）の構築を壊さない。
+    claim_id: str | None = None
+    head_sha: str | None = None
+    completion_id: str | None = None
 
     def render(self) -> str:
         """`parse_from_comments`で往復変換できるコメント本文を生成する。"""
@@ -75,9 +82,33 @@ class OutcomeRecord:
             "review": self.review.to_dict(),
             "ci": self.ci,
             "baseline_regressions": list(self.baseline_regressions),
+            "claim_id": self.claim_id,
+            "head_sha": self.head_sha,
+            "completion_id": self.completion_id,
         }
         body = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=False)
         return f"{OUTCOME_MARKER}\n```json\n{body}\n```\n"
+
+
+class OutcomeLookupState(enum.Enum):
+    """#998: Issueコメント取得結果を表す共有契約。
+
+    `ABSENT`は全ページの取得が完了した上でレコードが見つからなかった場合
+    にのみ返してよい。取得が途中で失敗した場合は`UNKNOWN`とし、両者を
+    呼び出し元が区別できるようにする（fail-closed）。
+    """
+
+    FOUND = "found"
+    ABSENT = "absent"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class OutcomeLookupResult:
+    """`OutcomeLookupState`と、`FOUND`時のみ設定される`OutcomeRecord`の組。"""
+
+    state: OutcomeLookupState
+    record: OutcomeRecord | None = None
 
 
 def _normalize_int(value: Any) -> int | None:
@@ -142,6 +173,12 @@ def _extract_optional_int(raw: Any) -> int | None | object:
     return val if val is not None else _INVALID
 
 
+def _extract_optional_str(raw: Any) -> str | None | object:
+    if raw is None:
+        return None
+    return raw if isinstance(raw, str) else _INVALID
+
+
 def _extract_reason(raw: Any, result: str) -> str | None | object:
     if raw is None:
         return None if result != RESULT_BLOCKED else _INVALID
@@ -151,6 +188,27 @@ def _extract_reason(raw: Any, result: str) -> str | None | object:
         return raw if raw in VALID_REASONS else _INVALID
     sanitized = _sanitize_reason(raw)
     return sanitized if sanitized else _INVALID
+
+
+def _identity_fields_from_dict(
+    data: Mapping[str, Any],
+) -> tuple[str | None, str | None, str | None] | object:
+    """#998: `claim_id`/`head_sha`/`completion_id`（同一作業試行の識別子）を
+    まとめて検証する。いずれか一つでも不正なら`_INVALID`を返す。"""
+    claim_id = _extract_optional_str(data.get("claim_id"))
+    if claim_id is _INVALID:
+        return _INVALID
+    head_sha = _extract_optional_str(data.get("head_sha"))
+    if head_sha is _INVALID:
+        return _INVALID
+    completion_id = _extract_optional_str(data.get("completion_id"))
+    if completion_id is _INVALID:
+        return _INVALID
+    return (
+        cast("str | None", claim_id),
+        cast("str | None", head_sha),
+        cast("str | None", completion_id),
+    )
 
 
 def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
@@ -170,8 +228,8 @@ def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
     if reason is _INVALID:
         return None
 
-    base_sha = data.get("base_sha")
-    if base_sha is not None and not isinstance(base_sha, str):
+    base_sha = _extract_optional_str(data.get("base_sha"))
+    if base_sha is _INVALID:
         return None
 
     attempt = _extract_optional_int(data.get("attempt"))
@@ -182,8 +240,8 @@ def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
     if review is _INVALID:
         return None
 
-    ci = data.get("ci")
-    if ci is not None and not isinstance(ci, str):
+    ci = _extract_optional_str(data.get("ci"))
+    if ci is _INVALID:
         return None
 
     baseline_regressions = _baseline_regressions_from_value(
@@ -192,16 +250,24 @@ def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
     if baseline_regressions is _INVALID:
         return None
 
+    identity = _identity_fields_from_dict(data)
+    if identity is _INVALID:
+        return None
+    claim_id, head_sha, completion_id = cast("tuple[str | None, ...]", identity)
+
     return OutcomeRecord(
         result=result,
         issue=issue,
         pr=cast(int | None, pr),
         reason=cast(str | None, reason),
-        base_sha=base_sha,
+        base_sha=cast(str | None, base_sha),
         attempt=cast(int | None, attempt),
         review=cast(ReviewSummary, review),
-        ci=ci,
+        ci=cast(str | None, ci),
         baseline_regressions=cast("tuple[str, ...]", baseline_regressions),
+        claim_id=claim_id,
+        head_sha=head_sha,
+        completion_id=completion_id,
     )
 
 
@@ -268,3 +334,54 @@ def parse_from_comments(
             latest_created_at = created_at
             latest_record = record
     return latest_record
+
+
+def calculate_blocked_attempt(
+    comments: Sequence[Mapping[str, Any]],
+    *,
+    issue_number: int,
+    claim_id: str,
+    head_sha: str,
+) -> int:
+    """Issueコメント履歴から、この`(claim_id, head_sha)`が投稿すべき
+    base-branch-redのblocked attempt番号を算出する。
+
+    対象は`result=blocked`・`reason=base-branch-red`・`issue`がこのIssue番号に
+    一致し、かつ`claim_id`/`head_sha`の両方を持つレコードに限る（PRコメント
+    時代・#998より前の旧形式レコードは識別子を持たないため対象外＝
+    「旧形式レコードを...attempt計算から除外する」）。
+
+    最新の対象レコードが呼び出し元と同じ`(claim_id, head_sha)`であれば、
+    同一作業試行の再送（通信再送等）とみなしその`attempt`をそのまま返す
+    （増加させない）。異なる場合は対象レコード中の最大`attempt`+1を返す
+    （対象レコードが無ければ1）。
+    """
+    qualifying: list[OutcomeRecord] = []
+    for comment in comments:
+        body = comment.get("body")
+        if not isinstance(body, str):
+            continue
+        record = _extract_record(body)
+        if record is None:
+            continue
+        if (
+            record.result != RESULT_BLOCKED
+            or record.reason != REASON_BASE_BRANCH_RED
+            or record.issue != issue_number
+            or record.claim_id is None
+            or record.head_sha is None
+        ):
+            continue
+        qualifying.append(record)
+
+    if not qualifying:
+        return 1
+
+    for record in qualifying:
+        if record.claim_id == claim_id and record.head_sha == head_sha:
+            return record.attempt if record.attempt is not None else 1
+
+    max_attempt = max(
+        (r.attempt for r in qualifying if r.attempt is not None), default=0
+    )
+    return max_attempt + 1

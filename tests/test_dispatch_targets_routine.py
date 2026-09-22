@@ -414,7 +414,10 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 "list_prs",
                 return_value=[
                     PrRecord(
-                        number=1, head_ref="claude/issue-1-task-a", changed_files=()
+                        number=1,
+                        head_ref="claude/issue-1-task-a",
+                        changed_files=(),
+                        closes_issue_numbers=(1,),
                     )
                 ],
             ),
@@ -512,6 +515,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                         changed_files=(),
                         created_at="2026-01-01T00:00:00Z",
                         state="OPEN",
+                        closes_issue_numbers=(1,),
                     )
                 ],
             ),
