@@ -414,7 +414,10 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 "list_prs",
                 return_value=[
                     PrRecord(
-                        number=1, head_ref="claude/issue-1-task-a", changed_files=()
+                        number=1,
+                        head_ref="claude/issue-1-task-a",
+                        changed_files=(),
+                        closes_issue_numbers=(1,),
                     )
                 ],
             ),
@@ -430,6 +433,32 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                 external_id="session_1", branch_name="claude/issue-1-task-a"
             )
             assert target.is_complete(handle, forge=self.forge) is True
+
+    def test_ambiguous_multi_issue_closure_does_not_guess_an_issue_number(self):
+        """Codexレビュー(#1015 round3 P2) Reproducer: `handle.issue_number`が
+        未設定で、マッチしたPRが複数Issueをcloseする場合、先頭のIssue番号を
+        誤って採用してはならない（対象タスクと無関係なIssueのコメントを
+        読んでしまう恐れがある）。解決不能としてUNKNOWN（pending）へ倒す。"""
+        target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
+        with patch.object(
+            self.forge,
+            "list_prs",
+            return_value=[
+                PrRecord(
+                    number=1,
+                    head_ref="claude/issue-1-task-a",
+                    changed_files=(),
+                    closes_issue_numbers=(10, 20),
+                )
+            ],
+        ):
+            handle = DispatchHandle(
+                external_id="session_1", branch_name="claude/issue-1-task-a"
+            )
+            # `ClaudeCodeCloudRoutineDispatchTarget.completion_status`は
+            # "unknown"を独自に"pending"へ丸める（既存の同クラスの契約）。
+            assert target.completion_status(handle, forge=self.forge) == "pending"
+            self.forge.list_comments.assert_not_called()
 
     def test_is_complete_false_when_no_matching_pr(self):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
@@ -512,6 +541,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
                         changed_files=(),
                         created_at="2026-01-01T00:00:00Z",
                         state="OPEN",
+                        closes_issue_numbers=(1,),
                     )
                 ],
             ),

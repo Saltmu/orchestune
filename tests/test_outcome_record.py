@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from orchestune.outcome_record import (
     OUTCOME_MARKER,
+    OutcomeLookupResult,
+    OutcomeLookupState,
     OutcomeRecord,
     ReviewSummary,
+    calculate_blocked_attempt,
     parse_from_comments,
 )
 
@@ -316,3 +319,225 @@ class TestParseFromCommentsTypeNormalization:
         body = f'{OUTCOME_MARKER}\n```json\n{{"result": "done", "issue": 12.34, "pr": 1}}\n```\n'
         comments = [{"body": body, "created_at": "2026-08-21T00:00:00Z"}]
         assert parse_from_comments(comments) is None
+
+
+class TestIdentityFieldsRoundTrip:
+    """#998: `claim_id`/`head_sha`/`completion_id`はIssue正本の同一作業試行識別子。"""
+
+    def test_full_identity_fields_round_trip(self):
+        record = OutcomeRecord(
+            result="blocked",
+            issue=548,
+            reason="base-branch-red",
+            attempt=2,
+            claim_id="claim-abc123",
+            head_sha="deadbeef",
+            completion_id="completion-xyz",
+        )
+        body = record.render()
+        comments = [{"body": body, "created_at": "2026-08-21T00:00:00Z"}]
+        assert parse_from_comments(comments) == record
+
+    def test_identity_fields_default_to_none_and_omitting_them_is_valid(self):
+        body = f'{OUTCOME_MARKER}\n```json\n{{"result": "done", "issue": 1}}\n```\n'
+        comments = [{"body": body, "created_at": "x"}]
+        record = parse_from_comments(comments)
+        assert record is not None
+        assert record.claim_id is None
+        assert record.head_sha is None
+        assert record.completion_id is None
+
+    def test_non_string_identity_fields_are_rejected(self):
+        for field_name in ("claim_id", "head_sha", "completion_id"):
+            body = (
+                f"{OUTCOME_MARKER}\n```json\n"
+                f'{{"result": "done", "issue": 1, "{field_name}": 123}}\n```\n'
+            )
+            comments = [{"body": body, "created_at": "x"}]
+            assert (
+                parse_from_comments(comments) is None
+            ), f"Expected non-string {field_name} to be rejected"
+
+
+class TestOutcomeLookupResult:
+    def test_found_state_carries_the_record(self):
+        record = OutcomeRecord(result="done", issue=1, pr=2)
+        result = OutcomeLookupResult(state=OutcomeLookupState.FOUND, record=record)
+        assert result.state is OutcomeLookupState.FOUND
+        assert result.record == record
+
+    def test_absent_and_unknown_states_carry_no_record(self):
+        absent = OutcomeLookupResult(state=OutcomeLookupState.ABSENT)
+        unknown = OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN)
+        assert absent.record is None
+        assert unknown.record is None
+        assert absent.state is not unknown.state
+
+
+class TestCalculateBlockedAttempt:
+    """#998: Issueコメント履歴からbase-branch-redの連続attemptを算出する。
+    旧PRコメント・旧形式（identityフィールド欠如）レコードは対象外。
+    """
+
+    def _blocked_comment(
+        self,
+        *,
+        attempt: int,
+        claim_id: str,
+        head_sha: str,
+        created_at: str,
+        issue: int = 1,
+    ) -> dict:
+        record = OutcomeRecord(
+            result="blocked",
+            issue=issue,
+            reason="base-branch-red",
+            attempt=attempt,
+            claim_id=claim_id,
+            head_sha=head_sha,
+        )
+        return {"body": record.render(), "created_at": created_at}
+
+    def test_first_attempt_with_no_history_is_one(self):
+        assert (
+            calculate_blocked_attempt(
+                [], issue_number=1, claim_id="claim-a", head_sha="sha-a"
+            )
+            == 1
+        )
+
+    def test_new_claim_and_head_sha_increments_prior_attempt(self):
+        comments = [
+            self._blocked_comment(
+                attempt=1,
+                claim_id="claim-a",
+                head_sha="sha-a",
+                created_at="2026-08-20T00:00:00Z",
+            )
+        ]
+        assert (
+            calculate_blocked_attempt(
+                comments, issue_number=1, claim_id="claim-b", head_sha="sha-b"
+            )
+            == 2
+        )
+
+    def test_retransmission_of_same_claim_and_head_sha_does_not_increment(self):
+        comments = [
+            self._blocked_comment(
+                attempt=2,
+                claim_id="claim-a",
+                head_sha="sha-a",
+                created_at="2026-08-20T00:00:00Z",
+            )
+        ]
+        assert (
+            calculate_blocked_attempt(
+                comments, issue_number=1, claim_id="claim-a", head_sha="sha-a"
+            )
+            == 2
+        )
+
+    def test_legacy_record_without_identity_fields_is_excluded(self):
+        legacy = OutcomeRecord(
+            result="blocked", issue=1, reason="base-branch-red", attempt=5
+        )
+        comments = [{"body": legacy.render(), "created_at": "2026-08-20T00:00:00Z"}]
+        assert (
+            calculate_blocked_attempt(
+                comments, issue_number=1, claim_id="claim-a", head_sha="sha-a"
+            )
+            == 1
+        )
+
+    def test_records_for_other_issues_are_excluded(self):
+        comments = [
+            self._blocked_comment(
+                attempt=7,
+                claim_id="claim-a",
+                head_sha="sha-a",
+                created_at="2026-08-20T00:00:00Z",
+                issue=999,
+            )
+        ]
+        assert (
+            calculate_blocked_attempt(
+                comments, issue_number=1, claim_id="claim-b", head_sha="sha-b"
+            )
+            == 1
+        )
+
+    def test_non_blocked_or_non_base_branch_red_records_are_excluded(self):
+        done = OutcomeRecord(
+            result="done", issue=1, claim_id="claim-a", head_sha="sha-a"
+        )
+        review_timeout = OutcomeRecord(
+            result="blocked",
+            issue=1,
+            reason="review-timeout",
+            attempt=9,
+            claim_id="claim-a",
+            head_sha="sha-a",
+        )
+        comments = [
+            {"body": done.render(), "created_at": "2026-08-20T00:00:00Z"},
+            {"body": review_timeout.render(), "created_at": "2026-08-20T00:00:01Z"},
+        ]
+        assert (
+            calculate_blocked_attempt(
+                comments, issue_number=1, claim_id="claim-b", head_sha="sha-b"
+            )
+            == 1
+        )
+
+    def test_uses_the_highest_qualifying_attempt_regardless_of_comment_order(self):
+        comments = [
+            self._blocked_comment(
+                attempt=1,
+                claim_id="claim-a",
+                head_sha="sha-a",
+                created_at="2026-08-20T00:00:00Z",
+            ),
+            self._blocked_comment(
+                attempt=2,
+                claim_id="claim-b",
+                head_sha="sha-b",
+                created_at="2026-08-21T00:00:00Z",
+            ),
+        ]
+        assert (
+            calculate_blocked_attempt(
+                comments, issue_number=1, claim_id="claim-c", head_sha="sha-c"
+            )
+            == 3
+        )
+
+    def test_delayed_retry_of_a_superseded_attempt_is_not_treated_as_retransmission(
+        self,
+    ):
+        """Codexレビュー(#1015 round3 P2) Reproducer: 「再送は最新の対象
+        レコードとだけ比較する」契約を、`qualifying`の中の任意の過去レコード
+        と比較する実装にしてしまうと、遅延到着した古い試行の再送が最新扱い
+        されてしまう。(claim-a, sha-1, attempt=1)の後に(claim-a, sha-2,
+        attempt=2)へ進んだ状態で、sha-1への遅延再送は「再送」ではなく
+        「新しい試行」として扱われ、次のattemptは3になるべき。"""
+        comments = [
+            self._blocked_comment(
+                attempt=1,
+                claim_id="claim-a",
+                head_sha="sha-1",
+                created_at="2026-08-20T00:00:00Z",
+            ),
+            self._blocked_comment(
+                attempt=2,
+                claim_id="claim-a",
+                head_sha="sha-2",
+                created_at="2026-08-21T00:00:00Z",
+            ),
+        ]
+        assert (
+            calculate_blocked_attempt(
+                comments, issue_number=1, claim_id="claim-a", head_sha="sha-1"
+            )
+            == 3
+        )
