@@ -19,7 +19,8 @@ cd worktree/<BRANCH_SLUG>
 ```
 
 Replace `<INSTALL_COMMAND>` with the project's dependency/bootstrap command
-(for example, `uv sync`). Then write `implementation_plan.md`, implement,
+(for example, `uv sync`). Then create the unique `<session-dir>` defined by the
+parent skill, write `<session-dir>/implementation-plan.md`, implement,
 test, run local CI, commit, push, create the PR, and handle review feedback from
 this directory. If the worktree cannot be created because the target or branch
 already exists, inspect it with `git worktree list` and choose a new slug; do not
@@ -56,4 +57,3 @@ git worktree prune
 ```
 
 Do not use `--force`; resolve or preserve uncommitted work first.
-

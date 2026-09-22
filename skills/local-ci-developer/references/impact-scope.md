@@ -28,7 +28,7 @@ nothing; record which supplementary searches you ran.
 
 ## 3. Classify
 
-Write the result into `implementation_plan.md` as a table, one row per reference site:
+Write the result into `<session-dir>/implementation-plan.md` as a table, one row per reference site:
 
 | Reference | Decision | Rationale |
 | :--- | :--- | :--- |
@@ -57,7 +57,7 @@ what makes the practice measurable.
 
 | Symptom | Action |
 | :--- | :--- |
-| MCP server does not start | Continue with `rg` / `grep`, note the fallback in `implementation_plan.md` |
+| MCP server does not start | Continue with `rg` / `grep`, note the fallback in `<session-dir>/implementation-plan.md` |
 | Language server is slow on first call | Wait; the symbol cache is per-file and content-hashed, so later calls are cheap |
 | Results look stale after a branch switch | Cached entries are keyed by file content hash and are discarded on mismatch; if results still look wrong, delete `.serena/cache/` in the worktree |
 | Tool cannot be repaired within the task | Disable it by removing the server from the client session and proceed with text search; do not block the task on tooling |

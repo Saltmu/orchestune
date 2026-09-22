@@ -571,3 +571,57 @@ class TestLockReentrancy:
 
         assert outcome.success is True
         assert outcome.owner_kind == OwnerKind.DISPATCH
+
+    def test_claim_task_resolves_parent_issue_base_without_view(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        repo_root = claim_env["repo_root"]
+        state_path = claim_env["state_path"]
+        footprint_with_parent = (
+            "## Footprint\n\n"
+            "```yaml\n"
+            "subtask_id: test-task\n"
+            "footprint: [orchestune/foo.py]\n"
+            "parent_issue_number: 894\n"
+            "```\n"
+        )
+        issue = _make_issue(number=101, body=footprint_with_parent)
+        forge = MockForge({101: issue})
+
+        captured_base_branch: list[str | None] = []
+
+        def mock_prepare_worktree(
+            branch, worktree_root, base_branch, claim_id, **kwargs
+        ):
+            captured_base_branch.append(base_branch)
+            target_path = Path(worktree_root) / branch.replace("/", "-")
+            target_path.mkdir(parents=True, exist_ok=True)
+            return WorktreePreparation(
+                worktree_path=target_path,
+                branch=branch,
+                accepted=True,
+                created=True,
+                base_sha="base_sha_894",
+            )
+
+        with (
+            patch(
+                "orchestune.claim.service.run_git", return_value=MagicMock(returncode=0)
+            ),
+            patch(
+                "orchestune.claim.service.prepare_task_worktree",
+                side_effect=mock_prepare_worktree,
+            ),
+        ):
+            request = ClaimRequest(issue_number=101, state_path=state_path)
+            outcome = claim_task(request, forge=forge, cwd=repo_root)
+
+        assert outcome.success is True
+        assert outcome.base_ref == "parent/issue-894"
+        assert captured_base_branch == ["parent/issue-894"]
+
+        saved_state = load_run_state(state_path)
+        active = saved_state.active_worktrees.get("101")
+        assert active is not None
+        assert active.base_ref == "parent/issue-894"
+        assert active.base_branch == "parent/issue-894"

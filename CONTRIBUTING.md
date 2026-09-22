@@ -51,7 +51,9 @@ The symbol cache is stored under `<project root>/.serena/cache/<language>/` and 
 
 ### Fallback and opt-out
 
-If the MCP server fails to start or the language server stops responding, fall back to the existing text search (`rg` / ripgrep, `grep`), record that in `implementation_plan.md`, and keep working. Text search cannot separate identically named symbols by type, so widen your review accordingly. Never stall a task on tooling trouble.
+If the MCP server fails to start or the language server stops responding, fall back to the existing text search (`rg` / ripgrep, `grep`), record that in the session-specific implementation plan, and keep working. Text search cannot separate identically named symbols by type, so widen your review accordingly. Never stall a task on tooling trouble.
+
+Agent scratch artifacts belong under the Git-ignored `.orchestune/tmp/` directory. Create one directory per session as `<artifact>-<issue-or-task>-<UTC timestamp>-<random>` (UTC `YYYYMMDDTHHMMSSZ`, plus a UUID or equivalent random value), and keep plans, PR bodies, and review replies inside it. Do not use fixed names in the repository root or the OS-global `/tmp`.
 
 To opt out permanently, disable the MCP server on the client side (in Claude Code, via `claude mcp` configuration or by disconnecting from `/mcp`).
 

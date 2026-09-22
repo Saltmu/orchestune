@@ -35,7 +35,7 @@ As an exception, a human may load this skill directly if they only want to re-ru
 
 ## Workflow: Scheduled Dispatch Execution
 
-1. Run the dispatcher to schedule and assign tasks to agents. Pass the required parent Issue number (`parent_issue_number` from `decomposition_plan.md`, or the parent Issue being resumed) to `--parent-issue`. This ensures child task branches diverge from the parent branch (`parent/issue-{number}`), enabling the Integrator to automatically merge completed child branches into the parent branch and close issues without waiting for human intervention (only the final merge from `parent/issue-{number}` to `main` requires human review).
+1. Run the dispatcher to schedule and assign tasks to agents. Pass the required parent Issue number (`parent_issue_number` from the approved decomposition plan, or the parent Issue being resumed) to `--parent-issue`. This ensures child task branches diverge from the parent branch (`parent/issue-{number}`), enabling the Integrator to automatically merge completed child branches into the parent branch and close issues without waiting for human intervention (only the final merge from `parent/issue-{number}` to `main` requires human review).
 
    ```bash
    # Dry-run (preview changes without applying)

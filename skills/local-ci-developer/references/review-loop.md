@@ -35,7 +35,7 @@ When findings are returned (Exit 10):
    - If speculative, unoccurred, or unneeded (YAGNI), decline with explicit rationale without filing an Issue.
    - In re-review reply, document decline rationale (e.g. `[Declined - YAGNI] Unoccurred edge case: exceeds PR acceptance criteria` or `[Declined - Out of Scope] Exceeds PR acceptance criteria; deferred to #...`).
 4. **Re-Review Reply Documentation**:
-   - Include detailed resolution summary (commit hashes for fixes, rationales for declines) in `/tmp/review_reply.md`.
+   - Include detailed resolution summary (commit hashes for fixes, rationales for declines) in `<session-dir>/review-reply.md`.
 
 ### Review Loop Control Flow (Pseudocode)
 
@@ -43,7 +43,7 @@ When findings are returned (Exit 10):
 Loop (up to 5 rounds):
   1. Acquire review state and execute shared verdict evaluator:
      - CLI/gh initial round: uv run python scripts/wait_for_review.py --pr <PR_NUMBER> --bot-name <bot>
-     - Subsequent rounds: attach --body-file /tmp/review_reply.md (with commit hash & fix summary).
+     - Subsequent rounds: attach `--body-file <session-dir>/review-reply.md` (with commit hash & fix summary).
      - GitHub MCP / App: retrieve comments/reviews snapshot, then run:
        uv run python scripts/wait_for_review.py --bot-name <bot> --review-state-file <STATE.json>
   2. Evaluate exit code, then carefully read the entire result:
@@ -56,13 +56,13 @@ Loop (up to 5 rounds):
        a. Classify findings: adopt ONLY module contradictions and unmet Acceptance Criteria/regressions. Decline unoccurred edge cases (YAGNI) and out-of-scope items.
        b. For in-scope findings: fix code and add tests, verify local CI, commit and push.
        c. For out-of-scope findings: do NOT modify code; file a follow-up Issue only if valuable, otherwise decline with rationale.
-       d. Create /tmp/review_reply.md with fix details, commit hashes, rationales, and optional follow-up Issue references (Round X/5).
+       d. Create `<session-dir>/review-reply.md` with fix details, commit hashes, rationales, and optional follow-up Issue references (Round X/5).
        e. Return to step 1.
      - Exit 0: terminate loop and proceed to Step 12 (Outcome).
 ```
 
 ### Review reply
-Use `/tmp/review_reply.md` with `Round X/5`, addressed findings and commit hashes,
+Use `<session-dir>/review-reply.md` with `Round X/5`, addressed findings and commit hashes,
 declined findings and reasons (e.g. `[Declined - YAGNI] Unoccurred edge case: ...`),
 and any follow-up Issue links. Pass it with `--body-file` to `wait_for_review.py`; do not post a separate trigger comment.
 

@@ -39,7 +39,7 @@ This document describes how to use the Orchestune CLI commands (`orchestune dag`
 
 ## 1. Task Decomposition Plan Specification
 
-To split a main development task (a "big rock") into parallelizable subtasks, place a `decomposition_plan.md` file in the root of your repository.
+To split a main development task (a "big rock") into parallelizable subtasks, create a unique Git-ignored path such as `.orchestune/tmp/decomposition-my-task-20260922T120000Z-550e8400/decomposition-plan.md`. The session directory format is `<artifact>-<issue-or-task>-<UTC timestamp>-<random>`; use a UUID or equivalent random value and pass the resulting path explicitly with `--plan`. The CLI's legacy `decomposition_plan.md` default remains available for backward compatibility, but agents must not create fixed-name drafts in the repository root or OS-global `/tmp`.
 This file consists of a YAML frontmatter section at the top for metadata and a markdown body below for descriptions.
 
 ### Example Format

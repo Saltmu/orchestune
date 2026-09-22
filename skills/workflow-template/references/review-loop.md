@@ -31,7 +31,7 @@ When findings are returned (Exit 10):
    - If speculative, unoccurred, or unneeded (YAGNI), decline with explicit rationale without filing an Issue.
    - In re-review reply, document decline rationale (e.g. `[Declined - YAGNI] Unoccurred edge case: exceeds PR acceptance criteria` or `[Declined - Out of Scope] Exceeds PR acceptance criteria; deferred to #...`).
 4. **Re-Review Reply Documentation**:
-   - Always include detailed resolution summary (commit hashes for fixes, rationales for declines) in `/tmp/review_reply.md`.
+   - Always include detailed resolution summary (commit hashes for fixes, rationales for declines) in `<session-dir>/review-reply.md`.
 
 ### Review Loop Control Flow (Pseudocode)
 
@@ -40,7 +40,7 @@ Loop (up to 5 rounds):
   1. Acquire review state and execute the shared verdict evaluator:
      - In wait_for_review.py environment:
          Initial round: uv run python scripts/wait_for_review.py --pr <PR_NUMBER> --bot-name <bot>
-         Subsequent rounds: attach --body-file /tmp/review_reply.md (must include commit hash and fix summary)
+         Subsequent rounds: attach `--body-file <session-dir>/review-reply.md` (must include commit hash and fix summary)
      - In GitHub MCP / GitHub App environment: retrieve `issue_comments`, `reviews`,
        and `inline_comments`, write the normalized JSON snapshot, then run:
        uv run python scripts/wait_for_review.py --bot-name <bot> --review-state-file <STATE.json>
@@ -53,12 +53,12 @@ Loop (up to 5 rounds):
        a. Classify findings: adopt ONLY module contradictions and unmet Acceptance Criteria/regressions. Decline unoccurred edge cases (YAGNI) and out-of-scope items.
        b. For in-scope findings: fix code and add tests, verify local CI (<CI_ENTRYPOINT>), commit and push.
        c. For out-of-scope findings: do NOT modify code; file a follow-up Issue only if valuable, otherwise decline with rationale.
-       d. Create /tmp/review_reply.md with fix details, commit hashes, rationales, and optional follow-up Issue references (Round X/5).
+       d. Create `<session-dir>/review-reply.md` with fix details, commit hashes, rationales, and optional follow-up Issue references (Round X/5).
        e. Return to step 1.
      - Exit 0: terminate the loop and proceed to Step 12 (Outcome).
 ```
 
-### Creating Review Reply File (`/tmp/review_reply.md`)
+### Creating Review Reply File (`<session-dir>/review-reply.md`)
 After addressing feedback and committing fixes, write a summary reply file explicitly detailing the modifications, commit hashes, and any out-of-scope follow-up Issues:
 ```markdown
 ## Addressing Review Feedback (Round 2/5)
@@ -106,4 +106,3 @@ finds the run, then `gh api repos/{owner}/{repo}/actions/runs/<run-id> --jq '.ac
 shows the triggering actor (neither `gh run list --json` nor `gh run view --json`
 exposes an actor field) and `gh run view <run-id> --json jobs` shows each job's
 conclusion.
-
