@@ -40,6 +40,22 @@ def _stub_label_actor_permission_by_default(fake_forge):
     stub_label_actor_permission(fake_forge)
 
 
+@pytest.fixture(autouse=True)
+def _resolve_legacy_temp_cwds(monkeypatch):
+    """Use the linked checkout for workspace lookup in legacy temp-dir tests."""
+    from orchestune.dispatch import dispatcher
+
+    resolve = dispatcher._resolve_dispatch_shared_paths
+    repository_cwd = Path(__file__).resolve().parents[1]
+
+    def _resolve(args, cwd):
+        if cwd is not None and not cwd.resolve().is_relative_to(repository_cwd):
+            cwd = repository_cwd
+        return resolve(args, cwd)
+
+    monkeypatch.setattr(dispatcher, "_resolve_dispatch_shared_paths", _resolve)
+
+
 class TestBuildArgParser:
     def _parse_args(self, args=()):
         from orchestune.dispatch.dispatcher import _build_arg_parser

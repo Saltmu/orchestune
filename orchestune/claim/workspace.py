@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from orchestune.infra.git_cli import get_git_repository_paths
+from orchestune.infra.git_cli import get_git_repository_paths, run_git
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,68 @@ def _resolve_relative_to(
     )
 
 
+def _resolve_primary_root(toplevel: Path, common_dir: Path) -> Path:
+    """Return the primary checkout root for normal and linked worktrees.
+
+    ``git-common-dir`` points at the primary checkout's ``.git`` directory for
+    linked worktrees. For submodules and repositories created with
+    ``--separate-git-dir`` it points elsewhere, so their checkout ``toplevel``
+    remains the only safe root for relative shared paths.
+    """
+    git_marker = toplevel / ".git"
+    if not git_marker.is_file():
+        return toplevel
+    try:
+        marker = git_marker.read_text(encoding="utf-8").strip()
+        prefix, _, raw_git_dir = marker.partition(":")
+        if prefix != "gitdir" or not raw_git_dir.strip():
+            return toplevel
+        git_dir = Path(raw_git_dir.strip())
+        if not git_dir.is_absolute():
+            git_dir = (toplevel / git_dir).resolve()
+        else:
+            git_dir = git_dir.resolve()
+    except OSError:
+        return toplevel
+
+    worktree_metadata = common_dir / "worktrees"
+    if git_dir.is_relative_to(worktree_metadata):
+        configured_worktree = _read_core_worktree(common_dir, toplevel)
+        if configured_worktree is not None:
+            return configured_worktree
+        if common_dir.name == ".git":
+            return common_dir.parent
+        raise ValueError(
+            "cannot determine the primary checkout for an external git directory; "
+            "configure core.worktree or provide absolute shared paths"
+        )
+    return toplevel
+
+
+def _read_core_worktree(common_dir: Path, toplevel: Path) -> Path | None:
+    """Read an optional external-git-dir ``core.worktree`` declaration."""
+    config_path = common_dir / "config"
+    try:
+        result = run_git(
+            ["config", "--file", str(config_path), "--get", "core.worktree"],
+            cwd=toplevel,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    if not value:
+        return None
+    worktree = Path(value)
+    return (
+        (common_dir / worktree).resolve()
+        if not worktree.is_absolute()
+        else worktree.resolve()
+    )
+
+
 def resolve_claim_workspace(
     cwd: str | Path | None = None,
     *,
@@ -50,13 +112,22 @@ def resolve_claim_workspace(
     起動されるディレクトリと、dispatch自身のjournal復元・GCが参照する
     `config.worktree_root`が食い違ってしまう。
 
-    Note:
-        Assumes common_dir is located directly inside the primary checkout
-        (e.g., `<primary_root>/.git`). Repositories with detached or external git
-        directories are not relocated.
+    Relative shared paths use the primary checkout for linked worktrees. For
+    submodules and standalone external git directories, they use the checkout
+    returned by ``git rev-parse --show-toplevel``. An external common directory
+    with linked worktrees must declare ``core.worktree`` (or use absolute paths)
+    so the primary checkout can be identified without guessing.
     """
     toplevel, common_dir = get_git_repository_paths(cwd)
-    primary_root = common_dir.parent
+    explicit_paths_are_absolute = all(
+        path is not None and Path(path).is_absolute()
+        for path in (explicit_state_path, explicit_worktree_root)
+    )
+    primary_root = (
+        toplevel
+        if explicit_paths_are_absolute
+        else _resolve_primary_root(toplevel, common_dir)
+    )
     repository_identity = common_dir.as_posix()
 
     run_state_path = _resolve_relative_to(
