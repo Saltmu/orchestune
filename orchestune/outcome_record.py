@@ -356,7 +356,9 @@ def calculate_blocked_attempt(
     （増加させない）。異なる場合は対象レコード中の最大`attempt`+1を返す
     （対象レコードが無ければ1）。
     """
-    qualifying: list[OutcomeRecord] = []
+    latest_created_at: str | None = None
+    latest_qualifying: OutcomeRecord | None = None
+    max_attempt = 0
     for comment in comments:
         body = comment.get("body")
         if not isinstance(body, str):
@@ -372,16 +374,21 @@ def calculate_blocked_attempt(
             or record.head_sha is None
         ):
             continue
-        qualifying.append(record)
+        if record.attempt is not None:
+            max_attempt = max(max_attempt, record.attempt)
+        created_at_raw = comment.get("created_at") or comment.get("createdAt")
+        created_at = created_at_raw if isinstance(created_at_raw, str) else ""
+        if latest_created_at is None or created_at >= latest_created_at:
+            latest_created_at = created_at
+            latest_qualifying = record
 
-    if not qualifying:
+    if latest_qualifying is None:
         return 1
 
-    for record in qualifying:
-        if record.claim_id == claim_id and record.head_sha == head_sha:
-            return record.attempt if record.attempt is not None else 1
+    if (
+        latest_qualifying.claim_id == claim_id
+        and latest_qualifying.head_sha == head_sha
+    ):
+        return latest_qualifying.attempt if latest_qualifying.attempt is not None else 1
 
-    max_attempt = max(
-        (r.attempt for r in qualifying if r.attempt is not None), default=0
-    )
     return max_attempt + 1

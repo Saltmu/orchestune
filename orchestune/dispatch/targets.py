@@ -299,11 +299,17 @@ def _resolve_issue_number_for_outcome(
     """`handle.issue_number`が未設定な場合、マッチした（ブランチ名一致の）
     open PRのGitHubクロージング参照（`closes_issue_numbers`）から対象Issueを
     解決する。これはPRの**メタデータ**であり、#998で読取対象外とした
-    PR**コメント**とは別物なので、Issueコメント正本の契約に反しない。"""
+    PR**コメント**とは別物なので、Issueコメント正本の契約に反しない。
+
+    Codexレビュー(#1015 round3 P2) 対応: 1つのPRが複数Issueをcloseする場合、
+    どれが実際のディスパッチ対象タスクかは`closes_issue_numbers`だけからは
+    判別できない（先頭を採ると別Issueを誤って対象にしうる）。曖昧な場合は
+    解決を諦め、他のマッチPRで一意に解決できないか続けて試す。
+    """
     if handle.issue_number is not None:
         return handle.issue_number
     for pr in open_prs:
-        if pr.closes_issue_numbers:
+        if len(pr.closes_issue_numbers) == 1:
             return pr.closes_issue_numbers[0]
     return None
 

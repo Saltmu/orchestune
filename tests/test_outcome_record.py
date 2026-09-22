@@ -511,3 +511,33 @@ class TestCalculateBlockedAttempt:
             )
             == 3
         )
+
+    def test_delayed_retry_of_a_superseded_attempt_is_not_treated_as_retransmission(
+        self,
+    ):
+        """Codexレビュー(#1015 round3 P2) Reproducer: 「再送は最新の対象
+        レコードとだけ比較する」契約を、`qualifying`の中の任意の過去レコード
+        と比較する実装にしてしまうと、遅延到着した古い試行の再送が最新扱い
+        されてしまう。(claim-a, sha-1, attempt=1)の後に(claim-a, sha-2,
+        attempt=2)へ進んだ状態で、sha-1への遅延再送は「再送」ではなく
+        「新しい試行」として扱われ、次のattemptは3になるべき。"""
+        comments = [
+            self._blocked_comment(
+                attempt=1,
+                claim_id="claim-a",
+                head_sha="sha-1",
+                created_at="2026-08-20T00:00:00Z",
+            ),
+            self._blocked_comment(
+                attempt=2,
+                claim_id="claim-a",
+                head_sha="sha-2",
+                created_at="2026-08-21T00:00:00Z",
+            ),
+        ]
+        assert (
+            calculate_blocked_attempt(
+                comments, issue_number=1, claim_id="claim-a", head_sha="sha-1"
+            )
+            == 3
+        )
