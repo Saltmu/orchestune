@@ -16,6 +16,7 @@ from orchestune.outcome_record import (
     VALID_RESULTS,
     OutcomeRecord,
     ReviewSummary,
+    is_known_reason,
 )
 
 
@@ -167,6 +168,22 @@ def sanitize_blocked_reason(reason: Any) -> str:
         return ""
     cleaned = "".join(" " if ord(c) < 32 or ord(c) == 127 else c for c in reason)
     return " ".join(cleaned.split())[:MAX_REASON_LENGTH]
+
+
+def _validate_record_reason(rec: OutcomeRecord) -> None:
+    """Validate canonical form of reason in an embedded OutcomeRecord."""
+    if rec.result == RESULT_BLOCKED:
+        sanitized = sanitize_blocked_reason(rec.reason)
+        if not sanitized or rec.reason != sanitized:
+            raise ValueError(
+                "Blocked outcome_record requires a canonical reason string equal to its sanitized form, "
+                f"got: {rec.reason!r}"
+            )
+    else:
+        if rec.reason is not None and not is_known_reason(rec.reason):
+            raise ValueError(
+                f"Non-blocked outcome_record reason must be None or in VALID_REASONS, got: {rec.reason!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -518,11 +535,7 @@ class CompleteResult:
                 "outcome_record.review must be a ReviewSummary with rounds as None or a valid positive non-boolean integer, "
                 f"got: {rec.review!r}"
             )
-        if rec.result == RESULT_BLOCKED and not sanitize_blocked_reason(rec.reason):
-            raise ValueError(
-                "Blocked outcome_record requires a non-empty string reason containing non-whitespace characters, "
-                f"got: {rec.reason!r}"
-            )
+        _validate_record_reason(rec)
 
     def _validate_stage_boundary(self) -> None:
         if self.success:

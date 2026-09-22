@@ -667,8 +667,18 @@ class TestCompleteResultAndGCBoundary:
                     outcome_record=bad_rounds_rec,
                 )
 
-        # Embedded blocked outcome_record requires valid reason (not None or whitespace)
-        for bad_reason in (None, "", "   ", "\t\n"):
+        # Embedded blocked outcome_record requires canonical reason equal to sanitized form
+        for bad_reason in (
+            None,
+            "",
+            "   ",
+            "\t\n",
+            "  base-branch-red  ",
+            "base-branch-red\n",
+            "base\tbranch\nred",
+            "base  branch  red",
+            "x" * (MAX_REASON_LENGTH + 1),
+        ):
             bad_blocked_rec = OutcomeRecord(
                 result=RESULT_BLOCKED,
                 issue=997,
@@ -676,7 +686,7 @@ class TestCompleteResultAndGCBoundary:
             )
             with pytest.raises(
                 ValueError,
-                match=r"Blocked outcome_record requires a non-empty string reason",
+                match=r"Blocked outcome_record requires a canonical reason string equal to its sanitized form",
             ):
                 CompleteResult.success_result(
                     issue_number=997,
@@ -684,7 +694,26 @@ class TestCompleteResultAndGCBoundary:
                     outcome_record=bad_blocked_rec,
                 )
 
-        # Valid blocked outcome_record accepted
+        # Embedded non-blocked outcome_record rejects arbitrary non-canonical reason
+        for bad_done_reason in ("custom-reason", "some-unregistered-reason"):
+            bad_done_rec = OutcomeRecord(
+                result=RESULT_DONE,
+                issue=997,
+                pr=1001,
+                reason=bad_done_reason,
+            )
+            with pytest.raises(
+                ValueError,
+                match=r"Non-blocked outcome_record reason must be None or in VALID_REASONS",
+            ):
+                CompleteResult.success_result(
+                    issue_number=997,
+                    result=RESULT_DONE,
+                    pr=1001,
+                    outcome_record=bad_done_rec,
+                )
+
+        # Valid blocked outcome_record accepted and round-trips through render/parse
         valid_blocked_rec = OutcomeRecord(
             result=RESULT_BLOCKED,
             issue=997,
@@ -696,6 +725,39 @@ class TestCompleteResultAndGCBoundary:
             outcome_record=valid_blocked_rec,
         )
         assert res_blocked.outcome_record == valid_blocked_rec
+        parsed = parse_from_comments([{"body": valid_blocked_rec.render()}])
+        assert parsed == valid_blocked_rec
+
+        # Valid non-blocked outcome_record with None or known reason accepted
+        valid_done_none = OutcomeRecord(
+            result=RESULT_DONE, issue=997, pr=1001, reason=None
+        )
+        res_done_none = CompleteResult.success_result(
+            issue_number=997,
+            result=RESULT_DONE,
+            pr=1001,
+            outcome_record=valid_done_none,
+        )
+        assert res_done_none.outcome_record == valid_done_none
+        assert (
+            parse_from_comments([{"body": valid_done_none.render()}]) == valid_done_none
+        )
+
+        valid_not_needed = OutcomeRecord(
+            result=RESULT_NOT_NEEDED,
+            issue=997,
+            reason=REASON_BASE_BRANCH_RED,
+        )
+        res_not_needed = CompleteResult.success_result(
+            issue_number=997,
+            result=RESULT_NOT_NEEDED,
+            outcome_record=valid_not_needed,
+        )
+        assert res_not_needed.outcome_record == valid_not_needed
+        assert (
+            parse_from_comments([{"body": valid_not_needed.render()}])
+            == valid_not_needed
+        )
 
     def test_failure_result_aligns_issue_number(self):
         """Codex finding: Keep failure diagnostics aligned with the result issue."""
