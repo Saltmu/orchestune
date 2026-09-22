@@ -194,14 +194,18 @@ def test_rejected_429_create_retries() -> None:
     assert clock.sleeps == [3.0]
 
 
-def test_rejected_403_rate_limit_create_retries() -> None:
+@pytest.mark.parametrize(
+    "detail",
+    ["API rate limit exceeded", "You have exceeded a secondary rate limit"],
+)
+def test_rejected_403_rate_limit_create_retries(detail: str) -> None:
     class RateLimitedForge(FakeForge):
         calls = 0
 
         def create_issue(self, title, body, labels=()):
             self.calls += 1
             if self.calls == 1:
-                raise _api_error("HTTP 403: API rate limit exceeded\nRetry-After: 3")
+                raise _api_error(f"HTTP 403: {detail}\nRetry-After: 3")
             return super().create_issue(title, body, labels)
 
     clock = Clock()

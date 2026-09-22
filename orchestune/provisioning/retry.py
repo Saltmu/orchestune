@@ -70,7 +70,10 @@ def _is_transient(error: BaseException) -> bool:
 
 def _is_rate_limit_rejection(error: BaseException) -> bool:
     detail = _detail(error).lower()
-    return "429" in detail or "rate limit exceeded" in detail
+    return any(
+        phrase in detail
+        for phrase in ("429", "rate limit exceeded", "exceeded a secondary rate limit")
+    )
 
 
 def _retry_after(error: BaseException, now: float) -> float | None:
