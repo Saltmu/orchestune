@@ -15,6 +15,7 @@ def main() -> None:
         print("  provision Provision GitHub Issues from decomposition_plan.md")
         print("  replan    Preview or replace an unstarted decomposition generation")
         print("  claim     Claim a task issue (--no-apply for a read-only preview)")
+        print("  complete  Complete a claimed task issue")
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -58,6 +59,10 @@ def main() -> None:
         from orchestune.claim.cli import main as claim_main
 
         sys.exit(claim_main())
+    elif cmd == "complete":
+        from orchestune.complete.cli import main as complete_main
+
+        complete_main()
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)

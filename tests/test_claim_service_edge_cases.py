@@ -54,6 +54,10 @@ class TestAdditionalClaimServiceEdgeCases:
             claim_id=claim_id,
             claim_stage=ClaimStage.ACTIVE_SAVED.value,
             reservation_kind=ReservationKind.FOOTPRINT.value,
+            base_ref="origin/main",
+            base_sha=None,
+            repository_id=(repo_root / ".git").as_posix(),
+            claimed_at=0.0,
             owner_token_digest=owner_token_digest(token),
         )
         with run_state_lock(state_path.with_suffix(".lock")):
@@ -96,6 +100,10 @@ class TestAdditionalClaimServiceEdgeCases:
             claim_id=claim_id,
             claim_stage=ClaimStage.ACTIVE_SAVED.value,
             reservation_kind=ReservationKind.FOOTPRINT.value,
+            base_ref="origin/main",
+            base_sha=None,
+            repository_id=(repo_root / ".git").as_posix(),
+            claimed_at=0.0,
             owner_token_digest=owner_token_digest(token),
         )
         with run_state_lock(state_path.with_suffix(".lock")):
@@ -313,6 +321,10 @@ class TestAdditionalClaimServiceEdgeCases:
             claim_id=claim_id,
             claim_stage=ClaimStage.ACTIVE_SAVED.value,
             reservation_kind=ReservationKind.REPOSITORY.value,
+            base_ref="origin/main",
+            base_sha=None,
+            repository_id=(repo_root / ".git").as_posix(),
+            claimed_at=0.0,
             owner_token_digest=owner_token_digest(token),
         )
         with run_state_lock(state_path.with_suffix(".lock")):
@@ -357,6 +369,10 @@ class TestAdditionalClaimServiceEdgeCases:
             claim_id=claim_id,
             claim_stage=ClaimStage.ACTIVE_SAVED.value,
             reservation_kind=ReservationKind.REPOSITORY.value,
+            base_ref="origin/main",
+            base_sha=None,
+            repository_id=(repo_root / ".git").as_posix(),
+            claimed_at=0.0,
             owner_token_digest=owner_token_digest(token),
         )
         with run_state_lock(state_path.with_suffix(".lock")):

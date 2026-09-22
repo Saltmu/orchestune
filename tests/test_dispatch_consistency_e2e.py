@@ -165,6 +165,15 @@ def test_recovery_bookkeeping_is_monotonic_and_idempotent_after_restart(
         declared_footprint=(),
         recompute_count=1,
         forced_serial=False,
+        owner_kind="dispatch",
+        claim_id="claim-744",
+        claim_stage="completed",
+        base_ref="origin/main",
+        base_sha=None,
+        reservation_kind="footprint",
+        repository_id="repository-744",
+        claimed_at=now - 120,
+        owner_token_digest="digest-744",
     )
     run_state = RunState(
         active_worktrees={"744": active},
@@ -219,6 +228,15 @@ def test_recovery_counters_use_repository_wide_in_progress_snapshot(
         declared_footprint=(),
         recompute_count=1,
         forced_serial=False,
+        owner_kind="dispatch",
+        claim_id="claim-745",
+        claim_stage="completed",
+        base_ref="origin/main",
+        base_sha=None,
+        reservation_kind="footprint",
+        repository_id="repository-745",
+        claimed_at=900.0,
+        owner_token_digest="digest-745",
     )
     run_state = RunState(active_worktrees={"745": active})
     config = DispatcherConfig(

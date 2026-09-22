@@ -6,6 +6,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
@@ -22,7 +23,12 @@ from orchestune.dispatch.labels import (
     TERMINAL_ESCALATION_LABELS,
     transition_status_label,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
+from orchestune.dispatch.state import (
+    ActiveWorktree,
+    RunState,
+    load_run_state,
+    save_run_state,
+)
 from orchestune.dispatch.targets import DispatchHandle, DispatchTarget
 from orchestune.issue_parsing import recovery_counters_from_body
 from orchestune.labels import StatusLabel
@@ -85,6 +91,27 @@ def active_from_attempt(
     )
 
 
+def _recovered_active_from_attempt(
+    attempt: LaunchAttempt, task: TaskMetadata, config: DispatcherConfig
+) -> ActiveWorktree:
+    """Restore a cloud handle without granting ownership of an absent claim."""
+    claim_id = f"recovered-{attempt.attempt_id}"
+    return replace(
+        active_from_attempt(attempt, task, config),
+        owner_kind="dispatch",
+        claim_id=claim_id,
+        claim_stage="completed",
+        base_ref=attempt.base_branch,
+        base_sha=None,
+        reservation_kind="footprint",
+        repository_id=str(config.run_state_path.resolve().parent),
+        claimed_at=attempt.started_at,
+        owner_token_digest=sha256(
+            f"recovered-unverifiable:{claim_id}".encode()
+        ).hexdigest(),
+    )
+
+
 def _hold(task: TaskMetadata, config: DispatcherConfig, reason: str) -> None:
     print(
         f"Holding cloud launch for issue #{task.issue_number}: {reason}",
@@ -126,7 +153,7 @@ def _adopt_confirmed_attempt(
     attempt: LaunchAttempt,
     task: TaskMetadata,
     config: DispatcherConfig,
-    existing: ActiveWorktree | None,
+    existing: ActiveWorktree,
 ) -> ActiveWorktree:
     """確認済みattemptから新規`ActiveWorktree`を組み立てる。
 
@@ -138,14 +165,17 @@ def _adopt_confirmed_attempt(
     以後の同時実行排他が緩んでしまう。
     """
     adopted = active_from_attempt(attempt, task, config)
-    if existing is None:
-        return adopted
     return replace(
         adopted,
         owner_kind=existing.owner_kind,
         claim_id=existing.claim_id,
+        claim_stage=existing.claim_stage,
         reservation_kind=existing.reservation_kind,
         base_ref=existing.base_ref,
+        base_sha=existing.base_sha,
+        repository_id=existing.repository_id,
+        claimed_at=existing.claimed_at,
+        owner_token_digest=existing.owner_token_digest,
     )
 
 
@@ -178,13 +208,23 @@ def reconcile_attempt(
         return True
     key = str(task.issue_number)
     existing = state.active_worktrees.get(key)
+    if existing is None:
+        persisted = load_run_state(config.run_state_path)
+        existing = persisted.active_worktrees.get(key)
+        if existing is not None:
+            state.active_worktrees[key] = existing
+    if existing is None:
+        state.active_worktrees[key] = _recovered_active_from_attempt(
+            attempt, task, config
+        )
+        existing = state.active_worktrees[key]
     # #943: dispatchの起動がclaim_task経由になったことで、実際の起動より前に
     # claim自身の予約（`launch_attempt_id`未設定のプレースホルダー）が
     # `run_state.active_worktrees`へ同期されるようになった。このプレース
     # ホルダーは別の起動に属するものではないため、既存の「別attemptに属する」
     # 拒否と区別し、確認済みのattemptで採用できるようにする
     # （`_adopt_confirmed_attempt`参照）。
-    if existing is None or existing.launch_attempt_id is None:
+    if existing.launch_attempt_id is None:
         state.active_worktrees[key] = _adopt_confirmed_attempt(
             attempt, task, config, existing
         )

@@ -17,9 +17,16 @@ from orchestune.claim import (
     ReservationKind,
     failure_reason_to_exit_code,
 )
+from orchestune.complete import CompleteExitCode
+from orchestune.exit_codes import TaskExitCode
 
 
 class TestClaimContracts:
+    def test_claim_and_complete_share_one_exit_code_contract(self) -> None:
+        assert ClaimExitCode is CompleteExitCode is TaskExitCode
+        assert ClaimExitCode.ISSUE_CLOSED == 11
+        assert CompleteExitCode.CLAIM_NOT_FOUND == 41
+
     def test_owner_kind_values(self) -> None:
         assert {k.value for k in OwnerKind} == {"interactive", "dispatch"}
         assert OwnerKind.INTERACTIVE == "interactive"

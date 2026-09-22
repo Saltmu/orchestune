@@ -6,9 +6,11 @@ import dataclasses
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from orchestune.claim.contracts import ClaimStage, OwnerKind, ReservationKind
 from orchestune.infra.json_state import read_json_with_recovery, write_json_atomic
 from orchestune.infra.process_utils import assert_run_state_lock_held
 from orchestune.models import Usage
@@ -249,47 +251,136 @@ def _parse_pending_lock_release_notices(value: object) -> list[int]:
     return list(dict.fromkeys(numbers))[-MAX_PENDING_LOCK_RELEASE_NOTICES:]
 
 
-def _parse_active_worktrees(data: dict) -> dict[str, ActiveWorktree]:
-    return {
-        key: ActiveWorktree(
-            issue_number=value["issue_number"],
-            branch=value["branch"],
-            worktree_path=value["worktree_path"],
-            pid=value["pid"],
-            started_at=value["started_at"],
-            declared_footprint=tuple(value["declared_footprint"]),
-            recompute_count=value.get("recompute_count", 0),
-            forced_serial=value.get("forced_serial", False),
-            external_id=value.get("external_id"),
-            external_url=value.get("external_url"),
-            base_branch=value.get("base_branch", "origin/main"),
-            estimated_tokens=value.get("estimated_tokens"),
-            token_estimate_recorded=value.get(
-                "token_estimate_recorded", "estimated_tokens" in value
-            ),
-            profile=value.get("profile"),
-            model=value.get("model"),
-            reasoning_effort=value.get("reasoning_effort"),
-            selection_reason=value.get("selection_reason"),
-            launch_attempt_id=value.get("launch_attempt_id"),
-            launch_phase=value.get("launch_phase"),
-            owner_kind=_parse_choice(
-                value.get("owner_kind"), {"interactive", "dispatch"}, "dispatch"
-            ),
-            claim_id=_parse_optional_string(value.get("claim_id")),
-            claim_stage=_parse_optional_string(value.get("claim_stage")),
-            base_ref=_parse_optional_string(value.get("base_ref")),
-            base_sha=_parse_optional_string(value.get("base_sha")),
-            reservation_kind=_parse_choice(
-                value.get("reservation_kind"),
-                {"footprint", "repository"},
-                "footprint",
-            ),
-            repository_id=_parse_optional_string(value.get("repository_id")),
-            claimed_at=_parse_optional_finite_float(value.get("claimed_at")),
-            owner_token_digest=_parse_optional_string(value.get("owner_token_digest")),
+_REQUIRED_ACTIVE_WORKTREE_FIELDS = frozenset(
+    {
+        "issue_number",
+        "branch",
+        "worktree_path",
+        "pid",
+        "started_at",
+        "declared_footprint",
+        "owner_kind",
+        "claim_id",
+        "claim_stage",
+        "base_ref",
+        "base_sha",
+        "reservation_kind",
+        "repository_id",
+        "claimed_at",
+        "owner_token_digest",
+    }
+)
+
+
+def _active_worktree_schema_error(key: object, detail: str) -> ValueError:
+    return ValueError(f"active_worktrees[{key}] schema error: {detail}")
+
+
+def _required_active_string(value: dict[str, object], name: str, key: object) -> str:
+    item = value[name]
+    if not isinstance(item, str) or not item:
+        raise _active_worktree_schema_error(key, f"{name} must be a non-empty string")
+    return item
+
+
+def _parse_active_worktree(key: object, value: object) -> ActiveWorktree:
+    if not isinstance(key, str) or not key:
+        raise _active_worktree_schema_error(key, "entry key must be a non-empty string")
+    if not isinstance(value, dict):
+        raise _active_worktree_schema_error(key, "entry must be an object")
+    missing = _REQUIRED_ACTIVE_WORKTREE_FIELDS - value.keys()
+    if missing:
+        raise _active_worktree_schema_error(
+            key, f"missing required fields: {', '.join(sorted(missing))}"
         )
-        for key, value in data.get("active_worktrees", {}).items()
+
+    issue_number = value["issue_number"]
+    if (
+        isinstance(issue_number, bool)
+        or not isinstance(issue_number, int)
+        or issue_number <= 0
+    ):
+        raise _active_worktree_schema_error(
+            key, "issue_number must be a positive integer"
+        )
+    branch = _required_active_string(value, "branch", key)
+    worktree_path = value["worktree_path"]
+    if not isinstance(worktree_path, str):
+        raise _active_worktree_schema_error(key, "worktree_path must be a string")
+    pid = value["pid"]
+    if pid is not None and (isinstance(pid, bool) or not isinstance(pid, int)):
+        raise _active_worktree_schema_error(key, "pid must be an integer or null")
+    started_at = value["started_at"]
+    if started_at is not None and _parse_optional_finite_float(started_at) is None:
+        raise _active_worktree_schema_error(
+            key, "started_at must be a finite number or null"
+        )
+    declared_footprint = value["declared_footprint"]
+    if not isinstance(declared_footprint, list) or not all(
+        isinstance(path, str) for path in declared_footprint
+    ):
+        raise _active_worktree_schema_error(
+            key, "declared_footprint must be an array of strings"
+        )
+
+    owner_kind = _required_active_string(value, "owner_kind", key)
+    if owner_kind not in {kind.value for kind in OwnerKind}:
+        raise _active_worktree_schema_error(key, "owner_kind has an unknown value")
+    claim_stage = _required_active_string(value, "claim_stage", key)
+    if claim_stage not in {stage.value for stage in ClaimStage}:
+        raise _active_worktree_schema_error(key, "claim_stage has an unknown value")
+    reservation_kind = _required_active_string(value, "reservation_kind", key)
+    if reservation_kind not in {kind.value for kind in ReservationKind}:
+        raise _active_worktree_schema_error(
+            key, "reservation_kind has an unknown value"
+        )
+    claimed_at = _parse_optional_finite_float(value["claimed_at"])
+    if claimed_at is None:
+        raise _active_worktree_schema_error(key, "claimed_at must be a finite number")
+    base_sha = value["base_sha"]
+    if base_sha is not None and not isinstance(base_sha, str):
+        raise _active_worktree_schema_error(key, "base_sha must be a string or null")
+
+    return ActiveWorktree(
+        issue_number=issue_number,
+        branch=branch,
+        worktree_path=worktree_path,
+        pid=pid,
+        started_at=_parse_optional_finite_float(started_at),
+        declared_footprint=tuple(declared_footprint),
+        recompute_count=value.get("recompute_count", 0),
+        forced_serial=value.get("forced_serial", False),
+        external_id=value.get("external_id"),
+        external_url=value.get("external_url"),
+        base_branch=value.get("base_branch", "origin/main"),
+        estimated_tokens=value.get("estimated_tokens"),
+        token_estimate_recorded=value.get(
+            "token_estimate_recorded", "estimated_tokens" in value
+        ),
+        profile=value.get("profile"),
+        model=value.get("model"),
+        reasoning_effort=value.get("reasoning_effort"),
+        selection_reason=value.get("selection_reason"),
+        launch_attempt_id=value.get("launch_attempt_id"),
+        launch_phase=value.get("launch_phase"),
+        owner_kind=owner_kind,
+        claim_id=_required_active_string(value, "claim_id", key),
+        claim_stage=claim_stage,
+        base_ref=_required_active_string(value, "base_ref", key),
+        base_sha=base_sha,
+        reservation_kind=reservation_kind,
+        repository_id=_required_active_string(value, "repository_id", key),
+        claimed_at=claimed_at,
+        owner_token_digest=_required_active_string(value, "owner_token_digest", key),
+    )
+
+
+def _parse_active_worktrees(data: dict[str, object]) -> dict[str, ActiveWorktree]:
+    raw_active = data.get("active_worktrees", {})
+    if not isinstance(raw_active, dict):
+        raise ValueError("active_worktrees schema error: value must be an object")
+    return {
+        key: _parse_active_worktree(key, value) for key, value in raw_active.items()
     }
 
 
@@ -316,9 +407,15 @@ def _parse_completed_worktrees(data: dict) -> list[CompletedWorktree]:
 
 
 def load_run_state(path: str | Path) -> RunState:
+    path = Path(path)
+    file_existed = path.exists()
     data = read_json_with_recovery(path, label="run_state.json")
     if data is None:
+        if file_existed:
+            raise ValueError("run_state.json schema error: ledger could not be read")
         return RunState(active_worktrees={}, launch_history=[])
+    if not isinstance(data, dict):
+        raise ValueError("run_state.json schema error: root must be an object")
 
     return RunState(
         active_worktrees=_parse_active_worktrees(data),
@@ -457,6 +554,35 @@ def prune_run_state(
     )
 
 
+def _materialize_active_worktree_for_persistence(active: ActiveWorktree) -> None:
+    """Make an in-memory legacy DTO explicit before it crosses the JSON boundary.
+
+    This is deliberately not a reader fallback: an on-disk record without any
+    of these fields is rejected by `_parse_active_worktree`.  Some internal
+    recovery callers still construct the older DTO directly, though, and their
+    unknown ownership must become explicitly non-resumable rather than create
+    an unreadable ledger on the next process start.
+    """
+    if active.owner_kind not in {kind.value for kind in OwnerKind}:
+        raise ValueError("active worktree owner_kind must be a known value")
+    if active.reservation_kind not in {kind.value for kind in ReservationKind}:
+        raise ValueError("active worktree reservation_kind must be a known value")
+    if active.claim_id is None:
+        active.claim_id = f"recovered-{active.issue_number}"
+    if active.claim_stage is None:
+        active.claim_stage = ClaimStage.COMPLETED.value
+    if active.base_ref is None:
+        active.base_ref = active.base_branch
+    if active.repository_id is None:
+        active.repository_id = "unverified-recovery"
+    if active.claimed_at is None:
+        active.claimed_at = active.started_at if active.started_at is not None else 0.0
+    if active.owner_token_digest is None:
+        active.owner_token_digest = sha256(
+            f"recovered-unverifiable:{active.claim_id}".encode()
+        ).hexdigest()
+
+
 def save_run_state(
     state: RunState,
     path: str | Path,
@@ -476,6 +602,8 @@ def save_run_state(
         open_prs=open_prs,
         max_completed_worktrees=max_completed_worktrees,
     )
+    for active in state.active_worktrees.values():
+        _materialize_active_worktree_for_persistence(active)
     data = {
         "active_worktrees": {
             key: dataclasses.asdict(value)

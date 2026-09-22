@@ -83,6 +83,15 @@ def _active(
         declared_footprint=(),
         external_id=external_id,
         base_branch="parent/issue-700",
+        owner_kind="dispatch",
+        claim_id=f"claim-{issue_number}",
+        claim_stage="completed",
+        base_ref="parent/issue-700",
+        base_sha=None,
+        reservation_kind="footprint",
+        repository_id="test-repository",
+        claimed_at=1_000.0,
+        owner_token_digest=f"digest-{issue_number}",
     )
 
 

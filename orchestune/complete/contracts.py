@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum, IntEnum
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from orchestune.claim.contracts import OwnerKind
+from orchestune.exit_codes import TaskExitCode, complete_failure_exit_code
 from orchestune.outcome_record import (
     MAX_REASON_LENGTH,
     RESULT_BLOCKED,
@@ -52,31 +53,7 @@ def can_transition(from_stage: CompleteStage, to_stage: CompleteStage) -> bool:
     return to_stage in allowed
 
 
-class CompleteExitCode(IntEnum):
-    """Exit codes for complete operations."""
-
-    SUCCESS = 0
-    GENERIC_ERROR = 1
-
-    # Preflight / Validation errors (10-19)
-    INVALID_REQUEST = 10
-    CLAIM_NOT_FOUND = 11
-    OWNER_TOKEN_MISMATCH = 12
-    INVALID_RESULT_PAYLOAD = 13
-    PR_REQUIRED = 14
-    PR_PROHIBITED = 15
-    REASON_REQUIRED = 16
-    DIRTY_WORKTREE = 17
-    EVIDENCE_MISSING = 18
-
-    # Concurrency / State errors (20-29)
-    STATE_LOCK_FAILED = 20
-    CONCURRENT_COMPLETION = 21
-    INVALID_STAGE_TRANSITION = 22
-
-    # Infrastructure / Network / Forge errors (30-39)
-    FORGE_POST_FAILED = 30
-    STATE_SAVE_FAILED = 31
+CompleteExitCode = TaskExitCode
 
 
 class CompleteFailureReason(str, Enum):
@@ -98,32 +75,11 @@ class CompleteFailureReason(str, Enum):
     STATE_SAVE_FAILED = "state_save_failed"
 
 
-_FAILURE_REASON_TO_EXIT_CODE: dict[CompleteFailureReason, CompleteExitCode] = {
-    CompleteFailureReason.INVALID_REQUEST: CompleteExitCode.INVALID_REQUEST,
-    CompleteFailureReason.CLAIM_NOT_FOUND: CompleteExitCode.CLAIM_NOT_FOUND,
-    CompleteFailureReason.OWNER_TOKEN_MISMATCH: CompleteExitCode.OWNER_TOKEN_MISMATCH,
-    CompleteFailureReason.INVALID_RESULT_PAYLOAD: CompleteExitCode.INVALID_RESULT_PAYLOAD,
-    CompleteFailureReason.PR_REQUIRED: CompleteExitCode.PR_REQUIRED,
-    CompleteFailureReason.PR_PROHIBITED: CompleteExitCode.PR_PROHIBITED,
-    CompleteFailureReason.REASON_REQUIRED: CompleteExitCode.REASON_REQUIRED,
-    CompleteFailureReason.DIRTY_WORKTREE: CompleteExitCode.DIRTY_WORKTREE,
-    CompleteFailureReason.EVIDENCE_MISSING: CompleteExitCode.EVIDENCE_MISSING,
-    CompleteFailureReason.STATE_LOCK_FAILED: CompleteExitCode.STATE_LOCK_FAILED,
-    CompleteFailureReason.CONCURRENT_COMPLETION: CompleteExitCode.CONCURRENT_COMPLETION,
-    CompleteFailureReason.INVALID_STAGE_TRANSITION: CompleteExitCode.INVALID_STAGE_TRANSITION,
-    CompleteFailureReason.FORGE_POST_FAILED: CompleteExitCode.FORGE_POST_FAILED,
-    CompleteFailureReason.STATE_SAVE_FAILED: CompleteExitCode.STATE_SAVE_FAILED,
-}
-
-
 def failure_reason_to_exit_code(reason: CompleteFailureReason) -> CompleteExitCode:
     """Map a CompleteFailureReason to its corresponding CompleteExitCode."""
-    if (
-        not isinstance(reason, CompleteFailureReason)
-        or reason not in _FAILURE_REASON_TO_EXIT_CODE
-    ):
+    if not isinstance(reason, CompleteFailureReason):
         raise KeyError(f"Unmapped complete failure reason: {reason!r}")
-    return _FAILURE_REASON_TO_EXIT_CODE[reason]
+    return complete_failure_exit_code(reason.value)
 
 
 def is_valid_positive_int(val: Any) -> bool:

@@ -7,6 +7,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -531,8 +532,14 @@ def _build_restored_from_attempt(
     return replace(
         active,
         owner_kind=owner_kind,
-        claim_id=claim_id,
+        claim_id=claim_id or _recovered_claim_id(issue),
+        claim_stage="completed",
+        base_ref=attempt.base_branch,
+        base_sha=None,
         reservation_kind=reservation_kind,
+        repository_id=_recovery_repository_id(config),
+        claimed_at=attempt.started_at,
+        owner_token_digest=_recovery_owner_token_digest(issue, claim_id),
     )
 
 
@@ -598,9 +605,36 @@ def _build_restored_standard_worktree(
         reasoning_effort=selection.reasoning_effort,
         selection_reason=selection.reason,
         owner_kind=owner_kind,
-        claim_id=claim_id,
+        claim_id=claim_id or _recovered_claim_id(issue),
+        claim_stage="completed",
+        base_ref=restored_base,
+        base_sha=None,
         reservation_kind=reservation_kind,
+        repository_id=_recovery_repository_id(config),
+        claimed_at=0.0,
+        owner_token_digest=_recovery_owner_token_digest(issue, claim_id),
     )
+
+
+def _recovered_claim_id(issue: IssueRecord) -> str:
+    """Return a durable ID for a recovered entry without impersonating its owner."""
+    return f"recovered-{issue.number}"
+
+
+def _recovery_owner_token_digest(issue: IssueRecord, claim_id: str | None) -> str:
+    """Make a recovered ownership record deliberately non-resumable.
+
+    The Issue body carries no owner secret, so recovery cannot authenticate a
+    prior claimant.  A deterministic digest preserves the strict ledger schema
+    while making any attempted owner-token comparison fail closed.
+    """
+    identity = claim_id or _recovered_claim_id(issue)
+    return sha256(f"recovered-unverifiable:{identity}".encode()).hexdigest()
+
+
+def _recovery_repository_id(config: DispatcherConfig) -> str:
+    """Scope a reconstructed entry to this durable dispatcher state location."""
+    return str(config.run_state_path.resolve().parent)
 
 
 def _build_restored_active_worktree(

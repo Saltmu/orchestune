@@ -16,6 +16,50 @@ from orchestune.infra.process_utils import run_state_lock
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
+def _serialized_current_active(**overrides):
+    active = {
+        "issue_number": 10,
+        "branch": "claude/issue-10-x",
+        "worktree_path": "worktrees/claude-issue-10-x",
+        "pid": 12345,
+        "started_at": 1700000000.0,
+        "declared_footprint": [],
+        "owner_kind": "dispatch",
+        "claim_id": "claim-10",
+        "claim_stage": "completed",
+        "base_ref": "origin/main",
+        "base_sha": "a" * 40,
+        "reservation_kind": "footprint",
+        "repository_id": "Saltmu/orchestune",
+        "claimed_at": 1700000001.0,
+        "owner_token_digest": "sha256:abc123",
+    }
+    active.update(overrides)
+    return active
+
+
+def _current_active_worktree(**overrides):
+    fields = {
+        "issue_number": 10,
+        "branch": "claude/issue-10-x",
+        "worktree_path": "worktrees/claude-issue-10-x",
+        "pid": 12345,
+        "started_at": 1700000000.0,
+        "declared_footprint": ("src/foo.py",),
+        "owner_kind": "dispatch",
+        "claim_id": "claim-10",
+        "claim_stage": "completed",
+        "base_ref": "origin/main",
+        "base_sha": "a" * 40,
+        "reservation_kind": "footprint",
+        "repository_id": "Saltmu/orchestune",
+        "claimed_at": 1700000001.0,
+        "owner_token_digest": "sha256:abc123",
+    }
+    fields.update(overrides)
+    return ActiveWorktree(**fields)
+
+
 class TestRunState:
     def test_new_claim_ownership_fields_round_trip_without_owner_token(self, tmp_path):
         path = tmp_path / "run_state.json"
@@ -45,23 +89,75 @@ class TestRunState:
         assert persisted["active_worktrees"]["10"]["reservation_kind"] == "repository"
         assert load_run_state(path).active_worktrees["10"] == active
 
-    def test_legacy_active_worktree_defaults_to_dispatch_footprint_reservation(
-        self, tmp_path
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("owner_kind", "unknown-owner"),
+            ("reservation_kind", "unknown-reservation"),
+            ("claim_stage", "unknown-stage"),
+            ("claim_id", None),
+            ("base_ref", None),
+            ("missing:base_sha", None),
+            ("repository_id", None),
+            ("claimed_at", None),
+            ("owner_token_digest", None),
+        ],
+    )
+    def test_rejects_incomplete_or_unknown_serialized_active_worktree(
+        self, tmp_path, field, value
     ):
+        path = tmp_path / "run_state.json"
+        active = {
+            "issue_number": 10,
+            "branch": "claude/issue-10-x",
+            "worktree_path": "worktrees/claude-issue-10-x",
+            "pid": 123,
+            "started_at": 1.0,
+            "declared_footprint": [],
+            "owner_kind": "dispatch",
+            "claim_id": "claim-10",
+            "claim_stage": "active_saved",
+            "base_ref": "origin/main",
+            "base_sha": "a" * 40,
+            "reservation_kind": "footprint",
+            "repository_id": "Saltmu/orchestune",
+            "claimed_at": 2.0,
+            "owner_token_digest": "sha256:abc123",
+        }
+        if field.startswith("missing:"):
+            del active[field.removeprefix("missing:")]
+        else:
+            active[field] = value
+        path.write_text(
+            json.dumps({"active_worktrees": {"10": active}}),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="active_worktrees\\[10\\]"):
+            load_run_state(path)
+
+    def test_rejects_wrong_type_in_serialized_active_worktree(self, tmp_path):
         path = tmp_path / "run_state.json"
         path.write_text(
             json.dumps(
                 {
                     "active_worktrees": {
                         "10": {
-                            "issue_number": 10,
+                            "issue_number": True,
                             "branch": "claude/issue-10-x",
                             "worktree_path": "worktrees/claude-issue-10-x",
                             "pid": 123,
                             "started_at": 1.0,
                             "declared_footprint": [],
-                            "owner_kind": "unknown-owner",
-                            "reservation_kind": "unknown-reservation",
+                            "owner_kind": "dispatch",
+                            "claim_id": "claim-10",
+                            "claim_stage": "active_saved",
+                            "base_ref": "origin/main",
+                            "base_sha": "a" * 40,
+                            "reservation_kind": "footprint",
+                            "repository_id": "Saltmu/orchestune",
+                            "claimed_at": 2.0,
+                            "owner_token_digest": "sha256:abc123",
                         }
                     }
                 }
@@ -69,11 +165,8 @@ class TestRunState:
             encoding="utf-8",
         )
 
-        active = load_run_state(path).active_worktrees["10"]
-
-        assert active.owner_kind == "dispatch"
-        assert active.reservation_kind == "footprint"
-        assert active.claim_id is None
+        with pytest.raises(ValueError, match="active_worktrees\\[10\\]"):
+            load_run_state(path)
 
     @pytest.mark.uses_run_state_lock_assertion
     def test_save_run_state_rejects_write_without_sibling_lock(self, tmp_path):
@@ -87,34 +180,36 @@ class TestRunState:
         assert state.active_worktrees == {}
         assert state.launch_history == []
 
-    def test_load_corrupted_file_falls_back_to_empty_state_and_quarantines(
+    def test_load_corrupted_file_rejects_and_quarantines(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        path.write_text("{broken json", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="ledger could not be read"):
+            load_run_state(path)
+
+        assert not path.exists()
+        assert list(tmp_path.glob("run_state.json.corrupt.*"))
+
+    def test_explicit_replacement_after_corrupted_load_overwrites_cleanly(
         self, tmp_path
     ):
         path = tmp_path / "run_state.json"
         path.write_text("{broken json", encoding="utf-8")
+        with pytest.raises(ValueError, match="ledger could not be read"):
+            load_run_state(path)
 
-        state = load_run_state(path)
-
-        assert state.active_worktrees == {}
-        assert state.launch_history == []
-        assert state.completed_worktrees == []
-        # 破損ファイルは元の場所から退避され、パスは"未存在"扱いになる
-        # (typed recovery bookkeepingがForgeの正本から復元できるように)。
-        assert not path.exists()
-        assert list(tmp_path.glob("run_state.json.corrupt.*"))
-
-    def test_save_after_corrupted_load_overwrites_cleanly(self, tmp_path):
-        path = tmp_path / "run_state.json"
-        path.write_text("{broken json", encoding="utf-8")
-        state = load_run_state(path)
-
-        state.active_worktrees["1"] = ActiveWorktree(
-            issue_number=1,
-            branch="claude/issue-1-x",
-            worktree_path="worktrees/claude-issue-1-x",
-            pid=1,
-            started_at=1.0,
-            declared_footprint=(),
+        state = RunState(
+            active_worktrees={
+                "1": _current_active_worktree(
+                    issue_number=1,
+                    branch="claude/issue-1-x",
+                    worktree_path="worktrees/claude-issue-1-x",
+                    pid=1,
+                    started_at=1.0,
+                    declared_footprint=(),
+                    claim_id="claim-1",
+                )
+            }
         )
         save_run_state(state, path)
 
@@ -126,13 +221,7 @@ class TestRunState:
         now = 1700000000.0
         state = RunState(
             active_worktrees={
-                "10": ActiveWorktree(
-                    issue_number=10,
-                    branch="claude/issue-10-x",
-                    worktree_path="worktrees/claude-issue-10-x",
-                    pid=12345,
-                    started_at=1700000000.0,
-                    declared_footprint=("src/foo.py",),
+                "10": _current_active_worktree(
                     estimated_tokens=400,
                     token_estimate_recorded=True,
                 )
@@ -146,23 +235,14 @@ class TestRunState:
         assert loaded.active_worktrees["10"].token_estimate_recorded is True
         assert loaded.launch_history == [1700000000.0]
 
-    def test_old_active_worktree_without_token_estimate_loads_compatibly(
+    def test_current_active_worktree_without_token_estimate_loads_compatibly(
         self, tmp_path
     ):
         path = tmp_path / "run_state.json"
         path.write_text(
             json.dumps(
                 {
-                    "active_worktrees": {
-                        "10": {
-                            "issue_number": 10,
-                            "branch": "claude/issue-10-x",
-                            "worktree_path": "worktrees/claude-issue-10-x",
-                            "pid": 12345,
-                            "started_at": 1700000000.0,
-                            "declared_footprint": [],
-                        }
-                    },
+                    "active_worktrees": {"10": _serialized_current_active()},
                     "launch_history": [],
                 }
             ),
@@ -183,13 +263,7 @@ class TestRunState:
         now = 1700000000.0
         state = RunState(
             active_worktrees={
-                "10": ActiveWorktree(
-                    issue_number=10,
-                    branch="claude/issue-10-x",
-                    worktree_path="worktrees/claude-issue-10-x",
-                    pid=12345,
-                    started_at=1700000000.0,
-                    declared_footprint=("src/foo.py",),
+                "10": _current_active_worktree(
                     profile="deep",
                     model="claude-3-7-sonnet-20250219",
                     reasoning_effort="high",
@@ -232,16 +306,7 @@ class TestRunState:
         path.write_text(
             json.dumps(
                 {
-                    "active_worktrees": {
-                        "10": {
-                            "issue_number": 10,
-                            "branch": "claude/issue-10-x",
-                            "worktree_path": "worktrees/claude-issue-10-x",
-                            "pid": 12345,
-                            "started_at": 1700000000.0,
-                            "declared_footprint": [],
-                        }
-                    },
+                    "active_worktrees": {"10": _serialized_current_active()},
                     "completed_worktrees": [
                         {
                             "issue_number": 11,
@@ -274,13 +339,9 @@ class TestRunState:
         path = tmp_path / "run_state.json"
         state = RunState(
             active_worktrees={
-                "10": ActiveWorktree(
-                    issue_number=10,
-                    branch="claude/issue-10-x",
-                    worktree_path="worktrees/claude-issue-10-x",
+                "10": _current_active_worktree(
                     pid=None,
                     started_at=None,
-                    declared_footprint=("src/foo.py",),
                 )
             }
         )
@@ -558,7 +619,9 @@ class TestRunState:
         loaded = load_run_state(path)
         assert loaded.last_reconciled_at is None
 
-    def test_load_backwards_compatibility_for_base_branch(self, tmp_path):
+    def test_rejects_legacy_active_worktree_even_when_completed_history_is_valid(
+        self, tmp_path
+    ):
         path = tmp_path / "run_state.json"
         old_data = {
             "active_worktrees": {
@@ -583,9 +646,8 @@ class TestRunState:
             ],
         }
         path.write_text(json.dumps(old_data))
-        loaded = load_run_state(path)
-        assert loaded.active_worktrees["10"].base_branch == "origin/main"
-        assert loaded.completed_worktrees[0].base_branch == "origin/main"
+        with pytest.raises(ValueError, match="missing required fields"):
+            load_run_state(path)
 
 
 class TestTaskReclaimCounts:
