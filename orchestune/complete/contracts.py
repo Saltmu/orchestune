@@ -292,13 +292,17 @@ class CompleteRequest:
             if not isinstance(self.payload, DonePayload) or not self.payload.pr:
                 raise ValueError("Done request requires a DonePayload with pr")
         elif self.result == RESULT_NOT_NEEDED:
-            if isinstance(self.payload, DonePayload):
-                raise ValueError("Not-needed request must not have DonePayload or PR")
+            if self.payload is not None and not isinstance(
+                self.payload, NotNeededPayload
+            ):
+                raise ValueError(
+                    "Not-needed request must only have NotNeededPayload or None"
+                )
         elif self.result == RESULT_BLOCKED:
-            if isinstance(self.payload, DonePayload):
-                raise ValueError("Blocked request must not have DonePayload or PR")
             if not isinstance(self.payload, BlockedPayload) or not self.payload.reason:
-                raise ValueError("Blocked request requires non-empty reason")
+                raise ValueError(
+                    "Blocked request requires a BlockedPayload with non-empty reason"
+                )
 
     def to_outcome_record(self) -> OutcomeRecord:
         """Derive an OutcomeRecord corresponding to this validated complete request."""
@@ -365,6 +369,11 @@ class CompleteResult:
         outcome_record: OutcomeRecord | None = None,
     ) -> CompleteResult:
         """Construct a successful CompleteResult indicating GC handoff."""
+        if stage != CompleteStage.HANDED_OFF_TO_GC:
+            raise ValueError(
+                "Successful CompleteResult requires CompleteStage.HANDED_OFF_TO_GC, "
+                f"got: {stage!r}"
+            )
         return cls(
             success=True,
             issue_number=issue_number,
@@ -375,7 +384,7 @@ class CompleteResult:
             pr=pr,
             outcome_record=outcome_record,
             failure=None,
-            handed_off_to_gc=(stage == CompleteStage.HANDED_OFF_TO_GC),
+            handed_off_to_gc=True,
         )
 
     @classmethod

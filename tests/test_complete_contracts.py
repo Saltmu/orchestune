@@ -103,16 +103,28 @@ class TestCompletePayloadsAndRequests:
         ):
             invalid_done.validate()
 
-        # not-needed with DonePayload
+        # not-needed with DonePayload or BlockedPayload
         invalid_not_needed = CompleteRequest(
             issue_number=997,
             result=RESULT_NOT_NEEDED,
             payload=DonePayload(pr=100),
         )
         with pytest.raises(
-            ValueError, match="Not-needed request must not have DonePayload or PR"
+            ValueError,
+            match="Not-needed request must only have NotNeededPayload or None",
         ):
             invalid_not_needed.validate()
+
+        invalid_not_needed_blocked = CompleteRequest(
+            issue_number=997,
+            result=RESULT_NOT_NEEDED,
+            payload=BlockedPayload(reason="some reason"),
+        )
+        with pytest.raises(
+            ValueError,
+            match="Not-needed request must only have NotNeededPayload or None",
+        ):
+            invalid_not_needed_blocked.validate()
 
         # blocked without reason
         invalid_blocked = CompleteRequest(
@@ -121,7 +133,8 @@ class TestCompletePayloadsAndRequests:
             payload=BlockedPayload(reason=""),
         )
         with pytest.raises(
-            ValueError, match="Blocked request requires non-empty reason"
+            ValueError,
+            match="Blocked request requires a BlockedPayload with non-empty reason",
         ):
             invalid_blocked.validate()
 
@@ -245,6 +258,18 @@ class TestCompleteResultAndGCBoundary:
         )
         assert not hasattr(res, "receipt")
         assert not hasattr(res, "completion_receipt")
+
+    def test_successful_complete_result_rejects_non_handed_off_stage(self):
+        """Codex finding: Reject successful results before GC handoff."""
+        with pytest.raises(
+            ValueError,
+            match="Successful CompleteResult requires CompleteStage.HANDED_OFF_TO_GC",
+        ):
+            CompleteResult.success_result(
+                issue_number=997,
+                result=RESULT_DONE,
+                stage=CompleteStage.INITIALIZING,
+            )
 
 
 class TestCompleteFailureAndExitCodes:
