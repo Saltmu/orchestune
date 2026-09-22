@@ -147,8 +147,14 @@ def _check_pr_identity_and_branches(
     expected_base = expected_base_ref or (
         getattr(active, "base_ref", None) if active else None
     )
+    if not expected_base:
+        return (
+            False,
+            "Base branch reference is required to validate pull request base branch",
+            CompleteFailureReason.EVIDENCE_MISSING,
+        )
     pr_base = getattr(pr, "base_ref", None)
-    if expected_base and pr_base and pr_base != expected_base:
+    if pr_base != expected_base:
         return (
             False,
             f"Pull request base branch mismatch: expected {expected_base}, got {pr_base}",
@@ -157,23 +163,10 @@ def _check_pr_identity_and_branches(
     return True, None, None
 
 
-def _check_pr_head_and_diff(
+def _check_pr_diff(
     pr: Any,
     payload_pr: int,
-    current_head_sha: str | None,
 ) -> tuple[bool, str | None, CompleteFailureReason | None]:
-    pr_head_sha = (
-        getattr(pr, "head_sha", None)
-        or getattr(pr, "head_oid", None)
-        or getattr(pr, "head_ref_oid", None)
-    )
-    if current_head_sha and pr_head_sha and pr_head_sha != current_head_sha:
-        return (
-            False,
-            f"Local HEAD ({current_head_sha}) has not been pushed to PR ({pr_head_sha})",
-            CompleteFailureReason.INVALID_REQUEST,
-        )
-
     changed_files = getattr(pr, "changed_files", None)
     commits_count = getattr(pr, "commits_count", None)
     is_empty = False
@@ -211,7 +204,6 @@ def _validate_pull_request(
     forge: Any | None,
     active: Any | None,
     expected_base_ref: str | None,
-    current_head_sha: str | None,
 ) -> tuple[bool, str | None, CompleteFailureReason | None]:
     if forge is None:
         return (
@@ -240,7 +232,7 @@ def _validate_pull_request(
     if not ok:
         return ok, reason, failure_reason
 
-    return _check_pr_head_and_diff(pr, payload.pr, current_head_sha)
+    return _check_pr_diff(pr, payload.pr)
 
 
 def _validate_blocked_payload(
@@ -266,13 +258,10 @@ def _validate_result_payload(
     forge: Any | None,
     active: Any | None,
     expected_base_ref: str | None,
-    current_head_sha: str | None,
 ) -> tuple[bool, str | None, CompleteFailureReason | None]:
     if request.result == RESULT_DONE:
         assert isinstance(request.payload, DonePayload)
-        return _validate_pull_request(
-            request.payload, forge, active, expected_base_ref, current_head_sha
-        )
+        return _validate_pull_request(request.payload, forge, active, expected_base_ref)
     if request.result == RESULT_BLOCKED:
         assert isinstance(request.payload, BlockedPayload)
         return _validate_blocked_payload(request.payload)
@@ -286,7 +275,6 @@ def evaluate_complete_preflight(
     forge: Any | None = None,
     run_state: Any | None = None,
     expected_base_ref: str | None = None,
-    current_head_sha: str | None = None,
 ) -> CompletePreflight:
     """Evaluate ownership, result, PR, and worktree preconditions."""
     try:
@@ -323,7 +311,7 @@ def evaluate_complete_preflight(
         )
 
     ok, reason, failure_reason = _validate_result_payload(
-        request, forge, active, expected_base_ref, current_head_sha
+        request, forge, active, expected_base_ref
     )
     if not ok:
         return CompletePreflight(

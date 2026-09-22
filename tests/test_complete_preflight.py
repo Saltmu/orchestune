@@ -175,7 +175,6 @@ class TestEvaluateCompletePreflight:
             forge=forge,
             run_state=run_state,
             expected_base_ref="parent/issue-894",
-            current_head_sha="head123",
         )
 
         assert result.accepted is True
@@ -205,7 +204,6 @@ class TestEvaluateCompletePreflight:
             forge=forge,
             run_state=run_state,
             expected_base_ref="parent/issue-894",
-            current_head_sha="head123",
         )
 
         assert result.accepted is False
@@ -236,7 +234,6 @@ class TestEvaluateCompletePreflight:
             forge=forge,
             run_state=run_state,
             expected_base_ref="parent/issue-894",
-            current_head_sha="head123",
         )
 
         assert result.accepted is False
@@ -323,18 +320,21 @@ class TestEvaluateCompletePreflight:
         assert result.accepted is False
         assert "base" in (result.reason or "").lower()
 
-    def test_done_rejects_unpushed_head(self, temp_git_repo: Path) -> None:
+    def test_done_rejects_missing_base_ref(self, temp_git_repo: Path) -> None:
         from orchestune.claim.ownership import owner_token_digest
 
         token = "token"
         digest = owner_token_digest(token)
 
         request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
-        forge = FakeForge({10: FakePr(number=10, head_sha="remote_sha_old")})
+        forge = FakeForge({10: FakePr(number=10, base_ref="main")})
+        # Active worktree without base_ref, and no expected_base_ref provided
         run_state = FakeRunState(
             {
                 "999": FakeActiveWorktree(
-                    owner_token_digest=digest, worktree_path=str(temp_git_repo)
+                    owner_token_digest=digest,
+                    worktree_path=str(temp_git_repo),
+                    base_ref="",
                 )
             }
         )
@@ -344,12 +344,12 @@ class TestEvaluateCompletePreflight:
             worktree_path=temp_git_repo,
             forge=forge,
             run_state=run_state,
-            expected_base_ref="parent/issue-894",
-            current_head_sha="local_sha_new",
+            expected_base_ref=None,
         )
 
         assert result.accepted is False
-        assert "pushed" in (result.reason or "").lower()
+        assert result.failure_reason == CompleteFailureReason.EVIDENCE_MISSING
+        assert "base branch reference is required" in (result.reason or "").lower()
 
     def test_done_rejects_empty_diff(self, temp_git_repo: Path) -> None:
         from orchestune.claim.ownership import owner_token_digest
@@ -373,7 +373,6 @@ class TestEvaluateCompletePreflight:
             forge=forge,
             run_state=run_state,
             expected_base_ref="parent/issue-894",
-            current_head_sha="head123",
         )
 
         assert result.accepted is False
@@ -573,7 +572,6 @@ class TestEvaluateCompletePreflight:
             forge=forge,
             run_state=run_state,
             expected_base_ref="parent/issue-894",
-            current_head_sha="head123",
         )
 
         assert result.accepted is False
@@ -661,7 +659,6 @@ class TestEvaluateCompletePreflight:
             worktree_path=None,
             forge=forge,
             run_state=run_state,
-            current_head_sha="head123",
         )
         assert result.accepted is True
         assert result.worktree_status == WorktreeStatus.CLEAN
@@ -692,7 +689,6 @@ class TestEvaluateCompletePreflight:
             worktree_path=None,
             forge=forge,
             run_state=run_state,
-            current_head_sha="head123",
         )
         assert result.accepted is True
         assert result.worktree_status == WorktreeStatus.CLEAN
@@ -911,47 +907,8 @@ class TestEvaluateCompletePreflight:
             forge=forge,
             run_state=run_state,
             expected_base_ref="parent/issue-894",
-            current_head_sha="local_sha_123",
         )
         assert result.accepted is True
-
-    def test_done_rejects_mismatched_head_sha(self, temp_git_repo: Path) -> None:
-        from orchestune.claim.ownership import owner_token_digest
-
-        token = "token"
-        digest = owner_token_digest(token)
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
-        run_state = FakeRunState(
-            {
-                "999": FakeActiveWorktree(
-                    owner_token_digest=digest,
-                    worktree_path=str(temp_git_repo),
-                    branch="claude/issue-999-complete-preflight",
-                    base_ref="parent/issue-894",
-                )
-            }
-        )
-        forge = FakeForge(
-            {
-                10: FakePr(
-                    number=10,
-                    head_ref="claude/issue-999-complete-preflight",
-                    base_ref="parent/issue-894",
-                    head_sha="remote_sha_456",
-                )
-            }
-        )
-        result = evaluate_complete_preflight(
-            request,
-            worktree_path=temp_git_repo,
-            forge=forge,
-            run_state=run_state,
-            expected_base_ref="parent/issue-894",
-            current_head_sha="local_sha_123",
-        )
-        assert result.accepted is False
-        assert result.failure_reason == CompleteFailureReason.INVALID_REQUEST
-        assert "not been pushed to pr" in (result.reason or "").lower()
 
     def test_done_supports_list_prs_forge_with_include_files(
         self, temp_git_repo: Path
