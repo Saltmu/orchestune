@@ -16,6 +16,8 @@ from orchestune.complete.contracts import (
     is_valid_attempt_number,
     is_valid_issue_number,
     is_valid_pr_number,
+    is_valid_review_summary,
+    is_valid_rounds_number,
     sanitize_blocked_reason,
 )
 
@@ -35,5 +37,7 @@ __all__ = [
     "is_valid_attempt_number",
     "is_valid_issue_number",
     "is_valid_pr_number",
+    "is_valid_review_summary",
+    "is_valid_rounds_number",
     "sanitize_blocked_reason",
 ]

@@ -207,6 +207,51 @@ class TestCompletePayloadsAndRequests:
             ):
                 BlockedPayload(reason=bad_reason)
 
+        # boolean or non-positive review rounds rejected in DonePayload and BlockedPayload
+        for bad_rounds in (True, False, 0, -1):
+            bad_review = ReviewSummary(
+                bot="codex", rounds=bad_rounds, verdict="approved"
+            )  # type: ignore
+            with pytest.raises(
+                ValueError,
+                match="review must be a ReviewSummary with rounds as None or a valid positive non-boolean integer",
+            ):
+                DonePayload(pr=1001, review=bad_review)
+
+            with pytest.raises(
+                ValueError,
+                match="review must be a ReviewSummary with rounds as None or a valid positive non-boolean integer",
+            ):
+                BlockedPayload(reason="some reason", review=bad_review)
+
+            with pytest.raises(
+                ValueError,
+                match="review must be a ReviewSummary with rounds as None or a valid positive non-boolean integer",
+            ):
+                CompleteRequest.done(issue_number=997, pr=1001, review=bad_review)
+
+            with pytest.raises(
+                ValueError,
+                match="review must be a ReviewSummary with rounds as None or a valid positive non-boolean integer",
+            ):
+                CompleteRequest.blocked(
+                    issue_number=997, reason="some reason", review=bad_review
+                )
+
+        # valid review accepted
+        valid_review_none = ReviewSummary(bot="codex", rounds=None, verdict="approved")
+        valid_review_num = ReviewSummary(bot="codex", rounds=2, verdict="approved")
+        assert DonePayload(pr=1001, review=valid_review_none).review.rounds is None
+        assert DonePayload(pr=1001, review=valid_review_num).review.rounds == 2
+        assert (
+            BlockedPayload(reason="some reason", review=valid_review_none).review.rounds
+            is None
+        )
+        assert (
+            BlockedPayload(reason="some reason", review=valid_review_num).review.rounds
+            == 2
+        )
+
         # blocked reason exceeding MAX_REASON_LENGTH is capped to canonical length
         long_reason = "x" * 150
         payload_long = BlockedPayload(reason=long_reason)
@@ -374,6 +419,98 @@ class TestCompleteResultAndGCBoundary:
                     issue_number=997,
                     result=RESULT_DONE,
                     pr=bad_pr,
+                )
+
+    def test_constructor_enforces_gc_handoff_invariant(self):
+        """Codex finding: Enforce the GC-handoff invariant in the constructor."""
+        # success=True with earlier stage rejected
+        with pytest.raises(
+            ValueError,
+            match="Successful CompleteResult requires CompleteStage.HANDED_OFF_TO_GC",
+        ):
+            CompleteResult(
+                success=True,
+                issue_number=997,
+                result=RESULT_DONE,
+                stage=CompleteStage.INITIALIZING,
+                handed_off_to_gc=False,
+            )
+
+        # success=True without handed_off_to_gc=True rejected
+        with pytest.raises(
+            ValueError,
+            match="Successful CompleteResult requires handed_off_to_gc=True",
+        ):
+            CompleteResult(
+                success=True,
+                issue_number=997,
+                result=RESULT_DONE,
+                stage=CompleteStage.HANDED_OFF_TO_GC,
+                handed_off_to_gc=False,
+            )
+
+        # success=False with handed_off_to_gc=True rejected
+        failure = CompleteFailure(
+            reason=CompleteFailureReason.INVALID_REQUEST,
+            message="bad request",
+            issue_number=997,
+        )
+        with pytest.raises(
+            ValueError,
+            match="Failed CompleteResult cannot have handed_off_to_gc=True",
+        ):
+            CompleteResult(
+                success=False,
+                issue_number=997,
+                result=RESULT_DONE,
+                stage=CompleteStage.INITIALIZING,
+                failure=failure,
+                handed_off_to_gc=True,
+            )
+
+        # success=False without failure object rejected
+        with pytest.raises(
+            ValueError,
+            match="Failed CompleteResult requires a CompleteFailure object",
+        ):
+            CompleteResult(
+                success=False,
+                issue_number=997,
+                result=RESULT_DONE,
+                stage=CompleteStage.INITIALIZING,
+                failure=None,
+                handed_off_to_gc=False,
+            )
+
+    def test_complete_result_rejects_noncanonical_result(self):
+        """Codex finding: Reject noncanonical successful and failure result values."""
+        failure = CompleteFailure(
+            reason=CompleteFailureReason.INVALID_REQUEST,
+            message="bad request",
+            issue_number=997,
+        )
+        for bad_result in ("don", "not_needed", "block", "", "INVALID"):
+            with pytest.raises(ValueError, match="Invalid complete result"):
+                CompleteResult.success_result(
+                    issue_number=997,
+                    result=bad_result,
+                )
+
+            with pytest.raises(ValueError, match="Invalid complete result"):
+                CompleteResult.failure_result(
+                    issue_number=997,
+                    result=bad_result,
+                    stage=CompleteStage.INITIALIZING,
+                    failure=failure,
+                )
+
+            with pytest.raises(ValueError, match="Invalid complete result"):
+                CompleteResult(
+                    success=True,
+                    issue_number=997,
+                    result=bad_result,
+                    stage=CompleteStage.HANDED_OFF_TO_GC,
+                    handed_off_to_gc=True,
                 )
 
 

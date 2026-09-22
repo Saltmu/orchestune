@@ -147,6 +147,20 @@ def is_valid_attempt_number(attempt: Any) -> bool:
     return is_valid_positive_int(attempt)
 
 
+def is_valid_rounds_number(rounds: Any) -> bool:
+    """Return whether rounds is None or a valid non-boolean positive integer."""
+    if rounds is None:
+        return True
+    return is_valid_positive_int(rounds)
+
+
+def is_valid_review_summary(review: Any) -> bool:
+    """Return whether review is a ReviewSummary with valid non-boolean rounds."""
+    if not isinstance(review, ReviewSummary):
+        return False
+    return is_valid_rounds_number(review.rounds)
+
+
 def sanitize_blocked_reason(reason: Any) -> str:
     """Sanitize and return reason string, stripping whitespace, control characters, and capping length."""
     if not isinstance(reason, str):
@@ -168,6 +182,11 @@ class DonePayload:
         if not is_valid_pr_number(self.pr):
             raise ValueError(
                 f"pr must be a valid positive non-boolean integer, got: {self.pr!r}"
+            )
+        if not is_valid_review_summary(self.review):
+            raise ValueError(
+                "review must be a ReviewSummary with rounds as None or a valid positive non-boolean integer, "
+                f"got: {self.review!r}"
             )
 
 
@@ -201,6 +220,11 @@ class BlockedPayload:
         if not is_valid_attempt_number(self.attempt):
             raise ValueError(
                 f"attempt must be None or a valid positive non-boolean integer, got: {self.attempt!r}"
+            )
+        if not is_valid_review_summary(self.review):
+            raise ValueError(
+                "review must be a ReviewSummary with rounds as None or a valid positive non-boolean integer, "
+                f"got: {self.review!r}"
             )
 
 
@@ -359,11 +383,13 @@ class CompleteRequest:
             raise ValueError(f"Invalid complete result: {self.result!r}")
 
         if self.result == RESULT_DONE:
-            if not isinstance(self.payload, DonePayload) or not is_valid_pr_number(
-                self.payload.pr
+            if (
+                not isinstance(self.payload, DonePayload)
+                or not is_valid_pr_number(self.payload.pr)
+                or not is_valid_review_summary(self.payload.review)
             ):
                 raise ValueError(
-                    "Done request requires a DonePayload with a valid positive integer pr"
+                    "Done request requires a DonePayload with a valid positive integer pr and valid review"
                 )
         elif self.result == RESULT_NOT_NEEDED:
             if self.payload is not None and not isinstance(
@@ -377,6 +403,7 @@ class CompleteRequest:
                 not isinstance(self.payload, BlockedPayload)
                 or not sanitize_blocked_reason(self.payload.reason)
                 or not is_valid_attempt_number(self.payload.attempt)
+                or not is_valid_review_summary(self.payload.review)
             ):
                 raise ValueError(
                     "Blocked request requires a BlockedPayload with a non-empty, non-whitespace reason"
@@ -439,10 +466,35 @@ class CompleteResult:
             raise ValueError(
                 f"issue_number must be a valid positive non-boolean integer, got: {self.issue_number!r}"
             )
+        if self.result not in VALID_RESULTS:
+            raise ValueError(f"Invalid complete result: {self.result!r}")
         if self.pr is not None and not is_valid_pr_number(self.pr):
             raise ValueError(
                 f"pr must be None or a valid positive non-boolean integer, got: {self.pr!r}"
             )
+        if self.success:
+            if self.stage != CompleteStage.HANDED_OFF_TO_GC:
+                raise ValueError(
+                    "Successful CompleteResult requires CompleteStage.HANDED_OFF_TO_GC, "
+                    f"got: {self.stage!r}"
+                )
+            if not self.handed_off_to_gc:
+                raise ValueError(
+                    "Successful CompleteResult requires handed_off_to_gc=True"
+                )
+            if self.failure is not None:
+                raise ValueError(
+                    "Successful CompleteResult cannot have a failure object"
+                )
+        else:
+            if self.handed_off_to_gc:
+                raise ValueError(
+                    "Failed CompleteResult cannot have handed_off_to_gc=True"
+                )
+            if self.failure is None:
+                raise ValueError(
+                    "Failed CompleteResult requires a CompleteFailure object"
+                )
 
     @classmethod
     def success_result(
@@ -457,6 +509,8 @@ class CompleteResult:
         outcome_record: OutcomeRecord | None = None,
     ) -> CompleteResult:
         """Construct a successful CompleteResult indicating GC handoff."""
+        if result not in VALID_RESULTS:
+            raise ValueError(f"Invalid complete result: {result!r}")
         if stage != CompleteStage.HANDED_OFF_TO_GC:
             raise ValueError(
                 "Successful CompleteResult requires CompleteStage.HANDED_OFF_TO_GC, "
@@ -487,6 +541,8 @@ class CompleteResult:
         owner_kind: OwnerKind | None = None,
     ) -> CompleteResult:
         """Construct a failed CompleteResult with diagnostic information."""
+        if result not in VALID_RESULTS:
+            raise ValueError(f"Invalid complete result: {result!r}")
         return cls(
             success=False,
             issue_number=issue_number,
