@@ -162,21 +162,52 @@ def _check_pr_head_and_diff(
     payload_pr: int,
     current_head_sha: str | None,
 ) -> tuple[bool, str | None, CompleteFailureReason | None]:
-    pr_head_sha = getattr(pr, "head_sha", None)
-    if current_head_sha and pr_head_sha and pr_head_sha != current_head_sha:
-        return (
-            False,
-            f"Local HEAD ({current_head_sha}) has not been pushed to PR ({pr_head_sha})",
-            CompleteFailureReason.INVALID_REQUEST,
-        )
+    pr_head_sha = (
+        getattr(pr, "head_sha", None)
+        or getattr(pr, "head_oid", None)
+        or getattr(pr, "head_ref_oid", None)
+    )
+    if current_head_sha:
+        if not pr_head_sha:
+            return (
+                False,
+                f"Pull request #{payload_pr} head SHA cannot be verified against local HEAD",
+                CompleteFailureReason.EVIDENCE_MISSING,
+            )
+        if pr_head_sha != current_head_sha:
+            return (
+                False,
+                f"Local HEAD ({current_head_sha}) has not been pushed to PR ({pr_head_sha})",
+                CompleteFailureReason.INVALID_REQUEST,
+            )
 
-    if getattr(pr, "commits_count", 1) == 0:
+    changed_files = getattr(pr, "changed_files", None)
+    commits_count = getattr(pr, "commits_count", None)
+    is_empty = False
+    if changed_files is not None and len(changed_files) == 0:
+        is_empty = True
+    elif commits_count is not None and commits_count == 0:
+        is_empty = True
+
+    if is_empty:
         return (
             False,
             f"Pull request #{payload_pr} contains no changes (empty diff)",
             CompleteFailureReason.INVALID_REQUEST,
         )
     return True, None, None
+
+
+def _fetch_pr(forge: Any, pr_number: int) -> tuple[Any | None, bool]:
+    if hasattr(forge, "get_pull_request"):
+        return forge.get_pull_request(pr_number), True
+    if hasattr(forge, "list_prs"):
+        prs = forge.list_prs(state="all")
+        for p in prs:
+            if getattr(p, "number", None) == pr_number:
+                return p, True
+        return None, True
+    return None, False
 
 
 def _validate_pull_request(
@@ -187,9 +218,19 @@ def _validate_pull_request(
     current_head_sha: str | None,
 ) -> tuple[bool, str | None, CompleteFailureReason | None]:
     if forge is None:
-        return True, None, None
+        return (
+            False,
+            "Pull request validation requires a forge client",
+            CompleteFailureReason.EVIDENCE_MISSING,
+        )
 
-    pr = forge.get_pull_request(payload.pr)
+    pr, supported = _fetch_pr(forge, payload.pr)
+    if not supported:
+        return (
+            False,
+            "Forge client does not support pull request lookup",
+            CompleteFailureReason.EVIDENCE_MISSING,
+        )
     if pr is None:
         return (
             False,

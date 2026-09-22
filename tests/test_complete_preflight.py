@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -101,10 +102,10 @@ class FakePr:
 
 
 class FakeForge:
-    def __init__(self, prs: dict[int, FakePr] | None = None) -> None:
+    def __init__(self, prs: dict[int, Any] | None = None) -> None:
         self.prs = prs or {}
 
-    def get_pull_request(self, pr_number: int) -> FakePr | None:
+    def get_pull_request(self, pr_number: int) -> Any | None:
         return self.prs.get(pr_number)
 
 
@@ -787,3 +788,170 @@ class TestEvaluateCompletePreflight:
         )
         assert res_merged.accepted is False
         assert "already merged" in (res_merged.reason or "")
+
+    def test_done_rejects_missing_forge(self, temp_git_repo: Path) -> None:
+        from orchestune.claim.ownership import owner_token_digest
+
+        token = "token"
+        digest = owner_token_digest(token)
+        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        run_state = FakeRunState(
+            {
+                "999": FakeActiveWorktree(
+                    owner_token_digest=digest,
+                    worktree_path=str(temp_git_repo),
+                )
+            }
+        )
+
+        result = evaluate_complete_preflight(
+            request, worktree_path=temp_git_repo, run_state=run_state, forge=None
+        )
+        assert result.accepted is False
+        assert result.failure_reason == CompleteFailureReason.EVIDENCE_MISSING
+        assert "forge" in (result.reason or "").lower()
+
+    def test_done_with_pr_record_model(self, temp_git_repo: Path) -> None:
+        from orchestune.claim.ownership import owner_token_digest
+        from orchestune.models import PrRecord
+
+        token = "token"
+        digest = owner_token_digest(token)
+        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        run_state = FakeRunState(
+            {
+                "999": FakeActiveWorktree(
+                    owner_token_digest=digest,
+                    worktree_path=str(temp_git_repo),
+                    branch="claude/issue-999-complete-preflight",
+                    base_ref="parent/issue-894",
+                )
+            }
+        )
+        pr = PrRecord(
+            number=10,
+            head_ref="claude/issue-999-complete-preflight",
+            base_ref="parent/issue-894",
+            state="OPEN",
+            changed_files=("foo.py",),
+        )
+        forge = FakeForge({10: pr})
+        result = evaluate_complete_preflight(
+            request,
+            worktree_path=temp_git_repo,
+            forge=forge,
+            run_state=run_state,
+            expected_base_ref="parent/issue-894",
+        )
+        assert result.accepted is True
+
+    def test_done_rejects_pr_record_empty_diff(self, temp_git_repo: Path) -> None:
+        from orchestune.claim.ownership import owner_token_digest
+        from orchestune.models import PrRecord
+
+        token = "token"
+        digest = owner_token_digest(token)
+        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        run_state = FakeRunState(
+            {
+                "999": FakeActiveWorktree(
+                    owner_token_digest=digest,
+                    worktree_path=str(temp_git_repo),
+                    branch="claude/issue-999-complete-preflight",
+                    base_ref="parent/issue-894",
+                )
+            }
+        )
+        pr = PrRecord(
+            number=10,
+            head_ref="claude/issue-999-complete-preflight",
+            base_ref="parent/issue-894",
+            state="OPEN",
+            changed_files=(),
+        )
+        forge = FakeForge({10: pr})
+        result = evaluate_complete_preflight(
+            request,
+            worktree_path=temp_git_repo,
+            forge=forge,
+            run_state=run_state,
+        )
+        assert result.accepted is False
+        assert result.failure_reason == CompleteFailureReason.INVALID_REQUEST
+        assert "empty diff" in (result.reason or "").lower()
+
+    def test_done_rejects_unverifiable_head_sha(self, temp_git_repo: Path) -> None:
+        from orchestune.claim.ownership import owner_token_digest
+        from orchestune.models import PrRecord
+
+        token = "token"
+        digest = owner_token_digest(token)
+        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        run_state = FakeRunState(
+            {
+                "999": FakeActiveWorktree(
+                    owner_token_digest=digest,
+                    worktree_path=str(temp_git_repo),
+                    branch="claude/issue-999-complete-preflight",
+                    base_ref="parent/issue-894",
+                )
+            }
+        )
+        pr = PrRecord(
+            number=10,
+            head_ref="claude/issue-999-complete-preflight",
+            base_ref="parent/issue-894",
+            state="OPEN",
+            changed_files=("foo.py",),
+        )
+        forge = FakeForge({10: pr})
+        result = evaluate_complete_preflight(
+            request,
+            worktree_path=temp_git_repo,
+            forge=forge,
+            run_state=run_state,
+            current_head_sha="local_sha_123",
+        )
+        assert result.accepted is False
+        assert result.failure_reason == CompleteFailureReason.EVIDENCE_MISSING
+        assert "head sha cannot be verified" in (result.reason or "").lower()
+
+    def test_done_supports_list_prs_forge(self, temp_git_repo: Path) -> None:
+        from orchestune.claim.ownership import owner_token_digest
+        from orchestune.models import PrRecord
+
+        class ListOnlyForge:
+            def __init__(self, prs: list[PrRecord]) -> None:
+                self._prs = prs
+
+            def list_prs(self, state: str = "open") -> list[PrRecord]:
+                return self._prs
+
+        token = "token"
+        digest = owner_token_digest(token)
+        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        run_state = FakeRunState(
+            {
+                "999": FakeActiveWorktree(
+                    owner_token_digest=digest,
+                    worktree_path=str(temp_git_repo),
+                    branch="claude/issue-999-complete-preflight",
+                    base_ref="parent/issue-894",
+                )
+            }
+        )
+        pr = PrRecord(
+            number=10,
+            head_ref="claude/issue-999-complete-preflight",
+            base_ref="parent/issue-894",
+            state="OPEN",
+            changed_files=("foo.py",),
+        )
+        forge = ListOnlyForge([pr])
+        result = evaluate_complete_preflight(
+            request,
+            worktree_path=temp_git_repo,
+            forge=forge,
+            run_state=run_state,
+        )
+        assert result.accepted is True
