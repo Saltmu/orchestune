@@ -144,3 +144,28 @@ def test_read_owner_token_uses_windows_acl_instead_of_posix_mode_bits(tmp_path):
 
     with patch("orchestune.claim.cli.os.name", "nt"):
         assert _read_owner_token(tmp_path, "claim-123") == "stored-owner-token"
+
+
+def test_success_renders_parent_base_when_present(tmp_path, capsys):
+    from orchestune.claim.cli import main
+
+    parent_outcome = ClaimOutcome(
+        success=True,
+        issue_number=998,
+        claim_id="claim-998",
+        branch="claude/issue-998-test",
+        worktree_path=Path("/tmp/worktrees/claim-998"),
+        base_ref="parent/issue-894",
+        owner_kind=OwnerKind.INTERACTIVE,
+        reservation_kind=ReservationKind.FOOTPRINT,
+        stage=ClaimStage.COMPLETED,
+        owner_token="tok",
+    )
+    with (
+        patch("orchestune.claim.cli.claim_task", return_value=parent_outcome),
+        patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
+    ):
+        assert main(["998"]) == 0
+
+    output = capsys.readouterr().out
+    assert "Base: parent/issue-894" in output
