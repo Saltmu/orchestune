@@ -119,3 +119,17 @@ Claude reported one verified finding (medium severity) and two style/design note
 4. **Style refactoring (Adopted in `7fa8a30`)**:
    Extracted `_record_failed_launch_phase` from `_apply_single_task_launch`, eliminating bloat warning and harmonizing error handling shape.
 Local CI passed with 4,101 tests passed, 95.20% coverage, and no bloat/leaks.
+
+## Review round 2 reconciliation
+
+Claude reported two verified findings:
+1. **Accurate reclaim reason for `DISPATCH_PRELAUNCH_ORPHAN` (Adopted & Fixed in `73cb91d`)**:
+   Extracted `_resolve_reclaim_reason` in `orchestune/dispatch/gc/zombies.py` to map `DISPATCH_PRELAUNCH_ORPHAN` to `"claimed but never launched"` across both `_build_reclaim_candidate` and `_refresh_reclaim`. Added test assertion in `test_dispatch_prelaunch_orphan_with_physical_worktree_is_safely_reclaimed`.
+2. **`now` logical timestamp threading (Adopted & Fixed in `73cb91d`)**:
+   Added `now: float | None = None` to `_persist_launching_phase` and `_record_failed_launch_phase` in `orchestune/dispatch/launch.py`, passed to `save_run_state(..., now=now)`. Added test assertion in `test_launch_phase_launching_persisted_before_provider_and_failure_holds_launch`.
+
+## Review round 3 reconciliation
+
+Claude confirmed both findings cleanly fixed with test coverage and reported zero new findings. PR approved for merge.
+
+
