@@ -159,6 +159,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "provisioning.plan",
             "provisioning.plan_loading",
             "provisioning.rendering",
+            "provisioning.retry",
             "provisioning.subtasks",
             "replan.audit",
             "replan.operations",

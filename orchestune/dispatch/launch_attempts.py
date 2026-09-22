@@ -91,6 +91,56 @@ def active_from_attempt(
     )
 
 
+def restored_active_record(
+    *,
+    issue_number: int,
+    branch: str,
+    worktree_path: str,
+    footprint: tuple[str, ...],
+    recompute_count: int,
+    forced_serial: bool,
+    external_id: str | None,
+    external_url: str | None,
+    base_branch: str,
+    profile: str | None,
+    model: str | None,
+    reasoning_effort: str | None,
+    selection_reason: str | None,
+    owner_kind: str,
+    claim_id: str,
+    reservation_kind: str,
+    repository_id: str,
+    owner_token_digest: str,
+) -> ActiveWorktree:
+    """Construct a non-resumable record recovered without an owner secret."""
+    return ActiveWorktree(
+        issue_number=issue_number,
+        branch=branch,
+        worktree_path=worktree_path,
+        pid=None,
+        started_at=None,
+        declared_footprint=footprint,
+        recompute_count=recompute_count,
+        forced_serial=forced_serial,
+        external_id=external_id,
+        external_url=external_url,
+        base_branch=base_branch,
+        profile=profile,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        selection_reason=selection_reason,
+        owner_kind=owner_kind,
+        claim_id=claim_id,
+        claim_stage="completed",
+        base_ref=base_branch,
+        base_sha=None,
+        reservation_kind=reservation_kind,
+        repository_id=repository_id,
+        claimed_at=0.0,
+        owner_token_digest=owner_token_digest,
+    )
+
+
 def _recovered_active_from_attempt(
     attempt: LaunchAttempt, task: TaskMetadata, config: DispatcherConfig
 ) -> ActiveWorktree:
@@ -179,6 +229,24 @@ def _adopt_confirmed_attempt(
     )
 
 
+def _load_or_recover_active(
+    attempt: LaunchAttempt,
+    task: TaskMetadata,
+    state: RunState,
+    config: DispatcherConfig,
+) -> ActiveWorktree:
+    key = str(task.issue_number)
+    existing = state.active_worktrees.get(key)
+    if existing is None:
+        existing = load_run_state(config.run_state_path).active_worktrees.get(key)
+        if existing is not None:
+            state.active_worktrees[key] = existing
+    if existing is None:
+        existing = _recovered_active_from_attempt(attempt, task, config)
+        state.active_worktrees[key] = existing
+    return existing
+
+
 def reconcile_attempt(
     attempt: LaunchAttempt,
     task: TaskMetadata,
@@ -207,17 +275,7 @@ def reconcile_attempt(
         )
         return True
     key = str(task.issue_number)
-    existing = state.active_worktrees.get(key)
-    if existing is None:
-        persisted = load_run_state(config.run_state_path)
-        existing = persisted.active_worktrees.get(key)
-        if existing is not None:
-            state.active_worktrees[key] = existing
-    if existing is None:
-        state.active_worktrees[key] = _recovered_active_from_attempt(
-            attempt, task, config
-        )
-        existing = state.active_worktrees[key]
+    existing = _load_or_recover_active(attempt, task, state, config)
     # #943: dispatchの起動がclaim_task経由になったことで、実際の起動より前に
     # claim自身の予約（`launch_attempt_id`未設定のプレースホルダー）が
     # `run_state.active_worktrees`へ同期されるようになった。このプレース
