@@ -117,6 +117,64 @@ class TestEvaluateFindingWithJev:
             assert secret_key not in str(result)
             assert secret_key not in repr(result)
 
+    def test_evaluate_finding_retries_on_transient_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("JEV_API_KEY", "secret-test-key")
+        fake_response_data = {"validity": 0.88, "impact": "HIGH"}
+
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(fake_response_data).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+
+        # Fail twice with 503 HTTPError, succeed on 3rd attempt
+        error_503 = urllib.error.HTTPError(
+            url=DEFAULT_JEV_API_URL,
+            code=503,
+            msg="Service Unavailable",
+            hdrs={},  # type: ignore[arg-type]
+            fp=None,
+        )
+
+        with (
+            patch(
+                "urllib.request.urlopen",
+                side_effect=[error_503, error_503, mock_response],
+            ) as mock_urlopen,
+            patch("time.sleep") as mock_sleep,
+        ):
+            result = evaluate_finding_with_jev(
+                comment="test",
+                path="foo.py",
+                line=1,
+            )
+            assert result.validity == 0.88
+            assert result.impact == "HIGH"
+            assert result.bypassed is False
+            assert mock_urlopen.call_count == 3
+            assert mock_sleep.call_count == 2
+
+    def test_evaluate_finding_chunks_oversized_comment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("JEV_API_KEY", "secret-test-key")
+        mock_response = MagicMock()
+        mock_response.read.return_value = json.dumps(
+            {"validity": 0.9, "impact": "HIGH"}
+        ).encode("utf-8")
+        mock_response.__enter__.return_value = mock_response
+
+        huge_comment = "A" * 10000
+        with patch(
+            "urllib.request.urlopen", return_value=mock_response
+        ) as mock_urlopen:
+            evaluate_finding_with_jev(huge_comment, path="large.py", line=1)
+            req = mock_urlopen.call_args[0][0]
+            body = json.loads(req.data.decode("utf-8"))
+            # Comment sent to API must be truncated/chunked
+            assert len(body["comment"]) < 5000
+            assert "[truncated" in body["comment"]
+
 
 class TestFilterReviewFindings:
     def test_filter_excludes_low_impact_and_low_validity(
@@ -309,3 +367,59 @@ class TestJevFilterIntegrationWithWaitForReview:
 
             assert len(result["inline_comments"]) == 1
             assert result["verdict"] == EXIT_FINDINGS_PRESENT
+
+    @patch("scripts.wait_for_review._get_pr_data", autospec=True)
+    def test_wait_for_review_filters_out_findings_even_when_bot_body_says_fail(
+        self, mock_get_data: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scripts.review_verdict import EXIT_NO_FINDINGS
+        from scripts.wait_for_review import wait_for_review
+
+        monkeypatch.setenv("JEV_API_KEY", "test-key")
+
+        trigger_comment = {
+            "id": 1,
+            "user": {"login": "human"},
+            "created_at": "2026-09-22T07:59:00Z",
+            "body": "@claude review",
+        }
+        review_summary = {
+            "id": 10,
+            "user": {"login": "claude[bot]"},
+            "created_at": "2026-09-22T08:00:00Z",
+            "body": "### Findings\n🔴 blocking bug: potential race condition\n\nMarking this **FAIL**.",
+        }
+        inline_comment = {
+            "id": 11,
+            "user": {"login": "claude[bot]"},
+            "created_at": "2026-09-22T08:00:00Z",
+            "path": "sample.py",
+            "line": 5,
+            "body": "Defensive check suggested for race condition",
+        }
+
+        mock_get_data.return_value = {
+            "issue_comments": [trigger_comment],
+            "reviews": [review_summary],
+            "inline_comments": [inline_comment],
+        }
+
+        # Mock Jev to mark this inline comment as LOW impact (speculative)
+        with patch(
+            "scripts.jev_filter.evaluate_finding_with_jev",
+            return_value=JevFindingEvaluation(
+                validity=0.5, impact="LOW", bypassed=False
+            ),
+        ):
+            result = wait_for_review(
+                pr_number=1011,
+                post_trigger=False,
+                bot_name="claude",
+                timeout=0,
+                interval=0,
+            )
+
+            # Even though review_body said FAIL and had 🔴, all findings were rejected by Jev,
+            # so verdict must converge to 0 (EXIT_NO_FINDINGS)
+            assert result["inline_comments"] == []
+            assert result["verdict"] == EXIT_NO_FINDINGS

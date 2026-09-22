@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -16,6 +17,9 @@ from typing import Any
 
 DEFAULT_JEV_API_URL = "https://api.jev.ai/v1/evaluate"
 DEFAULT_VALIDITY_THRESHOLD = 0.7
+MAX_COMMENT_LENGTH = 4000
+MAX_RETRIES = 3
+INITIAL_BACKOFF_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -52,11 +56,14 @@ def evaluate_finding_with_jev(
     api_key: str | None = None,
     base_url: str | None = None,
     timeout: float = 10.0,
+    max_retries: int = MAX_RETRIES,
+    initial_backoff: float = INITIAL_BACKOFF_SECONDS,
 ) -> JevFindingEvaluation:
     """Evaluate a single review finding with the Jev API.
 
     API key is read from JEV_API_KEY environment variable if not explicitly passed.
     If no key is configured, evaluation is bypassed safely without raising errors.
+    Applies comment chunking/truncation and exponential backoff retry for transient errors.
     """
     resolved_key = api_key or os.environ.get("JEV_API_KEY")
     if not resolved_key:
@@ -67,9 +74,19 @@ def evaluate_finding_with_jev(
         )
 
     url = base_url or os.environ.get("JEV_API_URL") or DEFAULT_JEV_API_URL
+
+    # Chunk / truncate oversized comments to prevent resource bloat and comply with API guidelines
+    comment_text = comment or ""
+    if len(comment_text) > MAX_COMMENT_LENGTH:
+        chunked_comment = (
+            comment_text[:MAX_COMMENT_LENGTH] + "\n... [truncated for Jev evaluation]"
+        )
+    else:
+        chunked_comment = comment_text
+
     payload = json.dumps(
         {
-            "comment": comment,
+            "comment": chunked_comment,
             "path": path,
             "line": line,
         }
@@ -85,28 +102,52 @@ def evaluate_finding_with_jev(
         method="POST",
     )
 
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            validity = float(data.get("validity", 1.0))
-            impact = str(data.get("impact", "HIGH")).upper()
-            return JevFindingEvaluation(
-                validity=validity,
-                impact=impact,
-                bypassed=False,
-                raw_response=data,
+    backoff = initial_backoff
+    for attempt in range(max_retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                validity = float(data.get("validity", 1.0))
+                impact = str(data.get("impact", "HIGH")).upper()
+                return JevFindingEvaluation(
+                    validity=validity,
+                    impact=impact,
+                    bypassed=False,
+                    raw_response=data,
+                )
+        except urllib.error.HTTPError as exc:
+            # 429 (rate limit) or 5xx (server error) are transient -> retry with backoff
+            if exc.code in (429, 500, 502, 503, 504) and attempt < max_retries:
+                time.sleep(backoff)
+                backoff *= 2.0
+                continue
+            print(
+                f"Warning: Jev evaluation HTTP error {exc.code}; bypassing filter.",
+                file=sys.stderr,
             )
-    except Exception as exc:
-        # Safe fallback: do not leak API key, log sanitized error type and proceed
-        print(
-            f"Warning: Jev evaluation failed ({type(exc).__name__}); bypassing filter.",
-            file=sys.stderr,
-        )
-        return JevFindingEvaluation(
-            validity=1.0,
-            impact="HIGH",
-            bypassed=True,
-        )
+            break
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if attempt < max_retries:
+                time.sleep(backoff)
+                backoff *= 2.0
+                continue
+            print(
+                f"Warning: Jev evaluation network error ({type(exc).__name__}); bypassing filter.",
+                file=sys.stderr,
+            )
+            break
+        except Exception as exc:
+            print(
+                f"Warning: Jev evaluation failed ({type(exc).__name__}); bypassing filter.",
+                file=sys.stderr,
+            )
+            break
+
+    return JevFindingEvaluation(
+        validity=1.0,
+        impact="HIGH",
+        bypassed=True,
+    )
 
 
 def filter_review_findings(

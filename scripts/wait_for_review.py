@@ -350,12 +350,16 @@ def _extract_review_result(
         latest_item=latest_item,
     )
     if result is not None:
-        if result.get("inline_comments"):
-            result["inline_comments"] = filter_review_findings(
-                result["inline_comments"],
+        initial_inlines = result.get("inline_comments", [])
+        if initial_inlines:
+            filtered_inlines = filter_review_findings(
+                initial_inlines,
                 bot_name=bot_name,
                 threshold=jev_threshold,
             )
+            result["inline_comments"] = filtered_inlines
+            if not filtered_inlines:
+                result["all_findings_filtered"] = True
         _print_review_result(result, bot_name)
     return result
 
@@ -466,11 +470,14 @@ def _check_immediate_review_result(
             jev_threshold=jev_threshold,
         )
         if result is not None:
-            result["verdict"] = evaluate_review_verdict(
-                result.get("review_body", ""),
-                result.get("inline_comments", []),
-                bot_name=bot_name,
-            )
+            if result.get("all_findings_filtered"):
+                result["verdict"] = EXIT_NO_FINDINGS
+            else:
+                result["verdict"] = evaluate_review_verdict(
+                    result.get("review_body", ""),
+                    result.get("inline_comments", []),
+                    bot_name=bot_name,
+                )
             result["round"] = current_round
             return result
     return None
@@ -667,11 +674,14 @@ def wait_for_review(
                                 jev_threshold=jev_threshold,
                             )
                             if result is not None:
-                                result["verdict"] = evaluate_review_verdict(
-                                    result.get("review_body", ""),
-                                    result.get("inline_comments", []),
-                                    bot_name=bot_name,
-                                )
+                                if result.get("all_findings_filtered"):
+                                    result["verdict"] = EXIT_NO_FINDINGS
+                                else:
+                                    result["verdict"] = evaluate_review_verdict(
+                                        result.get("review_body", ""),
+                                        result.get("inline_comments", []),
+                                        bot_name=bot_name,
+                                    )
                                 result["round"] = current_round
                                 return result
                         else:
@@ -793,17 +803,23 @@ def main() -> None:
         if args.review_state_file:
             with open(args.review_state_file, encoding="utf-8") as state_file:
                 result = evaluate_review_state(json.load(state_file), args.bot_name)
-            if result.get("inline_comments"):
-                result["inline_comments"] = filter_review_findings(
-                    result["inline_comments"],
+            initial_inlines = result.get("inline_comments", [])
+            if initial_inlines:
+                filtered_inlines = filter_review_findings(
+                    initial_inlines,
                     bot_name=args.bot_name,
                     threshold=args.jev_threshold,
                 )
-                result["verdict"] = evaluate_review_verdict(
-                    result.get("review_body", ""),
-                    result.get("inline_comments", []),
-                    bot_name=args.bot_name,
-                )
+                result["inline_comments"] = filtered_inlines
+                if not filtered_inlines:
+                    result["all_findings_filtered"] = True
+                    result["verdict"] = EXIT_NO_FINDINGS
+                else:
+                    result["verdict"] = evaluate_review_verdict(
+                        result.get("review_body", ""),
+                        result.get("inline_comments", []),
+                        bot_name=args.bot_name,
+                    )
             _print_review_result(result, args.bot_name)
             sys.exit(result["verdict"])
         if args.pr is None:
@@ -828,11 +844,14 @@ def main() -> None:
         )
         verdict = result.get("verdict")
         if verdict is None:
-            verdict = evaluate_review_verdict(
-                result.get("review_body", ""),
-                result.get("inline_comments", []),
-                bot_name=args.bot_name,
-            )
+            if result.get("all_findings_filtered"):
+                verdict = EXIT_NO_FINDINGS
+            else:
+                verdict = evaluate_review_verdict(
+                    result.get("review_body", ""),
+                    result.get("inline_comments", []),
+                    bot_name=args.bot_name,
+                )
         sys.exit(verdict)
     except MaxRoundsExceededError as e:
         print(f"Error: {e}", file=sys.stderr)
