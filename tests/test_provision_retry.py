@@ -168,6 +168,50 @@ def test_rejected_429_create_retries() -> None:
     assert clock.sleeps == [3.0]
 
 
+def test_rejected_403_rate_limit_create_retries() -> None:
+    class RateLimitedForge(FakeForge):
+        calls = 0
+
+        def create_issue(self, title, body, labels=()):
+            self.calls += 1
+            if self.calls == 1:
+                raise _api_error("HTTP 403: API rate limit exceeded\nRetry-After: 3")
+            return super().create_issue(title, body, labels)
+
+    clock = Clock()
+    forge = RateLimitedForge()
+    wrapped = ProvisionRetryForge(
+        forge, sleep=clock.sleep, clock=clock.time, min_interval=0
+    )
+    assert wrapped.create_issue("[EPIC] limited", PARENT_MARKER) == 100
+    assert forge.calls == 2
+    assert clock.sleeps == [3.0]
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["context deadline exceeded", "i/o timeout", "TLS handshake timeout"],
+)
+def test_gh_transport_timeout_retries(message: str) -> None:
+    class TimeoutForge(FakeForge):
+        calls = 0
+
+        def get_issue(self, issue_number):
+            self.calls += 1
+            if self.calls == 1:
+                raise _api_error(message)
+            return super().get_issue(issue_number)
+
+    clock = Clock()
+    forge = TimeoutForge()
+    number = forge.create_issue("a", "b")
+    wrapped = ProvisionRetryForge(
+        forge, sleep=clock.sleep, clock=clock.time, min_interval=0
+    )
+    assert wrapped.get_issue(number) is not None
+    assert forge.calls == 2
+
+
 def test_create_probe_reads_parent_number_from_yaml_fence() -> None:
     class LostResponseForge(FakeForge):
         writes = 0

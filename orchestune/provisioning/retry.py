@@ -30,6 +30,9 @@ _CONNECTION_ERRORS = (
     "temporary failure in name resolution",
     "unexpected eof",
     "stream error",
+    "context deadline exceeded",
+    "i/o timeout",
+    "tls handshake timeout",
 )
 
 
@@ -61,8 +64,13 @@ def _is_transient(error: BaseException) -> bool:
     return (
         bool(_TRANSIENT_STATUS.search(detail))
         or any(marker in detail for marker in _CONNECTION_ERRORS)
-        or "rate limit exceeded" in detail
+        or _is_rate_limit_rejection(error)
     )
+
+
+def _is_rate_limit_rejection(error: BaseException) -> bool:
+    detail = _detail(error).lower()
+    return "429" in detail or "rate limit exceeded" in detail
 
 
 def _retry_after(error: BaseException, now: float) -> float | None:
@@ -131,7 +139,7 @@ class ProvisionRetryForge:
                     if (
                         not replay_on_miss
                         and uncertain_error is not None
-                        and "429" not in _detail(uncertain_error)
+                        and not _is_rate_limit_rejection(uncertain_error)
                     ):
                         probe_delay = min(2.0**attempt, 8.0)
                         if (
