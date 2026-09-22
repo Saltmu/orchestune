@@ -21,11 +21,13 @@ from orchestune.complete import (
     failure_reason_to_exit_code,
 )
 from orchestune.outcome_record import (
+    MAX_REASON_LENGTH,
     REASON_BASE_BRANCH_RED,
     RESULT_BLOCKED,
     RESULT_DONE,
     RESULT_NOT_NEEDED,
     ReviewSummary,
+    parse_from_comments,
 )
 
 
@@ -135,6 +137,68 @@ class TestCompletePayloadsAndRequests:
             ):
                 DonePayload(pr=bad_pr)  # type: ignore
 
+        # boolean or non-positive issue_number rejected across factories and classes
+        for bad_issue in (True, False, 0, -1):
+            with pytest.raises(
+                ValueError,
+                match="issue_number must be a valid positive non-boolean integer",
+            ):
+                CompleteRequest.done(issue_number=bad_issue, pr=1001)  # type: ignore
+
+            with pytest.raises(
+                ValueError,
+                match="issue_number must be a valid positive non-boolean integer",
+            ):
+                CompleteRequest.not_needed(issue_number=bad_issue)  # type: ignore
+
+            with pytest.raises(
+                ValueError,
+                match="issue_number must be a valid positive non-boolean integer",
+            ):
+                CompleteRequest.blocked(issue_number=bad_issue, reason="blocked reason")  # type: ignore
+
+            with pytest.raises(
+                ValueError,
+                match="issue_number must be a valid positive non-boolean integer",
+            ):
+                CompleteRequest(  # type: ignore
+                    issue_number=bad_issue,
+                    result=RESULT_DONE,
+                    payload=DonePayload(pr=1001),
+                )
+
+            with pytest.raises(
+                ValueError,
+                match="issue_number must be a valid positive non-boolean integer",
+            ):
+                CompleteResult.success_result(  # type: ignore
+                    issue_number=bad_issue,
+                    result=RESULT_DONE,
+                )
+
+            with pytest.raises(
+                ValueError,
+                match="issue_number must be None or a valid positive non-boolean integer",
+            ):
+                CompleteFailure(  # type: ignore
+                    reason=CompleteFailureReason.INVALID_REQUEST,
+                    message="test",
+                    issue_number=bad_issue,
+                )
+
+        # boolean or non-positive attempt rejected in BlockedPayload
+        for bad_attempt in (True, False, 0, -1):
+            with pytest.raises(
+                ValueError,
+                match="attempt must be None or a valid positive non-boolean integer",
+            ):
+                BlockedPayload(reason="some reason", attempt=bad_attempt)  # type: ignore
+
+        # valid attempt values accepted
+        assert BlockedPayload(reason="some reason", attempt=None).attempt is None
+        assert BlockedPayload(reason="some reason", attempt=1).attempt == 1
+        assert BlockedPayload(reason="some reason", attempt=3).attempt == 3
+
         # blocked with empty or whitespace-only reason rejected
         for bad_reason in ("", "   ", "\t\n\r"):
             with pytest.raises(
@@ -142,6 +206,12 @@ class TestCompletePayloadsAndRequests:
                 match="reason must be a non-empty string containing non-whitespace characters",
             ):
                 BlockedPayload(reason=bad_reason)
+
+        # blocked reason exceeding MAX_REASON_LENGTH is capped to canonical length
+        long_reason = "x" * 150
+        payload_long = BlockedPayload(reason=long_reason)
+        assert len(payload_long.reason) == 100
+        assert payload_long.reason == "x" * 100
 
         # invalid result kind
         invalid_result = CompleteRequest(
@@ -186,6 +256,24 @@ class TestCompletePayloadsAndRequests:
         assert rec_blocked.reason == REASON_BASE_BRANCH_RED
         assert rec_blocked.base_sha == "def5678"
         assert rec_blocked.attempt == 2
+
+        # Round trip test: rendered records can be parsed back with canonical preservation
+        for rec in (rec_done, rec_not_needed, rec_blocked):
+            rendered = rec.render()
+            parsed = parse_from_comments([{"body": rendered}])
+            assert parsed is not None
+            assert parsed == rec
+
+        # Round trip with long reason exceeds MAX_REASON_LENGTH: preserved identically
+        req_long_blocked = CompleteRequest.blocked(
+            issue_number=997,
+            reason="long reason prefix: " + "y" * 120,
+        )
+        rec_long_blocked = req_long_blocked.to_outcome_record()
+        assert len(rec_long_blocked.reason) == MAX_REASON_LENGTH
+        parsed_long = parse_from_comments([{"body": rec_long_blocked.render()}])
+        assert parsed_long is not None
+        assert parsed_long.reason == rec_long_blocked.reason
 
     def test_owner_token_is_masked_in_repr(self):
         req = CompleteRequest.done(
@@ -275,6 +363,18 @@ class TestCompleteResultAndGCBoundary:
                 result=RESULT_DONE,
                 stage=CompleteStage.INITIALIZING,
             )
+
+    def test_complete_result_rejects_invalid_pr_number(self):
+        for bad_pr in (True, False, 0, -1):
+            with pytest.raises(
+                ValueError,
+                match="pr must be None or a valid positive non-boolean integer",
+            ):
+                CompleteResult.success_result(  # type: ignore
+                    issue_number=997,
+                    result=RESULT_DONE,
+                    pr=bad_pr,
+                )
 
 
 class TestCompleteFailureAndExitCodes:

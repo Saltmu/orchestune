@@ -13,6 +13,10 @@ from orchestune.complete.contracts import (
     NotNeededPayload,
     can_transition,
     failure_reason_to_exit_code,
+    is_valid_attempt_number,
+    is_valid_issue_number,
+    is_valid_pr_number,
+    sanitize_blocked_reason,
 )
 
 __all__ = [
@@ -28,4 +32,8 @@ __all__ = [
     "NotNeededPayload",
     "can_transition",
     "failure_reason_to_exit_code",
+    "is_valid_attempt_number",
+    "is_valid_issue_number",
+    "is_valid_pr_number",
+    "sanitize_blocked_reason",
 ]

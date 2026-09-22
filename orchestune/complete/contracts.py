@@ -9,6 +9,7 @@ from typing import Any
 
 from orchestune.claim.contracts import OwnerKind
 from orchestune.outcome_record import (
+    MAX_REASON_LENGTH,
     RESULT_BLOCKED,
     RESULT_DONE,
     RESULT_NOT_NEEDED,
@@ -124,17 +125,34 @@ def failure_reason_to_exit_code(reason: CompleteFailureReason) -> CompleteExitCo
     return _FAILURE_REASON_TO_EXIT_CODE[reason]
 
 
+def is_valid_positive_int(val: Any) -> bool:
+    """Return whether val is a valid non-boolean positive integer."""
+    return isinstance(val, int) and not isinstance(val, bool) and val > 0
+
+
 def is_valid_pr_number(pr: Any) -> bool:
     """Return whether pr is a valid non-boolean positive integer."""
-    return isinstance(pr, int) and not isinstance(pr, bool) and pr > 0
+    return is_valid_positive_int(pr)
+
+
+def is_valid_issue_number(issue: Any) -> bool:
+    """Return whether issue is a valid non-boolean positive integer."""
+    return is_valid_positive_int(issue)
+
+
+def is_valid_attempt_number(attempt: Any) -> bool:
+    """Return whether attempt is None or a valid non-boolean positive integer."""
+    if attempt is None:
+        return True
+    return is_valid_positive_int(attempt)
 
 
 def sanitize_blocked_reason(reason: Any) -> str:
-    """Sanitize and return reason string, stripping whitespace and control characters."""
+    """Sanitize and return reason string, stripping whitespace, control characters, and capping length."""
     if not isinstance(reason, str):
         return ""
     cleaned = "".join(" " if ord(c) < 32 or ord(c) == 127 else c for c in reason)
-    return " ".join(cleaned.split())
+    return " ".join(cleaned.split())[:MAX_REASON_LENGTH]
 
 
 @dataclass(frozen=True)
@@ -173,10 +191,16 @@ class BlockedPayload:
     ci: str | None = None
 
     def __post_init__(self) -> None:
-        if not sanitize_blocked_reason(self.reason):
+        sanitized = sanitize_blocked_reason(self.reason)
+        if not sanitized:
             raise ValueError(
                 "reason must be a non-empty string containing non-whitespace characters, "
                 f"got: {self.reason!r}"
+            )
+        object.__setattr__(self, "reason", sanitized)
+        if not is_valid_attempt_number(self.attempt):
+            raise ValueError(
+                f"attempt must be None or a valid positive non-boolean integer, got: {self.attempt!r}"
             )
 
 
@@ -192,6 +216,14 @@ class CompleteFailure:
     issue_number: int | None = None
     conflicting_stage: CompleteStage | None = None
     next_actions: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.issue_number is not None and not is_valid_issue_number(
+            self.issue_number
+        ):
+            raise ValueError(
+                f"issue_number must be None or a valid positive non-boolean integer, got: {self.issue_number!r}"
+            )
 
     @property
     def exit_code(self) -> CompleteExitCode:
@@ -212,6 +244,12 @@ class CompleteRequest:
     dry_run: bool = False
     state_path: Path | None = None
     worktree_root: Path | None = None
+
+    def __post_init__(self) -> None:
+        if not is_valid_issue_number(self.issue_number):
+            raise ValueError(
+                f"issue_number must be a valid positive non-boolean integer, got: {self.issue_number!r}"
+            )
 
     @classmethod
     def done(
@@ -312,6 +350,11 @@ class CompleteRequest:
 
     def validate(self) -> None:
         """Validate internal consistency of request fields and payload."""
+        if not is_valid_issue_number(self.issue_number):
+            raise ValueError(
+                f"issue_number must be a valid positive non-boolean integer, got: {self.issue_number!r}"
+            )
+
         if self.result not in VALID_RESULTS:
             raise ValueError(f"Invalid complete result: {self.result!r}")
 
@@ -330,9 +373,11 @@ class CompleteRequest:
                     "Not-needed request must only have NotNeededPayload or None"
                 )
         elif self.result == RESULT_BLOCKED:
-            if not isinstance(
-                self.payload, BlockedPayload
-            ) or not sanitize_blocked_reason(self.payload.reason):
+            if (
+                not isinstance(self.payload, BlockedPayload)
+                or not sanitize_blocked_reason(self.payload.reason)
+                or not is_valid_attempt_number(self.payload.attempt)
+            ):
                 raise ValueError(
                     "Blocked request requires a BlockedPayload with a non-empty, non-whitespace reason"
                 )
@@ -360,7 +405,7 @@ class CompleteRequest:
             return OutcomeRecord(
                 result=RESULT_BLOCKED,
                 issue=self.issue_number,
-                reason=sanitize_blocked_reason(self.payload.reason),
+                reason=self.payload.reason,
                 base_sha=self.payload.base_sha,
                 attempt=self.payload.attempt,
                 review=self.payload.review,
@@ -388,6 +433,16 @@ class CompleteResult:
     outcome_record: OutcomeRecord | None = None
     failure: CompleteFailure | None = None
     handed_off_to_gc: bool = False
+
+    def __post_init__(self) -> None:
+        if not is_valid_issue_number(self.issue_number):
+            raise ValueError(
+                f"issue_number must be a valid positive non-boolean integer, got: {self.issue_number!r}"
+            )
+        if self.pr is not None and not is_valid_pr_number(self.pr):
+            raise ValueError(
+                f"pr must be None or a valid positive non-boolean integer, got: {self.pr!r}"
+            )
 
     @classmethod
     def success_result(

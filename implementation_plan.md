@@ -6,7 +6,7 @@
 - **ベースブランチ**: `parent/issue-822`（ユーザー指定）
 - **作業ブランチ**: `claude/issue-997-complete-contract-scaffold`
 - **GitHub 操作バックエンド**: `gh` CLI
-- **PR レビュアー**: `claude` (Non-Interactive mode)
+- **PR レビュアー**: `codex` (Non-Interactive mode)
 
 ## 目的と受け入れ基準
 1. `done` / `not-needed` / `blocked` の入力型と状態遷移が型安全に表現できること
@@ -18,10 +18,10 @@
 
 | シンボル / 参照箇所 | 分類 | 根拠 |
 | :--- | :--- | :--- |
-| `orchestune/complete/__init__.py` | in scope (新規作成) | パッケージ公開シンボルの再エクスポート (`CompleteRequest`, `CompleteResult`, `CompleteFailure`, `CompleteStage` 等) |
+| `orchestune/complete/__init__.py` | in scope (新規作成) | パッケージ公開シンボルの再エクスポート (`CompleteRequest`, `CompleteResult`, `CompleteFailure`, `CompleteStage`, バリデータヘルパー等) |
 | `orchestune/complete/contracts.py` | in scope (新規作成) | `CompleteRequest`, `CompleteResult`, `CompleteFailure`, `CompleteStage`, `CompleteExitCode`, `CompleteFailureReason`, ペイロード型などのドメインモデル定義 |
 | `tests/test_complete_contracts.py` | in scope (新規作成) | Result別入力型、状態遷移ルール、GC責任境界 (CompletionReceipt非依存)、claim互換性の網羅的契約テスト |
-| `orchestune/outcome_record.py` | out of scope (参照のみ) | 既存の OutcomeRecord スキーマ・定数（`RESULT_*`, `REASON_*`）を利用し、無変更 |
+| `orchestune/outcome_record.py` | out of scope (参照のみ) | 既存の OutcomeRecord スキーマ・定数（`RESULT_*`, `REASON_*`, `MAX_REASON_LENGTH`）を利用し、無変更 |
 | `orchestune/claim/contracts.py` | out of scope (参照のみ) | `OwnerKind`, `OwnerToken` 等の契約を利用し、無変更 |
 | `orchestune/dispatch/cycle_records.py:CompletionReceipt` | out of scope (分離対象) | GC完了証跡であり、`CompleteResult` に含めないことをテストで検証 |
 
@@ -60,13 +60,13 @@ class CompleteStage(str, Enum):
   `FORGE_POST_FAILED`, `STATE_SAVE_FAILED`
 
 ### 3. Result別入力型 (`DonePayload`, `NotNeededPayload`, `BlockedPayload`)
-- `DonePayload`: `pr: int`, `review: ReviewSummary`, `ci: str | None`, `baseline_regressions: tuple[str, ...]`
-- `NotNeededPayload`: `note: str | None`
-- `BlockedPayload`: `reason: str`, `base_sha: str | None`, `attempt: int | None`, `review: ReviewSummary`, `ci: str | None`
+- `DonePayload`: `pr: int` (非ブール正整数), `review: ReviewSummary`, `ci: str | None`, `baseline_regressions: tuple[str, ...]`
+- `NotNeededPayload`: 空の dataclass（canonical OutcomeRecord スキーマに合わせた設計）
+- `BlockedPayload`: `reason: str` (空白・制御文字サニタイズかつ `MAX_REASON_LENGTH` (100) でキャップ), `base_sha: str | None`, `attempt: int | None` (None または非ブール正整数), `review: ReviewSummary`, `ci: str | None`
 
 ### 4. `CompleteRequest`
 - ファクトリメソッド `CompleteRequest.done()`, `CompleteRequest.not_needed()`, `CompleteRequest.blocked()` を提供
-- バリデーション機能 `validate()` により、done 時に pr があるか、not-needed/blocked 時に pr がないか、blocked 時に reason があるか等を事前検査
+- バリデーション機能 `validate()` および `__post_init__` により、`issue_number` が非ブール正整数であること、done 時に valid な pr があること、not-needed 時に NotNeededPayload または None であること、blocked 時に non-empty reason と valid attempt であること等を厳格に事前検査
 
 ### 5. `CompleteResult`
 - `success: bool`
