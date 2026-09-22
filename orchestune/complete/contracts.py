@@ -518,6 +518,11 @@ class CompleteResult:
                 "outcome_record.review must be a ReviewSummary with rounds as None or a valid positive non-boolean integer, "
                 f"got: {rec.review!r}"
             )
+        if rec.result == RESULT_BLOCKED and not sanitize_blocked_reason(rec.reason):
+            raise ValueError(
+                "Blocked outcome_record requires a non-empty string reason containing non-whitespace characters, "
+                f"got: {rec.reason!r}"
+            )
 
     def _validate_stage_boundary(self) -> None:
         if self.success:

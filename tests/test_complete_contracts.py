@@ -667,6 +667,36 @@ class TestCompleteResultAndGCBoundary:
                     outcome_record=bad_rounds_rec,
                 )
 
+        # Embedded blocked outcome_record requires valid reason (not None or whitespace)
+        for bad_reason in (None, "", "   ", "\t\n"):
+            bad_blocked_rec = OutcomeRecord(
+                result=RESULT_BLOCKED,
+                issue=997,
+                reason=bad_reason,  # type: ignore
+            )
+            with pytest.raises(
+                ValueError,
+                match=r"Blocked outcome_record requires a non-empty string reason",
+            ):
+                CompleteResult.success_result(
+                    issue_number=997,
+                    result=RESULT_BLOCKED,
+                    outcome_record=bad_blocked_rec,
+                )
+
+        # Valid blocked outcome_record accepted
+        valid_blocked_rec = OutcomeRecord(
+            result=RESULT_BLOCKED,
+            issue=997,
+            reason=REASON_BASE_BRANCH_RED,
+        )
+        res_blocked = CompleteResult.success_result(
+            issue_number=997,
+            result=RESULT_BLOCKED,
+            outcome_record=valid_blocked_rec,
+        )
+        assert res_blocked.outcome_record == valid_blocked_rec
+
     def test_failure_result_aligns_issue_number(self):
         """Codex finding: Keep failure diagnostics aligned with the result issue."""
         failure_issue_2 = CompleteFailure(
