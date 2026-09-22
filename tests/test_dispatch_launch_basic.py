@@ -473,7 +473,6 @@ class TestApplyTaskLaunches:
         from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.dispatch.targets import LocalProcessDispatchTarget
 
-        register_task_issue(1, "task-1")
         task = Task(
             issue_number=1,
             subtask_id="task-1",
@@ -485,6 +484,7 @@ class TestApplyTaskLaunches:
             status_labels=("status:queued",),
             created_at="2023-01-01T00:00:00+00:00",
         )
+        register_task_issue(1, "task-1", parent={"number": 700})
         plans = [
             TaskLaunchPlan(
                 task,
@@ -498,7 +498,7 @@ class TestApplyTaskLaunches:
             local_cmd="runner --base {base_branch} --issue {issue_number}",
         )
         config = DispatcherConfig(
-            parent_issue_number=100,
+            parent_issue_number=700,
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",

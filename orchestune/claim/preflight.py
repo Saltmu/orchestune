@@ -101,6 +101,13 @@ def resolve_claim_subtask_id(issue: IssueRecord) -> str:
     return fallback_id
 
 
+def _base_ref_for_parent(default_base: str, parent_issue_number: int | None) -> str:
+    """Return parent branch if parent exists, else fall back to default base."""
+    if parent_issue_number is not None:
+        return f"parent/issue-{parent_issue_number}"
+    return default_base
+
+
 def resolve_claim_base(
     issue_number: int,
     view: ClaimBaseResolutionView,
@@ -120,11 +127,8 @@ def resolve_claim_base(
 
     if decision.reason == "no-stack-dependency":
         parent_num = view.parent_issue_number(issue_number)
-        base_ref = (
-            f"parent/issue-{parent_num}"
-            if parent_num is not None
-            else getattr(view, "default_base", default_base) or default_base
-        )
+        effective_default = getattr(view, "default_base", default_base) or default_base
+        base_ref = _base_ref_for_parent(effective_default, parent_num)
         return ClaimBaseDecision(allowed=True, base_ref=base_ref, kind="normal")
 
     return ClaimBaseDecision(
@@ -249,17 +253,6 @@ def _check_dependencies_without_view(
     return None
 
 
-def _resolve_base_without_view(
-    default_base: str,
-    parent_issue_number: int | None,
-) -> str:
-    if default_base != "origin/main":
-        return default_base
-    if parent_issue_number is not None:
-        return f"parent/issue-{parent_issue_number}"
-    return default_base
-
-
 def _resolve_dependencies_and_base(
     issue_number: int,
     label_set: set[str],
@@ -291,7 +284,7 @@ def _resolve_dependencies_and_base(
     if failure is not None:
         return failure, None, None
 
-    base_ref = _resolve_base_without_view(default_base, parent_issue_number)
+    base_ref = _base_ref_for_parent(default_base, parent_issue_number)
     return None, base_ref, None
 
 
@@ -346,7 +339,7 @@ def evaluate_claim_preflight(
 
     reservation_kind = _resolve_reservation_kind(issue)
     subtask_id = resolve_claim_subtask_id(issue)
-    parent_number = effective_parent_number(issue)
+    parent_number = effective_parent_number(issue) if view is None else None
 
     dep_failure, base_ref, stack_target = _resolve_dependencies_and_base(
         issue.number,
