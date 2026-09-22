@@ -462,6 +462,11 @@ class CompleteResult:
     handed_off_to_gc: bool = False
 
     def __post_init__(self) -> None:
+        self._validate_identifiers()
+        self._validate_outcome_record()
+        self._validate_stage_boundary()
+
+    def _validate_identifiers(self) -> None:
         if not is_valid_issue_number(self.issue_number):
             raise ValueError(
                 f"issue_number must be a valid positive non-boolean integer, got: {self.issue_number!r}"
@@ -472,6 +477,35 @@ class CompleteResult:
             raise ValueError(
                 f"pr must be None or a valid positive non-boolean integer, got: {self.pr!r}"
             )
+
+    def _validate_outcome_record(self) -> None:
+        if self.outcome_record is None:
+            return
+        if not isinstance(self.outcome_record, OutcomeRecord):
+            raise ValueError(
+                f"outcome_record must be an OutcomeRecord or None, got: {self.outcome_record!r}"
+            )
+        if self.outcome_record.issue != self.issue_number:
+            raise ValueError(
+                f"outcome_record.issue ({self.outcome_record.issue}) does not match "
+                f"CompleteResult.issue_number ({self.issue_number})"
+            )
+        if self.outcome_record.result != self.result:
+            raise ValueError(
+                f"outcome_record.result ({self.outcome_record.result!r}) does not match "
+                f"CompleteResult.result ({self.result!r})"
+            )
+        if (
+            self.pr is not None
+            and self.outcome_record.pr is not None
+            and self.outcome_record.pr != self.pr
+        ):
+            raise ValueError(
+                f"outcome_record.pr ({self.outcome_record.pr}) does not match "
+                f"CompleteResult.pr ({self.pr})"
+            )
+
+    def _validate_stage_boundary(self) -> None:
         if self.success:
             if self.stage != CompleteStage.HANDED_OFF_TO_GC:
                 raise ValueError(
@@ -487,6 +521,10 @@ class CompleteResult:
                     "Successful CompleteResult cannot have a failure object"
                 )
         else:
+            if self.stage == CompleteStage.HANDED_OFF_TO_GC:
+                raise ValueError(
+                    "Failed CompleteResult cannot be at CompleteStage.HANDED_OFF_TO_GC"
+                )
             if self.handed_off_to_gc:
                 raise ValueError(
                     "Failed CompleteResult cannot have handed_off_to_gc=True"
@@ -543,6 +581,10 @@ class CompleteResult:
         """Construct a failed CompleteResult with diagnostic information."""
         if result not in VALID_RESULTS:
             raise ValueError(f"Invalid complete result: {result!r}")
+        if stage == CompleteStage.HANDED_OFF_TO_GC:
+            raise ValueError(
+                "Failed CompleteResult cannot be at CompleteStage.HANDED_OFF_TO_GC"
+            )
         return cls(
             success=False,
             issue_number=issue_number,

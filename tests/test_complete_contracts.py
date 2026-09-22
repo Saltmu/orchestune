@@ -26,6 +26,7 @@ from orchestune.outcome_record import (
     RESULT_BLOCKED,
     RESULT_DONE,
     RESULT_NOT_NEEDED,
+    OutcomeRecord,
     ReviewSummary,
     parse_from_comments,
 )
@@ -468,6 +469,31 @@ class TestCompleteResultAndGCBoundary:
                 handed_off_to_gc=True,
             )
 
+        # success=False with stage=HANDED_OFF_TO_GC rejected (constructor & factory)
+        with pytest.raises(
+            ValueError,
+            match="Failed CompleteResult cannot be at CompleteStage.HANDED_OFF_TO_GC",
+        ):
+            CompleteResult(
+                success=False,
+                issue_number=997,
+                result=RESULT_DONE,
+                stage=CompleteStage.HANDED_OFF_TO_GC,
+                failure=failure,
+                handed_off_to_gc=False,
+            )
+
+        with pytest.raises(
+            ValueError,
+            match="Failed CompleteResult cannot be at CompleteStage.HANDED_OFF_TO_GC",
+        ):
+            CompleteResult.failure_result(
+                issue_number=997,
+                result=RESULT_DONE,
+                stage=CompleteStage.HANDED_OFF_TO_GC,
+                failure=failure,
+            )
+
         # success=False without failure object rejected
         with pytest.raises(
             ValueError,
@@ -512,6 +538,57 @@ class TestCompleteResultAndGCBoundary:
                     stage=CompleteStage.HANDED_OFF_TO_GC,
                     handed_off_to_gc=True,
                 )
+
+    def test_complete_result_validates_embedded_outcome_record(self):
+        """Codex finding: Verify embedded outcome records match the result identity."""
+        valid_record = OutcomeRecord(result=RESULT_DONE, issue=997, pr=1001)
+
+        # Successful result accepts matching record
+        res = CompleteResult.success_result(
+            issue_number=997,
+            result=RESULT_DONE,
+            pr=1001,
+            outcome_record=valid_record,
+        )
+        assert res.outcome_record == valid_record
+
+        # Mismatched issue rejected
+        mismatched_issue = OutcomeRecord(result=RESULT_DONE, issue=998, pr=1001)
+        with pytest.raises(
+            ValueError, match=r"outcome_record\.issue \(998\) does not match"
+        ):
+            CompleteResult.success_result(
+                issue_number=997,
+                result=RESULT_DONE,
+                pr=1001,
+                outcome_record=mismatched_issue,
+            )
+
+        # Mismatched result rejected
+        mismatched_result = OutcomeRecord(
+            result=RESULT_BLOCKED, issue=997, reason="base-branch-red"
+        )
+        with pytest.raises(
+            ValueError, match=r"outcome_record\.result \('blocked'\) does not match"
+        ):
+            CompleteResult.success_result(
+                issue_number=997,
+                result=RESULT_DONE,
+                pr=1001,
+                outcome_record=mismatched_result,
+            )
+
+        # Mismatched pr rejected
+        mismatched_pr = OutcomeRecord(result=RESULT_DONE, issue=997, pr=1002)
+        with pytest.raises(
+            ValueError, match=r"outcome_record\.pr \(1002\) does not match"
+        ):
+            CompleteResult.success_result(
+                issue_number=997,
+                result=RESULT_DONE,
+                pr=1001,
+                outcome_record=mismatched_pr,
+            )
 
 
 class TestCompleteFailureAndExitCodes:

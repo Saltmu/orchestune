@@ -76,10 +76,10 @@ class CompleteStage(str, Enum):
 - `claim_id: str | None`
 - `owner_kind: OwnerKind | None`
 - `pr: int | None` (None または非ブール正整数)
-- `outcome_record: OutcomeRecord | None`
+- `outcome_record: OutcomeRecord | None` (指定時は `issue`, `result`, `pr` がトップレベル属性と一致することを強制)
 - `failure: CompleteFailure | None`
 - `handed_off_to_gc: bool`
-- **境界不変条件**: `__post_init__` で `success=True` の場合は `stage == HANDED_OFF_TO_GC` かつ `handed_off_to_gc=True` を、`success=False` の場合は `handed_off_to_gc=False` かつ `failure is not None` を強制
+- **境界不変条件**: `__post_init__` で `success=True` の場合は `stage == HANDED_OFF_TO_GC` かつ `handed_off_to_gc=True` かつ `failure is None` を、`success=False` の場合は `stage != HANDED_OFF_TO_GC` かつ `handed_off_to_gc=False` かつ `failure is not None` を強制
 - **重要**: `CompletionReceipt` を絶対に属性や依存関係に含めない
 
 ### 6. `CompleteFailure`
