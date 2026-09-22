@@ -180,6 +180,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "branch_naming",
             "claim",
             "claim.contracts",
+            "complete",
+            "complete.contracts",
             "consistency.contracts",
             "consistency.models",
             "consistency.vocabulary",
