@@ -506,28 +506,48 @@ def test_launch_phase_launching_persisted_before_provider_and_failure_holds_laun
     launch_env,
 ):
     # TDD 5: provider呼出直前にlaunchingが保存され、保存失敗時はproviderが呼ばれない
+    from orchestune.models import PrRecord
+
     forge, config, plan, launch = launch_env
     state = RunState()
 
     original_save = save_run_state
     save_calls = []
+    save_open_prs = []
 
     def mock_save(rs, path, **kwargs):
         active = rs.active_worktrees.get("1")
         if active is not None:
             save_calls.append(active.launch_phase)
+            save_open_prs.append(kwargs.get("open_prs"))
             if active.launch_phase == "launching":
                 raise OSError("disk full during launching save")
         return original_save(rs, path, **kwargs)
 
+    test_pr = PrRecord(
+        number=999,
+        title="Protected",
+        body="",
+        state="OPEN",
+        head_ref="head",
+        base_ref="main",
+        changed_files=(),
+    )
     with patch("orchestune.dispatch.launch.save_run_state", side_effect=mock_save):
         selected = _apply_task_launches(
-            [plan], state, 100.0, config, claim_fn=real_claim_fn(config)
+            [plan],
+            state,
+            100.0,
+            config,
+            claim_fn=real_claim_fn(config),
+            open_prs=[test_pr],
         )
 
     assert selected == []
     assert launch.call_count == 0
     assert "launching" in save_calls
+    # Claude review finding 1: open_prs must be threaded into launching phase save_run_state
+    assert any(prs == [test_pr] for prs in save_open_prs)
 
 
 def test_clear_launch_failure_persists_failed_phase(launch_env):

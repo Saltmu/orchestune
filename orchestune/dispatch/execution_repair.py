@@ -16,6 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 
+from orchestune.claim.contracts import ClaimStage
 from orchestune.consistency.desired import (
     DesiredTaskInput,
     DispatchPolicy,
@@ -379,7 +380,8 @@ def _dispatch_prelaunch_orphan(
         and active.owner_kind == "dispatch"
         and bool(active.claim_id and active.claim_id.strip())
         and isinstance(active.claim_stage, str)
-        and active.claim_stage.lower() in {"active_saved", "completed"}
+        and active.claim_stage.lower()
+        in {ClaimStage.ACTIVE_SAVED.value, ClaimStage.COMPLETED.value}
         and active.launch_phase in {None, "failed"}
     )
 

@@ -552,6 +552,7 @@ def _persist_launching_phase(
     outcome: ClaimOutcome,
     run_state: RunState,
     config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None = None,
 ) -> LaunchResult | None:
     """#964: provider呼出直前にlaunch_phase="launching"を永続化する。
 
@@ -567,6 +568,7 @@ def _persist_launching_phase(
             run_state,
             config.run_state_path,
             launch_window_seconds=config.window_seconds,
+            open_prs=open_prs,
         )
         return None
     except Exception as exc:
@@ -592,6 +594,7 @@ def _try_planned_launch(
     config: DispatcherConfig,
     run_state: RunState,
     claim_fn: ClaimFn,
+    open_prs: Sequence[PrRecord] | None = None,
 ) -> LaunchResult | None:
     """#943: worktree/所有権の取得をclaim_task（owner_kind=dispatch）経由に一本化する。"""
     task = plan.task
@@ -611,7 +614,9 @@ def _try_planned_launch(
     assert outcome.worktree_path is not None
     assert outcome.branch is not None
 
-    hold = _persist_launching_phase(task.issue_number, outcome, run_state, config)
+    hold = _persist_launching_phase(
+        task.issue_number, outcome, run_state, config, open_prs=open_prs
+    )
     if hold is not None:
         return hold
 
@@ -639,6 +644,31 @@ def _try_planned_launch(
     return launch
 
 
+def _record_failed_launch_phase(
+    issue_number: int,
+    run_state: RunState,
+    config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None,
+) -> None:
+    """#964: 明確な起動失敗時にlaunch_phase="failed"を永続化する。"""
+    active_entry = run_state.active_worktrees.get(str(issue_number))
+    if active_entry is None:
+        return
+    active_entry.launch_phase = "failed"
+    try:
+        save_run_state(
+            run_state,
+            config.run_state_path,
+            launch_window_seconds=config.window_seconds,
+            open_prs=open_prs,
+        )
+    except Exception as exc:
+        print(
+            f"Warning: failed to persist failed launch phase for issue #{issue_number}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def _apply_single_task_launch(
     plan: TaskLaunchPlan[TTask],
     run_state: RunState,
@@ -664,39 +694,18 @@ def _apply_single_task_launch(
         if target is None:
             return None
 
-        launch = _try_planned_launch(plan, target, config, run_state, claim_fn)
+        launch = _try_planned_launch(
+            plan, target, config, run_state, claim_fn, open_prs=open_prs
+        )
         if launch is None:
             # LaunchOutcomeUnknown: providerを実際に呼んだかどうか不明なため、
             # 安全側に倒してquotaを消費したものとして扱う（既存挙動）。
             run_state.launch_history.append(now)
             return None
         if launch.held is True:
-            # `is True`（真偽値としての緩い評価ではなく）で比較する: 既存の
-            # 多くのテストが`_launch_on_prepared_worktree`を素の`MagicMock`
-            # （`held`属性を明示しない）で置き換えており、緩い真偽評価だと
-            # 未設定属性への自動生成MagicMock（常にtruthy）を誤ってheld扱い
-            # してしまう。
-            # #943レビュー対応(Codex P1): claim_task自体がhold（provider未呼出）
-            # されたケース。quotaは消費しておらず、`_handle_launch_failure`の
-            # 独自ラベル遷移も適用しない（claim側の状態をそのまま次サイクルの
-            # 整合性回復に委ねる）。
             return None
         if not launch.launched:
-            active_entry = run_state.active_worktrees.get(str(task.issue_number))
-            if active_entry is not None:
-                active_entry.launch_phase = "failed"
-                try:
-                    save_run_state(
-                        run_state,
-                        config.run_state_path,
-                        launch_window_seconds=config.window_seconds,
-                        open_prs=open_prs,
-                    )
-                except Exception as exc:
-                    print(
-                        f"Warning: failed to persist failed launch phase for issue #{task.issue_number}: {exc}",
-                        file=sys.stderr,
-                    )
+            _record_failed_launch_phase(task.issue_number, run_state, config, open_prs)
             _handle_launch_failure(task, launch, config)
             return None
 
