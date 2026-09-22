@@ -578,17 +578,93 @@ class TestCompleteResultAndGCBoundary:
                 outcome_record=mismatched_result,
             )
 
-        # Mismatched pr rejected
-        mismatched_pr = OutcomeRecord(result=RESULT_DONE, issue=997, pr=1002)
+        # Boolean issue rejected in embedded record even if issue_number == 1
+        boolean_issue_rec = OutcomeRecord(result=RESULT_DONE, issue=True, pr=1001)  # type: ignore
         with pytest.raises(
-            ValueError, match=r"outcome_record\.pr \(1002\) does not match"
+            ValueError,
+            match=r"outcome_record\.issue must be a valid positive non-boolean integer",
+        ):
+            CompleteResult.success_result(
+                issue_number=1,
+                result=RESULT_DONE,
+                pr=1001,
+                outcome_record=boolean_issue_rec,
+            )
+
+        # Boolean PR rejected in embedded record
+        boolean_pr_rec = OutcomeRecord(result=RESULT_DONE, issue=997, pr=True)  # type: ignore
+        with pytest.raises(
+            ValueError,
+            match=r"outcome_record\.pr must be None or a valid positive non-boolean integer",
         ):
             CompleteResult.success_result(
                 issue_number=997,
                 result=RESULT_DONE,
-                pr=1001,
-                outcome_record=mismatched_pr,
+                pr=1,
+                outcome_record=boolean_pr_rec,
             )
+
+    def test_failure_result_aligns_issue_number(self):
+        """Codex finding: Keep failure diagnostics aligned with the result issue."""
+        failure_issue_2 = CompleteFailure(
+            reason=CompleteFailureReason.INVALID_REQUEST,
+            message="bad request",
+            issue_number=2,
+        )
+
+        # Mismatched issue_number rejected in failure_result
+        with pytest.raises(
+            ValueError,
+            match=r"failure\.issue_number \(2\) does not match CompleteResult\.issue_number \(1\)",
+        ):
+            CompleteResult.failure_result(
+                issue_number=1,
+                result=RESULT_DONE,
+                stage=CompleteStage.PREFLIGHT_VALIDATING,
+                failure=failure_issue_2,
+            )
+
+        # Mismatched issue_number rejected in constructor
+        with pytest.raises(
+            ValueError,
+            match=r"failure\.issue_number \(2\) does not match CompleteResult\.issue_number \(1\)",
+        ):
+            CompleteResult(
+                success=False,
+                issue_number=1,
+                result=RESULT_DONE,
+                stage=CompleteStage.PREFLIGHT_VALIDATING,
+                failure=failure_issue_2,
+                handed_off_to_gc=False,
+            )
+
+        # Matching issue_number accepted
+        failure_issue_1 = CompleteFailure(
+            reason=CompleteFailureReason.INVALID_REQUEST,
+            message="bad request",
+            issue_number=1,
+        )
+        res_matched = CompleteResult.failure_result(
+            issue_number=1,
+            result=RESULT_DONE,
+            stage=CompleteStage.PREFLIGHT_VALIDATING,
+            failure=failure_issue_1,
+        )
+        assert res_matched.failure.issue_number == 1
+
+        # None issue_number accepted
+        failure_issue_none = CompleteFailure(
+            reason=CompleteFailureReason.INVALID_REQUEST,
+            message="bad request",
+            issue_number=None,
+        )
+        res_none = CompleteResult.failure_result(
+            issue_number=1,
+            result=RESULT_DONE,
+            stage=CompleteStage.PREFLIGHT_VALIDATING,
+            failure=failure_issue_none,
+        )
+        assert res_none.failure.issue_number is None
 
 
 class TestCompleteFailureAndExitCodes:

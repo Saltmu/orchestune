@@ -485,6 +485,10 @@ class CompleteResult:
             raise ValueError(
                 f"outcome_record must be an OutcomeRecord or None, got: {self.outcome_record!r}"
             )
+        if not is_valid_issue_number(self.outcome_record.issue):
+            raise ValueError(
+                f"outcome_record.issue must be a valid positive non-boolean integer, got: {self.outcome_record.issue!r}"
+            )
         if self.outcome_record.issue != self.issue_number:
             raise ValueError(
                 f"outcome_record.issue ({self.outcome_record.issue}) does not match "
@@ -494,6 +498,12 @@ class CompleteResult:
             raise ValueError(
                 f"outcome_record.result ({self.outcome_record.result!r}) does not match "
                 f"CompleteResult.result ({self.result!r})"
+            )
+        if self.outcome_record.pr is not None and not is_valid_pr_number(
+            self.outcome_record.pr
+        ):
+            raise ValueError(
+                f"outcome_record.pr must be None or a valid positive non-boolean integer, got: {self.outcome_record.pr!r}"
             )
         if (
             self.pr is not None
@@ -532,6 +542,14 @@ class CompleteResult:
             if self.failure is None:
                 raise ValueError(
                     "Failed CompleteResult requires a CompleteFailure object"
+                )
+            if (
+                self.failure.issue_number is not None
+                and self.failure.issue_number != self.issue_number
+            ):
+                raise ValueError(
+                    f"failure.issue_number ({self.failure.issue_number}) does not match "
+                    f"CompleteResult.issue_number ({self.issue_number})"
                 )
 
     @classmethod
@@ -584,6 +602,11 @@ class CompleteResult:
         if stage == CompleteStage.HANDED_OFF_TO_GC:
             raise ValueError(
                 "Failed CompleteResult cannot be at CompleteStage.HANDED_OFF_TO_GC"
+            )
+        if failure.issue_number is not None and failure.issue_number != issue_number:
+            raise ValueError(
+                f"failure.issue_number ({failure.issue_number}) does not match "
+                f"CompleteResult.issue_number ({issue_number})"
             )
         return cls(
             success=False,
