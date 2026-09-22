@@ -147,6 +147,32 @@ def test_uncertain_create_with_delayed_search_never_reposts() -> None:
     assert forge.writes == 1
 
 
+def test_probe_rate_limit_does_not_make_uncertain_create_replayable() -> None:
+    class DelayedSearchForge(FakeForge):
+        writes = 0
+        probes = 0
+
+        def create_issue(self, title, body, labels=()):
+            self.writes += 1
+            super().create_issue(title, body, labels)
+            raise _api_error("HTTP 502")
+
+        def find_open_issues_by_exact_title(self, title):
+            self.probes += 1
+            if self.probes == 1:
+                raise _api_error("HTTP 429\nRetry-After: 1")
+            return []
+
+    clock = Clock()
+    forge = DelayedSearchForge()
+    wrapped = ProvisionRetryForge(
+        forge, sleep=clock.sleep, clock=clock.time, min_interval=0
+    )
+    with pytest.raises(RuntimeError, match="outcome is uncertain"):
+        wrapped.create_issue("[EPIC] delayed", PARENT_MARKER)
+    assert forge.writes == 1
+
+
 def test_rejected_429_create_retries() -> None:
     class RateLimitedForge(FakeForge):
         calls = 0

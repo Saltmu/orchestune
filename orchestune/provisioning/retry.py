@@ -120,6 +120,19 @@ class ProvisionRetryForge:
         self._last_call = self._clock()
         return action()
 
+    def _wait_after_failure(
+        self, error: Exception, attempt: int, waited: float
+    ) -> float:
+        delay = _retry_after(error, self._clock())
+        delay = min(2.0**attempt, 8.0) if delay is None else delay
+        if attempt + 1 >= self._max_attempts or waited + delay > self._max_wait:
+            raise RuntimeError(
+                f"Provision retry limit reached after {attempt + 1} attempts "
+                f"and {waited:g}s waiting: {_detail(error)}"
+            ) from error
+        self._sleep(delay)
+        return waited + delay
+
     def _call(
         self,
         action: Callable[[], Any],
@@ -131,9 +144,12 @@ class ProvisionRetryForge:
         uncertain = False
         uncertain_error: Exception | None = None
         for attempt in range(self._max_attempts):
+            probing = False
             try:
                 if uncertain and probe is not None:
+                    probing = True
                     found, value = self._paced(probe)
+                    probing = False
                     if found:
                         return value
                     if (
@@ -159,16 +175,9 @@ class ProvisionRetryForge:
                 if not _is_transient(error):
                     raise
                 uncertain = True
-                uncertain_error = error
-                delay = _retry_after(error, self._clock())
-                delay = min(2.0**attempt, 8.0) if delay is None else delay
-                if attempt + 1 >= self._max_attempts or waited + delay > self._max_wait:
-                    raise RuntimeError(
-                        f"Provision retry limit reached after {attempt + 1} attempts "
-                        f"and {waited:g}s waiting: {_detail(error)}"
-                    ) from error
-                self._sleep(delay)
-                waited += delay
+                if not probing:
+                    uncertain_error = error
+                waited = self._wait_after_failure(error, attempt, waited)
         raise AssertionError("unreachable")
 
     def _find_created(self, title: str, body: str) -> tuple[bool, int | None]:
