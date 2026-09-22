@@ -106,3 +106,16 @@
 - Actual use: Enumerate `ExecutionRecord`, `HANDLELESS_EXECUTION_ORPHAN`, `revalidate_reclaim_preconditions`, `launch_phase` references; supplemented by `git grep`.
 - Tokens: unavailable (no counter exposed).
 - Scope snapshot permalink: https://github.com/Saltmu/orchestune/issues/964#issuecomment-5769389411
+
+## Review round 1 reconciliation
+
+Claude reported one verified finding (medium severity) and two style/design notes:
+1. **`open_prs` threading to `_persist_launching_phase` (Adopted & Fixed in `7fa8a30`)**:
+   `save_run_state` call in `_persist_launching_phase` now takes `open_prs=open_prs`, threaded from `_apply_single_task_launch` through `_try_planned_launch`. This preserves pruning protection for completed worktrees with open PRs. Added assertion to `test_launch_phase_launching_persisted_before_provider_and_failure_holds_launch`.
+2. **`ClaimStage` enum reference (Adopted in `7fa8a30`)**:
+   `_dispatch_prelaunch_orphan` in `execution_repair.py` now references `ClaimStage.ACTIVE_SAVED.value` and `ClaimStage.COMPLETED.value`.
+3. **`launch_phase="launching"` stuck design note (Acknowledged as-designed)**:
+   Retaining worktree/active entry when launch outcome is ambiguous matches PR acceptance criteria and YAGNI scope guard (prioritizing safety against double execution).
+4. **Style refactoring (Adopted in `7fa8a30`)**:
+   Extracted `_record_failed_launch_phase` from `_apply_single_task_launch`, eliminating bloat warning and harmonizing error handling shape.
+Local CI passed with 4,101 tests passed, 95.20% coverage, and no bloat/leaks.
