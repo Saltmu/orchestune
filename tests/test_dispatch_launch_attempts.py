@@ -514,12 +514,14 @@ def test_launch_phase_launching_persisted_before_provider_and_failure_holds_laun
     original_save = save_run_state
     save_calls = []
     save_open_prs = []
+    save_nows = []
 
     def mock_save(rs, path, **kwargs):
         active = rs.active_worktrees.get("1")
         if active is not None:
             save_calls.append(active.launch_phase)
             save_open_prs.append(kwargs.get("open_prs"))
+            save_nows.append(kwargs.get("now"))
             if active.launch_phase == "launching":
                 raise OSError("disk full during launching save")
         return original_save(rs, path, **kwargs)
@@ -546,8 +548,9 @@ def test_launch_phase_launching_persisted_before_provider_and_failure_holds_laun
     assert selected == []
     assert launch.call_count == 0
     assert "launching" in save_calls
-    # Claude review finding 1: open_prs must be threaded into launching phase save_run_state
+    # Claude review findings: open_prs and now must be threaded into launching phase save_run_state
     assert any(prs == [test_pr] for prs in save_open_prs)
+    assert any(n == 100.0 for n in save_nows)
 
 
 def test_clear_launch_failure_persists_failed_phase(launch_env):

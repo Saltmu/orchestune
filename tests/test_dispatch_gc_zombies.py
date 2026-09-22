@@ -95,6 +95,7 @@ class TestCollectZombiesAndTimeouts:
             )
 
         assert len(events) == 1
+        assert events[0]["reason"] == "claimed but never launched"
         assert run_state.active_worktrees == {}
         assert mock_remove.called
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")

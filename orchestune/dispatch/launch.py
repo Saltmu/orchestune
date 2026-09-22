@@ -552,6 +552,7 @@ def _persist_launching_phase(
     outcome: ClaimOutcome,
     run_state: RunState,
     config: DispatcherConfig,
+    now: float | None = None,
     open_prs: Sequence[PrRecord] | None = None,
 ) -> LaunchResult | None:
     """#964: provider呼出直前にlaunch_phase="launching"を永続化する。
@@ -567,6 +568,7 @@ def _persist_launching_phase(
         save_run_state(
             run_state,
             config.run_state_path,
+            now=now,
             launch_window_seconds=config.window_seconds,
             open_prs=open_prs,
         )
@@ -594,6 +596,7 @@ def _try_planned_launch(
     config: DispatcherConfig,
     run_state: RunState,
     claim_fn: ClaimFn,
+    now: float | None = None,
     open_prs: Sequence[PrRecord] | None = None,
 ) -> LaunchResult | None:
     """#943: worktree/所有権の取得をclaim_task（owner_kind=dispatch）経由に一本化する。"""
@@ -615,7 +618,7 @@ def _try_planned_launch(
     assert outcome.branch is not None
 
     hold = _persist_launching_phase(
-        task.issue_number, outcome, run_state, config, open_prs=open_prs
+        task.issue_number, outcome, run_state, config, now=now, open_prs=open_prs
     )
     if hold is not None:
         return hold
@@ -648,7 +651,8 @@ def _record_failed_launch_phase(
     issue_number: int,
     run_state: RunState,
     config: DispatcherConfig,
-    open_prs: Sequence[PrRecord] | None,
+    now: float | None = None,
+    open_prs: Sequence[PrRecord] | None = None,
 ) -> None:
     """#964: 明確な起動失敗時にlaunch_phase="failed"を永続化する。"""
     active_entry = run_state.active_worktrees.get(str(issue_number))
@@ -659,6 +663,7 @@ def _record_failed_launch_phase(
         save_run_state(
             run_state,
             config.run_state_path,
+            now=now,
             launch_window_seconds=config.window_seconds,
             open_prs=open_prs,
         )
@@ -695,7 +700,7 @@ def _apply_single_task_launch(
             return None
 
         launch = _try_planned_launch(
-            plan, target, config, run_state, claim_fn, open_prs=open_prs
+            plan, target, config, run_state, claim_fn, now=now, open_prs=open_prs
         )
         if launch is None:
             # LaunchOutcomeUnknown: providerを実際に呼んだかどうか不明なため、
@@ -705,7 +710,9 @@ def _apply_single_task_launch(
         if launch.held is True:
             return None
         if not launch.launched:
-            _record_failed_launch_phase(task.issue_number, run_state, config, open_prs)
+            _record_failed_launch_phase(
+                task.issue_number, run_state, config, now=now, open_prs=open_prs
+            )
             _handle_launch_failure(task, launch, config)
             return None
 
