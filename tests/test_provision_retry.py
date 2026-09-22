@@ -85,6 +85,27 @@ def test_retry_limit_reports_failure() -> None:
     assert clock.sleeps == [1.0, 2.0]
 
 
+def test_http_500_retries() -> None:
+    class FlakyForge(FakeForge):
+        calls = 0
+
+        def get_issue(self, issue_number):
+            self.calls += 1
+            if self.calls == 1:
+                raise _api_error("HTTP 500")
+            return super().get_issue(issue_number)
+
+    clock = Clock()
+    forge = FlakyForge()
+    number = forge.create_issue("a", "b")
+    wrapped = ProvisionRetryForge(
+        forge, sleep=clock.sleep, clock=clock.time, min_interval=0
+    )
+    assert wrapped.get_issue(number) is not None
+    assert forge.calls == 2
+    assert clock.sleeps == [1.0]
+
+
 def test_lost_relationship_response_does_not_repeat_write() -> None:
     class LostResponseForge(FakeForge):
         writes = 0

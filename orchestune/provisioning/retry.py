@@ -19,7 +19,7 @@ from orchestune.issue_parsing import (
 from orchestune.provisioning.rendering import _subtask_id_from_body
 
 _TRANSIENT_STATUS = re.compile(
-    r"(?:HTTP[/ ]|status(?: code)?[=: ]+)(429|502|503|504)\b", re.I
+    r"(?:HTTP[/ ]|status(?: code)?[=: ]+)(429|500|502|503|504)\b", re.I
 )
 _RETRY_AFTER = re.compile(r"(?im)^retry-after:\s*(.+?)\s*$")
 _RATE_RESET = re.compile(r"(?im)^x-ratelimit-reset:\s*(\d+)\s*$")
