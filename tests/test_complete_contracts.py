@@ -99,7 +99,8 @@ class TestCompletePayloadsAndRequests:
             payload=None,
         )
         with pytest.raises(
-            ValueError, match="Done request requires a DonePayload with pr"
+            ValueError,
+            match="Done request requires a DonePayload with a valid positive integer pr",
         ):
             invalid_done.validate()
 
@@ -126,17 +127,21 @@ class TestCompletePayloadsAndRequests:
         ):
             invalid_not_needed_blocked.validate()
 
-        # blocked without reason
-        invalid_blocked = CompleteRequest(
-            issue_number=997,
-            result=RESULT_BLOCKED,
-            payload=BlockedPayload(reason=""),
-        )
-        with pytest.raises(
-            ValueError,
-            match="Blocked request requires a BlockedPayload with non-empty reason",
-        ):
-            invalid_blocked.validate()
+        # boolean or non-positive PR number rejected
+        for bad_pr in (True, False, 0, -1):
+            with pytest.raises(
+                ValueError,
+                match="pr must be a valid positive non-boolean integer",
+            ):
+                DonePayload(pr=bad_pr)  # type: ignore
+
+        # blocked with empty or whitespace-only reason rejected
+        for bad_reason in ("", "   ", "\t\n\r"):
+            with pytest.raises(
+                ValueError,
+                match="reason must be a non-empty string containing non-whitespace characters",
+            ):
+                BlockedPayload(reason=bad_reason)
 
         # invalid result kind
         invalid_result = CompleteRequest(
@@ -171,7 +176,7 @@ class TestCompletePayloadsAndRequests:
 
         req_blocked = CompleteRequest.blocked(
             issue_number=997,
-            reason=REASON_BASE_BRANCH_RED,
+            reason=f"  \t {REASON_BASE_BRANCH_RED} \n ",
             base_sha="def5678",
             attempt=2,
         )

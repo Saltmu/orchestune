@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, IntEnum
 from pathlib import Path
+from typing import Any
 
 from orchestune.claim.contracts import OwnerKind
 from orchestune.outcome_record import (
@@ -123,6 +124,19 @@ def failure_reason_to_exit_code(reason: CompleteFailureReason) -> CompleteExitCo
     return _FAILURE_REASON_TO_EXIT_CODE[reason]
 
 
+def is_valid_pr_number(pr: Any) -> bool:
+    """Return whether pr is a valid non-boolean positive integer."""
+    return isinstance(pr, int) and not isinstance(pr, bool) and pr > 0
+
+
+def sanitize_blocked_reason(reason: Any) -> str:
+    """Sanitize and return reason string, stripping whitespace and control characters."""
+    if not isinstance(reason, str):
+        return ""
+    cleaned = "".join(" " if ord(c) < 32 or ord(c) == 127 else c for c in reason)
+    return " ".join(cleaned.split())
+
+
 @dataclass(frozen=True)
 class DonePayload:
     """Input payload specific to successful done outcomes."""
@@ -131,6 +145,12 @@ class DonePayload:
     review: ReviewSummary = field(default_factory=ReviewSummary)
     ci: str | None = None
     baseline_regressions: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not is_valid_pr_number(self.pr):
+            raise ValueError(
+                f"pr must be a valid positive non-boolean integer, got: {self.pr!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -151,6 +171,13 @@ class BlockedPayload:
     attempt: int | None = None
     review: ReviewSummary = field(default_factory=ReviewSummary)
     ci: str | None = None
+
+    def __post_init__(self) -> None:
+        if not sanitize_blocked_reason(self.reason):
+            raise ValueError(
+                "reason must be a non-empty string containing non-whitespace characters, "
+                f"got: {self.reason!r}"
+            )
 
 
 CompletePayload = DonePayload | NotNeededPayload | BlockedPayload
@@ -289,8 +316,12 @@ class CompleteRequest:
             raise ValueError(f"Invalid complete result: {self.result!r}")
 
         if self.result == RESULT_DONE:
-            if not isinstance(self.payload, DonePayload) or not self.payload.pr:
-                raise ValueError("Done request requires a DonePayload with pr")
+            if not isinstance(self.payload, DonePayload) or not is_valid_pr_number(
+                self.payload.pr
+            ):
+                raise ValueError(
+                    "Done request requires a DonePayload with a valid positive integer pr"
+                )
         elif self.result == RESULT_NOT_NEEDED:
             if self.payload is not None and not isinstance(
                 self.payload, NotNeededPayload
@@ -299,9 +330,11 @@ class CompleteRequest:
                     "Not-needed request must only have NotNeededPayload or None"
                 )
         elif self.result == RESULT_BLOCKED:
-            if not isinstance(self.payload, BlockedPayload) or not self.payload.reason:
+            if not isinstance(
+                self.payload, BlockedPayload
+            ) or not sanitize_blocked_reason(self.payload.reason):
                 raise ValueError(
-                    "Blocked request requires a BlockedPayload with non-empty reason"
+                    "Blocked request requires a BlockedPayload with a non-empty, non-whitespace reason"
                 )
 
     def to_outcome_record(self) -> OutcomeRecord:
@@ -327,7 +360,7 @@ class CompleteRequest:
             return OutcomeRecord(
                 result=RESULT_BLOCKED,
                 issue=self.issue_number,
-                reason=self.payload.reason,
+                reason=sanitize_blocked_reason(self.payload.reason),
                 base_sha=self.payload.base_sha,
                 attempt=self.payload.attempt,
                 review=self.payload.review,
