@@ -728,3 +728,62 @@ class TestEvaluateCompletePreflight:
         result = evaluate_complete_preflight(request)
         assert result.accepted is False
         assert result.failure_reason == CompleteFailureReason.INVALID_REQUEST
+
+    @pytest.mark.parametrize("empty_token", ["", "   ", "\t\n"])
+    def test_done_rejects_empty_or_whitespace_owner_token_without_raising(
+        self, temp_git_repo: Path, empty_token: str
+    ) -> None:
+        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=empty_token)
+        run_state = FakeRunState(
+            {
+                "999": FakeActiveWorktree(
+                    owner_token_digest="some_digest",
+                    worktree_path=str(temp_git_repo),
+                )
+            }
+        )
+
+        result = evaluate_complete_preflight(
+            request, worktree_path=temp_git_repo, run_state=run_state
+        )
+        assert result.accepted is False
+        assert result.failure_reason == CompleteFailureReason.OWNER_TOKEN_MISMATCH
+        assert "owner token is required" in (result.reason or "").lower()
+
+    def test_pr_closed_and_merged_distinct_messages(self, temp_git_repo: Path) -> None:
+        from orchestune.claim.ownership import owner_token_digest
+
+        token = "token"
+        digest = owner_token_digest(token)
+        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        run_state = FakeRunState(
+            {
+                "999": FakeActiveWorktree(
+                    owner_token_digest=digest,
+                    worktree_path=str(temp_git_repo),
+                    base_ref="parent/issue-894",
+                )
+            }
+        )
+
+        # 1. Closed without being merged
+        forge_closed = FakeForge({10: FakePr(number=10, state="CLOSED")})
+        res_closed = evaluate_complete_preflight(
+            request,
+            worktree_path=temp_git_repo,
+            forge=forge_closed,
+            run_state=run_state,
+        )
+        assert res_closed.accepted is False
+        assert "closed without being merged" in (res_closed.reason or "")
+
+        # 2. Already merged
+        forge_merged = FakeForge({10: FakePr(number=10, state="MERGED")})
+        res_merged = evaluate_complete_preflight(
+            request,
+            worktree_path=temp_git_repo,
+            forge=forge_merged,
+            run_state=run_state,
+        )
+        assert res_merged.accepted is False
+        assert "already merged" in (res_merged.reason or "")

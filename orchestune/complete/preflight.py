@@ -48,15 +48,17 @@ def _validate_ownership(
 ) -> tuple[bool, str | None, CompleteFailureReason | None, Any | None]:
     active_worktrees = getattr(run_state, "active_worktrees", {}) if run_state else {}
     active = active_worktrees.get(str(request.issue_number))
+    token = (
+        request.owner_token.strip()
+        if isinstance(request.owner_token, str) and request.owner_token.strip()
+        else None
+    )
 
     if request.result == RESULT_NOT_NEEDED:
-        if active is None and request.owner_token is None:
+        if active is None and token is None:
             return True, None, None, None
         if active is not None:
-            if (
-                request.owner_token is None
-                or active.owner_token_digest != owner_token_digest(request.owner_token)
-            ):
+            if token is None or active.owner_token_digest != owner_token_digest(token):
                 return (
                     False,
                     "Owner token mismatch",
@@ -74,7 +76,7 @@ def _validate_ownership(
             None,
         )
 
-    if request.owner_token is None:
+    if token is None:
         return (
             False,
             "Owner token is required",
@@ -82,7 +84,7 @@ def _validate_ownership(
             None,
         )
 
-    if active.owner_token_digest != owner_token_digest(request.owner_token):
+    if active.owner_token_digest != owner_token_digest(token):
         return (
             False,
             "Owner token mismatch",
@@ -119,10 +121,17 @@ def _check_pr_identity_and_branches(
     active: Any | None,
     expected_base_ref: str | None,
 ) -> tuple[bool, str | None, CompleteFailureReason | None]:
-    if getattr(pr, "state", "").upper() != "OPEN":
+    pr_state = getattr(pr, "state", "").upper()
+    if pr_state == "MERGED":
         return (
             False,
-            f"Pull request #{payload_pr} is not open (state: {getattr(pr, 'state', '')})",
+            f"Pull request #{payload_pr} is already merged",
+            CompleteFailureReason.INVALID_REQUEST,
+        )
+    if pr_state != "OPEN":
+        return (
+            False,
+            f"Pull request #{payload_pr} is closed without being merged",
             CompleteFailureReason.INVALID_REQUEST,
         )
 
