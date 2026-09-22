@@ -178,6 +178,42 @@ def test_main_cli_arguments_parsing():
             )
 
 
+def test_main_cli_arguments_parsing_with_jev_threshold():
+    from scripts.wait_for_review import main
+
+    with patch(
+        "sys.argv",
+        [
+            "wait_for_review.py",
+            "--pr",
+            "540",
+            "--jev-threshold",
+            "0.85",
+        ],
+    ):
+        with patch(
+            "scripts.wait_for_review.wait_for_review", autospec=True
+        ) as mock_wait:
+            mock_wait.return_value = {"review_body": "LGTM", "inline_comments": []}
+            with pytest.raises(SystemExit) as exc:
+                main()
+            assert exc.value.code == 0
+            mock_wait.assert_called_once_with(
+                540,
+                timeout=1800,
+                interval=5,
+                bot_name="claude",
+                post_trigger=True,
+                body=None,
+                body_file=None,
+                max_rounds=5,
+                max_retries=1,
+                round_num=None,
+                stall_grace_seconds=600,
+                jev_threshold=0.85,
+            )
+
+
 def test_review_round_marker():
     assert _review_round_marker(1) == "<!-- orchestune:review-round 1 -->"
     assert _review_round_marker(5) == "<!-- orchestune:review-round 5 -->"

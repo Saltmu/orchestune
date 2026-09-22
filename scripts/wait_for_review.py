@@ -16,6 +16,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
+from scripts.jev_filter import filter_review_findings
 from scripts.review_verdict import (
     EXIT_FINDINGS_PRESENT as EXIT_FINDINGS_PRESENT,
 )
@@ -325,6 +326,7 @@ def _extract_review_result(
     exclude_ids: set[int | str] | None = None,
     latest_item: dict[str, Any] | None = None,
     latest_trigger_time: str = "",
+    jev_threshold: float | None = None,
 ) -> dict[str, Any] | None:
     # Scope inline comments to the current round, same as the summary/tracker
     # gating above: `pulls/{pr}/comments` returns every inline comment ever
@@ -348,6 +350,16 @@ def _extract_review_result(
         latest_item=latest_item,
     )
     if result is not None:
+        initial_inlines = result.get("inline_comments", [])
+        if initial_inlines:
+            filtered_inlines = filter_review_findings(
+                initial_inlines,
+                bot_name=bot_name,
+                threshold=jev_threshold,
+            )
+            result["inline_comments"] = filtered_inlines
+            if not filtered_inlines:
+                result["all_findings_filtered"] = True
         _print_review_result(result, bot_name)
     return result
 
@@ -437,6 +449,7 @@ def _check_immediate_review_result(
     bot_name: str,
     latest_trigger_time: str,
     current_round: int,
+    jev_threshold: float | None = None,
 ) -> dict[str, Any] | None:
     latest_bot_activity = _latest_bot_activity_item(initial_data, bot_name)
     latest_bot_item = _latest_bot_summary_item(initial_data, bot_name)
@@ -454,13 +467,17 @@ def _check_immediate_review_result(
             bot_name,
             latest_item=latest_bot_item,
             latest_trigger_time=latest_trigger_time,
+            jev_threshold=jev_threshold,
         )
         if result is not None:
-            result["verdict"] = evaluate_review_verdict(
-                result.get("review_body", ""),
-                result.get("inline_comments", []),
-                bot_name=bot_name,
-            )
+            if result.get("all_findings_filtered"):
+                result["verdict"] = EXIT_NO_FINDINGS
+            else:
+                result["verdict"] = evaluate_review_verdict(
+                    result.get("review_body", ""),
+                    result.get("inline_comments", []),
+                    bot_name=bot_name,
+                )
             result["round"] = current_round
             return result
     return None
@@ -542,6 +559,7 @@ def wait_for_review(
     max_retries: int = 1,
     round_num: int | None = None,
     stall_grace_seconds: int = DEFAULT_STALL_GRACE_SECONDS,
+    jev_threshold: float | None = None,
 ) -> dict[str, Any]:
     with ThreadPoolExecutor(max_workers=3) as executor:
         initial_data = _get_initial_pr_data(
@@ -580,7 +598,11 @@ def wait_for_review(
                 initial_data, bot_name
             )
             immediate = _check_immediate_review_result(
-                initial_data, bot_name, latest_trigger_time, current_round
+                initial_data,
+                bot_name,
+                latest_trigger_time,
+                current_round,
+                jev_threshold=jev_threshold,
             )
             if immediate is not None:
                 return immediate
@@ -649,13 +671,17 @@ def wait_for_review(
                                 exclude_ids=excluded_ids,
                                 latest_item=latest_bot_item,
                                 latest_trigger_time=latest_trigger_time,
+                                jev_threshold=jev_threshold,
                             )
                             if result is not None:
-                                result["verdict"] = evaluate_review_verdict(
-                                    result.get("review_body", ""),
-                                    result.get("inline_comments", []),
-                                    bot_name=bot_name,
-                                )
+                                if result.get("all_findings_filtered"):
+                                    result["verdict"] = EXIT_NO_FINDINGS
+                                else:
+                                    result["verdict"] = evaluate_review_verdict(
+                                        result.get("review_body", ""),
+                                        result.get("inline_comments", []),
+                                        bot_name=bot_name,
+                                    )
                                 result["round"] = current_round
                                 return result
                         else:
@@ -765,36 +791,67 @@ def main() -> None:
         default=None,
         help="Explicit review round number (default: auto-detected from PR comments)",
     )
+    parser.add_argument(
+        "--jev-threshold",
+        type=float,
+        default=None,
+        help="Validity threshold for Jev finding filter (default: 0.7 or JEV_THRESHOLD env)",
+    )
 
     args = parser.parse_args()
     try:
         if args.review_state_file:
             with open(args.review_state_file, encoding="utf-8") as state_file:
                 result = evaluate_review_state(json.load(state_file), args.bot_name)
+            initial_inlines = result.get("inline_comments", [])
+            if initial_inlines:
+                filtered_inlines = filter_review_findings(
+                    initial_inlines,
+                    bot_name=args.bot_name,
+                    threshold=args.jev_threshold,
+                )
+                result["inline_comments"] = filtered_inlines
+                if not filtered_inlines:
+                    result["all_findings_filtered"] = True
+                    result["verdict"] = EXIT_NO_FINDINGS
+                else:
+                    result["verdict"] = evaluate_review_verdict(
+                        result.get("review_body", ""),
+                        result.get("inline_comments", []),
+                        bot_name=args.bot_name,
+                    )
             _print_review_result(result, args.bot_name)
             sys.exit(result["verdict"])
         if args.pr is None:
             parser.error("--pr is required unless --review-state-file is used")
+        wait_kwargs: dict[str, Any] = {
+            "timeout": args.timeout,
+            "interval": args.interval,
+            "bot_name": args.bot_name,
+            "post_trigger": not args.no_post,
+            "body": args.body,
+            "body_file": args.body_file,
+            "max_rounds": args.max_rounds,
+            "max_retries": args.max_retries,
+            "round_num": args.round,
+            "stall_grace_seconds": args.stall_grace,
+        }
+        if args.jev_threshold is not None:
+            wait_kwargs["jev_threshold"] = args.jev_threshold
         result = wait_for_review(
             args.pr,
-            timeout=args.timeout,
-            interval=args.interval,
-            bot_name=args.bot_name,
-            post_trigger=not args.no_post,
-            body=args.body,
-            body_file=args.body_file,
-            max_rounds=args.max_rounds,
-            max_retries=args.max_retries,
-            round_num=args.round,
-            stall_grace_seconds=args.stall_grace,
+            **wait_kwargs,
         )
         verdict = result.get("verdict")
         if verdict is None:
-            verdict = evaluate_review_verdict(
-                result.get("review_body", ""),
-                result.get("inline_comments", []),
-                bot_name=args.bot_name,
-            )
+            if result.get("all_findings_filtered"):
+                verdict = EXIT_NO_FINDINGS
+            else:
+                verdict = evaluate_review_verdict(
+                    result.get("review_body", ""),
+                    result.get("inline_comments", []),
+                    bot_name=args.bot_name,
+                )
         sys.exit(verdict)
     except MaxRoundsExceededError as e:
         print(f"Error: {e}", file=sys.stderr)
