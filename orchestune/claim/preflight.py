@@ -32,7 +32,10 @@ from orchestune.dispatch.locks import (
     ExternalLockConflict,
     ExternalLockScanResult,
 )
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
+from orchestune.issue_parsing import (
+    FOOTPRINT_BLOCK_PATTERN,
+    effective_parent_number,
+)
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
 
@@ -221,12 +224,50 @@ def _resolve_reservation_kind(issue: IssueRecord) -> ReservationKind:
     return ReservationKind.REPOSITORY
 
 
+def _check_dependencies_without_view(
+    issue_number: int,
+    label_set: set[str],
+    assessment: DependencyAssessment | None,
+) -> ClaimFailure | None:
+    if StatusLabel.BLOCKED in label_set:
+        return ClaimFailure(
+            reason=ClaimFailureReason.UNRESOLVED_DEPENDENCIES,
+            message=f"Issue #{issue_number} is status:blocked but no resolution view is provided to verify stack eligibility.",
+        )
+
+    if assessment is not None and has_pending_dependencies(assessment):
+        unresolved = [
+            d.issue_number
+            for d in assessment.resolved
+            if d.state is not DependencyState.COMPLETED
+        ]
+        return ClaimFailure(
+            reason=ClaimFailureReason.UNRESOLVED_DEPENDENCIES,
+            message=f"Issue #{issue_number} has pending dependencies.",
+            conflicting_issue_number=unresolved[0] if unresolved else None,
+        )
+    return None
+
+
+def _resolve_base_without_view(
+    default_base: str,
+    parent_issue_number: int | None,
+) -> str:
+    if default_base != "origin/main":
+        return default_base
+    if parent_issue_number is not None:
+        return f"parent/issue-{parent_issue_number}"
+    return default_base
+
+
 def _resolve_dependencies_and_base(
     issue_number: int,
     label_set: set[str],
     assessment: DependencyAssessment | None,
     view: ClaimBaseResolutionView | None,
     default_base: str,
+    *,
+    parent_issue_number: int | None = None,
 ) -> tuple[ClaimFailure | None, str | None, int | None]:
     if view is not None:
         base_decision = resolve_claim_base(
@@ -246,33 +287,12 @@ def _resolve_dependencies_and_base(
             )
         return None, base_decision.base_ref, base_decision.target_issue_number
 
-    if StatusLabel.BLOCKED in label_set:
-        return (
-            ClaimFailure(
-                reason=ClaimFailureReason.UNRESOLVED_DEPENDENCIES,
-                message=f"Issue #{issue_number} is status:blocked but no resolution view is provided to verify stack eligibility.",
-            ),
-            None,
-            None,
-        )
+    failure = _check_dependencies_without_view(issue_number, label_set, assessment)
+    if failure is not None:
+        return failure, None, None
 
-    if assessment is not None and has_pending_dependencies(assessment):
-        unresolved = [
-            d.issue_number
-            for d in assessment.resolved
-            if d.state is not DependencyState.COMPLETED
-        ]
-        return (
-            ClaimFailure(
-                reason=ClaimFailureReason.UNRESOLVED_DEPENDENCIES,
-                message=f"Issue #{issue_number} has pending dependencies.",
-                conflicting_issue_number=unresolved[0] if unresolved else None,
-            ),
-            None,
-            None,
-        )
-
-    return None, None, None
+    base_ref = _resolve_base_without_view(default_base, parent_issue_number)
+    return None, base_ref, None
 
 
 def _validate_issue_and_labels(
@@ -326,9 +346,15 @@ def evaluate_claim_preflight(
 
     reservation_kind = _resolve_reservation_kind(issue)
     subtask_id = resolve_claim_subtask_id(issue)
+    parent_number = effective_parent_number(issue)
 
     dep_failure, base_ref, stack_target = _resolve_dependencies_and_base(
-        issue.number, label_set, assessment, view, default_base
+        issue.number,
+        label_set,
+        assessment,
+        view,
+        default_base,
+        parent_issue_number=parent_number,
     )
     if dep_failure is not None:
         return PreflightDecision(

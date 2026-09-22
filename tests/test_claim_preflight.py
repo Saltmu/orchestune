@@ -453,3 +453,48 @@ class TestEvaluateClaimPreflight:
         assert decision.failure is not None
         assert decision.failure.reason == ClaimFailureReason.UNRESOLVED_DEPENDENCIES
         assert "no resolution view" in decision.failure.message
+
+    def test_footprint_issue_without_view_resolves_parent_base(self) -> None:
+        issue = _make_issue(
+            number=938,
+            body=_footprint_body("claim-preflight-validation"),
+            labels=(StatusLabel.QUEUED,),
+        )
+        decision = evaluate_claim_preflight(issue)
+        assert decision.allowed is True
+        assert decision.failure is None
+        assert decision.base_ref == "parent/issue-893"
+
+    def test_native_sub_issue_without_view_resolves_parent_base(self) -> None:
+        issue = _make_issue(
+            number=938,
+            body="No footprint block",
+            labels=(StatusLabel.QUEUED,),
+            parent={"number": 894},
+        )
+        decision = evaluate_claim_preflight(issue)
+        assert decision.allowed is True
+        assert decision.failure is None
+        assert decision.base_ref == "parent/issue-894"
+
+    def test_plain_issue_without_view_resolves_default_base(self) -> None:
+        issue = _make_issue(
+            number=500,
+            body="Plain issue with no parent",
+            labels=(StatusLabel.QUEUED,),
+        )
+        decision = evaluate_claim_preflight(issue, default_base="origin/main")
+        assert decision.allowed is True
+        assert decision.failure is None
+        assert decision.base_ref == "origin/main"
+
+    def test_issue_with_parent_and_custom_default_base_uses_custom_base(self) -> None:
+        issue = _make_issue(
+            number=938,
+            body=_footprint_body("claim-preflight-validation"),
+            labels=(StatusLabel.QUEUED,),
+        )
+        decision = evaluate_claim_preflight(issue, default_base="custom-base")
+        assert decision.allowed is True
+        assert decision.failure is None
+        assert decision.base_ref == "custom-base"
