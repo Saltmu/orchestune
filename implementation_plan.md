@@ -1,135 +1,97 @@
-# Issue #964 implementation plan
+# 実装計画書: Issue #997 [FEAT] complete-contract-scaffold
 
-## Preflight & Environment
+## 概要 (Overview)
+- **対象Issue**: [#997](https://github.com/Saltmu/orchestune/issues/997) `[FEAT] complete-contract-scaffold: completeパッケージの共有入力・結果・エラー契約を定義する`
+- **親Issue**: [#894](https://github.com/Saltmu/orchestune/issues/894) `[EPIC] feat(cli): タスク完了・Outcome宣言を一元管理する complete コマンドの導入`
+- **ベースブランチ**: `parent/issue-822`（ユーザー指定）
+- **作業ブランチ**: `claude/issue-997-complete-contract-scaffold`
+- **GitHub 操作バックエンド**: `gh` CLI
+- **PR レビュアー**: `codex` (Non-Interactive mode)
 
-- Issue: #964, existing issue (non-interactive workflow)
-- Worktree: `/home/micro/orchestune/worktrees/claude-issue-964-task-964`
-- Base: `origin/main` (commit `d860f56`)
-- GitHub backend: `gh` CLI (`gh auth status` verified)
-- Reviewer: Claude (Codex and agy targets -> Claude per `local-ci-developer`)
-- Preflight checks: `uv --version` (0.12.10), `uv lock --check`, `gitleaks version` (8.30.1) verified.
-- Symbol indexing tool: Serena MCP (`find_symbol`, `find_referencing_symbols`, `get_symbols_overview`). Supplementary text searches via `git grep` for dynamic access, string-addressed test doubles, and serialized fields.
+## 目的と受け入れ基準
+1. `done` / `not-needed` / `blocked` の入力型と状態遷移が型安全に表現できること
+2. 成功は GC 引渡し（`HANDED_OFF_TO_GC`）までを意味し、`CompletionReceipt`（`orchestune.dispatch.cycle_records.CompletionReceipt`）を含まないこと（CLIとGCの責任境界の厳格な分離）
+3. `claim` パッケージ（#893）の所有者識別（`owner_token`, `owner_kind`, `claim_id`）と矛盾せず接続できること
+4. `uv run pytest tests/test_complete_contracts.py` を含むローカル CI が通過すること
 
-## Design
+## 影響範囲と仕分け (Impact Scope Reconciliation)
 
-1. **既存 finding の不変**:
-   - `HANDLELESS_EXECUTION_ORPHAN`（worktree 不存在必須）の定義・挙動は維持する。
-   - 新規 finding `DISPATCH_PRELAUNCH_ORPHAN = "execution.dispatch-prelaunch-orphan"` を追加。
-   - `orchestune/consistency/repairs/execution.py` で `COMMAND_RECLAIM` と `COMMAND_REQUEUE` へマッピングし、既存の回収・エスカレーション機構を再利用。
-
-2. **provider 境界での `launch_phase` 永続化**:
-   - claim placeholder を in-memory run_state へ同期後、provider 呼出直前に該当 active entry の `launch_phase="launching"` を保存。保存失敗時は provider を呼ばず起動を保留する。
-   - provider 起動成功時は local/cloud 問わず `launch_phase="launched"` を保存。
-   - 明確な起動失敗時は `launch_phase="failed"` を保存。
-   - `LaunchOutcomeUnknown` や例外時は `launch_phase="launching"` を維持。
-
-3. **consistency 観測の拡張**:
-   - `orchestune/consistency/vocabulary.py` に `FACT_EXECUTION_OWNER_KIND`, `FACT_EXECUTION_CLAIM_ID`, `FACT_EXECUTION_CLAIM_STAGE`, `FACT_EXECUTION_LAUNCH_PHASE` を追加。
-   - `ExecutionRecord` に上記 4 フィールドを追加。
-   - `dispatch/execution_repair.py` および `dispatch/cycle.py` のアダプタで `ActiveWorktree` から写す。consistency kernel が `dispatch.state` を直接 import しないレイヤー境界を維持。
-
-4. **新 finding の判定条件**:
-   - `zombie_gc_enabled is True`
-   - `execution_kind == "unknown"`
-   - `pid is None`, `external_id is None`, `started_at is None`
-   - `worktree_exists is True`
-   - `owner_kind == "dispatch"`
-   - `claim_id` が非空文字列
-   - `claim_stage in {"active_saved", "completed"}`
-   - `launch_phase in {None, "failed"}`
-   - 上記 facts がすべて `_KNOWN` であること。欠落・UNKNOWN・条件不一致時は finding なし。
-   - `owner_kind == "interactive"`、`launch_phase in {"launching", "unknown", "launched"}`、pid/external_id/started_at 存在時は除外。
-
-5. **修復直前の fresh precondition 再検証**:
-   - `revalidate_reclaim_preconditions` に `_dispatch_prelaunch_orphan` を追加し、run_state とファイルシステムの最新状態を再確認。不一致時は `SKIPPED`。
-
-## Impact scope (Serena MCP + supplementary text search)
-
-| Reference | Decision | Rationale |
+| シンボル / 参照箇所 | 分類 | 根拠 |
 | :--- | :--- | :--- |
-| `orchestune/consistency/vocabulary.py` | in scope | 新規 Fact キー（4種）および finding 名定数を定義。 |
-| `orchestune/consistency/observation.py:ExecutionRecord` | in scope | `owner_kind`, `claim_id`, `claim_stage`, `launch_phase` フィールドを追加。 |
-| `orchestune/consistency/observation.py:_read_*` & `_execution_observations` | in scope | 追加フィールドを読み取り Fact として emit する。 |
-| `orchestune/consistency/invariants/execution.py` | in scope | `DISPATCH_PRELAUNCH_ORPHAN` の純粋判定関数を追加し、invariant 検査に登録。 |
-| `orchestune/consistency/repairs/execution.py` | in scope | `DISPATCH_PRELAUNCH_ORPHAN` を `COMMAND_RECLAIM`, `COMMAND_REQUEUE` へマッピング。 |
-| `orchestune/dispatch/execution_repair.py:_execution_records` | in scope | `ActiveWorktree` から `ExecutionRecord` への新規 4 フィールドマッピングを追加。 |
-| `orchestune/dispatch/execution_repair.py:revalidate_reclaim_preconditions` | in scope | `_dispatch_prelaunch_orphan` helper による修復直前の fresh precondition 再検証を追加。 |
-| `orchestune/dispatch/cycle.py:_DispatchConsistencyAdapter._executions` | in scope | サイクル内の `ExecutionRecord` 生成箇所に 4 フィールドマッピングを追加。 |
-| `orchestune/dispatch/launch.py:_try_planned_launch` | in scope | provider 境界直前での `launching` 永続化と、失敗時の provider 呼出抑止。 |
-| `orchestune/dispatch/launch.py:_apply_single_task_launch` / `_record_successful_launch` | in scope | 成功時の `launched` 永続化、明確な失敗時の `failed` 永続化。 |
-| `orchestune/dispatch/gc/zombies.py` | in scope | `_build_reclaim_candidate` および `_reclaim_candidate_from_command` に `DISPATCH_PRELAUNCH_ORPHAN` を追加し、GC 回収対象に組み込み。 |
-| `orchestune/claim/service.py` | still out of scope | claim の既存保存順序・契約は変更しない。 |
-| `orchestune/dispatch/recovery.py` | still out of scope | durable unknown/launched attempt の復旧契約を変更しない。 |
-| `tests/test_consistency_observation.py` | in scope | 新規 Fact および `ExecutionRecord` 拡張の観測テスト。 |
-| `tests/test_consistency_execution_policy.py` | in scope | `DISPATCH_PRELAUNCH_ORPHAN` の生成・除外条件テスト（TDD 手順 1〜4）。 |
-| `tests/test_consistency_execution_repair.py` | in scope | 修復マッピングと fresh revalidation のテスト（TDD 手順 8）。 |
-| `tests/test_dispatch_launch_attempts.py` | in scope | provider 境界での `launch_phase` 永続化・結果不明時の保持テスト（TDD 手順 5〜7）。 |
-| `tests/test_dispatch_gc_zombies.py` | in scope | 統合回収テストと既存 orphan テストの無変更通過確認（TDD 手順 9, 10）。 |
-
-### Supplementary search coverage
-- Dynamic access (`getattr`/`setattr`/`**kwargs`): `ActiveWorktree` および `ExecutionRecord` のフィールドアクセスを検証。動的アクセスなし。
-- String-addressed test doubles: `test_consistency_*.py`, `test_dispatch_*.py` 内の mock/patch 対象を確認。
-- Serialized names: `run_state.json` の `launch_phase`, `owner_kind`, `claim_id`, `claim_stage` のキー名と既存 `ActiveWorktree` シリアライズ/デシリアライズとの整合性を確認。
-- Documentation/skills: レイヤー境界（consistency から dispatch.state への非依存）を確認。
-
-## TDD Plan
-
-1. **Step 1: Invariants & Policy テスト (TDD 1, 2, 3, 4)**
-   - `test_consistency_observation.py`: `ExecutionRecord` と Fact emit のテスト追加。
-   - `test_consistency_execution_policy.py`:
-     - worktree あり、dispatch owner、completed claim、handle なし、launch_phase=None で `DISPATCH_PRELAUNCH_ORPHAN` が出るテスト追加。
-     - interactive owner で finding が出ないテスト追加。
-     - launching, unknown, launched の各 phase で finding が出ないテスト追加。
-     - owner_kind, claim_id, claim_stage, launch_phase が UNKNOWN / 欠落時に自動修復しないテスト追加。
-2. **Step 2: Repairs & Preconditions テスト (TDD 8)**
-   - `test_consistency_execution_repair.py`:
-     - `DISPATCH_PRELAUNCH_ORPHAN` が `COMMAND_RECLAIM`, `COMMAND_REQUEUE` へマップされるテスト。
-     - fresh revalidation: finding 作成後に active が `launched` 等へ変わった場合、回収を SKIP するテスト。
-3. **Step 3: Dispatch Launch 永続化テスト (TDD 5, 6, 7)**
-   - `test_dispatch_launch_attempts.py`:
-     - provider 呼出直前に `launching` が保存され、保存失敗時は provider が呼ばれないテスト。
-     - 明確な起動失敗で `failed` が保存されるテスト。
-     - `LaunchOutcomeUnknown` では `launching` が残り、worktree と active entry が保持されるテスト。
-4. **Step 4: 統合回収 & 既存回帰テスト (TDD 9, 10)**
-   - `test_dispatch_gc_zombies.py`:
-     - 回収成功時に worktree 削除、queue 復帰、active 解放が既存回数制御を通る統合テスト。
-     - 既存 `HANDLELESS_EXECUTION_ORPHAN`、dead local process、timeout、interactive 除外テストが無変更で通ることを確認。
-5. **Step 5: ローカル CI 検証**
-   - `./scripts/local-ci.sh` の実行とエラーゼロ確認。
+| `orchestune/complete/__init__.py` | in scope (新規作成) | パッケージ公開シンボルの再エクスポート (`CompleteRequest`, `CompleteResult`, `CompleteFailure`, `CompleteStage`, バリデータヘルパー等) |
+| `orchestune/complete/contracts.py` | in scope (新規作成) | `CompleteRequest`, `CompleteResult`, `CompleteFailure`, `CompleteStage`, `CompleteExitCode`, `CompleteFailureReason`, ペイロード型などのドメインモデル定義 |
+| `tests/test_complete_contracts.py` | in scope (新規作成) | Result別入力型、状態遷移ルール、GC責任境界 (CompletionReceipt非依存)、claim互換性の網羅的契約テスト |
+| `orchestune/outcome_record.py` | out of scope (参照のみ) | 既存の OutcomeRecord スキーマ・定数（`RESULT_*`, `REASON_*`, `MAX_REASON_LENGTH`）を利用し、無変更 |
+| `orchestune/claim/contracts.py` | out of scope (参照のみ) | `OwnerKind`, `OwnerToken` 等の契約を利用し、無変更 |
+| `orchestune/dispatch/cycle_records.py:CompletionReceipt` | out of scope (分離対象) | GC完了証跡であり、`CompleteResult` に含めないことをテストで検証 |
 
 ## #822 observation record
 
 - Start date: 2026-09-22
 - Environment: Linux, Python 3.13.15, uv 0.12.10, ruff 0.4.10, mypy 1.20.2
-- Base SHA: `d860f56`
-- Tool: Serena MCP (`find_symbol`, `find_referencing_symbols`, `get_symbols_overview`)
-- Actual use: Enumerate `ExecutionRecord`, `HANDLELESS_EXECUTION_ORPHAN`, `revalidate_reclaim_preconditions`, `launch_phase` references; supplemented by `git grep`.
+- Base SHA: `aabe267`
+- Tool: Serena MCP (`find_symbol`), supplemented by `git grep`
+- Actual use: Verified non-existence of `CompleteRequest`, `CompleteResult`, `CompleteFailure`; verified declaration and role of `CompletionReceipt` in `orchestune/dispatch/cycle_records.py`.
 - Tokens: unavailable (no counter exposed).
-- Scope snapshot permalink: https://github.com/Saltmu/orchestune/issues/964#issuecomment-5769389411
+- Scope snapshot permalink: https://github.com/Saltmu/orchestune/issues/997#issuecomment-5769967296
 
-## Review round 1 reconciliation
+## 設計詳細
 
-Claude reported one verified finding (medium severity) and two style/design notes:
-1. **`open_prs` threading to `_persist_launching_phase` (Adopted & Fixed in `7fa8a30`)**:
-   `save_run_state` call in `_persist_launching_phase` now takes `open_prs=open_prs`, threaded from `_apply_single_task_launch` through `_try_planned_launch`. This preserves pruning protection for completed worktrees with open PRs. Added assertion to `test_launch_phase_launching_persisted_before_provider_and_failure_holds_launch`.
-2. **`ClaimStage` enum reference (Adopted in `7fa8a30`)**:
-   `_dispatch_prelaunch_orphan` in `execution_repair.py` now references `ClaimStage.ACTIVE_SAVED.value` and `ClaimStage.COMPLETED.value`.
-3. **`launch_phase="launching"` stuck design note (Acknowledged as-designed)**:
-   Retaining worktree/active entry when launch outcome is ambiguous matches PR acceptance criteria and YAGNI scope guard (prioritizing safety against double execution).
-4. **Style refactoring (Adopted in `7fa8a30`)**:
-   Extracted `_record_failed_launch_phase` from `_apply_single_task_launch`, eliminating bloat warning and harmonizing error handling shape.
-Local CI passed with 4,101 tests passed, 95.20% coverage, and no bloat/leaks.
+### 1. 状態遷移 (`CompleteStage`)
+```python
+class CompleteStage(str, Enum):
+    INITIALIZING = "initializing"
+    PREFLIGHT_VALIDATING = "preflight_validating"
+    EVIDENCE_VERIFYING = "evidence_verifying"
+    JOURNALING = "journaling"
+    POSTING = "posting"
+    HANDED_OFF_TO_GC = "handed_off_to_gc"
+```
+遷移順序: `INITIALIZING` -> `PREFLIGHT_VALIDATING` -> `EVIDENCE_VERIFYING` -> `JOURNALING` -> `POSTING` -> `HANDED_OFF_TO_GC`
+ヘルパー: `can_transition(from_stage: CompleteStage, to_stage: CompleteStage) -> bool`
 
-## Review round 2 reconciliation
+### 2. エラー分類とExitCode (`CompleteExitCode`, `CompleteFailureReason`)
+`ClaimExitCode` / `ClaimFailureReason` と整合した設計:
+- Preflight / Validation errors (10-19):
+  `INVALID_REQUEST`, `CLAIM_NOT_FOUND`, `OWNER_TOKEN_MISMATCH`, `INVALID_RESULT_PAYLOAD`, `PR_REQUIRED`, `PR_PROHIBITED`, `REASON_REQUIRED`, `DIRTY_WORKTREE`, `EVIDENCE_MISSING`
+- Concurrency / State errors (20-29):
+  `STATE_LOCK_FAILED`, `CONCURRENT_COMPLETION`, `INVALID_STAGE_TRANSITION`
+- Infrastructure / Forge errors (30-39):
+  `FORGE_POST_FAILED`, `STATE_SAVE_FAILED`
 
-Claude reported two verified findings:
-1. **Accurate reclaim reason for `DISPATCH_PRELAUNCH_ORPHAN` (Adopted & Fixed in `73cb91d`)**:
-   Extracted `_resolve_reclaim_reason` in `orchestune/dispatch/gc/zombies.py` to map `DISPATCH_PRELAUNCH_ORPHAN` to `"claimed but never launched"` across both `_build_reclaim_candidate` and `_refresh_reclaim`. Added test assertion in `test_dispatch_prelaunch_orphan_with_physical_worktree_is_safely_reclaimed`.
-2. **`now` logical timestamp threading (Adopted & Fixed in `73cb91d`)**:
-   Added `now: float | None = None` to `_persist_launching_phase` and `_record_failed_launch_phase` in `orchestune/dispatch/launch.py`, passed to `save_run_state(..., now=now)`. Added test assertion in `test_launch_phase_launching_persisted_before_provider_and_failure_holds_launch`.
+### 3. Result別入力型 (`DonePayload`, `NotNeededPayload`, `BlockedPayload`)
+- `DonePayload`: `pr: int` (非ブール正整数), `review: ReviewSummary` (rounds は None または非ブール正整数), `ci: str | None`, `baseline_regressions: tuple[str, ...]`
+- `NotNeededPayload`: 空の dataclass（canonical OutcomeRecord スキーマに合わせた設計）
+- `BlockedPayload`: `reason: str` (空白・制御文字サニタイズかつ `MAX_REASON_LENGTH` (100) でキャップ), `base_sha: str | None`, `attempt: int | None` (None または非ブール正整数), `review: ReviewSummary` (rounds は None または非ブール正整数), `ci: str | None`
 
-## Review round 3 reconciliation
+### 4. `CompleteRequest`
+- ファクトリメソッド `CompleteRequest.done()`, `CompleteRequest.not_needed()`, `CompleteRequest.blocked()` を提供
+- バリデーション機能 `validate()` および `__post_init__` により、`issue_number` が非ブール正整数であること、done 時に valid な pr と valid な review があること、not-needed 時に NotNeededPayload または None であること、blocked 時に non-empty reason と valid attempt と valid な review であること等を厳格に事前検査
 
-Claude confirmed both findings cleanly fixed with test coverage and reported zero new findings. PR approved for merge.
+### 5. `CompleteResult`
+- `success: bool`
+- `issue_number: int` (非ブール正整数)
+- `result: str` (`VALID_RESULTS` のいずれかであることを強制)
+- `stage: CompleteStage`
+- `claim_id: str | None`
+- `owner_kind: OwnerKind | None`
+- `pr: int | None` (None または非ブール正整数)
+- `outcome_record: OutcomeRecord | None` (指定時は `issue`, `result`, `pr` がトップレベル属性と一致することを強制)
+- `failure: CompleteFailure | None`
+- `handed_off_to_gc: bool`
+- **境界不変条件**: `__post_init__` で `success=True` の場合は `stage == HANDED_OFF_TO_GC` かつ `handed_off_to_gc=True` かつ `failure is None` を、`success=False` の場合は `stage != HANDED_OFF_TO_GC` かつ `handed_off_to_gc=False` かつ `failure is not None` を強制
+- **重要**: `CompletionReceipt` を絶対に属性や依存関係に含めない
 
+### 6. `CompleteFailure`
+- `reason: CompleteFailureReason`
+- `message: str`
+- `issue_number: int | None`
+- `conflicting_stage: CompleteStage | None`
+- `next_actions: tuple[str, ...]`
+- `@property exit_code -> CompleteExitCode`
 
+## TDD・実装ステップ
+1. **Red**: `tests/test_complete_contracts.py` を作成し、インポートエラーおよびアサーション失敗（Red）を確認
+2. **Green**: `orchestune/complete/__init__.py` および `orchestune/complete/contracts.py` を実装し、全テスト合格（Green）を確認
+3. **Refactor**: Ruff / Mypy / detect-bloat / local-ci.sh の検証
+4. **PR & Review**: `parent/issue-822` をベースとする PR 作成および Claude による自動レビュー
