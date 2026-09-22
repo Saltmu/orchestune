@@ -59,6 +59,20 @@ def provision_issues(*args: object, **kwargs: object) -> ProvisionResult:
     return _provision_issues(*args, **kwargs)  # type: ignore[arg-type]
 
 
+def _print_resume_hint(plan_path: str) -> None:
+    try:
+        subtasks, metadata = _load_plan(plan_path)
+    except Exception:
+        return
+    known = {task.id: task.issue_number for task in subtasks if task.issue_number}
+    print(
+        f"Saved Issue numbers: parent={metadata.parent_issue_number}, "
+        f"subtasks={known}; unfinished={len(subtasks) - len(known)}. "
+        "Rerun the same provision command after resolving the error.",
+        file=sys.stderr,
+    )
+
+
 def _print_result(result: ProvisionResult) -> None:
     if not result.applied:
         print("Dry run (--no-apply): no Issues were created.")
@@ -136,6 +150,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(2) from error
     except Exception as error:
         print(f"Error: {error}", file=sys.stderr)
+        _print_resume_hint(args.plan)
         raise SystemExit(1) from error
     _print_result(result)
     # #664: 同期に失敗した実行を成功終了させると、「provisionは通ったのに親Issue

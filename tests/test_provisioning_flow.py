@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,74 @@ from tests.test_provisioning_support import (
 
 
 class TestProvisionIssuesApply:
+    def test_lost_parent_create_response_reuses_parent(
+        self, plan_path: Path, template_path: Path
+    ):
+        class LostParentResponseForge(FakeForge):
+            lost = False
+
+            def create_issue(self, title, body, labels=()):
+                number = super().create_issue(title, body, labels)
+                if title.startswith("[EPIC]") and not self.lost:
+                    self.lost = True
+                    raise subprocess.CalledProcessError(
+                        1, ["gh", "issue", "create"], stderr="HTTP 502"
+                    )
+                return number
+
+        forge = LostParentResponseForge()
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+        assert result.parent_issue_number == 100
+        assert len(forge.issues) == 3
+
+    def test_lost_create_response_reuses_created_issue(
+        self, plan_path: Path, template_path: Path
+    ):
+        class LostResponseForge(FakeForge):
+            lost = False
+
+            def find_issues_by_parent_metadata(self, parent_issue_number):
+                return [
+                    self.get_issue(number)
+                    for number, issue in self.issues.items()
+                    if f"parent_issue_number: {parent_issue_number}" in issue["body"]
+                ]
+
+            def create_issue(self, title, body, labels=()):
+                number = super().create_issue(title, body, labels)
+                if "task-a" in title and not self.lost:
+                    self.lost = True
+                    raise subprocess.CalledProcessError(
+                        1, ["gh", "issue", "create"], stderr="HTTP 503"
+                    )
+                return number
+
+        forge = LostResponseForge()
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+        assert result.created["task-a"] in forge.issues
+        assert len(forge.issues) == 3
+
+    def test_transient_parent_sync_failure_retries_without_new_issues(
+        self, plan_path: Path, template_path: Path
+    ):
+        class FlakySyncForge(FakeForge):
+            failed = False
+
+            def update_issue_body(self, issue_number, body):
+                if not self.failed and int(issue_number) == 100:
+                    self.failed = True
+                    raise subprocess.CalledProcessError(
+                        1, ["gh", "issue", "edit"], stderr="HTTP 503"
+                    )
+                super().update_issue_body(issue_number, body)
+
+        forge = FlakySyncForge()
+        first = provision_issues(plan_path, forge=forge, template_path=template_path)
+        second = provision_issues(plan_path, forge=forge, template_path=template_path)
+        assert first.plan_synced
+        assert second.reused == first.created
+        assert len(forge.issues) == 3
+
     def test_creates_parent_and_subtasks_in_topological_order(
         self, plan_path: Path, template_path: Path
     ):

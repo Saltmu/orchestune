@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
+from typing import cast
 
 from orchestune.dag.graph import build_dag
 from orchestune.dag.models import (
@@ -30,6 +34,7 @@ from orchestune.provisioning.rendering import (
     _issue_title,
     _validate_template_identity_marker,
 )
+from orchestune.provisioning.retry import ProvisionRetryForge
 from orchestune.provisioning.subtasks import (
     _index_sub_issues_by_subtask_id,
     _link_subtask_relationships,
@@ -138,6 +143,25 @@ def _provision_and_link_one_subtask(
     )
 
 
+def _with_progress_diagnostic(
+    operation: Callable[[], tuple[int, bool, bool, bool]],
+    created: dict[str, int],
+    reused: dict[str, int],
+    remaining: int,
+    plan_path: str | Path,
+) -> tuple[int, bool, bool, bool]:
+    try:
+        return operation()
+    except Exception:
+        print(
+            f"Provision stopped: created={created}, reused={reused}, "
+            f"unfinished={remaining}; check Issue numbers in {plan_path} "
+            "and rerun the same provision command",
+            file=sys.stderr,
+        )
+        raise
+
+
 def _provision_subtasks_loop(
     resolved_forge: IssueForge,
     dag: DagResult,
@@ -155,24 +179,26 @@ def _provision_subtasks_loop(
     degraded_subtask_ids: list[str] = []
     plan_synced = True
 
-    for subtask_id in dag.topological_order:
+    for index, subtask_id in enumerate(dag.topological_order):
         subtask = dag.subtasks[subtask_id]
-        (
-            number,
-            is_reused,
-            is_done,
-            is_degraded,
-        ) = _provision_and_link_one_subtask(
-            resolved_forge,
-            subtask,
-            template,
-            resolved_repo_root,
+        number, is_reused, is_done, is_degraded = _with_progress_diagnostic(
+            partial(
+                _provision_and_link_one_subtask,
+                resolved_forge,
+                subtask,
+                template,
+                resolved_repo_root,
+                plan_path,
+                parent_issue_number,
+                existing_by_subtask_id,
+                dependencies_done,
+                resolved_numbers,
+                metadata_search_supported,
+            ),
+            created,
+            reused,
+            len(dag.topological_order) - index,
             plan_path,
-            parent_issue_number,
-            existing_by_subtask_id,
-            dependencies_done,
-            resolved_numbers,
-            metadata_search_supported,
         )
         (reused if is_reused else created)[subtask_id] = number
         dependencies_done[subtask_id] = is_done
@@ -222,7 +248,13 @@ def _apply_provisioning(
     template: str,
     resolved_repo_root: Path,
 ) -> ProvisionResult:
-    resolved_forge = forge or GitHubForge()
+    base_forge = forge or GitHubForge()
+    resolved_forge = cast(
+        IssueForge,
+        ProvisionRetryForge(
+            base_forge, min_interval=0.2 if isinstance(base_forge, GitHubForge) else 0
+        ),
+    )
     parent_issue_number, parent_plan_synced = _resolve_parent_issue(
         resolved_forge, metadata, plan_path, explicit_parent_issue=validated_parent
     )
