@@ -26,7 +26,6 @@ from orchestune.dispatch.labels import (
 from orchestune.dispatch.state import (
     ActiveWorktree,
     RunState,
-    load_run_state,
     save_run_state,
 )
 from orchestune.dispatch.targets import DispatchHandle, DispatchTarget
@@ -237,10 +236,6 @@ def _load_or_recover_active(
 ) -> ActiveWorktree:
     key = str(task.issue_number)
     existing = state.active_worktrees.get(key)
-    if existing is None:
-        existing = load_run_state(config.run_state_path).active_worktrees.get(key)
-        if existing is not None:
-            state.active_worktrees[key] = existing
     if existing is None:
         existing = _recovered_active_from_attempt(attempt, task, config)
         state.active_worktrees[key] = existing

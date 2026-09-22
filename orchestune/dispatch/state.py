@@ -164,10 +164,6 @@ def _parse_optional_string(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _parse_choice(value: object, allowed: set[str], default: str) -> str:
-    return value if isinstance(value, str) and value in allowed else default
-
-
 def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
     """#512: `run_state.json`の`task_reclaim_counts`を検証しつつ復元する。
 

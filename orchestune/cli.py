@@ -62,7 +62,7 @@ def main() -> None:
     elif cmd == "complete":
         from orchestune.complete.cli import main as complete_main
 
-        complete_main()
+        sys.exit(complete_main())
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
