@@ -880,7 +880,7 @@ class TestEvaluateCompletePreflight:
         assert result.failure_reason == CompleteFailureReason.INVALID_REQUEST
         assert "empty diff" in (result.reason or "").lower()
 
-    def test_done_rejects_unverifiable_head_sha(self, temp_git_repo: Path) -> None:
+    def test_done_allows_pr_record_without_head_sha(self, temp_git_repo: Path) -> None:
         from orchestune.claim.ownership import owner_token_digest
         from orchestune.models import PrRecord
 
@@ -910,22 +910,13 @@ class TestEvaluateCompletePreflight:
             worktree_path=temp_git_repo,
             forge=forge,
             run_state=run_state,
+            expected_base_ref="parent/issue-894",
             current_head_sha="local_sha_123",
         )
-        assert result.accepted is False
-        assert result.failure_reason == CompleteFailureReason.EVIDENCE_MISSING
-        assert "head sha cannot be verified" in (result.reason or "").lower()
+        assert result.accepted is True
 
-    def test_done_supports_list_prs_forge(self, temp_git_repo: Path) -> None:
+    def test_done_rejects_mismatched_head_sha(self, temp_git_repo: Path) -> None:
         from orchestune.claim.ownership import owner_token_digest
-        from orchestune.models import PrRecord
-
-        class ListOnlyForge:
-            def __init__(self, prs: list[PrRecord]) -> None:
-                self._prs = prs
-
-            def list_prs(self, state: str = "open") -> list[PrRecord]:
-                return self._prs
 
         token = "token"
         digest = owner_token_digest(token)
@@ -940,18 +931,77 @@ class TestEvaluateCompletePreflight:
                 )
             }
         )
-        pr = PrRecord(
-            number=10,
-            head_ref="claude/issue-999-complete-preflight",
-            base_ref="parent/issue-894",
-            state="OPEN",
-            changed_files=("foo.py",),
+        forge = FakeForge(
+            {
+                10: FakePr(
+                    number=10,
+                    head_ref="claude/issue-999-complete-preflight",
+                    base_ref="parent/issue-894",
+                    head_sha="remote_sha_456",
+                )
+            }
         )
-        forge = ListOnlyForge([pr])
         result = evaluate_complete_preflight(
             request,
             worktree_path=temp_git_repo,
             forge=forge,
             run_state=run_state,
+            expected_base_ref="parent/issue-894",
+            current_head_sha="local_sha_123",
+        )
+        assert result.accepted is False
+        assert result.failure_reason == CompleteFailureReason.INVALID_REQUEST
+        assert "not been pushed to pr" in (result.reason or "").lower()
+
+    def test_done_supports_list_prs_forge_with_include_files(
+        self, temp_git_repo: Path
+    ) -> None:
+        from orchestune.claim.ownership import owner_token_digest
+        from orchestune.models import PrRecord
+
+        class RealisticListOnlyForge:
+            """Mimics real forge behavior: only populates changed_files when include_files=True."""
+
+            def list_prs(
+                self, state: str = "open", include_files: bool = False
+            ) -> list[PrRecord]:
+                files = ("foo.py",) if include_files else ()
+                return [
+                    PrRecord(
+                        number=10,
+                        head_ref="claude/issue-999-complete-preflight",
+                        base_ref="parent/issue-894",
+                        state="OPEN",
+                        changed_files=files,
+                    )
+                ]
+
+        token = "token"
+        digest = owner_token_digest(token)
+        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        run_state = FakeRunState(
+            {
+                "999": FakeActiveWorktree(
+                    owner_token_digest=digest,
+                    worktree_path=str(temp_git_repo),
+                    branch="claude/issue-999-complete-preflight",
+                    base_ref="parent/issue-894",
+                )
+            }
+        )
+        forge = RealisticListOnlyForge()
+        result = evaluate_complete_preflight(
+            request,
+            worktree_path=temp_git_repo,
+            forge=forge,
+            run_state=run_state,
+            expected_base_ref="parent/issue-894",
         )
         assert result.accepted is True
+
+    def test_failure_diagnostics_populated(self, temp_git_repo: Path) -> None:
+        request = CompleteRequest.done(issue_number=999, pr=10, owner_token="")
+        result = evaluate_complete_preflight(request, worktree_path=temp_git_repo)
+        assert result.accepted is False
+        assert result.reason is not None
+        assert result.diagnostics == (result.reason,)

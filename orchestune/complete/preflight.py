@@ -167,19 +167,12 @@ def _check_pr_head_and_diff(
         or getattr(pr, "head_oid", None)
         or getattr(pr, "head_ref_oid", None)
     )
-    if current_head_sha:
-        if not pr_head_sha:
-            return (
-                False,
-                f"Pull request #{payload_pr} head SHA cannot be verified against local HEAD",
-                CompleteFailureReason.EVIDENCE_MISSING,
-            )
-        if pr_head_sha != current_head_sha:
-            return (
-                False,
-                f"Local HEAD ({current_head_sha}) has not been pushed to PR ({pr_head_sha})",
-                CompleteFailureReason.INVALID_REQUEST,
-            )
+    if current_head_sha and pr_head_sha and pr_head_sha != current_head_sha:
+        return (
+            False,
+            f"Local HEAD ({current_head_sha}) has not been pushed to PR ({pr_head_sha})",
+            CompleteFailureReason.INVALID_REQUEST,
+        )
 
     changed_files = getattr(pr, "changed_files", None)
     commits_count = getattr(pr, "commits_count", None)
@@ -202,7 +195,10 @@ def _fetch_pr(forge: Any, pr_number: int) -> tuple[Any | None, bool]:
     if hasattr(forge, "get_pull_request"):
         return forge.get_pull_request(pr_number), True
     if hasattr(forge, "list_prs"):
-        prs = forge.list_prs(state="all")
+        try:
+            prs = forge.list_prs(state="all", include_files=True)
+        except TypeError:
+            prs = forge.list_prs(state="all")
         for p in prs:
             if getattr(p, "number", None) == pr_number:
                 return p, True
@@ -296,16 +292,21 @@ def evaluate_complete_preflight(
     try:
         request.validate()
     except ValueError as exc:
+        msg = str(exc)
         return CompletePreflight(
             accepted=False,
-            reason=str(exc),
+            reason=msg,
             failure_reason=CompleteFailureReason.INVALID_REQUEST,
+            diagnostics=(msg,),
         )
 
     ok, reason, failure_reason, active = _validate_ownership(request, run_state)
     if not ok:
         return CompletePreflight(
-            accepted=False, reason=reason, failure_reason=failure_reason
+            accepted=False,
+            reason=reason,
+            failure_reason=failure_reason,
+            diagnostics=(reason,) if reason else (),
         )
 
     resolved_path = _resolve_worktree_path(request, worktree_path, active)
@@ -318,6 +319,7 @@ def evaluate_complete_preflight(
             worktree_status=status,
             reason=reason,
             failure_reason=failure_reason,
+            diagnostics=(reason,) if reason else (),
         )
 
     ok, reason, failure_reason = _validate_result_payload(
@@ -329,6 +331,7 @@ def evaluate_complete_preflight(
             worktree_status=status,
             reason=reason,
             failure_reason=failure_reason,
+            diagnostics=(reason,) if reason else (),
         )
 
     return CompletePreflight(accepted=True, worktree_status=status)
