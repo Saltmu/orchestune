@@ -168,6 +168,37 @@ def test_rejected_429_create_retries() -> None:
     assert clock.sleeps == [3.0]
 
 
+def test_create_probe_reads_parent_number_from_yaml_fence() -> None:
+    class LostResponseForge(FakeForge):
+        writes = 0
+
+        def create_issue(self, title, body, labels=()):
+            self.writes += 1
+            super().create_issue(title, body, labels)
+            raise _api_error("HTTP 503")
+
+        def find_issues_by_parent_metadata(self, parent_issue_number):
+            return [
+                self.get_issue(number)
+                for number, issue in self.issues.items()
+                if f"parent_issue_number: {parent_issue_number}" in issue["body"]
+            ]
+
+    clock = Clock()
+    forge = LostResponseForge()
+    FakeForge.create_issue(forge, "[EPIC] parent", PARENT_MARKER)
+    body = (
+        "Description mentions parent_issue_number: 999\n"
+        "parent_issue_number: 999\n\n"
+        "```yaml\nsubtask_id: task-a\nparent_issue_number: 100\n```\n"
+    )
+    wrapped = ProvisionRetryForge(
+        forge, sleep=clock.sleep, clock=clock.time, min_interval=0
+    )
+    assert wrapped.create_issue("task-a", body) == 101
+    assert forge.writes == 1
+
+
 def test_resume_hint_lists_saved_issue_numbers(plan_path, capsys) -> None:
     write_issue_numbers(plan_path, {"task-a": 101}, parent_issue_number=100)
     _print_resume_hint(str(plan_path))

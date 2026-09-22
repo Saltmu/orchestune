@@ -11,13 +11,16 @@ from email.utils import parsedate_to_datetime
 from typing import Any, cast
 
 from orchestune.forge import IssueForge
-from orchestune.issue_parsing import PARENT_MARKER, find_children_by_parent
+from orchestune.issue_parsing import (
+    PARENT_MARKER,
+    find_children_by_parent,
+    parent_issue_number_from_body,
+)
 from orchestune.provisioning.rendering import _subtask_id_from_body
 
 _TRANSIENT_STATUS = re.compile(
     r"(?:HTTP[/ ]|status(?: code)?[=: ]+)(429|502|503|504)\b", re.I
 )
-_PARENT_NUMBER = re.compile(r"(?m)^parent_issue_number: (\d+)\s*$")
 _RETRY_AFTER = re.compile(r"(?im)^retry-after:\s*(.+?)\s*$")
 _RATE_RESET = re.compile(r"(?im)^x-ratelimit-reset:\s*(\d+)\s*$")
 _CONNECTION_ERRORS = (
@@ -162,9 +165,9 @@ class ProvisionRetryForge:
 
     def _find_created(self, title: str, body: str) -> tuple[bool, int | None]:
         subtask_id = _subtask_id_from_body(body)
-        parent_match = _PARENT_NUMBER.search(body)
-        if subtask_id and parent_match:
-            result = find_children_by_parent(self._forge, int(parent_match.group(1)))
+        parent_number = parent_issue_number_from_body(body)
+        if subtask_id and parent_number is not None:
+            result = find_children_by_parent(self._forge, parent_number)
             matching = [
                 issue.number
                 for issue in result.issues
