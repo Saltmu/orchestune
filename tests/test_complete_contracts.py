@@ -591,6 +591,31 @@ class TestCompleteResultAndGCBoundary:
                 outcome_record=boolean_issue_rec,
             )
 
+        # One-sided PR mismatch rejected (top-level has PR, outcome_record has None)
+        one_sided_pr_rec = OutcomeRecord(result=RESULT_DONE, issue=997, pr=None)
+        with pytest.raises(
+            ValueError,
+            match=r"outcome_record\.pr \(None\) does not match CompleteResult\.pr \(1001\)",
+        ):
+            CompleteResult.success_result(
+                issue_number=997,
+                result=RESULT_DONE,
+                pr=1001,
+                outcome_record=one_sided_pr_rec,
+            )
+
+        # One-sided PR mismatch rejected (top-level has None, outcome_record has PR)
+        with pytest.raises(
+            ValueError,
+            match=r"outcome_record\.pr \(1001\) does not match CompleteResult\.pr \(None\)",
+        ):
+            CompleteResult.success_result(
+                issue_number=997,
+                result=RESULT_DONE,
+                pr=None,
+                outcome_record=valid_record,
+            )
+
         # Boolean PR rejected in embedded record
         boolean_pr_rec = OutcomeRecord(result=RESULT_DONE, issue=997, pr=True)  # type: ignore
         with pytest.raises(
@@ -603,6 +628,44 @@ class TestCompleteResultAndGCBoundary:
                 pr=1,
                 outcome_record=boolean_pr_rec,
             )
+
+        # Boolean attempt rejected in embedded record
+        for bad_attempt in (True, False, 0, -1):
+            bad_attempt_rec = OutcomeRecord(
+                result=RESULT_DONE,
+                issue=997,
+                pr=1001,
+                attempt=bad_attempt,  # type: ignore
+            )
+            with pytest.raises(
+                ValueError,
+                match=r"outcome_record\.attempt must be None or a valid positive non-boolean integer",
+            ):
+                CompleteResult.success_result(
+                    issue_number=997,
+                    result=RESULT_DONE,
+                    pr=1001,
+                    outcome_record=bad_attempt_rec,
+                )
+
+        # Boolean review rounds rejected in embedded record
+        for bad_rounds in (True, False, 0, -1):
+            bad_rounds_rec = OutcomeRecord(
+                result=RESULT_DONE,
+                issue=997,
+                pr=1001,
+                review=ReviewSummary(bot="codex", rounds=bad_rounds),  # type: ignore
+            )
+            with pytest.raises(
+                ValueError,
+                match=r"outcome_record\.review must be a ReviewSummary with rounds as None or a valid positive non-boolean integer",
+            ):
+                CompleteResult.success_result(
+                    issue_number=997,
+                    result=RESULT_DONE,
+                    pr=1001,
+                    outcome_record=bad_rounds_rec,
+                )
 
     def test_failure_result_aligns_issue_number(self):
         """Codex finding: Keep failure diagnostics aligned with the result issue."""

@@ -481,38 +481,42 @@ class CompleteResult:
     def _validate_outcome_record(self) -> None:
         if self.outcome_record is None:
             return
-        if not isinstance(self.outcome_record, OutcomeRecord):
+        rec = self.outcome_record
+        if not isinstance(rec, OutcomeRecord):
             raise ValueError(
-                f"outcome_record must be an OutcomeRecord or None, got: {self.outcome_record!r}"
+                f"outcome_record must be an OutcomeRecord or None, got: {rec!r}"
             )
-        if not is_valid_issue_number(self.outcome_record.issue):
+        if not is_valid_issue_number(rec.issue):
             raise ValueError(
-                f"outcome_record.issue must be a valid positive non-boolean integer, got: {self.outcome_record.issue!r}"
+                f"outcome_record.issue must be a valid positive non-boolean integer, got: {rec.issue!r}"
             )
-        if self.outcome_record.issue != self.issue_number:
+        if rec.issue != self.issue_number:
             raise ValueError(
-                f"outcome_record.issue ({self.outcome_record.issue}) does not match "
+                f"outcome_record.issue ({rec.issue}) does not match "
                 f"CompleteResult.issue_number ({self.issue_number})"
             )
-        if self.outcome_record.result != self.result:
+        if rec.result != self.result:
             raise ValueError(
-                f"outcome_record.result ({self.outcome_record.result!r}) does not match "
+                f"outcome_record.result ({rec.result!r}) does not match "
                 f"CompleteResult.result ({self.result!r})"
             )
-        if self.outcome_record.pr is not None and not is_valid_pr_number(
-            self.outcome_record.pr
-        ):
+        if rec.pr is not None and not is_valid_pr_number(rec.pr):
             raise ValueError(
-                f"outcome_record.pr must be None or a valid positive non-boolean integer, got: {self.outcome_record.pr!r}"
+                f"outcome_record.pr must be None or a valid positive non-boolean integer, got: {rec.pr!r}"
             )
-        if (
-            self.pr is not None
-            and self.outcome_record.pr is not None
-            and self.outcome_record.pr != self.pr
-        ):
+        if rec.pr != self.pr:
             raise ValueError(
-                f"outcome_record.pr ({self.outcome_record.pr}) does not match "
-                f"CompleteResult.pr ({self.pr})"
+                f"outcome_record.pr ({rec.pr}) does not match CompleteResult.pr ({self.pr})"
+            )
+        if not is_valid_attempt_number(rec.attempt):
+            raise ValueError(
+                "outcome_record.attempt must be None or a valid positive non-boolean integer, "
+                f"got: {rec.attempt!r}"
+            )
+        if not is_valid_review_summary(rec.review):
+            raise ValueError(
+                "outcome_record.review must be a ReviewSummary with rounds as None or a valid positive non-boolean integer, "
+                f"got: {rec.review!r}"
             )
 
     def _validate_stage_boundary(self) -> None:
