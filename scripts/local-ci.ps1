@@ -42,6 +42,11 @@ if ($LASTEXITCODE -ne 0) {
     }
 }
 
+# Invalidate prior evidence at CI start
+$CiStartTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+uv run python -m orchestune.complete.ci_evidence invalidate
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 Write-Host "[1/6] Checking code format (ruff format)..."
 uv run ruff format --check
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -90,3 +95,7 @@ if (Get-Command gitleaks -ErrorAction SilentlyContinue) {
 Write-Host "========================================="
 Write-Host "✨ Local CI passed successfully!"
 Write-Host "========================================="
+
+uv run python -m orchestune.complete.ci_evidence record --started-at $CiStartTime
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+

@@ -22,6 +22,10 @@ if ! uv run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" >/dev
   uv sync
 fi
 
+# Invalidate prior evidence at CI start
+CI_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+uv run python -m orchestune.complete.ci_evidence invalidate
+
 echo "[1/6] Checking code format (ruff format)..."
 uv run ruff format --check
 
@@ -57,3 +61,6 @@ fi
 echo "========================================="
 echo "✨ Local CI passed successfully!"
 echo "========================================="
+
+uv run python -m orchestune.complete.ci_evidence record --started-at "${CI_START_TIME}"
+
