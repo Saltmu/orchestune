@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -954,3 +954,27 @@ class TestEdgeCasesAndBoundaryConditions:
         ci_main(["resolve-base", "--worktree", str(git_worktree)])
         captured = capsys.readouterr()
         assert len(captured.out.strip()) == 40
+
+    def test_find_configured_python_passes_no_downloads_and_offline(
+        self, tmp_path: Path
+    ):
+        from orchestune.complete.ci_evidence import _find_configured_python
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout=str(tmp_path / "python")
+            )
+            with patch.object(Path, "is_file", return_value=True):
+                res = _find_configured_python(tmp_path)
+                assert res == tmp_path / "python"
+                mock_run.assert_called_once()
+                cmd = mock_run.call_args[0][0]
+                assert "--no-python-downloads" in cmd
+                assert "--offline" in cmd
+
+    def test_local_ci_scripts_fail_closed_on_base_resolution_failure(self):
+        sh_text = Path("scripts/local-ci.sh").read_text(encoding="utf-8")
+        ps1_text = Path("scripts/local-ci.ps1").read_text(encoding="utf-8")
+
+        assert "Failed to resolve initial base SHA before starting CI." in sh_text
+        assert "Failed to resolve initial base SHA before starting CI." in ps1_text

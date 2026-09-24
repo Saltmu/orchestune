@@ -53,9 +53,17 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 
 $CiStartTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
 $CiStartHead = (git rev-parse HEAD 2>$null)
-if ($CiStartHead) { $CiStartHead = $CiStartHead.Trim() }
+if ($LASTEXITCODE -ne 0 -or -not $CiStartHead) {
+    Write-Host "ERROR: Failed to resolve initial HEAD before starting CI." -ForegroundColor Red
+    exit 1
+}
+$CiStartHead = $CiStartHead.Trim()
 $CiStartTree = (git rev-parse 'HEAD^{tree}' 2>$null)
-if ($CiStartTree) { $CiStartTree = $CiStartTree.Trim() }
+if ($LASTEXITCODE -ne 0 -or -not $CiStartTree) {
+    Write-Host "ERROR: Failed to resolve initial tree SHA before starting CI." -ForegroundColor Red
+    exit 1
+}
+$CiStartTree = $CiStartTree.Trim()
 $CiStartBase = $env:ORCHESTUNE_BASE_SHA
 if (-not $CiStartBase) {
     $BaseResolveArgs = @()
@@ -63,7 +71,11 @@ if (-not $CiStartBase) {
     if ($env:ORCHESTUNE_STATE_PATH) { $BaseResolveArgs += @("--state-path", $env:ORCHESTUNE_STATE_PATH) }
     if ($env:ORCHESTUNE_ISSUE_NUMBER) { $BaseResolveArgs += @("--issue", $env:ORCHESTUNE_ISSUE_NUMBER) }
     $resolvedBase = (uv run --no-sync python -m orchestune.complete.ci_evidence resolve-base @BaseResolveArgs 2>$null)
-    if ($resolvedBase) { $CiStartBase = $resolvedBase.Trim() }
+    if ($LASTEXITCODE -ne 0 -or -not $resolvedBase) {
+        Write-Host "ERROR: Failed to resolve initial base SHA before starting CI." -ForegroundColor Red
+        exit 1
+    }
+    $CiStartBase = $resolvedBase.Trim()
 }
 uv run --no-sync python -m orchestune.complete.ci_evidence invalidate 2>$null
 

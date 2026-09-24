@@ -32,8 +32,14 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 CI_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-CI_START_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "")
-CI_START_TREE=$(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo "")
+if ! CI_START_HEAD=$(git rev-parse HEAD 2>/dev/null) || [ -z "${CI_START_HEAD}" ]; then
+  echo "ERROR: Failed to resolve initial HEAD before starting CI." >&2
+  exit 1
+fi
+if ! CI_START_TREE=$(git rev-parse 'HEAD^{tree}' 2>/dev/null) || [ -z "${CI_START_TREE}" ]; then
+  echo "ERROR: Failed to resolve initial tree SHA before starting CI." >&2
+  exit 1
+fi
 if [ -n "${ORCHESTUNE_BASE_SHA:-}" ]; then
   CI_START_BASE="${ORCHESTUNE_BASE_SHA}"
 else
@@ -47,7 +53,10 @@ else
   if [ -n "${ORCHESTUNE_ISSUE_NUMBER:-}" ]; then
     BASE_RESOLVE_ARGS+=("--issue" "${ORCHESTUNE_ISSUE_NUMBER}")
   fi
-  CI_START_BASE=$(uv run --no-sync python -m orchestune.complete.ci_evidence resolve-base "${BASE_RESOLVE_ARGS[@]}" 2>/dev/null || echo "")
+  if ! CI_START_BASE=$(uv run --no-sync python -m orchestune.complete.ci_evidence resolve-base "${BASE_RESOLVE_ARGS[@]}" 2>/dev/null) || [ -z "${CI_START_BASE}" ]; then
+    echo "ERROR: Failed to resolve initial base SHA before starting CI." >&2
+    exit 1
+  fi
 fi
 uv run --no-sync python -m orchestune.complete.ci_evidence invalidate 2>/dev/null || true
 

@@ -223,7 +223,7 @@ def _find_configured_python(root: Path) -> Path | None:
     """Find configured Python interpreter using uv python find without mutating filesystem."""
     try:
         res = subprocess.run(
-            ["uv", "python", "find"],
+            ["uv", "python", "find", "--no-python-downloads", "--offline"],
             cwd=root,
             capture_output=True,
             text=True,
