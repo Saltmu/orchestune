@@ -53,6 +53,19 @@ class ActiveWorktree:
     claimed_at: float | None = None
     # owner token 自体は絶対に台帳へ保存しない。照合用途には一方向digestだけを使う。
     owner_token_digest: str | None = None
+    # #1001: completion journal（claimと同じrun_state.jsonの排他ロック下での
+    # complete予約・投稿evidence・handoff-ready遷移の永続化）。存在
+    # （completion_id is not None）自体が「completing」状態を表し、GCの通常
+    # reclaimから除外する判定に使う（#1004）。旧形式状態の読取互換は本Issueの
+    # 受け入れ条件ではないが、追加フィールドはすべて省略可能にして既存の
+    # 永続化済みレコードを壊さない。
+    completion_id: str | None = None
+    completion_result: str | None = None
+    completion_stage: str | None = None
+    completion_payload: dict[str, Any] | None = None
+    completion_comment_id: str | None = None
+    completion_comment_url: str | None = None
+    completion_handoff_ready: bool = False
 
 
 @dataclass
@@ -315,6 +328,57 @@ def _validate_active_identity(
     return owner_kind, claim_stage, reservation_kind, claimed_at, base_sha
 
 
+def _parse_optional_completion_str(
+    value: dict[str, object], name: str, key: object
+) -> str | None:
+    item = value.get(name)
+    if item is not None and not isinstance(item, str):
+        raise _active_worktree_schema_error(key, f"{name} must be a string or null")
+    return item
+
+
+def _parse_completion_payload(
+    value: dict[str, object], key: object
+) -> dict[str, Any] | None:
+    item = value.get("completion_payload")
+    if item is not None and not isinstance(item, dict):
+        raise _active_worktree_schema_error(
+            key, "completion_payload must be an object or null"
+        )
+    return item
+
+
+def _parse_completion_handoff_ready(value: dict[str, object], key: object) -> bool:
+    item = value.get("completion_handoff_ready", False)
+    if not isinstance(item, bool):
+        raise _active_worktree_schema_error(
+            key, "completion_handoff_ready must be a boolean"
+        )
+    return item
+
+
+def _parse_completion_journal_fields(
+    value: dict[str, Any], key: object
+) -> dict[str, Any]:
+    return {
+        "completion_id": _parse_optional_completion_str(value, "completion_id", key),
+        "completion_result": _parse_optional_completion_str(
+            value, "completion_result", key
+        ),
+        "completion_stage": _parse_optional_completion_str(
+            value, "completion_stage", key
+        ),
+        "completion_payload": _parse_completion_payload(value, key),
+        "completion_comment_id": _parse_optional_completion_str(
+            value, "completion_comment_id", key
+        ),
+        "completion_comment_url": _parse_optional_completion_str(
+            value, "completion_comment_url", key
+        ),
+        "completion_handoff_ready": _parse_completion_handoff_ready(value, key),
+    }
+
+
 def _build_active_worktree(
     value: dict[str, Any],
     *,
@@ -361,6 +425,7 @@ def _build_active_worktree(
         repository_id=_required_active_string(value, "repository_id", key),
         claimed_at=claimed_at,
         owner_token_digest=_required_active_string(value, "owner_token_digest", key),
+        **_parse_completion_journal_fields(value, key),
     )
 
 

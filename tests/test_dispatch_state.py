@@ -335,6 +335,99 @@ class TestRunState:
         assert completed.reasoning_effort is None
         assert completed.selection_reason is None
 
+    def test_completion_journal_fields_default_to_none_and_false(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        state = RunState(active_worktrees={"10": _current_active_worktree()})
+
+        save_run_state(state, path)
+        active = load_run_state(path).active_worktrees["10"]
+
+        assert active.completion_id is None
+        assert active.completion_result is None
+        assert active.completion_stage is None
+        assert active.completion_payload is None
+        assert active.completion_comment_id is None
+        assert active.completion_comment_url is None
+        assert active.completion_handoff_ready is False
+
+    def test_save_and_load_roundtrip_with_completion_journal_fields(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        state = RunState(
+            active_worktrees={
+                "10": _current_active_worktree(
+                    completion_id="completion-abc123",
+                    completion_result="done",
+                    completion_stage="handed_off_to_gc",
+                    completion_payload={"pr": 42, "review": {"bot": "codex"}},
+                    completion_comment_id="999",
+                    completion_comment_url=(
+                        "https://github.com/Saltmu/orchestune/issues/10"
+                        "#issuecomment-999"
+                    ),
+                    completion_handoff_ready=True,
+                )
+            }
+        )
+
+        save_run_state(state, path)
+        active = load_run_state(path).active_worktrees["10"]
+
+        assert active.completion_id == "completion-abc123"
+        assert active.completion_result == "done"
+        assert active.completion_stage == "handed_off_to_gc"
+        assert active.completion_payload == {"pr": 42, "review": {"bot": "codex"}}
+        assert active.completion_comment_id == "999"
+        assert active.completion_comment_url.endswith("999")
+        assert active.completion_handoff_ready is True
+
+    def test_old_data_without_completion_journal_fields_loads_compatibly(
+        self, tmp_path
+    ):
+        path = tmp_path / "run_state.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "active_worktrees": {"10": _serialized_current_active()},
+                    "launch_history": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        active = load_run_state(path).active_worktrees["10"]
+        assert active.completion_id is None
+        assert active.completion_handoff_ready is False
+
+        save_run_state(RunState(active_worktrees={"10": active}), path)
+        assert (
+            load_run_state(path).active_worktrees["10"].completion_handoff_ready
+            is False
+        )
+
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("completion_id", 123),
+            ("completion_result", []),
+            ("completion_stage", 4.2),
+            ("completion_payload", ["not", "a", "dict"]),
+            ("completion_comment_id", True),
+            ("completion_comment_url", {}),
+            ("completion_handoff_ready", "yes"),
+        ],
+    )
+    def test_rejects_wrong_type_in_completion_journal_fields(
+        self, tmp_path, field, value
+    ):
+        path = tmp_path / "run_state.json"
+        active = _serialized_current_active(**{field: value})
+        path.write_text(
+            json.dumps({"active_worktrees": {"10": active}}), encoding="utf-8"
+        )
+
+        with pytest.raises(ValueError, match="active_worktrees\\[10\\]"):
+            load_run_state(path)
+
     def test_save_and_load_roundtrip_with_unknown_active_start_time(self, tmp_path):
         path = tmp_path / "run_state.json"
         state = RunState(
