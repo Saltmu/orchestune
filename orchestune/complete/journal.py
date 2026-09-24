@@ -102,29 +102,28 @@ def _acquire_run_state_lock(lock_path: Path, timeout_seconds: float) -> Any:
 
 
 def _apply_or_reject_conflicting_payload(
-    active: Any,
-    payload: dict[str, Any] | None,
-    run_state: Any,
-    state_path: Path,
-) -> None:
-    """Apply a first-time payload, accept an identical resend, or reject a
-    differing one — whether or not the completion has been handed off yet.
+    active: Any, payload: dict[str, Any] | None
+) -> bool:
+    """Apply a first-time payload in-memory, accept an identical resend as a
+    no-op, or reject a differing one — including once the completion has
+    already been handed off (with or without a payload on record yet).
 
-    A concurrent or restarted caller resuming the same completion/result must
-    not silently overwrite payload content another attempt already reserved
-    (and may already have posted): the persisted payload is the one that
-    evidence (comment id/url) will end up describing.
+    A concurrent or restarted caller resuming the same completion/result, or
+    recording handoff evidence for it, must not silently overwrite payload
+    content another attempt already reserved (and may already have posted):
+    the persisted payload is the one that evidence (comment id/url) will end
+    up describing. Returns True if the in-memory payload changed, so the
+    caller knows whether it still needs to persist it.
     """
-    if payload is None:
-        return
-    if active.completion_payload is None:
-        active.completion_payload = dict(payload)
-        _save_or_raise(run_state, state_path)
-    elif active.completion_payload != payload:
+    if payload is None or active.completion_payload == payload:
+        return False
+    if active.completion_handoff_ready or active.completion_payload is not None:
         raise CompletionJournalError(
             CompleteFailureReason.CONCURRENT_COMPLETION,
             "A different completion payload is already reserved for this " "completion",
         )
+    active.completion_payload = dict(payload)
+    return True
 
 
 def _resume_existing_reservation(
@@ -149,7 +148,8 @@ def _resume_existing_reservation(
             f"Cannot change reserved completion result from "
             f"{active.completion_result!r} to {result!r}",
         )
-    _apply_or_reject_conflicting_payload(active, payload, run_state, state_path)
+    if _apply_or_reject_conflicting_payload(active, payload):
+        _save_or_raise(run_state, state_path)
     return _to_journal(active)
 
 
@@ -204,8 +204,7 @@ def _apply_handoff_evidence(
         active.completion_comment_id = comment_id
     if comment_url is not None:
         active.completion_comment_url = comment_url
-    if payload is not None:
-        active.completion_payload = dict(payload)
+    _apply_or_reject_conflicting_payload(active, payload)
     return False
 
 

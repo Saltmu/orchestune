@@ -186,6 +186,20 @@ class TestReserveCompletion:
         persisted = load_run_state(path).active_worktrees["10"]
         assert persisted.completion_payload == {"pr": 1}
 
+    def test_rejects_a_payload_added_after_handoff_when_none_was_set(self, tmp_path):
+        path = _seed_active(tmp_path)
+        journal = _reserve(path)  # no payload reserved
+        mark_handoff_ready(journal, comment_id="1", comment_url="u", state_path=path)
+
+        # a terminal record must stay immutable even when the payload it was
+        # handed off with was never set in the first place.
+        with pytest.raises(CompletionJournalError) as excinfo:
+            _reserve(path, payload={"pr": 1})
+        assert excinfo.value.reason == CompleteFailureReason.CONCURRENT_COMPLETION
+
+        persisted = load_run_state(path).active_worktrees["10"]
+        assert persisted.completion_payload is None
+
     def test_save_failure_does_not_leave_a_half_applied_reservation(
         self, tmp_path, monkeypatch
     ):
@@ -240,6 +254,37 @@ class TestMarkHandoffReady:
             "pr": 42,
             "review": {"bot": "codex", "rounds": 1},
         }
+
+    def test_accepts_a_matching_payload_when_marking_handoff_ready(self, tmp_path):
+        path = _seed_active(tmp_path)
+        journal = _reserve(path, payload={"pr": 1})
+
+        ready = mark_handoff_ready(
+            journal, comment_id="1", comment_url="u", payload={"pr": 1}, state_path=path
+        )
+
+        assert ready.handoff_ready is True
+        assert ready.payload == {"pr": 1}
+
+    def test_rejects_a_conflicting_payload_when_marking_handoff_ready(self, tmp_path):
+        path = _seed_active(tmp_path)
+        journal = _reserve(path, payload={"pr": 1})
+
+        # the comment evidence being recorded must not be allowed to point at
+        # payload content that disagrees with what was actually reserved.
+        with pytest.raises(CompletionJournalError) as excinfo:
+            mark_handoff_ready(
+                journal,
+                comment_id="1",
+                comment_url="u",
+                payload={"pr": 2},
+                state_path=path,
+            )
+        assert excinfo.value.reason == CompleteFailureReason.CONCURRENT_COMPLETION
+
+        persisted = load_run_state(path).active_worktrees["10"]
+        assert persisted.completion_handoff_ready is False
+        assert persisted.completion_payload == {"pr": 1}
 
     def test_does_not_hold_the_lock_between_reserve_and_handoff(self, tmp_path):
         path = _seed_active(tmp_path)
