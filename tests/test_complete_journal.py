@@ -357,6 +357,44 @@ class TestMarkHandoffReady:
         )
         assert second == first
 
+    def test_rejects_a_retry_with_a_different_comment_id_after_handoff(self, tmp_path):
+        path = _seed_active(tmp_path)
+        journal = _reserve(path)
+        first = mark_handoff_ready(
+            journal, comment_id="1", comment_url="u", state_path=path
+        )
+
+        with pytest.raises(CompletionJournalError) as excinfo:
+            mark_handoff_ready(first, comment_id="2", comment_url="u", state_path=path)
+        assert excinfo.value.reason == CompleteFailureReason.INVALID_STAGE_TRANSITION
+
+        persisted = load_run_state(path).active_worktrees["10"]
+        assert persisted.completion_comment_id == "1"
+
+    def test_rejects_a_retry_with_a_different_payload_after_handoff(self, tmp_path):
+        path = _seed_active(tmp_path)
+        journal = _reserve(path)
+        first = mark_handoff_ready(
+            journal,
+            comment_id="1",
+            comment_url="u",
+            payload={"pr": 1},
+            state_path=path,
+        )
+
+        with pytest.raises(CompletionJournalError) as excinfo:
+            mark_handoff_ready(
+                first,
+                comment_id="1",
+                comment_url="u",
+                payload={"pr": 2},
+                state_path=path,
+            )
+        assert excinfo.value.reason == CompleteFailureReason.INVALID_STAGE_TRANSITION
+
+        persisted = load_run_state(path).active_worktrees["10"]
+        assert persisted.completion_payload == {"pr": 1}
+
     def test_save_failure_does_not_report_handoff_ready(self, tmp_path, monkeypatch):
         path = _seed_active(tmp_path)
         journal = _reserve(path)

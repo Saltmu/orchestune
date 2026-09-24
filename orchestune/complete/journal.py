@@ -132,6 +132,62 @@ def _resume_existing_reservation(
     return _to_journal(active)
 
 
+def _validate_resumable_claim(active: Any, journal: CompletionJournal) -> None:
+    """Reject a stale resume: the claim and reserved completion must be unchanged."""
+    if active is None or active.claim_id != journal.claim_id:
+        raise CompletionJournalError(
+            CompleteFailureReason.CLAIM_NOT_FOUND,
+            f"No active claim {journal.claim_id!r} found for issue "
+            f"#{journal.issue_number}",
+        )
+    if (
+        active.completion_id != journal.completion_id
+        or active.completion_result != journal.result
+    ):
+        raise CompletionJournalError(
+            CompleteFailureReason.INVALID_STAGE_TRANSITION,
+            "Completion reservation changed since it was reserved (stale resume)",
+        )
+
+
+def _apply_handoff_evidence(
+    active: Any,
+    comment_id: str | None,
+    comment_url: str | None,
+    payload: dict[str, Any] | None,
+) -> bool:
+    """Apply new posting evidence onto ``active``.
+
+    Returns True if the completion was already terminal (handed off), in
+    which case the caller should return the existing record unchanged.
+    Raises if the supplied evidence conflicts with an already-terminal
+    record instead of matching it exactly.
+    """
+    if active.completion_handoff_ready:
+        conflicts = (
+            (comment_id is not None and comment_id != active.completion_comment_id)
+            or (
+                comment_url is not None and comment_url != active.completion_comment_url
+            )
+            or (payload is not None and payload != active.completion_payload)
+        )
+        if conflicts:
+            raise CompletionJournalError(
+                CompleteFailureReason.INVALID_STAGE_TRANSITION,
+                "Completion already handed off to GC with different evidence; "
+                "retried evidence must match exactly",
+            )
+        return True
+
+    if comment_id is not None:
+        active.completion_comment_id = comment_id
+    if comment_url is not None:
+        active.completion_comment_url = comment_url
+    if payload is not None:
+        active.completion_payload = dict(payload)
+    return False
+
+
 def reserve_completion(
     *,
     issue_number: int,
@@ -204,34 +260,20 @@ def mark_handoff_ready(
     different completion winning the reservation) since it was reserved.
     Rejects marking handoff-ready unless a durable Issue comment id and url are
     on record (freshly supplied here, or already persisted from a prior call) —
-    otherwise GC could treat an unposted outcome as safely handed off.
+    otherwise GC could treat an unposted outcome as safely handed off. A
+    completion already handed off is terminal: an identical retry returns the
+    existing record unchanged, and a retry with conflicting evidence is
+    rejected rather than silently overwritten.
     """
     cm = _acquire_run_state_lock(_lock_path_for(state_path), timeout_seconds)
     try:
         run_state = load_run_state(state_path)
         active = run_state.active_worktrees.get(str(journal.issue_number))
-        if active is None or active.claim_id != journal.claim_id:
-            raise CompletionJournalError(
-                CompleteFailureReason.CLAIM_NOT_FOUND,
-                f"No active claim {journal.claim_id!r} found for issue "
-                f"#{journal.issue_number}",
-            )
-        if (
-            active.completion_id != journal.completion_id
-            or active.completion_result != journal.result
-        ):
-            raise CompletionJournalError(
-                CompleteFailureReason.INVALID_STAGE_TRANSITION,
-                "Completion reservation changed since it was reserved "
-                "(stale resume)",
-            )
+        _validate_resumable_claim(active, journal)
+        assert active is not None  # narrowed by _validate_resumable_claim above
 
-        if comment_id is not None:
-            active.completion_comment_id = comment_id
-        if comment_url is not None:
-            active.completion_comment_url = comment_url
-        if payload is not None:
-            active.completion_payload = dict(payload)
+        if _apply_handoff_evidence(active, comment_id, comment_url, payload):
+            return _to_journal(active)
 
         if not _has_posting_evidence(
             active.completion_comment_id, active.completion_comment_url
