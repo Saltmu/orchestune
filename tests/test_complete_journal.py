@@ -152,9 +152,26 @@ class TestReserveCompletion:
             "pr": 42
         }
 
-    def test_reservation_after_handoff_does_not_mutate_the_terminal_payload(
-        self, tmp_path
-    ):
+    def test_resuming_with_an_identical_payload_is_idempotent(self, tmp_path):
+        path = _seed_active(tmp_path)
+        first = _reserve(path, payload={"pr": 1})
+        second = _reserve(path, payload={"pr": 1})
+        assert second == first
+
+    def test_rejects_a_conflicting_payload_before_handoff(self, tmp_path):
+        path = _seed_active(tmp_path)
+        first = _reserve(path, payload={"pr": 1})
+
+        # a concurrent or restarted caller resuming the same completion must
+        # not silently overwrite payload content another attempt reserved.
+        with pytest.raises(CompletionJournalError) as excinfo:
+            _reserve(path, completion_id=first.completion_id, payload={"pr": 2})
+        assert excinfo.value.reason == CompleteFailureReason.CONCURRENT_COMPLETION
+
+        persisted = load_run_state(path).active_worktrees["10"]
+        assert persisted.completion_payload == {"pr": 1}
+
+    def test_rejects_a_conflicting_payload_after_handoff(self, tmp_path):
         path = _seed_active(tmp_path)
         journal = _reserve(path, payload={"pr": 1})
         mark_handoff_ready(journal, comment_id="1", comment_url="u", state_path=path)
@@ -162,10 +179,10 @@ class TestReserveCompletion:
         # a retried reservation (e.g. a re-executed caller) with a different
         # payload must not rewrite evidence that a posted comment already
         # refers to.
-        resumed = _reserve(path, payload={"pr": 2})
+        with pytest.raises(CompletionJournalError) as excinfo:
+            _reserve(path, payload={"pr": 2})
+        assert excinfo.value.reason == CompleteFailureReason.CONCURRENT_COMPLETION
 
-        assert resumed.payload == {"pr": 1}
-        assert resumed.handoff_ready is True
         persisted = load_run_state(path).active_worktrees["10"]
         assert persisted.completion_payload == {"pr": 1}
 

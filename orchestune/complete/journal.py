@@ -101,6 +101,32 @@ def _acquire_run_state_lock(lock_path: Path, timeout_seconds: float) -> Any:
         ) from e
 
 
+def _apply_or_reject_conflicting_payload(
+    active: Any,
+    payload: dict[str, Any] | None,
+    run_state: Any,
+    state_path: Path,
+) -> None:
+    """Apply a first-time payload, accept an identical resend, or reject a
+    differing one — whether or not the completion has been handed off yet.
+
+    A concurrent or restarted caller resuming the same completion/result must
+    not silently overwrite payload content another attempt already reserved
+    (and may already have posted): the persisted payload is the one that
+    evidence (comment id/url) will end up describing.
+    """
+    if payload is None:
+        return
+    if active.completion_payload is None:
+        active.completion_payload = dict(payload)
+        _save_or_raise(run_state, state_path)
+    elif active.completion_payload != payload:
+        raise CompletionJournalError(
+            CompleteFailureReason.CONCURRENT_COMPLETION,
+            "A different completion payload is already reserved for this " "completion",
+        )
+
+
 def _resume_existing_reservation(
     active: Any,
     issue_number: int,
@@ -123,12 +149,7 @@ def _resume_existing_reservation(
             f"Cannot change reserved completion result from "
             f"{active.completion_result!r} to {result!r}",
         )
-    # A completion already handed off to GC is terminal: its posted evidence
-    # (comment id/url) refers to a specific payload, so a retried reservation
-    # must not silently rewrite it out from under that evidence.
-    if payload is not None and not active.completion_handoff_ready:
-        active.completion_payload = dict(payload)
-        _save_or_raise(run_state, state_path)
+    _apply_or_reject_conflicting_payload(active, payload, run_state, state_path)
     return _to_journal(active)
 
 
