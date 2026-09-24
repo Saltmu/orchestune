@@ -11,13 +11,7 @@ echo "========================================="
 echo "Running Orchestune Local CI Check..."
 echo "========================================="
 
-if ! command -v uv >/dev/null 2>&1; then
-  echo "ERROR: uv is required for local CI. Install it from https://docs.astral.sh/uv/." >&2
-  exit 2
-fi
-
-# Invalidate prior evidence before any setup or validation steps without triggering uv environment sync
-CI_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+# Invalidate prior evidence before any prerequisite checks or setup
 if [ -n "${ORCHESTUNE_CI_EVIDENCE_PATH:-}" ]; then
   EVIDENCE_FILE="${ORCHESTUNE_CI_EVIDENCE_PATH}"
 else
@@ -25,6 +19,13 @@ else
   EVIDENCE_FILE="${GIT_DIR}/ci_evidence.json"
 fi
 rm -f "${EVIDENCE_FILE}" "${EVIDENCE_FILE}.tmp."* 2>/dev/null || true
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "ERROR: uv is required for local CI. Install it from https://docs.astral.sh/uv/." >&2
+  exit 2
+fi
+
+CI_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 uv run --no-sync python -m orchestune.complete.ci_evidence invalidate 2>/dev/null || true
 
 # Ensure virtual environment and dependencies are installed
@@ -69,5 +70,19 @@ echo "========================================="
 echo "✨ Local CI passed successfully!"
 echo "========================================="
 
-uv run python -m orchestune.complete.ci_evidence record --started-at "${CI_START_TIME}"
+RECORD_ARGS=("--started-at" "${CI_START_TIME}")
+if [ -n "${ORCHESTUNE_BASE_SHA:-}" ]; then
+  RECORD_ARGS+=("--base-sha" "${ORCHESTUNE_BASE_SHA}")
+fi
+if [ -n "${ORCHESTUNE_BASE_REF:-}" ]; then
+  RECORD_ARGS+=("--base-ref" "${ORCHESTUNE_BASE_REF}")
+fi
+if [ -n "${ORCHESTUNE_STATE_PATH:-}" ]; then
+  RECORD_ARGS+=("--state-path" "${ORCHESTUNE_STATE_PATH}")
+fi
+if [ -n "${ORCHESTUNE_ISSUE_NUMBER:-}" ]; then
+  RECORD_ARGS+=("--issue" "${ORCHESTUNE_ISSUE_NUMBER}")
+fi
+
+uv run python -m orchestune.complete.ci_evidence record "${RECORD_ARGS[@]}"
 

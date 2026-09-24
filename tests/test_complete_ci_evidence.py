@@ -718,3 +718,111 @@ class TestEdgeCasesAndBoundaryConditions:
         local_tip = _resolve_ref_tip(git_worktree, "main")
         assert local_tip is not None
         assert len(local_tip) == 40
+
+    def test_query_remote_ref_tip_fails_closed_when_origin_unreachable(
+        self, git_worktree: Path, tmp_path: Path
+    ):
+        from orchestune.complete.ci_evidence import (
+            _query_remote_ref_tip,
+            _resolve_ref_tip,
+        )
+        from orchestune.infra.git_cli import GitResult
+
+        # Add a dummy origin remote
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://invalid.example.com/repo.git"],
+            cwd=git_worktree,
+            check=True,
+        )
+
+        with patch("orchestune.complete.ci_evidence.run_git") as mock_git:
+            # remote get-url origin succeeds
+            def fake_run_git(args, **kwargs):
+                if args[:2] == ["remote", "get-url"]:
+                    return GitResult(
+                        returncode=0, stdout="https://invalid.example.com", stderr=""
+                    )
+                if args[0] == "ls-remote":
+                    return GitResult(
+                        returncode=128, stdout="", stderr="fatal: unable to access"
+                    )
+                return GitResult(returncode=0, stdout="a" * 40, stderr="")
+
+            mock_git.side_effect = fake_run_git
+
+            with pytest.raises(
+                CiEvidenceError, match="Failed to query authoritative remote tip"
+            ):
+                _query_remote_ref_tip(git_worktree, "origin/main")
+
+            with pytest.raises(
+                CiEvidenceError, match="Failed to query authoritative remote tip"
+            ):
+                _resolve_ref_tip(git_worktree, "origin/main")
+
+    def test_record_respects_custom_state_path_and_explicit_base(
+        self, git_worktree: Path, tmp_path: Path
+    ):
+        custom_base_sha = "1" * 40
+        # Explicit base_sha passed directly
+        ev1 = record_ci_evidence(
+            worktree_root=git_worktree,
+            started_at="2026-09-24T12:00:00Z",
+            exit_code=0,
+            base_sha=custom_base_sha,
+        )
+        assert ev1.base_sha == custom_base_sha
+
+        # Via ORCHESTUNE_BASE_SHA environment variable
+        with patch.dict(os.environ, {"ORCHESTUNE_BASE_SHA": "2" * 40}):
+            ev2 = record_ci_evidence(
+                worktree_root=git_worktree,
+                started_at="2026-09-24T12:00:00Z",
+                exit_code=0,
+            )
+            assert ev2.base_sha == "2" * 40
+
+        # Via custom state_path and issue
+        state_file = tmp_path / "custom_state.json"
+        state_file.write_text(
+            json.dumps(
+                {
+                    "active_worktrees": {
+                        "2000": {
+                            "worktree_path": str(git_worktree),
+                            "base_ref": "custom-base",
+                            "base_sha": "3" * 40,
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        ev3 = record_ci_evidence(
+            worktree_root=git_worktree,
+            started_at="2026-09-24T12:00:00Z",
+            exit_code=0,
+            state_path=state_file,
+            issue_number=2000,
+        )
+        assert ev3.base_sha == "3" * 40
+
+    def test_local_ci_scripts_invalidate_before_uv_guard(self):
+        sh_text = Path("scripts/local-ci.sh").read_text(encoding="utf-8")
+        ps1_text = Path("scripts/local-ci.ps1").read_text(encoding="utf-8")
+
+        # In bash script, direct removal occurs before command -v uv check
+        idx_sh_rm = sh_text.find("rm -f")
+        idx_sh_uv = sh_text.find("command -v uv")
+        assert idx_sh_rm != -1 and idx_sh_uv != -1
+        assert (
+            idx_sh_rm < idx_sh_uv
+        ), "Direct removal must occur before uv check in local-ci.sh"
+
+        # In PowerShell script, Remove-Item occurs before Get-Command uv check
+        idx_ps1_rm = ps1_text.find("Remove-Item")
+        idx_ps1_uv = ps1_text.find("Get-Command uv")
+        assert idx_ps1_rm != -1 and idx_ps1_uv != -1
+        assert (
+            idx_ps1_rm < idx_ps1_uv
+        ), "Direct removal must occur before uv check in local-ci.ps1"

@@ -220,9 +220,27 @@ def _resolve_tree_sha(root: Path) -> str:
     return res.stdout.strip()
 
 
+def _has_origin_remote(root: Path) -> bool:
+    """Check if repository has a configured origin remote."""
+    try:
+        res = run_git(["remote", "get-url", "origin"], cwd=root, check=False)
+        return res.returncode == 0 and bool(res.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _query_remote_ref_tip(root: Path, ref: str) -> str | None:
-    """Query authoritative remote origin tip commit SHA for a ref."""
+    """Query authoritative remote origin tip commit SHA for a ref.
+
+    Raises CiEvidenceError if origin is configured but the remote query fails,
+    preventing silent fallback to stale cached refs.
+    """
+    if not _has_origin_remote(root):
+        return None
+
     cleaned = ref.removeprefix("origin/").removeprefix("refs/heads/")
+    is_remote_ref = ref.startswith("origin/") or ref.startswith("refs/remotes/origin/")
+
     for query_ref in (f"refs/heads/{cleaned}", cleaned):
         try:
             res = run_git(
@@ -230,13 +248,27 @@ def _query_remote_ref_tip(root: Path, ref: str) -> str | None:
                 cwd=root,
                 check=False,
             )
-            if res.returncode == 0 and res.stdout.strip():
-                for line in res.stdout.strip().splitlines():
-                    parts = line.split()
-                    if parts and len(parts[0]) == 40:
-                        return parts[0]
-        except (OSError, subprocess.SubprocessError):
-            pass
+        except (OSError, subprocess.SubprocessError) as err:
+            raise CiEvidenceError(
+                f"Failed to query authoritative remote tip for {ref}: {err}"
+            ) from err
+
+        if res.returncode != 0:
+            raise CiEvidenceError(
+                f"Failed to query authoritative remote tip for {ref} from origin "
+                f"(exit code {res.returncode}): {res.stderr.strip()}"
+            )
+
+        if res.stdout.strip():
+            for line in res.stdout.strip().splitlines():
+                parts = line.split()
+                if parts and len(parts[0]) == 40:
+                    return parts[0]
+
+    if is_remote_ref:
+        raise CiEvidenceError(
+            f"Remote reference {ref!r} was not found on remote origin"
+        )
     return None
 
 
@@ -255,23 +287,37 @@ def _resolve_ref_tip(root: Path, ref: str) -> str | None:
 
 
 def _find_active_worktree_base(
-    root: Path, request: Any | None = None
+    root: Path,
+    request: Any | None = None,
+    *,
+    state_path: Path | str | None = None,
+    issue_number: int | str | None = None,
 ) -> tuple[str | None, str | None]:
-    """Look up (base_ref, base_sha) for root from request or run_state.json."""
+    """Look up (base_ref, base_sha) for root from request, state_path, or run_state.json."""
     candidate_paths: list[Path] = []
+    if state_path is not None:
+        candidate_paths.append(Path(state_path).resolve())
+    env_state = os.environ.get("ORCHESTUNE_STATE_PATH")
+    if env_state:
+        candidate_paths.append(Path(env_state).resolve())
     if request is not None and getattr(request, "state_path", None):
         candidate_paths.append(Path(request.state_path).resolve())
-    for candidate_dir in (root, root.parent, root.parent.parent):
+    for candidate_dir in [root] + list(root.parents)[:5]:
         candidate_paths.append(candidate_dir / "run_state.json")
 
-    req_issue = (
-        str(getattr(request, "issue_number", "")) if request is not None else None
-    )
-    for state_path in candidate_paths:
-        if not state_path.is_file():
+    req_issue: str | None = None
+    if issue_number is not None:
+        req_issue = str(issue_number)
+    elif os.environ.get("ORCHESTUNE_ISSUE_NUMBER"):
+        req_issue = str(os.environ["ORCHESTUNE_ISSUE_NUMBER"])
+    elif request is not None and getattr(request, "issue_number", None):
+        req_issue = str(request.issue_number)
+
+    for p in candidate_paths:
+        if not p.is_file():
             continue
         try:
-            data = json.loads(state_path.read_text(encoding="utf-8"))
+            data = json.loads(p.read_text(encoding="utf-8"))
             active_trees = data.get("active_worktrees", {})
             for issue_str, entry in active_trees.items():
                 if req_issue and issue_str == req_issue:
@@ -284,22 +330,8 @@ def _find_active_worktree_base(
     return None, None
 
 
-def _resolve_base_sha(root: Path, request: Any | None = None) -> str:
-    """Resolve target base branch tip commit SHA."""
-    if request is not None:
-        payload = getattr(request, "payload", None)
-        if payload is not None and getattr(payload, "base_sha", None):
-            return str(payload.base_sha)
-
-    active_ref, active_sha = _find_active_worktree_base(root, request)
-    if active_ref:
-        tip = _resolve_ref_tip(root, active_ref)
-        if tip:
-            return tip
-    if active_sha:
-        return active_sha
-
-    # Check for parent/issue-* branches
+def _resolve_fallback_base_tip(root: Path) -> str | None:
+    """Find fallback base tip from parent/* branches or main."""
     res = run_git(
         [
             "for-each-ref",
@@ -320,6 +352,47 @@ def _resolve_base_sha(root: Path, request: Any | None = None) -> str:
         tip = _resolve_ref_tip(root, default_ref)
         if tip:
             return tip
+    return None
+
+
+def _resolve_base_sha(
+    root: Path,
+    request: Any | None = None,
+    *,
+    base_sha: str | None = None,
+    base_ref: str | None = None,
+    state_path: Path | str | None = None,
+    issue_number: int | str | None = None,
+) -> str:
+    """Resolve target base branch tip commit SHA."""
+    explicit_sha = base_sha or os.environ.get("ORCHESTUNE_BASE_SHA")
+    if explicit_sha:
+        return explicit_sha
+
+    if request is not None:
+        payload = getattr(request, "payload", None)
+        if payload is not None and getattr(payload, "base_sha", None):
+            return str(payload.base_sha)
+
+    explicit_ref = base_ref or os.environ.get("ORCHESTUNE_BASE_REF")
+    if explicit_ref:
+        tip = _resolve_ref_tip(root, explicit_ref)
+        if tip:
+            return tip
+
+    active_ref, active_sha = _find_active_worktree_base(
+        root, request, state_path=state_path, issue_number=issue_number
+    )
+    if active_ref:
+        tip = _resolve_ref_tip(root, active_ref)
+        if tip:
+            return tip
+    if active_sha:
+        return active_sha
+
+    fallback_tip = _resolve_fallback_base_tip(root)
+    if fallback_tip:
+        return fallback_tip
 
     res = run_git(["rev-parse", "HEAD~1"], cwd=root, check=False)
     if res.returncode == 0 and res.stdout.strip():
@@ -351,6 +424,9 @@ def record_ci_evidence(
     completed_at: str | None = None,
     exit_code: int = 0,
     base_sha: str | None = None,
+    base_ref: str | None = None,
+    state_path: Path | str | None = None,
+    issue_number: int | str | None = None,
 ) -> CiEvidence:
     """Atomically record successful CI evidence outside the worktree tracking area."""
     root = (
@@ -366,10 +442,17 @@ def record_ci_evidence(
     is_clean = status == WorktreeStatus.CLEAN
     tree_sha = _resolve_tree_sha(root)
 
+    resolved_base = _resolve_base_sha(
+        root,
+        base_sha=base_sha,
+        base_ref=base_ref,
+        state_path=state_path,
+        issue_number=issue_number,
+    )
     now_utc = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     evidence = CiEvidence(
         head_sha=_resolve_head_sha(root),
-        base_sha=base_sha or _resolve_base_sha(root),
+        base_sha=resolved_base,
         succeeded=(exit_code == 0),
         schema_version=CURRENT_SCHEMA_VERSION,
         ci_definition_digest=compute_ci_definition_digest(root),
@@ -519,6 +602,7 @@ def run_local_ci_if_needed(
 
     root = getattr(request, "worktree_root", None)
     worktree_path = Path(root).resolve() if root is not None else Path.cwd().resolve()
+    expected_base_sha = _resolve_base_sha(worktree_path, request)
 
     cmd: Sequence[str]
     if ci_command is None:
@@ -528,7 +612,14 @@ def run_local_ci_if_needed(
     else:
         cmd = list(ci_command)
 
-    res = subprocess.run(cmd, cwd=worktree_path, check=False)
+    env = os.environ.copy()
+    env["ORCHESTUNE_BASE_SHA"] = expected_base_sha
+    if getattr(request, "state_path", None):
+        env["ORCHESTUNE_STATE_PATH"] = str(request.state_path)
+    if getattr(request, "issue_number", None):
+        env["ORCHESTUNE_ISSUE_NUMBER"] = str(request.issue_number)
+
+    res = subprocess.run(cmd, cwd=worktree_path, env=env, check=False)
     if res.returncode != 0:
         raise CiExecutionError(
             f"Local CI execution failed with exit code {res.returncode}"
@@ -546,6 +637,10 @@ def _cli_record(args: argparse.Namespace) -> None:
         worktree_root=args.worktree,
         started_at=args.started_at,
         exit_code=args.exit_code,
+        base_sha=args.base_sha,
+        base_ref=args.base_ref,
+        state_path=args.state_path,
+        issue_number=args.issue,
     )
 
 
@@ -572,6 +667,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     rec_parser.add_argument(
         "--exit-code", type=int, default=0, help="CI runner exit code"
+    )
+    rec_parser.add_argument(
+        "--base-sha", type=str, default=None, help="Authoritative base commit SHA"
+    )
+    rec_parser.add_argument(
+        "--base-ref", type=str, default=None, help="Target base branch reference"
+    )
+    rec_parser.add_argument(
+        "--state-path", type=Path, default=None, help="Path to run_state.json"
+    )
+    rec_parser.add_argument(
+        "--issue", type=int, default=None, help="Issue number for worktree"
     )
 
     args = parser.parse_args(argv)

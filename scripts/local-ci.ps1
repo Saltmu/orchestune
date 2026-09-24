@@ -26,13 +26,7 @@ Write-Host "========================================="
 Write-Host "Running Orchestune Local CI Check (PowerShell)..."
 Write-Host "========================================="
 
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Write-Host "ERROR: uv is required for local CI. Install it from https://docs.astral.sh/uv/." -ForegroundColor Red
-    exit 2
-}
-
-# Invalidate prior evidence before any setup or validation steps without triggering uv environment sync
-$CiStartTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+# Invalidate prior evidence before any prerequisite checks or setup
 if ($env:ORCHESTUNE_CI_EVIDENCE_PATH) {
     $EvidenceFile = $env:ORCHESTUNE_CI_EVIDENCE_PATH
 } else {
@@ -47,6 +41,13 @@ $EvidenceParent = Split-Path -Parent $EvidenceFile
 if ($EvidenceParent -and (Test-Path $EvidenceParent)) {
     Get-ChildItem -Path $EvidenceParent -Filter "ci_evidence.json.tmp.*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 }
+
+if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+    Write-Host "ERROR: uv is required for local CI. Install it from https://docs.astral.sh/uv/." -ForegroundColor Red
+    exit 2
+}
+
+$CiStartTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
 uv run --no-sync python -m orchestune.complete.ci_evidence invalidate 2>$null
 
 # Ensure virtual environment and dependencies are installed
@@ -109,6 +110,19 @@ Write-Host "========================================="
 Write-Host "✨ Local CI passed successfully!"
 Write-Host "========================================="
 
-uv run python -m orchestune.complete.ci_evidence record --started-at $CiStartTime
+$RecordArgs = @("--started-at", $CiStartTime)
+if ($env:ORCHESTUNE_BASE_SHA) {
+    $RecordArgs += @("--base-sha", $env:ORCHESTUNE_BASE_SHA)
+}
+if ($env:ORCHESTUNE_BASE_REF) {
+    $RecordArgs += @("--base-ref", $env:ORCHESTUNE_BASE_REF)
+}
+if ($env:ORCHESTUNE_STATE_PATH) {
+    $RecordArgs += @("--state-path", $env:ORCHESTUNE_STATE_PATH)
+}
+if ($env:ORCHESTUNE_ISSUE_NUMBER) {
+    $RecordArgs += @("--issue", $env:ORCHESTUNE_ISSUE_NUMBER)
+}
+uv run python -m orchestune.complete.ci_evidence record @RecordArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
