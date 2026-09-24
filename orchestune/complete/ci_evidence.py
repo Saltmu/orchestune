@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from orchestune.infra.git_cli import run_git
+from orchestune.infra.git_cli import WorktreeStatus, inspect_worktree_status, run_git
 from orchestune.outcome_record import RESULT_DONE
 
 CI_EVIDENCE_FILENAME = "ci_evidence.json"
@@ -61,6 +61,8 @@ class CiEvidence:
     completed_at: str = ""
     exit_code: int = 0
     status: str = "passed"
+    worktree_clean: bool = True
+    tree_sha: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize evidence to a dictionary."""
@@ -86,6 +88,8 @@ class CiEvidence:
             completed_at=str(data["completed_at"]),
             exit_code=int(data["exit_code"]),
             status=str(data["status"]),
+            worktree_clean=bool(data["worktree_clean"]),
+            tree_sha=str(data["tree_sha"]),
         )
 
 
@@ -108,6 +112,8 @@ def _validate_raw_evidence_data(data: dict[str, Any]) -> None:
         "completed_at",
         "exit_code",
         "status",
+        "worktree_clean",
+        "tree_sha",
     )
     for field_name in required:
         if field_name not in data:
@@ -206,8 +212,40 @@ def _resolve_head_sha(root: Path) -> str:
     return res.stdout.strip()
 
 
+def _resolve_tree_sha(root: Path) -> str:
+    """Resolve tree SHA of the current HEAD commit."""
+    res = run_git(["rev-parse", "HEAD^{tree}"], cwd=root, check=False)
+    if res.returncode != 0 or not res.stdout.strip():
+        raise CiEvidenceError(f"Failed to resolve tree SHA in {root}")
+    return res.stdout.strip()
+
+
+def _query_remote_ref_tip(root: Path, ref: str) -> str | None:
+    """Query authoritative remote origin tip commit SHA for a ref."""
+    cleaned = ref.removeprefix("origin/").removeprefix("refs/heads/")
+    for query_ref in (f"refs/heads/{cleaned}", cleaned):
+        try:
+            res = run_git(
+                ["ls-remote", "origin", query_ref],
+                cwd=root,
+                check=False,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                for line in res.stdout.strip().splitlines():
+                    parts = line.split()
+                    if parts and len(parts[0]) == 40:
+                        return parts[0]
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return None
+
+
 def _resolve_ref_tip(root: Path, ref: str) -> str | None:
-    """Resolve commit SHA for a ref or origin/ref."""
+    """Resolve commit SHA for a ref or origin/ref, querying remote origin first."""
+    remote_tip = _query_remote_ref_tip(root, ref)
+    if remote_tip:
+        return remote_tip
+
     cleaned = ref.removeprefix("origin/")
     for candidate in (f"origin/{cleaned}", cleaned):
         res = run_git(["rev-parse", f"{candidate}^{{commit}}"], cwd=root, check=False)
@@ -324,6 +362,9 @@ def record_ci_evidence(
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
 
     os_name, arch_name, py_ver = _get_current_environment()
+    status = inspect_worktree_status(root)
+    is_clean = status == WorktreeStatus.CLEAN
+    tree_sha = _resolve_tree_sha(root)
 
     now_utc = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     evidence = CiEvidence(
@@ -340,6 +381,8 @@ def record_ci_evidence(
         completed_at=completed_at or now_utc,
         exit_code=exit_code,
         status="passed" if exit_code == 0 else "failed",
+        worktree_clean=is_clean,
+        tree_sha=tree_sha,
     )
     _write_evidence_atomic(evidence, evidence_path)
     return evidence
@@ -358,16 +401,47 @@ def _write_evidence_atomic(evidence: CiEvidence, evidence_path: Path) -> None:
     os.replace(tmp_path, evidence_path)
 
 
+def _validate_environment_match(evidence: CiEvidence) -> None:
+    cur_os, cur_arch, cur_py = _get_current_environment()
+    if (
+        evidence.os != cur_os
+        or evidence.architecture != cur_arch
+        or evidence.python_version != cur_py
+    ):
+        raise CiEvidenceMismatchError(
+            f"Execution environment mismatch: evidence has ({evidence.os}, {evidence.architecture}, "
+            f"{evidence.python_version}), current is ({cur_os}, {cur_arch}, {cur_py})"
+        )
+
+
 def _validate_evidence_context(
     evidence: CiEvidence,
     root: Path,
     request: Any,
 ) -> None:
     """Validate that evidence matches current HEAD, base, definition, and environment."""
+    if not evidence.worktree_clean:
+        raise CiEvidenceMismatchError(
+            "CI evidence was recorded from a dirty worktree; clean worktree verification is required"
+        )
+
+    current_status = inspect_worktree_status(root)
+    if current_status != WorktreeStatus.CLEAN:
+        raise CiEvidenceMismatchError(
+            f"Worktree has uncommitted changes (status={current_status.value}); "
+            "clean worktree verification is required"
+        )
+
     current_head = _resolve_head_sha(root)
     if evidence.head_sha != current_head:
         raise CiEvidenceMismatchError(
             f"HEAD SHA mismatch: evidence has {evidence.head_sha}, current worktree is {current_head}"
+        )
+
+    current_tree = _resolve_tree_sha(root)
+    if evidence.tree_sha and evidence.tree_sha != current_tree:
+        raise CiEvidenceMismatchError(
+            f"Tree SHA mismatch: evidence has {evidence.tree_sha}, current worktree is {current_tree}"
         )
 
     expected_base = _resolve_base_sha(root, request)
@@ -390,16 +464,7 @@ def _validate_evidence_context(
             f"current lockfile is {current_lock_digest}"
         )
 
-    cur_os, cur_arch, cur_py = _get_current_environment()
-    if (
-        evidence.os != cur_os
-        or evidence.architecture != cur_arch
-        or evidence.python_version != cur_py
-    ):
-        raise CiEvidenceMismatchError(
-            f"Execution environment mismatch: evidence has ({evidence.os}, {evidence.architecture}, "
-            f"{evidence.python_version}), current is ({cur_os}, {cur_arch}, {cur_py})"
-        )
+    _validate_environment_match(evidence)
 
 
 def validate_ci_evidence(request: Any) -> CiEvidence:

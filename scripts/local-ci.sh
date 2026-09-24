@@ -16,9 +16,16 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 2
 fi
 
-# Invalidate prior evidence before any setup or validation steps
+# Invalidate prior evidence before any setup or validation steps without triggering uv environment sync
 CI_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-uv run python -m orchestune.complete.ci_evidence invalidate
+if [ -n "${ORCHESTUNE_CI_EVIDENCE_PATH:-}" ]; then
+  EVIDENCE_FILE="${ORCHESTUNE_CI_EVIDENCE_PATH}"
+else
+  GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo ".git")"
+  EVIDENCE_FILE="${GIT_DIR}/ci_evidence.json"
+fi
+rm -f "${EVIDENCE_FILE}" "${EVIDENCE_FILE}.tmp."* 2>/dev/null || true
+uv run --no-sync python -m orchestune.complete.ci_evidence invalidate 2>/dev/null || true
 
 # Ensure virtual environment and dependencies are installed
 if ! uv run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" >/dev/null 2>&1; then

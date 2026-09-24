@@ -148,6 +148,8 @@ class TestCiEvidenceDataclass:
             "completed_at": "2026-09-24T12:01:00Z",
             "exit_code": 0,
             "status": "passed",
+            "worktree_clean": True,
+            "tree_sha": "e" * 40,
         }
 
         # Failed exit code
@@ -331,15 +333,15 @@ class TestValidateCiEvidence:
             validate_ci_evidence(req)
 
     def test_validate_rejects_ci_definition_mismatch(self, git_worktree: Path):
-        record_ci_evidence(
+        ev_obj = record_ci_evidence(
             worktree_root=git_worktree,
             started_at="2026-09-24T12:00:00Z",
             exit_code=0,
         )
-        # Change local-ci.sh definition
-        (git_worktree / "scripts" / "local-ci.sh").write_text(
-            "#!/bin/sh\n# modified\nexit 0\n", encoding="utf-8"
-        )
+        ev_path = resolve_evidence_path(git_worktree)
+        data = ev_obj.to_dict()
+        data["ci_definition_digest"] = "0" * 64
+        ev_path.write_text(json.dumps(data), encoding="utf-8")
 
         req = CompleteRequest.done(
             issue_number=1000, pr=100, worktree_root=git_worktree
@@ -350,18 +352,71 @@ class TestValidateCiEvidence:
             validate_ci_evidence(req)
 
     def test_validate_rejects_lockfile_mismatch(self, git_worktree: Path):
-        record_ci_evidence(
+        ev_obj = record_ci_evidence(
             worktree_root=git_worktree,
             started_at="2026-09-24T12:00:00Z",
             exit_code=0,
         )
-        # Change uv.lock
-        (git_worktree / "uv.lock").write_text("modified lockfile\n", encoding="utf-8")
+        ev_path = resolve_evidence_path(git_worktree)
+        data = ev_obj.to_dict()
+        data["lockfile_digest"] = "0" * 64
+        ev_path.write_text(json.dumps(data), encoding="utf-8")
 
         req = CompleteRequest.done(
             issue_number=1000, pr=100, worktree_root=git_worktree
         )
         with pytest.raises(CiEvidenceMismatchError, match="Lockfile digest mismatch"):
+            validate_ci_evidence(req)
+
+    def test_validate_rejects_dirty_worktree(self, git_worktree: Path):
+        record_ci_evidence(
+            worktree_root=git_worktree,
+            started_at="2026-09-24T12:00:00Z",
+            exit_code=0,
+        )
+        (git_worktree / "uncommitted.txt").write_text("uncommitted\n", encoding="utf-8")
+        req = CompleteRequest.done(
+            issue_number=1000, pr=100, worktree_root=git_worktree
+        )
+        with pytest.raises(
+            CiEvidenceMismatchError, match="Worktree has uncommitted changes"
+        ):
+            validate_ci_evidence(req)
+
+    def test_validate_rejects_evidence_recorded_from_dirty_worktree(
+        self, git_worktree: Path
+    ):
+        (git_worktree / "uncommitted.txt").write_text("uncommitted\n", encoding="utf-8")
+        record_ci_evidence(
+            worktree_root=git_worktree,
+            started_at="2026-09-24T12:00:00Z",
+            exit_code=0,
+        )
+        # Discard uncommitted changes to make current worktree clean
+        (git_worktree / "uncommitted.txt").unlink()
+        req = CompleteRequest.done(
+            issue_number=1000, pr=100, worktree_root=git_worktree
+        )
+        with pytest.raises(
+            CiEvidenceMismatchError, match="recorded from a dirty worktree"
+        ):
+            validate_ci_evidence(req)
+
+    def test_validate_rejects_tree_sha_mismatch(self, git_worktree: Path):
+        ev_obj = record_ci_evidence(
+            worktree_root=git_worktree,
+            started_at="2026-09-24T12:00:00Z",
+            exit_code=0,
+        )
+        ev_path = resolve_evidence_path(git_worktree)
+        data = ev_obj.to_dict()
+        data["tree_sha"] = "0" * 40
+        ev_path.write_text(json.dumps(data), encoding="utf-8")
+
+        req = CompleteRequest.done(
+            issue_number=1000, pr=100, worktree_root=git_worktree
+        )
+        with pytest.raises(CiEvidenceMismatchError, match="Tree SHA mismatch"):
             validate_ci_evidence(req)
 
     def test_validate_rejects_environment_mismatch(self, git_worktree: Path):
@@ -625,3 +680,41 @@ class TestEdgeCasesAndBoundaryConditions:
         ):
             d = resolve_evidence_dir(tmp_path)
             assert d == tmp_path / ".git"
+
+    def test_query_remote_ref_tip_authoritative(
+        self, git_worktree: Path, tmp_path: Path
+    ):
+        from orchestune.complete.ci_evidence import (
+            _query_remote_ref_tip,
+            _resolve_ref_tip,
+        )
+
+        upstream = tmp_path / "upstream.git"
+        subprocess.run(
+            ["git", "clone", "--bare", str(git_worktree), str(upstream)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(upstream)],
+            cwd=git_worktree,
+            check=True,
+        )
+
+        remote_tip = _query_remote_ref_tip(git_worktree, "main")
+        assert remote_tip is not None
+        assert len(remote_tip) == 40
+        assert _resolve_ref_tip(git_worktree, "main") == remote_tip
+
+    def test_query_remote_ref_tip_fallback_when_remote_unavailable(
+        self, git_worktree: Path
+    ):
+        from orchestune.complete.ci_evidence import (
+            _query_remote_ref_tip,
+            _resolve_ref_tip,
+        )
+
+        assert _query_remote_ref_tip(git_worktree, "main") is None
+        local_tip = _resolve_ref_tip(git_worktree, "main")
+        assert local_tip is not None
+        assert len(local_tip) == 40

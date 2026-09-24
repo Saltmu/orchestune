@@ -31,10 +31,23 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     exit 2
 }
 
-# Invalidate prior evidence before any setup or validation steps
+# Invalidate prior evidence before any setup or validation steps without triggering uv environment sync
 $CiStartTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
-uv run python -m orchestune.complete.ci_evidence invalidate
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($env:ORCHESTUNE_CI_EVIDENCE_PATH) {
+    $EvidenceFile = $env:ORCHESTUNE_CI_EVIDENCE_PATH
+} else {
+    $GitDir = (git rev-parse --git-dir 2>$null)
+    if (-not $GitDir) { $GitDir = ".git" }
+    $EvidenceFile = Join-Path $GitDir "ci_evidence.json"
+}
+if (Test-Path $EvidenceFile) {
+    Remove-Item -Force $EvidenceFile -ErrorAction SilentlyContinue
+}
+$EvidenceParent = Split-Path -Parent $EvidenceFile
+if ($EvidenceParent -and (Test-Path $EvidenceParent)) {
+    Get-ChildItem -Path $EvidenceParent -Filter "ci_evidence.json.tmp.*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+}
+uv run --no-sync python -m orchestune.complete.ci_evidence invalidate 2>$null
 
 # Ensure virtual environment and dependencies are installed
 & uv run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" 2>$null
