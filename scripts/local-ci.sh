@@ -34,6 +34,21 @@ fi
 CI_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 CI_START_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "")
 CI_START_TREE=$(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo "")
+if [ -n "${ORCHESTUNE_BASE_SHA:-}" ]; then
+  CI_START_BASE="${ORCHESTUNE_BASE_SHA}"
+else
+  BASE_RESOLVE_ARGS=()
+  if [ -n "${ORCHESTUNE_BASE_REF:-}" ]; then
+    BASE_RESOLVE_ARGS+=("--base-ref" "${ORCHESTUNE_BASE_REF}")
+  fi
+  if [ -n "${ORCHESTUNE_STATE_PATH:-}" ]; then
+    BASE_RESOLVE_ARGS+=("--state-path" "${ORCHESTUNE_STATE_PATH}")
+  fi
+  if [ -n "${ORCHESTUNE_ISSUE_NUMBER:-}" ]; then
+    BASE_RESOLVE_ARGS+=("--issue" "${ORCHESTUNE_ISSUE_NUMBER}")
+  fi
+  CI_START_BASE=$(uv run --no-sync python -m orchestune.complete.ci_evidence resolve-base "${BASE_RESOLVE_ARGS[@]}" 2>/dev/null || echo "")
+fi
 uv run --no-sync python -m orchestune.complete.ci_evidence invalidate 2>/dev/null || true
 
 # Ensure virtual environment and dependencies are installed
@@ -84,6 +99,12 @@ if [ -n "${CI_START_HEAD}" ]; then
 fi
 if [ -n "${CI_START_TREE}" ]; then
   RECORD_ARGS+=("--expected-tree" "${CI_START_TREE}")
+fi
+if [ -n "${CI_START_BASE}" ]; then
+  RECORD_ARGS+=("--expected-base" "${CI_START_BASE}")
+  if [ -z "${ORCHESTUNE_BASE_SHA:-}" ]; then
+    RECORD_ARGS+=("--base-sha" "${CI_START_BASE}")
+  fi
 fi
 if [ -n "${ORCHESTUNE_BASE_SHA:-}" ]; then
   RECORD_ARGS+=("--base-sha" "${ORCHESTUNE_BASE_SHA}")

@@ -219,6 +219,27 @@ def _query_python_version(cmd: list[str], cwd: Path) -> str | None:
     return None
 
 
+def _find_configured_python(root: Path) -> Path | None:
+    """Find configured Python interpreter using uv python find without mutating filesystem."""
+    try:
+        res = subprocess.run(
+            ["uv", "python", "find"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=5,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            candidate = Path(res.stdout.strip())
+            if candidate.is_file():
+                return candidate
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
 def _resolve_runner_environment(
     worktree_root: Path | str | None = None,
 ) -> tuple[str, str, str]:
@@ -231,22 +252,26 @@ def _resolve_runner_environment(
         else Path.cwd().resolve()
     )
 
-    ver = _query_python_version(["uv", "run", "--no-sync", "python"], cwd=root)
-    if ver:
-        return os_name, arch_name, ver
-
     candidate_envs: list[Path] = []
     if "UV_PROJECT_ENVIRONMENT" in os.environ:
-        candidate_envs.append(Path(os.environ["UV_PROJECT_ENVIRONMENT"]))
+        raw_env = os.environ["UV_PROJECT_ENVIRONMENT"]
+        p = Path(raw_env)
+        candidate_envs.append(p if p.is_absolute() else (root / p).resolve())
     candidate_envs.append(root / ".venv")
 
     for env_dir in candidate_envs:
         for py_rel in ("bin/python", "Scripts/python.exe"):
             py_bin = env_dir / py_rel
             if py_bin.is_file():
-                fallback_ver = _query_python_version([str(py_bin)], cwd=root)
-                if fallback_ver:
-                    return os_name, arch_name, fallback_ver
+                ver = _query_python_version([str(py_bin)], cwd=root)
+                if ver:
+                    return os_name, arch_name, ver
+
+    configured_py = _find_configured_python(root)
+    if configured_py:
+        ver = _query_python_version([str(configured_py)], cwd=root)
+        if ver:
+            return os_name, arch_name, ver
 
     py_ver = f"{platform.python_implementation()} {platform.python_version()}"
     return os_name, arch_name, py_ver
@@ -480,10 +505,12 @@ def invalidate_ci_evidence(worktree_root: Path | str | None = None) -> None:
 def _check_run_boundaries(
     expected_head: str | None,
     expected_tree: str | None,
+    expected_base: str | None,
     current_head: str,
     tree_sha: str,
+    resolved_base: str,
 ) -> None:
-    """Ensure HEAD and tree did not mutate between CI launch and evidence recording."""
+    """Ensure HEAD, tree, and base did not mutate between CI launch and evidence recording."""
     exp_head = expected_head or os.environ.get("ORCHESTUNE_EXPECTED_HEAD")
     if exp_head and exp_head != current_head:
         raise CiEvidenceMismatchError(
@@ -494,6 +521,12 @@ def _check_run_boundaries(
     if exp_tree and exp_tree != tree_sha:
         raise CiEvidenceMismatchError(
             f"Tree changed during CI run: started at {exp_tree}, current is {tree_sha}"
+        )
+
+    exp_base = expected_base or os.environ.get("ORCHESTUNE_EXPECTED_BASE")
+    if exp_base and resolved_base and exp_base != resolved_base:
+        raise CiEvidenceMismatchError(
+            f"Base tip changed during CI run: started at {exp_base}, current is {resolved_base}"
         )
 
 
@@ -529,6 +562,31 @@ def _build_ci_evidence(
     )
 
 
+def _record_and_save_evidence(
+    root: Path,
+    current_head: str,
+    tree_sha: str,
+    resolved_base: str,
+    started_at: str | None,
+    completed_at: str | None,
+    exit_code: int,
+) -> CiEvidence:
+    """Build and atomically persist CI evidence."""
+    status = inspect_worktree_status(root)
+    evidence = _build_ci_evidence(
+        root=root,
+        current_head=current_head,
+        tree_sha=tree_sha,
+        is_clean=(status == WorktreeStatus.CLEAN),
+        resolved_base=resolved_base,
+        started_at=started_at,
+        completed_at=completed_at,
+        exit_code=exit_code,
+    )
+    _write_evidence_atomic(evidence, resolve_evidence_path(root))
+    return evidence
+
+
 def record_ci_evidence(
     worktree_root: Path | str | None = None,
     *,
@@ -541,6 +599,7 @@ def record_ci_evidence(
     issue_number: int | str | None = None,
     expected_head: str | None = None,
     expected_tree: str | None = None,
+    expected_base: str | None = None,
 ) -> CiEvidence:
     """Atomically record successful CI evidence outside the worktree tracking area."""
     root = (
@@ -548,14 +607,8 @@ def record_ci_evidence(
         if worktree_root is not None
         else Path.cwd().resolve()
     )
-    evidence_path = resolve_evidence_path(root)
-    evidence_path.parent.mkdir(parents=True, exist_ok=True)
-
     current_head = _resolve_head_sha(root)
     tree_sha = _resolve_tree_sha(root)
-    _check_run_boundaries(expected_head, expected_tree, current_head, tree_sha)
-
-    status = inspect_worktree_status(root)
     resolved_base = _resolve_base_sha(
         root,
         base_sha=base_sha,
@@ -563,21 +616,27 @@ def record_ci_evidence(
         state_path=state_path,
         issue_number=issue_number,
     )
-    evidence = _build_ci_evidence(
-        root=root,
-        current_head=current_head,
-        tree_sha=tree_sha,
-        is_clean=(status == WorktreeStatus.CLEAN),
-        resolved_base=resolved_base,
-        started_at=started_at,
-        completed_at=completed_at,
-        exit_code=exit_code,
+    _check_run_boundaries(
+        expected_head,
+        expected_tree,
+        expected_base,
+        current_head,
+        tree_sha,
+        resolved_base,
     )
-    _write_evidence_atomic(evidence, evidence_path)
-    return evidence
+    return _record_and_save_evidence(
+        root,
+        current_head,
+        tree_sha,
+        resolved_base,
+        started_at,
+        completed_at,
+        exit_code,
+    )
 
 
 def _write_evidence_atomic(evidence: CiEvidence, evidence_path: Path) -> None:
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = evidence_path.with_name(
         f"{CI_EVIDENCE_FILENAME}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
     )
@@ -603,17 +662,12 @@ def _validate_environment_match(evidence: CiEvidence, root: Path) -> None:
         )
 
 
-def _validate_evidence_context(
-    evidence: CiEvidence,
-    root: Path,
-    request: Any,
-) -> None:
-    """Validate that evidence matches current HEAD, base, definition, and environment."""
+def _validate_worktree_cleanliness(evidence: CiEvidence, root: Path) -> None:
+    """Validate that evidence and current worktree are both clean."""
     if not evidence.worktree_clean:
         raise CiEvidenceMismatchError(
             "CI evidence was recorded from a dirty worktree; clean worktree verification is required"
         )
-
     current_status = inspect_worktree_status(root)
     if current_status != WorktreeStatus.CLEAN:
         raise CiEvidenceMismatchError(
@@ -621,39 +675,52 @@ def _validate_evidence_context(
             "clean worktree verification is required"
         )
 
+
+def _validate_tree_and_commit(evidence: CiEvidence, root: Path, request: Any) -> None:
+    """Validate HEAD, tree, and base SHAs."""
     current_head = _resolve_head_sha(root)
     if evidence.head_sha != current_head:
         raise CiEvidenceMismatchError(
             f"HEAD SHA mismatch: evidence has {evidence.head_sha}, current worktree is {current_head}"
         )
-
     current_tree = _resolve_tree_sha(root)
     if evidence.tree_sha and evidence.tree_sha != current_tree:
         raise CiEvidenceMismatchError(
             f"Tree SHA mismatch: evidence has {evidence.tree_sha}, current worktree is {current_tree}"
         )
-
     expected_base = _resolve_base_sha(root, request)
     if expected_base and evidence.base_sha != expected_base:
         raise CiEvidenceMismatchError(
             f"Base SHA mismatch: evidence has {evidence.base_sha}, expected {expected_base}"
         )
 
+
+def _validate_digests_and_env(evidence: CiEvidence, root: Path) -> None:
+    """Validate CI definition, lockfile digest, and execution environment."""
     current_ci_digest = compute_ci_definition_digest(root)
     if evidence.ci_definition_digest != current_ci_digest:
         raise CiEvidenceMismatchError(
             f"CI definition digest mismatch: evidence has {evidence.ci_definition_digest}, "
             f"current definition is {current_ci_digest}"
         )
-
     current_lock_digest = compute_lockfile_digest(root)
     if evidence.lockfile_digest != current_lock_digest:
         raise CiEvidenceMismatchError(
             f"Lockfile digest mismatch: evidence has {evidence.lockfile_digest}, "
             f"current lockfile is {current_lock_digest}"
         )
-
     _validate_environment_match(evidence, root)
+
+
+def _validate_evidence_context(
+    evidence: CiEvidence,
+    root: Path,
+    request: Any,
+) -> None:
+    """Validate that evidence matches current HEAD, base, definition, and environment."""
+    _validate_worktree_cleanliness(evidence, root)
+    _validate_tree_and_commit(evidence, root, request)
+    _validate_digests_and_env(evidence, root)
 
 
 def validate_ci_evidence(request: Any) -> CiEvidence:
@@ -691,17 +758,76 @@ def _build_ci_env(
     expected_base_sha: str,
     initial_head: str,
     initial_tree: str,
+    initial_base: str,
 ) -> dict[str, str]:
     """Prepare environment variables for running local CI command."""
     env = os.environ.copy()
     env["ORCHESTUNE_BASE_SHA"] = expected_base_sha
     env["ORCHESTUNE_EXPECTED_HEAD"] = initial_head
     env["ORCHESTUNE_EXPECTED_TREE"] = initial_tree
+    if initial_base:
+        env["ORCHESTUNE_EXPECTED_BASE"] = initial_base
     if getattr(request, "state_path", None):
         env["ORCHESTUNE_STATE_PATH"] = str(request.state_path)
     if getattr(request, "issue_number", None):
         env["ORCHESTUNE_ISSUE_NUMBER"] = str(request.issue_number)
     return env
+
+
+def _execute_local_ci(
+    worktree_path: Path,
+    request: Any,
+    ci_command: Sequence[str] | str | None,
+    expected_base_sha: str,
+    initial_head: str,
+    initial_tree: str,
+    initial_base: str,
+) -> None:
+    """Execute local CI runner command with appropriate environment variables."""
+    cmd = (
+        _resolve_default_ci_command(worktree_path)
+        if ci_command is None
+        else (
+            shlex.split(ci_command) if isinstance(ci_command, str) else list(ci_command)
+        )
+    )
+    env = _build_ci_env(
+        worktree_path,
+        request,
+        expected_base_sha,
+        initial_head,
+        initial_tree,
+        initial_base,
+    )
+    res = subprocess.run(cmd, cwd=worktree_path, env=env, check=False)
+    if res.returncode != 0:
+        raise CiExecutionError(
+            f"Local CI execution failed with exit code {res.returncode}"
+        )
+
+
+def _verify_ci_run_result(
+    request: Any,
+    worktree_path: Path,
+    initial_head: str,
+    initial_tree: str,
+    initial_base: str,
+) -> CiEvidence:
+    """Verify evidence against worktree invariants after local CI finishes."""
+    evidence = validate_ci_evidence(request)
+    if evidence.head_sha != initial_head or (
+        evidence.tree_sha and evidence.tree_sha != initial_tree
+    ):
+        raise CiEvidenceMismatchError(
+            f"HEAD or tree changed during CI run: started at ({initial_head}, {initial_tree}), "
+            f"evidence has ({evidence.head_sha}, {evidence.tree_sha})"
+        )
+    current_base = _resolve_base_sha(worktree_path, request)
+    if initial_base and current_base != initial_base:
+        raise CiEvidenceMismatchError(
+            f"Base tip changed during CI run: started at {initial_base}, current is {current_base}"
+        )
+    return evidence
 
 
 def run_local_ci_if_needed(
@@ -726,40 +852,38 @@ def run_local_ci_if_needed(
 
     root = getattr(request, "worktree_root", None)
     worktree_path = Path(root).resolve() if root is not None else Path.cwd().resolve()
-    expected_base_sha = _resolve_base_sha(worktree_path, request)
+    initial_base = _resolve_base_sha(worktree_path, request)
     initial_head = _resolve_head_sha(worktree_path)
     initial_tree = _resolve_tree_sha(worktree_path)
 
-    cmd = (
-        _resolve_default_ci_command(worktree_path)
-        if ci_command is None
-        else (
-            shlex.split(ci_command) if isinstance(ci_command, str) else list(ci_command)
-        )
+    _execute_local_ci(
+        worktree_path,
+        request,
+        ci_command,
+        initial_base,
+        initial_head,
+        initial_tree,
+        initial_base,
     )
-    env = _build_ci_env(
-        worktree_path, request, expected_base_sha, initial_head, initial_tree
+    return _verify_ci_run_result(
+        request, worktree_path, initial_head, initial_tree, initial_base
     )
-
-    res = subprocess.run(cmd, cwd=worktree_path, env=env, check=False)
-    if res.returncode != 0:
-        raise CiExecutionError(
-            f"Local CI execution failed with exit code {res.returncode}"
-        )
-
-    evidence = validate_ci_evidence(request)
-    if evidence.head_sha != initial_head or (
-        evidence.tree_sha and evidence.tree_sha != initial_tree
-    ):
-        raise CiEvidenceMismatchError(
-            f"HEAD or tree changed during CI run: started at ({initial_head}, {initial_tree}), "
-            f"evidence has ({evidence.head_sha}, {evidence.tree_sha})"
-        )
-    return evidence
 
 
 def _cli_invalidate(args: argparse.Namespace) -> None:
     invalidate_ci_evidence(args.worktree)
+
+
+def _cli_resolve_base(args: argparse.Namespace) -> None:
+    root = Path(args.worktree).resolve() if args.worktree else Path.cwd().resolve()
+    base_sha = _resolve_base_sha(
+        root,
+        base_ref=args.base_ref,
+        state_path=args.state_path,
+        issue_number=args.issue,
+    )
+    if base_sha:
+        print(base_sha)
 
 
 def _cli_record(args: argparse.Namespace) -> None:
@@ -773,6 +897,62 @@ def _cli_record(args: argparse.Namespace) -> None:
         issue_number=args.issue,
         expected_head=args.expected_head,
         expected_tree=args.expected_tree,
+        expected_base=args.expected_base,
+    )
+
+
+def _add_resolve_base_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--worktree", type=Path, default=None, help="Path to worktree root"
+    )
+    parser.add_argument(
+        "--base-ref", type=str, default=None, help="Target base branch reference"
+    )
+    parser.add_argument(
+        "--state-path", type=Path, default=None, help="Path to run_state.json"
+    )
+    parser.add_argument(
+        "--issue", type=int, default=None, help="Issue number for worktree"
+    )
+
+
+def _add_record_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--worktree", type=Path, default=None, help="Path to worktree root"
+    )
+    parser.add_argument(
+        "--started-at", type=str, default=None, help="CI start timestamp (ISO 8601)"
+    )
+    parser.add_argument("--exit-code", type=int, default=0, help="CI runner exit code")
+    parser.add_argument(
+        "--base-sha", type=str, default=None, help="Authoritative base commit SHA"
+    )
+    parser.add_argument(
+        "--base-ref", type=str, default=None, help="Target base branch reference"
+    )
+    parser.add_argument(
+        "--state-path", type=Path, default=None, help="Path to run_state.json"
+    )
+    parser.add_argument(
+        "--issue", type=int, default=None, help="Issue number for worktree"
+    )
+    parser.add_argument(
+        "--expected-head",
+        type=str,
+        default=None,
+        help="Initial HEAD commit SHA before CI",
+    )
+    parser.add_argument(
+        "--expected-tree",
+        type=str,
+        default=None,
+        help="Initial tree SHA before CI",
+    )
+    parser.add_argument(
+        "--expected-base",
+        type=str,
+        default=None,
+        help="Initial base commit SHA before CI",
     )
 
 
@@ -783,51 +963,24 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    inv_parser = subparsers.add_parser(
-        "invalidate", help="Invalidate existing CI evidence"
-    )
-    inv_parser.add_argument(
+    inv = subparsers.add_parser("invalidate", help="Invalidate existing CI evidence")
+    inv.add_argument(
         "--worktree", type=Path, default=None, help="Path to worktree root"
     )
 
-    rec_parser = subparsers.add_parser("record", help="Record CI execution evidence")
-    rec_parser.add_argument(
-        "--worktree", type=Path, default=None, help="Path to worktree root"
+    res = subparsers.add_parser(
+        "resolve-base", help="Resolve current base commit SHA for worktree"
     )
-    rec_parser.add_argument(
-        "--started-at", type=str, default=None, help="CI start timestamp (ISO 8601)"
-    )
-    rec_parser.add_argument(
-        "--exit-code", type=int, default=0, help="CI runner exit code"
-    )
-    rec_parser.add_argument(
-        "--base-sha", type=str, default=None, help="Authoritative base commit SHA"
-    )
-    rec_parser.add_argument(
-        "--base-ref", type=str, default=None, help="Target base branch reference"
-    )
-    rec_parser.add_argument(
-        "--state-path", type=Path, default=None, help="Path to run_state.json"
-    )
-    rec_parser.add_argument(
-        "--issue", type=int, default=None, help="Issue number for worktree"
-    )
-    rec_parser.add_argument(
-        "--expected-head",
-        type=str,
-        default=None,
-        help="Initial HEAD commit SHA before CI",
-    )
-    rec_parser.add_argument(
-        "--expected-tree",
-        type=str,
-        default=None,
-        help="Initial tree SHA before CI",
-    )
+    _add_resolve_base_args(res)
+
+    rec = subparsers.add_parser("record", help="Record CI execution evidence")
+    _add_record_args(rec)
 
     args = parser.parse_args(argv)
     if args.command == "invalidate":
         _cli_invalidate(args)
+    elif args.command == "resolve-base":
+        _cli_resolve_base(args)
     elif args.command == "record":
         _cli_record(args)
 

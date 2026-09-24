@@ -56,6 +56,15 @@ $CiStartHead = (git rev-parse HEAD 2>$null)
 if ($CiStartHead) { $CiStartHead = $CiStartHead.Trim() }
 $CiStartTree = (git rev-parse 'HEAD^{tree}' 2>$null)
 if ($CiStartTree) { $CiStartTree = $CiStartTree.Trim() }
+$CiStartBase = $env:ORCHESTUNE_BASE_SHA
+if (-not $CiStartBase) {
+    $BaseResolveArgs = @()
+    if ($env:ORCHESTUNE_BASE_REF) { $BaseResolveArgs += @("--base-ref", $env:ORCHESTUNE_BASE_REF) }
+    if ($env:ORCHESTUNE_STATE_PATH) { $BaseResolveArgs += @("--state-path", $env:ORCHESTUNE_STATE_PATH) }
+    if ($env:ORCHESTUNE_ISSUE_NUMBER) { $BaseResolveArgs += @("--issue", $env:ORCHESTUNE_ISSUE_NUMBER) }
+    $resolvedBase = (uv run --no-sync python -m orchestune.complete.ci_evidence resolve-base @BaseResolveArgs 2>$null)
+    if ($resolvedBase) { $CiStartBase = $resolvedBase.Trim() }
+}
 uv run --no-sync python -m orchestune.complete.ci_evidence invalidate 2>$null
 
 # Ensure virtual environment and dependencies are installed
@@ -124,6 +133,12 @@ if ($CiStartHead) {
 }
 if ($CiStartTree) {
     $RecordArgs += @("--expected-tree", $CiStartTree)
+}
+if ($CiStartBase) {
+    $RecordArgs += @("--expected-base", $CiStartBase)
+    if (-not $env:ORCHESTUNE_BASE_SHA) {
+        $RecordArgs += @("--base-sha", $CiStartBase)
+    }
 }
 if ($env:ORCHESTUNE_BASE_SHA) {
     $RecordArgs += @("--base-sha", $env:ORCHESTUNE_BASE_SHA)
