@@ -196,12 +196,63 @@ def compute_lockfile_digest(worktree_root: Path | str | None = None) -> str:
     return hashlib.sha256(b"__absent__").hexdigest()
 
 
-def _get_current_environment() -> tuple[str, str, str]:
-    """Return (os, architecture, python_version) for the current runtime."""
+def _query_python_version(cmd: list[str], cwd: Path) -> str | None:
+    """Run command to query implementation and version of Python interpreter."""
+    try:
+        res = subprocess.run(
+            [
+                *cmd,
+                "-c",
+                "import platform; print(f'{platform.python_implementation()} {platform.python_version()}')",
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=5,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def _resolve_runner_environment(
+    worktree_root: Path | str | None = None,
+) -> tuple[str, str, str]:
+    """Return (os, architecture, python_version) for the expected CI runner."""
     os_name = platform.system()
     arch_name = platform.machine()
+    root = (
+        Path(worktree_root).resolve()
+        if worktree_root is not None
+        else Path.cwd().resolve()
+    )
+
+    for py_bin in (
+        root / ".venv" / "bin" / "python",
+        root / ".venv" / "Scripts" / "python.exe",
+    ):
+        if py_bin.is_file():
+            ver = _query_python_version([str(py_bin)], cwd=root)
+            if ver:
+                return os_name, arch_name, ver
+
+    ver = _query_python_version(["uv", "run", "--no-sync", "python"], cwd=root)
+    if ver:
+        return os_name, arch_name, ver
+
     py_ver = f"{platform.python_implementation()} {platform.python_version()}"
     return os_name, arch_name, py_ver
+
+
+def _get_current_environment(
+    worktree_root: Path | str | None = None,
+) -> tuple[str, str, str]:
+    """Compatibility alias for _resolve_runner_environment."""
+    return _resolve_runner_environment(worktree_root)
 
 
 def _resolve_head_sha(root: Path) -> str:
@@ -405,7 +456,12 @@ def invalidate_ci_evidence(worktree_root: Path | str | None = None) -> None:
     """Invalidate existing CI evidence and delete leftover temporary files."""
     evidence_path = resolve_evidence_path(worktree_root)
     if evidence_path.is_file():
-        evidence_path.unlink(missing_ok=True)
+        try:
+            evidence_path.unlink()
+        except OSError as err:
+            raise CiEvidenceError(
+                f"Failed to remove prior CI evidence at {evidence_path}: {err}"
+            ) from err
 
     parent_dir = evidence_path.parent
     if parent_dir.is_dir():
@@ -437,7 +493,7 @@ def record_ci_evidence(
     evidence_path = resolve_evidence_path(root)
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
 
-    os_name, arch_name, py_ver = _get_current_environment()
+    os_name, arch_name, py_ver = _resolve_runner_environment(root)
     status = inspect_worktree_status(root)
     is_clean = status == WorktreeStatus.CLEAN
     tree_sha = _resolve_tree_sha(root)
@@ -484,8 +540,8 @@ def _write_evidence_atomic(evidence: CiEvidence, evidence_path: Path) -> None:
     os.replace(tmp_path, evidence_path)
 
 
-def _validate_environment_match(evidence: CiEvidence) -> None:
-    cur_os, cur_arch, cur_py = _get_current_environment()
+def _validate_environment_match(evidence: CiEvidence, root: Path) -> None:
+    cur_os, cur_arch, cur_py = _resolve_runner_environment(root)
     if (
         evidence.os != cur_os
         or evidence.architecture != cur_arch
@@ -547,7 +603,7 @@ def _validate_evidence_context(
             f"current lockfile is {current_lock_digest}"
         )
 
-    _validate_environment_match(evidence)
+    _validate_environment_match(evidence, root)
 
 
 def validate_ci_evidence(request: Any) -> CiEvidence:

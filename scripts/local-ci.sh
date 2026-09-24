@@ -18,7 +18,13 @@ else
   GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo ".git")"
   EVIDENCE_FILE="${GIT_DIR}/ci_evidence.json"
 fi
-rm -f "${EVIDENCE_FILE}" "${EVIDENCE_FILE}.tmp."* 2>/dev/null || true
+if [ -e "${EVIDENCE_FILE}" ]; then
+  rm -f "${EVIDENCE_FILE}" "${EVIDENCE_FILE}.tmp."* 2>/dev/null || true
+  if [ -e "${EVIDENCE_FILE}" ]; then
+    echo "ERROR: Failed to remove prior CI evidence at ${EVIDENCE_FILE}." >&2
+    exit 1
+  fi
+fi
 
 if ! command -v uv >/dev/null 2>&1; then
   echo "ERROR: uv is required for local CI. Install it from https://docs.astral.sh/uv/." >&2

@@ -19,6 +19,7 @@ from orchestune.complete.ci_evidence import (
     CiEvidenceMismatchError,
     CiEvidenceMissingError,
     CiExecutionError,
+    _resolve_runner_environment,
     compute_lockfile_digest,
     invalidate_ci_evidence,
     record_ci_evidence,
@@ -48,7 +49,9 @@ def git_worktree(tmp_path: Path) -> Path:
     scripts_dir.mkdir()
     (scripts_dir / "local-ci.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     (scripts_dir / "local-ci.ps1").write_text("exit 0\n", encoding="utf-8")
-    (repo / "pyproject.toml").write_text("[project]\nname = 'test'\n", encoding="utf-8")
+    (repo / "pyproject.toml").write_text(
+        "[project]\nname = 'test'\nversion = '0.1.0'\n", encoding="utf-8"
+    )
     (repo / "uv.lock").write_text("lockfile content\n", encoding="utf-8")
     (repo / "file.txt").write_text("initial\n", encoding="utf-8")
 
@@ -826,3 +829,57 @@ class TestEdgeCasesAndBoundaryConditions:
         assert (
             idx_ps1_rm < idx_ps1_uv
         ), "Direct removal must occur before uv check in local-ci.ps1"
+
+    def test_validate_resolves_runner_environment_rather_than_verifier_process(
+        self, git_worktree: Path
+    ):
+        ev = record_ci_evidence(
+            worktree_root=git_worktree,
+            started_at="2026-09-24T12:00:00Z",
+            exit_code=0,
+        )
+        req = CompleteRequest.done(
+            issue_number=1000, pr=100, worktree_root=git_worktree
+        )
+
+        with patch(
+            "orchestune.complete.ci_evidence.platform.python_version",
+            return_value="3.12.0",
+        ):
+            validated = validate_ci_evidence(req)
+            assert validated.succeeded is True
+            assert validated.python_version == ev.python_version
+
+    def test_invalidate_ci_evidence_raises_when_file_cannot_be_removed(
+        self, git_worktree: Path
+    ):
+        ev_path = resolve_evidence_path(git_worktree)
+        ev_path.parent.mkdir(parents=True, exist_ok=True)
+        ev_path.write_text("{}", encoding="utf-8")
+
+        with patch.object(Path, "unlink", side_effect=OSError("Permission denied")):
+            with pytest.raises(
+                CiEvidenceError, match="Failed to remove prior CI evidence"
+            ):
+                invalidate_ci_evidence(git_worktree)
+
+    def test_local_ci_scripts_verify_evidence_absence(self):
+        sh_text = Path("scripts/local-ci.sh").read_text(encoding="utf-8")
+        ps1_text = Path("scripts/local-ci.ps1").read_text(encoding="utf-8")
+
+        assert 'echo "ERROR: Failed to remove prior CI evidence' in sh_text
+        assert "Failed to remove prior CI evidence" in ps1_text
+
+    def test_resolve_runner_environment_prefers_venv_python(self, tmp_path: Path):
+        venv_bin = tmp_path / ".venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        py_mock = venv_bin / "python"
+        py_mock.write_text("#!/bin/sh\n", encoding="utf-8")
+
+        with patch(
+            "orchestune.complete.ci_evidence._query_python_version",
+            return_value="CPython 3.14.0",
+        ) as mock_query:
+            _os_name, _arch_name, py_ver = _resolve_runner_environment(tmp_path)
+            assert py_ver == "CPython 3.14.0"
+            mock_query.assert_called_once_with([str(py_mock)], cwd=tmp_path.resolve())

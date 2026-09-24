@@ -36,6 +36,10 @@ if ($env:ORCHESTUNE_CI_EVIDENCE_PATH) {
 }
 if (Test-Path $EvidenceFile) {
     Remove-Item -Force $EvidenceFile -ErrorAction SilentlyContinue
+    if (Test-Path $EvidenceFile) {
+        Write-Host "ERROR: Failed to remove prior CI evidence at $EvidenceFile." -ForegroundColor Red
+        exit 1
+    }
 }
 $EvidenceParent = Split-Path -Parent $EvidenceFile
 if ($EvidenceParent -and (Test-Path $EvidenceParent)) {
