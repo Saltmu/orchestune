@@ -870,16 +870,70 @@ class TestEdgeCasesAndBoundaryConditions:
         assert 'echo "ERROR: Failed to remove prior CI evidence' in sh_text
         assert "Failed to remove prior CI evidence" in ps1_text
 
-    def test_resolve_runner_environment_prefers_venv_python(self, tmp_path: Path):
-        venv_bin = tmp_path / ".venv" / "bin"
-        venv_bin.mkdir(parents=True)
-        py_mock = venv_bin / "python"
-        py_mock.write_text("#!/bin/sh\n", encoding="utf-8")
-
+    def test_resolve_runner_environment_queries_uv_first(self, tmp_path: Path):
         with patch(
             "orchestune.complete.ci_evidence._query_python_version",
-            return_value="CPython 3.14.0",
+            return_value="CPython 3.13.0",
         ) as mock_query:
             _os_name, _arch_name, py_ver = _resolve_runner_environment(tmp_path)
-            assert py_ver == "CPython 3.14.0"
-            mock_query.assert_called_once_with([str(py_mock)], cwd=tmp_path.resolve())
+            assert py_ver == "CPython 3.13.0"
+            mock_query.assert_called_once_with(
+                ["uv", "run", "--no-sync", "python"], cwd=tmp_path.resolve()
+            )
+
+    def test_resolve_runner_environment_respects_uv_project_environment(
+        self, tmp_path: Path
+    ):
+        custom_bin = tmp_path / "custom" / "bin"
+        custom_bin.mkdir(parents=True)
+        py_mock = custom_bin / "python"
+        py_mock.write_text("#!/bin/sh\n", encoding="utf-8")
+
+        def fake_query(cmd: list[str], cwd: Path) -> str | None:
+            if cmd == ["uv", "run", "--no-sync", "python"]:
+                return None
+            if cmd == [str(py_mock)]:
+                return "CPython 3.13.9"
+            return None
+
+        with patch.dict(
+            os.environ, {"UV_PROJECT_ENVIRONMENT": str(tmp_path / "custom")}
+        ):
+            with patch(
+                "orchestune.complete.ci_evidence._query_python_version",
+                side_effect=fake_query,
+            ):
+                _os, _arch, py_ver = _resolve_runner_environment(tmp_path)
+                assert py_ver == "CPython 3.13.9"
+
+    def test_record_ci_evidence_rejects_head_change_during_run(
+        self, git_worktree: Path
+    ):
+        with pytest.raises(CiEvidenceMismatchError, match="HEAD changed during CI run"):
+            record_ci_evidence(
+                worktree_root=git_worktree,
+                expected_head="0" * 40,
+            )
+
+    def test_record_ci_evidence_rejects_tree_change_during_run(
+        self, git_worktree: Path
+    ):
+        with pytest.raises(CiEvidenceMismatchError, match="Tree changed during CI run"):
+            record_ci_evidence(
+                worktree_root=git_worktree,
+                expected_tree="0" * 40,
+            )
+
+    def test_local_ci_scripts_capture_and_pass_expected_head_and_tree(self):
+        sh_text = Path("scripts/local-ci.sh").read_text(encoding="utf-8")
+        ps1_text = Path("scripts/local-ci.ps1").read_text(encoding="utf-8")
+
+        assert "CI_START_HEAD=$(git rev-parse HEAD" in sh_text
+        assert "CI_START_TREE=$(git rev-parse 'HEAD^{tree}'" in sh_text
+        assert '--expected-head" "${CI_START_HEAD}"' in sh_text
+        assert '--expected-tree" "${CI_START_TREE}"' in sh_text
+
+        assert "$CiStartHead = (git rev-parse HEAD" in ps1_text
+        assert "$CiStartTree = (git rev-parse 'HEAD^{tree}'" in ps1_text
+        assert '"--expected-head", $CiStartHead' in ps1_text
+        assert '"--expected-tree", $CiStartTree' in ps1_text

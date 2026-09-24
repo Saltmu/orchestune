@@ -32,6 +32,8 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 CI_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+CI_START_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "")
+CI_START_TREE=$(git rev-parse 'HEAD^{tree}' 2>/dev/null || echo "")
 uv run --no-sync python -m orchestune.complete.ci_evidence invalidate 2>/dev/null || true
 
 # Ensure virtual environment and dependencies are installed
@@ -77,6 +79,12 @@ echo "✨ Local CI passed successfully!"
 echo "========================================="
 
 RECORD_ARGS=("--started-at" "${CI_START_TIME}")
+if [ -n "${CI_START_HEAD}" ]; then
+  RECORD_ARGS+=("--expected-head" "${CI_START_HEAD}")
+fi
+if [ -n "${CI_START_TREE}" ]; then
+  RECORD_ARGS+=("--expected-tree" "${CI_START_TREE}")
+fi
 if [ -n "${ORCHESTUNE_BASE_SHA:-}" ]; then
   RECORD_ARGS+=("--base-sha" "${ORCHESTUNE_BASE_SHA}")
 fi

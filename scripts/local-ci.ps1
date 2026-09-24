@@ -52,6 +52,10 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 
 $CiStartTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+$CiStartHead = (git rev-parse HEAD 2>$null)
+if ($CiStartHead) { $CiStartHead = $CiStartHead.Trim() }
+$CiStartTree = (git rev-parse 'HEAD^{tree}' 2>$null)
+if ($CiStartTree) { $CiStartTree = $CiStartTree.Trim() }
 uv run --no-sync python -m orchestune.complete.ci_evidence invalidate 2>$null
 
 # Ensure virtual environment and dependencies are installed
@@ -115,6 +119,12 @@ Write-Host "✨ Local CI passed successfully!"
 Write-Host "========================================="
 
 $RecordArgs = @("--started-at", $CiStartTime)
+if ($CiStartHead) {
+    $RecordArgs += @("--expected-head", $CiStartHead)
+}
+if ($CiStartTree) {
+    $RecordArgs += @("--expected-tree", $CiStartTree)
+}
 if ($env:ORCHESTUNE_BASE_SHA) {
     $RecordArgs += @("--base-sha", $env:ORCHESTUNE_BASE_SHA)
 }

@@ -231,18 +231,22 @@ def _resolve_runner_environment(
         else Path.cwd().resolve()
     )
 
-    for py_bin in (
-        root / ".venv" / "bin" / "python",
-        root / ".venv" / "Scripts" / "python.exe",
-    ):
-        if py_bin.is_file():
-            ver = _query_python_version([str(py_bin)], cwd=root)
-            if ver:
-                return os_name, arch_name, ver
-
     ver = _query_python_version(["uv", "run", "--no-sync", "python"], cwd=root)
     if ver:
         return os_name, arch_name, ver
+
+    candidate_envs: list[Path] = []
+    if "UV_PROJECT_ENVIRONMENT" in os.environ:
+        candidate_envs.append(Path(os.environ["UV_PROJECT_ENVIRONMENT"]))
+    candidate_envs.append(root / ".venv")
+
+    for env_dir in candidate_envs:
+        for py_rel in ("bin/python", "Scripts/python.exe"):
+            py_bin = env_dir / py_rel
+            if py_bin.is_file():
+                fallback_ver = _query_python_version([str(py_bin)], cwd=root)
+                if fallback_ver:
+                    return os_name, arch_name, fallback_ver
 
     py_ver = f"{platform.python_implementation()} {platform.python_version()}"
     return os_name, arch_name, py_ver
@@ -473,41 +477,41 @@ def invalidate_ci_evidence(worktree_root: Path | str | None = None) -> None:
                 pass
 
 
-def record_ci_evidence(
-    worktree_root: Path | str | None = None,
-    *,
-    started_at: str | None = None,
-    completed_at: str | None = None,
-    exit_code: int = 0,
-    base_sha: str | None = None,
-    base_ref: str | None = None,
-    state_path: Path | str | None = None,
-    issue_number: int | str | None = None,
+def _check_run_boundaries(
+    expected_head: str | None,
+    expected_tree: str | None,
+    current_head: str,
+    tree_sha: str,
+) -> None:
+    """Ensure HEAD and tree did not mutate between CI launch and evidence recording."""
+    exp_head = expected_head or os.environ.get("ORCHESTUNE_EXPECTED_HEAD")
+    if exp_head and exp_head != current_head:
+        raise CiEvidenceMismatchError(
+            f"HEAD changed during CI run: started at {exp_head}, current is {current_head}"
+        )
+
+    exp_tree = expected_tree or os.environ.get("ORCHESTUNE_EXPECTED_TREE")
+    if exp_tree and exp_tree != tree_sha:
+        raise CiEvidenceMismatchError(
+            f"Tree changed during CI run: started at {exp_tree}, current is {tree_sha}"
+        )
+
+
+def _build_ci_evidence(
+    root: Path,
+    current_head: str,
+    tree_sha: str,
+    is_clean: bool,
+    resolved_base: str,
+    started_at: str | None,
+    completed_at: str | None,
+    exit_code: int,
 ) -> CiEvidence:
-    """Atomically record successful CI evidence outside the worktree tracking area."""
-    root = (
-        Path(worktree_root).resolve()
-        if worktree_root is not None
-        else Path.cwd().resolve()
-    )
-    evidence_path = resolve_evidence_path(root)
-    evidence_path.parent.mkdir(parents=True, exist_ok=True)
-
+    """Construct CiEvidence instance for the validated worktree run."""
     os_name, arch_name, py_ver = _resolve_runner_environment(root)
-    status = inspect_worktree_status(root)
-    is_clean = status == WorktreeStatus.CLEAN
-    tree_sha = _resolve_tree_sha(root)
-
-    resolved_base = _resolve_base_sha(
-        root,
-        base_sha=base_sha,
-        base_ref=base_ref,
-        state_path=state_path,
-        issue_number=issue_number,
-    )
     now_utc = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    evidence = CiEvidence(
-        head_sha=_resolve_head_sha(root),
+    return CiEvidence(
+        head_sha=current_head,
         base_sha=resolved_base,
         succeeded=(exit_code == 0),
         schema_version=CURRENT_SCHEMA_VERSION,
@@ -522,6 +526,52 @@ def record_ci_evidence(
         status="passed" if exit_code == 0 else "failed",
         worktree_clean=is_clean,
         tree_sha=tree_sha,
+    )
+
+
+def record_ci_evidence(
+    worktree_root: Path | str | None = None,
+    *,
+    started_at: str | None = None,
+    completed_at: str | None = None,
+    exit_code: int = 0,
+    base_sha: str | None = None,
+    base_ref: str | None = None,
+    state_path: Path | str | None = None,
+    issue_number: int | str | None = None,
+    expected_head: str | None = None,
+    expected_tree: str | None = None,
+) -> CiEvidence:
+    """Atomically record successful CI evidence outside the worktree tracking area."""
+    root = (
+        Path(worktree_root).resolve()
+        if worktree_root is not None
+        else Path.cwd().resolve()
+    )
+    evidence_path = resolve_evidence_path(root)
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+
+    current_head = _resolve_head_sha(root)
+    tree_sha = _resolve_tree_sha(root)
+    _check_run_boundaries(expected_head, expected_tree, current_head, tree_sha)
+
+    status = inspect_worktree_status(root)
+    resolved_base = _resolve_base_sha(
+        root,
+        base_sha=base_sha,
+        base_ref=base_ref,
+        state_path=state_path,
+        issue_number=issue_number,
+    )
+    evidence = _build_ci_evidence(
+        root=root,
+        current_head=current_head,
+        tree_sha=tree_sha,
+        is_clean=(status == WorktreeStatus.CLEAN),
+        resolved_base=resolved_base,
+        started_at=started_at,
+        completed_at=completed_at,
+        exit_code=exit_code,
     )
     _write_evidence_atomic(evidence, evidence_path)
     return evidence
@@ -635,6 +685,25 @@ def _resolve_default_ci_command(root: Path) -> list[str]:
     return [str(sh_script)]
 
 
+def _build_ci_env(
+    worktree_path: Path,
+    request: Any,
+    expected_base_sha: str,
+    initial_head: str,
+    initial_tree: str,
+) -> dict[str, str]:
+    """Prepare environment variables for running local CI command."""
+    env = os.environ.copy()
+    env["ORCHESTUNE_BASE_SHA"] = expected_base_sha
+    env["ORCHESTUNE_EXPECTED_HEAD"] = initial_head
+    env["ORCHESTUNE_EXPECTED_TREE"] = initial_tree
+    if getattr(request, "state_path", None):
+        env["ORCHESTUNE_STATE_PATH"] = str(request.state_path)
+    if getattr(request, "issue_number", None):
+        env["ORCHESTUNE_ISSUE_NUMBER"] = str(request.issue_number)
+    return env
+
+
 def run_local_ci_if_needed(
     request: Any,
     *,
@@ -647,8 +716,7 @@ def run_local_ci_if_needed(
             f"CI execution is not applicable for non-done requests (got {req_result!r})"
         )
 
-    is_dry_run = getattr(request, "dry_run", False)
-    if is_dry_run:
+    if getattr(request, "dry_run", False):
         return validate_ci_evidence(request)
 
     try:
@@ -659,21 +727,19 @@ def run_local_ci_if_needed(
     root = getattr(request, "worktree_root", None)
     worktree_path = Path(root).resolve() if root is not None else Path.cwd().resolve()
     expected_base_sha = _resolve_base_sha(worktree_path, request)
+    initial_head = _resolve_head_sha(worktree_path)
+    initial_tree = _resolve_tree_sha(worktree_path)
 
-    cmd: Sequence[str]
-    if ci_command is None:
-        cmd = _resolve_default_ci_command(worktree_path)
-    elif isinstance(ci_command, str):
-        cmd = shlex.split(ci_command)
-    else:
-        cmd = list(ci_command)
-
-    env = os.environ.copy()
-    env["ORCHESTUNE_BASE_SHA"] = expected_base_sha
-    if getattr(request, "state_path", None):
-        env["ORCHESTUNE_STATE_PATH"] = str(request.state_path)
-    if getattr(request, "issue_number", None):
-        env["ORCHESTUNE_ISSUE_NUMBER"] = str(request.issue_number)
+    cmd = (
+        _resolve_default_ci_command(worktree_path)
+        if ci_command is None
+        else (
+            shlex.split(ci_command) if isinstance(ci_command, str) else list(ci_command)
+        )
+    )
+    env = _build_ci_env(
+        worktree_path, request, expected_base_sha, initial_head, initial_tree
+    )
 
     res = subprocess.run(cmd, cwd=worktree_path, env=env, check=False)
     if res.returncode != 0:
@@ -681,7 +747,15 @@ def run_local_ci_if_needed(
             f"Local CI execution failed with exit code {res.returncode}"
         )
 
-    return validate_ci_evidence(request)
+    evidence = validate_ci_evidence(request)
+    if evidence.head_sha != initial_head or (
+        evidence.tree_sha and evidence.tree_sha != initial_tree
+    ):
+        raise CiEvidenceMismatchError(
+            f"HEAD or tree changed during CI run: started at ({initial_head}, {initial_tree}), "
+            f"evidence has ({evidence.head_sha}, {evidence.tree_sha})"
+        )
+    return evidence
 
 
 def _cli_invalidate(args: argparse.Namespace) -> None:
@@ -697,6 +771,8 @@ def _cli_record(args: argparse.Namespace) -> None:
         base_ref=args.base_ref,
         state_path=args.state_path,
         issue_number=args.issue,
+        expected_head=args.expected_head,
+        expected_tree=args.expected_tree,
     )
 
 
@@ -735,6 +811,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     rec_parser.add_argument(
         "--issue", type=int, default=None, help="Issue number for worktree"
+    )
+    rec_parser.add_argument(
+        "--expected-head",
+        type=str,
+        default=None,
+        help="Initial HEAD commit SHA before CI",
+    )
+    rec_parser.add_argument(
+        "--expected-tree",
+        type=str,
+        default=None,
+        help="Initial tree SHA before CI",
     )
 
     args = parser.parse_args(argv)
