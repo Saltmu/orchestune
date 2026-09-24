@@ -25,6 +25,7 @@ from orchestune.dispatch.gc.completion import (
     _cloud_worktree_completion_status,
     _decide_completed_worktree_outcome,
     _decide_not_needed_dirty_worktree,
+    _fetch_outcome_for_active,
     _finalize_abandoned_cloud_worktree,
     _finalize_completed_worktree,
     _finalize_not_needed_worktree,
@@ -59,7 +60,7 @@ from orchestune.dispatch.state import (
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord, Usage
-from orchestune.outcome_record import RESULT_NOT_NEEDED, parse_from_comments
+from orchestune.outcome_record import RESULT_NOT_NEEDED, OutcomeLookupState
 from orchestune.task_metadata import TaskMetadata
 
 __all__ = [
@@ -107,14 +108,12 @@ def _rule_not_needed(
     )
     has_not_needed_outcome = False
     if not has_not_needed_label:
-        try:
-            comments = ctx.config.resolved_forge.list_comments(active.issue_number)
-            outcome = parse_from_comments(comments, since=active.started_at)
-            has_not_needed_outcome = (
-                outcome is not None and outcome.result == RESULT_NOT_NEEDED
-            )
-        except Exception:
-            pass
+        lookup = _fetch_outcome_for_active(active, ctx.config.resolved_forge)
+        has_not_needed_outcome = (
+            lookup.state is OutcomeLookupState.FOUND
+            and lookup.record is not None
+            and lookup.record.result == RESULT_NOT_NEEDED
+        )
 
     if not has_not_needed_label and not has_not_needed_outcome:
         return None
