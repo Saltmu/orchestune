@@ -48,8 +48,10 @@ def _new_completion_id() -> str:
     return f"completion-{uuid4().hex}"
 
 
-def _lock_path_for(state_path: Path, lock_path: Path | None) -> Path:
-    return lock_path if lock_path is not None else Path(state_path).with_suffix(".lock")
+def _lock_path_for(state_path: Path) -> Path:
+    # `save_run_state` always asserts the lock derived from `state_path` (never a
+    # caller-supplied override), so the acquired lock must match it exactly.
+    return Path(state_path).with_suffix(".lock")
 
 
 def _to_journal(active: Any) -> CompletionJournal:
@@ -130,7 +132,6 @@ def reserve_completion(
     completion_id: str | None = None,
     payload: dict[str, Any] | None = None,
     state_path: Path,
-    lock_path: Path | None = None,
     timeout_seconds: float = 0.0,
 ) -> CompletionJournal:
     """Reserve (or idempotently resume) a completion under the claim's state lock.
@@ -140,8 +141,7 @@ def reserve_completion(
     (concurrent completion), and reserving a different ``result`` than what
     is already reserved for this claim (double-complete / overwrite).
     """
-    resolved_lock_path = _lock_path_for(state_path, lock_path)
-    cm = _acquire_run_state_lock(resolved_lock_path, timeout_seconds)
+    cm = _acquire_run_state_lock(_lock_path_for(state_path), timeout_seconds)
     try:
         run_state = load_run_state(state_path)
         active = run_state.active_worktrees.get(str(issue_number))
@@ -185,7 +185,6 @@ def mark_handoff_ready(
     comment_url: str | None = None,
     payload: dict[str, Any] | None = None,
     state_path: Path,
-    lock_path: Path | None = None,
     timeout_seconds: float = 0.0,
 ) -> CompletionJournal:
     """Persist posting evidence and mark the completion ready for GC handoff.
@@ -194,9 +193,11 @@ def mark_handoff_ready(
     persisted completion must still match ``journal.completion_id``/``result`` —
     otherwise something changed underneath this attempt (a reclaim, or a
     different completion winning the reservation) since it was reserved.
+    Rejects marking handoff-ready unless a durable Issue comment id and url are
+    on record (freshly supplied here, or already persisted from a prior call) —
+    otherwise GC could treat an unposted outcome as safely handed off.
     """
-    resolved_lock_path = _lock_path_for(state_path, lock_path)
-    cm = _acquire_run_state_lock(resolved_lock_path, timeout_seconds)
+    cm = _acquire_run_state_lock(_lock_path_for(state_path), timeout_seconds)
     try:
         run_state = load_run_state(state_path)
         active = run_state.active_worktrees.get(str(journal.issue_number))
@@ -222,6 +223,17 @@ def mark_handoff_ready(
             active.completion_comment_url = comment_url
         if payload is not None:
             active.completion_payload = dict(payload)
+
+        if (
+            active.completion_comment_id is None
+            or active.completion_comment_url is None
+        ):
+            raise CompletionJournalError(
+                CompleteFailureReason.EVIDENCE_MISSING,
+                "Cannot mark handoff ready without a durably recorded Issue "
+                "comment id and url",
+            )
+
         active.completion_handoff_ready = True
         active.completion_stage = CompleteStage.HANDED_OFF_TO_GC.value
         _save_or_raise(run_state, state_path)

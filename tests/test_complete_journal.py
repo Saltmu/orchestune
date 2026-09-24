@@ -222,6 +222,38 @@ class TestMarkHandoffReady:
         )
         assert ready.handoff_ready is True
 
+    def test_rejects_marking_handoff_ready_without_any_posting_evidence(self, tmp_path):
+        path = _seed_active(tmp_path)
+        journal = _reserve(path)
+
+        with pytest.raises(CompletionJournalError) as excinfo:
+            mark_handoff_ready(journal, state_path=path)
+        assert excinfo.value.reason == CompleteFailureReason.EVIDENCE_MISSING
+
+        persisted = load_run_state(path).active_worktrees["10"]
+        assert persisted.completion_handoff_ready is False
+        assert persisted.completion_comment_id is None
+
+    def test_rejects_marking_handoff_ready_with_only_a_comment_id(self, tmp_path):
+        path = _seed_active(tmp_path)
+        journal = _reserve(path)
+
+        with pytest.raises(CompletionJournalError) as excinfo:
+            mark_handoff_ready(journal, comment_id="1", state_path=path)
+        assert excinfo.value.reason == CompleteFailureReason.EVIDENCE_MISSING
+
+    def test_accepts_evidence_already_persisted_by_a_prior_call(self, tmp_path):
+        path = _seed_active(tmp_path)
+        journal = _reserve(path)
+        # a prior process recorded evidence but crashed before flipping
+        # handoff_ready; a resuming call with no new evidence should still
+        # succeed because the persisted evidence already satisfies it.
+        mark_handoff_ready(journal, comment_id="1", comment_url="u", state_path=path)
+
+        ready = mark_handoff_ready(journal, state_path=path)
+        assert ready.handoff_ready is True
+        assert ready.comment_id == "1"
+
     def test_rejects_stale_resume_after_a_reclaim_replaced_the_completion(
         self, tmp_path
     ):
