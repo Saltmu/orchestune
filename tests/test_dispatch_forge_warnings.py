@@ -22,6 +22,7 @@ from orchestune.dispatch.gc.completion import (
 from orchestune.dispatch.state import ActiveWorktree
 from orchestune.dispatch.summary import WARN_PREFIX
 from orchestune.models import PrRecord
+from orchestune.outcome_record import OutcomeLookupState
 
 
 def _active(tmp_path, **overrides):
@@ -109,7 +110,10 @@ class TestFetchOutcomeForActive:
         forge = MagicMock()
         forge.list_comments.side_effect = RuntimeError("502 Bad Gateway")
 
-        assert _fetch_outcome_for_active(_active(tmp_path), forge) == "error"
+        assert (
+            _fetch_outcome_for_active(_active(tmp_path), forge).state
+            is OutcomeLookupState.UNKNOWN
+        )
 
         captured = capsys.readouterr().err
         assert WARN_PREFIX in captured
@@ -178,9 +182,8 @@ class TestCompletedWorktreeDecisionCarriesForgeError:
         assert event["error"] == "RuntimeError: 502 Bad Gateway"
 
 
-class TestOpenPrCommentFailures:
-    """PR#789レビュー(Codex P2): オープンPR経路のコメント取得失敗も、どの呼び出しが
-    失敗したのかを警告とレポートへ伝える。"""
+class TestIssueCommentFailures:
+    """Issueコメント取得失敗をUNKNOWNとして警告とレポートへ伝える。"""
 
     def _open_pr_config(self, tmp_path):
         forge = MagicMock()
@@ -202,7 +205,6 @@ class TestOpenPrCommentFailures:
         status = _local_pr_completion_status(_active(tmp_path), config, failures)
 
         assert status == "unknown"
-        # Issue側とPR側の2回の`list_comments`が落ちるので記録も2件になる。
         assert {failure.operation for failure in failures} == {"list_comments"}
         assert failures[0].description == "RuntimeError: 502 Bad Gateway"
         captured = capsys.readouterr().err
@@ -245,13 +247,8 @@ class TestWarningEncoding:
         assert failures[0].description == "RuntimeError: 接続に失敗しました"
 
 
-class TestSecondaryOutcomeLookupFailures:
-    """PR#789レビュー(Codex P2): Issueコメント取得の後段で落ちた呼び出しも報告する。
-
-    ここを黙って握り潰すと、一時的な障害でOutcome Recordを見落としたまま
-    `completed_without_outcome`（人手レビューへのエスカレーションと
-    run_stateからの除去）へ進んでしまう。保守的な保留で待つべき場面。
-    """
+class TestIssueCanonicalOutcomeLookup:
+    """PR一覧やPRコメントはOutcome判定に関与させない。"""
 
     def _forge(self, issue_comments):
         forge = MagicMock()
@@ -260,19 +257,19 @@ class TestSecondaryOutcomeLookupFailures:
         )
         return forge
 
-    def test_list_prs_failure_holds_when_no_outcome_was_found(self, tmp_path, capsys):
+    def test_list_prs_failure_does_not_affect_absent_issue_outcome(self, tmp_path):
         forge = self._forge([])
         forge.list_prs.side_effect = RuntimeError("504 Gateway Timeout")
         failures: list[ForgeFailure] = []
 
         result = _fetch_outcome_for_active(_active(tmp_path), forge, failures)
 
-        assert result == "error"
-        assert [failure.operation for failure in failures] == ["list_prs"]
-        assert WARN_PREFIX in capsys.readouterr().err
+        assert result.state is OutcomeLookupState.ABSENT
+        assert failures == []
+        forge.list_prs.assert_not_called()
 
     def test_outcome_already_found_on_the_issue_still_wins(self, tmp_path):
-        """後段が落ちても、既に読めたコメントに結論があるならそれを使う。"""
+        """PR一覧障害に関係なく、Issue上の宣言だけを採用する。"""
         forge = self._forge(
             [
                 {
@@ -289,13 +286,13 @@ class TestSecondaryOutcomeLookupFailures:
             _active(tmp_path, started_at=None), forge, failures
         )
 
-        assert result != "error"
-        assert result is not None
-        assert result.result == "done"
-        # 障害自体は起きているので、記録と警告は残す。
-        assert [failure.operation for failure in failures] == ["list_prs"]
+        assert result.state is OutcomeLookupState.FOUND
+        assert result.record is not None
+        assert result.record.result == "done"
+        assert failures == []
+        forge.list_prs.assert_not_called()
 
-    def test_pr_comment_failure_is_attributed_to_the_pr(self, tmp_path, capsys):
+    def test_pr_comment_failure_is_not_queried(self, tmp_path):
         forge = MagicMock()
         forge.list_prs.return_value = [
             PrRecord(
@@ -310,9 +307,12 @@ class TestSecondaryOutcomeLookupFailures:
         )
         failures: list[ForgeFailure] = []
 
-        assert _fetch_outcome_for_active(_active(tmp_path), forge, failures) == "error"
+        result = _fetch_outcome_for_active(_active(tmp_path), forge, failures)
 
-        assert "#1234" in capsys.readouterr().err
+        assert result.state is OutcomeLookupState.ABSENT
+        assert failures == []
+        forge.list_prs.assert_not_called()
+        assert [call.args[0] for call in forge.list_comments.call_args_list] == [702]
 
 
 def _raise(error):

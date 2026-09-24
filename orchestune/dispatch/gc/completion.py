@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import NamedTuple
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
@@ -49,9 +49,8 @@ from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, PrRecord, Usage
 from orchestune.outcome_record import (
-    RESULT_BLOCKED,
-    RESULT_DONE,
-    RESULT_NOT_NEEDED,
+    OutcomeLookupResult,
+    OutcomeLookupState,
     OutcomeRecord,
     parse_from_comments,
 )
@@ -157,44 +156,23 @@ def warn_forge_failure(
 
 def _fetch_outcome_for_active(
     active: ActiveWorktree, forge: Forge, error_sink: list[ForgeFailure] | None = None
-) -> OutcomeRecord | None | Literal["error"]:
+) -> OutcomeLookupResult:
+    """Read the active task's Issue-only Outcome declaration.
+
+    `ABSENT` means the complete Issue comment history was read and contains no
+    declaration for this session.  A failed read is deliberately `UNKNOWN`, so
+    every GC caller can hold rather than turn an API outage into a missing
+    Outcome escalation or a reclaim.
+    """
     try:
         comments = list(forge.list_comments(active.issue_number))
     except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
         warn_forge_failure("list_comments", active.issue_number, error, error_sink)
-        return "error"
-    had_error = False
-    try:
-        prs = forge.list_prs(state="all")
-        matching_prs = [
-            pr
-            for pr in prs
-            if (
-                (active.branch is not None and pr.head_ref == active.branch)
-                or pr_matches_issue(pr, active.issue_number)
-            )
-            and not _is_stale_pr_for_active(pr, active)
-        ]
-        for pr in matching_prs:
-            if pr.number != active.issue_number:
-                try:
-                    comments.extend(forge.list_comments(pr.number))
-                except Exception as error:  # noqa: BLE001 - 事実だけ表に出す
-                    warn_forge_failure("list_comments", pr.number, error, error_sink)
-                    had_error = True
-    except Exception as error:  # noqa: BLE001 - 事実だけ表に出す
-        warn_forge_failure("list_prs", active.issue_number, error, error_sink)
-        had_error = True
-
+        return OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN)
     outcome = parse_from_comments(comments, since=active.started_at)
-    # PR#789レビュー対応(Codex P2): 後段の取得に失敗した状態で結論が見つからない
-    # 場合は保守的に保留する。ここで`None`を返すと、Outcome Recordを一時的な
-    # API障害で見落としたまま`completed_without_outcome`（人手レビューへの
-    # エスカレーションとrun_stateからの除去）へ進んでしまう。
-    # 既に読めたコメントに結論があるならそれを使う（取りこぼしていない）。
-    if outcome is None and had_error:
-        return "error"
-    return outcome
+    if outcome is None:
+        return OutcomeLookupResult(state=OutcomeLookupState.ABSENT)
+    return OutcomeLookupResult(state=OutcomeLookupState.FOUND, record=outcome)
 
 
 def _detect_worktree_commits(
@@ -247,17 +225,15 @@ def _decide_completed_worktree_outcome(
     outcome = None
     if forge is not None:
         failures: list[ForgeFailure] = []
-        outcome_or_err = _fetch_outcome_for_active(active, forge, failures)
-        if outcome_or_err == "error":
-            if has_new_commits:
-                return CompletedWorktreeDecision(
-                    action="completion_skipped_forge_error",
-                    subtask_id=subtask_id,
-                    operation=failed_operations(failures),
-                    error=failure_descriptions(failures),
-                )
-        else:
-            outcome = outcome_or_err
+        lookup = _fetch_outcome_for_active(active, forge, failures)
+        if lookup.state is OutcomeLookupState.UNKNOWN:
+            return CompletedWorktreeDecision(
+                action="completion_skipped_forge_error",
+                subtask_id=subtask_id,
+                operation=failed_operations(failures),
+                error=failure_descriptions(failures),
+            )
+        outcome = lookup.record
 
     retry_count, retry_pending = _get_review_timeout_retry_state(
         run_state, active.issue_number
@@ -895,52 +871,17 @@ def _is_stale_pr_for_active(pr: PrRecord, active: ActiveWorktree) -> bool:
     return ts is not None and ts < math.floor(active.started_at)
 
 
-def _collect_open_pr_comments(
-    active: ActiveWorktree,
-    handle: DispatchHandle,
-    open_prs: list[PrRecord],
-    config: DispatcherConfig,
-    error_sink: list[ForgeFailure] | None = None,
-) -> tuple[list[dict], bool]:
-    all_comments: list[dict] = []
-    had_error = False
-    targets = {pr.number for pr in open_prs}
-    if handle.issue_number is not None:
-        targets.add(handle.issue_number)
-    for num in sorted(targets):
-        try:
-            all_comments.extend(config.resolved_forge.list_comments(num))
-        except Exception as error:  # noqa: BLE001
-            warn_forge_failure("list_comments", num, error, error_sink)
-            had_error = True
-    return all_comments, had_error
-
-
-def _eval_open_pr_status(
-    active: ActiveWorktree,
-    handle: DispatchHandle,
-    open_prs: list[PrRecord],
-    config: DispatcherConfig,
-    error_sink: list[ForgeFailure] | None = None,
-) -> str:
-    all_comments, had_error = _collect_open_pr_comments(
-        active, handle, open_prs, config, error_sink
-    )
-    outcome = parse_from_comments(all_comments, since=active.started_at)
-    if outcome is not None and outcome.result in (
-        RESULT_DONE,
-        RESULT_NOT_NEEDED,
-        RESULT_BLOCKED,
-    ):
-        return "completed"
-    return "unknown" if had_error and outcome is None else "pending"
-
-
 def _local_pr_completion_status(
     active: ActiveWorktree,
     config: DispatcherConfig,
     error_sink: list[ForgeFailure] | None = None,
 ) -> str:
+    lookup = _fetch_outcome_for_active(active, config.resolved_forge, error_sink)
+    if lookup.state is OutcomeLookupState.FOUND:
+        return "completed"
+    if lookup.state is OutcomeLookupState.UNKNOWN:
+        return "unknown"
+
     handle = _active_dispatch_handle(active)
     try:
         candidate_prs = config.resolved_forge.list_prs(state="all")
@@ -961,9 +902,8 @@ def _local_pr_completion_status(
     ]
     if any(pr.state == "MERGED" for pr in matching_prs):
         return "completed"
-    open_prs = [pr for pr in matching_prs if pr.state == "OPEN"]
-    if open_prs:
-        return _eval_open_pr_status(active, handle, open_prs, config, error_sink)
+    if any(pr.state == "OPEN" for pr in matching_prs):
+        return "pending"
     if any(pr.state == "CLOSED" for pr in matching_prs):
         return "abandoned"
     return "pending"
