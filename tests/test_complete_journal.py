@@ -152,6 +152,23 @@ class TestReserveCompletion:
             "pr": 42
         }
 
+    def test_reservation_after_handoff_does_not_mutate_the_terminal_payload(
+        self, tmp_path
+    ):
+        path = _seed_active(tmp_path)
+        journal = _reserve(path, payload={"pr": 1})
+        mark_handoff_ready(journal, comment_id="1", comment_url="u", state_path=path)
+
+        # a retried reservation (e.g. a re-executed caller) with a different
+        # payload must not rewrite evidence that a posted comment already
+        # refers to.
+        resumed = _reserve(path, payload={"pr": 2})
+
+        assert resumed.payload == {"pr": 1}
+        assert resumed.handoff_ready is True
+        persisted = load_run_state(path).active_worktrees["10"]
+        assert persisted.completion_payload == {"pr": 1}
+
     def test_save_failure_does_not_leave_a_half_applied_reservation(
         self, tmp_path, monkeypatch
     ):
@@ -241,6 +258,23 @@ class TestMarkHandoffReady:
         with pytest.raises(CompletionJournalError) as excinfo:
             mark_handoff_ready(journal, comment_id="1", state_path=path)
         assert excinfo.value.reason == CompleteFailureReason.EVIDENCE_MISSING
+
+    def test_rejects_blank_or_whitespace_only_comment_evidence(self, tmp_path):
+        path = _seed_active(tmp_path)
+        journal = _reserve(path)
+
+        with pytest.raises(CompletionJournalError) as excinfo:
+            mark_handoff_ready(
+                journal, comment_id="   ", comment_url="u", state_path=path
+            )
+        assert excinfo.value.reason == CompleteFailureReason.EVIDENCE_MISSING
+
+        with pytest.raises(CompletionJournalError) as excinfo:
+            mark_handoff_ready(journal, comment_id="1", comment_url="", state_path=path)
+        assert excinfo.value.reason == CompleteFailureReason.EVIDENCE_MISSING
+
+        persisted = load_run_state(path).active_worktrees["10"]
+        assert persisted.completion_handoff_ready is False
 
     def test_accepts_evidence_already_persisted_by_a_prior_call(self, tmp_path):
         path = _seed_active(tmp_path)

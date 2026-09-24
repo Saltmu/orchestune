@@ -48,6 +48,12 @@ def _new_completion_id() -> str:
     return f"completion-{uuid4().hex}"
 
 
+def _has_posting_evidence(comment_id: str | None, comment_url: str | None) -> bool:
+    return bool(comment_id and comment_id.strip()) and bool(
+        comment_url and comment_url.strip()
+    )
+
+
 def _lock_path_for(state_path: Path) -> Path:
     # `save_run_state` always asserts the lock derived from `state_path` (never a
     # caller-supplied override), so the acquired lock must match it exactly.
@@ -117,7 +123,10 @@ def _resume_existing_reservation(
             f"Cannot change reserved completion result from "
             f"{active.completion_result!r} to {result!r}",
         )
-    if payload is not None:
+    # A completion already handed off to GC is terminal: its posted evidence
+    # (comment id/url) refers to a specific payload, so a retried reservation
+    # must not silently rewrite it out from under that evidence.
+    if payload is not None and not active.completion_handoff_ready:
         active.completion_payload = dict(payload)
         _save_or_raise(run_state, state_path)
     return _to_journal(active)
@@ -224,9 +233,8 @@ def mark_handoff_ready(
         if payload is not None:
             active.completion_payload = dict(payload)
 
-        if (
-            active.completion_comment_id is None
-            or active.completion_comment_url is None
+        if not _has_posting_evidence(
+            active.completion_comment_id, active.completion_comment_url
         ):
             raise CompletionJournalError(
                 CompleteFailureReason.EVIDENCE_MISSING,
