@@ -206,25 +206,83 @@ def _resolve_head_sha(root: Path) -> str:
     return res.stdout.strip()
 
 
+def _resolve_ref_tip(root: Path, ref: str) -> str | None:
+    """Resolve commit SHA for a ref or origin/ref."""
+    cleaned = ref.removeprefix("origin/")
+    for candidate in (f"origin/{cleaned}", cleaned):
+        res = run_git(["rev-parse", f"{candidate}^{{commit}}"], cwd=root, check=False)
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    return None
+
+
+def _find_active_worktree_base(
+    root: Path, request: Any | None = None
+) -> tuple[str | None, str | None]:
+    """Look up (base_ref, base_sha) for root from request or run_state.json."""
+    candidate_paths: list[Path] = []
+    if request is not None and getattr(request, "state_path", None):
+        candidate_paths.append(Path(request.state_path).resolve())
+    for candidate_dir in (root, root.parent, root.parent.parent):
+        candidate_paths.append(candidate_dir / "run_state.json")
+
+    req_issue = (
+        str(getattr(request, "issue_number", "")) if request is not None else None
+    )
+    for state_path in candidate_paths:
+        if not state_path.is_file():
+            continue
+        try:
+            data = json.loads(state_path.read_text(encoding="utf-8"))
+            active_trees = data.get("active_worktrees", {})
+            for issue_str, entry in active_trees.items():
+                if req_issue and issue_str == req_issue:
+                    return entry.get("base_ref"), entry.get("base_sha")
+                wt_path = entry.get("worktree_path")
+                if wt_path and Path(wt_path).resolve() == root.resolve():
+                    return entry.get("base_ref"), entry.get("base_sha")
+        except (OSError, json.JSONDecodeError):
+            pass
+    return None, None
+
+
 def _resolve_base_sha(root: Path, request: Any | None = None) -> str:
-    """Resolve base commit SHA from request, active state, upstream, or fallback."""
+    """Resolve target base branch tip commit SHA."""
     if request is not None:
         payload = getattr(request, "payload", None)
         if payload is not None and getattr(payload, "base_sha", None):
             return str(payload.base_sha)
 
-    # Try merge-base with upstream
-    res = run_git(["merge-base", "HEAD", "@{upstream}"], cwd=root, check=False)
+    active_ref, active_sha = _find_active_worktree_base(root, request)
+    if active_ref:
+        tip = _resolve_ref_tip(root, active_ref)
+        if tip:
+            return tip
+    if active_sha:
+        return active_sha
+
+    # Check for parent/issue-* branches
+    res = run_git(
+        [
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads/parent/",
+            "refs/remotes/origin/parent/",
+        ],
+        cwd=root,
+        check=False,
+    )
     if res.returncode == 0 and res.stdout.strip():
-        return res.stdout.strip()
+        for parent_ref in res.stdout.strip().splitlines():
+            tip = _resolve_ref_tip(root, parent_ref)
+            if tip:
+                return tip
 
-    # Try merge-base with origin/main or main
-    for base_ref in ("origin/main", "main"):
-        res = run_git(["merge-base", "HEAD", base_ref], cwd=root, check=False)
-        if res.returncode == 0 and res.stdout.strip():
-            return res.stdout.strip()
+    for default_ref in ("origin/main", "main"):
+        tip = _resolve_ref_tip(root, default_ref)
+        if tip:
+            return tip
 
-    # Fallback to HEAD~1 or HEAD
     res = run_git(["rev-parse", "HEAD~1"], cwd=root, check=False)
     if res.returncode == 0 and res.stdout.strip():
         return res.stdout.strip()

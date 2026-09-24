@@ -31,6 +31,11 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     exit 2
 }
 
+# Invalidate prior evidence before any setup or validation steps
+$CiStartTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+uv run python -m orchestune.complete.ci_evidence invalidate
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 # Ensure virtual environment and dependencies are installed
 & uv run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" 2>$null
 if ($LASTEXITCODE -ne 0) {
@@ -41,11 +46,6 @@ if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
 }
-
-# Invalidate prior evidence at CI start
-$CiStartTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
-uv run python -m orchestune.complete.ci_evidence invalidate
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[1/6] Checking code format (ruff format)..."
 uv run ruff format --check

@@ -16,15 +16,15 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 2
 fi
 
+# Invalidate prior evidence before any setup or validation steps
+CI_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+uv run python -m orchestune.complete.ci_evidence invalidate
+
 # Ensure virtual environment and dependencies are installed
 if ! uv run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" >/dev/null 2>&1; then
   echo "Virtual environment or dependencies not found; running uv sync..."
   uv sync
 fi
-
-# Invalidate prior evidence at CI start
-CI_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-uv run python -m orchestune.complete.ci_evidence invalidate
 
 echo "[1/6] Checking code format (ruff format)..."
 uv run ruff format --check

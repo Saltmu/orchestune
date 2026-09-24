@@ -289,6 +289,47 @@ class TestValidateCiEvidence:
         with pytest.raises(CiEvidenceMismatchError, match="HEAD SHA mismatch"):
             validate_ci_evidence(req)
 
+    def test_validate_rejects_base_sha_mismatch_when_base_advances(
+        self, git_worktree: Path
+    ):
+        # Create a base branch with an initial commit
+        subprocess.run(
+            ["git", "branch", "parent/issue-894", "HEAD"], cwd=git_worktree, check=True
+        )
+        record_ci_evidence(
+            worktree_root=git_worktree,
+            started_at="2026-09-24T12:00:00Z",
+            exit_code=0,
+        )
+
+        # Advance parent/issue-894 with a new commit (simulate base advancing)
+        subprocess.run(
+            ["git", "checkout", "parent/issue-894"],
+            cwd=git_worktree,
+            check=True,
+            capture_output=True,
+        )
+        (git_worktree / "base_file.txt").write_text("base update\n", encoding="utf-8")
+        subprocess.run(["git", "add", "base_file.txt"], cwd=git_worktree, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "advance base"],
+            cwd=git_worktree,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "checkout", "main"],
+            cwd=git_worktree,
+            check=True,
+            capture_output=True,
+        )
+
+        req = CompleteRequest.done(
+            issue_number=1000, pr=100, worktree_root=git_worktree
+        )
+        with pytest.raises(CiEvidenceMismatchError, match="Base SHA mismatch"):
+            validate_ci_evidence(req)
+
     def test_validate_rejects_ci_definition_mismatch(self, git_worktree: Path):
         record_ci_evidence(
             worktree_root=git_worktree,
