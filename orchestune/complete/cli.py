@@ -88,13 +88,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
         request = _request_from_args(args)
-    except (SystemExit, ValueError) as exc:
-        if isinstance(exc, ValueError):
-            print(f"Error: {exc}")
+    except ValueError as exc:
+        print(f"Error: {exc}")
         return 40
 
     result = complete_task(request)
     if result.success:
+        if result.preview:
+            print(f"Completion preview validated for Issue #{result.issue_number}.")
+            return 0
         print(f"Completion handed off to GC for Issue #{result.issue_number}.")
         return 0
     assert result.failure is not None

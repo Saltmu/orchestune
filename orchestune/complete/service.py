@@ -31,6 +31,7 @@ from orchestune.complete.preflight import evaluate_complete_preflight
 from orchestune.dispatch.state import load_run_state
 from orchestune.forge import GitHubForge
 from orchestune.infra.git_cli import run_git
+from orchestune.outcome_record import RESULT_NOT_NEEDED
 
 
 @dataclass(frozen=True)
@@ -120,7 +121,7 @@ def _preflight_failure(
 
 def _preview(context: _CompletionContext) -> CompleteResult:
     record = context.request.to_outcome_record()
-    return CompleteResult.success_result(
+    return CompleteResult.preview_result(
         context.request.issue_number,
         context.request.result,
         claim_id=context.request.claim_id,
@@ -128,6 +129,10 @@ def _preview(context: _CompletionContext) -> CompleteResult:
         pr=record.pr,
         outcome_record=record,
     )
+
+
+def _is_unclaimed_not_needed(context: _CompletionContext) -> bool:
+    return context.request.result == RESULT_NOT_NEEDED and context.active is None
 
 
 def _run_ci(context: _CompletionContext) -> CompleteResult | None:
@@ -162,7 +167,7 @@ def _reserve(
             claim_id=request.claim_id,
             owner_token=request.owner_token,
             result=request.result,
-            payload={"outcome": request.to_outcome_record().render()},
+            payload=None,
             state_path=context.state_path,
         )
     except CompletionJournalError as exc:
@@ -179,18 +184,13 @@ def _record(context: _CompletionContext, journal: CompletionJournal) -> Any:
     )
 
 
-def _forge_runner(forge: Any) -> Any:
-    """Adapt the Forge command runner without widening the Forge public contract."""
-    return object.__getattribute__(forge, "_run")
-
-
 def _post(
     context: _CompletionContext, record: Any
 ) -> tuple[PostingResult | None, CompleteResult | None]:
     try:
         posted = post_issue_outcome(
             PostingRequest(context.request.issue_number, record),
-            runner=_forge_runner(context.forge),
+            forge=context.forge,
         )
     except OutcomePostingError as exc:
         return None, _failure(
@@ -233,6 +233,25 @@ def _handoff(
     )
 
 
+def _complete_unclaimed_not_needed(context: _CompletionContext) -> CompleteResult:
+    """Post a deterministic pre-claim no-op outcome without allocating a worktree."""
+    record = replace(
+        context.request.to_outcome_record(),
+        completion_id=f"unclaimed-not-needed-{context.request.issue_number}",
+    )
+    posted, failure = _post(context, record)
+    if failure is not None:
+        return failure
+    assert posted is not None
+    return CompleteResult.success_result(
+        context.request.issue_number,
+        context.request.result,
+        owner_kind=context.request.owner_kind,
+        pr=record.pr,
+        outcome_record=record,
+    )
+
+
 def complete_task(
     request: CompleteRequest, *, forge: Any | None = None
 ) -> CompleteResult:
@@ -243,6 +262,8 @@ def complete_task(
     assert context is not None
     if request.dry_run:
         return _preview(context)
+    if _is_unclaimed_not_needed(context):
+        return _complete_unclaimed_not_needed(context)
     if (failure := _run_ci(context)) is not None:
         return failure
     journal, failure = _reserve(context)

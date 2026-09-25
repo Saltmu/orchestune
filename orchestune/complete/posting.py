@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
 
-_Runner = Callable[[list[str], str | None], Any]
+
+class OutcomeIssueForge(Protocol):
+    """Narrow public Forge capability required by Issue outcome posting."""
+
+    def list_all_issue_comments(
+        self, issue_number: int | str
+    ) -> list[dict[str, Any]]: ...
+
+    def create_issue_comment(
+        self, issue_number: int | str, body: str
+    ) -> dict[str, Any]: ...
 
 
 class OutcomePostingError(RuntimeError):
@@ -43,24 +51,6 @@ class PostingResult:
     reused: bool
 
 
-def _run_json(runner: _Runner, args: list[str], input_text: str | None = None) -> Any:
-    raw = runner(args, input_text)
-    return json.loads(raw) if isinstance(raw, str) else raw
-
-
-def _comment_pages(raw: Any) -> list[dict[str, Any]]:
-    """Normalize ``gh api --paginate --slurp`` output without assuming one page."""
-    pages = raw if isinstance(raw, list) else [raw]
-    comments: list[dict[str, Any]] = []
-    for page in pages:
-        if not isinstance(page, list):
-            raise OutcomeLookupUnknownError(
-                "GitHub comments response has an invalid page"
-            )
-        comments.extend(comment for comment in page if isinstance(comment, dict))
-    return comments
-
-
 def _comment_evidence(comment: dict[str, Any]) -> tuple[str, str] | None:
     comment_id = comment.get("id")
     comment_url = comment.get("html_url")
@@ -69,16 +59,11 @@ def _comment_evidence(comment: dict[str, Any]) -> tuple[str, str] | None:
     return str(comment_id), comment_url
 
 
-def _find_existing(request: PostingRequest, runner: _Runner) -> PostingResult | None:
-    endpoint = (
-        f"repos/{{owner}}/{{repo}}/issues/{request.issue_number}/comments?per_page=100"
-    )
+def _find_existing(
+    request: PostingRequest, forge: OutcomeIssueForge
+) -> PostingResult | None:
     try:
-        comments = _comment_pages(
-            _run_json(runner, ["gh", "api", "--paginate", "--slurp", endpoint])
-        )
-    except OutcomeLookupUnknownError:
-        raise
+        comments = forge.list_all_issue_comments(request.issue_number)
     except Exception as exc:
         raise OutcomeLookupUnknownError(
             "Unable to retrieve every Issue comment page"
@@ -102,12 +87,9 @@ def _find_existing(request: PostingRequest, runner: _Runner) -> PostingResult | 
     return None
 
 
-def _post_new(request: PostingRequest, runner: _Runner) -> PostingResult:
-    endpoint = f"repos/{{owner}}/{{repo}}/issues/{request.issue_number}/comments"
-    response = _run_json(
-        runner,
-        ["gh", "api", "--method", "POST", endpoint, "--input", "-"],
-        json.dumps({"body": request.outcome_record.render()}),
+def _post_new(request: PostingRequest, forge: OutcomeIssueForge) -> PostingResult:
+    response = forge.create_issue_comment(
+        request.issue_number, request.outcome_record.render()
     )
     if not isinstance(response, dict):
         raise OutcomePostingError("GitHub did not return a comment object")
@@ -117,21 +99,23 @@ def _post_new(request: PostingRequest, runner: _Runner) -> PostingResult:
     return PostingResult(*evidence, reused=False)
 
 
-def post_issue_outcome(request: PostingRequest, *, runner: _Runner) -> PostingResult:
+def post_issue_outcome(
+    request: PostingRequest, *, forge: OutcomeIssueForge
+) -> PostingResult:
     """Find or post exactly one Outcome Record on the Issue itself.
 
     A failed POST is ambiguous: GitHub may have accepted it while its response was
     lost. Recheck every comment page and never retry POST blindly.
     """
-    existing = _find_existing(request, runner)
+    existing = _find_existing(request, forge)
     if existing is not None:
         return existing
 
     try:
-        return _post_new(request, runner)
+        return _post_new(request, forge)
     except Exception as post_error:
         try:
-            recovered = _find_existing(request, runner)
+            recovered = _find_existing(request, forge)
         except OutcomeLookupUnknownError as lookup_error:
             raise OutcomeLookupUnknownError(
                 "POST result is unknown and Issue comments could not be rechecked"

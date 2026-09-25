@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.complete.contracts import CompleteResult
 
 
@@ -52,3 +54,12 @@ def test_cli_returns_service_failure_exit_code() -> None:
 
     assert failed.failure is not None
     assert exit_code == int(failed.failure.exit_code)
+
+
+def test_help_keeps_argparse_success_exit_code() -> None:
+    from orchestune.complete.cli import main
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--help"])
+
+    assert excinfo.value.code == 0
