@@ -11,11 +11,120 @@ import pytest
 
 from scripts.jev_filter import (
     DEFAULT_JEV_API_URL,
+    DEFAULT_JEV_BASE_URL,
     JevFindingEvaluation,
     evaluate_finding_with_jev,
     filter_review_findings,
     is_finding_accepted,
 )
+
+
+class TestJevUrls:
+    def test_default_jev_base_and_api_urls(self) -> None:
+        assert DEFAULT_JEV_BASE_URL == "https://api.typesafe.ai/v1"
+        assert DEFAULT_JEV_API_URL == "https://api.typesafe.ai/v1/evaluate"
+
+    def test_base_url_argument_appends_evaluate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("JEV_API_KEY", "test-key")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"validity": 0.9, "impact": "HIGH"}
+        ).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+            evaluate_finding_with_jev(
+                comment="test",
+                base_url="https://api.typesafe.ai/v1",
+            )
+            req = mock_urlopen.call_args[0][0]
+            assert req.full_url == "https://api.typesafe.ai/v1/evaluate"
+
+    def test_base_url_argument_with_trailing_slash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("JEV_API_KEY", "test-key")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"validity": 0.9, "impact": "HIGH"}
+        ).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+            evaluate_finding_with_jev(
+                comment="test",
+                base_url="https://api.typesafe.ai/v1/",
+            )
+            req = mock_urlopen.call_args[0][0]
+            assert req.full_url == "https://api.typesafe.ai/v1/evaluate"
+
+    def test_base_url_argument_already_ends_with_evaluate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("JEV_API_KEY", "test-key")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"validity": 0.9, "impact": "HIGH"}
+        ).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+            evaluate_finding_with_jev(
+                comment="test",
+                base_url="https://custom.host/v1/evaluate",
+            )
+            req = mock_urlopen.call_args[0][0]
+            assert req.full_url == "https://custom.host/v1/evaluate"
+
+    def test_jev_base_url_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("JEV_API_KEY", "test-key")
+        monkeypatch.setenv("JEV_BASE_URL", "https://env.example.com/v1")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"validity": 0.9, "impact": "HIGH"}
+        ).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+            evaluate_finding_with_jev(comment="test")
+            req = mock_urlopen.call_args[0][0]
+            assert req.full_url == "https://env.example.com/v1/evaluate"
+
+    def test_jev_api_url_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("JEV_API_KEY", "test-key")
+        monkeypatch.setenv("JEV_API_URL", "https://env.example.com/v1/evaluate")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"validity": 0.9, "impact": "HIGH"}
+        ).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+            evaluate_finding_with_jev(comment="test")
+            req = mock_urlopen.call_args[0][0]
+            assert req.full_url == "https://env.example.com/v1/evaluate"
+
+    def test_base_url_argument_precedence_over_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("JEV_API_KEY", "test-key")
+        monkeypatch.setenv("JEV_BASE_URL", "https://ignored.com/v1")
+        monkeypatch.setenv("JEV_API_URL", "https://ignored.com/v1/evaluate")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"validity": 0.9, "impact": "HIGH"}
+        ).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+            evaluate_finding_with_jev(
+                comment="test",
+                base_url="https://explicit.com/v1",
+            )
+            req = mock_urlopen.call_args[0][0]
+            assert req.full_url == "https://explicit.com/v1/evaluate"
 
 
 class TestIsFindingAccepted:

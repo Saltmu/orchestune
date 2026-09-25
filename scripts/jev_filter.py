@@ -15,7 +15,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
-DEFAULT_JEV_API_URL = "https://api.jev.ai/v1/evaluate"
+DEFAULT_JEV_BASE_URL = "https://api.typesafe.ai/v1"
+DEFAULT_JEV_API_URL = f"{DEFAULT_JEV_BASE_URL}/evaluate"
 DEFAULT_VALIDITY_THRESHOLD = 0.7
 MAX_COMMENT_LENGTH = 4000
 MAX_RETRIES = 3
@@ -62,6 +63,7 @@ def evaluate_finding_with_jev(
     """Evaluate a single review finding with the Jev API.
 
     API key is read from JEV_API_KEY environment variable if not explicitly passed.
+    Base URL or endpoint can be passed via base_url argument or JEV_BASE_URL / JEV_API_URL env vars.
     If no key is configured, evaluation is bypassed safely without raising errors.
     Applies comment chunking/truncation and exponential backoff retry for transient errors.
     """
@@ -73,7 +75,17 @@ def evaluate_finding_with_jev(
             bypassed=True,
         )
 
-    url = base_url or os.environ.get("JEV_API_URL") or DEFAULT_JEV_API_URL
+    raw_url = (
+        base_url
+        or os.environ.get("JEV_BASE_URL")
+        or os.environ.get("JEV_API_URL")
+        or DEFAULT_JEV_API_URL
+    )
+    cleaned_url = raw_url.rstrip("/")
+    if cleaned_url.endswith("/evaluate"):
+        url = cleaned_url
+    else:
+        url = f"{cleaned_url}/evaluate"
 
     # Chunk / truncate oversized comments to prevent resource bloat and comply with API guidelines
     comment_text = comment or ""
