@@ -620,14 +620,13 @@ class TestDecideCompletedWorktreeOutcome:
 
         assert decision.action == "completion_skipped_prior_merge_indeterminate"
 
-    def test_no_new_commits_with_forge_error_falls_back_to_completed_no_commits(
+    def test_no_new_commits_with_forge_error_holds_for_retry(
         self,
     ):
         active = _active()
         task = _task()
         fake_forge = MagicMock()
         fake_forge.list_comments.side_effect = RuntimeError("network error")
-        fake_forge.list_prs.side_effect = RuntimeError("network error")
         with (
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
@@ -643,7 +642,8 @@ class TestDecideCompletedWorktreeOutcome:
             decision = _decide_completed_worktree_outcome(
                 active, task, forge=fake_forge
             )
-        assert decision.action == "completed_no_commits"
+        assert decision.action == "completion_skipped_forge_error"
+        assert decision.operation == "list_comments"
         assert decision.subtask_id == "task-a"
 
     def test_clean_with_new_commits_without_outcome_is_completed_without_outcome(self):

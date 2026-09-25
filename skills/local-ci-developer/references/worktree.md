@@ -28,8 +28,9 @@ uv sync
 Create the unique worktree-local `<session-dir>` defined by the parent skill and
 migrate the approved plan from `<planning-session-dir>` to
 `<session-dir>/implementation-plan.md`. From this point, refer only to the explicit
-worktree-local path. Then implement, test, run local CI, commit, push,
-create the PR, and handle review feedback entirely from within this worktree.
+worktree-local path. Then implement, test, run local CI, commit, push, create
+the PR, handle review feedback, and run `orchestune complete` entirely from
+within this worktree.
 
 ## Claim failures and recovery
 
@@ -42,19 +43,10 @@ If `orchestune claim` fails (non-zero exit code):
    ```
 4. For unresolved dependencies or conflict rejections, resolve the conflicting task or wait until dependencies complete before retrying.
 
-## Worktree completion and cleanup
+## Worktree completion and retention
 
-For dispatcher-launched worktrees (`owner_kind=dispatch`), do not manually
-remove the worktree; Orchestune's GC phase manages lifecycle transitions.
-
-For worktrees created via `orchestune claim` (`owner_kind=interactive`),
-the worktree is preserved by default. Once the PR is submitted and the outcome
-record is posted (or after PR merge), clean up the worktree from the primary
-repository root:
-
-```bash
-git worktree remove <worktree_path>
-git worktree prune
-```
-
-Do not use `--force`; resolve or preserve uncommitted work first.
+For dispatcher-launched (`owner_kind=dispatch`) and claimed interactive
+(`owner_kind=interactive`) worktrees, run `orchestune complete` for the task
+outcome. It posts to the task Issue and preserves the worktree. Do not remove
+the worktree as part of completion; Orchestune's GC phase handles lifecycle
+transitions after handoff.

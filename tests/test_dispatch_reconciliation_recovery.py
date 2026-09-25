@@ -24,10 +24,11 @@ from orchestune.dispatch.reconciliation import (
     _apply_base_branch_red_recovery,
     _decide_base_branch_red_recovery,
     _handle_base_branch_red_recovery,
+    _lookup_issue_outcome,
     _resolve_base_branch_for_task,
 )
 from orchestune.dispatch.state import RunState
-from orchestune.outcome_record import OutcomeRecord
+from orchestune.outcome_record import OutcomeLookupState, OutcomeRecord
 from tests.dispatch_test_support import make_plain_issue as _issue
 from tests.dispatch_test_support import make_test_cycle_context
 from tests.dispatch_test_support import make_test_task as _task
@@ -327,6 +328,64 @@ class TestBaseBranchRedRecovery:
 
         assert events == []
         fake_forge.remove_label.assert_not_called()
+
+    def test_handle_base_branch_red_recovery_skips_on_comment_fetch_failure(
+        self, tmp_path
+    ):
+        """#998: コメント取得失敗（UNKNOWN）は未投稿（ABSENT）と区別されるが、
+        いずれも復帰判断を行わない安全側の挙動は維持する。"""
+        issue = _issue(1, labels=("status:blocked", "ci:base-branch-red"))
+        issues_mock = MagicMock()
+        issues_mock.all.return_value = [issue]
+        task = _task(issue_number=1, subtask_id="task-a", depends_on=())
+        fake_forge = MagicMock()
+        fake_forge.list_comments.side_effect = RuntimeError("forge timeout")
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            forge=fake_forge,
+        )
+        run_state = RunState()
+        ctx = _ctx(
+            tasks_by_issue={1: task},
+            dependency_resolution={1: TaskDependencies()},
+            run_state=run_state,
+            config=config,
+        )
+
+        events = _handle_base_branch_red_recovery(issues_mock, ctx, run_state, config)
+
+        assert events == []
+        fake_forge.remove_label.assert_not_called()
+
+
+class TestLookupIssueOutcome:
+    def test_found_when_a_valid_record_exists(self):
+        outcome = OutcomeRecord(result="done", issue=1, pr=2)
+        fake_forge = MagicMock()
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+        ]
+        result = _lookup_issue_outcome(1, fake_forge)
+        assert result.state is OutcomeLookupState.FOUND
+        assert result.record == outcome
+
+    def test_absent_when_no_record_is_posted(self):
+        fake_forge = MagicMock()
+        fake_forge.list_comments.return_value = []
+        result = _lookup_issue_outcome(1, fake_forge)
+        assert result.state is OutcomeLookupState.ABSENT
+        assert result.record is None
+
+    def test_unknown_when_comment_fetch_fails(self):
+        fake_forge = MagicMock()
+        fake_forge.list_comments.side_effect = RuntimeError("forge timeout")
+        result = _lookup_issue_outcome(1, fake_forge)
+        assert result.state is OutcomeLookupState.UNKNOWN
+        assert result.record is None
 
 
 class TestResolveBaseBranchForTask:

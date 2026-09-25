@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, NamedTuple
+from typing import NamedTuple
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
@@ -24,6 +24,8 @@ from orchestune.dispatch.gc.git import (
 from orchestune.dispatch.gc.outcome_decision import (
     _decide_action_from_outcome,
     _get_review_timeout_retry_state,
+    _is_handoff_ready,
+    _is_handoff_retained_dirty,
 )
 from orchestune.dispatch.gc.prior_merge import decide_prior_parent_merge_completion
 from orchestune.dispatch.labels import (
@@ -49,9 +51,8 @@ from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, PrRecord, Usage
 from orchestune.outcome_record import (
-    RESULT_BLOCKED,
-    RESULT_DONE,
-    RESULT_NOT_NEEDED,
+    OutcomeLookupResult,
+    OutcomeLookupState,
     OutcomeRecord,
     parse_from_comments,
 )
@@ -157,44 +158,23 @@ def warn_forge_failure(
 
 def _fetch_outcome_for_active(
     active: ActiveWorktree, forge: Forge, error_sink: list[ForgeFailure] | None = None
-) -> OutcomeRecord | None | Literal["error"]:
+) -> OutcomeLookupResult:
+    """Read the active task's Issue-only Outcome declaration.
+
+    `ABSENT` means the complete Issue comment history was read and contains no
+    declaration for this session.  A failed read is deliberately `UNKNOWN`, so
+    every GC caller can hold rather than turn an API outage into a missing
+    Outcome escalation or a reclaim.
+    """
     try:
         comments = list(forge.list_comments(active.issue_number))
     except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
         warn_forge_failure("list_comments", active.issue_number, error, error_sink)
-        return "error"
-    had_error = False
-    try:
-        prs = forge.list_prs(state="all")
-        matching_prs = [
-            pr
-            for pr in prs
-            if (
-                (active.branch is not None and pr.head_ref == active.branch)
-                or pr_matches_issue(pr, active.issue_number)
-            )
-            and not _is_stale_pr_for_active(pr, active)
-        ]
-        for pr in matching_prs:
-            if pr.number != active.issue_number:
-                try:
-                    comments.extend(forge.list_comments(pr.number))
-                except Exception as error:  # noqa: BLE001 - 事実だけ表に出す
-                    warn_forge_failure("list_comments", pr.number, error, error_sink)
-                    had_error = True
-    except Exception as error:  # noqa: BLE001 - 事実だけ表に出す
-        warn_forge_failure("list_prs", active.issue_number, error, error_sink)
-        had_error = True
-
+        return OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN)
     outcome = parse_from_comments(comments, since=active.started_at)
-    # PR#789レビュー対応(Codex P2): 後段の取得に失敗した状態で結論が見つからない
-    # 場合は保守的に保留する。ここで`None`を返すと、Outcome Recordを一時的な
-    # API障害で見落としたまま`completed_without_outcome`（人手レビューへの
-    # エスカレーションとrun_stateからの除去）へ進んでしまう。
-    # 既に読めたコメントに結論があるならそれを使う（取りこぼしていない）。
-    if outcome is None and had_error:
-        return "error"
-    return outcome
+    if outcome is None:
+        return OutcomeLookupResult(state=OutcomeLookupState.ABSENT)
+    return OutcomeLookupResult(state=OutcomeLookupState.FOUND, record=outcome)
 
 
 def _detect_worktree_commits(
@@ -228,6 +208,43 @@ def _prior_merge_decision(
     )
 
 
+def _resolve_active_outcome(
+    active: ActiveWorktree,
+    subtask_id: str,
+    forge: Forge | None,
+) -> tuple[OutcomeRecord | None, CompletedWorktreeDecision | None]:
+    if forge is not None:
+        failures: list[ForgeFailure] = []
+        lookup = _fetch_outcome_for_active(active, forge, failures)
+        if lookup.state is OutcomeLookupState.UNKNOWN:
+            if _is_handoff_ready(active) and active.completion_result is not None:
+                return (
+                    OutcomeRecord(
+                        result=active.completion_result,
+                        issue=active.issue_number,
+                    ),
+                    None,
+                )
+            return None, CompletedWorktreeDecision(
+                action="completion_skipped_forge_error",
+                subtask_id=subtask_id,
+                operation=failed_operations(failures),
+                error=failure_descriptions(failures),
+            )
+        if lookup.record is not None:
+            return lookup.record, None
+
+    if _is_handoff_ready(active) and active.completion_result is not None:
+        return (
+            OutcomeRecord(
+                result=active.completion_result,
+                issue=active.issue_number,
+            ),
+            None,
+        )
+    return None, None
+
+
 def _decide_completed_worktree_outcome(
     active: ActiveWorktree,
     active_task: TaskMetadata | None,
@@ -238,26 +255,28 @@ def _decide_completed_worktree_outcome(
     issue: IssueRecord | None = None,
 ) -> CompletedWorktreeDecision:
     subtask_id = active_task.subtask_id if active_task else ""
-    if worktree_has_uncommitted_changes(active.worktree_path):
-        return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
-    if prior_merge_decision := _prior_merge_decision(active, active_task, forge, issue):
-        return prior_merge_decision
-    has_new_commits, commit_sha = _detect_worktree_commits(active, repository_root)
+    is_dirty = worktree_has_uncommitted_changes(active.worktree_path)
 
-    outcome = None
-    if forge is not None:
-        failures: list[ForgeFailure] = []
-        outcome_or_err = _fetch_outcome_for_active(active, forge, failures)
-        if outcome_or_err == "error":
-            if has_new_commits:
-                return CompletedWorktreeDecision(
-                    action="completion_skipped_forge_error",
-                    subtask_id=subtask_id,
-                    operation=failed_operations(failures),
-                    error=failure_descriptions(failures),
-                )
-        else:
-            outcome = outcome_or_err
+    outcome: OutcomeRecord | None = None
+    if is_dirty:
+        if not _is_handoff_ready(active):
+            return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
+        outcome, err_decision = _resolve_active_outcome(active, subtask_id, forge)
+        if err_decision is not None:
+            return err_decision
+        if not _is_handoff_retained_dirty(active, outcome):
+            return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
+    else:
+        if prior_merge_decision := _prior_merge_decision(
+            active, active_task, forge, issue
+        ):
+            return prior_merge_decision
+
+    has_new_commits, commit_sha = _detect_worktree_commits(active, repository_root)
+    if outcome is None:
+        outcome, err_decision = _resolve_active_outcome(active, subtask_id, forge)
+        if err_decision is not None:
+            return err_decision
 
     retry_count, retry_pending = _get_review_timeout_retry_state(
         run_state, active.issue_number
@@ -291,10 +310,15 @@ def _prepare_apply_escalation(
     active: ActiveWorktree,
     config: DispatcherConfig,
     active_task: TaskMetadata | None = None,
+    outcome: OutcomeRecord | None = None,
 ) -> tuple[str, ...] | None:
     if not config.apply:
         return None
-    remove_worktree(active.worktree_path)
+    if not (
+        _is_handoff_retained_dirty(active, outcome)
+        and worktree_has_uncommitted_changes(active.worktree_path)
+    ):
+        remove_worktree(active.worktree_path)
     return _stale_status_labels(active_task)
 
 
@@ -303,8 +327,11 @@ def _apply_escalation(
     config: DispatcherConfig,
     message: str,
     active_task: TaskMetadata | None = None,
+    outcome: OutcomeRecord | None = None,
 ) -> None:
-    stale_labels = _prepare_apply_escalation(active, config, active_task)
+    stale_labels = _prepare_apply_escalation(
+        active, config, active_task, outcome=outcome
+    )
     if stale_labels is not None:
         apply_human_review_escalation(
             active.issue_number,
@@ -320,8 +347,11 @@ def _apply_blocked_hold(
     active_task: TaskMetadata | None,
     comment: str,
     extra_label: str | None = None,
+    outcome: OutcomeRecord | None = None,
 ) -> None:
-    stale_labels = _prepare_apply_escalation(active, config, active_task)
+    stale_labels = _prepare_apply_escalation(
+        active, config, active_task, outcome=outcome
+    )
     if stale_labels is None:
         return
     transition_status_label(
@@ -348,6 +378,7 @@ def _apply_blocked_base_branch_red(
         f"`ci:base-branch-red`マーカーを付与して`status:blocked`で保留しました{attempt_str}。"
         "ベースブランチの前進（新コミット）時に自動で再キューイングされます。",
         extra_label="ci:base-branch-red",
+        outcome=decision.outcome,
     )
 
 
@@ -366,6 +397,7 @@ def _apply_escalated_base_branch_red(
         "自動再キューイングを停止し`status:blocked-human-review`へエスカレーションしました。"
         "ベースブランチの修正およびCI状況を確認の上、必要であれば`status:queued`へ再設定してください。",
         ctx.active_task,
+        outcome=decision.outcome,
     )
     try:
         ctx.config.resolved_forge.remove_label(
@@ -386,7 +418,9 @@ def _apply_escalated_review_timeout(
         "actor（ボット名義）、job conclusion（skipped等）、および認可エラーの有無をご確認ください。"
         "問題解決後、必要であれば`status:queued`へ再設定してください。"
     )
-    _apply_escalation(ctx.active, ctx.config, msg, ctx.active_task)
+    _apply_escalation(
+        ctx.active, ctx.config, msg, ctx.active_task, outcome=decision.outcome
+    )
 
 
 def _apply_blocked_review_timeout_hold(
@@ -399,6 +433,7 @@ def _apply_blocked_review_timeout_hold(
         "AIレビュー待機のタイムアウト（review-timeout）を検知しましたが、"
         "再投入管理状態（run_state）が未設定のため自動再投入を見送り、`status:blocked`で保留しました。"
         "ログやIssueの状況を確認の上、必要であれば`status:queued`へ再設定してください。",
+        outcome=decision.outcome,
     )
 
 
@@ -414,6 +449,7 @@ def _apply_blocked_unknown_reason(
         f"未知のブロック理由（{reason_str}）を持つOutcome Recordを検知したため、"
         "`status:blocked`で保留しました。"
         "ログやIssueの状況を確認の上、必要であれば`status:queued`へ再設定してください。",
+        outcome=decision.outcome,
     )
 
 
@@ -794,7 +830,7 @@ def _finalize_completed_worktree(
     on_review_timeout_requeue: Callable[[], None] | None = None,
     issue: IssueRecord | None = None,
 ) -> dict:
-    repo_root = config.worktree_root.parent if config.worktree_root else None
+    repo_root = Path(config.worktree_root).parent if config.worktree_root else None
     decision = _decide_completed_worktree_outcome(
         active,
         active_task,
@@ -842,13 +878,14 @@ def _finalize_not_needed_worktree(
         "subtask_id": subtask_id,
         "worktree_path": active.worktree_path,
     }
-    if _decide_not_needed_dirty_worktree(active):
+    if _decide_not_needed_dirty_worktree(active) and not _is_handoff_ready(active):
         event["action"] = "completion_skipped_dirty_worktree"
         return event
     if not config.apply:
         event["action"] = "not_needed"
         return event
-    remove_worktree(active.worktree_path)
+    if not worktree_has_uncommitted_changes(active.worktree_path):
+        remove_worktree(active.worktree_path)
     config.resolved_forge.remove_label(active.issue_number, StatusLabel.IN_PROGRESS)
     if isinstance(config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
         if dispatch_not_needed_review is None:
@@ -895,52 +932,17 @@ def _is_stale_pr_for_active(pr: PrRecord, active: ActiveWorktree) -> bool:
     return ts is not None and ts < math.floor(active.started_at)
 
 
-def _collect_open_pr_comments(
-    active: ActiveWorktree,
-    handle: DispatchHandle,
-    open_prs: list[PrRecord],
-    config: DispatcherConfig,
-    error_sink: list[ForgeFailure] | None = None,
-) -> tuple[list[dict], bool]:
-    all_comments: list[dict] = []
-    had_error = False
-    targets = {pr.number for pr in open_prs}
-    if handle.issue_number is not None:
-        targets.add(handle.issue_number)
-    for num in sorted(targets):
-        try:
-            all_comments.extend(config.resolved_forge.list_comments(num))
-        except Exception as error:  # noqa: BLE001
-            warn_forge_failure("list_comments", num, error, error_sink)
-            had_error = True
-    return all_comments, had_error
-
-
-def _eval_open_pr_status(
-    active: ActiveWorktree,
-    handle: DispatchHandle,
-    open_prs: list[PrRecord],
-    config: DispatcherConfig,
-    error_sink: list[ForgeFailure] | None = None,
-) -> str:
-    all_comments, had_error = _collect_open_pr_comments(
-        active, handle, open_prs, config, error_sink
-    )
-    outcome = parse_from_comments(all_comments, since=active.started_at)
-    if outcome is not None and outcome.result in (
-        RESULT_DONE,
-        RESULT_NOT_NEEDED,
-        RESULT_BLOCKED,
-    ):
-        return "completed"
-    return "unknown" if had_error and outcome is None else "pending"
-
-
 def _local_pr_completion_status(
     active: ActiveWorktree,
     config: DispatcherConfig,
     error_sink: list[ForgeFailure] | None = None,
 ) -> str:
+    lookup = _fetch_outcome_for_active(active, config.resolved_forge, error_sink)
+    if lookup.state is OutcomeLookupState.FOUND:
+        return "completed"
+    if lookup.state is OutcomeLookupState.UNKNOWN:
+        return "unknown"
+
     handle = _active_dispatch_handle(active)
     try:
         candidate_prs = config.resolved_forge.list_prs(state="all")
@@ -961,9 +963,8 @@ def _local_pr_completion_status(
     ]
     if any(pr.state == "MERGED" for pr in matching_prs):
         return "completed"
-    open_prs = [pr for pr in matching_prs if pr.state == "OPEN"]
-    if open_prs:
-        return _eval_open_pr_status(active, handle, open_prs, config, error_sink)
+    if any(pr.state == "OPEN" for pr in matching_prs):
+        return "pending"
     if any(pr.state == "CLOSED" for pr in matching_prs):
         return "abandoned"
     return "pending"
@@ -1128,6 +1129,10 @@ def _finalize_abandoned_cloud_worktree(
 
 
 def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> bool:
+    if _is_handoff_ready(active):
+        return True
+    if active.completion_id is not None:
+        return False
     if active.owner_kind == "interactive":
         return False
     if active.external_id is not None:

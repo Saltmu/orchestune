@@ -421,6 +421,11 @@ class TestCodexCloudDispatchTarget:
             mock_fetch.assert_not_called()
 
     def test_is_complete_when_pr_is_open_for_task_branch(self):
+        """#998: `_check_open_prs_outcome`（`dispatch/targets.py`、共有ヘルパー）は
+        PRコメントを読まずIssueコメントのみを正本とするよう変更された。
+        `handle.issue_number`が未設定な場合でも、マッチしたPRの
+        `closes_issue_numbers`から対象Issueを解決できるようにしたため、
+        フィクスチャへ`closes_issue_numbers`を追加した。"""
         target = CodexCloudDispatchTarget("env_123")
         outcome = OutcomeRecord(result="done", issue=1, pr=1)
         with (
@@ -429,7 +434,10 @@ class TestCodexCloudDispatchTarget:
                 "list_prs",
                 return_value=[
                     PrRecord(
-                        number=1, head_ref="claude/issue-1-task-a", changed_files=()
+                        number=1,
+                        head_ref="claude/issue-1-task-a",
+                        changed_files=(),
+                        closes_issue_numbers=(1,),
                     )
                 ],
             ),

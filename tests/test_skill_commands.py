@@ -543,19 +543,21 @@ def test_worker_skills_forbid_direct_label_operations(skill_name: str):
 
 @pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
 def test_worker_skills_document_all_outcome_record_patterns(skill_name: str):
-    """Worker skills must document complete JSON templates for all 3 outcome results (done, not-needed, blocked)."""
+    """Worker skills route all outcomes through complete and the task Issue."""
     skill_dir = SKILLS_ROOT / skill_name
     skill_md = skill_dir / "SKILL.md"
     skill_text = skill_md.read_text(encoding="utf-8")
 
-    assert '"result": "done"' in skill_text or 'result: "done"' in skill_text
+    assert "orchestune complete --issue <N> --result not-needed" in skill_text
+    assert "orchestune complete --issue <N> --pr <PR> --result done" in skill_text
     assert (
-        '"result": "not-needed"' in skill_text or 'result: "not-needed"' in skill_text
+        "orchestune complete --issue <N> --result blocked --reason <REASON>"
+        in skill_text
     )
-    assert '"result": "blocked"' in skill_text or 'result: "blocked"' in skill_text
-    assert "base-branch-red" in skill_text
-    assert "base_sha" in skill_text
-    assert "attempt" in skill_text
+    assert "Issue comments" in skill_text
+    assert "Post to **PR comments**" not in skill_text
+    assert "to PR/Issue comments" not in skill_text
+    assert "<!-- orchestune:outcome -->" not in skill_text
 
 
 @pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
@@ -576,11 +578,13 @@ def test_workflow_skills_document_isolated_worktree_operations(skill_name: str):
         assert "Auto-Dispatch" not in worktree_content
         assert "dispatcher-provisioned worktree" not in skill_content
     else:
-        assert "git worktree add" in worktree_content
-        assert "worktree/<BRANCH_SLUG>" in worktree_content
-        assert "git worktree remove" in worktree_content
-        assert "replace('/', '-')" in worktree_content
+        assert "orchestune claim" in worktree_content
+        assert "orchestune claim <issue_number> --resume <claim_id>" in worktree_content
+        assert "<worktree_path>" in worktree_content
         assert "<INSTALL_COMMAND>" in worktree_content
+
+    assert "git worktree remove" not in worktree_content
+    assert "orchestune complete" in worktree_content
 
     for reference_name in ("tdd.md", "pr.md", "review-loop.md"):
         reference = (skill_dir / "references" / reference_name).read_text(

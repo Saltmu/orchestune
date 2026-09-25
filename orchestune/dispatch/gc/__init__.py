@@ -25,6 +25,7 @@ from orchestune.dispatch.gc.completion import (
     _cloud_worktree_completion_status,
     _decide_completed_worktree_outcome,
     _decide_not_needed_dirty_worktree,
+    _fetch_outcome_for_active,
     _finalize_abandoned_cloud_worktree,
     _finalize_completed_worktree,
     _finalize_not_needed_worktree,
@@ -38,12 +39,18 @@ from orchestune.dispatch.gc.completion import (
     warn_forge_failure,
 )
 from orchestune.dispatch.gc.git import (
+    VerifiedWorktreeRemovalRequest,
+    WorktreeRemovalEvaluation,
+    WorktreeRemovalResult,
     backup_wip_commit,
+    evaluate_worktree_removal,
     remote_branch_commit_sha_if_ahead,
+    remove_verified_worktree,
     remove_worktree,
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
+from orchestune.dispatch.gc.outcome_decision import _is_handoff_ready
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
@@ -59,7 +66,7 @@ from orchestune.dispatch.state import (
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord, Usage
-from orchestune.outcome_record import RESULT_NOT_NEEDED, parse_from_comments
+from orchestune.outcome_record import RESULT_NOT_NEEDED, OutcomeLookupState
 from orchestune.task_metadata import TaskMetadata
 
 __all__ = [
@@ -81,11 +88,16 @@ __all__ = [
     "_parse_github_timestamp",
     "is_completion_hold_event",
     "backup_wip_commit",
+    "evaluate_worktree_removal",
     "is_process_alive",
     "remote_branch_commit_sha_if_ahead",
+    "remove_verified_worktree",
     "remove_worktree",
     "worktree_has_new_commits",
     "worktree_has_uncommitted_changes",
+    "VerifiedWorktreeRemovalRequest",
+    "WorktreeRemovalEvaluation",
+    "WorktreeRemovalResult",
 ]
 
 
@@ -107,14 +119,12 @@ def _rule_not_needed(
     )
     has_not_needed_outcome = False
     if not has_not_needed_label:
-        try:
-            comments = ctx.config.resolved_forge.list_comments(active.issue_number)
-            outcome = parse_from_comments(comments, since=active.started_at)
-            has_not_needed_outcome = (
-                outcome is not None and outcome.result == RESULT_NOT_NEEDED
-            )
-        except Exception:
-            pass
+        lookup = _fetch_outcome_for_active(active, ctx.config.resolved_forge)
+        has_not_needed_outcome = (
+            lookup.state is OutcomeLookupState.FOUND
+            and lookup.record is not None
+            and lookup.record.result == RESULT_NOT_NEEDED
+        )
 
     if not has_not_needed_label and not has_not_needed_outcome:
         return None
@@ -639,7 +649,12 @@ def _resolve_completion(
     active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     """完了候補・保留・早期終端を明示的な値として解決する。"""
+    is_handoff_ready = _is_handoff_ready(active)
+    if active.completion_id is not None and not is_handoff_ready:
+        return CompletionResolution.pending()
     if active.owner_kind == "interactive":
+        if is_handoff_ready:
+            return CompletionResolution.ready(active)
         return CompletionResolution.pending()
     if active.started_at is None and active.external_id is None:
         return _resolve_recovered_completion(ctx, key, active, active_task)

@@ -271,7 +271,11 @@ class TestCollectChildSummaries:
 
         assert summaries[0].pr_numbers == ()
 
-    def test_prefers_the_outcome_record_posted_on_the_subtask_pr(self):
+    def test_reads_the_outcome_record_from_the_child_issue_even_with_a_subtask_pr(
+        self,
+    ):
+        """#998: Issueコメントが宣言の正本。サブタスクPRがあっても、その
+        PRコメントは読まず、常に子Issue自身のコメント欄から解決する。"""
         self.forge.list_prs.return_value = [
             _subtask_pr(201, review_decision="APPROVED")
         ]
@@ -282,7 +286,7 @@ class TestCollectChildSummaries:
             review=ReviewSummary(bot="codex", rounds=2, verdict="approved"),
         )
         self.forge.list_comments.side_effect = lambda number: (
-            [_outcome_comment(record)] if number == 201 else []
+            [_outcome_comment(record)] if number == 101 else []
         )
 
         summaries = collect_child_summaries(self.forge, 100, [_child(101)])
@@ -301,35 +305,40 @@ class TestCollectChildSummaries:
         assert summaries[0].review == "not-needed"
 
     def test_rejects_an_outcome_record_naming_another_issue(self):
-        """Codexレビュー(P2) Reproducer: PRが複数Issueを閉じる場合や古い
-        レコードが貼り直された場合、そのPRのコメントには別タスクのOutcome
-        Recordが載りうる。`issue`は契約上の識別子なので、一致しないレコードを
-        この子Issueのレビュー結果として表示してはならない。"""
+        """Codexレビュー(P2) Reproducer: 古いレコードが貼り直された場合等、
+        Issueのコメント欄には別タスクのOutcome Recordが載りうる。`issue`は
+        契約上の識別子なので、一致しないレコードをこの子Issueのレビュー結果
+        として表示してはならない。"""
         self.forge.list_prs.return_value = [
             _subtask_pr(201, review_decision="APPROVED")
         ]
         foreign = OutcomeRecord(result="done", issue=999, pr=201)
         self.forge.list_comments.side_effect = lambda number: (
-            [_outcome_comment(foreign)] if number == 201 else []
+            [_outcome_comment(foreign)] if number == 101 else []
         )
 
         summaries = collect_child_summaries(self.forge, 100, [_child(101)])
 
         assert summaries[0].review == "APPROVED"
 
-    def test_rejects_an_outcome_record_naming_another_pr(self):
-        """同(P2): PRコメント上のレコードが別PRを名乗る場合も同様に弾く。"""
+    def test_accepts_a_record_naming_a_different_pr_since_the_issue_alone_identifies_it(
+        self,
+    ):
+        """#998: Issueコメントのみが正本になったことで、`_child_outcome`は
+        常に`pr_number=None`で`_identifies_child`を呼ぶ（該当PRのコメント欄を
+        読むことがなくなったため、レコードの`pr`とマッチさせる相手がいない）。
+        したがって`issue`さえ一致すれば`pr`の値によらず採用される。"""
         self.forge.list_prs.return_value = [
             _subtask_pr(201, review_decision="APPROVED")
         ]
-        foreign = OutcomeRecord(result="done", issue=101, pr=999)
+        record = OutcomeRecord(result="done", issue=101, pr=999)
         self.forge.list_comments.side_effect = lambda number: (
-            [_outcome_comment(foreign)] if number == 201 else []
+            [_outcome_comment(record)] if number == 101 else []
         )
 
         summaries = collect_child_summaries(self.forge, 100, [_child(101)])
 
-        assert summaries[0].review == "APPROVED"
+        assert summaries[0].review == "done"
 
     def test_picks_the_latest_record_that_identifies_this_child(self):
         """PR#690レビュー対応(Codex P2) Reproducer: 識別チェックを
@@ -352,7 +361,7 @@ class TestCollectChildSummaries:
                 _outcome_comment(mine, created_at="2026-01-02T00:00:00Z"),
                 _outcome_comment(foreign, created_at="2026-01-03T00:00:00Z"),
             ]
-            if number == 201
+            if number == 101
             else []
         )
 
@@ -366,7 +375,7 @@ class TestCollectChildSummaries:
         self.forge.list_prs.return_value = [_subtask_pr(201)]
         record = OutcomeRecord(result="done", issue=101)
         self.forge.list_comments.side_effect = lambda number: (
-            [_outcome_comment(record)] if number == 201 else []
+            [_outcome_comment(record)] if number == 101 else []
         )
 
         summaries = collect_child_summaries(self.forge, 100, [_child(101)])
@@ -450,50 +459,41 @@ class TestCollectChildSummaries:
 
         assert summaries == []
 
-    def test_prefers_the_outcome_on_the_latest_subtask_pr(self):
-        """PR#690レビュー対応(Codex P2) Reproducer: 子Issueに複数のマージ済み
-        サブタスクPRがあるとき、`_merged_subtask_prs`は表示順を安定させるため
-        PR番号昇順で返す。その順で先頭のレコードを採ると、後から作られたPRに
-        新しい結果があっても古い方を載せてしまい、行にはPRが両方並ぶため
-        齟齬になる。PR番号の大きい方＝最新の表明を採ること。"""
+    def test_review_is_independent_of_which_or_how_many_subtask_prs_matched(self):
+        """#998: Issueコメントが唯一の正本になったため、子Issueに複数の
+        マージ済みサブタスクPRがあっても採用されるレコードは変わらない
+        （旧来のPR番号大小比較は廃止）。表示欄（`pr_numbers`）には引き続き
+        マッチした全PRが昇順で並ぶ。"""
         self.forge.list_prs.return_value = [
             _subtask_pr(201, head_ref="claude/issue-101-task-a"),
             _subtask_pr(205, head_ref="claude/issue-101-task-a-retry"),
         ]
-        older = OutcomeRecord(
+        record = OutcomeRecord(
             result="done",
             issue=101,
-            pr=201,
-            review=ReviewSummary(bot="codex", rounds=1, verdict="approved"),
-        )
-        newer = OutcomeRecord(
-            result="done",
-            issue=101,
-            pr=205,
             review=ReviewSummary(bot="claude", rounds=3, verdict="approved"),
         )
-        by_pr = {201: older, 205: newer}
         self.forge.list_comments.side_effect = lambda number: (
-            [_outcome_comment(by_pr[number])] if number in by_pr else []
+            [_outcome_comment(record)] if number == 101 else []
         )
 
         summaries = collect_child_summaries(self.forge, 100, [_child(101)])
 
         assert summaries[0].review == "done (claude / approved / 3ラウンド)"
-        # 表示は昇順のまま（読みやすさのため）で、採用だけが最新優先。
         assert summaries[0].pr_numbers == (201, 205)
 
-    def test_child_issue_comments_are_not_fetched_once_the_pr_answered(self):
-        """APIコスト制限: Outcome Recordはスキル契約上PRコメントが第一の
-        投稿先であるため、そこで解決できた子Issueのコメントは読みに行かない。"""
+    def test_subtask_pr_comments_are_never_fetched_for_the_outcome_record(self):
+        """#998: Issueコメントのみが宣言の正本。サブタスクPRがあっても、
+        そのPRのコメントは一切読みに行かない（旧来のPRコメント優先探索は
+        廃止し、通信再送・重複読取による誤ったattempt増加の温床を断つ）。"""
         record = OutcomeRecord(result="done", issue=101, pr=201)
         self.forge.list_prs.return_value = [_subtask_pr(201)]
         self.forge.list_comments.side_effect = lambda number: (
-            [_outcome_comment(record)] if number == 201 else []
+            [_outcome_comment(record)] if number == 101 else []
         )
 
         collect_child_summaries(self.forge, 100, [_child(101)])
 
         assert [call.args[0] for call in self.forge.list_comments.call_args_list] == [
-            201
+            101
         ]

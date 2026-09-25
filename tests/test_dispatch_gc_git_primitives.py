@@ -14,6 +14,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.dispatch.gc import (
     ZombieOrTimeoutReclaim,
     _finalize_completed_worktree,
@@ -271,13 +273,32 @@ class TestRemoveWorktree:
     """#193: 完了したworktreeの削除。"""
 
     def test_calls_git_worktree_remove_without_force(self):
-        with patch("orchestune.dispatch.gc.git.subprocess.run") as mock_run:
-            mock_run.return_value = subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            )
-            remove_worktree("worktrees/w1")
-        args = mock_run.call_args.args[0]
-        assert args == ["git", "worktree", "remove", str(Path("worktrees/w1"))]
+        w1_path = Path("worktrees/w1")
+        wt_list = (
+            f"worktree /repo\nHEAD 111\nbranch refs/heads/main\n\n"
+            f"worktree {w1_path.resolve()}\nHEAD 222\nbranch refs/heads/feature\n\n"
+        )
+
+        def run_mock(args, **kwargs):
+            if "rev-parse" in args and "--show-toplevel" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="/repo\n", stderr="")
+            if "worktree" in args and "list" in args:
+                return subprocess.CompletedProcess(args, 0, stdout=wt_list, stderr="")
+            if "status" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        with patch(
+            "orchestune.dispatch.gc.git.subprocess.run", side_effect=run_mock
+        ) as mock_run:
+            remove_worktree(w1_path)
+        calls = [c.args[0] for c in mock_run.call_args_list]
+        remove_calls = [
+            c for c in calls if len(c) >= 3 and c[1:3] == ["worktree", "remove"]
+        ]
+        assert len(remove_calls) == 1
+        args = remove_calls[0]
+        assert args == ["git", "worktree", "remove", str(w1_path)]
         assert "--force" not in args
 
     def test_swallows_error_when_already_removed(self):
@@ -319,12 +340,15 @@ class TestRemoveWorktree:
     def test_removes_claim_marker_when_worktree_removal_succeeds(self, tmp_path):
         """撤去が実際に成功した場合（=worktreeが消えた場合）は、対で
         所有権マーカーも片付けて、後日の正当な再claimを妨げないこと。"""
+        import shutil
+
         from orchestune.dispatch.claim_marker import (
             claim_marker_path,
             write_claim_marker,
         )
 
         worktree_path = tmp_path / "worktrees" / "w-removed"
+        worktree_path.mkdir(parents=True)
         write_claim_marker(
             worktree_path,
             claim_id="claim-1",
@@ -333,15 +357,103 @@ class TestRemoveWorktree:
             branch_created=True,
         )
 
-        with patch(
-            "orchestune.dispatch.gc.git.subprocess.run",
-            return_value=subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="", stderr=""
-            ),
-        ):
+        wt_list = (
+            f"worktree /repo\nHEAD 111\nbranch refs/heads/main\n\n"
+            f"worktree {worktree_path.resolve()}\nHEAD 222\nbranch refs/heads/claude/issue-1-task-1\n\n"
+        )
+
+        def run_mock(args, **kwargs):
+            if "rev-parse" in args and "--show-toplevel" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="/repo\n", stderr="")
+            if "worktree" in args and "list" in args:
+                return subprocess.CompletedProcess(args, 0, stdout=wt_list, stderr="")
+            if "status" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+            if "worktree" in args and "remove" in args:
+                shutil.rmtree(worktree_path)
+                return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        with patch("orchestune.dispatch.gc.git.subprocess.run", side_effect=run_mock):
             remove_worktree(worktree_path)
 
         assert not claim_marker_path(worktree_path).exists()
+
+    def test_removes_claim_marker_when_git_raises_but_directory_is_gone(self, tmp_path):
+        """#943 / #1004: git worktree remove が例外を送出しても、ディスク上から
+        worktree ディレクトリが消えていれば所有権マーカーを片付け、
+        後日の再claimでオーナー不一致として永久拒否されるのを防止する。"""
+        import shutil
+
+        from orchestune.dispatch.claim_marker import (
+            claim_marker_path,
+            write_claim_marker,
+        )
+
+        worktree_path = tmp_path / "worktrees" / "w-gone-with-err"
+        worktree_path.mkdir(parents=True)
+        write_claim_marker(
+            worktree_path,
+            claim_id="claim-1",
+            branch="claude/issue-1-task-1",
+            base_sha="deadbeef",
+            branch_created=True,
+        )
+
+        wt_list = (
+            f"worktree /repo\nHEAD 111\nbranch refs/heads/main\n\n"
+            f"worktree {worktree_path.resolve()}\nHEAD 222\nbranch refs/heads/claude/issue-1-task-1\n\n"
+        )
+
+        def run_mock(args, **kwargs):
+            if "rev-parse" in args and "--show-toplevel" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="/repo\n", stderr="")
+            if "worktree" in args and "list" in args:
+                return subprocess.CompletedProcess(args, 0, stdout=wt_list, stderr="")
+            if "status" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+            if "worktree" in args and "remove" in args:
+                # ディレクトリは削除されたが git コマンド自体は例外を送出するケース
+                shutil.rmtree(worktree_path)
+                raise subprocess.CalledProcessError(1, args, stderr="fatal: lock error")
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        with patch("orchestune.dispatch.gc.git.subprocess.run", side_effect=run_mock):
+            res = remove_worktree(worktree_path)
+
+        assert not worktree_path.exists()
+        assert not claim_marker_path(worktree_path).exists()
+        assert res.removed is True
+        assert res.success is True
+
+    def test_rejects_removal_when_safety_evaluation_fails(self, tmp_path):
+        """#1004: evaluate_worktree_removal の安全判定に失敗した場合、物理削除は行われない。"""
+        from orchestune.dispatch.claim_marker import (
+            claim_marker_path,
+            write_claim_marker,
+        )
+
+        worktree_path = tmp_path / "worktrees" / "w-unregistered"
+        worktree_path.mkdir(parents=True)
+        write_claim_marker(
+            worktree_path,
+            claim_id="claim-1",
+            branch="claude/issue-1-task-1",
+            base_sha="deadbeef",
+            branch_created=True,
+        )
+
+        with patch("orchestune.dispatch.gc.git.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            res = remove_worktree(worktree_path)
+
+        assert res.success is False
+        assert res.removed is False
+        assert res.rejection_reason == "unregistered_worktree"
+        assert worktree_path.exists()
+        assert claim_marker_path(worktree_path).exists()
 
 
 class TestWorktreeHasNewCommitsIntegration:
@@ -522,3 +634,451 @@ class TestWorktreeHasNewCommitsIntegration:
         # 5. 検証: ローカルを優先して解決するため、HEAD (B) と ローカル parent (B) を比較し、新規コミットなし (False) となることを確認。
         # (もしリモート優先バグがあると、HEAD (B) と origin/parent (A) を比較して新規コミットあり (True) と判定されてしまう)
         assert worktree_has_new_commits(local_dir, "parent/issue-129") is False
+
+
+class TestEvaluateWorktreeRemoval:
+    """#1004: evaluate_worktree_removal による worktree 削除安全条件の検証。"""
+
+    def test_clean_registered_matching_worktree_is_removable(self, tmp_path):
+        from orchestune.dispatch.claim_marker import write_claim_marker
+        from orchestune.dispatch.gc.git import evaluate_worktree_removal
+        from orchestune.dispatch.state import ActiveWorktree
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        wt_path = tmp_path / "worktrees" / "wt-1"
+        wt_path.mkdir(parents=True)
+
+        write_claim_marker(
+            wt_path,
+            claim_id="claim-1004",
+            branch="claude/issue-1004-task",
+            base_sha="abc1234",
+            branch_created=True,
+        )
+
+        active = ActiveWorktree(
+            issue_number=1004,
+            branch="claude/issue-1004-task",
+            worktree_path=str(wt_path),
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+            claim_id="claim-1004",
+        )
+
+        worktree_list_output = (
+            f"worktree {repo_root}\nHEAD 1111111\nbranch refs/heads/main\n\n"
+            f"worktree {wt_path}\nHEAD 2222222\nbranch refs/heads/claude/issue-1004-task\n\n"
+        )
+
+        with patch("orchestune.dispatch.gc.git.run_git") as mock_git:
+
+            def git_side_effect(args, cwd=None, check=True):
+                if args == ["rev-parse", "--show-toplevel"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=str(repo_root) + "\n", stderr=""
+                    )
+                if args == ["worktree", "list", "--porcelain"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=worktree_list_output, stderr=""
+                    )
+                if args == ["status", "--porcelain"]:
+                    return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+                raise AssertionError(f"Unexpected git call: {args}")
+
+            mock_git.side_effect = git_side_effect
+            evaluation = evaluate_worktree_removal(active, repo_root=repo_root)
+
+        assert evaluation.can_remove is True
+        assert evaluation.rejection_reason is None
+        assert evaluation.request is not None
+
+    def test_rejects_primary_worktree(self, tmp_path):
+        from orchestune.dispatch.gc.git import evaluate_worktree_removal
+        from orchestune.dispatch.state import ActiveWorktree
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        active = ActiveWorktree(
+            issue_number=1004,
+            branch="main",
+            worktree_path=str(repo_root),
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+        )
+
+        with patch("orchestune.dispatch.gc.git.run_git") as mock_git:
+            mock_git.return_value = subprocess.CompletedProcess(
+                ["rev-parse", "--show-toplevel"],
+                0,
+                stdout=str(repo_root) + "\n",
+                stderr="",
+            )
+            evaluation = evaluate_worktree_removal(active, repo_root=repo_root)
+
+        assert evaluation.can_remove is False
+        assert evaluation.rejection_reason == "primary_worktree"
+
+    def test_rejects_unregistered_worktree(self, tmp_path):
+        from orchestune.dispatch.gc.git import evaluate_worktree_removal
+        from orchestune.dispatch.state import ActiveWorktree
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        wt_path = tmp_path / "worktrees" / "wt-unregistered"
+        wt_path.mkdir(parents=True)
+
+        active = ActiveWorktree(
+            issue_number=1004,
+            branch="claude/issue-1004-task",
+            worktree_path=str(wt_path),
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+        )
+
+        worktree_list_output = (
+            f"worktree {repo_root}\nHEAD 1111111\nbranch refs/heads/main\n\n"
+        )
+
+        with patch("orchestune.dispatch.gc.git.run_git") as mock_git:
+
+            def git_side_effect(args, cwd=None, check=True):
+                if args == ["rev-parse", "--show-toplevel"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=str(repo_root) + "\n", stderr=""
+                    )
+                if args == ["worktree", "list", "--porcelain"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=worktree_list_output, stderr=""
+                    )
+                raise AssertionError(f"Unexpected git call: {args}")
+
+            mock_git.side_effect = git_side_effect
+            evaluation = evaluate_worktree_removal(active, repo_root=repo_root)
+
+        assert evaluation.can_remove is False
+        assert evaluation.rejection_reason == "unregistered_worktree"
+
+    def test_rejects_dirty_worktree(self, tmp_path):
+        from orchestune.dispatch.claim_marker import write_claim_marker
+        from orchestune.dispatch.gc.git import evaluate_worktree_removal
+        from orchestune.dispatch.state import ActiveWorktree
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        wt_path = tmp_path / "worktrees" / "wt-dirty"
+        wt_path.mkdir(parents=True)
+
+        write_claim_marker(
+            wt_path,
+            claim_id="claim-1004",
+            branch="claude/issue-1004-task",
+            base_sha="abc1234",
+            branch_created=True,
+        )
+
+        active = ActiveWorktree(
+            issue_number=1004,
+            branch="claude/issue-1004-task",
+            worktree_path=str(wt_path),
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+            claim_id="claim-1004",
+        )
+
+        worktree_list_output = (
+            f"worktree {repo_root}\nHEAD 1111111\nbranch refs/heads/main\n\n"
+            f"worktree {wt_path}\nHEAD 2222222\nbranch refs/heads/claude/issue-1004-task\n\n"
+        )
+
+        with patch("orchestune.dispatch.gc.git.run_git") as mock_git:
+
+            def git_side_effect(args, cwd=None, check=True):
+                if args == ["rev-parse", "--show-toplevel"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=str(repo_root) + "\n", stderr=""
+                    )
+                if args == ["worktree", "list", "--porcelain"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=worktree_list_output, stderr=""
+                    )
+                if args == ["status", "--porcelain"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=" M dirty_file.py\n", stderr=""
+                    )
+                raise AssertionError(f"Unexpected git call: {args}")
+
+            mock_git.side_effect = git_side_effect
+            evaluation = evaluate_worktree_removal(active, repo_root=repo_root)
+
+        assert evaluation.can_remove is False
+        assert evaluation.rejection_reason == "dirty_worktree"
+
+    def test_rejects_branch_mismatch(self, tmp_path):
+        from orchestune.dispatch.claim_marker import write_claim_marker
+        from orchestune.dispatch.gc.git import evaluate_worktree_removal
+        from orchestune.dispatch.state import ActiveWorktree
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        wt_path = tmp_path / "worktrees" / "wt-mismatch"
+        wt_path.mkdir(parents=True)
+
+        write_claim_marker(
+            wt_path,
+            claim_id="claim-1004",
+            branch="different-branch",
+            base_sha="abc1234",
+            branch_created=True,
+        )
+
+        active = ActiveWorktree(
+            issue_number=1004,
+            branch="claude/issue-1004-task",
+            worktree_path=str(wt_path),
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+            claim_id="claim-1004",
+        )
+
+        worktree_list_output = (
+            f"worktree {repo_root}\nHEAD 1111111\nbranch refs/heads/main\n\n"
+            f"worktree {wt_path}\nHEAD 2222222\nbranch refs/heads/different-branch\n\n"
+        )
+
+        with patch("orchestune.dispatch.gc.git.run_git") as mock_git:
+
+            def git_side_effect(args, cwd=None, check=True):
+                if args == ["rev-parse", "--show-toplevel"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=str(repo_root) + "\n", stderr=""
+                    )
+                if args == ["worktree", "list", "--porcelain"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=worktree_list_output, stderr=""
+                    )
+                raise AssertionError(f"Unexpected git call: {args}")
+
+            mock_git.side_effect = git_side_effect
+            evaluation = evaluate_worktree_removal(active, repo_root=repo_root)
+
+        assert evaluation.can_remove is False
+        assert evaluation.rejection_reason == "branch_mismatch"
+
+    def test_rejects_owner_mismatch(self, tmp_path):
+        from orchestune.dispatch.claim_marker import write_claim_marker
+        from orchestune.dispatch.gc.git import evaluate_worktree_removal
+        from orchestune.dispatch.state import ActiveWorktree
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        wt_path = tmp_path / "worktrees" / "wt-wrong-owner"
+        wt_path.mkdir(parents=True)
+
+        write_claim_marker(
+            wt_path,
+            claim_id="other-claim-id",
+            branch="claude/issue-1004-task",
+            base_sha="abc1234",
+            branch_created=True,
+        )
+
+        active = ActiveWorktree(
+            issue_number=1004,
+            branch="claude/issue-1004-task",
+            worktree_path=str(wt_path),
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+            claim_id="claim-1004",
+        )
+
+        worktree_list_output = (
+            f"worktree {repo_root}\nHEAD 1111111\nbranch refs/heads/main\n\n"
+            f"worktree {wt_path}\nHEAD 2222222\nbranch refs/heads/claude/issue-1004-task\n\n"
+        )
+
+        with patch("orchestune.dispatch.gc.git.run_git") as mock_git:
+
+            def git_side_effect(args, cwd=None, check=True):
+                if args == ["rev-parse", "--show-toplevel"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=str(repo_root) + "\n", stderr=""
+                    )
+                if args == ["worktree", "list", "--porcelain"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=worktree_list_output, stderr=""
+                    )
+                if args == ["status", "--porcelain"]:
+                    return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+                raise AssertionError(f"Unexpected git call: {args}")
+
+            mock_git.side_effect = git_side_effect
+            evaluation = evaluate_worktree_removal(active, repo_root=repo_root)
+
+        assert evaluation.can_remove is False
+        assert evaluation.rejection_reason == "owner_mismatch"
+
+    def test_fails_closed_when_git_command_raises(self, tmp_path):
+        from orchestune.dispatch.gc.git import evaluate_worktree_removal
+        from orchestune.dispatch.state import ActiveWorktree
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        wt_path = tmp_path / "worktrees" / "wt-error"
+        wt_path.mkdir(parents=True)
+
+        active = ActiveWorktree(
+            issue_number=1004,
+            branch="claude/issue-1004-task",
+            worktree_path=str(wt_path),
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+        )
+
+        with patch("orchestune.dispatch.gc.git.run_git") as mock_git:
+            mock_git.side_effect = subprocess.CalledProcessError(
+                1, ["git", "worktree", "list"]
+            )
+            evaluation = evaluate_worktree_removal(active, repo_root=repo_root)
+
+        assert evaluation.can_remove is False
+        assert evaluation.rejection_reason == "git_worktree_list_failed"
+
+    def test_rejects_symlink_mismatch(self, tmp_path):
+        from orchestune.dispatch.gc.git import evaluate_worktree_removal
+        from orchestune.dispatch.state import ActiveWorktree
+
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        wt_target = tmp_path / "worktrees" / "wt-target"
+        wt_target.mkdir(parents=True)
+        wt_symlink = tmp_path / "worktrees" / "wt-symlink"
+        try:
+            wt_symlink.symlink_to(wt_target)
+        except OSError:
+            pytest.skip("Symlink creation not permitted on this system")
+
+        active = ActiveWorktree(
+            issue_number=1004,
+            branch="claude/issue-1004-task",
+            worktree_path=str(wt_symlink),
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+        )
+
+        worktree_list_output = (
+            f"worktree {repo_root}\nHEAD 1111111\nbranch refs/heads/main\n\n"
+            f"worktree {wt_symlink}\nHEAD 2222222\nbranch refs/heads/claude/issue-1004-task\n\n"
+        )
+
+        with patch("orchestune.dispatch.gc.git.run_git") as mock_git:
+
+            def git_side_effect(args, cwd=None, check=True):
+                if args == ["rev-parse", "--show-toplevel"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=str(repo_root) + "\n", stderr=""
+                    )
+                if args == ["worktree", "list", "--porcelain"]:
+                    return subprocess.CompletedProcess(
+                        args, 0, stdout=worktree_list_output, stderr=""
+                    )
+                raise AssertionError(f"Unexpected git call: {args}")
+
+            mock_git.side_effect = git_side_effect
+            evaluation = evaluate_worktree_removal(active, repo_root=repo_root)
+
+        assert evaluation.can_remove is False
+        assert evaluation.rejection_reason == "symlink_mismatch"
+
+
+class TestRemoveVerifiedWorktree:
+    """#1004: remove_verified_worktree による安全な物理削除実行の検証。"""
+
+    def test_removes_worktree_and_marker_on_success(self, tmp_path):
+        from orchestune.dispatch.claim_marker import (
+            claim_marker_path,
+            write_claim_marker,
+        )
+        from orchestune.dispatch.gc.git import (
+            VerifiedWorktreeRemovalRequest,
+            remove_verified_worktree,
+        )
+
+        wt_path = tmp_path / "worktrees" / "wt-to-remove"
+        wt_path.mkdir(parents=True)
+        write_claim_marker(
+            wt_path,
+            claim_id="claim-1004",
+            branch="claude/issue-1004-task",
+            base_sha="abc1234",
+            branch_created=True,
+        )
+
+        request = VerifiedWorktreeRemovalRequest(
+            worktree_path=wt_path,
+            branch="claude/issue-1004-task",
+        )
+
+        with patch("orchestune.dispatch.gc.git.run_git") as mock_git:
+
+            def git_side_effect(args, cwd=None, check=True):
+                if args[:3] == ["worktree", "remove", str(wt_path)]:
+                    # 削除シミュレーション: ディレクトリを削除
+                    import shutil
+
+                    shutil.rmtree(wt_path)
+                    return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+                raise AssertionError(f"Unexpected git call: {args}")
+
+            mock_git.side_effect = git_side_effect
+            result = remove_verified_worktree(request)
+
+        assert result.success is True
+        assert result.removed is True
+        assert not wt_path.exists()
+        assert not claim_marker_path(wt_path).exists()
+
+    def test_preserves_marker_when_git_removal_fails(self, tmp_path):
+        from orchestune.dispatch.claim_marker import (
+            claim_marker_path,
+            write_claim_marker,
+        )
+        from orchestune.dispatch.gc.git import (
+            VerifiedWorktreeRemovalRequest,
+            remove_verified_worktree,
+        )
+
+        wt_path = tmp_path / "worktrees" / "wt-cannot-remove"
+        wt_path.mkdir(parents=True)
+        write_claim_marker(
+            wt_path,
+            claim_id="claim-1004",
+            branch="claude/issue-1004-task",
+            base_sha="abc1234",
+            branch_created=True,
+        )
+
+        request = VerifiedWorktreeRemovalRequest(
+            worktree_path=wt_path,
+            branch="claude/issue-1004-task",
+        )
+
+        with patch("orchestune.dispatch.gc.git.run_git") as mock_git:
+            mock_git.side_effect = subprocess.CalledProcessError(
+                1, ["git", "worktree", "remove"]
+            )
+            result = remove_verified_worktree(request)
+
+        assert result.success is False
+        assert result.removed is False
+        assert wt_path.exists()
+        assert claim_marker_path(wt_path).exists()

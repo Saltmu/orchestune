@@ -36,9 +36,8 @@ from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.models import Usage
 from orchestune.outcome_record import (
-    RESULT_BLOCKED,
-    RESULT_DONE,
-    RESULT_NOT_NEEDED,
+    OutcomeLookupResult,
+    OutcomeLookupState,
     parse_from_comments,
 )
 from orchestune.task_metadata import TaskMetadata
@@ -294,33 +293,58 @@ def _is_stale_pr_for_handle(pr: PrRecord, handle: DispatchHandle) -> bool:
     return created_at is None or created_at < math.floor(handle.started_at)
 
 
+def _resolve_issue_number_for_outcome(
+    handle: DispatchHandle, open_prs: list[PrRecord]
+) -> int | None:
+    """`handle.issue_number`が未設定な場合、マッチした（ブランチ名一致の）
+    open PRのGitHubクロージング参照（`closes_issue_numbers`）から対象Issueを
+    解決する。これはPRの**メタデータ**であり、#998で読取対象外とした
+    PR**コメント**とは別物なので、Issueコメント正本の契約に反しない。
+
+    Codexレビュー(#1015 round3 P2) 対応: 1つのPRが複数Issueをcloseする場合、
+    どれが実際のディスパッチ対象タスクかは`closes_issue_numbers`だけからは
+    判別できない（先頭を採ると別Issueを誤って対象にしうる）。曖昧な場合は
+    解決を諦め、他のマッチPRで一意に解決できないか続けて試す。
+    """
+    if handle.issue_number is not None:
+        return handle.issue_number
+    for pr in open_prs:
+        if len(pr.closes_issue_numbers) == 1:
+            return pr.closes_issue_numbers[0]
+    return None
+
+
+def _lookup_issue_outcome(
+    issue_number: int | None, forge: Forge, *, since: float | None
+) -> OutcomeLookupResult:
+    """#998: Issueコメントのみを宣言の正本として`OutcomeRecord`を解決する。
+
+    旧来はPRコメントへもフォールバックしていたが、Issueコメント正本の契約に
+    伴い廃止した（通信再送や複数PRでの重複読み取りによる誤ったattempt増加を
+    防ぐため）。取得に失敗した場合はABSENT（未投稿）と区別してUNKNOWNを返す。
+    """
+    if issue_number is None:
+        return OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN)
+    try:
+        comments = forge.list_comments(issue_number)
+    except Exception:
+        return OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN)
+    record = parse_from_comments(comments, since=since)
+    if record is None:
+        return OutcomeLookupResult(state=OutcomeLookupState.ABSENT)
+    return OutcomeLookupResult(state=OutcomeLookupState.FOUND, record=record)
+
+
 def _check_open_prs_outcome(
     open_prs: list[PrRecord],
     handle: DispatchHandle,
     forge: Forge,
 ) -> Literal["completed", "unknown", "pending"]:
-    all_comments: list[Mapping[str, Any]] = []
-    had_error = False
-    if handle.issue_number is not None:
-        try:
-            all_comments.extend(forge.list_comments(handle.issue_number))
-        except Exception:
-            had_error = True
-    pr_numbers = {pr.number for pr in open_prs}
-    for pr_num in pr_numbers:
-        if handle.issue_number is None or pr_num != handle.issue_number:
-            try:
-                all_comments.extend(forge.list_comments(pr_num))
-            except Exception:
-                had_error = True
-    outcome = parse_from_comments(all_comments, since=handle.started_at)
-    if outcome is not None and outcome.result in (
-        RESULT_DONE,
-        RESULT_NOT_NEEDED,
-        RESULT_BLOCKED,
-    ):
+    issue_number = _resolve_issue_number_for_outcome(handle, open_prs)
+    lookup = _lookup_issue_outcome(issue_number, forge, since=handle.started_at)
+    if lookup.state is OutcomeLookupState.FOUND:
         return "completed"
-    if had_error and outcome is None:
+    if lookup.state is OutcomeLookupState.UNKNOWN:
         return "unknown"
     return "pending"
 

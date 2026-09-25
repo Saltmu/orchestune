@@ -6,9 +6,11 @@ import dataclasses
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from orchestune.claim.contracts import ClaimStage, OwnerKind, ReservationKind
 from orchestune.infra.json_state import read_json_with_recovery, write_json_atomic
 from orchestune.infra.process_utils import assert_run_state_lock_held
 from orchestune.models import Usage
@@ -51,6 +53,19 @@ class ActiveWorktree:
     claimed_at: float | None = None
     # owner token 自体は絶対に台帳へ保存しない。照合用途には一方向digestだけを使う。
     owner_token_digest: str | None = None
+    # #1001: completion journal（claimと同じrun_state.jsonの排他ロック下での
+    # complete予約・投稿evidence・handoff-ready遷移の永続化）。存在
+    # （completion_id is not None）自体が「completing」状態を表し、GCの通常
+    # reclaimから除外する判定に使う（#1004）。旧形式状態の読取互換は本Issueの
+    # 受け入れ条件ではないが、追加フィールドはすべて省略可能にして既存の
+    # 永続化済みレコードを壊さない。
+    completion_id: str | None = None
+    completion_result: str | None = None
+    completion_stage: str | None = None
+    completion_payload: dict[str, Any] | None = None
+    completion_comment_id: str | None = None
+    completion_comment_url: str | None = None
+    completion_handoff_ready: bool = False
 
 
 @dataclass
@@ -162,10 +177,6 @@ def _parse_optional_string(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _parse_choice(value: object, allowed: set[str], default: str) -> str:
-    return value if isinstance(value, str) and value in allowed else default
-
-
 def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
     """#512: `run_state.json`の`task_reclaim_counts`を検証しつつ復元する。
 
@@ -249,47 +260,234 @@ def _parse_pending_lock_release_notices(value: object) -> list[int]:
     return list(dict.fromkeys(numbers))[-MAX_PENDING_LOCK_RELEASE_NOTICES:]
 
 
-def _parse_active_worktrees(data: dict) -> dict[str, ActiveWorktree]:
-    return {
-        key: ActiveWorktree(
-            issue_number=value["issue_number"],
-            branch=value["branch"],
-            worktree_path=value["worktree_path"],
-            pid=value["pid"],
-            started_at=value["started_at"],
-            declared_footprint=tuple(value["declared_footprint"]),
-            recompute_count=value.get("recompute_count", 0),
-            forced_serial=value.get("forced_serial", False),
-            external_id=value.get("external_id"),
-            external_url=value.get("external_url"),
-            base_branch=value.get("base_branch", "origin/main"),
-            estimated_tokens=value.get("estimated_tokens"),
-            token_estimate_recorded=value.get(
-                "token_estimate_recorded", "estimated_tokens" in value
-            ),
-            profile=value.get("profile"),
-            model=value.get("model"),
-            reasoning_effort=value.get("reasoning_effort"),
-            selection_reason=value.get("selection_reason"),
-            launch_attempt_id=value.get("launch_attempt_id"),
-            launch_phase=value.get("launch_phase"),
-            owner_kind=_parse_choice(
-                value.get("owner_kind"), {"interactive", "dispatch"}, "dispatch"
-            ),
-            claim_id=_parse_optional_string(value.get("claim_id")),
-            claim_stage=_parse_optional_string(value.get("claim_stage")),
-            base_ref=_parse_optional_string(value.get("base_ref")),
-            base_sha=_parse_optional_string(value.get("base_sha")),
-            reservation_kind=_parse_choice(
-                value.get("reservation_kind"),
-                {"footprint", "repository"},
-                "footprint",
-            ),
-            repository_id=_parse_optional_string(value.get("repository_id")),
-            claimed_at=_parse_optional_finite_float(value.get("claimed_at")),
-            owner_token_digest=_parse_optional_string(value.get("owner_token_digest")),
+_REQUIRED_ACTIVE_WORKTREE_FIELDS = frozenset(
+    {
+        "issue_number",
+        "branch",
+        "worktree_path",
+        "pid",
+        "started_at",
+        "declared_footprint",
+        "owner_kind",
+        "claim_id",
+        "claim_stage",
+        "base_ref",
+        "base_sha",
+        "reservation_kind",
+        "repository_id",
+        "claimed_at",
+        "owner_token_digest",
+    }
+)
+
+
+def _active_worktree_schema_error(key: object, detail: str) -> ValueError:
+    return ValueError(f"active_worktrees[{key}] schema error: {detail}")
+
+
+def recovered_claim_id(issue_number: int) -> str:
+    return f"recovered-{issue_number}"
+
+
+def recovered_owner_token_digest(issue_number: int, claim_id: str | None) -> str:
+    identity = claim_id or recovered_claim_id(issue_number)
+    return sha256(f"recovered-unverifiable:{identity}".encode()).hexdigest()
+
+
+def recovery_repository_id(path: Path) -> str:
+    return str(path.resolve().parent)
+
+
+def _required_active_string(value: dict[str, object], name: str, key: object) -> str:
+    item = value[name]
+    if not isinstance(item, str) or not item:
+        raise _active_worktree_schema_error(key, f"{name} must be a non-empty string")
+    return item
+
+
+def _validate_active_identity(
+    key: object, value: dict[str, object]
+) -> tuple[str, str, str, float, str | None]:
+    owner_kind = _required_active_string(value, "owner_kind", key)
+    claim_stage = _required_active_string(value, "claim_stage", key)
+    reservation_kind = _required_active_string(value, "reservation_kind", key)
+    if (
+        owner_kind not in {kind.value for kind in OwnerKind}
+        or claim_stage not in {stage.value for stage in ClaimStage}
+        or reservation_kind not in {kind.value for kind in ReservationKind}
+    ):
+        raise _active_worktree_schema_error(
+            key, "ownership or lifecycle value is unknown"
         )
-        for key, value in data.get("active_worktrees", {}).items()
+    claimed_at = _parse_optional_finite_float(value["claimed_at"])
+    if claimed_at is None:
+        raise _active_worktree_schema_error(key, "claimed_at must be a finite number")
+    base_sha = value["base_sha"]
+    if base_sha is not None and not isinstance(base_sha, str):
+        raise _active_worktree_schema_error(key, "base_sha must be a string or null")
+    return owner_kind, claim_stage, reservation_kind, claimed_at, base_sha
+
+
+def _parse_optional_completion_str(
+    value: dict[str, object], name: str, key: object
+) -> str | None:
+    item = value.get(name)
+    if item is not None and not isinstance(item, str):
+        raise _active_worktree_schema_error(key, f"{name} must be a string or null")
+    return item
+
+
+def _parse_completion_payload(
+    value: dict[str, object], key: object
+) -> dict[str, Any] | None:
+    item = value.get("completion_payload")
+    if item is not None and not isinstance(item, dict):
+        raise _active_worktree_schema_error(
+            key, "completion_payload must be an object or null"
+        )
+    return item
+
+
+def _parse_completion_handoff_ready(value: dict[str, object], key: object) -> bool:
+    item = value.get("completion_handoff_ready", False)
+    if not isinstance(item, bool):
+        raise _active_worktree_schema_error(
+            key, "completion_handoff_ready must be a boolean"
+        )
+    return item
+
+
+def _parse_completion_journal_fields(
+    value: dict[str, Any], key: object
+) -> dict[str, Any]:
+    return {
+        "completion_id": _parse_optional_completion_str(value, "completion_id", key),
+        "completion_result": _parse_optional_completion_str(
+            value, "completion_result", key
+        ),
+        "completion_stage": _parse_optional_completion_str(
+            value, "completion_stage", key
+        ),
+        "completion_payload": _parse_completion_payload(value, key),
+        "completion_comment_id": _parse_optional_completion_str(
+            value, "completion_comment_id", key
+        ),
+        "completion_comment_url": _parse_optional_completion_str(
+            value, "completion_comment_url", key
+        ),
+        "completion_handoff_ready": _parse_completion_handoff_ready(value, key),
+    }
+
+
+def _build_active_worktree(
+    value: dict[str, Any],
+    *,
+    key: object,
+    issue_number: int,
+    branch: str,
+    worktree_path: str,
+    pid: int | None,
+    started_at: object,
+    declared_footprint: list[object],
+    identity: tuple[str, str, str, float, str | None],
+) -> ActiveWorktree:
+    owner_kind, claim_stage, reservation_kind, claimed_at, base_sha = identity
+    return ActiveWorktree(
+        issue_number=issue_number,
+        branch=branch,
+        worktree_path=worktree_path,
+        pid=pid,
+        started_at=_parse_optional_finite_float(started_at),
+        declared_footprint=tuple(
+            item for item in declared_footprint if isinstance(item, str)
+        ),
+        recompute_count=value.get("recompute_count", 0),
+        forced_serial=value.get("forced_serial", False),
+        external_id=value.get("external_id"),
+        external_url=value.get("external_url"),
+        base_branch=value.get("base_branch", "origin/main"),
+        estimated_tokens=value.get("estimated_tokens"),
+        token_estimate_recorded=value.get(
+            "token_estimate_recorded", "estimated_tokens" in value
+        ),
+        profile=value.get("profile"),
+        model=value.get("model"),
+        reasoning_effort=value.get("reasoning_effort"),
+        selection_reason=value.get("selection_reason"),
+        launch_attempt_id=value.get("launch_attempt_id"),
+        launch_phase=value.get("launch_phase"),
+        owner_kind=owner_kind,
+        claim_id=_required_active_string(value, "claim_id", key),
+        claim_stage=claim_stage,
+        base_ref=_required_active_string(value, "base_ref", key),
+        base_sha=base_sha,
+        reservation_kind=reservation_kind,
+        repository_id=_required_active_string(value, "repository_id", key),
+        claimed_at=claimed_at,
+        owner_token_digest=_required_active_string(value, "owner_token_digest", key),
+        **_parse_completion_journal_fields(value, key),
+    )
+
+
+def _parse_active_worktree(key: object, value: object) -> ActiveWorktree:
+    if not isinstance(key, str) or not key:
+        raise _active_worktree_schema_error(key, "entry key must be a non-empty string")
+    if not isinstance(value, dict):
+        raise _active_worktree_schema_error(key, "entry must be an object")
+    missing = _REQUIRED_ACTIVE_WORKTREE_FIELDS - value.keys()
+    if missing:
+        raise _active_worktree_schema_error(
+            key, f"missing required fields: {', '.join(sorted(missing))}"
+        )
+
+    issue_number = value["issue_number"]
+    if (
+        isinstance(issue_number, bool)
+        or not isinstance(issue_number, int)
+        or issue_number <= 0
+    ):
+        raise _active_worktree_schema_error(
+            key, "issue_number must be a positive integer"
+        )
+    branch = _required_active_string(value, "branch", key)
+    worktree_path = value["worktree_path"]
+    if not isinstance(worktree_path, str):
+        raise _active_worktree_schema_error(key, "worktree_path must be a string")
+    pid = value["pid"]
+    if pid is not None and (isinstance(pid, bool) or not isinstance(pid, int)):
+        raise _active_worktree_schema_error(key, "pid must be an integer or null")
+    started_at = value["started_at"]
+    if started_at is not None and _parse_optional_finite_float(started_at) is None:
+        raise _active_worktree_schema_error(
+            key, "started_at must be a finite number or null"
+        )
+    declared_footprint = value["declared_footprint"]
+    if not isinstance(declared_footprint, list) or not all(
+        isinstance(path, str) for path in declared_footprint
+    ):
+        raise _active_worktree_schema_error(
+            key, "declared_footprint must be an array of strings"
+        )
+
+    return _build_active_worktree(
+        value,
+        key=key,
+        issue_number=issue_number,
+        branch=branch,
+        worktree_path=worktree_path,
+        pid=pid,
+        started_at=started_at,
+        declared_footprint=declared_footprint,
+        identity=_validate_active_identity(key, value),
+    )
+
+
+def _parse_active_worktrees(data: dict[str, object]) -> dict[str, ActiveWorktree]:
+    raw_active = data.get("active_worktrees", {})
+    if not isinstance(raw_active, dict):
+        raise ValueError("active_worktrees schema error: value must be an object")
+    return {
+        key: _parse_active_worktree(key, value) for key, value in raw_active.items()
     }
 
 
@@ -316,9 +514,15 @@ def _parse_completed_worktrees(data: dict) -> list[CompletedWorktree]:
 
 
 def load_run_state(path: str | Path) -> RunState:
+    path = Path(path)
+    file_existed = path.exists()
     data = read_json_with_recovery(path, label="run_state.json")
     if data is None:
+        if file_existed:
+            raise ValueError("run_state.json schema error: ledger could not be read")
         return RunState(active_worktrees={}, launch_history=[])
+    if not isinstance(data, dict):
+        raise ValueError("run_state.json schema error: root must be an object")
 
     return RunState(
         active_worktrees=_parse_active_worktrees(data),
@@ -457,6 +661,35 @@ def prune_run_state(
     )
 
 
+def _materialize_active_worktree_for_persistence(active: ActiveWorktree) -> None:
+    """Make an in-memory legacy DTO explicit before it crosses the JSON boundary.
+
+    This is deliberately not a reader fallback: an on-disk record without any
+    of these fields is rejected by `_parse_active_worktree`.  Some internal
+    recovery callers still construct the older DTO directly, though, and their
+    unknown ownership must become explicitly non-resumable rather than create
+    an unreadable ledger on the next process start.
+    """
+    if active.owner_kind not in {kind.value for kind in OwnerKind}:
+        raise ValueError("active worktree owner_kind must be a known value")
+    if active.reservation_kind not in {kind.value for kind in ReservationKind}:
+        raise ValueError("active worktree reservation_kind must be a known value")
+    if active.claim_id is None:
+        active.claim_id = f"recovered-{active.issue_number}"
+    if active.claim_stage is None:
+        active.claim_stage = ClaimStage.COMPLETED.value
+    if active.base_ref is None:
+        active.base_ref = active.base_branch
+    if active.repository_id is None:
+        active.repository_id = "unverified-recovery"
+    if active.claimed_at is None:
+        active.claimed_at = active.started_at if active.started_at is not None else 0.0
+    if active.owner_token_digest is None:
+        active.owner_token_digest = sha256(
+            f"recovered-unverifiable:{active.claim_id}".encode()
+        ).hexdigest()
+
+
 def save_run_state(
     state: RunState,
     path: str | Path,
@@ -476,6 +709,8 @@ def save_run_state(
         open_prs=open_prs,
         max_completed_worktrees=max_completed_worktrees,
     )
+    for active in state.active_worktrees.values():
+        _materialize_active_worktree_for_persistence(active)
     data = {
         "active_worktrees": {
             key: dataclasses.asdict(value)

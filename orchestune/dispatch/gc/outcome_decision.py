@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from orchestune.dispatch.state import RunState
+from orchestune.complete.contracts import CompleteStage
+from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.outcome_record import (
     REASON_BASE_BRANCH_RED,
     REASON_REVIEW_TIMEOUT,
@@ -11,6 +12,25 @@ from orchestune.outcome_record import (
     RESULT_NOT_NEEDED,
     OutcomeRecord,
 )
+
+
+def _is_handoff_ready(active: ActiveWorktree) -> bool:
+    """#1004: handoff-ready 状態かどうかを判定する。"""
+    return bool(
+        active.completion_handoff_ready
+        or active.completion_stage == CompleteStage.HANDED_OFF_TO_GC.value
+    )
+
+
+def _is_handoff_retained_dirty(
+    active: ActiveWorktree, outcome: OutcomeRecord | None
+) -> bool:
+    """#1004: handoff-ready かつ not-needed/blocked の dirty worktree 保持判定。"""
+    return bool(
+        _is_handoff_ready(active)
+        and outcome is not None
+        and outcome.result in (RESULT_NOT_NEEDED, RESULT_BLOCKED)
+    )
 
 
 def _decide_action_from_outcome(
@@ -55,4 +75,9 @@ def _get_review_timeout_retry_state(
     return 0, False
 
 
-__all__ = ["_decide_action_from_outcome", "_get_review_timeout_retry_state"]
+__all__ = [
+    "_decide_action_from_outcome",
+    "_get_review_timeout_retry_state",
+    "_is_handoff_ready",
+    "_is_handoff_retained_dirty",
+]

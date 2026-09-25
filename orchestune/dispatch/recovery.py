@@ -64,9 +64,20 @@ from orchestune.dispatch.labels import (
     TERMINAL_ESCALATION_LABELS,
     transition_status_label,
 )
-from orchestune.dispatch.launch_attempts import active_from_attempt, reconcile_attempt
+from orchestune.dispatch.launch_attempts import (
+    active_from_attempt,
+    reconcile_attempt,
+    restored_active_record,
+)
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
+from orchestune.dispatch.state import (
+    ActiveWorktree,
+    RunState,
+    recovered_claim_id,
+    recovered_owner_token_digest,
+    recovery_repository_id,
+    save_run_state,
+)
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     effective_parent_number,
@@ -531,8 +542,14 @@ def _build_restored_from_attempt(
     return replace(
         active,
         owner_kind=owner_kind,
-        claim_id=claim_id,
+        claim_id=claim_id or recovered_claim_id(issue.number),
+        claim_stage="completed",
+        base_ref=attempt.base_branch,
+        base_sha=None,
         reservation_kind=reservation_kind,
+        repository_id=recovery_repository_id(config.run_state_path),
+        claimed_at=attempt.started_at,
+        owner_token_digest=recovered_owner_token_digest(issue.number, claim_id),
     )
 
 
@@ -566,7 +583,6 @@ def _build_restored_standard_worktree(
 ) -> ActiveWorktree:
     if owner_kind == "interactive" and subtask_id == f"issue-{issue.number}":
         subtask_id = resolve_claim_subtask_id(issue)
-    recompute_count, forced_serial = _recovery_counters_for_issue(issue)
     branch, worktree_path, external_id, external_url = _restored_worktree_workspace(
         issue, subtask_id, resolver, resolutions, config
     )
@@ -578,16 +594,13 @@ def _build_restored_standard_worktree(
         resolutions,
         config,
     )
-    task = parse_task_from_issue(issue, issue_to_subtask_id)
-    selection = resolve_task_execution_selection(task, config)
-
-    return ActiveWorktree(
+    recompute_count, forced_serial = _recovery_counters_for_issue(issue)
+    selection = resolve_task_execution_selection(parse_task_from_issue(issue), config)
+    return restored_active_record(
         issue_number=issue.number,
         branch=branch,
         worktree_path=worktree_path,
-        pid=None,
-        started_at=None,
-        declared_footprint=declared_footprint,
+        footprint=declared_footprint,
         recompute_count=recompute_count,
         forced_serial=forced_serial,
         external_id=external_id,
@@ -598,8 +611,10 @@ def _build_restored_standard_worktree(
         reasoning_effort=selection.reasoning_effort,
         selection_reason=selection.reason,
         owner_kind=owner_kind,
-        claim_id=claim_id,
+        claim_id=claim_id or recovered_claim_id(issue.number),
         reservation_kind=reservation_kind,
+        repository_id=recovery_repository_id(config.run_state_path),
+        owner_token_digest=recovered_owner_token_digest(issue.number, claim_id),
     )
 
 

@@ -148,6 +148,8 @@ def _build_reclaim_candidate(
     """
     if active.owner_kind == "interactive":
         return None
+    if active.completion_id is not None:
+        return None
     is_timeout = EXECUTION_TIMED_OUT in finding_codes
     reason = _resolve_reclaim_reason(finding_codes, timed_out=is_timeout)
     return ZombieOrTimeoutReclaim(
@@ -588,6 +590,16 @@ def _apply_zombie_or_timeout_reclaim(
     open_prs: Sequence[PrRecord] | None = None,
 ) -> dict | None:
     """decide層が判定した回収対象に基づき、安全に副作用を適用する。"""
+    if reclaim.active.completion_id is not None:
+        return {
+            "issue_number": reclaim.active.issue_number,
+            "subtask_id": reclaim.subtask_id,
+            "action": "gc_reclaim_excluded_completing",
+            "reason": "task is currently completing and is excluded from automatic GC reclaim",
+            "owner_kind": reclaim.active.owner_kind,
+            "completion_id": reclaim.active.completion_id,
+            "completion_stage": reclaim.active.completion_stage,
+        }
     if reclaim.active.owner_kind == "interactive":
         return build_interactive_exclusion_event(
             reclaim.active,
@@ -702,6 +714,30 @@ def _apply_validated_reclaim(
     )
 
 
+def _handle_completing_reclaim_exclusion(
+    command: RepairCommand,
+    reclaim: ZombieOrTimeoutReclaim,
+    event_sink: Callable[[dict], None] | None,
+) -> RepairResult:
+    if event_sink is not None:
+        event_sink(
+            {
+                "issue_number": reclaim.active.issue_number,
+                "subtask_id": reclaim.subtask_id,
+                "action": "gc_reclaim_excluded_completing",
+                "reason": "task is currently completing and is excluded from automatic GC reclaim",
+                "owner_kind": reclaim.active.owner_kind,
+                "completion_id": reclaim.active.completion_id,
+                "completion_stage": reclaim.active.completion_stage,
+            }
+        )
+    return RepairResult(
+        command=command,
+        status=RepairStatus.SKIPPED,
+        diagnostics=("completing task is excluded from automatic GC reclaim",),
+    )
+
+
 def execute_reclaim_repair_command(
     command: RepairCommand,
     run_state: RunState,
@@ -722,6 +758,8 @@ def execute_reclaim_repair_command(
         )
     if not config.apply:
         return RepairResult(command=command, status=RepairStatus.SKIPPED)
+    if reclaim.active.completion_id is not None:
+        return _handle_completing_reclaim_exclusion(command, reclaim, event_sink)
     if reclaim.active.owner_kind == "interactive":
         return _handle_interactive_reclaim_exclusion(command, reclaim, event_sink)
     precondition = revalidate_reclaim_preconditions(

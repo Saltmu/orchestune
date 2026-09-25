@@ -183,6 +183,28 @@ def test_reconcile_attempt_adopts_confirmed_launch_over_claim_placeholder(launch
     assert adopted.claim_id == "claim-xyz"
 
 
+def test_reconcile_attempt_uses_validated_in_memory_state(launch_env):
+    """An unrelated corrupt ledger entry must not affect attempt reconciliation."""
+    from orchestune.dispatch.attempt_record import LaunchAttempt
+    from orchestune.dispatch.launch_attempts import reconcile_attempt
+
+    _forge, config, plan, _launch = launch_env
+    config.run_state_path.write_text('{"active_worktrees": {"other": {}}}')
+    attempt = LaunchAttempt(
+        attempt_id="confirmed-attempt-2",
+        phase="launched",
+        target=config.dispatch_target.target_name,
+        branch=plan.branch_name,
+        base_branch=plan.base_branch_for_state,
+        started_at=100.0,
+        external_id="ext-2",
+    )
+    state = RunState()
+
+    assert reconcile_attempt(attempt, plan.task, state, config) is True
+    assert state.active_worktrees["1"].external_id == "ext-2"
+
+
 def test_unknown_launch_is_not_retried_after_state_loss(launch_env):
     forge, config, plan, launch = launch_env
     launch.side_effect = OSError("response lost after acceptance")

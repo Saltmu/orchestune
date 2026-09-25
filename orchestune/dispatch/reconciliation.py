@@ -24,10 +24,16 @@ from orchestune.dispatch.rebase import SubTask, _build_subtasks_for_recompute
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.state import RunState
 from orchestune.dispatch.status_repair import VerifiedStatusTransition
+from orchestune.forge import Forge
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
-from orchestune.outcome_record import OutcomeRecord, parse_from_comments
+from orchestune.outcome_record import (
+    OutcomeLookupResult,
+    OutcomeLookupState,
+    OutcomeRecord,
+    parse_from_comments,
+)
 from orchestune.task_metadata import TaskMetadata
 
 
@@ -454,6 +460,24 @@ def _resolve_recovery_base_sha(
     return _get_branch_commit_sha(base_branch, repo_root)
 
 
+def _lookup_issue_outcome(issue_number: int, forge: Forge) -> OutcomeLookupResult:
+    """#998: Issueコメントを正本として`OutcomeRecord`を解決する。
+
+    コメント取得自体の失敗（UNKNOWN）と、正常に取得できたが該当レコードが
+    無い場合（ABSENT）を区別する共有契約を用いる。いずれの場合も呼び出し元
+    は「復帰判断を行わない」というfail-closedな挙動を維持する（両者を区別
+    しても、ここでは同じ安全側の扱いにする）。
+    """
+    try:
+        comments = forge.list_comments(issue_number)
+    except Exception:
+        return OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN)
+    record = parse_from_comments(comments)
+    if record is None:
+        return OutcomeLookupResult(state=OutcomeLookupState.ABSENT)
+    return OutcomeLookupResult(state=OutcomeLookupState.FOUND, record=record)
+
+
 def _handle_base_branch_red_recovery(
     issues: Any,
     ctx: CycleContext,
@@ -471,12 +495,10 @@ def _handle_base_branch_red_recovery(
     current_base_shas: dict[int, str | None] = {}
     repo_root = config.worktree_root.parent if config.worktree_root else None
     for issue in base_branch_red_issues:
-        try:
-            comments = config.resolved_forge.list_comments(issue.number)
-            outcome = parse_from_comments(comments)
-        except Exception:
-            outcome = None
-        outcomes_by_issue[issue.number] = outcome
+        lookup = _lookup_issue_outcome(issue.number, config.resolved_forge)
+        outcomes_by_issue[issue.number] = (
+            lookup.record if lookup.state is OutcomeLookupState.FOUND else None
+        )
 
         task = ctx.task(issue.number)
         if task is not None:
