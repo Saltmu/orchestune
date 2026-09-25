@@ -377,6 +377,53 @@ class TestRemoveWorktree:
 
         assert not claim_marker_path(worktree_path).exists()
 
+    def test_removes_claim_marker_when_git_raises_but_directory_is_gone(self, tmp_path):
+        """#943 / #1004: git worktree remove が例外を送出しても、ディスク上から
+        worktree ディレクトリが消えていれば所有権マーカーを片付け、
+        後日の再claimでオーナー不一致として永久拒否されるのを防止する。"""
+        import shutil
+
+        from orchestune.dispatch.claim_marker import (
+            claim_marker_path,
+            write_claim_marker,
+        )
+
+        worktree_path = tmp_path / "worktrees" / "w-gone-with-err"
+        worktree_path.mkdir(parents=True)
+        write_claim_marker(
+            worktree_path,
+            claim_id="claim-1",
+            branch="claude/issue-1-task-1",
+            base_sha="deadbeef",
+            branch_created=True,
+        )
+
+        wt_list = (
+            f"worktree /repo\nHEAD 111\nbranch refs/heads/main\n\n"
+            f"worktree {worktree_path.resolve()}\nHEAD 222\nbranch refs/heads/claude/issue-1-task-1\n\n"
+        )
+
+        def run_mock(args, **kwargs):
+            if "rev-parse" in args and "--show-toplevel" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="/repo\n", stderr="")
+            if "worktree" in args and "list" in args:
+                return subprocess.CompletedProcess(args, 0, stdout=wt_list, stderr="")
+            if "status" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+            if "worktree" in args and "remove" in args:
+                # ディレクトリは削除されたが git コマンド自体は例外を送出するケース
+                shutil.rmtree(worktree_path)
+                raise subprocess.CalledProcessError(1, args, stderr="fatal: lock error")
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        with patch("orchestune.dispatch.gc.git.subprocess.run", side_effect=run_mock):
+            res = remove_worktree(worktree_path)
+
+        assert not worktree_path.exists()
+        assert not claim_marker_path(worktree_path).exists()
+        assert res.removed is True
+        assert res.success is True
+
     def test_rejects_removal_when_safety_evaluation_fails(self, tmp_path):
         """#1004: evaluate_worktree_removal の安全判定に失敗した場合、物理削除は行われない。"""
         from orchestune.dispatch.claim_marker import (

@@ -501,3 +501,52 @@ class TestCompleteGcHandoff:
         )
 
         assert _is_handoff_ready(active) is False
+
+    def test_remove_verified_worktree_cleans_claim_marker_when_git_raises_but_directory_is_gone(
+        self, tmp_path
+    ):
+        """#943 / #1004: remove_verified_worktree は git worktree remove が例外を出しても
+        ディレクトリが消えていれば claim marker を削除する。"""
+        import subprocess
+
+        from orchestune.dispatch.claim_marker import (
+            claim_marker_path,
+            write_claim_marker,
+        )
+        from orchestune.dispatch.gc.git import (
+            VerifiedWorktreeRemovalRequest,
+            remove_verified_worktree,
+        )
+
+        wt_path = tmp_path / "worktrees" / "wt-verified-gone"
+        marker_file = claim_marker_path(wt_path)
+        wt_path.mkdir(parents=True)
+        write_claim_marker(
+            wt_path,
+            claim_id="claim-1004",
+            branch="claude/issue-1004",
+            base_sha="abc1234",
+            branch_created=True,
+        )
+        assert marker_file.exists()
+
+        def mock_run_git(cmd, **kwargs):
+            if "worktree" in cmd and "remove" in cmd:
+                # ディレクトリは削除されるが例外が発生
+                wt_path.rmdir()
+                raise subprocess.CalledProcessError(1, cmd, stderr="fatal: lock error")
+            return None
+
+        with patch("orchestune.dispatch.gc.git.run_git", side_effect=mock_run_git):
+            res = remove_verified_worktree(
+                VerifiedWorktreeRemovalRequest(
+                    worktree_path=wt_path,
+                    branch="claude/issue-1004",
+                    claim_id="claim-1004",
+                )
+            )
+
+        assert not wt_path.exists()
+        assert not marker_file.exists()
+        assert res.removed is True
+        assert res.success is True

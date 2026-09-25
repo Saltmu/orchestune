@@ -388,24 +388,31 @@ def evaluate_worktree_removal(
 def remove_verified_worktree(
     request: VerifiedWorktreeRemovalRequest,
 ) -> WorktreeRemovalResult:
-    """#1004: 検証済みworktree削除要求に基づき物理削除を実行する。"""
+    """#1004 / #943: 検証済みworktree削除要求に基づき物理削除を実行する。
+
+    git worktree remove が例外を送出しても（すでに別経路で削除済みなど）、
+    ディスク上からディレクトリが消えていれば所有権マーカーを片付けて
+    後日の再claimを妨げないようにする。
+    """
     path = request.worktree_path
+    removal_error: str | None = None
     try:
         run_git(["worktree", "remove", str(path)], cwd=None, check=True)
     except (subprocess.CalledProcessError, OSError) as exc:
-        return WorktreeRemovalResult(
-            success=False,
-            removed=False,
-            error=str(exc),
-        )
+        removal_error = str(exc)
     if path.exists():
         return WorktreeRemovalResult(
             success=False,
             removed=False,
-            error="Worktree directory still exists after git worktree remove",
+            error=removal_error
+            or "Worktree directory still exists after git worktree remove",
         )
     remove_claim_marker(path)
-    return WorktreeRemovalResult(success=True, removed=True)
+    return WorktreeRemovalResult(
+        success=True,
+        removed=True,
+        error=removal_error,
+    )
 
 
 def remove_worktree(
