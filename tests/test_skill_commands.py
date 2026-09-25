@@ -579,6 +579,7 @@ def test_workflow_skills_document_isolated_worktree_operations(skill_name: str):
         assert "dispatcher-provisioned worktree" not in skill_content
     else:
         assert "orchestune claim" in worktree_content
+        assert "orchestune claim <issue_number> --resume <claim_id>" in worktree_content
         assert "<worktree_path>" in worktree_content
         assert "<INSTALL_COMMAND>" in worktree_content
 

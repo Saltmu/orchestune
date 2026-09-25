@@ -21,7 +21,11 @@ parent skill, write `<session-dir>/implementation-plan.md`, implement,
 test, run local CI, commit, push, create the PR, handle review feedback, and run
 `orchestune complete` from this directory. If the claim reports an interrupted
 reservation, resume it with its reported claim ID instead of creating another
-worktree.
+worktree:
+
+```bash
+orchestune claim <issue_number> --resume <claim_id>
+```
 
 ## Branch naming convention (agent-neutral)
 
