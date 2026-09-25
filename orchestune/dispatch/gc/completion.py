@@ -300,10 +300,15 @@ def _prepare_apply_escalation(
     active: ActiveWorktree,
     config: DispatcherConfig,
     active_task: TaskMetadata | None = None,
+    outcome: OutcomeRecord | None = None,
 ) -> tuple[str, ...] | None:
     if not config.apply:
         return None
-    remove_worktree(active.worktree_path)
+    if not (
+        _is_handoff_retained_dirty(active, outcome)
+        and worktree_has_uncommitted_changes(active.worktree_path)
+    ):
+        remove_worktree(active.worktree_path)
     return _stale_status_labels(active_task)
 
 
@@ -312,8 +317,11 @@ def _apply_escalation(
     config: DispatcherConfig,
     message: str,
     active_task: TaskMetadata | None = None,
+    outcome: OutcomeRecord | None = None,
 ) -> None:
-    stale_labels = _prepare_apply_escalation(active, config, active_task)
+    stale_labels = _prepare_apply_escalation(
+        active, config, active_task, outcome=outcome
+    )
     if stale_labels is not None:
         apply_human_review_escalation(
             active.issue_number,
@@ -329,8 +337,11 @@ def _apply_blocked_hold(
     active_task: TaskMetadata | None,
     comment: str,
     extra_label: str | None = None,
+    outcome: OutcomeRecord | None = None,
 ) -> None:
-    stale_labels = _prepare_apply_escalation(active, config, active_task)
+    stale_labels = _prepare_apply_escalation(
+        active, config, active_task, outcome=outcome
+    )
     if stale_labels is None:
         return
     transition_status_label(
@@ -357,6 +368,7 @@ def _apply_blocked_base_branch_red(
         f"`ci:base-branch-red`マーカーを付与して`status:blocked`で保留しました{attempt_str}。"
         "ベースブランチの前進（新コミット）時に自動で再キューイングされます。",
         extra_label="ci:base-branch-red",
+        outcome=decision.outcome,
     )
 
 
@@ -375,6 +387,7 @@ def _apply_escalated_base_branch_red(
         "自動再キューイングを停止し`status:blocked-human-review`へエスカレーションしました。"
         "ベースブランチの修正およびCI状況を確認の上、必要であれば`status:queued`へ再設定してください。",
         ctx.active_task,
+        outcome=decision.outcome,
     )
     try:
         ctx.config.resolved_forge.remove_label(
@@ -395,7 +408,9 @@ def _apply_escalated_review_timeout(
         "actor（ボット名義）、job conclusion（skipped等）、および認可エラーの有無をご確認ください。"
         "問題解決後、必要であれば`status:queued`へ再設定してください。"
     )
-    _apply_escalation(ctx.active, ctx.config, msg, ctx.active_task)
+    _apply_escalation(
+        ctx.active, ctx.config, msg, ctx.active_task, outcome=decision.outcome
+    )
 
 
 def _apply_blocked_review_timeout_hold(
@@ -408,6 +423,7 @@ def _apply_blocked_review_timeout_hold(
         "AIレビュー待機のタイムアウト（review-timeout）を検知しましたが、"
         "再投入管理状態（run_state）が未設定のため自動再投入を見送り、`status:blocked`で保留しました。"
         "ログやIssueの状況を確認の上、必要であれば`status:queued`へ再設定してください。",
+        outcome=decision.outcome,
     )
 
 
@@ -423,6 +439,7 @@ def _apply_blocked_unknown_reason(
         f"未知のブロック理由（{reason_str}）を持つOutcome Recordを検知したため、"
         "`status:blocked`で保留しました。"
         "ログやIssueの状況を確認の上、必要であれば`status:queued`へ再設定してください。",
+        outcome=decision.outcome,
     )
 
 
@@ -615,23 +632,6 @@ def _apply_token_limit_escalation(
     )
 
 
-def _apply_blocked_outcome(
-    ctx: _CompletionContext, decision: CompletedWorktreeDecision
-) -> None:
-    """#1004: blocked報告を受理し、dirtyなworktreeを保持する。"""
-    if not ctx.config.apply:
-        return
-    stale_labels = _stale_status_labels(ctx.active_task)
-    transition_status_label(
-        ctx.config.resolved_forge,
-        ctx.active.issue_number,
-        StatusLabel.BLOCKED,
-        stale_labels,
-    )
-    if not worktree_has_uncommitted_changes(ctx.active.worktree_path):
-        remove_worktree(ctx.active.worktree_path)
-
-
 def _apply_done_worktree_cleanup(ctx: _CompletionContext) -> str | None:
     commit_sha = None
     if ctx.active.external_id is None:
@@ -657,8 +657,6 @@ def _dispatch_terminal_or_blocked_action(
     action = decision.action
     if action == "completed_without_outcome":
         _apply_without_outcome_escalation(ctx)
-    elif action == "blocked":
-        _apply_blocked_outcome(ctx, decision)
     elif action == "blocked_base_branch_red":
         _apply_blocked_base_branch_red(ctx, decision)
     elif action == "escalated_base_branch_red":

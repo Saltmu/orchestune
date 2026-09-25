@@ -13,6 +13,7 @@ from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
     _apply_completed_worktree_outcome,
+    _decide_completed_worktree_outcome,
 )
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
@@ -279,11 +280,7 @@ class TestCompleteGcHandoff:
         )
         run_state.active_worktrees["1004"] = active
 
-        decision = CompletedWorktreeDecision(
-            action="blocked",
-            commit_sha=None,
-        )
-
+        forge = MagicMock()
         task = Task(
             issue_number=1004,
             subtask_id="gc-handoff",
@@ -301,6 +298,36 @@ class TestCompleteGcHandoff:
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 return_value=True,
             ),
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_new_commits",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.gc.completion._fetch_outcome_for_active"
+            ) as mock_fetch,
+        ):
+            from orchestune.dispatch.gc.completion import (
+                OutcomeLookupResult,
+                OutcomeLookupState,
+            )
+            from orchestune.outcome_record import OutcomeRecord
+
+            mock_fetch.return_value = OutcomeLookupResult(
+                state=OutcomeLookupState.FOUND,
+                record=OutcomeRecord(result="blocked", issue=1004, pr=None),
+            )
+            decision = _decide_completed_worktree_outcome(
+                active,
+                task,
+                forge=forge,
+            )
+        assert decision.action == "blocked_unknown_reason"
+
+        with (
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
             patch("orchestune.dispatch.gc.completion.remove_worktree") as mock_remove,
         ):
             event = _apply_completed_worktree_outcome(
@@ -312,8 +339,71 @@ class TestCompleteGcHandoff:
             )
             mock_remove.assert_not_called()
 
-        assert event["action"] == "blocked"
+        assert event["action"] == "blocked_unknown_reason"
         assert wt_path.exists()
+
+    def test_blocked_outcome_removes_clean_worktree(self, tmp_path):
+        """blocked 報告で worktree が clean な場合は通常通り削除される。"""
+        config = _make_config(tmp_path)
+        run_state = RunState()
+
+        wt_path = tmp_path / "worktrees" / "wt-clean-blocked"
+        wt_path.mkdir(parents=True)
+
+        active = ActiveWorktree(
+            issue_number=1004,
+            branch="claude/issue-1004-task",
+            worktree_path=str(wt_path),
+            pid=None,
+            started_at=time.time() - 100,
+            declared_footprint=(),
+            owner_kind="interactive",
+            completion_id="comp-1004-clean-blocked",
+            completion_result="blocked",
+            completion_stage=CompleteStage.HANDED_OFF_TO_GC.value,
+            completion_handoff_ready=True,
+            completion_comment_id="comment-4",
+            completion_comment_url="https://github.com/example/issues/1004#4",
+        )
+        run_state.active_worktrees["1004"] = active
+
+        from orchestune.outcome_record import OutcomeRecord
+
+        decision = CompletedWorktreeDecision(
+            action="blocked_unknown_reason",
+            commit_sha=None,
+            outcome=OutcomeRecord(result="blocked", issue=1004, pr=None),
+        )
+
+        task = Task(
+            issue_number=1004,
+            subtask_id="gc-handoff",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="high",
+            progress_partial=False,
+            status_labels=(),
+            created_at="2026-09-25T00:00:00Z",
+        )
+
+        with (
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch("orchestune.dispatch.gc.completion.remove_worktree") as mock_remove,
+        ):
+            event = _apply_completed_worktree_outcome(
+                active,
+                decision,
+                config,
+                task,
+                run_state=run_state,
+            )
+            mock_remove.assert_called_once_with(str(wt_path))
+
+        assert event["action"] == "blocked_unknown_reason"
 
     def test_completion_receipt_not_minted_if_state_save_fails(self, tmp_path):
         """障害注入: 台帳保存が失敗した場合、CompletionReceipt は確定されない。"""
