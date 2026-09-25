@@ -75,17 +75,16 @@ def evaluate_finding_with_jev(
             bypassed=True,
         )
 
-    raw_url = (
-        base_url
-        or os.environ.get("JEV_BASE_URL")
-        or os.environ.get("JEV_API_URL")
-        or DEFAULT_JEV_API_URL
-    )
-    cleaned_url = raw_url.rstrip("/")
-    if cleaned_url.endswith("/evaluate"):
-        url = cleaned_url
+    if base_url:
+        cleaned = base_url.rstrip("/")
+        url = cleaned if cleaned.endswith("/evaluate") else f"{cleaned}/evaluate"
+    elif os.environ.get("JEV_BASE_URL"):
+        cleaned = os.environ["JEV_BASE_URL"].rstrip("/")
+        url = cleaned if cleaned.endswith("/evaluate") else f"{cleaned}/evaluate"
+    elif os.environ.get("JEV_API_URL"):
+        url = os.environ["JEV_API_URL"]
     else:
-        url = f"{cleaned_url}/evaluate"
+        url = DEFAULT_JEV_API_URL
 
     # Chunk / truncate oversized comments to prevent resource bloat and comply with API guidelines
     comment_text = comment or ""

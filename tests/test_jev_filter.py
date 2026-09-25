@@ -106,6 +106,22 @@ class TestJevUrls:
             req = mock_urlopen.call_args[0][0]
             assert req.full_url == "https://env.example.com/v1/evaluate"
 
+    def test_jev_api_url_env_var_preserved_exact(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("JEV_API_KEY", "test-key")
+        monkeypatch.setenv("JEV_API_URL", "https://proxy.example/jev")
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps(
+            {"validity": 0.9, "impact": "HIGH"}
+        ).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+
+        with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+            evaluate_finding_with_jev(comment="test")
+            req = mock_urlopen.call_args[0][0]
+            assert req.full_url == "https://proxy.example/jev"
+
     def test_base_url_argument_precedence_over_env(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
