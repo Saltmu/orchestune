@@ -392,3 +392,22 @@ class TestCompleteGcHandoff:
 
         assert decision.action == "completion_skipped_dirty_worktree"
         mock_prior.assert_not_called()
+
+    def test_mid_journaling_completion_is_not_treated_as_handoff_ready(self):
+        """JOURNALING中（completion_handoff_ready=False）は completion_result があっても handoff-ready とみなさない。"""
+        from orchestune.dispatch.gc.outcome_decision import _is_handoff_ready
+
+        active = ActiveWorktree(
+            issue_number=1004,
+            branch="claude/issue-1004-task",
+            worktree_path="worktrees/w1",
+            pid=None,
+            started_at=time.time() - 100,
+            declared_footprint=(),
+            completion_id="comp-1004",
+            completion_result="not-needed",
+            completion_stage=CompleteStage.JOURNALING.value,
+            completion_handoff_ready=False,
+        )
+
+        assert _is_handoff_ready(active) is False

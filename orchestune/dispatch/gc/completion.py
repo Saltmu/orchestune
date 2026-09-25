@@ -226,7 +226,7 @@ def _resolve_active_outcome(
         if lookup.record is not None:
             return lookup.record, None
 
-    if active.completion_result is not None:
+    if _is_handoff_ready(active) and active.completion_result is not None:
         return (
             OutcomeRecord(
                 result=active.completion_result,

@@ -13,7 +13,6 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
-from orchestune.complete.contracts import CompleteStage
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.escalation import apply_human_review_escalation
@@ -51,6 +50,7 @@ from orchestune.dispatch.gc.git import (
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
+from orchestune.dispatch.gc.outcome_decision import _is_handoff_ready
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
@@ -649,10 +649,7 @@ def _resolve_completion(
     active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     """完了候補・保留・早期終端を明示的な値として解決する。"""
-    is_handoff_ready = (
-        active.completion_handoff_ready
-        or active.completion_stage == CompleteStage.HANDED_OFF_TO_GC.value
-    )
+    is_handoff_ready = _is_handoff_ready(active)
     if active.completion_id is not None and not is_handoff_ready:
         return CompletionResolution.pending()
     if active.owner_kind == "interactive":

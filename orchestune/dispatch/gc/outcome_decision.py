@@ -19,7 +19,6 @@ def _is_handoff_ready(active: ActiveWorktree) -> bool:
     return bool(
         active.completion_handoff_ready
         or active.completion_stage == CompleteStage.HANDED_OFF_TO_GC.value
-        or active.completion_result is not None
     )
 
 
