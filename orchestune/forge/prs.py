@@ -303,6 +303,15 @@ class GitHubPullRequestMixin:
             body=raw.get("body") or "",
         )
 
+    def get_pull_request(self, pr_number: int | str) -> PrRecord:
+        """Fetch one pull request directly instead of listing repository history."""
+        number = validate_issue_number(pr_number)
+        stdout = self._run(["gh", "pr", "view", str(number), "--json", _PR_JSON_FIELDS])
+        raw = json.loads(stdout)
+        if not isinstance(raw, dict):
+            raise ValueError("GitHub did not return a pull request object")
+        return self._parse_pr_record(raw, state="all", paginate_files=False)
+
     def list_prs(
         self,
         state: str = "open",
