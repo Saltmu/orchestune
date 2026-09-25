@@ -41,6 +41,7 @@ class TestPostIssueOutcome:
         assert result.comment_id == "88"
         assert result.comment_url == "https://example.test/comments/88"
         assert len(calls) == 2
+        assert all(call[0][0] == "gh" for call in calls)
         assert "/issues/1003/comments" in " ".join(calls[0][0])
         assert "/issues/1003/comments" in " ".join(calls[1][0])
         assert calls[1][1] is not None

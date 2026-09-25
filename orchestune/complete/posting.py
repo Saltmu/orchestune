@@ -75,7 +75,7 @@ def _find_existing(request: PostingRequest, runner: _Runner) -> PostingResult | 
     )
     try:
         comments = _comment_pages(
-            _run_json(runner, ["api", "--paginate", "--slurp", endpoint])
+            _run_json(runner, ["gh", "api", "--paginate", "--slurp", endpoint])
         )
     except OutcomeLookupUnknownError:
         raise
@@ -106,7 +106,7 @@ def _post_new(request: PostingRequest, runner: _Runner) -> PostingResult:
     endpoint = f"repos/{{owner}}/{{repo}}/issues/{request.issue_number}/comments"
     response = _run_json(
         runner,
-        ["api", "--method", "POST", endpoint, "--input", "-"],
+        ["gh", "api", "--method", "POST", endpoint, "--input", "-"],
         json.dumps({"body": request.outcome_record.render()}),
     )
     if not isinstance(response, dict):
