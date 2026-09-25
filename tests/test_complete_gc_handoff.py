@@ -345,3 +345,50 @@ class TestCompleteGcHandoff:
 
         assert success is False
         ctx.record_completion.assert_not_called()
+
+    def test_dirty_subtask_with_merged_parent_is_skipped_not_marked_done(
+        self, tmp_path
+    ):
+        """親Issueがマージ済みでも、未コミット変更がある子タスクは already_merged で完了させずスキップする。"""
+        from orchestune.dispatch.gc.completion import _decide_completed_worktree_outcome
+
+        wt_path = tmp_path / "worktrees" / "wt-dirty-child"
+        wt_path.mkdir(parents=True)
+        (wt_path / "dirty.txt").write_text("uncommitted work")
+
+        active = ActiveWorktree(
+            issue_number=1005,
+            branch="claude/issue-1005-task",
+            worktree_path=str(wt_path),
+            pid=None,
+            started_at=time.time() - 100,
+            declared_footprint=(),
+        )
+
+        task = Task(
+            issue_number=1005,
+            subtask_id="child-task",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="high",
+            progress_partial=False,
+            status_labels=(),
+            created_at="2026-09-25T00:00:00Z",
+            parent_number=1000,
+        )
+
+        with (
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                return_value=True,
+            ),
+            patch(
+                "orchestune.dispatch.gc.completion._prior_merge_decision",
+                return_value=CompletedWorktreeDecision(action="already_merged"),
+            ) as mock_prior,
+        ):
+            decision = _decide_completed_worktree_outcome(active, task)
+
+        assert decision.action == "completion_skipped_dirty_worktree"
+        mock_prior.assert_not_called()

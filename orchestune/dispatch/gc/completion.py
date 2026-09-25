@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import NamedTuple
 
 from orchestune.bounded_limit import exceeds_limit
-from orchestune.complete.contracts import CompleteStage
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.git import (
@@ -25,6 +24,8 @@ from orchestune.dispatch.gc.git import (
 from orchestune.dispatch.gc.outcome_decision import (
     _decide_action_from_outcome,
     _get_review_timeout_retry_state,
+    _is_handoff_ready,
+    _is_handoff_retained_dirty,
 )
 from orchestune.dispatch.gc.prior_merge import decide_prior_parent_merge_completion
 from orchestune.dispatch.labels import (
@@ -236,24 +237,6 @@ def _resolve_active_outcome(
     return None, None
 
 
-def _is_dirty_worktree_blocking(
-    active: ActiveWorktree, outcome: OutcomeRecord | None
-) -> bool:
-    if not worktree_has_uncommitted_changes(active.worktree_path):
-        return False
-    is_handoff_ready = (
-        active.completion_handoff_ready
-        or active.completion_stage == CompleteStage.HANDED_OFF_TO_GC.value
-        or active.completion_result is not None
-    )
-    is_retained = (
-        is_handoff_ready
-        and outcome is not None
-        and outcome.result in ("not-needed", "blocked")
-    )
-    return not is_retained
-
-
 def _decide_completed_worktree_outcome(
     active: ActiveWorktree,
     active_task: TaskMetadata | None,
@@ -264,16 +247,26 @@ def _decide_completed_worktree_outcome(
     issue: IssueRecord | None = None,
 ) -> CompletedWorktreeDecision:
     subtask_id = active_task.subtask_id if active_task else ""
-    if prior_merge_decision := _prior_merge_decision(active, active_task, forge, issue):
-        return prior_merge_decision
+    is_dirty = worktree_has_uncommitted_changes(active.worktree_path)
+
+    outcome: OutcomeRecord | None = None
+    if is_dirty:
+        outcome, err_decision = _resolve_active_outcome(active, subtask_id, forge)
+        if err_decision is not None:
+            return err_decision
+        if not _is_handoff_retained_dirty(active, outcome):
+            return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
+    else:
+        if prior_merge_decision := _prior_merge_decision(
+            active, active_task, forge, issue
+        ):
+            return prior_merge_decision
+
     has_new_commits, commit_sha = _detect_worktree_commits(active, repository_root)
-
-    outcome, error_decision = _resolve_active_outcome(active, subtask_id, forge)
-    if error_decision is not None:
-        return error_decision
-
-    if _is_dirty_worktree_blocking(active, outcome):
-        return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
+    if outcome is None:
+        outcome, err_decision = _resolve_active_outcome(active, subtask_id, forge)
+        if err_decision is not None:
+            return err_decision
 
     retry_count, retry_pending = _get_review_timeout_retry_state(
         run_state, active.issue_number
@@ -877,12 +870,7 @@ def _finalize_not_needed_worktree(
         "subtask_id": subtask_id,
         "worktree_path": active.worktree_path,
     }
-    is_handoff_ready = (
-        active.completion_handoff_ready
-        or active.completion_stage == CompleteStage.HANDED_OFF_TO_GC.value
-        or active.completion_result in ("not-needed", "not_needed")
-    )
-    if _decide_not_needed_dirty_worktree(active) and not is_handoff_ready:
+    if _decide_not_needed_dirty_worktree(active) and not _is_handoff_ready(active):
         event["action"] = "completion_skipped_dirty_worktree"
         return event
     if not config.apply:
@@ -1133,10 +1121,7 @@ def _finalize_abandoned_cloud_worktree(
 
 
 def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> bool:
-    if (
-        active.completion_handoff_ready
-        or active.completion_stage == CompleteStage.HANDED_OFF_TO_GC.value
-    ):
+    if _is_handoff_ready(active):
         return True
     if active.completion_id is not None:
         return False
