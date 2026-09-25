@@ -24,6 +24,8 @@ from orchestune.dispatch.gc.git import (
 from orchestune.dispatch.gc.outcome_decision import (
     _decide_action_from_outcome,
     _get_review_timeout_retry_state,
+    _is_handoff_ready,
+    _is_handoff_retained_dirty,
 )
 from orchestune.dispatch.gc.prior_merge import decide_prior_parent_merge_completion
 from orchestune.dispatch.labels import (
@@ -206,6 +208,43 @@ def _prior_merge_decision(
     )
 
 
+def _resolve_active_outcome(
+    active: ActiveWorktree,
+    subtask_id: str,
+    forge: Forge | None,
+) -> tuple[OutcomeRecord | None, CompletedWorktreeDecision | None]:
+    if forge is not None:
+        failures: list[ForgeFailure] = []
+        lookup = _fetch_outcome_for_active(active, forge, failures)
+        if lookup.state is OutcomeLookupState.UNKNOWN:
+            if _is_handoff_ready(active) and active.completion_result is not None:
+                return (
+                    OutcomeRecord(
+                        result=active.completion_result,
+                        issue=active.issue_number,
+                    ),
+                    None,
+                )
+            return None, CompletedWorktreeDecision(
+                action="completion_skipped_forge_error",
+                subtask_id=subtask_id,
+                operation=failed_operations(failures),
+                error=failure_descriptions(failures),
+            )
+        if lookup.record is not None:
+            return lookup.record, None
+
+    if _is_handoff_ready(active) and active.completion_result is not None:
+        return (
+            OutcomeRecord(
+                result=active.completion_result,
+                issue=active.issue_number,
+            ),
+            None,
+        )
+    return None, None
+
+
 def _decide_completed_worktree_outcome(
     active: ActiveWorktree,
     active_task: TaskMetadata | None,
@@ -216,24 +255,28 @@ def _decide_completed_worktree_outcome(
     issue: IssueRecord | None = None,
 ) -> CompletedWorktreeDecision:
     subtask_id = active_task.subtask_id if active_task else ""
-    if worktree_has_uncommitted_changes(active.worktree_path):
-        return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
-    if prior_merge_decision := _prior_merge_decision(active, active_task, forge, issue):
-        return prior_merge_decision
-    has_new_commits, commit_sha = _detect_worktree_commits(active, repository_root)
+    is_dirty = worktree_has_uncommitted_changes(active.worktree_path)
 
-    outcome = None
-    if forge is not None:
-        failures: list[ForgeFailure] = []
-        lookup = _fetch_outcome_for_active(active, forge, failures)
-        if lookup.state is OutcomeLookupState.UNKNOWN:
-            return CompletedWorktreeDecision(
-                action="completion_skipped_forge_error",
-                subtask_id=subtask_id,
-                operation=failed_operations(failures),
-                error=failure_descriptions(failures),
-            )
-        outcome = lookup.record
+    outcome: OutcomeRecord | None = None
+    if is_dirty:
+        if not _is_handoff_ready(active):
+            return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
+        outcome, err_decision = _resolve_active_outcome(active, subtask_id, forge)
+        if err_decision is not None:
+            return err_decision
+        if not _is_handoff_retained_dirty(active, outcome):
+            return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
+    else:
+        if prior_merge_decision := _prior_merge_decision(
+            active, active_task, forge, issue
+        ):
+            return prior_merge_decision
+
+    has_new_commits, commit_sha = _detect_worktree_commits(active, repository_root)
+    if outcome is None:
+        outcome, err_decision = _resolve_active_outcome(active, subtask_id, forge)
+        if err_decision is not None:
+            return err_decision
 
     retry_count, retry_pending = _get_review_timeout_retry_state(
         run_state, active.issue_number
@@ -267,10 +310,15 @@ def _prepare_apply_escalation(
     active: ActiveWorktree,
     config: DispatcherConfig,
     active_task: TaskMetadata | None = None,
+    outcome: OutcomeRecord | None = None,
 ) -> tuple[str, ...] | None:
     if not config.apply:
         return None
-    remove_worktree(active.worktree_path)
+    if not (
+        _is_handoff_retained_dirty(active, outcome)
+        and worktree_has_uncommitted_changes(active.worktree_path)
+    ):
+        remove_worktree(active.worktree_path)
     return _stale_status_labels(active_task)
 
 
@@ -279,8 +327,11 @@ def _apply_escalation(
     config: DispatcherConfig,
     message: str,
     active_task: TaskMetadata | None = None,
+    outcome: OutcomeRecord | None = None,
 ) -> None:
-    stale_labels = _prepare_apply_escalation(active, config, active_task)
+    stale_labels = _prepare_apply_escalation(
+        active, config, active_task, outcome=outcome
+    )
     if stale_labels is not None:
         apply_human_review_escalation(
             active.issue_number,
@@ -296,8 +347,11 @@ def _apply_blocked_hold(
     active_task: TaskMetadata | None,
     comment: str,
     extra_label: str | None = None,
+    outcome: OutcomeRecord | None = None,
 ) -> None:
-    stale_labels = _prepare_apply_escalation(active, config, active_task)
+    stale_labels = _prepare_apply_escalation(
+        active, config, active_task, outcome=outcome
+    )
     if stale_labels is None:
         return
     transition_status_label(
@@ -324,6 +378,7 @@ def _apply_blocked_base_branch_red(
         f"`ci:base-branch-red`マーカーを付与して`status:blocked`で保留しました{attempt_str}。"
         "ベースブランチの前進（新コミット）時に自動で再キューイングされます。",
         extra_label="ci:base-branch-red",
+        outcome=decision.outcome,
     )
 
 
@@ -342,6 +397,7 @@ def _apply_escalated_base_branch_red(
         "自動再キューイングを停止し`status:blocked-human-review`へエスカレーションしました。"
         "ベースブランチの修正およびCI状況を確認の上、必要であれば`status:queued`へ再設定してください。",
         ctx.active_task,
+        outcome=decision.outcome,
     )
     try:
         ctx.config.resolved_forge.remove_label(
@@ -362,7 +418,9 @@ def _apply_escalated_review_timeout(
         "actor（ボット名義）、job conclusion（skipped等）、および認可エラーの有無をご確認ください。"
         "問題解決後、必要であれば`status:queued`へ再設定してください。"
     )
-    _apply_escalation(ctx.active, ctx.config, msg, ctx.active_task)
+    _apply_escalation(
+        ctx.active, ctx.config, msg, ctx.active_task, outcome=decision.outcome
+    )
 
 
 def _apply_blocked_review_timeout_hold(
@@ -375,6 +433,7 @@ def _apply_blocked_review_timeout_hold(
         "AIレビュー待機のタイムアウト（review-timeout）を検知しましたが、"
         "再投入管理状態（run_state）が未設定のため自動再投入を見送り、`status:blocked`で保留しました。"
         "ログやIssueの状況を確認の上、必要であれば`status:queued`へ再設定してください。",
+        outcome=decision.outcome,
     )
 
 
@@ -390,6 +449,7 @@ def _apply_blocked_unknown_reason(
         f"未知のブロック理由（{reason_str}）を持つOutcome Recordを検知したため、"
         "`status:blocked`で保留しました。"
         "ログやIssueの状況を確認の上、必要であれば`status:queued`へ再設定してください。",
+        outcome=decision.outcome,
     )
 
 
@@ -770,7 +830,7 @@ def _finalize_completed_worktree(
     on_review_timeout_requeue: Callable[[], None] | None = None,
     issue: IssueRecord | None = None,
 ) -> dict:
-    repo_root = config.worktree_root.parent if config.worktree_root else None
+    repo_root = Path(config.worktree_root).parent if config.worktree_root else None
     decision = _decide_completed_worktree_outcome(
         active,
         active_task,
@@ -818,13 +878,14 @@ def _finalize_not_needed_worktree(
         "subtask_id": subtask_id,
         "worktree_path": active.worktree_path,
     }
-    if _decide_not_needed_dirty_worktree(active):
+    if _decide_not_needed_dirty_worktree(active) and not _is_handoff_ready(active):
         event["action"] = "completion_skipped_dirty_worktree"
         return event
     if not config.apply:
         event["action"] = "not_needed"
         return event
-    remove_worktree(active.worktree_path)
+    if not worktree_has_uncommitted_changes(active.worktree_path):
+        remove_worktree(active.worktree_path)
     config.resolved_forge.remove_label(active.issue_number, StatusLabel.IN_PROGRESS)
     if isinstance(config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
         if dispatch_not_needed_review is None:
@@ -1068,6 +1129,10 @@ def _finalize_abandoned_cloud_worktree(
 
 
 def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> bool:
+    if _is_handoff_ready(active):
+        return True
+    if active.completion_id is not None:
+        return False
     if active.owner_kind == "interactive":
         return False
     if active.external_id is not None:

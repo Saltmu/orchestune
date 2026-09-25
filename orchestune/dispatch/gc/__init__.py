@@ -39,12 +39,18 @@ from orchestune.dispatch.gc.completion import (
     warn_forge_failure,
 )
 from orchestune.dispatch.gc.git import (
+    VerifiedWorktreeRemovalRequest,
+    WorktreeRemovalEvaluation,
+    WorktreeRemovalResult,
     backup_wip_commit,
+    evaluate_worktree_removal,
     remote_branch_commit_sha_if_ahead,
+    remove_verified_worktree,
     remove_worktree,
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
+from orchestune.dispatch.gc.outcome_decision import _is_handoff_ready
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
@@ -82,11 +88,16 @@ __all__ = [
     "_parse_github_timestamp",
     "is_completion_hold_event",
     "backup_wip_commit",
+    "evaluate_worktree_removal",
     "is_process_alive",
     "remote_branch_commit_sha_if_ahead",
+    "remove_verified_worktree",
     "remove_worktree",
     "worktree_has_new_commits",
     "worktree_has_uncommitted_changes",
+    "VerifiedWorktreeRemovalRequest",
+    "WorktreeRemovalEvaluation",
+    "WorktreeRemovalResult",
 ]
 
 
@@ -638,7 +649,12 @@ def _resolve_completion(
     active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     """完了候補・保留・早期終端を明示的な値として解決する。"""
+    is_handoff_ready = _is_handoff_ready(active)
+    if active.completion_id is not None and not is_handoff_ready:
+        return CompletionResolution.pending()
     if active.owner_kind == "interactive":
+        if is_handoff_ready:
+            return CompletionResolution.ready(active)
         return CompletionResolution.pending()
     if active.started_at is None and active.external_id is None:
         return _resolve_recovered_completion(ctx, key, active, active_task)
