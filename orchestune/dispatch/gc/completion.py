@@ -217,6 +217,14 @@ def _resolve_active_outcome(
         failures: list[ForgeFailure] = []
         lookup = _fetch_outcome_for_active(active, forge, failures)
         if lookup.state is OutcomeLookupState.UNKNOWN:
+            if _is_handoff_ready(active) and active.completion_result is not None:
+                return (
+                    OutcomeRecord(
+                        result=active.completion_result,
+                        issue=active.issue_number,
+                    ),
+                    None,
+                )
             return None, CompletedWorktreeDecision(
                 action="completion_skipped_forge_error",
                 subtask_id=subtask_id,
@@ -251,6 +259,8 @@ def _decide_completed_worktree_outcome(
 
     outcome: OutcomeRecord | None = None
     if is_dirty:
+        if not _is_handoff_ready(active):
+            return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
         outcome, err_decision = _resolve_active_outcome(active, subtask_id, forge)
         if err_decision is not None:
             return err_decision

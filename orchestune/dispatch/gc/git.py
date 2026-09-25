@@ -187,18 +187,13 @@ def _is_primary_worktree(
     resolved_target: Path,
     repo_root: str | Path | None,
 ) -> bool:
-    resolved_root = None
     if repo_root is not None:
-        resolved_root = Path(repo_root).resolve()
+        return resolved_target == Path(repo_root).resolve()
     try:
         toplevel_res = run_git(["rev-parse", "--show-toplevel"], cwd=None, check=True)
-        toplevel = Path(toplevel_res.stdout.strip()).resolve()
-        if resolved_root is None:
-            resolved_root = toplevel
+        return resolved_target == Path(toplevel_res.stdout.strip()).resolve()
     except (subprocess.CalledProcessError, OSError):
-        pass
-
-    return resolved_root is not None and resolved_target == resolved_root
+        return False
 
 
 def _find_registered_entry(
