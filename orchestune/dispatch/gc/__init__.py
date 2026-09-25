@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
+from orchestune.complete.contracts import CompleteStage
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.escalation import apply_human_review_escalation
@@ -39,8 +40,13 @@ from orchestune.dispatch.gc.completion import (
     warn_forge_failure,
 )
 from orchestune.dispatch.gc.git import (
+    VerifiedWorktreeRemovalRequest,
+    WorktreeRemovalEvaluation,
+    WorktreeRemovalResult,
     backup_wip_commit,
+    evaluate_worktree_removal,
     remote_branch_commit_sha_if_ahead,
+    remove_verified_worktree,
     remove_worktree,
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
@@ -82,11 +88,16 @@ __all__ = [
     "_parse_github_timestamp",
     "is_completion_hold_event",
     "backup_wip_commit",
+    "evaluate_worktree_removal",
     "is_process_alive",
     "remote_branch_commit_sha_if_ahead",
+    "remove_verified_worktree",
     "remove_worktree",
     "worktree_has_new_commits",
     "worktree_has_uncommitted_changes",
+    "VerifiedWorktreeRemovalRequest",
+    "WorktreeRemovalEvaluation",
+    "WorktreeRemovalResult",
 ]
 
 
@@ -638,7 +649,15 @@ def _resolve_completion(
     active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     """完了候補・保留・早期終端を明示的な値として解決する。"""
+    is_handoff_ready = (
+        active.completion_handoff_ready
+        or active.completion_stage == CompleteStage.HANDED_OFF_TO_GC.value
+    )
+    if active.completion_id is not None and not is_handoff_ready:
+        return CompletionResolution.pending()
     if active.owner_kind == "interactive":
+        if is_handoff_ready:
+            return CompletionResolution.ready(active)
         return CompletionResolution.pending()
     if active.started_at is None and active.external_id is None:
         return _resolve_recovered_completion(ctx, key, active, active_task)

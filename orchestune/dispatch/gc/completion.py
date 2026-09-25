@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from orchestune.bounded_limit import exceeds_limit
+from orchestune.complete.contracts import CompleteStage
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.git import (
@@ -206,6 +207,53 @@ def _prior_merge_decision(
     )
 
 
+def _resolve_active_outcome(
+    active: ActiveWorktree,
+    subtask_id: str,
+    forge: Forge | None,
+) -> tuple[OutcomeRecord | None, CompletedWorktreeDecision | None]:
+    if forge is not None:
+        failures: list[ForgeFailure] = []
+        lookup = _fetch_outcome_for_active(active, forge, failures)
+        if lookup.state is OutcomeLookupState.UNKNOWN:
+            return None, CompletedWorktreeDecision(
+                action="completion_skipped_forge_error",
+                subtask_id=subtask_id,
+                operation=failed_operations(failures),
+                error=failure_descriptions(failures),
+            )
+        if lookup.record is not None:
+            return lookup.record, None
+
+    if active.completion_result is not None:
+        return (
+            OutcomeRecord(
+                result=active.completion_result,
+                issue=active.issue_number,
+            ),
+            None,
+        )
+    return None, None
+
+
+def _is_dirty_worktree_blocking(
+    active: ActiveWorktree, outcome: OutcomeRecord | None
+) -> bool:
+    if not worktree_has_uncommitted_changes(active.worktree_path):
+        return False
+    is_handoff_ready = (
+        active.completion_handoff_ready
+        or active.completion_stage == CompleteStage.HANDED_OFF_TO_GC.value
+        or active.completion_result is not None
+    )
+    is_retained = (
+        is_handoff_ready
+        and outcome is not None
+        and outcome.result in ("not-needed", "blocked")
+    )
+    return not is_retained
+
+
 def _decide_completed_worktree_outcome(
     active: ActiveWorktree,
     active_task: TaskMetadata | None,
@@ -216,24 +264,16 @@ def _decide_completed_worktree_outcome(
     issue: IssueRecord | None = None,
 ) -> CompletedWorktreeDecision:
     subtask_id = active_task.subtask_id if active_task else ""
-    if worktree_has_uncommitted_changes(active.worktree_path):
-        return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
     if prior_merge_decision := _prior_merge_decision(active, active_task, forge, issue):
         return prior_merge_decision
     has_new_commits, commit_sha = _detect_worktree_commits(active, repository_root)
 
-    outcome = None
-    if forge is not None:
-        failures: list[ForgeFailure] = []
-        lookup = _fetch_outcome_for_active(active, forge, failures)
-        if lookup.state is OutcomeLookupState.UNKNOWN:
-            return CompletedWorktreeDecision(
-                action="completion_skipped_forge_error",
-                subtask_id=subtask_id,
-                operation=failed_operations(failures),
-                error=failure_descriptions(failures),
-            )
-        outcome = lookup.record
+    outcome, error_decision = _resolve_active_outcome(active, subtask_id, forge)
+    if error_decision is not None:
+        return error_decision
+
+    if _is_dirty_worktree_blocking(active, outcome):
+        return CompletedWorktreeDecision(action="completion_skipped_dirty_worktree")
 
     retry_count, retry_pending = _get_review_timeout_retry_state(
         run_state, active.issue_number
@@ -582,6 +622,23 @@ def _apply_token_limit_escalation(
     )
 
 
+def _apply_blocked_outcome(
+    ctx: _CompletionContext, decision: CompletedWorktreeDecision
+) -> None:
+    """#1004: blocked報告を受理し、dirtyなworktreeを保持する。"""
+    if not ctx.config.apply:
+        return
+    stale_labels = _stale_status_labels(ctx.active_task)
+    transition_status_label(
+        ctx.config.resolved_forge,
+        ctx.active.issue_number,
+        StatusLabel.BLOCKED,
+        stale_labels,
+    )
+    if not worktree_has_uncommitted_changes(ctx.active.worktree_path):
+        remove_worktree(ctx.active.worktree_path)
+
+
 def _apply_done_worktree_cleanup(ctx: _CompletionContext) -> str | None:
     commit_sha = None
     if ctx.active.external_id is None:
@@ -607,6 +664,8 @@ def _dispatch_terminal_or_blocked_action(
     action = decision.action
     if action == "completed_without_outcome":
         _apply_without_outcome_escalation(ctx)
+    elif action == "blocked":
+        _apply_blocked_outcome(ctx, decision)
     elif action == "blocked_base_branch_red":
         _apply_blocked_base_branch_red(ctx, decision)
     elif action == "escalated_base_branch_red":
@@ -770,7 +829,7 @@ def _finalize_completed_worktree(
     on_review_timeout_requeue: Callable[[], None] | None = None,
     issue: IssueRecord | None = None,
 ) -> dict:
-    repo_root = config.worktree_root.parent if config.worktree_root else None
+    repo_root = Path(config.worktree_root).parent if config.worktree_root else None
     decision = _decide_completed_worktree_outcome(
         active,
         active_task,
@@ -818,13 +877,19 @@ def _finalize_not_needed_worktree(
         "subtask_id": subtask_id,
         "worktree_path": active.worktree_path,
     }
-    if _decide_not_needed_dirty_worktree(active):
+    is_handoff_ready = (
+        active.completion_handoff_ready
+        or active.completion_stage == CompleteStage.HANDED_OFF_TO_GC.value
+        or active.completion_result in ("not-needed", "not_needed")
+    )
+    if _decide_not_needed_dirty_worktree(active) and not is_handoff_ready:
         event["action"] = "completion_skipped_dirty_worktree"
         return event
     if not config.apply:
         event["action"] = "not_needed"
         return event
-    remove_worktree(active.worktree_path)
+    if not worktree_has_uncommitted_changes(active.worktree_path):
+        remove_worktree(active.worktree_path)
     config.resolved_forge.remove_label(active.issue_number, StatusLabel.IN_PROGRESS)
     if isinstance(config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
         if dispatch_not_needed_review is None:
@@ -1068,6 +1133,13 @@ def _finalize_abandoned_cloud_worktree(
 
 
 def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> bool:
+    if (
+        active.completion_handoff_ready
+        or active.completion_stage == CompleteStage.HANDED_OFF_TO_GC.value
+    ):
+        return True
+    if active.completion_id is not None:
+        return False
     if active.owner_kind == "interactive":
         return False
     if active.external_id is not None:
