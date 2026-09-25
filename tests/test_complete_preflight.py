@@ -133,6 +133,37 @@ class FakeRunState:
 
 
 class TestEvaluateCompletePreflight:
+    def test_done_reports_forge_lookup_failure_without_raising(
+        self, temp_git_repo: Path
+    ) -> None:
+        from orchestune.claim.ownership import owner_token_digest
+
+        token = "token"
+        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        run_state = FakeRunState(
+            {
+                "999": FakeActiveWorktree(
+                    owner_token_digest=owner_token_digest(token),
+                    worktree_path=str(temp_git_repo),
+                )
+            }
+        )
+
+        class UnavailableForge:
+            def get_pull_request(self, pr_number: int) -> Any:
+                raise RuntimeError("HTTP 502")
+
+        result = evaluate_complete_preflight(
+            request,
+            worktree_path=temp_git_repo,
+            forge=UnavailableForge(),
+            run_state=run_state,
+        )
+
+        assert result.accepted is False
+        assert result.failure_reason == CompleteFailureReason.EVIDENCE_MISSING
+        assert "unavailable" in (result.reason or "").lower()
+
     def test_done_success(self, temp_git_repo: Path) -> None:
         from orchestune.claim.ownership import owner_token_digest
 

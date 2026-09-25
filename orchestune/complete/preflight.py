@@ -184,19 +184,27 @@ def _check_pr_diff(
     return True, None, None
 
 
-def _fetch_pr(forge: Any, pr_number: int) -> tuple[Any | None, bool]:
+def _fetch_pr(forge: Any, pr_number: int) -> tuple[Any | None, bool, str | None]:
     if hasattr(forge, "get_pull_request"):
-        return forge.get_pull_request(pr_number), True
+        try:
+            return forge.get_pull_request(pr_number), True, None
+        except Exception as exc:
+            return None, True, str(exc)
     if hasattr(forge, "list_prs"):
         try:
             prs = forge.list_prs(state="all", include_files=True)
         except TypeError:
-            prs = forge.list_prs(state="all")
+            try:
+                prs = forge.list_prs(state="all")
+            except Exception as exc:
+                return None, True, str(exc)
+        except Exception as exc:
+            return None, True, str(exc)
         for p in prs:
             if getattr(p, "number", None) == pr_number:
-                return p, True
-        return None, True
-    return None, False
+                return p, True, None
+        return None, True, None
+    return None, False, None
 
 
 def _validate_pull_request(
@@ -212,11 +220,17 @@ def _validate_pull_request(
             CompleteFailureReason.EVIDENCE_MISSING,
         )
 
-    pr, supported = _fetch_pr(forge, payload.pr)
+    pr, supported, lookup_error = _fetch_pr(forge, payload.pr)
     if not supported:
         return (
             False,
             "Forge client does not support pull request lookup",
+            CompleteFailureReason.EVIDENCE_MISSING,
+        )
+    if lookup_error is not None:
+        return (
+            False,
+            f"Pull request #{payload.pr} lookup is unavailable: {lookup_error}",
             CompleteFailureReason.EVIDENCE_MISSING,
         )
     if pr is None:
