@@ -418,9 +418,10 @@ class CompleteRequest:
 class CompleteResult:
     """Outcome of a complete attempt.
 
-    Boundary invariant: success means advancing through complete stages
-    up to GC handoff (`handed_off_to_gc=True`). It strictly excludes
-    CompletionReceipt (settlement receipt), which is owned by GC.
+    A successful apply advances through complete stages up to GC handoff
+    (`handed_off_to_gc=True`). A successful preview is explicitly marked and
+    stops at preflight without claiming that side effects occurred.
+    Both strictly exclude CompletionReceipt, which is owned by GC.
     """
 
     success: bool
@@ -433,6 +434,7 @@ class CompleteResult:
     outcome_record: OutcomeRecord | None = None
     failure: CompleteFailure | None = None
     handed_off_to_gc: bool = False
+    preview: bool = False
 
     def __post_init__(self) -> None:
         self._validate_identifiers()
@@ -495,12 +497,20 @@ class CompleteResult:
 
     def _validate_stage_boundary(self) -> None:
         if self.success:
-            if self.stage != CompleteStage.HANDED_OFF_TO_GC:
+            if self.preview:
+                if self.stage != CompleteStage.PREFLIGHT_VALIDATING:
+                    raise ValueError(
+                        "Preview CompleteResult requires CompleteStage.PREFLIGHT_VALIDATING, "
+                        f"got: {self.stage!r}"
+                    )
+                if self.handed_off_to_gc:
+                    raise ValueError("Preview CompleteResult cannot claim GC handoff")
+            elif self.stage != CompleteStage.HANDED_OFF_TO_GC:
                 raise ValueError(
                     "Successful CompleteResult requires CompleteStage.HANDED_OFF_TO_GC, "
                     f"got: {self.stage!r}"
                 )
-            if not self.handed_off_to_gc:
+            elif not self.handed_off_to_gc:
                 raise ValueError(
                     "Successful CompleteResult requires handed_off_to_gc=True"
                 )
@@ -509,6 +519,8 @@ class CompleteResult:
                     "Successful CompleteResult cannot have a failure object"
                 )
         else:
+            if self.preview:
+                raise ValueError("Failed CompleteResult cannot be a preview")
             if self.stage == CompleteStage.HANDED_OFF_TO_GC:
                 raise ValueError(
                     "Failed CompleteResult cannot be at CompleteStage.HANDED_OFF_TO_GC"
@@ -597,4 +609,30 @@ class CompleteResult:
             outcome_record=None,
             failure=failure,
             handed_off_to_gc=False,
+        )
+
+    @classmethod
+    def preview_result(
+        cls,
+        issue_number: int,
+        result: str,
+        *,
+        claim_id: str | None = None,
+        owner_kind: OwnerKind | None = None,
+        pr: int | None = None,
+        outcome_record: OutcomeRecord | None = None,
+    ) -> CompleteResult:
+        """Construct a validated, side-effect-free completion preview."""
+        return cls(
+            success=True,
+            issue_number=issue_number,
+            result=result,
+            stage=CompleteStage.PREFLIGHT_VALIDATING,
+            claim_id=claim_id,
+            owner_kind=owner_kind,
+            pr=pr,
+            outcome_record=outcome_record,
+            failure=None,
+            handed_off_to_gc=False,
+            preview=True,
         )

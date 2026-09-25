@@ -213,6 +213,49 @@ class GitHubIssueMixin:
             if isinstance(c, dict)
         ]
 
+    def list_all_issue_comments(self, issue_number: int | str) -> list[dict[str, Any]]:
+        """Return every native Issue comment, including durable API evidence."""
+        number = validate_issue_number(issue_number)
+        stdout = self._run(
+            [
+                "gh",
+                "api",
+                "--paginate",
+                "--slurp",
+                f"repos/{{owner}}/{{repo}}/issues/{number}/comments?per_page=100",
+            ]
+        )
+        pages = json.loads(stdout)
+        if not isinstance(pages, list) or not all(
+            isinstance(page, list) for page in pages
+        ):
+            raise ValueError("GitHub comments response has an invalid page")
+        return [
+            comment for page in pages for comment in page if isinstance(comment, dict)
+        ]
+
+    def create_issue_comment(
+        self, issue_number: int | str, body: str
+    ) -> dict[str, Any]:
+        """Create an Issue comment and return GitHub's durable response object."""
+        number = validate_issue_number(issue_number)
+        stdout = self._run(
+            [
+                "gh",
+                "api",
+                "--method",
+                "POST",
+                f"repos/{{owner}}/{{repo}}/issues/{number}/comments",
+                "--input",
+                "-",
+            ],
+            input_text=json.dumps({"body": body}),
+        )
+        response = json.loads(stdout)
+        if not isinstance(response, dict):
+            raise ValueError("GitHub did not return an Issue comment object")
+        return response
+
     def get_authenticated_user(self) -> str:
         """Return the GitHub identity that will author Forge writes."""
         login = self._run(["gh", "api", "user", "--jq", ".login"]).strip()

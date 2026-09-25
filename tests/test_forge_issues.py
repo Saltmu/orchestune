@@ -827,6 +827,45 @@ class TestGetIssue:
 
 
 class TestListComments:
+    def test_lists_every_native_issue_comment_page_with_api_evidence(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout(
+            '[[{"id": 1, "html_url": "https://example.test/comments/1", "body": "one"}], []]'
+        )
+
+        comments = forge.list_all_issue_comments(42)
+
+        assert comments == [
+            {"id": 1, "html_url": "https://example.test/comments/1", "body": "one"}
+        ]
+        assert gh_run.call_args.args[0] == [
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            "repos/{owner}/{repo}/issues/42/comments?per_page=100",
+        ]
+
+    def test_creates_native_issue_comment_and_returns_response(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout('{"id": 1, "html_url": "https://example.test/comments/1"}')
+
+        comment = forge.create_issue_comment(42, "outcome body")
+
+        assert comment["id"] == 1
+        assert gh_run.call_args.args[0] == [
+            "gh",
+            "api",
+            "--method",
+            "POST",
+            "repos/{owner}/{repo}/issues/42/comments",
+            "--input",
+            "-",
+        ]
+        assert gh_run.call_args.kwargs["input"] == b'{"body": "outcome body"}'
+
     def test_returns_parsed_and_normalized_comments(self, forge: GitHubForge, gh_run):
         gh_run.stdout(
             '{"comments": ['

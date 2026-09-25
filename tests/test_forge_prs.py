@@ -232,6 +232,24 @@ class TestDeleteBranch:
             forge.delete_branch("claude/issue-1-task-1")
 
 
+class TestGetPullRequest:
+    def test_fetches_one_pr_without_listing_the_repository(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout(
+            '{"number": 5, "headRefName": "feat/x", "baseRefName": "main", '
+            '"state": "OPEN", "files": [{"path": "one.py"}]}'
+        )
+
+        pr = forge.get_pull_request(5)
+
+        assert pr is not None
+        assert pr.number == 5
+        assert pr.changed_files == ("one.py",)
+        assert gh_run.call_args.args[0][:4] == ["gh", "pr", "view", "5"]
+        assert "--json" in gh_run.call_args.args[0]
+
+
 class TestListPrsQuery:
     def test_lists_merged_history_scoped_to_one_parent_without_default_truncation(
         self, forge: GitHubForge, gh_run
