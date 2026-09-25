@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
@@ -69,6 +69,7 @@ class IssuesByStatus:
     blocked: list[IssueRecord]
     done: list[IssueRecord]
     not_needed: list[IssueRecord]
+    closed_unterminated: list[IssueRecord] = field(default_factory=list)
 
     def all(self) -> list[IssueRecord]:
         return [
@@ -78,6 +79,7 @@ class IssuesByStatus:
             *self.blocked,
             *self.done,
             *self.not_needed,
+            *self.closed_unterminated,
         ]
 
 
@@ -206,9 +208,13 @@ def _group_by_status(issues: list[IssueRecord]) -> IssuesByStatus:
     blocked: list[IssueRecord] = []
     done: list[IssueRecord] = []
     not_needed: list[IssueRecord] = []
+    closed_unterminated: list[IssueRecord] = []
 
     for issue in issues:
         is_open = issue.state == "OPEN"
+        has_terminal = (
+            StatusLabel.DONE in issue.labels or StatusLabel.NOT_NEEDED in issue.labels
+        )
         if is_open and StatusLabel.QUEUED in issue.labels:
             queued.append(issue)
         if is_open and StatusLabel.EXTERNAL_LOCK in issue.labels:
@@ -221,6 +227,11 @@ def _group_by_status(issues: list[IssueRecord]) -> IssuesByStatus:
             done.append(issue)
         if StatusLabel.NOT_NEEDED in issue.labels:
             not_needed.append(issue)
+        # #865: クローズ済みだが終端ラベルを持たないIssueを保持する。
+        # 最初の終端ラベル付与APIコールが失敗した場合でも、all()に残ることで
+        # 先行マージ整合（reconcile_prior_parent_merges）による再試行を可能にする。
+        if not is_open and not has_terminal:
+            closed_unterminated.append(issue)
 
     return IssuesByStatus(
         queued=queued,
@@ -229,6 +240,7 @@ def _group_by_status(issues: list[IssueRecord]) -> IssuesByStatus:
         blocked=blocked,
         done=done,
         not_needed=not_needed,
+        closed_unterminated=closed_unterminated,
     )
 
 
