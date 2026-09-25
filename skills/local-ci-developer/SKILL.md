@@ -13,7 +13,7 @@ This skill acts as a router orchestrating the standard development workflow: des
 
 > [!IMPORTANT]
 > **No Direct GitHub Label Operations**:
-> Never add, remove, or modify GitHub Issue or PR labels directly (e.g., never run `gh issue edit --add-label` / `gh issue edit --remove-label`). Label lifecycles and transitions are managed exclusively by `orchestune claim` and the Orchestune engine (Dispatcher and Integrator). All task outcomes (completion, escalation, or requirement already met) must be reported strictly through Outcome Records (`<!-- orchestune:outcome -->`).
+> Never add, remove, or modify GitHub Issue or PR labels directly (e.g., never run `gh issue edit --add-label` / `gh issue edit --remove-label`). Label lifecycles and transitions are managed exclusively by `orchestune claim` and the Orchestune engine (Dispatcher and Integrator). Report every task outcome through `orchestune complete`, which posts the canonical Outcome Record to the task Issue.
 
 ## Execution Modes
 
@@ -23,7 +23,7 @@ This skill acts as a router orchestrating the standard development workflow: des
 | **Issue Creation (Step 2)** | Create via selected backend (`gh` CLI or GitHub MCP/Web UI) if needed | Use issue number provided in prompt (skip creation) |
 | **Worktree (Step 2.5)** | Run `orchestune claim <issue_number>` to prepare and enter task worktree (proceed directly if already inside task worktree) | Run `orchestune claim <issue_number>` to prepare and enter task worktree (proceed directly if already inside task worktree) |
 | **Review Execution (Step 11)** | Execute review using reviewer bot selected in Step 1 | Execute review using reviewer bot resolved in Step 1 |
-| **Escalation** | Prompt user for decision | Post an outcome record (`blocked`) and terminate safely |
+| **Escalation** | Prompt user for decision | Run `orchestune complete --issue <N> --result blocked --reason <REASON>` and terminate safely |
 
 ## Fast-Path for Minor Changes (Typo / Docs)
 For documentation updates or typo fixes that do not alter code logic, **Steps 3–8 (TDD) may be skipped**. However, to prevent secret leaks (gitleaks) and ensure quality, **Step 9 Local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`) must always be executed** before proceeding to Step 10 (PR creation).
@@ -59,7 +59,7 @@ before Step 2.6 and maintain its record through Steps 10–12, including zero-fi
 
 | Step | Item | Summary / Command | Reference |
 | :--- | :--- | :--- | :--- |
-| **0** | **Preflight & Requirement Check** | Verify uv, lockfile, gitleaks, `gh auth status`, and GitHub MCP; fix backend. If requirements are met on `main`, post outcome record (`result: not-needed`) and exit. | - |
+| **0** | **Preflight & Requirement Check** | Verify uv, lockfile, gitleaks, `gh auth status`, and GitHub MCP; fix backend. If requirements are already met before claim, run `orchestune complete --issue <N> --result not-needed` from the current checkout and exit without creating a worktree. | - |
 | **1** | **Design & Implementation Plan** | Write `<planning-session-dir>/implementation-plan.md` (preflight, backend, reviewer bot, design). Ask user for plan & reviewer approval (bypass approval for existing Issue / Auto-Dispatch). | - |
 | **2** | **GitHub Issue Creation** | Skip if issue number was provided in prompt. When filing new: use selected backend (`gh issue create --title "..." --body "..."` or GitHub MCP/Web UI). | - |
 | **2.5** | **Worktree Preparation** | Run `orchestune claim <issue_number>` to validate, prepare task worktree, and work there (proceed directly if already inside task worktree). Create worktree-local `<session-dir>` and migrate the approved plan before continuing. | [references/worktree.md](references/worktree.md) |
@@ -67,31 +67,25 @@ before Step 2.6 and maintain its record through Steps 10–12, including zero-fi
 | **3–9** | **TDD & Local CI** | Reproducer test, baseline recording, test-driven implementation, local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`). | [references/tdd.md](references/tdd.md) |
 | **10** | **Pull Request Creation** | Fill `.github/pull_request_template.md` and submit via selected backend (`gh pr create` or GitHub MCP/Web UI). | [references/pr.md](references/pr.md) |
 | **11** | **Automated LLM PR Review** | Atomic review trigger, wait, and feedback resolution loop via `scripts/wait_for_review.py` using selected reviewer bot. | [references/review-loop.md](references/review-loop.md) |
-| **12** | **Outcome Declaration** | Post an outcome record (`result: done`) to PR/Issue comments via selected backend and finish work. | - |
+| **12** | **Outcome Declaration** | From the claimed task worktree, run `orchestune complete --issue <N> --pr <PR> --result done` after review; use the blocked command below if escalation is required. `complete` posts to Issue comments and hands off to GC. | - |
 
-### Outcome Record Format
-Upon task completion, satisfaction, or escalation, post the appropriate machine-readable outcome marker and JSON payload in a comment. Field values for `issue` and `pr` must be unquoted numbers (e.g. `123`).
+### Completion commands
 
-Select only the matching outcome below; replace example IDs/values with actual task data.
-**Successful completion** — PR comments (or Issue comments):
-````markdown
-<!-- orchestune:outcome -->
-```json
-{"result": "done", "issue": 123, "pr": 456}
+Use `orchestune complete` for every outcome. It creates or reuses the canonical
+Outcome Record in Issue comments; do not compose JSON or post to PR comments.
+Replace placeholders with the task Issue number, PR number, or concrete reason:
+
+```bash
+# Requirement already satisfied before claim: run from the current checkout.
+orchestune complete --issue <N> --result not-needed
+
+# Claimed task: run from its worktree after review succeeds.
+orchestune complete --issue <N> --pr <PR> --result done
+
+# Claimed task: run from its worktree when work cannot continue.
+orchestune complete --issue <N> --result blocked --reason <REASON>
 ```
-````
-**Already satisfied; no commit/PR** — Issue comments:
-````markdown
-<!-- orchestune:outcome -->
-```json
-{"result": "not-needed", "issue": 123}
-```
-````
-**Blocked** — Issue comments; use current base SHA and increment the prior attempt
-(1 initially; escalates at 3). Review-specific fields and thresholds take precedence.
-````markdown
-<!-- orchestune:outcome -->
-```json
-{"result": "blocked", "issue": 123, "reason": "base-branch-red", "base_sha": "abc1234", "attempt": 1}
-```
-````
+
+For a claimed task whose requirement becomes unnecessary, run the `not-needed`
+command from its worktree. `done` and `blocked` require an existing claim.
+`complete` preserves the worktree and hands claimed completion to GC.

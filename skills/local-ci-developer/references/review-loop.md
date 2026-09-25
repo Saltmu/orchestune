@@ -49,7 +49,7 @@ Loop (up to 5 rounds):
   2. Evaluate exit code, then carefully read the entire result:
      - Exit 10: actionable findings are present. Read every Inline Finding block (path, line, full body).
      - Exit 0: clean pass / no findings. Exit 11: reviewer still in progress.
-     - Exit 20: timeout (default 1800s); retry once with --no-post --timeout 1800. If still timed out, post Outcome Record with result: "blocked", reason: "review-timeout", review.bot set to reviewer bot, and attempt count.
+     - Exit 20: timeout (default 1800s); retry once with --no-post --timeout 1800. If still timed out, run `orchestune complete --issue <N> --result blocked --reason review-timeout` from the claimed worktree.
      - Exit 21: stalled — in-progress tracker stopped changing past grace window (default 600s); run ended without posting final result. Re-run wait_for_review.py normally for next round; Exit 12 escalates.
      - Exit 30: ambiguous verdict; inspect summary and inline findings before requesting another review or escalating. Exit 2 or 12: record and escalate.
      - Exit 10:

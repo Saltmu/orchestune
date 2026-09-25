@@ -12,7 +12,10 @@ from orchestune.complete.contracts import CompleteResult
 def test_dry_run_builds_done_request_without_calling_service() -> None:
     from orchestune.complete.cli import main
 
-    with patch("orchestune.complete.cli.complete_task") as complete_task:
+    with (
+        patch("orchestune.complete.cli._credentials", return_value=(None, None, None)),
+        patch("orchestune.complete.cli.complete_task") as complete_task,
+    ):
         exit_code = main(
             ["--issue", "1003", "--pr", "42", "--result", "done", "--no-apply"]
         )
@@ -49,7 +52,10 @@ def test_cli_returns_service_failure_exit_code() -> None:
             issue_number=1003,
         ),
     )
-    with patch("orchestune.complete.cli.complete_task", return_value=failed):
+    with (
+        patch("orchestune.complete.cli._credentials", return_value=(None, None, None)),
+        patch("orchestune.complete.cli.complete_task", return_value=failed),
+    ):
         exit_code = main(["--issue", "1003", "--result", "not-needed", "--no-apply"])
 
     assert failed.failure is not None
