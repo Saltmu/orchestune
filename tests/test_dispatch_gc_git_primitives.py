@@ -14,6 +14,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.dispatch.gc import (
     ZombieOrTimeoutReclaim,
     _finalize_completed_worktree,
@@ -959,7 +961,10 @@ class TestEvaluateWorktreeRemoval:
         wt_target = tmp_path / "worktrees" / "wt-target"
         wt_target.mkdir(parents=True)
         wt_symlink = tmp_path / "worktrees" / "wt-symlink"
-        wt_symlink.symlink_to(wt_target)
+        try:
+            wt_symlink.symlink_to(wt_target)
+        except OSError:
+            pytest.skip("Symlink creation not permitted on this system")
 
         active = ActiveWorktree(
             issue_number=1004,

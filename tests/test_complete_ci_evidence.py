@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -466,7 +467,7 @@ class TestRunLocalCiIfNeeded:
 
         # Provide a mock CI command that records evidence
         mock_cmd = [
-            "python3",
+            sys.executable,
             "-c",
             "from orchestune.complete.ci_evidence import record_ci_evidence; "
             "record_ci_evidence(worktree_root='.', exit_code=0)",
@@ -482,7 +483,7 @@ class TestRunLocalCiIfNeeded:
         )
 
         # CI command that fails
-        failing_cmd = ["python3", "-c", "import sys; sys.exit(2)"]
+        failing_cmd = [sys.executable, "-c", "import sys; sys.exit(2)"]
         with pytest.raises(CiExecutionError, match="Local CI execution failed"):
             run_local_ci_if_needed(req, ci_command=failing_cmd)
 
@@ -525,7 +526,7 @@ class TestCliEntrypoint:
         # 1. Invalidate
         res_inv = subprocess.run(
             [
-                "python3",
+                sys.executable,
                 "-m",
                 "orchestune.complete.ci_evidence",
                 "invalidate",
@@ -540,7 +541,7 @@ class TestCliEntrypoint:
         # 2. Record
         res_rec = subprocess.run(
             [
-                "python3",
+                sys.executable,
                 "-m",
                 "orchestune.complete.ci_evidence",
                 "record",
@@ -627,8 +628,9 @@ class TestEdgeCasesAndBoundaryConditions:
         req = CompleteRequest.done(
             issue_number=1000, pr=100, worktree_root=git_worktree
         )
+        py_exe = sys.executable.replace("\\", "/")
         py_cmd = (
-            'python3 -c "from orchestune.complete.ci_evidence import record_ci_evidence; '
+            f'"{py_exe}" -c "from orchestune.complete.ci_evidence import record_ci_evidence; '
             "record_ci_evidence(worktree_root='.', exit_code=0)\""
         )
         ev = run_local_ci_if_needed(req, ci_command=py_cmd)
