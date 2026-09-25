@@ -468,8 +468,8 @@ class TestRunLocalCiIfNeeded:
         mock_cmd = [
             "python3",
             "-c",
-            f"from orchestune.complete.ci_evidence import record_ci_evidence; "
-            f"record_ci_evidence(worktree_root='{git_worktree}', exit_code=0)",
+            "from orchestune.complete.ci_evidence import record_ci_evidence; "
+            "record_ci_evidence(worktree_root='.', exit_code=0)",
         ]
         ev = run_local_ci_if_needed(req, ci_command=mock_cmd)
         assert ev.succeeded is True
@@ -628,8 +628,8 @@ class TestEdgeCasesAndBoundaryConditions:
             issue_number=1000, pr=100, worktree_root=git_worktree
         )
         py_cmd = (
-            f'python3 -c "from orchestune.complete.ci_evidence import record_ci_evidence; '
-            f"record_ci_evidence(worktree_root='{git_worktree}', exit_code=0)\""
+            'python3 -c "from orchestune.complete.ci_evidence import record_ci_evidence; '
+            "record_ci_evidence(worktree_root='.', exit_code=0)\""
         )
         ev = run_local_ci_if_needed(req, ci_command=py_cmd)
         assert ev.succeeded is True
