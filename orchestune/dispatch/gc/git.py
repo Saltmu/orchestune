@@ -236,6 +236,12 @@ def _check_branch_and_owner_mismatch(
         marker_branch = marker.get("branch")
         if branch is not None and marker_branch is not None and marker_branch != branch:
             return "branch_mismatch"
+        if (
+            registered_branch is not None
+            and marker_branch is not None
+            and registered_branch != marker_branch
+        ):
+            return "branch_mismatch"
 
         marker_claim_id = marker.get("claim_id")
         if (
@@ -402,10 +408,31 @@ def remove_verified_worktree(
     return WorktreeRemovalResult(success=True, removed=True)
 
 
-def remove_worktree(worktree_path: str | Path) -> None:
-    """#193: 完了したworktreeを撤去する（検証済み削除APIの互換ラッパー）。"""
+def remove_worktree(
+    worktree_path: str | Path,
+    *,
+    active: ActiveWorktree | None = None,
+    expected_branch: str | None = None,
+    expected_claim_id: str | None = None,
+    repo_root: str | Path | None = None,
+) -> WorktreeRemovalResult:
+    """#193 / #1004: 完了したworktreeを検証した上で安全に撤去する。"""
     path = Path(worktree_path)
-    remove_verified_worktree(VerifiedWorktreeRemovalRequest(worktree_path=path))
+    eval_res = evaluate_worktree_removal(
+        active=active,
+        worktree_path=path,
+        expected_branch=expected_branch,
+        expected_claim_id=expected_claim_id,
+        repo_root=repo_root,
+    )
+    if not eval_res.can_remove or eval_res.request is None:
+        return WorktreeRemovalResult(
+            success=False,
+            removed=False,
+            rejection_reason=eval_res.rejection_reason,
+            error=str(eval_res.details) if eval_res.details else None,
+        )
+    return remove_verified_worktree(eval_res.request)
 
 
 def _list_remote_temp_refs(root: Path, forge: Forge) -> tuple[str, set[str]] | None:
