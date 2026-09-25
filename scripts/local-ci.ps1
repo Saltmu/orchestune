@@ -26,10 +26,58 @@ Write-Host "========================================="
 Write-Host "Running Orchestune Local CI Check (PowerShell)..."
 Write-Host "========================================="
 
+# Invalidate prior evidence before any prerequisite checks or setup
+if ($env:ORCHESTUNE_CI_EVIDENCE_PATH) {
+    $EvidenceFile = $env:ORCHESTUNE_CI_EVIDENCE_PATH
+} else {
+    $GitDir = (git rev-parse --git-dir 2>$null)
+    if (-not $GitDir) { $GitDir = ".git" }
+    $EvidenceFile = Join-Path $GitDir "ci_evidence.json"
+}
+if (Test-Path $EvidenceFile) {
+    Remove-Item -Force $EvidenceFile -ErrorAction SilentlyContinue
+    if (Test-Path $EvidenceFile) {
+        Write-Host "ERROR: Failed to remove prior CI evidence at $EvidenceFile." -ForegroundColor Red
+        exit 1
+    }
+}
+$EvidenceParent = Split-Path -Parent $EvidenceFile
+if ($EvidenceParent -and (Test-Path $EvidenceParent)) {
+    Get-ChildItem -Path $EvidenceParent -Filter "ci_evidence.json.tmp.*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+}
+
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Write-Host "ERROR: uv is required for local CI. Install it from https://docs.astral.sh/uv/." -ForegroundColor Red
     exit 2
 }
+
+$CiStartTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+$CiStartHead = (git rev-parse HEAD 2>$null)
+if ($LASTEXITCODE -ne 0 -or -not $CiStartHead) {
+    Write-Host "ERROR: Failed to resolve initial HEAD before starting CI." -ForegroundColor Red
+    exit 1
+}
+$CiStartHead = $CiStartHead.Trim()
+$CiStartTree = (git rev-parse 'HEAD^{tree}' 2>$null)
+if ($LASTEXITCODE -ne 0 -or -not $CiStartTree) {
+    Write-Host "ERROR: Failed to resolve initial tree SHA before starting CI." -ForegroundColor Red
+    exit 1
+}
+$CiStartTree = $CiStartTree.Trim()
+$CiStartBase = $env:ORCHESTUNE_BASE_SHA
+if (-not $CiStartBase) {
+    $BaseResolveArgs = @()
+    if ($env:ORCHESTUNE_BASE_REF) { $BaseResolveArgs += @("--base-ref", $env:ORCHESTUNE_BASE_REF) }
+    if ($env:ORCHESTUNE_STATE_PATH) { $BaseResolveArgs += @("--state-path", $env:ORCHESTUNE_STATE_PATH) }
+    if ($env:ORCHESTUNE_ISSUE_NUMBER) { $BaseResolveArgs += @("--issue", $env:ORCHESTUNE_ISSUE_NUMBER) }
+    $resolvedBase = (uv run --no-sync python -m orchestune.complete.ci_evidence resolve-base @BaseResolveArgs 2>$null)
+    if ($LASTEXITCODE -ne 0 -or -not $resolvedBase) {
+        Write-Host "ERROR: Failed to resolve initial base SHA before starting CI." -ForegroundColor Red
+        exit 1
+    }
+    $CiStartBase = $resolvedBase.Trim()
+}
+uv run --no-sync python -m orchestune.complete.ci_evidence invalidate 2>$null
 
 # Ensure virtual environment and dependencies are installed
 & uv run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" 2>$null
@@ -90,3 +138,32 @@ if (Get-Command gitleaks -ErrorAction SilentlyContinue) {
 Write-Host "========================================="
 Write-Host "✨ Local CI passed successfully!"
 Write-Host "========================================="
+
+$RecordArgs = @("--started-at", $CiStartTime)
+if ($CiStartHead) {
+    $RecordArgs += @("--expected-head", $CiStartHead)
+}
+if ($CiStartTree) {
+    $RecordArgs += @("--expected-tree", $CiStartTree)
+}
+if ($CiStartBase) {
+    $RecordArgs += @("--expected-base", $CiStartBase)
+    if (-not $env:ORCHESTUNE_BASE_SHA) {
+        $RecordArgs += @("--base-sha", $CiStartBase)
+    }
+}
+if ($env:ORCHESTUNE_BASE_SHA) {
+    $RecordArgs += @("--base-sha", $env:ORCHESTUNE_BASE_SHA)
+}
+if ($env:ORCHESTUNE_BASE_REF) {
+    $RecordArgs += @("--base-ref", $env:ORCHESTUNE_BASE_REF)
+}
+if ($env:ORCHESTUNE_STATE_PATH) {
+    $RecordArgs += @("--state-path", $env:ORCHESTUNE_STATE_PATH)
+}
+if ($env:ORCHESTUNE_ISSUE_NUMBER) {
+    $RecordArgs += @("--issue", $env:ORCHESTUNE_ISSUE_NUMBER)
+}
+uv run python -m orchestune.complete.ci_evidence record @RecordArgs
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
