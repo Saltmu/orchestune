@@ -109,11 +109,8 @@ fi
 if [ -n "${CI_START_TREE}" ]; then
   RECORD_ARGS+=("--expected-tree" "${CI_START_TREE}")
 fi
-if [ -n "${CI_START_BASE}" ]; then
-  RECORD_ARGS+=("--expected-base" "${CI_START_BASE}")
-  if [ -z "${ORCHESTUNE_BASE_SHA:-}" ]; then
-    RECORD_ARGS+=("--base-sha" "${CI_START_BASE}")
-  fi
+if [ -n "${CI_START_BASE}" ] && [ -z "${ORCHESTUNE_BASE_SHA:-}" ]; then
+  RECORD_ARGS+=("--base-sha" "${CI_START_BASE}")
 fi
 if [ -n "${ORCHESTUNE_BASE_SHA:-}" ]; then
   RECORD_ARGS+=("--base-sha" "${ORCHESTUNE_BASE_SHA}")

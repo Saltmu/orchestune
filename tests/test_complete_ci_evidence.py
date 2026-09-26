@@ -295,9 +295,7 @@ class TestValidateCiEvidence:
         with pytest.raises(CiEvidenceMismatchError, match="HEAD SHA mismatch"):
             validate_ci_evidence(req)
 
-    def test_validate_rejects_base_sha_mismatch_when_base_advances(
-        self, git_worktree: Path
-    ):
+    def test_validate_accepts_evidence_when_base_advances(self, git_worktree: Path):
         # Create a base branch with an initial commit
         subprocess.run(
             ["git", "branch", "parent/issue-894", "HEAD"], cwd=git_worktree, check=True
@@ -333,8 +331,12 @@ class TestValidateCiEvidence:
         req = CompleteRequest.done(
             issue_number=1000, pr=100, worktree_root=git_worktree
         )
-        with pytest.raises(CiEvidenceMismatchError, match="Base SHA mismatch"):
-            validate_ci_evidence(req)
+        # HEAD and tree are unchanged, so the evidence still covers what CI tested.
+        ev = validate_ci_evidence(req)
+        assert ev.succeeded is True
+        # A sibling merge into the base must not force a full CI rerun (#1047).
+        ev = run_local_ci_if_needed(req, ci_command=["false"])
+        assert ev.succeeded is True
 
     def test_validate_rejects_ci_definition_mismatch(self, git_worktree: Path):
         ev_obj = record_ci_evidence(
@@ -919,18 +921,45 @@ class TestEdgeCasesAndBoundaryConditions:
                 expected_tree="0" * 40,
             )
 
-    def test_record_ci_evidence_rejects_base_tip_change_during_run(
+    def test_record_ci_evidence_ignores_base_tip_change_during_run(
         self, git_worktree: Path
     ):
-        with pytest.raises(
-            CiEvidenceMismatchError, match="Base tip changed during CI run"
-        ):
-            record_ci_evidence(
-                worktree_root=git_worktree,
-                expected_base="0" * 40,
-            )
+        with patch.dict(os.environ, {"ORCHESTUNE_EXPECTED_BASE": "0" * 40}):
+            ev = record_ci_evidence(worktree_root=git_worktree, base_sha="1" * 40)
+        assert ev.base_sha == "1" * 40
 
-    def test_local_ci_scripts_capture_and_pass_expected_head_tree_and_base(self):
+    def test_run_local_ci_accepts_base_advancing_during_run(self, git_worktree: Path):
+        subprocess.run(
+            ["git", "branch", "parent/issue-894", "HEAD"], cwd=git_worktree, check=True
+        )
+        invalidate_ci_evidence(git_worktree)
+        req = CompleteRequest.done(
+            issue_number=1000, pr=100, worktree_root=git_worktree
+        )
+        # The fake CI advances the base branch before recording evidence.
+        advance_and_record = [
+            sys.executable,
+            "-c",
+            "import subprocess\n"
+            "tree = subprocess.check_output(['git', 'write-tree'], text=True).strip()\n"
+            "commit = subprocess.check_output(\n"
+            "    ['git', 'commit-tree', tree, '-p', 'HEAD', '-m', 'advance base'],\n"
+            "    text=True,\n"
+            ").strip()\n"
+            "subprocess.check_call(\n"
+            "    ['git', 'update-ref', 'refs/heads/parent/issue-894', commit]\n"
+            ")\n"
+            "from orchestune.complete.ci_evidence import record_ci_evidence\n"
+            "record_ci_evidence(worktree_root='.', exit_code=0)\n",
+        ]
+        initial_base = subprocess.check_output(
+            ["git", "rev-parse", "parent/issue-894"], cwd=git_worktree, text=True
+        ).strip()
+        ev = run_local_ci_if_needed(req, ci_command=advance_and_record)
+        assert ev.succeeded is True
+        assert ev.base_sha == initial_base
+
+    def test_local_ci_scripts_capture_and_pass_expected_head_and_tree(self):
         sh_text = Path("scripts/local-ci.sh").read_text(encoding="utf-8")
         ps1_text = Path("scripts/local-ci.ps1").read_text(encoding="utf-8")
 
@@ -939,14 +968,16 @@ class TestEdgeCasesAndBoundaryConditions:
         assert "CI_START_BASE=$(uv run --no-sync python" in sh_text
         assert '--expected-head" "${CI_START_HEAD}"' in sh_text
         assert '--expected-tree" "${CI_START_TREE}"' in sh_text
-        assert '--expected-base" "${CI_START_BASE}"' in sh_text
+        assert "--expected-base" not in sh_text
+        assert '--base-sha" "${CI_START_BASE}"' in sh_text
 
         assert "$CiStartHead = (git rev-parse HEAD" in ps1_text
         assert "$CiStartTree = (git rev-parse 'HEAD^{tree}'" in ps1_text
         assert "$resolvedBase = (uv run --no-sync python" in ps1_text
         assert '"--expected-head", $CiStartHead' in ps1_text
         assert '"--expected-tree", $CiStartTree' in ps1_text
-        assert '"--expected-base", $CiStartBase' in ps1_text
+        assert "--expected-base" not in ps1_text
+        assert '"--base-sha", $CiStartBase' in ps1_text
 
     def test_cli_resolve_base_outputs_base_sha(
         self, git_worktree: Path, capsys: pytest.CaptureFixture[str]

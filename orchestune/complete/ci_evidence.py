@@ -505,12 +505,14 @@ def invalidate_ci_evidence(worktree_root: Path | str | None = None) -> None:
 def _check_run_boundaries(
     expected_head: str | None,
     expected_tree: str | None,
-    expected_base: str | None,
     current_head: str,
     tree_sha: str,
-    resolved_base: str,
 ) -> None:
-    """Ensure HEAD, tree, and base did not mutate between CI launch and evidence recording."""
+    """Ensure HEAD and tree did not mutate between CI launch and evidence recording.
+
+    The base tip is deliberately not checked: CI tests the HEAD tree only, so a
+    base advancing mid-run does not invalidate the result (#1047).
+    """
     exp_head = expected_head or os.environ.get("ORCHESTUNE_EXPECTED_HEAD")
     if exp_head and exp_head != current_head:
         raise CiEvidenceMismatchError(
@@ -521,12 +523,6 @@ def _check_run_boundaries(
     if exp_tree and exp_tree != tree_sha:
         raise CiEvidenceMismatchError(
             f"Tree changed during CI run: started at {exp_tree}, current is {tree_sha}"
-        )
-
-    exp_base = expected_base or os.environ.get("ORCHESTUNE_EXPECTED_BASE")
-    if exp_base and resolved_base and exp_base != resolved_base:
-        raise CiEvidenceMismatchError(
-            f"Base tip changed during CI run: started at {exp_base}, current is {resolved_base}"
         )
 
 
@@ -599,7 +595,6 @@ def record_ci_evidence(
     issue_number: int | str | None = None,
     expected_head: str | None = None,
     expected_tree: str | None = None,
-    expected_base: str | None = None,
 ) -> CiEvidence:
     """Atomically record successful CI evidence outside the worktree tracking area."""
     root = (
@@ -616,14 +611,7 @@ def record_ci_evidence(
         state_path=state_path,
         issue_number=issue_number,
     )
-    _check_run_boundaries(
-        expected_head,
-        expected_tree,
-        expected_base,
-        current_head,
-        tree_sha,
-        resolved_base,
-    )
+    _check_run_boundaries(expected_head, expected_tree, current_head, tree_sha)
     return _record_and_save_evidence(
         root,
         current_head,
@@ -676,8 +664,12 @@ def _validate_worktree_cleanliness(evidence: CiEvidence, root: Path) -> None:
         )
 
 
-def _validate_tree_and_commit(evidence: CiEvidence, root: Path, request: Any) -> None:
-    """Validate HEAD, tree, and base SHAs."""
+def _validate_tree_and_commit(evidence: CiEvidence, root: Path) -> None:
+    """Validate HEAD and tree SHAs.
+
+    ``base_sha`` is recorded for auditing only. CI tests the HEAD tree, not its
+    merge with the base, so a base advancing after CI must not force a rerun (#1047).
+    """
     current_head = _resolve_head_sha(root)
     if evidence.head_sha != current_head:
         raise CiEvidenceMismatchError(
@@ -687,11 +679,6 @@ def _validate_tree_and_commit(evidence: CiEvidence, root: Path, request: Any) ->
     if evidence.tree_sha and evidence.tree_sha != current_tree:
         raise CiEvidenceMismatchError(
             f"Tree SHA mismatch: evidence has {evidence.tree_sha}, current worktree is {current_tree}"
-        )
-    expected_base = _resolve_base_sha(root, request)
-    if expected_base and evidence.base_sha != expected_base:
-        raise CiEvidenceMismatchError(
-            f"Base SHA mismatch: evidence has {evidence.base_sha}, expected {expected_base}"
         )
 
 
@@ -712,14 +699,10 @@ def _validate_digests_and_env(evidence: CiEvidence, root: Path) -> None:
     _validate_environment_match(evidence, root)
 
 
-def _validate_evidence_context(
-    evidence: CiEvidence,
-    root: Path,
-    request: Any,
-) -> None:
-    """Validate that evidence matches current HEAD, base, definition, and environment."""
+def _validate_evidence_context(evidence: CiEvidence, root: Path) -> None:
+    """Validate that evidence matches current HEAD, tree, definition, and environment."""
     _validate_worktree_cleanliness(evidence, root)
-    _validate_tree_and_commit(evidence, root, request)
+    _validate_tree_and_commit(evidence, root)
     _validate_digests_and_env(evidence, root)
 
 
@@ -739,7 +722,7 @@ def validate_ci_evidence(request: Any) -> CiEvidence:
         raise CiEvidenceInvalidError(f"Corrupt or unreadable CI evidence: {e}") from e
 
     evidence = CiEvidence.from_dict(data)
-    _validate_evidence_context(evidence, worktree_path, request)
+    _validate_evidence_context(evidence, worktree_path)
     return evidence
 
 
@@ -758,15 +741,12 @@ def _build_ci_env(
     expected_base_sha: str,
     initial_head: str,
     initial_tree: str,
-    initial_base: str,
 ) -> dict[str, str]:
     """Prepare environment variables for running local CI command."""
     env = os.environ.copy()
     env["ORCHESTUNE_BASE_SHA"] = expected_base_sha
     env["ORCHESTUNE_EXPECTED_HEAD"] = initial_head
     env["ORCHESTUNE_EXPECTED_TREE"] = initial_tree
-    if initial_base:
-        env["ORCHESTUNE_EXPECTED_BASE"] = initial_base
     if getattr(request, "state_path", None):
         env["ORCHESTUNE_STATE_PATH"] = str(request.state_path)
     if getattr(request, "issue_number", None):
@@ -781,7 +761,6 @@ def _execute_local_ci(
     expected_base_sha: str,
     initial_head: str,
     initial_tree: str,
-    initial_base: str,
 ) -> None:
     """Execute local CI runner command with appropriate environment variables."""
     cmd = (
@@ -797,7 +776,6 @@ def _execute_local_ci(
         expected_base_sha,
         initial_head,
         initial_tree,
-        initial_base,
     )
     res = subprocess.run(cmd, cwd=worktree_path, env=env, check=False)
     if res.returncode != 0:
@@ -811,7 +789,6 @@ def _verify_ci_run_result(
     worktree_path: Path,
     initial_head: str,
     initial_tree: str,
-    initial_base: str,
 ) -> CiEvidence:
     """Verify evidence against worktree invariants after local CI finishes."""
     evidence = validate_ci_evidence(request)
@@ -821,11 +798,6 @@ def _verify_ci_run_result(
         raise CiEvidenceMismatchError(
             f"HEAD or tree changed during CI run: started at ({initial_head}, {initial_tree}), "
             f"evidence has ({evidence.head_sha}, {evidence.tree_sha})"
-        )
-    current_base = _resolve_base_sha(worktree_path, request)
-    if initial_base and current_base != initial_base:
-        raise CiEvidenceMismatchError(
-            f"Base tip changed during CI run: started at {initial_base}, current is {current_base}"
         )
     return evidence
 
@@ -863,11 +835,8 @@ def run_local_ci_if_needed(
         initial_base,
         initial_head,
         initial_tree,
-        initial_base,
     )
-    return _verify_ci_run_result(
-        request, worktree_path, initial_head, initial_tree, initial_base
-    )
+    return _verify_ci_run_result(request, worktree_path, initial_head, initial_tree)
 
 
 def _cli_invalidate(args: argparse.Namespace) -> None:
@@ -897,7 +866,6 @@ def _cli_record(args: argparse.Namespace) -> None:
         issue_number=args.issue,
         expected_head=args.expected_head,
         expected_tree=args.expected_tree,
-        expected_base=args.expected_base,
     )
 
 
@@ -947,12 +915,6 @@ def _add_record_args(parser: argparse.ArgumentParser) -> None:
         type=str,
         default=None,
         help="Initial tree SHA before CI",
-    )
-    parser.add_argument(
-        "--expected-base",
-        type=str,
-        default=None,
-        help="Initial base commit SHA before CI",
     )
 
 

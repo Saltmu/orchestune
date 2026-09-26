@@ -146,11 +146,8 @@ if ($CiStartHead) {
 if ($CiStartTree) {
     $RecordArgs += @("--expected-tree", $CiStartTree)
 }
-if ($CiStartBase) {
-    $RecordArgs += @("--expected-base", $CiStartBase)
-    if (-not $env:ORCHESTUNE_BASE_SHA) {
-        $RecordArgs += @("--base-sha", $CiStartBase)
-    }
+if ($CiStartBase -and -not $env:ORCHESTUNE_BASE_SHA) {
+    $RecordArgs += @("--base-sha", $CiStartBase)
 }
 if ($env:ORCHESTUNE_BASE_SHA) {
     $RecordArgs += @("--base-sha", $env:ORCHESTUNE_BASE_SHA)
