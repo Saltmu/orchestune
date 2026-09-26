@@ -351,6 +351,71 @@ class TestEvaluateCompletePreflight:
         assert result.accepted is False
         assert "base" in (result.reason or "").lower()
 
+    @pytest.mark.parametrize(
+        "expected_base_ref",
+        ["origin/main", "refs/remotes/origin/main", "refs/heads/main"],
+    )
+    def test_done_accepts_git_ref_for_pr_base(
+        self, temp_git_repo: Path, expected_base_ref: str
+    ) -> None:
+        from orchestune.claim.ownership import owner_token_digest
+
+        token = "token"
+        digest = owner_token_digest(token)
+        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        forge = FakeForge({10: FakePr(number=10, base_ref="main", head_sha="head123")})
+        run_state = FakeRunState(
+            {
+                "999": FakeActiveWorktree(
+                    owner_token_digest=digest,
+                    worktree_path=str(temp_git_repo),
+                    base_ref=expected_base_ref,
+                )
+            }
+        )
+
+        result = evaluate_complete_preflight(
+            request,
+            worktree_path=temp_git_repo,
+            forge=forge,
+            run_state=run_state,
+        )
+
+        assert result.accepted is True
+        assert result.failure_reason is None
+
+    @pytest.mark.parametrize("pr_base_ref", ["origin/main", "refs/remotes/origin/main"])
+    def test_done_keeps_pr_base_branch_name_literal(
+        self, temp_git_repo: Path, pr_base_ref: str
+    ) -> None:
+        from orchestune.claim.ownership import owner_token_digest
+
+        token = "token"
+        digest = owner_token_digest(token)
+        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        forge = FakeForge(
+            {10: FakePr(number=10, base_ref=pr_base_ref, head_sha="head123")}
+        )
+        run_state = FakeRunState(
+            {
+                "999": FakeActiveWorktree(
+                    owner_token_digest=digest,
+                    worktree_path=str(temp_git_repo),
+                    base_ref="main",
+                )
+            }
+        )
+
+        result = evaluate_complete_preflight(
+            request,
+            worktree_path=temp_git_repo,
+            forge=forge,
+            run_state=run_state,
+        )
+
+        assert result.accepted is False
+        assert "base" in (result.reason or "").lower()
+
     def test_done_rejects_missing_base_ref(self, temp_git_repo: Path) -> None:
         from orchestune.claim.ownership import owner_token_digest
 

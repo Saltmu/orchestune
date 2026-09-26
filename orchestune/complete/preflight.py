@@ -115,6 +115,14 @@ def _validate_worktree_status(
     return True, None, None
 
 
+def _normalize_branch_ref(branch_ref: str) -> str:
+    """Normalize common Git ref prefixes before comparing a PR base branch."""
+    for prefix in ("refs/remotes/origin/", "origin/", "refs/heads/"):
+        if branch_ref.startswith(prefix):
+            return branch_ref[len(prefix) :]
+    return branch_ref
+
+
 def _check_pr_identity_and_branches(
     pr: Any,
     payload_pr: int,
@@ -154,7 +162,12 @@ def _check_pr_identity_and_branches(
             CompleteFailureReason.EVIDENCE_MISSING,
         )
     pr_base = getattr(pr, "base_ref", None)
-    if pr_base != expected_base:
+    bases_match = (
+        isinstance(pr_base, str)
+        and isinstance(expected_base, str)
+        and pr_base == _normalize_branch_ref(expected_base)
+    )
+    if not bases_match:
         return (
             False,
             f"Pull request base branch mismatch: expected {expected_base}, got {pr_base}",
