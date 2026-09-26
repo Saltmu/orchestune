@@ -72,7 +72,7 @@ build-backend = "hatchling.build"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "-n auto --maxprocesses=8"
+addopts = "-n 2"
 markers = [
     "uses_run_state_lock_assertion: exercises save_run_state's real lock-ownership assertion",
     "uses_real_file_lock: exercises the real fcntl-based Integrator worktree lock instead of the autouse no-op stub",
