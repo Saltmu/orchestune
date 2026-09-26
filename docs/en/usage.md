@@ -532,3 +532,22 @@ Upon completing task implementation, the `orchestune complete` command verifies 
 - **Environment Override**: Setting `ORCHESTUNE_CI_EVIDENCE_PATH` allows specifying a custom evidence file location.
 - **Permission Isolation & Sandbox Support**: Even in restricted sandbox environments or linked worktrees where the Git metadata directory (`.git` or `.git/worktrees/<name>`) is read-only, evidence invalidation, recording, and verification succeed as long as the worktree itself is writable.
 - **Migration Note**: Legacy evidence previously recorded under `.git` is not reused by the new default path. After migrating, rerun local CI (`./scripts/local-ci.sh` or `.\scripts\local-ci.ps1`) to record fresh evidence.
+
+## 9. Garbage Collecting Handoff-Ready Tasks (`orchestune gc`)
+
+After `orchestune complete` records an Outcome and the related PR is merged, run the dedicated GC command from the primary checkout to release the reservation. It also supports interactive tasks that have no parent Issue.
+
+```bash
+orchestune gc --no-apply  # inspect decisions without changes
+orchestune gc             # apply the decisions
+```
+
+The command inspects handoff-ready interactive entries (`owner_kind=interactive`) only. The dispatch cycle owns dispatch worktrees. A `done` entry is released only after it verifies the exact journaled Outcome comment, the merged PR, the PR head and base, and worktree ownership. A matching `blocked` or `not-needed` Outcome releases the reservation; a clean worktree is removed, while a dirty worktree is retained without done history or a receipt. Missing or mismatched Outcome, PR, or ownership evidence leaves the entry on hold with a reason.
+
+`--no-apply` is a read-only preview. Apply mode operates on the local ledger and worktrees; it does not change GitHub Issues, labels, PRs, comments, branches, or start a dispatch cycle. If the current working directory is inside a worktree that would be removed, the command holds it as `current_worktree`; rerun from the primary checkout or another directory.
+
+| Option | Default | Description |
+| :--- | :--- | :--- |
+| `--no-apply` | disabled | Show decisions without applying them. |
+| `--state <path>` | primary checkout's `run_state.json` | Select the ledger path. Relative paths are based on the primary checkout. |
+| `--timeout <seconds>` | `0` | Lock wait time for the ledger and claim lock. Negative and non-finite values are argument errors. |

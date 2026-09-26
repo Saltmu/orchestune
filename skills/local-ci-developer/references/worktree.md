@@ -48,5 +48,17 @@ If `orchestune claim` fails (non-zero exit code):
 For dispatcher-launched (`owner_kind=dispatch`) and claimed interactive
 (`owner_kind=interactive`) worktrees, run `orchestune complete` for the task
 outcome. It posts to the task Issue and preserves the worktree. Do not remove
-the worktree as part of completion; Orchestune's GC phase handles lifecycle
-transitions after handoff.
+the worktree as part of completion. The dispatch cycle handles dispatcher
+worktrees. For an interactive task after its PR is merged, run the local GC
+command from the primary checkout:
+
+```bash
+orchestune gc --no-apply
+orchestune gc
+```
+
+Review the preview before applying it. This command handles handoff-ready
+interactive reservations only; the dispatch cycle owns dispatch worktrees. It
+verifies the matching Outcome and merged PR for `done` tasks, and retains dirty
+worktrees for `blocked` and `not-needed` outcomes. It does not update GitHub or
+start a dispatch cycle.
