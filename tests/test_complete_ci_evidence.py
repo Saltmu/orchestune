@@ -798,15 +798,43 @@ class TestEdgeCasesAndBoundaryConditions:
         ev_path = resolve_evidence_path(git_worktree)
         assert ev_path.is_file()
 
-    def test_resolve_evidence_dir_oserror_fallback(self, tmp_path: Path):
+    def test_resolve_evidence_dir_oserror_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         from orchestune.complete.ci_evidence import resolve_evidence_dir
 
+        monkeypatch.chdir(tmp_path)
         with patch(
             "orchestune.complete.ci_evidence.run_git",
             side_effect=OSError("git not found"),
-        ):
-            d = resolve_evidence_dir(tmp_path)
-            assert d == tmp_path / ".orchestune" / "ci"
+        ) as mock_git:
+            d = resolve_evidence_dir()
+            mock_git.assert_called_once()
+            assert d == (tmp_path / ".orchestune" / "ci").resolve()
+
+    def test_resolve_evidence_dir_uses_show_toplevel_when_worktree_root_is_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from orchestune.complete.ci_evidence import resolve_evidence_dir
+        from orchestune.infra.git_cli import GitResult
+
+        sub_dir = tmp_path / "subdir"
+        sub_dir.mkdir()
+        monkeypatch.chdir(sub_dir)
+
+        with patch(
+            "orchestune.complete.ci_evidence.run_git",
+            return_value=GitResult(
+                returncode=0, stdout=str(tmp_path) + "\n", stderr=""
+            ),
+        ) as mock_git:
+            d = resolve_evidence_dir()
+            mock_git.assert_called_once_with(
+                ["rev-parse", "--show-toplevel"],
+                cwd=sub_dir.resolve(),
+                check=False,
+            )
+            assert d == (tmp_path / ".orchestune" / "ci").resolve()
 
     def test_query_remote_ref_tip_authoritative(
         self, git_worktree: Path, tmp_path: Path
