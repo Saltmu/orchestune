@@ -236,6 +236,24 @@ class TestBaseBranchRedRecovery:
         events = _handle_base_branch_red_recovery(issues_mock, ctx, RunState(), config)
         assert events == []
 
+    def test_handle_base_branch_red_recovery_skips_closed_issues(self, tmp_path):
+        """#865: クローズ済みIssueがci:base-branch-redを持っていても、
+        ベースコミット前進検知および再キュー処理から除外される。"""
+        import dataclasses
+
+        issue = _issue(1, labels=("status:blocked", "ci:base-branch-red"))
+        issue = dataclasses.replace(issue, state="CLOSED")
+        issues_mock = MagicMock()
+        issues_mock.all.return_value = [issue]
+        ctx = MagicMock()
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+        )
+        events = _handle_base_branch_red_recovery(issues_mock, ctx, RunState(), config)
+        assert events == []
+
     def test_handle_base_branch_red_recovery_success(self, tmp_path):
         issue = _issue(1, labels=("status:blocked", "ci:base-branch-red"))
         issues_mock = MagicMock()
