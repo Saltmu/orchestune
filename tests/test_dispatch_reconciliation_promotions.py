@@ -405,6 +405,40 @@ class TestHandleBlockedRecomputeRecovery:
         mock_add.assert_not_called()
         assert result == []
 
+    def test_closed_issue_with_blocked_recompute_is_skipped(self, tmp_path):
+        """#865: クローズ済みIssueがstatus:blocked-recomputeを持っていても、
+        自動復帰処理でstatus:queuedへ再投入されないよう除外される。"""
+        task = _task(
+            issue_number=1, subtask_id="task-a", depends_on=(), status_labels=()
+        )
+        run_state = RunState(active_worktrees={})
+        ctx = _ctx(tasks_by_issue={1: task})
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+        )
+
+        closed_issue = _issue(
+            1, labels=("status:blocked-recompute", "status:blocked"), state="CLOSED"
+        )
+        with (
+            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
+        ):
+            result = _handle_blocked_recompute_recovery(
+                _IssuesStub([closed_issue]),
+                run_state,
+                ctx,
+                config,
+            )
+
+        mock_remove.assert_not_called()
+        mock_add.assert_not_called()
+        assert result == []
+
     def test_dry_run_returns_event_without_calling_github(self, tmp_path):
         task = _task(
             issue_number=1, subtask_id="task-a", depends_on=(), status_labels=()

@@ -165,7 +165,9 @@ def _handle_blocked_recompute_recovery(
     """フットプリント逸脱によるブロック（status:blocked-recompute）の自動復帰（解除）処理を行う。"""
     recompute_resolved_promoted_events: list[dict] = []
     blocked_recompute_issues = [
-        issue for issue in issues.all() if StatusLabel.BLOCKED_RECOMPUTE in issue.labels
+        issue
+        for issue in issues.all()
+        if issue.state == "OPEN" and StatusLabel.BLOCKED_RECOMPUTE in issue.labels
     ]
 
     if not blocked_recompute_issues:
@@ -486,7 +488,9 @@ def _handle_base_branch_red_recovery(
 ) -> list[dict]:
     """#555: ci:base-branch-red マーカーを持つタスクのベースコミット前進検知および再キューを行う。"""
     base_branch_red_issues = [
-        issue for issue in issues.all() if "ci:base-branch-red" in issue.labels
+        issue
+        for issue in issues.all()
+        if issue.state == "OPEN" and "ci:base-branch-red" in issue.labels
     ]
     if not base_branch_red_issues:
         return []

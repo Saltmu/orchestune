@@ -8,6 +8,7 @@
 `test_dispatch_cycle_completion.py`へそれぞれ分割している（#343）。
 """
 
+import dataclasses
 import json
 import subprocess
 import tempfile
@@ -35,6 +36,7 @@ from orchestune.dispatch.state import (
     load_run_state,
 )
 from orchestune.issue_parsing import PARENT_MARKER
+from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord, PrRecord
 from tests.dispatch_test_support import make_footprint_issue as _full_issue
 from tests.dispatch_test_support import (
@@ -375,6 +377,26 @@ class TestGroupByStatus:
         result = _group_by_status(issues)
         assert [i.number for i in result.done] == [1]
         assert [i.number for i in result.not_needed] == [1]
+
+    def test_closed_without_terminal_label_is_retained_in_closed_unterminated(self):
+        """#865: クローズ済みだが終端ラベル（status:done/not-needed）を持たないIssueは、
+        open向けバケット（queued等）からは除外されるが、closed_unterminatedに保持され、
+        all()にも含まれることで先行マージ整合などの再試行対象に残る。"""
+        issues = [
+            _sub_issue(1, labels=("status:queued",), state="CLOSED"),
+            _sub_issue(2, labels=("status:in-progress",), state="CLOSED"),
+            _sub_issue(3, labels=("status:blocked",), state="CLOSED"),
+            _sub_issue(4, labels=("status:external-lock",), state="CLOSED"),
+            _sub_issue(5, labels=("status:done",), state="CLOSED"),
+        ]
+        result = _group_by_status(issues)
+        assert result.queued == []
+        assert result.in_progress == []
+        assert result.blocked == []
+        assert result.locked == []
+        assert [i.number for i in result.done] == [5]
+        assert [i.number for i in result.closed_unterminated] == [1, 2, 3, 4]
+        assert set(i.number for i in result.all()) == {1, 2, 3, 4, 5}
 
 
 class TestFetchIssues:
@@ -950,3 +972,136 @@ class TestRunDispatchCycleActorVerification:
         assert report.selected == []
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
+
+    def test_closed_issue_retry_promotes_dependent_issue(self, tmp_path, fake_forge):
+        """#865: クローズ済みIssueへの終端ラベル付与の最初の試行が失敗していても、
+        次サイクルのfetch層で除外されずに取得・再試行され、依存元が最終的に昇格する。"""
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+        )
+
+        issue_1 = _full_issue(101, subtask_id="task-1", labels=("status:queued",))
+        issue_1 = dataclasses.replace(issue_1, state="CLOSED")
+
+        issue_2 = _full_issue(
+            102,
+            subtask_id="task-2",
+            labels=("status:blocked",),
+            depends_on=("task-1",),
+        )
+
+        fake_forge.list_sub_issues.return_value = [issue_1, issue_2]
+        fake_forge.find_issues_by_parent_metadata.return_value = []
+        fake_forge.get_issue.side_effect = (
+            lambda num: issue_1 if num == 101 else issue_2
+        )
+        fake_forge.get_issue_last_reopened_at.return_value = None
+        fake_forge.is_merge_commit_reachable_from.return_value = True
+        fake_forge.branch_exists.return_value = False
+
+        merged_pr = PrRecord(
+            number=301,
+            title="task 1",
+            body="close #101",
+            state="MERGED",
+            head_ref="claude/issue-101-task-1",
+            base_ref="parent/issue-100",
+            merged_at="2026-09-01T12:00:00Z",
+            merge_commit_oid="a" * 40,
+            closes_issue_numbers=(101,),
+            changed_files=(),
+            is_cross_repository=False,
+        )
+        fake_forge.list_merged_prs_for_base.return_value = [merged_pr]
+        fake_forge.list_open_prs.return_value = []
+
+        with (
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
+            ),
+        ):
+            run_dispatch_cycle(config)
+
+        # issue 101 に status:done が付与され、status:queued が削除されること
+        fake_forge.add_label.assert_any_call(101, StatusLabel.DONE)
+        fake_forge.remove_label.assert_any_call(101, StatusLabel.QUEUED)
+
+        # issue 102 (依存元) が status:queued へ昇格すること
+        fake_forge.add_label.assert_any_call(102, StatusLabel.QUEUED)
+        fake_forge.remove_label.assert_any_call(102, StatusLabel.BLOCKED)
+
+    def test_closed_issue_without_merged_pr_fails_closed_without_promotion(
+        self, tmp_path, fake_forge
+    ):
+        """#865: 先行マージが確認できないクローズ済みIssueは、
+        status:done が付与されず、依存元も昇格しない（fail-closed方針の維持）。"""
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            max_concurrent=2,
+            max_launches_per_window=2,
+            window_seconds=3600,
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            log_dir=tmp_path / "logs",
+            apply=True,
+        )
+
+        issue_1 = _full_issue(101, subtask_id="task-1", labels=("status:queued",))
+        issue_1 = dataclasses.replace(issue_1, state="CLOSED")
+
+        issue_2 = _full_issue(
+            102,
+            subtask_id="task-2",
+            labels=("status:blocked",),
+            depends_on=("task-1",),
+        )
+
+        fake_forge.list_sub_issues.return_value = [issue_1, issue_2]
+        fake_forge.find_issues_by_parent_metadata.return_value = []
+        fake_forge.get_issue.side_effect = (
+            lambda num: issue_1 if num == 101 else issue_2
+        )
+        fake_forge.get_issue_last_reopened_at.return_value = None
+        fake_forge.is_merge_commit_reachable_from.return_value = False
+        fake_forge.branch_exists.return_value = False
+
+        # マージ済みPRは存在しない
+        fake_forge.list_merged_prs_for_base.return_value = []
+        fake_forge.list_open_prs.return_value = []
+
+        with (
+            patch(
+                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                autospec=True,
+                return_value=[],
+            ),
+        ):
+            report = run_dispatch_cycle(config)
+
+        # issue 101 に status:done は付与されないこと
+        done_calls = [
+            c
+            for c in fake_forge.add_label.call_args_list
+            if len(c[0]) >= 2 and c[0][0] == 101 and c[0][1] == StatusLabel.DONE
+        ]
+        assert done_calls == []
+
+        # issue 102 は status:queued に昇格しないこと
+        queued_calls_102 = [
+            c
+            for c in fake_forge.add_label.call_args_list
+            if len(c[0]) >= 2 and c[0][0] == 102 and c[0][1] == StatusLabel.QUEUED
+        ]
+        assert queued_calls_102 == []
+        assert report.selected == []
