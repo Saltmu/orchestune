@@ -623,6 +623,7 @@ def record_ci_evidence(
 
 
 def _write_evidence_atomic(evidence: CiEvidence, evidence_path: Path) -> None:
+    tmp_path: Path | None = None
     try:
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = evidence_path.with_name(
@@ -636,6 +637,11 @@ def _write_evidence_atomic(evidence: CiEvidence, evidence_path: Path) -> None:
             os.fsync(f.fileno())
         os.replace(tmp_path, evidence_path)
     except OSError as err:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         raise CiEvidenceError(
             f"Failed to persist CI evidence at {evidence_path}: {err}"
         ) from err

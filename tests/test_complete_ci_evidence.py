@@ -265,6 +265,8 @@ class TestEvidenceStorageAndAtomicRename:
                         started_at="2026-09-24T12:00:00Z",
                         exit_code=0,
                     )
+        tmp_files = list(ro_evidence.parent.glob(f"{CI_EVIDENCE_FILENAME}.tmp.*"))
+        assert len(tmp_files) == 0
 
     def test_evidence_storage_succeeds_when_git_dir_is_read_only(
         self, git_worktree: Path, tmp_path: Path
