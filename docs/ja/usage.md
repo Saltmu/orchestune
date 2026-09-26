@@ -241,63 +241,115 @@ orchestune-dispatch
 
 ### 主要なオプション
 
+日常のディスパッチ実行で使用するCLIオプションは以下の6つに集約されています。詳細な動作パラメータ（レート制限、トークン予算、タイムアウト、パス等）は設定ファイル（`orchestune.toml`）または環境変数で設定します。
+
 | オプション | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
+| `--parent-issue <int>` / `-p <int>` | - | 開発対象をまとめている親の GitHub Issue 番号を指定。未指定時は現在のGitブランチ名（`parent/issue-<N>`）から推論されます。どちらからも特定できない場合は起動エラーとなります。起票される子Issueがすべてこの親Issueに紐付けられます。 |
 | `--apply` / `--no-apply` | `--apply` | 実際にタスク割り当てやGitブランチ作成を実行するか、プレビュー（ドライラン）のみにするかを選択。 |
-| `--max-concurrent <int>` | `2` | 同時に実行（起動）できるサブタスクエージェントの最大数。 |
-| `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | 自動選択（非CI: `auto` / GitHub Actions: `cloud-routine`） | エージェントの起動先。未指定時は実行環境（`GITHUB_ACTIONS`環境変数）から自動選択される。`auto`はPATH上のローカルCLIを検出する。ローカル CLI、Claude Code Cloud Routine、または `ORCHESTUNE_CODEX_CLOUD_ENV`（もしくは `--codex-cloud-env`）で指定した Codex Cloud environment を明示選択できる。`codex-cloud` はタスクブランチを `origin` へ push してから Codex Cloud に投入し、実タスク状態追跡および対象ブランチの PR / outcome record を組み合わせて完了を判定する。`local`を明示指定した場合のみ、後方互換のダミー起動（no-op、テスト・dry-run用途）になる。 |
-| `--reviewer-bot {auto,claude,codex}` | `auto` | 実装後に依頼するレビュアー。`auto`はdispatch targetの解決後に評価され、Claude系にはCodex、Codex系と`agy`にはClaudeを選ぶ。明示値はこの対応表より優先される。汎用`local`からは推定できないため警告を出す。 |
-| `--consistency-mode {off,shadow,repair}` | `off` | 追加のrepository-wide整合性loop。`off`は既存動作を維持し、`shadow`は新たな変更を加えずreportを追加し、`repair`はuser allowlistへ明示したcodeを実行できる。組み込みの安全なself-healingは全modeで有効なまま。 |
-| `--consistency-repair-code <code>` | - | 追加の`repair` loopで許可するfinding codeまたはcommand code。複数指定する場合は繰り返す。空のuser allowlistはreport-onlyであり、組み込みの安全な修復は無効にしない。 |
-| `--consistency-max-repair-passes <1..5>` | `1` | dispatch cycleあたりのguarded repair／再観測pass上限。同じidempotency keyを同一cycleで二度実行しない。 |
-| `--codex-cloud-env <id>` | - | `--dispatch-target codex-cloud` で利用する Codex Cloud environment ID。未指定時は `ORCHESTUNE_CODEX_CLOUD_ENV` 環境変数を使用。 |
-| `--local-cmd <template>` | - | ローカルターゲットへディスパッチするコマンドテンプレート。使用可能な変数: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}`, `{model}`, `{reasoning_effort}`, `{profile}`, `{reviewer_bot}`。汎用`local`で省略した場合はダミー起動になる。ローカルCLIプリセットで指定するとプリセット全体を置き換え、Orchestuneはテンプレート内にある`{reviewer_bot}`だけを置換し、任意のカスタムコマンドへレビュー指示を追記しない。 |
-| `--parent-issue <int>` | - | 開発対象をまとめている親の GitHub Issue 番号を指定。起票される子Issueがすべてこの親Issueに紐付けられます。 |
-| `--ci-command <cmd>` | `./scripts/local-ci.sh`（Orchestune自身のリポジトリ固有の値） | Integratorが統合ブランチ上で実行するCIコマンド（shlex構文のシェル風文字列。例: `'make ci'`）。導入先リポジトリのCIエントリーポイントが異なる場合は必ず設定してください（[セットアップガイドの「導入要件」](setup.md#0-導入要件prerequisites)参照）。`orchestune.toml`/`pyproject.toml`の`[tool.orchestune]`セクションでは`ci-command`キーとして指定できます。 |
-| `--deviation-buffer-lines <int>` | `5` | ライブロックを防止するための、フットプリントから逸脱したファイルの変更行数の許容バッファ値。 |
-| `--max-launches-per-window <int>` | `1` | 指定した時間窓（`--window-seconds`）内で最大何回エージェントを起動できるかを制限する、APIバースト制御用オプション。 |
-| `--window-seconds <int>` | `3600` | バースト制限およびトークン消費上限を適用する時間窓の秒数（デフォルトは1時間）。 |
-| `--max-tokens-per-window <int>` | - | 指定した時間窓（`--window-seconds`）内で消費できるトークン数の総上限。累計消費量が上限に達した場合、新規タスクの起動を一時停止する。未指定時は無制限。 |
-| `--max-tokens-per-task <int>` | - | 単一サブタスクが消費できるトークン数の上限。完了時にこの上限を超過していた場合、自動完了を見送り `status:blocked-human-review` へエスカレーションする。未指定時は無制限。 |
-| `--max-recompute-retries <int>` | `2` | フットプリント逸脱を検知した際のruntime Conflict Graph再計算のリトライ上限。超過した場合は強制直列化（force-serial）へフォールバックする。 |
-| `--task-timeout-seconds <int>` | `0` | タスクをタイムアウトとみなしてGCで回収するまでの秒数。`0`（既定）ではタイムアウトによる回収を行わず、ゾンビ検知のみ実行する。無人運転時は正の値を設定することを推奨。 |
-| `--max-task-reclaims <int>` | `3` | ゾンビ・タイムアウトGCが同一タスクを`status:queued`へ差し戻せる回数の上限。超過したタスクは`status:blocked-human-review`へ遷移し、以降は再投入されない。`0`は「1回目の回収で即エスカレーション」を意味する（無制限にする設定値は存在しない）。 |
-| `--early-death-window-seconds <int>` | `120` | 起動からこの秒数以内にローカルプロセスがコミットなしで終了した場合、一時的な起動障害として扱う。`0`では即時終了だけを対象にする。 |
-| `--max-early-death-retries <int>` | `2` | 一時的な起動障害を自動で再キューイングする上限。次のコミットなし終了は`status:blocked-human-review`へエスカレーションする。 |
-| `--early-death-backoff-seconds <int>` | `60` | 起動直後の異常終了を再キューイングする際の基準待機秒数。再試行ごとに待機時間を2倍にする。 |
-| `--not-needed-review-timeout-seconds <int>` | `86400` | `status:not-needed`判定の独立検証レビュー（Cloud Routineターゲット使用時）が、どちらの結果ラベルも返さないまま保持され続ける秒数の上限。超過したエントリは`status:blocked-human-review`へエスカレーションする（無制限にする設定値は存在しない）。 |
-| `--model <name>` | - | 実行時に使用する具象モデル名をオーバーライドします（例: `sonnet`, `gpt-5.6-terra`, `gemini-2.5-pro`）。未指定時はプロファイル／能力ランクの設定に従います。 |
-| `--reasoning-effort <effort>` / `--effort <effort>` | - | 実行時の推論強度をオーバーライドします（例: `low`, `medium`, `high`）。未指定時はプロファイルの設定に従います。 |
-| `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。未指定（デフォルト `False`）でローカルCLIターゲットを実行しようとした場合は、安全のため起動時に設定エラーとなり拒否されます（Fail-Closed）。設定ファイル（`orchestune.toml`等）では `allow-unsafe-agent-execution = true`（または `allow_unsafe_agent_execution = true`）として指定できます。 |
-| `--run-state-path <path>` | `run_state.json` | ディスパッチサイクル間で引き継ぐ実行状態（起動中タスク・起動履歴等）の永続化先。相対パスは、primary checkout（linked worktreeを使用している場合はGit common dirから求めたprimary checkout）のルート基準で解決されます。設定ファイルの値も同じ規則です。 |
-| `--worktree-root <path>` | `worktrees` | agent worktreeのルート。相対パスは`--run-state-path`と同じprimary checkoutルート基準で解決され、設定ファイルの値にも適用されます。 |
+| `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | 自動選択（非CI: `auto` / GitHub Actions: `cloud-routine`） | エージェントの起動先。未指定時は設定ファイルの値、または実行環境（`GITHUB_ACTIONS`環境変数）から自動選択されます。`auto`はPATH上のローカルCLIを検出します。`local`は後方互換のダミー起動（no-op、テスト・dry-run用途）になります。 |
+| `--max-concurrent <int>` | `2` (設定ファイル未指定時) | 同時に実行（起動）できるサブタスクエージェントの最大数。設定ファイルの値よりもCLI引数が優先されます。 |
+| `--profile <name>` | - | この実行全体で使用するタスクプロファイル（例: `balanced`, `fast-code`, `deep-reasoning`）をオーバーライドします。タスクメタデータのプロファイルやモデルランクより優先されます。 |
+| `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。安全のためCLI引数でのみ指定可能（設定ファイルでの指定は禁止）です。未指定でローカルCLIターゲットを実行しようとした場合は設定エラーで拒否されます（Fail-Closed）。 |
 
-default self-healing allowlistは`--consistency-repair-code`から意図的に分離されています。内容は`status.blocked-with-resolved-dependencies`、`status.primary-status-conflict`、`execution.requeue`、`execution.update-bookkeeping`、`execution.reclaim`であり、追加loopより前から存在するstatus promotion／reconciliation、state recovery、GCの動作を維持します。組み込みrepair passへ到達したcodeを後段のrepository-wide repair loopが再試行することはなく、Planner候補に現れただけのcommandはuser allowlistの対象に残ります。opt-inしたexecution commandは、組み込み境界と同じguard付きGC／recovery handlerを使用します。
+### 設定ファイル (`orchestune.toml`) による詳細設定
 
-既存動作を保つ場合は`off`、開始／終了findingを追加確認する場合は`shadow`、新規policyを有効にせず最終dispositionを確認する場合はrepair codeなしの`repair`、有効化する場合は限定した`--consistency-repair-code`を使用します。`--apply`は既存修復とopt-in policyの変更を許可し、`--no-apply`は外部または永続的な修復副作用を許可しません（GC出力はpreviewとなり、recoveryは一時的なmemory上のpreview bookkeepingだけを更新する場合があります）。
+日常オプション以外の設定（ストレージパス、レート制限、タイムアウト、レビュアー、整合性ループ等）は、リポジトリの設定ファイル（`orchestune.toml` または `pyproject.toml` の `[tool.orchestune]` セクション）に集約して定義します。`cp orchestune.toml.example orchestune.toml` でテンプレートをコピーして使用してください。実ファイルはローカル設定としてGit管理外にし、共有する変更は `orchestune.toml.example` へ反映します。
+
+#### 設定ファイル項目一覧
+
+| 設定キー | デフォルト値 | 説明 |
+| :--- | :--- | :--- |
+| `reviewer-bot` | `"auto"` | 実装後に依頼するレビュアー（`"auto"`, `"claude"`, `"codex"`）。`auto`はターゲットから判定し、Claude系にはCodex、Codex/agy系にはClaudeを割り当てます。 |
+| `ci-command` | `"./scripts/local-ci.sh"` | Integratorが統合ブランチ上で実行するCIコマンド（shlex構文の文字列または文字列リスト。例: `"make ci"`）。導入先リポジトリのCIエントリーポイントが異なる場合は必ず設定してください。 |
+| `max-launches-per-window` | `1` | 指定した時間窓（`window-seconds`）内で最大何回エージェントを起動できるかを制限する、APIバースト制御用設定。 |
+| `window-seconds` | `3600` | バースト制限およびトークン消費上限を適用する時間窓の秒数（デフォルトは1時間）。 |
+| `deviation-buffer-lines` | `5` | ライブロックを防止するための、フットプリントから逸脱したファイルの変更行数の許容バッファ値。 |
+| `max-recompute-retries` | `2` | フットプリント逸脱を検知した際のruntime Conflict Graph再計算のリトライ上限。超過した場合は強制直列化（force-serial）へフォールバックします。 |
+| `task-timeout-seconds` | `0` | タスクをタイムアウトとみなしてGCで回収するまでの秒数。`0`（既定）ではタイムアウトによる回収を行わず、ゾンビ検知のみ実行します。 |
+| `max-task-reclaims` | `3` | ゾンビ・タイムアウトGCが同一タスクを`status:queued`へ差し戻せる回数の上限。超過したタスクは`status:blocked-human-review`へ遷移します。 |
+| `early-death-window-seconds` | `120` | 起動からこの秒数以内にローカルプロセスがコミットなしで終了した場合、一時的な起動障害として扱います。 |
+| `max-early-death-retries` | `2` | 一時的な起動障害を自動で再キューイングする上限。次のコミットなし終了は`status:blocked-human-review`へエスカレーションします。 |
+| `early-death-backoff-seconds` | `60` | 起動直後の異常終了を再キューイングする際の基準待機秒数。再試行ごとに待機時間を2倍にします。 |
+| `zombie-gc` | `true` | ゾンビプロセスの検出・回収を有効にするフラグ。 |
+| `max-tokens-per-window` | `None` | 指定した時間窓内で消費できるトークン数の総上限。累計消費量が上限に達した場合、新規タスクの起動を一時停止します。 |
+| `max-tokens-per-task` | `None` | 単一サブタスクが消費できるトークン数の上限。完了時にこの上限を超過していた場合、自動完了を見送りエスカレーションします。 |
+| `local-cmd` | `None` | ローカルターゲットへディスパッチするコマンドテンプレート。使用可能な変数: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}`, `{model}`, `{reasoning_effort}`, `{profile}`, `{reviewer_bot}`。 |
+| `routine-id` | `None` | Cloud Routine ターゲットで使用するルーチンID。環境変数 `ORCHESTUNE_ROUTINE_ID` が優先されます。 |
+| `codex-cloud-env` | `None` | Codex Cloud ターゲットで使用する環境ID。環境変数 `ORCHESTUNE_CODEX_CLOUD_ENV` が優先されます。 |
+| `consistency-mode` | `"off"` | 追加のrepository-wide整合性loop（`"off"`, `"shadow"`, `"repair"`）。 |
+| `consistency-repair-code` | `[]` | 追加の`repair` loopで許可するfinding codeまたはcommand codeのリスト。 |
+| `consistency-max-repair-passes` | `1` | dispatch cycleあたりのguarded repair／再観測pass上限（1〜5）。 |
+| `run-state-path` | `"run_state.json"` | ディスパッチサイクル間で引き継ぐ実行状態の永続化先。相対パスはprimary checkoutルート基準で解決されます。 |
+| `worktree-root` | `"worktrees"` | agent worktreeのルートディレクトリ。相対パスはprimary checkoutルート基準で解決されます。 |
+| `log-dir` | `"logs"` | エージェント実行ログの出力先ディレクトリ。 |
+| `events-log-path` | `"events.jsonl"` | ディスパッチイベントログの出力先パス。 |
+| `not-needed-review-state-path` | `"not_needed_review_state.json"` | Cloud Routine の not-needed レビュー状態記録パス。 |
+| `not-needed-review-timeout-seconds` | `86400` | not-needed レビューのタイムアウト秒数。 |
+| `default_execution_profile` | `"balanced"` | タスクでプロファイルが指定されていない場合に使用するデフォルトプロファイル名。 |
+
+default self-healing allowlistは`consistency-repair-code`から意図的に分離されています。内容は`status.blocked-with-resolved-dependencies`、`status.primary-status-conflict`、`execution.requeue`、`execution.update-bookkeeping`、`execution.reclaim`であり、追加loopより前から存在するstatus promotion／reconciliation、state recovery、GCの動作を維持します。組み込みrepair passへ到達したcodeを後段のrepository-wide repair loopが再試行することはなく、Planner候補に現れただけのcommandはuser allowlistの対象に残ります。opt-inしたexecution commandは、組み込み境界と同じguard付きGC／recovery handlerを使用します。
+
+既存動作を保つ場合は`off`、開始／終了findingを追加確認する場合は`shadow`、新規policyを有効にせず最終dispositionを確認する場合はrepair codeなしの`repair`、有効化する場合は限定した`consistency-repair-code`を使用します。`--apply`は既存修復とopt-in policyの変更を許可し、`--no-apply`は外部または永続的な修復副作用を許可しません（GC出力はpreviewとなり、recoveryは一時的なmemory上のpreview bookkeepingだけを更新する場合があります）。
 
 `--json`出力または`events.jsonl`の`consistency.scans`、`consistency.repair_passes`、`consistency.repair_outcomes`を確認してください。Outcomeは`resolved`、`unresolved`、`deferred`、`failed`、`observation-unknown`を区別します。unknown／staleな観測とnon-repairable findingは変更されずreportに残ります。dry-runまたはlive precondition不成立によるcommand単位のskipped resultはfindingの最終dispositionで表され、旧phase所有の修復経路へfallbackすることはありません。status遷移が途中で失敗した場合はIntent journalが`run_state.json`の隣に残り、次cycleが外部副作用を重複させず再開できます。
 
-### 設定ファイルによるオプションの省略
+### クラウド環境変数とシークレット
 
-プロジェクトディレクトリに設定ファイルを配置することで、上記オプションの指定を省略し、デフォルト値として優先適用できます。`cp orchestune.toml.example orchestune.toml` でテンプレートをコピーしてください。実ファイルはローカル設定としてGit管理外にし、共有する変更は `orchestune.toml.example` へ反映します。
+クラウドターゲット連携用の認証情報および環境識別子は、環境変数経由での設定を基本とします。
 
-テンプレートでは、モデル以外の有効な設定値は実装上のデフォルトに揃えています。モデルは用途別の推奨値として、通常のSubIssue向け `balanced`、小さく明確な変更向け `fast-code`、複雑な設計・調査向け `deep-reasoning` の3プロファイルを定義しています。
+| 環境変数名 | 用途 | 優先順位・制約 |
+| :--- | :--- | :--- |
+| `ORCHESTUNE_ROUTINE_TOKEN` | Claude Code Cloud Routine の API 認証トークン | **環境変数のみ**（セキュリティ保護のため設定ファイルへの記述は厳格に禁止） |
+| `ORCHESTUNE_ROUTINE_ID` | Claude Code Cloud Routine のルーチンID | 環境変数 > 設定ファイル（`routine-id`） |
+| `ORCHESTUNE_CODEX_CLOUD_ENV` | Codex Cloud の環境識別子 | 環境変数 > 設定ファイル（`codex-cloud-env`） |
 
-設定ファイルは以下の順序で探索され、最初に見つかったものがロードされます：
-1. プロジェクトルートの `orchestune.toml`
-2. プロジェクトルートの `pyproject.toml` の `[tool.orchestune]` セクション
+### CLI引数から設定ファイル／環境変数への移行対応表
+
+以前のバージョンでCLI引数として提供されていた非日常オプションは、以下のように設定ファイル項目または環境変数へ集約されました。従来のCLIオプションを指定した場合は起動時エラーとなります。
+
+| 旧CLIオプション | 移行先設定 | 備考 |
+| :--- | :--- | :--- |
+| (旧) `--parent-issue <int>` | `-p <int>` / `--parent-issue <int>` または ブランチ推論 | CLIオプションとして存続（`-p` 短縮形追加、設定ファイルへの記述は禁止） |
+| (旧) `--model <name>` | `[execution_profiles.<name>.<target>] model` | プロファイル配下のターゲット別テーブルに定義 |
+| (旧) `--reasoning-effort <effort>` | `[execution_profiles.<name>.<target>] reasoning_effort` | プロファイル配下のターゲット別テーブルに定義 |
+| (旧) `--reviewer-bot <bot>` | 設定ファイル `reviewer-bot = "..."` | 設定ファイルのみに集約 |
+| (旧) `--local-cmd <cmd>` | 設定ファイル `local-cmd = "..."` | 設定ファイルのみに集約 |
+| (旧) `--routine-id <id>` | `ORCHESTUNE_ROUTINE_ID` または 設定ファイル `routine-id` | 環境変数優先 |
+| (旧) `--routine-token <token>` | `ORCHESTUNE_ROUTINE_TOKEN` | 環境変数のみ（設定ファイルへの記述禁止） |
+| (旧) `--codex-cloud-env <id>` | `ORCHESTUNE_CODEX_CLOUD_ENV` または 設定ファイル `codex-cloud-env` | 環境変数優先 |
+| (旧) `--ci-command <cmd>` | 設定ファイル `ci-command = "..."` | 設定ファイルのみに集約 |
+| (旧) `--max-launches-per-window` | 設定ファイル `max-launches-per-window` | 設定ファイルのみに集約 |
+| (旧) `--window-seconds` | 設定ファイル `window-seconds` | 設定ファイルのみに集約 |
+| (旧) `--max-tokens-per-window` | 設定ファイル `max-tokens-per-window` | 設定ファイルのみに集約 |
+| (旧) `--max-tokens-per-task` | 設定ファイル `max-tokens-per-task` | 設定ファイルのみに集約 |
+| (旧) `--deviation-buffer-lines` | 設定ファイル `deviation-buffer-lines` | 設定ファイルのみに集約 |
+| (旧) `--max-recompute-retries` | 設定ファイル `max-recompute-retries` | 設定ファイルのみに集約 |
+| (旧) `--task-timeout-seconds` | 設定ファイル `task-timeout-seconds` | 設定ファイルのみに集約 |
+| (旧) `--max-task-reclaims` | 設定ファイル `max-task-reclaims` | 設定ファイルのみに集約 |
+| (旧) `--early-death-window-seconds` | 設定ファイル `early-death-window-seconds` | 設定ファイルのみに集約 |
+| (旧) `--max-early-death-retries` | 設定ファイル `max-early-death-retries` | 設定ファイルのみに集約 |
+| (旧) `--early-death-backoff-seconds` | 設定ファイル `early-death-backoff-seconds` | 設定ファイルのみに集約 |
+| (旧) `--zombie-gc` | 設定ファイル `zombie-gc` | 設定ファイルのみに集約 |
+| (旧) `--consistency-mode` | 設定ファイル `consistency-mode` | 設定ファイルのみに集約 |
+| (旧) `--consistency-repair-code` | 設定ファイル `consistency-repair-code` | 設定ファイルのみに集約 |
+| (旧) `--consistency-max-repair-passes` | 設定ファイル `consistency-max-repair-passes` | 設定ファイルのみに集約 |
+| (旧) `--run-state-path` | 設定ファイル `run-state-path` | 設定ファイルのみに集約 |
+| (旧) `--worktree-root` | 設定ファイル `worktree-root` | 設定ファイルのみに集約 |
+| (旧) `--log-dir` | 設定ファイル `log-dir` | 設定ファイルのみに集約 |
+| (旧) `--events-log-path` | 設定ファイル `events-log-path` | 設定ファイルのみに集約 |
+| (旧) `--not-needed-review-state-path` | 設定ファイル `not-needed-review-state-path` | 設定ファイルのみに集約 |
+| (旧) `--not-needed-review-timeout-seconds` | 設定ファイル `not-needed-review-timeout-seconds` | 設定ファイルのみに集約 |
+| (旧) `--allow-unsafe-agent-execution` | `--allow-unsafe-agent-execution` | CLIオプションとして存続（設定ファイルへの記述は禁止） |
 
 #### 設定ファイルの記述例 (`orchestune.toml`)
 ```toml
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
-allow-unsafe-agent-execution = true
 consistency-mode = "shadow"
 consistency-repair-code = []
 consistency-max-repair-passes = 1
-parent-issue = 181
 run-state-path = "run_state.json"
 default_execution_profile = "balanced"
 
@@ -334,11 +386,9 @@ reasoning_effort = "medium"
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
-allow-unsafe-agent-execution = true
 consistency-mode = "shadow"
 consistency-repair-code = []
 consistency-max-repair-passes = 1
-parent-issue = 181
 run-state-path = "run_state.json"
 default_execution_profile = "balanced"
 
@@ -362,7 +412,7 @@ reasoning_effort = "high"
 > [!NOTE]
 > 設定項目名は、CLI オプションに対応するケバブケース（例: `max-concurrent`）と、内部変数名に対応するスネークケース（例: `max_concurrent`）のどちらの形式でも記述可能です。
 > コマンドライン引数で明示的にオプションが指定された場合は、設定ファイルの値よりもコマンドライン引数の値が優先されます。
-> 未知のキーや不正な値がある場合は、既定値へフォールバックせず起動時にエラーで停止します。真偽値は TOML の bool、パス・文字列の設定は文字列、整数の設定は TOML の整数で指定してください。`consistency-repair-code`は空でない文字列のlistです。`max-concurrent`、`max-launches-per-window`、`deviation-buffer-lines`、`max-recompute-retries`、`task-timeout-seconds`、`max-task-reclaims`、`early-death-window-seconds`、`max-early-death-retries`、`early-death-backoff-seconds`、`not-needed-review-timeout-seconds` は `0` 以上、`window-seconds` と `parent-issue` は `1` 以上、`consistency-max-repair-passes`は`1`～`5`です。
+> 未知のキーや不正な値がある場合は、既定値へフォールバックせず起動時にエラーで停止します。親Issue（`parent_issue`）、安全バイパス（`allow_unsafe_agent_execution`）、ルーチントークン（`routine_token`）、およびトップレベルの `model`/`reasoning_effort` は設定ファイルへの記述が禁止されています。真偽値は TOML の bool、パス・文字列の設定は文字列、整数の設定は TOML の整数で指定してください。`consistency-repair-code`は空でない文字列のlistです。`max-concurrent`、`max-launches-per-window`、`deviation-buffer-lines`、`max-recompute-retries`、`task-timeout-seconds`、`max-task-reclaims`、`early-death-window-seconds`、`max-early-death-retries`、`early-death-backoff-seconds`、`not-needed-review-timeout-seconds` は `0` 以上、`window-seconds` は `1` 以上、`consistency-max-repair-passes`は`1`～`5`です。
 >
 > `[execution_profiles]`（または `[tool.orchestune.execution_profiles]`）では、各プロファイル名（例: `balanced`, `deep-reasoning`, `fast-code`）配下にターゲット名（`claude-cli`, `agy-cli`, `codex-cli`, `cloud-routine`, `codex-cloud`）別のテーブルを定義します。各ターゲット設定では `model`（文字列）および `reasoning_effort`（`"low"` / `"medium"` / `"high"`）が指定可能です。`execution_profiles` テーブルを定義する場合、`default_execution_profile`（未指定時は `"balanced"`）のエントリが必ず含まれている必要があります。
 

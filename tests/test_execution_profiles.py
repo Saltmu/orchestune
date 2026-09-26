@@ -945,7 +945,7 @@ class TestResolveTaskExecutionSelection:
         assert sel.model == "claude-3-7-sonnet"
         assert "CLI override" not in sel.reason
 
-    def test_resolve_task_execution_selection_with_cli_overrides(self) -> None:
+    def test_resolve_task_execution_selection_with_cli_profile_override(self) -> None:
         from orchestune.models import Task
 
         task = Task(
@@ -962,6 +962,19 @@ class TestResolveTaskExecutionSelection:
             execution_profile="deep",
         )
         target = LocalProcessDispatchTarget(local_cmd="claude-cli")
+        profile_config = extract_execution_profile_config(
+            {
+                "default_execution_profile": "custom-profile",
+                "execution_profiles": {
+                    "custom-profile": {
+                        "claude-cli": {
+                            "model": "custom-cli-model",
+                            "reasoning_effort": "high",
+                        }
+                    }
+                },
+            }
+        )
         config = DispatcherConfig(
             parent_issue_number=100,
             max_concurrent=1,
@@ -972,11 +985,11 @@ class TestResolveTaskExecutionSelection:
             worktree_root=Path("/tmp/wt"),
             apply=False,
             dispatch_target=target,
-            model="custom-cli-model",
-            reasoning_effort="high",
+            profile="custom-profile",
+            execution_profile_config=profile_config,
             forge=MagicMock(spec=Forge),
         )
         sel = resolve_task_execution_selection(task, config)
         assert sel.model == "custom-cli-model"
         assert sel.reasoning_effort == "high"
-        assert "CLI override" in sel.reason
+        assert "CLI profile override" in sel.reason

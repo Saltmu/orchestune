@@ -248,63 +248,115 @@ orchestune-dispatch
 
 ### Major Options
 
+Routine dispatch execution uses strictly the following 6 options. Detailed parameters (rate limits, token budgets, timeouts, paths, etc.) are configured via configuration files (`orchestune.toml`) or environment variables.
+
 | Option | Default | Description |
 | :--- | :--- | :--- |
-| `--apply` / `--no-apply` | `--apply` | Choose whether to actually execute actions (worktree setup, API calls) or just preview them (dry-run). |
-| `--max-concurrent <int>` | `2` | Maximum number of subtask agents running concurrently. |
-| `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | auto-selected (non-CI: `auto` / GitHub Actions: `cloud-routine`) | Target environment to launch agents. When unspecified, it is auto-selected from the runtime environment (the `GITHUB_ACTIONS` variable). `auto` detects a local CLI on `PATH`. You can explicitly select a local CLI, Claude Code Cloud Routine, or a Codex Cloud environment configured through `ORCHESTUNE_CODEX_CLOUD_ENV` (or `--codex-cloud-env`). `codex-cloud` pushes the task branch to `origin`, submits it to Codex Cloud, and combines Cloud task tracking with branch PR / outcome record status to determine completion. Only explicitly passing `local` gives the backward-compatible no-op dummy (for tests/dry-runs). |
-| `--reviewer-bot {auto,claude,codex}` | `auto` | Reviewer requested after implementation. `auto` is evaluated after the dispatch target is resolved and selects a cross-vendor reviewer: Claude targets use Codex; Codex and `agy` targets use Claude. An explicit value overrides this mapping. Generic `local` cannot be inferred and emits a warning. |
-| `--consistency-mode {off,shadow,repair}` | `off` | Additional repository-wide consistency loop. `off` keeps established behavior, `shadow` adds reports without new mutations, and `repair` can execute explicitly user-allowlisted codes. Built-in safe self-healing remains enabled in every mode. |
-| `--consistency-repair-code <code>` | - | Finding or command code allowed in the additional `repair` loop. Repeat the option for multiple codes. An empty user allowlist is report-only and does not disable built-in safe repairs. |
-| `--consistency-max-repair-passes <1..5>` | `1` | Maximum guarded repair/re-observation passes per dispatch cycle. The same idempotency key is not executed twice in one cycle. |
-| `--codex-cloud-env <id>` | - | Codex Cloud environment ID used by `--dispatch-target codex-cloud`; defaults to `ORCHESTUNE_CODEX_CLOUD_ENV`. |
-| `--local-cmd <template>` | - | When using a local target, a command template for dispatching to a CLI. Available placeholders: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}`, `{model}`, `{reasoning_effort}`, `{profile}`, and `{reviewer_bot}`. If omitted for generic `local`, the dry-run stub is used. With a local CLI preset, this option replaces the preset; Orchestune substitutes `{reviewer_bot}` when present but never appends review instructions to arbitrary custom commands. |
-| `--parent-issue <int>` | - | The parent GitHub Issue number that coordinates this plan. Created sub-issues will link to this parent. |
-| `--ci-command <cmd>` | `./scripts/local-ci.sh` (specific to Orchestune's own repository) | The CI command the Integrator runs on the integration branch (a shell-like string parsed with shlex, e.g. `'make ci'`). Set this explicitly if your repository's CI entrypoint differs (see [Setup Guide § Prerequisites](setup.md#0-prerequisites)). In `orchestune.toml`/`pyproject.toml`'s `[tool.orchestune]` section, use the `ci-command` key. |
-| `--deviation-buffer-lines <int>` | `5` | Allowed line modifications buffer outside the declared footprint to prevent live-locks. |
-| `--max-launches-per-window <int>` | `1` | Rate limiting: maximum number of agent launches allowed in `--window-seconds`. |
-| `--window-seconds <int>` | `3600` | The sliding window duration in seconds for launch rate-limiting and token quotas (default is 1 hour). |
-| `--max-tokens-per-window <int>` | - | Quota limit: maximum total tokens consumed across completed tasks within `--window-seconds`. When reached, new task launches are paused. Unlimited if omitted. |
-| `--max-tokens-per-task <int>` | - | Per-task limit: maximum token consumption allowed for a single subtask. If exceeded upon completion, automatic completion is halted and escalated to `status:blocked-human-review`. Unlimited if omitted. |
-| `--max-recompute-retries <int>` | `2` | Maximum runtime Conflict Graph recomputation retries after a footprint deviation is detected. Exceeding it falls back to forced serialization (force-serial). |
-| `--task-timeout-seconds <int>` | `0` | Seconds after which a running task is treated as timed out and reclaimed by the GC. `0` (the default) disables timeout reclamation and only detects zombies. Set a positive value before leaving a run unattended. |
-| `--max-task-reclaims <int>` | `3` | Maximum number of times the zombie/timeout GC may return the same task to `status:queued`. Once exceeded, the task moves to `status:blocked-human-review` and is no longer requeued. `0` means the very first reclaim escalates; there is no value that makes it unlimited. |
-| `--early-death-window-seconds <int>` | `120` | Treat a no-commit local process exit within this many seconds of launch as a transient startup failure. `0` restricts this recovery to an immediate exit. |
-| `--max-early-death-retries <int>` | `2` | Maximum automatic requeues for transient startup failures. The next no-commit exit escalates to `status:blocked-human-review`. |
-| `--early-death-backoff-seconds <int>` | `60` | Base delay for an early-death requeue. Each retry doubles the previous delay. |
-| `--not-needed-review-timeout-seconds <int>` | `86400` | Maximum number of seconds a pending `status:not-needed` independent review (Cloud Routine target only) is kept without either outcome label appearing. An entry past the limit escalates to `status:blocked-human-review`; there is no value that makes it unlimited. |
-| `--model <name>` | - | Override the concrete model name to use at runtime (e.g. `sonnet`, `gpt-5.6-terra`, `gemini-2.5-pro`). When omitted, follows profile/tier settings. |
-| `--reasoning-effort <effort>` / `--effort <effort>` | - | Override the reasoning effort at runtime (e.g. `low`, `medium`, `high`). When omitted, follows profile settings. |
-| `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`). When omitted (default `False`), attempting to execute a local CLI target fails closed with a configuration error at startup for safety. In configuration files (`orchestune.toml`, etc.), it can be specified as `allow-unsafe-agent-execution = true` (or `allow_unsafe_agent_execution = true`). |
-| `--run-state-path <path>` | `run_state.json` | Where the run state carried across dispatch cycles (active tasks, launch history) is persisted. Relative paths are resolved from the primary checkout root (derived from Git's common directory when running from a linked worktree); configuration-file values follow the same rule. |
-| `--worktree-root <path>` | `worktrees` | Root for agent worktrees. Relative paths use the same primary-checkout-root rule as `--run-state-path`, including values from configuration files. |
+| `--parent-issue <int>` / `-p <int>` | - | The parent GitHub Issue number coordinating this plan. If omitted, inferred from the current Git branch name (`parent/issue-<N>`). If neither is available, startup fails with an error. Created sub-issues will link to this parent. |
+| `--apply` / `--no-apply` | `--apply` | Choose whether to actually execute actions (worktree setup, API calls) or preview them (dry-run). |
+| `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | auto-selected (non-CI: `auto` / GitHub Actions: `cloud-routine`) | Target environment to launch agents. When unspecified, resolved from configuration file or auto-selected from runtime environment (`GITHUB_ACTIONS`). `auto` detects a local CLI on `PATH`. `local` gives the backward-compatible no-op dummy (for tests/dry-runs). |
+| `--max-concurrent <int>` | `2` (when unset in config) | Maximum number of subtask agents running concurrently. CLI argument overrides configuration file setting. |
+| `--profile <name>` | - | Override the task execution profile (e.g. `balanced`, `fast-code`, `deep-reasoning`) for this entire run, taking precedence over task metadata profile or model tier. |
+| `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`). For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error. |
 
-The default self-healing allowlist is intentionally separate from `--consistency-repair-code`. It contains `status.blocked-with-resolved-dependencies`, `status.primary-status-conflict`, `execution.requeue`, `execution.update-bookkeeping`, and `execution.reclaim`, preserving the status promotion/reconciliation, state recovery, and GC behavior that predates the optional loop. Codes that reached a built-in repair pass are not attempted again by the later repository-wide repair loop; commands that appeared only as planner candidates remain eligible for the user allowlist. Opted-in execution commands use the same guarded GC and recovery handlers as the built-in boundaries.
+### Configuration File (`orchestune.toml`) for Detailed Settings
 
-Use `off` for unchanged behavior, `shadow` to inspect additional start/end findings, `repair` with no repair codes to inspect final dispositions without enabling a new policy, and then a limited set of `--consistency-repair-code` options to opt in. `--apply` permits the established repairs and opted-in policies to mutate; `--no-apply` permits no external or durable repair side effects (GC output is a preview and recovery may update only ephemeral in-memory preview bookkeeping).
+Non-routine options (storage paths, rate limits, timeouts, reviewer selection, consistency loops, etc.) are centralized in the repository's configuration file (`orchestune.toml` or the `[tool.orchestune]` section of `pyproject.toml`). Copy the template with `cp orchestune.toml.example orchestune.toml`. Keep the real file as untracked local configuration and publish shared changes through `orchestune.toml.example`.
+
+#### Configuration File Settings
+
+| Setting Key | Default | Description |
+| :--- | :--- | :--- |
+| `reviewer-bot` | `"auto"` | Reviewer requested after implementation (`"auto"`, `"claude"`, `"codex"`). `auto` evaluates target type and maps Claude targets to Codex, and Codex/agy targets to Claude. |
+| `ci-command` | `"./scripts/local-ci.sh"` | The CI command the Integrator runs on the integration branch (a shell-like string parsed with shlex or string list, e.g. `"make ci"`). Set this explicitly if your repository's CI entrypoint differs. |
+| `max-launches-per-window` | `1` | Rate limiting: maximum number of agent launches allowed in `window-seconds`. |
+| `window-seconds` | `3600` | The sliding window duration in seconds for launch rate-limiting and token quotas (default is 1 hour). |
+| `deviation-buffer-lines` | `5` | Allowed line modifications buffer outside the declared footprint to prevent live-locks. |
+| `max-recompute-retries` | `2` | Maximum runtime Conflict Graph recomputation retries after a footprint deviation is detected. Exceeding it falls back to forced serialization (force-serial). |
+| `task-timeout-seconds` | `0` | Seconds after which a running task is treated as timed out and reclaimed by the GC. `0` (default) disables timeout reclamation and only detects zombies. |
+| `max-task-reclaims` | `3` | Maximum number of times the zombie/timeout GC may return the same task to `status:queued`. Once exceeded, the task moves to `status:blocked-human-review`. |
+| `early-death-window-seconds` | `120` | Treat a no-commit local process exit within this many seconds of launch as a transient startup failure. |
+| `max-early-death-retries` | `2` | Maximum automatic requeues for transient startup failures. The next no-commit exit escalates to `status:blocked-human-review`. |
+| `early-death-backoff-seconds` | `60` | Base delay for an early-death requeue. Each retry doubles the previous delay. |
+| `zombie-gc` | `true` | Enable zombie process detection and reclamation. |
+| `max-tokens-per-window` | `None` | Quota limit: maximum total tokens consumed across completed tasks within `window-seconds`. Pauses new launches when reached. |
+| `max-tokens-per-task` | `None` | Per-task limit: maximum token consumption allowed for a single subtask before escalating to `status:blocked-human-review`. |
+| `local-cmd` | `None` | Command template for dispatching to a local target. Available placeholders: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}`, `{model}`, `{reasoning_effort}`, `{profile}`, and `{reviewer_bot}`. |
+| `routine-id` | `None` | Cloud Routine ID for `cloud-routine` target. The `ORCHESTUNE_ROUTINE_ID` environment variable takes precedence. |
+| `codex-cloud-env` | `None` | Codex Cloud environment ID for `codex-cloud` target. The `ORCHESTUNE_CODEX_CLOUD_ENV` environment variable takes precedence. |
+| `consistency-mode` | `"off"` | Additional repository-wide consistency loop (`"off"`, `"shadow"`, `"repair"`). |
+| `consistency-repair-code` | `[]` | List of finding codes or command codes allowed in the `repair` loop. |
+| `consistency-max-repair-passes` | `1` | Maximum guarded repair/re-observation passes per dispatch cycle (1-5). |
+| `run-state-path` | `"run_state.json"` | Where the run state carried across dispatch cycles is persisted. Relative paths resolve against the primary checkout root. |
+| `worktree-root` | `"worktrees"` | Root directory for agent worktrees. Relative paths resolve against the primary checkout root. |
+| `log-dir` | `"logs"` | Directory where agent execution logs are stored. |
+| `events-log-path` | `"events.jsonl"` | File path for dispatch event logging. |
+| `not-needed-review-state-path` | `"not_needed_review_state.json"` | State file for pending not-needed reviews on Cloud Routine targets. |
+| `not-needed-review-timeout-seconds` | `86400` | Timeout in seconds for pending not-needed reviews. |
+| `default_execution_profile` | `"balanced"` | Default profile name when none is specified by task or CLI. |
+
+The default self-healing allowlist is intentionally separate from `consistency-repair-code`. It contains `status.blocked-with-resolved-dependencies`, `status.primary-status-conflict`, `execution.requeue`, `execution.update-bookkeeping`, and `execution.reclaim`, preserving the status promotion/reconciliation, state recovery, and GC behavior that predates the optional loop. Codes that reached a built-in repair pass are not attempted again by the later repository-wide repair loop; commands that appeared only as planner candidates remain eligible for the user allowlist. Opted-in execution commands use the same guarded GC and recovery handlers as the built-in boundaries.
+
+Use `off` for unchanged behavior, `shadow` to inspect additional start/end findings, `repair` with no repair codes to inspect final dispositions without enabling a new policy, and then a limited set of `consistency-repair-code` options to opt in. `--apply` permits the established repairs and opted-in policies to mutate; `--no-apply` permits no external or durable repair side effects (GC output is a preview and recovery may update only ephemeral in-memory preview bookkeeping).
 
 Inspect `consistency.scans`, `consistency.repair_passes`, and `consistency.repair_outcomes` in `--json` output or `events.jsonl`. Outcomes are `resolved`, `unresolved`, `deferred`, `failed`, or `observation-unknown`. Unknown/stale observations and non-repairable findings remain visible without being mutated. A skipped command-level result caused by dry-run or a failed live precondition is represented by the finding's final disposition; there is no fallback to an old phase-owned repair path. A failed partial status transition leaves its Intent journal beside `run_state.json` so the next cycle can resume it without duplicating the external side effect.
 
-### Configuration File for Omitting Options
+### Cloud Environment Variables and Secrets
 
-You can place a configuration file in your project root directory to omit specifying options on the command line. Copy the template with `cp orchestune.toml.example orchestune.toml`. Keep the real file as untracked local configuration and publish shared changes through `orchestune.toml.example`.
+Authentication secrets and identifiers for cloud targets are configured through environment variables:
 
-The template keeps active non-model settings aligned with implementation defaults. Models are recommendations grouped into three use-case profiles: `balanced` for ordinary SubIssue work, `fast-code` for small and explicit changes, and `deep-reasoning` for complex design or investigation.
+| Environment Variable | Purpose | Precedence & Constraints |
+| :--- | :--- | :--- |
+| `ORCHESTUNE_ROUTINE_TOKEN` | Claude Code Cloud Routine API authentication token | **Environment variable only** (strictly prohibited in configuration files for security) |
+| `ORCHESTUNE_ROUTINE_ID` | Claude Code Cloud Routine ID | Environment variable > configuration file (`routine-id`) |
+| `ORCHESTUNE_CODEX_CLOUD_ENV` | Codex Cloud environment ID | Environment variable > configuration file (`codex-cloud-env`) |
 
-The dispatcher searches for configuration files in the following order and loads the first one found:
-1. `orchestune.toml` in the project root.
-2. `[tool.orchestune]` section in `pyproject.toml` in the project root.
+### CLI Arguments Migration Table
+
+Non-routine options previously exposed via CLI flags have been migrated to configuration files or environment variables as follows. Passing removed CLI flags will result in an unrecognized argument error:
+
+| Former CLI Flag | New Configuration Setting | Notes |
+| :--- | :--- | :--- |
+| (Former) `--parent-issue <int>` | `-p <int>` / `--parent-issue <int>` or branch inference | Retained on CLI (added `-p` shortcut; prohibited in TOML) |
+| (Former) `--model <name>` | `[execution_profiles.<name>.<target>] model` | Configured per target inside profiles |
+| (Former) `--reasoning-effort <effort>` | `[execution_profiles.<name>.<target>] reasoning_effort` | Configured per target inside profiles |
+| (Former) `--reviewer-bot <bot>` | Config setting `reviewer-bot = "..."` | Centralized in config file |
+| (Former) `--local-cmd <cmd>` | Config setting `local-cmd = "..."` | Centralized in config file |
+| (Former) `--routine-id <id>` | `ORCHESTUNE_ROUTINE_ID` or config `routine-id` | Env var takes precedence |
+| (Former) `--routine-token <token>` | `ORCHESTUNE_ROUTINE_TOKEN` | Env var only (prohibited in TOML) |
+| (Former) `--codex-cloud-env <id>` | `ORCHESTUNE_CODEX_CLOUD_ENV` or config `codex-cloud-env` | Env var takes precedence |
+| (Former) `--ci-command <cmd>` | Config setting `ci-command = "..."` | Centralized in config file |
+| (Former) `--max-launches-per-window` | Config setting `max-launches-per-window` | Centralized in config file |
+| (Former) `--window-seconds` | Config setting `window-seconds` | Centralized in config file |
+| (Former) `--max-tokens-per-window` | Config setting `max-tokens-per-window` | Centralized in config file |
+| (Former) `--max-tokens-per-task` | Config setting `max-tokens-per-task` | Centralized in config file |
+| (Former) `--deviation-buffer-lines` | Config setting `deviation-buffer-lines` | Centralized in config file |
+| (Former) `--max-recompute-retries` | Config setting `max-recompute-retries` | Centralized in config file |
+| (Former) `--task-timeout-seconds` | Config setting `task-timeout-seconds` | Centralized in config file |
+| (Former) `--max-task-reclaims` | Config setting `max-task-reclaims` | Centralized in config file |
+| (Former) `--early-death-window-seconds` | Config setting `early-death-window-seconds` | Centralized in config file |
+| (Former) `--max-early-death-retries` | Config setting `max-early-death-retries` | Centralized in config file |
+| (Former) `--early-death-backoff-seconds` | Config setting `early-death-backoff-seconds` | Centralized in config file |
+| (Former) `--zombie-gc` | Config setting `zombie-gc` | Centralized in config file |
+| (Former) `--consistency-mode` | Config setting `consistency-mode` | Centralized in config file |
+| (Former) `--consistency-repair-code` | Config setting `consistency-repair-code` | Centralized in config file |
+| (Former) `--consistency-max-repair-passes` | Config setting `consistency-max-repair-passes` | Centralized in config file |
+| (Former) `--run-state-path` | Config setting `run-state-path` | Centralized in config file |
+| (Former) `--worktree-root` | Config setting `worktree-root` | Centralized in config file |
+| (Former) `--log-dir` | Config setting `log-dir` | Centralized in config file |
+| (Former) `--events-log-path` | Config setting `events-log-path` | Centralized in config file |
+| (Former) `--not-needed-review-state-path` | Config setting `not-needed-review-state-path` | Centralized in config file |
+| (Former) `--not-needed-review-timeout-seconds` | Config setting `not-needed-review-timeout-seconds` | Centralized in config file |
+| (Former) `--allow-unsafe-agent-execution` | `--allow-unsafe-agent-execution` | Retained on CLI (prohibited in TOML) |
 
 #### Example Config (`orchestune.toml`)
 ```toml
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
-allow-unsafe-agent-execution = true
 consistency-mode = "shadow"
 consistency-repair-code = []
 consistency-max-repair-passes = 1
-parent-issue = 181
 run-state-path = "run_state.json"
 default_execution_profile = "balanced"
 
@@ -341,11 +393,9 @@ reasoning_effort = "medium"
 max-concurrent = 2
 dispatch-target = "claude-cli"
 reviewer-bot = "auto"
-allow-unsafe-agent-execution = true
 consistency-mode = "shadow"
 consistency-repair-code = []
 consistency-max-repair-passes = 1
-parent-issue = 181
 run-state-path = "run_state.json"
 default_execution_profile = "balanced"
 
@@ -369,7 +419,7 @@ reasoning_effort = "high"
 > [!NOTE]
 > Setting keys can be written in either kebab-case (e.g., `max-concurrent`) to match CLI options, or snake_case (e.g., `max_concurrent`) to match internal variables.
 > If an option is explicitly specified as a command-line argument, it overrides the value in the configuration file.
-> Unknown keys and invalid values stop startup with an error rather than falling back to defaults. Boolean settings must be TOML booleans, paths and string settings must be strings, and integer settings must be TOML integers. `consistency-repair-code` must be a list of non-empty strings. `max-concurrent`, `max-launches-per-window`, `deviation-buffer-lines`, `max-recompute-retries`, `task-timeout-seconds`, `max-task-reclaims`, `early-death-window-seconds`, `max-early-death-retries`, `early-death-backoff-seconds`, and `not-needed-review-timeout-seconds` must be at least `0`; `window-seconds` and `parent-issue` must be at least `1`, and `consistency-max-repair-passes` must be between `1` and `5`.
+> Unknown keys and invalid values stop startup with an error rather than falling back to defaults. Parent issue (`parent_issue`), unsafe execution bypass (`allow_unsafe_agent_execution`), routine tokens (`routine_token`), and top-level `model`/`reasoning_effort` are prohibited in configuration files. Boolean settings must be TOML booleans, paths and string settings must be strings, and integer settings must be TOML integers. `consistency-repair-code` must be a list of non-empty strings. `max-concurrent`, `max-launches-per-window`, `deviation-buffer-lines`, `max-recompute-retries`, `task-timeout-seconds`, `max-task-reclaims`, `early-death-window-seconds`, `max-early-death-retries`, `early-death-backoff-seconds`, and `not-needed-review-timeout-seconds` must be at least `0`; `window-seconds` must be at least `1`, and `consistency-max-repair-passes` must be between `1` and `5`.
 >
 > In `[execution_profiles]` (or `[tool.orchestune.execution_profiles]`), define target-specific tables (`claude-cli`, `agy-cli`, `codex-cli`, `cloud-routine`, `codex-cloud`) under each profile name (e.g. `balanced`, `deep-reasoning`, `fast-code`). Each target configuration accepts `model` (string) and `reasoning_effort` (`"low"` / `"medium"` / `"high"`). When defining the `execution_profiles` table, the entry corresponding to `default_execution_profile` (defaults to `"balanced"`) must be included.
 

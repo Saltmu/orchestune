@@ -94,29 +94,12 @@ def _run_patched_cycle(
         return run_dispatch_cycle(config)
 
 
-def test_consistency_mode_is_exposed_by_cli_and_defaults_off(
+def test_consistency_mode_is_configured_via_toml_and_defaults_off(
     tmp_path, fake_forge
 ) -> None:
     parser = _build_arg_parser()
-    assert parser.parse_args(["--parent-issue", "1"]).consistency_mode == "off"
-    assert parser.parse_args(
-        ["--parent-issue", "1", "--consistency-mode", "shadow"]
-    ).consistency_mode
-    repair_args = parser.parse_args(
-        [
-            "--parent-issue",
-            "1",
-            "--consistency-mode",
-            "repair",
-            "--consistency-repair-code",
-            "status.primary-conflict",
-            "--consistency-max-repair-passes",
-            "2",
-        ]
-    )
-    assert repair_args.consistency_mode == "repair"
-    assert repair_args.consistency_repair_code == ["status.primary-conflict"]
-    assert repair_args.consistency_max_repair_passes == 2
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--parent-issue", "1", "--consistency-mode", "shadow"])
 
     captured = []
 
@@ -124,10 +107,19 @@ def test_consistency_mode_is_exposed_by_cli_and_defaults_off(
         captured.append(config)
         return _report(applied=False)
 
-    with patch(
-        "orchestune.dispatch.dispatcher.run_dispatch_cycle",
-        autospec=True,
-        side_effect=capture,
+    with (
+        patch(
+            "orchestune.dispatch.dispatcher.load_config_file",
+            return_value={
+                "consistency-mode": "shadow",
+                "dispatch-target": "local",
+            },
+        ),
+        patch(
+            "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+            autospec=True,
+            side_effect=capture,
+        ),
     ):
         assert (
             main(
@@ -135,15 +127,7 @@ def test_consistency_mode_is_exposed_by_cli_and_defaults_off(
                     "--parent-issue",
                     "100",
                     "--no-apply",
-                    "--dispatch-target",
-                    "local",
-                    "--consistency-mode",
-                    "shadow",
-                    "--run-state-path",
-                    str(tmp_path / "state.json"),
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
-                ]
+                ],
             )
             == 0
         )

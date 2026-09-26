@@ -45,6 +45,14 @@ def _test_workspace_roots() -> tuple[Path, Path]:
 def test_shared_relative_paths_use_primary_repository_root(cwd_suffix):
     worktree_root, repository_root = _test_workspace_roots()
     with (
+        patch(
+            "orchestune.dispatch.dispatcher.load_config_file",
+            return_value={
+                "run-state-path": "shared/state.json",
+                "worktree-root": "shared/worktrees",
+                "events-log-path": str(repository_root / "shared/events.jsonl"),
+            },
+        ),
         patch("orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True),
         patch(
             "orchestune.dispatch.dispatcher.run_dispatch_cycle",
@@ -57,12 +65,6 @@ def test_shared_relative_paths_use_primary_repository_root(cwd_suffix):
                 "--parent-issue",
                 "100",
                 "--no-apply",
-                "--run-state-path",
-                "shared/state.json",
-                "--worktree-root",
-                "shared/worktrees",
-                "--events-log-path",
-                str(repository_root / "shared/events.jsonl"),
             ],
             cwd=worktree_root / cwd_suffix,
         )
@@ -77,6 +79,14 @@ def test_absolute_shared_paths_are_preserved(tmp_path):
     state_path = (tmp_path / "state.json").resolve()
     worktree_root = (tmp_path / "worktrees").resolve()
     with (
+        patch(
+            "orchestune.dispatch.dispatcher.load_config_file",
+            return_value={
+                "run-state-path": str(state_path),
+                "worktree-root": str(worktree_root),
+                "events-log-path": str(tmp_path / "events.jsonl"),
+            },
+        ),
         patch("orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True),
         patch(
             "orchestune.dispatch.dispatcher.run_dispatch_cycle",
@@ -89,12 +99,6 @@ def test_absolute_shared_paths_are_preserved(tmp_path):
                 "--parent-issue",
                 "100",
                 "--no-apply",
-                "--run-state-path",
-                str(state_path),
-                "--worktree-root",
-                str(worktree_root),
-                "--events-log-path",
-                str(tmp_path / "events.jsonl"),
             ],
             cwd=repository_root,
         )
@@ -110,7 +114,6 @@ def test_config_file_shared_paths_use_primary_repository_root():
         patch(
             "orchestune.dispatch.dispatcher.load_config_file",
             return_value={
-                "parent-issue": 100,
                 "run-state-path": "configured/state.json",
                 "worktree-root": "configured/worktrees",
                 "events-log-path": "configured/events.jsonl",
@@ -123,7 +126,7 @@ def test_config_file_shared_paths_use_primary_repository_root():
             return_value=_empty_report(),
         ) as mock_run,
     ):
-        main(["--no-apply"], cwd=repository_root)
+        main(["-p", "100", "--no-apply"], cwd=repository_root)
 
     config = mock_run.call_args.args[0]
     assert (
@@ -135,16 +138,21 @@ def test_config_file_shared_paths_use_primary_repository_root():
 def test_dispatch_from_outside_repository_fails_closed(tmp_path):
     state_path = tmp_path / "state.json"
     worktree_root = tmp_path / "worktrees"
-    with pytest.raises(SystemExit) as error:
+    with (
+        patch(
+            "orchestune.dispatch.dispatcher.load_config_file",
+            return_value={
+                "run-state-path": str(state_path),
+                "worktree-root": str(worktree_root),
+            },
+        ),
+        pytest.raises(SystemExit) as error,
+    ):
         main(
             [
                 "--parent-issue",
                 "100",
                 "--no-apply",
-                "--run-state-path",
-                str(state_path),
-                "--worktree-root",
-                str(worktree_root),
             ],
             cwd=tmp_path,
         )

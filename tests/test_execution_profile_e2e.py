@@ -715,7 +715,7 @@ model_tier: strong
         in_memory_forge.set_label_actor(num, "status:queued", "bot")
         in_memory_forge.add_sub_issue(100, num)
 
-        profile_config_dict = {
+        profile_config_dict: dict[str, Any] = {
             "model_tiers": {
                 "strong": {
                     "claude-cli": "claude-3-7-sonnet",
@@ -763,6 +763,18 @@ model_tier: strong
         assert selection.model == "claude-3-7-sonnet"
 
         # Now test with CLI overrides
+        profile_config_dict["default_execution_profile"] = "custom-override"
+        profile_config_dict["execution_profiles"] = {
+            "custom-override": {
+                "claude-cli": {
+                    "model": "custom-cli-model",
+                    "reasoning_effort": "high",
+                }
+            }
+        }
+        profile_config_with_override = extract_execution_profile_config(
+            profile_config_dict
+        )
         target.launched_tasks.clear()
         config_override = DispatcherConfig(
             parent_issue_number=100,
@@ -775,9 +787,8 @@ model_tier: strong
             apply=True,
             dispatch_target=target,
             forge=in_memory_forge,
-            execution_profile_config=profile_config,
-            model="custom-cli-model",
-            reasoning_effort="high",
+            execution_profile_config=profile_config_with_override,
+            profile="custom-override",
         )
 
         # Reset issue state to queued

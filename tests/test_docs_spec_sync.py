@@ -486,18 +486,26 @@ class TestDocsExecutionProfilesConsistency:
         assert ja_cfg2 == en_cfg2
 
     @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
-    def test_toml_examples_include_allow_unsafe_for_local_cli(self, lang):
+    def test_toml_examples_do_not_include_prohibited_keys(self, lang):
         section = _section(lang, 4)
         toml_blocks = self._TOML_FENCE_PATTERN.findall(section)
         for block in toml_blocks[:2]:
             data = tomllib.loads(block)
             config_table = data.get("tool", {}).get("orchestune", data)
-            if config_table.get("dispatch-target") in {
-                "claude-cli",
-                "codex-cli",
-                "agy-cli",
-            }:
-                assert config_table.get("allow-unsafe-agent-execution") is True
+            for prohibited in (
+                "allow-unsafe-agent-execution",
+                "allow_unsafe_agent_execution",
+                "parent-issue",
+                "parent_issue",
+                "routine-token",
+                "routine_token",
+                "model",
+                "reasoning-effort",
+                "reasoning_effort",
+            ):
+                assert (
+                    prohibited not in config_table
+                ), f"Prohibited key {prohibited!r} found in {lang} TOML example"
 
 
 class TestOrchestuneTomlExample:
@@ -560,11 +568,15 @@ class TestOrchestuneTomlExample:
         )
         parser = _build_arg_parser()
         runtime_defaults = vars(parser.parse_args(["--parent-issue", "1"]))
+        default_fallbacks = {"apply": True, "max_concurrent": 2}
 
         for key, configured_value in _config_defaults(parser, data).items():
-            assert configured_value == runtime_defaults[key], (
+            expected = runtime_defaults.get(key)
+            if expected is None:
+                expected = default_fallbacks.get(key)
+            assert configured_value == expected, (
                 f"非モデル設定 {key!r} は推奨値ではなく実行時デフォルトを使用してください: "
-                f"example={configured_value!r} / default={runtime_defaults[key]!r}"
+                f"example={configured_value!r} / default={expected!r}"
             )
 
         assert extract_dag_ignore_patterns(data) == []
@@ -572,17 +584,54 @@ class TestOrchestuneTomlExample:
 
     def test_every_dispatcher_setting_is_present_or_commented(self):
         raw_toml = (REPO_ROOT / "orchestune.toml.example").read_text(encoding="utf-8")
-        parser = _build_arg_parser()
+        from orchestune.dispatch.config_loader import (
+            _BOOLEAN_CONFIG_KEYS,
+            _NON_NEGATIVE_INT_KEYS,
+            _PATH_CONFIG_KEYS,
+            _POSITIVE_INT_KEYS,
+            _STRING_KEYS,
+        )
+
+        all_toml_keys = (
+            _BOOLEAN_CONFIG_KEYS
+            | _NON_NEGATIVE_INT_KEYS
+            | _POSITIVE_INT_KEYS
+            | _PATH_CONFIG_KEYS
+            | _STRING_KEYS
+            | {
+                "dispatch_target",
+                "reviewer_bot",
+                "ci_command",
+                "consistency_mode",
+                "consistency_repair_code",
+                "consistency_max_repair_passes",
+                "dag_ignore_patterns",
+                "dag_similarity_threshold",
+            }
+        )
 
         missing = []
-        for action in parser._actions:
-            if action.dest == "help":
-                continue
-            key = action.dest.replace("_", "-")
-            if re.search(rf"(?m)^#?\s*{re.escape(key)}\s*=", raw_toml) is None:
+        for key in sorted(all_toml_keys):
+            k_dash = key.replace("_", "-")
+            if (
+                re.search(rf"(?m)^#?\s*{re.escape(k_dash)}\s*=", raw_toml) is None
+                and re.search(rf"(?m)^#?\s*{re.escape(key)}\s*=", raw_toml) is None
+            ):
                 missing.append(key)
 
         assert not missing, f"設定例に未記載のdispatcher設定があります: {missing}"
+
+        data = tomllib.loads(raw_toml)
+        for prohibited in (
+            "allow-unsafe-agent-execution",
+            "parent-issue",
+            "routine-token",
+            "model",
+            "reasoning-effort",
+        ):
+            assert (
+                prohibited not in data
+            ), f"禁止されたキー {prohibited!r} が設定例に含まれています"
 
     @pytest.mark.parametrize(
         ("profile", "tier", "target", "expected_model", "expected_effort"),
