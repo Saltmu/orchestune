@@ -494,33 +494,54 @@ def resolve_execution_profile(
     )
 
 
+def validate_profile_for_target(
+    profile_name: str, target_name: str, config: ExecutionProfileConfig
+) -> None:
+    """Validate that the profile exists and the target is configured before side effects."""
+    if profile_name not in config.profiles:
+        raise ConfigError(
+            f"unknown profile {profile_name!r}; defined profiles: {', '.join(sorted(config.profiles))}"
+        )
+    profile_targets = config.profiles[profile_name]
+    candidates = _target_lookup_candidates(target_name)
+    if not any(candidate in profile_targets for candidate in candidates):
+        raise ConfigError(
+            f"target {target_name!r} is not configured in profile {profile_name!r}"
+        )
+
+
 def resolve_task_execution_selection(
     task: Any,
     config: Any,
 ) -> ExecutionSelection:
     """Deterministically resolve an ExecutionSelection for a task, applying DispatcherConfig overrides if present."""
-    sel = resolve_execution_profile(
+    cli_profile = getattr(config, "profile", None)
+    if cli_profile is not None:
+        dispatch_target = getattr(config, "dispatch_target", None)
+        target_name = _extract_target_name(dispatch_target)
+        profile_config = _normalize_profile_config(
+            getattr(config, "execution_profile_config", None)
+        )
+        profile_targets = profile_config.profiles.get(cli_profile, {})
+        matched_target_config: TargetExecutionConfig | None = None
+        for candidate in _target_lookup_candidates(target_name):
+            if candidate in profile_targets:
+                matched_target_config = profile_targets[candidate]
+                break
+        model = matched_target_config.model if matched_target_config else None
+        reasoning_effort = (
+            matched_target_config.reasoning_effort if matched_target_config else None
+        )
+        return ExecutionSelection(
+            profile=cli_profile,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            reason=f"profile '{cli_profile}' resolved for target '{target_name}' (CLI profile override)",
+        )
+
+    return resolve_execution_profile(
         getattr(task, "execution_profile", None),
         getattr(config, "dispatch_target", None),
         getattr(config, "execution_profile_config", None),
         model_tier=getattr(task, "model_tier", None),
     )
-    if (
-        getattr(config, "model", None) is not None
-        or getattr(config, "reasoning_effort", None) is not None
-    ):
-        override_model = (
-            config.model if getattr(config, "model", None) is not None else sel.model
-        )
-        override_effort = (
-            config.reasoning_effort
-            if getattr(config, "reasoning_effort", None) is not None
-            else sel.reasoning_effort
-        )
-        return ExecutionSelection(
-            profile=sel.profile,
-            model=override_model,
-            reasoning_effort=override_effort,
-            reason=f"{sel.reason} (CLI override)",
-        )
-    return sel

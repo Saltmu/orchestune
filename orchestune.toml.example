@@ -24,8 +24,8 @@ max-early-death-retries = 2
 early-death-backoff-seconds = 60
 zombie-gc = true
 
-# Default: unset. Set this only when processing one specific parent Issue.
-# parent-issue = 697
+# Parent Issue cannot be set in configuration files.
+# Specify via CLI (-p / --parent-issue) or infer from a parent/issue-<N> branch.
 
 # Default: automatically selected (`cloud-routine` in GitHub Actions, `auto`
 # locally). Uncomment only to pin a target.
@@ -34,19 +34,17 @@ zombie-gc = true
 reviewer-bot = "auto"
 
 # Default: unset. These are target-specific connection/command overrides.
-# Never commit credentials; prefer ORCHESTUNE_ROUTINE_ID,
-# ORCHESTUNE_ROUTINE_TOKEN, and ORCHESTUNE_CODEX_CLOUD_ENV.
+# Never commit credentials. For cloud routine tokens, use the
+# ORCHESTUNE_ROUTINE_TOKEN environment variable (prohibited in TOML).
 # local-cmd = "codex exec ..."
 # routine-id = "your-routine-id"
-# routine-token = "your-secret-token"
 # codex-cloud-env = "your-environment-id"
 
-# Runtime-wide model overrides are unset by default. Prefer the profiles below.
-# model = "gpt-5.6-terra"
-# reasoning-effort = "medium"
+# Top-level model and reasoning-effort are prohibited; define them inside
+# [execution_profiles.<name>.<target>] below.
 
-# Unsafe execution is opt-in and disabled by default.
-allow-unsafe-agent-execution = false
+# Unsafe execution cannot be set in configuration files (fail-closed).
+# Use the --allow-unsafe-agent-execution CLI flag for local CLI targets.
 
 # Token limits are unset by default.
 # max-tokens-per-window = 1000000

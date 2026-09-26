@@ -1047,8 +1047,7 @@ def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
     if is_unsafe and not allow_unsafe:
         raise ValueError(
             f"設定エラー: `{dispatch_target_name}` によるローカル無人実行は、承認やサンドボックスのバイパスを伴う完全権限実行となります。\n"
-            "この実行を許可するには、信頼できる実行環境であることを確認の上、明示的に `--allow-unsafe-agent-execution` オプションを指定するか、"
-            "設定ファイル（orchestune.toml 等）で `allow_unsafe_agent_execution = true` を設定してください。"
+            "この実行を許可するには、信頼できる実行環境であることを確認の上、明示的に `--allow-unsafe-agent-execution` オプションを指定してください。"
         )
     return dispatch_target_name
 
@@ -1058,8 +1057,8 @@ def _build_cloud_routine_target(
     routine_token: str | None,
     reviewer_bot: ReviewerBot | None,
 ) -> ClaudeCodeCloudRoutineDispatchTarget | None:
-    resolved_id = routine_id or os.environ.get(ROUTINE_ID_ENV_VAR)
-    resolved_token = routine_token or os.environ.get(ROUTINE_TOKEN_ENV_VAR)
+    resolved_id = os.environ.get(ROUTINE_ID_ENV_VAR) or routine_id
+    resolved_token = os.environ.get(ROUTINE_TOKEN_ENV_VAR) or routine_token
     if resolved_id and resolved_token:
         return ClaudeCodeCloudRoutineDispatchTarget(
             resolved_id, resolved_token, reviewer_bot=reviewer_bot
@@ -1078,7 +1077,7 @@ def _build_codex_cloud_target(
     log_dir: str | Path,
     reviewer_bot: ReviewerBot | None,
 ) -> CodexCloudDispatchTarget | None:
-    resolved_env = codex_cloud_env or os.environ.get(CODEX_CLOUD_ENV_VAR)
+    resolved_env = os.environ.get(CODEX_CLOUD_ENV_VAR) or codex_cloud_env
     if resolved_env:
         return CodexCloudDispatchTarget(
             resolved_env, log_dir=log_dir, reviewer_bot=reviewer_bot
@@ -1095,7 +1094,7 @@ def _warn_unresolved_auto_reviewer(resolved_target_name: str) -> None:
     print(
         f"警告: 実行ターゲット `{resolved_target_name}` からレビュアーボットを"
         "自動選択できません。決定論的なレビュー担当が必要な場合は "
-        "`--reviewer-bot claude|codex` を明示してください。",
+        '設定ファイルで `reviewer_bot = "claude"` または `reviewer_bot = "codex"` を指定してください。',
         file=sys.stderr,
     )
 

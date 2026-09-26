@@ -96,7 +96,6 @@ class TestDispatcherConfigLoading:
     def test_load_config_from_orchestune_toml(self, tmp_path):
         config_path = tmp_path / "orchestune.toml"
         config_path.write_text(
-            "parent-issue = 181\n"
             "max-concurrent = 5\n"
             "dispatch-target = 'local'\n"
             "run-state-path = 'custom_state.json'\n"
@@ -114,7 +113,7 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "181", "--no-apply"], cwd=tmp_path)
 
         mock_build.assert_called_once()
         assert mock_build.call_args.args[0].dispatch_target_name == "local"
@@ -177,24 +176,8 @@ class TestDispatcherConfigLoading:
         with pytest.raises(SystemExit):
             main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
 
-    def test_cli_repair_allowlist_replaces_config_file_allowlist(self, tmp_path):
-        (tmp_path / "orchestune.toml").write_text(
-            "consistency-mode = 'repair'\n"
-            "consistency-repair-code = ['status.from-config']\n"
-            "events-log-path = 'custom_events.jsonl'\n",
-            encoding="utf-8",
-        )
-
-        with (
-            patch(
-                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
-            ),
-            patch(
-                "orchestune.dispatch.dispatcher.run_dispatch_cycle",
-                autospec=True,
-                return_value=self._empty_report(),
-            ) as mock_run,
-        ):
+    def test_cli_repair_allowlist_flag_is_removed_from_cli(self, tmp_path):
+        with pytest.raises(SystemExit) as excinfo:
             main(
                 [
                     "--parent-issue",
@@ -205,10 +188,7 @@ class TestDispatcherConfigLoading:
                 ],
                 cwd=tmp_path,
             )
-
-        assert mock_run.call_args.args[0].consistency_repair_allowlist == frozenset(
-            {"status.from-cli"}
-        )
+        assert excinfo.value.code == 2
 
     def test_orchestune_toml_with_dag_ignore_patterns_does_not_crash_dispatcher(
         self, tmp_path
@@ -291,10 +271,6 @@ class TestDispatcherConfigLoading:
                     "--parent-issue",
                     "100",
                     "--no-apply",
-                    "--run-state-path",
-                    str(tmp_path / "rs.json"),
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -383,7 +359,15 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(
+                [
+                    "--parent-issue",
+                    "100",
+                    "--no-apply",
+                    "--allow-unsafe-agent-execution",
+                ],
+                cwd=tmp_path,
+            )
 
         mock_build.assert_called_once()
         assert mock_build.call_args.args[0].dispatch_target_name == "claude-cli"
@@ -417,8 +401,7 @@ class TestDispatcherConfigLoading:
                     "3",
                     "--dispatch-target",
                     "claude-cli",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
+                    "--allow-unsafe-agent-execution",
                 ],
                 cwd=tmp_path,
             )
@@ -429,19 +412,9 @@ class TestDispatcherConfigLoading:
         config_arg = mock_run.call_args.args[0]
         assert config_arg.max_concurrent == 3
 
-    def test_ci_command_cli_flag_is_split_into_argv_list(self, tmp_path):
-        """#394: `--ci-command`はshlex構文の文字列として受け取り、
-        `DispatcherConfig.ci_command`にはargvリストとして渡ること。"""
-        with (
-            patch(
-                "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
-            ),
-            patch(
-                "orchestune.dispatch.dispatcher.run_dispatch_cycle",
-                autospec=True,
-                return_value=self._empty_report(),
-            ) as mock_run,
-        ):
+    def test_ci_command_cli_flag_is_removed_from_cli(self, tmp_path):
+        """#1035: `--ci-command` はCLI引数から削除され、TOMLでのみ設定可能。CLIでの指定はエラー。"""
+        with pytest.raises(SystemExit) as excinfo:
             main(
                 [
                     "--parent-issue",
@@ -449,14 +422,10 @@ class TestDispatcherConfigLoading:
                     "--no-apply",
                     "--ci-command",
                     "make ci",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
-
-        config_arg = mock_run.call_args.args[0]
-        assert config_arg.ci_command == ["make", "ci"]
+        assert excinfo.value.code == 2
 
     def test_ci_command_unset_defaults_to_none(self, tmp_path):
         """#394: `--ci-command`未指定時は`DispatcherConfig.ci_command`が
@@ -476,8 +445,6 @@ class TestDispatcherConfigLoading:
                     "--parent-issue",
                     "100",
                     "--no-apply",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -508,8 +475,6 @@ class TestDispatcherConfigLoading:
                     "--parent-issue",
                     "100",
                     "--no-apply",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -526,7 +491,7 @@ class TestDispatcherConfigLoading:
             ('apply = "false"\n', "must be a boolean"),
             ("max-concurrent = -1\n", "greater than or equal to 0"),
             ("window-seconds = 0\n", "greater than or equal to 1"),
-            ("parent-issue = 0\n", "greater than or equal to 1"),
+            ("parent-issue = 0\n", "parent issue cannot be set in configuration files"),
             ("run-state-path = 1\n", "must be a string path"),
         ],
     )
@@ -585,7 +550,15 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ),
         ):
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(
+                [
+                    "--parent-issue",
+                    "100",
+                    "--no-apply",
+                    "--allow-unsafe-agent-execution",
+                ],
+                cwd=tmp_path,
+            )
 
         assert mock_build.call_args.args[0].dispatch_target_name == dispatch_target
 
@@ -646,8 +619,6 @@ class TestDispatcherConfigLoading:
                     "--parent-issue",
                     "100",
                     "--allow-unsafe-agent-execution",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -696,8 +667,6 @@ class TestDispatcherConfigLoading:
                     "--parent-issue",
                     "100",
                     "--allow-unsafe-agent-execution",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -745,8 +714,6 @@ class TestDispatcherConfigLoading:
                     "--parent-issue",
                     "100",
                     "--allow-unsafe-agent-execution",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -770,8 +737,6 @@ class TestDispatcherConfigLoading:
                     "--parent-issue",
                     "100",
                     "--allow-unsafe-agent-execution",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -816,8 +781,6 @@ class TestDispatcherConfigLoading:
                     "100",
                     "--apply",
                     "--allow-unsafe-agent-execution",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -868,8 +831,6 @@ class TestDispatcherConfigLoading:
                     "--parent-issue",
                     "100",
                     "--allow-unsafe-agent-execution",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -926,8 +887,6 @@ class TestDispatcherConfigLoading:
                     "--parent-issue",
                     "100",
                     "--allow-unsafe-agent-execution",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -1014,38 +973,35 @@ class TestDispatcherConfigLoading:
                     "claude-cli",
                     "--allow-unsafe-agent-execution",
                     "--no-apply",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
             assert code == 0
 
     def test_unsafe_cli_with_allow_unsafe_option_in_orchestune_toml_succeeds(
-        self, tmp_path
+        self, tmp_path, capsys
     ):
+        """#1035: allow_unsafe_agent_execution はTOMLでは禁止され、CLIでのみ指定可能。"""
         orchestune_toml = tmp_path / "orchestune.toml"
         orchestune_toml.write_text(
             "allow_unsafe_agent_execution = true\n", encoding="utf-8"
         )
-        with patch(
-            "orchestune.dispatch.dispatcher.run_dispatch_cycle",
-            autospec=True,
-            return_value=self._empty_report(),
-        ):
-            code = main(
+        with pytest.raises(SystemExit) as excinfo:
+            main(
                 [
                     "--parent-issue",
                     "100",
                     "--dispatch-target",
                     "claude-cli",
                     "--no-apply",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
-            assert code == 0
+        assert excinfo.value.code == 2
+        assert (
+            "setting 'allow_unsafe_agent_execution' is prohibited"
+            in capsys.readouterr().err
+        )
 
     def test_execution_profiles_loaded_from_orchestune_toml(self, tmp_path):
         """#668: orchestune.tomlからexecution_profilesとdefault_execution_profileがロードされること。"""
@@ -1079,8 +1035,6 @@ reasoning_effort = "low"
                     "--parent-issue",
                     "100",
                     "--no-apply",
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )

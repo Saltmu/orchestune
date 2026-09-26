@@ -62,184 +62,123 @@ class TestBuildArgParser:
 
         return _build_arg_parser().parse_args(["--parent-issue", "100", *args])
 
-    """#328: dispatch-cycleの既定挙動をapplyに変更（--no-applyでdry-run）。"""
-
-    def test_apply_defaults_to_true(self):
+    def test_apply_defaults_to_none_in_parser(self):
         args = self._parse_args([])
-        assert args.apply is True
+        assert args.apply is None
 
-    def test_no_apply_flag_disables_apply(self):
-        args = self._parse_args(["--no-apply"])
-        assert args.apply is False
+    def test_apply_flags_parse_correctly(self):
+        assert self._parse_args(["--apply"]).apply is True
+        assert self._parse_args(["--no-apply"]).apply is False
 
-    def test_max_tokens_args_defaults_to_none(self):
-        args = self._parse_args([])
-        assert args.max_tokens_per_window is None
-        assert args.max_tokens_per_task is None
+    def test_parent_issue_options(self):
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-    def test_max_tokens_args_are_parsed(self):
-        args = self._parse_args(
-            [
-                "--max-tokens-per-window",
-                "50000",
-                "--max-tokens-per-task",
-                "10000",
-            ]
-        )
-        assert args.max_tokens_per_window == 50000
-        assert args.max_tokens_per_task == 10000
-
-    def test_explicit_apply_flag_still_works(self):
-        args = self._parse_args(["--apply"])
-        assert args.apply is True
+        parser = _build_arg_parser()
+        assert parser.parse_args(["-p", "100"]).parent_issue == 100
+        assert parser.parse_args(["--parent-issue", "100"]).parent_issue == 100
+        with pytest.raises(SystemExit):
+            parser.parse_args(["-p", "0"])
+        with pytest.raises(SystemExit):
+            parser.parse_args(["-p", "-1"])
 
     def test_dispatch_target_defaults_to_none_when_unspecified(self):
         args = self._parse_args([])
         assert args.dispatch_target is None
 
-    def test_dispatch_target_explicit_local_is_preserved(self):
-        args = self._parse_args(["--dispatch-target", "local"])
-        assert args.dispatch_target == "local"
+    @pytest.mark.parametrize(
+        "target",
+        [
+            "local",
+            "auto",
+            "claude-cli",
+            "agy-cli",
+            "codex-cli",
+            "cloud-routine",
+            "codex-cloud",
+        ],
+    )
+    def test_dispatch_target_choices(self, target):
+        args = self._parse_args(["--dispatch-target", target])
+        assert args.dispatch_target == target
 
-    def test_dispatch_target_explicit_auto_is_preserved(self):
-        args = self._parse_args(["--dispatch-target", "auto"])
-        assert args.dispatch_target == "auto"
-
-    def test_dispatch_target_explicit_codex_cli_is_preserved(self):
-        args = self._parse_args(["--dispatch-target", "codex-cli"])
-        assert args.dispatch_target == "codex-cli"
-
-    def test_dispatch_target_explicit_codex_cloud_is_preserved(self):
-        args = self._parse_args(["--dispatch-target", "codex-cloud"])
-        assert args.dispatch_target == "codex-cloud"
-
-    def test_reviewer_bot_defaults_to_auto(self):
-        args = self._parse_args([])
-        assert args.reviewer_bot == "auto"
-
-    @pytest.mark.parametrize("reviewer_bot", ["auto", "claude", "codex"])
-    def test_reviewer_bot_is_parsed(self, reviewer_bot):
-        args = self._parse_args(["--reviewer-bot", reviewer_bot])
-        assert args.reviewer_bot == reviewer_bot
-
-    def test_codex_cloud_env_option_is_parsed(self):
-        args = self._parse_args(["--codex-cloud-env", "env_123"])
-        assert args.codex_cloud_env == "env_123"
-
-    def test_task_timeout_seconds_defaults_to_zero(self):
-        args = self._parse_args([])
-        assert args.task_timeout_seconds == 0
-
-    def test_task_timeout_seconds_arg_is_parsed(self):
-        args = self._parse_args(["--task-timeout-seconds", "3600"])
-        assert args.task_timeout_seconds == 3600
-
-    def test_max_task_reclaims_defaults_to_a_finite_value(self):
-        """#512: 「無制限」を表す既定値を持たない（終端のない経路を作らない）。"""
-
-        args = self._parse_args([])
-        assert args.max_task_reclaims == 3
-
-    def test_max_task_reclaims_arg_is_parsed(self):
-        args = self._parse_args(["--max-task-reclaims", "5"])
-        assert args.max_task_reclaims == 5
-
-    def test_max_task_reclaims_rejects_negative_values(self):
-        """PR#520レビュー対応(Codex P2): 負値は設定ファイル同様CLIでも拒否する
-        （素通りすると「1回目の回収で必ず上限超過」と解釈され、タスクが黙って
-        status:blocked-human-reviewへ落ちてしまう）。"""
-        import pytest
-
+    def test_dispatch_target_invalid_choice_rejected(self):
         with pytest.raises(SystemExit):
-            self._parse_args(["--max-task-reclaims", "-1"])
+            self._parse_args(["--dispatch-target", "invalid"])
 
-    def test_early_death_retry_options_have_bounded_defaults(self):
+    def test_max_concurrent_options(self):
         args = self._parse_args([])
-        assert args.early_death_window_seconds == 120
-        assert args.max_early_death_retries == 2
-        assert args.early_death_backoff_seconds == 60
-
-    def test_early_death_retry_options_are_parsed_and_reject_negative_values(self):
-        import pytest
-
-        args = self._parse_args(
-            [
-                "--early-death-window-seconds",
-                "30",
-                "--max-early-death-retries",
-                "4",
-                "--early-death-backoff-seconds",
-                "15",
-            ]
-        )
-        assert (args.early_death_window_seconds, args.max_early_death_retries) == (
-            30,
-            4,
-        )
-        assert args.early_death_backoff_seconds == 15
+        assert args.max_concurrent is None
+        args = self._parse_args(["--max-concurrent", "5"])
+        assert args.max_concurrent == 5
         with pytest.raises(SystemExit):
-            self._parse_args(["--max-early-death-retries", "-1"])
+            self._parse_args(["--max-concurrent", "-1"])
 
-    def test_not_needed_review_timeout_seconds_defaults_to_a_finite_value(self):
-        """#511: 「無制限」を表す既定値を持たない（終端のない経路を作らない）。"""
-
+    def test_profile_option(self):
         args = self._parse_args([])
-        assert args.not_needed_review_timeout_seconds == 86400
+        assert args.profile is None
+        args = self._parse_args(["--profile", "deep-reasoning"])
+        assert args.profile == "deep-reasoning"
 
-    def test_not_needed_review_timeout_seconds_arg_is_parsed(self):
-        args = self._parse_args(["--not-needed-review-timeout-seconds", "1800"])
-        assert args.not_needed_review_timeout_seconds == 1800
+    def test_allow_unsafe_option(self):
+        args = self._parse_args([])
+        assert args.allow_unsafe_agent_execution is False
+        args = self._parse_args(["--allow-unsafe-agent-execution"])
+        assert args.allow_unsafe_agent_execution is True
 
-    def test_not_needed_review_timeout_seconds_rejects_negative_values(self):
-        """`--max-task-reclaims`と同じ理由で負値を拒否する（素通りすると
-        「今すぐ全件エスカレーション」相当になり、保留エントリが黙って
-        status:blocked-human-reviewへ落ちてしまう）。"""
-        import pytest
-
+    @pytest.mark.parametrize(
+        "removed_option",
+        [
+            "--max-tokens-per-window",
+            "--max-tokens-per-task",
+            "--reviewer-bot",
+            "--codex-cloud-env",
+            "--task-timeout-seconds",
+            "--max-task-reclaims",
+            "--early-death-window-seconds",
+            "--max-early-death-retries",
+            "--early-death-backoff-seconds",
+            "--not-needed-review-timeout-seconds",
+            "--zombie-gc",
+            "--no-zombie-gc",
+            "--model",
+            "--effort",
+            "--reasoning-effort",
+            "--ci-command",
+            "--run-state-path",
+            "--worktree-root",
+            "--log-dir",
+            "--events-log-path",
+            "--not-needed-review-state-path",
+            "--routine-id",
+            "--routine-token",
+            "--local-cmd",
+            "--consistency-repair-code",
+        ],
+    )
+    def test_removed_options_raise_error(self, removed_option):
+        """#1035: 削除された日常外オプションはCLIで渡すとエラーとなる。"""
+        flag_args = [removed_option]
+        if removed_option not in {"--zombie-gc", "--no-zombie-gc"}:
+            flag_args.append("val")
         with pytest.raises(SystemExit):
-            self._parse_args(["--not-needed-review-timeout-seconds", "-1"])
-
-    def test_zombie_gc_defaults_to_true(self):
-        args = self._parse_args([])
-        assert args.zombie_gc is True
-
-    def test_no_zombie_gc_disables_zombie_gc(self):
-        args = self._parse_args(["--no-zombie-gc"])
-        assert args.zombie_gc is False
+            self._parse_args(flag_args)
 
 
 class TestDispatcherCliSingleResponsibility:
     def test_parser_option_groups_preserve_all_destinations(self):
-        from orchestune.dispatch.dispatcher import (
-            _add_dispatch_target_arguments,
-            _add_execution_arguments,
-            _add_safety_and_budget_arguments,
-            _add_storage_arguments,
-        )
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
-        parser = __import__("argparse").ArgumentParser()
-        for register in (
-            _add_execution_arguments,
-            _add_storage_arguments,
-            _add_dispatch_target_arguments,
-            _add_safety_and_budget_arguments,
-        ):
-            register(parser)
-
+        parser = _build_arg_parser()
         destinations = {action.dest for action in parser._actions}
-        assert {
+        assert destinations == {
+            "help",
+            "parent_issue",
             "apply",
-            "max_concurrent",
-            "run_state_path",
-            "events_log_path",
-            "not_needed_review_state_path",
             "dispatch_target",
-            "reviewer_bot",
-            "routine_token",
+            "max_concurrent",
+            "profile",
             "allow_unsafe_agent_execution",
-            "max_tokens_per_task",
-            "ci_command",
-        } <= destinations
+        }
 
     @pytest.mark.parametrize(
         ("statuses", "expected"),
@@ -259,9 +198,8 @@ class TestDispatcherCliSingleResponsibility:
 
 class TestConfigDefaults:
     def test_config_defaults_load(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
+        from orchestune.dispatch.config_loader import validate_toml_config
 
-        parser = _build_arg_parser()
         config_data = {
             "task-timeout-seconds": 1200,
             "max-task-reclaims": 5,
@@ -269,7 +207,7 @@ class TestConfigDefaults:
             "zombie-gc": False,
             "reviewer-bot": "claude",
         }
-        defaults = _config_defaults(parser, config_data)
+        defaults = validate_toml_config(config_data)
         assert defaults["task_timeout_seconds"] == 1200
         assert defaults["max_task_reclaims"] == 5
         assert defaults["not_needed_review_timeout_seconds"] == 1800
@@ -277,14 +215,11 @@ class TestConfigDefaults:
         assert defaults["reviewer_bot"] == "claude"
 
     def test_cli_reviewer_bot_overrides_config_default(self):
-        from orchestune.dispatch.dispatcher import _build_arg_parser, _config_defaults
+        from orchestune.dispatch.dispatcher import _build_arg_parser
 
         parser = _build_arg_parser()
-        parser.set_defaults(**_config_defaults(parser, {"reviewer-bot": "claude"}))
-
-        args = parser.parse_args(["--parent-issue", "100", "--reviewer-bot", "codex"])
-
-        assert args.reviewer_bot == "codex"
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--parent-issue", "100", "--reviewer-bot", "codex"])
 
     def test_config_defaults_validation_error(self):
         import pytest
@@ -437,10 +372,6 @@ class TestMainDispatchTargetAutoDetection:
                     "--parent-issue",
                     "100",
                     "--no-apply",
-                    "--run-state-path",
-                    str(tmp_path / "rs.json"),
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -464,10 +395,6 @@ class TestMainDispatchTargetAutoDetection:
                     "--parent-issue",
                     "100",
                     "--no-apply",
-                    "--run-state-path",
-                    str(tmp_path / "rs.json"),
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -495,10 +422,6 @@ class TestMainDispatchTargetAutoDetection:
                     "--no-apply",
                     "--dispatch-target",
                     "local",
-                    "--run-state-path",
-                    str(tmp_path / "rs.json"),
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
@@ -506,6 +429,9 @@ class TestMainDispatchTargetAutoDetection:
         assert mock_build.call_args.args[0].dispatch_target_name == "local"
 
     def test_explicit_reviewer_bot_is_forwarded_to_target_builder(self, tmp_path):
+        (tmp_path / "orchestune.toml").write_text(
+            "reviewer-bot = 'codex'\n", encoding="utf-8"
+        )
         with (
             patch(
                 "orchestune.dispatch.dispatcher.build_dispatch_target", autospec=True
@@ -521,21 +447,27 @@ class TestMainDispatchTargetAutoDetection:
                     "--parent-issue",
                     "100",
                     "--no-apply",
-                    "--reviewer-bot",
-                    "codex",
-                    "--run-state-path",
-                    str(tmp_path / "rs.json"),
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
                 ],
                 cwd=tmp_path,
             )
 
         assert mock_build.call_args.args[0].reviewer_bot == "codex"
 
-    def test_cli_model_and_effort_overrides_forwarded_to_dispatcher_config(
-        self, tmp_path
-    ):
+    def test_cli_model_and_effort_flags_removed(self, tmp_path):
+        with pytest.raises(SystemExit):
+            main(
+                ["--parent-issue", "100", "--model", "claude-3-7-sonnet"], cwd=tmp_path
+            )
+        with pytest.raises(SystemExit):
+            main(["--parent-issue", "100", "--effort", "high"], cwd=tmp_path)
+        with pytest.raises(SystemExit):
+            main(["--parent-issue", "100", "--reasoning-effort", "low"], cwd=tmp_path)
+
+    def test_cli_profile_override_forwarded_to_dispatcher_config(self, tmp_path):
+        (tmp_path / "orchestune.toml").write_text(
+            'default_execution_profile = "deep-reasoning"\n[execution_profiles.deep-reasoning.local]\n',
+            encoding="utf-8",
+        )
         with patch(
             "orchestune.dispatch.dispatcher.run_dispatch_cycle",
             autospec=True,
@@ -548,44 +480,11 @@ class TestMainDispatchTargetAutoDetection:
                     "--no-apply",
                     "--dispatch-target",
                     "local",
-                    "--model",
-                    "claude-3-7-sonnet",
-                    "--effort",
-                    "high",
-                    "--run-state-path",
-                    str(tmp_path / "rs.json"),
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
+                    "--profile",
+                    "deep-reasoning",
                 ],
                 cwd=tmp_path,
             )
 
         config = mock_cycle.call_args.args[0]
-        assert config.model == "claude-3-7-sonnet"
-        assert config.reasoning_effort == "high"
-
-    def test_cli_reasoning_effort_alias_forwarded_to_dispatcher_config(self, tmp_path):
-        with patch(
-            "orchestune.dispatch.dispatcher.run_dispatch_cycle",
-            autospec=True,
-            return_value=self._empty_report(),
-        ) as mock_cycle:
-            main(
-                [
-                    "--parent-issue",
-                    "100",
-                    "--no-apply",
-                    "--dispatch-target",
-                    "local",
-                    "--reasoning-effort",
-                    "low",
-                    "--run-state-path",
-                    str(tmp_path / "rs.json"),
-                    "--events-log-path",
-                    str(tmp_path / "events.jsonl"),
-                ],
-                cwd=tmp_path,
-            )
-
-        config = mock_cycle.call_args.args[0]
-        assert config.reasoning_effort == "low"
+        assert config.profile == "deep-reasoning"
