@@ -258,7 +258,7 @@ table above cannot silently drift from the code:
    dedicated test asserts it pulls in no L4 entrypoint, which is the property
    that would otherwise be lost.
 5. **No cross-package import cycles (with allowlist ratchet)**:
-   In addition to module-level cycle prohibition (Rule 3), circular imports between top-level packages (`orchestune.<pkg>`, or the module name for standalone modules) are forbidden. Cross-package cycles are not allowed even within the same layer or in downward-pointing directions. Pre-existing cycles are explicitly tracked in `KNOWN_PACKAGE_CYCLE_EDGES` with stated reasons and planned resolution issues, and verified via strongly connected components (SCC) over the reduced package graph. Introducing new unauthorized cycles fails CI, and resolved cycle edges must be removed from the allowlist (ratchet).
+   In addition to module-level cycle prohibition (Rule 3), circular imports between top-level packages (`orchestune.<pkg>`, or the module name for standalone modules) are forbidden. Cross-package cycles are not allowed even within the same layer or in downward-pointing directions. Pre-existing cycles are explicitly tracked in `KNOWN_PACKAGE_CYCLE_EDGES` with stated reasons and planned resolution issues, and verified via strongly connected components (SCC) over the reduced package graph. Introducing new unauthorized cycles fails CI, and resolved cycle edges must be removed from the allowlist (ratchet). The package root (`orchestune/__init__.py`), which declares public re-exports (Rule 4), is exempt from cross-package cycle tracking.
 
 ### 4.3 Why `Forge` is a protocol, not a class
 

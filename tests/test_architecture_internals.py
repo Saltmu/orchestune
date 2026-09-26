@@ -5,12 +5,14 @@ from __future__ import annotations
 import ast
 
 from test_architecture import (
+    PACKAGE_NAME,
     PACKAGE_ROOT,
     _collect_dict_assignments,
     _cycle_members,
     _internal_imports,
     _module_name,
     _package_cycle_edges,
+    _package_import_graph,
     _relative_import_name,
     _top_level_package,
 )
@@ -198,6 +200,14 @@ def test_top_level_package_resolves_packages_and_modules() -> None:
     assert _top_level_package("cli") == "cli"
     assert _top_level_package("bootstrap") == "bootstrap"
     assert _top_level_package("orchestune") == "orchestune"
+
+
+def test_package_import_graph_excludes_package_root() -> None:
+    """#1052 review: 公開API宣言側のパッケージルート（orchestune）がノード・エッジから除外されること。"""
+    pkg_graph = _package_import_graph()
+    assert PACKAGE_NAME not in pkg_graph
+    for dependencies in pkg_graph.values():
+        assert PACKAGE_NAME not in dependencies
 
 
 def test_package_cycle_detection_mechanics_accepts_allowed_and_acyclic() -> None:

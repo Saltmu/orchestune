@@ -417,14 +417,19 @@ def _top_level_package(module: str) -> str:
 def _package_import_graph() -> dict[str, set[str]]:
     """モジュール依存グラフをトップレベルパッケージ単位に縮約したグラフを返す。
 
-    同一パッケージ内のimportはパッケージ間エッジに含めない。
+    同一パッケージ内のimportおよび公開APIを宣言するパッケージルート
+    （orchestune/__init__.py）自身とのエッジは含めない。
     """
     module_graph = _import_graph()
     package_graph: dict[str, set[str]] = defaultdict(set)
     for module, dependencies in module_graph.items():
+        if module == PACKAGE_NAME:
+            continue
         src_pkg = _top_level_package(module)
         package_graph[src_pkg]
         for dep in dependencies:
+            if dep == PACKAGE_NAME:
+                continue
             dst_pkg = _top_level_package(dep)
             package_graph[dst_pkg]
             if src_pkg != dst_pkg:
