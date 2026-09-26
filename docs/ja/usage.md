@@ -530,7 +530,7 @@ orchestune gc --no-apply  # 判定を確認する（状態・worktree・lockは�
 orchestune gc             # 確認後に適用する
 ```
 
-このコマンドはhandoff-readyの台帳エントリだけを調べます。`done` は、台帳が指す同一OutcomeコメントとPRのマージ、およびPRのhead/baseとworktree所有者を確認できた場合に解放します。`blocked` または `not-needed` は同一Outcomeを確認できれば解放し、cleanなworktreeは削除します。dirtyなworktreeは保持し、done履歴やreceiptは作りません。Outcome、PR、所有者を確認できない場合は理由を表示して保留します。
+このコマンドはhandoff-readyな対話タスク（`owner_kind=interactive`）だけを調べます。dispatch所有のworktreeはdispatchサイクルが扱います。`done` は、台帳が指す同一OutcomeコメントとPRのマージ、およびPRのhead/baseとworktree所有者を確認できた場合に解放します。`blocked` または `not-needed` は同一Outcomeを確認できれば解放し、cleanなworktreeは削除します。dirtyなworktreeは保持し、done履歴やreceiptは作りません。Outcome、PR、所有者を確認できない場合は理由を表示して保留します。
 
 `--no-apply` は読み取り専用のプレビューです。applyモードもローカル台帳とworktreeのみを扱い、GitHubのIssue、ラベル、PR、コメント、branchやdispatchサイクルは変更しません。実行中のworktree自身を削除する必要がある場合は `current_worktree` で保留されるため、primary checkoutなど別の場所から再実行してください。
 

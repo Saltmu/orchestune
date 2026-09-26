@@ -57,7 +57,8 @@ orchestune gc --no-apply
 orchestune gc
 ```
 
-Review the preview before applying it. This command verifies the matching
-Outcome and merged PR for `done` tasks, releases only handoff-ready local
-reservations, and retains dirty worktrees for `blocked` and `not-needed`
-outcomes. It does not update GitHub or start a dispatch cycle.
+Review the preview before applying it. This command handles handoff-ready
+interactive reservations only; the dispatch cycle owns dispatch worktrees. It
+verifies the matching Outcome and merged PR for `done` tasks, and retains dirty
+worktrees for `blocked` and `not-needed` outcomes. It does not update GitHub or
+start a dispatch cycle.

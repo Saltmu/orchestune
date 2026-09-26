@@ -542,7 +542,7 @@ orchestune gc --no-apply  # inspect decisions without changes
 orchestune gc             # apply the decisions
 ```
 
-The command inspects handoff-ready ledger entries only. A `done` entry is released only after it verifies the exact journaled Outcome comment, the merged PR, the PR head and base, and worktree ownership. A matching `blocked` or `not-needed` Outcome releases the reservation; a clean worktree is removed, while a dirty worktree is retained without done history or a receipt. Missing or mismatched Outcome, PR, or ownership evidence leaves the entry on hold with a reason.
+The command inspects handoff-ready interactive entries (`owner_kind=interactive`) only. The dispatch cycle owns dispatch worktrees. A `done` entry is released only after it verifies the exact journaled Outcome comment, the merged PR, the PR head and base, and worktree ownership. A matching `blocked` or `not-needed` Outcome releases the reservation; a clean worktree is removed, while a dirty worktree is retained without done history or a receipt. Missing or mismatched Outcome, PR, or ownership evidence leaves the entry on hold with a reason.
 
 `--no-apply` is a read-only preview. Apply mode operates on the local ledger and worktrees; it does not change GitHub Issues, labels, PRs, comments, branches, or start a dispatch cycle. If the current working directory is inside a worktree that would be removed, the command holds it as `current_worktree`; rerun from the primary checkout or another directory.
 

@@ -80,6 +80,15 @@ def _absolute_worktree_path(active: ActiveWorktree, workspace: ClaimWorkspace) -
     return path
 
 
+def _is_standalone_gc_candidate(active: ActiveWorktree) -> bool:
+    """Limit this standalone command to interactive claims.
+
+    Dispatch-owned worktrees need TaskMetadata to record their subtask id in
+    CompletedWorktree; the dispatch cycle owns that lifecycle and KPI record.
+    """
+    return active.owner_kind == "interactive" and _is_handoff_ready(active)
+
+
 def _make_item(
     key: str,
     active: ActiveWorktree,
@@ -140,7 +149,7 @@ def _preview(
     except (OSError, ValueError):
         return GcRunResult((), 0, (), 1)
     candidates = [
-        (key, item) for key, item in active.items() if _is_handoff_ready(item)
+        (key, item) for key, item in active.items() if _is_standalone_gc_candidate(item)
     ]
     skipped = len(active) - len(candidates)
     forge: HandoffForge | None = None
@@ -269,7 +278,7 @@ def _apply_locked(
     except (OSError, ValueError):
         return GcRunResult((), 0, (), 1)
     candidates = [
-        (key, item) for key, item in active.items() if _is_handoff_ready(item)
+        (key, item) for key, item in active.items() if _is_standalone_gc_candidate(item)
     ]
     skipped = len(active) - len(candidates)
     if not candidates:

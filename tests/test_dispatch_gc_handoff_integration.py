@@ -149,6 +149,10 @@ def _write_state(repo: Path, active: ActiveWorktree) -> Path:
         claimed_at=2.0,
         base_sha=None,
         owner_token_digest="e" * 64,
+        completion_id="completion-251",
+        completion_result="done",
+        completion_stage="handed_off_to_gc",
+        completion_handoff_ready=True,
     )
     state = {
         "active_worktrees": {"250": asdict(active), "251": asdict(running)},
@@ -248,6 +252,8 @@ def test_preview_does_not_change_state_worktree_marker_or_create_locks(
     result = run_handoff_gc(GcRequest(apply=False), forge_factory=lambda: forge)
 
     assert result.exit_code == 0
+    assert len(result.items) == 1
+    assert result.skipped == 1
     assert result.items[0].action == "would_release"
     assert result.items[0].worktree_action == "remove"
     assert result.receipts == ()
@@ -549,7 +555,7 @@ def test_worktree_removal_failure_keeps_reservation_and_no_receipt(
     assert result.receipts == ()
 
 
-def test_no_handoff_targets_do_not_construct_forge_or_rewrite_state(
+def test_no_interactive_handoff_targets_do_not_construct_forge_or_rewrite_state(
     tmp_path: Path, monkeypatch
 ):
     from orchestune.dispatch.gc.handoff import GcRequest
