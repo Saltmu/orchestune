@@ -409,6 +409,96 @@ def _cycle_members(graph: dict[str, set[str]]) -> set[str]:
     return cycles
 
 
+def _top_level_package(module: str) -> str:
+    """モジュール名（orchestune.除去後）からトップレベルパッケージまたは単一モジュール名を返す。"""
+    return module.split(".", 1)[0]
+
+
+def _package_import_graph() -> dict[str, set[str]]:
+    """モジュール依存グラフをトップレベルパッケージ単位に縮約したグラフを返す。
+
+    同一パッケージ内のimportおよび公開APIを宣言するパッケージルート
+    （orchestune/__init__.py）自身とのエッジは含めない。
+    """
+    module_graph = _import_graph()
+    package_graph: dict[str, set[str]] = defaultdict(set)
+    for module, dependencies in module_graph.items():
+        if module == PACKAGE_NAME:
+            continue
+        src_pkg = _top_level_package(module)
+        package_graph[src_pkg]
+        for dep in dependencies:
+            if dep == PACKAGE_NAME:
+                continue
+            dst_pkg = _top_level_package(dep)
+            package_graph[dst_pkg]
+            if src_pkg != dst_pkg:
+                package_graph[src_pkg].add(dst_pkg)
+    return dict(package_graph)
+
+
+def _tarjan_scc(graph: dict[str, set[str]]) -> list[list[str]]:
+    """Tarjan's SCCアルゴリズムによりグラフの強連結成分のリストを返す。"""
+    index_counter = [0]
+    index: dict[str, int] = {}
+    lowlink: dict[str, int] = {}
+    on_stack: dict[str, bool] = {}
+    stack: list[str] = []
+    sccs: list[list[str]] = []
+
+    def strongconnect(node: str) -> None:
+        index[node] = index_counter[0]
+        lowlink[node] = index_counter[0]
+        index_counter[0] += 1
+        stack.append(node)
+        on_stack[node] = True
+
+        for dep in graph.get(node, ()):
+            if dep not in graph:
+                continue
+            if dep not in index:
+                strongconnect(dep)
+                lowlink[node] = min(lowlink[node], lowlink[dep])
+            elif on_stack.get(dep):
+                lowlink[node] = min(lowlink[node], index[dep])
+
+        if lowlink[node] == index[node]:
+            component: list[str] = []
+            while True:
+                member = stack.pop()
+                on_stack[member] = False
+                component.append(member)
+                if member == node:
+                    break
+            sccs.append(component)
+
+    for node in graph:
+        if node not in index:
+            strongconnect(node)
+    return sccs
+
+
+def _package_cycle_edges(graph: dict[str, set[str]]) -> set[tuple[str, str]]:
+    """非自明な強連結成分（要素数2以上、または自己ループ）に属する循環エッジを返す。
+
+    許容エッジを先に除外する方式では既存の許容エッジを経由する新規循環を
+    見逃すため、元の縮約グラフのSCCから同一SCC内エッジを列挙する。
+    """
+    cycle_edges: set[tuple[str, str]] = set()
+    for scc in _tarjan_scc(graph):
+        scc_set = set(scc)
+        if len(scc_set) > 1:
+            for u in scc_set:
+                for v in graph.get(u, ()):
+                    if v in scc_set:
+                        cycle_edges.add((u, v))
+        elif len(scc_set) == 1:
+            u = scc[0]
+            if u in graph.get(u, ()):
+                cycle_edges.add((u, u))
+    return cycle_edges
+
+
 def _l4_dependents(graph: dict[str, set[str]]) -> dict[str, set[str]]:
     dependents: dict[str, set[str]] = defaultdict(set)
     for module, dependencies in graph.items():
@@ -1164,3 +1254,51 @@ def test_execution_profiles_boundary_documented_in_architecture_docs() -> None:
         assert (
             "ExecutionSelection" in doc_text
         ), f"{lang}: ExecutionSelection reference missing"
+
+
+KNOWN_PACKAGE_CYCLE_EDGES: dict[tuple[str, str], str] = {
+    ("claim", "dispatch"): "Resolved by #1053: ledger package extraction",
+    ("complete", "claim"): "Resolved by #1053: ledger package extraction",
+    ("complete", "dispatch"): "Resolved by #1053: ledger package extraction",
+    ("dag", "symbol_verification"): "Resolved by #1053: ledger package extraction",
+    ("dispatch", "claim"): "Resolved by #1053: ledger package extraction",
+    ("dispatch", "complete"): "Resolved by #1053: ledger package extraction",
+    ("dispatch", "integrator"): "Resolved by #1053: ledger package extraction",
+    ("integrator", "dispatch"): "Resolved by #1053: ledger package extraction",
+    ("provisioning", "replan"): "Resolved by #1053: ledger package extraction",
+    ("replan", "provisioning"): "Resolved by #1053: ledger package extraction",
+    ("symbol_verification", "dag"): "Resolved by #1053: ledger package extraction",
+}
+
+
+def test_package_dependency_cycles_match_allowlist() -> None:
+    actual_cycles = _package_cycle_edges(_package_import_graph())
+    allowed_cycles = set(KNOWN_PACKAGE_CYCLE_EDGES.keys())
+
+    unexpected = actual_cycles - allowed_cycles
+    assert (
+        unexpected == set()
+    ), f"Unexpected package import cycle edges found: {sorted(unexpected)}"
+
+    stale = allowed_cycles - actual_cycles
+    assert (
+        stale == set()
+    ), f"Stale package import cycle edges in allowlist: {sorted(stale)}"
+
+    for edge, reason in KNOWN_PACKAGE_CYCLE_EDGES.items():
+        assert reason.strip(), f"Empty reason for allowed cycle edge: {edge}"
+
+
+def test_architecture_docs_mention_package_cycle_guard() -> None:
+    """#1052: Both architecture documents explain package-level import cycle prohibition."""
+    for lang in DOC_LANGUAGES:
+        lines = _architecture_doc(lang)
+        doc_text = "\n".join(lines)
+        if lang == "ja":
+            assert (
+                "パッケージ間循環の禁止" in doc_text
+            ), f"{lang}: 'パッケージ間循環の禁止' が docs/ja/architecture.md §4.2 に見当たりません"
+        else:
+            assert (
+                "cross-package import cycles" in doc_text
+            ), f"{lang}: 'cross-package import cycles' missing in docs/en/architecture.md §4.2"

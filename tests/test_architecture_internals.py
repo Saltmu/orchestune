@@ -5,12 +5,16 @@ from __future__ import annotations
 import ast
 
 from test_architecture import (
+    PACKAGE_NAME,
     PACKAGE_ROOT,
     _collect_dict_assignments,
     _cycle_members,
     _internal_imports,
     _module_name,
+    _package_cycle_edges,
+    _package_import_graph,
     _relative_import_name,
+    _top_level_package,
 )
 
 
@@ -187,3 +191,93 @@ def test_relative_import_resolution_multilevel() -> None:
         )
         == "orchestune.forge.issues"
     )
+
+
+def test_top_level_package_resolves_packages_and_modules() -> None:
+    """#1052: _top_level_packageがパッケージ名と単一モジュール名を正しく返すこと。"""
+    assert _top_level_package("claim.ownership") == "claim"
+    assert _top_level_package("dispatch.gc.git") == "dispatch"
+    assert _top_level_package("cli") == "cli"
+    assert _top_level_package("bootstrap") == "bootstrap"
+    assert _top_level_package("orchestune") == "orchestune"
+
+
+def test_package_import_graph_excludes_package_root() -> None:
+    """#1052 review: 公開API宣言側のパッケージルート（orchestune）がノード・エッジから除外されること。"""
+    pkg_graph = _package_import_graph()
+    assert PACKAGE_NAME not in pkg_graph
+    for dependencies in pkg_graph.values():
+        assert PACKAGE_NAME not in dependencies
+
+
+def test_package_cycle_detection_mechanics_accepts_allowed_and_acyclic() -> None:
+    """#1052: 許容済み循環のみ、および非循環エッジ追加がパスし、実在しないエッジはratchetで弾かれること。"""
+    base_graph = {
+        "dispatch": {"claim"},
+        "claim": {"dispatch"},
+        "leaf": set(),
+    }
+    allowed = {("dispatch", "claim"), ("claim", "dispatch")}
+    cycles = _package_cycle_edges(base_graph)
+    assert cycles == allowed
+    assert cycles - allowed == set()
+
+    non_cycling_graph = {
+        "dispatch": {"claim", "leaf"},
+        "claim": {"dispatch"},
+        "leaf": set(),
+    }
+    assert _package_cycle_edges(non_cycling_graph) - allowed == set()
+
+    # 許容リストに実在しないエッジが残ると ratchet により検出される
+    stale_allowed = allowed | {("dispatch", "nonexistent")}
+    assert stale_allowed - cycles == {("dispatch", "nonexistent")}
+
+
+def test_package_cycle_detection_mechanics_detects_new_and_extended_cycles() -> None:
+    """#1052: 独立した新規循環、および許容済みエッジを経由する新規循環を検出できること。"""
+    allowed = {("dispatch", "claim"), ("claim", "dispatch")}
+    independent_cycle_graph = {
+        "dispatch": {"claim"},
+        "claim": {"dispatch"},
+        "pkg_a": {"pkg_b"},
+        "pkg_b": {"pkg_a"},
+    }
+    cycles_indep = _package_cycle_edges(independent_cycle_graph)
+    assert cycles_indep - allowed == {("pkg_a", "pkg_b"), ("pkg_b", "pkg_a")}
+
+    extended_cycle_graph = {
+        "dispatch": {"claim"},
+        "claim": {"new_pkg"},
+        "new_pkg": {"dispatch"},
+    }
+    cycles_ext = _package_cycle_edges(extended_cycle_graph)
+    assert cycles_ext - allowed == {("claim", "new_pkg"), ("new_pkg", "dispatch")}
+
+
+def test_package_cycle_detection_mechanics_detects_within_scc_and_self_loops() -> None:
+    """#1052: 既存SCC内に追加された未許容エッジ、および自己ループを検出できること。"""
+    scc_graph = {
+        "dispatch": {"claim"},
+        "claim": {"dispatch", "integrator"},
+        "integrator": {"claim"},
+    }
+    scc_allowed = {
+        ("dispatch", "claim"),
+        ("claim", "dispatch"),
+        ("claim", "integrator"),
+        ("integrator", "claim"),
+    }
+    assert _package_cycle_edges(scc_graph) - scc_allowed == set()
+
+    scc_with_unallowed = {
+        "dispatch": {"claim", "integrator"},
+        "claim": {"dispatch", "integrator"},
+        "integrator": {"claim"},
+    }
+    assert _package_cycle_edges(scc_with_unallowed) - scc_allowed == {
+        ("dispatch", "integrator")
+    }
+
+    self_loop_graph = {"pkg_self": {"pkg_self"}}
+    assert _package_cycle_edges(self_loop_graph) == {("pkg_self", "pkg_self")}
