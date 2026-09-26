@@ -106,8 +106,26 @@ Write-Host "[4/6] Running tests with coverage (pytest)..."
 # Note: On Windows subshell environments (e.g. agy CLI / ConPTY), pytest-xdist (-n auto) spawns multiple worker
 # processes that inherit pipe handles, which can cause pipe destruction crashes when workers exit.
 # We default to single-process execution (-n 0) for safe Windows execution. Override via PYTEST_ADDOPTS if needed.
-uv run pytest -n 0 --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$CiContextVars = @(
+    "ORCHESTUNE_EXPECTED_HEAD", "ORCHESTUNE_EXPECTED_TREE", "ORCHESTUNE_EXPECTED_BASE",
+    "ORCHESTUNE_BASE_SHA", "ORCHESTUNE_BASE_REF", "ORCHESTUNE_STATE_PATH",
+    "ORCHESTUNE_ISSUE_NUMBER", "ORCHESTUNE_CI_EVIDENCE_PATH"
+)
+$SavedCiContext = @{}
+foreach ($var in $CiContextVars) {
+    $value = [Environment]::GetEnvironmentVariable($var, "Process")
+    if ($null -ne $value) { $SavedCiContext[$var] = $value }
+    Remove-Item "Env:$var" -ErrorAction SilentlyContinue
+}
+try {
+    uv run pytest -n 0 --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
+    $PytestExitCode = $LASTEXITCODE
+} finally {
+    foreach ($var in $SavedCiContext.Keys) {
+        Set-Item "Env:$var" $SavedCiContext[$var]
+    }
+}
+if ($PytestExitCode -ne 0) { exit $PytestExitCode }
 
 Write-Host "[5/6] Detecting new or worsened code and skill bloat..."
 uv run python scripts/detect_bloat.py --baseline .orchestune/bloat-baseline.json
@@ -166,4 +184,3 @@ if ($env:ORCHESTUNE_ISSUE_NUMBER) {
 }
 uv run python -m orchestune.complete.ci_evidence record @RecordArgs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
