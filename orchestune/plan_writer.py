@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 
 import yaml
@@ -313,20 +313,27 @@ def _find_subtasks_bounds(lines: list[str], start: int, end: int) -> tuple[int, 
     value, it would be found and mutated instead of the actual subtask.
     """
     for index in range(start, end):
-        if _SUBTASKS_KEY_LINE.match(lines[index]):
+        key_match = _SUBTASKS_KEY_LINE.match(lines[index])
+        if key_match:
+            key_indent = len(lines[index]) - len(lines[index].lstrip(" "))
             list_start = index + 1
             list_end = list_start
             while list_end < end:
                 line = lines[list_end]
                 stripped = line.strip()
-                # A column-0 comment (`# ...`) between sequence items is
-                # valid YAML and must not be mistaken for the next
-                # top-level frontmatter key ending the list — only a real
-                # (non-comment) line at indent 0 does that.
+                line_indent = len(line) - len(line.lstrip(" "))
+                item_match = _LIST_ITEM_START.match(line)
+                same_indent_item = (
+                    item_match is not None and len(item_match.group(1)) == key_indent
+                )
+                # A sequence item may legally start at the same indentation
+                # as its mapping key (`subtasks:\n- id: task-a`). Keep that
+                # item while a same-indent mapping key still closes the list.
                 if (
                     stripped
                     and not stripped.startswith("#")
-                    and len(line) - len(line.lstrip(" ")) == 0
+                    and line_indent <= key_indent
+                    and not same_indent_item
                 ):
                     break
                 list_end += 1
@@ -425,6 +432,25 @@ def _write_subtask_issue_number(
     raise ValueError(
         f"decomposition_plan.md に該当するサブタスクが見つかりません: {subtask_id}"
     )
+
+
+def validate_subtask_issue_number_targets(
+    path: str | Path, subtask_ids: Iterable[str]
+) -> None:
+    """Check that each parsed subtask ID can be located by the plan writer.
+
+    The in-memory lines are updated with placeholder numbers so validation
+    follows the exact same item lookup and boundary behavior as persistence,
+    without writing to disk.
+    """
+    lines = Path(path).read_text(encoding="utf-8").splitlines(keepends=True)
+    start, end = _find_frontmatter_bounds(lines)
+    for subtask_id in subtask_ids:
+        subtasks_start, subtasks_end = _find_subtasks_bounds(lines, start, end)
+        new_subtasks_end = _write_subtask_issue_number(
+            lines, subtasks_start, subtasks_end, subtask_id, 0
+        )
+        end += new_subtasks_end - subtasks_end
 
 
 def _atomic_write_text(target: Path, content: str) -> None:

@@ -21,7 +21,10 @@ from orchestune.dag.models import (
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import GitHubForge, IssueForge, RelationshipUnavailableError
 from orchestune.models import IssueRecord
-from orchestune.plan_writer import write_issue_numbers
+from orchestune.plan_writer import (
+    validate_subtask_issue_number_targets,
+    write_issue_numbers,
+)
 from orchestune.provisioning.parent import _resolve_parent_issue
 from orchestune.provisioning.plan import (
     PlanMetadata,
@@ -319,6 +322,9 @@ def provision_issues(
             if validated_parent is not None
             else metadata.parent_issue_number,
         )
+    validate_subtask_issue_number_targets(
+        plan_path, (subtask.id for subtask in subtasks)
+    )
     return _apply_provisioning(
         forge,
         metadata,

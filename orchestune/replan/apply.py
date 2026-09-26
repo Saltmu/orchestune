@@ -10,6 +10,7 @@ from typing import Protocol, cast
 from orchestune.dag.parsing import extract_frontmatter_and_body
 from orchestune.forge import GitHubForge
 from orchestune.issue_parsing import embed_decomposition_plan_in_parent_body
+from orchestune.plan_writer import validate_subtask_issue_number_targets
 from orchestune.provisioning.plan import GITHUB_ISSUE_BODY_LIMIT
 from orchestune.provisioning.rendering import _validate_template_identity_marker
 from orchestune.replan.audit import (
@@ -229,6 +230,9 @@ def _validated_preview(
     parent_issue_number: int | None,
 ) -> tuple[int, ReplanSnapshot, ReplanPreview]:
     plan = load_replan_plan(plan_path)
+    validate_subtask_issue_number_targets(
+        plan_path, (subtask.id for subtask in plan.subtasks)
+    )
     parent = _parent_number(plan.parent_issue_number, parent_issue_number)
     snapshot = collect_replan_snapshot(forge, parent)
     preview = build_replan_preview(plan, snapshot)
