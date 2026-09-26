@@ -148,6 +148,11 @@ def test_restore_plan_file_from_parent_helper(tmp_path: Path):
     assert "parent_issue_number: 500" in content
     assert "Some overview" in content
 
+    from orchestune.plan_writer import write_issue_numbers
+
+    write_issue_numbers(out_file, {"sub-1": 502})
+    assert "issue_number: 502" in out_file.read_text(encoding="utf-8")
+
 
 def test_provision_persists_plan_into_parent_issue_body(tmp_path: Path):
     plan_file = tmp_path / "decomposition_plan.md"

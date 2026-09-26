@@ -26,6 +26,39 @@ from tests.test_provisioning_support import (
 
 
 class TestProvisionIssuesApply:
+    def test_provisions_compact_sequence_plan(
+        self, plan_path: Path, template_path: Path
+    ):
+        plan_path.write_text(
+            plan_path.read_text(encoding="utf-8")
+            .replace("  - id:", "- id:")
+            .replace("\n    ", "\n  "),
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+
+        result = provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert set(result.created) == {"task-a", "task-b"}
+        assert "issue_number:" in plan_path.read_text(encoding="utf-8")
+
+    def test_unwritable_subtask_plan_fails_before_creating_any_issues(
+        self, plan_path: Path, template_path: Path
+    ):
+        plan_path.write_text(
+            plan_path.read_text(encoding="utf-8").replace(
+                "  - id: task-a", '  - "id": task-a'
+            ),
+            encoding="utf-8",
+        )
+        forge = FakeForge()
+
+        with pytest.raises(ValueError, match="task-a"):
+            provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert forge.create_issue_calls == []
+        assert forge.issues == {}
+
     def test_lost_parent_create_response_reuses_parent(
         self, plan_path: Path, template_path: Path
     ):
