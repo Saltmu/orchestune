@@ -131,7 +131,7 @@ def _validate_raw_evidence_data(data: dict[str, Any]) -> None:
 
 
 def resolve_evidence_dir(worktree_root: Path | str | None = None) -> Path:
-    """Resolve the directory outside the worktree's tracked area to store evidence."""
+    """Resolve the directory inside the worktree to store CI evidence."""
     override = os.environ.get("ORCHESTUNE_CI_EVIDENCE_PATH")
     if override:
         return Path(override).parent.resolve()
@@ -141,14 +141,14 @@ def resolve_evidence_dir(worktree_root: Path | str | None = None) -> Path:
         if worktree_root is not None
         else Path.cwd().resolve()
     )
-    try:
-        res = run_git(["rev-parse", "--git-dir"], cwd=cwd, check=False)
-        if res.returncode == 0 and res.stdout.strip():
-            raw = Path(res.stdout.strip())
-            return raw if raw.is_absolute() else (cwd / raw).resolve()
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return (cwd / ".git").resolve()
+    if worktree_root is None:
+        try:
+            res = run_git(["rev-parse", "--show-toplevel"], cwd=cwd, check=False)
+            if res.returncode == 0 and res.stdout.strip():
+                cwd = Path(res.stdout.strip()).resolve()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return (cwd / ".orchestune" / "ci").resolve()
 
 
 def resolve_evidence_path(worktree_root: Path | str | None = None) -> Path:
@@ -624,17 +624,22 @@ def record_ci_evidence(
 
 
 def _write_evidence_atomic(evidence: CiEvidence, evidence_path: Path) -> None:
-    evidence_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = evidence_path.with_name(
-        f"{CI_EVIDENCE_FILENAME}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
-    )
-    payload_json = json.dumps(evidence.to_dict(), indent=2, sort_keys=True)
-    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(payload_json)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, evidence_path)
+    try:
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = evidence_path.with_name(
+            f"{CI_EVIDENCE_FILENAME}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+        )
+        payload_json = json.dumps(evidence.to_dict(), indent=2, sort_keys=True)
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload_json)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, evidence_path)
+    except OSError as err:
+        raise CiEvidenceError(
+            f"Failed to persist CI evidence at {evidence_path}: {err}"
+        ) from err
 
 
 def _validate_environment_match(evidence: CiEvidence, root: Path) -> None:

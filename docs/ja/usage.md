@@ -459,3 +459,14 @@ orchestune claim 123
 ### 失敗時の対応
 
 前提条件の未達（先行タスク未完了など）や競合、環境エラーが発生した場合は、非ゼロの終了コードとともにエラー理由と推奨される次のアクションが標準エラー出力に表示されます。指示に従って競合を解消するか、中断された claim を `--resume` で復旧してください。なお、すでに着手済みで作業ツリー内にいる場合は、再度の claim は不要です。
+
+## 8. ローカルCI証跡の保存と完了処理 (`orchestune complete`)
+
+タスク実装完了時、`orchestune complete` コマンドによりローカルCIの検証結果とOutcome RecordをIssueに記録します。
+
+### CI証跡の保存場所とGit管理
+- **既定保存先**: 各worktree内の `.orchestune/ci/ci_evidence.json`
+- **Git ignore**: `.orchestune/ci/` は `.gitignore` に登録されており、証跡ファイルや一時ファイル（`.tmp.*`）の生成によってGitのclean判定が汚されることはありません。
+- **環境変数による上書き**: `ORCHESTUNE_CI_EVIDENCE_PATH` を指定することで、任意のファイルパスへ保存先を変更できます。
+- **権限分離とサンドボックス対応**: Git metadata directory（`.git` や `.git/worktrees/<name>`）が読み取り専用のサンドボックス環境やlinked worktreeであっても、worktree内が書き込み可能であれば証跡の無効化・保存・検証が正常に動作します。
+- **移行時の注意**: 旧バージョンで `.git` 配下に保存されていた古い証跡は新しい既定経路では再利用されません。移行後はローカルCI（`./scripts/local-ci.sh` または `.\scripts\local-ci.ps1`）を再実行して新たな証跡を生成してください。

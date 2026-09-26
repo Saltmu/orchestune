@@ -471,3 +471,14 @@ Upon success, the command prints the issue number, claim ID, branch name, prepar
 ### Failure Handling
 
 If a claim cannot proceed due to unmet dependencies, conflicts, or environmental errors, the command exits with a non-zero exit code and outputs the failure reason along with recommended next actions to stderr. Follow the diagnostic instructions to resolve conflicts or resume an interrupted claim using `--resume`. If already working inside the claimed task worktree, running claim again is not needed.
+
+## 8. Local CI Evidence Storage and Task Completion (`orchestune complete`)
+
+Upon completing task implementation, the `orchestune complete` command verifies local CI evidence and records the Outcome Record on the task Issue.
+
+### Evidence Storage Location and Git State
+- **Default Storage Location**: `.orchestune/ci/ci_evidence.json` inside each worktree.
+- **Git Ignore**: `.orchestune/ci/` is registered in `.gitignore`, ensuring evidence and atomic temporary files (`.tmp.*`) never dirty the worktree's clean git status.
+- **Environment Override**: Setting `ORCHESTUNE_CI_EVIDENCE_PATH` allows specifying a custom evidence file location.
+- **Permission Isolation & Sandbox Support**: Even in restricted sandbox environments or linked worktrees where the Git metadata directory (`.git` or `.git/worktrees/<name>`) is read-only, evidence invalidation, recording, and verification succeed as long as the worktree itself is writable.
+- **Migration Note**: Legacy evidence previously recorded under `.git` is not reused by the new default path. After migrating, rerun local CI (`./scripts/local-ci.sh` or `.\scripts\local-ci.ps1`) to record fresh evidence.

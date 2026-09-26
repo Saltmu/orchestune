@@ -15,15 +15,18 @@ echo "========================================="
 if [ -n "${ORCHESTUNE_CI_EVIDENCE_PATH:-}" ]; then
   EVIDENCE_FILE="${ORCHESTUNE_CI_EVIDENCE_PATH}"
 else
-  GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo ".git")"
-  EVIDENCE_FILE="${GIT_DIR}/ci_evidence.json"
+  EVIDENCE_FILE=".orchestune/ci/ci_evidence.json"
 fi
 if [ -e "${EVIDENCE_FILE}" ]; then
-  rm -f "${EVIDENCE_FILE}" "${EVIDENCE_FILE}.tmp."* 2>/dev/null || true
+  rm -f "${EVIDENCE_FILE}" 2>/dev/null || true
   if [ -e "${EVIDENCE_FILE}" ]; then
     echo "ERROR: Failed to remove prior CI evidence at ${EVIDENCE_FILE}." >&2
     exit 1
   fi
+fi
+EVIDENCE_DIR="$(dirname "${EVIDENCE_FILE}")"
+if [ -d "${EVIDENCE_DIR}" ]; then
+  rm -f "${EVIDENCE_DIR}/ci_evidence.json.tmp."* 2>/dev/null || true
 fi
 
 if ! command -v uv >/dev/null 2>&1; then

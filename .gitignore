@@ -27,6 +27,9 @@ decomposition_plan.md
 # Agent scratch artifacts (plans, PR bodies, review replies; never commit)
 .orchestune/tmp/
 
+# Local CI evidence (never commit)
+.orchestune/ci/
+
 # Code analysis tool local state: symbol index, LSP cache, memories (never commit)
 .serena/
 
