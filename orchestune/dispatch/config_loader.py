@@ -32,6 +32,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.execution_profiles import (
     ExecutionProfileConfig,
     extract_execution_profile_config,
+    extract_target_name,
     validate_profile_for_target,
 )
 from orchestune.dispatch.targets import (
@@ -533,7 +534,7 @@ def _resolve_and_build_target(
         )
     )
     if args.profile:
-        resolved_name = getattr(dispatch_target, "name", dispatch_target_name)
+        resolved_name = extract_target_name(dispatch_target)
         validate_profile_for_target(
             args.profile, resolved_name, execution_profile_config
         )

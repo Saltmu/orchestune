@@ -345,3 +345,52 @@ class TestProfileOverrideAndValidation:
         )
         with pytest.raises(ConfigError, match="target 'claude-cli' is not configured"):
             validate_profile_for_target("balanced", "claude-cli", profile_cfg)
+
+    def test_load_and_resolve_config_validates_profile_against_resolved_auto_target(
+        self, tmp_path, fake_forge
+    ):
+        toml_content = """
+dispatch_target = "auto"
+default_execution_profile = "fast-code"
+
+[execution_profiles.fast-code.claude-cli]
+model = "claude-3-5-sonnet"
+"""
+        (tmp_path / "orchestune.toml").write_text(toml_content, encoding="utf-8")
+
+        mock_target = MagicMock()
+        mock_target.target_name = "claude-cli"
+
+        config = load_and_resolve_config(
+            cli_args=["-p", "1035", "--profile", "fast-code"],
+            cwd=tmp_path,
+            forge=fake_forge,
+            build_target_fn=lambda _target_cfg: mock_target,
+        )
+        assert config.profile == "fast-code"
+
+    def test_load_and_resolve_config_rejects_profile_missing_resolved_auto_target(
+        self, tmp_path, fake_forge
+    ):
+        toml_content = """
+dispatch_target = "auto"
+default_execution_profile = "fast-code"
+
+[execution_profiles.fast-code.codex-cli]
+model = "gpt-5.6"
+"""
+        (tmp_path / "orchestune.toml").write_text(toml_content, encoding="utf-8")
+
+        mock_target = MagicMock()
+        mock_target.target_name = "claude-cli"
+
+        with pytest.raises(
+            ConfigError,
+            match="target 'claude-cli' is not configured in profile 'fast-code'",
+        ):
+            load_and_resolve_config(
+                cli_args=["-p", "1035", "--profile", "fast-code"],
+                cwd=tmp_path,
+                forge=fake_forge,
+                build_target_fn=lambda _target_cfg: mock_target,
+            )

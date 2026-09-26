@@ -311,7 +311,7 @@ def load_execution_profile_config(
     return extract_execution_profile_config(config_data)
 
 
-def _extract_target_name(target: str | Any) -> str:
+def extract_target_name(target: str | Any) -> str:
     if isinstance(target, str):
         return target.strip().lower().replace("_", "-")
 
@@ -349,6 +349,8 @@ def _extract_target_name(target: str | Any) -> str:
                     return local_target_names[executable]
     return "local"
 
+
+_extract_target_name = extract_target_name
 
 _TARGET_ALIASES: dict[str, tuple[str, ...]] = {
     "claude": ("claude", "claude-cli"),

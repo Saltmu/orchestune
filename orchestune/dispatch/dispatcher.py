@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,7 +27,6 @@ from orchestune.dispatch.config_loader import (
 )
 from orchestune.dispatch.cycle import run_dispatch_cycle
 from orchestune.dispatch.cycle_report import CycleReport
-from orchestune.dispatch.execution_profiles import ExecutionProfileConfig
 from orchestune.dispatch.postcycle import (
     _decide_semantic_review_enabled,
     _poll_pending_not_needed_reviews,
@@ -70,47 +68,10 @@ def _config_defaults(
 
 
 @dataclass(frozen=True)
-class _DispatcherInputs:
-    args: argparse.Namespace
-    dag_ignore_patterns: tuple[re.Pattern[str], ...]
-    dag_similarity_threshold: float
-    execution_profile_config: ExecutionProfileConfig | None
-    run_state_path: Path
-    worktree_root: Path
-
-
-@dataclass(frozen=True)
 class _DispatcherRunResult:
     report: Any
     post_cycle_results: list[PhaseResult]
     integrator_run_report: Any
-
-
-def _load_dispatcher_inputs(
-    parser: argparse.ArgumentParser,
-    argv: list[str] | None,
-    cwd: Path | None,
-) -> _DispatcherInputs:
-    try:
-        cfg = load_and_resolve_config(
-            argv,
-            cwd,
-            load_config_fn=load_config_file,
-            build_target_fn=build_dispatch_target,
-            resolve_paths_fn=_resolve_dispatch_shared_paths,
-        )
-    except (ConfigError, ValueError) as e:
-        _config_error(parser, str(e))
-
-    args = parser.parse_args(argv)
-    return _DispatcherInputs(
-        args=args,
-        dag_ignore_patterns=cfg.dag_ignore_patterns,
-        dag_similarity_threshold=cfg.dag_similarity_threshold,
-        execution_profile_config=cfg.execution_profile_config,
-        run_state_path=cfg.run_state_path,
-        worktree_root=cfg.worktree_root,
-    )
 
 
 def _resolve_dispatch_shared_paths(
