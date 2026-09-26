@@ -99,32 +99,24 @@ def test_ci_workflow_caches_gitleaks_binary():
     ), f"cache key should reference runner.os and gitleaks: {key}"
 
 
-def test_pytest_addopts_caps_worker_count():
-    """`-n auto` alone oversubscribes on many-core hosts (e.g. 16 workers on a
-    16-core WSL2 box), which measurably increases both wall time and peak
-    memory versus a capped worker count, and can trigger OS OOM kills under
-    concurrent local-ci.sh runs. `--maxprocesses` caps `-n auto`'s worker
-    count while still degrading gracefully (no-op) on hosts with fewer cores.
-    """
+def test_pytest_addopts_uses_two_workers():
+    """Ordinary pytest runs should use exactly two xdist workers by default."""
     import tomllib
 
     pyproject_path = os.path.join(os.path.dirname(__file__), "..", "pyproject.toml")
     with open(pyproject_path, "rb") as f:
         pyproject = tomllib.load(f)
 
-    addopts = pyproject["tool"]["pytest"]["ini_options"]["addopts"]
-    assert "-n auto" in addopts, "addopts must keep auto-detecting worker count"
-    assert "--maxprocesses=" in addopts, (
-        "addopts must cap the worker count via --maxprocesses to avoid "
-        "oversubscription/OOM on many-core hosts"
-    )
+    addopts = pyproject["tool"]["pytest"]["ini_options"]["addopts"].split()
+    assert "-n" in addopts, "addopts must set the xdist worker count"
+    worker_option_index = addopts.index("-n")
+    assert (
+        addopts[worker_option_index + 1] == "2"
+    ), "ordinary pytest runs must use exactly two xdist workers"
 
 
-def test_local_ci_sh_does_not_bypass_pytest_worker_cap():
-    """scripts/local-ci.sh must not pass its own `-n` value: doing so would
-    bypass the `--maxprocesses` cap defined in pyproject.toml's addopts and
-    reintroduce the oversubscription/OOM risk the cap exists to prevent.
-    """
+def test_local_ci_sh_inherits_pytest_default():
+    """scripts/local-ci.sh should inherit the two-worker pytest default."""
     local_ci_path = os.path.join(
         os.path.dirname(__file__), "..", "scripts", "local-ci.sh"
     )
@@ -136,5 +128,5 @@ def test_local_ci_sh_does_not_bypass_pytest_worker_cap():
     for line in pytest_lines:
         assert "-n " not in line and not line.rstrip().endswith("-n"), (
             f"local-ci.sh must not pass -n directly (bypasses the "
-            f"--maxprocesses cap in pyproject.toml): {line!r}"
+            f"two-worker default in pyproject.toml): {line!r}"
         )
