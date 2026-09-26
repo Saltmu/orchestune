@@ -836,6 +836,21 @@ class TestEdgeCasesAndBoundaryConditions:
             )
             assert d == (tmp_path / ".orchestune" / "ci").resolve()
 
+    def test_resolve_evidence_dir_resolves_toplevel_even_when_subdirectory_passed_as_worktree_root(
+        self, git_worktree: Path
+    ):
+        """Round 3 review finding: If worktree_root is a subdirectory (e.g.
+
+        from orchestune complete invoked in a subdir), resolve_evidence_dir
+        must resolve to the true worktree root via git rev-parse --show-toplevel.
+        """
+        from orchestune.complete.ci_evidence import resolve_evidence_dir
+
+        sub_dir = git_worktree / "subdir"
+        sub_dir.mkdir()
+        ev_dir = resolve_evidence_dir(sub_dir)
+        assert ev_dir == git_worktree / ".orchestune" / "ci"
+
     def test_query_remote_ref_tip_authoritative(
         self, git_worktree: Path, tmp_path: Path
     ):

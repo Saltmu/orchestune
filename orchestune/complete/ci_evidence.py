@@ -141,13 +141,12 @@ def resolve_evidence_dir(worktree_root: Path | str | None = None) -> Path:
         if worktree_root is not None
         else Path.cwd().resolve()
     )
-    if worktree_root is None:
-        try:
-            res = run_git(["rev-parse", "--show-toplevel"], cwd=cwd, check=False)
-            if res.returncode == 0 and res.stdout.strip():
-                cwd = Path(res.stdout.strip()).resolve()
-        except (OSError, subprocess.SubprocessError):
-            pass
+    try:
+        res = run_git(["rev-parse", "--show-toplevel"], cwd=cwd, check=False)
+        if res.returncode == 0 and res.stdout.strip():
+            cwd = Path(res.stdout.strip()).resolve()
+    except (OSError, subprocess.SubprocessError):
+        pass
     return (cwd / ".orchestune" / "ci").resolve()
 
 
