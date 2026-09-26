@@ -30,9 +30,7 @@ Write-Host "========================================="
 if ($env:ORCHESTUNE_CI_EVIDENCE_PATH) {
     $EvidenceFile = $env:ORCHESTUNE_CI_EVIDENCE_PATH
 } else {
-    $GitDir = (git rev-parse --git-dir 2>$null)
-    if (-not $GitDir) { $GitDir = ".git" }
-    $EvidenceFile = Join-Path $GitDir "ci_evidence.json"
+    $EvidenceFile = Join-Path $ProjectRoot ".orchestune\ci\ci_evidence.json"
 }
 if (Test-Path $EvidenceFile) {
     Remove-Item -Force $EvidenceFile -ErrorAction SilentlyContinue

@@ -55,6 +55,7 @@ def git_worktree(tmp_path: Path) -> Path:
     )
     (repo / "uv.lock").write_text("lockfile content\n", encoding="utf-8")
     (repo / "file.txt").write_text("initial\n", encoding="utf-8")
+    (repo / ".gitignore").write_text(".orchestune/ci/\n", encoding="utf-8")
 
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(
@@ -183,8 +184,8 @@ class TestEvidenceStorageAndAtomicRename:
 
     def test_evidence_stored_outside_worktree_tracking_area(self, git_worktree: Path):
         ev_path = resolve_evidence_path(git_worktree)
-        # Should be inside .git
-        assert ".git" in str(ev_path)
+        # Should be inside .orchestune/ci
+        assert ev_path == git_worktree / ".orchestune" / "ci" / CI_EVIDENCE_FILENAME
         assert ev_path.name == CI_EVIDENCE_FILENAME
 
         # Record evidence
@@ -205,6 +206,127 @@ class TestEvidenceStorageAndAtomicRename:
             check=True,
         )
         assert res.stdout.strip() == "", "Evidence file must not appear in git status"
+
+    def test_concurrent_worktrees_have_isolated_evidence(
+        self, git_worktree: Path, tmp_path: Path
+    ):
+        """Issue #1049: Concurrent worktrees do not share or overwrite each other's evidence."""
+        wt1 = tmp_path / "wt1"
+        wt2 = tmp_path / "wt2"
+        subprocess.run(
+            ["git", "worktree", "add", str(wt1), "-b", "branch-wt1"],
+            cwd=git_worktree,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "worktree", "add", str(wt2), "-b", "branch-wt2"],
+            cwd=git_worktree,
+            check=True,
+            capture_output=True,
+        )
+
+        ev_path1 = resolve_evidence_path(wt1)
+        ev_path2 = resolve_evidence_path(wt2)
+        assert ev_path1 != ev_path2
+        assert ev_path1 == wt1 / ".orchestune" / "ci" / CI_EVIDENCE_FILENAME
+        assert ev_path2 == wt2 / ".orchestune" / "ci" / CI_EVIDENCE_FILENAME
+
+        record_ci_evidence(
+            worktree_root=wt1,
+            started_at="2026-09-24T12:00:00Z",
+            exit_code=0,
+        )
+        assert ev_path1.is_file()
+        assert not ev_path2.exists()
+
+    def test_legacy_git_evidence_not_reused_without_new_ci(self, git_worktree: Path):
+        """Issue #1049: Legacy evidence under .git is not reused by default path."""
+        legacy_path = git_worktree / ".git" / CI_EVIDENCE_FILENAME
+        legacy_path.write_text("{}", encoding="utf-8")
+        req = CompleteRequest.done(issue_number=1049, pr=1, worktree_root=git_worktree)
+        with pytest.raises(CiEvidenceMissingError, match="No CI evidence found"):
+            validate_ci_evidence(req)
+
+    def test_evidence_storage_fails_with_clear_error_when_storage_not_writable(
+        self, git_worktree: Path, tmp_path: Path
+    ):
+        """Issue #1049: When evidence storage directory is not writable, fails with clear error."""
+        non_writable_dir = tmp_path / "ro_storage"
+        non_writable_dir.mkdir()
+        ro_evidence = non_writable_dir / "sub" / CI_EVIDENCE_FILENAME
+        with patch.dict(os.environ, {"ORCHESTUNE_CI_EVIDENCE_PATH": str(ro_evidence)}):
+            with patch("os.replace", side_effect=OSError("Permission denied")):
+                with pytest.raises(
+                    CiEvidenceError, match="Failed to persist CI evidence"
+                ):
+                    record_ci_evidence(
+                        worktree_root=git_worktree,
+                        started_at="2026-09-24T12:00:00Z",
+                        exit_code=0,
+                    )
+        tmp_files = list(ro_evidence.parent.glob(f"{CI_EVIDENCE_FILENAME}.tmp.*"))
+        assert len(tmp_files) == 0
+
+    def test_evidence_storage_succeeds_when_git_dir_is_read_only(
+        self, git_worktree: Path, tmp_path: Path
+    ):
+        """Issue #1049: evidence invalidation, recording, and validation must succeed
+
+        even when git metadata directory (e.g. .git/worktrees/<name>) is read-only.
+        """
+        linked_wt = tmp_path / "linked_wt"
+        subprocess.run(
+            ["git", "worktree", "add", str(linked_wt), "-b", "linked-branch"],
+            cwd=git_worktree,
+            check=True,
+            capture_output=True,
+        )
+        (linked_wt / ".gitignore").write_text(".orchestune/ci/\n", encoding="utf-8")
+        gitdir_content = (linked_wt / ".git").read_text(encoding="utf-8").strip()
+        assert gitdir_content.startswith("gitdir:")
+        gitdir_rel = gitdir_content.split("gitdir:", 1)[1].strip()
+        gitdir_path = Path(gitdir_rel)
+        if not gitdir_path.is_absolute():
+            gitdir_path = (linked_wt / gitdir_path).resolve()
+
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            pytest.skip(
+                "Root user bypasses DAC permission checks for read-only directory"
+            )
+
+        original_mode = gitdir_path.stat().st_mode
+        try:
+            os.chmod(gitdir_path, 0o555)
+            # Verify that gitdir genuinely blocks raw writes before trusting reproducer
+            probe_file = gitdir_path / "probe.tmp"
+            try:
+                probe_file.write_text("probe", encoding="utf-8")
+                probe_file.unlink(missing_ok=True)
+                is_read_only = False
+            except OSError:
+                is_read_only = True
+
+            if not is_read_only:
+                pytest.skip(
+                    "Filesystem does not enforce DAC read-only permissions in this environment"
+                )
+
+            ev = record_ci_evidence(
+                worktree_root=linked_wt,
+                started_at="2026-09-24T12:00:00Z",
+                exit_code=0,
+            )
+            assert ev.succeeded is True
+            req = CompleteRequest.done(issue_number=1049, pr=1, worktree_root=linked_wt)
+            validated = validate_ci_evidence(req)
+            assert validated.succeeded is True
+            assert (
+                resolve_evidence_path(linked_wt)
+                == linked_wt / ".orchestune" / "ci" / CI_EVIDENCE_FILENAME
+            )
+        finally:
+            os.chmod(gitdir_path, original_mode)
 
     def test_invalidate_removes_old_evidence_and_temp_files(self, git_worktree: Path):
         ev_path = resolve_evidence_path(git_worktree)
@@ -678,15 +800,58 @@ class TestEdgeCasesAndBoundaryConditions:
         ev_path = resolve_evidence_path(git_worktree)
         assert ev_path.is_file()
 
-    def test_resolve_evidence_dir_oserror_fallback(self, tmp_path: Path):
+    def test_resolve_evidence_dir_oserror_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
         from orchestune.complete.ci_evidence import resolve_evidence_dir
 
+        monkeypatch.chdir(tmp_path)
         with patch(
             "orchestune.complete.ci_evidence.run_git",
             side_effect=OSError("git not found"),
-        ):
-            d = resolve_evidence_dir(tmp_path)
-            assert d == tmp_path / ".git"
+        ) as mock_git:
+            d = resolve_evidence_dir()
+            mock_git.assert_called_once()
+            assert d == (tmp_path / ".orchestune" / "ci").resolve()
+
+    def test_resolve_evidence_dir_uses_show_toplevel_when_worktree_root_is_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from orchestune.complete.ci_evidence import resolve_evidence_dir
+        from orchestune.infra.git_cli import GitResult
+
+        sub_dir = tmp_path / "subdir"
+        sub_dir.mkdir()
+        monkeypatch.chdir(sub_dir)
+
+        with patch(
+            "orchestune.complete.ci_evidence.run_git",
+            return_value=GitResult(
+                returncode=0, stdout=str(tmp_path) + "\n", stderr=""
+            ),
+        ) as mock_git:
+            d = resolve_evidence_dir()
+            mock_git.assert_called_once_with(
+                ["rev-parse", "--show-toplevel"],
+                cwd=sub_dir.resolve(),
+                check=False,
+            )
+            assert d == (tmp_path / ".orchestune" / "ci").resolve()
+
+    def test_resolve_evidence_dir_resolves_toplevel_even_when_subdirectory_passed_as_worktree_root(
+        self, git_worktree: Path
+    ):
+        """Round 3 review finding: If worktree_root is a subdirectory (e.g.
+
+        from orchestune complete invoked in a subdir), resolve_evidence_dir
+        must resolve to the true worktree root via git rev-parse --show-toplevel.
+        """
+        from orchestune.complete.ci_evidence import resolve_evidence_dir
+
+        sub_dir = git_worktree / "subdir"
+        sub_dir.mkdir()
+        ev_dir = resolve_evidence_dir(sub_dir)
+        assert ev_dir == git_worktree / ".orchestune" / "ci"
 
     def test_query_remote_ref_tip_authoritative(
         self, git_worktree: Path, tmp_path: Path
@@ -873,6 +1038,10 @@ class TestEdgeCasesAndBoundaryConditions:
 
         assert 'echo "ERROR: Failed to remove prior CI evidence' in sh_text
         assert "Failed to remove prior CI evidence" in ps1_text
+        assert ".orchestune/ci/ci_evidence.json" in sh_text
+        assert ".orchestune\\ci\\ci_evidence.json" in ps1_text
+        assert 'GIT_DIR="$(git rev-parse --git-dir' not in sh_text
+        assert "$GitDir = (git rev-parse --git-dir" not in ps1_text
 
     def test_resolve_runner_environment_does_not_create_venv(self, tmp_path: Path):
         (tmp_path / "pyproject.toml").write_text(
