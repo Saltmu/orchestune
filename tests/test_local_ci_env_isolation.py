@@ -14,7 +14,6 @@ import pytest
 _COMPLETION_CONTEXT = (
     "ORCHESTUNE_EXPECTED_HEAD",
     "ORCHESTUNE_EXPECTED_TREE",
-    "ORCHESTUNE_EXPECTED_BASE",
     "ORCHESTUNE_BASE_SHA",
     "ORCHESTUNE_BASE_REF",
     "ORCHESTUNE_STATE_PATH",
@@ -119,7 +118,9 @@ def _assert_ci_isolation(tmp_path: Path, script_name: str, command: list[str]) -
         name: "a" * 40 for name in _COMPLETION_CONTEXT
     }
     args = json.loads(record_args.read_text(encoding="utf-8"))
-    assert {"--expected-head", "--expected-tree", "--expected-base"} <= set(args)
+    assert {"--expected-head", "--expected-tree"} <= set(args)
+    # Base drift no longer invalidates evidence (#1047).
+    assert "--expected-base" not in args
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell CI path")

@@ -107,7 +107,7 @@ Write-Host "[4/6] Running tests with coverage (pytest)..."
 # processes that inherit pipe handles, which can cause pipe destruction crashes when workers exit.
 # We default to single-process execution (-n 0) for safe Windows execution. Override via PYTEST_ADDOPTS if needed.
 $CiContextVars = @(
-    "ORCHESTUNE_EXPECTED_HEAD", "ORCHESTUNE_EXPECTED_TREE", "ORCHESTUNE_EXPECTED_BASE",
+    "ORCHESTUNE_EXPECTED_HEAD", "ORCHESTUNE_EXPECTED_TREE",
     "ORCHESTUNE_BASE_SHA", "ORCHESTUNE_BASE_REF", "ORCHESTUNE_STATE_PATH",
     "ORCHESTUNE_ISSUE_NUMBER", "ORCHESTUNE_CI_EVIDENCE_PATH"
 )

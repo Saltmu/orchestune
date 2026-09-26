@@ -79,7 +79,7 @@ echo "[4/6] Running tests with coverage (pytest)..."
 (
   # Tests create independent Git repositories; completion's CI context belongs only
   # to this worktree and must not become those repositories' evidence defaults.
-  unset ORCHESTUNE_EXPECTED_HEAD ORCHESTUNE_EXPECTED_TREE ORCHESTUNE_EXPECTED_BASE
+  unset ORCHESTUNE_EXPECTED_HEAD ORCHESTUNE_EXPECTED_TREE
   unset ORCHESTUNE_BASE_SHA ORCHESTUNE_BASE_REF ORCHESTUNE_STATE_PATH
   unset ORCHESTUNE_ISSUE_NUMBER ORCHESTUNE_CI_EVIDENCE_PATH
   uv run pytest --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
