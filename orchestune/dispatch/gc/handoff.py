@@ -131,7 +131,10 @@ def _outcome_matches_active(outcome: OutcomeRecord, active: ActiveWorktree) -> b
 
 
 def _normalise_base_ref(ref: str, *, remote_names: frozenset[str]) -> str:
-    remote, separator, branch = ref.partition("/")
+    if ref.startswith("refs/heads/"):
+        return ref.removeprefix("refs/heads/")
+    remote_ref = ref.removeprefix("refs/remotes/")
+    remote, separator, branch = remote_ref.partition("/")
     if separator and remote in remote_names:
         return branch
     return ref

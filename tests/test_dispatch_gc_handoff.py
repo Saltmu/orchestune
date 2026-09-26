@@ -68,6 +68,28 @@ def test_inspect_strips_configured_remote_prefix_from_expected_base(tmp_path: Pa
     assert forge.reachability_calls == [(_head_sha(active), "release/next")]
 
 
+@pytest.mark.parametrize(
+    ("base_ref", "expected_base"),
+    [
+        ("refs/remotes/origin/main", "main"),
+        ("refs/heads/main", "main"),
+    ],
+)
+def test_inspect_normalizes_full_git_base_refs(
+    tmp_path: Path, base_ref: str, expected_base: str
+):
+    repo, worktree, branch = _create_repo(tmp_path)
+    active, comment = _make_active(repo, worktree, branch)
+    active.base_ref = base_ref
+    forge = _forge(comment, branch, _head_sha(active))
+    forge.pr = replace(forge.pr, base_ref=expected_base)
+
+    plan = _inspect(active, repo, forge)
+
+    assert plan.action == "release"
+    assert forge.reachability_calls == [(_head_sha(active), expected_base)]
+
+
 @pytest.mark.parametrize("base_ref", ["claude/issue-123-task", "parent/issue-123"])
 def test_inspect_preserves_slash_containing_local_base_branch(
     tmp_path: Path, base_ref: str
