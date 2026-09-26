@@ -43,6 +43,10 @@ def _create_repo(tmp_path: Path) -> tuple[Path, Path, str]:
     run_git(["init", "-b", "main"], cwd=repo)
     run_git(["config", "user.name", "Test User"], cwd=repo)
     run_git(["config", "user.email", "test@example.com"], cwd=repo)
+    run_git(
+        ["remote", "add", "origin", "https://example.invalid/Saltmu/orchestune.git"],
+        cwd=repo,
+    )
     (repo / "README.md").write_text("initial\n", encoding="utf-8")
     run_git(["add", "README.md"], cwd=repo)
     run_git(["commit", "-m", "initial"], cwd=repo)
@@ -473,10 +477,11 @@ def test_preview_with_missing_state_is_a_read_only_noop(tmp_path: Path, monkeypa
 def test_state_lock_contention_returns_exit_22_without_changes(
     tmp_path: Path, monkeypatch
 ):
-    from unittest.mock import patch
+    import threading
 
     from orchestune.dispatch.gc.handoff import GcRequest
     from orchestune.dispatch.gc_service import run_handoff_gc
+    from orchestune.infra.process_utils import run_state_lock
 
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
@@ -485,12 +490,24 @@ def test_state_lock_contention_returns_exit_22_without_changes(
     forge = _forge(comment, branch, _head_sha(active))
     monkeypatch.chdir(repo)
 
-    with patch(
-        "orchestune.dispatch.gc_service.run_state_lock",
-        side_effect=RuntimeError("Another instance is already running"),
-    ):
-        result = run_handoff_gc(GcRequest(), forge_factory=lambda: forge)
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
 
+    def hold_run_state_lock():
+        with run_state_lock(state_path.with_suffix(".lock"), timeout=0):
+            lock_acquired.set()
+            release_lock.wait(timeout=5)
+
+    lock_thread = threading.Thread(target=hold_run_state_lock)
+    lock_thread.start()
+    assert lock_acquired.wait(timeout=5)
+    try:
+        result = run_handoff_gc(GcRequest(), forge_factory=lambda: forge)
+    finally:
+        release_lock.set()
+        lock_thread.join(timeout=5)
+
+    assert not lock_thread.is_alive()
     assert result.exit_code == 22
     assert state_path.read_bytes() == before
     assert worktree.exists()

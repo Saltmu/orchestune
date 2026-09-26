@@ -169,7 +169,9 @@ def _preview(
 
 
 def _run_state_lock_error(exc: RuntimeError) -> bool:
-    return "Another instance is already running" in str(exc)
+    return isinstance(exc.__cause__, FileLockContentionError) or (
+        "another process is currently holding the lock." in str(exc)
+    )
 
 
 def _remove_absent_claim_marker(active: ActiveWorktree, target: Path) -> str | None:

@@ -130,14 +130,18 @@ def _outcome_matches_active(outcome: OutcomeRecord, active: ActiveWorktree) -> b
     return outcome.result in {"blocked", "not-needed"}
 
 
-def _normalise_base_ref(ref: str, *, remote_ref: bool = False) -> str:
-    if remote_ref and "/" in ref:
-        return ref.split("/", maxsplit=1)[1]
+def _normalise_base_ref(ref: str, *, remote_names: frozenset[str]) -> str:
+    remote, separator, branch = ref.partition("/")
+    if separator and remote in remote_names:
+        return branch
     return ref
 
 
 def _verify_merged_pr(
-    active: ActiveWorktree, outcome: OutcomeRecord, forge: HandoffForge
+    active: ActiveWorktree,
+    outcome: OutcomeRecord,
+    forge: HandoffForge,
+    workspace: ClaimWorkspace,
 ) -> str | None:
     pr_number = outcome.pr
     if not isinstance(pr_number, int) or isinstance(pr_number, bool) or pr_number <= 0:
@@ -146,10 +150,18 @@ def _verify_merged_pr(
         pr = forge.get_pull_request(pr_number)
     except Exception:
         return "pr_unknown"
+    try:
+        remote_names = frozenset(
+            run_git(
+                ["remote"], cwd=workspace.repository_root, check=False
+            ).stdout.splitlines()
+        )
+    except OSError:
+        remote_names = frozenset()
     expected_base = _normalise_base_ref(
-        active.base_ref or active.base_branch, remote_ref=True
+        active.base_ref or active.base_branch, remote_names=remote_names
     )
-    actual_base = _normalise_base_ref(pr.base_ref)
+    actual_base = pr.base_ref
     if (
         pr.number != outcome.pr
         or pr.head_ref != active.branch
@@ -287,7 +299,7 @@ def inspect_handoff(
     if outcome is None:
         return _held_plan(active, error or "outcome_absent")
     if outcome.result == "done":
-        if error := _verify_merged_pr(active, outcome, forge):
+        if error := _verify_merged_pr(active, outcome, forge, workspace):
             return _held_plan(active, error, outcome)
 
     action, reason, worktree_action, request = _inspect_worktree(

@@ -9,6 +9,7 @@ import pytest
 
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.dispatch.claim_marker import claim_marker_path, write_claim_marker
+from orchestune.infra.git_cli import run_git
 from orchestune.outcome_record import OutcomeRecord
 from tests.test_dispatch_gc_handoff_integration import (
     FakeHandoffForge,
@@ -50,8 +51,12 @@ def test_inspect_releases_clean_done_with_exact_merged_pr(tmp_path: Path):
     assert forge.reachability_calls == [(_head_sha(active), "main")]
 
 
-def test_inspect_strips_remote_prefix_from_expected_base_only(tmp_path: Path):
+def test_inspect_strips_configured_remote_prefix_from_expected_base(tmp_path: Path):
     repo, worktree, branch = _create_repo(tmp_path)
+    run_git(
+        ["remote", "add", "custom-remote", "https://example.invalid/upstream.git"],
+        cwd=repo,
+    )
     active, comment = _make_active(repo, worktree, branch)
     active.base_ref = "custom-remote/release/next"
     forge = _forge(comment, branch, _head_sha(active))
@@ -61,6 +66,22 @@ def test_inspect_strips_remote_prefix_from_expected_base_only(tmp_path: Path):
 
     assert plan.action == "release"
     assert forge.reachability_calls == [(_head_sha(active), "release/next")]
+
+
+@pytest.mark.parametrize("base_ref", ["claude/issue-123-task", "parent/issue-123"])
+def test_inspect_preserves_slash_containing_local_base_branch(
+    tmp_path: Path, base_ref: str
+):
+    repo, worktree, branch = _create_repo(tmp_path)
+    active, comment = _make_active(repo, worktree, branch)
+    active.base_ref = base_ref
+    forge = _forge(comment, branch, _head_sha(active))
+    forge.pr = replace(forge.pr, base_ref=base_ref)
+
+    plan = _inspect(active, repo, forge)
+
+    assert plan.action == "release"
+    assert forge.reachability_calls == [(_head_sha(active), base_ref)]
 
 
 def test_inspect_holds_when_journaled_comment_is_absent(tmp_path: Path):
