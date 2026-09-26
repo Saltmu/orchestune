@@ -30,6 +30,9 @@ decomposition_plan.md
 # Local CI evidence (never commit)
 .orchestune/ci/
 
+# Orchestune claim owner tokens (never commit)
+.orchestune/claim-tokens/
+
 # Code analysis tool local state: symbol index, LSP cache, memories (never commit)
 .serena/
 
