@@ -314,6 +314,28 @@ def test_apply_rejects_stale_token_before_the_first_write(
     assert "issue_number: null" in plan.read_text(encoding="utf-8")
 
 
+def test_apply_rejects_unwritable_plan_before_creating_replacement_issues(
+    replan_files: tuple[Path, Path],
+) -> None:
+    plan, template = replan_files
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace("  - id: task-a", '  - "id": task-a'),
+        encoding="utf-8",
+    )
+    forge = FakeReplanForge()
+
+    with pytest.raises(ValueError, match="task-a"):
+        apply_replan(
+            plan,
+            preview_token(forge, plan),
+            forge=forge,
+            template_path=template,
+            repo_root=plan.parent,
+        )
+
+    assert forge.mutations == []
+
+
 def test_apply_rejects_an_unsafe_old_generation_before_writing(
     replan_files: tuple[Path, Path],
 ) -> None:
@@ -375,6 +397,31 @@ def test_apply_prepares_new_generation_then_retires_and_switches_parent_plan(
     assert "issue_number: 100" in local
     assert "issue_number: 101" in local
     assert "body:10" not in operations
+
+
+def test_apply_succeeds_with_compact_sequence_plan(
+    replan_files: tuple[Path, Path],
+) -> None:
+    plan, template = replan_files
+    plan.write_text(
+        plan.read_text(encoding="utf-8")
+        .replace("  - id:", "- id:")
+        .replace("\n    ", "\n  "),
+        encoding="utf-8",
+    )
+    forge = FakeReplanForge()
+
+    result = apply_replan(
+        plan,
+        preview_token(forge, plan),
+        forge=forge,
+        template_path=template,
+        repo_root=plan.parent,
+    )
+
+    assert result.created_issue_numbers == (100, 101)
+    assert "issue_number: 100" in plan.read_text(encoding="utf-8")
+    assert "issue_number: 101" in plan.read_text(encoding="utf-8")
 
 
 def test_same_subtask_id_still_creates_a_new_revision_issue(

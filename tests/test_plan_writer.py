@@ -920,3 +920,28 @@ class TestWriteParentIssueNumberInsertionBoundaryValues:
         lines = path.read_text(encoding="utf-8").splitlines()
         title_index = lines.index('title: "x"')
         assert lines[title_index + 1] == "parent_issue_number: 7"
+
+
+def test_write_issue_numbers_supports_compact_sequence_at_subtasks_indent(
+    tmp_path: Path,
+):
+    path = tmp_path / "decomposition_plan.md"
+    path.write_text(
+        "---\n"
+        'title: "x"\n'
+        "subtasks:\n"
+        "- id: task-a\n"
+        '  description: "A"\n'
+        "- id: task-b\n"
+        '  description: "B"\n'
+        "plan_revision: retained\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    write_issue_numbers(path, {"task-a": 101, "task-b": 102})
+
+    text = path.read_text(encoding="utf-8")
+    assert "  issue_number: 101" in text
+    assert "  issue_number: 102" in text
+    assert "plan_revision: retained" in text
