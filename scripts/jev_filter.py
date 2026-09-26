@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 DEFAULT_JEV_BASE_URL = "https://api.typesafe.ai/v1"
-DEFAULT_JEV_API_URL = f"{DEFAULT_JEV_BASE_URL}/evaluate"
+DEFAULT_JEV_API_URL = f"{DEFAULT_JEV_BASE_URL}/systemone"
 DEFAULT_VALIDITY_THRESHOLD = 0.7
 MAX_COMMENT_LENGTH = 4000
 MAX_RETRIES = 3
@@ -50,85 +50,82 @@ def is_finding_accepted(
     return validity >= threshold
 
 
-def evaluate_finding_with_jev(
-    comment: str,
-    path: str = "",
-    line: Any = "",
-    api_key: str | None = None,
-    base_url: str | None = None,
-    timeout: float = 10.0,
-    max_retries: int = MAX_RETRIES,
-    initial_backoff: float = INITIAL_BACKOFF_SECONDS,
-) -> JevFindingEvaluation:
-    """Evaluate a single review finding with the Jev API.
+def _resolve_api_url(base_url: str | None) -> str:
+    configured_base = base_url or os.environ.get("JEV_BASE_URL")
+    if configured_base:
+        cleaned = configured_base.rstrip("/")
+        return cleaned if cleaned.endswith("/systemone") else f"{cleaned}/systemone"
+    return os.environ.get("JEV_API_URL") or DEFAULT_JEV_API_URL
 
-    API key is read from JEV_API_KEY environment variable if not explicitly passed.
-    Base URL or endpoint can be passed via base_url argument or JEV_BASE_URL / JEV_API_URL env vars.
-    If no key is configured, evaluation is bypassed safely without raising errors.
-    Applies comment chunking/truncation and exponential backoff retry for transient errors.
-    """
-    resolved_key = api_key or os.environ.get("JEV_API_KEY")
-    if not resolved_key:
-        return JevFindingEvaluation(
-            validity=1.0,
-            impact="HIGH",
-            bypassed=True,
-        )
 
-    if base_url:
-        cleaned = base_url.rstrip("/")
-        url = cleaned if cleaned.endswith("/evaluate") else f"{cleaned}/evaluate"
-    elif os.environ.get("JEV_BASE_URL"):
-        cleaned = os.environ["JEV_BASE_URL"].rstrip("/")
-        url = cleaned if cleaned.endswith("/evaluate") else f"{cleaned}/evaluate"
-    elif os.environ.get("JEV_API_URL"):
-        url = os.environ["JEV_API_URL"]
-    else:
-        url = DEFAULT_JEV_API_URL
-
-    # Chunk / truncate oversized comments to prevent resource bloat and comply with API guidelines
+def _build_payload(comment: str, path: str, line: Any) -> bytes:
     comment_text = comment or ""
     if len(comment_text) > MAX_COMMENT_LENGTH:
-        chunked_comment = (
+        comment_text = (
             comment_text[:MAX_COMMENT_LENGTH] + "\n... [truncated for Jev evaluation]"
         )
-    else:
-        chunked_comment = comment_text
-
-    payload = json.dumps(
+    return json.dumps(
         {
-            "comment": chunked_comment,
-            "path": path,
-            "line": line,
+            "model": "jev-latest",
+            "state": {"comment": comment_text, "path": path, "line": line},
+            "questions": {
+                "validity": {
+                    "type": "noul",
+                    "instructions": (
+                        "Does the review finding in `comment`, at `path` and `line`, "
+                        "describe a concrete, plausible defect that needs fixing, "
+                        "rather than a speculative edge case or stylistic preference?"
+                    ),
+                },
+                "impact": {
+                    "type": "choice",
+                    "instructions": (
+                        "What is the impact of the defect described in `comment` "
+                        "at `path` and `line`, if it occurs?"
+                    ),
+                    "criteria": {
+                        "LOW": "Cosmetic, stylistic, or negligible functional impact.",
+                        "MEDIUM": "A functional defect affecting a limited use case.",
+                        "HIGH": "Major correctness, security, or availability failure.",
+                    },
+                },
+            },
         }
     ).encode("utf-8")
 
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {resolved_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+
+def _parse_evaluation(data: dict[str, Any]) -> JevFindingEvaluation:
+    validity_answer = data["answers"]["validity"]
+    impact_answer = data["answers"]["impact"]
+    validity = validity_answer["noul"]
+    impact = impact_answer["choice"]
+    if (
+        validity_answer["type"] != "noul"
+        or impact_answer["type"] != "choice"
+        or isinstance(validity, bool)
+        or not isinstance(validity, int | float)
+        or not 0.0 <= validity <= 1.0
+        or impact not in ("LOW", "MEDIUM", "HIGH")
+    ):
+        raise ValueError("Invalid Jev answers")
+    return JevFindingEvaluation(
+        validity=float(validity), impact=impact, raw_response=data
     )
 
+
+def _evaluate_request(
+    req: urllib.request.Request,
+    timeout: float,
+    max_retries: int,
+    initial_backoff: float,
+) -> JevFindingEvaluation:
     backoff = initial_backoff
     for attempt in range(max_retries + 1):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                validity = float(data.get("validity", 1.0))
-                impact = str(data.get("impact", "HIGH")).upper()
-                return JevFindingEvaluation(
-                    validity=validity,
-                    impact=impact,
-                    bypassed=False,
-                    raw_response=data,
-                )
+                return _parse_evaluation(json.loads(resp.read().decode("utf-8")))
         except urllib.error.HTTPError as exc:
-            # 429 (rate limit) or 5xx (server error) are transient -> retry with backoff
-            if exc.code in (429, 500, 502, 503, 504) and attempt < max_retries:
+            if exc.code in (429, 500, 502, 503, 504, 529) and attempt < max_retries:
                 time.sleep(backoff)
                 backoff *= 2.0
                 continue
@@ -153,12 +150,40 @@ def evaluate_finding_with_jev(
                 file=sys.stderr,
             )
             break
+    return JevFindingEvaluation(validity=1.0, impact="HIGH", bypassed=True)
 
-    return JevFindingEvaluation(
-        validity=1.0,
-        impact="HIGH",
-        bypassed=True,
+
+def evaluate_finding_with_jev(
+    comment: str,
+    path: str = "",
+    line: Any = "",
+    api_key: str | None = None,
+    base_url: str | None = None,
+    timeout: float = 10.0,
+    max_retries: int = MAX_RETRIES,
+    initial_backoff: float = INITIAL_BACKOFF_SECONDS,
+) -> JevFindingEvaluation:
+    """Evaluate a review finding via TypeSafe's System One API.
+
+    API key defaults to JEV_API_KEY. The URL defaults to /v1/systemone;
+    base_url or JEV_BASE_URL selects a base or /systemone endpoint, while
+    JEV_API_URL specifies an exact endpoint. Explicit base_url takes precedence.
+    Missing keys or failed evaluations bypass filtering to preserve findings.
+    Oversized comments are truncated; transient errors use bounded backoff.
+    """
+    resolved_key = api_key or os.environ.get("JEV_API_KEY")
+    if not resolved_key:
+        return JevFindingEvaluation(validity=1.0, impact="HIGH", bypassed=True)
+    req = urllib.request.Request(
+        _resolve_api_url(base_url),
+        data=_build_payload(comment, path, line),
+        headers={
+            "Authorization": f"Bearer {resolved_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
     )
+    return _evaluate_request(req, timeout, max_retries, initial_backoff)
 
 
 def filter_review_findings(

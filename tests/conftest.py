@@ -31,6 +31,7 @@ from orchestune.models import IssueRecord, PrRecord
 pytest_plugins = [
     "tests.test_provisioning_support",
     "tests.claim_helpers",
+    "tests.environment_support",
 ]
 
 GIT_ENV_VARS_TO_CLEAR = DANGEROUS_GIT_ENV_VARS
@@ -1230,12 +1231,4 @@ def _guard_dispatch_cycle_ensure_parent_branch(
             "orchestune.dispatch.cycle.ensure_parent_branch_ready",
             isolate_parent_branch_ready,
         )
-    yield
-
-
-@pytest.fixture(autouse=True)
-def _isolate_git_env(monkeypatch: pytest.MonkeyPatch):
-    """Ensure tests run in an isolated Git environment where GIT_* variables are stripped."""
-    for var in DANGEROUS_GIT_ENV_VARS:
-        monkeypatch.delenv(var, raising=False)
     yield
