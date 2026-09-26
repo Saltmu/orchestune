@@ -76,7 +76,14 @@ echo "[3/6] Checking types (mypy)..."
 uv run mypy orchestune tests
 
 echo "[4/6] Running tests with coverage (pytest)..."
-uv run pytest --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
+(
+  # Tests create independent Git repositories; completion's CI context belongs only
+  # to this worktree and must not become those repositories' evidence defaults.
+  unset ORCHESTUNE_EXPECTED_HEAD ORCHESTUNE_EXPECTED_TREE ORCHESTUNE_EXPECTED_BASE
+  unset ORCHESTUNE_BASE_SHA ORCHESTUNE_BASE_REF ORCHESTUNE_STATE_PATH
+  unset ORCHESTUNE_ISSUE_NUMBER ORCHESTUNE_CI_EVIDENCE_PATH
+  uv run pytest --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
+)
 
 echo "[5/6] Detecting new or worsened code and skill bloat..."
 uv run python scripts/detect_bloat.py --baseline .orchestune/bloat-baseline.json
@@ -129,4 +136,3 @@ if [ -n "${ORCHESTUNE_ISSUE_NUMBER:-}" ]; then
 fi
 
 uv run python -m orchestune.complete.ci_evidence record "${RECORD_ARGS[@]}"
-
