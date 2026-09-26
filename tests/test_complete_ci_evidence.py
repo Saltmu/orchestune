@@ -288,9 +288,28 @@ class TestEvidenceStorageAndAtomicRename:
         if not gitdir_path.is_absolute():
             gitdir_path = (linked_wt / gitdir_path).resolve()
 
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            pytest.skip(
+                "Root user bypasses DAC permission checks for read-only directory"
+            )
+
         original_mode = gitdir_path.stat().st_mode
         try:
             os.chmod(gitdir_path, 0o555)
+            # Verify that gitdir genuinely blocks raw writes before trusting reproducer
+            probe_file = gitdir_path / "probe.tmp"
+            try:
+                probe_file.write_text("probe", encoding="utf-8")
+                probe_file.unlink(missing_ok=True)
+                is_read_only = False
+            except OSError:
+                is_read_only = True
+
+            if not is_read_only:
+                pytest.skip(
+                    "Filesystem does not enforce DAC read-only permissions in this environment"
+                )
+
             ev = record_ci_evidence(
                 worktree_root=linked_wt,
                 started_at="2026-09-24T12:00:00Z",
