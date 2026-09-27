@@ -202,11 +202,9 @@ def _parse_applicability(answer: Any) -> tuple[str, float | None]:
             for v in values
         ):
             return "UNKNOWN", None
-        if (
-            not math.isclose(sum(values), 1, abs_tol=1e-6)
-            or probabilities[choice] < max(values)
-            or not math.isclose(probabilities[choice], confidence, abs_tol=1e-6)
-        ):
+        if not math.isclose(sum(values), 1, abs_tol=1e-6) or probabilities[
+            choice
+        ] < max(values):
             return "UNKNOWN", None
     return choice, float(confidence)
 

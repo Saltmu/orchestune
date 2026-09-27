@@ -12,7 +12,7 @@
 | SPECULATIVE | コードと実行条件から、文書化されていない追加の仮定が必要で、既存要件への違反もないと判断できる |
 | UNKNOWN | コード・入力経路・規約などが不足、矛盾、または重要箇所が切り詰められている |
 
-API障害は `bypassed=True` として無条件に保持します（validity閾値が1を超えていても保持）。SPECULATIVEでconfidenceが0.9以上、コード・実行条件の出典が一致し、base規約が取得でき、missing/truncatedが空の場合だけ新軸で除外します。confidenceは校正済みの発生確率ではありません。パス分類やPR本文の「内部用」「YAGNI」という主張だけでは証拠を満たしません。低頻度だけでSPECULATIVEにはなりません。
+API障害は `bypassed=True` として無条件に保持します（validity閾値が1を超えていても保持）。SPECULATIVEでconfidenceが0.9以上、コード・実行条件の出典が一致し、base規約が取得でき、missing/truncatedが空の場合だけ新軸で除外します。APIの `confidence` は確率分布全体から導かれる確信度で、`probabilities[choice]` と一致する必要はなく、校正済みの発生確率でもありません。パーサーは独立した値として保持し、有限な0〜1の範囲と、確率分布がある場合は各値の範囲・合計1・choiceが最大確率であることを検査します。[API仕様](https://docs.typesafe.ai/api)を参照してください。パス分類やPR本文の「内部用」「YAGNI」という主張だけでは証拠を満たしません。低頻度だけでSPECULATIVEにはなりません。
 
 それ以外は従来の `validity >= threshold` かつ `impact != LOW` を使います。旧形式の応答や新軸の不正値はUNKNOWNとして従来判定へ戻します。既存軸が不正な場合は評価全体をbypassします。
 
