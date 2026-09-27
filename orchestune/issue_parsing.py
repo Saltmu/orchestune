@@ -611,7 +611,7 @@ def _parse_yaml_footprint_dict(
     str | None,
     str | None,
 ]:
-    subtask_id = str(data.get("subtask_id", ""))
+    subtask_id = str(data.get("subtask_id") or "").strip()
     footprint_error: str | None = None
     try:
         footprint = parse_footprint_value(data.get("footprint"))

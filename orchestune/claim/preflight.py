@@ -6,8 +6,6 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-import yaml
-
 from orchestune.claim.contracts import (
     ClaimFailure,
     ClaimFailureReason,
@@ -23,7 +21,6 @@ from orchestune.dependencies.policy import (
     has_pending_dependencies,
 )
 from orchestune.issue_parsing import (
-    FOOTPRINT_BLOCK_PATTERN,
     effective_parent_number,
     parse_task_from_issue,
 )
@@ -80,28 +77,17 @@ class PreflightDecision:
     task: TaskMetadata | None = None
 
 
-def resolve_claim_subtask_id(issue: IssueRecord) -> str:
+def resolve_claim_subtask_id(
+    issue: IssueRecord, *, task: TaskMetadata | None = None
+) -> str:
     """Resolve a stable subtask identifier for branch naming and tracking.
 
     Prioritizes subtask_id declared in Footprint YAML. If absent, empty,
     or if the YAML block is missing/malformed, generates a stable ID
     derived from the issue number (independent of issue title changes).
     """
-    fallback_id = f"task-{issue.number}"
-    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
-    if not match:
-        return fallback_id
-
-    try:
-        data = yaml.safe_load(match.group(1))
-        if isinstance(data, dict):
-            subtask_id = str(data.get("subtask_id") or "").strip()
-            if subtask_id:
-                return subtask_id
-    except yaml.YAMLError:
-        pass
-
-    return fallback_id
+    resolved_task = task if task is not None else parse_task_from_issue(issue)
+    return resolved_task.subtask_id or f"task-{issue.number}"
 
 
 def _base_ref_for_parent(default_base: str, parent_issue_number: int | None) -> str:
@@ -360,7 +346,7 @@ def evaluate_claim_preflight(
         return PreflightDecision(allowed=False, issue_number=issue_num, failure=failure)
 
     task = parse_task_from_issue(issue)
-    subtask_id = task.subtask_id or f"task-{issue.number}"
+    subtask_id = resolve_claim_subtask_id(issue, task=task)
     reservation_kind, failure = _evaluate_footprint_reservation(task)
     base_ref, stack_target = None, None
     if failure is None:

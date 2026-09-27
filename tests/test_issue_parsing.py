@@ -793,3 +793,13 @@ class TestFootprintParsing:
             assert task.footprint == ()
             assert task.footprint_error is not None
             assert task.yaml_error is False
+
+    def test_subtask_id_null_or_whitespace_parses_as_empty_string(self):
+        from orchestune.issue_parsing import parse_task_from_issue
+        from orchestune.models import IssueRecord
+
+        for val in ("null", "''", "'   '", "~"):
+            body = f"```yaml\nsubtask_id: {val}\n```\n"
+            issue = IssueRecord(1, "title", body, (), "2026-01-01T00:00:00Z")
+            task = parse_task_from_issue(issue)
+            assert task.subtask_id == ""

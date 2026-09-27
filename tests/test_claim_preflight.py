@@ -106,6 +106,17 @@ class TestResolveClaimSubtaskId:
         )
         assert resolve_claim_subtask_id(issue) == "task-77"
 
+    def test_falls_back_when_subtask_id_in_yaml_is_null_or_whitespace(self) -> None:
+        for body in (
+            "```yaml\nsubtask_id: null\nfootprint: [a.py]\n```",
+            "```yaml\nsubtask_id:\nfootprint: [a.py]\n```",
+            "```yaml\nsubtask_id: '   '\nfootprint: [a.py]\n```",
+        ):
+            issue = _make_issue(number=78, body=body)
+            assert resolve_claim_subtask_id(issue) == "task-78"
+            decision = evaluate_claim_preflight(issue)
+            assert decision.subtask_id == "task-78"
+
     def test_subtask_id_does_not_change_when_title_changes(self) -> None:
         body = _footprint_body("stable-id")
         issue1 = _make_issue(number=938, title="Old Title", body=body)
