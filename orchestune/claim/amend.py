@@ -129,7 +129,7 @@ def _issue_footprint(forge: Forge, active: ActiveWorktree) -> IssueRecord:
     return issue
 
 
-def _git_lines(args: list[str], cwd: str) -> list[str]:
+def _git_paths(args: list[str], cwd: str) -> list[str]:
     result = run_git(args, cwd=cwd, check=False)
     if result.returncode != 0:
         raise _reject(
@@ -137,7 +137,7 @@ def _git_lines(args: list[str], cwd: str) -> list[str]:
             f"Unable to list changed files in the worktree: {(result.stderr or '').strip()}",
             "Inspect the worktree manually; the reservation was left unchanged.",
         )
-    return [line for line in result.stdout.splitlines() if line.strip()]
+    return [path for path in result.stdout.split("\0") if path]
 
 
 def _changed_files(active: ActiveWorktree) -> list[str]:
@@ -148,12 +148,12 @@ def _changed_files(active: ActiveWorktree) -> list[str]:
             f"Claim {active.claim_id} has no recorded base commit or worktree path.",
             "Inspect the worktree manually; the reservation was left unchanged.",
         )
-    diff = _git_lines(
-        ["diff", "--name-only", "--no-renames", active.base_sha],
+    diff = _git_paths(
+        ["diff", "--name-only", "--no-renames", "-z", active.base_sha],
         active.worktree_path,
     )
-    untracked = _git_lines(
-        ["ls-files", "--others", "--exclude-standard"], active.worktree_path
+    untracked = _git_paths(
+        ["ls-files", "--others", "--exclude-standard", "-z"], active.worktree_path
     )
     return [*diff, *untracked]
 

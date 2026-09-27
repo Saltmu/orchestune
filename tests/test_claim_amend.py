@@ -387,3 +387,18 @@ def test_amend_reports_lock_contention(amend_env):
     assert outcome.success is False
     assert outcome.failure is not None
     assert outcome.failure.reason == ClaimFailureReason.STATE_LOCK_FAILED
+
+
+def test_amend_records_non_ascii_changed_paths_verbatim(amend_env):
+    worktree = amend_env["worktree"]
+    (worktree / "設計.md").write_text("untracked")
+    (worktree / "README.md").write_text("changed")
+    run_git(["mv", "README.md", "読んで.md"], cwd=worktree)
+
+    outcome = _amend(amend_env)
+
+    assert outcome.success is True, outcome.failure
+    assert "設計.md" in outcome.amended_footprint
+    assert "読んで.md" in outcome.amended_footprint
+    assert "README.md" in outcome.amended_footprint
+    assert not any('"' in path or "\\" in path for path in outcome.amended_footprint)
