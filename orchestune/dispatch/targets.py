@@ -9,70 +9,70 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
-import time
-import urllib.error
-import urllib.request
-from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from orchestune.dispatch.reviewer import (
     ReviewerBot,
     ReviewerBotSetting,
     resolve_reviewer_bot,
 )
-from orchestune.forge import Forge, GitHubForge
+from orchestune.forge import Forge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.models import Usage
-from orchestune.outcome_record import (
-    OutcomeLookupResult,
-    OutcomeLookupState,
-    parse_from_comments,
+from orchestune.targets.cloud_routine import (
+    ROUTINE_ID_ENV_VAR as ROUTINE_ID_ENV_VAR,
+)
+from orchestune.targets.cloud_routine import (
+    ROUTINE_TOKEN_ENV_VAR as ROUTINE_TOKEN_ENV_VAR,
+)
+from orchestune.targets.cloud_routine import (
+    ClaudeCodeCloudRoutineDispatchTarget as ClaudeCodeCloudRoutineDispatchTarget,
+)
+from orchestune.targets.contracts import (
+    DispatchHandle as DispatchHandle,
+)
+from orchestune.targets.contracts import (
+    DispatchTarget as DispatchTarget,
+)
+from orchestune.targets.contracts import (
+    ExecutionSelection,
+)
+from orchestune.targets.contracts import (
+    LaunchCapabilities as LaunchCapabilities,
+)
+from orchestune.targets.support import (
+    NONINTERACTIVE_DISPATCH_INSTRUCTION as NONINTERACTIVE_DISPATCH_INSTRUCTION,
+)
+from orchestune.targets.support import (
+    BranchReachabilityError as BranchReachabilityError,
+)
+from orchestune.targets.support import (
+    _lookup_issue_outcome as _lookup_issue_outcome,
+)
+from orchestune.targets.support import (
+    _noninteractive_instruction,
+    _resolve_base_branch_val,
+    _task_pr_completion_status,
+)
+from orchestune.targets.support import (
+    _push_branch_and_verify as _push_branch_and_verify,
 )
 from orchestune.task_metadata import TaskMetadata
-
-if TYPE_CHECKING:
-    from orchestune.dispatch.execution_profiles import ExecutionSelection
-    from orchestune.models import PrRecord
 
 logger = logging.getLogger(__name__)
 
 
-ROUTINE_ID_ENV_VAR = "ORCHESTUNE_ROUTINE_ID"
-ROUTINE_TOKEN_ENV_VAR = "ORCHESTUNE_ROUTINE_TOKEN"
 CODEX_CLOUD_ENV_VAR = "ORCHESTUNE_CODEX_CLOUD_ENV"
-
-NONINTERACTIVE_DISPATCH_INSTRUCTION = (
-    "これは非対話型のバックグラウンド自動実行であり、標準入力からの応答は得られません。"
-    "planning_modeによるユーザー承認待ちで停止せず、"
-    "実装プラン作成後は直ちに実装・検証・コミットまで完了させてください。"
-)
-
-
-def _noninteractive_instruction(reviewer_bot: ReviewerBot | None) -> str:
-    if reviewer_bot is None:
-        return NONINTERACTIVE_DISPATCH_INSTRUCTION
-    return (
-        NONINTERACTIVE_DISPATCH_INSTRUCTION
-        + f"PR作成後のレビュー担当には必ず `{reviewer_bot}` を指定し、"
-        "レビュー完了と指摘解消まで自律的に進めてください。"
-    )
-
-
-def _resolve_base_branch_val(base_branch: str | None) -> str:
-    """PR作成時のベースブランチ名を正規化する（未指定時は'main'）。"""
-    return (base_branch.removeprefix("origin/") if base_branch else "") or "main"
 
 
 _CLAUDE_CLI_LOCAL_CMD_BASE = (
@@ -159,279 +159,10 @@ def resolve_default_dispatch_target_name(env: Mapping[str, str]) -> str:
     return "auto"
 
 
-@dataclass(frozen=True)
-class DispatchHandle:
-    """起動したエージェント実行を後から追跡するための不透明なハンドル。"""
-
-    pid: int | None = None
-    external_id: str | None = None
-    external_url: str | None = None
-    branch_name: str | None = None
-    issue_number: int | None = None
-    started_at: float | None = None
-    launch_attempt_id: str | None = None
-
-
-@dataclass(frozen=True)
-class LaunchCapabilities:
-    """Attempt lookup must identify one execution by ID, not by branch similarity.
-
-    Idempotent targets override launch_attempt to pass the ID as the provider key.
-    A None lookup result is inconclusive, not proof that a launch did not happen.
-    """
-
-    durable_attempt: bool = False
-    idempotent_launch: bool = False
-    lookup_by_attempt: bool = False
-
-
-class DispatchTarget(ABC):
-    """タスクを実際にどこへディスパッチするかを表す戦略インターフェース。"""
-
-    target_name: str | None = None
-    launch_capabilities = LaunchCapabilities()
-
-    def lookup_launch_attempt(self, attempt_id: str) -> DispatchHandle | None:
-        """Return a uniquely matched handle, or None when reconciliation is unavailable."""
-        return None
-
-    def launch_attempt(
-        self,
-        attempt_id: str,
-        task: TaskMetadata,
-        branch_name: str,
-        worktree_path: Path,
-        *,
-        force_push: bool = False,
-        execution_selection: ExecutionSelection | None = None,
-        base_branch: str | None = None,
-    ) -> DispatchHandle:
-        """Launch once; idempotent providers override this to use attempt_id as a key."""
-        return self.launch(
-            task,
-            branch_name,
-            worktree_path,
-            force_push=force_push,
-            execution_selection=execution_selection,
-            base_branch=base_branch,
-        )
-
-    @abstractmethod
-    def launch(
-        self,
-        task: TaskMetadata,
-        branch_name: str,
-        worktree_path: Path,
-        *,
-        force_push: bool = False,
-        execution_selection: ExecutionSelection | None = None,
-        base_branch: str | None = None,
-    ) -> DispatchHandle:
-        """タスクに対応するエージェントを起動し、追跡用ハンドルを返す。
-
-        #384: `force_push=True`は、自動リベース後の再launch（ローカルで書き
-        換え済みの履歴を再pushする必要がある場合）を呼び出し元が明示するため
-        のフラグ。pushを行わない実装では無視してよい。
-
-        #711: `base_branch`はタスクPR作成先のベースブランチ（親Issueモード時は
-        `parent/issue-{N}`、通常時は`main`）。未指定時は`None`（各実装側で
-        `main`へフォールバック）。
-        """
-
-    @abstractmethod
-    def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
-        """`launch`で起動した実行が完了しているかどうかを判定する。"""
-
-    def completion_status(
-        self, handle: DispatchHandle, forge: Forge | None = None
-    ) -> Literal["pending", "completed", "abandoned"]:
-        """Return a lifecycle status; local targets only expose pending/completed.
-
-        #315レビュー対応: `is_complete`の旧シグネチャ（`forge`引数なし）を実装した
-        サブクラスが残っていても、TypeErrorにせず引数無しで再試行して互換性を保つ。
-        """
-        try:
-            complete = self.is_complete(handle, forge=forge)
-        except TypeError:
-            complete = self.is_complete(handle)
-        return "completed" if complete else "pending"
-
-    def collect_usage(self, handle: DispatchHandle) -> Usage | None:
-        """#438: 完了した実行の消費量および動作モデル名を返す。取得できない場合は None。"""
-        return None
-
-
-def _parse_github_timestamp(value: str) -> float | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
-
-
-def _is_stale_pr_for_handle(pr: PrRecord, handle: DispatchHandle) -> bool:
-    """#246: session開始（`handle.started_at`）より前に作成されたPRは、状態
-    （OPEN/MERGED/CLOSED）に関係なく現在のsessionの成果物ではない。同名branchの
-    古いMERGED PR等で再キュー後の新sessionが即completed扱いされないよう除外する。
-
-    `created_at`を取得・解釈できないPRも現世代の証拠とはみなさない（fail
-    closed）。`started_at`を持たないhandle（復元経路等）は従来通り除外しない。
-    CLOSED PRの`closed_at < started_at`によるstale判定（#210）は、
-    `closed_at >= created_at`であるため`created_at`判定に包含される。
-
-    #262レビュー対応: GitHubの`created_at`は秒精度で切り捨てられる一方、
-    `handle.started_at`は小数秒を含む（各task起動直前に`time.time()`で
-    取得）。直接比較すると、実際にはsession開始「後」に作成された正規PRでも
-    `created_at < started_at`が真になり誤ってstale扱いされうる
-    （例: created_at=X.000, started_at=X.900）。比較はGitHub側の精度に
-    合わせて`started_at`を秒単位に切り捨ててから行い、同じ秒に作成された
-    PRはstaleとしない。"""
-    if handle.started_at is None:
-        return False
-    created_at = _parse_github_timestamp(pr.created_at)
-    return created_at is None or created_at < math.floor(handle.started_at)
-
-
-def _resolve_issue_number_for_outcome(
-    handle: DispatchHandle, open_prs: list[PrRecord]
-) -> int | None:
-    """`handle.issue_number`が未設定な場合、マッチした（ブランチ名一致の）
-    open PRのGitHubクロージング参照（`closes_issue_numbers`）から対象Issueを
-    解決する。これはPRの**メタデータ**であり、#998で読取対象外とした
-    PR**コメント**とは別物なので、Issueコメント正本の契約に反しない。
-
-    Codexレビュー(#1015 round3 P2) 対応: 1つのPRが複数Issueをcloseする場合、
-    どれが実際のディスパッチ対象タスクかは`closes_issue_numbers`だけからは
-    判別できない（先頭を採ると別Issueを誤って対象にしうる）。曖昧な場合は
-    解決を諦め、他のマッチPRで一意に解決できないか続けて試す。
-    """
-    if handle.issue_number is not None:
-        return handle.issue_number
-    for pr in open_prs:
-        if len(pr.closes_issue_numbers) == 1:
-            return pr.closes_issue_numbers[0]
-    return None
-
-
-def _lookup_issue_outcome(
-    issue_number: int | None, forge: Forge, *, since: float | None
-) -> OutcomeLookupResult:
-    """#998: Issueコメントのみを宣言の正本として`OutcomeRecord`を解決する。
-
-    旧来はPRコメントへもフォールバックしていたが、Issueコメント正本の契約に
-    伴い廃止した（通信再送や複数PRでの重複読み取りによる誤ったattempt増加を
-    防ぐため）。取得に失敗した場合はABSENT（未投稿）と区別してUNKNOWNを返す。
-    """
-    if issue_number is None:
-        return OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN)
-    try:
-        comments = forge.list_comments(issue_number)
-    except Exception:
-        return OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN)
-    record = parse_from_comments(comments, since=since)
-    if record is None:
-        return OutcomeLookupResult(state=OutcomeLookupState.ABSENT)
-    return OutcomeLookupResult(state=OutcomeLookupState.FOUND, record=record)
-
-
-def _check_open_prs_outcome(
-    open_prs: list[PrRecord],
-    handle: DispatchHandle,
-    forge: Forge,
-) -> Literal["completed", "unknown", "pending"]:
-    issue_number = _resolve_issue_number_for_outcome(handle, open_prs)
-    lookup = _lookup_issue_outcome(issue_number, forge, since=handle.started_at)
-    if lookup.state is OutcomeLookupState.FOUND:
-        return "completed"
-    if lookup.state is OutcomeLookupState.UNKNOWN:
-        return "unknown"
-    return "pending"
-
-
-def _task_pr_completion_status(
-    handle: DispatchHandle,
-    forge: Forge | None = None,
-) -> Literal["pending", "completed", "abandoned", "unknown"]:
-    if handle.branch_name is None and handle.issue_number is None:
-        return "pending"
-    forge = forge or GitHubForge()
-    try:
-        prs = forge.list_prs(state="all")
-    except Exception:
-        return "unknown"
-    matching_prs = [
-        pr
-        for pr in prs
-        if (
-            (handle.branch_name is not None and pr.head_ref == handle.branch_name)
-            or (
-                handle.issue_number is not None
-                and handle.issue_number in pr.closes_issue_numbers
-            )
-        )
-        and not _is_stale_pr_for_handle(pr, handle)
-    ]
-    if any(pr.state == "MERGED" for pr in matching_prs):
-        return "completed"
-
-    open_prs = [pr for pr in matching_prs if pr.state == "OPEN"]
-    if open_prs:
-        return _check_open_prs_outcome(open_prs, handle, forge)
-
-    if any(pr.state == "CLOSED" for pr in matching_prs):
-        return "abandoned"
-    return "pending"
-
-
 def default_dry_run_command_builder(
     task: TaskMetadata, worktree_path: Path
 ) -> list[str]:
     return ["true"]
-
-
-class BranchReachabilityError(RuntimeError):
-    """#244レビュー対応: `_push_branch_and_verify`の到達性検証失敗専用の例外。
-
-    `create_worktree_and_launch`側で汎用`RuntimeError`を捕捉すると、
-    このチェック以外の実装バグまで通常の起動失敗として握り潰してしまうため、
-    この専用型だけを捕捉させる。
-    """
-
-
-def _push_branch_and_verify(
-    branch_name: str, worktree_path: Path, *, force: bool = False
-) -> None:
-    """#244: stacked/parent base付きで作成されたローカルtask branchを、リモート
-    セッションがその内容ごとcheckoutできるようoriginへpushし、到達性を検証する。
-
-    push後に`git ls-remote`でリモートbranchのSHAをローカルHEADと照合し、
-    確認できない場合は`BranchReachabilityError`を送出する
-    （呼び出し側はfireせずfail closed）。
-
-    #384: `force=True`の場合は`--force-with-lease`を付与する。自動リベースは
-    ローカルで既存の履歴を書き換えるため、force無しの通常pushは常に
-    non-fast-forwardで拒否される（初回起動時の新規ブランチpushには影響しない）。
-    """
-    push_args = ["push", "--set-upstream", "origin", branch_name]
-    if force:
-        push_args.insert(1, "--force-with-lease")
-    run_git(push_args, cwd=worktree_path, check=True)
-    local_sha = run_git(
-        ["rev-parse", "HEAD"], cwd=worktree_path, check=True
-    ).stdout.strip()
-    ls_remote_output = run_git(
-        ["ls-remote", "origin", f"refs/heads/{branch_name}"],
-        cwd=worktree_path,
-        check=True,
-    ).stdout.strip()
-    remote_sha = ls_remote_output.split()[0] if ls_remote_output else ""
-    if not remote_sha or remote_sha != local_sha:
-        raise BranchReachabilityError(
-            f"リモートブランチ '{branch_name}' の到達性を検証できませんでした "
-            f"(local={local_sha or '不明'}, remote={remote_sha or '不在'})。"
-            "baseの変更を含まないセッション起動を防ぐため、fireを中止します。"
-        )
 
 
 def _is_pid_alive(pid: int | None) -> bool:
@@ -640,163 +371,6 @@ def _parse_usage_from_log(log_path: Path) -> Usage | None:
     except Exception:
         pass
     return None
-
-
-class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
-    """#181/#215: Claude Codeクラウドルーチンのfire APIへ実ディスパッチする。
-
-    事前に https://claude.ai/code/routines でAPIトリガー付きルーチンを作成し、
-    その`routine_id`と発行済みトークンを渡す必要がある
-    （参考: https://code.claude.com/docs/en/routines.md ）。
-    セッションの完了状態を問い合わせるポーリングAPIは現時点で公開されていないため、
-    `is_complete`は対象ブランチにオープンなPRが立ったことをプロキシシグナルとして使う。
-    """
-
-    API_BASE = "https://api.anthropic.com/v1/claude_code/routines"
-    BETA_HEADER = "experimental-cc-routine-2026-04-01"
-    ANTHROPIC_VERSION = "2023-06-01"
-    _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
-    target_name = "cloud-routine"
-    launch_capabilities = LaunchCapabilities(durable_attempt=True)
-
-    def __init__(
-        self,
-        routine_id: str,
-        routine_token: str,
-        max_retries: int = 3,
-        initial_delay: float = 1.0,
-        reviewer_bot: ReviewerBot | None = None,
-    ):
-        self._routine_id = routine_id
-        self._routine_token = routine_token
-        self._max_retries = max_retries
-        self._initial_delay = initial_delay
-        self._reviewer_bot = reviewer_bot
-
-    def _build_text(
-        self, task: TaskMetadata, branch_name: str, base_branch: str | None = None
-    ) -> str:
-        footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
-        base_branch_val = _resolve_base_branch_val(base_branch)
-        return (
-            f"GitHub Issue #{task.issue_number}"
-            f"（サブタスク: {task.subtask_id or '不明'}）を"
-            "標準開発ワークフローに従って実装してください。\n"
-            f"作業ブランチ名は必ず `{branch_name}` としてください。\n"
-            # #244: stacked/parent baseの変更はpush済みbranchにしか含まれない。
-            # default branch基点で同名branchを新規作成すると成果物からbaseの
-            # 変更が欠落するため、必ずorigin上のbranchを起点にさせる。
-            f"作業ブランチ `{branch_name}` は、依存先・親ブランチ（base）の内容を"
-            "含む状態でoriginへpush済みです。ブランチを新規作成せず、必ず"
-            f"originから `{branch_name}` をfetchしてcheckoutし、その内容を"
-            "起点に作業してください。\n"
-            f"想定footprint: {footprint}\n"
-            f"PR作成時は必ずベースブランチに `{base_branch_val}` を指定してください（`gh pr create --base {base_branch_val}`）。\n"
-            f"{_noninteractive_instruction(self._reviewer_bot)}\n"
-        )
-
-    def _fire(
-        self, text: str, model: str | None = None, *, retry: bool = True
-    ) -> dict[str, Any]:
-        """任意のテキスト指示でルーチンをfireし、生のレスポンスペイロードを返す。"""
-        payload_dict: dict[str, Any] = {"text": text}
-        if model is not None:
-            payload_dict["model"] = model
-        body = json.dumps(payload_dict).encode("utf-8")
-        request = urllib.request.Request(
-            f"{self.API_BASE}/{self._routine_id}/fire",
-            data=body,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {self._routine_token}",
-                "anthropic-beta": self.BETA_HEADER,
-                "anthropic-version": self.ANTHROPIC_VERSION,
-                "Content-Type": "application/json",
-            },
-        )
-        if retry:
-            return self._fire_with_retry(request)
-        with urllib.request.urlopen(request, timeout=30) as response:
-            result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
-            return result
-
-    def launch(
-        self,
-        task: TaskMetadata,
-        branch_name: str,
-        worktree_path: Path,
-        *,
-        force_push: bool = False,
-        execution_selection: ExecutionSelection | None = None,
-        base_branch: str | None = None,
-    ) -> DispatchHandle:
-        # #244: fireより先にpush・到達性検証を行い、確認できなければfireしない。
-        _push_branch_and_verify(branch_name, worktree_path, force=force_push)
-        model = execution_selection.model if execution_selection else None
-        reasoning_effort = (
-            execution_selection.reasoning_effort if execution_selection else None
-        )
-        if reasoning_effort is not None:
-            logger.warning(
-                "ClaudeCodeCloudRoutineDispatchTarget does not support reasoning_effort %r; skipping setting",
-                reasoning_effort,
-            )
-        payload = self._fire(
-            self._build_text(task, branch_name, base_branch=base_branch),
-            model=model,
-            retry=False,
-        )
-        return DispatchHandle(
-            external_id=payload.get("claude_code_session_id"),
-            external_url=payload.get("claude_code_session_url"),
-            branch_name=branch_name,
-        )
-
-    def fire_text(self, text: str, model: str | None = None) -> DispatchHandle:
-        """#186: タスク以外の任意指示（統合コーディネーターの意味的レビュー等）を
-        dispatcherと同一のルーチンへ投げるための汎用fire。"""
-        payload = self._fire(text, model=model)
-        return DispatchHandle(
-            external_id=payload.get("claude_code_session_id"),
-            external_url=payload.get("claude_code_session_url"),
-        )
-
-    def _fire_with_retry(self, request: urllib.request.Request) -> dict[str, Any]:
-        """#215: 最大`max_retries`回・指数バックオフでリトライする。
-
-        4xx（認証・入力エラー等の非一時的エラー）はリトライ対象外として即座に送出する。
-        """
-        delay = self._initial_delay
-        last_error: Exception | None = None
-        for attempt in range(self._max_retries + 1):
-            try:
-                with urllib.request.urlopen(request, timeout=30) as response:
-                    result: dict[str, Any] = json.loads(response.read().decode("utf-8"))
-                    return result
-            except urllib.error.HTTPError as exc:
-                if exc.code not in self._RETRYABLE_STATUSES:
-                    raise
-                last_error = exc
-            except urllib.error.URLError as exc:
-                last_error = exc
-            if attempt < self._max_retries:
-                time.sleep(delay)
-                delay *= 2
-        assert last_error is not None
-        raise last_error
-
-    def completion_status(
-        self, handle: DispatchHandle, forge: Forge | None = None
-    ) -> Literal["pending", "completed", "abandoned"]:
-        """#239/#210: ブランチ名またはclosingIssuesReferencesでPR完了を判定する。"""
-        status = _task_pr_completion_status(handle, forge=forge)
-        return "pending" if status == "unknown" else status
-
-    def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
-        """#239: ブランチ名一致を優先判定としつつ、AIセッションが指示された
-        ブランチ名に従わなかった場合に備え、PRの`closingIssuesReferences`
-        （`Closes #N`等から解決されるIssue参照）によるフォールバック判定も行う。"""
-        return self.completion_status(handle, forge=forge) == "completed"
 
 
 _CODEX_TASK_URL_RE = re.compile(r"https?://[^\s]+/tasks/([a-zA-Z0-9_-]+)")

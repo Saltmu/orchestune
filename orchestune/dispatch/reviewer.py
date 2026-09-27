@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
-ReviewerBot = Literal["claude", "codex"]
-ReviewerBotSetting = Literal["auto", "claude", "codex"]
+from orchestune.targets.contracts import (
+    ReviewerBot as ReviewerBot,
+)
+from orchestune.targets.contracts import (
+    ReviewerBotSetting as ReviewerBotSetting,
+)
 
 _AUTO_REVIEWER_BY_TARGET: dict[str, ReviewerBot] = {
     "claude-cli": "codex",

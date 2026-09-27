@@ -156,6 +156,10 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.status_repair_dependencies",
             "dispatch.summary",
             "dispatch.targets",
+            "targets",
+            "targets.cloud_routine",
+            "targets.contracts",
+            "targets.support",
             "dispatch.worktree",
             "infra.not_needed_review_state",
             "integrator.finalization",
@@ -887,11 +891,10 @@ KNOWN_PACKAGE_CYCLE_EDGES: dict[tuple[str, str], str] = {
     ),
     ("dispatch", "integrator"): (
         "Postcycle invokes integration/coordinator/parent completion; reverse "
-        "dependencies are tracked in #1073 and #1074"
+        "dependencies are tracked in #1073"
     ),
     ("integrator", "dispatch"): (
-        "Legacy dependency resolution (#1073) and routine target/handle/constants "
-        "(#1074) still live under dispatch"
+        "Legacy dependency resolution (#1073) still lives under dispatch"
     ),
 }
 
@@ -964,3 +967,22 @@ def test_integrator_does_not_import_dispatch_escalation_or_worktree() -> None:
     for module, dependencies in _import_graph().items():
         if module == "integrator" or module.startswith("integrator."):
             assert not dependencies & forbidden, module
+
+
+def test_integrator_coordinator_uses_shared_routine_target() -> None:
+    graph = _import_graph()
+    assert "dispatch.targets" not in graph["integrator.coordinator"]
+    assert {"targets.cloud_routine", "targets.contracts"} <= graph[
+        "integrator.coordinator"
+    ]
+
+
+def test_shared_targets_have_no_workflow_imports() -> None:
+    graph = _import_graph()
+    for module, dependencies in graph.items():
+        if module == "targets" or module.startswith("targets."):
+            assert not any(
+                dependency == package or dependency.startswith(package + ".")
+                for dependency in dependencies
+                for package in ("dispatch", "integrator")
+            ), (module, dependencies)
