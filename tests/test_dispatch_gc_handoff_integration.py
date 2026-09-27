@@ -7,11 +7,11 @@ from pathlib import Path
 import pytest
 
 from orchestune.claim.workspace import resolve_claim_workspace
-from orchestune.dispatch.claim_marker import claim_marker_path, write_claim_marker
 from orchestune.infra.git_cli import run_git
 from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord
+from orchestune.worktree_ops.claim_marker import claim_marker_path, write_claim_marker
 
 
 class FakeHandoffForge:

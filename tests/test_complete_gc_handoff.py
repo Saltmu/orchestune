@@ -509,13 +509,13 @@ class TestCompleteGcHandoff:
         ディレクトリが消えていれば claim marker を削除する。"""
         import subprocess
 
-        from orchestune.dispatch.claim_marker import (
-            claim_marker_path,
-            write_claim_marker,
-        )
         from orchestune.dispatch.gc.git import (
             VerifiedWorktreeRemovalRequest,
             remove_verified_worktree,
+        )
+        from orchestune.worktree_ops.claim_marker import (
+            claim_marker_path,
+            write_claim_marker,
         )
 
         wt_path = tmp_path / "worktrees" / "wt-verified-gone"

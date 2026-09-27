@@ -11,12 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.claim.workspace import ClaimWorkspace, resolve_claim_workspace
-from orchestune.dispatch.claim_marker import (
-    claim_lock_path,
-    claim_marker_path,
-    read_claim_marker,
-    remove_claim_marker,
-)
 from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.gc import _completed_worktree_record
 from orchestune.dispatch.gc.git import (
@@ -39,6 +33,12 @@ from orchestune.infra.process_utils import (
     run_state_lock,
 )
 from orchestune.ledger.run_state import ActiveWorktree, _parse_active_worktrees
+from orchestune.worktree_ops.claim_marker import (
+    claim_lock_path,
+    claim_marker_path,
+    read_claim_marker,
+    remove_claim_marker,
+)
 
 
 @dataclass(frozen=True)

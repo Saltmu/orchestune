@@ -31,11 +31,13 @@ from orchestune.dispatch.gc.completion import (
 from orchestune.dispatch.gc.completion import (
     _finalize_completed_worktree as extracted_finalize_completed_worktree,
 )
-from orchestune.dispatch.gc.git import prune_stale_integration_temp_branches
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim as ExtractedZombieOrTimeoutReclaim,
 )
 from orchestune.models import PrRecord
+from orchestune.worktree_ops.temp_branches import (
+    prune_stale_integration_temp_branches,
+)
 
 
 def test_extracted_gc_symbols_remain_available_from_legacy_module():
@@ -78,7 +80,9 @@ class TestPruneStaleIntegrationTempBranches:
     def test_deletes_only_old_temp_branches_without_open_pr(self, fake_forge):
         # #435: クラッシュ等で残ったtemp branchだけを回収し、レビュー中の
         # 統合PRのheadや作成直後の並行ランを誤って削除してはならない。
-        with patch("orchestune.dispatch.gc.git.run_git", autospec=True) as run_git:
+        with patch(
+            "orchestune.worktree_ops.temp_branches.run_git", autospec=True
+        ) as run_git:
             run_git.return_value = subprocess.CompletedProcess(
                 args=[],
                 returncode=0,
@@ -313,7 +317,7 @@ class TestRemoveWorktree:
         本体が実際にはまだディスク上に残っている場合、所有権マーカーを
         消してはならない。マーカーを消すと、所有権を証明できないworktreeが
         `unclaimed_existing_worktree`として残り続けてしまう。"""
-        from orchestune.dispatch.claim_marker import (
+        from orchestune.worktree_ops.claim_marker import (
             claim_marker_path,
             write_claim_marker,
         )
@@ -342,7 +346,7 @@ class TestRemoveWorktree:
         所有権マーカーも片付けて、後日の正当な再claimを妨げないこと。"""
         import shutil
 
-        from orchestune.dispatch.claim_marker import (
+        from orchestune.worktree_ops.claim_marker import (
             claim_marker_path,
             write_claim_marker,
         )
@@ -385,7 +389,7 @@ class TestRemoveWorktree:
         後日の再claimでオーナー不一致として永久拒否されるのを防止する。"""
         import shutil
 
-        from orchestune.dispatch.claim_marker import (
+        from orchestune.worktree_ops.claim_marker import (
             claim_marker_path,
             write_claim_marker,
         )
@@ -428,7 +432,7 @@ class TestRemoveWorktree:
 
     def test_rejects_removal_when_safety_evaluation_fails(self, tmp_path):
         """#1004: evaluate_worktree_removal の安全判定に失敗した場合、物理削除は行われない。"""
-        from orchestune.dispatch.claim_marker import (
+        from orchestune.worktree_ops.claim_marker import (
             claim_marker_path,
             write_claim_marker,
         )
@@ -640,9 +644,9 @@ class TestEvaluateWorktreeRemoval:
     """#1004: evaluate_worktree_removal による worktree 削除安全条件の検証。"""
 
     def test_clean_registered_matching_worktree_is_removable(self, tmp_path):
-        from orchestune.dispatch.claim_marker import write_claim_marker
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
         from orchestune.ledger.run_state import ActiveWorktree
+        from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -764,9 +768,9 @@ class TestEvaluateWorktreeRemoval:
         assert evaluation.rejection_reason == "unregistered_worktree"
 
     def test_rejects_dirty_worktree(self, tmp_path):
-        from orchestune.dispatch.claim_marker import write_claim_marker
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
         from orchestune.ledger.run_state import ActiveWorktree
+        from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -820,9 +824,9 @@ class TestEvaluateWorktreeRemoval:
         assert evaluation.rejection_reason == "dirty_worktree"
 
     def test_rejects_branch_mismatch(self, tmp_path):
-        from orchestune.dispatch.claim_marker import write_claim_marker
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
         from orchestune.ledger.run_state import ActiveWorktree
+        from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -872,9 +876,9 @@ class TestEvaluateWorktreeRemoval:
         assert evaluation.rejection_reason == "branch_mismatch"
 
     def test_rejects_owner_mismatch(self, tmp_path):
-        from orchestune.dispatch.claim_marker import write_claim_marker
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
         from orchestune.ledger.run_state import ActiveWorktree
+        from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -1004,13 +1008,13 @@ class TestRemoveVerifiedWorktree:
     """#1004: remove_verified_worktree による安全な物理削除実行の検証。"""
 
     def test_removes_worktree_and_marker_on_success(self, tmp_path):
-        from orchestune.dispatch.claim_marker import (
-            claim_marker_path,
-            write_claim_marker,
-        )
         from orchestune.dispatch.gc.git import (
             VerifiedWorktreeRemovalRequest,
             remove_verified_worktree,
+        )
+        from orchestune.worktree_ops.claim_marker import (
+            claim_marker_path,
+            write_claim_marker,
         )
 
         wt_path = tmp_path / "worktrees" / "wt-to-remove"
@@ -1048,13 +1052,13 @@ class TestRemoveVerifiedWorktree:
         assert not claim_marker_path(wt_path).exists()
 
     def test_preserves_marker_when_git_removal_fails(self, tmp_path):
-        from orchestune.dispatch.claim_marker import (
-            claim_marker_path,
-            write_claim_marker,
-        )
         from orchestune.dispatch.gc.git import (
             VerifiedWorktreeRemovalRequest,
             remove_verified_worktree,
+        )
+        from orchestune.worktree_ops.claim_marker import (
+            claim_marker_path,
+            write_claim_marker,
         )
 
         wt_path = tmp_path / "worktrees" / "wt-cannot-remove"

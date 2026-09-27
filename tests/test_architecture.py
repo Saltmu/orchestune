@@ -125,7 +125,6 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.conflicts",
             "dispatch.cost_model",
             "dispatch.critical_path",
-            "dispatch.claim_marker",
             "dispatch.cycle_action_contracts",
             "dispatch.cycle_context_state",
             "dispatch.cycle_records",
@@ -187,6 +186,10 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "replan.snapshot",
             "status_snapshot",
             "task_branch_resolution",
+            "worktree_ops",
+            "worktree_ops.claim_marker",
+            "worktree_ops.preparation",
+            "worktree_ops.temp_branches",
         }
     ),
     1: frozenset(
@@ -869,28 +872,27 @@ def test_execution_profiles_boundary_documented_in_architecture_docs() -> None:
 
 KNOWN_PACKAGE_CYCLE_EDGES: dict[tuple[str, str], str] = {
     ("claim", "dispatch"): (
-        "Worktree preparation (#1072) and dependency assessment/policy (#1073) "
-        "still live under dispatch"
+        "Dependency assessment and policy (#1073) still live under dispatch"
     ),
     ("complete", "claim"): (
         "Completion uses claim ownership/workspace; cycle closes via claim -> "
-        "dispatch -> complete until #1072, #1073 remove the return path"
+        "dispatch -> complete until #1073 removes the remaining return path"
     ),
     ("dispatch", "claim"): (
         "Dispatch reuses claim contracts/preflight/service/workspace; return path "
-        "from claim remains until #1072, #1073"
+        "from claim remains until #1073"
     ),
     ("dispatch", "complete"): (
         "GC consumes completion contracts; return path via complete -> claim -> "
-        "dispatch remains until #1072, #1073"
+        "dispatch remains until #1073"
     ),
     ("dispatch", "integrator"): (
         "Postcycle invokes integration/coordinator/parent completion; reverse "
-        "dependencies are tracked in #1072, #1073, #1074"
+        "dependencies are tracked in #1073 and #1074"
     ),
     ("integrator", "dispatch"): (
-        "Git cleanup (#1072), legacy dependency resolution (#1073), and routine "
-        "target/handle/constants (#1074) still live under dispatch"
+        "Legacy dependency resolution (#1073) and routine target/handle/constants "
+        "(#1074) still live under dispatch"
     ),
 }
 

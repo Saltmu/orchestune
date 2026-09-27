@@ -515,7 +515,7 @@ class TestRunDispatchCycle:
                 autospec=True,
                 return_value=[],
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_subproc_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -558,7 +558,7 @@ class TestRunDispatchCycle:
         fake_forge.get_issue.return_value = queued_issue
         with (
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -567,7 +567,7 @@ class TestRunDispatchCycle:
                 autospec=True,
                 return_value=[],
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_subproc_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -915,7 +915,7 @@ class TestRunDispatchCycleActorVerification:
                 autospec=True,
                 return_value=[],
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run"),
+            patch("orchestune.infra.git_cli.subprocess.run"),
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_list.side_effect = lambda label, **_: (

@@ -385,11 +385,11 @@ class TestApplyTaskLaunches:
 
         with (
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
             patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_add_comment,
@@ -446,11 +446,11 @@ class TestApplyTaskLaunches:
 
         with (
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
                 "orchestune.dispatch.worktree.time.time",
@@ -508,11 +508,11 @@ class TestApplyTaskLaunches:
 
         with (
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -581,11 +581,11 @@ class TestApplyTaskLaunches:
 
         with (
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -659,11 +659,11 @@ class TestApplyTaskLaunches:
 
         with (
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
                 "fake_forge_proxy.active_fake_forge.add_label",
@@ -717,11 +717,11 @@ class TestApplyTaskLaunchesLabelOrdering:
 
         with (
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch(
                 "fake_forge_proxy.active_fake_forge.add_label",
@@ -780,7 +780,7 @@ class TestApplyTaskLaunchesLabelOrdering:
 
         with (
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -874,11 +874,11 @@ class TestLaunchSelectedTasks:
 
         with (
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
             patch("fake_forge_proxy.active_fake_forge.add_label"),
             patch("fake_forge_proxy.active_fake_forge.add_comment"),

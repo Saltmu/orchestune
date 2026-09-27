@@ -16,7 +16,6 @@ from orchestune.claim.contracts import (
 )
 from orchestune.claim.ownership import new_claim_id, new_owner_token, owner_token_digest
 from orchestune.claim.service import claim_task, resume_claim
-from orchestune.dispatch.worktree import WorktreePreparation
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import (
@@ -25,6 +24,7 @@ from orchestune.ledger.run_state import (
     save_run_state,
 )
 from orchestune.models import IssueRecord
+from orchestune.worktree_ops.preparation import WorktreePreparation
 from tests.claim_helpers import MockForge, _make_issue
 
 
