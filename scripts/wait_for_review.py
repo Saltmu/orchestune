@@ -851,6 +851,40 @@ def _write_output_file(result: dict[str, Any], output_file: str) -> None:
         raise RuntimeError(f"Failed to write --output-file {output_file}: {e}") from e
 
 
+def _resolve_offline_completeness(state: object) -> tuple[dict[str, str], list[str]]:
+    """Resolve the offline `--review-state-file` completeness declaration.
+
+    Distinguishes three cases: no `completeness` key at all (legacy input;
+    `.get()` alone can't tell this apart from an explicit `"completeness":
+    null`, so presence is checked separately) keeps every section "unknown"
+    with no incompleteness; a key present but not a usable object (null, a
+    list, a string, ...) is a malformed-but-positive declaration and every
+    section is treated as incomplete; a proper dict normalizes each of the
+    three required sections (an omitted section counts as incomplete, not an
+    implicit "complete") (Codex PR #1114 rounds 1-4 findings).
+    """
+    completeness_key_present = isinstance(state, dict) and "completeness" in state
+    state_completeness = (
+        state.get("completeness")
+        if isinstance(state, dict) and completeness_key_present
+        else None
+    )
+    if isinstance(state_completeness, dict):
+        completeness = {
+            section: state_completeness.get(section, "unknown")
+            for section in _COMPLETENESS_SECTIONS
+        }
+        incomplete_sections = [
+            section for section, status in completeness.items() if status != "complete"
+        ]
+    else:
+        completeness = dict.fromkeys(_COMPLETENESS_SECTIONS, "unknown")
+        incomplete_sections = (
+            list(_COMPLETENESS_SECTIONS) if completeness_key_present else []
+        )
+    return completeness, incomplete_sections
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Trigger and detect AI review activity on a GitHub PR in a single blocking process."
@@ -976,23 +1010,7 @@ def main() -> None:
                 and item.get("provenance") == "current"
                 and item.get("commit_id")
             }
-            state_completeness = (
-                state.get("completeness") if isinstance(state, dict) else None
-            )
-            # A section omitted from a caller-supplied completeness dict is
-            # not distinguishable from a section that was silently fetched
-            # empty: treat a missing required key the same as an explicit
-            # non-"complete" value, not as an implicit "complete" (Codex PR
-            # #1114 round 3 finding). Only when the caller supplies no
-            # completeness object at all (legacy input) do all three sections
-            # default to "unknown" without downgrading acquisition_status.
-            if isinstance(state_completeness, dict):
-                completeness = {
-                    section: state_completeness.get(section, "unknown")
-                    for section in _COMPLETENESS_SECTIONS
-                }
-            else:
-                completeness = dict.fromkeys(_COMPLETENESS_SECTIONS, "unknown")
+            completeness, incomplete_sections = _resolve_offline_completeness(state)
             result.update(
                 repository=None,
                 pr_number=args.pr,
@@ -1007,23 +1025,6 @@ def main() -> None:
                 current_head_sha=None,
                 jev_evaluations=jev_evaluations,
                 completeness=completeness,
-            )
-            # A caller-supplied completeness dict is a positive declaration:
-            # any value other than "complete" (not just the enumerated
-            # missing/error/truncated spellings, e.g. "partial", and not an
-            # omitted required key, normalized to "unknown" above) means the
-            # adapter itself isn't vouching for a full fetch. Only the
-            # *absence* of a completeness key at all (state_completeness is
-            # None) keeps legacy input working (Codex PR #1114 round 2/3
-            # findings).
-            incomplete_sections = (
-                [
-                    section
-                    for section, status in completeness.items()
-                    if status != "complete"
-                ]
-                if isinstance(state_completeness, dict)
-                else []
             )
             if (
                 incomplete_sections

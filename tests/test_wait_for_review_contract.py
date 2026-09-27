@@ -916,6 +916,27 @@ def test_offline_sparse_completeness_treats_omitted_sections_as_incomplete(tmp_p
     assert exc.value.code == EXIT_NO_RESULT
 
 
+def test_offline_malformed_completeness_value_is_also_not_exit_0(tmp_path):
+    """An explicitly-supplied but non-object `completeness` value (null, a
+    list, a string) is a positive-but-malformed declaration and must not be
+    read as the legacy "key absent" case, which alone preserves Exit 0
+    (Codex PR #1114 round 4 finding)."""
+    from scripts.wait_for_review import EXIT_NO_RESULT, main
+
+    state = _jev_state()
+    state["completeness"] = None
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with (
+        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        pytest.raises(SystemExit) as exc,
+    ):
+        main()
+
+    assert exc.value.code == EXIT_NO_RESULT
+
+
 def test_offline_unknown_completeness_still_exits_acquired(tmp_path):
     """The default "unknown" completeness (no metadata supplied) must keep
     working for legacy callers -- only an *explicit* incomplete declaration
