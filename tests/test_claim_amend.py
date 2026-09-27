@@ -413,6 +413,21 @@ def test_amend_records_non_ascii_changed_paths_verbatim(amend_env):
             "--amend-footprint",
         ),
         (
+            {"owner_kind": OwnerKind.DISPATCH.value},
+            "--result blocked --reason footprint-expansion-required",
+            "--resume",
+        ),
+        (
+            {"claim_stage": ClaimStage.ACTIVE_SAVED.value},
+            "--resume claim-amend-201",
+            "--amend-footprint",
+        ),
+        (
+            {"completion_id": "completion-1"},
+            "Continue work in the existing worktree",
+            "--amend-footprint",
+        ),
+        (
             {"reservation_kind": ReservationKind.REPOSITORY.value},
             "already reserves the whole repository",
             "--amend-footprint",

@@ -164,18 +164,22 @@ def held_claim_next_actions(active: ActiveWorktree) -> tuple[str, ...]:
         actions.append(
             f"Continue work in the existing worktree: {active.worktree_path}"
         )
-    if active.claim_id:
-        actions.append(
-            f"If the claim was interrupted, run: orchestune claim {n} --resume {active.claim_id}"
-        )
     if active.owner_kind != OwnerKind.INTERACTIVE.value:
         actions.append(
             "If the task needs files outside its reservation, run: orchestune complete "
             f"--issue {n} --result blocked --reason footprint-expansion-required"
         )
-    elif _is_repository_reservation(active):
+        return tuple(actions)
+    if active.claim_id:
+        actions.append(
+            f"If the claim was interrupted, run: orchestune claim {n} --resume {active.claim_id}"
+        )
+    if _is_repository_reservation(active):
         actions.append("The claim already reserves the whole repository.")
-    else:
+    elif (
+        active.claim_stage == ClaimStage.COMPLETED.value
+        and active.completion_id is None
+    ):
         actions.append(
             "If the task needs files outside its reservation, update the Issue footprint "
             f"and run: orchestune claim {n} --amend-footprint"
