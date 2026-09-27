@@ -249,7 +249,10 @@ def test_inspect_holds_for_symlink_worktree_path(tmp_path: Path):
     target = tmp_path / "different-worktree"
     target.mkdir()
     worktree.rename(tmp_path / "original-worktree")
-    worktree.symlink_to(target, target_is_directory=True)
+    try:
+        worktree.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("Symlink creation not permitted on this system")
     forge = _forge(comment, branch, _head_sha(active))
 
     plan = _inspect(active, repo, forge)

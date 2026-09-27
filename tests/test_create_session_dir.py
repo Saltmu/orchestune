@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -18,14 +19,75 @@ SESSION_DIR_PATTERN = re.compile(
 )
 
 
+def _find_bash() -> str | None:
+    if sys.platform != "win32":
+        return shutil.which("bash")
+    git = shutil.which("git")
+    if git:
+        git_bash = Path(git).resolve().parent.parent / "bin" / "bash.exe"
+        if git_bash.is_file():
+            return str(git_bash)
+        git_usr_bash = Path(git).resolve().parent.parent / "usr" / "bin" / "bash.exe"
+        if git_usr_bash.is_file():
+            return str(git_usr_bash)
+    for standard_path in [
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        / "Git"
+        / "bin"
+        / "bash.exe",
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+        / "Git"
+        / "bin"
+        / "bash.exe",
+    ]:
+        if standard_path.is_file():
+            return str(standard_path)
+    bash = shutil.which("bash")
+    if bash and "WindowsApps" not in Path(bash).parts:
+        return bash
+    return None
+
+
+def _list2cmdline(seq: Sequence[str]) -> str:
+    """Format argument sequence into a Windows command line, quoting newlines."""
+    result: list[str] = []
+    for arg in seq:
+        bs_buf: list[str] = []
+        if result:
+            result.append(" ")
+        needquote = (
+            (" " in arg) or ("\t" in arg) or ("\n" in arg) or ("\r" in arg) or not arg
+        )
+        if needquote:
+            result.append('"')
+        for c in arg:
+            if c == "\\":
+                bs_buf.append(c)
+            elif c == '"':
+                result.append("\\" * len(bs_buf) * 2)
+                bs_buf = []
+                result.append('\\"')
+            else:
+                if bs_buf:
+                    result.extend(bs_buf)
+                    bs_buf = []
+                result.append(c)
+        if bs_buf:
+            result.extend(bs_buf)
+        if needquote:
+            result.extend("\\" * len(bs_buf))
+            result.append('"')
+    return "".join(result)
+
+
 def _run_sh(
     *args: str, cwd: Path, check: bool = True
 ) -> subprocess.CompletedProcess[str]:
     if sys.platform == "win32":
-        bash = shutil.which("bash")
+        bash = _find_bash()
         if bash is None:
-            pytest.skip("bash is not available on Windows")
-        cmd = [bash, str(SCRIPT_SH), *args]
+            pytest.skip("Git Bash is not available on Windows")
+        cmd: str | list[str] = _list2cmdline([bash, str(SCRIPT_SH), *args])
     else:
         cmd = [str(SCRIPT_SH), *args]
     return subprocess.run(
@@ -263,3 +325,28 @@ def test_create_session_dir_ps1_allows_dot_in_task(tmp_path: Path):
 
     created_dir = tmp_path / output
     assert created_dir.is_dir(), f"Expected directory '{created_dir}' to exist"
+
+
+def test_list2cmdline_quotes_whitespace_and_newlines():
+    assert _list2cmdline([]) == ""
+    assert _list2cmdline(["a", "b"]) == "a b"
+    assert _list2cmdline(["a b"]) == '"a b"'
+    assert _list2cmdline(["a\tb"]) == '"a\tb"'
+    assert _list2cmdline(["a\nb"]) == '"a\nb"'
+    assert _list2cmdline(["a\rb"]) == '"a\rb"'
+    assert _list2cmdline([""]) == '""'
+    assert _list2cmdline(['a"b']) == r"a\"b"
+    assert _list2cmdline(['a " b']) == r'"a \" b"'
+    assert _list2cmdline([r"a\b"]) == r"a\b"
+    assert _list2cmdline([r"a\ b"]) == r'"a\ b"'
+
+
+def test_find_bash():
+    bash = _find_bash()
+    if sys.platform != "win32":
+        assert bash is not None
+        assert "bash" in bash
+    else:
+        if bash is not None:
+            assert "WindowsApps" not in Path(bash).parts
+            assert Path(bash).is_file()
