@@ -257,9 +257,11 @@ Testing full lifecycle of execution profiles.
 
         # 5. Run Dispatch Cycle 1: Launch all 3 tasks
         with (
-            patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
             patch(
-                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                "orchestune.worktree_ops.preparation._create_worktree", autospec=True
+            ),
+            patch(
+                "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
@@ -378,9 +380,11 @@ Testing full lifecycle of execution profiles.
         )
 
         with (
-            patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
             patch(
-                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                "orchestune.worktree_ops.preparation._create_worktree", autospec=True
+            ),
+            patch(
+                "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
@@ -515,9 +519,11 @@ Testing full lifecycle of execution profiles.
         )
 
         with (
-            patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
             patch(
-                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                "orchestune.worktree_ops.preparation._create_worktree", autospec=True
+            ),
+            patch(
+                "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
@@ -602,9 +608,11 @@ Testing full lifecycle of execution profiles.
         )
 
         with (
-            patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
             patch(
-                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                "orchestune.worktree_ops.preparation._create_worktree", autospec=True
+            ),
+            patch(
+                "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
@@ -741,9 +749,11 @@ model_tier: strong
         )
 
         with (
-            patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
             patch(
-                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                "orchestune.worktree_ops.preparation._create_worktree", autospec=True
+            ),
+            patch(
+                "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
@@ -810,9 +820,11 @@ model_tier: strong
             marker.unlink()
 
         with (
-            patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
             patch(
-                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                "orchestune.worktree_ops.preparation._create_worktree", autospec=True
+            ),
+            patch(
+                "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
                 autospec=True,
                 return_value="deadbeefcafe",
             ),

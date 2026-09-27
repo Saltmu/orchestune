@@ -744,7 +744,7 @@ def stub_claim_workspace_git_repo(
     `git fetch origin`（`orchestune.claim.service`内の`run_git`呼び出し）も
     通過するようになった。
 
-    これらのテストの多くは`orchestune.dispatch.worktree.subprocess.run`を汎用的な
+    これらのテストの多くは`orchestune.infra.git_cli.subprocess.run`を汎用的な
     `MagicMock(returncode=0, stdout="", stderr="")`でグローバルに差し替えており
     （同じ`subprocess`モジュールオブジェクト経由で`orchestune.infra.git_cli.run_git`
     にも波及する）、`rev-parse --show-toplevel --git-common-dir`の空stdoutは
@@ -757,7 +757,7 @@ def stub_claim_workspace_git_repo(
     `get_git_repository_paths`をこのモジュール境界でスタブして`tmp_path`を
     リポジトリrootとして返し（claimが解決するworktree_rootをテストの既存の
     `tmp_path`前提と一致させる）、`orchestune.claim.service.run_git`（claimの
-    fetchステップのみ。worktree.py側のgit呼び出しは各テスト個別のモックのまま）
+    fetchステップのみ。共有worktree準備のgit呼び出しは各テスト個別のモックのまま）
     を常に成功させる。
     """
     if request.path.name not in _CLAIM_WORKSPACE_STUB_TESTS:

@@ -722,7 +722,7 @@ class TestRunDispatchCycleCompletion:
         fake_forge.remove_label.reset_mock(side_effect=True)
         with (
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -743,7 +743,7 @@ class TestRunDispatchCycleCompletion:
                 return_value=True,
             ),
             patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_subproc_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
 

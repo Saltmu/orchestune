@@ -10,13 +10,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from orchestune.dispatch import gc as dispatch_gc
-from orchestune.dispatch.claim_marker import (
-    claim_lock_path,
-    claim_marker_path,
-    read_claim_marker,
-    remove_claim_marker,
-    write_claim_marker,
-)
 from orchestune.dispatch.targets import (
     BranchReachabilityError,
     DispatchHandle,
@@ -25,7 +18,43 @@ from orchestune.dispatch.targets import (
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.infra.process_utils import file_lock as file_lock
 from orchestune.task_metadata import TaskMetadata
-from orchestune.validation import validate_ref_name
+from orchestune.worktree_ops.claim_marker import (
+    claim_lock_path,
+    claim_marker_path,
+    read_claim_marker,
+    remove_claim_marker,
+    write_claim_marker,
+)
+from orchestune.worktree_ops.preparation import (
+    WorktreePreparation,
+)
+from orchestune.worktree_ops.preparation import (
+    _branch_exists as _common_branch_exists,
+)
+from orchestune.worktree_ops.preparation import (
+    _create_worktree as _common_create_worktree,
+)
+from orchestune.worktree_ops.preparation import (
+    _git_common_dir as _common_git_common_dir,
+)
+from orchestune.worktree_ops.preparation import (
+    _git_toplevel as _common_git_toplevel,
+)
+from orchestune.worktree_ops.preparation import (
+    _resolve_worktree_head_sha as _common_resolve_worktree_head_sha,
+)
+from orchestune.worktree_ops.preparation import (
+    _resolve_worktree_path as _common_resolve_worktree_path,
+)
+from orchestune.worktree_ops.preparation import (
+    _verify_worktree_identity as _common_verify_worktree_identity,
+)
+from orchestune.worktree_ops.preparation import (
+    _worktree_checked_out_branch as _common_worktree_checked_out_branch,
+)
+from orchestune.worktree_ops.preparation import (
+    prepare_task_worktree as _prepare_shared_task_worktree,
+)
 
 if TYPE_CHECKING:
     from orchestune.dispatch.execution_profiles import ExecutionSelection
@@ -65,19 +94,6 @@ class LaunchResult:
     held: bool = False
 
 
-@dataclass(frozen=True)
-class WorktreePreparation:
-    """`prepare_task_worktree`の結果。後段のロールバック可否判定に使う。"""
-
-    worktree_path: Path
-    branch: str
-    accepted: bool
-    created: bool = False
-    branch_created: bool = False
-    base_sha: str | None = None
-    rejection_reason: str | None = None
-
-
 def _branch_exists(branch_name: str, cwd: str | Path | None = None) -> bool:
     """指定されたブランチがローカルまたはリモート追跡ブランチとして存在するか確認する。
 
@@ -88,28 +104,12 @@ def _branch_exists(branch_name: str, cwd: str | Path | None = None) -> bool:
     自体の検証は、本関数が実際に経由する`run_git`境界のpatchのみで完結する
     `tests/test_dispatch_worktree.py::TestBranchExists`に一本化している。
     """
-    res_local = run_git(
-        ["show-ref", "--verify", f"refs/heads/{branch_name}"], cwd=cwd, check=False
-    )
-    if res_local.returncode == 0:
-        return True
-
-    res_remote = run_git(
-        ["show-ref", "--verify", f"refs/remotes/origin/{branch_name}"],
-        cwd=cwd,
-        check=False,
-    )
-    if res_remote.returncode == 0:
-        return True
-
-    return False
+    return _common_branch_exists(branch_name, cwd=cwd, git_runner=run_git)
 
 
 def _resolve_worktree_path(worktree_root: str | Path, branch_name: str) -> Path:
     """ブランチ名のバリデーションを行い、worktreeの対象パスを計算する。"""
-    validate_ref_name(branch_name)
-    slug = branch_name.replace("/", "-")
-    return Path(worktree_root) / slug
+    return _common_resolve_worktree_path(worktree_root, branch_name)
 
 
 def _cleanup_existing_worktree(
@@ -152,21 +152,16 @@ def _create_worktree(
     cwd: str | Path | None = None,
 ) -> None:
     """無効なworktreeを整理し、指定のブランチ/ベースブランチでworktreeを作成する。"""
-    run_git(["worktree", "prune"], cwd=cwd, check=False)
-    worktree_root.mkdir(parents=True, exist_ok=True)
-
-    if _branch_exists(branch_name, cwd=cwd):
-        cmd = ["worktree", "add", str(worktree_path), branch_name]
-    else:
-        cmd = ["worktree", "add", "-b", branch_name, str(worktree_path)]
-        if base_branch:
-            resolved_base = resolve_local_or_remote_branch(
-                cwd or ".",
-                base_branch,
-                prefer_remote=base_branch.startswith("parent/"),
-            )
-            cmd.append(resolved_base)
-    run_git(cmd, cwd=cwd, check=True)
+    _common_create_worktree(
+        worktree_path,
+        worktree_root,
+        branch_name,
+        base_branch,
+        cwd=cwd,
+        git_runner=run_git,
+        branch_exists=_branch_exists,
+        branch_resolver=resolve_local_or_remote_branch,
+    )
 
 
 _claim_marker_path = claim_marker_path
@@ -191,7 +186,7 @@ def clear_claim_ownership_marker(worktree_path: str | Path) -> None:
 
 
 def _resolve_worktree_head_sha(worktree_path: Path) -> str:
-    return run_git(["rev-parse", "HEAD"], cwd=worktree_path, check=True).stdout.strip()
+    return _common_resolve_worktree_head_sha(worktree_path, git_runner=run_git)
 
 
 def _target_supports_param(dispatch_target: DispatchTarget, param_name: str) -> bool:
@@ -364,68 +359,18 @@ def _prepare_worktree_forced(
     )
 
 
-def _create_and_claim_worktree(
-    worktree_path: Path,
-    worktree_root: Path,
-    branch: str,
-    base_branch: str | None,
-    claim_id: str,
-    cwd: str | Path | None = None,
-) -> WorktreePreparation:
-    """#935: 安全経路（`allow_force=False`）専用。新規worktreeを作成し、
-    所有権マーカーとbase_shaを発行する。"""
-    branch_created = not _branch_exists(branch, cwd=cwd)
-    _create_worktree(worktree_path, worktree_root, branch, base_branch, cwd=cwd)
-    base_sha = _resolve_worktree_head_sha(worktree_path)
-    _write_claim_marker(
-        worktree_path,
-        claim_id=claim_id,
-        branch=branch,
-        base_sha=base_sha,
-        branch_created=branch_created,
-    )
-    return WorktreePreparation(
-        worktree_path=worktree_path,
-        branch=branch,
-        accepted=True,
-        created=True,
-        branch_created=branch_created,
-        base_sha=base_sha,
-    )
-
-
 def _worktree_checked_out_branch(worktree_path: Path) -> str | None:
     """worktree_pathが実際にチェックアウトしているブランチ名を返す。
     gitワークツリーとして無効な場合はNoneを返す。"""
-    try:
-        result = run_git(
-            ["symbolic-ref", "--short", "HEAD"], cwd=worktree_path, check=False
-        )
-    except OSError:
-        return None
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip()
+    return _common_worktree_checked_out_branch(worktree_path, git_runner=run_git)
 
 
 def _git_common_dir(path: Path) -> str | None:
-    try:
-        result = run_git(["rev-parse", "--git-common-dir"], cwd=path, check=False)
-    except OSError:
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-    return str((path / result.stdout.strip()).resolve())
+    return _common_git_common_dir(path, git_runner=run_git)
 
 
 def _git_toplevel(path: Path) -> str | None:
-    try:
-        result = run_git(["rev-parse", "--show-toplevel"], cwd=path, check=False)
-    except OSError:
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
-        return None
-    return str(Path(result.stdout.strip()).resolve())
+    return _common_git_toplevel(path, git_runner=run_git)
 
 
 def _verify_worktree_identity(
@@ -439,133 +384,8 @@ def _verify_worktree_identity(
     リポジトリと一致すること（別リポジトリでない）に加え、`worktree_path`
     自身がそのcheckoutのtoplevel（＝それ自体が独立したworktree registration
     の根）であること（単なるサブディレクトリでない）も確認する。"""
-    if _worktree_checked_out_branch(worktree_path) != branch:
-        return False
-    if _git_toplevel(worktree_path) != str(worktree_path.resolve()):
-        return False
-    this_repo_git_dir = _git_common_dir(
-        Path(repository_root) if repository_root else Path(".")
-    )
-    return this_repo_git_dir is not None and this_repo_git_dir == _git_common_dir(
-        worktree_path
-    )
-
-
-def _prepare_worktree_from_marker(
-    worktree_path: Path,
-    worktree_root: Path,
-    branch: str,
-    base_branch: str | None,
-    marker: dict[str, Any],
-    cwd: str | Path | None = None,
-) -> WorktreePreparation:
-    """#935: claim_idが一致するマーカーが既にある場合の安全な再開経路。
-    既存パスは無条件では削除も強制もしない。"""
-    claim_id = marker["claim_id"]
-    base_sha = marker.get("base_sha")
-    if worktree_path.exists():
-        # #935レビュー対応(P2): マーカーが一致していても、そのパスが実際に
-        # このリポジトリの`branch`をチェックアウトした有効なgit worktreeで
-        # ある保証はない（手動削除後に無関係/破損したディレクトリや、同名
-        # branchを持つ別リポジトリが同じpathへ作られた場合等）。所有権が
-        # 確認できないstaleなマーカーを信用して受理しない。
-        if not _verify_worktree_identity(worktree_path, branch, repository_root=cwd):
-            return WorktreePreparation(
-                worktree_path=worktree_path,
-                branch=branch,
-                accepted=False,
-                rejection_reason="stale_marker_unverified_worktree",
-            )
-        return WorktreePreparation(
-            worktree_path=worktree_path,
-            branch=branch,
-            accepted=True,
-            created=False,
-            base_sha=base_sha,
-        )
-    if not _branch_exists(branch, cwd=cwd):
-        return _create_and_claim_worktree(
-            worktree_path, worktree_root, branch, base_branch, claim_id, cwd=cwd
-        )
-    run_git(["worktree", "prune"], cwd=cwd, check=False)
-    worktree_root.mkdir(parents=True, exist_ok=True)
-    run_git(["worktree", "add", str(worktree_path), branch], cwd=cwd, check=True)
-    _write_claim_marker(
-        worktree_path,
-        claim_id=claim_id,
-        branch=branch,
-        base_sha=base_sha,
-        branch_created=False,
-    )
-    return WorktreePreparation(
-        worktree_path=worktree_path,
-        branch=branch,
-        accepted=True,
-        created=True,
-        branch_created=False,
-        base_sha=base_sha,
-    )
-
-
-def _prepare_worktree_unclaimed(
-    worktree_path: Path,
-    branch: str,
-    worktree_root: Path,
-    base_branch: str | None,
-    claim_id: str,
-    cwd: str | Path | None = None,
-    *,
-    trust_unclaimed_branch: bool = False,
-) -> WorktreePreparation:
-    """#935: 所有権マーカーが存在しない場合の経路。既存パス／既存ブランチのいずれかが
-    残っていれば、所有権を証明できないため削除もforceも行わず拒否するのが既定。
-
-    #943: `trust_unclaimed_branch=True`は、呼び出し元（`claim_task`）が本呼び出し
-    直前に`run_state`全体を走査する`evaluate_claim_conflicts`（SAME_ISSUE等）で
-    「この`issue_number`を現在保持しているactiveは存在しない」ことを既に確認
-    済みの場合のみ渡される。stale markerより強い根拠（run_state全体の最新
-    スキャン）が既にあるため、このケースに限り、ブランチだけが残っている
-    （worktree本体は既に無い）既存ブランチの再利用を許可する——完了・巻き戻し
-    後に再claimする正当なリトライ（例:Integratorによる巻き戻し後の再起動）を
-    ブロックしないため。worktree本体が残っている`unclaimed_existing_worktree`
-    は、この根拠だけでは安全性を判断できないため対象外のまま拒否し続ける。
-    """
-    if worktree_path.exists():
-        return WorktreePreparation(
-            worktree_path=worktree_path,
-            branch=branch,
-            accepted=False,
-            rejection_reason="unclaimed_existing_worktree",
-        )
-    if _branch_exists(branch, cwd=cwd):
-        if not trust_unclaimed_branch:
-            return WorktreePreparation(
-                worktree_path=worktree_path,
-                branch=branch,
-                accepted=False,
-                rejection_reason="unclaimed_existing_branch",
-            )
-        run_git(["worktree", "prune"], cwd=cwd, check=False)
-        worktree_root.mkdir(parents=True, exist_ok=True)
-        run_git(["worktree", "add", str(worktree_path), branch], cwd=cwd, check=True)
-        base_sha = _resolve_worktree_head_sha(worktree_path)
-        _write_claim_marker(
-            worktree_path,
-            claim_id=claim_id,
-            branch=branch,
-            base_sha=base_sha,
-            branch_created=False,
-        )
-        return WorktreePreparation(
-            worktree_path=worktree_path,
-            branch=branch,
-            accepted=True,
-            created=True,
-            branch_created=False,
-            base_sha=base_sha,
-        )
-    return _create_and_claim_worktree(
-        worktree_path, worktree_root, branch, base_branch, claim_id, cwd=cwd
+    return _common_verify_worktree_identity(
+        worktree_path, branch, repository_root=repository_root, git_runner=run_git
     )
 
 
@@ -579,51 +399,22 @@ def prepare_task_worktree(
     cwd: str | Path | None = None,
     trust_unclaimed_branch: bool = False,
 ) -> WorktreePreparation:
-    """#935: 所有権を確認したうえで安全にworktreeを準備する。
-
-    `allow_force=True`は既存dispatch経路専用の後方互換パスであり、所有権を
-    問わず既存の force cleanup セマンティクスをそのまま実行する。
-    `allow_force=False`（既定）では、claim_idが一致するマーカーがない既存の
-    パス／ブランチを一切削除・強制せず拒否する。
-
-    `trust_unclaimed_branch`（#943）は、呼び出し元が本呼び出しより前に
-    `run_state`全体から「この所有権を現在保持しているactiveは存在しない」ことを
-    既に確認済みの場合のみ`True`を渡すこと。詳細は`_prepare_worktree_unclaimed`
-    を参照。"""
+    """Preserve the dispatcher entry point and delegate safe preparation."""
     worktree_root_path = Path(worktree_root)
     worktree_path = _resolve_worktree_path(worktree_root_path, branch)
-
-    # #935レビュー対応(P1): force奪取の「作成→旧マーカー無効化」と、安全経路の
-    # 「マーカー確認→作成/再利用」を同一branchに対して相互排他にし、並行する
-    # rollback_task_worktreeが奪取の中間状態を観測できないようにする。
-    with file_lock(_claim_lock_path(worktree_path)):
-        if allow_force:
+    if allow_force:
+        with file_lock(_claim_lock_path(worktree_path)):
             return _prepare_worktree_forced(
                 worktree_path, worktree_root_path, branch, base_branch, cwd=cwd
             )
-
-        marker = _read_claim_marker(worktree_path)
-        if marker is not None:
-            if marker.get("claim_id") != claim_id or marker.get("branch") != branch:
-                return WorktreePreparation(
-                    worktree_path=worktree_path,
-                    branch=branch,
-                    accepted=False,
-                    rejection_reason="claim_id_mismatch",
-                )
-            return _prepare_worktree_from_marker(
-                worktree_path, worktree_root_path, branch, base_branch, marker, cwd=cwd
-            )
-
-        return _prepare_worktree_unclaimed(
-            worktree_path,
-            branch,
-            worktree_root_path,
-            base_branch,
-            claim_id,
-            cwd=cwd,
-            trust_unclaimed_branch=trust_unclaimed_branch,
-        )
+    return _prepare_shared_task_worktree(
+        branch,
+        worktree_root_path,
+        base_branch,
+        claim_id,
+        cwd=cwd,
+        trust_unclaimed_branch=trust_unclaimed_branch,
+    )
 
 
 def _worktree_is_verified_clean(worktree_path: Path) -> bool:

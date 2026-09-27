@@ -59,7 +59,7 @@ def _issue(number: int, footprint: Sequence[str]) -> IssueRecord:
 
 
 def _fake_preparation(branch: str, worktree_root: Path, *_args: Any, **_kwargs: Any):
-    from orchestune.dispatch.worktree import WorktreePreparation
+    from orchestune.worktree_ops.preparation import WorktreePreparation
 
     return WorktreePreparation(
         worktree_path=Path(worktree_root) / branch.replace("/", "-"),

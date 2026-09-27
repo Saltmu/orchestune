@@ -41,7 +41,6 @@ from orchestune.claim.workspace import (
     check_repository_identity_match,
     resolve_claim_workspace,
 )
-from orchestune.dispatch.worktree import WorktreePreparation, prepare_task_worktree
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
@@ -59,6 +58,10 @@ from orchestune.ledger.status_labels import (
 )
 from orchestune.models import IssueRecord
 from orchestune.task_metadata import TaskMetadata
+from orchestune.worktree_ops.preparation import (
+    WorktreePreparation,
+    prepare_task_worktree,
+)
 
 
 class _DefaultConflictView:
@@ -246,7 +249,6 @@ def _prepare_worktree_for_reservation(
             workspace.worktree_root,
             base_ref,
             claim_id or "",
-            allow_force=False,
             cwd=workspace.repository_root,
             # #943: この時点で`_validate_preflight_and_conflict`
             # (`evaluate_claim_conflicts`)が同じロック内で`run_state`全体を
