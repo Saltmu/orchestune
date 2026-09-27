@@ -68,7 +68,7 @@ sequenceDiagram
 ## 4. Shared stack-target policy and fallback
 
 Launch, auto-rebase, and base-branch-red recovery all pass the same
-`DependencyAssessment` view to `dependency_policy.decide_stack_target`. They use
+`DependencyAssessment` view to `dependencies.policy.decide_stack_target`. They use
 the dependency's canonical branch only when the shared policy returns a safe
 target. This table is the canonical per-consumer behavior when no target exists.
 

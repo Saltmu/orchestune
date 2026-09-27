@@ -17,6 +17,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from orchestune.dag.models import ConflictGraph, SubTask
+from orchestune.dependencies.resolution import build_legacy_dag_inputs
 from orchestune.dispatch.cost_model import (
     ESTIMATE_SOURCE_DEFAULT,
     CostEstimate,
@@ -28,7 +29,6 @@ from orchestune.dispatch.critical_path import (
     compute_precedence_ranks,
     pending_tasks,
 )
-from orchestune.dispatch.dependency_resolution import build_legacy_dag_inputs
 from orchestune.issue_parsing import BASE_PRIORITY, parse_task_from_issue
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN as _FOOTPRINT_BLOCK_PATTERN
 from orchestune.labels import StatusLabel

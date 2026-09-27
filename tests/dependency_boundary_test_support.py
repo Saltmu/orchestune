@@ -65,9 +65,6 @@ PRODUCTION_EXCEPTIONS = frozenset(
         _exception(
             "orchestune.dispatch.cycle_context_state", "<module>", "Task", _IDENTITY
         ),
-        _exception(
-            "orchestune.dispatch.dependency_resolution", "<module>", "Task", _IDENTITY
-        ),
         _exception("orchestune.dispatch.recovery", "<module>", "Task", _LOW_LEVEL),
         _exception("orchestune.dispatch.rules", "<module>", "Task", _IDENTITY),
         _exception("orchestune.dispatch.scoring", "<module>", "Task", _COMPAT),
@@ -96,21 +93,6 @@ PRODUCTION_EXCEPTIONS = frozenset(
             "native_depends_on",
             _IDENTITY,
         ),
-        *{
-            _exception(
-                "orchestune.dispatch.dependency_resolution",
-                function,
-                attribute,
-                _IDENTITY,
-            )
-            for function, attribute in {
-                ("_resolve_native", "native_depends_on"),
-                ("_own_native_subtask_ids", "native_depends_on"),
-                ("_resolve_body", "depends_on"),
-                ("from_task", "depends_on"),
-                ("from_task", "native_depends_on"),
-            }
-        },
         _exception(
             "orchestune.dispatch.cycle", "execute", "tasks_by_issue", _PRIVATE_VIEW
         ),

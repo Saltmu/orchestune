@@ -3,11 +3,11 @@
 from dataclasses import dataclass
 
 from orchestune.branch_naming import build_task_branch_name
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     DependencyAssessment,
     assess_dependencies,
 )
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     TaskDependencies,
     resolve_all_dependencies,
 )

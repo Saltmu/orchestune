@@ -13,11 +13,11 @@ from orchestune.claim.contracts import (
     ClaimFailureReason,
     ReservationKind,
 )
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     DependencyAssessment,
     DependencyState,
 )
-from orchestune.dispatch.dependency_policy import (
+from orchestune.dependencies.policy import (
     DependencyPolicyView,
     decide_stack_target,
     has_pending_dependencies,

@@ -198,7 +198,7 @@ class TestReconcileRecovery:
         task = _task(
             issue_number=1, status_labels=(StatusLabel.BLOCKED,), depends_on=()
         )
-        from orchestune.dispatch.dependency_resolution import TaskDependencies
+        from orchestune.dependencies.resolution import TaskDependencies
 
         ctx = _ctx(
             tasks_by_issue={1: task},

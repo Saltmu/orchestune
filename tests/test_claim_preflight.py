@@ -16,12 +16,12 @@ from orchestune.claim.preflight import (
     resolve_claim_base,
     resolve_claim_subtask_id,
 )
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     AssessedDependency,
     DependencyAssessment,
     DependencyState,
 )
-from orchestune.dispatch.dependency_resolution import UnresolvedDependency
+from orchestune.dependencies.resolution import UnresolvedDependency
 from orchestune.labels import StatusLabel
 from orchestune.lock_contracts import (
     KIND_BRANCH,

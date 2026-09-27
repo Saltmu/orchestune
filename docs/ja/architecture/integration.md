@@ -79,7 +79,7 @@ sequenceDiagram
 ## 4. 共通stack target policyとfallback
 
 launch、auto-rebase、base-branch-red recoveryは、いずれも
-`dependency_policy.decide_stack_target`へ同じ`DependencyAssessment` viewを渡します。
+`dependencies.policy.decide_stack_target`へ同じ`DependencyAssessment` viewを渡します。
 安全なtargetがある場合だけ、その依存先のcanonical branchを使います。consumer別の
 targetなしの扱いは次の表が正本です。
 

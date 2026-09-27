@@ -40,16 +40,16 @@ from orchestune.consistency.repairs.execution import (
     COMMAND_REQUEUE,
     plan_execution_repairs,
 )
+from orchestune.dependencies.resolution import (
+    EMPTY_DEPENDENCIES,
+    TaskDependencies,
+    resolve_all_dependencies,
+)
 from orchestune.dispatch.attempt_record import (
     MARKER,
     LaunchAttempt,
     attempt_from_body,
     read_attempt,
-)
-from orchestune.dispatch.dependency_resolution import (
-    EMPTY_DEPENDENCIES,
-    TaskDependencies,
-    resolve_all_dependencies,
 )
 from orchestune.dispatch.execution_profiles import (
     resolve_task_execution_selection,

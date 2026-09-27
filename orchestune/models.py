@@ -33,7 +33,7 @@ class Task:
     # ネイティブSub-issue関係由来の`native_depends_on`（Issue番号、常に一意）は
     # 別フィールドとして保持する。ここで両方をsubtask_id文字列へ統合してしまうと、
     # 別EPICが同名subtask_idを使った場合に依存解決が取り違わる
-    # （`orchestune.dispatch.dependency_resolution`が両方を見て解決する）。
+    # （`orchestune.dependencies.resolution`が両方を見て解決する）。
     depends_on: tuple[str, ...] = ()
     native_depends_on: tuple[int, ...] = ()
     yaml_error: bool = False

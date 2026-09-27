@@ -19,9 +19,9 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+from orchestune.dependencies.resolution import resolve_all_dependencies
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.rules import CycleContext
 from orchestune.forge import Forge
 from orchestune.infra.process_utils import run_state_lock

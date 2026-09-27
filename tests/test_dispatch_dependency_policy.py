@@ -4,17 +4,17 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     AssessedDependency,
     DependencyAssessment,
     DependencyState,
 )
-from orchestune.dispatch.dependency_policy import (
+from orchestune.dependencies.policy import (
     StackTarget,
     decide_stack_target,
     has_pending_dependencies,
 )
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     REASON_MISSING,
     UnresolvedDependency,
 )

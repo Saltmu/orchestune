@@ -16,13 +16,13 @@ from orchestune.claim.contracts import (
     ClaimStage,
     OwnerKind,
 )
-from orchestune.dispatch.cost_model import build_cost_model
-from orchestune.dispatch.cycle_action_contracts import CycleQueries
-from orchestune.dispatch.dependency_policy import (
+from orchestune.dependencies.policy import (
     DependencyPolicyView,
     StackDecision,
     decide_stack_target,
 )
+from orchestune.dispatch.cost_model import build_cost_model
+from orchestune.dispatch.cycle_action_contracts import CycleQueries
 from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
     resolve_task_execution_selection,

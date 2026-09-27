@@ -13,17 +13,17 @@ from __future__ import annotations
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     DependencyAssessment,
     assess_dependencies,
 )
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     REASON_AMBIGUOUS,
     TaskDependencies,
     UnresolvedDependency,
     resolve_stackable_dependency_issue,
 )
+from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.launch import _is_task_stack_eligible
 from orchestune.dispatch.rebase import _decide_rebase_target
 from orchestune.dispatch.reconciliation import _resolve_base_branch_for_task

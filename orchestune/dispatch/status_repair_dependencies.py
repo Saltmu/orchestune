@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from orchestune.consistency.desired import TaskLifecycle
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     AssessedDependency,
     DependencyAssessment,
     DependencyState,
     assess_dependencies,
 )
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     TaskDependencies,
     resolve_task_dependencies,
 )

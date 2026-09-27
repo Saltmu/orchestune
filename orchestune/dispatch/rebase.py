@@ -14,12 +14,12 @@ from pathlib import Path
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dag.graph import recompute_dag_for_footprint_change
 from orchestune.dag.models import FootprintConflict, SubTask
-from orchestune.dispatch import gc as dispatch_gc
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.dependency_policy import (
+from orchestune.dependencies.policy import (
     DependencyPolicyView,
     decide_stack_target,
 )
+from orchestune.dispatch import gc as dispatch_gc
+from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.execution_profiles import ExecutionSelection
 from orchestune.dispatch.locks import check_footprint_deviation
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext

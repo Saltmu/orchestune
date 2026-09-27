@@ -128,9 +128,10 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.cycle_action_contracts",
             "dispatch.cycle_context_state",
             "dispatch.cycle_records",
-            "dispatch.dependency_assessment",
-            "dispatch.dependency_policy",
-            "dispatch.dependency_resolution",
+            "dependencies",
+            "dependencies.assessment",
+            "dependencies.policy",
+            "dependencies.resolution",
             "dispatch.escalation",
             "dispatch.execution_profiles",
             "dispatch.execution_repair",
@@ -874,30 +875,7 @@ def test_execution_profiles_boundary_documented_in_architecture_docs() -> None:
         ), f"{lang}: ExecutionSelection reference missing"
 
 
-KNOWN_PACKAGE_CYCLE_EDGES: dict[tuple[str, str], str] = {
-    ("claim", "dispatch"): (
-        "Dependency assessment and policy (#1073) still live under dispatch"
-    ),
-    ("complete", "claim"): (
-        "Completion uses claim ownership/workspace; cycle closes via claim -> "
-        "dispatch -> complete until #1073 removes the remaining return path"
-    ),
-    ("dispatch", "claim"): (
-        "Dispatch reuses claim contracts/preflight/service/workspace; return path "
-        "from claim remains until #1073"
-    ),
-    ("dispatch", "complete"): (
-        "GC consumes completion contracts; return path via complete -> claim -> "
-        "dispatch remains until #1073"
-    ),
-    ("dispatch", "integrator"): (
-        "Postcycle invokes integration/coordinator/parent completion; reverse "
-        "dependencies are tracked in #1073"
-    ),
-    ("integrator", "dispatch"): (
-        "Legacy dependency resolution (#1073) still lives under dispatch"
-    ),
-}
+KNOWN_PACKAGE_CYCLE_EDGES: dict[tuple[str, str], str] = {}
 
 
 def test_package_dependency_cycles_match_allowlist() -> None:

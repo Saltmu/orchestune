@@ -11,13 +11,13 @@ import dataclasses
 
 import pytest
 
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     AssessedDependency,
     DependencyAssessment,
     DependencyState,
     assess_dependencies,
 )
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     REASON_AMBIGUOUS,
     REASON_MISSING,
     REASON_UNKNOWN_PARENT,

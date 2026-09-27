@@ -734,7 +734,7 @@ def parse_task_from_issue(
     issue: IssueRecord,
     # #799: 依存解決の入力にはもう使わない（ネイティブ依存は
     # `Task.native_depends_on`としてIssue番号のまま保持し、
-    # `orchestune.dispatch.dependency_resolution`が解決する）。
+    # `orchestune.dependencies.resolution`が解決する）。
     # `integrator`/`recovery`など他モジュールの既存呼び出し互換のため
     # 引数自体は残す。
     issue_to_subtask_id: dict[int, str] | None = None,

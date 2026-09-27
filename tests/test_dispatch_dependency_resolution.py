@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     REASON_AMBIGUOUS,
     REASON_MISSING,
     REASON_UNKNOWN_PARENT,

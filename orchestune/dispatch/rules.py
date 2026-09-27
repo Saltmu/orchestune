@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 
 from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.dag.models import SubTask
+from orchestune.dependencies.assessment import DependencyAssessment
+from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_action_contracts import (
     ActivePhaseResult,
@@ -23,8 +25,6 @@ from orchestune.dispatch.cycle_context_state import (
     RecordResult,
     _CycleState,
 )
-from orchestune.dispatch.dependency_assessment import DependencyAssessment
-from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord, Task

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import os
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     DependencyAssessment,
     DependencyState,
 )
+from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.labels import StatusLabel
 from orchestune.ledger.escalation import apply_human_review_escalation

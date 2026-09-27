@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Protocol, TypeVar
 
 from orchestune.claim.contracts import ClaimStage, ReservationKind
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     EMPTY_DEPENDENCIES,
     TaskDependencies,
 )

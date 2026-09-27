@@ -7,15 +7,15 @@ from typing import Any
 
 from orchestune.consistency.invariants.status import primary_status_labels
 from orchestune.dag.graph import recompute_dag_for_footprint_change
+from orchestune.dependencies.policy import (
+    DependencyPolicyView,
+    decide_stack_target,
+    has_pending_dependencies,
+)
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_records import (
     _authoritative_execution_active,
     apply_verified_transition,
-)
-from orchestune.dispatch.dependency_policy import (
-    DependencyPolicyView,
-    decide_stack_target,
-    has_pending_dependencies,
 )
 from orchestune.dispatch.locks import check_footprint_deviation
 from orchestune.dispatch.rebase import SubTask, _build_subtasks_for_recompute

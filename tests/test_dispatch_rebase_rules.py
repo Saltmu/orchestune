@@ -8,17 +8,17 @@
 from unittest.mock import MagicMock, patch
 
 from orchestune.dag.models import compile_extra_ignore_patterns
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     DependencyAssessment,
     assess_dependencies,
 )
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     REASON_MISSING,
     TaskDependencies,
     UnresolvedDependency,
     build_legacy_dag_inputs,
 )
+from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.rebase import (
     FootprintDeviationDecision,
     RebaseContext,

@@ -26,7 +26,7 @@ _PROCESS_TIMEOUT = 60
 
 class _NoDependencyView:
     def assess_dependencies(self, _issue_number: int):
-        from orchestune.dispatch.dependency_assessment import DependencyAssessment
+        from orchestune.dependencies.assessment import DependencyAssessment
 
         return DependencyAssessment()
 

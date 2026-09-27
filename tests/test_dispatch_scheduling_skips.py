@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     TaskDependencies,
     UnresolvedDependency,
 )
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
 from orchestune.dispatch.phase_scheduling import _determine_candidate_tasks
 from orchestune.dispatch.summary import (

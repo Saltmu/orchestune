@@ -17,6 +17,12 @@ from orchestune.consistency.supervisor import (
     ConsistencyMode,
     ConsistencyRepairPass,
 )
+from orchestune.dependencies.resolution import (
+    REASON_MISSING,
+    TaskDependencies,
+    UnresolvedDependency,
+    resolve_all_dependencies,
+)
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import (
     _execute_cycle_pipeline,
@@ -27,12 +33,6 @@ from orchestune.dispatch.cycle_action_contracts import ActivePhaseResult, GcPhas
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.cycle_report import CycleReport, build_event_log_entry
-from orchestune.dispatch.dependency_resolution import (
-    REASON_MISSING,
-    TaskDependencies,
-    UnresolvedDependency,
-    resolve_all_dependencies,
-)
 from orchestune.dispatch.launch import TaskLaunchPlan, _record_successful_launch
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
 from orchestune.dispatch.phase_scheduling import (

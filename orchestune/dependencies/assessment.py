@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     TaskDependencies,
     UnresolvedDependency,
 )
