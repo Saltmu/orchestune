@@ -841,3 +841,26 @@ def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
         step11_dev_row is not None
     ), f"{skill_name} must contain Step 11 in Development Steps table"
     assert "selected reviewer bot" in step11_dev_row.lower()
+
+
+def test_issue_footprint_example_selects_file_reservation():
+    """起票例を claim/parser へ渡し、実ファイル単位の予約として解釈できる。"""
+    from orchestune.claim.contracts import ReservationKind
+    from orchestune.claim.preflight import _resolve_reservation_kind
+    from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
+    from orchestune.models import IssueRecord
+
+    text = (
+        SKILLS_ROOT / "local-ci-developer" / "references" / "worktree.md"
+    ).read_text(encoding="utf-8")
+    match = FOOTPRINT_BLOCK_PATTERN.search(text)
+    assert match is not None, "起票手順に機械可読な Footprint YAML の例が必要"
+    issue = IssueRecord(1044, "Example", match.group(0), (), "2026-09-27")
+    task = parse_task_from_issue(issue)
+    assert not task.yaml_error
+    assert task.footprint
+    assert _resolve_reservation_kind(issue) == ReservationKind.FOOTPRINT
+    for path in task.footprint:
+        assert not Path(path).is_absolute()
+        assert ".." not in Path(path).parts
+        assert (REPO_ROOT / path).is_file()

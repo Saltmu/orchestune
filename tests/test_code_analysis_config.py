@@ -166,3 +166,20 @@ def test_agent_rules_require_impact_scope_before_implementation():
 
     assert "影響範囲" in instructions
     assert "references/impact-scope.md" in instructions
+
+
+def test_footprint_guidance_has_one_source_before_detailed_impact_analysis():
+    """共通ルールと各フェーズがスキル正本の初期宣言へ接続している。"""
+    instructions = AGENT_RULES.read_text(encoding="utf-8")
+    skill = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+    worktree = (SKILL_DIR / "references/worktree.md").read_text(encoding="utf-8")
+    impact = IMPACT_SCOPE_REFERENCE.read_text(encoding="utf-8")
+
+    assert "footprint" in instructions
+    assert "../skills/local-ci-developer/SKILL.md" in instructions
+    assert "footprint:" not in instructions  # YAML の詳細は二重管理しない
+    assert skill.index("## Initial Footprint") < skill.index("## Development Steps")
+    for reference in (worktree, impact):
+        assert (
+            "../SKILL.md#initial-footprint-before-issue-creation-or-claim" in reference
+        )

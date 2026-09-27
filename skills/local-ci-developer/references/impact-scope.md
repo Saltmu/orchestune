@@ -1,6 +1,6 @@
 # Impact Scope Determination (Step 2.6)
 
-Run this **inside the task worktree, before writing any production code** to decide scope from evidence.
+Run this **inside the task worktree, before writing any production code** to refine the [initial footprint](../SKILL.md#initial-footprint-before-issue-creation-or-claim) declared before Issue creation/claim. Reconcile the detailed findings with that declaration and the held reservation; follow the linked procedure if they differ.
 
 During #822 observation, start the [measurement record](measurement.md) before preparation
 or searches. Preserve the original table before implementation; append reconciliation
