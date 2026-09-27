@@ -16,7 +16,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from scripts.jev_context import (
     JevReviewContext,
@@ -333,7 +333,15 @@ def _append_jev_log(
         )
 
 
-def filter_review_findings(
+def _jev_decision(reason: str) -> str:
+    if reason == "bypass":
+        return "bypassed"
+    if reason == "accepted":
+        return "kept"
+    return "filtered"
+
+
+def evaluate_review_findings(
     inline_comments: list[dict[str, Any]],
     bot_name: str = "claude",
     threshold: float | None = None,
@@ -343,16 +351,37 @@ def filter_review_findings(
     pr: int | None = None,
     *,
     context: Any = None,
-) -> list[dict[str, Any]]:
-    """Filter inline comments using Jev evaluation and threshold policy.
+) -> dict[str, Any]:
+    """Evaluate inline comments with Jev and return a structured report.
 
-    Outputs structured evaluation logs to stderr for PoC visibility
-    and persists them to a JSONL log file.
-    If JEV_API_KEY is not set, findings pass through untouched.
+    Every finding is represented exactly once in `jev_evaluations` — kept,
+    filtered, bypassed (API/log failure; findings are always retained), or
+    not_evaluated (no API key configured). Unlike the legacy behavior, no
+    finding is ever dropped from the report itself; callers decide what to do
+    with excluded findings. `kept` mirrors the previous filtered-list contract
+    for backward compatibility.
+
+    Outputs structured evaluation logs to stderr for PoC visibility and
+    persists them to a JSONL log file. If JEV_API_KEY is not set, findings are
+    reported as not_evaluated and pass through untouched.
     """
     resolved_key = api_key or os.environ.get("JEV_API_KEY")
     if not resolved_key:
-        return inline_comments
+        return {
+            "kept": list(inline_comments),
+            "jev_evaluations": [
+                {
+                    "finding_id": item.get("id", index),
+                    "decision": "not_evaluated",
+                    "validity": None,
+                    "impact": None,
+                    "applicability": None,
+                    "applicability_confidence": None,
+                    "decision_reason": "no_api_key",
+                }
+                for index, item in enumerate(inline_comments)
+            ],
+        }
 
     if threshold is None:
         try:
@@ -362,9 +391,10 @@ def filter_review_findings(
         except ValueError:
             threshold = DEFAULT_VALIDITY_THRESHOLD
 
-    accepted_findings: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    jev_evaluations: list[dict[str, Any]] = []
 
-    for item in inline_comments:
+    for index, item in enumerate(inline_comments):
         comment = str(item.get("body") or "")
         path = str(item.get("path") or "")
         line = item.get("line") or ""
@@ -424,7 +454,49 @@ def filter_review_findings(
         }
         print(json.dumps(stderr_entry), file=sys.stderr)
 
-        if accepted:
-            accepted_findings.append(item)
+        jev_evaluations.append(
+            {
+                "finding_id": item.get("id", index),
+                "decision": _jev_decision(reason),
+                "validity": evaluation.validity,
+                "impact": evaluation.impact,
+                "applicability": evaluation.applicability,
+                "applicability_confidence": evaluation.applicability_confidence,
+                "decision_reason": reason,
+            }
+        )
 
-    return accepted_findings
+        if accepted:
+            kept.append(item)
+
+    return {"kept": kept, "jev_evaluations": jev_evaluations}
+
+
+def filter_review_findings(
+    inline_comments: list[dict[str, Any]],
+    bot_name: str = "claude",
+    threshold: float | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    log_path: str | Path | None = None,
+    pr: int | None = None,
+    *,
+    context: Any = None,
+) -> list[dict[str, Any]]:
+    """Backward-compatible wrapper returning only the kept findings as a list.
+
+    Prefer `evaluate_review_findings` for new callers that need the structured
+    per-finding decisions (`jev_evaluations`); this wrapper exists so existing
+    list-in/list-out callers keep working unchanged.
+    """
+    report = evaluate_review_findings(
+        inline_comments,
+        bot_name=bot_name,
+        threshold=threshold,
+        api_key=api_key,
+        base_url=base_url,
+        log_path=log_path,
+        pr=pr,
+        context=context,
+    )
+    return cast("list[dict[str, Any]]", report["kept"])

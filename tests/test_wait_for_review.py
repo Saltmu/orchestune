@@ -7,7 +7,6 @@ from unittest.mock import patch
 import pytest
 
 from scripts.wait_for_review import (
-    EXIT_NO_FINDINGS,
     StalledReviewError,
     _build_snapshot,
     _extract_review_result,
@@ -20,6 +19,18 @@ from scripts.wait_for_review import (
     _run_gh,
     wait_for_review,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_network_sha_lookups(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`wait_for_review()` best-effort fetches PR head SHA / repo slug via `gh`
+    for the new acquisition-contract fields; tests here exercise polling/round
+    logic and must stay hermetic, so default those lookups to "unknown" unless
+    a specific test overrides them."""
+    monkeypatch.setattr(
+        "scripts.wait_for_review._fetch_pr_head_sha", lambda pr_number: None
+    )
+    monkeypatch.setattr("scripts.wait_for_review._fetch_repository_slug", lambda: None)
 
 
 def test_filter_bot_items():
@@ -760,8 +771,13 @@ def test_wait_for_review_excludes_inline_comments_from_earlier_rounds(
         post_trigger=True,
     )
 
-    assert result["inline_comments"] == []
-    assert result["verdict"] == EXIT_NO_FINDINGS
+    # The stale round-1 inline comment is not discarded -- it stays visible,
+    # tagged historical -- but must not be reported as belonging to this round.
+    assert len(result["inline_comments"]) == 1
+    assert result["inline_comments"][0]["provenance"] == "historical"
+    assert not any(
+        item["provenance"] == "current" for item in result["inline_comments"]
+    )
 
 
 @patch("scripts.wait_for_review._get_pr_data", autospec=True)

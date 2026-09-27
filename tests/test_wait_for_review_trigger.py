@@ -232,7 +232,7 @@ def test_handle_review_trigger_skips_when_existing_trigger_has_mention(mock_post
     excluded_ids = set()
     initial_snapshot = {}
 
-    timestamp = _handle_review_trigger(
+    timestamp, trigger_id = _handle_review_trigger(
         pr_number=540,
         bot_name="claude",
         initial_data=data,
@@ -245,6 +245,7 @@ def test_handle_review_trigger_skips_when_existing_trigger_has_mention(mock_post
     )
 
     assert timestamp == "2026-08-20T10:00:00Z"
+    assert trigger_id == 501
     assert 501 in excluded_ids
     mock_post.assert_not_called()
 
@@ -268,7 +269,7 @@ def test_handle_review_trigger_reposts_when_existing_trigger_lacks_mention(mock_
     excluded_ids = set()
     initial_snapshot = {}
 
-    timestamp = _handle_review_trigger(
+    timestamp, trigger_id = _handle_review_trigger(
         pr_number=540,
         bot_name="codex",
         initial_data=data,
@@ -281,6 +282,7 @@ def test_handle_review_trigger_reposts_when_existing_trigger_lacks_mention(mock_
     )
 
     assert timestamp == "2026-08-20T10:01:00Z"
+    assert trigger_id == 503
     assert 502 in excluded_ids
     assert 503 in excluded_ids
     mock_post.assert_called_once_with(

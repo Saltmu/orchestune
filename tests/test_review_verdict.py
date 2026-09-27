@@ -1,85 +1,38 @@
 from __future__ import annotations
 
-import json
-import sys
-
-import pytest
-
 from scripts.review_verdict import (
-    EXIT_FINDINGS_PRESENT,
-    EXIT_NO_FINDINGS,
-    EXIT_UNDETERMINED,
-    evaluate_review_state,
-    evaluate_review_verdict,
+    ACQUISITION_ACQUIRED,
+    ACQUISITION_IN_PROGRESS,
+    ACQUISITION_UNAVAILABLE,
+    SCHEMA_VERSION,
+    collect_review_state,
+    extract_review_result,
     normalize_review_state,
 )
 
 
-def test_codex_boilerplate_with_inline_finding_is_not_a_clean_pass():
-    state = {
-        "reviews": [
-            {
-                "id": 1,
-                "user": {"login": "chatgpt-codex-connector[bot]"},
-                "submitted_at": "2026-08-20T10:00:00Z",
-                "body": "Here are some automated review suggestions.",
-            }
-        ],
-        "inline_comments": [
-            {
-                "id": 2,
-                "user": {"login": "chatgpt-codex-connector[bot]"},
-                "created_at": "2026-08-20T10:00:00Z",
-                "path": "app.py",
-                "line": 42,
-                "body": "Validate this input before using it.",
-            }
-        ],
+def test_normalize_review_state_rejects_non_list_sections():
+    import pytest
+
+    with pytest.raises(ValueError, match="reviews"):
+        normalize_review_state({"reviews": {"id": 1}})
+
+
+def test_collect_review_state_unavailable_when_no_bot_activity():
+    result = collect_review_state({}, bot_name="codex")
+    assert result == {
+        "schema_version": SCHEMA_VERSION,
+        "acquisition_status": ACQUISITION_UNAVAILABLE,
+        "reason": "no @codex activity found in the supplied review state",
+        "review_items": [],
+        "review_body": "",
+        "inline_comments": [],
+        "timestamp": "",
     }
 
-    result = evaluate_review_state(state, bot_name="codex")
 
-    assert result is not None
-    assert result["verdict"] == EXIT_FINDINGS_PRESENT
-    assert result["inline_comments"] == [
-        {
-            "path": "app.py",
-            "line": 42,
-            "body": "Validate this input before using it.",
-            "id": 2,
-            "position_line": 42,
-        }
-    ]
-
-
-def test_codex_clean_pass_without_inlines_returns_clean_exit_code():
-    assert (
-        evaluate_review_verdict(
-            "Didn't find any major issues. Nice work!", bot_name="codex"
-        )
-        == EXIT_NO_FINDINGS
-    )
-
-
-def test_codex_boilerplate_without_inline_findings_is_a_clean_pass():
-    assert (
-        evaluate_review_verdict(
-            "Here are some automated review suggestions.", bot_name="codex"
-        )
-        == EXIT_NO_FINDINGS
-    )
-
-
-def test_claude_without_blocking_issues_remains_a_clean_pass():
-    assert (
-        evaluate_review_verdict("Reviewed without any blocking issues.")
-        == EXIT_NO_FINDINGS
-    )
-
-
-def test_external_state_uses_the_same_verdict_contract_as_direct_evaluation():
+def test_collect_review_state_acquired_carries_no_verdict_field():
     state = {
-        "issue_comments": [],
         "reviews": [
             {
                 "id": 1,
@@ -88,118 +41,242 @@ def test_external_state_uses_the_same_verdict_contract_as_direct_evaluation():
                 "body": "Didn't find any major issues.",
             }
         ],
-        "inline_comments": [],
     }
 
-    result = evaluate_review_state(state, bot_name="codex")
+    result = collect_review_state(state, bot_name="codex")
+
+    assert result["acquisition_status"] == ACQUISITION_ACQUIRED
+    assert "verdict" not in result
+    assert result["review_body"] == "Didn't find any major issues."
+
+
+def test_extract_review_result_keeps_all_current_round_bodies_not_just_latest():
+    """A body-only summary and a separate findings review in the same round must
+    both survive — collapsing to a single "latest" item was the bug the issue
+    reports (comment/review multiplicity loses content)."""
+    state = normalize_review_state(
+        {
+            "issue_comments": [
+                {
+                    "id": 1,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T10:00:00Z",
+                    "body": "LGTM overall.",
+                }
+            ],
+            "reviews": [
+                {
+                    "id": 2,
+                    "user": {"login": "claude[bot]"},
+                    "submitted_at": "2026-08-20T10:05:00Z",
+                    "body": "### Findings\n- Bug: validate the input.",
+                    "state": "CHANGES_REQUESTED",
+                }
+            ],
+        }
+    )
+
+    result = extract_review_result(state, "claude")
 
     assert result is not None
-    assert result["verdict"] == evaluate_review_verdict(
-        result["review_body"], result["inline_comments"], bot_name="codex"
+    assert len(result["review_items"]) == 2
+    assert result["review_body"] == (
+        "LGTM overall.\n\n---\n\n### Findings\n- Bug: validate the input."
     )
-    assert result["verdict"] == EXIT_NO_FINDINGS
+    assert all(item["provenance"] == "current" for item in result["review_items"])
 
 
-def test_external_state_uses_the_same_latest_item_tiebreak_as_gh_polling(capsys):
-    from scripts.wait_for_review import _extract_review_result
+def test_extract_review_result_tags_items_before_round_start_as_historical():
+    state = normalize_review_state(
+        {
+            "reviews": [
+                {
+                    "id": 1,
+                    "user": {"login": "claude[bot]"},
+                    "submitted_at": "2026-08-20T09:00:00Z",
+                    "body": "old round findings",
+                },
+                {
+                    "id": 2,
+                    "user": {"login": "claude[bot]"},
+                    "submitted_at": "2026-08-20T10:00:00Z",
+                    "body": "new round findings",
+                },
+            ],
+        }
+    )
 
+    result = extract_review_result(
+        state, "claude", round_started_at="2026-08-20T09:30:00Z"
+    )
+
+    assert result is not None
+    by_id = {item["id"]: item for item in result["review_items"]}
+    assert by_id[1]["provenance"] == "historical"
+    assert by_id[2]["provenance"] == "current"
+    # Historical content is not discarded, only excluded from the round's body.
+    assert result["review_body"] == "new round findings"
+
+
+def test_extract_review_result_tags_missing_timestamp_as_unassociated():
+    state = normalize_review_state(
+        {
+            "inline_comments": [
+                {
+                    "id": 9,
+                    "user": {"login": "claude[bot]"},
+                    "path": "a.py",
+                    "line": 1,
+                    "body": "no timestamp at all",
+                }
+            ],
+        }
+    )
+
+    result = extract_review_result(
+        state, "claude", round_started_at="2026-08-20T09:30:00Z"
+    )
+
+    assert result is not None
+    assert result["inline_comments"][0]["provenance"] == "unassociated"
+
+
+def test_extract_review_result_excludes_finished_progress_tracker_from_review_items():
+    state = normalize_review_state(
+        {
+            "issue_comments": [
+                {
+                    "id": 1,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T10:00:00Z",
+                    "body": "**Claude finished**\nView job run here",
+                },
+                {
+                    "id": 2,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T10:01:00Z",
+                    "body": "Actual review summary.",
+                },
+            ],
+        }
+    )
+
+    result = extract_review_result(state, "claude")
+
+    assert result is not None
+    assert [item["id"] for item in result["review_items"]] == [2]
+    assert result["review_body"] == "Actual review summary."
+
+
+def test_extract_review_result_empty_body_falls_back_to_current_inline_count():
+    state = normalize_review_state(
+        {
+            "reviews": [
+                {
+                    "id": 1,
+                    "user": {"login": "claude[bot]"},
+                    "submitted_at": "2026-08-20T10:00:00Z",
+                    "body": "",
+                }
+            ],
+            "inline_comments": [
+                {
+                    "id": 2,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T10:00:00Z",
+                    "path": "a.py",
+                    "line": 1,
+                    "body": "bug",
+                }
+            ],
+        }
+    )
+
+    result = extract_review_result(state, "claude")
+
+    assert result is not None
+    assert "1 inline comment(s)" in result["review_body"]
+
+
+def test_extract_review_result_returns_none_for_empty_review_with_no_inlines():
+    """An empty review record (no body, no inline comments) is not review
+    content -- distinct from a genuine zero-findings review, which always
+    carries real body text (issue #1099)."""
+    state = normalize_review_state(
+        {
+            "reviews": [
+                {
+                    "id": 1,
+                    "user": {"login": "claude[bot]"},
+                    "submitted_at": "2026-08-20T10:00:00Z",
+                    "body": "",
+                    "state": "APPROVED",
+                }
+            ],
+        }
+    )
+    assert extract_review_result(state, "claude") is None
+
+
+def test_extract_review_result_returns_none_when_no_bot_activity():
+    state = normalize_review_state({"issue_comments": []})
+    assert extract_review_result(state, "claude") is None
+
+
+def test_extract_review_result_returns_none_for_lone_finished_tracker():
+    """A "job finished" tracker with no other activity is execution telemetry,
+    not review content — must not be reported as a (empty) acquired result."""
+    state = normalize_review_state(
+        {
+            "issue_comments": [
+                {
+                    "id": 1,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T10:00:00Z",
+                    "body": "**Claude finished**\nView job run here",
+                }
+            ],
+        }
+    )
+    assert extract_review_result(state, "claude") is None
+
+
+def test_collect_review_state_in_progress_for_explicit_marker():
+    """A single snapshot (no polling loop) whose latest activity explicitly
+    says the bot is still working must report in_progress, not a final
+    acquired-or-unavailable result (issue #1099 Exit 11)."""
     state = {
         "issue_comments": [
             {
                 "id": 1,
                 "user": {"login": "claude[bot]"},
                 "created_at": "2026-08-20T10:00:00Z",
-                "body": "LGTM",
+                "updated_at": "2026-08-20T10:00:00Z",
+                "body": "### Review in progress\n- [ ] Working...",
             }
         ],
-        "reviews": [
+    }
+    result = collect_review_state(state, bot_name="claude")
+    assert result["acquisition_status"] == ACQUISITION_IN_PROGRESS
+    assert "verdict" not in result
+
+
+def test_collect_review_state_unavailable_for_lone_finished_tracker():
+    state = {
+        "issue_comments": [
             {
-                "id": 2,
+                "id": 1,
                 "user": {"login": "claude[bot]"},
-                "submitted_at": "2026-08-20T10:00:00Z",
-                "body": "### Findings\n- [ ] Bug: validate the input.",
+                "created_at": "2026-08-20T10:00:00Z",
+                "body": "**Claude finished**\nView job run here",
             }
         ],
-        "inline_comments": [],
     }
-
-    result = evaluate_review_state(state)
-    gh_result = _extract_review_result(state, "claude")
-
-    assert gh_result is not None
-    assert result["review_body"] == gh_result["review_body"]
-    assert result["verdict"] == EXIT_FINDINGS_PRESENT
-    capsys.readouterr()
+    result = collect_review_state(state, bot_name="claude")
+    assert result["acquisition_status"] == ACQUISITION_UNAVAILABLE
 
 
-def test_empty_external_state_is_undetermined():
-    assert evaluate_review_state({}, bot_name="codex") == {
-        "review_body": "",
-        "inline_comments": [],
-        "timestamp": "",
-        "verdict": EXIT_UNDETERMINED,
-    }
-
-
-def test_normalize_review_state_rejects_non_list_sections():
-    with pytest.raises(ValueError, match="reviews"):
-        normalize_review_state({"reviews": {"id": 1}})
-
-
-def test_cli_evaluates_external_state_without_a_pr_or_gh(tmp_path, capsys, monkeypatch):
-    from scripts.wait_for_review import main
-
-    state_file = tmp_path / "review-state.json"
-    state_file.write_text(
-        json.dumps(
-            {
-                "reviews": [
-                    {
-                        "id": 1,
-                        "user": {"login": "codex[bot]"},
-                        "submitted_at": "2026-08-20T10:00:00Z",
-                        "body": "Here are some automated review suggestions.",
-                    }
-                ],
-                "inline_comments": [
-                    {
-                        "id": 2,
-                        "user": {"login": "codex[bot]"},
-                        "created_at": "2026-08-20T10:00:00Z",
-                        "path": "app.py",
-                        "line": 42,
-                        "body": "Validate this input before using it.",
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "wait_for_review.py",
-            "--bot-name",
-            "codex",
-            "--review-state-file",
-            str(state_file),
-        ],
-    )
-
-    with pytest.raises(SystemExit) as exit_info:
-        main()
-
-    assert exit_info.value.code == EXIT_FINDINGS_PRESENT
-    output = capsys.readouterr().out
-    assert "[ACTION REQUIRED] Inline Findings: 1 item(s)" in output
-    assert "--- Inline Finding 1: app.py:42 ---" in output
-    assert "Validate this input before using it." in output
-
-
-def test_extract_preserves_inline_provenance() -> None:
-    from scripts.review_verdict import extract_review_result, normalize_review_state
-
+def test_extract_preserves_inline_metadata_and_provenance() -> None:
     metadata = {
         "id": 5,
         "diff_hunk": "@@ -1 +1 @@",
@@ -229,5 +306,6 @@ def test_extract_preserves_inline_provenance() -> None:
     finding = result["inline_comments"][0]
     assert finding["line"] == 3
     assert finding["position_line"] is None
+    assert finding["provenance"] == "current"
     for key, value in metadata.items():
         assert finding[key] == value

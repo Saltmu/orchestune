@@ -1,4 +1,11 @@
-"""Normalize AI review state and evaluate its verdict independently of transport."""
+"""Normalize AI review activity into a transport-neutral acquisition-state snapshot.
+
+Acquisition (this module) is independent of semantic judgment: it identifies bot
+activity, associates every review item and inline comment with the current round
+via `provenance`, and reports completeness. Deciding whether the acquired content
+constitutes an adequate, passing review is the calling LLM's responsibility (see
+review-loop.md); this module never computes a pass/fail verdict.
+"""
 
 from __future__ import annotations
 
@@ -6,10 +13,18 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-EXIT_NO_FINDINGS = 0
-EXIT_FINDINGS_PRESENT = 10
+SCHEMA_VERSION = 1
+
+ACQUISITION_ACQUIRED = "acquired"
+ACQUISITION_UNAVAILABLE = "unavailable"
+ACQUISITION_IN_PROGRESS = "in_progress"
+
+# Exit codes this module's results map to. Acquisition-loop control codes
+# (internal error=2, round limit=12, timeout=20, stalled=21) are raised as
+# exceptions by scripts/wait_for_review.py and are not produced here.
+EXIT_ACQUIRED = 0
 EXIT_IN_PROGRESS = 11
-EXIT_UNDETERMINED = 30
+EXIT_NO_RESULT = 30
 
 ReviewState = dict[str, list[dict[str, Any]]]
 _STATE_SECTIONS = ("issue_comments", "reviews", "inline_comments")
@@ -172,178 +187,184 @@ def _build_snapshot(
     return snapshot
 
 
+def _normalize_review_item(
+    item: dict[str, Any], kind: str, provenance: str
+) -> dict[str, Any]:
+    normalized: dict[str, Any] = {
+        "id": item.get("id"),
+        "kind": kind,
+        "body": item.get("body") or "",
+        "created_at": item.get("created_at") or "",
+        "updated_at": item.get("updated_at") or "",
+        "submitted_at": item.get("submitted_at") or "",
+        "provenance": provenance,
+    }
+    if kind == "review":
+        normalized["state"] = item.get("state")
+        normalized["commit_id"] = item.get("commit_id")
+    return normalized
+
+
+def _normalize_inline_item(item: dict[str, Any], provenance: str) -> dict[str, Any]:
+    return {
+        "path": item.get("path", "unknown"),
+        "line": item.get("line") or item.get("original_line") or "N/A",
+        "body": item.get("body") or "",
+        **{
+            key: item[key]
+            for key in (
+                "id",
+                "diff_hunk",
+                "side",
+                "start_line",
+                "start_side",
+                "commit_id",
+                "original_commit_id",
+                "original_line",
+                "context",
+            )
+            if key in item
+        },
+        "position_line": item.get("position_line", item.get("line")),
+        "provenance": provenance,
+    }
+
+
+def _classify_provenance(created: str, round_started_at: str) -> str:
+    """Attribute one item to the current round, an earlier round, or unknown timing.
+
+    An empty `round_started_at` means the caller has no trigger boundary to compare
+    against (e.g. an offline snapshot with no round metadata); such content is not
+    discarded, it is treated as belonging to the only round the caller knows about.
+    """
+    if not round_started_at:
+        return "current"
+    if not created:
+        return "unassociated"
+    return "current" if created >= round_started_at else "historical"
+
+
 def extract_review_result(
     data: ReviewState,
     bot_name: str,
     exclude_ids: set[int | str] | None = None,
-    latest_item: dict[str, Any] | None = None,
+    round_started_at: str = "",
 ) -> dict[str, Any] | None:
-    """Extract the latest bot summary and every associated inline comment."""
-    latest = latest_item or _latest_bot_summary_item(data, bot_name, exclude_ids)
-    if latest is None:
-        return None
-    inlines = [
-        {
-            "path": item.get("path", "unknown"),
-            "line": item.get("line") or item.get("original_line") or "N/A",
-            "body": item.get("body") or "",
-            **{
-                key: item[key]
-                for key in (
-                    "id",
-                    "diff_hunk",
-                    "side",
-                    "start_line",
-                    "start_side",
-                    "commit_id",
-                    "original_commit_id",
-                    "original_line",
-                    "context",
-                )
-                if key in item
-            },
-            "position_line": item.get("position_line", item.get("line")),
-        }
-        for item in _filter_bot_items(data["inline_comments"], bot_name, exclude_ids)
+    """Collect every bot review item and inline comment, tagged with round provenance.
+
+    Unlike the previous single-latest-item extraction, this returns *all* bot
+    `issue_comments`/`reviews` and *all* inline comments the bot has posted, each
+    tagged `current` (>= round_started_at), `historical` (before it), or
+    `unassociated` (no usable timestamp) — nothing is discarded. Returns None only
+    when the bot has posted no activity of any kind.
+    """
+    review_candidates = [
+        *[
+            (item, "issue_comment")
+            for item in _filter_bot_items(data["issue_comments"], bot_name, exclude_ids)
+        ],
+        *[
+            (item, "review")
+            for item in _filter_bot_items(data["reviews"], bot_name, exclude_ids)
+        ],
     ]
-    body = latest.get("body") or ""
-    if not body and inlines:
-        body = f"(No review summary body; see {len(inlines)} inline comment(s) below)"
+    inline_candidates = _filter_bot_items(
+        data["inline_comments"], bot_name, exclude_ids
+    )
+
+    review_items = [
+        _normalize_review_item(
+            item,
+            kind,
+            _classify_provenance(_get_item_created_timestamp(item), round_started_at),
+        )
+        for item, kind in sorted(
+            review_candidates, key=lambda pair: _get_item_timestamp(pair[0])
+        )
+        if not _is_finished_progress_tracker(item, bot_name)
+    ]
+    inline_items = [
+        _normalize_inline_item(
+            item,
+            _classify_provenance(_get_item_created_timestamp(item), round_started_at),
+        )
+        for item in sorted(inline_candidates, key=_get_item_timestamp)
+    ]
+
+    # A lone "job finished" tracker comment, or a review/comment record with no
+    # body and no inline comments (empty review, trigger-only, all-sections-empty),
+    # is execution telemetry rather than review content: treat it the same as no
+    # activity at all, distinct from a genuine zero-findings review (which always
+    # carries real body text, e.g. "LGTM, no issues found") (issue #1099).
+    if not any(item["body"] for item in review_items) and not inline_items:
+        return None
+
+    current_bodies = [
+        item["body"]
+        for item in review_items
+        if item["provenance"] == "current" and item["body"]
+    ]
+    review_body = "\n\n---\n\n".join(current_bodies)
+    if not review_body:
+        current_inlines = [
+            item for item in inline_items if item["provenance"] == "current"
+        ]
+        if current_inlines:
+            review_body = f"(No review summary body; see {len(current_inlines)} inline comment(s) below)"
+
+    timestamps = [_get_item_timestamp(item) for item, _ in review_candidates] + [
+        _get_item_timestamp(item) for item in inline_candidates
+    ]
+
     return {
-        "review_body": body,
-        "inline_comments": inlines,
-        "timestamp": _get_item_timestamp(latest),
+        "review_items": review_items,
+        "review_body": review_body,
+        "inline_comments": inline_items,
+        "timestamp": max(timestamps, default=""),
     }
 
 
-def _evaluate_marker_layer(body: str) -> int | None:
-    match = re.search(r"<!--\s*orchestune:verdict\s+(pass|fail)\s*-->", body, re.I)
-    if match:
-        return (
-            EXIT_NO_FINDINGS
-            if match.group(1).lower() == "pass"
-            else EXIT_FINDINGS_PRESENT
-        )
-    return None
+def collect_review_state(value: object, bot_name: str = "claude") -> dict[str, Any]:
+    """Assemble an acquisition-state result from an externally acquired snapshot.
 
-
-def _evaluate_codex_signals(
-    body_lower: str, inlines: list[dict[str, Any]]
-) -> int | None:
-    if inlines or any(
-        signal in body_lower
-        for signal in (
-            "p1 badge",
-            "p2 badge",
-            "p1:",
-            "p2:",
-            "[p1]",
-            "[p2]",
-        )
-    ):
-        return EXIT_FINDINGS_PRESENT
-    if "here are some automated review suggestions" in body_lower:
-        return EXIT_NO_FINDINGS
-    if any(
-        signal in body_lower
-        for signal in (
-            "didn't find any major issues",
-            "no major issues found",
-            "no issues found",
-            "nice work",
-            "lgtm",
-        )
-    ):
-        return EXIT_NO_FINDINGS
-    return None
-
-
-def _evaluate_claude_signals(
-    body_lower: str, inlines: list[dict[str, Any]]
-) -> int | None:
-    if inlines:
-        return EXIT_FINDINGS_PRESENT
-    clean = any(
-        re.search(pattern, body_lower)
-        for pattern in (
-            r"\b(?:no|without)\b(?:\s+\w+){0,3}\s+blocking\s+(?:issues?|bugs?|problems?)",
-            r"\ball\s+checks\s+passed\b",
-            r"\blooks\s+good\b",
-            r"\blgtm\b",
-        )
-    )
-    blocking_matches = list(
-        re.finditer(r"\bblocking\s+(?:bugs?|issues?)\b", body_lower)
-    )
-    blocking_keyword = any(
-        not re.search(
-            r"\b(?:no|without)\b(?:\s+\w+){0,3}\s*$",
-            body_lower[max(0, match.start() - 30) : match.start()],
-        )
-        for match in blocking_matches
-    )
-    blocking = blocking_keyword or any(
-        re.search(pattern, body_lower)
-        for pattern in (
-            r"marking\s+this\s+\*\*fail\*\*",
-            r"marking\s+this\s+fail\b",
-            r"verdict:\s*fail\b",
-            r"should\s+not\s+be\s+merged\b",
-        )
-    )
-    if "### findings" in body_lower:
-        findings = body_lower.split("### findings", 1)[1]
-        blocking = blocking or any(
-            marker in findings
-            for marker in ("- [ ]", "🔴", "⚠️", "bug:", "defect:", "vulnerability")
-        )
-    return EXIT_FINDINGS_PRESENT if blocking else EXIT_NO_FINDINGS if clean else None
-
-
-def evaluate_review_verdict(
-    review_body: str,
-    inline_comments: list[dict[str, Any]] | None = None,
-    bot_name: str = "claude",
-) -> int:
-    """Apply the shared exit-code contract to an already acquired review result."""
-    body = review_body or ""
-    inlines = inline_comments or []
-    if (marker := _evaluate_marker_layer(body)) is not None:
-        return marker
-    if _is_explicitly_in_progress({"body": body}):
-        return EXIT_IN_PROGRESS
-    if bot_name.lower() == "codex":
-        verdict = _evaluate_codex_signals(body.lower(), inlines)
-    elif bot_name.lower() == "claude":
-        verdict = _evaluate_claude_signals(body.lower(), inlines)
-    else:
-        verdict = (
-            EXIT_FINDINGS_PRESENT
-            if inlines
-            else (
-                EXIT_NO_FINDINGS
-                if any(
-                    x in body.lower()
-                    for x in ("lgtm", "all checks passed", "no blocking issues")
-                )
-                else None
-            )
-        )
-    return verdict if verdict is not None else EXIT_UNDETERMINED
-
-
-def evaluate_review_state(value: object, bot_name: str = "claude") -> dict[str, Any]:
-    """Evaluate externally acquired review state without using the GitHub CLI."""
+    Used by the offline `--review-state-file` path. Online adapters
+    (`scripts/wait_for_review.py`) build the equivalent result while additionally
+    tracking round/trigger/SHA identifiers this transport-neutral entry point does
+    not have.
+    """
     data = normalize_review_state(value)
     result = extract_review_result(data, bot_name)
+
+    # A single snapshot (no polling loop available to this entry point) whose
+    # latest bot activity explicitly reports still-in-progress must not be
+    # treated as a final acquired-or-unavailable result (issue #1099 Exit 11).
+    latest_activity = _latest_bot_activity_item(data, bot_name)
+    if latest_activity is not None and _is_explicitly_in_progress(latest_activity):
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "acquisition_status": ACQUISITION_IN_PROGRESS,
+            "reason": f"@{bot_name} activity is explicitly still in progress",
+            "review_items": result["review_items"] if result else [],
+            "review_body": result["review_body"] if result else "",
+            "inline_comments": result["inline_comments"] if result else [],
+            "timestamp": (
+                result["timestamp"] if result else _get_item_timestamp(latest_activity)
+            ),
+        }
+
     if result is None:
         return {
+            "schema_version": SCHEMA_VERSION,
+            "acquisition_status": ACQUISITION_UNAVAILABLE,
+            "reason": f"no @{bot_name} activity found in the supplied review state",
+            "review_items": [],
             "review_body": "",
             "inline_comments": [],
             "timestamp": "",
-            "verdict": EXIT_UNDETERMINED,
         }
-    result["verdict"] = evaluate_review_verdict(
-        result["review_body"], result["inline_comments"], bot_name
-    )
-    return result
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "acquisition_status": ACQUISITION_ACQUIRED,
+        "reason": "",
+        **result,
+    }
