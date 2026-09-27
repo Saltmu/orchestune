@@ -9,6 +9,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from orchestune.claim.amend import FootprintAmendOutcome, amend_claim_footprint
 from orchestune.claim.contracts import (
     ClaimFailure,
     ClaimFailureReason,
@@ -25,8 +26,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Claim an Orchestune task issue.")
     parser.add_argument("issue_number", type=int, help="GitHub Issue number to claim")
     parser.add_argument("--no-apply", action="store_true", help="validate only")
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--resume", metavar="CLAIM_ID", help="resume an interrupted claim"
+    )
+    mode.add_argument(
+        "--amend-footprint",
+        action="store_true",
+        help="widen the held claim to the Issue footprint and files already changed",
     )
     parser.add_argument("--state", type=Path, help="path to the local run_state.json")
     parser.add_argument(
@@ -167,6 +174,35 @@ def _run_claim(args: argparse.Namespace, token_dir: Path) -> ClaimOutcome:
     return claim_task(request, apply=not args.no_apply)
 
 
+def _run_amend(args: argparse.Namespace, token_dir: Path) -> FootprintAmendOutcome:
+    return amend_claim_footprint(
+        args.issue_number,
+        read_owner_token=lambda claim_id: _read_owner_token(token_dir, claim_id),
+        apply=not args.no_apply,
+        state_path=args.state,
+        timeout_seconds=args.timeout,
+    )
+
+
+def _render_amend(outcome: FootprintAmendOutcome, *, preview: bool) -> int:
+    if not outcome.success:
+        assert outcome.failure is not None
+        _print_failure(outcome.failure)
+        return int(outcome.failure.exit_code)
+    if preview:
+        print("Dry run: no Forge or state changes were made.")
+    print(f"Issue: #{outcome.issue_number}")
+    print(f"Claim ID: {outcome.claim_id}")
+    print(f"Worktree: {outcome.worktree_path}")
+    print(f"Added: {', '.join(outcome.added) or 'none'}")
+    print(f"Footprint: {', '.join(outcome.amended_footprint)}")
+    if not preview:
+        print(
+            f"Issue footprint updated: {'yes' if outcome.issue_body_updated else 'no'}"
+        )
+    return 0
+
+
 def _render_outcome(outcome: ClaimOutcome, token_dir: Path, *, preview: bool) -> int:
     if not outcome.success:
         assert outcome.failure is not None
@@ -198,7 +234,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 22
     try:
         token_dir = _token_directory(args.state)
-        outcome = _run_claim(args, token_dir)
+        if args.amend_footprint:
+            amended = _run_amend(args, token_dir)
+        else:
+            outcome = _run_claim(args, token_dir)
     except Exception:
         print(
             "Claim failed: reason=generic_error\n"
@@ -206,6 +245,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+    if args.amend_footprint:
+        return _render_amend(amended, preview=args.no_apply)
     return _render_outcome(outcome, token_dir, preview=args.no_apply)
 
 

@@ -27,6 +27,10 @@ worktree:
 orchestune claim <issue_number> --resume <claim_id>
 ```
 
+If the task needs files outside its held file reservation, add them to the Issue
+`footprint` and run `orchestune claim <issue_number> --amend-footprint`. It widens
+the reservation, or reports the conflicting task and changes nothing.
+
 ## Branch naming convention (agent-neutral)
 
 Use the branch assigned by Orchestune or specified by the task. Do not rename

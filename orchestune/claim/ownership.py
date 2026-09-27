@@ -149,3 +149,22 @@ def evaluate_claim_conflicts(
         if _shared_contract_conflicts(reservation_task, view.task(active.issue_number)):
             return ClaimConflict(ClaimConflictReason.SHARED_CONTRACT, active)
     return None
+
+
+def held_claim_next_actions(active: ActiveWorktree) -> tuple[str, ...]:
+    """Recovery hints for a re-claim rejected because the issue is already held."""
+    n = active.issue_number
+    actions = []
+    if active.worktree_path:
+        actions.append(
+            f"Continue work in the existing worktree: {active.worktree_path}"
+        )
+    if active.claim_id:
+        actions.append(
+            f"If the claim was interrupted, run: orchestune claim {n} --resume {active.claim_id}"
+        )
+    actions.append(
+        "If the task needs files outside its reservation, update the Issue footprint "
+        f"and run: orchestune claim {n} --amend-footprint"
+    )
+    return tuple(actions)
