@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from orchestune.claim.workspace import ClaimWorkspace
-from orchestune.dispatch.claim_marker import claim_marker_path, read_claim_marker
 from orchestune.dispatch.gc.git import (
     VerifiedWorktreeRemovalRequest,
     evaluate_worktree_removal,
@@ -20,6 +19,7 @@ from orchestune.infra.git_cli import run_git
 from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
+from orchestune.worktree_ops.claim_marker import claim_marker_path, read_claim_marker
 
 
 class HandoffForge(Protocol):

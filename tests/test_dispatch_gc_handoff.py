@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from orchestune.claim.workspace import resolve_claim_workspace
-from orchestune.dispatch.claim_marker import claim_marker_path, write_claim_marker
 from orchestune.infra.git_cli import run_git
 from orchestune.outcome_record import OutcomeRecord
+from orchestune.worktree_ops.claim_marker import claim_marker_path, write_claim_marker
 from tests.test_dispatch_gc_handoff_integration import (
     FakeHandoffForge,
     _create_repo,

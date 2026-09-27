@@ -11,15 +11,24 @@ from unittest.mock import patch
 import pytest
 
 from orchestune.dispatch.worktree import (
-    WorktreePreparation,
-    _claim_lock_path,
-    _claim_marker_path,
-    prepare_task_worktree,
+    prepare_task_worktree as prepare_dispatch_task_worktree,
+)
+from orchestune.dispatch.worktree import (
     rollback_task_worktree,
 )
 from orchestune.infra.git_cli import GitResult
 from orchestune.infra.git_cli import run_git as real_run_git
 from orchestune.infra.process_utils import FileLock, FileLockContentionError
+from orchestune.worktree_ops.claim_marker import (
+    claim_lock_path as _claim_lock_path,
+)
+from orchestune.worktree_ops.claim_marker import (
+    claim_marker_path as _claim_marker_path,
+)
+from orchestune.worktree_ops.preparation import (
+    WorktreePreparation,
+    prepare_task_worktree,
+)
 
 
 def _init_repo(path):
@@ -107,7 +116,7 @@ class TestPrepareTaskWorktree:
         )
 
         with patch(
-            "orchestune.dispatch.worktree.run_git", autospec=True
+            "orchestune.worktree_ops.preparation.run_git", autospec=True
         ) as mock_run_git:
             result = prepare_task_worktree(
                 "claim/issue-3-task-3", worktree_root, None, "claim-mine"
@@ -126,7 +135,7 @@ class TestPrepareTaskWorktree:
         (worktree_path / "in_progress.txt").write_text("agent work")
 
         with patch(
-            "orchestune.dispatch.worktree.run_git", autospec=True
+            "orchestune.worktree_ops.preparation.run_git", autospec=True
         ) as mock_run_git:
             result = prepare_task_worktree(
                 "claim/issue-4-task-4", worktree_root, None, "claim-mine"
@@ -141,12 +150,12 @@ class TestPrepareTaskWorktree:
         worktree_root = tmp_path / "worktrees"
         with (
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.worktree.run_git", autospec=True
+                "orchestune.worktree_ops.preparation.run_git", autospec=True
             ) as mock_run_git,
         ):
             result = prepare_task_worktree(
@@ -251,7 +260,7 @@ class TestPrepareTaskWorktree:
             mock_run_git.return_value = GitResult(
                 returncode=0, stdout="deadbeefcafe\n", stderr=""
             )
-            result = prepare_task_worktree(
+            result = prepare_dispatch_task_worktree(
                 "claim/issue-7-task-7",
                 worktree_root,
                 None,
@@ -289,7 +298,7 @@ class TestPrepareTaskWorktree:
         )
         assert _claim_marker_path(original.worktree_path).exists()
 
-        result = prepare_task_worktree(
+        result = prepare_dispatch_task_worktree(
             "claim/issue-12-task-12",
             worktree_root,
             None,
@@ -447,7 +456,7 @@ class TestPrepareTaskWorktree:
             with pytest.raises(FileLockContentionError):
                 rollback_task_worktree(preparation, "claim-17")
             with pytest.raises(FileLockContentionError):
-                prepare_task_worktree(
+                prepare_dispatch_task_worktree(
                     "claim/issue-17-task-17",
                     worktree_root,
                     None,
@@ -468,7 +477,7 @@ class TestPrepareTaskWorktree:
         _claim_marker_path(worktree_path).write_text(json.dumps(["not", "a", "dict"]))
 
         with patch(
-            "orchestune.dispatch.worktree.run_git", autospec=True
+            "orchestune.worktree_ops.preparation.run_git", autospec=True
         ) as mock_run_git:
             result = prepare_task_worktree(
                 "claim/issue-23-task-23", worktree_root, None, "claim-x"

@@ -14,7 +14,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from enum import StrEnum
 
-from orchestune.dispatch.gc.git import prune_stale_integration_temp_branches
 from orchestune.forge import REQUIRED_LABELS
 from orchestune.infra.git_cli import (
     ConditionalBranchDeletionResult,
@@ -44,6 +43,9 @@ from orchestune.pr_link_notice import (
     render_merged_notice,
 )
 from orchestune.task_branch_resolution import BranchCapability, TaskBranchResolver
+from orchestune.worktree_ops.temp_branches import (
+    prune_stale_integration_temp_branches,
+)
 
 
 @contextmanager

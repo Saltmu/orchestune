@@ -104,13 +104,13 @@ class TestBranchStacking:
             # 実行しようとするため、実gitリポジトリを持たないこのテストでも
             # 通過できるよう既存の他ファイルと同じ境界でmockする。
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_subproc_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_subproc_run,
             patch(
-                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
@@ -247,13 +247,13 @@ class TestBranchStacking:
             # 実行しようとするため、実gitリポジトリを持たないこのテストでも
             # 通過できるよう既存の他ファイルと同じ境界でmockする。
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_subproc_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_subproc_run,
             patch(
-                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
@@ -361,7 +361,7 @@ class TestBranchStacking:
             patch("orchestune.dispatch.rebase.os.kill") as mock_kill,
             patch("orchestune.dispatch.worktree.subprocess.Popen") as mock_popen,
             # git コマンド実行のモック
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch(
                 "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
                 autospec=True,
@@ -481,7 +481,7 @@ class TestBranchStacking:
             patch("fake_forge_proxy.active_fake_forge.add_label"),
             patch("fake_forge_proxy.active_fake_forge.remove_label"),
             patch("orchestune.dispatch.rebase.os.kill", return_value=None),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch(
                 "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
                 autospec=True,
@@ -687,13 +687,13 @@ class TestBranchStacking:
             # 実行しようとするため、実gitリポジトリを持たないこのテストでも
             # 通過できるよう既存の他ファイルと同じ境界でmockする。
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_subproc_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_subproc_run,
             patch(
-                "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+                "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
@@ -842,7 +842,7 @@ class TestBranchStacking:
             ) as mock_remove_label,
             patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_add_comment,
             patch("orchestune.dispatch.rebase.os.kill") as mock_kill,
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch(
                 "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
                 autospec=True,
@@ -956,7 +956,7 @@ class TestBranchStacking:
             ) as mock_remove_label,
             patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_add_comment,
             patch("orchestune.dispatch.rebase.os.kill") as mock_kill,
-            patch("orchestune.dispatch.worktree.subprocess.run"),
+            patch("orchestune.infra.git_cli.subprocess.run"),
         ):
             run_dispatch_cycle(config)
 

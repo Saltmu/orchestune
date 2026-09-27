@@ -53,20 +53,20 @@ def launch_env(tmp_path):
     )
     with (
         patch.object(target, "completion_status", return_value="pending"),
-        patch("orchestune.dispatch.worktree._create_worktree", autospec=True),
+        patch("orchestune.worktree_ops.preparation._create_worktree", autospec=True),
         patch(
             "orchestune.dispatch.worktree._cleanup_existing_worktree",
             autospec=True,
             return_value=None,
         ),
         # #943: dispatch launchはclaim_task経由の安全なworktree準備
-        # (`prepare_task_worktree(allow_force=False)`)を通るようになり、新規
+        # (`prepare_task_worktree`)を通るようになり、新規
         # worktreeでは常に`_resolve_worktree_head_sha`（実`git rev-parse HEAD`）
         # でbase_shaを取得する。`_create_worktree`を上でno-opにモックしている
         # ため実ディレクトリが存在せず、これも併せてモックしないと
         # `FileNotFoundError`になる。
         patch(
-            "orchestune.dispatch.worktree._resolve_worktree_head_sha",
+            "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
             autospec=True,
             return_value="0" * 40,
         ),
@@ -390,7 +390,8 @@ def test_hard_stop_before_provider_resumes_same_prepared_attempt(launch_env):
 
     forge, config, plan, launch = launch_env
     with patch(
-        "orchestune.dispatch.worktree._create_worktree", side_effect=SystemExit("stop")
+        "orchestune.worktree_ops.preparation._create_worktree",
+        side_effect=SystemExit("stop"),
     ):
         with pytest.raises(SystemExit):
             _apply_task_launches(

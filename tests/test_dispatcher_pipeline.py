@@ -406,7 +406,7 @@ class TestLaunchOrderingCrashSafety:
         fake_forge.get_issue.return_value = queued_issue
         with (
             patch(
-                "orchestune.dispatch.worktree._branch_exists",
+                "orchestune.worktree_ops.preparation._branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -415,7 +415,7 @@ class TestLaunchOrderingCrashSafety:
                 autospec=True,
                 return_value=[],
             ),
-            patch("orchestune.dispatch.worktree.subprocess.run") as mock_subproc_run,
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_subproc_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -533,7 +533,7 @@ class TestPreventDuplicateSessions:
         autospec=True,
         return_value=[],
     )
-    @patch("orchestune.dispatch.worktree.subprocess.run")
+    @patch("orchestune.infra.git_cli.subprocess.run")
     @patch("orchestune.dispatch.targets.subprocess.Popen")
     def test_run_dispatch_cycle_skips_launch_if_open_pr_exists(
         self,
@@ -596,11 +596,11 @@ class TestPreventDuplicateSessions:
         return_value=[],
     )
     @patch(
-        "orchestune.dispatch.worktree._branch_exists",
+        "orchestune.worktree_ops.preparation._branch_exists",
         autospec=True,
         return_value=False,
     )
-    @patch("orchestune.dispatch.worktree.subprocess.run")
+    @patch("orchestune.infra.git_cli.subprocess.run")
     @patch("orchestune.dispatch.targets.subprocess.Popen")
     def test_run_dispatch_cycle_ignores_unrelated_closes_issue_pr(
         self,
@@ -828,7 +828,7 @@ class TestPreventDuplicateSessions:
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.worktree.subprocess.run",
+                "orchestune.infra.git_cli.subprocess.run",
                 side_effect=subprocess.CalledProcessError(
                     returncode=128, cmd="git ls-remote"
                 ),
