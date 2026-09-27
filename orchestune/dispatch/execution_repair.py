@@ -54,10 +54,10 @@ from orchestune.consistency.repairs.status import (
     COMMAND_TRANSITION_LABEL,
 )
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.task_metadata import TaskMetadata
 

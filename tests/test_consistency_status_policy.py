@@ -46,10 +46,10 @@ from orchestune.consistency.observation import (
     FACT_ISSUE_STATUS_LABELS,
 )
 from orchestune.consistency.repairs.status import plan_status_repairs
-from orchestune.dispatch.labels import (
+from orchestune.ledger.status_labels import (
     PRIMARY_STATUS_LABELS as DISPATCH_PRIMARY_STATUS_LABELS,
 )
-from orchestune.dispatch.labels import (
+from orchestune.ledger.status_labels import (
     TERMINAL_ESCALATION_LABELS as DISPATCH_TERMINAL_ESCALATION_LABELS,
 )
 from tests.consistency_status_test_support import (

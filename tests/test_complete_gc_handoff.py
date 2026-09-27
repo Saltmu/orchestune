@@ -20,7 +20,7 @@ from orchestune.dispatch.gc.zombies import (
     _apply_zombie_or_timeout_reclaim,
     execute_reclaim_repair_command,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import Task
 
 

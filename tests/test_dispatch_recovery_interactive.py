@@ -20,7 +20,7 @@ from orchestune.dispatch.recovery import (
     execute_bookkeeping_repair_command,
     execute_recovery_requeue_command,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord
 from orchestune.task_branch_resolution import TaskBranchResolver
 from tests.dispatch_gc_test_support import _task

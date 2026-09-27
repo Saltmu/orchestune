@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.gc.completion import is_completion_hold_event
-from orchestune.dispatch.state import RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.models import PrRecord
 from orchestune.task_metadata import CycleTask
 from tests.dispatch_gc_test_support import _active, _ctx, _task

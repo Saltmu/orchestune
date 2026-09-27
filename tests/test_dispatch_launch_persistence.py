@@ -8,7 +8,7 @@ from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import ActiveWorktree, CompletedWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, CompletedWorktree, RunState
 from orchestune.models import PrRecord, Usage
 from tests.conftest import make_issue, real_claim_fn, register_task_issue
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
@@ -166,7 +166,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
         from unittest.mock import MagicMock, patch
 
         from orchestune.dispatch.launch import _apply_task_launches
-        from orchestune.dispatch.state import load_run_state
+        from orchestune.ledger.run_state import load_run_state
 
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"
@@ -215,7 +215,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
         from unittest.mock import MagicMock, patch
 
         from orchestune.dispatch.launch import _apply_task_launches
-        from orchestune.dispatch.state import load_run_state
+        from orchestune.ledger.run_state import load_run_state
 
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"
@@ -264,7 +264,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
         from unittest.mock import MagicMock, patch
 
         from orchestune.dispatch.launch import _apply_task_launches
-        from orchestune.dispatch.state import load_run_state
+        from orchestune.ledger.run_state import load_run_state
 
         plans, dispatch_target = self._launch_plan(tmp_path)
         run_state_path = tmp_path / "run_state.json"

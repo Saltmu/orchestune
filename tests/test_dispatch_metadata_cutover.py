@@ -9,8 +9,8 @@ from orchestune.dispatch.dependency_resolution import build_legacy_dag_inputs
 from orchestune.dispatch.report import _report_to_dict
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import select_tasks_with_decisions
-from orchestune.dispatch.state import RunState
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import RunState
 from orchestune.models import Task
 from orchestune.task_metadata import CycleTask
 

@@ -7,7 +7,6 @@ from collections.abc import Callable
 from pathlib import Path
 
 from orchestune.branch_naming import build_task_branch_name
-from orchestune.dispatch.labels import TERMINAL_ESCALATION_LABELS
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import (
     fetch_remote_branch,
@@ -19,6 +18,7 @@ from orchestune.infra.process_utils import default_ci_command
 from orchestune.infra.python_env import install_dependencies, resolve_virtualenv_path
 from orchestune.integrator.pr import handle_merge_failure
 from orchestune.integrator.proofs import TaskIntegrationProof
+from orchestune.ledger.status_labels import TERMINAL_ESCALATION_LABELS
 from orchestune.models import Task
 from orchestune.task_branch_resolution import (
     BranchCapability,

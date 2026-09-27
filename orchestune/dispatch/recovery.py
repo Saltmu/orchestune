@@ -59,25 +59,12 @@ from orchestune.dispatch.execution_repair import (
     command_finding_codes,
     derive_execution_desired_state,
 )
-from orchestune.dispatch.labels import (
-    PRIMARY_STATUS_LABELS,
-    TERMINAL_ESCALATION_LABELS,
-    transition_status_label,
-)
 from orchestune.dispatch.launch_attempts import (
     active_from_attempt,
     reconcile_attempt,
     restored_active_record,
 )
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import (
-    ActiveWorktree,
-    RunState,
-    recovered_claim_id,
-    recovered_owner_token_digest,
-    recovery_repository_id,
-    save_run_state,
-)
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     effective_parent_number,
@@ -87,6 +74,19 @@ from orchestune.issue_parsing import (
     recovery_counters_from_body,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import (
+    ActiveWorktree,
+    RunState,
+    recovered_claim_id,
+    recovered_owner_token_digest,
+    recovery_repository_id,
+    save_run_state,
+)
+from orchestune.ledger.status_labels import (
+    PRIMARY_STATUS_LABELS,
+    TERMINAL_ESCALATION_LABELS,
+    transition_status_label,
+)
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.task_branch_resolution import (
     BranchCapability,

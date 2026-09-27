@@ -24,7 +24,7 @@ from orchestune.dispatch.phase_gc import (
 )
 from orchestune.dispatch.rules import _RuleExecutionContext
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.models import PrRecord
 from tests.dispatch_test_support import make_footprint_issue as _issue
 from tests.dispatch_test_support import (

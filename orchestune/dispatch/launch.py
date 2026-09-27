@@ -28,17 +28,9 @@ from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
     resolve_task_execution_selection,
 )
-from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.launch_attempts import (
     LaunchOutcomeUnknown,
     prepare_journaled_target,
-)
-from orchestune.dispatch.state import (
-    ActiveWorktree,
-    CompletedWorktree,
-    RunState,
-    load_run_state,
-    save_run_state,
 )
 from orchestune.dispatch.worktree import LaunchResult, _launch_on_prepared_worktree
 from orchestune.infra.git_cli import run_git
@@ -48,6 +40,14 @@ from orchestune.issue_parsing import (
     launch_history_in_window,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import (
+    ActiveWorktree,
+    CompletedWorktree,
+    RunState,
+    load_run_state,
+    save_run_state,
+)
+from orchestune.ledger.status_labels import transition_status_label
 from orchestune.models import PrRecord
 from orchestune.task_branch_resolution import BranchCapability
 from orchestune.task_metadata import TaskMetadata

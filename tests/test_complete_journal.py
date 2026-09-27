@@ -11,9 +11,9 @@ from orchestune.complete.journal import (
     mark_handoff_ready,
     reserve_completion,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState, load_run_state
-from orchestune.dispatch.state import save_run_state as save_run_state_unlocked
 from orchestune.infra.process_utils import run_state_lock
+from orchestune.ledger.run_state import ActiveWorktree, RunState, load_run_state
+from orchestune.ledger.run_state import save_run_state as save_run_state_unlocked
 from tests.dispatch_test_support import save_locked_run_state
 
 OWNER_TOKEN = "owner-token-abc"

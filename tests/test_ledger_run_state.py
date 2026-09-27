@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from orchestune.dispatch.state import (
+from orchestune.infra.process_utils import run_state_lock
+from orchestune.ledger.run_state import (
     MAX_PENDING_LOCK_RELEASE_NOTICES,
     ActiveWorktree,
     CompletedWorktree,
@@ -11,8 +12,7 @@ from orchestune.dispatch.state import (
     load_run_state,
     prune_run_state,
 )
-from orchestune.dispatch.state import save_run_state as save_run_state_unlocked
-from orchestune.infra.process_utils import run_state_lock
+from orchestune.ledger.run_state import save_run_state as save_run_state_unlocked
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
@@ -491,7 +491,7 @@ class TestRunState:
         assert loaded.completed_worktrees == []
 
     def test_prune_run_state(self):
-        from orchestune.dispatch.state import prune_run_state
+        from orchestune.ledger.run_state import prune_run_state
 
         now = 5000000.0
         # launch_window = 86400 -> min_launch_time = 4913600
@@ -533,7 +533,7 @@ class TestRunState:
         assert pruned.completed_worktrees[0].subtask_id == "recent"
 
     def test_prune_run_state_bounded_when_many_old_issues(self):
-        from orchestune.dispatch.state import prune_run_state
+        from orchestune.ledger.run_state import prune_run_state
 
         now = 5000000.0
         # 30日以上前(500.0)の CompletedWorktree が 1000 個ある
@@ -562,7 +562,7 @@ class TestRunState:
         assert len(pruned.completed_worktrees) == 0
 
     def test_prune_run_state_preserves_open_pr_latest_completed_worktree(self):
-        from orchestune.dispatch.state import prune_run_state
+        from orchestune.ledger.run_state import prune_run_state
         from orchestune.models import PrRecord
 
         now = 5000000.0  # min_completed_time = 2408000
@@ -622,7 +622,7 @@ class TestRunState:
     def test_prune_run_state_preserves_old_protected_record_over_new_unprotected_history(
         self,
     ):
-        from orchestune.dispatch.state import prune_run_state
+        from orchestune.ledger.run_state import prune_run_state
         from orchestune.models import PrRecord
 
         now = 5000000.0  # min_completed_time = 2408000

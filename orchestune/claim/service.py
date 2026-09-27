@@ -41,22 +41,22 @@ from orchestune.claim.workspace import (
     check_repository_identity_match,
     resolve_claim_workspace,
 )
-from orchestune.dispatch.labels import (
-    TERMINAL_ESCALATION_LABELS,
-    transition_status_label,
-)
-from orchestune.dispatch.state import (
-    ActiveWorktree,
-    RunState,
-    load_run_state,
-    save_run_state,
-)
 from orchestune.dispatch.worktree import WorktreePreparation, prepare_task_worktree
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
 from orchestune.labels import STATUS_LABEL_PREFIX, StatusLabel
+from orchestune.ledger.run_state import (
+    ActiveWorktree,
+    RunState,
+    load_run_state,
+    save_run_state,
+)
+from orchestune.ledger.status_labels import (
+    TERMINAL_ESCALATION_LABELS,
+    transition_status_label,
+)
 from orchestune.models import IssueRecord
 from orchestune.task_metadata import TaskMetadata
 

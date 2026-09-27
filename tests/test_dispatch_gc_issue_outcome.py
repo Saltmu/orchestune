@@ -10,7 +10,7 @@ from orchestune.dispatch.gc.completion import (
     _fetch_outcome_for_active,
     _local_pr_completion_status,
 )
-from orchestune.dispatch.state import ActiveWorktree
+from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeLookupState, OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _rule_ctx, _task

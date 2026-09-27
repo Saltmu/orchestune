@@ -16,7 +16,7 @@ from orchestune.dispatch.locks import (
 from orchestune.dispatch.phase_rebase import _sync_external_locks
 from orchestune.dispatch.report import write_github_step_summary
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.models import PrRecord
 from tests.dispatch_lock_test_support import LockDependencyTestView
 

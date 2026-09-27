@@ -29,11 +29,11 @@ from orchestune.dispatch.cycle_records import (
     _authoritative_execution_active,
     apply_verified_transition,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.dispatch.status_repair import (
     VerifiedStatusTransition,
     execute_status_repair_command,
 )
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from tests.dispatch_test_support import make_test_cycle_context, make_test_task
 from tests.test_consistency_status_repair import _plan
 

@@ -13,7 +13,7 @@ import pytest
 
 from orchestune.dispatch.cycle_action_contracts import StackBase
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.task_metadata import CycleTask
 from tests.dispatch_gc_test_support import _ctx, _task
 

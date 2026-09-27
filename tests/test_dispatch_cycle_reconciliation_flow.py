@@ -25,12 +25,12 @@ from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
 from orchestune.dispatch.locks import ExternalLockScanResult
-from orchestune.dispatch.state import (
-    ActiveWorktree,
-    RunState,
-)
 from orchestune.dispatch.status_repair import (
     execute_status_repair_command as execute_status_repair_command_real,
+)
+from orchestune.ledger.run_state import (
+    ActiveWorktree,
+    RunState,
 )
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeRecord

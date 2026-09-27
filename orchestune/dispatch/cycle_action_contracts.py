@@ -18,7 +18,7 @@ from orchestune.dispatch.dependency_assessment import DependencyAssessment
 from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
-from orchestune.dispatch.state import ActiveWorktree
+from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.task_branch_resolution import TaskBranchResolution
 from orchestune.task_metadata import CycleTask, TaskMetadata

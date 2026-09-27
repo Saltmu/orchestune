@@ -23,7 +23,7 @@ from orchestune.dispatch.gc.zombies import (
     _apply_zombie_or_timeout_reclaim,
     execute_reclaim_repair_command,
 )
-from orchestune.dispatch.state import RunState
+from orchestune.ledger.run_state import RunState
 from tests.dispatch_gc_test_support import _active, _task
 from tests.dispatch_gc_test_support import (
     decide_gc_reclaims as _decide_zombie_or_timeout_reclaims,

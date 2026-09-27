@@ -24,7 +24,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from statistics import median
 
-from orchestune.dispatch.state import CompletedWorktree, RunState
+from orchestune.ledger.run_state import CompletedWorktree, RunState
 from orchestune.task_metadata import TaskMetadata
 
 # 履歴が全く無いときの推定所要時間（30分）。bottom levelは相対比較にしか使わない

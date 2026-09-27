@@ -30,15 +30,15 @@ from orchestune.dispatch.execution_profiles import (
     resolve_execution_profile,
 )
 from orchestune.dispatch.report import write_github_step_summary
-from orchestune.dispatch.state import (
-    load_run_state,
-)
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     CodexCloudDispatchTarget,
     DispatchHandle,
     DispatchTarget,
     _format_local_cmd,
+)
+from orchestune.ledger.run_state import (
+    load_run_state,
 )
 from orchestune.models import PrRecord, Task
 from orchestune.outcome_record import OutcomeRecord

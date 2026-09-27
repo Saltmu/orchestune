@@ -16,7 +16,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
 from orchestune.dispatch.cycle_context import _group_by_status
 from orchestune.dispatch.locks import ExternalLockScanResult
-from orchestune.dispatch.state import (
+from orchestune.ledger.run_state import (
     RunState,
 )
 from orchestune.models import PrRecord

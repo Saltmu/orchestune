@@ -16,7 +16,7 @@ from orchestune.dispatch.dependency_resolution import (
     legacy_merged_depends_on,
 )
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.state import RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.models import Task
 
 

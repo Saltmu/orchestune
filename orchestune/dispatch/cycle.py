@@ -103,7 +103,6 @@ from orchestune.dispatch.recovery import (
     recovery_bookkeeping_invariants,
 )
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.state import load_run_state
 from orchestune.dispatch.status_dependency_policy import (
     completed_dependency_ids,
     desired_dependency_ids,
@@ -122,6 +121,7 @@ from orchestune.dispatch.status_repair_dependencies import (
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.infra.process_utils import is_process_alive, run_state_lock
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import load_run_state
 from orchestune.pr_link_notice import (
     notice_expected_bases,
     notify_open_pr_links,

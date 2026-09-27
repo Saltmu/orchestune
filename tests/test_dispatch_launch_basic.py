@@ -14,7 +14,7 @@ from orchestune.dispatch.launch import (
 )
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import CompletedWorktree, RunState
+from orchestune.ledger.run_state import CompletedWorktree, RunState
 from orchestune.models import PrRecord
 from orchestune.task_branch_resolution import (
     CanonicalBranchState,

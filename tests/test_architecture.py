@@ -127,7 +127,6 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.gc.outcome_decision",
             "dispatch.gc.prior_merge",
             "dispatch.gc.zombies",
-            "dispatch.labels",
             "dispatch.launch",
             "dispatch.launch_attempts",
             "dispatch.locks",
@@ -138,7 +137,6 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.reviewer",
             "dispatch.rules",
             "dispatch.scoring",
-            "dispatch.state",
             "dispatch.status_repair",
             "dispatch.status_dependency_policy",
             "dispatch.status_repair_dependencies",
@@ -155,6 +153,9 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator.worktree",
             "issue_notice",
             "issue_parsing",
+            "ledger",
+            "ledger.run_state",
+            "ledger.status_labels",
             "pr_link_notice",
             "provisioning.parent",
             "provisioning.plan",
@@ -1260,7 +1261,6 @@ def test_execution_profiles_boundary_documented_in_architecture_docs() -> None:
 KNOWN_PACKAGE_CYCLE_EDGES: dict[tuple[str, str], str] = {
     ("claim", "dispatch"): "Resolved by #1053: ledger package extraction",
     ("complete", "claim"): "Resolved by #1053: ledger package extraction",
-    ("complete", "dispatch"): "Resolved by #1053: ledger package extraction",
     ("dag", "symbol_verification"): "Resolved by #1053: ledger package extraction",
     ("dispatch", "claim"): "Resolved by #1053: ledger package extraction",
     ("dispatch", "complete"): "Resolved by #1053: ledger package extraction",
@@ -1309,8 +1309,8 @@ def test_ownership_contracts_have_no_internal_dependencies() -> None:
     assert _import_graph()["ownership_contracts"] == set()
 
 
-def test_dispatch_state_does_not_import_claim() -> None:
+def test_ledger_run_state_does_not_import_claim() -> None:
     assert not any(
         dependency == "claim" or dependency.startswith("claim.")
-        for dependency in _import_graph()["dispatch.state"]
+        for dependency in _import_graph()["ledger.run_state"]
     )

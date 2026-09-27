@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from orchestune.claim.contracts import ClaimRequest, ClaimStage, ReservationKind
 from orchestune.dag.contracts import is_contract_writer
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.task_metadata import TaskMetadata
 
 

@@ -21,11 +21,11 @@ from orchestune.dispatch.gc.completion import (
     _finalize_not_needed_worktree,
     _is_worktree_complete,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     CodexCloudDispatchTarget,
 )
+from orchestune.ledger.run_state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _task

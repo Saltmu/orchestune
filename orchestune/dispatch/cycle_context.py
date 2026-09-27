@@ -14,7 +14,6 @@ from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.recovery import _extract_raw_subtask_id
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import parse_task_from_issue
-from orchestune.dispatch.state import RunState
 from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
 from orchestune.integrator.coordinator import (
     IntegrationCoordinator,
@@ -22,6 +21,7 @@ from orchestune.integrator.coordinator import (
 )
 from orchestune.issue_parsing import find_children_by_parent
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import RunState
 from orchestune.models import IssueRecord
 from orchestune.task_branch_resolution import (
     BranchCapability,
