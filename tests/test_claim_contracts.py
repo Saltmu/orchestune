@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,37 @@ from orchestune.exit_codes import TaskExitCode
 
 
 class TestClaimContracts:
+    @pytest.mark.parametrize(
+        ("name", "members"),
+        [
+            ("OwnerKind", [("INTERACTIVE", "interactive"), ("DISPATCH", "dispatch")]),
+            (
+                "ReservationKind",
+                [("FOOTPRINT", "footprint"), ("REPOSITORY", "repository")],
+            ),
+            (
+                "ClaimStage",
+                [
+                    ("VALIDATING", "validating"),
+                    ("FETCHED", "fetched"),
+                    ("RESERVED", "reserved"),
+                    ("WORKTREE_PREPARED", "worktree_prepared"),
+                    ("ACTIVE_SAVED", "active_saved"),
+                    ("LABELED", "labeled"),
+                    ("COMPLETED", "completed"),
+                ],
+            ),
+        ],
+    )
+    def test_ownership_enums_are_reexported_unchanged(
+        self, name: str, members: list[tuple[str, str]]
+    ) -> None:
+        shared = getattr(import_module("orchestune.ownership_contracts"), name)
+        assert getattr(import_module("orchestune.claim.contracts"), name) is shared
+        assert getattr(import_module("orchestune.claim"), name) is shared
+        assert shared.__module__ == "orchestune.ownership_contracts"
+        assert [(member.name, member.value) for member in shared] == members
+
     def test_claim_and_complete_share_one_exit_code_contract(self) -> None:
         assert ClaimExitCode is CompleteExitCode is TaskExitCode
         assert ClaimExitCode.ISSUE_CLOSED == 11

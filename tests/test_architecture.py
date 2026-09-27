@@ -204,6 +204,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "labels",
             "models",
             "outcome_record",
+            "ownership_contracts",
             "plan_writer",
             "provisioning",
             "replan",
@@ -1302,3 +1303,14 @@ def test_architecture_docs_mention_package_cycle_guard() -> None:
             assert (
                 "cross-package import cycles" in doc_text
             ), f"{lang}: 'cross-package import cycles' missing in docs/en/architecture.md §4.2"
+
+
+def test_ownership_contracts_have_no_internal_dependencies() -> None:
+    assert _import_graph()["ownership_contracts"] == set()
+
+
+def test_dispatch_state_does_not_import_claim() -> None:
+    assert not any(
+        dependency == "claim" or dependency.startswith("claim.")
+        for dependency in _import_graph()["dispatch.state"]
+    )

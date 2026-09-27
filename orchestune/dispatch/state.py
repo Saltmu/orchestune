@@ -10,10 +10,10 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from orchestune.claim.contracts import ClaimStage, OwnerKind, ReservationKind
 from orchestune.infra.json_state import read_json_with_recovery, write_json_atomic
 from orchestune.infra.process_utils import assert_run_state_lock_held
 from orchestune.models import Usage
+from orchestune.ownership_contracts import ClaimStage, OwnerKind, ReservationKind
 
 
 @dataclass
