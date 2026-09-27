@@ -844,3 +844,46 @@ def test_offline_with_key_never_fetches_missing_context(monkeypatch, tmp_path):
     saved = json.loads(output_path.read_text(encoding="utf-8"))
     assert saved["jev_evaluations"][0]["decision"] == "kept"
     assert saved["jev_evaluations"][0]["decision_reason"] == "accepted"
+
+
+def test_offline_explicit_incomplete_section_is_not_exit_0(tmp_path):
+    """A partial MCP/App snapshot that explicitly declares a section
+    missing/error/truncated must not report a trustworthy acquired result,
+    even though some content was found (Codex PR #1114 round 1 finding)."""
+    from scripts.wait_for_review import EXIT_NO_RESULT, main
+
+    state = _jev_state()
+    state["completeness"] = {
+        "issue_comments": "complete",
+        "reviews": "complete",
+        "inline_comments": "truncated",
+    }
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with (
+        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        pytest.raises(SystemExit) as exc,
+    ):
+        main()
+
+    assert exc.value.code == EXIT_NO_RESULT
+
+
+def test_offline_unknown_completeness_still_exits_acquired(tmp_path):
+    """The default "unknown" completeness (no metadata supplied) must keep
+    working for legacy callers -- only an *explicit* incomplete declaration
+    downgrades the result, per issue #1099's "旧入力形式の読み込みは維持する"."""
+    from scripts.wait_for_review import main
+
+    state = _jev_state()
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with (
+        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        pytest.raises(SystemExit) as exc,
+    ):
+        main()
+
+    assert exc.value.code == EXIT_ACQUIRED

@@ -501,8 +501,16 @@ def _handle_review_trigger(
     max_rounds: int,
     body: str | None,
     body_file: str | None,
-) -> tuple[str, int | str | None]:
-    """Post (or find) this round's trigger comment. Returns (trigger_time, trigger_id)."""
+) -> tuple[str, int | str | None, str | None]:
+    """Post (or find) this round's trigger comment.
+
+    Returns (trigger_time, trigger_id, requested_head_sha). The head SHA is
+    only captured immediately before actually posting a *new* trigger
+    comment: reusing an already-posted trigger (idempotent resume) must not
+    report the PR's current head as "requested", since later commits may
+    have landed after that trigger was originally sent (issue #1099 PR
+    #1114 round 1 review).
+    """
     existing_trigger = _find_existing_trigger_comment(
         initial_data, bot_name, current_round
     )
@@ -517,7 +525,7 @@ def _handle_review_trigger(
                 f"Review trigger for @{bot_name} (Round {current_round}) already exists "
                 f"(Comment ID: {trigger_id}); skipping post and waiting..."
             )
-            return trigger_time, trigger_id
+            return trigger_time, trigger_id, None
         print(
             f"Review trigger comment for Round {current_round} (Comment ID: {trigger_id}) "
             f"is missing @{bot_name} review mention; reposting trigger..."
@@ -527,6 +535,7 @@ def _handle_review_trigger(
         f"Posting review trigger comment (Round {current_round}/{max_rounds}) "
         f"for @{bot_name} on PR #{pr_number}..."
     )
+    requested_head_sha = _fetch_pr_head_sha(pr_number)
     trigger_info = post_review_trigger(
         pr_number,
         bot_name=bot_name,
@@ -543,7 +552,7 @@ def _handle_review_trigger(
             f"{trigger_time}:{len(trigger_body)}"
         )
     print(f"Trigger posted (Comment ID: {trigger_id}, time: {trigger_time})")
-    return trigger_time, trigger_id
+    return trigger_time, trigger_id, requested_head_sha
 
 
 def _check_immediate_review_result(
@@ -687,19 +696,18 @@ def wait_for_review(
 
         trigger_id: int | str | None = None
         if post_trigger:
-            # Captured before posting so it reflects the head the reviewer is
-            # actually being asked to look at, not a later poll's head.
-            requested_head_sha = _fetch_pr_head_sha(pr_number)
-            latest_trigger_time, trigger_id = _handle_review_trigger(
-                pr_number,
-                bot_name,
-                initial_data,
-                initial_snapshot,
-                excluded_ids,
-                current_round,
-                max_rounds,
-                body,
-                body_file,
+            latest_trigger_time, trigger_id, requested_head_sha = (
+                _handle_review_trigger(
+                    pr_number,
+                    bot_name,
+                    initial_data,
+                    initial_snapshot,
+                    excluded_ids,
+                    current_round,
+                    max_rounds,
+                    body,
+                    body_file,
+                )
             )
         else:
             # An already-posted trigger predates this invocation; the head at
@@ -969,6 +977,15 @@ def main() -> None:
             state_completeness = (
                 state.get("completeness") if isinstance(state, dict) else None
             )
+            completeness = (
+                state_completeness
+                if isinstance(state_completeness, dict)
+                else {
+                    "issue_comments": "unknown",
+                    "reviews": "unknown",
+                    "inline_comments": "unknown",
+                }
+            )
             result.update(
                 repository=None,
                 pr_number=args.pr,
@@ -982,16 +999,26 @@ def main() -> None:
                 ),
                 current_head_sha=None,
                 jev_evaluations=jev_evaluations,
-                completeness=(
-                    state_completeness
-                    if isinstance(state_completeness, dict)
-                    else {
-                        "issue_comments": "unknown",
-                        "reviews": "unknown",
-                        "inline_comments": "unknown",
-                    }
-                ),
+                completeness=completeness,
             )
+            incomplete_sections = [
+                section
+                for section, status in completeness.items()
+                if status in ("missing", "error", "truncated")
+            ]
+            if (
+                incomplete_sections
+                and result["acquisition_status"] == ACQUISITION_ACQUIRED
+            ):
+                # The adapter itself declared a section incomplete: a partial
+                # fetch must not be reported as a trustworthy acquired result,
+                # even though some content was found (issue #1099 PR #1114
+                # round 1 review).
+                result["acquisition_status"] = ACQUISITION_UNAVAILABLE
+                result["reason"] = (
+                    "supplied completeness declares "
+                    f"{', '.join(incomplete_sections)} incomplete"
+                )
             _print_review_result(result, args.bot_name)
             if args.output_file:
                 _write_output_file(result, args.output_file)
