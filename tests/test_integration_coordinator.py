@@ -4,10 +4,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestune.dispatch.targets import (
-    ClaudeCodeCloudRoutineDispatchTarget,
-    DispatchHandle,
-)
 from orchestune.infra.not_needed_review_state import (
     NotNeededReviewState,
     PendingNotNeededReview,
@@ -25,6 +21,10 @@ from orchestune.integrator.coordinator import (
     process_pending_not_needed_reviews,
     record_pending_not_needed_review,
 )
+from orchestune.targets.cloud_routine import (
+    ClaudeCodeCloudRoutineDispatchTarget,
+)
+from orchestune.targets.contracts import DispatchHandle
 
 
 class _FakeFirer:

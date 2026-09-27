@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.dag.models import ConfigError, load_orchestune_config
+from orchestune.targets.contracts import ExecutionSelection as ExecutionSelection
 
 logger = logging.getLogger(__name__)
 
@@ -151,16 +152,6 @@ class ExecutionProfileConfig:
     def default_profile(self) -> str:
         """Alias for default_execution_profile."""
         return self.default_execution_profile
-
-
-@dataclass(frozen=True)
-class ExecutionSelection:
-    """Deterministic selection result for a task execution profile."""
-
-    profile: str
-    model: str | None
-    reasoning_effort: str | None
-    reason: str
 
 
 def _get_aliased_value(table: dict[str, Any], key_underscore: str) -> Any:

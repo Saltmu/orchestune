@@ -52,9 +52,12 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
     def test_launch_fires_routine_and_returns_session_handle(self, tmp_path):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "sk-ant-oat01-xxx")
         with (
-            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
-                "orchestune.dispatch.targets.urllib.request.urlopen",
+                "orchestune.targets.cloud_routine._push_branch_and_verify",
+                autospec=True,
+            ),
+            patch(
+                "orchestune.targets.cloud_routine.urllib.request.urlopen",
                 return_value=self._response(),
             ) as mock_urlopen,
         ):
@@ -85,9 +88,12 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
     def test_launch_instructs_base_branch(self, tmp_path):
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "sk-ant-oat01-xxx")
         with (
-            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
-                "orchestune.dispatch.targets.urllib.request.urlopen",
+                "orchestune.targets.cloud_routine._push_branch_and_verify",
+                autospec=True,
+            ),
+            patch(
+                "orchestune.targets.cloud_routine.urllib.request.urlopen",
                 return_value=self._response(),
             ) as mock_urlopen,
         ):
@@ -116,9 +122,12 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             reason="test",
         )
         with (
-            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
-                "orchestune.dispatch.targets.urllib.request.urlopen",
+                "orchestune.targets.cloud_routine._push_branch_and_verify",
+                autospec=True,
+            ),
+            patch(
+                "orchestune.targets.cloud_routine.urllib.request.urlopen",
                 return_value=self._response(),
             ) as mock_urlopen,
         ):
@@ -150,9 +159,12 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         )
         with (
             caplog.at_level(logging.WARNING),
-            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
-                "orchestune.dispatch.targets.urllib.request.urlopen",
+                "orchestune.targets.cloud_routine._push_branch_and_verify",
+                autospec=True,
+            ),
+            patch(
+                "orchestune.targets.cloud_routine.urllib.request.urlopen",
                 return_value=self._response(),
             ) as mock_urlopen,
         ):
@@ -201,10 +213,10 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
 
         with (
             patch(
-                "orchestune.dispatch.targets.subprocess.run", side_effect=fake_run
+                "orchestune.infra.git_cli.subprocess.run", side_effect=fake_run
             ) as mock_run,
             patch(
-                "orchestune.dispatch.targets.urllib.request.urlopen",
+                "orchestune.targets.cloud_routine.urllib.request.urlopen",
                 side_effect=fake_urlopen,
             ),
         ):
@@ -255,10 +267,10 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
 
         with (
             patch(
-                "orchestune.dispatch.targets.subprocess.run", side_effect=fake_run
+                "orchestune.infra.git_cli.subprocess.run", side_effect=fake_run
             ) as mock_run,
             patch(
-                "orchestune.dispatch.targets.urllib.request.urlopen",
+                "orchestune.targets.cloud_routine.urllib.request.urlopen",
                 return_value=self._response(),
             ),
         ):
@@ -281,12 +293,14 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "token")
         with (
             patch(
-                "orchestune.dispatch.targets.subprocess.run",
+                "orchestune.infra.git_cli.subprocess.run",
                 side_effect=subprocess.CalledProcessError(
                     returncode=1, cmd="git push", stderr="remote: permission denied"
                 ),
             ),
-            patch("orchestune.dispatch.targets.urllib.request.urlopen") as mock_urlopen,
+            patch(
+                "orchestune.targets.cloud_routine.urllib.request.urlopen"
+            ) as mock_urlopen,
         ):
             with pytest.raises(subprocess.CalledProcessError):
                 target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
@@ -311,8 +325,10 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
             )
 
         with (
-            patch("orchestune.dispatch.targets.subprocess.run", side_effect=fake_run),
-            patch("orchestune.dispatch.targets.urllib.request.urlopen") as mock_urlopen,
+            patch("orchestune.infra.git_cli.subprocess.run", side_effect=fake_run),
+            patch(
+                "orchestune.targets.cloud_routine.urllib.request.urlopen"
+            ) as mock_urlopen,
         ):
             with pytest.raises(BranchReachabilityError, match="到達性を検証できません"):
                 target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
@@ -334,7 +350,7 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         # #186: 統合コーディネーターが同一ルーチンへ任意指示を投げる汎用fire。
         target = ClaudeCodeCloudRoutineDispatchTarget("trig_1", "sk-ant-oat01-xxx")
         with patch(
-            "orchestune.dispatch.targets.urllib.request.urlopen",
+            "orchestune.targets.cloud_routine.urllib.request.urlopen",
             return_value=self._response(),
         ) as mock_urlopen:
             handle = target.fire_text("結合diffをレビューして")
@@ -357,12 +373,15 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         )
         transient = urllib.error.HTTPError("url", 503, "unavailable", {}, None)
         with (
-            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
-                "orchestune.dispatch.targets.urllib.request.urlopen",
+                "orchestune.targets.cloud_routine._push_branch_and_verify",
+                autospec=True,
+            ),
+            patch(
+                "orchestune.targets.cloud_routine.urllib.request.urlopen",
                 side_effect=[transient, self._response()],
             ),
-            patch("orchestune.dispatch.targets.time.sleep") as mock_sleep,
+            patch("orchestune.targets.cloud_routine.time.sleep") as mock_sleep,
         ):
             handle = target.fire_text("review integration")
 
@@ -375,12 +394,15 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         )
         transient = urllib.error.HTTPError("url", 500, "error", {}, None)
         with (
-            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
-                "orchestune.dispatch.targets.urllib.request.urlopen",
+                "orchestune.targets.cloud_routine._push_branch_and_verify",
+                autospec=True,
+            ),
+            patch(
+                "orchestune.targets.cloud_routine.urllib.request.urlopen",
                 side_effect=[transient, transient, transient],
             ) as mock_urlopen,
-            patch("orchestune.dispatch.targets.time.sleep"),
+            patch("orchestune.targets.cloud_routine.time.sleep"),
         ):
             with pytest.raises(urllib.error.HTTPError):
                 target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
@@ -392,12 +414,15 @@ class TestClaudeCodeCloudRoutineDispatchTarget:
         )
         auth_error = urllib.error.HTTPError("url", 401, "unauthorized", {}, None)
         with (
-            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
             patch(
-                "orchestune.dispatch.targets.urllib.request.urlopen",
+                "orchestune.targets.cloud_routine._push_branch_and_verify",
+                autospec=True,
+            ),
+            patch(
+                "orchestune.targets.cloud_routine.urllib.request.urlopen",
                 side_effect=[auth_error, self._response()],
             ) as mock_urlopen,
-            patch("orchestune.dispatch.targets.time.sleep") as mock_sleep,
+            patch("orchestune.targets.cloud_routine.time.sleep") as mock_sleep,
         ):
             with pytest.raises(urllib.error.HTTPError):
                 target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")

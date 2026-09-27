@@ -265,7 +265,10 @@ Testing full lifecycle of execution profiles.
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
-            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
+            patch(
+                "orchestune.targets.cloud_routine._push_branch_and_verify",
+                autospec=True,
+            ),
             patch(
                 "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
             ),
@@ -388,7 +391,10 @@ Testing full lifecycle of execution profiles.
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
-            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
+            patch(
+                "orchestune.targets.cloud_routine._push_branch_and_verify",
+                autospec=True,
+            ),
             patch(
                 "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
             ),
@@ -527,7 +533,10 @@ Testing full lifecycle of execution profiles.
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
-            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
+            patch(
+                "orchestune.targets.cloud_routine._push_branch_and_verify",
+                autospec=True,
+            ),
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
                 autospec=True,
@@ -616,7 +625,10 @@ Testing full lifecycle of execution profiles.
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
-            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
+            patch(
+                "orchestune.targets.cloud_routine._push_branch_and_verify",
+                autospec=True,
+            ),
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
                 autospec=True,
@@ -757,7 +769,10 @@ model_tier: strong
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
-            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
+            patch(
+                "orchestune.targets.cloud_routine._push_branch_and_verify",
+                autospec=True,
+            ),
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
                 autospec=True,
@@ -828,7 +843,10 @@ model_tier: strong
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
-            patch("orchestune.dispatch.targets._push_branch_and_verify", autospec=True),
+            patch(
+                "orchestune.targets.cloud_routine._push_branch_and_verify",
+                autospec=True,
+            ),
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
                 autospec=True,

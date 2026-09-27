@@ -31,12 +31,6 @@ from pathlib import Path
 from typing import Protocol
 
 from orchestune.bounded_limit import exceeds_limit
-from orchestune.dispatch.targets import (
-    ROUTINE_ID_ENV_VAR,
-    ROUTINE_TOKEN_ENV_VAR,
-    ClaudeCodeCloudRoutineDispatchTarget,
-    DispatchHandle,
-)
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.not_needed_review_state import (
     NotNeededReviewState,
@@ -47,6 +41,12 @@ from orchestune.infra.not_needed_review_state import (
 from orchestune.infra.process_utils import file_lock
 from orchestune.labels import StatusLabel
 from orchestune.ledger.escalation import apply_human_review_escalation
+from orchestune.targets.cloud_routine import (
+    ROUTINE_ID_ENV_VAR,
+    ROUTINE_TOKEN_ENV_VAR,
+    ClaudeCodeCloudRoutineDispatchTarget,
+)
+from orchestune.targets.contracts import DispatchHandle
 
 # #282: status:not-needed判定の独立検証結果ラベル。
 NOT_NEEDED_VERIFIED_LABEL = "not-needed-review:passed"
