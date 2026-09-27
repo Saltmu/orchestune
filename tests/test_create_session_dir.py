@@ -18,7 +18,9 @@ SESSION_DIR_PATTERN = re.compile(
 )
 
 
-def _run_sh(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+def _run_sh(
+    *args: str, cwd: Path, check: bool = True
+) -> subprocess.CompletedProcess[str]:
     if sys.platform == "win32":
         bash = shutil.which("bash")
         if bash is None:
@@ -31,7 +33,24 @@ def _run_sh(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
         cwd=cwd,
         capture_output=True,
         text=True,
-        check=True,
+        check=check,
+    )
+
+
+def _run_sh_unchecked(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return _run_sh(*args, cwd=cwd, check=False)
+
+
+def _run_ps1_unchecked(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    ps = _find_powershell()
+    if ps is None:
+        pytest.skip("powershell/pwsh is not installed")
+    return subprocess.run(
+        [ps, "-NoProfile", "-File", str(SCRIPT_PS1), *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 
@@ -100,6 +119,10 @@ def test_create_session_dir_ps1_content():
     assert "Get-Date" in content
     assert "AsUTC" in content or "ToUniversalTime" in content
     assert ".orchestune/tmp" in content.replace("\\", "/")
+    assert "Prefix -notmatch" in content
+    assert "Task -notmatch" in content
+    assert "^[a-zA-Z0-9_-]+$" in content
+    assert "^[a-zA-Z0-9_.-]+$" in content
 
 
 @pytest.mark.skipif(
@@ -120,6 +143,123 @@ def test_create_session_dir_ps1_execution(tmp_path: Path):
     assert match is not None, f"Output '{output}' does not match pattern"
     assert match.group("prefix") == "planning"
     assert match.group("task") == "1084"
+
+    created_dir = tmp_path / output
+    assert created_dir.is_dir(), f"Expected directory '{created_dir}' to exist"
+
+
+INVALID_PREFIXES = [
+    "../escaped",
+    "/absolute",
+    "a/b",
+    r"a\b",
+    "pre fix",
+    "pre\nfix",
+    "",
+    "prefix!",
+    "prefix.dot",
+]
+
+INVALID_TASKS = [
+    "../escaped",
+    "/absolute",
+    "a/b",
+    r"a\b",
+    "task slug",
+    "task\nslug",
+    "",
+    "task!",
+]
+
+
+@pytest.mark.parametrize("invalid_prefix", INVALID_PREFIXES)
+def test_create_session_dir_sh_rejects_invalid_prefix(
+    tmp_path: Path, invalid_prefix: str
+):
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    result = _run_sh_unchecked(invalid_prefix, "valid-task", cwd=sandbox)
+    assert (
+        result.returncode != 0
+    ), f"Expected non-zero exit for prefix '{invalid_prefix}'"
+    assert "prefix" in result.stderr.lower()
+    assert list(sandbox.iterdir()) == []
+    assert list(tmp_path.iterdir()) == [sandbox]
+
+
+@pytest.mark.parametrize("invalid_task", INVALID_TASKS)
+def test_create_session_dir_sh_rejects_invalid_task(tmp_path: Path, invalid_task: str):
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    result = _run_sh_unchecked("planning", invalid_task, cwd=sandbox)
+    assert result.returncode != 0, f"Expected non-zero exit for task '{invalid_task}'"
+    assert "task" in result.stderr.lower()
+    assert list(sandbox.iterdir()) == []
+    assert list(tmp_path.iterdir()) == [sandbox]
+
+
+def test_create_session_dir_sh_allows_dot_in_task(tmp_path: Path):
+    result = _run_sh("task", "subtask.1", cwd=tmp_path)
+    output = result.stdout.strip()
+    match = SESSION_DIR_PATTERN.match(output)
+    assert match is not None, f"Output '{output}' does not match pattern"
+    assert match.group("prefix") == "task"
+    assert match.group("task") == "subtask.1"
+
+    created_dir = tmp_path / output
+    assert created_dir.is_dir(), f"Expected directory '{created_dir}' to exist"
+
+
+@pytest.mark.skipif(
+    _find_powershell() is None, reason="powershell/pwsh is not installed"
+)
+@pytest.mark.parametrize("invalid_prefix", INVALID_PREFIXES)
+def test_create_session_dir_ps1_rejects_invalid_prefix(
+    tmp_path: Path, invalid_prefix: str
+):
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    result = _run_ps1_unchecked(invalid_prefix, "valid-task", cwd=sandbox)
+    assert (
+        result.returncode != 0
+    ), f"Expected non-zero exit for prefix '{invalid_prefix}'"
+    assert "prefix" in result.stderr.lower()
+    assert list(sandbox.iterdir()) == []
+    assert list(tmp_path.iterdir()) == [sandbox]
+
+
+@pytest.mark.skipif(
+    _find_powershell() is None, reason="powershell/pwsh is not installed"
+)
+@pytest.mark.parametrize("invalid_task", INVALID_TASKS)
+def test_create_session_dir_ps1_rejects_invalid_task(tmp_path: Path, invalid_task: str):
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    result = _run_ps1_unchecked("planning", invalid_task, cwd=sandbox)
+    assert result.returncode != 0, f"Expected non-zero exit for task '{invalid_task}'"
+    assert "task" in result.stderr.lower()
+    assert list(sandbox.iterdir()) == []
+    assert list(tmp_path.iterdir()) == [sandbox]
+
+
+@pytest.mark.skipif(
+    _find_powershell() is None, reason="powershell/pwsh is not installed"
+)
+def test_create_session_dir_ps1_allows_dot_in_task(tmp_path: Path):
+    ps = _find_powershell()
+    assert ps is not None
+    result = subprocess.run(
+        [ps, "-NoProfile", "-File", str(SCRIPT_PS1), "task", "subtask.1"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    output = result.stdout.strip().replace("\\", "/")
+    match = SESSION_DIR_PATTERN.match(output)
+    assert match is not None, f"Output '{output}' does not match pattern"
+    assert match.group("prefix") == "task"
+    assert match.group("task") == "subtask.1"
 
     created_dir = tmp_path / output
     assert created_dir.is_dir(), f"Expected directory '{created_dir}' to exist"
