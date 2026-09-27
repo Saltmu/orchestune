@@ -1,8 +1,10 @@
 """Script to trigger and detect AI review activity on a GitHub Pull Request.
 
 Posts a review trigger (optional) and polls for any new or updated activity
-from the specified bot (Claude, Codex, etc.), returning the latest comment
-and inline remarks directly to stdout for LLM evaluation.
+from the specified bot (Claude, Codex, etc.), returning the full acquired
+review content directly to stdout (and optionally a JSON file) for the calling
+LLM to judge. This script never computes a pass/fail verdict; see
+review-loop.md for the LLM decision procedure.
 """
 
 from __future__ import annotations
@@ -18,32 +20,42 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
 from scripts.jev_context import JevReviewContext, collect_review_context
-from scripts.jev_filter import filter_review_findings
+from scripts.jev_filter import evaluate_review_findings
 from scripts.review_verdict import (
-    EXIT_FINDINGS_PRESENT as EXIT_FINDINGS_PRESENT,
+    ACQUISITION_ACQUIRED as ACQUISITION_ACQUIRED,
+)
+from scripts.review_verdict import (
+    ACQUISITION_IN_PROGRESS as ACQUISITION_IN_PROGRESS,
+)
+from scripts.review_verdict import (
+    ACQUISITION_UNAVAILABLE as ACQUISITION_UNAVAILABLE,
+)
+from scripts.review_verdict import (
+    EXIT_ACQUIRED as EXIT_ACQUIRED,
 )
 from scripts.review_verdict import (
     EXIT_IN_PROGRESS as EXIT_IN_PROGRESS,
 )
 from scripts.review_verdict import (
-    EXIT_NO_FINDINGS as EXIT_NO_FINDINGS,
+    EXIT_NO_RESULT as EXIT_NO_RESULT,
 )
 from scripts.review_verdict import (
-    EXIT_UNDETERMINED as EXIT_UNDETERMINED,
+    SCHEMA_VERSION as SCHEMA_VERSION,
 )
 from scripts.review_verdict import (
-    _build_snapshot,
+    _build_snapshot as _build_snapshot,
+)
+from scripts.review_verdict import (
+    _filter_bot_items as _filter_bot_items,
+)
+from scripts.review_verdict import (
     _get_item_created_timestamp,
     _is_explicitly_in_progress,
     _latest_bot_activity_item,
     _latest_bot_summary_item,
-    evaluate_review_state,
-    evaluate_review_verdict,
+    collect_review_state,
     extract_review_result,
     normalize_review_state,
-)
-from scripts.review_verdict import (
-    _filter_bot_items as _filter_bot_items,
 )
 from scripts.review_verdict import (
     _get_item_timestamp as _get_item_timestamp,
@@ -58,6 +70,8 @@ EXIT_TIMEOUT = 20  # Timeout waiting for review activity
 EXIT_STALLED = 21  # In-progress tracker comment stopped changing; job likely ended
 
 GH_COMMAND_TIMEOUT_SECONDS = 30
+
+_COMPLETENESS_SECTIONS = ("issue_comments", "reviews", "inline_comments")
 
 # How long a bot's own "in progress" tracker comment may report the same
 # unchanged content before it is treated as stalled rather than merely slow.
@@ -142,6 +156,26 @@ def _run_gh_api(endpoint: str, *extra_args: str) -> list[dict[str, Any]]:
             elif isinstance(obj, dict):
                 items.append(obj)
     return items
+
+
+def _fetch_pr_head_sha(pr_number: int) -> str | None:
+    """Best-effort current PR head SHA. Failure means unknown, never a guess."""
+    try:
+        stdout = _run_gh(["pr", "view", str(pr_number), "--json", "headRefOid"])
+        value = json.loads(stdout)["headRefOid"]
+        return cast(str, value) if isinstance(value, str) and value else None
+    except (RuntimeError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def _fetch_repository_slug() -> str | None:
+    """Best-effort `owner/repo` for the current checkout. Failure means unknown."""
+    try:
+        stdout = _run_gh(["repo", "view", "--json", "nameWithOwner"])
+        value = json.loads(stdout)["nameWithOwner"]
+        return cast(str, value) if isinstance(value, str) and value else None
+    except (RuntimeError, json.JSONDecodeError, KeyError, TypeError):
+        return None
 
 
 def _review_trigger_marker(bot_name: str) -> str:
@@ -305,20 +339,76 @@ def _latest_review_trigger_timestamp(
 
 
 def _print_review_result(result: dict[str, Any], bot_name: str) -> None:
-    """Render review results so inline findings cannot be overlooked in agent output."""
+    """Render the acquired result. This is raw acquired content, not a verdict:
+    the calling LLM still has to read it and judge whether it is adequate."""
     inline_items = result.get("inline_comments", [])
+    current_inlines = [
+        item for item in inline_items if item.get("provenance") == "current"
+    ]
+    jev_evaluations = result.get("jev_evaluations", [])
+    status = result.get("acquisition_status")
     print("\n" + "=" * 72)
-    print(f"[AI Review Update Detected - @{bot_name}]")
-    print(f"Timestamp: {result.get('timestamp', '')}")
-    if inline_items:
-        print(f"[ACTION REQUIRED] Inline Findings: {len(inline_items)} item(s)")
-        for index, item in enumerate(inline_items, start=1):
-            print(f"\n--- Inline Finding {index}: {item['path']}:{item['line']} ---")
-            print(item["body"] or "(No comment body provided)")
-        print("--- End Inline Findings ---")
+    if status == ACQUISITION_ACQUIRED:
+        print(f"[AI Review Content Acquired - @{bot_name}] LLM judgment required")
     else:
-        print("Inline Findings: none")
+        # A non-acquired status (unavailable/in_progress) is not ready for
+        # judgment; the banner must not claim otherwise even though some
+        # partial content may still be shown below for context (Codex PR
+        # #1114 round 7 finding).
+        reason = result.get("reason") or "no reason given"
+        print(f"[AI Review NOT Acquired ({status}) - @{bot_name}] {reason}")
+    print(f"Round: {result.get('round')}  Timestamp: {result.get('timestamp', '')}")
+    print(
+        f"Requested SHA: {result.get('requested_head_sha')}  "
+        f"Reviewed SHA: {result.get('reviewed_head_sha')}  "
+        f"Current SHA: {result.get('current_head_sha')}"
+    )
+    if inline_items:
+        print(
+            f"Inline comments: {len(inline_items)} total "
+            f"({len(current_inlines)} current round)"
+        )
+        jev_by_id = {e["finding_id"]: e for e in jev_evaluations}
+        # Mirror evaluate_review_findings()'s id-or-index fallback: a missing
+        # id and an explicit `"id": null` are both id-less, and the fallback
+        # index must be positional within `current_inlines` (the list that
+        # was actually passed to evaluate_review_findings), not within the
+        # full inline_items list, which may interleave historical/unassociated
+        # items and shift the index basis (Codex PR #1114 round 5 finding).
+        current_index_by_identity = {
+            id(current_item): index
+            for index, current_item in enumerate(current_inlines)
+        }
+        for index, item in enumerate(inline_items, start=1):
+            item_id = item.get("id")
+            if item_id is not None:
+                finding_id: Any = item_id
+            else:
+                position = current_index_by_identity.get(id(item))
+                # Matches jev_filter._finding_id()'s string-tagged sentinel:
+                # a bare int fallback could collide with a coincidentally
+                # equal supplied id (Codex PR #1114 round 6 finding).
+                finding_id = f"index:{position}" if position is not None else None
+            jev = jev_by_id.get(finding_id) if finding_id is not None else None
+            jev_note = (
+                f" [jev: {jev['decision']} ({jev['decision_reason']})]" if jev else ""
+            )
+            print(
+                f"\n--- Inline Comment {index}: {item['path']}:{item['line']} "
+                f"[{item.get('provenance')}]{jev_note} ---"
+            )
+            print(item["body"] or "(No comment body provided)")
+        print("--- End Inline Comments ---")
+    else:
+        print("Inline comments: none")
     print("=" * 72 + "\n")
+    for index, item in enumerate(result.get("review_items", []), start=1):
+        print(
+            f"--- Review Item {index} [{item.get('kind')}/{item.get('provenance')}] ---"
+        )
+        print(item.get("body") or "(empty body)")
+        print()
+    print("--- review_body (concatenated current-round bodies) ---")
     print(result.get("review_body", ""))
 
 
@@ -326,54 +416,82 @@ def _extract_review_result(
     current_data: dict[str, list[dict[str, Any]]],
     bot_name: str,
     exclude_ids: set[int | str] | None = None,
-    latest_item: dict[str, Any] | None = None,
     latest_trigger_time: str = "",
     jev_threshold: float | None = None,
     pr_number: int | None = None,
     context_cache: dict[int, JevReviewContext] | None = None,
+    round_num: int | None = None,
+    trigger_id: int | str | None = None,
+    triggered_at: str = "",
+    requested_head_sha: str | None = None,
+    repository: str | None = None,
 ) -> dict[str, Any] | None:
-    # Scope inline comments to the current round, same as the summary/tracker
-    # gating above: `pulls/{pr}/comments` returns every inline comment ever
-    # posted on the PR, so an unfiltered fetch would keep resurfacing a prior
-    # round's already-addressed findings as "current" forever, even after the
-    # bot reports a clean pass this round (see Issue #926 PR #927 round 3).
-    scoped_data = current_data
-    if latest_trigger_time:
-        scoped_data = {
-            **current_data,
-            "inline_comments": [
-                item
-                for item in current_data.get("inline_comments", [])
-                if _get_item_created_timestamp(item) >= latest_trigger_time
-            ],
-        }
     result = extract_review_result(
-        normalize_review_state(scoped_data),
+        normalize_review_state(current_data),
         bot_name,
         exclude_ids=exclude_ids,
-        latest_item=latest_item,
+        round_started_at=latest_trigger_time,
     )
-    if result is not None:
-        initial_inlines = result.get("inline_comments", [])
-        if initial_inlines:
-            review_context = None
-            if os.environ.get("JEV_API_KEY") and pr_number is not None:
-                cache = context_cache if context_cache is not None else {}
-                if pr_number not in cache:
-                    cache[pr_number] = collect_review_context(pr_number)
-                review_context = cache[pr_number]
-            filtered_inlines = filter_review_findings(
-                initial_inlines,
-                bot_name=bot_name,
-                threshold=jev_threshold,
-                pr=pr_number,
-                context=review_context,
-            )
-            result["inline_comments"] = filtered_inlines
-            if not filtered_inlines:
-                result["all_findings_filtered"] = True
-        _print_review_result(result, bot_name)
-    return result
+    if result is None:
+        return None
+
+    current_inlines = [
+        item for item in result["inline_comments"] if item["provenance"] == "current"
+    ]
+    jev_evaluations: list[dict[str, Any]] = []
+    if current_inlines:
+        review_context = None
+        if os.environ.get("JEV_API_KEY") and pr_number is not None:
+            cache = context_cache if context_cache is not None else {}
+            if pr_number not in cache:
+                cache[pr_number] = collect_review_context(pr_number)
+            review_context = cache[pr_number]
+        jev_report = evaluate_review_findings(
+            current_inlines,
+            bot_name=bot_name,
+            threshold=jev_threshold,
+            pr=pr_number,
+            context=review_context,
+        )
+        jev_evaluations = jev_report["jev_evaluations"]
+
+    reviewed_shas = {
+        item.get("commit_id")
+        for item in result["review_items"]
+        if item.get("kind") == "review"
+        and item.get("provenance") == "current"
+        and item.get("commit_id")
+    }
+    reviewed_head_sha = next(iter(reviewed_shas)) if len(reviewed_shas) == 1 else None
+
+    current_head_sha = _fetch_pr_head_sha(pr_number) if pr_number is not None else None
+
+    full_result: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "acquisition_status": ACQUISITION_ACQUIRED,
+        "reason": "",
+        "repository": repository,
+        "pr_number": pr_number,
+        "reviewer": bot_name,
+        "round": round_num,
+        "trigger_id": trigger_id,
+        "triggered_at": triggered_at,
+        "requested_head_sha": requested_head_sha,
+        "reviewed_head_sha": reviewed_head_sha,
+        "current_head_sha": current_head_sha,
+        "review_items": result["review_items"],
+        "review_body": result["review_body"],
+        "inline_comments": result["inline_comments"],
+        "jev_evaluations": jev_evaluations,
+        "completeness": {
+            "issue_comments": "complete",
+            "reviews": "complete",
+            "inline_comments": "complete",
+        },
+        "timestamp": result["timestamp"],
+    }
+    _print_review_result(full_result, bot_name)
+    return full_result
 
 
 def _get_initial_pr_data(
@@ -412,7 +530,16 @@ def _handle_review_trigger(
     max_rounds: int,
     body: str | None,
     body_file: str | None,
-) -> str:
+) -> tuple[str, int | str | None, str | None]:
+    """Post (or find) this round's trigger comment.
+
+    Returns (trigger_time, trigger_id, requested_head_sha). The head SHA is
+    only captured immediately before actually posting a *new* trigger
+    comment: reusing an already-posted trigger (idempotent resume) must not
+    report the PR's current head as "requested", since later commits may
+    have landed after that trigger was originally sent (issue #1099 PR
+    #1114 round 1 review).
+    """
     existing_trigger = _find_existing_trigger_comment(
         initial_data, bot_name, current_round
     )
@@ -427,7 +554,7 @@ def _handle_review_trigger(
                 f"Review trigger for @{bot_name} (Round {current_round}) already exists "
                 f"(Comment ID: {trigger_id}); skipping post and waiting..."
             )
-            return trigger_time
+            return trigger_time, trigger_id, None
         print(
             f"Review trigger comment for Round {current_round} (Comment ID: {trigger_id}) "
             f"is missing @{bot_name} review mention; reposting trigger..."
@@ -437,6 +564,7 @@ def _handle_review_trigger(
         f"Posting review trigger comment (Round {current_round}/{max_rounds}) "
         f"for @{bot_name} on PR #{pr_number}..."
     )
+    requested_head_sha = _fetch_pr_head_sha(pr_number)
     trigger_info = post_review_trigger(
         pr_number,
         bot_name=bot_name,
@@ -453,7 +581,7 @@ def _handle_review_trigger(
             f"{trigger_time}:{len(trigger_body)}"
         )
     print(f"Trigger posted (Comment ID: {trigger_id}, time: {trigger_time})")
-    return trigger_time
+    return trigger_time, trigger_id, requested_head_sha
 
 
 def _check_immediate_review_result(
@@ -464,9 +592,13 @@ def _check_immediate_review_result(
     jev_threshold: float | None = None,
     pr_number: int | None = None,
     context_cache: dict[int, JevReviewContext] | None = None,
+    trigger_id: int | str | None = None,
+    requested_head_sha: str | None = None,
+    repository: str | None = None,
+    exclude_ids: set[int | str] | None = None,
 ) -> dict[str, Any] | None:
-    latest_bot_activity = _latest_bot_activity_item(initial_data, bot_name)
-    latest_bot_item = _latest_bot_summary_item(initial_data, bot_name)
+    latest_bot_activity = _latest_bot_activity_item(initial_data, bot_name, exclude_ids)
+    latest_bot_item = _latest_bot_summary_item(initial_data, bot_name, exclude_ids)
     if (
         latest_bot_item is not None
         and latest_trigger_time
@@ -476,26 +608,20 @@ def _check_immediate_review_result(
             and _is_explicitly_in_progress(latest_bot_activity)
         )
     ):
-        result = _extract_review_result(
+        return _extract_review_result(
             initial_data,
             bot_name,
-            latest_item=latest_bot_item,
+            exclude_ids=exclude_ids,
             latest_trigger_time=latest_trigger_time,
             jev_threshold=jev_threshold,
             pr_number=pr_number,
             context_cache=context_cache,
+            round_num=current_round,
+            trigger_id=trigger_id,
+            triggered_at=latest_trigger_time,
+            requested_head_sha=requested_head_sha,
+            repository=repository,
         )
-        if result is not None:
-            if result.get("all_findings_filtered"):
-                result["verdict"] = EXIT_NO_FINDINGS
-            else:
-                result["verdict"] = evaluate_review_verdict(
-                    result.get("review_body", ""),
-                    result.get("inline_comments", []),
-                    bot_name=bot_name,
-                )
-            result["round"] = current_round
-            return result
     return None
 
 
@@ -578,6 +704,7 @@ def wait_for_review(
     jev_threshold: float | None = None,
 ) -> dict[str, Any]:
     context_cache: dict[int, JevReviewContext] = {}
+    repository = _fetch_repository_slug()
     with ThreadPoolExecutor(max_workers=3) as executor:
         initial_data = _get_initial_pr_data(
             pr_number,
@@ -598,22 +725,42 @@ def wait_for_review(
                 f"Maximum review rounds ({max_rounds}) exceeded (attempted round {current_round})."
             )
 
+        trigger_id: int | str | None = None
         if post_trigger:
-            latest_trigger_time = _handle_review_trigger(
-                pr_number,
-                bot_name,
-                initial_data,
-                initial_snapshot,
-                excluded_ids,
-                current_round,
-                max_rounds,
-                body,
-                body_file,
+            latest_trigger_time, trigger_id, requested_head_sha = (
+                _handle_review_trigger(
+                    pr_number,
+                    bot_name,
+                    initial_data,
+                    initial_snapshot,
+                    excluded_ids,
+                    current_round,
+                    max_rounds,
+                    body,
+                    body_file,
+                )
             )
         else:
+            # An already-posted trigger predates this invocation; the head at
+            # the time it was posted was never captured, so it stays unknown
+            # rather than guessed from the current head.
+            requested_head_sha = None
             latest_trigger_time = _latest_review_trigger_timestamp(
                 initial_data, bot_name
             )
+            existing_trigger = _find_existing_trigger_comment(
+                initial_data, bot_name, current_round
+            )
+            if existing_trigger is not None:
+                trigger_id = existing_trigger.get("id")
+                # A trigger comment authored by the target bot itself (e.g. a
+                # hosted environment re-triggering its own review under its
+                # own bot identity) must not be read as the review it is
+                # asking for -- without this, the trigger's own text can
+                # satisfy the round-content gate before any real review
+                # arrives (Codex PR #1114 round 8 finding).
+                if trigger_id is not None:
+                    excluded_ids.add(trigger_id)
             immediate = _check_immediate_review_result(
                 initial_data,
                 bot_name,
@@ -622,6 +769,10 @@ def wait_for_review(
                 jev_threshold=jev_threshold,
                 pr_number=pr_number,
                 context_cache=context_cache,
+                trigger_id=trigger_id,
+                requested_head_sha=requested_head_sha,
+                repository=repository,
+                exclude_ids=excluded_ids,
             )
             if immediate is not None:
                 return immediate
@@ -688,23 +839,22 @@ def wait_for_review(
                                 current_data,
                                 bot_name,
                                 exclude_ids=excluded_ids,
-                                latest_item=latest_bot_item,
                                 latest_trigger_time=latest_trigger_time,
                                 jev_threshold=jev_threshold,
                                 pr_number=pr_number,
                                 context_cache=context_cache,
+                                round_num=current_round,
+                                trigger_id=trigger_id,
+                                triggered_at=latest_trigger_time,
+                                requested_head_sha=requested_head_sha,
+                                repository=repository,
                             )
                             if result is not None:
-                                if result.get("all_findings_filtered"):
-                                    result["verdict"] = EXIT_NO_FINDINGS
-                                else:
-                                    result["verdict"] = evaluate_review_verdict(
-                                        result.get("review_body", ""),
-                                        result.get("inline_comments", []),
-                                        bot_name=bot_name,
-                                    )
-                                result["round"] = current_round
                                 return result
+                            # Activity was only execution telemetry (e.g. a lone
+                            # finished-tracker comment): nothing acquired yet,
+                            # keep waiting instead of re-checking every poll.
+                            initial_snapshot = current_snapshot
                         else:
                             initial_snapshot = current_snapshot
                             print(
@@ -729,6 +879,48 @@ def wait_for_review(
     raise TimeoutError(
         f"Timed out waiting for @{bot_name} activity on PR #{pr_number} after {timeout}s."
     )
+
+
+def _write_output_file(result: dict[str, Any], output_file: str) -> None:
+    try:
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        raise RuntimeError(f"Failed to write --output-file {output_file}: {e}") from e
+
+
+def _resolve_offline_completeness(state: object) -> tuple[dict[str, str], list[str]]:
+    """Resolve the offline `--review-state-file` completeness declaration.
+
+    Distinguishes three cases: no `completeness` key at all (legacy input;
+    `.get()` alone can't tell this apart from an explicit `"completeness":
+    null`, so presence is checked separately) keeps every section "unknown"
+    with no incompleteness; a key present but not a usable object (null, a
+    list, a string, ...) is a malformed-but-positive declaration and every
+    section is treated as incomplete; a proper dict normalizes each of the
+    three required sections (an omitted section counts as incomplete, not an
+    implicit "complete") (Codex PR #1114 rounds 1-4 findings).
+    """
+    completeness_key_present = isinstance(state, dict) and "completeness" in state
+    state_completeness = (
+        state.get("completeness")
+        if isinstance(state, dict) and completeness_key_present
+        else None
+    )
+    if isinstance(state_completeness, dict):
+        completeness = {
+            section: state_completeness.get(section, "unknown")
+            for section in _COMPLETENESS_SECTIONS
+        }
+        incomplete_sections = [
+            section for section, status in completeness.items() if status != "complete"
+        ]
+    else:
+        completeness = dict.fromkeys(_COMPLETENESS_SECTIONS, "unknown")
+        incomplete_sections = (
+            list(_COMPLETENESS_SECTIONS) if completeness_key_present else []
+        )
+    return completeness, incomplete_sections
 
 
 def main() -> None:
@@ -818,34 +1010,83 @@ def main() -> None:
         default=None,
         help="Validity threshold for Jev finding filter (default: 0.7 or JEV_THRESHOLD env)",
     )
+    parser.add_argument(
+        "--output-file",
+        type=str,
+        default=None,
+        help=(
+            "Write the complete machine-readable acquisition result as JSON to this "
+            "path. A write failure exits non-zero, even if acquisition itself succeeded."
+        ),
+    )
 
     args = parser.parse_args()
     try:
         if args.review_state_file:
             with open(args.review_state_file, encoding="utf-8") as state_file:
                 state = json.load(state_file)
-                result = evaluate_review_state(state, args.bot_name)
-            initial_inlines = result.get("inline_comments", [])
-            if initial_inlines:
-                filtered_inlines = filter_review_findings(
-                    initial_inlines,
+            result = collect_review_state(state, args.bot_name)
+            current_inlines = [
+                item
+                for item in result.get("inline_comments", [])
+                if item.get("provenance") == "current"
+            ]
+            jev_evaluations: list[dict[str, Any]] = []
+            if current_inlines:
+                jev_report = evaluate_review_findings(
+                    current_inlines,
                     bot_name=args.bot_name,
                     threshold=args.jev_threshold,
                     pr=args.pr,
                     context=state.get("context") if isinstance(state, dict) else None,
                 )
-                result["inline_comments"] = filtered_inlines
-                if not filtered_inlines:
-                    result["all_findings_filtered"] = True
-                    result["verdict"] = EXIT_NO_FINDINGS
-                else:
-                    result["verdict"] = evaluate_review_verdict(
-                        result.get("review_body", ""),
-                        result.get("inline_comments", []),
-                        bot_name=args.bot_name,
-                    )
+                jev_evaluations = jev_report["jev_evaluations"]
+            reviewed_shas = {
+                item.get("commit_id")
+                for item in result.get("review_items", [])
+                if item.get("kind") == "review"
+                and item.get("provenance") == "current"
+                and item.get("commit_id")
+            }
+            completeness, incomplete_sections = _resolve_offline_completeness(state)
+            result.update(
+                repository=None,
+                pr_number=args.pr,
+                reviewer=args.bot_name,
+                round=None,
+                trigger_id=None,
+                triggered_at="",
+                requested_head_sha=None,
+                reviewed_head_sha=(
+                    next(iter(reviewed_shas)) if len(reviewed_shas) == 1 else None
+                ),
+                current_head_sha=None,
+                jev_evaluations=jev_evaluations,
+                completeness=completeness,
+            )
+            if (
+                incomplete_sections
+                and result["acquisition_status"] == ACQUISITION_ACQUIRED
+            ):
+                # The adapter itself declared a section incomplete: a partial
+                # fetch must not be reported as a trustworthy acquired result,
+                # even though some content was found (issue #1099 PR #1114
+                # round 1 review).
+                result["acquisition_status"] = ACQUISITION_UNAVAILABLE
+                result["reason"] = (
+                    "supplied completeness declares "
+                    f"{', '.join(incomplete_sections)} incomplete"
+                )
             _print_review_result(result, args.bot_name)
-            sys.exit(result["verdict"])
+            if args.output_file:
+                _write_output_file(result, args.output_file)
+            status = result["acquisition_status"]
+            if status == ACQUISITION_ACQUIRED:
+                sys.exit(EXIT_ACQUIRED)
+            elif status == ACQUISITION_IN_PROGRESS:
+                sys.exit(EXIT_IN_PROGRESS)
+            else:
+                sys.exit(EXIT_NO_RESULT)
         if args.pr is None:
             parser.error("--pr is required unless --review-state-file is used")
         wait_kwargs: dict[str, Any] = {
@@ -866,17 +1107,9 @@ def main() -> None:
             args.pr,
             **wait_kwargs,
         )
-        verdict = result.get("verdict")
-        if verdict is None:
-            if result.get("all_findings_filtered"):
-                verdict = EXIT_NO_FINDINGS
-            else:
-                verdict = evaluate_review_verdict(
-                    result.get("review_body", ""),
-                    result.get("inline_comments", []),
-                    bot_name=args.bot_name,
-                )
-        sys.exit(verdict)
+        if args.output_file:
+            _write_output_file(result, args.output_file)
+        sys.exit(EXIT_ACQUIRED)
     except MaxRoundsExceededError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(EXIT_MAX_ROUNDS)

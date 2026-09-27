@@ -1,6 +1,8 @@
 # Jevによるレビュー指摘の評価
 
-`wait_for_review.py` は、`JEV_API_KEY` が設定され、対象のinline指摘がある場合にJevで評価します。キー未設定ならPRメタデータやコードの追加取得、評価API呼び出しを行わず、指摘をそのまま保持します。即時結果、polling結果、offline `--review-state-file` は同じ採否を使います。
+`wait_for_review.py` は、`JEV_API_KEY` が設定され、対象ラウンドのinline指摘がある場合にJevで評価します。キー未設定ならPRメタデータやコードの追加取得、評価API呼び出しを行わず、指摘は `not_evaluated` として保持します。即時結果、polling結果、offline `--review-state-file` は同じ採否ポリシーを使います。
+
+`scripts/jev_filter.py::evaluate_review_findings()` が構造化レポート `{"kept": [...], "jev_evaluations": [...]}` を返します。`jev_evaluations` は元指摘のid（またはidが無いoffline入力ではsnapshot内の連番）ごとに `decision`（`kept` / `filtered` / `bypassed` / `not_evaluated`）、`decision_reason`（`accepted` / `low_validity` / `low_impact` / `speculative` / `bypass` / `no_api_key`）、`validity`/`impact`/`applicability`/`applicability_confidence` を保持します。**Jevが `filtered` と判定した指摘も `wait_for_review.py` の結果契約の `inline_comments` から削除されません**——採否は呼び出し元LLMが`jev_evaluations`を参考情報として読み、コード・受け入れ条件に基づいて最終判断します。旧来の `filter_review_findings()` は `kept` のみを返す互換ラッパーとして維持されており、一指摘につき評価APIは一回だけ呼び出されます（`filter_review_findings`/`evaluate_review_findings` の二重呼び出しはしません）。
 
 ## 評価と採否
 

@@ -1,6 +1,8 @@
 # Evaluating review findings with Jev
 
-`wait_for_review.py` evaluates inline findings only when `JEV_API_KEY` is configured and findings exist. Without a key, it preserves findings without fetching additional PR metadata or code, or calling Jev. Immediate, polling, and offline `--review-state-file` results use the same acceptance policy.
+`wait_for_review.py` evaluates inline findings only when `JEV_API_KEY` is configured and the current round has findings. Without a key, findings are reported as `not_evaluated` without fetching additional PR metadata or code, or calling Jev. Immediate, polling, and offline `--review-state-file` results use the same acceptance policy.
+
+`scripts/jev_filter.py::evaluate_review_findings()` returns a structured report, `{"kept": [...], "jev_evaluations": [...]}`. `jev_evaluations` holds one entry per original finding id (or, for id-less offline input, a snapshot-local index) with `decision` (`kept` / `filtered` / `bypassed` / `not_evaluated`), `decision_reason` (`accepted` / `low_validity` / `low_impact` / `speculative` / `bypass` / `no_api_key`), and `validity`/`impact`/`applicability`/`applicability_confidence`. **A finding Jev decides is `filtered` is never removed from `wait_for_review.py`'s `inline_comments` result contract** — the calling LLM reads `jev_evaluations` as advisory information and makes the final call based on the code and Acceptance Criteria. The legacy `filter_review_findings()` remains as a backward-compatible wrapper returning only `kept`; each finding is evaluated by the API exactly once regardless of which entry point is called (`filter_review_findings`/`evaluate_review_findings` never double-evaluate).
 
 ## Evaluation and acceptance
 

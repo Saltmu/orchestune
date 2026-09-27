@@ -16,6 +16,7 @@ from scripts.jev_filter import (
     DEFAULT_JEV_LOG_PATH,
     JevFindingEvaluation,
     evaluate_finding_with_jev,
+    evaluate_review_findings,
     filter_review_findings,
     is_finding_accepted,
 )
@@ -37,6 +38,16 @@ def _api_response(validity: float, impact: str) -> dict[str, Any]:
         },
         "usage": {"input_tokens": 300, "output_tokens": 30},
     }
+
+
+@pytest.fixture(autouse=True)
+def _no_network_sha_lookups(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The `wait_for_review()` integration tests below don't exercise SHA/repo
+    metadata; keep them hermetic instead of hitting `gh` for real."""
+    monkeypatch.setattr(
+        "scripts.wait_for_review._fetch_pr_head_sha", lambda pr_number: None
+    )
+    monkeypatch.setattr("scripts.wait_for_review._fetch_repository_slug", lambda: None)
 
 
 class TestJevUrls:
@@ -414,12 +425,148 @@ class TestFilterReviewFindings:
         assert filtered == inlines
 
 
+class TestEvaluateReviewFindings:
+    """Structured report: findings are annotated, never dropped from the report."""
+
+    def test_no_api_key_marks_every_finding_not_evaluated_and_keeps_all(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("JEV_API_KEY", raising=False)
+        inlines = [
+            {"id": 1, "path": "a.py", "line": 10, "body": "Real bug"},
+            {"id": 2, "path": "b.py", "line": 20, "body": "Nitpick"},
+        ]
+
+        result = evaluate_review_findings(inlines, bot_name="claude")
+
+        assert result["kept"] == inlines
+        assert [e["decision"] for e in result["jev_evaluations"]] == [
+            "not_evaluated",
+            "not_evaluated",
+        ]
+        assert [e["finding_id"] for e in result["jev_evaluations"]] == [1, 2]
+        assert all(
+            e["decision_reason"] == "no_api_key" for e in result["jev_evaluations"]
+        )
+
+    def test_mixed_decisions_annotate_every_finding_even_when_filtered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("JEV_API_KEY", "test-key")
+        inlines = [
+            {"id": 1, "path": "a.py", "line": 10, "body": "Real bug"},
+            {"id": 2, "path": "b.py", "line": 20, "body": "Nitpick style"},
+        ]
+        evaluations = {
+            "Real bug": JevFindingEvaluation(validity=0.9, impact="HIGH"),
+            "Nitpick style": JevFindingEvaluation(validity=0.95, impact="LOW"),
+        }
+
+        def mock_eval(
+            comment: str, path: str = "", line: Any = "", **kwargs: Any
+        ) -> JevFindingEvaluation:
+            return evaluations[comment]
+
+        with patch(
+            "scripts.jev_filter.evaluate_finding_with_jev", side_effect=mock_eval
+        ):
+            result = evaluate_review_findings(inlines, bot_name="claude", threshold=0.7)
+
+        # kept mirrors the legacy filtered-list contract.
+        assert [item["id"] for item in result["kept"]] == [1]
+        # But the report still carries an entry for the filtered finding too —
+        # its body is not lost, only annotated as filtered.
+        assert len(result["jev_evaluations"]) == 2
+        by_id = {e["finding_id"]: e for e in result["jev_evaluations"]}
+        assert by_id[1]["decision"] == "kept"
+        assert by_id[1]["decision_reason"] == "accepted"
+        assert by_id[2]["decision"] == "filtered"
+        assert by_id[2]["decision_reason"] == "low_impact"
+
+    def test_api_failure_marks_bypassed_and_keeps_finding(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("JEV_API_KEY", "test-key")
+        inlines = [{"id": 7, "path": "a.py", "line": 1, "body": "Something"}]
+
+        with patch(
+            "scripts.jev_filter.evaluate_finding_with_jev",
+            return_value=JevFindingEvaluation(
+                validity=1.0, impact="HIGH", bypassed=True
+            ),
+        ):
+            result = evaluate_review_findings(inlines, bot_name="claude", threshold=0.7)
+
+        assert [item["id"] for item in result["kept"]] == [7]
+        assert result["jev_evaluations"][0]["decision"] == "bypassed"
+
+    def test_finding_without_id_falls_back_to_index(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("JEV_API_KEY", raising=False)
+        inlines = [{"path": "a.py", "line": 1, "body": "no id here"}]
+
+        result = evaluate_review_findings(inlines, bot_name="claude")
+
+        assert result["jev_evaluations"][0]["finding_id"] == "index:0"
+
+    def test_explicit_null_id_is_also_treated_as_id_less(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`dict.get("id", index)` only falls back on a *missing* key, so an
+        offline/MCP snapshot serializing id-less findings as `"id": null`
+        would otherwise collide every one onto the same `None` finding_id
+        (Codex PR #1114 round 5 finding)."""
+        monkeypatch.delenv("JEV_API_KEY", raising=False)
+        inlines = [
+            {"id": None, "path": "a.py", "line": 1, "body": "first"},
+            {"id": None, "path": "b.py", "line": 2, "body": "second"},
+        ]
+
+        result = evaluate_review_findings(inlines, bot_name="claude")
+
+        finding_ids = [e["finding_id"] for e in result["jev_evaluations"]]
+        assert finding_ids == ["index:0", "index:1"]
+
+    def test_fallback_id_never_collides_with_a_coincidentally_equal_supplied_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fallback id for an id-less finding must not collide with a
+        real supplied id equal to that positional index, e.g. an id-less
+        finding at position 0 alongside another finding explicitly numbered
+        `0` (Codex PR #1114 round 6 finding)."""
+        monkeypatch.delenv("JEV_API_KEY", raising=False)
+        inlines = [
+            {"path": "a.py", "line": 1, "body": "id-less, position 0"},
+            {"id": 0, "path": "b.py", "line": 2, "body": "explicitly id 0"},
+        ]
+
+        result = evaluate_review_findings(inlines, bot_name="claude")
+
+        finding_ids = [e["finding_id"] for e in result["jev_evaluations"]]
+        assert len(set(finding_ids)) == 2
+        assert 0 in finding_ids
+        assert "index:0" in finding_ids
+
+    def test_filter_review_findings_is_a_thin_wrapper_over_kept(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("JEV_API_KEY", raising=False)
+        inlines = [{"id": 1, "path": "a.py", "line": 1, "body": "x"}]
+        assert (
+            filter_review_findings(inlines, bot_name="claude")
+            == evaluate_review_findings(inlines, bot_name="claude")["kept"]
+        )
+
+
 class TestJevFilterIntegrationWithWaitForReview:
     @patch("scripts.wait_for_review._get_pr_data", autospec=True)
-    def test_wait_for_review_filters_out_low_impact_to_converge(
+    def test_wait_for_review_annotates_low_impact_as_filtered_without_dropping_it(
         self, mock_get_data: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from scripts.review_verdict import EXIT_NO_FINDINGS
+        """Jev filtering must never remove a finding from `inline_comments` — it
+        only annotates `jev_evaluations`; the LLM decides what to do with it."""
+        from scripts.review_verdict import ACQUISITION_ACQUIRED
         from scripts.wait_for_review import wait_for_review
 
         monkeypatch.setenv("JEV_API_KEY", "test-key")
@@ -466,16 +613,20 @@ class TestJevFilterIntegrationWithWaitForReview:
                 interval=0,
             )
 
-            # Finding was filtered out; inline_comments became empty
-            assert result["inline_comments"] == []
-            # Because body is clean and inlines are now empty, verdict converges to 0 (EXIT_NO_FINDINGS)
-            assert result["verdict"] == EXIT_NO_FINDINGS
+            # The finding stays in inline_comments — it is the source of truth —
+            # but the report marks it filtered rather than dropping it.
+            assert result["acquisition_status"] == ACQUISITION_ACQUIRED
+            assert len(result["inline_comments"]) == 1
+            assert result["inline_comments"][0]["id"] == 11
+            assert len(result["jev_evaluations"]) == 1
+            assert result["jev_evaluations"][0]["finding_id"] == 11
+            assert result["jev_evaluations"][0]["decision"] == "filtered"
+            assert result["jev_evaluations"][0]["decision_reason"] == "low_impact"
 
     @patch("scripts.wait_for_review._get_pr_data", autospec=True)
     def test_wait_for_review_keeps_high_impact_finding(
         self, mock_get_data: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from scripts.review_verdict import EXIT_FINDINGS_PRESENT
         from scripts.wait_for_review import wait_for_review
 
         monkeypatch.setenv("JEV_API_KEY", "test-key")
@@ -523,13 +674,13 @@ class TestJevFilterIntegrationWithWaitForReview:
             )
 
             assert len(result["inline_comments"]) == 1
-            assert result["verdict"] == EXIT_FINDINGS_PRESENT
+            assert result["jev_evaluations"][0]["decision"] == "kept"
+            assert result["jev_evaluations"][0]["decision_reason"] == "accepted"
 
     @patch("scripts.wait_for_review._get_pr_data", autospec=True)
-    def test_wait_for_review_filters_out_findings_even_when_bot_body_says_fail(
+    def test_wait_for_review_annotates_findings_as_filtered_even_when_bot_body_says_fail(
         self, mock_get_data: MagicMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from scripts.review_verdict import EXIT_NO_FINDINGS
         from scripts.wait_for_review import wait_for_review
 
         monkeypatch.setenv("JEV_API_KEY", "test-key")
@@ -576,10 +727,12 @@ class TestJevFilterIntegrationWithWaitForReview:
                 interval=0,
             )
 
-            # Even though review_body said FAIL and had 🔴, all findings were rejected by Jev,
-            # so verdict must converge to 0 (EXIT_NO_FINDINGS)
-            assert result["inline_comments"] == []
-            assert result["verdict"] == EXIT_NO_FINDINGS
+            # Even though review_body said FAIL and had 🔴, Jev marks the
+            # finding filtered — but it still appears in inline_comments and
+            # review_body for the calling LLM to weigh for itself.
+            assert len(result["inline_comments"]) == 1
+            assert result["jev_evaluations"][0]["decision"] == "filtered"
+            assert "FAIL" in result["review_body"]
 
 
 @pytest.mark.parametrize(

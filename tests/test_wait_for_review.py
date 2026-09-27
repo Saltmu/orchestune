@@ -7,7 +7,6 @@ from unittest.mock import patch
 import pytest
 
 from scripts.wait_for_review import (
-    EXIT_NO_FINDINGS,
     StalledReviewError,
     _build_snapshot,
     _extract_review_result,
@@ -17,9 +16,22 @@ from scripts.wait_for_review import (
     _is_explicitly_in_progress,
     _latest_bot_summary_item,
     _latest_review_trigger_timestamp,
+    _print_review_result,
     _run_gh,
     wait_for_review,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_network_sha_lookups(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`wait_for_review()` best-effort fetches PR head SHA / repo slug via `gh`
+    for the new acquisition-contract fields; tests here exercise polling/round
+    logic and must stay hermetic, so default those lookups to "unknown" unless
+    a specific test overrides them."""
+    monkeypatch.setattr(
+        "scripts.wait_for_review._fetch_pr_head_sha", lambda pr_number: None
+    )
+    monkeypatch.setattr("scripts.wait_for_review._fetch_repository_slug", lambda: None)
 
 
 def test_filter_bot_items():
@@ -760,8 +772,13 @@ def test_wait_for_review_excludes_inline_comments_from_earlier_rounds(
         post_trigger=True,
     )
 
-    assert result["inline_comments"] == []
-    assert result["verdict"] == EXIT_NO_FINDINGS
+    # The stale round-1 inline comment is not discarded -- it stays visible,
+    # tagged historical -- but must not be reported as belonging to this round.
+    assert len(result["inline_comments"]) == 1
+    assert result["inline_comments"][0]["provenance"] == "historical"
+    assert not any(
+        item["provenance"] == "current" for item in result["inline_comments"]
+    )
 
 
 @patch("scripts.wait_for_review._get_pr_data", autospec=True)
@@ -1054,3 +1071,81 @@ def test_get_initial_pr_data_times_out():
                 _get_initial_pr_data(
                     pr_number=540, executor=executor, timeout=0, interval=0
                 )
+
+
+def test_print_review_result_matches_id_less_findings_by_current_round_position(
+    capsys,
+):
+    """An id-less current-round finding must be annotated with its own Jev
+    decision even when a historical/unassociated item is interleaved before
+    it in the full inline_comments list -- the display fallback must use the
+    same current-inlines position basis evaluate_review_findings used, not a
+    position within the full list (Codex PR #1114 round 5 finding)."""
+    result = {
+        "round": 1,
+        "timestamp": "2026-09-27T00:00:00Z",
+        "requested_head_sha": "a" * 40,
+        "reviewed_head_sha": "a" * 40,
+        "current_head_sha": "a" * 40,
+        "review_items": [],
+        "review_body": "",
+        "inline_comments": [
+            {
+                "path": "old.py",
+                "line": 1,
+                "body": "historical, id-less",
+                "provenance": "historical",
+            },
+            {
+                "path": "new.py",
+                "line": 2,
+                "body": "current, id-less",
+                "provenance": "current",
+            },
+        ],
+        "jev_evaluations": [
+            {
+                "finding_id": "index:0",
+                "decision": "kept",
+                "decision_reason": "accepted",
+            }
+        ],
+    }
+
+    _print_review_result(result, "claude")
+
+    output = capsys.readouterr().out
+    lines = {
+        line for line in output.splitlines() if line.startswith("--- Inline Comment")
+    }
+    historical_header = next(line for line in lines if "Inline Comment 1:" in line)
+    current_header = next(line for line in lines if "Inline Comment 2:" in line)
+    assert "[jev:" not in historical_header
+    assert "[jev: kept (accepted)]" in current_header
+
+
+def test_print_review_result_does_not_claim_acquired_for_a_non_acquired_status(capsys):
+    """The stdout banner must reflect acquisition_status, not unconditionally
+    claim content was acquired -- an unavailable/in_progress result (Exit
+    11/30) must not be presented to the LLM as ready for judgment (Codex PR
+    #1114 round 7 finding)."""
+    result = {
+        "acquisition_status": "unavailable",
+        "reason": "no @claude activity found in the supplied review state",
+        "round": None,
+        "timestamp": "",
+        "requested_head_sha": None,
+        "reviewed_head_sha": None,
+        "current_head_sha": None,
+        "review_items": [],
+        "review_body": "",
+        "inline_comments": [],
+        "jev_evaluations": [],
+    }
+
+    _print_review_result(result, "claude")
+
+    output = capsys.readouterr().out
+    assert "Content Acquired" not in output
+    assert "[AI Review NOT Acquired (unavailable)" in output
+    assert "no @claude activity found in the supplied review state" in output

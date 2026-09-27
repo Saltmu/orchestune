@@ -6,36 +6,108 @@ from unittest.mock import patch
 import pytest
 
 from scripts.wait_for_review import (
-    EXIT_FINDINGS_PRESENT,
-    EXIT_IN_PROGRESS,
-    EXIT_NO_FINDINGS,
-    EXIT_UNDETERMINED,
+    EXIT_ACQUIRED,
     MaxRoundsExceededError,
     _find_existing_trigger_comment,
     _get_latest_review_round,
     _mark_review_trigger,
     _parse_review_round_marker,
     _review_round_marker,
-    evaluate_review_verdict,
     post_review_trigger,
     wait_for_review,
 )
 
 
-def test_main_cli_success():
+@pytest.fixture(autouse=True)
+def _no_network_sha_lookups(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`wait_for_review()`/`_extract_review_result()` best-effort fetch PR head
+    SHA / repo slug via `gh` for the acquisition-contract fields; keep these
+    tests hermetic unless a specific test overrides the lookups."""
+    monkeypatch.setattr(
+        "scripts.wait_for_review._fetch_pr_head_sha", lambda pr_number: None
+    )
+    monkeypatch.setattr("scripts.wait_for_review._fetch_repository_slug", lambda: None)
+
+
+@pytest.mark.parametrize(
+    "side_effect, expected_exit",
+    [
+        pytest.param(None, 0, id="acquired"),
+        pytest.param(ValueError("boom"), 2, id="internal-error"),
+        pytest.param(MaxRoundsExceededError("max"), 12, id="round-limit"),
+        pytest.param(TimeoutError("timed out"), 20, id="timed-out"),
+    ],
+)
+def test_exit_code_table_for_online_acquisition_control_paths(
+    side_effect, expected_exit
+):
+    """Exit codes here are pure acquisition/wait control, verified against the
+    full table (issue #1099 Exit table); StalledReviewError=21 is covered by
+    test_main_cli_stalled since it needs its own import."""
     from scripts.wait_for_review import main
 
     with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
         with patch(
-            "scripts.wait_for_review.wait_for_review", autospec=True
-        ) as mock_wait:
-            mock_wait.return_value = {"review_body": "LGTM", "inline_comments": []}
+            "scripts.wait_for_review.wait_for_review",
+            autospec=True,
+            side_effect=side_effect,
+            return_value={"review_body": "LGTM", "inline_comments": []},
+        ):
             with pytest.raises(SystemExit) as exc:
                 main()
-            assert exc.value.code == 0
+            assert exc.value.code == expected_exit
 
 
-def test_main_cli_findings():
+@pytest.mark.parametrize(
+    "state, expected_exit",
+    [
+        pytest.param(
+            {
+                "reviews": [
+                    {
+                        "id": 1,
+                        "user": {"login": "claude[bot]"},
+                        "submitted_at": "2026-08-20T10:00:00Z",
+                        "body": "LGTM",
+                    }
+                ]
+            },
+            0,
+            id="acquired",
+        ),
+        pytest.param(
+            {
+                "issue_comments": [
+                    {
+                        "id": 1,
+                        "user": {"login": "claude[bot]"},
+                        "created_at": "2026-08-20T10:00:00Z",
+                        "body": "### Review in progress\n- [ ] Working...",
+                    }
+                ]
+            },
+            11,
+            id="in-progress",
+        ),
+        pytest.param({}, 30, id="no-result"),
+    ],
+)
+def test_exit_code_table_for_offline_single_snapshot_paths(
+    state, expected_exit, tmp_path
+):
+    """The offline `--review-state-file` path is the only one that can produce
+    Exit 11/30 directly from acquisition_status (issue #1099 Exit table)."""
+    from scripts.wait_for_review import main
+
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+    with patch("sys.argv", ["wait_for_review.py", "--review-state-file", str(path)]):
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == expected_exit
+
+
+def test_main_cli_success():
     from scripts.wait_for_review import main
 
     with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
@@ -48,23 +120,64 @@ def test_main_cli_findings():
             }
             with pytest.raises(SystemExit) as exc:
                 main()
-            assert exc.value.code == 10
+            # Content no longer decides the exit code: any acquired result is
+            # Exit 0 (Exit 10 / findings-present is abolished, issue #1099).
+            assert exc.value.code == EXIT_ACQUIRED
 
 
-def test_main_cli_undetermined():
+def test_main_cli_writes_output_file(tmp_path):
     from scripts.wait_for_review import main
 
-    with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
+    output_path = tmp_path / "review-result.json"
+    with patch(
+        "sys.argv",
+        [
+            "wait_for_review.py",
+            "--pr",
+            "540",
+            "--no-post",
+            "--output-file",
+            str(output_path),
+        ],
+    ):
         with patch(
             "scripts.wait_for_review.wait_for_review", autospec=True
         ) as mock_wait:
             mock_wait.return_value = {
-                "review_body": "### Note\nAmbiguous comment",
+                "acquisition_status": "acquired",
+                "review_body": "LGTM",
                 "inline_comments": [],
             }
             with pytest.raises(SystemExit) as exc:
                 main()
-            assert exc.value.code == 30
+            assert exc.value.code == EXIT_ACQUIRED
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["review_body"] == "LGTM"
+
+
+def test_main_cli_output_file_write_failure_is_not_a_silent_success(tmp_path):
+    from scripts.wait_for_review import main
+
+    unwritable_path = tmp_path / "no-such-dir" / "review-result.json"
+    with patch(
+        "sys.argv",
+        [
+            "wait_for_review.py",
+            "--pr",
+            "540",
+            "--no-post",
+            "--output-file",
+            str(unwritable_path),
+        ],
+    ):
+        with patch(
+            "scripts.wait_for_review.wait_for_review", autospec=True
+        ) as mock_wait:
+            mock_wait.return_value = {"review_body": "LGTM", "inline_comments": []}
+            with pytest.raises(SystemExit) as exc:
+                main()
+            # A write failure must not exit as if acquisition succeeded.
+            assert exc.value.code != EXIT_ACQUIRED
 
 
 def test_main_cli_timeout():
@@ -162,7 +275,7 @@ def test_main_cli_arguments_parsing():
             mock_wait.return_value = {"review_body": "LGTM", "inline_comments": []}
             with pytest.raises(SystemExit) as exc:
                 main()
-            assert exc.value.code == 0
+            assert exc.value.code == EXIT_ACQUIRED
             mock_wait.assert_called_once_with(
                 540,
                 timeout=1800,
@@ -197,7 +310,7 @@ def test_main_cli_arguments_parsing_with_jev_threshold():
             mock_wait.return_value = {"review_body": "LGTM", "inline_comments": []}
             with pytest.raises(SystemExit) as exc:
                 main()
-            assert exc.value.code == 0
+            assert exc.value.code == EXIT_ACQUIRED
             mock_wait.assert_called_once_with(
                 540,
                 timeout=1800,
@@ -356,6 +469,8 @@ def test_wait_for_review_idempotent_skips_post_if_same_round_exists(
 
     mock_post.assert_not_called()
     assert "### Review complete" in result["review_body"]
+    assert result["round"] == 1
+    assert result["trigger_id"] == 100
 
 
 @patch("scripts.wait_for_review._get_pr_data", autospec=True)
@@ -384,88 +499,6 @@ def test_wait_for_review_max_rounds_exceeded(mock_get_data):
         )
 
 
-def test_evaluate_verdict_layer1_html_marker_pass():
-    body = "Review body with random text <!-- orchestune:verdict pass --> more text"
-    assert evaluate_review_verdict(body, [], "claude") == EXIT_NO_FINDINGS
-
-
-def test_evaluate_verdict_layer1_html_marker_fail():
-    body = "Review body <!-- orchestune:verdict fail --> despite other words"
-    assert evaluate_review_verdict(body, [], "claude") == EXIT_FINDINGS_PRESENT
-
-
-def test_evaluate_verdict_layer2_codex_clean():
-    body = "Codex Review: Didn't find any major issues. Nice work!"
-    assert evaluate_review_verdict(body, [], "codex") == EXIT_NO_FINDINGS
-
-
-def test_evaluate_verdict_layer2_codex_inlines():
-    body = "### 💡 Codex Review\nHere are some suggestions."
-    inlines = [{"path": "main.py", "line": 10, "body": "Fix bug"}]
-    assert evaluate_review_verdict(body, inlines, "codex") == EXIT_FINDINGS_PRESENT
-
-
-def test_evaluate_verdict_layer2_codex_badge_in_body():
-    body = "### 💡 Codex Review\nHere are some suggestions: P1 Badge: Security flaw"
-    assert evaluate_review_verdict(body, [], "codex") == EXIT_FINDINGS_PRESENT
-
-
-def test_evaluate_verdict_layer2_claude_clean():
-    body = "No blocking issues found. This is a safe, self-contained update."
-    assert evaluate_review_verdict(body, [], "claude") == EXIT_NO_FINDINGS
-
-    body2 = "### Review complete\nAll checks passed."
-    assert evaluate_review_verdict(body2, [], "claude") == EXIT_NO_FINDINGS
-
-    body3 = "### Review complete\nLooks good!"
-    assert evaluate_review_verdict(body3, [], "claude") == EXIT_NO_FINDINGS
-
-
-def test_evaluate_verdict_layer2_claude_blocking_findings():
-    body = "### Findings\nblocking bugs as written:\n- Issue 1"
-    assert evaluate_review_verdict(body, [], "claude") == EXIT_FINDINGS_PRESENT
-
-    body2 = "### Review complete\nmarking this **fail** due to errors."
-    assert evaluate_review_verdict(body2, [], "claude") == EXIT_FINDINGS_PRESENT
-
-    body3 = "This PR should not be merged in its current form."
-    assert evaluate_review_verdict(body3, [], "claude") == EXIT_FINDINGS_PRESENT
-
-    body4 = "### Findings\n\n- [ ] Vulnerability in parser\n- [x] Style fixed"
-    assert evaluate_review_verdict(body4, [], "claude") == EXIT_FINDINGS_PRESENT
-
-
-def test_evaluate_verdict_layer2_claude_inlines():
-    body = "### Review complete\nSee comments."
-    inlines = [{"path": "main.py", "line": 5, "body": "Fix this"}]
-    assert evaluate_review_verdict(body, inlines, "claude") == EXIT_FINDINGS_PRESENT
-
-
-def test_evaluate_verdict_layer3_undetermined_fallback():
-    body = "### Review note\nJust some comments about architecture without clear pass/fail status."
-    assert evaluate_review_verdict(body, [], "claude") == EXIT_UNDETERMINED
-    assert evaluate_review_verdict(body, [], "codex") == EXIT_UNDETERMINED
-    assert evaluate_review_verdict("", [], "other_bot") == EXIT_UNDETERMINED
-
-
-def test_evaluate_verdict_in_progress_state():
-    body = "### Review in progress\n- [ ] Working on checks..."
-    assert evaluate_review_verdict(body, [], "claude") == EXIT_IN_PROGRESS
-    assert evaluate_review_verdict(body, [], "codex") == EXIT_IN_PROGRESS
-
-
-def test_evaluate_verdict_generic_bot():
-    body = "Review complete: All checks passed. Looks good."
-    assert evaluate_review_verdict(body, [], "custom-bot") == EXIT_NO_FINDINGS
-
-    body_inlines = "Review complete: Some comments."
-    inlines = [{"path": "app.py", "line": 1, "body": "fix"}]
-    assert (
-        evaluate_review_verdict(body_inlines, inlines, "custom-bot")
-        == EXIT_FINDINGS_PRESENT
-    )
-
-
 def test_get_latest_review_round_and_idempotency_when_poster_is_bot():
     data = {
         "issue_comments": [
@@ -481,14 +514,6 @@ def test_get_latest_review_round_and_idempotency_when_poster_is_bot():
     found = _find_existing_trigger_comment(data, "claude", 1)
     assert found is not None
     assert found["id"] == 50
-
-
-def test_evaluate_verdict_layer2_claude_no_major_blocking_issues():
-    body1 = "No major blocking issues found. Looks great overall."
-    assert evaluate_review_verdict(body1, [], "claude") == EXIT_NO_FINDINGS
-
-    body2 = "There are no other blocking bugs in this patch."
-    assert evaluate_review_verdict(body2, [], "claude") == EXIT_NO_FINDINGS
 
 
 @patch("scripts.wait_for_review._get_pr_data", autospec=True)
@@ -519,6 +544,39 @@ def test_wait_for_review_round_number_immediate_no_post(mock_get_data):
         post_trigger=False,
     )
     assert result["round"] == 1
+    assert result["trigger_id"] == 100
+    assert result["acquisition_status"] == "acquired"
+
+
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
+def test_wait_for_review_no_post_does_not_self_acquire_bot_authored_trigger(
+    mock_get_data,
+):
+    """A `--no-post` retry of a trigger authored by the target bot itself
+    (e.g. a hosted environment re-triggering its own review under its own
+    bot identity) must not read the trigger's own text as the review it is
+    asking for -- unlike the post_trigger=True path, this trigger was never
+    added to excluded_ids before this fix (Codex PR #1114 round 8 finding)."""
+    bot_authored_trigger = {
+        "id": 100,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-20T07:44:44Z",
+        "body": "@claude review\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->",
+    }
+    mock_get_data.return_value = {
+        "issue_comments": [bot_authored_trigger],
+        "reviews": [],
+        "inline_comments": [],
+    }
+
+    with pytest.raises(TimeoutError):
+        wait_for_review(
+            pr_number=540,
+            timeout=0,
+            interval=0,
+            bot_name="claude",
+            post_trigger=False,
+        )
 
 
 @patch("scripts.wait_for_review._get_pr_data", autospec=True)
@@ -640,8 +698,8 @@ def test_context_is_lazy_cached_and_disabled_without_key(monkeypatch):
             return_value=JevReviewContext(),
         ) as collect,
         patch(
-            "scripts.wait_for_review.filter_review_findings",
-            side_effect=lambda items, **kwargs: items,
+            "scripts.wait_for_review.evaluate_review_findings",
+            side_effect=lambda items, **kwargs: {"kept": items, "jev_evaluations": []},
         ) as filtering,
     ):
         _extract_review_result(state, "claude", pr_number=3, context_cache=cache)
@@ -708,7 +766,12 @@ def _jev_offline_context():
 
 
 @pytest.mark.parametrize("route", ["immediate", "polling", "offline"])
-def test_three_routes_use_same_context_policy(route, monkeypatch, tmp_path):
+def test_three_routes_use_same_context_policy_and_never_drop_the_finding(
+    route, monkeypatch, tmp_path
+):
+    """All three acquisition routes must run the same Jev context policy AND
+    must never remove the finding from the contract just because Jev marked
+    it speculative -- only `jev_evaluations` records that decision."""
     from scripts.jev_context import JevReviewContext
     from scripts.jev_filter import JevFindingEvaluation
     from scripts.wait_for_review import _check_immediate_review_result, main
@@ -736,7 +799,11 @@ def test_three_routes_use_same_context_policy(route, monkeypatch, tmp_path):
             result = _check_immediate_review_result(
                 state, "claude", "2026-09-27T00:00:00Z", 1, pr_number=5
             )
-            assert result["verdict"] == EXIT_NO_FINDINGS
+            assert result is not None
+            assert result["acquisition_status"] == "acquired"
+            assert len(result["inline_comments"]) == 1
+            assert result["jev_evaluations"][0]["decision"] == "filtered"
+            assert result["jev_evaluations"][0]["decision_reason"] == "speculative"
         elif route == "polling":
             with (
                 patch(
@@ -750,7 +817,9 @@ def test_three_routes_use_same_context_policy(route, monkeypatch, tmp_path):
                 patch("scripts.wait_for_review._get_pr_data", return_value=state),
             ):
                 result = wait_for_review(5, post_trigger=False)
-            assert result["verdict"] == EXIT_NO_FINDINGS
+            assert result["acquisition_status"] == "acquired"
+            assert len(result["inline_comments"]) == 1
+            assert result["jev_evaluations"][0]["decision"] == "filtered"
         else:
             state["context"] = _jev_offline_context()
             path = tmp_path / "state.json"
@@ -760,7 +829,9 @@ def test_three_routes_use_same_context_policy(route, monkeypatch, tmp_path):
                 pytest.raises(SystemExit) as exc,
             ):
                 main()
-            assert exc.value.code == EXIT_NO_FINDINGS
+            # Findings are never dropped, so acquisition is still Exit 0 even
+            # though Jev marked the sole finding filtered.
+            assert exc.value.code == EXIT_ACQUIRED
             collect.assert_not_called()
         assert evaluate.call_args.kwargs["context"]["code"]["commit_sha"] == "a" * 40
         record = json.loads((tmp_path / "jev.jsonl").read_text())
@@ -773,6 +844,7 @@ def test_offline_with_key_never_fetches_missing_context(monkeypatch, tmp_path):
 
     monkeypatch.setenv("JEV_API_KEY", "test-key")
     monkeypatch.setenv("JEV_LOG_PATH", str(tmp_path / "jev.jsonl"))
+    output_path = tmp_path / "review-result.json"
     path = tmp_path / "state.json"
     path.write_text(json.dumps(_jev_state()))
     evaluation = JevFindingEvaluation(
@@ -781,9 +853,135 @@ def test_offline_with_key_never_fetches_missing_context(monkeypatch, tmp_path):
     with (
         patch("scripts.jev_filter.evaluate_finding_with_jev", return_value=evaluation),
         patch("scripts.jev_context.subprocess.run") as run,
+        patch(
+            "sys.argv",
+            [
+                "wait",
+                "--review-state-file",
+                str(path),
+                "--output-file",
+                str(output_path),
+            ],
+        ),
+        pytest.raises(SystemExit) as exc,
+    ):
+        main()
+    # No context was supplied for this finding, so SPECULATIVE exclusion's
+    # provenance requirements are unmet and Jev falls back to validity/impact
+    # (HIGH, validity 0.99 >= threshold) -> kept. Acquisition is Exit 0 either
+    # way; what must hold is that offline never shells out to git for context.
+    assert exc.value.code == EXIT_ACQUIRED
+    run.assert_not_called()
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+    assert saved["jev_evaluations"][0]["decision"] == "kept"
+    assert saved["jev_evaluations"][0]["decision_reason"] == "accepted"
+
+
+def test_offline_explicit_incomplete_section_is_not_exit_0(tmp_path):
+    """A partial MCP/App snapshot that explicitly declares a section
+    missing/error/truncated must not report a trustworthy acquired result,
+    even though some content was found (Codex PR #1114 round 1 finding)."""
+    from scripts.wait_for_review import EXIT_NO_RESULT, main
+
+    state = _jev_state()
+    state["completeness"] = {
+        "issue_comments": "complete",
+        "reviews": "complete",
+        "inline_comments": "truncated",
+    }
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with (
         patch("sys.argv", ["wait", "--review-state-file", str(path)]),
         pytest.raises(SystemExit) as exc,
     ):
         main()
-    assert exc.value.code == EXIT_FINDINGS_PRESENT
-    run.assert_not_called()
+
+    assert exc.value.code == EXIT_NO_RESULT
+
+
+def test_offline_unenumerated_incomplete_status_is_also_not_exit_0(tmp_path):
+    """Any explicitly-supplied non-"complete" status (not just the enumerated
+    missing/error/truncated spellings, e.g. "partial") downgrades the result
+    (Codex PR #1114 round 2 finding)."""
+    from scripts.wait_for_review import EXIT_NO_RESULT, main
+
+    state = _jev_state()
+    state["completeness"] = {
+        "issue_comments": "complete",
+        "reviews": "complete",
+        "inline_comments": "partial",
+    }
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with (
+        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        pytest.raises(SystemExit) as exc,
+    ):
+        main()
+
+    assert exc.value.code == EXIT_NO_RESULT
+
+
+def test_offline_sparse_completeness_treats_omitted_sections_as_incomplete(tmp_path):
+    """A caller-supplied completeness dict that omits a required section must
+    not be read as an implicit "complete" for that section -- an omitted
+    section is indistinguishable from one fetched empty (Codex PR #1114
+    round 3 finding)."""
+    from scripts.wait_for_review import EXIT_NO_RESULT, main
+
+    state = _jev_state()
+    # Only declares `reviews`; `issue_comments`/`inline_comments` are omitted.
+    state["completeness"] = {"reviews": "complete"}
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with (
+        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        pytest.raises(SystemExit) as exc,
+    ):
+        main()
+
+    assert exc.value.code == EXIT_NO_RESULT
+
+
+def test_offline_malformed_completeness_value_is_also_not_exit_0(tmp_path):
+    """An explicitly-supplied but non-object `completeness` value (null, a
+    list, a string) is a positive-but-malformed declaration and must not be
+    read as the legacy "key absent" case, which alone preserves Exit 0
+    (Codex PR #1114 round 4 finding)."""
+    from scripts.wait_for_review import EXIT_NO_RESULT, main
+
+    state = _jev_state()
+    state["completeness"] = None
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with (
+        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        pytest.raises(SystemExit) as exc,
+    ):
+        main()
+
+    assert exc.value.code == EXIT_NO_RESULT
+
+
+def test_offline_unknown_completeness_still_exits_acquired(tmp_path):
+    """The default "unknown" completeness (no metadata supplied) must keep
+    working for legacy callers -- only an *explicit* incomplete declaration
+    downgrades the result, per issue #1099's "旧入力形式の読み込みは維持する"."""
+    from scripts.wait_for_review import main
+
+    state = _jev_state()
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with (
+        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        pytest.raises(SystemExit) as exc,
+    ):
+        main()
+
+    assert exc.value.code == EXIT_ACQUIRED

@@ -15,6 +15,15 @@ from scripts.wait_for_review import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_network_sha_lookups(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_handle_review_trigger()` best-effort fetches the PR head SHA via `gh`
+    when it posts a new trigger; keep these tests hermetic."""
+    monkeypatch.setattr(
+        "scripts.wait_for_review._fetch_pr_head_sha", lambda pr_number: "c" * 40
+    )
+
+
 @patch("scripts.wait_for_review.subprocess.run")
 def test_post_review_trigger_default(mock_run):
     mock_run.return_value.returncode = 0
@@ -232,7 +241,7 @@ def test_handle_review_trigger_skips_when_existing_trigger_has_mention(mock_post
     excluded_ids = set()
     initial_snapshot = {}
 
-    timestamp = _handle_review_trigger(
+    timestamp, trigger_id, requested_head_sha = _handle_review_trigger(
         pr_number=540,
         bot_name="claude",
         initial_data=data,
@@ -245,6 +254,10 @@ def test_handle_review_trigger_skips_when_existing_trigger_has_mention(mock_post
     )
 
     assert timestamp == "2026-08-20T10:00:00Z"
+    assert trigger_id == 501
+    # Reusing an existing trigger must not report the current head as
+    # "requested" -- that head was never actually sent to the reviewer.
+    assert requested_head_sha is None
     assert 501 in excluded_ids
     mock_post.assert_not_called()
 
@@ -268,7 +281,7 @@ def test_handle_review_trigger_reposts_when_existing_trigger_lacks_mention(mock_
     excluded_ids = set()
     initial_snapshot = {}
 
-    timestamp = _handle_review_trigger(
+    timestamp, trigger_id, requested_head_sha = _handle_review_trigger(
         pr_number=540,
         bot_name="codex",
         initial_data=data,
@@ -281,6 +294,10 @@ def test_handle_review_trigger_reposts_when_existing_trigger_lacks_mention(mock_
     )
 
     assert timestamp == "2026-08-20T10:01:00Z"
+    assert trigger_id == 503
+    # A new trigger was actually posted here, so the head at that moment is
+    # captured as requested_head_sha.
+    assert requested_head_sha == "c" * 40
     assert 502 in excluded_ids
     assert 503 in excluded_ids
     mock_post.assert_called_once_with(
