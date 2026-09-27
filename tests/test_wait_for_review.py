@@ -1122,3 +1122,30 @@ def test_print_review_result_matches_id_less_findings_by_current_round_position(
     current_header = next(line for line in lines if "Inline Comment 2:" in line)
     assert "[jev:" not in historical_header
     assert "[jev: kept (accepted)]" in current_header
+
+
+def test_print_review_result_does_not_claim_acquired_for_a_non_acquired_status(capsys):
+    """The stdout banner must reflect acquisition_status, not unconditionally
+    claim content was acquired -- an unavailable/in_progress result (Exit
+    11/30) must not be presented to the LLM as ready for judgment (Codex PR
+    #1114 round 7 finding)."""
+    result = {
+        "acquisition_status": "unavailable",
+        "reason": "no @claude activity found in the supplied review state",
+        "round": None,
+        "timestamp": "",
+        "requested_head_sha": None,
+        "reviewed_head_sha": None,
+        "current_head_sha": None,
+        "review_items": [],
+        "review_body": "",
+        "inline_comments": [],
+        "jev_evaluations": [],
+    }
+
+    _print_review_result(result, "claude")
+
+    output = capsys.readouterr().out
+    assert "Content Acquired" not in output
+    assert "[AI Review NOT Acquired (unavailable)" in output
+    assert "no @claude activity found in the supplied review state" in output

@@ -346,8 +346,17 @@ def _print_review_result(result: dict[str, Any], bot_name: str) -> None:
         item for item in inline_items if item.get("provenance") == "current"
     ]
     jev_evaluations = result.get("jev_evaluations", [])
+    status = result.get("acquisition_status")
     print("\n" + "=" * 72)
-    print(f"[AI Review Content Acquired - @{bot_name}] LLM judgment required")
+    if status == ACQUISITION_ACQUIRED:
+        print(f"[AI Review Content Acquired - @{bot_name}] LLM judgment required")
+    else:
+        # A non-acquired status (unavailable/in_progress) is not ready for
+        # judgment; the banner must not claim otherwise even though some
+        # partial content may still be shown below for context (Codex PR
+        # #1114 round 7 finding).
+        reason = result.get("reason") or "no reason given"
+        print(f"[AI Review NOT Acquired ({status}) - @{bot_name}] {reason}")
     print(f"Round: {result.get('round')}  Timestamp: {result.get('timestamp', '')}")
     print(
         f"Requested SHA: {result.get('requested_head_sha')}  "
