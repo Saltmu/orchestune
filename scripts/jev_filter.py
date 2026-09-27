@@ -341,6 +341,15 @@ def _jev_decision(reason: str) -> str:
     return "filtered"
 
 
+def _finding_id(item: dict[str, Any], index: int) -> Any:
+    """A missing id and an explicit `"id": null` (offline/MCP snapshots) are
+    both id-less: `dict.get("id", index)` only falls back on a missing key,
+    so an explicit null would otherwise collide every id-less finding onto
+    the same `None` finding_id (Codex PR #1114 round 5 finding)."""
+    value = item.get("id")
+    return value if value is not None else index
+
+
 def evaluate_review_findings(
     inline_comments: list[dict[str, Any]],
     bot_name: str = "claude",
@@ -371,7 +380,7 @@ def evaluate_review_findings(
             "kept": list(inline_comments),
             "jev_evaluations": [
                 {
-                    "finding_id": item.get("id", index),
+                    "finding_id": _finding_id(item, index),
                     "decision": "not_evaluated",
                     "validity": None,
                     "impact": None,
@@ -456,7 +465,7 @@ def evaluate_review_findings(
 
         jev_evaluations.append(
             {
-                "finding_id": item.get("id", index),
+                "finding_id": _finding_id(item, index),
                 "decision": _jev_decision(reason),
                 "validity": evaluation.validity,
                 "impact": evaluation.impact,

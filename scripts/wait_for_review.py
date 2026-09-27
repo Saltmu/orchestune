@@ -360,9 +360,24 @@ def _print_review_result(result: dict[str, Any], bot_name: str) -> None:
             f"({len(current_inlines)} current round)"
         )
         jev_by_id = {e["finding_id"]: e for e in jev_evaluations}
+        # Mirror evaluate_review_findings()'s id-or-index fallback: a missing
+        # id and an explicit `"id": null` are both id-less, and the fallback
+        # index must be positional within `current_inlines` (the list that
+        # was actually passed to evaluate_review_findings), not within the
+        # full inline_items list, which may interleave historical/unassociated
+        # items and shift the index basis (Codex PR #1114 round 5 finding).
+        current_index_by_identity = {
+            id(current_item): index
+            for index, current_item in enumerate(current_inlines)
+        }
         for index, item in enumerate(inline_items, start=1):
-            finding_id = item.get("id", index - 1)
-            jev = jev_by_id.get(finding_id)
+            item_id = item.get("id")
+            finding_id = (
+                item_id
+                if item_id is not None
+                else current_index_by_identity.get(id(item))
+            )
+            jev = jev_by_id.get(finding_id) if finding_id is not None else None
             jev_note = (
                 f" [jev: {jev['decision']} ({jev['decision_reason']})]" if jev else ""
             )

@@ -16,6 +16,7 @@ from scripts.wait_for_review import (
     _is_explicitly_in_progress,
     _latest_bot_summary_item,
     _latest_review_trigger_timestamp,
+    _print_review_result,
     _run_gh,
     wait_for_review,
 )
@@ -1070,3 +1071,54 @@ def test_get_initial_pr_data_times_out():
                 _get_initial_pr_data(
                     pr_number=540, executor=executor, timeout=0, interval=0
                 )
+
+
+def test_print_review_result_matches_id_less_findings_by_current_round_position(
+    capsys,
+):
+    """An id-less current-round finding must be annotated with its own Jev
+    decision even when a historical/unassociated item is interleaved before
+    it in the full inline_comments list -- the display fallback must use the
+    same current-inlines position basis evaluate_review_findings used, not a
+    position within the full list (Codex PR #1114 round 5 finding)."""
+    result = {
+        "round": 1,
+        "timestamp": "2026-09-27T00:00:00Z",
+        "requested_head_sha": "a" * 40,
+        "reviewed_head_sha": "a" * 40,
+        "current_head_sha": "a" * 40,
+        "review_items": [],
+        "review_body": "",
+        "inline_comments": [
+            {
+                "path": "old.py",
+                "line": 1,
+                "body": "historical, id-less",
+                "provenance": "historical",
+            },
+            {
+                "path": "new.py",
+                "line": 2,
+                "body": "current, id-less",
+                "provenance": "current",
+            },
+        ],
+        "jev_evaluations": [
+            {
+                "finding_id": 0,
+                "decision": "kept",
+                "decision_reason": "accepted",
+            }
+        ],
+    }
+
+    _print_review_result(result, "claude")
+
+    output = capsys.readouterr().out
+    lines = {
+        line for line in output.splitlines() if line.startswith("--- Inline Comment")
+    }
+    historical_header = next(line for line in lines if "Inline Comment 1:" in line)
+    current_header = next(line for line in lines if "Inline Comment 2:" in line)
+    assert "[jev:" not in historical_header
+    assert "[jev: kept (accepted)]" in current_header

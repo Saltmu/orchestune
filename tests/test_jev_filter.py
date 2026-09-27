@@ -510,6 +510,24 @@ class TestEvaluateReviewFindings:
 
         assert result["jev_evaluations"][0]["finding_id"] == 0
 
+    def test_explicit_null_id_is_also_treated_as_id_less(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`dict.get("id", index)` only falls back on a *missing* key, so an
+        offline/MCP snapshot serializing id-less findings as `"id": null`
+        would otherwise collide every one onto the same `None` finding_id
+        (Codex PR #1114 round 5 finding)."""
+        monkeypatch.delenv("JEV_API_KEY", raising=False)
+        inlines = [
+            {"id": None, "path": "a.py", "line": 1, "body": "first"},
+            {"id": None, "path": "b.py", "line": 2, "body": "second"},
+        ]
+
+        result = evaluate_review_findings(inlines, bot_name="claude")
+
+        finding_ids = [e["finding_id"] for e in result["jev_evaluations"]]
+        assert finding_ids == [0, 1]
+
     def test_filter_review_findings_is_a_thin_wrapper_over_kept(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
