@@ -15,7 +15,7 @@ from orchestune.issue_parsing import (
     parent_issue_number_from_body,
 )
 from orchestune.labels import StatusLabel
-from orchestune.replan.models import PlanGeneration
+from orchestune.plan_identity import PlanGeneration
 
 _PLACEHOLDERS = (
     "subtask_id",

@@ -221,6 +221,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "models",
             "outcome_record",
             "ownership_contracts",
+            "plan_identity",
             "plan_writer",
             "provisioning",
             "replan",
@@ -889,11 +890,6 @@ KNOWN_PACKAGE_CYCLE_EDGES: dict[tuple[str, str], str] = {
         "Git cleanup (#1072), legacy dependency resolution (#1073), and routine "
         "target/handle/constants (#1074) still live under dispatch"
     ),
-    (
-        "provisioning",
-        "replan",
-    ): "Rendering uses replan models; shared plan boundary #1076",
-    ("replan", "provisioning"): "Plan loading/rendering/validation are shared; #1076",
 }
 
 
