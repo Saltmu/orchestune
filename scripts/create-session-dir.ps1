@@ -11,8 +11,18 @@ param(
     [string]$Prefix = "task",
     [string]$Task = "scratch"
 )
-
 $ErrorActionPreference = "Stop"
+
+if ($Prefix -notmatch '^[a-zA-Z0-9_-]+$') {
+    [Console]::Error.WriteLine("Error: Invalid prefix '$Prefix'. prefix must contain only ASCII alphanumeric characters, underscores, and hyphens.")
+    exit 1
+}
+
+if ($Task -notmatch '^[a-zA-Z0-9_.-]+$') {
+    [Console]::Error.WriteLine("Error: Invalid task '$Task'. task must contain only ASCII alphanumeric characters, underscores, hyphens, and dots.")
+    exit 1
+}
+
 
 $timestamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssZ")
 $randomHex = [guid]::NewGuid().ToString("N").Substring(0, 8)
