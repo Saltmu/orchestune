@@ -9,7 +9,12 @@ from secrets import token_urlsafe
 from typing import Protocol
 from uuid import uuid4
 
-from orchestune.claim.contracts import ClaimRequest, ClaimStage, ReservationKind
+from orchestune.claim.contracts import (
+    ClaimRequest,
+    ClaimStage,
+    OwnerKind,
+    ReservationKind,
+)
 from orchestune.dag.contracts import is_contract_writer
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.task_metadata import TaskMetadata
@@ -163,8 +168,16 @@ def held_claim_next_actions(active: ActiveWorktree) -> tuple[str, ...]:
         actions.append(
             f"If the claim was interrupted, run: orchestune claim {n} --resume {active.claim_id}"
         )
-    actions.append(
-        "If the task needs files outside its reservation, update the Issue footprint "
-        f"and run: orchestune claim {n} --amend-footprint"
-    )
+    if active.owner_kind != OwnerKind.INTERACTIVE.value:
+        actions.append(
+            "If the task needs files outside its reservation, run: orchestune complete "
+            f"--issue {n} --result blocked --reason footprint-expansion-required"
+        )
+    elif _is_repository_reservation(active):
+        actions.append("The claim already reserves the whole repository.")
+    else:
+        actions.append(
+            "If the task needs files outside its reservation, update the Issue footprint "
+            f"and run: orchestune claim {n} --amend-footprint"
+        )
     return tuple(actions)

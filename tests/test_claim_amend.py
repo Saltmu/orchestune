@@ -402,3 +402,33 @@ def test_amend_records_non_ascii_changed_paths_verbatim(amend_env):
     assert "読んで.md" in outcome.amended_footprint
     assert "README.md" in outcome.amended_footprint
     assert not any('"' in path or "\\" in path for path in outcome.amended_footprint)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected", "unexpected"),
+    [
+        (
+            {"owner_kind": OwnerKind.DISPATCH.value},
+            "--result blocked --reason footprint-expansion-required",
+            "--amend-footprint",
+        ),
+        (
+            {"reservation_kind": ReservationKind.REPOSITORY.value},
+            "already reserves the whole repository",
+            "--amend-footprint",
+        ),
+    ],
+)
+def test_held_claim_next_actions_offer_amend_only_when_eligible(
+    tmp_path, overrides, expected, unexpected
+):
+    from orchestune.claim.ownership import held_claim_next_actions
+
+    active = _active(
+        201, tmp_path, ("a.py",), base_sha="abc", identity="repo", **overrides
+    )
+
+    actions = "\n".join(held_claim_next_actions(active))
+
+    assert expected in actions
+    assert unexpected not in actions
