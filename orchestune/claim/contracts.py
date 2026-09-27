@@ -25,6 +25,7 @@ class ClaimFailureReason(str, Enum):
     EXTERNAL_LOCK_CONFLICT = "external_lock_conflict"
     INVALID_RESUME = "invalid_resume"
     INVALID_BRANCH_NAME = "invalid_branch_name"
+    INVALID_FOOTPRINT = "invalid_footprint"
     CLAIM_CONFLICT = "claim_conflict"
     EXISTING_CLAIM_UNRECOVERED = "existing_claim_unrecovered"
     STATE_LOCK_FAILED = "state_lock_failed"

@@ -229,3 +229,17 @@ def test_forced_serial_without_footprint_overlap_does_not_conflict() -> None:
         )
         == ClaimConflictReason.SHARED_CONTRACT
     )
+
+
+def test_footprint_overlap_matches_canonicalized_paths() -> None:
+    candidate = _active(10, footprint=("src/foo.py",))
+    active = _active(11, footprint=("src/foo.py",))
+    assert (
+        _conflict(
+            candidate,
+            active,
+            _task(10, footprint=("src/foo.py",)),
+            _task(11, footprint=("src/foo.py",)),
+        )
+        == ClaimConflictReason.FOOTPRINT_OVERLAP
+    )

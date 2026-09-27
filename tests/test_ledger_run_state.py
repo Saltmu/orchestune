@@ -89,6 +89,18 @@ class TestRunState:
         assert persisted["active_worktrees"]["10"]["reservation_kind"] == "repository"
         assert load_run_state(path).active_worktrees["10"] == active
 
+    def test_load_run_state_canonicalizes_declared_footprint(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        raw_active = _serialized_current_active(
+            declared_footprint=["./src/a.py", "src/a.py", r"src\b.py"]
+        )
+        path.write_text(json.dumps({"active_worktrees": {"10": raw_active}}))
+        loaded = load_run_state(path)
+        assert loaded.active_worktrees["10"].declared_footprint == (
+            "src/a.py",
+            "src/b.py",
+        )
+
     @pytest.mark.parametrize(
         "field,value",
         [

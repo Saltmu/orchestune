@@ -21,6 +21,7 @@ from orchestune.dispatch.scoring import (
     REASON_BLOCKED_RECOMPUTE,
     REASON_CONFLICT,
     REASON_EXTERNAL_LOCK,
+    REASON_INVALID_FOOTPRINT,
     REASON_LAUNCH_FAILED,
     REASON_QUOTA_EXHAUSTED,
     REASON_TOKEN_BUDGET,
@@ -60,6 +61,7 @@ _REASON_LABELS = {
     REASON_CONFLICT: "競合するタスクが実行中",
     REASON_LAUNCH_FAILED: "起動に失敗",
     REASON_YAML_ERROR: "Footprint YAMLの解析に失敗",
+    REASON_INVALID_FOOTPRINT: "Footprintの指定値が不正",
     REASON_BLOCKED_RECOMPUTE: "依存グラフ再計算によりブロック",
     REASON_ALREADY_ACTIVE: "既に実行中",
 }

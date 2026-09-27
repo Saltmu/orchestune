@@ -189,6 +189,22 @@ class TestParseSubtaskInfoFromIssue:
         assert subtask_id == "task-a"
         assert footprint == ("src/foo.py",)
 
+    def test_extracts_declared_footprint_normalized(self):
+        issue = _issue_with_footprint(
+            1, subtask_id="task-a", footprint=["./src/foo.py", "src/foo.py"]
+        )
+        subtask_id, footprint = _parse_subtask_info_from_issue(issue)
+        assert subtask_id == "task-a"
+        assert footprint == ("src/foo.py",)
+
+    def test_falls_back_to_empty_footprint_on_footprint_error(self):
+        issue = _issue_with_footprint(
+            1, subtask_id="task-a", footprint=["../outside.py"]
+        )
+        subtask_id, footprint = _parse_subtask_info_from_issue(issue)
+        assert subtask_id == "task-a"
+        assert footprint == ()
+
 
 class TestRestorationCandidateProjection:
     """Supervisor adapter が観測する復元候補の projection を検証する。"""

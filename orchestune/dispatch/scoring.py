@@ -108,6 +108,7 @@ REASON_TOKEN_BUDGET = "token-budget"
 REASON_LAUNCH_FAILED = "launch-failed"
 # PR#665レビュー指摘(Codex P2): スコアリング以前に候補から外れる理由。
 REASON_YAML_ERROR = "yaml-error"
+REASON_INVALID_FOOTPRINT = "invalid-footprint"
 REASON_EXTERNAL_LOCK = "external-lock"
 REASON_BLOCKED_RECOMPUTE = "blocked-recompute"
 REASON_ALREADY_ACTIVE = "already-active"
@@ -473,6 +474,8 @@ def _ineligibility_reason(
     """スコアリング以前に候補から外れる理由。外れないなら`None`。"""
     if task.yaml_error:
         return REASON_YAML_ERROR
+    if task.footprint_error:
+        return REASON_INVALID_FOOTPRINT
     if StatusLabel.EXTERNAL_LOCK in task.status_labels:
         return REASON_EXTERNAL_LOCK
     if StatusLabel.BLOCKED_RECOMPUTE in task.status_labels:

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from orchestune.dag.models import FootprintValidationError, parse_footprint_value
 from orchestune.forge import MetadataSearchUnavailableError
 from orchestune.models import IssueRecord, Task, normalize_newlines
 
@@ -608,9 +609,15 @@ def _parse_yaml_footprint_dict(
     bool,
     str | None,
     str | None,
+    str | None,
 ]:
     subtask_id = str(data.get("subtask_id", ""))
-    footprint = tuple(str(f) for f in (data.get("footprint") or []))
+    footprint_error: str | None = None
+    try:
+        footprint = parse_footprint_value(data.get("footprint"))
+    except FootprintValidationError as e:
+        footprint = ()
+        footprint_error = str(e)
     symbols = tuple(str(s) for s in (data.get("symbols") or []))
     shared_contract = (
         str(data["shared_contract"]) if data.get("shared_contract") else None
@@ -626,6 +633,7 @@ def _parse_yaml_footprint_dict(
         writes_sc,
         profile,
         model_tier,
+        footprint_error,
     )
 
 
@@ -638,6 +646,7 @@ _FootprintMetadataTuple = tuple[
     str | None,
     str | None,
     bool,
+    str | None,
     re.Match[str] | None,
 ]
 
@@ -653,6 +662,7 @@ def _extract_footprint_metadata(
     execution_profile: str | None = None
     model_tier: str | None = None
     yaml_error = False
+    footprint_error: str | None = None
     match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
     if match:
         try:
@@ -666,6 +676,7 @@ def _extract_footprint_metadata(
                     writes_shared_contract,
                     execution_profile,
                     model_tier,
+                    footprint_error,
                 ) = _parse_yaml_footprint_dict(data)
         except yaml.YAMLError as e:
             print(
@@ -682,6 +693,7 @@ def _extract_footprint_metadata(
         execution_profile,
         model_tier,
         yaml_error,
+        footprint_error,
         match,
     )
 
@@ -748,6 +760,7 @@ def parse_task_from_issue(
         execution_profile,
         model_tier,
         yaml_error,
+        footprint_error,
         match,
     ) = _extract_footprint_metadata(issue)
     depends_on = _body_depends_on(match, yaml_error)
@@ -769,6 +782,7 @@ def parse_task_from_issue(
         depends_on=depends_on,
         native_depends_on=issue.blocked_by,
         yaml_error=yaml_error,
+        footprint_error=footprint_error,
         parent_number=parent_number,
         issue_state=issue.state,
         parent_state=parent_state,

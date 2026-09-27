@@ -25,6 +25,7 @@ from orchestune.dependencies.policy import (
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     effective_parent_number,
+    parse_task_from_issue,
 )
 from orchestune.labels import StatusLabel
 from orchestune.ledger.status_labels import (
@@ -216,16 +217,29 @@ def _check_status_labels(
     return None
 
 
+def _evaluate_footprint_reservation(
+    issue: IssueRecord,
+) -> tuple[ReservationKind, ClaimFailure | None]:
+    task = parse_task_from_issue(issue)
+    if task.yaml_error:
+        return ReservationKind.REPOSITORY, None
+    if task.footprint_error is not None:
+        failure = ClaimFailure(
+            reason=ClaimFailureReason.INVALID_FOOTPRINT,
+            message=task.footprint_error,
+            next_actions=(
+                "Fix the `footprint` list in the Issue body (repository-relative paths only) and retry.",
+            ),
+        )
+        return ReservationKind.REPOSITORY, failure
+    if task.footprint:
+        return ReservationKind.FOOTPRINT, None
+    return ReservationKind.REPOSITORY, None
+
+
 def _resolve_reservation_kind(issue: IssueRecord) -> ReservationKind:
-    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
-    if match:
-        try:
-            data = yaml.safe_load(match.group(1))
-            if isinstance(data, dict) and bool(data.get("footprint")):
-                return ReservationKind.FOOTPRINT
-        except yaml.YAMLError:
-            pass
-    return ReservationKind.REPOSITORY
+    kind, _ = _evaluate_footprint_reservation(issue)
+    return kind
 
 
 def _check_dependencies_without_view(
@@ -337,8 +351,17 @@ def evaluate_claim_preflight(
     if failure is not None or issue is None:
         return PreflightDecision(allowed=False, issue_number=issue_num, failure=failure)
 
-    reservation_kind = _resolve_reservation_kind(issue)
     subtask_id = resolve_claim_subtask_id(issue)
+    reservation_kind, footprint_failure = _evaluate_footprint_reservation(issue)
+    if footprint_failure is not None:
+        return PreflightDecision(
+            allowed=False,
+            issue_number=issue.number,
+            subtask_id=subtask_id,
+            reservation_kind=reservation_kind,
+            failure=footprint_failure,
+        )
+
     parent_number = effective_parent_number(issue) if view is None else None
 
     dep_failure, base_ref, stack_target = _resolve_dependencies_and_base(

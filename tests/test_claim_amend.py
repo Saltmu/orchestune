@@ -292,6 +292,48 @@ def test_amend_rejects_repository_reservation_declaration_in_issue(amend_env):
     assert _held_footprint(amend_env) == ("orchestune/foo.py",)
 
 
+def test_amend_rejects_malformed_yaml_footprint(amend_env):
+    amend_env["forge"].issues[201] = _make_issue(
+        number=201, body="## Footprint\n\n```yaml\n[unclosed\n```\n"
+    )
+
+    outcome = _amend(amend_env)
+
+    assert outcome.success is False
+    assert outcome.failure is not None
+    assert outcome.failure.reason == ClaimFailureReason.INVALID_FOOTPRINT
+    assert _held_footprint(amend_env) == ("orchestune/foo.py",)
+
+
+def test_amend_rejects_invalid_footprint_declaration(amend_env):
+    amend_env["forge"].issues[201] = _make_issue(
+        number=201,
+        body="## Footprint\n\n```yaml\nsubtask_id: test-task\nfootprint:\n  - ../escape.py\n```\n",
+    )
+
+    outcome = _amend(amend_env)
+
+    assert outcome.success is False
+    assert outcome.failure is not None
+    assert outcome.failure.reason == ClaimFailureReason.INVALID_FOOTPRINT
+    assert _held_footprint(amend_env) == ("orchestune/foo.py",)
+
+
+def test_amend_normalizes_and_deduplicates_footprint_paths(amend_env):
+    amend_env["forge"].issues[201] = _make_issue(
+        number=201,
+        body=_issue_body(
+            ["orchestune/foo.py", "./orchestune/bar.py", "orchestune/bar.py"]
+        ),
+    )
+
+    outcome = _amend(amend_env)
+
+    assert outcome.success is True
+    assert outcome.amended_footprint == ("orchestune/foo.py", "orchestune/bar.py")
+    assert _held_footprint(amend_env) == ("orchestune/foo.py", "orchestune/bar.py")
+
+
 def test_amend_rejects_closed_issue(amend_env):
     amend_env["forge"].issues[201] = _make_issue(
         number=201, body=_issue_body(["orchestune/foo.py"]), state="CLOSED"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from orchestune.dispatch.scoring import (
+    REASON_INVALID_FOOTPRINT,
     REASON_QUOTA_EXHAUSTED,
     REASON_SELECTED,
     SchedulingDecision,
@@ -124,6 +125,10 @@ class TestRenderSkippedMarkdown:
     def test_falls_back_to_the_raw_reason_code_when_unmapped(self):
         body = "\n".join(render_skipped_markdown([_skip(1, "brand-new-reason")]))
         assert "brand-new-reason" in body
+
+    def test_renders_invalid_footprint_reason(self):
+        body = "\n".join(render_skipped_markdown([_skip(1, REASON_INVALID_FOOTPRINT)]))
+        assert "Footprintの指定値が不正" in body
 
 
 class TestRenderForgeWarnings:

@@ -22,6 +22,7 @@ _EXPECTED_PROPERTIES = (
     "status_labels",
     "created_at",
     "yaml_error",
+    "footprint_error",
     "parent_number",
     "issue_state",
     "parent_state",
@@ -67,7 +68,7 @@ class TestCycleTaskFieldShape:
         expected = tuple(f.name for f in _non_raw_task_fields())
         actual = tuple(f.name for f in dataclasses.fields(CycleTask))
         assert actual == expected
-        assert len(actual) == 17
+        assert len(actual) == 18
 
     def test_defaults_match_task_defaults(self) -> None:
         cycle_fields = {f.name: f for f in dataclasses.fields(CycleTask)}
@@ -122,6 +123,7 @@ class TestFromTask:
         )
         cycle_task = CycleTask.from_task(minimal_task)
         assert cycle_task.yaml_error is False
+        assert cycle_task.footprint_error is None
         assert cycle_task.parent_number is None
         assert cycle_task.issue_state == "OPEN"
         assert cycle_task.parent_state is None

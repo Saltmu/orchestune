@@ -334,18 +334,9 @@ def _parse_subtask_info_from_issue(
     issue: IssueRecord,
 ) -> tuple[str, tuple[str, ...]]:
     """Issueの本文から subtask_id と declared_footprint を抽出する。"""
-    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
+    parsed = parse_task_from_issue(issue)
+    declared_footprint = () if parsed.footprint_error else parsed.footprint
     subtask_id = _extract_raw_subtask_id(issue)
-    declared_footprint: tuple[str, ...] = ()
-    if match:
-        try:
-            data = yaml.safe_load(match.group(1))
-            if isinstance(data, dict):
-                footprint = data.get("footprint", [])
-                if isinstance(footprint, list):
-                    declared_footprint = tuple(footprint)
-        except Exception:
-            pass
 
     if not subtask_id:
         owner_kind, _, _ = _parse_claim_info_from_issue(issue)

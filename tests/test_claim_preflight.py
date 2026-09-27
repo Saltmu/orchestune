@@ -517,3 +517,49 @@ class TestEvaluateClaimPreflight:
         decision_view = resolve_claim_base(938, view, default_base="custom-base")
         assert decision_view.allowed is True
         assert decision_view.base_ref == "parent/issue-893"
+
+
+class TestClaimPreflightFootprintValidation:
+    def test_rejects_string_footprint_with_invalid_footprint(self) -> None:
+        body = "```yaml\nsubtask_id: test-task\nfootprint: src/new.py\n```"
+        issue = _make_issue(number=100, body=body, labels=(StatusLabel.QUEUED,))
+        decision = evaluate_claim_preflight(issue)
+        assert decision.allowed is False
+        assert decision.failure is not None
+        assert decision.failure.reason == ClaimFailureReason.INVALID_FOOTPRINT
+        assert decision.failure.exit_code == ClaimExitCode.INVALID_FOOTPRINT
+        assert int(decision.failure.exit_code) == 18
+
+    def test_rejects_invalid_footprint_paths(self) -> None:
+        for bad_path in ("/abs/path.py", "../escape.py", "C:\\win.py"):
+            body = f"```yaml\nsubtask_id: test-task\nfootprint: ['{bad_path}']\n```"
+            issue = _make_issue(number=100, body=body, labels=(StatusLabel.QUEUED,))
+            decision = evaluate_claim_preflight(issue)
+            assert decision.allowed is False
+            assert decision.failure is not None
+            assert decision.failure.reason == ClaimFailureReason.INVALID_FOOTPRINT
+
+    def test_accepts_valid_footprint_and_resolves_kind(self) -> None:
+        body = "```yaml\nsubtask_id: test-task\nfootprint:\n  - ./src/a.py\n  - src/b.py\n```"
+        issue = _make_issue(number=100, body=body, labels=(StatusLabel.QUEUED,))
+        decision = evaluate_claim_preflight(issue)
+        assert decision.allowed is True
+        assert decision.failure is None
+        assert decision.reservation_kind == ReservationKind.FOOTPRINT
+
+    def test_accepts_empty_or_omitted_footprint_as_repository(self) -> None:
+        body_empty = "```yaml\nsubtask_id: test-task\nfootprint: []\n```"
+        issue_empty = _make_issue(
+            number=100, body=body_empty, labels=(StatusLabel.QUEUED,)
+        )
+        decision_empty = evaluate_claim_preflight(issue_empty)
+        assert decision_empty.allowed is True
+        assert decision_empty.reservation_kind == ReservationKind.REPOSITORY
+
+        body_omitted = "```yaml\nsubtask_id: test-task\n```"
+        issue_omitted = _make_issue(
+            number=100, body=body_omitted, labels=(StatusLabel.QUEUED,)
+        )
+        decision_omitted = evaluate_claim_preflight(issue_omitted)
+        assert decision_omitted.allowed is True
+        assert decision_omitted.reservation_kind == ReservationKind.REPOSITORY

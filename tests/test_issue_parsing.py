@@ -730,3 +730,66 @@ class TestModelTierFromBody:
         task = parse_task_from_issue(issue)
         assert task.model_tier is None
         assert task.yaml_error is False
+
+
+class TestFootprintParsing:
+    def test_parses_and_normalizes_valid_footprint(self):
+        from orchestune.issue_parsing import parse_task_from_issue
+        from orchestune.models import IssueRecord
+
+        body = (
+            "```yaml\n"
+            "subtask_id: task-a\n"
+            "footprint:\n"
+            "  - ./src/core.py\n"
+            "  - src\\utils.py\n"
+            "  - src/core.py\n"
+            "```\n"
+        )
+        issue = IssueRecord(1, "title", body, (), "2026-01-01T00:00:00Z")
+        task = parse_task_from_issue(issue)
+        assert task.footprint == ("src/core.py", "src/utils.py")
+        assert task.footprint_error is None
+        assert task.yaml_error is False
+
+    def test_invalid_footprint_string_sets_footprint_error_and_preserves_other_fields(
+        self,
+    ):
+        from orchestune.issue_parsing import parse_task_from_issue
+        from orchestune.models import IssueRecord
+
+        body = (
+            "```yaml\n"
+            "subtask_id: task-a\n"
+            "footprint: src/new.py\n"
+            "depends_on:\n"
+            "  - task-b\n"
+            "execution_profile: deep-reasoning\n"
+            "```\n"
+        )
+        issue = IssueRecord(1, "title", body, (), "2026-01-01T00:00:00Z")
+        task = parse_task_from_issue(issue)
+        assert task.footprint == ()
+        assert task.footprint_error is not None
+        assert "must be a list" in task.footprint_error
+        assert task.yaml_error is False
+        assert task.subtask_id == "task-a"
+        assert task.depends_on == ("task-b",)
+        assert task.execution_profile == "deep-reasoning"
+
+    def test_invalid_footprint_path_sets_footprint_error(self):
+        from orchestune.issue_parsing import parse_task_from_issue
+        from orchestune.models import IssueRecord
+
+        for bad_path in ("/abs/path.py", "../escape.py", "C:\\win.py"):
+            body = (
+                "```yaml\n"
+                "subtask_id: task-a\n"
+                f"footprint: ['{bad_path}']\n"
+                "```\n"
+            )
+            issue = IssueRecord(1, "title", body, (), "2026-01-01T00:00:00Z")
+            task = parse_task_from_issue(issue)
+            assert task.footprint == ()
+            assert task.footprint_error is not None
+            assert task.yaml_error is False

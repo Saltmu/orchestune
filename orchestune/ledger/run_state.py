@@ -10,6 +10,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from orchestune.dag.models import canonicalize_footprint
 from orchestune.infra.json_state import read_json_with_recovery, write_json_atomic
 from orchestune.infra.process_utils import assert_run_state_lock_held
 from orchestune.models import Usage
@@ -398,7 +399,7 @@ def _build_active_worktree(
         worktree_path=worktree_path,
         pid=pid,
         started_at=_parse_optional_finite_float(started_at),
-        declared_footprint=tuple(
+        declared_footprint=canonicalize_footprint(
             item for item in declared_footprint if isinstance(item, str)
         ),
         recompute_count=value.get("recompute_count", 0),

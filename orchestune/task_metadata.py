@@ -41,6 +41,8 @@ class TaskMetadata(Protocol):
     @property
     def yaml_error(self) -> bool: ...
     @property
+    def footprint_error(self) -> str | None: ...
+    @property
     def parent_number(self) -> int | None: ...
     @property
     def issue_state(self) -> str: ...
@@ -70,6 +72,7 @@ class CycleTask:
     status_labels: tuple[str, ...]
     created_at: str
     yaml_error: bool = False
+    footprint_error: str | None = None
     parent_number: int | None = None
     issue_state: str = "OPEN"
     parent_state: str | None = None
@@ -92,6 +95,7 @@ class CycleTask:
             status_labels=tuple(task.status_labels),
             created_at=task.created_at,
             yaml_error=task.yaml_error,
+            footprint_error=task.footprint_error,
             parent_number=task.parent_number,
             issue_state=task.issue_state,
             parent_state=task.parent_state,
@@ -125,6 +129,7 @@ def task_metadata_to_dict(task: TaskMetadata) -> dict[str, object]:
         "status_labels": task.status_labels,
         "created_at": task.created_at,
         "yaml_error": task.yaml_error,
+        "footprint_error": task.footprint_error,
         "parent_number": task.parent_number,
         "issue_state": task.issue_state,
         "parent_state": task.parent_state,
