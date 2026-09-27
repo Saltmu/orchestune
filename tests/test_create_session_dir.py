@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,9 +18,31 @@ SESSION_DIR_PATTERN = re.compile(
 )
 
 
+def _run_sh(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    if sys.platform == "win32":
+        bash = shutil.which("bash")
+        if bash is None:
+            pytest.skip("bash is not available on Windows")
+        cmd = [bash, str(SCRIPT_SH), *args]
+    else:
+        cmd = [str(SCRIPT_SH), *args]
+    return subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def _find_powershell() -> str | None:
+    return shutil.which("pwsh") or shutil.which("powershell")
+
+
 def test_script_sh_exists_and_executable():
     assert SCRIPT_SH.is_file(), f"{SCRIPT_SH} does not exist"
-    assert os.access(SCRIPT_SH, os.X_OK), f"{SCRIPT_SH} is not executable"
+    if sys.platform != "win32":
+        assert os.access(SCRIPT_SH, os.X_OK), f"{SCRIPT_SH} is not executable"
 
 
 def test_script_ps1_exists():
@@ -27,13 +50,7 @@ def test_script_ps1_exists():
 
 
 def test_create_session_dir_default(tmp_path: Path):
-    result = subprocess.run(
-        [str(SCRIPT_SH)],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_sh(cwd=tmp_path)
     output = result.stdout.strip()
     match = SESSION_DIR_PATTERN.match(output)
     assert match is not None, f"Output '{output}' does not match pattern"
@@ -45,13 +62,7 @@ def test_create_session_dir_default(tmp_path: Path):
 
 
 def test_create_session_dir_custom_prefix_and_task(tmp_path: Path):
-    result = subprocess.run(
-        [str(SCRIPT_SH), "planning", "1084"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_sh("planning", "1084", cwd=tmp_path)
     output = result.stdout.strip()
     match = SESSION_DIR_PATTERN.match(output)
     assert match is not None, f"Output '{output}' does not match pattern"
@@ -63,13 +74,7 @@ def test_create_session_dir_custom_prefix_and_task(tmp_path: Path):
 
 
 def test_create_session_dir_custom_prefix_only(tmp_path: Path):
-    result = subprocess.run(
-        [str(SCRIPT_SH), "decomposition"],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_sh("decomposition", cwd=tmp_path)
     output = result.stdout.strip()
     match = SESSION_DIR_PATTERN.match(output)
     assert match is not None, f"Output '{output}' does not match pattern"
@@ -83,13 +88,7 @@ def test_create_session_dir_custom_prefix_only(tmp_path: Path):
 def test_create_session_dir_uniqueness_across_consecutive_calls(tmp_path: Path):
     dirs = set()
     for _ in range(5):
-        result = subprocess.run(
-            [str(SCRIPT_SH), "task", "rapid"],
-            cwd=tmp_path,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        result = _run_sh("task", "rapid", cwd=tmp_path)
         output = result.stdout.strip()
         dirs.add(output)
     # Even if executed within the same second, random suffix ensures distinct dirs
@@ -103,10 +102,14 @@ def test_create_session_dir_ps1_content():
     assert ".orchestune/tmp" in content.replace("\\", "/")
 
 
-@pytest.mark.skipif(shutil.which("pwsh") is None, reason="pwsh is not installed")
+@pytest.mark.skipif(
+    _find_powershell() is None, reason="powershell/pwsh is not installed"
+)
 def test_create_session_dir_ps1_execution(tmp_path: Path):
+    ps = _find_powershell()
+    assert ps is not None
     result = subprocess.run(
-        ["pwsh", "-NoProfile", "-File", str(SCRIPT_PS1), "planning", "1084"],
+        [ps, "-NoProfile", "-File", str(SCRIPT_PS1), "planning", "1084"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
