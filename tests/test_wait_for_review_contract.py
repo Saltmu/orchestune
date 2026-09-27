@@ -894,6 +894,28 @@ def test_offline_unenumerated_incomplete_status_is_also_not_exit_0(tmp_path):
     assert exc.value.code == EXIT_NO_RESULT
 
 
+def test_offline_sparse_completeness_treats_omitted_sections_as_incomplete(tmp_path):
+    """A caller-supplied completeness dict that omits a required section must
+    not be read as an implicit "complete" for that section -- an omitted
+    section is indistinguishable from one fetched empty (Codex PR #1114
+    round 3 finding)."""
+    from scripts.wait_for_review import EXIT_NO_RESULT, main
+
+    state = _jev_state()
+    # Only declares `reviews`; `issue_comments`/`inline_comments` are omitted.
+    state["completeness"] = {"reviews": "complete"}
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with (
+        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        pytest.raises(SystemExit) as exc,
+    ):
+        main()
+
+    assert exc.value.code == EXIT_NO_RESULT
+
+
 def test_offline_unknown_completeness_still_exits_acquired(tmp_path):
     """The default "unknown" completeness (no metadata supplied) must keep
     working for legacy callers -- only an *explicit* incomplete declaration

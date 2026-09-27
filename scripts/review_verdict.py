@@ -222,6 +222,7 @@ def _normalize_inline_item(item: dict[str, Any], provenance: str) -> dict[str, A
                 "original_commit_id",
                 "original_line",
                 "context",
+                "pull_request_review_id",
             )
             if key in item
         },
@@ -242,6 +243,25 @@ def _classify_provenance(created: str, round_started_at: str) -> str:
     if not created:
         return "unassociated"
     return "current" if created >= round_started_at else "historical"
+
+
+def _classify_inline_provenance(
+    item: dict[str, Any],
+    round_started_at: str,
+    review_provenance_by_id: dict[Any, str],
+) -> str:
+    """Prefer the parent review's confirmed provenance over the comment's own
+    timestamp when both are known: an inline comment's `pull_request_review_id`
+    proves which review it belongs to, so a comment attached to a *historical*
+    review must not be promoted to `current` just because it (or a later edit)
+    carries a recent timestamp; a review id that is present but not found among
+    this snapshot's review items cannot be confirmed either way (Codex PR #1114
+    round 3 finding).
+    """
+    review_id = item.get("pull_request_review_id")
+    if review_id is not None:
+        return review_provenance_by_id.get(review_id, "unassociated")
+    return _classify_provenance(_get_item_created_timestamp(item), round_started_at)
 
 
 def extract_review_result(
@@ -272,6 +292,11 @@ def extract_review_result(
         data["inline_comments"], bot_name, exclude_ids
     )
 
+    # Execution telemetry -- a "job finished" tracker or a body that is still
+    # explicitly reporting in-progress -- is not review content, even when it
+    # happens to be the most recent item in the round (Codex PR #1114 round 3
+    # finding: an older in-progress body left over once a "finished" tracker
+    # arrives with no summary must not be read as a completed review).
     review_items = [
         _normalize_review_item(
             item,
@@ -282,11 +307,21 @@ def extract_review_result(
             review_candidates, key=lambda pair: _get_item_timestamp(pair[0])
         )
         if not _is_finished_progress_tracker(item, bot_name)
+        and not _is_explicitly_in_progress(item)
     ]
+    # Only "review" items (not issue_comments) share an id namespace with
+    # inline comments' `pull_request_review_id`.
+    review_provenance_by_id = {
+        item["id"]: item["provenance"]
+        for item in review_items
+        if item["kind"] == "review" and item["id"] is not None
+    }
     inline_items = [
         _normalize_inline_item(
             item,
-            _classify_provenance(_get_item_created_timestamp(item), round_started_at),
+            _classify_inline_provenance(
+                item, round_started_at, review_provenance_by_id
+            ),
         )
         for item in sorted(inline_candidates, key=_get_item_timestamp)
     ]

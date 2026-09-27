@@ -197,6 +197,96 @@ def test_extract_review_result_returns_none_when_only_historical_content_exists(
     assert result is None
 
 
+def test_extract_review_result_returns_none_for_leftover_in_progress_body_after_finished_tracker():
+    """A "finished" tracker with no summary, arriving after an unresolved
+    in-progress body, must not let that stale in-progress text be read as
+    completed review content (Codex PR #1114 round 3 finding)."""
+    state = normalize_review_state(
+        {
+            "issue_comments": [
+                {
+                    "id": 1,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T10:00:00Z",
+                    "body": "### Review in progress\n- [ ] Working...",
+                },
+                {
+                    "id": 2,
+                    "user": {"login": "claude[bot]"},
+                    "created_at": "2026-08-20T10:05:00Z",
+                    "body": "**Claude finished**\nView job run here",
+                },
+            ],
+        }
+    )
+
+    assert extract_review_result(state, "claude") is None
+
+
+def test_extract_review_result_prefers_confirmed_review_id_over_own_timestamp():
+    """An inline comment's `pull_request_review_id` proves which review it
+    belongs to; a comment attached to a historical review must stay
+    historical even if its own timestamp looks current (Codex PR #1114
+    round 3 finding)."""
+    state = normalize_review_state(
+        {
+            "reviews": [
+                {
+                    "id": 900,
+                    "user": {"login": "claude[bot]"},
+                    "submitted_at": "2026-08-20T09:00:00Z",
+                    "body": "old round findings",
+                },
+                {
+                    "id": 901,
+                    "user": {"login": "claude[bot]"},
+                    "submitted_at": "2026-08-20T10:00:00Z",
+                    "body": "new round findings",
+                },
+            ],
+            "inline_comments": [
+                {
+                    "id": 5,
+                    "user": {"login": "claude[bot]"},
+                    "path": "a.py",
+                    "line": 1,
+                    "body": "belongs to the old review despite a recent timestamp",
+                    "created_at": "2026-08-20T10:01:00Z",
+                    "pull_request_review_id": 900,
+                },
+                {
+                    "id": 6,
+                    "user": {"login": "claude[bot]"},
+                    "path": "b.py",
+                    "line": 2,
+                    "body": "belongs to the new review",
+                    "created_at": "2026-08-20T10:01:00Z",
+                    "pull_request_review_id": 901,
+                },
+                {
+                    "id": 7,
+                    "user": {"login": "claude[bot]"},
+                    "path": "c.py",
+                    "line": 3,
+                    "body": "references a review id absent from this snapshot",
+                    "created_at": "2026-08-20T10:01:00Z",
+                    "pull_request_review_id": 999,
+                },
+            ],
+        }
+    )
+
+    result = extract_review_result(
+        state, "claude", round_started_at="2026-08-20T09:30:00Z"
+    )
+
+    assert result is not None
+    by_id = {item["id"]: item for item in result["inline_comments"]}
+    assert by_id[5]["provenance"] == "historical"
+    assert by_id[6]["provenance"] == "current"
+    assert by_id[7]["provenance"] == "unassociated"
+
+
 def test_extract_review_result_excludes_finished_progress_tracker_from_review_items():
     state = normalize_review_state(
         {

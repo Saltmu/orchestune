@@ -71,6 +71,8 @@ EXIT_STALLED = 21  # In-progress tracker comment stopped changing; job likely en
 
 GH_COMMAND_TIMEOUT_SECONDS = 30
 
+_COMPLETENESS_SECTIONS = ("issue_comments", "reviews", "inline_comments")
+
 # How long a bot's own "in progress" tracker comment may report the same
 # unchanged content before it is treated as stalled rather than merely slow.
 # A live job keeps editing that same comment (ticking off checklist items) as
@@ -977,15 +979,20 @@ def main() -> None:
             state_completeness = (
                 state.get("completeness") if isinstance(state, dict) else None
             )
-            completeness = (
-                state_completeness
-                if isinstance(state_completeness, dict)
-                else {
-                    "issue_comments": "unknown",
-                    "reviews": "unknown",
-                    "inline_comments": "unknown",
+            # A section omitted from a caller-supplied completeness dict is
+            # not distinguishable from a section that was silently fetched
+            # empty: treat a missing required key the same as an explicit
+            # non-"complete" value, not as an implicit "complete" (Codex PR
+            # #1114 round 3 finding). Only when the caller supplies no
+            # completeness object at all (legacy input) do all three sections
+            # default to "unknown" without downgrading acquisition_status.
+            if isinstance(state_completeness, dict):
+                completeness = {
+                    section: state_completeness.get(section, "unknown")
+                    for section in _COMPLETENESS_SECTIONS
                 }
-            )
+            else:
+                completeness = dict.fromkeys(_COMPLETENESS_SECTIONS, "unknown")
             result.update(
                 repository=None,
                 pr_number=args.pr,
@@ -1003,11 +1010,12 @@ def main() -> None:
             )
             # A caller-supplied completeness dict is a positive declaration:
             # any value other than "complete" (not just the enumerated
-            # missing/error/truncated spellings, e.g. "partial") means the
+            # missing/error/truncated spellings, e.g. "partial", and not an
+            # omitted required key, normalized to "unknown" above) means the
             # adapter itself isn't vouching for a full fetch. Only the
-            # *absence* of a completeness key (state_completeness is None,
-            # defaulted to "unknown" above) keeps legacy input working
-            # (Codex PR #1114 round 2 finding).
+            # *absence* of a completeness key at all (state_completeness is
+            # None) keeps legacy input working (Codex PR #1114 round 2/3
+            # findings).
             incomplete_sections = (
                 [
                     section
