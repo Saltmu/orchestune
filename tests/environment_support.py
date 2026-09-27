@@ -14,13 +14,20 @@ def _isolate_git_env(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_jev_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Require tests to opt into Jev instead of using real session credentials."""
+def _isolate_jev_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Require tests to opt into Jev instead of using real session credentials,
+
+    and isolate Jev log output to a temporary directory by default.
+    """
     for name in (
         "JEV_API_KEY",
         "JEV_BASE_URL",
         "JEV_API_URL",
         "JEV_THRESHOLD",
-        "JEV_LOG_PATH",
     ):
         monkeypatch.delenv(name, raising=False)
+
+    tmp_jev_log = tmp_path_factory.mktemp("jev_isolated") / "evaluations.jsonl"
+    monkeypatch.setenv("JEV_LOG_PATH", str(tmp_jev_log))

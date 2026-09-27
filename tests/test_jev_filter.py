@@ -624,6 +624,27 @@ class TestJevLogPersistence:
     def test_default_jev_log_path(self) -> None:
         assert DEFAULT_JEV_LOG_PATH == ".orchestune/jev/evaluations.jsonl"
 
+    def test_filter_falls_back_to_default_log_path_when_env_var_unset(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("JEV_LOG_PATH", raising=False)
+        default_target = tmp_path / "default_evals.jsonl"
+        monkeypatch.setattr(
+            "scripts.jev_filter.DEFAULT_JEV_LOG_PATH", str(default_target)
+        )
+
+        response = MagicMock()
+        response.read.return_value = json.dumps(_api_response(0.9, "HIGH")).encode()
+        response.__enter__.return_value = response
+
+        finding = {"body": "Defect", "path": "a.py", "line": 1}
+        with patch("urllib.request.urlopen", return_value=response):
+            filter_review_findings([finding], api_key="test-key")
+
+        assert default_target.exists()
+        lines = default_target.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 1
+
     def test_filter_persists_evaluation_to_specified_log_path(
         self, tmp_path: Path
     ) -> None:
