@@ -1,6 +1,38 @@
 """Package boundaries for the shared execution ledger."""
 
-from test_architecture import PACKAGE_ROOT, _import_graph
+import pytest
+import test_architecture as architecture
+from architecture_test_support import PACKAGE_ROOT, _import_graph
+
+
+@pytest.mark.parametrize(
+    "source", ["ledger", "ledger.run_state", "ledger.nested.state"]
+)
+@pytest.mark.parametrize(
+    "dependency", ["issue_parsing", "claim.service", "cli", "ledger_extra"]
+)
+def test_ledger_boundary_rejects_other_l2_and_higher_modules(
+    monkeypatch: pytest.MonkeyPatch, source: str, dependency: str
+) -> None:
+    graph = {source: {dependency}}
+    layers = {**architecture._module_layer(), "ledger_extra": 2}
+    monkeypatch.setattr(architecture, "_import_graph", lambda: graph)
+    monkeypatch.setattr(architecture, "_module_layer", lambda: layers)
+    with pytest.raises(AssertionError, match=f"{source} -> {dependency}"):
+        architecture.test_ledger_dependencies_stay_within_boundary()
+
+
+def test_ledger_boundary_allows_internal_l0_and_l1_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = {
+        "ledger": {"ledger.run_state"},
+        "ledger.escalation": {"ledger.status_labels", "forge", "labels"},
+        "ledger.run_state": {"ownership_contracts", "infra.process_utils"},
+        "ledger_extra": {"claim.service"},
+    }
+    monkeypatch.setattr(architecture, "_import_graph", lambda: graph)
+    architecture.test_ledger_dependencies_stay_within_boundary()
 
 
 def test_state_and_label_modules_are_owned_by_ledger() -> None:

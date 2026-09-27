@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import ast
 
-from test_architecture import (
+from architecture_test_support import (
     PACKAGE_NAME,
     PACKAGE_ROOT,
-    _collect_dict_assignments,
     _cycle_members,
     _internal_imports,
     _module_name,
@@ -16,6 +15,7 @@ from test_architecture import (
     _relative_import_name,
     _top_level_package,
 )
+from test_architecture import _collect_dict_assignments
 
 
 def test_collect_dict_assignments_captures_annotated_assignments() -> None:
