@@ -7,6 +7,8 @@ import json
 from dataclasses import dataclass
 
 from orchestune.dag.models import SubTask
+
+# Re-exported for backward compatibility; canonical footprint target is orchestune.plan_identity (see #1087).
 from orchestune.plan_identity import PlanGeneration, PlanRevision
 
 
