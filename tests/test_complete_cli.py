@@ -62,6 +62,37 @@ def test_cli_returns_service_failure_exit_code() -> None:
     assert exit_code == int(failed.failure.exit_code)
 
 
+def test_cli_displays_resumable_completion_id_and_reached_stage(capsys) -> None:
+    from orchestune.complete.cli import main
+    from orchestune.complete.contracts import (
+        CompleteFailure,
+        CompleteFailureReason,
+        CompleteStage,
+    )
+
+    failed = CompleteResult.failure_result(
+        1003,
+        "done",
+        CompleteStage.OUTCOME_POSTED,
+        CompleteFailure(
+            CompleteFailureReason.LABEL_CONFLICT,
+            "A protected status label prevents completion.",
+            issue_number=1003,
+        ),
+        completion_id="completion-1003",
+    )
+    with (
+        patch("orchestune.complete.cli._credentials", return_value=(None, None, None)),
+        patch("orchestune.complete.cli.complete_task", return_value=failed),
+    ):
+        exit_code = main(["--issue", "1003", "--pr", "42", "--result", "done"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 55
+    assert "completion-1003" in output
+    assert "outcome_posted" in output
+
+
 def test_help_keeps_argparse_success_exit_code() -> None:
     from orchestune.complete.cli import main
 
