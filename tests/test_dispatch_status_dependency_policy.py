@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     AssessedDependency,
     DependencyAssessment,
     DependencyState,
 )
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     REASON_MISSING,
     UnresolvedDependency,
 )

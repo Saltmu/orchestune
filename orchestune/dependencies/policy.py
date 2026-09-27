@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     DependencyAssessment,
     DependencyState,
 )

@@ -20,13 +20,13 @@ from orchestune.consistency.invariants.status import (
     primary_status_labels,
 )
 from orchestune.dag.models import SubTask
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     DependencyAssessment,
 )
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     assess_dependencies as assess_dependency_lifecycle,
 )
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     TaskDependencies,
     build_legacy_dag_inputs,
 )

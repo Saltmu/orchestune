@@ -55,7 +55,7 @@ def _subtasks_by_id(
 
     `depends_on`やfootprintの**値**までは検証しない——それは変換のやり直しであり、
     `derived_inputs`を受け取る意味自体が失われる。値の導出責務は呼び出し側
-    （`dependency_resolution.build_legacy_dag_inputs`）に残す。
+    （`dependencies.resolution.build_legacy_dag_inputs`）に残す。
     """
     named_tasks = [task for task in tasks if task.subtask_id]
     by_identity: dict[tuple[int | None, str], SubTask] = {}

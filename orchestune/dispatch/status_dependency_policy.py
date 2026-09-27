@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     DependencyAssessment,
     DependencyState,
 )

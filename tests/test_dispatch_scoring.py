@@ -253,7 +253,7 @@ class TestParseTaskFromIssue:
     def test_native_blocked_by_is_kept_as_issue_numbers(self):
         """#799: ネイティブ`blocked_by`はIssue番号のまま`native_depends_on`に
         保持し、本文の`depends_on`（subtask_id文字列）とは混ぜない
-        （依存解決は`orchestune.dispatch.dependency_resolution`が担う）。
+        （依存解決は`orchestune.dependencies.resolution`が担う）。
         """
         issue = IssueRecord(
             number=11,

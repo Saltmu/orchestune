@@ -25,6 +25,7 @@ from orchestune.consistency.supervisor import (
     RepairDisposition,
     consistency_cycle_to_dict,
 )
+from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import (
     _run_recovery_bookkeeping_boundary,
@@ -33,7 +34,6 @@ from orchestune.dispatch.cycle import (
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.cycle_report import CycleReport
-from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase_gc import run_gc_phase
 from orchestune.dispatch.rules import CycleContext

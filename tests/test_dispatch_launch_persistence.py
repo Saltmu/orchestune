@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
+from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.ledger.run_state import ActiveWorktree, CompletedWorktree, RunState

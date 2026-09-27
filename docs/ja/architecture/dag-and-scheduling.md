@@ -187,16 +187,16 @@ graph LR
 
 Dispatcherの実行時依存評価は、次の3層を混ぜずに順番に適用します。
 
-1. **Identity Resolution** (`dependency_resolution`): Issue本文の`depends_on`と
+1. **Identity Resolution** (`dependencies.resolution`): Issue本文の`depends_on`と
    native `blocked_by`を依存先Issue番号へ解決します。本文の`subtask_id`は親Issueで
    scopeし、missing、ambiguous、unknown-parentを`unresolved`診断として保持します。
    未解決依存を「依存なし」へ変換しません。raw `Task`はこの宣言境界だけで扱い、
    consumerへ公開するfrozen `CycleTask`にはraw依存宣言を含めません。
-2. **Lifecycle Assessment** (`dependency_assessment`): 解決済みIssueを
+2. **Lifecycle Assessment** (`dependencies.assessment`): 解決済みIssueを
    `COMPLETED > CHANGES_REQUESTED > CI_PASSED_UNMERGED > WAITING`の優先順位で
    一度だけ分類します。`CI_PASSED_UNMERGED`は観測事実であってstack許可ではなく、
    解決済み分類と未解決依存（unresolved dependency）の診断は別に保持します。
-3. **Use-case Policy** (`dependency_policy`): launch、rebase、base recoveryなどの
+3. **Use-case Policy** (`dependencies.policy`): launch、rebase、base recoveryなどの
    用途が同じAssessmentから安全なtargetを決定します。IdentityやLifecycleの意味を
    各consumerで再実装せず、判断不能時はfail-closedにします。
 

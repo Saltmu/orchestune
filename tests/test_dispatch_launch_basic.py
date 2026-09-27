@@ -3,8 +3,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from orchestune.branch_naming import build_task_branch_name, parse_task_branch_name
+from orchestune.dependencies.resolution import resolve_all_dependencies
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.dependency_resolution import resolve_all_dependencies
 from orchestune.dispatch.launch import (
     TaskLaunchPlan,
     _decide_duplicate_candidates,

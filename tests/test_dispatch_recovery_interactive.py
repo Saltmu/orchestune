@@ -8,9 +8,9 @@ from orchestune.consistency.repairs.execution import (
     COMMAND_BOOKKEEPING,
     COMMAND_REQUEUE,
 )
+from orchestune.dependencies.resolution import EMPTY_DEPENDENCIES
 from orchestune.dispatch.attempt_record import LaunchAttempt
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.dependency_resolution import EMPTY_DEPENDENCIES
 from orchestune.dispatch.recovery import (
     RecoveryBookkeepingSnapshot,
     _build_restored_active_worktree,

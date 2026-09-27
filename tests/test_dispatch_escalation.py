@@ -1,12 +1,12 @@
 import tempfile
 from pathlib import Path
 
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     AssessedDependency,
     DependencyAssessment,
     DependencyState,
 )
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     UnresolvedDependency,
     resolve_all_dependencies,
 )

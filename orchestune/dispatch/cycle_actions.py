@@ -21,6 +21,8 @@ from orchestune.consistency.repairs.execution import (
     COMMAND_REQUEUE,
 )
 from orchestune.dag.models import SubTask
+from orchestune.dependencies.assessment import DependencyAssessment
+from orchestune.dependencies.policy import DependencyPolicyView
 from orchestune.dispatch.actor_verification import (
     _apply_actor_verification,
     _decide_actor_verification,
@@ -40,8 +42,6 @@ from orchestune.dispatch.cycle_context import (
 )
 from orchestune.dispatch.cycle_context_state import RecordStatus
 from orchestune.dispatch.cycle_records import _on_status_transition_verified
-from orchestune.dispatch.dependency_assessment import DependencyAssessment
-from orchestune.dispatch.dependency_policy import DependencyPolicyView
 from orchestune.dispatch.escalation import _rule_changes_requested
 from orchestune.dispatch.execution_repair import DispatchRepairExecutorAdapter
 from orchestune.dispatch.filters import _filter_candidates_for_forced_serial

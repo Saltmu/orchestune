@@ -9,16 +9,16 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     DependencyAssessment,
     assess_dependencies,
 )
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     REASON_AMBIGUOUS,
     TaskDependencies,
     UnresolvedDependency,
 )
+from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.reconciliation import (
     BaseBranchRedRecoveryDecision,
     _apply_base_branch_red_recovery,

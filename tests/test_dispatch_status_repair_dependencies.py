@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.dependency_assessment import DependencyState
-from orchestune.dispatch.dependency_resolution import REASON_MISSING
+from orchestune.dependencies.assessment import DependencyState
+from orchestune.dependencies.resolution import REASON_MISSING
 from orchestune.dispatch.status_dependency_policy import dependencies_completed
 from orchestune.dispatch.status_repair_dependencies import (
     evaluate_fresh_dependencies,

@@ -8,7 +8,7 @@ from dataclasses import replace
 from orchestune.dag.graph import build_dag
 from orchestune.dag.models import SubTask
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
-from orchestune.dispatch.dependency_resolution import legacy_merged_depends_on
+from orchestune.dependencies.resolution import legacy_merged_depends_on
 from orchestune.forge import Forge, GitHubForge
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,

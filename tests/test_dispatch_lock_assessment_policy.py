@@ -13,12 +13,12 @@ import inspect
 from dataclasses import dataclass, field
 
 from orchestune.branch_naming import build_task_branch_name
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     AssessedDependency,
     DependencyAssessment,
     DependencyState,
 )
-from orchestune.dispatch.dependency_resolution import UnresolvedDependency
+from orchestune.dependencies.resolution import UnresolvedDependency
 from orchestune.dispatch.locks import (
     _direct_dependency_canonical_branches,
     scan_external_locks,

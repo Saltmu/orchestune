@@ -9,18 +9,18 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from orchestune.dispatch.cycle_action_contracts import StackBase
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     DependencyAssessment,
     DependencyState,
 )
-from orchestune.dispatch.dependency_policy import (
+from orchestune.dependencies.policy import (
     DependencyPolicyView,
     StackDecision,
 )
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     describe_unresolved_dependency,
 )
+from orchestune.dispatch.cycle_action_contracts import StackBase
 from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
     resolve_task_execution_selection,

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from orchestune.branch_naming import build_task_branch_name
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     DependencyAssessment,
     DependencyState,
 )

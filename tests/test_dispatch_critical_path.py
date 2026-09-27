@@ -1,5 +1,6 @@
 """#660: Precedence DAG由来のスケジューリングrank（bottom level / 解放数）のテスト。"""
 
+from orchestune.dependencies.resolution import build_legacy_dag_inputs
 from orchestune.dispatch.critical_path import (
     MAX_TRANSITIVE_CLOSURE_NODES,
     pending_tasks,
@@ -7,7 +8,6 @@ from orchestune.dispatch.critical_path import (
 from orchestune.dispatch.critical_path import (
     compute_precedence_ranks as _compute_precedence_ranks,
 )
-from orchestune.dispatch.dependency_resolution import build_legacy_dag_inputs
 from orchestune.models import Task
 
 

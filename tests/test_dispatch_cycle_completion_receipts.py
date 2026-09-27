@@ -15,10 +15,10 @@ from unittest.mock import patch
 
 import pytest
 
+from orchestune.dependencies.assessment import DependencyState
+from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.cycle_context_state import RecordStatus
 from orchestune.dispatch.cycle_records import CompletionReceipt
-from orchestune.dispatch.dependency_assessment import DependencyState
-from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.gc import _record_completed_worktree
 from tests.dispatch_gc_test_support import _active, _task
 from tests.dispatch_gc_test_support import _rule_ctx as _ctx

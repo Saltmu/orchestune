@@ -5,12 +5,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.dependency_assessment import (
+from orchestune.dependencies.assessment import (
     AssessedDependency,
     DependencyAssessment,
     DependencyState,
 )
+from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.launch import _is_task_stack_eligible
 from orchestune.dispatch.rebase import _decide_rebase_target
 from orchestune.dispatch.reconciliation import _resolve_base_branch_for_task

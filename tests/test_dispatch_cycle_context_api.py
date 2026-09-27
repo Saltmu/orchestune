@@ -17,8 +17,8 @@ from __future__ import annotations
 
 import pytest
 
-from orchestune.dispatch.dependency_assessment import DependencyState
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.assessment import DependencyState
+from orchestune.dependencies.resolution import (
     REASON_MISSING,
     TaskDependencies,
     UnresolvedDependency,

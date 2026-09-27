@@ -188,19 +188,19 @@ Ordinary `import` bindings are not collected. As an exception, the checker adds 
 The dispatcher applies three runtime dependency layers in order without merging
 their responsibilities:
 
-1. **Identity Resolution** (`dependency_resolution`) resolves body `depends_on`
+1. **Identity Resolution** (`dependencies.resolution`) resolves body `depends_on`
    and native `blocked_by` declarations to dependency Issue numbers. Body
    `subtask_id` values are scoped by parent Issue; missing, ambiguous, and
    unknown-parent cases remain `unresolved` diagnostics. An unresolved dependency
    never becomes “no dependency.” Raw `Task` declarations stay inside this identity
    boundary, while the frozen `CycleTask` exposed to consumers contains no raw
    dependency declarations.
-2. **Lifecycle Assessment** (`dependency_assessment`) classifies resolved Issues
+2. **Lifecycle Assessment** (`dependencies.assessment`) classifies resolved Issues
    once in the priority order
    `COMPLETED > CHANGES_REQUESTED > CI_PASSED_UNMERGED > WAITING`.
    `CI_PASSED_UNMERGED` is an observed fact, not stack permission. Resolved
    classifications and unresolved dependency diagnostics remain separate.
-3. **Use-case Policy** (`dependency_policy`) lets launch, rebase, base recovery,
+3. **Use-case Policy** (`dependencies.policy`) lets launch, rebase, base recovery,
    and other consumers select a safe target from the same assessment. Consumers
    do not reimplement Identity or Lifecycle meaning, and uncertainty fails closed.
 

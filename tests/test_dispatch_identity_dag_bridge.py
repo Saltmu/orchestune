@@ -8,13 +8,13 @@ import inspect
 import pytest
 
 from orchestune.dag.models import SubTask
-from orchestune.dispatch.conflicts import build_task_conflict_graph
-from orchestune.dispatch.critical_path import compute_precedence_ranks
-from orchestune.dispatch.dependency_resolution import (
+from orchestune.dependencies.resolution import (
     DependencyDeclarations,
     build_legacy_dag_inputs,
     legacy_merged_depends_on,
 )
+from orchestune.dispatch.conflicts import build_task_conflict_graph
+from orchestune.dispatch.critical_path import compute_precedence_ranks
 from orchestune.dispatch.rules import CycleContext
 from orchestune.ledger.run_state import RunState
 from orchestune.models import Task

@@ -13,9 +13,9 @@ from typing import Protocol
 from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.consistency.supervisor import ConsistencyCycleReport
 from orchestune.dag.models import SubTask
+from orchestune.dependencies.assessment import DependencyAssessment
+from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.cycle_context_state import LaunchFact, RecordResult
-from orchestune.dispatch.dependency_assessment import DependencyAssessment
-from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.ledger.run_state import ActiveWorktree
