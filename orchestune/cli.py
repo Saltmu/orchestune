@@ -3,29 +3,7 @@ import sys
 from orchestune.version import get_version
 
 
-def main() -> None:
-    if len(sys.argv) < 2:
-        print("Usage: orchestune <command> [<args>]")
-        print("Available commands:")
-        print("  dag       DAG validation tool")
-        print("  dispatch  Dispatcher/scheduler tool")
-        print("  status    Monitor dispatched agent sessions (--watch for live view)")
-        print("  setup     Setup skills symlinks for AI assistants")
-        print("  bootstrap Verify gh auth and ensure required GitHub labels exist")
-        print("  provision Provision GitHub Issues from decomposition_plan.md")
-        print("  replan    Preview or replace an unstarted decomposition generation")
-        print("  claim     Claim a task issue (--no-apply for a read-only preview)")
-        print("  complete  Complete a claimed task issue")
-        sys.exit(1)
-
-    cmd = sys.argv[1]
-
-    if cmd in {"--version", "-V"}:
-        print(f"orchestune {get_version()}")
-        return
-
-    sys.argv = [sys.argv[0]] + sys.argv[2:]
-
+def _dispatch_command(cmd: str) -> None:
     if cmd == "dag":
         from orchestune.dag.cli import main as dag_main
 
@@ -63,6 +41,38 @@ def main() -> None:
         from orchestune.complete.cli import main as complete_main
 
         sys.exit(complete_main())
+    elif cmd == "gc":
+        from orchestune.dispatch.gc_cli import main as gc_main
+
+        sys.exit(gc_main())
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        print("Usage: orchestune <command> [<args>]")
+        print("Available commands:")
+        print("  dag       DAG validation tool")
+        print("  dispatch  Dispatcher/scheduler tool")
+        print("  status    Monitor dispatched agent sessions (--watch for live view)")
+        print("  setup     Setup skills symlinks for AI assistants")
+        print("  bootstrap Verify gh auth and ensure required GitHub labels exist")
+        print("  provision Provision GitHub Issues from decomposition_plan.md")
+        print("  replan    Preview or replace an unstarted decomposition generation")
+        print("  claim     Claim a task issue (--no-apply for a read-only preview)")
+        print("  complete  Complete a claimed task issue")
+        print(
+            "  gc        Release handoff-ready task reservations (--no-apply to preview)"
+        )
+        sys.exit(1)
+
+    cmd = sys.argv[1]
+
+    if cmd in {"--version", "-V"}:
+        print(f"orchestune {get_version()}")
+        return
+
+    sys.argv = [sys.argv[0]] + sys.argv[2:]
+    _dispatch_command(cmd)

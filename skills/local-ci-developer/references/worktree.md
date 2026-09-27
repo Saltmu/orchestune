@@ -1,7 +1,9 @@
 # Task Claim and Worktree Preparation (Step 2.5)
 
+Before claim, follow [Initial Footprint](../SKILL.md#initial-footprint-before-issue-creation-or-claim) for new and existing Issues.
+
 If you are already inside the task worktree (e.g. launched directly into the
-task workspace), the task is already claimed—proceed directly to Step 2.6.
+task workspace), the task is already claimed—proceed directly to Step 2.6 to reconcile the declaration with the held reservation; editing the Issue does not change that reservation.
 
 Otherwise, from the repository root, claim the task issue before modifying
 source files to validate prerequisites, resolve the base branch, prepare an
@@ -48,5 +50,36 @@ If `orchestune claim` fails (non-zero exit code):
 For dispatcher-launched (`owner_kind=dispatch`) and claimed interactive
 (`owner_kind=interactive`) worktrees, run `orchestune complete` for the task
 outcome. It posts to the task Issue and preserves the worktree. Do not remove
-the worktree as part of completion; Orchestune's GC phase handles lifecycle
-transitions after handoff.
+the worktree as part of completion. The dispatch cycle handles dispatcher
+worktrees. For an interactive task after its PR is merged, run the local GC
+command from the primary checkout:
+
+```bash
+orchestune gc --no-apply
+orchestune gc
+```
+
+Review the preview before applying it. This command handles handoff-ready
+interactive reservations only; the dispatch cycle owns dispatch worktrees. It
+verifies the matching Outcome and merged PR for `done` tasks, and retains dirty
+worktrees for `blocked` and `not-needed` outcomes. It does not update GitHub or
+start a dispatch cycle.
+
+## Initial Footprint Procedure
+
+During Step 1, inspect the request and relevant files to list expected repository-relative file paths, including tests and docs, in the plan. This initial investigation precedes Issue creation and claim; Step 2.6 refines it inside the worktree.
+For a new Issue (Step 2), put that list in the Issue body's first fenced `yaml` block under `## Footprint`, as below. Prose or comments alone are not read by claim. Adapt the paths and metadata to the task:
+
+```yaml
+subtask_id: issue-footprint-declaration
+description: Declare planned files before claim
+footprint:
+  - skills/local-ci-developer/SKILL.md
+  - tests/test_skill_commands.py
+symbols: []
+depends_on: []
+```
+
+For an existing Issue, before Step 2.5 fetch its current body with the selected GitHub backend and check that this YAML is valid and `footprint` covers the expected changes with repository-relative file paths (including planned new files). Add or correct missing, stale, or invalid declarations in the body, preserving unrelated metadata and content, then re-fetch to verify before claim. Skipping Issue creation does not skip this check.
+If scope cannot be determined, record the concrete reason in the Issue body and plan and explicitly choose a **repository reservation** by omitting `footprint`; for example, “The failing subsystem is not yet identified; reserve the repository until investigation determines the affected files.” Do not use `footprint: []` to disguise unknown scope or claim a file-scoped reservation. Missing or empty footprints select a repository reservation.
+Editing an Issue body does not shrink or expand an already acquired reservation. For an already claimed task, proceed to Step 2.6 and reconcile the declaration with the held reservation; do not release other tasks' reservations or write outside the held scope. If additional files are needed beyond a file reservation, stop implementation and resolve ownership through the supported claim/completion workflow before continuing.

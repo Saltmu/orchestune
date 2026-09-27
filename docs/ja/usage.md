@@ -520,3 +520,22 @@ orchestune claim 123
 - **環境変数による上書き**: `ORCHESTUNE_CI_EVIDENCE_PATH` を指定することで、任意のファイルパスへ保存先を変更できます。
 - **権限分離とサンドボックス対応**: Git metadata directory（`.git` や `.git/worktrees/<name>`）が読み取り専用のサンドボックス環境やlinked worktreeであっても、worktree内が書き込み可能であれば証跡の無効化・保存・検証が正常に動作します。
 - **移行時の注意**: 旧バージョンで `.git` 配下に保存されていた古い証跡は新しい既定経路では再利用されません。移行後はローカルCI（`./scripts/local-ci.sh` または `.\scripts\local-ci.ps1`）を再実行して新たな証跡を生成してください。
+
+## 9. handoff-readyタスクのGC（`orchestune gc`）
+
+`orchestune complete` がOutcome Recordを記録し、対象PRがマージされた後、primary checkoutからGC専用コマンドを実行して予約を解放できます。親Issueなしの対話タスクにも使用できます。
+
+```bash
+orchestune gc --no-apply  # 判定を確認する（状態・worktree・lockは変更しない）
+orchestune gc             # 確認後に適用する
+```
+
+このコマンドはhandoff-readyな対話タスク（`owner_kind=interactive`）だけを調べます。dispatch所有のworktreeはdispatchサイクルが扱います。`done` は、台帳が指す同一OutcomeコメントとPRのマージ、およびPRのhead/baseとworktree所有者を確認できた場合に解放します。`blocked` または `not-needed` は同一Outcomeを確認できれば解放し、cleanなworktreeは削除します。dirtyなworktreeは保持し、done履歴やreceiptは作りません。Outcome、PR、所有者を確認できない場合は理由を表示して保留します。
+
+`--no-apply` は読み取り専用のプレビューです。applyモードもローカル台帳とworktreeのみを扱い、GitHubのIssue、ラベル、PR、コメント、branchやdispatchサイクルは変更しません。実行中のworktree自身を削除する必要がある場合は `current_worktree` で保留されるため、primary checkoutなど別の場所から再実行してください。
+
+| オプション | デフォルト | 説明 |
+| :--- | :--- | :--- |
+| `--no-apply` | 無効 | 変更せずに判定を表示する。 |
+| `--state <path>` | primary checkoutの `run_state.json` | 台帳パスを指定する。相対パスはprimary checkout基準。 |
+| `--timeout <seconds>` | `0` | 台帳とclaim lockの取得待ち秒数。負数・非有限値は引数エラー。 |
