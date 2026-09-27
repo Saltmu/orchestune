@@ -33,6 +33,9 @@ decomposition_plan.md
 # Orchestune claim owner tokens (never commit)
 .orchestune/claim-tokens/
 
+# Jev review evaluation logs (never commit)
+.orchestune/jev/
+
 # Code analysis tool local state: symbol index, LSP cache, memories (never commit)
 .serena/
 
