@@ -31,21 +31,16 @@ For documentation updates or typo fixes that do not alter code logic, **Steps 3â
 ## Session Scratch Directory
 
 Before an Issue/worktree exists, create a repository-local, Git-ignored planning
-directory for the approval draft:
-
-```text
-.orchestune/tmp/planning-<task>-<UTC timestamp>-<random>/
-```
-
-Use UTC `YYYYMMDDTHHMMSSZ` and a UUID or equivalent unpredictable `<random>`
-component; `<planning-session-dir>` means this pre-claim directory. After Step 2.5
-enters the task worktree, create a new worktree-local directory named
-`.orchestune/tmp/task-<issue>-<UTC timestamp>-<random>/`, migrate the approved
-`implementation-plan.md` into it, and use that explicit `<session-dir>` for all
-remaining plan updates, PR bodies, review replies, and scratch artifacts. Never
-resolve the pre-claim relative path after changing checkouts. Never use a fixed
-file in the repository root or the OS-global `/tmp`, and never delete and recreate
-a tracked fixed-name plan.
+directory via `./scripts/create-session-dir.sh planning <task>` (Windows: `.\scripts\create-session-dir.ps1 planning <task>`).
+This generates `.orchestune/tmp/planning-<task>-<UTC timestamp>-<random>/` without inline Python.
+`<planning-session-dir>` means this pre-claim directory. After Step 2.5 enters the task
+worktree, create `.orchestune/tmp/task-<issue>-<UTC timestamp>-<random>/` via
+`./scripts/create-session-dir.sh task <issue>` (Windows: `.\scripts\create-session-dir.ps1 task <issue>`),
+migrate the approved `implementation-plan.md` into it, and use that explicit
+`<session-dir>` for all remaining plan updates, PR bodies, review replies, and
+scratch artifacts. Never resolve the pre-claim relative path after changing checkouts.
+Never use a fixed file in the repository root or the OS-global `/tmp`, and never
+delete and recreate a tracked fixed-name plan.
 
 ## Preflight & GitHub Backend Selection (Step 0)
 At session start, inspect and record the execution environment:
