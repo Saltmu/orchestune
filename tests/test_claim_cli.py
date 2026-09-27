@@ -169,3 +169,102 @@ def test_success_renders_parent_base_when_present(tmp_path, capsys):
 
     output = capsys.readouterr().out
     assert "Base: parent/issue-894" in output
+
+
+def _amended(**overrides):
+    from orchestune.claim.amend import FootprintAmendOutcome
+
+    fields = dict(
+        success=True,
+        issue_number=123,
+        claim_id="claim-123",
+        worktree_path=Path("/tmp/worktrees/claim-123"),
+        previous_footprint=("orchestune/foo.py",),
+        amended_footprint=("orchestune/foo.py", "docs/plan.md"),
+        added=("docs/plan.md",),
+        issue_body_updated=True,
+    )
+    fields.update(overrides)
+    return FootprintAmendOutcome(**fields)
+
+
+def test_amend_footprint_reads_token_by_claim_id_and_renders_added_files(
+    tmp_path, capsys
+):
+    from orchestune.claim.cli import main
+
+    token_record = tmp_path / "claim-123.token"
+    token_record.write_text("stored-owner-token\n", encoding="utf-8")
+    token_record.chmod(0o600)
+    with (
+        patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
+        patch(
+            "orchestune.claim.cli.amend_claim_footprint", return_value=_amended()
+        ) as amend,
+        patch("orchestune.claim.cli.claim_task") as claim,
+    ):
+        assert main(["123", "--amend-footprint", "--timeout", "2"]) == 0
+
+    claim.assert_not_called()
+    assert amend.call_args.args == (123,)
+    kwargs = amend.call_args.kwargs
+    assert kwargs["apply"] is True
+    assert kwargs["timeout_seconds"] == 2.0
+    assert kwargs["read_owner_token"]("claim-123") == "stored-owner-token"
+    assert kwargs["read_owner_token"]("claim-other") is None
+    output = capsys.readouterr().out
+    assert "Claim ID: claim-123" in output
+    assert "Added: docs/plan.md" in output
+    assert "Issue footprint updated: yes" in output
+    assert "stored-owner-token" not in output
+    assert not (tmp_path / "claim-123.token.tmp").exists()
+
+
+def test_amend_footprint_no_apply_is_read_only_preview(tmp_path, capsys):
+    from orchestune.claim.cli import main
+
+    with (
+        patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
+        patch(
+            "orchestune.claim.cli.amend_claim_footprint",
+            return_value=_amended(issue_body_updated=False),
+        ) as amend,
+    ):
+        assert main(["123", "--amend-footprint", "--no-apply"]) == 0
+
+    assert amend.call_args.kwargs["apply"] is False
+    output = capsys.readouterr().out
+    assert "Dry run" in output
+    assert "Added: docs/plan.md" in output
+
+
+def test_amend_footprint_failure_uses_reason_exit_code(tmp_path, capsys):
+    from orchestune.claim.cli import main
+
+    failure = ClaimFailure(
+        reason=ClaimFailureReason.CLAIM_CONFLICT,
+        message="Footprint overlaps issue #99",
+        conflicting_issue_number=99,
+    )
+    with (
+        patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
+        patch(
+            "orchestune.claim.cli.amend_claim_footprint",
+            return_value=_amended(success=False, failure=failure),
+        ),
+    ):
+        assert main(["123", "--amend-footprint"]) == 20
+
+    stderr = capsys.readouterr().err
+    assert "reason=claim_conflict" in stderr
+    assert "conflicting_issue=#99" in stderr
+
+
+def test_amend_footprint_and_resume_are_mutually_exclusive(capsys):
+    import pytest
+
+    from orchestune.claim.cli import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["123", "--amend-footprint", "--resume", "claim-123"])
+    assert exc.value.code == 2

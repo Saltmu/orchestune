@@ -503,12 +503,26 @@ orchestune claim 123
 | :--- | :--- | :--- |
 | `--no-apply` | 無効 | Git、GitHub、台帳の変更を行わず、事前検証と予定値の表示のみを行うプレビュー（ドライラン）モード。 |
 | `--resume <claim_id>` | なし | ネットワーク障害やプロセス中断で途中停止した既存の claim を、保護されたローカル認証情報を用いて再開する。 |
+| `--amend-footprint` | 無効 | 保持中の claim のファイル予約を拡張する。`--resume` とは併用不可。詳細は後述。 |
 | `--state <path>` | `run_state.json` | 実行状態台帳ファイルのパスを指定。 |
 | `--timeout <seconds>` | なし | 台帳ロックのタイムアウト秒数。 |
 
 ### 失敗時の対応
 
 前提条件の未達（先行タスク未完了など）や競合、環境エラーが発生した場合は、非ゼロの終了コードとともにエラー理由と推奨される次のアクションが標準エラー出力に表示されます。指示に従って競合を解消するか、中断された claim を `--resume` で復旧してください。なお、すでに着手済みで作業ツリー内にいる場合は、再度の claim は不要です。
+
+すでに保持している Issue に対して `orchestune claim <N>` を再実行すると `existing_claim_unrecovered` で失敗し、次のアクションとして worktree のパス、`--resume` コマンド、`--amend-footprint` コマンドが表示されます。
+
+### 予約の拡張（`--amend-footprint`）
+
+保持中のファイル予約の外にあるファイルの変更が必要になった場合は、Issue 本文の `footprint` に追記してから次を実行します。
+
+```bash
+orchestune claim <N> --amend-footprint --no-apply  # プレビュー
+orchestune claim <N> --amend-footprint
+```
+
+新しい footprint は、保持中の footprint・Issue の footprint・claim の基点以降に worktree で変更済みのすべてのファイル（コミット済み・未コミット・未追跡）の和集合です。縮小はしません。他のすべての active 予約との衝突を再判定し、衝突した場合は何も変更せずに相手の Issue を表示します。成功すると不足分を Issue の footprint に追記して台帳を更新します。worktree・ブランチ・claim ID・ラベルは変わりません。対象は、claim を作成したワークスペース（保護された owner token がある場所）で完了済みの interactive なファイル予約のみです。リポジトリ予約への切り替えはサポートしません。
 
 ## 8. ローカルCI証跡の保存と完了処理 (`orchestune complete`)
 
