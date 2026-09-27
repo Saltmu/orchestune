@@ -16,10 +16,10 @@ MAX_SOURCE_BYTES = 128 * 1024
 MAX_PAYLOAD_BYTES = 32 * 1024
 TEXT_LIMITS = {
     "pr.title": 300,
-    "pr.body": 3000,
+    "pr.body": 8000,
     "code.text": 6000,
     "code.module_description": 2000,
-    "repository_rules.text": 4000,
+    "repository_rules.text": 8000,
 }
 
 

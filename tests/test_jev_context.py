@@ -6,7 +6,10 @@ import json
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from scripts.jev_context import (
+    JevFindingContext,
     JevReviewContext,
     collect_finding_context,
     normalize_context,
@@ -15,6 +18,84 @@ from scripts.jev_context import (
 HEAD = "a" * 40
 BASE = "b" * 40
 OLD = "c" * 40
+
+
+def long_review_context(body: str, rules: str) -> JevFindingContext:
+    review = review_context()
+    review.pr["body"] = body
+    with patch(
+        "scripts.jev_context._read_blob",
+        side_effect=lambda sha, path: rules
+        if path == ".agents/AGENTS.md"
+        else '"""Documented local command inputs."""\npass\n',
+    ):
+        return collect_finding_context(
+            {"path": "scripts/a.py", "line": 2, "side": "RIGHT", "commit_id": HEAD},
+            review,
+        )
+
+
+def test_observed_review_sizes_preserve_complete_context() -> None:
+    from scripts.jev_filter import _build_payload, is_finding_accepted
+
+    body = "語" * 1518 + "x" * 4458  # 5976 chars, about 9 KiB as in PR #1094
+    rules = "語" * 2735 + "x" * 2135  # 4870 chars, about 10 KiB
+    context = long_review_context(body, rules)
+    payload = _build_payload("finding", "scripts/a.py", 2, context=context)
+    sent = json.loads(payload)["state"]["context"]
+    assert sent["pr"]["body"] == body
+    assert sent["repository_rules"]["text"] == rules
+    assert sent["missing"] == sent["truncated"] == []
+    assert len(payload) <= 32 * 1024
+    assert not is_finding_accepted(
+        0.99,
+        "HIGH",
+        applicability="SPECULATIVE",
+        applicability_confidence=0.95,
+        context=sent,
+    )
+
+
+@pytest.mark.parametrize("length", [7999, 8000, 8001])
+@pytest.mark.parametrize(
+    "section,key,marker",
+    [
+        ("pr", "body", "pr.body"),
+        ("repository_rules", "text", "repository_rules.text"),
+    ],
+)
+def test_long_context_field_limit(
+    length: int, section: str, key: str, marker: str
+) -> None:
+    from scripts.jev_context import has_speculative_evidence
+
+    raw = long_review_context("body", "rules")
+    field = raw["pr"] if section == "pr" else raw["repository_rules"]
+    field[key] = "x" * length
+    context = normalize_context(raw)
+    normalized_field = context["pr"] if section == "pr" else context["repository_rules"]
+    assert normalized_field[key] == "x" * min(length, 8000)
+    assert (marker in context["truncated"]) == (length > 8000)
+    assert has_speculative_evidence(context) == (length <= 8000)
+
+
+def test_expanded_multibyte_context_still_retains_finding_on_payload_overflow() -> None:
+    from scripts.jev_filter import _build_payload, is_finding_accepted
+
+    context = long_review_context("語" * 8000, "語" * 8000)
+    assert context["truncated"] == []  # per-field limits alone do not suffice
+    payload = _build_payload("finding", "scripts/a.py", 2, context=context)
+    sent = json.loads(payload.decode("utf-8"))["state"]["context"]
+    assert len(payload) <= 32 * 1024
+    assert sent["truncated"]
+    assert sent["pr"]["body"] != context["pr"]["body"]
+    assert is_finding_accepted(
+        0.99,
+        "HIGH",
+        applicability="SPECULATIVE",
+        applicability_confidence=0.95,
+        context=sent,
+    )
 
 
 def review_context() -> JevReviewContext:
