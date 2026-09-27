@@ -238,13 +238,13 @@ def _apply_invalid_footprint_blocking(
         transition_status_label(
             config.resolved_forge,
             task.issue_number,
-            StatusLabel.BLOCKED,
+            StatusLabel.BLOCKED_HUMAN_REVIEW,
             (StatusLabel.QUEUED,),
         )
         detail = f": {task.footprint_error}" if task.footprint_error else ""
         config.resolved_forge.add_comment(
             task.issue_number,
-            f"Footprintの指定値が不正なため、タスクをブロックしました{detail}。フォーマットを確認してください。",
+            f"footprint が不正なため、タスクを人間のレビュー待ちにしました{detail}。Issue 本文の footprint を修正してください。",
         )
 
 
@@ -387,7 +387,7 @@ def _handle_launch_failure(
         )
         config.resolved_forge.add_comment(
             task.issue_number,
-            f"ブランチ名またはsubtask_idが不正なため、タスクをブロックしました (`status:blocked-human-review`)。\n"
+            f"ブランチ名、subtask_id、またはfootprintが不正なため、タスクをブロックしました (`status:blocked-human-review`)。\n"
             f"エラー内容:\n```\n{launch.error_message}\n```",
         )
     else:

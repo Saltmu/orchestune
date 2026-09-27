@@ -201,8 +201,12 @@ class TestApplyInvalidFootprintBlocking:
         ):
             _apply_invalid_footprint_blocking([task], config)
 
-        assert call_order == [("add", "status:blocked"), ("remove", "status:queued")]
+        assert call_order == [
+            ("add", "status:blocked-human-review"),
+            ("remove", "status:queued"),
+        ]
         assert "invalid path: /etc/passwd" in mock_comment.call_args[0][1]
+        assert "footprint が不正なため" in mock_comment.call_args[0][1]
 
 
 class TestLaunchSelectedTasksInvalidFootprint:
@@ -240,5 +244,6 @@ class TestLaunchSelectedTasksInvalidFootprint:
         ):
             _launch_selected_tasks(ctx)
 
-        mock_add_label.assert_called_once_with(1, "status:blocked")
+        mock_add_label.assert_called_once_with(1, "status:blocked-human-review")
         assert "bad path" in mock_comment.call_args[0][1]
+        assert "footprint が不正なため" in mock_comment.call_args[0][1]

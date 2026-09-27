@@ -39,6 +39,7 @@ from orchestune.lock_contracts import (
     ExternalLockScanResult,
 )
 from orchestune.models import IssueRecord
+from orchestune.task_metadata import TaskMetadata
 
 
 @runtime_checkable
@@ -76,6 +77,7 @@ class PreflightDecision:
     reservation_kind: ReservationKind = ReservationKind.FOOTPRINT
     failure: ClaimFailure | None = None
     stack_target_issue_number: int | None = None
+    task: TaskMetadata | None = None
 
 
 def resolve_claim_subtask_id(issue: IssueRecord) -> str:
@@ -218,9 +220,8 @@ def _check_status_labels(
 
 
 def _evaluate_footprint_reservation(
-    issue: IssueRecord,
+    task: TaskMetadata,
 ) -> tuple[ReservationKind, ClaimFailure | None]:
-    task = parse_task_from_issue(issue)
     if task.yaml_error:
         return ReservationKind.REPOSITORY, None
     if task.footprint_error is not None:
@@ -237,8 +238,15 @@ def _evaluate_footprint_reservation(
     return ReservationKind.REPOSITORY, None
 
 
-def _resolve_reservation_kind(issue: IssueRecord) -> ReservationKind:
-    kind, _ = _evaluate_footprint_reservation(issue)
+def _resolve_reservation_kind(
+    issue_or_task: IssueRecord | TaskMetadata,
+) -> ReservationKind:
+    task = (
+        issue_or_task
+        if isinstance(issue_or_task, TaskMetadata)
+        else parse_task_from_issue(issue_or_task)
+    )
+    kind, _ = _evaluate_footprint_reservation(task)
     return kind
 
 
@@ -351,43 +359,30 @@ def evaluate_claim_preflight(
     if failure is not None or issue is None:
         return PreflightDecision(allowed=False, issue_number=issue_num, failure=failure)
 
-    subtask_id = resolve_claim_subtask_id(issue)
-    reservation_kind, footprint_failure = _evaluate_footprint_reservation(issue)
-    if footprint_failure is not None:
-        return PreflightDecision(
-            allowed=False,
-            issue_number=issue.number,
-            subtask_id=subtask_id,
-            reservation_kind=reservation_kind,
-            failure=footprint_failure,
-        )
-
-    parent_number = effective_parent_number(issue) if view is None else None
-
-    dep_failure, base_ref, stack_target = _resolve_dependencies_and_base(
-        issue.number,
-        label_set,
-        assessment,
-        view,
-        default_base,
-        parent_issue_number=parent_number,
-    )
-    if dep_failure is not None:
-        return PreflightDecision(
-            allowed=False,
-            issue_number=issue.number,
-            subtask_id=subtask_id,
-            reservation_kind=reservation_kind,
-            failure=dep_failure,
+    task = parse_task_from_issue(issue)
+    subtask_id = task.subtask_id or f"task-{issue.number}"
+    reservation_kind, failure = _evaluate_footprint_reservation(task)
+    base_ref, stack_target = None, None
+    if failure is None:
+        parent_number = effective_parent_number(issue) if view is None else None
+        failure, base_ref, stack_target = _resolve_dependencies_and_base(
+            issue.number,
+            label_set,
+            assessment,
+            view,
+            default_base,
+            parent_issue_number=parent_number,
         )
 
     return PreflightDecision(
-        allowed=True,
+        allowed=failure is None,
         issue_number=issue.number,
         subtask_id=subtask_id,
         base_ref=base_ref,
         reservation_kind=reservation_kind,
+        failure=failure,
         stack_target_issue_number=stack_target,
+        task=task,
     )
 
 

@@ -2,7 +2,7 @@
 
 `models.Task`はraw依存宣言（`depends_on` / `native_depends_on`）を含む全域DTOの
 まま維持する。本モジュールはpolicy/consumer側が誤ってraw宣言を参照できないよう、
-非raw17フィールドだけを公開する`TaskMetadata` Protocolと、それを満たす
+非raw18フィールドだけを公開する`TaskMetadata` Protocolと、それを満たす
 frozen/slotsの値型`CycleTask`を提供する。raw宣言の保持・DAG変換は別モジュール
 （#888 `cycle-identity-dag-bridge`）の責務であり、ここでは扱わない。
 """
@@ -18,7 +18,7 @@ from orchestune.models import Task
 
 @runtime_checkable
 class TaskMetadata(Protocol):
-    """`Task`の非raw17フィールドを読み取り専用propertyとして公開する契約。"""
+    """`Task`の非raw18フィールドを読み取り専用propertyとして公開する契約。"""
 
     @property
     def issue_number(self) -> int: ...

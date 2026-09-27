@@ -232,8 +232,12 @@ def test_forced_serial_without_footprint_overlap_does_not_conflict() -> None:
 
 
 def test_footprint_overlap_matches_canonicalized_paths() -> None:
-    candidate = _active(10, footprint=("src/foo.py",))
-    active = _active(11, footprint=("src/foo.py",))
+    # 台帳を経由した古い表記の `./src/foo.py` を持つ active と、
+    # Windows区切り文字を含む予約候補がどちらも正規化され FOOTPRINT_OVERLAP になることを検証する。
+    from orchestune.dag.models import canonicalize_footprint
+
+    candidate = _active(10, footprint=canonicalize_footprint((r"src\foo.py",)))
+    active = _active(11, footprint=canonicalize_footprint(("./src/foo.py",)))
     assert (
         _conflict(
             candidate,
