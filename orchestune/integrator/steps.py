@@ -14,16 +14,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from enum import StrEnum
 
-from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.git import prune_stale_integration_temp_branches
-from orchestune.dispatch.worktree import file_lock
 from orchestune.forge import REQUIRED_LABELS
 from orchestune.infra.git_cli import (
     ConditionalBranchDeletionResult,
     delete_remote_branch_if_matches,
     run_git,
 )
-from orchestune.infra.process_utils import default_ci_command
+from orchestune.infra.process_utils import default_ci_command, file_lock
 from orchestune.integrator.finalization import (
     ensure_integration_receipt,
     find_integration_receipt,
@@ -39,6 +37,7 @@ from orchestune.integrator.types import (
     IntegrationStatus,
 )
 from orchestune.integrator.worktree import IntegrationWorktree
+from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.models import Task
 from orchestune.pr_link_notice import (
     ensure_pr_merged_notice,

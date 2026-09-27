@@ -690,7 +690,7 @@ _FAKE_FORGE_MIGRATION_TESTS = frozenset(
 _FAKE_FORGE_MIGRATION_MODULES = (
     "orchestune.dispatch.actor_verification",
     "orchestune.dispatch.config",
-    "orchestune.dispatch.escalation",
+    "orchestune.ledger.escalation",
     "orchestune.dispatch.rebase",
 )
 

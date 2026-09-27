@@ -115,7 +115,7 @@ stateDiagram-v2
   タスクを一時停止する。
 
 > **注記（#109）**: 上記3つの遷移（5〜7）は、いずれも
-> `orchestune/dispatch/escalation.py`の`apply_human_review_escalation`
+> `orchestune/ledger/escalation.py`の`apply_human_review_escalation`
 > （現在のstatus:*ラベルを除去→`status:blocked-human-review`付与→理由コメント、
 > という共通処理）へ実装を集約している。各呼び出し元（`_finalize_completed_worktree`
 > /`_apply_duplicate_skip`/`_apply_changes_requested_escalation`）は、どの理由で

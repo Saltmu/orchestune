@@ -23,7 +23,6 @@ from orchestune.dispatch.dependency_policy import (
     StackDecision,
     decide_stack_target,
 )
-from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
     resolve_task_execution_selection,
@@ -40,6 +39,7 @@ from orchestune.issue_parsing import (
     launch_history_in_window,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     CompletedWorktree,

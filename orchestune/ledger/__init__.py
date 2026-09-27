@@ -1,1 +1,1 @@
-"""Shared execution ledger and status transitions."""
+"""Shared ledger contracts and operations."""

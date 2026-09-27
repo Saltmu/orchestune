@@ -13,8 +13,8 @@ from orchestune.dispatch.dependency_resolution import (
 from orchestune.dispatch.escalation import (
     _decide_changes_requested_escalation,
     _rule_changes_requested,
-    apply_human_review_escalation,
 )
+from orchestune.ledger.escalation import apply_human_review_escalation
 from tests.dispatch_gc_test_support import _rule_ctx
 from tests.dispatch_test_support import make_test_active_worktree as _active
 from tests.dispatch_test_support import make_test_cycle_context
