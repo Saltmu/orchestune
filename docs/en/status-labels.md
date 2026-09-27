@@ -112,7 +112,7 @@ independently of the lifecycle above (see "External lock" below).
   pausing the stacked task.
 
 > **Note (#109)**: transitions 5-7 above all delegate to
-> `apply_human_review_escalation` in `orchestune/dispatch/escalation.py` (the
+> `apply_human_review_escalation` in `orchestune/ledger/escalation.py` (the
 > shared logic: remove the current `status:*` label, add
 > `status:blocked-human-review`, then post the reason as a comment). Each
 > caller (`_finalize_completed_worktree` / `_apply_duplicate_skip` /

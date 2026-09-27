@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from orchestune.complete.contracts import CompleteStage
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.outcome_record import (
     REASON_BASE_BRANCH_RED,
     REASON_REVIEW_TIMEOUT,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import functools
 import inspect
 import re
 import tomllib
@@ -11,12 +10,25 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from architecture_test_support import (
+    _SUBPROCESS_CALLS,
+    PACKAGE_NAME,
+    PACKAGE_ROOT,
+    _assigned_names,
+    _cycle_members,
+    _import_graph,
+    _package_cycle_edges,
+    _package_import_graph,
+    _package_modules,
+    _relative_import_name,
+    _subprocess_command_modules,
+    _top_level_package,
+)
 from dependency_boundary_test_support import (
     production_boundary_violations,
     unused_production_boundary_exceptions,
 )
 
-PACKAGE_ROOT = Path(__file__).parents[1] / "orchestune"
 TESTS_ROOT = Path(__file__).parent
 REPO_ROOT = Path(__file__).parents[1]
 SKILLS_ROOT = REPO_ROOT / "skills"
@@ -27,7 +39,6 @@ DOC_LANGUAGES = ("en", "ja")
 # `setup_skills` (see `SKILLS_EXCLUDED_FROM_SETUP`), so it has no reason to
 # ship in the distributed package either.
 PACKAGING_EXCLUDED_SKILLS = frozenset({"local-ci-developer"})
-PACKAGE_NAME = "orchestune"
 
 
 def test_dispatch_dependency_boundary() -> None:
@@ -130,7 +141,6 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.gc.outcome_decision",
             "dispatch.gc.prior_merge",
             "dispatch.gc.zombies",
-            "dispatch.labels",
             "dispatch.launch",
             "dispatch.launch_attempts",
             "dispatch.locks",
@@ -141,7 +151,6 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.reviewer",
             "dispatch.rules",
             "dispatch.scoring",
-            "dispatch.state",
             "dispatch.status_repair",
             "dispatch.status_dependency_policy",
             "dispatch.status_repair_dependencies",
@@ -158,6 +167,10 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator.worktree",
             "issue_notice",
             "issue_parsing",
+            "ledger",
+            "ledger.escalation",
+            "ledger.run_state",
+            "ledger.status_labels",
             "pr_link_notice",
             "provisioning.parent",
             "provisioning.plan",
@@ -207,6 +220,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "labels",
             "models",
             "outcome_record",
+            "ownership_contracts",
             "plan_writer",
             "provisioning",
             "replan",
@@ -234,9 +248,6 @@ EXPECTED_SUBPROCESS_COMMAND_MODULES = {
     "gh": {"forge.admin"},
     "git": {"infra.git_cli"},
 }
-_SUBPROCESS_CALLS = frozenset({"run", "call", "Popen", "check_call", "check_output"})
-_COMMANDS = frozenset({"git", "gh"})
-_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 _LAYER_ROW = re.compile(r"^\s*\|\s*\*\*L(\d)\*\*")
 _COMMAND_ROW = re.compile(r"^\s*\|\s*`(git|gh)`\s*\|")
 # Dotted so a module under a subpackage can be documented as `sub.worker`,
@@ -268,329 +279,12 @@ BOUNDED_RECOVERY_TERMINALS = {
 }
 
 
-def _module_name(path: Path) -> str:
-    relative = path.relative_to(PACKAGE_ROOT).with_suffix("")
-    parts = relative.parts[:-1] if relative.name == "__init__" else relative.parts
-    return ".".join((PACKAGE_NAME, *parts))
-
-
-@functools.cache
-def _package_modules() -> dict[str, Path]:
-    """Every `.py` under `orchestune/`, subpackage initialisers included.
-
-    A nested `__init__.py` can carry imports and package wiring of its own, so
-    leaving it out would hide cycles and upward dependencies introduced there —
-    and would quietly weaken the "the layer table covers every file" promise.
-
-    Cached: callers only read the result, never mutate it, and this file's
-    package tree doesn't change mid test-run, so repeated calls (12+ across
-    this module's tests) can safely share one filesystem walk.
-    """
-    return {_module_name(path): path for path in PACKAGE_ROOT.rglob("*.py")}
-
-
-def _relative_import_name(
-    current_module: str, node: ast.ImportFrom, *, is_package: bool
-) -> str | None:
-    """`from . import x` / `from ..y import z` の解決先モジュール名を返す。
-
-    相対importの基準は「そのモジュールが属するパッケージ」であり、`__init__.py`
-    ではモジュール自身がそのパッケージになる。`orchestune/sub/__init__.py` の
-    `from .. import cli` は `orchestune.cli` を指すが、`orchestune/foo.py` の
-    同じ記述は1つ上（存在しない親）を指す。この違いを `is_package` で分ける。
-    """
-    if node.level == 0:
-        return node.module
-
-    base = current_module if is_package else current_module.rsplit(".", 1)[0]
-    package_parts = base.split(".")
-    target_len = len(package_parts) - node.level + 1
-    if target_len <= 0:
-        return None
-    parent_parts = package_parts[:target_len]
-    if node.module:
-        parent_parts.extend(node.module.split("."))
-    return ".".join(parent_parts) or None
-
-
-def _internal_imports(
-    current_module: str,
-    tree: ast.AST,
-    known_modules: set[str],
-    *,
-    is_package: bool,
-) -> set[str]:
-    imports: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name in known_modules:
-                    imports.add(alias.name)
-            continue
-
-        if not isinstance(node, ast.ImportFrom):
-            continue
-
-        module_name = _relative_import_name(current_module, node, is_package=is_package)
-        if module_name in known_modules:
-            imports.add(module_name)
-        if module_name is not None:
-            # `from orchestune import dispatch_gc` / `from . import worker` は、
-            # パッケージ名そのものではなく個々のサブモジュールへの依存でもある。
-            imports.update(
-                f"{module_name}.{alias.name}"
-                for alias in node.names
-                if f"{module_name}.{alias.name}" in known_modules
-            )
-    imports.discard(current_module)
-    return imports
-
-
-@functools.cache
-def _import_graph() -> dict[str, set[str]]:
-    modules = _package_modules()
-    known_modules = set(modules)
-    return {
-        module.removeprefix(f"{PACKAGE_NAME}."): {
-            dependency.removeprefix(f"{PACKAGE_NAME}.")
-            for dependency in _internal_imports(
-                module,
-                ast.parse(path.read_text(encoding="utf-8")),
-                known_modules,
-                is_package=path.name == "__init__.py",
-            )
-        }
-        for module, path in modules.items()
-    }
-
-
-def _cycle_members(graph: dict[str, set[str]]) -> set[str]:
-    """非自明な強連結成分（要素数2以上、または自己ループ）に属するモジュール名を返す。
-
-    Tarjan's SCCアルゴリズムを使う。単純な「探索中スタック+visited集合」による
-    DFSは、あるノードが別の経路から先に`visited`化されてしまうと、そのノード
-    経由でしか辿り着けない別の循環を再探索せず見逃す（探索順序に依存して
-    検出結果が変わる）欠陥がある。Tarjan's SCCはノードの近傍を辿る順序に
-    依らず正しい強連結成分を求められるため、この欠陥がない。
-    """
-    index_counter = [0]
-    index: dict[str, int] = {}
-    lowlink: dict[str, int] = {}
-    on_stack: dict[str, bool] = {}
-    stack: list[str] = []
-    cycles: set[str] = set()
-
-    def strongconnect(module: str) -> None:
-        index[module] = index_counter[0]
-        lowlink[module] = index_counter[0]
-        index_counter[0] += 1
-        stack.append(module)
-        on_stack[module] = True
-
-        for dependency in graph.get(module, ()):
-            if dependency not in graph:
-                continue
-            if dependency not in index:
-                strongconnect(dependency)
-                lowlink[module] = min(lowlink[module], lowlink[dependency])
-            elif on_stack.get(dependency):
-                lowlink[module] = min(lowlink[module], index[dependency])
-
-        if lowlink[module] == index[module]:
-            component: list[str] = []
-            while True:
-                member = stack.pop()
-                on_stack[member] = False
-                component.append(member)
-                if member == module:
-                    break
-            if len(component) > 1 or module in graph.get(module, ()):
-                cycles.update(component)
-
-    for module in graph:
-        if module not in index:
-            strongconnect(module)
-    return cycles
-
-
 def _l4_dependents(graph: dict[str, set[str]]) -> dict[str, set[str]]:
     dependents: dict[str, set[str]] = defaultdict(set)
     for module, dependencies in graph.items():
         for dependency in dependencies & L4_MODULES:
             dependents[dependency].add(module)
     return dict(dependents)
-
-
-def _leading_command(node: ast.expr | None) -> str | None:
-    """`["git", ...]` / `("gh", ...)` の先頭要素が対象コマンドならその名前を返す。"""
-    if not isinstance(node, ast.List | ast.Tuple) or not node.elts:
-        return None
-    first = node.elts[0]
-    if isinstance(first, ast.Constant) and first.value in _COMMANDS:
-        return str(first.value)
-    return None
-
-
-def _assigned_names(node: ast.AST) -> tuple[list[ast.expr], ast.expr | None]:
-    if isinstance(node, ast.Assign):
-        return list(node.targets), node.value
-    if isinstance(node, ast.AnnAssign | ast.AugAssign):
-        return [node.target], node.value
-    return [], None
-
-
-def _nodes_in_scope(scope: ast.AST) -> list[ast.AST]:
-    """`scope` 直下のノードを、ネストしたスコープの中身を除いて位置順に返す。
-
-    ネストしたスコープを定義するノード自体は返す（呼び出し側がそこで再帰する）。
-    """
-    collected: list[ast.AST] = []
-
-    def visit(node: ast.AST, *, is_root: bool) -> None:
-        if not is_root:
-            collected.append(node)
-            if isinstance(node, _SCOPE_NODES):
-                return
-        for child in ast.iter_child_nodes(node):
-            visit(child, is_root=False)
-
-    visit(scope, is_root=True)
-    return sorted(
-        collected, key=lambda n: (getattr(n, "lineno", 0), getattr(n, "col_offset", 0))
-    )
-
-
-def _subprocess_first_argument(
-    node: ast.Call, subprocess_names: set[str], call_names: set[str]
-) -> ast.expr | None:
-    """`subprocess.run(...)` 系の呼び出しなら、そのargvにあたる式を返す。
-
-    argvは第1位置引数だけでなく `subprocess.run(args=[...])` のキーワードでも
-    渡せるため、両方を見る。
-    """
-    is_subprocess_call = (
-        isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id in subprocess_names
-        and node.func.attr in _SUBPROCESS_CALLS
-    ) or (isinstance(node.func, ast.Name) and node.func.id in call_names)
-    if not is_subprocess_call:
-        return None
-    if node.args:
-        return node.args[0]
-    for keyword in node.keywords:
-        if keyword.arg == "args":
-            return keyword.value
-    return None
-
-
-def _scope_bindings(scope: ast.AST) -> tuple[set[str], dict[str, set[str]]]:
-    """そのスコープが代入する名前と、名前ごとのコマンド候補を返す。
-
-    候補は「そのスコープ内のあらゆる代入」の和集合であり、位置も分岐も条件も
-    問わない。`if` の片方だけで再代入される、ループで書き換わる、ネストした
-    関数から実行時に参照される — いずれも静的には実行経路が決まらないため、
-    ありうる束縛はすべて候補として扱う（見逃すより過剰に報告する側へ倒す）。
-
-    第1要素はコマンドリテラル以外を代入された名前も含む。Pythonではスコープ内で
-    一度でも代入された名前はそのスコープのローカルになるため、外側の同名を
-    引き継がないようにするのに必要。ただし`global` / `nonlocal`宣言された名前は
-    代入してもローカルにならない（外側の名前そのものを書き換える）ので除外し、
-    外側から引き継いだ候補が残るようにする。
-    """
-    assigned: set[str] = set()
-    rebound_outer: set[str] = set()
-    candidates: dict[str, set[str]] = defaultdict(set)
-    for node in _nodes_in_scope(scope):
-        if isinstance(node, _SCOPE_NODES):
-            continue
-        if isinstance(node, ast.Global | ast.Nonlocal):
-            rebound_outer.update(node.names)
-            continue
-        targets, value = _assigned_names(node)
-        command = _leading_command(value)
-        for target in targets:
-            if isinstance(target, ast.Name):
-                assigned.add(target.id)
-                if command is not None:
-                    candidates[target.id].add(command)
-    return assigned - rebound_outer, dict(candidates)
-
-
-def _scan_scope(
-    scope: ast.AST,
-    inherited: dict[str, set[str]],
-    subprocess_names: set[str],
-    call_names: set[str],
-    found: set[str],
-) -> None:
-    """1つのスコープを走査し、実行されたコマンド名を `found` へ集める。
-
-    スコープ内で代入される名前はそのスコープの候補で解決し（外側の同名は
-    Pythonの規則どおり見えないので引き継がない）、代入されない自由変数は
-    外側から引き継いだ候補で解決する。`global` / `nonlocal`宣言された名前は
-    ローカルを作らないため、外側の候補と自スコープの候補を合わせて扱う。
-    """
-    assigned, candidates = _scope_bindings(scope)
-    bindings = {
-        name: set(commands)
-        for name, commands in inherited.items()
-        if name not in assigned
-    }
-    for name, commands in candidates.items():
-        bindings[name] = bindings.get(name, set()) | commands
-
-    for node in _nodes_in_scope(scope):
-        if isinstance(node, _SCOPE_NODES):
-            # クラス本体の名前はメソッドからは見えない（メソッド内の裸の名前は
-            # 外側の関数スコープ→モジュールグローバルへと解決され、クラス属性は
-            # 参照されない）。そのためクラス配下のスコープへは、クラス本体が
-            # 作った束縛ではなく、クラス自身が引き継いだ束縛をそのまま渡す。
-            nested = inherited if isinstance(scope, ast.ClassDef) else bindings
-            _scan_scope(node, nested, subprocess_names, call_names, found)
-            continue
-        if isinstance(node, ast.Call):
-            argument = _subprocess_first_argument(node, subprocess_names, call_names)
-            command = _leading_command(argument)
-            if command is not None:
-                found.add(command)
-            elif isinstance(argument, ast.Name):
-                found.update(bindings.get(argument.id, ()))
-
-
-def _subprocess_command_modules() -> dict[str, set[str]]:
-    """{コマンド: そのコマンドをsubprocess実行しているモジュール名}を返す。
-
-    検出できるのは、コマンドリストがリテラルとして書かれている呼び出し
-    （直接渡す場合と、リテラルを代入した変数を渡す場合）です。変数経由の場合は
-    分岐やループを問わず、その名前が取りうる束縛をすべて候補とします。
-    実行時に組み立てたリストや、他モジュールから受け取ったコマンドまでは
-    追跡しません。
-    """
-    command_modules: dict[str, set[str]] = defaultdict(set)
-    for module, path in _package_modules().items():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        subprocess_names = {"subprocess"}
-        call_names: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                subprocess_names.update(
-                    alias.asname or alias.name
-                    for alias in node.names
-                    if alias.name == "subprocess"
-                )
-            elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
-                call_names.update(
-                    alias.asname or alias.name
-                    for alias in node.names
-                    if alias.name in _SUBPROCESS_CALLS
-                )
-
-        found: set[str] = set()
-        _scan_scope(tree, {}, subprocess_names, call_names, found)
-        for command in found:
-            command_modules[command].add(module.removeprefix(f"{PACKAGE_NAME}."))
-    return dict(command_modules)
 
 
 def test_package_import_graph_does_not_gain_cycles() -> None:
@@ -1168,3 +862,111 @@ def test_execution_profiles_boundary_documented_in_architecture_docs() -> None:
         assert (
             "ExecutionSelection" in doc_text
         ), f"{lang}: ExecutionSelection reference missing"
+
+
+KNOWN_PACKAGE_CYCLE_EDGES: dict[tuple[str, str], str] = {
+    ("claim", "dispatch"): (
+        "Shared lock contracts (#1071), worktree preparation (#1072), and "
+        "dependency assessment/policy (#1073) still live under dispatch"
+    ),
+    ("complete", "claim"): (
+        "Completion uses claim ownership/workspace; cycle closes via claim -> "
+        "dispatch -> complete until #1071, #1072, #1073 remove the return path"
+    ),
+    (
+        "dag",
+        "symbol_verification",
+    ): "DAG construction invokes symbol verification; #1075",
+    ("dispatch", "claim"): (
+        "Dispatch reuses claim contracts/preflight/service/workspace; return path "
+        "from claim remains until #1071, #1072, #1073"
+    ),
+    ("dispatch", "complete"): (
+        "GC consumes completion contracts; return path via complete -> claim -> "
+        "dispatch remains until #1071, #1072, #1073"
+    ),
+    ("dispatch", "integrator"): (
+        "Postcycle invokes integration/coordinator/parent completion; reverse "
+        "dependencies are tracked in #1072, #1073, #1074"
+    ),
+    ("integrator", "dispatch"): (
+        "Git cleanup (#1072), legacy dependency resolution (#1073), and routine "
+        "target/handle/constants (#1074) still live under dispatch"
+    ),
+    (
+        "provisioning",
+        "replan",
+    ): "Rendering uses replan models; shared plan boundary #1076",
+    ("replan", "provisioning"): "Plan loading/rendering/validation are shared; #1076",
+    ("symbol_verification", "dag"): "Verification consumes DAG models; #1075",
+}
+
+
+def test_package_dependency_cycles_match_allowlist() -> None:
+    actual_cycles = _package_cycle_edges(_package_import_graph())
+    allowed_cycles = set(KNOWN_PACKAGE_CYCLE_EDGES.keys())
+
+    unexpected = actual_cycles - allowed_cycles
+    assert (
+        unexpected == set()
+    ), f"Unexpected package import cycle edges found: {sorted(unexpected)}"
+
+    stale = allowed_cycles - actual_cycles
+    assert (
+        stale == set()
+    ), f"Stale package import cycle edges in allowlist: {sorted(stale)}"
+
+    for edge, reason in KNOWN_PACKAGE_CYCLE_EDGES.items():
+        assert reason.strip(), f"Empty reason for allowed cycle edge: {edge}"
+
+
+def test_architecture_docs_mention_package_cycle_guard() -> None:
+    """#1052: Both architecture documents explain package-level import cycle prohibition."""
+    for lang in DOC_LANGUAGES:
+        lines = _architecture_doc(lang)
+        doc_text = "\n".join(lines)
+        if lang == "ja":
+            assert (
+                "パッケージ間循環の禁止" in doc_text
+            ), f"{lang}: 'パッケージ間循環の禁止' が docs/ja/architecture.md §4.2 に見当たりません"
+        else:
+            assert (
+                "cross-package import cycles" in doc_text
+            ), f"{lang}: 'cross-package import cycles' missing in docs/en/architecture.md §4.2"
+
+
+def test_ownership_contracts_have_no_internal_dependencies() -> None:
+    assert _import_graph()["ownership_contracts"] == set()
+
+
+def test_ledger_dependencies_stay_within_boundary() -> None:
+    """Ledger may use its own modules and only L0/L1 outside the package."""
+    layers = _module_layer()
+    ledger_modules = {
+        module: dependencies
+        for module, dependencies in _import_graph().items()
+        if _top_level_package(module) == "ledger"
+    }
+    assert ledger_modules, "No ledger modules found"
+    violations = [
+        f"{module} -> {dependency}"
+        for module, dependencies in ledger_modules.items()
+        for dependency in dependencies
+        if _top_level_package(dependency) != "ledger"
+        and layers.get(dependency) not in {0, 1}
+    ]
+    assert not violations, f"Ledger boundary violations: {sorted(violations)}"
+
+
+def test_ledger_run_state_does_not_import_claim() -> None:
+    assert not any(
+        dependency == "claim" or dependency.startswith("claim.")
+        for dependency in _import_graph()["ledger.run_state"]
+    )
+
+
+def test_integrator_does_not_import_dispatch_escalation_or_worktree() -> None:
+    forbidden = {"dispatch.escalation", "dispatch.worktree"}
+    for module, dependencies in _import_graph().items():
+        if module == "integrator" or module.startswith("integrator."):
+            assert not dependencies & forbidden, module

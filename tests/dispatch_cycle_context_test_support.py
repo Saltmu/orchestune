@@ -16,8 +16,8 @@ from __future__ import annotations
 from typing import Any
 
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.state import ActiveWorktree
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.models import Task
 from tests.dispatch_test_support import (
     make_state_root,

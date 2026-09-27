@@ -16,9 +16,12 @@ from functools import cache
 from typing import cast
 
 from orchestune.branch_naming import branch_matches_task, parse_task_branch_name
-from orchestune.dispatch.labels import PRIMARY_STATUS_LABELS, transition_status_label
 from orchestune.issue_parsing import effective_parent_number
 from orchestune.labels import StatusLabel
+from orchestune.ledger.status_labels import (
+    PRIMARY_STATUS_LABELS,
+    transition_status_label,
+)
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.pr_link_notice import ensure_pr_merged_notice
 from orchestune.task_metadata import TaskMetadata

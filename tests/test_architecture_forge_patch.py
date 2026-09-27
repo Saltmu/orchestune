@@ -14,8 +14,8 @@ REPO_ROOT = Path(__file__).parents[1]
 GITHUB_FORGE_PATCH_EXEMPTIONS = frozenset({"test_forge.py"})
 _GITHUB_FORGE_PATCH_TARGET = re.compile(r"(?:^|\.)GitHubForge(?:\.|$)")
 
-# Re-use shared AST walking and scope helpers from test_architecture
-from tests.test_architecture import (  # noqa: E402
+# Re-use shared AST walking and scope helpers from architecture_test_support
+from architecture_test_support import (  # noqa: E402
     _SCOPE_NODES,
     _assigned_names,
     _nodes_in_scope,

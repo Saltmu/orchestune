@@ -31,16 +31,16 @@ from orchestune.dispatch.dispatcher import (
     _emit_dispatcher_report,
 )
 from orchestune.dispatch.scoring import SchedulingDecision, ScoreComponents
-from orchestune.dispatch.state import (
-    ActiveWorktree,
-    CompletedWorktree,
-    RunState,
-    load_run_state,
-)
 from orchestune.dispatch.summary import (
     REASON_EXTERNAL_LOCK,
     SUMMARY_PREFIX,
     SkipRecord,
+)
+from orchestune.ledger.run_state import (
+    ActiveWorktree,
+    CompletedWorktree,
+    RunState,
+    load_run_state,
 )
 from orchestune.models import PrRecord, Task
 from orchestune.outcome_record import OutcomeRecord

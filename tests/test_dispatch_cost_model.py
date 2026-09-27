@@ -9,7 +9,7 @@ from orchestune.dispatch.cost_model import (
     ESTIMATE_SOURCE_TASK,
     build_cost_model,
 )
-from orchestune.dispatch.state import CompletedWorktree, RunState
+from orchestune.ledger.run_state import CompletedWorktree, RunState
 from orchestune.models import Task, Usage
 
 

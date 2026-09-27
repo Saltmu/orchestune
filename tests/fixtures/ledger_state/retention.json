@@ -1,0 +1,198 @@
+{
+  "source_main_sha": "2a4775a13ff58d018627080ea543d5fbe3c22597",
+  "now": 1700000000.0,
+  "input": {
+    "active_worktrees": {
+      "10": {
+        "issue_number": 10,
+        "branch": "task/10",
+        "worktree_path": "worktrees/task-10",
+        "pid": null,
+        "started_at": null,
+        "declared_footprint": [
+          "src/task.py"
+        ],
+        "owner_kind": "dispatch",
+        "claim_id": "claim-10",
+        "claim_stage": "completed",
+        "base_ref": "parent/issue-1053",
+        "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "reservation_kind": "footprint",
+        "repository_id": "Saltmu/orchestune",
+        "claimed_at": 1699999900.0,
+        "owner_token_digest": "fixture-digest",
+        "estimated_tokens": 400,
+        "token_estimate_recorded": true,
+        "profile": "balanced",
+        "model": "fixture-model",
+        "reasoning_effort": "medium",
+        "selection_reason": "task-profile",
+        "launch_attempt_id": "attempt-10",
+        "launch_phase": "launched",
+        "completion_id": "completion-10",
+        "completion_result": "done",
+        "completion_stage": "handoff_ready",
+        "completion_payload": {
+          "pr": 20,
+          "review": {
+            "bot": "claude",
+            "rounds": 1
+          }
+        },
+        "completion_comment_id": "100",
+        "completion_comment_url": "https://github.com/Saltmu/orchestune/issues/10#issuecomment-100",
+        "completion_handoff_ready": true
+      }
+    },
+    "launch_history": [
+      1699913599.0,
+      1699913600.0,
+      1700000000.0
+    ],
+    "last_reconciled_at": 1699999990.0,
+    "task_reclaim_lookup_cursor": 4,
+    "pending_lock_release_notices": [
+      7,
+      7,
+      false,
+      -1,
+      8
+    ],
+    "task_reclaim_counts": {
+      "9": {
+        "count": 2,
+        "last_reclaimed_at": 1.0,
+        "pending": true,
+        "early_death_retry_count": 1,
+        "early_death_retry_at": 1700000010.0,
+        "early_death_retry_pending": true,
+        "review_timeout_retry_count": 3,
+        "review_timeout_retry_at": 1700000020.0,
+        "review_timeout_retry_pending": true
+      },
+      "invalid": {
+        "count": 2
+      },
+      "11": {
+        "count": true
+      }
+    },
+    "completed_worktrees": [
+      {
+        "issue_number": 6,
+        "subtask_id": "old",
+        "branch": "task/6",
+        "started_at": null,
+        "completed_at": 1.0
+      },
+      {
+        "issue_number": 7,
+        "subtask_id": "recent",
+        "branch": "task/7",
+        "started_at": 1699999800.0,
+        "completed_at": 1699999900.0,
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 10,
+          "total_tokens": 30
+        }
+      }
+    ]
+  },
+  "normalized": {
+    "active_worktrees": {
+      "10": {
+        "issue_number": 10,
+        "branch": "task/10",
+        "worktree_path": "worktrees/task-10",
+        "pid": null,
+        "started_at": null,
+        "declared_footprint": [
+          "src/task.py"
+        ],
+        "recompute_count": 0,
+        "forced_serial": false,
+        "external_id": null,
+        "external_url": null,
+        "base_branch": "origin/main",
+        "estimated_tokens": 400,
+        "token_estimate_recorded": true,
+        "profile": "balanced",
+        "model": "fixture-model",
+        "reasoning_effort": "medium",
+        "selection_reason": "task-profile",
+        "launch_attempt_id": "attempt-10",
+        "launch_phase": "launched",
+        "owner_kind": "dispatch",
+        "claim_id": "claim-10",
+        "claim_stage": "completed",
+        "base_ref": "parent/issue-1053",
+        "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "reservation_kind": "footprint",
+        "repository_id": "Saltmu/orchestune",
+        "claimed_at": 1699999900.0,
+        "owner_token_digest": "fixture-digest",
+        "completion_id": "completion-10",
+        "completion_result": "done",
+        "completion_stage": "handoff_ready",
+        "completion_payload": {
+          "pr": 20,
+          "review": {
+            "bot": "claude",
+            "rounds": 1
+          }
+        },
+        "completion_comment_id": "100",
+        "completion_comment_url": "https://github.com/Saltmu/orchestune/issues/10#issuecomment-100",
+        "completion_handoff_ready": true
+      }
+    },
+    "launch_history": [
+      1699913600.0,
+      1700000000.0
+    ],
+    "completed_worktrees": [
+      {
+        "issue_number": 7,
+        "subtask_id": "recent",
+        "branch": "task/7",
+        "started_at": 1699999800.0,
+        "completed_at": 1699999900.0,
+        "recompute_count": 0,
+        "forced_serial": false,
+        "commit_sha": null,
+        "base_branch": "origin/main",
+        "usage": {
+          "input_tokens": 20,
+          "output_tokens": 10,
+          "total_tokens": 30,
+          "model": null,
+          "cost_usd": null
+        },
+        "profile": null,
+        "model": null,
+        "reasoning_effort": null,
+        "selection_reason": null
+      }
+    ],
+    "last_reconciled_at": 1699999990.0,
+    "task_reclaim_counts": {
+      "9": {
+        "count": 2,
+        "last_reclaimed_at": 1.0,
+        "pending": true,
+        "early_death_retry_count": 1,
+        "early_death_retry_at": 1700000010.0,
+        "early_death_retry_pending": true,
+        "review_timeout_retry_count": 3,
+        "review_timeout_retry_at": 1700000020.0,
+        "review_timeout_retry_pending": true
+      }
+    },
+    "task_reclaim_lookup_cursor": 4,
+    "pending_lock_release_notices": [
+      7,
+      8
+    ]
+  }
+}

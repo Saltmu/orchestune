@@ -155,7 +155,7 @@ class ForgeSnapshot:
 class ExecutionRecord:
     """One in-flight execution as the dispatcher recorded it in run state.
 
-    Deliberately not `dispatch.state.ActiveWorktree`: the consistency kernel
+    Deliberately not `ledger.run_state.ActiveWorktree`: the consistency kernel
     stays independent of dispatch, and callers map their own record onto this
     minimal shape.
     """

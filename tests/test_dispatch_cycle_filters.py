@@ -20,11 +20,11 @@ from orchestune.dispatch.filters import (
     _filter_candidates_for_forced_serial,
     _filter_deviation_blocked_candidates,
 )
-from orchestune.dispatch.state import (
+from orchestune.issue_parsing import PARENT_MARKER
+from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
 )
-from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.models import IssueRecord
 from tests.dispatch_test_support import make_footprint_issue as _full_issue
 from tests.dispatch_test_support import make_test_active_worktree as _active

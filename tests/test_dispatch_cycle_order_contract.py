@@ -50,9 +50,9 @@ from orchestune.dispatch.scoring import (
     ScoreComponents,
     Task,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.dispatch.summary import merge_skips
 from orchestune.dispatch.worktree import LaunchResult
+from orchestune.ledger.run_state import ActiveWorktree, RunState, TaskReclaimRecord
 from tests.conftest import make_task
 
 

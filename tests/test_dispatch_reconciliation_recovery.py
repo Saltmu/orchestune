@@ -27,7 +27,7 @@ from orchestune.dispatch.reconciliation import (
     _lookup_issue_outcome,
     _resolve_base_branch_for_task,
 )
-from orchestune.dispatch.state import RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.outcome_record import OutcomeLookupState, OutcomeRecord
 from tests.dispatch_test_support import make_plain_issue as _issue
 from tests.dispatch_test_support import make_test_cycle_context

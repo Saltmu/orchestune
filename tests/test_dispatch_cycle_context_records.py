@@ -21,8 +21,8 @@ from orchestune.dispatch.cycle_context_state import (
     REASON_UNKNOWN_ISSUE,
     RecordStatus,
 )
-from orchestune.dispatch.state import RunState
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import RunState
 from tests.dispatch_cycle_context_test_support import _active, _ctx, _task
 
 

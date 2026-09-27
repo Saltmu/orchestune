@@ -12,9 +12,9 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.state import load_run_state
 from orchestune.infra.git_cli import run_git
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import load_run_state
 from orchestune.models import IssueRecord
 from tests.claim_helpers import MockForge
 

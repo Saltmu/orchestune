@@ -21,7 +21,7 @@ from orchestune.claim.ownership import (
     new_owner_token,
     owner_token_digest,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.task_metadata import CycleTask
 
 

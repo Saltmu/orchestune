@@ -64,7 +64,7 @@ from orchestune.consistency.vocabulary import (
 from orchestune.labels import StatusLabel
 
 # The mutually exclusive lifecycle positions of `docs/ja/status-labels.md`.
-# `orchestune.dispatch.labels.PRIMARY_STATUS_LABELS` is a deliberately narrower
+# `orchestune.ledger.status_labels.PRIMARY_STATUS_LABELS` is a deliberately narrower
 # tuple — the labels one `transition_status_label` call sweeps away — while this
 # is the full set a task must hold exactly one of.
 PRIMARY_STATUS_LABELS = (

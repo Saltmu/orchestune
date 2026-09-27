@@ -7,7 +7,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from orchestune.claim.contracts import OwnerKind
 from orchestune.exit_codes import TaskExitCode, complete_failure_exit_code
 from orchestune.outcome_record import (
     MAX_REASON_LENGTH,
@@ -19,6 +18,7 @@ from orchestune.outcome_record import (
     ReviewSummary,
     is_known_reason,
 )
+from orchestune.ownership_contracts import OwnerKind
 
 
 class CompleteStage(str, Enum):

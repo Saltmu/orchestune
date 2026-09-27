@@ -16,8 +16,8 @@ from orchestune.dispatch.gc.outcome_decision import (
     _is_handoff_ready,
     _is_handoff_retained_dirty,
 )
-from orchestune.dispatch.state import ActiveWorktree
 from orchestune.infra.git_cli import run_git
+from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
 

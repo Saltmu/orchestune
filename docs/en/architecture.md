@@ -202,9 +202,9 @@ from its own layer or from any layer below it, never from a layer above.
 | --- | --- | --- |
 | **L4** | **Entrypoints**<br/>the modules that expose a `main()` | `bootstrap`, `claim.cli`, `complete.cli`, `cli`, `dag.cli`, `dispatch.dispatcher`, `dispatch.gc_cli`, `monitor`, `provisioning.cli`, `replan.cli` |
 | **L3** | **Workflows**<br/>dispatch cycle and integration pipelines | `claim.service`, `complete.service`, `dispatch.cycle`, `dispatch.cycle_actions`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.gc_service`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integrator`, `integrator.coordinator`, `integrator.parent_completion`, `integrator.steps`, `integrator.types`, `provisioning.flow`, `replan.apply` |
-| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `claim.ownership`, `claim.preflight`, `claim.workspace`, `complete.ci_evidence`, `complete.journal`, `complete.posting`, `complete.preflight`, `consistency`, `consistency.desired`, `consistency.engine`, `consistency.invariants`, `consistency.invariants.execution`, `consistency.invariants.status`, `consistency.intents`, `consistency.observation`, `consistency.repairs`, `consistency.repairs.execution`, `consistency.repairs.status`, `consistency.supervisor`, `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.attempt_record`, `dispatch.config`, `dispatch.config_loader`, `dispatch.conflicts`, `dispatch.cost_model`, `dispatch.critical_path`, `dispatch.claim_marker`, `dispatch.cycle_action_contracts`, `dispatch.cycle_context_state`, `dispatch.cycle_records`, `dispatch.dependency_assessment`, `dispatch.dependency_policy`, `dispatch.dependency_resolution`, `dispatch.escalation`, `dispatch.execution_profiles`, `dispatch.execution_repair`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.handoff`, `dispatch.gc.outcome_decision`, `dispatch.gc.prior_merge`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.launch_attempts`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.prior_parent_merge`, `dispatch.reviewer`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.status_dependency_policy`, `dispatch.status_repair`, `dispatch.status_repair_dependencies`, `dispatch.summary`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.finalization`, `integrator.final_pr_body`, `integrator.git_ops`, `integrator.pr`, `integrator.proofs`, `integrator.tasks`, `integrator.worktree`, `issue_notice`, `issue_parsing`, `pr_link_notice`, `provisioning.parent`, `provisioning.plan`, `provisioning.plan_loading`, `provisioning.rendering`, `provisioning.retry`, `provisioning.subtasks`, `replan.audit`, `replan.operations`, `replan.plan`, `replan.preview`, `replan.snapshot`, `status_snapshot`, `symbol_verification`, `task_branch_resolution` |
+| **L2** | **Domain**<br/>DAG construction, scoring, dispatch mechanics | `claim.ownership`, `claim.preflight`, `claim.workspace`, `complete.ci_evidence`, `complete.journal`, `complete.posting`, `complete.preflight`, `consistency`, `consistency.desired`, `consistency.engine`, `consistency.invariants`, `consistency.invariants.execution`, `consistency.invariants.status`, `consistency.intents`, `consistency.observation`, `consistency.repairs`, `consistency.repairs.execution`, `consistency.repairs.status`, `consistency.supervisor`, `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.attempt_record`, `dispatch.config`, `dispatch.config_loader`, `dispatch.conflicts`, `dispatch.cost_model`, `dispatch.critical_path`, `dispatch.claim_marker`, `dispatch.cycle_action_contracts`, `dispatch.cycle_context_state`, `dispatch.cycle_records`, `dispatch.dependency_assessment`, `dispatch.dependency_policy`, `dispatch.dependency_resolution`, `dispatch.escalation`, `dispatch.execution_profiles`, `dispatch.execution_repair`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.handoff`, `dispatch.gc.outcome_decision`, `dispatch.gc.prior_merge`, `dispatch.gc.zombies`, `dispatch.launch`, `dispatch.launch_attempts`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.prior_parent_merge`, `dispatch.reviewer`, `dispatch.rules`, `dispatch.scoring`, `dispatch.status_dependency_policy`, `dispatch.status_repair`, `dispatch.status_repair_dependencies`, `dispatch.summary`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.finalization`, `integrator.final_pr_body`, `integrator.git_ops`, `integrator.pr`, `integrator.proofs`, `integrator.tasks`, `integrator.worktree`, `issue_notice`, `issue_parsing`, `ledger`, `ledger.escalation`, `ledger.run_state`, `ledger.status_labels`, `pr_link_notice`, `provisioning.parent`, `provisioning.plan`, `provisioning.plan_loading`, `provisioning.rendering`, `provisioning.retry`, `provisioning.subtasks`, `replan.audit`, `replan.operations`, `replan.plan`, `replan.preview`, `replan.snapshot`, `status_snapshot`, `symbol_verification`, `task_branch_resolution` |
 | **L1** | **Adapters**<br/>the modules that run external developer tools | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli`, `infra.python_env` |
-| **L0** | **Infra**<br/>pure DTOs and dependency-free helpers | `bounded_limit`, `branch_naming`, `claim`, `claim.contracts`, `complete`, `complete.contracts`, `consistency.contracts`, `consistency.models`, `consistency.vocabulary`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `exit_codes`, `infra`, `infra.json_state`, `infra.process_utils`, `labels`, `models`, `outcome_record`, `plan_writer`, `provisioning`, `replan`, `replan.models`, `setup_skills`, `task_metadata`, `validation`, `version` |
+| **L0** | **Infra**<br/>pure DTOs and dependency-free helpers | `bounded_limit`, `branch_naming`, `claim`, `claim.contracts`, `complete`, `complete.contracts`, `consistency.contracts`, `consistency.models`, `consistency.vocabulary`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `exit_codes`, `infra`, `infra.json_state`, `infra.process_utils`, `labels`, `models`, `outcome_record`, `ownership_contracts`, `plan_writer`, `provisioning`, `replan`, `replan.models`, `setup_skills`, `task_metadata`, `validation`, `version` |
 
 Pure data-transfer modules (`models`, `dag.models`, `dispatch.result`) sit at
 **L0**, below the adapters, because `GitHubForge` returns `IssueRecord` and
@@ -216,6 +216,55 @@ L4 is defined by "has a `main()`, and nothing but `cli` imports it", not by
 the other five; the guard encodes that as `ALLOWED_L4_DEPENDENTS`.
 
 New code belongs in the layer that owns the behaviour, and this section and `tests/test_architecture.py` keep enforcing it mechanically.
+
+#### Shared execution ledger and ownership contracts
+
+`ledger` is L2 shared infrastructure for `claim`, `complete`, `dispatch`,
+`integrator`, and status reporting. It owns three responsibilities:
+
+- `ledger.run_state`: execution-state models, loading, validation, normalization,
+  persistence, and retention helpers. Moving it out of dispatch preserves the
+  JSON format and the requirement to hold the existing state lock when saving.
+- `ledger.status_labels`: shared status-label constants and transitions.
+- `ledger.escalation`: the shared escalation operation. It adds the terminal
+  label, invokes the caller's state-commit callback, removes the specified old
+  labels, then posts the reason. A failed add or callback stops later steps;
+  later cleanup/comment failure does not roll back a committed state update.
+  Dispatch-specific rule evaluation, process stopping, and ledger updates stay
+  with the dispatch workflow and its callbacks.
+
+`ownership_contracts` is an independent L0 module defining `OwnerKind`,
+`ClaimStage`, and `ReservationKind`. Ledger imports it directly; `claim.contracts`
+may re-export those same enums and retains claim-specific requests/outcomes.
+The shared enums have no dependency on claim, ledger, or dispatch implementations.
+
+The dedicated ledger boundary is stricter than the general layer rule: ledger
+may import its own modules, but its other dependencies inside `orchestune` must
+be L0/L1. Standard-library and third-party imports are outside this layer check.
+Ledger does not depend on claim or dispatch. `complete` no longer imports dispatch;
+the former `dispatch.state` and `dispatch.labels` modules have been removed.
+Integrator imports shared escalation from ledger and `file_lock` directly from
+`infra.process_utils`.
+
+The remaining workflow dependencies were deliberately excluded from the ledger
+extraction. These follow-ups own their placement and behaviour-preserving migration:
+
+| Consumer | Remaining dependency / reason | Follow-up |
+| --- | --- | --- |
+| `claim.preflight` | `dispatch.locks`: shared lock types/constants still coexist with dispatch scanning | [#1071](https://github.com/Saltmu/orchestune/issues/1071) |
+| `claim.service` | `dispatch.worktree`: shared worktree preparation still belongs to dispatch | [#1072](https://github.com/Saltmu/orchestune/issues/1072) |
+| `claim.preflight` | `dispatch.dependency_assessment` / `dispatch.dependency_policy`: common readiness and stack policy | [#1073](https://github.com/Saltmu/orchestune/issues/1073) |
+| `integrator.coordinator` | `dispatch.targets`: routine constants, target implementation, and handle contract | [#1074](https://github.com/Saltmu/orchestune/issues/1074) |
+| `integrator.steps` | `dispatch.gc.git`: shared temporary-branch cleanup | [#1072](https://github.com/Saltmu/orchestune/issues/1072) |
+| `integrator.tasks` | `dispatch.dependency_resolution`: shared legacy dependency resolution | [#1073](https://github.com/Saltmu/orchestune/issues/1073) |
+
+These return paths also keep the existing `complete → claim`,
+`dispatch → claim/complete/integrator` edges inside package cycles. Removing a
+single module import cannot retire an allowlist entry while another import
+between the same packages remains in a cycle. The unrelated
+`dag ↔ symbol_verification` and `provisioning ↔ replan` cycles are tracked in
+[#1075](https://github.com/Saltmu/orchestune/issues/1075) and
+[#1076](https://github.com/Saltmu/orchestune/issues/1076), respectively.
 
 ### 4.2 Invariants enforced by CI
 
@@ -257,6 +306,15 @@ table above cannot silently drift from the code:
    is not subject to rule 1. What it may import is checked separately: a
    dedicated test asserts it pulls in no L4 entrypoint, which is the property
    that would otherwise be lost.
+5. **No cross-package import cycles (with allowlist ratchet)**:
+   In addition to module-level cycle prohibition (Rule 3), circular imports between top-level packages (`orchestune.<pkg>`, or the module name for standalone modules) are forbidden. Cross-package cycles are not allowed even within the same layer or in downward-pointing directions. Pre-existing cycles are explicitly tracked in `KNOWN_PACKAGE_CYCLE_EDGES` with stated reasons and planned resolution issues, and verified via strongly connected components (SCC) over the reduced package graph. Introducing new unauthorized cycles fails CI, and resolved cycle edges must be removed from the allowlist (ratchet). The package root (`orchestune/__init__.py`), which declares public re-exports (Rule 4), is exempt from cross-package cycle tracking.
+6. **Ledger imports only its own modules and L0/L1 dependencies.** The dedicated
+   test rejects dependencies on other L2 modules as well as L3/L4 modules, which
+   the general downward-layer rule alone cannot ensure. Synthetic graphs in
+   `tests/test_ledger_architecture.py` exercise the same guard for package
+   initializers and nested modules, both allowed and forbidden dependencies.
+   Ownership contracts remain dependency-free; companion tests preserve the
+   absence of ledger → claim/dispatch and complete → dispatch edges.
 
 ### 4.3 Why `Forge` is a protocol, not a class
 

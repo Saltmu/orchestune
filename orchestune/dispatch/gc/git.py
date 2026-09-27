@@ -19,7 +19,7 @@ from orchestune.infra.git_cli import (
 )
 
 if TYPE_CHECKING:
-    from orchestune.dispatch.state import ActiveWorktree
+    from orchestune.ledger.run_state import ActiveWorktree
 
 
 @dataclass(frozen=True)

@@ -26,7 +26,7 @@ from orchestune.dispatch.cycle_context_state import (
 from orchestune.dispatch.dependency_assessment import DependencyAssessment
 from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.scoring import SchedulingResult
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord, Task
 from orchestune.task_branch_resolution import TaskBranchResolution
 from orchestune.task_metadata import TaskMetadata

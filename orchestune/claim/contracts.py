@@ -7,33 +7,9 @@ from enum import Enum
 from pathlib import Path
 
 from orchestune.exit_codes import TaskExitCode, claim_failure_exit_code
-
-
-class OwnerKind(str, Enum):
-    """Identifies the entity responsible for an active claim session."""
-
-    INTERACTIVE = "interactive"
-    DISPATCH = "dispatch"
-
-
-class ReservationKind(str, Enum):
-    """Scope of task reservation applied during claim."""
-
-    FOOTPRINT = "footprint"
-    REPOSITORY = "repository"
-
-
-class ClaimStage(str, Enum):
-    """Progression stages of claim side-effects."""
-
-    VALIDATING = "validating"
-    FETCHED = "fetched"
-    RESERVED = "reserved"
-    WORKTREE_PREPARED = "worktree_prepared"
-    ACTIVE_SAVED = "active_saved"
-    LABELED = "labeled"
-    COMPLETED = "completed"
-
+from orchestune.ownership_contracts import ClaimStage as ClaimStage
+from orchestune.ownership_contracts import OwnerKind as OwnerKind
+from orchestune.ownership_contracts import ReservationKind as ReservationKind
 
 ClaimExitCode = TaskExitCode
 

@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from orchestune.dispatch.state import RunState, save_run_state
 from orchestune.infra.process_utils import run_state_lock
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import RunState, save_run_state
 from orchestune.models import IssueRecord
 from tests.conftest import FakeForge
 

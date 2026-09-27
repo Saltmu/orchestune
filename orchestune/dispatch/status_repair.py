@@ -29,7 +29,6 @@ from orchestune.consistency.repairs.status import (
 )
 from orchestune.consistency.vocabulary import DESIRED_STATUS_LABEL
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.status_dependency_policy import dependencies_completed
 from orchestune.dispatch.status_repair_dependencies import (
@@ -38,6 +37,7 @@ from orchestune.dispatch.status_repair_dependencies import (
     evaluate_fresh_dependencies,
     task_lifecycle,
 )
+from orchestune.ledger.status_labels import transition_status_label
 
 _STATUS_REPAIR_OPERATION = "supervisor-status-repair"
 

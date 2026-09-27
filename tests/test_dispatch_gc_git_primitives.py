@@ -642,7 +642,7 @@ class TestEvaluateWorktreeRemoval:
     def test_clean_registered_matching_worktree_is_removable(self, tmp_path):
         from orchestune.dispatch.claim_marker import write_claim_marker
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.dispatch.state import ActiveWorktree
+        from orchestune.ledger.run_state import ActiveWorktree
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -696,7 +696,7 @@ class TestEvaluateWorktreeRemoval:
 
     def test_rejects_primary_worktree(self, tmp_path):
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.dispatch.state import ActiveWorktree
+        from orchestune.ledger.run_state import ActiveWorktree
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -724,7 +724,7 @@ class TestEvaluateWorktreeRemoval:
 
     def test_rejects_unregistered_worktree(self, tmp_path):
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.dispatch.state import ActiveWorktree
+        from orchestune.ledger.run_state import ActiveWorktree
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -766,7 +766,7 @@ class TestEvaluateWorktreeRemoval:
     def test_rejects_dirty_worktree(self, tmp_path):
         from orchestune.dispatch.claim_marker import write_claim_marker
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.dispatch.state import ActiveWorktree
+        from orchestune.ledger.run_state import ActiveWorktree
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -822,7 +822,7 @@ class TestEvaluateWorktreeRemoval:
     def test_rejects_branch_mismatch(self, tmp_path):
         from orchestune.dispatch.claim_marker import write_claim_marker
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.dispatch.state import ActiveWorktree
+        from orchestune.ledger.run_state import ActiveWorktree
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -874,7 +874,7 @@ class TestEvaluateWorktreeRemoval:
     def test_rejects_owner_mismatch(self, tmp_path):
         from orchestune.dispatch.claim_marker import write_claim_marker
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.dispatch.state import ActiveWorktree
+        from orchestune.ledger.run_state import ActiveWorktree
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -927,7 +927,7 @@ class TestEvaluateWorktreeRemoval:
 
     def test_fails_closed_when_git_command_raises(self, tmp_path):
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.dispatch.state import ActiveWorktree
+        from orchestune.ledger.run_state import ActiveWorktree
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -954,7 +954,7 @@ class TestEvaluateWorktreeRemoval:
 
     def test_rejects_symlink_mismatch(self, tmp_path):
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.dispatch.state import ActiveWorktree
+        from orchestune.ledger.run_state import ActiveWorktree
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()

@@ -5,7 +5,7 @@ from orchestune.dispatch.scoring import (
     quota_available,
     select_next_tasks,
 )
-from orchestune.dispatch.state import ActiveWorktree, CompletedWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, CompletedWorktree, RunState
 from orchestune.models import IssueRecord
 
 

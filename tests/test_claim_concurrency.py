@@ -13,10 +13,10 @@ from unittest.mock import patch
 import pytest
 
 from orchestune.claim.contracts import ClaimRequest, OwnerKind
-from orchestune.dispatch.state import ActiveWorktree, RunState, load_run_state
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import run_state_lock
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import ActiveWorktree, RunState, load_run_state
 from orchestune.models import IssueRecord
 from tests.claim_helpers import MockForge
 
@@ -138,8 +138,8 @@ def _run_dispatch_claim(
     from orchestune.dispatch.cycle_actions import _bind_dispatch_claim_fn
     from orchestune.dispatch.launch import TaskLaunchPlan, _try_planned_launch
     from orchestune.dispatch.scoring import Task
-    from orchestune.dispatch.state import load_run_state
     from orchestune.dispatch.worktree import LaunchResult
+    from orchestune.ledger.run_state import load_run_state
 
     task = Task(
         issue_number=issue_number,
@@ -254,7 +254,7 @@ def _run_claimers_from_repos(
 
 
 def _save_state(path: Path, state: RunState) -> None:
-    from orchestune.dispatch.state import save_run_state
+    from orchestune.ledger.run_state import save_run_state
 
     with run_state_lock(path.with_suffix(".lock"), timeout=10):
         save_run_state(state, path)
@@ -387,7 +387,7 @@ def test_primary_and_linked_worktree_share_one_ledger_without_lost_updates(
 
 
 def _gc_save_process(state_path: str, ready: Any, start: Any, results: Any) -> None:
-    from orchestune.dispatch.state import (
+    from orchestune.ledger.run_state import (
         load_run_state,
         prune_run_state,
         save_run_state,

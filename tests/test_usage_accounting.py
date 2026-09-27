@@ -6,17 +6,17 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc.completion import _apply_completed_worktree_outcome
 from orchestune.dispatch.postcycle import _format_event_log_comment
 from orchestune.dispatch.scoring import quota_available
-from orchestune.dispatch.state import (
-    ActiveWorktree,
-    CompletedWorktree,
-    RunState,
-    load_run_state,
-)
 from orchestune.dispatch.targets import (
     CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
     DispatchHandle,
     DispatchTarget,
     LocalProcessDispatchTarget,
+)
+from orchestune.ledger.run_state import (
+    ActiveWorktree,
+    CompletedWorktree,
+    RunState,
+    load_run_state,
 )
 from orchestune.models import Task, Usage
 from orchestune.outcome_record import OutcomeRecord

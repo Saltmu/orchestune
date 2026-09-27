@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, Task
 from tests.conftest import make_issue
 from tests.dispatch_test_support import (

@@ -15,7 +15,6 @@ from typing import Literal
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_records import CompletionReceipt
-from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
     ForgeFailure,
@@ -56,15 +55,16 @@ from orchestune.dispatch.gc.zombies import (
     _apply_zombie_or_timeout_reclaim,
 )
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
-from orchestune.dispatch.state import (
+from orchestune.infra.process_utils import is_process_alive
+from orchestune.labels import StatusLabel
+from orchestune.ledger.escalation import apply_human_review_escalation
+from orchestune.ledger.run_state import (
     ActiveWorktree,
     CompletedWorktree,
     RunState,
     TaskReclaimRecord,
     save_run_state,
 )
-from orchestune.infra.process_utils import is_process_alive
-from orchestune.labels import StatusLabel
 from orchestune.models import PrRecord, Usage
 from orchestune.outcome_record import RESULT_NOT_NEEDED, OutcomeLookupState
 from orchestune.task_metadata import TaskMetadata

@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, call, patch
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.rebase import RebaseContext
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from tests.dispatch_test_support import make_test_active_worktree, make_test_task
 
 

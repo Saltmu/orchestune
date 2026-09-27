@@ -30,9 +30,9 @@ from orchestune.dispatch.dependency_resolution import (
     TaskDependencies,
     build_legacy_dag_inputs,
 )
-from orchestune.dispatch.state import ActiveWorktree
 from orchestune.dispatch.status_repair_dependencies import task_lifecycle
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.models import IssueRecord, PrRecord, Task
 from orchestune.task_branch_resolution import TaskBranchResolution
 from orchestune.task_metadata import CycleTask

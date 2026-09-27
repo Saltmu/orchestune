@@ -13,7 +13,7 @@ from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
 )
-from orchestune.dispatch.state import (
+from orchestune.ledger.run_state import (
     RunState,
     TaskReclaimRecord,
     load_run_state,

@@ -11,8 +11,8 @@ from unittest.mock import ANY, MagicMock, patch
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
-from orchestune.dispatch.state import ActiveWorktree, RunState, load_run_state
 from orchestune.dispatch.targets import DispatchHandle
+from orchestune.ledger.run_state import ActiveWorktree, RunState, load_run_state
 from orchestune.models import PrRecord
 from tests.dispatch_test_support import make_footprint_issue as _issue
 from tests.dispatch_test_support import (

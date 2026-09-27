@@ -201,9 +201,9 @@ record APIは外部I/Oを行わず、呼出側の成功確認済みの事実だ�
 | --- | --- | --- |
 | **L4** | **エントリポイント**<br/>`main()` を持つモジュール | `bootstrap`, `claim.cli`, `complete.cli`, `cli`, `dag.cli`, `dispatch.dispatcher`, `dispatch.gc_cli`, `monitor`, `provisioning.cli`, `replan.cli` |
 | **L3** | **ワークフロー**<br/>ディスパッチサイクルと統合パイプライン | `claim.service`, `complete.service`, `dispatch.cycle`, `dispatch.cycle_actions`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.gc_service`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integrator`, `integrator.coordinator`, `integrator.parent_completion`, `integrator.steps`, `integrator.types`, `provisioning.flow`, `replan.apply` |
-| **L2** | **ドメイン**<br/>DAG構築・スコアリング・ディスパッチ機構 | `claim.ownership`, `claim.preflight`, `claim.workspace`, `complete.ci_evidence`, `complete.journal`, `complete.posting`, `complete.preflight`, `consistency`, `consistency.desired`, `consistency.engine`, `consistency.invariants`, `consistency.invariants.execution`, `consistency.invariants.status`, `consistency.intents`, `consistency.observation`, `consistency.repairs`, `consistency.repairs.execution`, `consistency.repairs.status`, `consistency.supervisor`, `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.attempt_record`, `dispatch.config`, `dispatch.config_loader`, `dispatch.conflicts`, `dispatch.cost_model`, `dispatch.critical_path`, `dispatch.claim_marker`, `dispatch.cycle_action_contracts`, `dispatch.cycle_context_state`, `dispatch.cycle_records`, `dispatch.dependency_assessment`, `dispatch.dependency_policy`, `dispatch.dependency_resolution`, `dispatch.escalation`, `dispatch.execution_profiles`, `dispatch.execution_repair`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.handoff`, `dispatch.gc.outcome_decision`, `dispatch.gc.prior_merge`, `dispatch.gc.zombies`, `dispatch.labels`, `dispatch.launch`, `dispatch.launch_attempts`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.prior_parent_merge`, `dispatch.reviewer`, `dispatch.rules`, `dispatch.scoring`, `dispatch.state`, `dispatch.status_dependency_policy`, `dispatch.status_repair`, `dispatch.status_repair_dependencies`, `dispatch.summary`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.finalization`, `integrator.final_pr_body`, `integrator.git_ops`, `integrator.pr`, `integrator.proofs`, `integrator.tasks`, `integrator.worktree`, `issue_notice`, `issue_parsing`, `pr_link_notice`, `provisioning.parent`, `provisioning.plan`, `provisioning.plan_loading`, `provisioning.rendering`, `provisioning.retry`, `provisioning.subtasks`, `replan.audit`, `replan.operations`, `replan.plan`, `replan.preview`, `replan.snapshot`, `status_snapshot`, `symbol_verification`, `task_branch_resolution` |
+| **L2** | **ドメイン**<br/>DAG構築・スコアリング・ディスパッチ機構 | `claim.ownership`, `claim.preflight`, `claim.workspace`, `complete.ci_evidence`, `complete.journal`, `complete.posting`, `complete.preflight`, `consistency`, `consistency.desired`, `consistency.engine`, `consistency.invariants`, `consistency.invariants.execution`, `consistency.invariants.status`, `consistency.intents`, `consistency.observation`, `consistency.repairs`, `consistency.repairs.execution`, `consistency.repairs.status`, `consistency.supervisor`, `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dispatch.actor_verification`, `dispatch.attempt_record`, `dispatch.config`, `dispatch.config_loader`, `dispatch.conflicts`, `dispatch.cost_model`, `dispatch.critical_path`, `dispatch.claim_marker`, `dispatch.cycle_action_contracts`, `dispatch.cycle_context_state`, `dispatch.cycle_records`, `dispatch.dependency_assessment`, `dispatch.dependency_policy`, `dispatch.dependency_resolution`, `dispatch.escalation`, `dispatch.execution_profiles`, `dispatch.execution_repair`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.handoff`, `dispatch.gc.outcome_decision`, `dispatch.gc.prior_merge`, `dispatch.gc.zombies`, `dispatch.launch`, `dispatch.launch_attempts`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.prior_parent_merge`, `dispatch.reviewer`, `dispatch.rules`, `dispatch.scoring`, `dispatch.status_dependency_policy`, `dispatch.status_repair`, `dispatch.status_repair_dependencies`, `dispatch.summary`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.finalization`, `integrator.final_pr_body`, `integrator.git_ops`, `integrator.pr`, `integrator.proofs`, `integrator.tasks`, `integrator.worktree`, `issue_notice`, `issue_parsing`, `ledger`, `ledger.escalation`, `ledger.run_state`, `ledger.status_labels`, `pr_link_notice`, `provisioning.parent`, `provisioning.plan`, `provisioning.plan_loading`, `provisioning.rendering`, `provisioning.retry`, `provisioning.subtasks`, `replan.audit`, `replan.operations`, `replan.plan`, `replan.preview`, `replan.snapshot`, `status_snapshot`, `symbol_verification`, `task_branch_resolution` |
 | **L1** | **アダプタ**<br/>外部開発ツールを実行するモジュール群 | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli`, `infra.python_env` |
-| **L0** | **インフラ**<br/>純粋なDTOと依存を持たないヘルパ | `bounded_limit`, `branch_naming`, `claim`, `claim.contracts`, `complete`, `complete.contracts`, `consistency.contracts`, `consistency.models`, `consistency.vocabulary`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `exit_codes`, `infra`, `infra.json_state`, `infra.process_utils`, `labels`, `models`, `outcome_record`, `plan_writer`, `provisioning`, `replan`, `replan.models`, `setup_skills`, `task_metadata`, `validation`, `version` |
+| **L0** | **インフラ**<br/>純粋なDTOと依存を持たないヘルパ | `bounded_limit`, `branch_naming`, `claim`, `claim.contracts`, `complete`, `complete.contracts`, `consistency.contracts`, `consistency.models`, `consistency.vocabulary`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `exit_codes`, `infra`, `infra.json_state`, `infra.process_utils`, `labels`, `models`, `outcome_record`, `ownership_contracts`, `plan_writer`, `provisioning`, `replan`, `replan.models`, `setup_skills`, `task_metadata`, `validation`, `version` |
 
 純粋なデータ転送モジュール（`models`, `dag.models`, `dispatch.result`）を
 アダプタより下の **L0** に置いているのは、`GitHubForge` が `IssueRecord` /
@@ -213,6 +213,51 @@ record APIは外部I/Oを行わず、呼出側の成功確認済みの事実だ�
 L4の定義は「`main()` を持ち、`cli` 以外からはimportされない」ことであって、「argparse配線しか含まない」ことではありません。`cli` が例外なのは、残り5つへ処理を振り分ける役割だからです（ガード側では `ALLOWED_L4_DEPENDENTS` として表現されています）。
 
 新規のコードは常にその振る舞いを所有する層に配置する必要があり、境界は引き続きこの節と`tests/test_architecture.py`で機械的に検証されます。
+
+#### 共有実行台帳と所有権契約
+
+`ledger` は `claim`・`complete`・`dispatch`・`integrator`・状態表示が共有する
+L2 の基盤で、次の3つの責務を持ちます。
+
+- `ledger.run_state`: 実行状態モデル、読込、検証、正規化、保存、保持方針のヘルパー。
+  dispatch からの分離で JSON 形式や、保存時に既存の状態ロックを保持する条件は変えません。
+- `ledger.status_labels`: 共通の状態ラベル定数と遷移。
+- `ledger.escalation`: 共通エスカレーション操作。終端ラベル追加、利用側の台帳確定
+  コールバック、指定された旧ラベル削除、理由コメント投稿の順で実行します。
+  追加またはコールバックの失敗は後続処理を停止し、その後の削除・投稿の失敗では
+  確定済みの台帳更新を巻き戻しません。dispatch 固有のルール評価・プロセス停止・
+  台帳更新は dispatch ワークフローとコールバックに残します。
+
+`ownership_contracts` は `OwnerKind`・`ClaimStage`・`ReservationKind` を定義する
+独立した L0 モジュールです。ledger はここを直接参照します。`claim.contracts` は
+同じ enum の再エクスポートを許可し、claim 固有の Request・Outcome を保持します。
+共有 enum は claim・ledger・dispatch の実装に依存しません。
+
+ledger の専用境界は一般のレイヤー規則より厳しく、ledger 内部参照を許可する一方、
+`orchestune` 内の外部依存は L0/L1 に限定します。標準・外部ライブラリはこの
+レイヤー検査の対象外です。ledger は claim・dispatch に依存しません。
+`complete` から dispatch への依存は解消済みで、旧 `dispatch.state`・
+`dispatch.labels` は削除済みです。integrator は共通エスカレーションを ledger から、
+`file_lock` を `infra.process_utils` から直接参照します。
+
+以下のワークフロー依存は ledger 分離の対象外として残しています。
+配置の見直しと挙動を維持した移行は後続 Issue で行います。
+
+| 利用側 | 残存依存と理由 | 後続 Issue |
+| --- | --- | --- |
+| `claim.preflight` | `dispatch.locks`: 共通のロック型・定数が dispatch の走査処理と同居 | [#1071](https://github.com/Saltmu/orchestune/issues/1071) |
+| `claim.service` | `dispatch.worktree`: 共通の worktree 準備が dispatch 配下にある | [#1072](https://github.com/Saltmu/orchestune/issues/1072) |
+| `claim.preflight` | `dispatch.dependency_assessment` / `dispatch.dependency_policy`: readiness・stack 判定を共有 | [#1073](https://github.com/Saltmu/orchestune/issues/1073) |
+| `integrator.coordinator` | `dispatch.targets`: routine 定数・target 実装・handle 契約を共有 | [#1074](https://github.com/Saltmu/orchestune/issues/1074) |
+| `integrator.steps` | `dispatch.gc.git`: 一時ブランチ掃除を共有 | [#1072](https://github.com/Saltmu/orchestune/issues/1072) |
+| `integrator.tasks` | `dispatch.dependency_resolution`: legacy 依存解決を共有 | [#1073](https://github.com/Saltmu/orchestune/issues/1073) |
+
+これらの戻り経路によって `complete → claim`・`dispatch → claim/complete/integrator`
+もパッケージ循環に残ります。同じパッケージ対の別の import が循環内に残る間は、
+一部のモジュール参照を解消しただけで許容エントリを削除してはいけません。
+別責務の `dag ↔ symbol_verification` と `provisioning ↔ replan` の循環は、それぞれ
+[#1075](https://github.com/Saltmu/orchestune/issues/1075)・
+[#1076](https://github.com/Saltmu/orchestune/issues/1076) で追跡します。
 
 ### 4.2 CIで機械的に検証される不変条件
 
@@ -242,6 +287,14 @@ L4の定義は「`main()` を持ち、`cli` 以外からはimportされない」
    循環インポートは禁止されています。また、循環検知をすり抜ける関数内import（内部モジュールに対するもの）も禁止です。起動時間短縮のためにエントリポイントのimportを遅延させる `cli` のみが例外となります。
 4. **表は網羅的である**:
    `orchestune/` 配下のすべての `.py` ファイルが、英語版・日本語版の両ドキュメントでちょうど1つの層に現れる必要があります。ただし `orchestune/__init__.py` 自身のみ意図的な例外です。パッケージルートは境界の**中にいる**のではなく境界を**宣言する**側であるため、層を持たずルール1の対象にもなりません。何をimportしてよいかは別途検査しており、L4のエントリポイントを取り込んでいないことを専用のテストが表明します（これが例外化によって失われうる性質であるためです）。
+5. **パッケージ間循環の禁止（許容リスト付き ratchet）**:
+   モジュール単位の循環禁止（ルール3）に加えて、トップレベルパッケージ（`orchestune.<pkg>`、単一モジュールはそのモジュール名）間での循環importも禁止されます。同一レイヤー内または上位→下位レイヤーであっても、パッケージ間の循環は許容されません。既存の循環は `KNOWN_PACKAGE_CYCLE_EDGES` の許容リストに明示的な理由と解消予定Issueを付与して記録されており、元の縮約グラフの強連結成分（SCC）から循環エッジを抽出して検査されます。新たな未許容循環の追加はCIで阻止され、リファクタリングにより解消された循環エッジは許容リストからの削除が機械的に強制されます（ratchet）。なおパッケージルート（`orchestune/__init__.py`）は公開APIを再公開・宣言する側であるため（ルール4参照）、パッケージ間循環の検査対象外となります。
+6. **ledger の依存は内部参照と L0/L1 のみ**:
+   一般の下向きレイヤー規則だけでは禁止できない別の L2 モジュールへの依存も、
+   L3/L4 への依存とともに専用テストで拒否します。`tests/test_ledger_architecture.py`
+   の合成グラフは同じガードを呼び出し、パッケージ初期化・ネストしたモジュールの
+   許可・禁止方向を検証します。所有権契約は依存を持たず、補助テストで
+   ledger → claim/dispatch と complete → dispatch の依存がないことも維持します。
 
 ### 4.3 なぜ `Forge` はクラスではなくプロトコルなのか
 

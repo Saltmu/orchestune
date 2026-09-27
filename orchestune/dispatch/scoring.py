@@ -29,10 +29,10 @@ from orchestune.dispatch.critical_path import (
     pending_tasks,
 )
 from orchestune.dispatch.dependency_resolution import build_legacy_dag_inputs
-from orchestune.dispatch.state import RunState
 from orchestune.issue_parsing import BASE_PRIORITY, parse_task_from_issue
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN as _FOOTPRINT_BLOCK_PATTERN
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import RunState
 from orchestune.models import Task
 from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 

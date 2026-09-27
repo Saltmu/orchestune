@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from orchestune.dispatch.labels import transition_status_label
+from orchestune.ledger.status_labels import transition_status_label
 
 
 class TestTransitionStatusLabel:

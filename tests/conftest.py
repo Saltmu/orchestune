@@ -690,7 +690,7 @@ _FAKE_FORGE_MIGRATION_TESTS = frozenset(
 _FAKE_FORGE_MIGRATION_MODULES = (
     "orchestune.dispatch.actor_verification",
     "orchestune.dispatch.config",
-    "orchestune.dispatch.escalation",
+    "orchestune.ledger.escalation",
     "orchestune.dispatch.rebase",
 )
 
@@ -1118,7 +1118,7 @@ def _stub_run_state_lock_assertion_by_default(request: pytest.FixtureRequest):
         yield
         return
 
-    with patch("orchestune.dispatch.state.assert_run_state_lock_held"):
+    with patch("orchestune.ledger.run_state.assert_run_state_lock_held"):
         yield
 
 

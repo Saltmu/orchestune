@@ -23,8 +23,8 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import CycleReport, run_dispatch_cycle
 from orchestune.dispatch.dispatcher import main
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
-from orchestune.dispatch.state import RunState, load_run_state
 from orchestune.forge import ForgeAuthError
+from orchestune.ledger.run_state import RunState, load_run_state
 from tests.dispatch_test_support import make_footprint_issue as _issue
 from tests.dispatch_test_support import (
     save_locked_run_state as save_run_state,

@@ -18,7 +18,6 @@ from orchestune.consistency.invariants.execution import (
 from orchestune.consistency.models import RepairCommand, RepairResult, RepairStatus
 from orchestune.consistency.repairs.execution import COMMAND_RECLAIM
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.execution_repair import (
     ReclaimPrecondition,
     command_finding_codes,
@@ -28,18 +27,19 @@ from orchestune.dispatch.gc.git import (
     backup_wip_commit,
     remove_worktree,
 )
-from orchestune.dispatch.labels import (
-    TERMINAL_ESCALATION_LABELS,
-    transition_status_label,
-)
-from orchestune.dispatch.state import (
+from orchestune.infra.process_utils import is_process_alive
+from orchestune.labels import StatusLabel
+from orchestune.ledger.escalation import apply_human_review_escalation
+from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
     TaskReclaimRecord,
     save_run_state,
 )
-from orchestune.infra.process_utils import is_process_alive
-from orchestune.labels import StatusLabel
+from orchestune.ledger.status_labels import (
+    TERMINAL_ESCALATION_LABELS,
+    transition_status_label,
+)
 from orchestune.models import PrRecord
 from orchestune.task_metadata import TaskMetadata
 

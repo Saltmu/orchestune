@@ -15,7 +15,7 @@ from orchestune.dispatch.gc.completion import (
     _finalize_abandoned_cloud_worktree,
     _local_pr_completion_status,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState, TaskReclaimRecord
+from orchestune.ledger.run_state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _task

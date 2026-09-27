@@ -7,7 +7,7 @@ from orchestune.dispatch.dependency_resolution import (
     EMPTY_DEPENDENCIES,
     TaskDependencies,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.task_metadata import TaskMetadata
 
 TTask = TypeVar("TTask", bound=TaskMetadata)

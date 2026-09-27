@@ -32,7 +32,7 @@ from orchestune.dispatch.rebase import (
     _decide_footprint_deviation_outcome as _decide_footprint_deviation_outcome_impl,
 )
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from tests.dispatch_test_support import make_test_active_worktree, make_test_task
 
 

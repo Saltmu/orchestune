@@ -50,8 +50,8 @@ from orchestune.dispatch.gc.zombies import (
     build_interactive_exclusion_event,
     execute_reclaim_repair_command,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import PrRecord
 from orchestune.task_metadata import TaskMetadata
 

@@ -30,7 +30,6 @@ from orchestune.dispatch.gc.handoff import (
     inspect_handoff,
 )
 from orchestune.dispatch.gc.outcome_decision import _is_handoff_ready
-from orchestune.dispatch.state import ActiveWorktree, _parse_active_worktrees
 from orchestune.forge import GitHubForge
 from orchestune.infra.json_state import write_json_atomic
 from orchestune.infra.process_utils import (
@@ -39,6 +38,7 @@ from orchestune.infra.process_utils import (
     file_lock,
     run_state_lock,
 )
+from orchestune.ledger.run_state import ActiveWorktree, _parse_active_worktrees
 
 
 @dataclass(frozen=True)
