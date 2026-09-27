@@ -16,7 +16,11 @@ from orchestune.claim.contracts import (
     OwnerKind,
     ReservationKind,
 )
-from orchestune.claim.ownership import evaluate_claim_conflicts, owner_token_digest
+from orchestune.claim.ownership import (
+    evaluate_claim_conflicts,
+    held_claim_next_actions,
+    owner_token_digest,
+)
 from orchestune.claim.service import _DefaultConflictView, _validate_issue_for_resume
 from orchestune.claim.workspace import (
     check_repository_identity_match,
@@ -91,11 +95,13 @@ def _check_eligibility(active: ActiveWorktree, repository_identity: str) -> None
     if not check_repository_identity_match(repository_identity, active.repository_id):
         problems.append("it belongs to a different repository checkout")
     if problems:
+        actions = [
+            a for a in held_claim_next_actions(active) if "--amend-footprint" not in a
+        ]
         raise _reject(
             ClaimFailureReason.INVALID_RESUME,
             f"The claim for issue #{n} cannot be amended: {'; '.join(problems)}.",
-            f"For an interrupted claim run `orchestune claim {n} --resume {active.claim_id}` first.",
-            "Dispatcher-owned or completing reservations are managed by the dispatch cycle.",
+            *actions,
         )
 
 

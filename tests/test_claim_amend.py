@@ -447,3 +447,18 @@ def test_held_claim_next_actions_offer_amend_only_when_eligible(
 
     assert expected in actions
     assert unexpected not in actions
+
+
+def test_amend_rejection_for_dispatcher_claim_advises_blocked_outcome(amend_env):
+    state = load_run_state(amend_env["state_path"])
+    active = state.active_worktrees["201"]
+    active.owner_kind = OwnerKind.DISPATCH.value
+    _save({"201": active}, amend_env["state_path"])
+
+    outcome = _amend(amend_env)
+
+    assert outcome.failure is not None
+    actions = "\n".join(outcome.failure.next_actions)
+    assert "--result blocked --reason footprint-expansion-required" in actions
+    assert "--resume" not in actions
+    assert "--amend-footprint" not in actions
