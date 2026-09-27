@@ -372,11 +372,14 @@ def _print_review_result(result: dict[str, Any], bot_name: str) -> None:
         }
         for index, item in enumerate(inline_items, start=1):
             item_id = item.get("id")
-            finding_id = (
-                item_id
-                if item_id is not None
-                else current_index_by_identity.get(id(item))
-            )
+            if item_id is not None:
+                finding_id: Any = item_id
+            else:
+                position = current_index_by_identity.get(id(item))
+                # Matches jev_filter._finding_id()'s string-tagged sentinel:
+                # a bare int fallback could collide with a coincidentally
+                # equal supplied id (Codex PR #1114 round 6 finding).
+                finding_id = f"index:{position}" if position is not None else None
             jev = jev_by_id.get(finding_id) if finding_id is not None else None
             jev_note = (
                 f" [jev: {jev['decision']} ({jev['decision_reason']})]" if jev else ""

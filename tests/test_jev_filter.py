@@ -508,7 +508,7 @@ class TestEvaluateReviewFindings:
 
         result = evaluate_review_findings(inlines, bot_name="claude")
 
-        assert result["jev_evaluations"][0]["finding_id"] == 0
+        assert result["jev_evaluations"][0]["finding_id"] == "index:0"
 
     def test_explicit_null_id_is_also_treated_as_id_less(
         self, monkeypatch: pytest.MonkeyPatch
@@ -526,7 +526,27 @@ class TestEvaluateReviewFindings:
         result = evaluate_review_findings(inlines, bot_name="claude")
 
         finding_ids = [e["finding_id"] for e in result["jev_evaluations"]]
-        assert finding_ids == [0, 1]
+        assert finding_ids == ["index:0", "index:1"]
+
+    def test_fallback_id_never_collides_with_a_coincidentally_equal_supplied_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The fallback id for an id-less finding must not collide with a
+        real supplied id equal to that positional index, e.g. an id-less
+        finding at position 0 alongside another finding explicitly numbered
+        `0` (Codex PR #1114 round 6 finding)."""
+        monkeypatch.delenv("JEV_API_KEY", raising=False)
+        inlines = [
+            {"path": "a.py", "line": 1, "body": "id-less, position 0"},
+            {"id": 0, "path": "b.py", "line": 2, "body": "explicitly id 0"},
+        ]
+
+        result = evaluate_review_findings(inlines, bot_name="claude")
+
+        finding_ids = [e["finding_id"] for e in result["jev_evaluations"]]
+        assert len(set(finding_ids)) == 2
+        assert 0 in finding_ids
+        assert "index:0" in finding_ids
 
     def test_filter_review_findings_is_a_thin_wrapper_over_kept(
         self, monkeypatch: pytest.MonkeyPatch

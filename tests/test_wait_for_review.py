@@ -1105,7 +1105,7 @@ def test_print_review_result_matches_id_less_findings_by_current_round_position(
         ],
         "jev_evaluations": [
             {
-                "finding_id": 0,
+                "finding_id": "index:0",
                 "decision": "kept",
                 "decision_reason": "accepted",
             }

@@ -345,9 +345,14 @@ def _finding_id(item: dict[str, Any], index: int) -> Any:
     """A missing id and an explicit `"id": null` (offline/MCP snapshots) are
     both id-less: `dict.get("id", index)` only falls back on a missing key,
     so an explicit null would otherwise collide every id-less finding onto
-    the same `None` finding_id (Codex PR #1114 round 5 finding)."""
+    the same `None` finding_id (Codex PR #1114 round 5 finding). The
+    fallback is a string-tagged sentinel, not the bare positional index:
+    real GitHub ids are always integers, so a plain int fallback could
+    collide with a coincidentally-equal supplied id (e.g. an id-less finding
+    alongside one explicitly numbered `0`) (Codex PR #1114 round 6 finding).
+    """
     value = item.get("id")
-    return value if value is not None else index
+    return value if value is not None else f"index:{index}"
 
 
 def evaluate_review_findings(
