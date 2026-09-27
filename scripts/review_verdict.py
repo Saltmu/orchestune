@@ -187,6 +187,22 @@ def extract_review_result(
             "path": item.get("path", "unknown"),
             "line": item.get("line") or item.get("original_line") or "N/A",
             "body": item.get("body") or "",
+            **{
+                key: item[key]
+                for key in (
+                    "id",
+                    "diff_hunk",
+                    "side",
+                    "start_line",
+                    "start_side",
+                    "commit_id",
+                    "original_commit_id",
+                    "original_line",
+                    "context",
+                )
+                if key in item
+            },
+            "position_line": item.get("position_line", item.get("line")),
         }
         for item in _filter_bot_items(data["inline_comments"], bot_name, exclude_ids)
     ]

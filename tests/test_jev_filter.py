@@ -234,7 +234,7 @@ class TestEvaluateFindingWithJev:
             assert req.method == "POST"
             assert body["model"] == "jev-latest"
             assert set(body) == {"model", "state", "questions"}
-            assert set(body["questions"]) == {"validity", "impact"}
+            assert set(body["questions"]) == {"validity", "impact", "applicability"}
             assert body["questions"]["validity"]["type"] == "noul"
             assert body["questions"]["impact"]["type"] == "choice"
             assert set(body["questions"]["impact"]["criteria"]) == {
@@ -789,3 +789,141 @@ class TestJevLogPersistence:
         record = json.loads(lines[0])
         assert record["bypassed"] is True
         assert record["accepted"] is True
+
+
+def test_speculative_requires_evidence_and_bypass_wins() -> None:
+    context = {
+        "schema_version": 2,
+        "pr": {},
+        "code": {
+            "status": "available",
+            "text": "def run(): pass",
+            "source": "git_blob",
+            "commit_sha": "a" * 40,
+            "side": "RIGHT",
+            "start_line": 1,
+        },
+        "execution": {
+            "evidence": [
+                {
+                    "source": "module_description",
+                    "commit_sha": "a" * 40,
+                    "text": "Only documented local inputs are used.",
+                }
+            ]
+        },
+        "repository_rules": {
+            "status": "available",
+            "text": "Validate external inputs.",
+            "source": ".agents/AGENTS.md",
+            "commit_sha": "b" * 40,
+        },
+        "missing": [],
+        "truncated": [],
+    }
+    kwargs: dict[str, Any] = {
+        "applicability": "SPECULATIVE",
+        "applicability_confidence": 0.95,
+    }
+    assert not is_finding_accepted(0.99, "HIGH", context=context, **kwargs)
+    assert is_finding_accepted(0.99, "HIGH", **kwargs)
+    assert is_finding_accepted(
+        0.99, "HIGH", context={**context, "missing": ["rules"]}, **kwargs
+    )
+    assert is_finding_accepted(0.99, "HIGH", context=context, applicability="UNKNOWN")
+    assert is_finding_accepted(0, "LOW", 2, bypassed=True)
+
+
+def test_new_axis_payload_and_legacy_response() -> None:
+    from scripts.jev_filter import _build_payload, _parse_evaluation
+
+    payload = json.loads(_build_payload("finding", "scripts/a.py", 4, context={}))
+    assert payload["state"]["context"]["schema_version"] == 2
+    assert payload["questions"]["applicability"]["type"] == "choice"
+    assert _parse_evaluation(_api_response(0.9, "HIGH")).applicability == "UNKNOWN"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        None,
+        {},
+        {"type": "choice", "choice": "BAD", "confidence": 1},
+        {"type": "choice", "choice": "SPECULATIVE", "confidence": float("nan")},
+        {"type": "choice", "choice": "SPECULATIVE", "confidence": True},
+        {"type": "choice", "choice": "SPECULATIVE", "confidence": 1.1},
+        {
+            "type": "choice",
+            "choice": "SPECULATIVE",
+            "confidence": 0.95,
+            "probabilities": {"APPLICABLE": 0.96, "SPECULATIVE": 0.03, "UNKNOWN": 0.01},
+        },
+    ],
+)
+def test_invalid_new_answer_keeps_legacy_evaluation(answer: Any) -> None:
+    from scripts.jev_filter import _parse_evaluation
+
+    response = _api_response(0.99, "HIGH")
+    response["answers"]["applicability"] = answer
+    evaluation = _parse_evaluation(response)
+    assert evaluation.applicability == "UNKNOWN"
+    assert not evaluation.bypassed
+    assert is_finding_accepted(evaluation.validity, evaluation.impact)
+
+
+def test_valid_new_answer_parses_choice_confidence() -> None:
+    from scripts.jev_filter import _parse_evaluation
+
+    response = _api_response(0.99, "HIGH")
+    response["answers"]["applicability"] = {
+        "type": "choice",
+        "choice": "SPECULATIVE",
+        "confidence": 0.95,
+        "probabilities": {"APPLICABLE": 0.03, "SPECULATIVE": 0.95, "UNKNOWN": 0.02},
+    }
+    evaluation = _parse_evaluation(response)
+    assert evaluation.applicability == "SPECULATIVE"
+    assert evaluation.applicability_confidence == 0.95
+
+
+def test_bypass_retains_finding_above_one_threshold(tmp_path: Path) -> None:
+    finding = {"body": "bug", "path": "a.py", "line": 2}
+    with patch(
+        "scripts.jev_filter.evaluate_finding_with_jev",
+        return_value=JevFindingEvaluation(1, "HIGH", bypassed=True),
+    ):
+        assert filter_review_findings(
+            [finding], api_key="test-key", threshold=2, log_path=tmp_path / "log"
+        ) == [finding]
+    record = json.loads((tmp_path / "log").read_text())
+    assert record["decision_reason"] == "bypass"
+    assert record["schema_version"] == 2
+    assert "text" not in record["context"]["code"]
+
+
+def test_utf8_total_payload_is_bounded_and_marks_omissions() -> None:
+    from scripts.jev_filter import _build_payload
+
+    context = {
+        "pr": {"title": "語" * 300, "body": "語" * 3000},
+        "code": {
+            "status": "available",
+            "text": "語" * 6000,
+            "module_description": "語" * 2000,
+        },
+        "execution": {
+            "evidence": [{"source": "module_description", "text": "語" * 2000}]
+        },
+        "repository_rules": {"status": "available", "text": "語" * 4000},
+    }
+    payload = _build_payload("語" * 4000, "scripts/a.py", 1, context=context)
+    assert len(payload) <= 32 * 1024
+    sent = json.loads(payload)
+    assert sent["state"]["context"]["truncated"]
+    assert is_finding_accepted(
+        0.99,
+        "HIGH",
+        context=sent["state"]["context"],
+        applicability="SPECULATIVE",
+        applicability_confidence=0.95,
+    )

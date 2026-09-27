@@ -616,3 +616,174 @@ def test_wait_for_review_does_not_self_trigger_if_poster_is_bot(
     assert "### Review complete" in result["review_body"]
     assert result["timestamp"] == "2026-08-20T07:46:00Z"
     assert result["round"] == 1
+
+
+def test_context_is_lazy_cached_and_disabled_without_key(monkeypatch):
+    from scripts.jev_context import JevReviewContext
+    from scripts.wait_for_review import _extract_review_result
+
+    state = {
+        "reviews": [{"body": "bug", "user": {"login": "claude"}}],
+        "inline_comments": [
+            {"body": "bug", "path": "a.py", "line": 1, "user": {"login": "claude"}}
+        ],
+    }
+    cache = {}
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    with patch("scripts.wait_for_review.collect_review_context") as collect:
+        _extract_review_result(state, "claude", pr_number=3, context_cache=cache)
+        collect.assert_not_called()
+    monkeypatch.setenv("JEV_API_KEY", "test-key")
+    with (
+        patch(
+            "scripts.wait_for_review.collect_review_context",
+            return_value=JevReviewContext(),
+        ) as collect,
+        patch(
+            "scripts.wait_for_review.filter_review_findings",
+            side_effect=lambda items, **kwargs: items,
+        ) as filtering,
+    ):
+        _extract_review_result(state, "claude", pr_number=3, context_cache=cache)
+        _extract_review_result(state, "claude", pr_number=3, context_cache=cache)
+        collect.assert_called_once_with(3)
+        assert filtering.call_args.kwargs["context"] is cache[3]
+
+
+def _jev_state():
+    sha = "a" * 40
+    return {
+        "issue_comments": [],
+        "reviews": [
+            {
+                "id": 1,
+                "body": "blocking bug",
+                "submitted_at": "2026-09-27T00:01:00Z",
+                "user": {"login": "claude"},
+            }
+        ],
+        "inline_comments": [
+            {
+                "id": 2,
+                "body": "Only future external callers could trigger this defect",
+                "path": "scripts/a.py",
+                "line": 2,
+                "side": "RIGHT",
+                "commit_id": sha,
+                "user": {"login": "claude"},
+                "created_at": "2026-09-27T00:01:00Z",
+            }
+        ],
+    }
+
+
+def _jev_offline_context():
+    return {
+        "pr": {"base_sha": "b" * 40},
+        "code": {
+            "source": "git_blob",
+            "commit_sha": "a" * 40,
+            "side": "RIGHT",
+            "start_line": 1,
+            "text": "pass",
+            "status": "available",
+        },
+        "execution": {
+            "input_trust": "unknown",
+            "evidence": [
+                {
+                    "source": "module_description",
+                    "commit_sha": "a" * 40,
+                    "text": "Only documented local trusted config inputs are used.",
+                }
+            ],
+        },
+        "repository_rules": {
+            "source": ".agents/AGENTS.md",
+            "commit_sha": "b" * 40,
+            "text": "Check actual external inputs",
+            "status": "available",
+        },
+    }
+
+
+@pytest.mark.parametrize("route", ["immediate", "polling", "offline"])
+def test_three_routes_use_same_context_policy(route, monkeypatch, tmp_path):
+    from scripts.jev_context import JevReviewContext
+    from scripts.jev_filter import JevFindingEvaluation
+    from scripts.wait_for_review import _check_immediate_review_result, main
+
+    monkeypatch.setenv("JEV_API_KEY", "test-key")
+    monkeypatch.setenv("JEV_LOG_PATH", str(tmp_path / "jev.jsonl"))
+    state = _jev_state()
+    review = JevReviewContext(pr={"head_sha": "a" * 40, "base_sha": "b" * 40})
+    evaluation = JevFindingEvaluation(
+        0.99, "HIGH", applicability="SPECULATIVE", applicability_confidence=0.95
+    )
+    with (
+        patch(
+            "scripts.jev_filter.evaluate_finding_with_jev", return_value=evaluation
+        ) as evaluate,
+        patch(
+            "scripts.jev_context._read_blob",
+            return_value='"""Only documented trusted local config inputs are used."""\npass',
+        ),
+        patch(
+            "scripts.wait_for_review.collect_review_context", return_value=review
+        ) as collect,
+    ):
+        if route == "immediate":
+            result = _check_immediate_review_result(
+                state, "claude", "2026-09-27T00:00:00Z", 1, pr_number=5
+            )
+            assert result["verdict"] == EXIT_NO_FINDINGS
+        elif route == "polling":
+            with (
+                patch(
+                    "scripts.wait_for_review._get_initial_pr_data",
+                    return_value={
+                        "issue_comments": [],
+                        "reviews": [],
+                        "inline_comments": [],
+                    },
+                ),
+                patch("scripts.wait_for_review._get_pr_data", return_value=state),
+            ):
+                result = wait_for_review(5, post_trigger=False)
+            assert result["verdict"] == EXIT_NO_FINDINGS
+        else:
+            state["context"] = _jev_offline_context()
+            path = tmp_path / "state.json"
+            path.write_text(json.dumps(state))
+            with (
+                patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+                pytest.raises(SystemExit) as exc,
+            ):
+                main()
+            assert exc.value.code == EXIT_NO_FINDINGS
+            collect.assert_not_called()
+        assert evaluate.call_args.kwargs["context"]["code"]["commit_sha"] == "a" * 40
+        record = json.loads((tmp_path / "jev.jsonl").read_text())
+        assert record["decision_reason"] == "speculative"
+
+
+def test_offline_with_key_never_fetches_missing_context(monkeypatch, tmp_path):
+    from scripts.jev_filter import JevFindingEvaluation
+    from scripts.wait_for_review import main
+
+    monkeypatch.setenv("JEV_API_KEY", "test-key")
+    monkeypatch.setenv("JEV_LOG_PATH", str(tmp_path / "jev.jsonl"))
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(_jev_state()))
+    evaluation = JevFindingEvaluation(
+        0.99, "HIGH", applicability="SPECULATIVE", applicability_confidence=0.95
+    )
+    with (
+        patch("scripts.jev_filter.evaluate_finding_with_jev", return_value=evaluation),
+        patch("scripts.jev_context.subprocess.run") as run,
+        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        pytest.raises(SystemExit) as exc,
+    ):
+        main()
+    assert exc.value.code == EXIT_FINDINGS_PRESENT
+    run.assert_not_called()
