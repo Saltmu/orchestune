@@ -620,6 +620,12 @@ def _build_restored_active_worktree(
     config: DispatcherConfig,
 ) -> ActiveWorktree:
     owner_kind, claim_id, reservation_kind = _parse_claim_info_from_issue(issue)
+    parsed = parse_task_from_issue(issue)
+    if (
+        parsed.footprint_error or parsed.yaml_error
+    ) and reservation_kind == "footprint":
+        reservation_kind = "repository"
+        declared_footprint = ()
     attempt = attempt_from_body(issue.body)
     if (
         owner_kind != "interactive"

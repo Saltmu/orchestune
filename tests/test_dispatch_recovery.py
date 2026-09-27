@@ -230,8 +230,29 @@ class TestRestorationCandidateProjection:
         assert subtask_id == "task-a"
         assert active.branch == "claude/issue-101-task-a"
         assert active.declared_footprint == ("src/foo.py",)
+        assert active.reservation_kind == "footprint"
         # decide層はrun_stateを変更しない
         assert run_state.active_worktrees == {}
+
+    def test_falls_back_to_repository_reservation_on_footprint_error(self, tmp_path):
+        run_state = RunState(active_worktrees={})
+        issue = _issue_with_footprint(
+            101, subtask_id="task-a", footprint=["../outside.py"]
+        )
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+
+        with patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]):
+            result = _project_restoration_candidates(run_state, [issue], config)
+
+        assert len(result) == 1
+        _, _, active = result[0]
+        assert active.declared_footprint == ()
+        assert active.reservation_kind == "repository"
 
     def test_restores_recompute_count_and_forced_serial_from_issue_body(self, tmp_path):
         """#513再現テスト: run_state.json消失時、Issue本文に永続化された
