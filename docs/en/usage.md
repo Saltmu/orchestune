@@ -515,12 +515,26 @@ Upon success, the command prints the issue number, claim ID, branch name, prepar
 | :--- | :--- | :--- |
 | `--no-apply` | disabled | Dry-run mode: validates prerequisites and previews planned values without modifying Git, GitHub, or local state. |
 | `--resume <claim_id>` | none | Resumes an interrupted claim using protected local credentials. |
+| `--amend-footprint` | disabled | Widens the held claim's file reservation. Cannot be combined with `--resume`. See below. |
 | `--state <path>` | `run_state.json` | Path to the run-state ledger file. |
 | `--timeout <seconds>` | none | Timeout in seconds for acquiring the run-state lock. |
 
 ### Failure Handling
 
 If a claim cannot proceed due to unmet dependencies, conflicts, or environmental errors, the command exits with a non-zero exit code and outputs the failure reason along with recommended next actions to stderr. Follow the diagnostic instructions to resolve conflicts or resume an interrupted claim using `--resume`. If already working inside the claimed task worktree, running claim again is not needed.
+
+When re-running `orchestune claim <N>` for an issue you already hold, it fails with `existing_claim_unrecovered` and prints the worktree path, the `--resume` command, and the `--amend-footprint` command as next actions.
+
+### Widening the reservation (`--amend-footprint`)
+
+If the task turns out to need files outside its held file reservation, add them to the `footprint` in the Issue body and run:
+
+```bash
+orchestune claim <N> --amend-footprint --no-apply  # preview
+orchestune claim <N> --amend-footprint
+```
+
+The new footprint is the union of the held footprint, the Issue footprint, and every file already changed in the worktree since the claim base (committed, uncommitted, and untracked). It never shrinks. The command re-checks conflicts against every other active reservation and, on conflict, changes nothing and reports the conflicting issue. On success it adds missing files to the Issue footprint and updates the ledger; the worktree, branch, claim ID, and labels stay unchanged. Only completed interactive file reservations in the claiming workspace (with its protected owner token) are eligible. Switching to a repository reservation is not supported.
 
 ## 8. Local CI Evidence Storage and Task Completion (`orchestune complete`)
 

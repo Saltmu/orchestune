@@ -9,7 +9,12 @@ from secrets import token_urlsafe
 from typing import Protocol
 from uuid import uuid4
 
-from orchestune.claim.contracts import ClaimRequest, ClaimStage, ReservationKind
+from orchestune.claim.contracts import (
+    ClaimRequest,
+    ClaimStage,
+    OwnerKind,
+    ReservationKind,
+)
 from orchestune.dag.contracts import is_contract_writer
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.task_metadata import TaskMetadata
@@ -149,3 +154,34 @@ def evaluate_claim_conflicts(
         if _shared_contract_conflicts(reservation_task, view.task(active.issue_number)):
             return ClaimConflict(ClaimConflictReason.SHARED_CONTRACT, active)
     return None
+
+
+def held_claim_next_actions(active: ActiveWorktree) -> tuple[str, ...]:
+    """Recovery hints for a re-claim rejected because the issue is already held."""
+    n = active.issue_number
+    actions = []
+    if active.worktree_path:
+        actions.append(
+            f"Continue work in the existing worktree: {active.worktree_path}"
+        )
+    if active.owner_kind != OwnerKind.INTERACTIVE.value:
+        actions.append(
+            "If the task needs files outside its reservation, run: orchestune complete "
+            f"--issue {n} --result blocked --reason footprint-expansion-required"
+        )
+        return tuple(actions)
+    if active.claim_id:
+        actions.append(
+            f"If the claim was interrupted, run: orchestune claim {n} --resume {active.claim_id}"
+        )
+    if _is_repository_reservation(active):
+        actions.append("The claim already reserves the whole repository.")
+    elif (
+        active.claim_stage == ClaimStage.COMPLETED.value
+        and active.completion_id is None
+    ):
+        actions.append(
+            "If the task needs files outside its reservation, update the Issue footprint "
+            f"and run: orchestune claim {n} --amend-footprint"
+        )
+    return tuple(actions)

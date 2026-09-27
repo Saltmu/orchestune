@@ -27,6 +27,7 @@ from orchestune.claim.ownership import (
     OwnerToken,
     build_reservation,
     evaluate_claim_conflicts,
+    held_claim_next_actions,
     new_owner_token,
     owner_token_digest,
 )
@@ -95,8 +96,10 @@ def _resolve_owner_token(request: ClaimRequest) -> tuple[ClaimRequest, str]:
 def _conflict_to_outcome(issue_number: int, conflict: ClaimConflict) -> ClaimOutcome:
     """Format a conflict decision into a structured rejection outcome."""
     reason = ClaimFailureReason.CLAIM_CONFLICT
+    next_actions: tuple[str, ...] = ()
     if conflict.reason == ClaimConflictReason.SAME_ISSUE:
         reason = ClaimFailureReason.EXISTING_CLAIM_UNRECOVERED
+        next_actions = held_claim_next_actions(conflict.active)
     msg = f"Claim conflict with issue #{conflict.active.issue_number}: {conflict.reason.value}"
     failure = ClaimFailure(
         reason=reason,
@@ -106,6 +109,7 @@ def _conflict_to_outcome(issue_number: int, conflict: ClaimConflict) -> ClaimOut
         conflicting_path=Path(conflict.active.worktree_path)
         if conflict.active.worktree_path
         else None,
+        next_actions=next_actions,
     )
     return ClaimOutcome(success=False, issue_number=issue_number, failure=failure)
 

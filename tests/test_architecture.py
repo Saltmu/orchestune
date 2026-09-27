@@ -69,6 +69,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     ),
     3: frozenset(
         {
+            "claim.amend",
             "claim.service",
             "complete.service",
             "dispatch.cycle",
