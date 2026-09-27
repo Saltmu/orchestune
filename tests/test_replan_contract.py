@@ -31,7 +31,7 @@ def _subtask(subtask_id: str = "task-a") -> SubTask:
     return SubTask(
         id=subtask_id,
         description="Implement the contract",
-        footprint=("orchestune/replan/models.py",),
+        footprint=("orchestune/plan_identity.py",),
         symbols=("PlanGeneration",),
         depends_on=(),
         risk=False,
