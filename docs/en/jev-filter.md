@@ -12,7 +12,7 @@ Each finding uses one request containing validity (quality of the stated evidenc
 | SPECULATIVE | Code and execution evidence establish that undocumented assumptions are necessary and existing requirements are not violated |
 | UNKNOWN | Relevant code, input provenance, or rules are missing, contradictory, or materially truncated |
 
-Evaluation failures set `bypassed=True` and always retain findings, even for thresholds above 1. Only SPECULATIVE with confidence at least 0.9, consistent code/execution provenance, available base rules, and empty missing/truncated lists can be excluded by the new axis. Confidence is not a calibrated probability of occurrence. Path classification, PR claims of internal use or YAGNI, and low frequency alone cannot establish speculation.
+Evaluation failures set `bypassed=True` and always retain findings, even for thresholds above 1. Only SPECULATIVE with confidence at least 0.9, consistent code/execution provenance, available base rules, and empty missing/truncated lists can be excluded by the new axis. The API's `confidence` describes certainty derived from the full probability distribution; it need not equal `probabilities[choice]` and is not a calibrated probability of occurrence. The parser preserves it independently, validating its finite 0–1 range and, when probabilities are supplied, their ranges, sum of 1, and highest-probability choice. See the [API reference](https://docs.typesafe.ai/api). Path classification, PR claims of internal use or YAGNI, and low frequency alone cannot establish speculation.
 
 Otherwise the existing `validity >= threshold` and `impact != LOW` policy applies. Legacy responses and invalid new answers become UNKNOWN; invalid legacy answers bypass the entire evaluation.
 

@@ -852,6 +852,14 @@ def test_new_axis_payload_and_legacy_response() -> None:
         {"type": "choice", "choice": "SPECULATIVE", "confidence": float("nan")},
         {"type": "choice", "choice": "SPECULATIVE", "confidence": True},
         {"type": "choice", "choice": "SPECULATIVE", "confidence": 1.1},
+        {"type": "choice", "choice": "SPECULATIVE", "confidence": -0.1},
+        {"type": "choice", "choice": "SPECULATIVE", "confidence": float("inf")},
+        {
+            "type": "choice",
+            "choice": "SPECULATIVE",
+            "confidence": 0.95,
+            "probabilities": {"APPLICABLE": 0.1, "SPECULATIVE": 0.95, "UNKNOWN": 0.1},
+        },
         {
             "type": "choice",
             "choice": "SPECULATIVE",
@@ -867,23 +875,46 @@ def test_invalid_new_answer_keeps_legacy_evaluation(answer: Any) -> None:
     response["answers"]["applicability"] = answer
     evaluation = _parse_evaluation(response)
     assert evaluation.applicability == "UNKNOWN"
+    assert evaluation.applicability_confidence is None
     assert not evaluation.bypassed
     assert is_finding_accepted(evaluation.validity, evaluation.impact)
 
 
-def test_valid_new_answer_parses_choice_confidence() -> None:
+@pytest.mark.parametrize(
+    ("choice", "confidence", "probabilities"),
+    [
+        (
+            "SPECULATIVE",
+            0.95,
+            {"APPLICABLE": 0.03, "SPECULATIVE": 0.95, "UNKNOWN": 0.02},
+        ),
+        (
+            "APPLICABLE",
+            0.21,
+            {"APPLICABLE": 0.48, "SPECULATIVE": 0.11, "UNKNOWN": 0.41},
+        ),
+        (
+            "SPECULATIVE",
+            0.95,
+            {"APPLICABLE": 0.08, "SPECULATIVE": 0.9, "UNKNOWN": 0.02},
+        ),
+    ],
+)
+def test_valid_new_answer_parses_choice_confidence(
+    choice: str, confidence: float, probabilities: dict[str, float]
+) -> None:
     from scripts.jev_filter import _parse_evaluation
 
     response = _api_response(0.99, "HIGH")
     response["answers"]["applicability"] = {
         "type": "choice",
-        "choice": "SPECULATIVE",
-        "confidence": 0.95,
-        "probabilities": {"APPLICABLE": 0.03, "SPECULATIVE": 0.95, "UNKNOWN": 0.02},
+        "choice": choice,
+        "confidence": confidence,
+        "probabilities": probabilities,
     }
     evaluation = _parse_evaluation(response)
-    assert evaluation.applicability == "SPECULATIVE"
-    assert evaluation.applicability_confidence == 0.95
+    assert evaluation.applicability == choice
+    assert evaluation.applicability_confidence == confidence
 
 
 def test_bypass_retains_finding_above_one_threshold(tmp_path: Path) -> None:
