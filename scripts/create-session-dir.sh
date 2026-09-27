@@ -5,17 +5,8 @@ set -euo pipefail
 # Generates a collision-safe session directory under .orchestune/tmp/
 # without requiring inline Python execution.
 
-if [ "$#" -ge 1 ]; then
-    PREFIX="$1"
-else
-    PREFIX="task"
-fi
-
-if [ "$#" -ge 2 ]; then
-    TASK="$2"
-else
-    TASK="scratch"
-fi
+PREFIX="${1-task}"
+TASK="${2-scratch}"
 
 if [[ ! "$PREFIX" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     echo "Error: Invalid prefix '$PREFIX'. prefix must contain only ASCII alphanumeric characters, underscores, and hyphens." >&2

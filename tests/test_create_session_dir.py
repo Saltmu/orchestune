@@ -18,7 +18,9 @@ SESSION_DIR_PATTERN = re.compile(
 )
 
 
-def _run_sh(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+def _run_sh(
+    *args: str, cwd: Path, check: bool = True
+) -> subprocess.CompletedProcess[str]:
     if sys.platform == "win32":
         bash = shutil.which("bash")
         if bash is None:
@@ -31,25 +33,12 @@ def _run_sh(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
         cwd=cwd,
         capture_output=True,
         text=True,
-        check=True,
+        check=check,
     )
 
 
 def _run_sh_unchecked(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    if sys.platform == "win32":
-        bash = shutil.which("bash")
-        if bash is None:
-            pytest.skip("bash is not available on Windows")
-        cmd = [bash, str(SCRIPT_SH), *args]
-    else:
-        cmd = [str(SCRIPT_SH), *args]
-    return subprocess.run(
-        cmd,
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    return _run_sh(*args, cwd=cwd, check=False)
 
 
 def _run_ps1_unchecked(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
