@@ -14,7 +14,6 @@ from typing import NamedTuple
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.gc.git import (
     remote_branch_commit_sha_if_ahead,
     remove_worktree,
@@ -38,6 +37,7 @@ from orchestune.forge import Forge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
+from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,

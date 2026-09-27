@@ -6,9 +6,9 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.forge import Forge, GitHubForge
 from orchestune.labels import StatusLabel
+from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:

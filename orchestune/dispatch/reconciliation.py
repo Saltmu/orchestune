@@ -17,7 +17,6 @@ from orchestune.dispatch.dependency_policy import (
     decide_stack_target,
     has_pending_dependencies,
 )
-from orchestune.dispatch.escalation import apply_human_review_escalation
 from orchestune.dispatch.locks import check_footprint_deviation
 from orchestune.dispatch.rebase import SubTask, _build_subtasks_for_recompute
 from orchestune.dispatch.rules import CycleContext
@@ -25,6 +24,7 @@ from orchestune.dispatch.status_repair import VerifiedStatusTransition
 from orchestune.forge import Forge
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.labels import StatusLabel
+from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import RunState
 from orchestune.ledger.status_labels import transition_status_label
 from orchestune.models import IssueRecord

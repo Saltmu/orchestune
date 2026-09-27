@@ -154,6 +154,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "issue_notice",
             "issue_parsing",
             "ledger",
+            "ledger.escalation",
             "ledger.run_state",
             "ledger.status_labels",
             "pr_link_notice",
@@ -1314,3 +1315,10 @@ def test_ledger_run_state_does_not_import_claim() -> None:
         dependency == "claim" or dependency.startswith("claim.")
         for dependency in _import_graph()["ledger.run_state"]
     )
+
+
+def test_integrator_does_not_import_dispatch_escalation_or_worktree() -> None:
+    forbidden = {"dispatch.escalation", "dispatch.worktree"}
+    for module, dependencies in _import_graph().items():
+        if module == "integrator" or module.startswith("integrator."):
+            assert not dependencies & forbidden, module
