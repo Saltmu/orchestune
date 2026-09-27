@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from orchestune.dag.models import SubTask
 from orchestune.dag.symbol_verification import (
     find_missing_footprint_paths,
@@ -394,6 +396,158 @@ class TestFindMissingSymbols:
         subtask = _subtask(footprint=("pkg/broken.py",), symbols=("anything",))
 
         assert find_missing_symbols(subtask, tmp_path) == ()
+
+
+class TestImportFromReexports:
+    @pytest.mark.parametrize(
+        ("source", "symbols", "missing"),
+        [
+            (
+                'from pkg import Foo\n__all__ = ["Foo"]\n',
+                ("Foo", "models.Foo"),
+                (),
+            ),
+            (
+                "from .contracts import Foo as PublicFoo, Bar\n"
+                '__all__ = ("PublicFoo", "Bar", "PublicFoo")\n',
+                ("PublicFoo", "Foo", "Bar", "contracts.Bar"),
+                ("Foo",),
+            ),
+            (
+                'from pkg import Foo\n__all__ = ["Foo"]\n'
+                "def helper():\n    return __all__\n",
+                ("Foo",),
+                (),
+            ),
+            (
+                'from pkg import Foo\n__all__ = ["Foo"]\n'
+                "class Helper:\n    value = __all__\n",
+                ("Foo",),
+                (),
+            ),
+            (
+                "from ..contracts import Foo\n" '__all__: list[str] = ["Foo"]\n',
+                ("Foo", "contracts.Foo"),
+                (),
+            ),
+            (
+                "from pkg import Foo\n"
+                "if TYPE_CHECKING:\n    from pkg.types import Bar\n"
+                '__all__ = ["Foo", "Bar"]\n',
+                ("Foo", "Bar"),
+                (),
+            ),
+            (
+                "if FEATURE:\n    from pkg import Foo\n" '__all__ = ["Foo"]\n',
+                ("Foo",),
+                (),
+            ),
+        ],
+    )
+    def test_static_all_intersects_module_import_from_bindings(
+        self, tmp_path, source, symbols, missing
+    ):
+        _write(tmp_path, "pkg/mod.py", source)
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=symbols)
+
+        assert find_missing_symbols(subtask, tmp_path) == missing
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "from pkg import Foo\n",
+            "from pkg import Foo as Foo\n",
+            "from pkg import Foo\n__all__ = []\n",
+            'from pkg import Foo\n__all__ = ["Ghost"]\n',
+            'from pkg import *\n__all__ = ["Foo"]\n',
+            'import pkg\n__all__ = ["pkg"]\n',
+            'from __future__ import annotations\n__all__ = ["annotations"]\n',
+            'def helper():\n    from pkg import Foo\n__all__ = ["Foo"]\n',
+            'class Helper:\n    from pkg import Foo\n__all__ = ["Foo"]\n',
+            'from pkg import Foo\ndef helper():\n    __all__ = ["Foo"]\n',
+            'from pkg import Foo\nclass Helper:\n    __all__ = ["Foo"]\n',
+        ],
+    )
+    def test_imports_without_matching_module_static_all_are_not_reexports(
+        self, tmp_path, source
+    ):
+        _write(tmp_path, "pkg/mod.py", source)
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("Foo",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ("Foo",)
+
+    @pytest.mark.parametrize(
+        "all_statement",
+        [
+            "__all__ = make_exports()",
+            "__all__ = EXPORTS",
+            "__all__ = [name for name in EXPORTS]",
+            '__all__ = {"Foo"}',
+            '__all__ = ["Foo", 1]',
+            '__all__ = ["Foo" + "Bar"]',
+            "__all__ = [*EXPORTS]",
+            '__all__ = ["Foo"]\n__all__ = ["Bar"]',
+            '__all__ = ["Foo"]\n__all__ += ["Bar"]',
+            '__all__ = ["Foo"]\n__all__.append("Bar")',
+            '__all__ = ["Foo"]\n__all__.extend(EXPORTS)',
+            '__all__ = ["Foo"]\n__all__[0] = "Bar"',
+            '__all__ = ["Foo"]\ndel __all__[0]',
+            '__all__ = ["Foo"]\ndel __all__',
+            '__all__ = ["Foo"]\nother = __all__',
+            '__all__ = ["Foo"]\nprint(__all__)',
+            '__all__: __all__ = ["Foo"]',
+            '__all__ = ["Foo"]\nif FEATURE:\n    __all__ = ["Bar"]',
+            '__all__ = other = ["Foo"]',
+            'if FEATURE:\n    __all__ = ["Foo"]',
+            "from pkg import Foo as __all__",
+        ],
+    )
+    def test_ambiguous_or_dynamic_all_suppresses_only_import_candidates(
+        self, tmp_path, all_statement
+    ):
+        source = f"from pkg import Foo\n{all_statement}\ndef Local():\n    pass\n"
+        _write(tmp_path, "pkg/mod.py", source)
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("Foo", "Local"))
+
+        assert find_missing_symbols(subtask, tmp_path) == ("Foo",)
+
+    def test_reexported_class_does_not_imply_its_methods(self, tmp_path):
+        _write(
+            tmp_path,
+            "pkg/mod.py",
+            'from pkg import PublicFoo\n__all__ = ["PublicFoo"]\n',
+        )
+        subtask = _subtask(footprint=("pkg/mod.py",), symbols=("pkg.PublicFoo.method",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ("pkg.PublicFoo.method",)
+
+    def test_reexport_detection_is_per_footprint_file(self, tmp_path):
+        _write(tmp_path, "pkg/imports.py", "from other import Foo\n")
+        _write(tmp_path, "pkg/exports.py", '__all__ = ["Foo"]\n')
+        subtask = _subtask(
+            footprint=("pkg/imports.py", "pkg/exports.py"), symbols=("Foo",)
+        )
+
+        assert find_missing_symbols(subtask, tmp_path) == ("Foo",)
+
+    def test_import_source_is_neither_loaded_nor_resolved(self, tmp_path):
+        _write(
+            tmp_path,
+            "pkg/facade.py",
+            'from .broken_source import Foo\n__all__ = ["Foo"]\n',
+        )
+        marker = tmp_path / "import-was-executed"
+        _write(
+            tmp_path,
+            "pkg/broken_source.py",
+            "from pathlib import Path\n"
+            f'Path({str(marker)!r}).write_text("bad")\n'
+            'raise RuntimeError("must not import")\n',
+        )
+        subtask = _subtask(footprint=("pkg/facade.py",), symbols=("Foo",))
+
+        assert find_missing_symbols(subtask, tmp_path) == ()
+        assert not marker.exists()
 
 
 class TestFindMissingFootprintPaths:

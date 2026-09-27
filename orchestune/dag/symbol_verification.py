@@ -78,9 +78,164 @@ def _collect_all_names(tree: ast.Module) -> set[str]:
     return names
 
 
+class _ModuleAllReferenceVisitor(ast.NodeVisitor):
+    """Find module-scope reads/bindings of ``__all__`` without entering scopes."""
+
+    def __init__(self) -> None:
+        self.found = False
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if node.id == "__all__":
+            self.found = True
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            bound_name = alias.asname or alias.name.partition(".")[0]
+            if bound_name == "__all__":
+                self.found = True
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        for alias in node.names:
+            if alias.name != "*" and (alias.asname or alias.name) == "__all__":
+                self.found = True
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function_header(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function_header(node)
+
+    def _visit_function_header(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> None:
+        if node.name == "__all__":
+            self.found = True
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        self.visit(node.args)
+        if node.returns is not None:
+            self.visit(node.returns)
+        for type_param in getattr(node, "type_params", ()):
+            self.visit(type_param)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        if node.name == "__all__":
+            self.found = True
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for base in node.bases:
+            self.visit(base)
+        for keyword in node.keywords:
+            self.visit(keyword)
+        for type_param in getattr(node, "type_params", ()):
+            self.visit(type_param)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        # Lambda defaults are evaluated in the enclosing scope; the body is not.
+        self.visit(node.args)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.name == "__all__":
+            self.found = True
+        if node.type is not None:
+            self.visit(node.type)
+        for statement in node.body:
+            self.visit(statement)
+
+    def visit_MatchAs(self, node: ast.MatchAs) -> None:
+        if node.name == "__all__":
+            self.found = True
+        if node.pattern is not None:
+            self.visit(node.pattern)
+
+    def visit_MatchStar(self, node: ast.MatchStar) -> None:
+        if node.name == "__all__":
+            self.found = True
+
+    def visit_MatchMapping(self, node: ast.MatchMapping) -> None:
+        if node.rest == "__all__":
+            self.found = True
+        self.generic_visit(node)
+
+
+def _is_standalone_all_assignment(node: ast.stmt) -> bool:
+    if isinstance(node, ast.Assign):
+        return (
+            len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "__all__"
+        )
+    return (
+        isinstance(node, ast.AnnAssign)
+        and node.value is not None
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "__all__"
+    )
+
+
+def _collect_static_all_names(tree: ast.Module) -> set[str] | None:
+    """Return a literal module ``__all__`` or ``None`` when it is ambiguous.
+
+    Only a single direct assignment to ``__all__`` is accepted. Any other
+    module-scope reference or binding makes the declaration ambiguous; nested
+    function and class bodies are separate scopes and are not inspected.
+    """
+    assignments = [node for node in tree.body if _is_standalone_all_assignment(node)]
+    if len(assignments) != 1:
+        return None
+
+    declaration = assignments[0]
+    references = _ModuleAllReferenceVisitor()
+    for node in _flatten_scope_statements(tree.body):
+        if node is not declaration:
+            references.visit(node)
+            if references.found:
+                return None
+
+    if isinstance(declaration, ast.Assign):
+        value = declaration.value
+    elif isinstance(declaration, ast.AnnAssign) and declaration.value is not None:
+        annotation_references = _ModuleAllReferenceVisitor()
+        annotation_references.visit(declaration.annotation)
+        if annotation_references.found:
+            return None
+        value = declaration.value
+    else:
+        return None
+    if not isinstance(value, ast.List | ast.Tuple):
+        return None
+    names: set[str] = set()
+    for element in value.elts:
+        if not isinstance(element, ast.Constant) or not isinstance(element.value, str):
+            return None
+        names.add(element.value)
+    return names
+
+
+def _collect_reexported_names(tree: ast.Module) -> set[str]:
+    """Return module ``ImportFrom`` bindings explicitly named in static ``__all__``."""
+    all_names = _collect_static_all_names(tree)
+    if all_names is None or not all_names:
+        return set()
+
+    imported_names: set[str] = set()
+    for node in _flatten_scope_statements(tree.body):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level == 0 and node.module == "__future__":
+            continue
+        imported_names.update(
+            alias.asname or alias.name for alias in node.names if alias.name != "*"
+        )
+    return imported_names & all_names
+
+
 def _collect_top_level_names(tree: ast.Module) -> set[str]:
     """`_symbol_matches`が「モジュール修飾記法」（`db.get_connection`等）を
     末尾セグメントだけで緩く照合する際の候補集合を返す。
+
+    モジュールスコープの定義・代入に加え、静的`__all__`に明示された
+    `ImportFrom`の再エクスポート名も含める。
 
     `ast.walk`は木全体をフラットに走査してしまいスコープ情報を失うため、
     これだけは`_flatten_scope_statements(tree.body)`（モジュールスコープの
@@ -99,6 +254,7 @@ def _collect_top_level_names(tree: ast.Module) -> set[str]:
                     top_level_names.add(target.id)
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             top_level_names.add(node.target.id)
+    top_level_names |= _collect_reexported_names(tree)
     return top_level_names
 
 

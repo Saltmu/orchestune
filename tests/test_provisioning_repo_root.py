@@ -109,6 +109,40 @@ class TestSymbolVerificationWarning:
         )
         assert "symbols未検出" not in subtask_body
 
+    @pytest.mark.parametrize("apply", [True, False])
+    def test_static_reexport_suppresses_only_its_warning(
+        self, tmp_path: Path, template_path: Path, apply: bool
+    ):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "foo.py").write_text(
+            "from nonexistent_contracts import Foo as PublicFoo\n"
+            '__all__ = ["PublicFoo"]\n',
+            encoding="utf-8",
+        )
+        plan_path = tmp_path / "decomposition_plan.md"
+        plan_path.write_text(self._plan("PublicFoo, MissingSymbol"), encoding="utf-8")
+
+        forge = FakeForge()
+        result = provision_issues(
+            plan_path,
+            forge=forge if apply else None,
+            apply=apply,
+            template_path=template_path,
+            repo_root=tmp_path,
+        )
+
+        body = (
+            next(
+                body for title, body, _ in forge.create_issue_calls if "task-a" in title
+            )
+            if apply
+            else result.previews[0].body
+        )
+        assert "symbols未検出" in body
+        warning = body.split("symbols未検出", maxsplit=1)[1]
+        assert "MissingSymbol" in warning
+        assert "PublicFoo" not in warning
+
     def test_missing_symbol_appends_warning_in_no_apply_preview(
         self, tmp_path: Path, template_path: Path
     ):
