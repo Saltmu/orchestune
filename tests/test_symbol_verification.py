@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from orchestune.dag.models import SubTask
-from orchestune.symbol_verification import (
+from orchestune.dag.symbol_verification import (
     find_missing_footprint_paths,
     find_missing_symbols,
 )

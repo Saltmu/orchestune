@@ -9,13 +9,13 @@ from pathlib import Path
 import yaml
 
 from orchestune.dag.models import SubTask
+from orchestune.dag.symbol_verification import find_missing_symbols
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     parent_issue_number_from_body,
 )
 from orchestune.labels import StatusLabel
 from orchestune.replan.models import PlanGeneration
-from orchestune.symbol_verification import find_missing_symbols
 
 _PLACEHOLDERS = (
     "subtask_id",
