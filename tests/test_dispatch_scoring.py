@@ -194,6 +194,28 @@ class TestParseTaskFromIssue:
         assert task.yaml_error is True
         assert task.subtask_id == ""
 
+    def test_invalid_footprint_sets_footprint_error(self):
+        body = (
+            "## Footprint\n"
+            "```yaml\n"
+            "subtask_id: task-invalid-fp\n"
+            "footprint:\n"
+            "  - ../escape.py\n"
+            "```\n"
+        )
+        issue = IssueRecord(
+            number=9,
+            title="t",
+            body=body,
+            labels=(),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        task = parse_task_from_issue(issue)
+        assert task.yaml_error is False
+        assert task.footprint_error is not None
+        assert task.subtask_id == "task-invalid-fp"
+        assert task.footprint == ()
+
     def test_parses_parent_number_from_issue(self):
         issue = IssueRecord(
             number=10,

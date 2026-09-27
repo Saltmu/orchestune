@@ -82,7 +82,11 @@ def owner_token_digest(token: OwnerToken | str) -> str:
 def build_reservation(
     request: ClaimRequest, task_metadata: TaskMetadata
 ) -> ActiveWorktree:
-    """Build a pre-worktree reservation without persisting it or performing I/O."""
+    """Build a pre-worktree reservation without persisting it or performing I/O.
+
+    Paths in ``task_metadata.footprint`` are assumed to be canonical POSIX paths
+    normalized by upstream parsing (e.g. ``parse_task_from_issue``).
+    """
     footprint = tuple(task_metadata.footprint)
     if not request.owner_token or not request.owner_token.strip():
         raise ValueError("owner token must be generated and retained by the caller")
@@ -125,7 +129,12 @@ def _shared_contract_conflicts(
 def evaluate_claim_conflicts(
     reservation: ActiveWorktree, run_state: RunState, view: ClaimConflictView
 ) -> ClaimConflict | None:
-    """Return the first active reservation that excludes ``reservation``."""
+    """Return the first active reservation that excludes ``reservation``.
+
+    Assumes footprint paths on both ``reservation`` and active worktrees in
+    ``run_state`` are canonical POSIX paths (normalized on reservation build
+    and on run state loading).
+    """
     reservation_task = view.task(reservation.issue_number)
     for active in run_state.active_worktrees.values():
         if active.issue_number == reservation.issue_number:

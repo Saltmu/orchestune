@@ -224,6 +224,30 @@ def _apply_yaml_error_blocking(
         )
 
 
+def _decide_invalid_footprint_tasks(candidate_tasks: Sequence[TTask]) -> list[TTask]:
+    """Footprint値が不正なタスクを判定する（副作用なし）。"""
+    return [
+        task for task in candidate_tasks if task.footprint_error and not task.yaml_error
+    ]
+
+
+def _apply_invalid_footprint_blocking(
+    invalid_footprint_tasks: Sequence[TaskMetadata], config: DispatcherConfig
+) -> None:
+    for task in invalid_footprint_tasks:
+        transition_status_label(
+            config.resolved_forge,
+            task.issue_number,
+            StatusLabel.BLOCKED_HUMAN_REVIEW,
+            (StatusLabel.QUEUED,),
+        )
+        detail = f": {task.footprint_error}" if task.footprint_error else ""
+        config.resolved_forge.add_comment(
+            task.issue_number,
+            f"footprint が不正なため、タスクを人間のレビュー待ちにしました{detail}。Issue 本文の footprint を修正してください。",
+        )
+
+
 def _decide_task_launch_plan(
     selected: Sequence[TTask],
     task_to_base_branch: dict[int, str],
@@ -363,7 +387,7 @@ def _handle_launch_failure(
         )
         config.resolved_forge.add_comment(
             task.issue_number,
-            f"ブランチ名またはsubtask_idが不正なため、タスクをブロックしました (`status:blocked-human-review`)。\n"
+            f"ブランチ名、subtask_id、またはfootprintが不正なため、タスクをブロックしました (`status:blocked-human-review`)。\n"
             f"エラー内容:\n```\n{launch.error_message}\n```",
         )
     else:
@@ -534,7 +558,11 @@ def _resolve_claim_failure_launch_result(
         pid=None,
         launched=False,
         error_message=failure.message,
-        validation_error=failure.reason is ClaimFailureReason.INVALID_BRANCH_NAME,
+        validation_error=failure.reason
+        in (
+            ClaimFailureReason.INVALID_BRANCH_NAME,
+            ClaimFailureReason.INVALID_FOOTPRINT,
+        ),
         execution_selection=plan.execution_selection,
     )
 
@@ -786,6 +814,8 @@ def _launch_selected_tasks(ctx: LaunchContext[TTask]) -> list[TTask]:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
     yaml_error_tasks = _decide_yaml_error_tasks(ctx.candidate_tasks)
     _apply_yaml_error_blocking(yaml_error_tasks, ctx.config)
+    invalid_footprint_tasks = _decide_invalid_footprint_tasks(ctx.candidate_tasks)
+    _apply_invalid_footprint_blocking(invalid_footprint_tasks, ctx.config)
 
     plans = _decide_task_launch_plan(ctx.selected, ctx.task_to_base_branch, ctx.config)
     assert ctx.claim_fn is not None

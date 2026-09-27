@@ -19,6 +19,7 @@ class TaskExitCode(IntEnum):
     EXTERNAL_LOCK_CONFLICT = 15
     INVALID_RESUME = 16
     INVALID_BRANCH_NAME = 17
+    INVALID_FOOTPRINT = 18
 
     CLAIM_CONFLICT = 20
     EXISTING_CLAIM_UNRECOVERED = 21
@@ -53,6 +54,7 @@ _CLAIM_FAILURE_EXIT_CODES: dict[str, TaskExitCode] = {
     "external_lock_conflict": TaskExitCode.EXTERNAL_LOCK_CONFLICT,
     "invalid_resume": TaskExitCode.INVALID_RESUME,
     "invalid_branch_name": TaskExitCode.INVALID_BRANCH_NAME,
+    "invalid_footprint": TaskExitCode.INVALID_FOOTPRINT,
     "claim_conflict": TaskExitCode.CLAIM_CONFLICT,
     "existing_claim_unrecovered": TaskExitCode.EXISTING_CLAIM_UNRECOVERED,
     "state_lock_failed": TaskExitCode.STATE_LOCK_FAILED,

@@ -137,6 +137,10 @@ def _evaluate_conflict_step(
     return None
 
 
+def _claim_failure(issue_number: int, failure: ClaimFailure | None) -> ClaimOutcome:
+    return ClaimOutcome(success=False, issue_number=issue_number, failure=failure)
+
+
 def _validate_preflight_and_conflict(
     request: ClaimRequest,
     run_state: RunState,
@@ -151,13 +155,7 @@ def _validate_preflight_and_conflict(
             reason=ClaimFailureReason.ISSUE_NOT_FOUND,
             message=f"Issue #{request.issue_number} was not found.",
         )
-        return (
-            None,
-            None,
-            ClaimOutcome(
-                success=False, issue_number=request.issue_number, failure=failure
-            ),
-        )
+        return None, None, _claim_failure(request.issue_number, failure)
 
     preflight_view = view if isinstance(view, ClaimBaseResolutionView) else None
     preflight = evaluate_claim_preflight(
@@ -167,17 +165,11 @@ def _validate_preflight_and_conflict(
         default_base=default_base,
     )
     if not preflight.allowed:
-        return (
-            None,
-            issue,
-            ClaimOutcome(
-                success=False,
-                issue_number=request.issue_number,
-                failure=preflight.failure,
-            ),
-        )
+        return None, issue, _claim_failure(request.issue_number, preflight.failure)
 
-    task_meta = parse_task_from_issue(issue)
+    task_meta = (
+        preflight.task if preflight.task is not None else parse_task_from_issue(issue)
+    )
     reservation = build_reservation(request, task_meta)
     conflict_view = (
         view

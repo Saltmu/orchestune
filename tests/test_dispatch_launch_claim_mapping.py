@@ -10,7 +10,7 @@ from orchestune.dispatch.scoring import Task
 from tests.conftest import register_task_issue
 
 
-def _task(issue_number, subtask_id=None):
+def _task(issue_number, subtask_id=None, footprint_error=None, yaml_error=False):
     resolved_subtask_id = subtask_id or f"task-{issue_number}"
     register_task_issue(issue_number, resolved_subtask_id)
     return Task(
@@ -24,6 +24,8 @@ def _task(issue_number, subtask_id=None):
         status_labels=("status:queued",),
         created_at="2023-01-01T00:00:00+00:00",
         depends_on=(),
+        yaml_error=yaml_error,
+        footprint_error=footprint_error,
     )
 
 
@@ -62,6 +64,16 @@ class TestResolveClaimFailureLaunchResult:
         )
         result = _resolve_claim_failure_launch_result(self._plan(tmp_path), outcome)
         assert result.validation_error is False
+
+    def test_invalid_footprint_is_a_validation_error(self, tmp_path):
+        from orchestune.claim.contracts import ClaimFailureReason
+        from orchestune.dispatch.launch import _resolve_claim_failure_launch_result
+
+        outcome = self._outcome(
+            ClaimFailureReason.INVALID_FOOTPRINT, "invalid footprint"
+        )
+        result = _resolve_claim_failure_launch_result(self._plan(tmp_path), outcome)
+        assert result.validation_error is True
 
 
 class TestTryPlannedLaunchPassesWorktreeRoot:
@@ -138,3 +150,100 @@ class TestHandleLaunchFailureStripsClaimLabel:
         assert (1, StatusLabel.IN_PROGRESS) in [
             (call.args[0], call.args[1]) for call in mock_remove.call_args_list
         ]
+
+
+class TestDecideInvalidFootprintTasks:
+    """decide層: 副作用なしでFootprint不正のタスクのみを判定する。"""
+
+    def test_returns_only_invalid_footprint_tasks(self):
+        from orchestune.dispatch.launch import _decide_invalid_footprint_tasks
+
+        ok_task = _task(1)
+        bad_task = _task(2, footprint_error="invalid path")
+        yaml_bad_task = _task(3, yaml_error=True, footprint_error="syntax error")
+        assert _decide_invalid_footprint_tasks([ok_task, bad_task, yaml_bad_task]) == [
+            bad_task
+        ]
+
+    def test_returns_empty_when_no_errors(self):
+        from orchestune.dispatch.launch import _decide_invalid_footprint_tasks
+
+        assert _decide_invalid_footprint_tasks([_task(1)]) == []
+
+
+class TestApplyInvalidFootprintBlocking:
+    def test_transitions_to_blocked_and_posts_comment(self, tmp_path):
+        from unittest.mock import patch
+
+        from orchestune.dispatch.launch import _apply_invalid_footprint_blocking
+
+        task = _task(
+            1, subtask_id="task-1", footprint_error="invalid path: /etc/passwd"
+        )
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        call_order: list[tuple[str, str]] = []
+
+        with (
+            patch(
+                "fake_forge_proxy.active_fake_forge.add_label",
+                side_effect=lambda issue, label: call_order.append(("add", label)),
+            ),
+            patch(
+                "fake_forge_proxy.active_fake_forge.remove_label",
+                side_effect=lambda issue, label: call_order.append(("remove", label)),
+            ),
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment,
+        ):
+            _apply_invalid_footprint_blocking([task], config)
+
+        assert call_order == [
+            ("add", "status:blocked-human-review"),
+            ("remove", "status:queued"),
+        ]
+        assert "invalid path: /etc/passwd" in mock_comment.call_args[0][1]
+        assert "footprint が不正なため" in mock_comment.call_args[0][1]
+
+
+class TestLaunchSelectedTasksInvalidFootprint:
+    def test_blocks_invalid_footprint_candidate_not_included_in_selected(
+        self, tmp_path
+    ):
+        from unittest.mock import patch
+
+        from orchestune.dispatch.launch import LaunchContext, _launch_selected_tasks
+        from orchestune.ledger.run_state import RunState
+        from tests.conftest import real_claim_fn
+
+        bad_task = _task(1, subtask_id="bad-task", footprint_error="bad path")
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        run_state = RunState(active_worktrees={})
+        ctx = LaunchContext(
+            selected=[],
+            task_to_base_branch={},
+            candidate_tasks=[bad_task],
+            run_state=run_state,
+            now=1000.0,
+            config=config,
+            claim_fn=real_claim_fn(config),
+        )
+
+        with (
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment,
+        ):
+            _launch_selected_tasks(ctx)
+
+        mock_add_label.assert_called_once_with(1, "status:blocked-human-review")
+        assert "bad path" in mock_comment.call_args[0][1]
+        assert "footprint が不正なため" in mock_comment.call_args[0][1]

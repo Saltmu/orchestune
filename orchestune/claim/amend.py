@@ -26,6 +26,7 @@ from orchestune.claim.workspace import (
     check_repository_identity_match,
     resolve_claim_workspace,
 )
+from orchestune.dag.models import canonicalize_footprint
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
@@ -125,7 +126,20 @@ def _issue_footprint(forge: Forge, active: ActiveWorktree) -> IssueRecord:
     failure = _validate_issue_for_resume(issue)
     if failure is not None:
         raise _AmendRejected(failure)
-    if not parse_task_from_issue(issue).footprint:
+    parsed = parse_task_from_issue(issue)
+    if parsed.yaml_error:
+        raise _reject(
+            ClaimFailureReason.INVALID_FOOTPRINT,
+            f"Issue #{issue.number} has a malformed footprint YAML block.",
+            "Fix the YAML syntax in the footprint block of the Issue body and retry.",
+        )
+    if parsed.footprint_error:
+        raise _reject(
+            ClaimFailureReason.INVALID_FOOTPRINT,
+            f"Issue #{issue.number} has an invalid footprint declaration: {parsed.footprint_error}",
+            "Fix the footprint declaration in the Issue body and retry.",
+        )
+    if not parsed.footprint:
         raise _reject(
             ClaimFailureReason.INVALID_RESUME,
             f"Issue #{issue.number} declares no footprint (repository reservation).",
@@ -253,7 +267,7 @@ def _amend_in_lock(
         *parse_task_from_issue(issue).footprint,
         *_changed_files(active),
     ]
-    amended_footprint = tuple(dict.fromkeys(candidates))
+    amended_footprint = canonicalize_footprint(candidates)
     added = tuple(p for p in amended_footprint if p not in previous)
     amended = dataclasses.replace(active, declared_footprint=amended_footprint)
     _check_conflicts(key, amended, run_state, forge)

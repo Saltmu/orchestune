@@ -259,6 +259,58 @@ def normalize_footprint_path(path: str) -> str:
     return normalized
 
 
+class FootprintValidationError(ValueError):
+    """Raised when a footprint value or element fails validation."""
+
+
+def parse_footprint_value(raw: object) -> tuple[str, ...]:
+    """Strictly validate and normalize a footprint value into a deduplicated tuple.
+
+    - Returns () for None or empty list/tuple.
+    - Raises FootprintValidationError if raw is a string, non-sequence, or contains
+      invalid elements (dict, list, bool).
+    - Skips None elements; stringifies numbers (int/float).
+    - Normalizes each path with normalize_footprint_path, wrapping failures in FootprintValidationError.
+    - Preserves order while eliminating duplicates via dict.fromkeys.
+    """
+    if raw is None:
+        return ()
+    if isinstance(raw, str) or not isinstance(raw, list | tuple):
+        raise FootprintValidationError(
+            f"'footprint' must be a list of paths, got {type(raw).__name__}: {raw!r}"
+        )
+    normalized: list[str] = []
+    for item in raw:
+        if item is None:
+            continue
+        if isinstance(item, bool) or not isinstance(item, str | int | float):
+            raise FootprintValidationError(
+                f"Invalid footprint element type: {type(item).__name__} ({item!r})"
+            )
+        try:
+            normalized.append(normalize_footprint_path(str(item)))
+        except ValueError as e:
+            raise FootprintValidationError(str(e)) from e
+    return tuple(dict.fromkeys(normalized))
+
+
+def canonicalize_footprint(paths: Iterable[str]) -> tuple[str, ...]:
+    """Leniently normalize footprint paths for persisted data, retaining invalid paths as-is.
+
+    - Applies normalize_footprint_path to each path.
+    - Falls back to the raw string if normalization raises ValueError.
+    - Preserves order while eliminating duplicates.
+    """
+    result: list[str] = []
+    for p in paths:
+        s = str(p)
+        try:
+            result.append(normalize_footprint_path(s))
+        except ValueError:
+            result.append(s)
+    return tuple(dict.fromkeys(result))
+
+
 def is_ignored_footprint(
     path: str, extra_patterns: Iterable[re.Pattern[str]] = ()
 ) -> bool:

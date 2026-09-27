@@ -37,6 +37,7 @@ class Task:
     depends_on: tuple[str, ...] = ()
     native_depends_on: tuple[int, ...] = ()
     yaml_error: bool = False
+    footprint_error: str | None = None
     parent_number: int | None = None
     issue_state: str = "OPEN"
     parent_state: str | None = None

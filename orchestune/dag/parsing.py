@@ -10,7 +10,12 @@ from typing import Any
 
 import yaml
 
-from orchestune.dag.models import SubTask, normalize_footprint_path
+from orchestune.dag.models import (
+    FootprintValidationError,
+    SubTask,
+    normalize_footprint_path,
+    parse_footprint_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,13 +129,16 @@ def _parse_sequence_field(
 
 
 def _parse_footprint(val: object, subtask_id: str) -> tuple[str, ...]:
-    if val is None:
-        return ()
-    if isinstance(val, str) or not isinstance(val, list | tuple):
+    try:
+        return parse_footprint_value(val)
+    except FootprintValidationError as e:
+        if isinstance(val, str) or not isinstance(val, list | tuple):
+            raise ValueError(
+                f"サブタスク '{subtask_id}' の 'footprint' はリストである必要があります: {val!r}"
+            ) from e
         raise ValueError(
-            f"サブタスク '{subtask_id}' の 'footprint' はリストである必要があります: {val!r}"
-        )
-    return tuple(normalize_footprint_path(str(x)) for x in val if x is not None)
+            f"サブタスク '{subtask_id}' の 'footprint' が不正です: {e}"
+        ) from e
 
 
 def _parse_execution_profile(raw_profile: object, subtask_id: str) -> str | None:

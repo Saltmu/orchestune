@@ -95,6 +95,7 @@ from orchestune.task_branch_resolution import (
     TaskBranchResolver,
     probe_canonical_state,
 )
+from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:
     from orchestune.dispatch.config import DispatcherConfig
@@ -316,15 +317,12 @@ def _parse_claim_info_from_issue(
         try:
             data = yaml.safe_load(match.group(1))
             if isinstance(data, dict):
-                raw_owner_kind = data.get("owner_kind")
-                if raw_owner_kind in {"interactive", "dispatch"}:
-                    owner_kind = raw_owner_kind
-                raw_claim_id = data.get("claim_id")
-                if isinstance(raw_claim_id, str) and raw_claim_id:
-                    claim_id = raw_claim_id
-                raw_res_kind = data.get("reservation_kind")
-                if raw_res_kind in {"footprint", "repository"}:
-                    reservation_kind = raw_res_kind
+                if (k := data.get("owner_kind")) in {"interactive", "dispatch"}:
+                    owner_kind = k
+                if isinstance(cid := data.get("claim_id"), str) and cid:
+                    claim_id = cid
+                if (rk := data.get("reservation_kind")) in {"footprint", "repository"}:
+                    reservation_kind = rk
         except Exception:
             pass
     return owner_kind, claim_id, reservation_kind
@@ -332,20 +330,12 @@ def _parse_claim_info_from_issue(
 
 def _parse_subtask_info_from_issue(
     issue: IssueRecord,
+    task: TaskMetadata | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     """Issueの本文から subtask_id と declared_footprint を抽出する。"""
-    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
+    parsed = task if task is not None else parse_task_from_issue(issue)
+    declared_footprint = () if parsed.footprint_error else parsed.footprint
     subtask_id = _extract_raw_subtask_id(issue)
-    declared_footprint: tuple[str, ...] = ()
-    if match:
-        try:
-            data = yaml.safe_load(match.group(1))
-            if isinstance(data, dict):
-                footprint = data.get("footprint", [])
-                if isinstance(footprint, list):
-                    declared_footprint = tuple(footprint)
-        except Exception:
-            pass
 
     if not subtask_id:
         owner_kind, _, _ = _parse_claim_info_from_issue(issue)
@@ -537,8 +527,10 @@ def _build_restored_from_attempt(
     claim_id: str | None,
     reservation_kind: str,
     config: DispatcherConfig,
+    task: TaskMetadata | None = None,
 ) -> ActiveWorktree:
-    active = active_from_attempt(attempt, parse_task_from_issue(issue), config)
+    parsed = task if task is not None else parse_task_from_issue(issue)
+    active = active_from_attempt(attempt, parsed, config)
     return replace(
         active,
         owner_kind=owner_kind,
@@ -580,6 +572,7 @@ def _build_restored_standard_worktree(
     claim_id: str | None,
     reservation_kind: str,
     config: DispatcherConfig,
+    task: TaskMetadata | None = None,
 ) -> ActiveWorktree:
     if owner_kind == "interactive" and subtask_id == f"issue-{issue.number}":
         subtask_id = resolve_claim_subtask_id(issue)
@@ -595,7 +588,8 @@ def _build_restored_standard_worktree(
         config,
     )
     recompute_count, forced_serial = _recovery_counters_for_issue(issue)
-    selection = resolve_task_execution_selection(parse_task_from_issue(issue), config)
+    parsed = task if task is not None else parse_task_from_issue(issue)
+    selection = resolve_task_execution_selection(parsed, config)
     return restored_active_record(
         issue_number=issue.number,
         branch=branch,
@@ -627,8 +621,15 @@ def _build_restored_active_worktree(
     issue_to_subtask_id: dict[int, str],
     dependency_resolution: dict[int, TaskDependencies],
     config: DispatcherConfig,
+    task: TaskMetadata | None = None,
 ) -> ActiveWorktree:
     owner_kind, claim_id, reservation_kind = _parse_claim_info_from_issue(issue)
+    parsed = task if task is not None else parse_task_from_issue(issue)
+    if (
+        parsed.footprint_error or parsed.yaml_error
+    ) and reservation_kind == "footprint":
+        reservation_kind = "repository"
+        declared_footprint = ()
     attempt = attempt_from_body(issue.body)
     if (
         owner_kind != "interactive"
@@ -636,7 +637,13 @@ def _build_restored_active_worktree(
         and attempt.phase == "launched"
     ):
         return _build_restored_from_attempt(
-            issue, attempt, owner_kind, claim_id, reservation_kind, config
+            issue,
+            attempt,
+            owner_kind,
+            claim_id,
+            reservation_kind,
+            config,
+            task=parsed,
         )
     return _build_restored_standard_worktree(
         issue,
@@ -650,6 +657,7 @@ def _build_restored_active_worktree(
         claim_id,
         reservation_kind,
         config,
+        task=parsed,
     )
 
 
@@ -663,16 +671,16 @@ def _restoration_candidates(
         for issue in issues
         if (raw := _extract_raw_subtask_id(issue)) is not None
     }
-    tasks_by_issue = {
-        issue.number: parse_task_from_issue(issue, issue_to_subtask_id)
-        for issue in issues
-    }
+    tasks_by_issue = _tasks_from_issues(issues)
     dependency_resolution = resolve_all_dependencies(tasks_by_issue)
     resolver = TaskBranchResolver(open_prs)
     resolutions: dict[int, TaskBranchResolution] = {}
     candidates = []
     for issue in issues:
-        subtask_id, declared_footprint = _parse_subtask_info_from_issue(issue)
+        parsed_task = tasks_by_issue.get(issue.number)
+        subtask_id, declared_footprint = _parse_subtask_info_from_issue(
+            issue, task=parsed_task
+        )
         active = _build_restored_active_worktree(
             issue,
             subtask_id,
@@ -682,6 +690,7 @@ def _restoration_candidates(
             issue_to_subtask_id,
             dependency_resolution,
             config,
+            task=parsed_task,
         )
         candidates.append((str(issue.number), subtask_id, active))
     return tuple(candidates)

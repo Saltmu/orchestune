@@ -28,6 +28,7 @@ def _task(
     created_at=CREATED_AT,
     status_labels=("status:queued",),
     yaml_error=False,
+    footprint_error=None,
     progress_partial=False,
 ):
     return Task(
@@ -42,6 +43,7 @@ def _task(
         created_at=created_at,
         depends_on=depends_on,
         yaml_error=yaml_error,
+        footprint_error=footprint_error,
     )
 
 
@@ -561,6 +563,17 @@ class TestIneligibleCandidatesAreStillReported:
         excluded = next(d for d in result.decisions if d.issue_number == 2)
         assert excluded.selected is False
         assert excluded.reason == "yaml-error"
+        assert excluded.score == 0.0
+
+    def test_invalid_footprint_candidate_is_reported_with_its_reason(self):
+        invalid = _task(2, footprint_error="bad path")
+
+        result = _select([_task(1), invalid])
+
+        assert [t.issue_number for t in result.selected] == [1]
+        excluded = next(d for d in result.decisions if d.issue_number == 2)
+        assert excluded.selected is False
+        assert excluded.reason == "invalid-footprint"
         assert excluded.score == 0.0
 
     def test_ineligible_candidate_keeps_real_rank_and_cost_metadata(self):

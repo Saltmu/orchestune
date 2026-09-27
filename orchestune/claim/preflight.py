@@ -6,8 +6,6 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-import yaml
-
 from orchestune.claim.contracts import (
     ClaimFailure,
     ClaimFailureReason,
@@ -23,8 +21,8 @@ from orchestune.dependencies.policy import (
     has_pending_dependencies,
 )
 from orchestune.issue_parsing import (
-    FOOTPRINT_BLOCK_PATTERN,
     effective_parent_number,
+    parse_task_from_issue,
 )
 from orchestune.labels import StatusLabel
 from orchestune.ledger.status_labels import (
@@ -38,6 +36,7 @@ from orchestune.lock_contracts import (
     ExternalLockScanResult,
 )
 from orchestune.models import IssueRecord
+from orchestune.task_metadata import TaskMetadata
 
 
 @runtime_checkable
@@ -75,30 +74,20 @@ class PreflightDecision:
     reservation_kind: ReservationKind = ReservationKind.FOOTPRINT
     failure: ClaimFailure | None = None
     stack_target_issue_number: int | None = None
+    task: TaskMetadata | None = None
 
 
-def resolve_claim_subtask_id(issue: IssueRecord) -> str:
+def resolve_claim_subtask_id(
+    issue: IssueRecord, *, task: TaskMetadata | None = None
+) -> str:
     """Resolve a stable subtask identifier for branch naming and tracking.
 
     Prioritizes subtask_id declared in Footprint YAML. If absent, empty,
     or if the YAML block is missing/malformed, generates a stable ID
     derived from the issue number (independent of issue title changes).
     """
-    fallback_id = f"task-{issue.number}"
-    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
-    if not match:
-        return fallback_id
-
-    try:
-        data = yaml.safe_load(match.group(1))
-        if isinstance(data, dict):
-            subtask_id = str(data.get("subtask_id") or "").strip()
-            if subtask_id:
-                return subtask_id
-    except yaml.YAMLError:
-        pass
-
-    return fallback_id
+    resolved_task = task if task is not None else parse_task_from_issue(issue)
+    return resolved_task.subtask_id or f"task-{issue.number}"
 
 
 def _base_ref_for_parent(default_base: str, parent_issue_number: int | None) -> str:
@@ -216,16 +205,35 @@ def _check_status_labels(
     return None
 
 
-def _resolve_reservation_kind(issue: IssueRecord) -> ReservationKind:
-    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
-    if match:
-        try:
-            data = yaml.safe_load(match.group(1))
-            if isinstance(data, dict) and bool(data.get("footprint")):
-                return ReservationKind.FOOTPRINT
-        except yaml.YAMLError:
-            pass
-    return ReservationKind.REPOSITORY
+def _evaluate_footprint_reservation(
+    task: TaskMetadata,
+) -> tuple[ReservationKind, ClaimFailure | None]:
+    if task.yaml_error:
+        return ReservationKind.REPOSITORY, None
+    if task.footprint_error is not None:
+        failure = ClaimFailure(
+            reason=ClaimFailureReason.INVALID_FOOTPRINT,
+            message=task.footprint_error,
+            next_actions=(
+                "Fix the `footprint` list in the Issue body (repository-relative paths only) and retry.",
+            ),
+        )
+        return ReservationKind.REPOSITORY, failure
+    if task.footprint:
+        return ReservationKind.FOOTPRINT, None
+    return ReservationKind.REPOSITORY, None
+
+
+def _resolve_reservation_kind(
+    issue_or_task: IssueRecord | TaskMetadata,
+) -> ReservationKind:
+    task = (
+        issue_or_task
+        if isinstance(issue_or_task, TaskMetadata)
+        else parse_task_from_issue(issue_or_task)
+    )
+    kind, _ = _evaluate_footprint_reservation(task)
+    return kind
 
 
 def _check_dependencies_without_view(
@@ -337,34 +345,30 @@ def evaluate_claim_preflight(
     if failure is not None or issue is None:
         return PreflightDecision(allowed=False, issue_number=issue_num, failure=failure)
 
-    reservation_kind = _resolve_reservation_kind(issue)
-    subtask_id = resolve_claim_subtask_id(issue)
-    parent_number = effective_parent_number(issue) if view is None else None
-
-    dep_failure, base_ref, stack_target = _resolve_dependencies_and_base(
-        issue.number,
-        label_set,
-        assessment,
-        view,
-        default_base,
-        parent_issue_number=parent_number,
-    )
-    if dep_failure is not None:
-        return PreflightDecision(
-            allowed=False,
-            issue_number=issue.number,
-            subtask_id=subtask_id,
-            reservation_kind=reservation_kind,
-            failure=dep_failure,
+    task = parse_task_from_issue(issue)
+    subtask_id = resolve_claim_subtask_id(issue, task=task)
+    reservation_kind, failure = _evaluate_footprint_reservation(task)
+    base_ref, stack_target = None, None
+    if failure is None:
+        parent_number = effective_parent_number(issue) if view is None else None
+        failure, base_ref, stack_target = _resolve_dependencies_and_base(
+            issue.number,
+            label_set,
+            assessment,
+            view,
+            default_base,
+            parent_issue_number=parent_number,
         )
 
     return PreflightDecision(
-        allowed=True,
+        allowed=failure is None,
         issue_number=issue.number,
         subtask_id=subtask_id,
         base_ref=base_ref,
         reservation_kind=reservation_kind,
+        failure=failure,
         stack_target_issue_number=stack_target,
+        task=task,
     )
 
 

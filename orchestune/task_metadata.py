@@ -2,7 +2,7 @@
 
 `models.Task`はraw依存宣言（`depends_on` / `native_depends_on`）を含む全域DTOの
 まま維持する。本モジュールはpolicy/consumer側が誤ってraw宣言を参照できないよう、
-非raw17フィールドだけを公開する`TaskMetadata` Protocolと、それを満たす
+非raw18フィールドだけを公開する`TaskMetadata` Protocolと、それを満たす
 frozen/slotsの値型`CycleTask`を提供する。raw宣言の保持・DAG変換は別モジュール
 （#888 `cycle-identity-dag-bridge`）の責務であり、ここでは扱わない。
 """
@@ -18,7 +18,7 @@ from orchestune.models import Task
 
 @runtime_checkable
 class TaskMetadata(Protocol):
-    """`Task`の非raw17フィールドを読み取り専用propertyとして公開する契約。"""
+    """`Task`の非raw18フィールドを読み取り専用propertyとして公開する契約。"""
 
     @property
     def issue_number(self) -> int: ...
@@ -40,6 +40,8 @@ class TaskMetadata(Protocol):
     def created_at(self) -> str: ...
     @property
     def yaml_error(self) -> bool: ...
+    @property
+    def footprint_error(self) -> str | None: ...
     @property
     def parent_number(self) -> int | None: ...
     @property
@@ -70,6 +72,7 @@ class CycleTask:
     status_labels: tuple[str, ...]
     created_at: str
     yaml_error: bool = False
+    footprint_error: str | None = None
     parent_number: int | None = None
     issue_state: str = "OPEN"
     parent_state: str | None = None
@@ -92,6 +95,7 @@ class CycleTask:
             status_labels=tuple(task.status_labels),
             created_at=task.created_at,
             yaml_error=task.yaml_error,
+            footprint_error=task.footprint_error,
             parent_number=task.parent_number,
             issue_state=task.issue_state,
             parent_state=task.parent_state,
@@ -125,6 +129,7 @@ def task_metadata_to_dict(task: TaskMetadata) -> dict[str, object]:
         "status_labels": task.status_labels,
         "created_at": task.created_at,
         "yaml_error": task.yaml_error,
+        "footprint_error": task.footprint_error,
         "parent_number": task.parent_number,
         "issue_state": task.issue_state,
         "parent_state": task.parent_state,
