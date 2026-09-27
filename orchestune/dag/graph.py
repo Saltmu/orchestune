@@ -27,7 +27,7 @@ from orchestune.dag.similarity import (
     DEFAULT_SIMILARITY_THRESHOLD,
     build_similarity_conflicts,
 )
-from orchestune.symbol_verification import (
+from orchestune.dag.symbol_verification import (
     find_missing_footprint_paths,
     find_missing_symbols,
 )

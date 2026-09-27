@@ -116,6 +116,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dag.graph",
             "dag.parsing",
             "dag.similarity",
+            "dag.symbol_verification",
             "dispatch.actor_verification",
             "dispatch.attempt_record",
             "dispatch.config",
@@ -184,7 +185,6 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "replan.preview",
             "replan.snapshot",
             "status_snapshot",
-            "symbol_verification",
             "task_branch_resolution",
         }
     ),
@@ -873,10 +873,6 @@ KNOWN_PACKAGE_CYCLE_EDGES: dict[tuple[str, str], str] = {
         "Completion uses claim ownership/workspace; cycle closes via claim -> "
         "dispatch -> complete until #1071, #1072, #1073 remove the return path"
     ),
-    (
-        "dag",
-        "symbol_verification",
-    ): "DAG construction invokes symbol verification; #1075",
     ("dispatch", "claim"): (
         "Dispatch reuses claim contracts/preflight/service/workspace; return path "
         "from claim remains until #1071, #1072, #1073"
@@ -898,7 +894,6 @@ KNOWN_PACKAGE_CYCLE_EDGES: dict[tuple[str, str], str] = {
         "replan",
     ): "Rendering uses replan models; shared plan boundary #1076",
     ("replan", "provisioning"): "Plan loading/rendering/validation are shared; #1076",
-    ("symbol_verification", "dag"): "Verification consumes DAG models; #1075",
 }
 
 
