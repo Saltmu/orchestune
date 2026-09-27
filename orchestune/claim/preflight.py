@@ -22,12 +22,6 @@ from orchestune.dispatch.dependency_policy import (
     decide_stack_target,
     has_pending_dependencies,
 )
-from orchestune.dispatch.locks import (
-    KIND_BRANCH,
-    KIND_PR,
-    ExternalLockConflict,
-    ExternalLockScanResult,
-)
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     effective_parent_number,
@@ -36,6 +30,12 @@ from orchestune.labels import StatusLabel
 from orchestune.ledger.status_labels import (
     PRIMARY_STATUS_LABELS,
     TERMINAL_ESCALATION_LABELS,
+)
+from orchestune.lock_contracts import (
+    KIND_BRANCH,
+    KIND_PR,
+    ExternalLockConflict,
+    ExternalLockScanResult,
 )
 from orchestune.models import IssueRecord
 

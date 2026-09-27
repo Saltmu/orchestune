@@ -203,7 +203,7 @@ record APIは外部I/Oを行わず、呼出側の成功確認済みの事実だ�
 | **L3** | **ワークフロー**<br/>ディスパッチサイクルと統合パイプライン | `claim.service`, `complete.service`, `dispatch.cycle`, `dispatch.cycle_actions`, `dispatch.cycle_context`, `dispatch.cycle_report`, `dispatch.gc_service`, `dispatch.phase_gc`, `dispatch.phase_reconciliation`, `dispatch.phase_rebase`, `dispatch.phase_scheduling`, `dispatch.postcycle`, `dispatch.report`, `integrator`, `integrator.coordinator`, `integrator.parent_completion`, `integrator.steps`, `integrator.types`, `provisioning.flow`, `replan.apply` |
 | **L2** | **ドメイン**<br/>DAG構築・スコアリング・ディスパッチ機構 | `claim.ownership`, `claim.preflight`, `claim.workspace`, `complete.ci_evidence`, `complete.journal`, `complete.posting`, `complete.preflight`, `consistency`, `consistency.desired`, `consistency.engine`, `consistency.invariants`, `consistency.invariants.execution`, `consistency.invariants.status`, `consistency.intents`, `consistency.observation`, `consistency.repairs`, `consistency.repairs.execution`, `consistency.repairs.status`, `consistency.supervisor`, `dag.contracts`, `dag.graph`, `dag.parsing`, `dag.similarity`, `dag.symbol_verification`, `dispatch.actor_verification`, `dispatch.attempt_record`, `dispatch.config`, `dispatch.config_loader`, `dispatch.conflicts`, `dispatch.cost_model`, `dispatch.critical_path`, `dispatch.claim_marker`, `dispatch.cycle_action_contracts`, `dispatch.cycle_context_state`, `dispatch.cycle_records`, `dispatch.dependency_assessment`, `dispatch.dependency_policy`, `dispatch.dependency_resolution`, `dispatch.escalation`, `dispatch.execution_profiles`, `dispatch.execution_repair`, `dispatch.filters`, `dispatch.gc`, `dispatch.gc.completion`, `dispatch.gc.git`, `dispatch.gc.handoff`, `dispatch.gc.outcome_decision`, `dispatch.gc.prior_merge`, `dispatch.gc.zombies`, `dispatch.launch`, `dispatch.launch_attempts`, `dispatch.locks`, `dispatch.rebase`, `dispatch.reconciliation`, `dispatch.recovery`, `dispatch.prior_parent_merge`, `dispatch.reviewer`, `dispatch.rules`, `dispatch.scoring`, `dispatch.status_dependency_policy`, `dispatch.status_repair`, `dispatch.status_repair_dependencies`, `dispatch.summary`, `dispatch.targets`, `dispatch.worktree`, `infra.not_needed_review_state`, `integrator.finalization`, `integrator.final_pr_body`, `integrator.git_ops`, `integrator.pr`, `integrator.proofs`, `integrator.tasks`, `integrator.worktree`, `issue_notice`, `issue_parsing`, `ledger`, `ledger.escalation`, `ledger.run_state`, `ledger.status_labels`, `pr_link_notice`, `provisioning.parent`, `provisioning.plan`, `provisioning.plan_loading`, `provisioning.rendering`, `provisioning.retry`, `provisioning.subtasks`, `replan.audit`, `replan.operations`, `replan.plan`, `replan.preview`, `replan.snapshot`, `status_snapshot`, `task_branch_resolution` |
 | **L1** | **アダプタ**<br/>外部開発ツールを実行するモジュール群 | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli`, `infra.python_env` |
-| **L0** | **インフラ**<br/>純粋なDTOと依存を持たないヘルパ | `bounded_limit`, `branch_naming`, `claim`, `claim.contracts`, `complete`, `complete.contracts`, `consistency.contracts`, `consistency.models`, `consistency.vocabulary`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `exit_codes`, `infra`, `infra.json_state`, `infra.process_utils`, `labels`, `models`, `outcome_record`, `ownership_contracts`, `plan_identity`, `plan_writer`, `provisioning`, `replan`, `replan.models`, `setup_skills`, `task_metadata`, `validation`, `version` |
+| **L0** | **インフラ**<br/>純粋なDTOと依存を持たないヘルパ | `bounded_limit`, `branch_naming`, `claim`, `claim.contracts`, `complete`, `complete.contracts`, `consistency.contracts`, `consistency.models`, `consistency.vocabulary`, `dag`, `dag.models`, `dispatch`, `dispatch.result`, `exit_codes`, `infra`, `infra.json_state`, `infra.process_utils`, `labels`, `lock_contracts`, `models`, `outcome_record`, `ownership_contracts`, `plan_identity`, `plan_writer`, `provisioning`, `replan`, `replan.models`, `setup_skills`, `task_metadata`, `validation`, `version` |
 
 純粋なデータ転送モジュール（`models`, `dag.models`, `dispatch.result`）を
 アダプタより下の **L0** に置いているのは、`GitHubForge` が `IssueRecord` /
@@ -245,7 +245,6 @@ ledger の専用境界は一般のレイヤー規則より厳しく、ledger 内
 
 | 利用側 | 残存依存と理由 | 後続 Issue |
 | --- | --- | --- |
-| `claim.preflight` | `dispatch.locks`: 共通のロック型・定数が dispatch の走査処理と同居 | [#1071](https://github.com/Saltmu/orchestune/issues/1071) |
 | `claim.service` | `dispatch.worktree`: 共通の worktree 準備が dispatch 配下にある | [#1072](https://github.com/Saltmu/orchestune/issues/1072) |
 | `claim.preflight` | `dispatch.dependency_assessment` / `dispatch.dependency_policy`: readiness・stack 判定を共有 | [#1073](https://github.com/Saltmu/orchestune/issues/1073) |
 | `integrator.coordinator` | `dispatch.targets`: routine 定数・target 実装・handle 契約を共有 | [#1074](https://github.com/Saltmu/orchestune/issues/1074) |
@@ -255,6 +254,11 @@ ledger の専用境界は一般のレイヤー規則より厳しく、ledger 内
 これらの戻り経路によって `complete → claim`・`dispatch → claim/complete/integrator`
 もパッケージ循環に残ります。同じパッケージ対の別の import が循環内に残る間は、
 一部のモジュール参照を解消しただけで許容エントリを削除してはいけません。
+`claim.preflight` の `dispatch.locks` への共通ロック型・定数依存は、
+[#1071](https://github.com/Saltmu/orchestune/issues/1071) で
+`KIND_BRANCH`/`KIND_PR`/`ExternalLockConflict`/`ExternalLockScanResult` を
+L0 の `lock_contracts` モジュールへ移して解消しました。`claim ↔ dispatch` の
+循環自体は、上表に残る #1072・#1073 の依存により継続します。
 別責務の `dag ↔ symbol_verification` の循環は、[#1075](https://github.com/Saltmu/orchestune/issues/1075) で検証処理を `dag` パッケージ配下（`dag.symbol_verification`）へ集約して解消しました。残る `provisioning ↔ replan` の循環は [#1076](https://github.com/Saltmu/orchestune/issues/1076) で追跡します。
 
 ### 4.2 CIで機械的に検証される不変条件

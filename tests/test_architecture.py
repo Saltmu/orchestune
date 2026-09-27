@@ -218,6 +218,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "infra.json_state",
             "infra.process_utils",
             "labels",
+            "lock_contracts",
             "models",
             "outcome_record",
             "ownership_contracts",
@@ -867,20 +868,20 @@ def test_execution_profiles_boundary_documented_in_architecture_docs() -> None:
 
 KNOWN_PACKAGE_CYCLE_EDGES: dict[tuple[str, str], str] = {
     ("claim", "dispatch"): (
-        "Shared lock contracts (#1071), worktree preparation (#1072), and "
-        "dependency assessment/policy (#1073) still live under dispatch"
+        "Worktree preparation (#1072) and dependency assessment/policy (#1073) "
+        "still live under dispatch"
     ),
     ("complete", "claim"): (
         "Completion uses claim ownership/workspace; cycle closes via claim -> "
-        "dispatch -> complete until #1071, #1072, #1073 remove the return path"
+        "dispatch -> complete until #1072, #1073 remove the return path"
     ),
     ("dispatch", "claim"): (
         "Dispatch reuses claim contracts/preflight/service/workspace; return path "
-        "from claim remains until #1071, #1072, #1073"
+        "from claim remains until #1072, #1073"
     ),
     ("dispatch", "complete"): (
         "GC consumes completion contracts; return path via complete -> claim -> "
-        "dispatch remains until #1071, #1072, #1073"
+        "dispatch remains until #1072, #1073"
     ),
     ("dispatch", "integrator"): (
         "Postcycle invokes integration/coordinator/parent completion; reverse "

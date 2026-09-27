@@ -6,7 +6,6 @@ import re
 import subprocess
 import sys
 from collections.abc import Iterable
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
@@ -17,6 +16,12 @@ from orchestune.dispatch.dependency_assessment import (
 )
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.labels import StatusLabel
+from orchestune.lock_contracts import (
+    KIND_BRANCH,
+    KIND_PR,
+    ExternalLockConflict,
+    ExternalLockScanResult,
+)
 from orchestune.models import PrRecord
 from orchestune.pr_link_notice import pr_matches_issue
 from orchestune.task_branch_resolution import (
@@ -44,33 +49,8 @@ def _is_hotspot(path: str) -> bool:
     return any(pattern.search(path) for pattern in _HOTSPOT_PATTERNS)
 
 
-KIND_BRANCH = "branch"
-KIND_PR = "pr"
 KIND_BRANCH_DIFF_UNKNOWN = "branch-diff-unknown"
 KIND_PR_FILES_TRUNCATED = "pr-files-truncated"
-
-
-@dataclass(frozen=True)
-class ExternalLockConflict:
-    """#787: 外部ロック1件分の理由。運用者が「なぜ起動しないのか」を追える最小単位。
-
-    `files`は`branch`/`pr`種別でのみ埋まる。差分を取得できなかったブランチや
-    changed filesが打ち切られたPRはfail closedでロックするため衝突ファイルを
-    特定できず、種別だけで理由を表す。"""
-
-    kind: str
-    source: str
-    files: tuple[str, ...] = ()
-
-
-@dataclass
-class ExternalLockScanResult:
-    to_lock: list[TaskMetadata]
-    to_unlock: list[TaskMetadata]
-    # #787: 新規ロック(to_lock)だけでなく「前サイクルから継続してロック中の
-    # タスク」も収録する。継続ロックはto_lock/to_unlockのどちらにも現れず、
-    # 理由を引ける場所が他に無いため（#695の実例）。
-    conflicts: dict[int, tuple[ExternalLockConflict, ...]] = field(default_factory=dict)
 
 
 def _collect_branch_footprints(

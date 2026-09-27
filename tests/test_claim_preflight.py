@@ -22,13 +22,13 @@ from orchestune.dispatch.dependency_assessment import (
     DependencyState,
 )
 from orchestune.dispatch.dependency_resolution import UnresolvedDependency
-from orchestune.dispatch.locks import (
+from orchestune.labels import StatusLabel
+from orchestune.lock_contracts import (
     KIND_BRANCH,
     KIND_PR,
     ExternalLockConflict,
     ExternalLockScanResult,
 )
-from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
 
 
