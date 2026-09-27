@@ -327,6 +327,7 @@ def _extract_review_result(
     latest_item: dict[str, Any] | None = None,
     latest_trigger_time: str = "",
     jev_threshold: float | None = None,
+    pr_number: int | None = None,
 ) -> dict[str, Any] | None:
     # Scope inline comments to the current round, same as the summary/tracker
     # gating above: `pulls/{pr}/comments` returns every inline comment ever
@@ -356,6 +357,7 @@ def _extract_review_result(
                 initial_inlines,
                 bot_name=bot_name,
                 threshold=jev_threshold,
+                pr=pr_number,
             )
             result["inline_comments"] = filtered_inlines
             if not filtered_inlines:
@@ -450,6 +452,7 @@ def _check_immediate_review_result(
     latest_trigger_time: str,
     current_round: int,
     jev_threshold: float | None = None,
+    pr_number: int | None = None,
 ) -> dict[str, Any] | None:
     latest_bot_activity = _latest_bot_activity_item(initial_data, bot_name)
     latest_bot_item = _latest_bot_summary_item(initial_data, bot_name)
@@ -468,6 +471,7 @@ def _check_immediate_review_result(
             latest_item=latest_bot_item,
             latest_trigger_time=latest_trigger_time,
             jev_threshold=jev_threshold,
+            pr_number=pr_number,
         )
         if result is not None:
             if result.get("all_findings_filtered"):
@@ -603,6 +607,7 @@ def wait_for_review(
                 latest_trigger_time,
                 current_round,
                 jev_threshold=jev_threshold,
+                pr_number=pr_number,
             )
             if immediate is not None:
                 return immediate
@@ -672,6 +677,7 @@ def wait_for_review(
                                 latest_item=latest_bot_item,
                                 latest_trigger_time=latest_trigger_time,
                                 jev_threshold=jev_threshold,
+                                pr_number=pr_number,
                             )
                             if result is not None:
                                 if result.get("all_findings_filtered"):
@@ -809,6 +815,7 @@ def main() -> None:
                     initial_inlines,
                     bot_name=args.bot_name,
                     threshold=args.jev_threshold,
+                    pr=args.pr,
                 )
                 result["inline_comments"] = filtered_inlines
                 if not filtered_inlines:

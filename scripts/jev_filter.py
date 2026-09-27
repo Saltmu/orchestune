@@ -13,10 +13,13 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 DEFAULT_JEV_BASE_URL = "https://api.typesafe.ai/v1"
 DEFAULT_JEV_API_URL = f"{DEFAULT_JEV_BASE_URL}/systemone"
+DEFAULT_JEV_LOG_PATH = ".orchestune/jev/evaluations.jsonl"
 DEFAULT_VALIDITY_THRESHOLD = 0.7
 MAX_COMMENT_LENGTH = 4000
 MAX_RETRIES = 3
@@ -186,16 +189,42 @@ def evaluate_finding_with_jev(
     return _evaluate_request(req, timeout, max_retries, initial_backoff)
 
 
+def _append_jev_log(
+    record: dict[str, Any],
+    log_path: str | Path | None = None,
+) -> None:
+    """Append a Jev evaluation record to a JSONL log file.
+
+    Defaults to JEV_LOG_PATH env var, or DEFAULT_JEV_LOG_PATH.
+    Creates parent directories if necessary.
+    Handles I/O errors gracefully by warning to stderr.
+    """
+    target = log_path or os.environ.get("JEV_LOG_PATH") or DEFAULT_JEV_LOG_PATH
+    try:
+        path = Path(target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        print(
+            f"Warning: Failed to write Jev evaluation log to {target}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def filter_review_findings(
     inline_comments: list[dict[str, Any]],
     bot_name: str = "claude",
     threshold: float | None = None,
     api_key: str | None = None,
     base_url: str | None = None,
+    log_path: str | Path | None = None,
+    pr: int | None = None,
 ) -> list[dict[str, Any]]:
     """Filter inline comments using Jev evaluation and threshold policy.
 
-    Outputs structured evaluation logs to stderr for PoC visibility.
+    Outputs structured evaluation logs to stderr for PoC visibility
+    and persists them to a JSONL log file.
     If JEV_API_KEY is not set, findings pass through untouched.
     """
     resolved_key = api_key or os.environ.get("JEV_API_KEY")
@@ -231,7 +260,22 @@ def filter_review_findings(
             threshold=threshold,
         )
 
-        log_entry = {
+        now_iso = datetime.now(UTC).isoformat()
+        file_log_entry = {
+            "timestamp": now_iso,
+            "reviewer": bot_name,
+            "pr": pr,
+            "path": path,
+            "line": line,
+            "comment": comment,
+            "validity": evaluation.validity,
+            "impact": evaluation.impact,
+            "accepted": accepted,
+            "bypassed": evaluation.bypassed,
+        }
+        _append_jev_log(file_log_entry, log_path=log_path)
+
+        stderr_entry = {
             "reviewer": bot_name,
             "comment": comment,
             "path": path,
@@ -240,7 +284,7 @@ def filter_review_findings(
             "impact": evaluation.impact,
             "accepted": accepted,
         }
-        print(json.dumps(log_entry), file=sys.stderr)
+        print(json.dumps(stderr_entry), file=sys.stderr)
 
         if accepted:
             accepted_findings.append(item)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +13,7 @@ import pytest
 from scripts.jev_filter import (
     DEFAULT_JEV_API_URL,
     DEFAULT_JEV_BASE_URL,
+    DEFAULT_JEV_LOG_PATH,
     JevFindingEvaluation,
     evaluate_finding_with_jev,
     filter_review_findings,
@@ -616,3 +618,153 @@ def test_system_one_answers_drive_filter(validity: float, impact: str) -> None:
     with patch("urllib.request.urlopen", return_value=response):
         result = filter_review_findings([finding], api_key="test-key")
     assert result == ([finding] if validity >= 0.7 and impact != "LOW" else [])
+
+
+class TestJevLogPersistence:
+    def test_default_jev_log_path(self) -> None:
+        assert DEFAULT_JEV_LOG_PATH == ".orchestune/jev/evaluations.jsonl"
+
+    def test_filter_persists_evaluation_to_specified_log_path(
+        self, tmp_path: Path
+    ) -> None:
+        log_file = tmp_path / "sub" / "evaluations.jsonl"
+        response = MagicMock()
+        response.read.return_value = json.dumps(_api_response(0.9, "HIGH")).encode()
+        response.__enter__.return_value = response
+
+        finding = {"body": "Defect in logic", "path": "core.py", "line": 100}
+        with patch("urllib.request.urlopen", return_value=response):
+            result = filter_review_findings(
+                [finding],
+                bot_name="codex",
+                api_key="test-key",
+                log_path=log_file,
+                pr=1082,
+            )
+
+        assert len(result) == 1
+        assert log_file.exists()
+        lines = log_file.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["reviewer"] == "codex"
+        assert record["pr"] == 1082
+        assert record["path"] == "core.py"
+        assert record["line"] == 100
+        assert record["comment"] == "Defect in logic"
+        assert record["validity"] == 0.9
+        assert record["impact"] == "HIGH"
+        assert record["accepted"] is True
+        assert record["bypassed"] is False
+        assert "timestamp" in record
+
+    def test_filter_persists_to_env_var_log_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        env_log = tmp_path / "env_evals.jsonl"
+        monkeypatch.setenv("JEV_LOG_PATH", str(env_log))
+
+        response = MagicMock()
+        response.read.return_value = json.dumps(_api_response(0.5, "LOW")).encode()
+        response.__enter__.return_value = response
+
+        finding = {"body": "Minor typo", "path": "README.md", "line": 1}
+        with patch("urllib.request.urlopen", return_value=response):
+            result = filter_review_findings(
+                [finding],
+                bot_name="claude",
+                api_key="test-key",
+            )
+
+        assert len(result) == 0
+        assert env_log.exists()
+        lines = env_log.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["reviewer"] == "claude"
+        assert record["pr"] is None
+        assert record["validity"] == 0.5
+        assert record["impact"] == "LOW"
+        assert record["accepted"] is False
+        assert record["bypassed"] is False
+
+    def test_filter_appends_multiple_evaluations(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "evals.jsonl"
+        response1 = MagicMock()
+        response1.read.return_value = json.dumps(_api_response(0.85, "HIGH")).encode()
+        response1.__enter__.return_value = response1
+
+        response2 = MagicMock()
+        response2.read.return_value = json.dumps(_api_response(0.4, "LOW")).encode()
+        response2.__enter__.return_value = response2
+
+        findings = [
+            {"body": "Issue 1", "path": "a.py", "line": 10},
+            {"body": "Issue 2", "path": "b.py", "line": 20},
+        ]
+        with patch("urllib.request.urlopen", side_effect=[response1, response2]):
+            filter_review_findings(
+                findings,
+                api_key="test-key",
+                log_path=log_file,
+            )
+
+        lines = log_file.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 2
+
+        # Second call to ensure append, not overwrite
+        response3 = MagicMock()
+        response3.read.return_value = json.dumps(_api_response(0.95, "HIGH")).encode()
+        response3.__enter__.return_value = response3
+        with patch("urllib.request.urlopen", return_value=response3):
+            filter_review_findings(
+                [{"body": "Issue 3", "path": "c.py", "line": 30}],
+                api_key="test-key",
+                log_path=log_file,
+            )
+
+        lines_after = log_file.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines_after) == 3
+
+    def test_filter_handles_write_error_gracefully(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        log_file = tmp_path / "restricted.jsonl"
+        response = MagicMock()
+        response.read.return_value = json.dumps(_api_response(0.9, "HIGH")).encode()
+        response.__enter__.return_value = response
+
+        finding = {"body": "Defect", "path": "core.py", "line": 10}
+        with patch("builtins.open", side_effect=OSError("Disk full")):
+            with patch("urllib.request.urlopen", return_value=response):
+                result = filter_review_findings(
+                    [finding],
+                    api_key="test-key",
+                    log_path=log_file,
+                )
+
+        # Filtering should still succeed despite log write failure
+        assert len(result) == 1
+        captured = capsys.readouterr()
+        assert "Warning: Failed to write Jev evaluation log" in captured.err
+
+    def test_filter_logs_when_bypassed_due_to_api_error(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "bypassed.jsonl"
+        finding = {"body": "Potential issue", "path": "x.py", "line": 5}
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.URLError("Connection refused"),
+        ):
+            result = filter_review_findings(
+                [finding],
+                api_key="test-key",
+                log_path=log_file,
+            )
+
+        assert len(result) == 1  # Bypassed findings are preserved
+        assert log_file.exists()
+        lines = log_file.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["bypassed"] is True
+        assert record["accepted"] is True

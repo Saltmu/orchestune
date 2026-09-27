@@ -16,5 +16,11 @@ def _isolate_git_env(monkeypatch: pytest.MonkeyPatch):
 @pytest.fixture(autouse=True)
 def _isolate_jev_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Require tests to opt into Jev instead of using real session credentials."""
-    for name in ("JEV_API_KEY", "JEV_BASE_URL", "JEV_API_URL", "JEV_THRESHOLD"):
+    for name in (
+        "JEV_API_KEY",
+        "JEV_BASE_URL",
+        "JEV_API_URL",
+        "JEV_THRESHOLD",
+        "JEV_LOG_PATH",
+    ):
         monkeypatch.delenv(name, raising=False)
