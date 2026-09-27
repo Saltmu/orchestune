@@ -62,6 +62,7 @@ _COMPAT = "Explicit legacy raw-Task compatibility boundary."
 PRODUCTION_EXCEPTIONS = frozenset(
     {
         _exception("orchestune.task_metadata", "<module>", "Task", _COMPAT),
+        _exception("orchestune.dependencies.resolution", "<module>", "Task", _IDENTITY),
         _exception(
             "orchestune.dispatch.cycle_context_state", "<module>", "Task", _IDENTITY
         ),
@@ -93,6 +94,21 @@ PRODUCTION_EXCEPTIONS = frozenset(
             "native_depends_on",
             _IDENTITY,
         ),
+        *{
+            _exception(
+                "orchestune.dependencies.resolution",
+                function,
+                attribute,
+                _IDENTITY,
+            )
+            for function, attribute in {
+                ("_resolve_native", "native_depends_on"),
+                ("_own_native_subtask_ids", "native_depends_on"),
+                ("_resolve_body", "depends_on"),
+                ("from_task", "depends_on"),
+                ("from_task", "native_depends_on"),
+            }
+        },
         _exception(
             "orchestune.dispatch.cycle", "execute", "tasks_by_issue", _PRIVATE_VIEW
         ),
@@ -349,6 +365,7 @@ def _module_name(package_root: Path, path: Path) -> str:
 def _production_observations(repo_root: Path) -> tuple[BoundaryViolation, ...]:
     package_root = repo_root / "orchestune"
     paths = [package_root / "task_metadata.py"]
+    paths.extend(sorted((package_root / "dependencies").rglob("*.py")))
     paths.extend(sorted((package_root / "dispatch").rglob("*.py")))
     observations = [
         violation
