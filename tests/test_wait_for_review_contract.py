@@ -870,6 +870,30 @@ def test_offline_explicit_incomplete_section_is_not_exit_0(tmp_path):
     assert exc.value.code == EXIT_NO_RESULT
 
 
+def test_offline_unenumerated_incomplete_status_is_also_not_exit_0(tmp_path):
+    """Any explicitly-supplied non-"complete" status (not just the enumerated
+    missing/error/truncated spellings, e.g. "partial") downgrades the result
+    (Codex PR #1114 round 2 finding)."""
+    from scripts.wait_for_review import EXIT_NO_RESULT, main
+
+    state = _jev_state()
+    state["completeness"] = {
+        "issue_comments": "complete",
+        "reviews": "complete",
+        "inline_comments": "partial",
+    }
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state), encoding="utf-8")
+
+    with (
+        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        pytest.raises(SystemExit) as exc,
+    ):
+        main()
+
+    assert exc.value.code == EXIT_NO_RESULT
+
+
 def test_offline_unknown_completeness_still_exits_acquired(tmp_path):
     """The default "unknown" completeness (no metadata supplied) must keep
     working for legacy callers -- only an *explicit* incomplete declaration

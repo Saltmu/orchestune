@@ -295,8 +295,15 @@ def extract_review_result(
     # body and no inline comments (empty review, trigger-only, all-sections-empty),
     # is execution telemetry rather than review content: treat it the same as no
     # activity at all, distinct from a genuine zero-findings review (which always
-    # carries real body text, e.g. "LGTM, no issues found") (issue #1099).
-    if not any(item["body"] for item in review_items) and not inline_items:
+    # carries real body text, e.g. "LGTM, no issues found") (issue #1099). This
+    # must be scoped to `current`-provenance items only: a PR with a real
+    # historical review body must not let that stale content satisfy a new
+    # round whose own activity is empty/tracker-only (Codex PR #1114 round 2
+    # finding).
+    has_current_content = any(
+        item["body"] for item in review_items if item["provenance"] == "current"
+    ) or any(item["provenance"] == "current" for item in inline_items)
+    if not has_current_content:
         return None
 
     current_bodies = [

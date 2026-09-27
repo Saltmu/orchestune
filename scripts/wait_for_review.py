@@ -1001,11 +1001,22 @@ def main() -> None:
                 jev_evaluations=jev_evaluations,
                 completeness=completeness,
             )
-            incomplete_sections = [
-                section
-                for section, status in completeness.items()
-                if status in ("missing", "error", "truncated")
-            ]
+            # A caller-supplied completeness dict is a positive declaration:
+            # any value other than "complete" (not just the enumerated
+            # missing/error/truncated spellings, e.g. "partial") means the
+            # adapter itself isn't vouching for a full fetch. Only the
+            # *absence* of a completeness key (state_completeness is None,
+            # defaulted to "unknown" above) keeps legacy input working
+            # (Codex PR #1114 round 2 finding).
+            incomplete_sections = (
+                [
+                    section
+                    for section, status in completeness.items()
+                    if status != "complete"
+                ]
+                if isinstance(state_completeness, dict)
+                else []
+            )
             if (
                 incomplete_sections
                 and result["acquisition_status"] == ACQUISITION_ACQUIRED

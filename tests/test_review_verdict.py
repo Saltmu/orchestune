@@ -121,6 +121,14 @@ def test_extract_review_result_tags_items_before_round_start_as_historical():
 def test_extract_review_result_tags_missing_timestamp_as_unassociated():
     state = normalize_review_state(
         {
+            "reviews": [
+                {
+                    "id": 1,
+                    "user": {"login": "claude[bot]"},
+                    "submitted_at": "2026-08-20T10:00:00Z",
+                    "body": "current round findings",
+                }
+            ],
             "inline_comments": [
                 {
                     "id": 9,
@@ -139,6 +147,54 @@ def test_extract_review_result_tags_missing_timestamp_as_unassociated():
 
     assert result is not None
     assert result["inline_comments"][0]["provenance"] == "unassociated"
+
+
+def test_extract_review_result_returns_none_for_only_unassociated_content():
+    """An unassociated-only result (no confirmed current-round content) must
+    not be reported as an acquired result for the round (Codex PR #1114
+    round 2 finding: only current-provenance content may satisfy a round)."""
+    state = normalize_review_state(
+        {
+            "inline_comments": [
+                {
+                    "id": 9,
+                    "user": {"login": "claude[bot]"},
+                    "path": "a.py",
+                    "line": 1,
+                    "body": "no timestamp at all",
+                }
+            ],
+        }
+    )
+
+    result = extract_review_result(
+        state, "claude", round_started_at="2026-08-20T09:30:00Z"
+    )
+
+    assert result is None
+
+
+def test_extract_review_result_returns_none_when_only_historical_content_exists():
+    """A prior round's real review body must not satisfy a new round whose
+    own activity is empty (Codex PR #1114 round 2 finding)."""
+    state = normalize_review_state(
+        {
+            "reviews": [
+                {
+                    "id": 1,
+                    "user": {"login": "claude[bot]"},
+                    "submitted_at": "2026-08-20T09:00:00Z",
+                    "body": "old round findings",
+                }
+            ],
+        }
+    )
+
+    result = extract_review_result(
+        state, "claude", round_started_at="2026-08-20T09:30:00Z"
+    )
+
+    assert result is None
 
 
 def test_extract_review_result_excludes_finished_progress_tracker_from_review_items():
