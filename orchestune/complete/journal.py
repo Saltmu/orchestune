@@ -17,8 +17,8 @@ from uuid import uuid4
 
 from orchestune.claim.ownership import owner_token_digest
 from orchestune.complete.contracts import CompleteFailureReason, CompleteStage
-from orchestune.dispatch.state import load_run_state, save_run_state
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
+from orchestune.ledger.run_state import load_run_state, save_run_state
 
 
 @dataclass(frozen=True)

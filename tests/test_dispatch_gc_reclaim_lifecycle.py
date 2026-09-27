@@ -14,7 +14,7 @@ from orchestune.dispatch.cycle_context import (
     discard_reclaim_counts_for_closed_issues,
 )
 from orchestune.dispatch.gc import _rule_completed, _rule_not_needed
-from orchestune.dispatch.state import (
+from orchestune.ledger.run_state import (
     RunState,
     TaskReclaimRecord,
     load_run_state,

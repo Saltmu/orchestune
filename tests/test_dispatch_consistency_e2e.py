@@ -37,8 +37,8 @@ from orchestune.dispatch.dependency_resolution import TaskDependencies
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase_gc import run_gc_phase
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.state import ActiveWorktree, RunState, load_run_state
 from orchestune.dispatch.status_repair import status_intent_journal_path
+from orchestune.ledger.run_state import ActiveWorktree, RunState, load_run_state
 from tests.conftest import make_issue, make_pr, make_task
 
 pytestmark = pytest.mark.e2e

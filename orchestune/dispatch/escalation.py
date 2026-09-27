@@ -10,11 +10,11 @@ from orchestune.dispatch.dependency_assessment import (
     DependencyAssessment,
     DependencyState,
 )
-from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
-from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.forge import Forge, GitHubForge
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import ActiveWorktree, RunState
+from orchestune.ledger.status_labels import transition_status_label
 from orchestune.task_metadata import TaskMetadata
 
 # #511: `status:not-needed`（対応不要）検証レビューのタイムアウト時にも

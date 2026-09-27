@@ -6,8 +6,8 @@ import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
-from orchestune.dispatch.state import RunState, load_run_state, save_run_state
 from orchestune.dispatch.targets import CodexCloudDispatchTarget, DispatchHandle
+from orchestune.ledger.run_state import RunState, load_run_state, save_run_state
 from tests.conftest import FakeForge, make_issue, make_task, real_claim_fn
 
 
@@ -138,7 +138,7 @@ def test_reconcile_attempt_adopts_confirmed_launch_over_claim_placeholder(launch
     してはならない——プレースホルダーは採用してよい。"""
     from orchestune.dispatch.attempt_record import LaunchAttempt
     from orchestune.dispatch.launch_attempts import reconcile_attempt
-    from orchestune.dispatch.state import ActiveWorktree, RunState
+    from orchestune.ledger.run_state import ActiveWorktree, RunState
 
     forge, config, plan, launch = launch_env
     task = plan.task

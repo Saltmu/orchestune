@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
-from orchestune.dispatch.state import (
+from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
     load_run_state,

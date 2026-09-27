@@ -27,8 +27,8 @@ from orchestune.dispatch.reconciliation import (
     _handle_blocked_recompute_recovery,
 )
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from tests.conftest import make_issue
 from tests.dispatch_test_support import make_plain_issue as _issue
 from tests.dispatch_test_support import make_test_active_worktree as _active

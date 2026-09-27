@@ -10,7 +10,7 @@ from pathlib import Path
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.complete.contracts import CompleteRequest
 from orchestune.complete.service import complete_task
-from orchestune.dispatch.state import load_run_state
+from orchestune.ledger.run_state import load_run_state
 
 
 def _parser() -> argparse.ArgumentParser:

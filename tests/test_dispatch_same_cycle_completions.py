@@ -13,8 +13,8 @@ from orchestune.dispatch.cycle import _finish_consistency_runtime, _RepairCycleS
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.forge import Forge
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import Task
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-same-cycle-"))

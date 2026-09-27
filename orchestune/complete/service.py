@@ -28,9 +28,9 @@ from orchestune.complete.posting import (
     post_issue_outcome,
 )
 from orchestune.complete.preflight import evaluate_complete_preflight
-from orchestune.dispatch.state import load_run_state
 from orchestune.forge import GitHubForge
 from orchestune.infra.git_cli import run_git
+from orchestune.ledger.run_state import load_run_state
 from orchestune.outcome_record import RESULT_NOT_NEEDED
 
 

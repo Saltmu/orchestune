@@ -28,18 +28,18 @@ from orchestune.dispatch.gc.git import (
     backup_wip_commit,
     remove_worktree,
 )
-from orchestune.dispatch.labels import (
-    TERMINAL_ESCALATION_LABELS,
-    transition_status_label,
-)
-from orchestune.dispatch.state import (
+from orchestune.infra.process_utils import is_process_alive
+from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
     TaskReclaimRecord,
     save_run_state,
 )
-from orchestune.infra.process_utils import is_process_alive
-from orchestune.labels import StatusLabel
+from orchestune.ledger.status_labels import (
+    TERMINAL_ESCALATION_LABELS,
+    transition_status_label,
+)
 from orchestune.models import PrRecord
 from orchestune.task_metadata import TaskMetadata
 

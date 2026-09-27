@@ -18,7 +18,6 @@ from orchestune.dispatch.locks import (
     render_external_lock_release_notice,
     scan_external_locks,
 )
-from orchestune.dispatch.state import MAX_PENDING_LOCK_RELEASE_NOTICES, RunState
 from orchestune.infra.git_cli import (
     branch_changed_files,
     ensure_parent_branch,
@@ -27,6 +26,7 @@ from orchestune.infra.git_cli import (
 from orchestune.issue_notice import post_notice_if_changed
 from orchestune.issue_parsing import is_epic_issue
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import MAX_PENDING_LOCK_RELEASE_NOTICES, RunState
 from orchestune.models import PrRecord
 from orchestune.task_metadata import TaskMetadata
 

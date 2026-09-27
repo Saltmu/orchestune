@@ -17,7 +17,7 @@ from orchestune.dispatch.recovery import (
     _restoration_candidates,
     execute_bookkeeping_repair_command,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
 
 

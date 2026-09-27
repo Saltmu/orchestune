@@ -43,8 +43,8 @@ from orchestune.dispatch.cycle_action_contracts import (
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
-from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.task_metadata import TaskMetadata
 from tests.dispatch_cycle_context_test_support import _ctx, _task

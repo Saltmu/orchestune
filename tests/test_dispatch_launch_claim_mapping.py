@@ -77,7 +77,7 @@ class TestTryPlannedLaunchPassesWorktreeRoot:
             ClaimOutcome,
         )
         from orchestune.dispatch.launch import TaskLaunchPlan, _try_planned_launch
-        from orchestune.dispatch.state import RunState
+        from orchestune.ledger.run_state import RunState
 
         custom_root = tmp_path / "custom-worktrees"
         config = DispatcherConfig(

@@ -15,7 +15,7 @@ from orchestune.dispatch.gc import (
     _rule_not_needed,
 )
 from orchestune.dispatch.phase_gc import run_gc_phase
-from orchestune.dispatch.state import RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.outcome_record import OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _ctx, _task
 

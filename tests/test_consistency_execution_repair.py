@@ -41,7 +41,7 @@ from orchestune.dispatch.execution_repair import (
 )
 from orchestune.dispatch.phase_gc import _gc_supervisor, _GcReclaimAdapter
 from orchestune.dispatch.scoring import Task
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import PrRecord
 from tests.dispatch_gc_test_support import (
     run_gc_reclaims as _collect_zombies_and_timeouts,

@@ -16,7 +16,7 @@ from orchestune.dispatch.cycle import (
 from orchestune.dispatch.cycle_action_contracts import ActivePhaseResult
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
-from orchestune.dispatch.state import (
+from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
 )

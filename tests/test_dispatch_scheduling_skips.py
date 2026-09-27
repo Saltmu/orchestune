@@ -16,13 +16,13 @@ from orchestune.dispatch.dependency_resolution import (
 )
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
 from orchestune.dispatch.phase_scheduling import _determine_candidate_tasks
-from orchestune.dispatch.state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.dispatch.summary import (
     REASON_DEPENDENCY,
     REASON_EXTERNAL_LOCK,
     REASON_REVIEW_TIMEOUT_BACKOFF,
     merge_skips,
 )
+from orchestune.ledger.run_state import ActiveWorktree, RunState, TaskReclaimRecord
 from orchestune.models import Task
 from orchestune.task_metadata import CycleTask
 from tests.dispatch_test_support import make_test_cycle_context

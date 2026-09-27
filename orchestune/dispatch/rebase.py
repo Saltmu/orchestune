@@ -21,16 +21,16 @@ from orchestune.dispatch.dependency_policy import (
     decide_stack_target,
 )
 from orchestune.dispatch.execution_profiles import ExecutionSelection
-from orchestune.dispatch.labels import transition_status_label
 from orchestune.dispatch.locks import check_footprint_deviation
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
-from orchestune.dispatch.state import ActiveWorktree, RunState
 from orchestune.dispatch.worktree import _provision_and_launch
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.infra.process_utils import default_ci_command, is_process_alive
 from orchestune.issue_parsing import backfill_recovery_counters
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import ActiveWorktree, RunState
+from orchestune.ledger.status_labels import transition_status_label
 from orchestune.task_metadata import TaskMetadata
 
 logger = logging.getLogger(__name__)

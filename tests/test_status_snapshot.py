@@ -11,7 +11,7 @@ import os
 import pytest
 
 import orchestune.status_snapshot as status_snapshot_module
-from orchestune.dispatch.state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.status_snapshot import (
     MonitorState,
     StatusSnapshot,

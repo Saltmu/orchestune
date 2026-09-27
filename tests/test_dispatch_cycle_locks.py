@@ -21,16 +21,16 @@ from orchestune.dispatch.phase_rebase import (
 from orchestune.dispatch.phase_rebase import (
     _decide_external_lock_sync as _decide_external_lock_sync_impl,
 )
-from orchestune.dispatch.state import (
-    ActiveWorktree,
-    RunState,
-)
 from orchestune.infra.process_utils import (
     assert_run_state_lock_held,
     is_run_state_lock_held,
     run_state_lock,
 )
 from orchestune.issue_notice import notice_marker, render_notice
+from orchestune.ledger.run_state import (
+    ActiveWorktree,
+    RunState,
+)
 from orchestune.models import PrRecord
 from tests.dispatch_lock_test_support import LockDependencyTestView
 from tests.dispatch_test_support import make_footprint_issue as _full_issue

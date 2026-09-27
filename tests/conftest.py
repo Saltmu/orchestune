@@ -1118,7 +1118,7 @@ def _stub_run_state_lock_assertion_by_default(request: pytest.FixtureRequest):
         yield
         return
 
-    with patch("orchestune.dispatch.state.assert_run_state_lock_held"):
+    with patch("orchestune.ledger.run_state.assert_run_state_lock_held"):
         yield
 
 

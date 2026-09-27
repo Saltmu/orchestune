@@ -19,8 +19,8 @@ from unittest.mock import MagicMock, patch
 from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.models import ConsistencyScope, RepairCommand
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.state import RunState
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import RunState
 from tests.conftest import make_issue, make_task
 from tests.dispatch_gc_test_support import _ctx, _task
 from tests.test_consistency_status_repair import _config, _plan

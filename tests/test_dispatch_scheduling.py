@@ -13,7 +13,7 @@ from orchestune.dispatch.scoring import (
     select_next_tasks,
     select_tasks_with_decisions,
 )
-from orchestune.dispatch.state import ActiveWorktree, CompletedWorktree, RunState
+from orchestune.ledger.run_state import ActiveWorktree, CompletedWorktree, RunState
 from orchestune.models import Task, Usage
 
 NOW = 1_800_000_000.0

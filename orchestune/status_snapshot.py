@@ -15,10 +15,10 @@ from enum import Enum
 from pathlib import Path
 
 from orchestune.branch_naming import parse_task_branch_name
-from orchestune.dispatch.state import load_run_state
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import load_run_state
 
 _TAIL_CHUNK_SIZE = 8192
 _LABEL_CACHE_TTL_SECONDS = 15.0

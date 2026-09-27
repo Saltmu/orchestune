@@ -85,7 +85,6 @@ from orchestune.dispatch.scoring import (
     ScoreComponents,
     select_tasks_with_decisions,
 )
-from orchestune.dispatch.state import ActiveWorktree, RunState, save_run_state
 from orchestune.dispatch.status_repair import execute_status_repair_command
 from orchestune.dispatch.summary import (
     REASON_ACTOR_UNVERIFIED,
@@ -95,6 +94,7 @@ from orchestune.dispatch.summary import (
     REASON_REVIEW_TIMEOUT_BACKOFF,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import ActiveWorktree, RunState, save_run_state
 from orchestune.models import IssueRecord
 from orchestune.task_metadata import TaskMetadata
 
