@@ -28,8 +28,10 @@ request another round.
    `inline_comments`; Jev's decision is advisory, not a removal). Use `--output-file
    <session-dir>/review-result.json` to get the complete machine-readable result instead of
    re-parsing stdout.
-2. For every `current`-provenance review item and inline comment (including ones Jev marked
-   `filtered`/`bypassed`), record one row in `<session-dir>/review-reply.md`:
+2. For every distinct finding in a `current`-provenance review item or inline comment (including
+   ones Jev marked `filtered`/`bypassed`) — a body with several unrelated findings gets one row
+   *per finding*, not one per comment/review container — record a row in
+   `<session-dir>/review-reply.md`:
 
    | Column | Content |
    | --- | --- |
