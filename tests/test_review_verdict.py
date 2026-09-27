@@ -46,6 +46,8 @@ def test_codex_boilerplate_with_inline_finding_is_not_a_clean_pass():
             "path": "app.py",
             "line": 42,
             "body": "Validate this input before using it.",
+            "id": 2,
+            "position_line": 42,
         }
     ]
 
@@ -193,3 +195,39 @@ def test_cli_evaluates_external_state_without_a_pr_or_gh(tmp_path, capsys, monke
     assert "[ACTION REQUIRED] Inline Findings: 1 item(s)" in output
     assert "--- Inline Finding 1: app.py:42 ---" in output
     assert "Validate this input before using it." in output
+
+
+def test_extract_preserves_inline_provenance() -> None:
+    from scripts.review_verdict import extract_review_result, normalize_review_state
+
+    metadata = {
+        "id": 5,
+        "diff_hunk": "@@ -1 +1 @@",
+        "side": "LEFT",
+        "start_line": 2,
+        "start_side": "LEFT",
+        "commit_id": "a" * 40,
+        "original_commit_id": "b" * 40,
+        "original_line": 3,
+    }
+    state = normalize_review_state(
+        {
+            "reviews": [{"body": "findings", "user": {"login": "claude"}}],
+            "inline_comments": [
+                {
+                    "body": "bug",
+                    "path": "a.py",
+                    "line": None,
+                    "user": {"login": "claude"},
+                    **metadata,
+                }
+            ],
+        }
+    )
+    result = extract_review_result(state, "claude")
+    assert result is not None
+    finding = result["inline_comments"][0]
+    assert finding["line"] == 3
+    assert finding["position_line"] is None
+    for key, value in metadata.items():
+        assert finding[key] == value

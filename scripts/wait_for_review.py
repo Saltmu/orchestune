@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -16,6 +17,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
+from scripts.jev_context import JevReviewContext, collect_review_context
 from scripts.jev_filter import filter_review_findings
 from scripts.review_verdict import (
     EXIT_FINDINGS_PRESENT as EXIT_FINDINGS_PRESENT,
@@ -328,6 +330,7 @@ def _extract_review_result(
     latest_trigger_time: str = "",
     jev_threshold: float | None = None,
     pr_number: int | None = None,
+    context_cache: dict[int, JevReviewContext] | None = None,
 ) -> dict[str, Any] | None:
     # Scope inline comments to the current round, same as the summary/tracker
     # gating above: `pulls/{pr}/comments` returns every inline comment ever
@@ -353,11 +356,18 @@ def _extract_review_result(
     if result is not None:
         initial_inlines = result.get("inline_comments", [])
         if initial_inlines:
+            review_context = None
+            if os.environ.get("JEV_API_KEY") and pr_number is not None:
+                cache = context_cache if context_cache is not None else {}
+                if pr_number not in cache:
+                    cache[pr_number] = collect_review_context(pr_number)
+                review_context = cache[pr_number]
             filtered_inlines = filter_review_findings(
                 initial_inlines,
                 bot_name=bot_name,
                 threshold=jev_threshold,
                 pr=pr_number,
+                context=review_context,
             )
             result["inline_comments"] = filtered_inlines
             if not filtered_inlines:
@@ -453,6 +463,7 @@ def _check_immediate_review_result(
     current_round: int,
     jev_threshold: float | None = None,
     pr_number: int | None = None,
+    context_cache: dict[int, JevReviewContext] | None = None,
 ) -> dict[str, Any] | None:
     latest_bot_activity = _latest_bot_activity_item(initial_data, bot_name)
     latest_bot_item = _latest_bot_summary_item(initial_data, bot_name)
@@ -472,6 +483,7 @@ def _check_immediate_review_result(
             latest_trigger_time=latest_trigger_time,
             jev_threshold=jev_threshold,
             pr_number=pr_number,
+            context_cache=context_cache,
         )
         if result is not None:
             if result.get("all_findings_filtered"):
@@ -565,6 +577,7 @@ def wait_for_review(
     stall_grace_seconds: int = DEFAULT_STALL_GRACE_SECONDS,
     jev_threshold: float | None = None,
 ) -> dict[str, Any]:
+    context_cache: dict[int, JevReviewContext] = {}
     with ThreadPoolExecutor(max_workers=3) as executor:
         initial_data = _get_initial_pr_data(
             pr_number,
@@ -608,6 +621,7 @@ def wait_for_review(
                 current_round,
                 jev_threshold=jev_threshold,
                 pr_number=pr_number,
+                context_cache=context_cache,
             )
             if immediate is not None:
                 return immediate
@@ -678,6 +692,7 @@ def wait_for_review(
                                 latest_trigger_time=latest_trigger_time,
                                 jev_threshold=jev_threshold,
                                 pr_number=pr_number,
+                                context_cache=context_cache,
                             )
                             if result is not None:
                                 if result.get("all_findings_filtered"):
@@ -808,7 +823,8 @@ def main() -> None:
     try:
         if args.review_state_file:
             with open(args.review_state_file, encoding="utf-8") as state_file:
-                result = evaluate_review_state(json.load(state_file), args.bot_name)
+                state = json.load(state_file)
+                result = evaluate_review_state(state, args.bot_name)
             initial_inlines = result.get("inline_comments", [])
             if initial_inlines:
                 filtered_inlines = filter_review_findings(
@@ -816,6 +832,7 @@ def main() -> None:
                     bot_name=args.bot_name,
                     threshold=args.jev_threshold,
                     pr=args.pr,
+                    context=state.get("context") if isinstance(state, dict) else None,
                 )
                 result["inline_comments"] = filtered_inlines
                 if not filtered_inlines:
