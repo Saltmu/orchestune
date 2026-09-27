@@ -549,6 +549,37 @@ def test_wait_for_review_round_number_immediate_no_post(mock_get_data):
 
 
 @patch("scripts.wait_for_review._get_pr_data", autospec=True)
+def test_wait_for_review_no_post_does_not_self_acquire_bot_authored_trigger(
+    mock_get_data,
+):
+    """A `--no-post` retry of a trigger authored by the target bot itself
+    (e.g. a hosted environment re-triggering its own review under its own
+    bot identity) must not read the trigger's own text as the review it is
+    asking for -- unlike the post_trigger=True path, this trigger was never
+    added to excluded_ids before this fix (Codex PR #1114 round 8 finding)."""
+    bot_authored_trigger = {
+        "id": 100,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-08-20T07:44:44Z",
+        "body": "@claude review\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->",
+    }
+    mock_get_data.return_value = {
+        "issue_comments": [bot_authored_trigger],
+        "reviews": [],
+        "inline_comments": [],
+    }
+
+    with pytest.raises(TimeoutError):
+        wait_for_review(
+            pr_number=540,
+            timeout=0,
+            interval=0,
+            bot_name="claude",
+            post_trigger=False,
+        )
+
+
+@patch("scripts.wait_for_review._get_pr_data", autospec=True)
 def test_wait_for_review_max_retries_exceeded_polling(mock_get_data):
     mock_get_data.side_effect = [
         {"issue_comments": [], "reviews": [], "inline_comments": []},

@@ -595,9 +595,10 @@ def _check_immediate_review_result(
     trigger_id: int | str | None = None,
     requested_head_sha: str | None = None,
     repository: str | None = None,
+    exclude_ids: set[int | str] | None = None,
 ) -> dict[str, Any] | None:
-    latest_bot_activity = _latest_bot_activity_item(initial_data, bot_name)
-    latest_bot_item = _latest_bot_summary_item(initial_data, bot_name)
+    latest_bot_activity = _latest_bot_activity_item(initial_data, bot_name, exclude_ids)
+    latest_bot_item = _latest_bot_summary_item(initial_data, bot_name, exclude_ids)
     if (
         latest_bot_item is not None
         and latest_trigger_time
@@ -610,6 +611,7 @@ def _check_immediate_review_result(
         return _extract_review_result(
             initial_data,
             bot_name,
+            exclude_ids=exclude_ids,
             latest_trigger_time=latest_trigger_time,
             jev_threshold=jev_threshold,
             pr_number=pr_number,
@@ -751,6 +753,14 @@ def wait_for_review(
             )
             if existing_trigger is not None:
                 trigger_id = existing_trigger.get("id")
+                # A trigger comment authored by the target bot itself (e.g. a
+                # hosted environment re-triggering its own review under its
+                # own bot identity) must not be read as the review it is
+                # asking for -- without this, the trigger's own text can
+                # satisfy the round-content gate before any real review
+                # arrives (Codex PR #1114 round 8 finding).
+                if trigger_id is not None:
+                    excluded_ids.add(trigger_id)
             immediate = _check_immediate_review_result(
                 initial_data,
                 bot_name,
@@ -762,6 +772,7 @@ def wait_for_review(
                 trigger_id=trigger_id,
                 requested_head_sha=requested_head_sha,
                 repository=repository,
+                exclude_ids=excluded_ids,
             )
             if immediate is not None:
                 return immediate
