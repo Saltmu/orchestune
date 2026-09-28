@@ -73,6 +73,37 @@ class TestCompletePayloadsAndRequests:
         # Validation succeeds
         req.validate()
 
+    def test_request_fingerprint_tracks_only_canonical_user_intent(self):
+        first = CompleteRequest.done(
+            issue_number=997,
+            pr=1001,
+            owner_token="token-one",
+            claim_id="claim-one",
+            review=ReviewSummary(bot="claude", rounds=1, verdict="approved"),
+            ci="passed",
+            baseline_regressions=("test_a",),
+        )
+        same_request = CompleteRequest.done(
+            issue_number=997,
+            pr=1001,
+            owner_token="token-two",
+            claim_id="claim-two",
+            review=ReviewSummary(bot="claude", rounds=1, verdict="approved"),
+            ci="passed",
+            baseline_regressions=("test_a",),
+        )
+        changed_request = CompleteRequest.done(
+            issue_number=997,
+            pr=1002,
+            review=ReviewSummary(bot="claude", rounds=1, verdict="approved"),
+            ci="passed",
+            baseline_regressions=("test_a",),
+        )
+
+        assert first.request_fingerprint == same_request.request_fingerprint
+        assert first.request_fingerprint != changed_request.request_fingerprint
+        assert len(first.request_fingerprint) == 64
+
     def test_blocked_request_construction_and_validation(self):
         req = CompleteRequest.blocked(
             issue_number=997,
@@ -357,6 +388,83 @@ class TestCompleteStageTransitions:
         assert not can_transition(
             CompleteStage.INITIALIZING, CompleteStage.HANDED_OFF_TO_GC
         )
+
+    def test_label_confirmed_lifecycle_is_additive_to_the_legacy_handoff_path(self):
+        assert can_transition(CompleteStage.RESERVED, CompleteStage.OUTCOME_POSTED)
+        assert can_transition(
+            CompleteStage.OUTCOME_POSTED, CompleteStage.LABEL_CONFIRMED
+        )
+        assert can_transition(CompleteStage.LABEL_CONFIRMED, CompleteStage.HANDED_OFF)
+        assert not can_transition(CompleteStage.RESERVED, CompleteStage.HANDED_OFF)
+        assert not can_transition(
+            CompleteStage.OUTCOME_POSTED, CompleteStage.HANDED_OFF
+        )
+
+        # The #1001 writer remains usable until #1110 switches it.
+        assert can_transition(CompleteStage.POSTING, CompleteStage.HANDED_OFF_TO_GC)
+
+    def test_completion_journal_record_round_trips_and_rejects_skipped_stages(self):
+        from orchestune.complete.journal import CompletionJournalRecord
+
+        record = CompletionJournalRecord(
+            repository_id="Saltmu/orchestune",
+            issue_number=1003,
+            generation_id="claim-1003",
+            completion_id="completion-1003",
+            owner_token_digest="a" * 64,
+            request_fingerprint="b" * 64,
+            result="done",
+            target_label="status:done",
+            outcome_payload={"result": "done", "issue": 1003, "pr": 42},
+            stage=CompleteStage.RESERVED,
+        )
+
+        restored = CompletionJournalRecord.from_dict(record.to_dict())
+        assert restored == record
+
+        with pytest.raises(ValueError, match="result must match"):
+            dataclasses.replace(record, outcome_payload={"issue": 1003, "pr": 42})
+        with pytest.raises(ValueError, match="issue must match"):
+            dataclasses.replace(record, outcome_payload={"result": "done", "pr": 42})
+
+        with pytest.raises(ValueError, match="transition"):
+            record.advance(
+                CompleteStage.LABEL_CONFIRMED,
+                label_evidence={
+                    "status": "confirmed",
+                    "observed_labels": ["status:done"],
+                },
+            )
+
+    def test_label_transition_result_contract_distinguishes_failures(self):
+        from orchestune.complete.contracts import (
+            CompletionLabelStatus,
+            CompletionLabelTransitionResult,
+        )
+
+        confirmed = CompletionLabelTransitionResult(
+            status=CompletionLabelStatus.CONFIRMED,
+            target_label="status:done",
+            observed_labels=("status:done",),
+        )
+        assert confirmed.confirmed
+        assert confirmed.exit_code == CompleteExitCode.SUCCESS
+
+        conflict = CompletionLabelTransitionResult(
+            status=CompletionLabelStatus.CONFLICT,
+            target_label="status:done",
+            observed_labels=("status:blocked-human-review",),
+            failure_reason=CompleteFailureReason.LABEL_CONFLICT,
+        )
+        assert not conflict.confirmed
+        assert conflict.exit_code == CompleteExitCode.LABEL_CONFLICT
+
+        with pytest.raises(ValueError, match="observed_labels"):
+            CompletionLabelTransitionResult(
+                status=CompletionLabelStatus.CONFIRMED,
+                target_label="status:done",
+                observed_labels=(),
+            )
 
 
 class TestCompleteResultAndGCBoundary:
@@ -858,3 +966,21 @@ class TestCompleteFailureAndExitCodes:
         assert res.success is False
         assert res.handed_off_to_gc is False
         assert res.failure == failure
+
+    def test_new_failure_codes_are_additive_and_completion_id_survives_result(self):
+        failure = CompleteFailure(
+            reason=CompleteFailureReason.LABEL_CONFLICT,
+            message="A protected status label prevents completion.",
+            issue_number=997,
+        )
+        res = CompleteResult.failure_result(
+            issue_number=997,
+            result=RESULT_DONE,
+            stage=CompleteStage.OUTCOME_POSTED,
+            failure=failure,
+            completion_id="completion-997",
+        )
+
+        assert failure.exit_code == 55
+        assert CompleteExitCode.FORGE_POST_FAILED == 51
+        assert res.completion_id == "completion-997"

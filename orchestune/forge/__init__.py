@@ -175,20 +175,39 @@ def _decode(raw: bytes | str | None) -> str:
 class GitHubForge(GitHubIssueMixin, GitHubPullRequestMixin, GitHubRepoAdminMixin):
     """Compatibility facade composing focused GitHub Forge implementations."""
 
+    def __init__(self, *, timeout_seconds: float | None = None) -> None:
+        if timeout_seconds is not None and timeout_seconds <= 0:
+            raise ValueError("Forge timeout must be positive")
+        self.timeout_seconds = timeout_seconds
+
     def _run(self, args: list[str], input_text: str | None = None) -> str:
+        timeout_kwargs: dict[str, Any] = (
+            {"timeout": self.timeout_seconds}
+            if self.timeout_seconds is not None
+            else {}
+        )
         if input_text is None:
-            return subprocess.run(
-                args,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=True,
-            ).stdout
+            return _decode(
+                subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=True,
+                    **timeout_kwargs,
+                ).stdout
+            )
+        if self.timeout_seconds is not None:
+            return self._run_with_stdin(
+                args, input_text, timeout_seconds=self.timeout_seconds
+            )
         return self._run_with_stdin(args, input_text)
 
     @staticmethod
-    def _run_with_stdin(args: list[str], input_text: str) -> str:
+    def _run_with_stdin(
+        args: list[str], input_text: str, *, timeout_seconds: float | None = None
+    ) -> str:
         """#664: 標準入力へ渡す本文をバイト列で書き込む。
 
         Windows上の`text=True`なsubprocess stdin書き込みは`\\n`を
@@ -198,7 +217,12 @@ class GitHubForge(GitHubIssueMixin, GitHubPullRequestMixin, GitHubRepoAdminMixin
         改行変換そのものを回避する。
         """
         payload = normalize_newlines(input_text).encode("utf-8")
-        result = subprocess.run(args, input=payload, capture_output=True, check=False)
+        timeout_kwargs: dict[str, Any] = (
+            {"timeout": timeout_seconds} if timeout_seconds is not None else {}
+        )
+        result = subprocess.run(
+            args, input=payload, capture_output=True, check=False, **timeout_kwargs
+        )
         stdout = _decode(result.stdout)
         # 呼び出し側(`forge.issues`)がstderrを文字列として検査するため、
         # バイナリ実行でも文字列へ復号してから例外を組み立てる。

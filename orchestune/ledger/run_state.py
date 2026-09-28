@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -67,6 +68,7 @@ class ActiveWorktree:
     completion_comment_id: str | None = None
     completion_comment_url: str | None = None
     completion_handoff_ready: bool = False
+    completion_policy_config: dict[str, Any] | None = None
 
 
 @dataclass
@@ -146,6 +148,11 @@ class RunState:
     # `to_unlock`に現れないため、ここに残さないとIssue上の通知が「ロック中」の
     # まま取り残される。投稿できた時点で消える。
     pending_lock_release_notices: list[int] = field(default_factory=list)
+    # #1108: versioned completion lifecycle state. These remain opaque JSON
+    # records here to keep the ledger independent from the completion package.
+    completion_journal: dict[str, dict[str, Any]] = field(default_factory=dict)
+    completion_reservations: dict[str, dict[str, Any]] = field(default_factory=dict)
+    completion_replay_receipts: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def _parse_non_negative_int(value: object, default: int = 0) -> int:
@@ -362,6 +369,7 @@ def _parse_completion_journal_fields(
     value: dict[str, Any], key: object
 ) -> dict[str, Any]:
     return {
+        "completion_policy_config": value.get("completion_policy_config"),
         "completion_id": _parse_optional_completion_str(value, "completion_id", key),
         "completion_result": _parse_optional_completion_str(
             value, "completion_result", key
@@ -492,6 +500,36 @@ def _parse_active_worktrees(data: dict[str, object]) -> dict[str, ActiveWorktree
     }
 
 
+def _parse_completion_records(
+    data: dict[str, object], key: str
+) -> dict[str, dict[str, Any]]:
+    raw_records = data.get(key, {})
+    if not isinstance(raw_records, dict):
+        raise ValueError(f"{key} schema error: value must be an object")
+    records: dict[str, dict[str, Any]] = {}
+    for record_key, value in raw_records.items():
+        if not isinstance(record_key, str) or not isinstance(value, dict):
+            raise ValueError(f"{key} schema error: entries must be named objects")
+        version = value.get("schema_version")
+        if version != 1 or isinstance(version, bool):
+            raise ValueError(f"{key} schema_version is unsupported for {record_key!r}")
+        policies = value.get("downstream_policy_records", {})
+        if not isinstance(policies, dict):
+            raise ValueError(f"{key} downstream_policy_records schema error")
+        for policy_key, policy in policies.items():
+            if (
+                not isinstance(policy_key, str)
+                or not isinstance(policy, dict)
+                or policy.get("schema_version") != 1
+                or isinstance(policy.get("schema_version"), bool)
+            ):
+                raise ValueError(
+                    f"{key} downstream policy schema_version is unsupported"
+                )
+        records[record_key] = value
+    return records
+
+
 def _parse_completed_worktrees(data: dict) -> list[CompletedWorktree]:
     return [
         CompletedWorktree(
@@ -525,6 +563,24 @@ def load_run_state(path: str | Path) -> RunState:
     if not isinstance(data, dict):
         raise ValueError("run_state.json schema error: root must be an object")
 
+    return _run_state_from_data(data)
+
+
+def load_run_state_readonly(path: str | Path) -> RunState:
+    """Read the ledger without corruption recovery or filesystem writes."""
+    path = Path(path)
+    if not path.exists():
+        return RunState()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError("run_state.json could not be read without recovery") from error
+    if not isinstance(data, dict):
+        raise ValueError("run_state.json root must be an object")
+    return _run_state_from_data(data)
+
+
+def _run_state_from_data(data: dict[str, Any]) -> RunState:
     return RunState(
         active_worktrees=_parse_active_worktrees(data),
         launch_history=list(data.get("launch_history", [])),
@@ -536,6 +592,13 @@ def load_run_state(path: str | Path) -> RunState:
         ),
         pending_lock_release_notices=_parse_pending_lock_release_notices(
             data.get("pending_lock_release_notices")
+        ),
+        completion_journal=_parse_completion_records(data, "completion_journal"),
+        completion_reservations=_parse_completion_records(
+            data, "completion_reservations"
+        ),
+        completion_replay_receipts=_parse_completion_records(
+            data, "completion_replay_receipts"
         ),
     )
 
@@ -659,6 +722,9 @@ def prune_run_state(
         pending_lock_release_notices=state.pending_lock_release_notices[
             -MAX_PENDING_LOCK_RELEASE_NOTICES:
         ],
+        completion_journal=state.completion_journal,
+        completion_reservations=state.completion_reservations,
+        completion_replay_receipts=state.completion_replay_receipts,
     )
 
 
@@ -691,6 +757,13 @@ def _materialize_active_worktree_for_persistence(active: ActiveWorktree) -> None
         ).hexdigest()
 
 
+def _active_worktree_data(active: ActiveWorktree) -> dict[str, Any]:
+    data = dataclasses.asdict(active)
+    if active.completion_policy_config is None:
+        data.pop("completion_policy_config")
+    return data
+
+
 def save_run_state(
     state: RunState,
     path: str | Path,
@@ -714,7 +787,7 @@ def save_run_state(
         _materialize_active_worktree_for_persistence(active)
     data = {
         "active_worktrees": {
-            key: dataclasses.asdict(value)
+            key: _active_worktree_data(value)
             for key, value in state.active_worktrees.items()
         },
         "launch_history": state.launch_history,
@@ -733,4 +806,12 @@ def save_run_state(
             -MAX_PENDING_LOCK_RELEASE_NOTICES:
         ],
     }
+    # Keep the established serialization of pre-#1108 state unchanged. New
+    # completion maps appear only once populated and are never retention-pruned.
+    if state.completion_journal:
+        data["completion_journal"] = state.completion_journal
+    if state.completion_reservations:
+        data["completion_reservations"] = state.completion_reservations
+    if state.completion_replay_receipts:
+        data["completion_replay_receipts"] = state.completion_replay_receipts
     write_json_atomic(path, data)

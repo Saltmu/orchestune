@@ -192,10 +192,6 @@ PRODUCTION_EXCEPTIONS = frozenset(
                 ("_reserve_reclaim", "prs"),
                 ("_abandoned_worktree_outcome", "run_state"),
                 ("_handle_completed_event_outcome", "run_state"),
-                ("_settle_early_death_requeue", "run_state"),
-                ("_settle_early_death_requeue", "prs"),
-                ("_settle_review_timeout_requeue", "run_state"),
-                ("_settle_review_timeout_requeue", "prs"),
                 ("_rule_completed", "run_state"),
                 ("_rule_completed", "prs"),
             }

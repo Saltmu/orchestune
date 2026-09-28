@@ -37,6 +37,8 @@ from orchestune.dispatch.status_repair_dependencies import (
     evaluate_fresh_dependencies,
     task_lifecycle,
 )
+from orchestune.ledger.completion_reservations import completion_mutation_blocked_fresh
+from orchestune.ledger.run_state import RunState
 from orchestune.ledger.status_labels import transition_status_label
 
 _STATUS_REPAIR_OPERATION = "supervisor-status-repair"
@@ -245,6 +247,10 @@ def reconcile_status_repair_intents(
         expected = _intent_expected_label(intent)
         try:
             issue_number = int(intent.subject_id or "")
+            if completion_mutation_blocked_fresh(
+                RunState(), issue_number, config.run_state_path
+            ):
+                continue
             if expected is None or not _status_is_verified(
                 issue_number, expected, config
             ):
@@ -298,7 +304,7 @@ def _repair_subject_task(
     if command.subject_id is None:
         return None
     try:
-        return tasks_by_issue.get(int(command.subject_id))
+        return tasks_by_issue.get(int(command.subject_id or "0"))
     except ValueError:
         return None
 
@@ -413,6 +419,14 @@ def execute_status_repair_command(
     on_verified: Callable[[VerifiedStatusTransition], None] | None = None,
 ) -> RepairResult:
     """Execute one supervisor-selected command through live safeguards."""
+    if str(command.subject_id or "").isdigit() and completion_mutation_blocked_fresh(
+        RunState(), int(command.subject_id or "0"), config.run_state_path
+    ):
+        return RepairResult(
+            command=command,
+            status=RepairStatus.SKIPPED,
+            diagnostics=("unfinished completion reservation",),
+        )
     preflight = _status_command_preflight(command, tasks_by_issue, config)
     if preflight is not None:
         return preflight

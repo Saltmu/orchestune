@@ -18,7 +18,7 @@ def _is_handoff_ready(active: ActiveWorktree) -> bool:
     """#1004: handoff-ready 状態かどうかを判定する。"""
     return bool(
         active.completion_handoff_ready
-        or active.completion_stage == CompleteStage.HANDED_OFF_TO_GC.value
+        and active.completion_stage == CompleteStage.HANDED_OFF.value
     )
 
 

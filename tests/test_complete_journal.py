@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from orchestune.claim.ownership import owner_token_digest
@@ -285,6 +287,355 @@ class TestMarkHandoffReady:
         persisted = load_run_state(path).active_worktrees["10"]
         assert persisted.completion_handoff_ready is False
         assert persisted.completion_payload == {"pr": 1}
+
+
+def _new_journal_record(**overrides):
+    from orchestune.complete.contracts import CompleteStage
+    from orchestune.complete.journal import CompletionJournalRecord
+
+    values = {
+        "repository_id": "Saltmu/orchestune",
+        "issue_number": 1108,
+        "generation_id": "claim-1108",
+        "completion_id": "completion-1108",
+        "owner_token_digest": owner_token_digest(OWNER_TOKEN),
+        "request_fingerprint": "b" * 64,
+        "result": "done",
+        "target_label": "status:done",
+        "outcome_payload": {"result": "done", "issue": 1108, "pr": 1234},
+        "stage": CompleteStage.RESERVED,
+    }
+    values.update(overrides)
+    return CompletionJournalRecord(**values)
+
+
+class TestLabelConfirmedCompletionContract:
+    def test_new_generation_can_replace_only_a_handed_off_reservation(self, tmp_path):
+        from orchestune.complete.contracts import (
+            CompletionLabelStatus,
+            CompletionLabelTransitionResult,
+        )
+        from orchestune.complete.journal import (
+            record_label_confirmation,
+            record_posting_evidence,
+        )
+
+        path = tmp_path / "run_state.json"
+        original = reserve_completion(
+            record=_new_journal_record(), owner_token=OWNER_TOKEN, state_path=path
+        )
+        posted = record_posting_evidence(
+            original,
+            comment_id="comment-old",
+            comment_url="https://example.test/comment-old",
+            owner_token=OWNER_TOKEN,
+            state_path=path,
+        )
+        labeled = record_label_confirmation(
+            posted,
+            CompletionLabelTransitionResult(
+                status=CompletionLabelStatus.CONFIRMED,
+                target_label="status:done",
+                observed_labels=("status:done",),
+            ),
+            owner_token=OWNER_TOKEN,
+            state_path=path,
+        )
+        mark_handoff_ready(labeled, owner_token=OWNER_TOKEN, state_path=path)
+
+        next_generation = _new_journal_record(
+            generation_id="claim-1108-reopened",
+            completion_id="completion-1108-reopened",
+        )
+        next_reserved = reserve_completion(
+            record=next_generation, owner_token=OWNER_TOKEN, state_path=path
+        )
+
+        persisted = load_run_state(path)
+        assert next_reserved.generation_id == "claim-1108-reopened"
+        assert (
+            persisted.completion_reservations[original.reservation_key]["generation_id"]
+            == "claim-1108-reopened"
+        )
+        assert persisted.completion_replay_receipts[original.receipt_key]["stage"] == (
+            "handed_off"
+        )
+        assert len(persisted.completion_journal) == 2
+
+    def test_new_generation_cannot_replace_an_incomplete_reservation(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        reserve_completion(
+            record=_new_journal_record(), owner_token=OWNER_TOKEN, state_path=path
+        )
+        next_generation = _new_journal_record(
+            generation_id="claim-1108-reopened",
+            completion_id="completion-1108-reopened",
+        )
+
+        with pytest.raises(CompletionJournalError) as excinfo:
+            reserve_completion(
+                record=next_generation, owner_token=OWNER_TOKEN, state_path=path
+            )
+
+        assert excinfo.value.reason == CompleteFailureReason.GENERATION_MISMATCH
+
+    def test_malformed_persisted_record_uses_typed_completion_error(self, tmp_path):
+        from orchestune.complete.journal import record_posting_evidence
+
+        path = tmp_path / "run_state.json"
+        initial = _new_journal_record()
+        reserve_completion(record=initial, owner_token=OWNER_TOKEN, state_path=path)
+
+        with run_state_lock(path.with_suffix(".lock")):
+            state = load_run_state(path)
+            del state.completion_journal[initial.journal_key]["owner_token_digest"]
+            save_run_state_unlocked(state, path)
+
+        with pytest.raises(CompletionJournalError) as excinfo:
+            record_posting_evidence(
+                initial,
+                comment_id="comment-1234",
+                comment_url="https://example.test/comment-1234",
+                owner_token=OWNER_TOKEN,
+                state_path=path,
+            )
+
+        assert excinfo.value.reason == CompleteFailureReason.INVALID_COMPLETION_STATE
+
+    def test_downstream_policy_status_is_keyed_and_round_trips(self):
+        from orchestune.complete.journal import (
+            CompletionJournalRecord,
+            DownstreamPolicyRecord,
+        )
+
+        record = _new_journal_record(
+            downstream_policy_records=(
+                DownstreamPolicyRecord(
+                    repository_id="Saltmu/orchestune",
+                    issue_number=1108,
+                    generation_id="claim-1108",
+                    completion_id="completion-1108",
+                    policy_kind="merge_queue",
+                ),
+            )
+        )
+        serialized = record.to_dict()
+        policy = record.downstream_policy_records[0]
+        assert serialized["downstream_policy_records"][policy.policy_key]["status"] == (
+            "pending"
+        )
+        restored = CompletionJournalRecord.from_dict(serialized)
+        assert restored == record
+
+    def test_duplicate_downstream_policy_kind_is_rejected(self):
+        from orchestune.complete.journal import DownstreamPolicyRecord
+
+        first = DownstreamPolicyRecord(
+            repository_id="Saltmu/orchestune",
+            issue_number=1108,
+            generation_id="claim-1108",
+            completion_id="completion-1108",
+            policy_kind="merge_queue",
+        )
+        applied = DownstreamPolicyRecord(
+            repository_id="Saltmu/orchestune",
+            issue_number=1108,
+            generation_id="claim-1108",
+            completion_id="completion-1108",
+            policy_kind="merge_queue",
+            status="applied",
+        )
+
+        with pytest.raises(ValueError, match="policy kinds must be unique"):
+            _new_journal_record(downstream_policy_records=(first, applied))
+
+    def test_failed_handoff_save_does_not_create_a_replay_receipt(
+        self, tmp_path, monkeypatch
+    ):
+        import orchestune.complete.journal as journal_module
+        from orchestune.complete.contracts import (
+            CompletionLabelStatus,
+            CompletionLabelTransitionResult,
+        )
+        from orchestune.complete.journal import (
+            record_label_confirmation,
+            record_posting_evidence,
+        )
+
+        path = tmp_path / "run_state.json"
+        record = reserve_completion(
+            record=_new_journal_record(), owner_token=OWNER_TOKEN, state_path=path
+        )
+        posted = record_posting_evidence(
+            record,
+            comment_id="comment-1234",
+            comment_url="https://example.test/comment-1234",
+            owner_token=OWNER_TOKEN,
+            state_path=path,
+        )
+        labeled = record_label_confirmation(
+            posted,
+            CompletionLabelTransitionResult(
+                status=CompletionLabelStatus.CONFIRMED,
+                target_label="status:done",
+                observed_labels=("status:done",),
+            ),
+            owner_token=OWNER_TOKEN,
+            state_path=path,
+        )
+
+        def _fail_save(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(journal_module, "save_run_state", _fail_save)
+        with pytest.raises(CompletionJournalError) as excinfo:
+            mark_handoff_ready(labeled, owner_token=OWNER_TOKEN, state_path=path)
+
+        assert excinfo.value.reason == CompleteFailureReason.STATE_SAVE_FAILED
+        persisted = load_run_state(path)
+        assert persisted.completion_journal[labeled.journal_key]["stage"] == (
+            "label_confirmed"
+        )
+        assert persisted.completion_replay_receipts == {}
+
+    def test_journal_round_trip_and_separate_post_label_and_handoff_evidence(
+        self, tmp_path
+    ):
+        from orchestune.complete.contracts import (
+            CompleteStage,
+            CompletionLabelStatus,
+            CompletionLabelTransitionResult,
+        )
+        from orchestune.complete.journal import (
+            record_label_confirmation,
+            record_posting_evidence,
+        )
+
+        path = tmp_path / "run_state.json"
+        initial = _new_journal_record()
+        reserved = reserve_completion(
+            record=initial, owner_token=OWNER_TOKEN, state_path=path
+        )
+        state = load_run_state(path)
+        assert state.completion_journal[initial.journal_key] == initial.to_dict()
+        assert state.completion_reservations[initial.reservation_key][
+            "completion_id"
+        ] == (initial.completion_id)
+        assert OWNER_TOKEN not in path.read_text(encoding="utf-8")
+
+        posted = record_posting_evidence(
+            reserved,
+            comment_id="comment-1234",
+            comment_url="https://example.test/comment-1234",
+            owner_token=OWNER_TOKEN,
+            state_path=path,
+        )
+        assert posted.stage == CompleteStage.OUTCOME_POSTED
+        with pytest.raises(CompletionJournalError) as excinfo:
+            mark_handoff_ready(posted, owner_token=OWNER_TOKEN, state_path=path)
+        assert excinfo.value.reason == CompleteFailureReason.INVALID_STAGE_TRANSITION
+
+        label_result = CompletionLabelTransitionResult(
+            status=CompletionLabelStatus.CONFIRMED,
+            target_label="status:done",
+            observed_labels=("priority:high", "status:done"),
+        )
+        labeled = record_label_confirmation(
+            posted,
+            label_result,
+            owner_token=OWNER_TOKEN,
+            state_path=path,
+        )
+        assert labeled.stage == CompleteStage.LABEL_CONFIRMED
+
+        retried = record_label_confirmation(
+            posted,
+            CompletionLabelTransitionResult(
+                status=CompletionLabelStatus.CONFIRMED,
+                target_label="status:done",
+                observed_labels=("status:done", "priority:high"),
+            ),
+            owner_token=OWNER_TOKEN,
+            state_path=path,
+        )
+        assert retried == labeled
+
+        handed_off = mark_handoff_ready(
+            labeled, owner_token=OWNER_TOKEN, state_path=path
+        )
+        assert handed_off.stage == CompleteStage.HANDED_OFF
+        persisted = load_run_state(path)
+        receipt = persisted.completion_replay_receipts[initial.receipt_key]
+        assert receipt["completion_id"] == initial.completion_id
+        assert (
+            persisted.completion_journal[initial.journal_key]["stage"] == "handed_off"
+        )
+
+    def test_new_writer_rejects_owner_or_fingerprint_mismatch(self, tmp_path):
+        from dataclasses import replace
+
+        from orchestune.complete.journal import record_posting_evidence
+
+        path = tmp_path / "run_state.json"
+        initial = _new_journal_record()
+        reserved = reserve_completion(
+            record=initial, owner_token=OWNER_TOKEN, state_path=path
+        )
+
+        with pytest.raises(CompletionJournalError) as owner_error:
+            record_posting_evidence(
+                reserved,
+                comment_id="comment-1234",
+                comment_url="https://example.test/comment-1234",
+                owner_token="wrong-owner",
+                state_path=path,
+            )
+        assert owner_error.value.reason == CompleteFailureReason.OWNER_TOKEN_MISMATCH
+
+        changed_request = replace(initial, request_fingerprint="c" * 64)
+        with pytest.raises(CompletionJournalError) as fingerprint_error:
+            record_posting_evidence(
+                changed_request,
+                comment_id="comment-1234",
+                comment_url="https://example.test/comment-1234",
+                owner_token=OWNER_TOKEN,
+                state_path=path,
+            )
+        assert (
+            fingerprint_error.value.reason
+            == CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH
+        )
+        assert load_run_state(path).completion_journal[initial.journal_key][
+            "stage"
+        ] == ("reserved")
+
+        changed_owner = replace(initial, owner_token_digest="c" * 64)
+        with pytest.raises(CompletionJournalError) as digest_error:
+            record_posting_evidence(
+                changed_owner,
+                comment_id="comment-1234",
+                comment_url="https://example.test/comment-1234",
+                owner_token=OWNER_TOKEN,
+                state_path=path,
+            )
+        assert digest_error.value.reason == CompleteFailureReason.OWNER_TOKEN_MISMATCH
+
+    def test_unknown_new_schema_is_not_treated_as_empty_state(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "active_worktrees": {},
+                    "completion_journal": {
+                        "future": {"schema_version": 999, "stage": "future"}
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="completion_journal.*schema_version"):
+            load_run_state(path)
 
     def test_does_not_hold_the_lock_between_reserve_and_handoff(self, tmp_path):
         path = _seed_active(tmp_path)

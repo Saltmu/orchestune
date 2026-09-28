@@ -24,6 +24,10 @@ class OutcomePostingError(RuntimeError):
     """Raised when GitHub rejects a completion outcome post."""
 
 
+class OutcomePostingConflictError(OutcomePostingError):
+    """A matching completion identity carries a different immutable body."""
+
+
 class OutcomeLookupUnknownError(OutcomePostingError):
     """Raised when all Issue comments cannot be conclusively inspected."""
 
@@ -76,8 +80,13 @@ def _find_existing(
             or record.completion_id != request.outcome_record.completion_id
         ):
             continue
-        if record.issue != request.issue_number:
-            continue
+        if (
+            record != request.outcome_record
+            or comment.get("body") != request.outcome_record.render()
+        ):
+            raise OutcomePostingConflictError(
+                "Completion ID matches a different repository/Issue, generation, result, or fixed payload"
+            )
         evidence = _comment_evidence(comment)
         if evidence is None:
             raise OutcomeLookupUnknownError(

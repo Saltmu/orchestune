@@ -43,6 +43,16 @@ class TaskExitCode(IntEnum):
     CONCURRENT_COMPLETION = 49
     INVALID_STAGE_TRANSITION = 50
     FORGE_POST_FAILED = 51
+    COMPLETION_RESERVATION_NOT_FOUND = 52
+    REPOSITORY_IDENTITY_MISMATCH = 53
+    GENERATION_MISMATCH = 54
+    LABEL_CONFLICT = 55
+    REQUEST_FINGERPRINT_MISMATCH = 56
+    LABEL_ADD_FAILED = 57
+    LABEL_CLEANUP_INCOMPLETE = 58
+    LABEL_STATE_UNKNOWN = 59
+    PUBLICATION_POLICY_FAILED = 60
+    INVALID_COMPLETION_STATE = 61
 
 
 _CLAIM_FAILURE_EXIT_CODES: dict[str, TaskExitCode] = {
@@ -80,6 +90,16 @@ _COMPLETE_FAILURE_EXIT_CODES: dict[str, TaskExitCode] = {
     "invalid_stage_transition": TaskExitCode.INVALID_STAGE_TRANSITION,
     "forge_post_failed": TaskExitCode.FORGE_POST_FAILED,
     "state_save_failed": TaskExitCode.STATE_SAVE_FAILED,
+    "completion_reservation_not_found": TaskExitCode.COMPLETION_RESERVATION_NOT_FOUND,
+    "repository_identity_mismatch": TaskExitCode.REPOSITORY_IDENTITY_MISMATCH,
+    "generation_mismatch": TaskExitCode.GENERATION_MISMATCH,
+    "request_fingerprint_mismatch": TaskExitCode.REQUEST_FINGERPRINT_MISMATCH,
+    "label_add_failed": TaskExitCode.LABEL_ADD_FAILED,
+    "label_cleanup_incomplete": TaskExitCode.LABEL_CLEANUP_INCOMPLETE,
+    "label_state_unknown": TaskExitCode.LABEL_STATE_UNKNOWN,
+    "label_conflict": TaskExitCode.LABEL_CONFLICT,
+    "publication_policy_failed": TaskExitCode.PUBLICATION_POLICY_FAILED,
+    "invalid_completion_state": TaskExitCode.INVALID_COMPLETION_STATE,
 }
 
 

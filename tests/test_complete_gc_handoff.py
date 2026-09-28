@@ -143,7 +143,7 @@ class TestCompleteGcHandoff:
             owner_kind="interactive",
             completion_id="comp-1004-1",
             completion_result="done",
-            completion_stage=CompleteStage.HANDED_OFF_TO_GC.value,
+            completion_stage=CompleteStage.HANDED_OFF.value,
             completion_handoff_ready=True,
             completion_comment_id="comment-1",
             completion_comment_url="https://github.com/example/issues/1004#1",
@@ -171,19 +171,13 @@ class TestCompleteGcHandoff:
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=True,
             ),
-            patch(
-                "orchestune.dispatch.gc.completion._fetch_outcome_for_active"
-            ) as mock_fetch,
+            patch("orchestune.dispatch.gc.completion._verify_outcome") as mock_fetch,
         ):
-            from orchestune.dispatch.gc.completion import (
-                OutcomeLookupResult,
-                OutcomeLookupState,
-            )
             from orchestune.outcome_record import OutcomeRecord
 
-            mock_fetch.return_value = OutcomeLookupResult(
-                state=OutcomeLookupState.FOUND,
-                record=OutcomeRecord(result="done", issue=1004, pr=1),
+            mock_fetch.return_value = (
+                OutcomeRecord(result="done", issue=1004, pr=1),
+                None,
             )
             decision = _decide_completed_worktree_outcome(
                 active,
@@ -211,7 +205,7 @@ class TestCompleteGcHandoff:
             owner_kind="interactive",
             completion_id="comp-1004-not-needed",
             completion_result="not-needed",
-            completion_stage=CompleteStage.HANDED_OFF_TO_GC.value,
+            completion_stage=CompleteStage.HANDED_OFF.value,
             completion_handoff_ready=True,
             completion_comment_id="comment-2",
             completion_comment_url="https://github.com/example/issues/1004#2",
@@ -273,7 +267,7 @@ class TestCompleteGcHandoff:
             owner_kind="interactive",
             completion_id="comp-1004-blocked",
             completion_result="blocked",
-            completion_stage=CompleteStage.HANDED_OFF_TO_GC.value,
+            completion_stage=CompleteStage.HANDED_OFF.value,
             completion_handoff_ready=True,
             completion_comment_id="comment-3",
             completion_comment_url="https://github.com/example/issues/1004#3",
@@ -302,19 +296,13 @@ class TestCompleteGcHandoff:
                 "orchestune.dispatch.gc.completion.worktree_has_new_commits",
                 return_value=False,
             ),
-            patch(
-                "orchestune.dispatch.gc.completion._fetch_outcome_for_active"
-            ) as mock_fetch,
+            patch("orchestune.dispatch.gc.completion._verify_outcome") as mock_fetch,
         ):
-            from orchestune.dispatch.gc.completion import (
-                OutcomeLookupResult,
-                OutcomeLookupState,
-            )
             from orchestune.outcome_record import OutcomeRecord
 
-            mock_fetch.return_value = OutcomeLookupResult(
-                state=OutcomeLookupState.FOUND,
-                record=OutcomeRecord(result="blocked", issue=1004, pr=None),
+            mock_fetch.return_value = (
+                OutcomeRecord(result="blocked", issue=1004, pr=None),
+                None,
             )
             decision = _decide_completed_worktree_outcome(
                 active,
@@ -360,7 +348,7 @@ class TestCompleteGcHandoff:
             owner_kind="interactive",
             completion_id="comp-1004-clean-blocked",
             completion_result="blocked",
-            completion_stage=CompleteStage.HANDED_OFF_TO_GC.value,
+            completion_stage=CompleteStage.HANDED_OFF.value,
             completion_handoff_ready=True,
             completion_comment_id="comment-4",
             completion_comment_url="https://github.com/example/issues/1004#4",
@@ -550,3 +538,10 @@ class TestCompleteGcHandoff:
         assert not marker_file.exists()
         assert res.removed is True
         assert res.success is True
+
+    def test_replay_receipt_is_separate_from_gc_completion_receipt(self):
+        from orchestune.complete.journal import CompletionReplayReceipt
+
+        assert CompletionReplayReceipt.__name__ == "CompletionReplayReceipt"
+        assert CompletionReceipt.__name__ == "CompletionReceipt"
+        assert CompletionReplayReceipt is not CompletionReceipt

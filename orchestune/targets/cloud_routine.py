@@ -150,6 +150,14 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
             external_url=payload.get("claude_code_session_url"),
         )
 
+    def fire_text_once(self, text: str) -> DispatchHandle:
+        """Fire a durable policy intent once; ambiguous responses require lookup."""
+        payload = self._fire(text, retry=False)
+        return DispatchHandle(
+            external_id=payload.get("claude_code_session_id"),
+            external_url=payload.get("claude_code_session_url"),
+        )
+
     def _fire_with_retry(self, request: urllib.request.Request) -> dict[str, Any]:
         """#215: 最大`max_retries`回・指数バックオフでリトライする。
 

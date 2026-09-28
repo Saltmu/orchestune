@@ -1,46 +1,53 @@
-"""Completion workflow composing preflight, CI evidence, journal, and posting."""
+"""Label-confirmed completion with fixed payloads and immutable replay receipts."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import json
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from uuid import uuid4
 
+from orchestune.claim.ownership import owner_token_digest
 from orchestune.claim.workspace import resolve_claim_workspace
-from orchestune.complete.ci_evidence import CiEvidenceError, run_local_ci_if_needed
+from orchestune.complete.ci_evidence import (
+    CiEvidenceError,
+    run_local_ci_if_needed,
+    validate_ci_evidence,
+)
 from orchestune.complete.contracts import (
     CompleteFailure,
     CompleteFailureReason,
     CompleteRequest,
     CompleteResult,
     CompleteStage,
+    DownstreamPolicyRecord,
 )
 from orchestune.complete.journal import (
-    CompletionJournal,
     CompletionJournalError,
-    mark_handoff_ready,
-    reserve_completion,
+    CompletionJournalRecord,
+    _save_or_raise,
+    completion_journal_lock,
+    reserve_completion_locked,
 )
+from orchestune.complete.not_needed_policy import not_needed_policies
+from orchestune.complete.policy import evaluate_publication_policy
+from orchestune.complete.policy_actions import escalate_token_limit_locked
 from orchestune.complete.posting import (
     OutcomePostingError,
-    PostingRequest,
-    PostingResult,
-    post_issue_outcome,
 )
-from orchestune.complete.preflight import evaluate_complete_preflight
+from orchestune.complete.preflight import _fetch_pr, evaluate_complete_preflight
+from orchestune.complete.publication import (
+    PublicationContext,
+    publish_reserved_completion_locked,
+)
+from orchestune.complete.replay import find_replay
+from orchestune.complete.unclaimed import complete_unclaimed, validate_unclaimed
 from orchestune.forge import GitHubForge
 from orchestune.infra.git_cli import run_git
-from orchestune.ledger.run_state import load_run_state
-from orchestune.outcome_record import RESULT_NOT_NEEDED
-
-
-@dataclass(frozen=True)
-class _CompletionContext:
-    request: CompleteRequest
-    state_path: Path
-    worktree: Path
-    forge: Any
-    active: Any | None
+from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import load_run_state_readonly
 
 
 def _failure(
@@ -48,6 +55,7 @@ def _failure(
     stage: CompleteStage,
     reason: CompleteFailureReason,
     message: str,
+    completion_id: str | None = None,
 ) -> CompleteResult:
     return CompleteResult.failure_result(
         request.issue_number,
@@ -56,225 +64,449 @@ def _failure(
         CompleteFailure(reason, message, issue_number=request.issue_number),
         claim_id=request.claim_id,
         owner_kind=request.owner_kind,
+        completion_id=completion_id or request.completion_id,
     )
 
 
 def _head_sha(worktree: Path) -> str | None:
     result = run_git(["rev-parse", "HEAD"], cwd=worktree, check=False)
-    return result.stdout.strip() or None if result.returncode == 0 else None
+    return (result.stdout.strip() or None) if result.returncode == 0 else None
 
 
-def _prepare(
-    request: CompleteRequest, forge: Any | None
-) -> tuple[_CompletionContext | None, CompleteResult | None]:
-    try:
-        request.validate()
-    except ValueError as exc:
-        return None, _failure(
-            request,
-            CompleteStage.INITIALIZING,
+def _validate_claim_context(
+    active: Any | None, repository: str, worktree: Path, state_path: Path
+) -> None:
+    if active is None:
+        return
+    if active.repository_id != repository:
+        raise CompletionJournalError(
+            CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH,
+            "Claim belongs to another repository",
+        )
+    claimed_path = Path(active.worktree_path)
+    if not claimed_path.is_absolute():
+        claimed_path = state_path.parent / claimed_path
+    if claimed_path.resolve() != worktree.resolve():
+        raise CompletionJournalError(
             CompleteFailureReason.INVALID_REQUEST,
-            str(exc),
+            "Completion must run from the claimed worktree",
         )
 
+
+def _check(request: CompleteRequest, state: Any, worktree: Path, forge: Any) -> None:
+    active = state.active_worktrees.get(str(request.issue_number))
+    if active is not None and request.claim_id != active.claim_id:
+        raise CompletionJournalError(
+            CompleteFailureReason.GENERATION_MISMATCH, "Claim generation differs"
+        )
+    preflight = evaluate_complete_preflight(
+        request,
+        worktree_path=worktree,
+        forge=forge,
+        run_state=state,
+        expected_base_ref=getattr(active, "base_ref", None),
+    )
+    if not preflight.accepted:
+        raise CompletionJournalError(
+            preflight.failure_reason or CompleteFailureReason.INVALID_REQUEST,
+            preflight.reason or "Preflight rejected",
+        )
+
+
+def _pending(
+    request: CompleteRequest, state: Any, repository: str, generation: str
+) -> CompletionJournalRecord | None:
+    records = [
+        raw
+        for raw in state.completion_journal.values()
+        if raw.get("repository_id") == repository
+        and raw.get("issue_number") == request.issue_number
+        and raw.get("generation_id") == generation
+    ]
+    if not records:
+        return None
+    if len(records) != 1:
+        raise CompletionJournalError(
+            CompleteFailureReason.CONCURRENT_COMPLETION, "Multiple pending completions"
+        )
+    record = CompletionJournalRecord.from_dict(records[0])
+    if (
+        request.completion_id is not None
+        and request.completion_id != record.completion_id
+    ):
+        raise CompletionJournalError(
+            CompleteFailureReason.CONCURRENT_COMPLETION,
+            "A different completion is reserved",
+        )
+    if record.request_fingerprint != request.request_fingerprint:
+        raise CompletionJournalError(
+            CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH,
+            "Reserved request payload differs",
+        )
+    return record
+
+
+def _downstream_policies(
+    request: CompleteRequest,
+    active: Any,
+    repository: str,
+    completion_id: str,
+    policy: dict[str, Any],
+) -> tuple[DownstreamPolicyRecord, ...]:
+    return not_needed_policies(
+        request, active, repository, active.claim_id, completion_id, policy["context"]
+    )
+
+
+def _ensure_validated_head(
+    request: CompleteRequest, head_sha: str | None, policy: dict[str, Any]
+) -> None:
+    if request.result != "done":
+        return
+    ci = policy.get("validation", {}).get("ci") or {}
+    if head_sha is None or ci.get("head_sha") != head_sha:
+        raise CompletionJournalError(
+            CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH,
+            "HEAD changed after CI validation",
+        )
+
+
+def _initial_issue_evidence(forge: Any, issue: int) -> dict[str, Any]:
+    try:
+        return {
+            "labels": list(forge.get_issue_labels(issue)),
+            "state": forge.get_issue_state(issue),
+        }
+    except Exception as error:
+        raise CompletionJournalError(
+            CompleteFailureReason.EVIDENCE_MISSING,
+            "Initial Issue evidence is unavailable",
+        ) from error
+
+
+def _new_record(
+    request: CompleteRequest,
+    active: Any,
+    repository: str,
+    worktree: Path,
+    forge: Any,
+    policy: dict[str, Any],
+) -> CompletionJournalRecord:
+    completion_id = request.completion_id or f"completion-{uuid4().hex}"
+    outcome = replace(
+        request.to_outcome_record(),
+        claim_id=active.claim_id,
+        completion_id=completion_id,
+        head_sha=_head_sha(worktree),
+    )
+    _ensure_validated_head(request, outcome.head_sha, policy)
+    policy = {
+        **policy,
+        "initial_issue": _initial_issue_evidence(forge, request.issue_number),
+        "context": {"active": asdict(active)},
+    }
+    target = {
+        "done": StatusLabel.DONE,
+        "blocked": StatusLabel.BLOCKED,
+        "not-needed": StatusLabel.NOT_NEEDED,
+    }[request.result]
+    policies = _downstream_policies(request, active, repository, completion_id, policy)
+    return CompletionJournalRecord(
+        repository,
+        request.issue_number,
+        active.claim_id,
+        completion_id,
+        owner_token_digest(request.owner_token or ""),
+        request.request_fingerprint,
+        request.result,
+        target,
+        {
+            "issue": request.issue_number,
+            "result": request.result,
+            "body": outcome.render(),
+            "head_sha": outcome.head_sha,
+        },
+        CompleteStage.RESERVED,
+        prepublication_policy_evidence=policy,
+        downstream_policy_records=policies,
+    )
+
+
+def _reject_policy(
+    context: PublicationContext, record: CompletionJournalRecord
+) -> None:
+    policy = record.prepublication_policy_evidence or {}
+    if policy.get("decision") == "allowed":
+        return
+    if policy.get("decision") == "exceeded":
+        escalation = escalate_token_limit_locked(
+            context.forge, record.issue_number, record.completion_id, policy
+        )
+        record = replace(
+            record, prepublication_policy_evidence={**policy, "escalation": escalation}
+        )
+        state = load_run_state_readonly(context.state_path)
+        state.completion_journal[record.journal_key] = record.to_dict()
+        _save_or_raise(state, context.state_path)
+    raise CompletionJournalError(
+        CompleteFailureReason.PUBLICATION_POLICY_FAILED,
+        f"Done publication held: token usage {policy.get('decision', 'unknown')}",
+    )
+
+
+def _validation_policy(
+    request: CompleteRequest,
+    forge: Any,
+    policy: dict[str, Any],
+    ci: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if request.result != "done":
+        return policy
+    pr_number = request.to_outcome_record().pr
+    assert pr_number is not None
+    pr, supported, error = _fetch_pr(forge, pr_number)
+    if not supported or pr is None or error:
+        raise CompletionJournalError(
+            CompleteFailureReason.EVIDENCE_MISSING, "PR evidence is unavailable"
+        )
+    return {
+        **policy,
+        "validation": {
+            "ci": ci,
+            "pr": {
+                name: getattr(pr, name, None)
+                for name in (
+                    "number",
+                    "head_ref",
+                    "base_ref",
+                    "changed_files",
+                    "state",
+                    "is_ci_passing",
+                )
+            },
+        },
+    }
+
+
+@dataclass
+class _Progress:
+    stage: CompleteStage = CompleteStage.INITIALIZING
+    completion_id: str | None = None
+    state_path: Path | None = None
+    on_progress: Callable[[str, CompleteStage], None] | None = None
+
+    def report(self, record: CompletionJournalRecord) -> None:
+        changed = (self.completion_id, self.stage) != (
+            record.completion_id,
+            record.stage,
+        )
+        self.completion_id, self.stage = record.completion_id, record.stage
+        if changed and self.on_progress is not None:
+            self.on_progress(record.completion_id, record.stage)
+
+
+def _preview(request: CompleteRequest) -> CompleteResult:
+    return CompleteResult.preview_result(
+        request.issue_number,
+        request.result,
+        claim_id=request.claim_id,
+        owner_kind=request.owner_kind,
+        pr=request.to_outcome_record().pr,
+        outcome_record=request.to_outcome_record(),
+        completion_id=request.completion_id,
+    )
+
+
+def _policy_for_request(
+    request: CompleteRequest, state: Any, repository: str, worktree: Path, forge: Any
+) -> dict[str, Any]:
+    active = state.active_worktrees[str(request.issue_number)]
+    pending = _pending(request, state, repository, active.claim_id or "")
+    ci = None
+    if request.result == "done":
+        ci = (
+            validate_ci_evidence(request)
+            if pending is not None
+            else run_local_ci_if_needed(request)
+        ).to_dict()
+    policy = (
+        evaluate_publication_policy(active, worktree, forge)
+        if request.result == "done"
+        else {"decision": "allowed"}
+    )
+    return cast(
+        dict[str, Any],
+        json.loads(json.dumps(_validation_policy(request, forge, policy, ci))),
+    )
+
+
+def _select_record(
+    context: PublicationContext,
+    state: Any,
+    repository: str,
+    policy: dict[str, Any],
+    progress: _Progress,
+) -> CompletionJournalRecord:
+    request, active = context.request, context.active
+    assert active is not None
+    assert context.worktree is not None
+    _validate_claim_context(active, repository, context.worktree, context.state_path)
+    record = _pending(request, state, repository, active.claim_id or "")
+    if record is None:
+        assert context.worktree is not None
+        record = _new_record(
+            request, active, repository, context.worktree, context.forge, policy
+        )
+        progress.report(record)
+        record = reserve_completion_locked(
+            record, owner_token=request.owner_token or "", state_path=context.state_path
+        )
+    elif context.worktree is not None and record.outcome_payload.get(
+        "head_sha"
+    ) != _head_sha(context.worktree):
+        raise CompletionJournalError(
+            CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH,
+            "HEAD changed since completion was reserved",
+        )
+    previous = record.prepublication_policy_evidence or {}
+    _ensure_validated_head(request, record.outcome_payload.get("head_sha"), policy)
+    if request.result == "done" and previous.get("validation") != policy.get(
+        "validation"
+    ):
+        raise CompletionJournalError(
+            CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH,
+            "CI or PR evidence changed since reservation",
+        )
+    if previous.get("decision") == "unknown":
+        record = replace(record, prepublication_policy_evidence={**previous, **policy})
+        state = load_run_state_readonly(context.state_path)
+        state.completion_journal[record.journal_key] = record.to_dict()
+        _save_or_raise(state, context.state_path)
+    progress.report(record)
+    return record
+
+
+def _publish_request(
+    request: CompleteRequest,
+    repository: str,
+    state_path: Path,
+    worktree: Path,
+    forge: Any,
+    policy: dict[str, Any],
+    progress: _Progress,
+) -> CompleteResult:
+    with completion_journal_lock(state_path, 30):
+        state = load_run_state_readonly(state_path)
+        replay = find_replay(request, state, repository)
+        if replay is not None:
+            return replay
+        active = state.active_worktrees.get(str(request.issue_number))
+        if active is None:
+            raise CompletionJournalError(
+                CompleteFailureReason.CLAIM_NOT_FOUND,
+                "Claim disappeared before publication",
+            )
+        _validate_claim_context(
+            active,
+            repository,
+            worktree,
+            state_path,
+        )
+        _check(request, state, worktree, forge)
+        context = PublicationContext(request, state_path, worktree, forge, active)
+        record = _select_record(context, state, repository, policy, progress)
+        _reject_policy(context, record)
+        return publish_reserved_completion_locked(context, record)
+
+
+def _complete(
+    request: CompleteRequest, forge: Any | None, progress: _Progress
+) -> CompleteResult:
+    request.validate()
     workspace = resolve_claim_workspace(
         explicit_state_path=request.state_path,
         explicit_worktree_root=request.worktree_root,
     )
     state_path = Path(request.state_path or workspace.run_state_path)
-    state = load_run_state(state_path)
-    active = state.active_worktrees.get(str(request.issue_number))
-    context = _CompletionContext(
-        request=request,
-        state_path=state_path,
-        worktree=Path(request.worktree_root or Path.cwd()).resolve(),
-        forge=forge or GitHubForge(),
-        active=active,
-    )
-    failure = _preflight_failure(context, state)
-    return (None, failure) if failure is not None else (context, None)
-
-
-def _preflight_failure(
-    context: _CompletionContext, state: Any
-) -> CompleteResult | None:
-    preflight = evaluate_complete_preflight(
-        context.request,
-        worktree_path=context.worktree,
-        forge=context.forge,
-        run_state=state,
-        expected_base_ref=getattr(
-            state.active_worktrees.get(str(context.request.issue_number)),
-            "base_ref",
-            None,
-        ),
-    )
-    if preflight.accepted:
-        return None
-    return _failure(
-        context.request,
-        CompleteStage.PREFLIGHT_VALIDATING,
-        preflight.failure_reason or CompleteFailureReason.INVALID_REQUEST,
-        preflight.reason or "Completion preflight was rejected",
-    )
-
-
-def _preview(context: _CompletionContext) -> CompleteResult:
-    record = context.request.to_outcome_record()
-    return CompleteResult.preview_result(
-        context.request.issue_number,
-        context.request.result,
-        claim_id=context.request.claim_id,
-        owner_kind=context.request.owner_kind,
-        pr=record.pr,
-        outcome_record=record,
-    )
-
-
-def _is_unclaimed_not_needed(context: _CompletionContext) -> bool:
-    return context.request.result == RESULT_NOT_NEEDED and context.active is None
-
-
-def _run_ci(context: _CompletionContext) -> CompleteResult | None:
-    if context.request.result != "done":
-        return None
-    try:
-        run_local_ci_if_needed(context.request)
-    except CiEvidenceError as exc:
-        return _failure(
-            context.request,
-            CompleteStage.EVIDENCE_VERIFYING,
-            CompleteFailureReason.EVIDENCE_MISSING,
-            str(exc),
+    progress.state_path = state_path
+    worktree = Path(request.worktree_root or Path.cwd()).resolve()
+    state = load_run_state_readonly(state_path)
+    replay = find_replay(request, state, workspace.repository_identity)
+    if replay is not None:
+        return replay
+    forge = forge or GitHubForge(timeout_seconds=30)
+    progress.stage = CompleteStage.PREFLIGHT_VALIDATING
+    if str(request.issue_number) not in state.active_worktrees:
+        if request.dry_run:
+            validate_unclaimed(
+                request, state, workspace.repository_identity, forge, state_path
+            )
+            return _preview(request)
+        return complete_unclaimed(
+            request, workspace.repository_identity, state_path, forge, progress.report
         )
-    return None
-
-
-def _reserve(
-    context: _CompletionContext,
-) -> tuple[CompletionJournal | None, CompleteResult | None]:
-    request = context.request
-    if context.active is None or not request.claim_id or not request.owner_token:
-        return None, _failure(
-            request,
-            CompleteStage.JOURNALING,
-            CompleteFailureReason.CLAIM_NOT_FOUND,
-            "A claimed task and owner token are required for completion",
-        )
-    try:
-        journal = reserve_completion(
-            issue_number=request.issue_number,
-            claim_id=request.claim_id,
-            owner_token=request.owner_token,
-            result=request.result,
-            payload=None,
-            state_path=context.state_path,
-        )
-    except CompletionJournalError as exc:
-        return None, _failure(request, CompleteStage.JOURNALING, exc.reason, str(exc))
-    return journal, None
-
-
-def _record(context: _CompletionContext, journal: CompletionJournal) -> Any:
-    return replace(
-        context.request.to_outcome_record(),
-        claim_id=journal.claim_id,
-        head_sha=_head_sha(context.worktree),
-        completion_id=journal.completion_id,
+    _validate_claim_context(
+        state.active_worktrees.get(str(request.issue_number)),
+        workspace.repository_identity,
+        worktree,
+        state_path,
+    )
+    _check(request, state, worktree, forge)
+    if request.dry_run:
+        return _preview(request)
+    progress.stage = CompleteStage.EVIDENCE_VERIFYING
+    policy = _policy_for_request(
+        request, state, workspace.repository_identity, worktree, forge
+    )
+    return _publish_request(
+        request,
+        workspace.repository_identity,
+        state_path,
+        worktree,
+        forge,
+        policy,
+        progress,
     )
 
 
-def _post(
-    context: _CompletionContext, record: Any
-) -> tuple[PostingResult | None, CompleteResult | None]:
-    try:
-        posted = post_issue_outcome(
-            PostingRequest(context.request.issue_number, record),
-            forge=context.forge,
-        )
-    except OutcomePostingError as exc:
-        return None, _failure(
-            context.request,
-            CompleteStage.POSTING,
-            CompleteFailureReason.FORGE_POST_FAILED,
-            str(exc),
-        )
-    return posted, None
-
-
-def _recheck(context: _CompletionContext) -> CompleteResult | None:
-    """Revalidate after network I/O and before journal handoff lock reacquisition."""
-    return _preflight_failure(context, load_run_state(context.state_path))
-
-
-def _handoff(
-    context: _CompletionContext,
-    journal: CompletionJournal,
-    record: Any,
-    posted: PostingResult,
-) -> CompleteResult:
-    try:
-        mark_handoff_ready(
-            journal,
-            comment_id=posted.comment_id,
-            comment_url=posted.comment_url,
-            payload={"outcome": record.render()},
-            state_path=context.state_path,
-        )
-    except CompletionJournalError as exc:
-        return _failure(context.request, CompleteStage.POSTING, exc.reason, str(exc))
-    return CompleteResult.success_result(
-        context.request.issue_number,
-        context.request.result,
-        claim_id=journal.claim_id,
-        owner_kind=context.request.owner_kind,
-        pr=record.pr,
-        outcome_record=record,
-    )
-
-
-def _complete_unclaimed_not_needed(context: _CompletionContext) -> CompleteResult:
-    """Post a deterministic pre-claim no-op outcome without allocating a worktree."""
-    record = replace(
-        context.request.to_outcome_record(),
-        completion_id=f"unclaimed-not-needed-{context.request.issue_number}",
-    )
-    posted, failure = _post(context, record)
-    if failure is not None:
-        return failure
-    assert posted is not None
-    return CompleteResult.success_result(
-        context.request.issue_number,
-        context.request.result,
-        owner_kind=context.request.owner_kind,
-        pr=record.pr,
-        outcome_record=record,
-    )
+def _failure_stage(progress: _Progress) -> CompleteStage:
+    if progress.state_path is not None and progress.completion_id is not None:
+        try:
+            state = load_run_state_readonly(progress.state_path)
+            for raw in state.completion_journal.values():
+                if raw.get("completion_id") == progress.completion_id:
+                    stage = CompleteStage(raw["stage"])
+                    return (
+                        CompleteStage.LABEL_CONFIRMED
+                        if stage is CompleteStage.HANDED_OFF
+                        else stage
+                    )
+        except (ValueError, OSError):
+            pass
+    return progress.stage
 
 
 def complete_task(
-    request: CompleteRequest, *, forge: Any | None = None
+    request: CompleteRequest,
+    *,
+    forge: Any | None = None,
+    on_progress: Callable[[str, CompleteStage], None] | None = None,
 ) -> CompleteResult:
-    """Complete one owned task without ever posting outside its Issue."""
-    context, failure = _prepare(request, forge)
-    if failure is not None:
-        return failure
-    assert context is not None
-    if request.dry_run:
-        return _preview(context)
-    if _is_unclaimed_not_needed(context):
-        return _complete_unclaimed_not_needed(context)
-    if (failure := _run_ci(context)) is not None:
-        return failure
-    journal, failure = _reserve(context)
-    if failure is not None:
-        return failure
-    assert journal is not None
-    record = _record(context, journal)
-    posted, failure = _post(context, record)
-    if failure is not None:
-        return failure
-    assert posted is not None
-    if (failure := _recheck(context)) is not None:
-        return failure
-    return _handoff(context, journal, record, posted)
+    """Replay first, validate CI outside the lock, then publish one frozen transaction."""
+    progress = _Progress(completion_id=request.completion_id, on_progress=on_progress)
+    try:
+        return _complete(request, forge, progress)
+    except CompletionJournalError as error:
+        reason, message = error.reason, str(error)
+    except CiEvidenceError as error:
+        message = str(error)
+        reason = CompleteFailureReason.EVIDENCE_MISSING
+    except OutcomePostingError as error:
+        message = str(error)
+        reason = CompleteFailureReason.FORGE_POST_FAILED
+    except Exception as error:
+        message = str(error)
+        reason = CompleteFailureReason.INVALID_COMPLETION_STATE
+    return _failure(
+        request, _failure_stage(progress), reason, message, progress.completion_id
+    )

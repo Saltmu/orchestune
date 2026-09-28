@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -35,15 +37,27 @@ class CompleteStage(str, Enum):
     JOURNALING = "journaling"
     POSTING = "posting"
     HANDED_OFF_TO_GC = "handed_off_to_gc"
+    # Label-confirmed lifecycle stages. The legacy POSTING -> HANDED_OFF_TO_GC
+    # path stays available until the new writer and readers switch together.
+    RESERVED = "reserved"
+    OUTCOME_POSTED = "outcome_posted"
+    LABEL_CONFIRMED = "label_confirmed"
+    HANDED_OFF = "handed_off"
 
 
 _VALID_STAGE_TRANSITIONS: dict[CompleteStage, frozenset[CompleteStage]] = {
     CompleteStage.INITIALIZING: frozenset({CompleteStage.PREFLIGHT_VALIDATING}),
     CompleteStage.PREFLIGHT_VALIDATING: frozenset({CompleteStage.EVIDENCE_VERIFYING}),
     CompleteStage.EVIDENCE_VERIFYING: frozenset({CompleteStage.JOURNALING}),
-    CompleteStage.JOURNALING: frozenset({CompleteStage.POSTING}),
+    CompleteStage.JOURNALING: frozenset(
+        {CompleteStage.POSTING, CompleteStage.RESERVED}
+    ),
     CompleteStage.POSTING: frozenset({CompleteStage.HANDED_OFF_TO_GC}),
     CompleteStage.HANDED_OFF_TO_GC: frozenset(),
+    CompleteStage.RESERVED: frozenset({CompleteStage.OUTCOME_POSTED}),
+    CompleteStage.OUTCOME_POSTED: frozenset({CompleteStage.LABEL_CONFIRMED}),
+    CompleteStage.LABEL_CONFIRMED: frozenset({CompleteStage.HANDED_OFF}),
+    CompleteStage.HANDED_OFF: frozenset(),
 }
 
 
@@ -73,6 +87,16 @@ class CompleteFailureReason(str, Enum):
     INVALID_STAGE_TRANSITION = "invalid_stage_transition"
     FORGE_POST_FAILED = "forge_post_failed"
     STATE_SAVE_FAILED = "state_save_failed"
+    COMPLETION_RESERVATION_NOT_FOUND = "completion_reservation_not_found"
+    REPOSITORY_IDENTITY_MISMATCH = "repository_identity_mismatch"
+    GENERATION_MISMATCH = "generation_mismatch"
+    REQUEST_FINGERPRINT_MISMATCH = "request_fingerprint_mismatch"
+    LABEL_ADD_FAILED = "label_add_failed"
+    LABEL_CLEANUP_INCOMPLETE = "label_cleanup_incomplete"
+    LABEL_STATE_UNKNOWN = "label_state_unknown"
+    LABEL_CONFLICT = "label_conflict"
+    PUBLICATION_POLICY_FAILED = "publication_policy_failed"
+    INVALID_COMPLETION_STATE = "invalid_completion_state"
 
 
 def failure_reason_to_exit_code(reason: CompleteFailureReason) -> CompleteExitCode:
@@ -80,6 +104,140 @@ def failure_reason_to_exit_code(reason: CompleteFailureReason) -> CompleteExitCo
     if not isinstance(reason, CompleteFailureReason):
         raise KeyError(f"Unmapped complete failure reason: {reason!r}")
     return complete_failure_exit_code(reason.value)
+
+
+class CompletionLabelStatus(str, Enum):
+    """Outcome of a live, completion-specific status-label transition."""
+
+    CONFIRMED = "confirmed"
+    ADD_FAILED = "add_failed"
+    CLEANUP_INCOMPLETE = "cleanup_incomplete"
+    UNKNOWN = "unknown"
+    CONFLICT = "conflict"
+
+
+@dataclass(frozen=True)
+class CompletionLabelTransitionResult:
+    """Observed result returned by the completion label transition helper."""
+
+    status: CompletionLabelStatus
+    target_label: str
+    observed_labels: tuple[str, ...] = ()
+    failed_operation: str | None = None
+    failure_reason: CompleteFailureReason | None = None
+
+    @property
+    def confirmed(self) -> bool:
+        """Whether the requested target label was observed after the transition."""
+        return self.status is CompletionLabelStatus.CONFIRMED
+
+    @property
+    def exit_code(self) -> CompleteExitCode:
+        """Return success or the stable failure code for this label transition."""
+        if self.confirmed:
+            return CompleteExitCode.SUCCESS
+        assert self.failure_reason is not None
+        return failure_reason_to_exit_code(self.failure_reason)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, CompletionLabelStatus):
+            raise ValueError("status must be a CompletionLabelStatus")
+        if not isinstance(self.target_label, str) or not self.target_label.strip():
+            raise ValueError("target_label must be a non-empty string")
+        if any(
+            not isinstance(label, str) or not label.strip()
+            for label in self.observed_labels
+        ):
+            raise ValueError("observed_labels must contain non-empty strings")
+        if self.failed_operation is not None and (
+            not isinstance(self.failed_operation, str)
+            or not self.failed_operation.strip()
+        ):
+            raise ValueError("failed_operation must be None or a non-empty string")
+        if self.status is CompletionLabelStatus.CONFIRMED:
+            if self.target_label not in self.observed_labels:
+                raise ValueError(
+                    "confirmed label result requires target_label in observed_labels"
+                )
+            if self.failure_reason is not None or self.failed_operation is not None:
+                raise ValueError(
+                    "confirmed label result cannot contain failure details"
+                )
+            return
+        if self.failure_reason is None:
+            raise ValueError("failed label result requires failure_reason")
+        expected = {
+            CompletionLabelStatus.ADD_FAILED: CompleteFailureReason.LABEL_ADD_FAILED,
+            CompletionLabelStatus.CLEANUP_INCOMPLETE: CompleteFailureReason.LABEL_CLEANUP_INCOMPLETE,
+            CompletionLabelStatus.UNKNOWN: CompleteFailureReason.LABEL_STATE_UNKNOWN,
+            CompletionLabelStatus.CONFLICT: CompleteFailureReason.LABEL_CONFLICT,
+        }[self.status]
+        if self.failure_reason is not expected:
+            raise ValueError(
+                f"{self.status.value} requires failure_reason={expected.value}"
+            )
+
+
+@dataclass(frozen=True)
+class DownstreamPolicyRecord:
+    """A generation-scoped downstream policy action awaiting or confirming apply."""
+
+    repository_id: str
+    issue_number: int
+    generation_id: str
+    completion_id: str
+    policy_kind: str
+    status: str = "pending"
+    schema_version: int = 1
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("repository_id", self.repository_id),
+            ("generation_id", self.generation_id),
+            ("completion_id", self.completion_id),
+            ("policy_kind", self.policy_kind),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        if not is_valid_issue_number(self.issue_number):
+            raise ValueError("issue_number must be a positive integer")
+        if not isinstance(self.metadata, dict):
+            raise ValueError("policy metadata must be an object")
+        try:
+            json.dumps(self.metadata, allow_nan=False)
+        except (TypeError, ValueError) as error:
+            raise ValueError("policy metadata must contain JSON data") from error
+        if self.status not in {"pending", "applied"}:
+            raise ValueError("status must be 'pending' or 'applied'")
+        if (
+            not isinstance(self.schema_version, int)
+            or isinstance(self.schema_version, bool)
+            or self.schema_version != 1
+        ):
+            raise ValueError(
+                f"unsupported downstream policy schema_version: {self.schema_version}"
+            )
+
+    @property
+    def policy_key(self) -> str:
+        return f"{self.repository_id}::{self.issue_number}::{self.generation_id}::{self.completion_id}::{self.policy_kind}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "repository_id": self.repository_id,
+            "issue_number": self.issue_number,
+            "generation_id": self.generation_id,
+            "completion_id": self.completion_id,
+            "policy_kind": self.policy_kind,
+            "status": self.status,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> DownstreamPolicyRecord:
+        return cls(**value)
 
 
 def is_valid_positive_int(val: Any) -> bool:
@@ -95,6 +253,34 @@ def is_valid_pr_number(pr: Any) -> bool:
 def is_valid_issue_number(issue: Any) -> bool:
     """Return whether issue is a valid non-boolean positive integer."""
     return is_valid_positive_int(issue)
+
+
+def _required_text(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
+    return value
+
+
+def _required_digest(value: object, name: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value)
+    ):
+        raise ValueError(f"{name} must be a 64-character lowercase SHA-256 digest")
+    return value
+
+
+def _validate_fixed_outcome(
+    payload: dict[str, Any], issue_number: int, result: str
+) -> None:
+    if payload.get("result") != result:
+        raise ValueError("outcome_payload result must match the reserved result")
+    issue_values = [payload[key] for key in ("issue", "issue_number") if key in payload]
+    if not issue_values or any(
+        value != issue_number or isinstance(value, bool) for value in issue_values
+    ):
+        raise ValueError("outcome_payload issue must match the reserved issue")
 
 
 def is_valid_attempt_number(attempt: Any) -> bool:
@@ -241,6 +427,7 @@ class CompleteRequest:
     dry_run: bool = False
     state_path: Path | None = None
     worktree_root: Path | None = None
+    completion_id: str | None = None
 
     def __post_init__(self) -> None:
         if not is_valid_issue_number(self.issue_number):
@@ -256,6 +443,7 @@ class CompleteRequest:
         *,
         owner_token: str | None = None,
         claim_id: str | None = None,
+        completion_id: str | None = None,
         owner_kind: OwnerKind = OwnerKind.INTERACTIVE,
         review: ReviewSummary | None = None,
         ci: str | None = None,
@@ -276,6 +464,7 @@ class CompleteRequest:
             result=RESULT_DONE,
             owner_token=owner_token,
             claim_id=claim_id,
+            completion_id=completion_id,
             owner_kind=owner_kind,
             payload=payload,
             dry_run=dry_run,
@@ -290,6 +479,7 @@ class CompleteRequest:
         *,
         owner_token: str | None = None,
         claim_id: str | None = None,
+        completion_id: str | None = None,
         owner_kind: OwnerKind = OwnerKind.INTERACTIVE,
         dry_run: bool = False,
         state_path: Path | None = None,
@@ -301,6 +491,7 @@ class CompleteRequest:
             result=RESULT_NOT_NEEDED,
             owner_token=owner_token,
             claim_id=claim_id,
+            completion_id=completion_id,
             owner_kind=owner_kind,
             payload=NotNeededPayload(),
             dry_run=dry_run,
@@ -318,6 +509,7 @@ class CompleteRequest:
         attempt: int | None = None,
         owner_token: str | None = None,
         claim_id: str | None = None,
+        completion_id: str | None = None,
         owner_kind: OwnerKind = OwnerKind.INTERACTIVE,
         review: ReviewSummary | None = None,
         ci: str | None = None,
@@ -338,6 +530,7 @@ class CompleteRequest:
             result=RESULT_BLOCKED,
             owner_token=owner_token,
             claim_id=claim_id,
+            completion_id=completion_id,
             owner_kind=owner_kind,
             payload=payload,
             dry_run=dry_run,
@@ -347,6 +540,8 @@ class CompleteRequest:
 
     def validate(self) -> None:
         """Validate internal consistency of request fields and payload."""
+        if self.completion_id is not None:
+            _required_text(self.completion_id, "completion_id")
         if not is_valid_issue_number(self.issue_number):
             raise ValueError(
                 f"issue_number must be a valid positive non-boolean integer, got: {self.issue_number!r}"
@@ -413,6 +608,43 @@ class CompleteRequest:
             )
         raise ValueError(f"Unsupported complete result: {self.result!r}")
 
+    @property
+    def request_fingerprint(self) -> str:
+        """Canonical digest of caller intent, excluding generated completion data."""
+        return completion_request_fingerprint(self)
+
+
+def completion_request_fingerprint(request: CompleteRequest) -> str:
+    """Hash stable user-supplied completion fields in canonical JSON form."""
+    request.validate()
+    payload: dict[str, Any] = {
+        "issue": request.issue_number,
+        "result": request.result,
+    }
+    if isinstance(request.payload, DonePayload):
+        payload.update(
+            {
+                "pr": request.payload.pr,
+                "review": request.payload.review.to_dict(),
+                "ci": request.payload.ci,
+                "baseline_regressions": list(request.payload.baseline_regressions),
+            }
+        )
+    elif isinstance(request.payload, BlockedPayload):
+        payload.update(
+            {
+                "reason": request.payload.reason,
+                "base_sha": request.payload.base_sha,
+                "attempt": request.payload.attempt,
+                "review": request.payload.review.to_dict(),
+                "ci": request.payload.ci,
+            }
+        )
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
 
 @dataclass(frozen=True)
 class CompleteResult:
@@ -435,6 +667,7 @@ class CompleteResult:
     failure: CompleteFailure | None = None
     handed_off_to_gc: bool = False
     preview: bool = False
+    completion_id: str | None = None
 
     def __post_init__(self) -> None:
         self._validate_identifiers()
@@ -452,6 +685,10 @@ class CompleteResult:
             raise ValueError(
                 f"pr must be None or a valid positive non-boolean integer, got: {self.pr!r}"
             )
+        if self.completion_id is not None and (
+            not isinstance(self.completion_id, str) or not self.completion_id.strip()
+        ):
+            raise ValueError("completion_id must be None or a non-empty string")
 
     def _validate_outcome_record(self) -> None:
         if self.outcome_record is None:
@@ -505,7 +742,10 @@ class CompleteResult:
                     )
                 if self.handed_off_to_gc:
                     raise ValueError("Preview CompleteResult cannot claim GC handoff")
-            elif self.stage != CompleteStage.HANDED_OFF_TO_GC:
+            elif self.stage not in {
+                CompleteStage.HANDED_OFF_TO_GC,
+                CompleteStage.HANDED_OFF,
+            }:
                 raise ValueError(
                     "Successful CompleteResult requires CompleteStage.HANDED_OFF_TO_GC, "
                     f"got: {self.stage!r}"
@@ -521,9 +761,9 @@ class CompleteResult:
         else:
             if self.preview:
                 raise ValueError("Failed CompleteResult cannot be a preview")
-            if self.stage == CompleteStage.HANDED_OFF_TO_GC:
+            if self.stage in {CompleteStage.HANDED_OFF_TO_GC, CompleteStage.HANDED_OFF}:
                 raise ValueError(
-                    "Failed CompleteResult cannot be at CompleteStage.HANDED_OFF_TO_GC"
+                    f"Failed CompleteResult cannot be at CompleteStage.{self.stage.name}"
                 )
             if self.handed_off_to_gc:
                 raise ValueError(
@@ -553,11 +793,12 @@ class CompleteResult:
         owner_kind: OwnerKind | None = None,
         pr: int | None = None,
         outcome_record: OutcomeRecord | None = None,
+        completion_id: str | None = None,
     ) -> CompleteResult:
         """Construct a successful CompleteResult indicating GC handoff."""
         if result not in VALID_RESULTS:
             raise ValueError(f"Invalid complete result: {result!r}")
-        if stage != CompleteStage.HANDED_OFF_TO_GC:
+        if stage not in {CompleteStage.HANDED_OFF_TO_GC, CompleteStage.HANDED_OFF}:
             raise ValueError(
                 "Successful CompleteResult requires CompleteStage.HANDED_OFF_TO_GC, "
                 f"got: {stage!r}"
@@ -573,6 +814,7 @@ class CompleteResult:
             outcome_record=outcome_record,
             failure=None,
             handed_off_to_gc=True,
+            completion_id=completion_id,
         )
 
     @classmethod
@@ -585,6 +827,7 @@ class CompleteResult:
         *,
         claim_id: str | None = None,
         owner_kind: OwnerKind | None = None,
+        completion_id: str | None = None,
     ) -> CompleteResult:
         """Construct a failed CompleteResult with diagnostic information."""
         if result not in VALID_RESULTS:
@@ -592,6 +835,10 @@ class CompleteResult:
         if stage == CompleteStage.HANDED_OFF_TO_GC:
             raise ValueError(
                 "Failed CompleteResult cannot be at CompleteStage.HANDED_OFF_TO_GC"
+            )
+        if stage == CompleteStage.HANDED_OFF:
+            raise ValueError(
+                "Failed CompleteResult cannot be at CompleteStage.HANDED_OFF"
             )
         if failure.issue_number is not None and failure.issue_number != issue_number:
             raise ValueError(
@@ -609,6 +856,7 @@ class CompleteResult:
             outcome_record=None,
             failure=failure,
             handed_off_to_gc=False,
+            completion_id=completion_id,
         )
 
     @classmethod
@@ -621,6 +869,7 @@ class CompleteResult:
         owner_kind: OwnerKind | None = None,
         pr: int | None = None,
         outcome_record: OutcomeRecord | None = None,
+        completion_id: str | None = None,
     ) -> CompleteResult:
         """Construct a validated, side-effect-free completion preview."""
         return cls(
@@ -635,4 +884,5 @@ class CompleteResult:
             failure=None,
             handed_off_to_gc=False,
             preview=True,
+            completion_id=completion_id,
         )
