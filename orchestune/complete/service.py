@@ -181,6 +181,19 @@ def _ensure_validated_head(
         )
 
 
+def _initial_issue_evidence(forge: Any, issue: int) -> dict[str, Any]:
+    try:
+        return {
+            "labels": list(forge.get_issue_labels(issue)),
+            "state": forge.get_issue_state(issue),
+        }
+    except Exception as error:
+        raise CompletionJournalError(
+            CompleteFailureReason.EVIDENCE_MISSING,
+            "Initial Issue evidence is unavailable",
+        ) from error
+
+
 def _new_record(
     request: CompleteRequest,
     active: Any,
@@ -199,10 +212,7 @@ def _new_record(
     _ensure_validated_head(request, outcome.head_sha, policy)
     policy = {
         **policy,
-        "initial_issue": {
-            "labels": list(forge.get_issue_labels(request.issue_number)),
-            "state": forge.get_issue_state(request.issue_number),
-        },
+        "initial_issue": _initial_issue_evidence(forge, request.issue_number),
         "context": {"active": asdict(active)},
     }
     target = {
@@ -414,14 +424,19 @@ def _publish_request(
         replay = find_replay(request, state, repository)
         if replay is not None:
             return replay
+        active = state.active_worktrees.get(str(request.issue_number))
+        if active is None:
+            raise CompletionJournalError(
+                CompleteFailureReason.CLAIM_NOT_FOUND,
+                "Claim disappeared before publication",
+            )
         _validate_claim_context(
-            state.active_worktrees.get(str(request.issue_number)),
+            active,
             repository,
             worktree,
             state_path,
         )
         _check(request, state, worktree, forge)
-        active = state.active_worktrees[str(request.issue_number)]
         context = PublicationContext(request, state_path, worktree, forge, active)
         record = _select_record(context, state, repository, policy, progress)
         _reject_policy(context, record)

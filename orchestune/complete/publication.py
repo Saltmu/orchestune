@@ -116,6 +116,16 @@ def _confirm_labels(
     return record
 
 
+def _publication_labels(context: PublicationContext, issue: int) -> tuple[str, ...]:
+    try:
+        return tuple(context.forge.get_issue_labels(issue))
+    except Exception as error:
+        raise CompletionJournalError(
+            CompleteFailureReason.LABEL_STATE_UNKNOWN,
+            "Issue labels are unavailable before publication",
+        ) from error
+
+
 def publish_reserved_completion_locked(
     context: PublicationContext, record: CompletionJournalRecord
 ) -> CompleteResult:
@@ -132,7 +142,7 @@ def publish_reserved_completion_locked(
             CompleteFailureReason.INVALID_COMPLETION_STATE, "Fixed outcome is malformed"
         )
     if record.stage is CompleteStage.RESERVED:
-        labels = context.forge.get_issue_labels(record.issue_number)
+        labels = _publication_labels(context, record.issue_number)
         allowed = {
             *PRIMARY_STATUS_LABELS,
             record.target_label,

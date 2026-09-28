@@ -350,3 +350,59 @@ def test_new_completion_rejects_foreign_claim_context_before_publication(
     assert not result.success
     assert forge.comments == [] and forge.operations == []
     assert request.state_path.read_bytes() == before
+
+
+def test_claim_disappearing_before_locked_publication_returns_claim_not_found(
+    tmp_path, monkeypatch
+):
+    from complete_lifecycle_test_support import lifecycle_environment
+
+    from orchestune.complete.journal import completion_journal_lock
+    from orchestune.complete.service import complete_task
+
+    request, forge, _ = lifecycle_environment(tmp_path, monkeypatch)
+
+    def release_claim(*_):
+        with completion_journal_lock(request.state_path):
+            state = run_state.load_run_state_readonly(request.state_path)
+            state.active_worktrees.clear()
+            run_state.save_run_state(state, request.state_path)
+        return {"decision": "allowed"}
+
+    monkeypatch.setattr(
+        "orchestune.complete.service._policy_for_request", release_claim
+    )
+    result = complete_task(request, forge=forge)
+    assert not result.success
+    assert result.failure.reason.value == "claim_not_found"
+    assert not forge.comments
+    assert not run_state.load_run_state_readonly(request.state_path).completion_journal
+
+
+@pytest.mark.parametrize("query", ["labels", "state", "publication_labels"])
+def test_issue_evidence_failure_has_remote_failure_reason(tmp_path, monkeypatch, query):
+    from complete_lifecycle_test_support import lifecycle_environment
+
+    from orchestune.complete.service import complete_task
+
+    request, forge, _ = lifecycle_environment(tmp_path, monkeypatch)
+    calls = 0
+
+    def unavailable(*_):
+        nonlocal calls
+        calls += 1
+        if query == "publication_labels" and calls == 1:
+            return tuple(forge.labels)
+        raise OSError("remote query unavailable")
+
+    monkeypatch.setattr(
+        forge,
+        "get_issue_state" if query == "state" else "get_issue_labels",
+        unavailable,
+    )
+    result = complete_task(request, forge=forge)
+    assert not result.success
+    assert result.failure.reason.value == (
+        "label_state_unknown" if query == "publication_labels" else "evidence_missing"
+    )
+    assert not forge.comments
