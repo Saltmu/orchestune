@@ -23,6 +23,10 @@ from orchestune.complete.contracts import (
     CompleteStage,
     CompletionLabelStatus,
     CompletionLabelTransitionResult,
+    DownstreamPolicyRecord,
+    _required_digest,
+    _required_text,
+    _validate_fixed_outcome,
     can_transition,
 )
 from orchestune.infra.process_utils import (
@@ -50,88 +54,6 @@ class CompletionJournal:
 
 
 _COMPLETION_SCHEMA_VERSION = 1
-
-
-def _required_text(value: object, name: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{name} must be a non-empty string")
-    return value
-
-
-def _required_digest(value: object, name: str) -> str:
-    if (
-        not isinstance(value, str)
-        or len(value) != 64
-        or any(char not in "0123456789abcdef" for char in value)
-    ):
-        raise ValueError(f"{name} must be a 64-character lowercase SHA-256 digest")
-    return value
-
-
-def _validate_fixed_outcome(
-    payload: dict[str, Any], issue_number: int, result: str
-) -> None:
-    if payload.get("result", result) != result:
-        raise ValueError("outcome_payload result must match the reserved result")
-    payload_issue = payload.get("issue", payload.get("issue_number", issue_number))
-    if payload_issue != issue_number or isinstance(payload_issue, bool):
-        raise ValueError("outcome_payload issue must match the reserved issue")
-
-
-@dataclass(frozen=True)
-class DownstreamPolicyRecord:
-    """A generation-scoped downstream policy action awaiting or confirming apply."""
-
-    repository_id: str
-    issue_number: int
-    generation_id: str
-    completion_id: str
-    policy_kind: str
-    status: str = "pending"
-    schema_version: int = _COMPLETION_SCHEMA_VERSION
-
-    def __post_init__(self) -> None:
-        _required_text(self.repository_id, "repository_id")
-        _required_text(self.generation_id, "generation_id")
-        _required_text(self.completion_id, "completion_id")
-        _required_text(self.policy_kind, "policy_kind")
-        if (
-            not isinstance(self.issue_number, int)
-            or isinstance(self.issue_number, bool)
-            or self.issue_number <= 0
-        ):
-            raise ValueError("issue_number must be a positive integer")
-        if self.status not in {"pending", "applied"}:
-            raise ValueError("status must be 'pending' or 'applied'")
-        if (
-            not isinstance(self.schema_version, int)
-            or isinstance(self.schema_version, bool)
-            or self.schema_version != _COMPLETION_SCHEMA_VERSION
-        ):
-            raise ValueError(
-                f"unsupported downstream policy schema_version: {self.schema_version}"
-            )
-
-    @property
-    def policy_key(self) -> str:
-        return f"{self.repository_id}::{self.issue_number}::{self.generation_id}::{self.completion_id}::{self.policy_kind}"
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "repository_id": self.repository_id,
-            "issue_number": self.issue_number,
-            "generation_id": self.generation_id,
-            "completion_id": self.completion_id,
-            "policy_kind": self.policy_kind,
-            "status": self.status,
-        }
-
-    @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> DownstreamPolicyRecord:
-        if value.get("schema_version") != _COMPLETION_SCHEMA_VERSION:
-            raise ValueError("downstream policy schema_version is unsupported")
-        return cls(**value)
 
 
 @dataclass(frozen=True)
@@ -630,12 +552,47 @@ def completion_journal_lock(
         cm.__exit__(None, None, None)
 
 
+def _invalid_completion_state(message: str, error: Exception) -> CompletionJournalError:
+    return CompletionJournalError(
+        CompleteFailureReason.INVALID_COMPLETION_STATE,
+        f"Invalid persisted completion state: {message}",
+    )
+
+
+def _load_contract_state(state_path: Path) -> Any:
+    try:
+        return load_run_state(state_path)
+    except (TypeError, ValueError) as error:
+        raise _invalid_completion_state(str(error), error) from error
+
+
+def _parse_contract_record(raw: dict[str, Any]) -> CompletionJournalRecord:
+    try:
+        return CompletionJournalRecord.from_dict(raw)
+    except (KeyError, TypeError, ValueError) as error:
+        raise _invalid_completion_state(str(error), error) from error
+
+
+def _parse_contract_reservation(raw: dict[str, Any]) -> CompletionReservation:
+    try:
+        return CompletionReservation.from_dict(raw)
+    except (KeyError, TypeError, ValueError) as error:
+        raise _invalid_completion_state(str(error), error) from error
+
+
+def _has_durable_handoff_receipt(state: Any, record: CompletionJournalRecord) -> bool:
+    return (
+        record.stage is CompleteStage.HANDED_OFF
+        and state.completion_replay_receipts.get(record.receipt_key) == record.to_dict()
+    )
+
+
 def _new_contract_record(
     state: Any, candidate: CompletionJournalRecord
 ) -> CompletionJournalRecord | None:
     raw = state.completion_journal.get(candidate.journal_key)
     if raw is not None:
-        return CompletionJournalRecord.from_dict(raw)
+        return _parse_contract_record(raw)
     for key, value in state.completion_journal.items():
         if (
             not isinstance(value, dict)
@@ -647,7 +604,10 @@ def _new_contract_record(
                 CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH,
                 "Completion repository identity does not match the persisted reservation",
             )
+        persisted = _parse_contract_record(value)
         if value.get("generation_id") != candidate.generation_id:
+            if _has_durable_handoff_receipt(state, persisted):
+                continue
             raise CompletionJournalError(
                 CompleteFailureReason.GENERATION_MISMATCH,
                 "Completion generation does not match the persisted reservation",
@@ -712,7 +672,7 @@ def _resume_reserved_contract(
     raw_reservation: dict[str, Any],
     owner_token: str,
 ) -> CompletionJournalRecord:
-    reservation = CompletionReservation.from_dict(raw_reservation)
+    reservation = _parse_contract_reservation(raw_reservation)
     if reservation.repository_id != record.repository_id:
         reason = CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH
     elif reservation.generation_id != record.generation_id:
@@ -740,6 +700,48 @@ def _resume_reserved_contract(
     raise CompletionJournalError(reason, f"Issue reservation conflict: {reason.value}")
 
 
+def _allow_terminal_generation_replacement(
+    state: Any,
+    reservation: CompletionReservation,
+    candidate: CompletionJournalRecord,
+) -> None:
+    if (reservation.repository_id, reservation.issue_number) != (
+        candidate.repository_id,
+        candidate.issue_number,
+    ):
+        raise CompletionJournalError(
+            CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH,
+            "Issue reservation belongs to a different repository or issue",
+        )
+    old_key = (
+        f"{reservation.repository_id}::{reservation.issue_number}::"
+        f"{reservation.generation_id}::{reservation.completion_id}"
+    )
+    raw = state.completion_journal.get(old_key)
+    if raw is None:
+        raise CompletionJournalError(
+            CompleteFailureReason.INVALID_COMPLETION_STATE,
+            "Issue reservation has no matching journal record",
+        )
+    previous = _parse_contract_record(raw)
+    if (
+        reservation.owner_token_digest != previous.owner_token_digest
+        or reservation.request_fingerprint != previous.request_fingerprint
+        or reservation.result != previous.result
+        or reservation.target_label != previous.target_label
+        or reservation.outcome_payload != previous.outcome_payload
+    ):
+        raise CompletionJournalError(
+            CompleteFailureReason.INVALID_COMPLETION_STATE,
+            "Issue reservation identity does not match its journal record",
+        )
+    if not _has_durable_handoff_receipt(state, previous):
+        raise CompletionJournalError(
+            CompleteFailureReason.GENERATION_MISMATCH,
+            "A new generation cannot replace an incomplete completion reservation",
+        )
+
+
 def reserve_completion_locked(
     record: CompletionJournalRecord,
     *,
@@ -749,12 +751,22 @@ def reserve_completion_locked(
     """Reserve a new-contract completion when the caller already holds the state lock."""
     assert_run_state_lock_held(_lock_path_for(state_path))
     _validate_reservation_request(record, owner_token)
-    run_state = load_run_state(state_path)
+    run_state = _load_contract_state(state_path)
     current = _new_contract_record(run_state, record)
     reservation_key = record.reservation_key
     raw_reservation = run_state.completion_reservations.get(reservation_key)
     if raw_reservation is not None:
-        return _resume_reserved_contract(record, current, raw_reservation, owner_token)
+        reservation = _parse_contract_reservation(raw_reservation)
+        if reservation.generation_id == record.generation_id:
+            return _resume_reserved_contract(
+                record, current, raw_reservation, owner_token
+            )
+        _allow_terminal_generation_replacement(run_state, reservation, record)
+        if current is not None:
+            raise CompletionJournalError(
+                CompleteFailureReason.INVALID_COMPLETION_STATE,
+                "A new generation journal exists without its Issue reservation",
+            )
     if current is not None:
         _verify_contract_identity(record, current, owner_token)
         return current
@@ -952,7 +964,7 @@ def _load_contract_for_update(
             CompleteFailureReason.COMPLETION_RESERVATION_NOT_FOUND,
             "No Issue-level completion reservation exists",
         )
-    reservation = CompletionReservation.from_dict(raw_reservation)
+    reservation = _parse_contract_reservation(raw_reservation)
     if reservation.generation_id != persisted.generation_id:
         reason = CompleteFailureReason.GENERATION_MISMATCH
     elif reservation.completion_id != persisted.completion_id:
@@ -984,7 +996,7 @@ def record_posting_evidence(
             "Posting evidence requires a non-empty comment id and url",
         )
     with completion_journal_lock(state_path, timeout_seconds):
-        run_state = load_run_state(state_path)
+        run_state = _load_contract_state(state_path)
         persisted = _load_contract_for_update(run_state, record, owner_token)
         evidence = {"comment_id": comment_id, "comment_url": comment_url}
         if persisted.stage is not CompleteStage.RESERVED:
@@ -1024,10 +1036,10 @@ def record_label_confirmation(
     evidence = {
         "status": result.status.value,
         "target_label": result.target_label,
-        "observed_labels": list(result.observed_labels),
+        "observed_labels": sorted(set(result.observed_labels)),
     }
     with completion_journal_lock(state_path, timeout_seconds):
-        run_state = load_run_state(state_path)
+        run_state = _load_contract_state(state_path)
         persisted = _load_contract_for_update(run_state, record, owner_token)
         if persisted.stage in {CompleteStage.LABEL_CONFIRMED, CompleteStage.HANDED_OFF}:
             if persisted.label_evidence != evidence:
@@ -1057,7 +1069,7 @@ def _mark_contract_handoff_ready(
     timeout_seconds: float,
 ) -> CompletionJournalRecord:
     with completion_journal_lock(state_path, timeout_seconds):
-        run_state = load_run_state(state_path)
+        run_state = _load_contract_state(state_path)
         persisted = _load_contract_for_update(run_state, record, owner_token)
         if persisted.stage is CompleteStage.HANDED_OFF:
             raw_receipt = run_state.completion_replay_receipts.get(

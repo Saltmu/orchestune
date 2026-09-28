@@ -302,7 +302,7 @@ def _new_journal_record(**overrides):
         "request_fingerprint": "b" * 64,
         "result": "done",
         "target_label": "status:done",
-        "outcome_payload": {"result": "done", "pr": 1234},
+        "outcome_payload": {"result": "done", "issue": 1108, "pr": 1234},
         "stage": CompleteStage.RESERVED,
     }
     values.update(overrides)
@@ -310,6 +310,98 @@ def _new_journal_record(**overrides):
 
 
 class TestLabelConfirmedCompletionContract:
+    def test_new_generation_can_replace_only_a_handed_off_reservation(self, tmp_path):
+        from orchestune.complete.contracts import (
+            CompletionLabelStatus,
+            CompletionLabelTransitionResult,
+        )
+        from orchestune.complete.journal import (
+            record_label_confirmation,
+            record_posting_evidence,
+        )
+
+        path = tmp_path / "run_state.json"
+        original = reserve_completion(
+            record=_new_journal_record(), owner_token=OWNER_TOKEN, state_path=path
+        )
+        posted = record_posting_evidence(
+            original,
+            comment_id="comment-old",
+            comment_url="https://example.test/comment-old",
+            owner_token=OWNER_TOKEN,
+            state_path=path,
+        )
+        labeled = record_label_confirmation(
+            posted,
+            CompletionLabelTransitionResult(
+                status=CompletionLabelStatus.CONFIRMED,
+                target_label="status:done",
+                observed_labels=("status:done",),
+            ),
+            owner_token=OWNER_TOKEN,
+            state_path=path,
+        )
+        mark_handoff_ready(labeled, owner_token=OWNER_TOKEN, state_path=path)
+
+        next_generation = _new_journal_record(
+            generation_id="claim-1108-reopened",
+            completion_id="completion-1108-reopened",
+        )
+        next_reserved = reserve_completion(
+            record=next_generation, owner_token=OWNER_TOKEN, state_path=path
+        )
+
+        persisted = load_run_state(path)
+        assert next_reserved.generation_id == "claim-1108-reopened"
+        assert (
+            persisted.completion_reservations[original.reservation_key]["generation_id"]
+            == "claim-1108-reopened"
+        )
+        assert persisted.completion_replay_receipts[original.receipt_key]["stage"] == (
+            "handed_off"
+        )
+        assert len(persisted.completion_journal) == 2
+
+    def test_new_generation_cannot_replace_an_incomplete_reservation(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        reserve_completion(
+            record=_new_journal_record(), owner_token=OWNER_TOKEN, state_path=path
+        )
+        next_generation = _new_journal_record(
+            generation_id="claim-1108-reopened",
+            completion_id="completion-1108-reopened",
+        )
+
+        with pytest.raises(CompletionJournalError) as excinfo:
+            reserve_completion(
+                record=next_generation, owner_token=OWNER_TOKEN, state_path=path
+            )
+
+        assert excinfo.value.reason == CompleteFailureReason.GENERATION_MISMATCH
+
+    def test_malformed_persisted_record_uses_typed_completion_error(self, tmp_path):
+        from orchestune.complete.journal import record_posting_evidence
+
+        path = tmp_path / "run_state.json"
+        initial = _new_journal_record()
+        reserve_completion(record=initial, owner_token=OWNER_TOKEN, state_path=path)
+
+        with run_state_lock(path.with_suffix(".lock")):
+            state = load_run_state(path)
+            del state.completion_journal[initial.journal_key]["owner_token_digest"]
+            save_run_state_unlocked(state, path)
+
+        with pytest.raises(CompletionJournalError) as excinfo:
+            record_posting_evidence(
+                initial,
+                comment_id="comment-1234",
+                comment_url="https://example.test/comment-1234",
+                owner_token=OWNER_TOKEN,
+                state_path=path,
+            )
+
+        assert excinfo.value.reason == CompleteFailureReason.INVALID_COMPLETION_STATE
+
     def test_downstream_policy_status_is_keyed_and_round_trips(self):
         from orchestune.complete.journal import (
             CompletionJournalRecord,
@@ -456,6 +548,18 @@ class TestLabelConfirmedCompletionContract:
         )
         assert labeled.stage == CompleteStage.LABEL_CONFIRMED
 
+        retried = record_label_confirmation(
+            posted,
+            CompletionLabelTransitionResult(
+                status=CompletionLabelStatus.CONFIRMED,
+                target_label="status:done",
+                observed_labels=("status:done", "priority:high"),
+            ),
+            owner_token=OWNER_TOKEN,
+            state_path=path,
+        )
+        assert retried == labeled
+
         handed_off = mark_handoff_ready(
             labeled, owner_token=OWNER_TOKEN, state_path=path
         )
@@ -504,6 +608,17 @@ class TestLabelConfirmedCompletionContract:
         assert load_run_state(path).completion_journal[initial.journal_key][
             "stage"
         ] == ("reserved")
+
+        changed_owner = replace(initial, owner_token_digest="c" * 64)
+        with pytest.raises(CompletionJournalError) as digest_error:
+            record_posting_evidence(
+                changed_owner,
+                comment_id="comment-1234",
+                comment_url="https://example.test/comment-1234",
+                owner_token=OWNER_TOKEN,
+                state_path=path,
+            )
+        assert digest_error.value.reason == CompleteFailureReason.OWNER_TOKEN_MISMATCH
 
     def test_unknown_new_schema_is_not_treated_as_empty_state(self, tmp_path):
         path = tmp_path / "run_state.json"

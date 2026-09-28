@@ -96,6 +96,7 @@ class CompleteFailureReason(str, Enum):
     LABEL_STATE_UNKNOWN = "label_state_unknown"
     LABEL_CONFLICT = "label_conflict"
     PUBLICATION_POLICY_FAILED = "publication_policy_failed"
+    INVALID_COMPLETION_STATE = "invalid_completion_state"
 
 
 def failure_reason_to_exit_code(reason: CompleteFailureReason) -> CompleteExitCode:
@@ -177,6 +178,60 @@ class CompletionLabelTransitionResult:
             )
 
 
+@dataclass(frozen=True)
+class DownstreamPolicyRecord:
+    """A generation-scoped downstream policy action awaiting or confirming apply."""
+
+    repository_id: str
+    issue_number: int
+    generation_id: str
+    completion_id: str
+    policy_kind: str
+    status: str = "pending"
+    schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("repository_id", self.repository_id),
+            ("generation_id", self.generation_id),
+            ("completion_id", self.completion_id),
+            ("policy_kind", self.policy_kind),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        if not is_valid_issue_number(self.issue_number):
+            raise ValueError("issue_number must be a positive integer")
+        if self.status not in {"pending", "applied"}:
+            raise ValueError("status must be 'pending' or 'applied'")
+        if (
+            not isinstance(self.schema_version, int)
+            or isinstance(self.schema_version, bool)
+            or self.schema_version != 1
+        ):
+            raise ValueError(
+                f"unsupported downstream policy schema_version: {self.schema_version}"
+            )
+
+    @property
+    def policy_key(self) -> str:
+        return f"{self.repository_id}::{self.issue_number}::{self.generation_id}::{self.completion_id}::{self.policy_kind}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "repository_id": self.repository_id,
+            "issue_number": self.issue_number,
+            "generation_id": self.generation_id,
+            "completion_id": self.completion_id,
+            "policy_kind": self.policy_kind,
+            "status": self.status,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> DownstreamPolicyRecord:
+        return cls(**value)
+
+
 def is_valid_positive_int(val: Any) -> bool:
     """Return whether val is a valid non-boolean positive integer."""
     return isinstance(val, int) and not isinstance(val, bool) and val > 0
@@ -190,6 +245,34 @@ def is_valid_pr_number(pr: Any) -> bool:
 def is_valid_issue_number(issue: Any) -> bool:
     """Return whether issue is a valid non-boolean positive integer."""
     return is_valid_positive_int(issue)
+
+
+def _required_text(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
+    return value
+
+
+def _required_digest(value: object, name: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value)
+    ):
+        raise ValueError(f"{name} must be a 64-character lowercase SHA-256 digest")
+    return value
+
+
+def _validate_fixed_outcome(
+    payload: dict[str, Any], issue_number: int, result: str
+) -> None:
+    if payload.get("result") != result:
+        raise ValueError("outcome_payload result must match the reserved result")
+    issue_values = [payload[key] for key in ("issue", "issue_number") if key in payload]
+    if not issue_values or any(
+        value != issue_number or isinstance(value, bool) for value in issue_values
+    ):
+        raise ValueError("outcome_payload issue must match the reserved issue")
 
 
 def is_valid_attempt_number(attempt: Any) -> bool:

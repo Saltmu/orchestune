@@ -415,12 +415,17 @@ class TestCompleteStageTransitions:
             request_fingerprint="b" * 64,
             result="done",
             target_label="status:done",
-            outcome_payload={"result": "done", "pr": 42},
+            outcome_payload={"result": "done", "issue": 1003, "pr": 42},
             stage=CompleteStage.RESERVED,
         )
 
         restored = CompletionJournalRecord.from_dict(record.to_dict())
         assert restored == record
+
+        with pytest.raises(ValueError, match="result must match"):
+            dataclasses.replace(record, outcome_payload={"issue": 1003, "pr": 42})
+        with pytest.raises(ValueError, match="issue must match"):
+            dataclasses.replace(record, outcome_payload={"result": "done", "pr": 42})
 
         with pytest.raises(ValueError, match="transition"):
             record.advance(

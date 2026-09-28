@@ -52,6 +52,7 @@ class TaskExitCode(IntEnum):
     LABEL_CLEANUP_INCOMPLETE = 58
     LABEL_STATE_UNKNOWN = 59
     PUBLICATION_POLICY_FAILED = 60
+    INVALID_COMPLETION_STATE = 61
 
 
 _CLAIM_FAILURE_EXIT_CODES: dict[str, TaskExitCode] = {
@@ -98,6 +99,7 @@ _COMPLETE_FAILURE_EXIT_CODES: dict[str, TaskExitCode] = {
     "label_state_unknown": TaskExitCode.LABEL_STATE_UNKNOWN,
     "label_conflict": TaskExitCode.LABEL_CONFLICT,
     "publication_policy_failed": TaskExitCode.PUBLICATION_POLICY_FAILED,
+    "invalid_completion_state": TaskExitCode.INVALID_COMPLETION_STATE,
 }
 
 
