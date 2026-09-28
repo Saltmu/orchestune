@@ -100,7 +100,7 @@ def _make_active(
         repository_id=workspace.repository_identity,
         completion_id=completion_id,
         completion_result="done",
-        completion_stage="handed_off_to_gc",
+        completion_stage="handed_off",
         completion_payload={"outcome": outcome.render()},
         completion_comment_id=comment_id,
         completion_comment_url=comment_url,
@@ -166,9 +166,62 @@ def _write_state(repo: Path, active: ActiveWorktree) -> Path:
         "pending_lock_release_notices": [251],
         "extension_data": {"keep": ["verbatim", 7]},
     }
+    state.update(_confirmed_contract_fields(active))
     path = repo / "run_state.json"
     path.write_text(json.dumps(state, indent=2), encoding="utf-8")
     return path
+
+
+def _confirmed_contract_fields(active: ActiveWorktree) -> dict:
+    from orchestune.complete.contracts import CompleteStage
+    from orchestune.complete.journal import (
+        CompletionJournalRecord,
+        CompletionReservation,
+    )
+    from orchestune.outcome_record import parse_from_comments
+
+    if (
+        not active.completion_comment_id
+        or not isinstance(active.completion_payload, dict)
+        or not active.completion_payload.get("outcome")
+    ):
+        return {}
+    outcome = parse_from_comments([{"body": active.completion_payload["outcome"]}])
+    assert outcome is not None
+    assert active.repository_id and active.claim_id and active.completion_id
+    assert active.owner_token_digest and active.completion_result
+    record = CompletionJournalRecord(
+        repository_id=active.repository_id,
+        issue_number=active.issue_number,
+        generation_id=active.claim_id,
+        completion_id=active.completion_id,
+        owner_token_digest=active.owner_token_digest,
+        request_fingerprint="f" * 64,
+        result=active.completion_result,
+        target_label=f"status:{active.completion_result}",
+        outcome_payload={
+            "issue": outcome.issue,
+            "result": outcome.result,
+            "outcome": outcome.render(),
+        },
+        stage=CompleteStage.HANDED_OFF,
+        posting_evidence={
+            "comment_id": active.completion_comment_id,
+            "comment_url": active.completion_comment_url,
+        },
+        label_evidence={
+            "status": "confirmed",
+            "target_label": f"status:{active.completion_result}",
+            "observed_labels": [f"status:{active.completion_result}"],
+        },
+    )
+    return {
+        "completion_journal": {record.journal_key: record.to_dict()},
+        "completion_reservations": {
+            record.reservation_key: CompletionReservation.from_journal(record).to_dict()
+        },
+        "completion_replay_receipts": {record.receipt_key: record.to_dict()},
+    }
 
 
 def test_apply_releases_verified_done_and_preserves_unrelated_state(
@@ -589,7 +642,9 @@ def test_no_interactive_handoff_targets_do_not_construct_forge_or_rewrite_state(
     result = run_handoff_gc(GcRequest(), forge_factory=lambda: pytest.fail("no target"))
 
     assert result.exit_code == 0
-    assert result.items == ()
-    assert result.skipped == 2
+    assert len(result.items) == 1
+    assert result.items[0].action == "held"
+    assert result.items[0].reason == "not_handoff_ready"
+    assert result.skipped == 1
     assert state_path.read_bytes() == before
     assert worktree.exists()

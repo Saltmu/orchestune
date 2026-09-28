@@ -57,6 +57,10 @@ from orchestune.dispatch.gc.zombies import (
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
+from orchestune.ledger.completion_reservations import (
+    completion_handoff_matches_active,
+    completion_mutation_blocked_fresh,
+)
 from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import (
     ActiveWorktree,
@@ -114,6 +118,17 @@ def _rule_not_needed(
     （PID/PR存在ベース）は永遠にマッチしない。ラベルまたはoutcome検知を最優先の
     完了シグナルとして扱い、stale判定より先に評価する。
     """
+    if active.completion_id is not None and not completion_handoff_matches_active(
+        ctx.run_state, active
+    ):
+        return ActiveWorktreeRuleOutcome(
+            completion_event={
+                "issue_number": active.issue_number,
+                "worktree_path": active.worktree_path,
+                "action": "completion_reserved_hold",
+            },
+            terminal=True,
+        )
     has_not_needed_label = (
         active_task is not None and StatusLabel.NOT_NEEDED in active_task.status_labels
     )
@@ -390,6 +405,10 @@ def _apply_stale_active_entry_discard(
     """#382: 帳簿(run_state)を破棄する前に、対応する物理worktree・プロセスの
     状態を確認し、必要な後始末を行う。
     """
+    if completion_mutation_blocked_fresh(
+        run_state, active.issue_number, config.run_state_path
+    ):
+        return False
     if not config.apply:
         return True
     if not _cleanup_stale_active_worktree(active, reason, config):
@@ -649,7 +668,9 @@ def _resolve_completion(
     active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     """完了候補・保留・早期終端を明示的な値として解決する。"""
-    is_handoff_ready = _is_handoff_ready(active)
+    if ctx.completion_reserved(active.issue_number):
+        return CompletionResolution.pending()
+    is_handoff_ready = _is_handoff_ready(active) and ctx.handoff_matches(active)
     if active.completion_id is not None and not is_handoff_ready:
         return CompletionResolution.pending()
     if active.owner_kind == "interactive":

@@ -115,20 +115,25 @@ class TestCompletionService:
         request = CompleteRequest.not_needed(
             1003, dry_run=True, state_path=tmp_path / "run_state.json"
         )
-        workspace = SimpleNamespace(run_state_path=tmp_path / "run_state.json")
-        state = SimpleNamespace(active_worktrees={})
+        workspace = SimpleNamespace(
+            run_state_path=tmp_path / "run_state.json", repository_identity="repo"
+        )
+        state = SimpleNamespace(active_worktrees={}, completion_replay_receipts={})
         with (
             patch(
                 "orchestune.complete.service.resolve_claim_workspace",
                 return_value=workspace,
             ),
-            patch("orchestune.complete.service.load_run_state", return_value=state),
+            patch(
+                "orchestune.complete.service.load_run_state_readonly",
+                return_value=state,
+            ),
             patch(
                 "orchestune.complete.service.evaluate_complete_preflight",
                 return_value=CompletePreflight(accepted=True),
             ),
             patch("orchestune.complete.service.run_local_ci_if_needed") as run_ci,
-            patch("orchestune.complete.service.reserve_completion") as reserve,
+            patch("orchestune.complete.service.reserve_completion_locked") as reserve,
             patch("orchestune.complete.service.post_issue_outcome") as post,
         ):
             result = complete_task(request, forge=SimpleNamespace(_run=lambda *_: "[]"))
@@ -140,64 +145,28 @@ class TestCompletionService:
         reserve.assert_not_called()
         post.assert_not_called()
 
-    def test_rechecks_then_persists_comment_evidence_after_post(self, tmp_path) -> None:
-        from orchestune.complete.contracts import CompleteRequest
-        from orchestune.complete.journal import CompletionJournal
-        from orchestune.complete.posting import PostingResult
-        from orchestune.complete.preflight import CompletePreflight
+    def test_rechecks_then_persists_comment_evidence_after_post(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from complete_lifecycle_test_support import lifecycle_environment
+
         from orchestune.complete.service import complete_task
+        from orchestune.ledger.run_state import load_run_state_readonly
 
-        state_path = tmp_path / "run_state.json"
-        active = SimpleNamespace(base_ref="parent/issue-894")
-        state = SimpleNamespace(active_worktrees={"1003": active})
-        request = CompleteRequest.not_needed(
-            1003,
-            owner_token="token",
-            claim_id="claim-1",
-            state_path=state_path,
-            worktree_root=Path.cwd(),
-        )
-        journal = CompletionJournal(
-            issue_number=1003,
-            claim_id="claim-1",
-            completion_id="completion-1",
-            result="not-needed",
-            stage="journaling",
-        )
-        workspace = SimpleNamespace(run_state_path=state_path)
-        with (
-            patch(
-                "orchestune.complete.service.resolve_claim_workspace",
-                return_value=workspace,
-            ),
-            patch("orchestune.complete.service.load_run_state", return_value=state),
-            patch(
-                "orchestune.complete.service.evaluate_complete_preflight",
-                return_value=CompletePreflight(accepted=True),
-            ) as preflight,
-            patch(
-                "orchestune.complete.service.reserve_completion", return_value=journal
-            ) as reserve,
-            patch(
-                "orchestune.complete.service.post_issue_outcome",
-                return_value=PostingResult(
-                    "7", "https://example.test/comments/7", False
-                ),
-            ),
-            patch("orchestune.complete.service.mark_handoff_ready") as handoff,
-        ):
-            result = complete_task(request, forge=SimpleNamespace(_run=lambda *_: "[]"))
-
-        assert result.success is True
+        request, forge, preflight = lifecycle_environment(tmp_path, monkeypatch)
+        result = complete_task(request, forge=forge)
+        assert result.success
         assert preflight.call_count == 2
         assert result.outcome_record is not None
-        assert result.outcome_record.completion_id == "completion-1"
-        assert reserve.call_args.kwargs["payload"] is None
-        handoff.assert_called_once()
-        assert handoff.call_args.kwargs["comment_url"].endswith("/7")
-        assert handoff.call_args.kwargs["payload"] == {
-            "outcome": result.outcome_record.render()
-        }
+        assert result.outcome_record.completion_id == result.completion_id
+        state = load_run_state_readonly(request.state_path)
+        active = state.active_worktrees["1110"]
+        assert active.completion_comment_url is not None
+        assert active.completion_comment_url.endswith("/1")
+        assert active.completion_payload is not None
+        assert active.completion_payload["body"] == result.outcome_record.render()
+        assert active.completion_handoff_ready
+        assert state.completion_replay_receipts
 
     def test_unclaimed_not_needed_posts_with_a_stable_identity(self, tmp_path) -> None:
         from orchestune.complete.contracts import CompleteRequest
@@ -208,19 +177,24 @@ class TestCompletionService:
         request = CompleteRequest.not_needed(
             1003, state_path=tmp_path / "run_state.json", worktree_root=Path.cwd()
         )
-        workspace = SimpleNamespace(run_state_path=request.state_path)
-        state = SimpleNamespace(active_worktrees={})
+        workspace = SimpleNamespace(
+            run_state_path=request.state_path, repository_identity="repo"
+        )
+        state = SimpleNamespace(active_worktrees={}, completion_replay_receipts={})
         with (
             patch(
                 "orchestune.complete.service.resolve_claim_workspace",
                 return_value=workspace,
             ),
-            patch("orchestune.complete.service.load_run_state", return_value=state),
+            patch(
+                "orchestune.complete.service.load_run_state_readonly",
+                return_value=state,
+            ),
             patch(
                 "orchestune.complete.service.evaluate_complete_preflight",
                 return_value=CompletePreflight(accepted=True),
             ),
-            patch("orchestune.complete.service.reserve_completion") as reserve,
+            patch("orchestune.complete.service.reserve_completion_locked") as reserve,
             patch(
                 "orchestune.complete.service.post_issue_outcome",
                 return_value=PostingResult(
@@ -231,6 +205,7 @@ class TestCompletionService:
             result = complete_task(request, forge=SimpleNamespace())
 
         assert result.success is True
+        assert result.outcome_record is not None
         assert result.outcome_record is not None
         assert result.outcome_record.completion_id == "unclaimed-not-needed-1003"
         reserve.assert_not_called()

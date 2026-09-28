@@ -16,7 +16,8 @@ from orchestune.dispatch.gc.outcome_decision import (
     _is_handoff_retained_dirty,
 )
 from orchestune.infra.git_cli import run_git
-from orchestune.ledger.run_state import ActiveWorktree
+from orchestune.ledger.completion_reservations import completion_handoff_matches_active
+from orchestune.ledger.run_state import ActiveWorktree, load_run_state_readonly
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
 from orchestune.worktree_ops.claim_marker import claim_marker_path, read_claim_marker
@@ -295,7 +296,25 @@ def inspect_handoff(
 ) -> HandoffPlan:
     """Verify durable completion evidence and evaluate a single handoff entry."""
     if not _is_handoff_ready(active):
+        if (
+            active.completion_handoff_ready
+            or active.completion_stage == "handed_off_to_gc"
+        ):
+            return _held_plan(active, "legacy_unverified")
         return _held_plan(active, "not_handoff_ready")
+    if (
+        not active.completion_comment_id
+        or not active.completion_comment_url
+        or not isinstance(active.completion_payload, dict)
+        or not active.completion_payload.get("outcome")
+    ):
+        return _held_plan(active, "handoff_evidence_missing")
+    try:
+        state = load_run_state_readonly(workspace.run_state_path)
+    except (OSError, ValueError):
+        return _held_plan(active, "completion_state_invalid")
+    if not completion_handoff_matches_active(state, active):
+        return _held_plan(active, "completion_evidence_mismatch")
     if active.repository_id != workspace.repository_identity:
         return _held_plan(active, "repository_mismatch")
     outcome, error = _verify_outcome(active, forge)

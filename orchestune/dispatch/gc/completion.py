@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
@@ -20,6 +20,7 @@ from orchestune.dispatch.gc.git import (
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
+from orchestune.dispatch.gc.handoff import HandoffForge, _verify_outcome
 from orchestune.dispatch.gc.outcome_decision import (
     _decide_action_from_outcome,
     _get_review_timeout_retry_state,
@@ -57,6 +58,7 @@ from orchestune.outcome_record import (
     parse_from_comments,
 )
 from orchestune.pr_link_notice import pr_matches_issue
+from orchestune.targets.completion_policy import token_limit_decision
 from orchestune.task_metadata import TaskMetadata
 
 
@@ -213,18 +215,24 @@ def _resolve_active_outcome(
     subtask_id: str,
     forge: Forge | None,
 ) -> tuple[OutcomeRecord | None, CompletedWorktreeDecision | None]:
+    if _is_handoff_ready(active):
+        outcome, error = (
+            _verify_outcome(active, cast(HandoffForge, forge))
+            if forge is not None
+            else (None, "outcome_unknown")
+        )
+        if outcome is None:
+            return None, CompletedWorktreeDecision(
+                action="completion_skipped_forge_error",
+                subtask_id=subtask_id,
+                operation="completion_outcome",
+                error=error or "",
+            )
+        return outcome, None
     if forge is not None:
         failures: list[ForgeFailure] = []
         lookup = _fetch_outcome_for_active(active, forge, failures)
         if lookup.state is OutcomeLookupState.UNKNOWN:
-            if _is_handoff_ready(active) and active.completion_result is not None:
-                return (
-                    OutcomeRecord(
-                        result=active.completion_result,
-                        issue=active.issue_number,
-                    ),
-                    None,
-                )
             return None, CompletedWorktreeDecision(
                 action="completion_skipped_forge_error",
                 subtask_id=subtask_id,
@@ -234,14 +242,6 @@ def _resolve_active_outcome(
         if lookup.record is not None:
             return lookup.record, None
 
-    if _is_handoff_ready(active) and active.completion_result is not None:
-        return (
-            OutcomeRecord(
-                result=active.completion_result,
-                issue=active.issue_number,
-            ),
-            None,
-        )
     return None, None
 
 
@@ -735,11 +735,8 @@ def _check_token_limit_exceeded(
     decision: CompletedWorktreeDecision,
     event: dict,
 ) -> bool:
-    if (
-        ctx.config.max_tokens_per_task is not None
-        and isinstance(usage, Usage)
-        and usage.total_tokens > ctx.config.max_tokens_per_task
-    ):
+    if token_limit_decision(ctx.config.max_tokens_per_task, usage) == "exceeded":
+        assert isinstance(usage, Usage)
         _apply_token_limit_escalation(ctx.active, ctx.config, usage)
         event["action"] = "escalated_token_limit_exceeded"
         event["subtask_id"] = decision.subtask_id

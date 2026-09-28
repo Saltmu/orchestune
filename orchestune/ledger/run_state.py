@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -67,6 +68,7 @@ class ActiveWorktree:
     completion_comment_id: str | None = None
     completion_comment_url: str | None = None
     completion_handoff_ready: bool = False
+    completion_policy_config: dict[str, Any] | None = None
 
 
 @dataclass
@@ -367,6 +369,7 @@ def _parse_completion_journal_fields(
     value: dict[str, Any], key: object
 ) -> dict[str, Any]:
     return {
+        "completion_policy_config": value.get("completion_policy_config"),
         "completion_id": _parse_optional_completion_str(value, "completion_id", key),
         "completion_result": _parse_optional_completion_str(
             value, "completion_result", key
@@ -560,6 +563,24 @@ def load_run_state(path: str | Path) -> RunState:
     if not isinstance(data, dict):
         raise ValueError("run_state.json schema error: root must be an object")
 
+    return _run_state_from_data(data)
+
+
+def load_run_state_readonly(path: str | Path) -> RunState:
+    """Read the ledger without corruption recovery or filesystem writes."""
+    path = Path(path)
+    if not path.exists():
+        return RunState()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ValueError("run_state.json could not be read without recovery") from error
+    if not isinstance(data, dict):
+        raise ValueError("run_state.json root must be an object")
+    return _run_state_from_data(data)
+
+
+def _run_state_from_data(data: dict[str, Any]) -> RunState:
     return RunState(
         active_worktrees=_parse_active_worktrees(data),
         launch_history=list(data.get("launch_history", [])),
@@ -736,6 +757,13 @@ def _materialize_active_worktree_for_persistence(active: ActiveWorktree) -> None
         ).hexdigest()
 
 
+def _active_worktree_data(active: ActiveWorktree) -> dict[str, Any]:
+    data = dataclasses.asdict(active)
+    if active.completion_policy_config is None:
+        data.pop("completion_policy_config")
+    return data
+
+
 def save_run_state(
     state: RunState,
     path: str | Path,
@@ -759,7 +787,7 @@ def save_run_state(
         _materialize_active_worktree_for_persistence(active)
     data = {
         "active_worktrees": {
-            key: dataclasses.asdict(value)
+            key: _active_worktree_data(value)
             for key, value in state.active_worktrees.items()
         },
         "launch_history": state.launch_history,

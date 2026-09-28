@@ -94,6 +94,10 @@ from orchestune.dispatch.summary import (
     REASON_REVIEW_TIMEOUT_BACKOFF,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.completion_reservations import (
+    completion_handoff_matches_active,
+    completion_mutation_blocked_fresh,
+)
 from orchestune.ledger.run_state import ActiveWorktree, RunState, save_run_state
 from orchestune.models import IssueRecord
 from orchestune.task_metadata import TaskMetadata
@@ -145,6 +149,20 @@ def _run_active_worktree_rules(
     aggregates = _ActiveWorktreeAggregates()
 
     for key, active in list(ctx.run_state.active_worktrees.items()):
+        if (
+            active.completion_id is not None
+            and not completion_handoff_matches_active(ctx.run_state, active)
+        ) or completion_mutation_blocked_fresh(
+            ctx.run_state, active.issue_number, ctx.config.run_state_path
+        ):
+            aggregates.completion_events.append(
+                {
+                    "issue_number": active.issue_number,
+                    "worktree_path": active.worktree_path,
+                    "action": "completion_reserved_hold",
+                }
+            )
+            continue
         active_task = ctx.queries.task(active.issue_number)
 
         if _EARLY_ACTIVE_WORKTREE_RULES.run(ctx, key, active, active_task, aggregates):

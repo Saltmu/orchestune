@@ -189,6 +189,7 @@ class DownstreamPolicyRecord:
     policy_kind: str
     status: str = "pending"
     schema_version: int = 1
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -201,6 +202,12 @@ class DownstreamPolicyRecord:
                 raise ValueError(f"{name} must be a non-empty string")
         if not is_valid_issue_number(self.issue_number):
             raise ValueError("issue_number must be a positive integer")
+        if not isinstance(self.metadata, dict):
+            raise ValueError("policy metadata must be an object")
+        try:
+            json.dumps(self.metadata, allow_nan=False)
+        except (TypeError, ValueError) as error:
+            raise ValueError("policy metadata must contain JSON data") from error
         if self.status not in {"pending", "applied"}:
             raise ValueError("status must be 'pending' or 'applied'")
         if (
@@ -225,6 +232,7 @@ class DownstreamPolicyRecord:
             "completion_id": self.completion_id,
             "policy_kind": self.policy_kind,
             "status": self.status,
+            "metadata": self.metadata,
         }
 
     @classmethod
@@ -419,6 +427,7 @@ class CompleteRequest:
     dry_run: bool = False
     state_path: Path | None = None
     worktree_root: Path | None = None
+    completion_id: str | None = None
 
     def __post_init__(self) -> None:
         if not is_valid_issue_number(self.issue_number):
@@ -434,6 +443,7 @@ class CompleteRequest:
         *,
         owner_token: str | None = None,
         claim_id: str | None = None,
+        completion_id: str | None = None,
         owner_kind: OwnerKind = OwnerKind.INTERACTIVE,
         review: ReviewSummary | None = None,
         ci: str | None = None,
@@ -454,6 +464,7 @@ class CompleteRequest:
             result=RESULT_DONE,
             owner_token=owner_token,
             claim_id=claim_id,
+            completion_id=completion_id,
             owner_kind=owner_kind,
             payload=payload,
             dry_run=dry_run,
@@ -468,6 +479,7 @@ class CompleteRequest:
         *,
         owner_token: str | None = None,
         claim_id: str | None = None,
+        completion_id: str | None = None,
         owner_kind: OwnerKind = OwnerKind.INTERACTIVE,
         dry_run: bool = False,
         state_path: Path | None = None,
@@ -479,6 +491,7 @@ class CompleteRequest:
             result=RESULT_NOT_NEEDED,
             owner_token=owner_token,
             claim_id=claim_id,
+            completion_id=completion_id,
             owner_kind=owner_kind,
             payload=NotNeededPayload(),
             dry_run=dry_run,
@@ -496,6 +509,7 @@ class CompleteRequest:
         attempt: int | None = None,
         owner_token: str | None = None,
         claim_id: str | None = None,
+        completion_id: str | None = None,
         owner_kind: OwnerKind = OwnerKind.INTERACTIVE,
         review: ReviewSummary | None = None,
         ci: str | None = None,
@@ -516,6 +530,7 @@ class CompleteRequest:
             result=RESULT_BLOCKED,
             owner_token=owner_token,
             claim_id=claim_id,
+            completion_id=completion_id,
             owner_kind=owner_kind,
             payload=payload,
             dry_run=dry_run,
@@ -525,6 +540,8 @@ class CompleteRequest:
 
     def validate(self) -> None:
         """Validate internal consistency of request fields and payload."""
+        if self.completion_id is not None:
+            _required_text(self.completion_id, "completion_id")
         if not is_valid_issue_number(self.issue_number):
             raise ValueError(
                 f"issue_number must be a valid positive non-boolean integer, got: {self.issue_number!r}"
@@ -725,7 +742,10 @@ class CompleteResult:
                     )
                 if self.handed_off_to_gc:
                     raise ValueError("Preview CompleteResult cannot claim GC handoff")
-            elif self.stage != CompleteStage.HANDED_OFF_TO_GC:
+            elif self.stage not in {
+                CompleteStage.HANDED_OFF_TO_GC,
+                CompleteStage.HANDED_OFF,
+            }:
                 raise ValueError(
                     "Successful CompleteResult requires CompleteStage.HANDED_OFF_TO_GC, "
                     f"got: {self.stage!r}"
@@ -741,13 +761,9 @@ class CompleteResult:
         else:
             if self.preview:
                 raise ValueError("Failed CompleteResult cannot be a preview")
-            if self.stage == CompleteStage.HANDED_OFF_TO_GC:
+            if self.stage in {CompleteStage.HANDED_OFF_TO_GC, CompleteStage.HANDED_OFF}:
                 raise ValueError(
-                    "Failed CompleteResult cannot be at CompleteStage.HANDED_OFF_TO_GC"
-                )
-            if self.stage == CompleteStage.HANDED_OFF:
-                raise ValueError(
-                    "Failed CompleteResult cannot be at CompleteStage.HANDED_OFF"
+                    f"Failed CompleteResult cannot be at CompleteStage.{self.stage.name}"
                 )
             if self.handed_off_to_gc:
                 raise ValueError(
@@ -782,7 +798,7 @@ class CompleteResult:
         """Construct a successful CompleteResult indicating GC handoff."""
         if result not in VALID_RESULTS:
             raise ValueError(f"Invalid complete result: {result!r}")
-        if stage != CompleteStage.HANDED_OFF_TO_GC:
+        if stage not in {CompleteStage.HANDED_OFF_TO_GC, CompleteStage.HANDED_OFF}:
             raise ValueError(
                 "Successful CompleteResult requires CompleteStage.HANDED_OFF_TO_GC, "
                 f"got: {stage!r}"

@@ -28,7 +28,6 @@ from orchestune.dispatch.reviewer import (
 from orchestune.forge import Forge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
-from orchestune.models import Usage
 from orchestune.targets.cloud_routine import (
     ROUTINE_ID_ENV_VAR as ROUTINE_ID_ENV_VAR,
 )
@@ -67,6 +66,11 @@ from orchestune.targets.support import (
 from orchestune.targets.support import (
     _push_branch_and_verify as _push_branch_and_verify,
 )
+from orchestune.targets.usage import LocalUsageProvider
+from orchestune.targets.usage import (
+    _extract_usage_from_dict as _extract_usage_from_dict,
+)
+from orchestune.targets.usage import _parse_usage_from_log as _parse_usage_from_log
 from orchestune.task_metadata import TaskMetadata
 
 logger = logging.getLogger(__name__)
@@ -223,7 +227,7 @@ def _format_local_cmd(
     return cmd
 
 
-class LocalProcessDispatchTarget(DispatchTarget):
+class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
     """ローカルマシン上のサブプロセスとしてエージェントを起動する戦略。
 
     デフォルト（dry runモード）では何も実行しない`default_dry_run_command_builder`を使う。
@@ -296,81 +300,6 @@ class LocalProcessDispatchTarget(DispatchTarget):
 
     def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
         return not _is_pid_alive(handle.pid)
-
-    def collect_usage(self, handle: DispatchHandle) -> Usage | None:
-        """#438: ログファイルから usage / model 情報を抽出して返す。"""
-        if not handle.branch_name:
-            return None
-        slug = handle.branch_name.replace("/", "-")
-        log_path = self._log_dir / f"{slug}.log"
-        return _parse_usage_from_log(log_path)
-
-
-def _extract_usage_from_dict(data: Any) -> Usage | None:
-    if not isinstance(data, dict):
-        return None
-    usage_data = data.get("usage") if isinstance(data.get("usage"), dict) else data
-    if not isinstance(usage_data, dict):
-        return None
-    if "input_tokens" not in usage_data and "output_tokens" not in usage_data:
-        return None
-    try:
-        input_tokens = int(usage_data.get("input_tokens", 0))
-        output_tokens = int(usage_data.get("output_tokens", 0))
-        total_tokens = int(usage_data.get("total_tokens", input_tokens + output_tokens))
-        model = (
-            str(data["model"])
-            if data.get("model") is not None
-            else (
-                str(usage_data["model"])
-                if usage_data.get("model") is not None
-                else None
-            )
-        )
-        cost_val = data.get("total_cost_combined")
-        if cost_val is None:
-            cost_val = data.get("cost_usd")
-        if cost_val is None and usage_data is not data:
-            cost_val = usage_data.get("total_cost_combined")
-        if cost_val is None and usage_data is not data:
-            cost_val = usage_data.get("cost_usd")
-        cost_usd = float(cost_val) if cost_val is not None else None
-        return Usage(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-            model=model,
-            cost_usd=cost_usd,
-        )
-    except (TypeError, ValueError):
-        return None
-
-
-def _parse_usage_from_log(log_path: Path) -> Usage | None:
-    if not log_path.exists() or log_path.stat().st_size == 0:
-        return None
-    try:
-        content = log_path.read_text(encoding="utf-8", errors="replace")
-    except Exception:
-        return None
-    lines = [line.strip() for line in content.splitlines() if line.strip()]
-    for line in reversed(lines):
-        if line.startswith("{") and line.endswith("}"):
-            try:
-                data = json.loads(line)
-                usage = _extract_usage_from_dict(data)
-                if usage is not None:
-                    return usage
-            except Exception:
-                pass
-    try:
-        data = json.loads(content.strip())
-        usage = _extract_usage_from_dict(data)
-        if usage is not None:
-            return usage
-    except Exception:
-        pass
-    return None
 
 
 _CODEX_TASK_URL_RE = re.compile(r"https?://[^\s]+/tasks/([a-zA-Z0-9_-]+)")

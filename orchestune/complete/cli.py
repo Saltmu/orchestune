@@ -8,9 +8,9 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from orchestune.claim.workspace import resolve_claim_workspace
-from orchestune.complete.contracts import CompleteRequest
+from orchestune.complete.contracts import CompleteRequest, CompleteStage
 from orchestune.complete.service import complete_task
-from orchestune.ledger.run_state import load_run_state
+from orchestune.ledger.run_state import load_run_state_readonly
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -22,6 +22,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--reason")
     parser.add_argument(
+        "--completion-id", help="resume or read an immutable completion result"
+    )
+    parser.add_argument(
         "--no-apply",
         action="store_true",
         help="validate without CI, state, or GitHub writes",
@@ -31,7 +34,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _credentials(issue_number: int) -> tuple[str | None, str | None, Path]:
     workspace = resolve_claim_workspace()
-    state = load_run_state(workspace.run_state_path)
+    state = load_run_state_readonly(workspace.run_state_path)
     active = state.active_worktrees.get(str(issue_number))
     if active is None or not active.claim_id:
         return None, None, workspace.run_state_path
@@ -61,6 +64,7 @@ def _read_owner_token(path: Path) -> str | None:
 def _request_from_args(args: argparse.Namespace) -> CompleteRequest:
     token, claim_id, state_path = _credentials(args.issue)
     common = {
+        "completion_id": args.completion_id,
         "owner_token": token,
         "claim_id": claim_id,
         "dry_run": args.no_apply,
@@ -84,6 +88,11 @@ def _request_from_args(args: argparse.Namespace) -> CompleteRequest:
     return CompleteRequest.not_needed(args.issue, **common)
 
 
+def _print_progress(completion_id: str, stage: CompleteStage) -> None:
+    print(f"Completion ID: {completion_id}", flush=True)
+    print(f"Reached stage: {stage.value}", flush=True)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = _parser().parse_args(argv)
@@ -92,7 +101,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Error: {exc}")
         return 40
 
-    result = complete_task(request)
+    result = complete_task(request, on_progress=_print_progress)
     if result.completion_id is not None:
         print(f"Completion ID: {result.completion_id}")
     print(f"Reached stage: {result.stage.value}")

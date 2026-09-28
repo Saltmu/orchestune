@@ -26,7 +26,17 @@ from orchestune.dispatch.cycle_context_state import (
     _CycleState,
 )
 from orchestune.dispatch.scoring import SchedulingResult
-from orchestune.ledger.run_state import ActiveWorktree, RunState
+from orchestune.ledger.completion_reservations import (
+    completion_handoff_matches_active,
+    completion_mutation_blocked_fresh,
+    dependency_completion_blocked,
+    dependency_completion_blocked_fresh,
+)
+from orchestune.ledger.run_state import (
+    ActiveWorktree,
+    RunState,
+    load_run_state_readonly,
+)
 from orchestune.models import IssueRecord, PrRecord, Task
 from orchestune.task_branch_resolution import TaskBranchResolution
 from orchestune.task_metadata import TaskMetadata
@@ -74,10 +84,30 @@ class CycleContext(_CycleState):
             branch_resolutions_by_issue=branch_resolutions_by_issue or {},
         )
         self.config = config
+        self._completion_reservation_state = run_state
         self.not_needed_review_dispatcher = not_needed_review_dispatcher
         self._actions = actions
 
     # ---- action API ---------------------------------------------------------
+
+    def is_completion_blocked(self, issue_number: int) -> bool:
+        if self.config is None:
+            return dependency_completion_blocked(
+                self._completion_reservation_state, issue_number
+            )
+        return dependency_completion_blocked_fresh(
+            self._completion_reservation_state, issue_number, self.config.run_state_path
+        )
+
+    def is_effectively_done(self, issue_number: int) -> bool:
+        return not self.is_completion_blocked(
+            issue_number
+        ) and super().is_effectively_done(issue_number)
+
+    def is_completion_confirmed(self, issue_number: int) -> bool:
+        return not self.is_completion_blocked(
+            issue_number
+        ) and super().is_completion_confirmed(issue_number)
 
     def _action_port(self) -> CycleActions:
         if self._actions is None:
@@ -134,6 +164,16 @@ class _RuleExecutionContext:
     tasks_by_issue: dict[int, TaskMetadata] = field(default_factory=dict)
     dag_inputs: tuple[SubTask, ...] = ()
     issue_number_by_subtask_id: dict[str, int] = field(default_factory=dict)
+
+    def completion_reserved(self, issue_number: int) -> bool:
+        return completion_mutation_blocked_fresh(
+            RunState(), issue_number, self.config.run_state_path
+        )
+
+    def handoff_matches(self, active: ActiveWorktree) -> bool:
+        return completion_handoff_matches_active(
+            load_run_state_readonly(self.config.run_state_path), active
+        )
 
     def record_completion(self, issue_number: int) -> RecordResult:
         return self.queries.record_completion(issue_number)

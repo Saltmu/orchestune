@@ -7,7 +7,6 @@ import os
 import re
 import shlex
 import subprocess
-import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -43,6 +42,9 @@ from orchestune.dispatch.targets import (
     resolve_default_dispatch_target_name,
 )
 from orchestune.infra.git_cli import get_git_repository_paths, run_git
+from orchestune.infra.repository_config import (
+    find_and_load_config_file as find_and_load_config_file,
+)
 
 _DISPATCH_TARGET_HELP = (
     "#215/#163: エージェントの実ディスパッチ先。未指定時は実行環境から自動選択される"
@@ -362,34 +364,6 @@ def validate_toml_config(config_data: dict[str, Any]) -> dict[str, Any]:
         extract_execution_profile_config(config_data)
 
     return validated
-
-
-def find_and_load_config_file(checkout_root: Path) -> dict[str, Any]:
-    """Search and load configuration from orchestune.toml or pyproject.toml."""
-    orchestune_toml = checkout_root / "orchestune.toml"
-    if orchestune_toml.exists():
-        try:
-            with open(orchestune_toml, "rb") as f:
-                return tomllib.load(f)
-        except Exception as e:
-            raise ConfigError(f"failed to load {orchestune_toml}: {e}") from e
-
-    pyproject_toml = checkout_root / "pyproject.toml"
-    if pyproject_toml.exists():
-        try:
-            with open(pyproject_toml, "rb") as f:
-                data = tomllib.load(f)
-        except Exception as e:
-            raise ConfigError(f"failed to load {pyproject_toml}: {e}") from e
-        tool = data.get("tool", {})
-        if not isinstance(tool, dict):
-            raise ConfigError(f"{pyproject_toml}: [tool] must be a table")
-        config = tool.get("orchestune", {})
-        if not isinstance(config, dict):
-            raise ConfigError(f"{pyproject_toml}: [tool.orchestune] must be a table")
-        return config
-
-    return {}
 
 
 def _get_current_git_branch(cwd: Path | None = None) -> str:

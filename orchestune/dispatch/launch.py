@@ -6,7 +6,8 @@ import sys
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Generic, TypeVar
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.claim.contracts import (
@@ -404,12 +405,40 @@ def _handle_launch_failure(
         )
 
 
+def _claim_launch_fields(
+    reservation: ActiveWorktree, config: DispatcherConfig
+) -> dict[str, Any]:
+    return {
+        name: getattr(reservation, name)
+        for name in (
+            "owner_kind",
+            "claim_id",
+            "claim_stage",
+            "base_ref",
+            "base_sha",
+            "reservation_kind",
+            "repository_id",
+            "claimed_at",
+            "owner_token_digest",
+        )
+    } | {
+        "completion_policy_config": {
+            "max_tokens_per_task": config.max_tokens_per_task,
+            "source": "dispatcher-effective-config",
+            "log_dir": str(Path(config.log_dir).resolve()),
+            "dispatch_target": getattr(config.dispatch_target, "target_name", None)
+            or "auto",
+        }
+    }
+
+
 def _build_active_worktree_from_launch(
     task: TaskMetadata,
     plan: TaskLaunchPlan,
     launch,
     run_state: RunState,
     now: float,
+    config: DispatcherConfig,
 ) -> ActiveWorktree:
     reservation = run_state.active_worktrees.get(str(task.issue_number))
     if reservation is None:
@@ -446,15 +475,7 @@ def _build_active_worktree_from_launch(
         # The claim reservation is the only authoritative source for durable
         # ownership and identity.  Reconstructing any of these defaults here
         # would produce a ledger that the strict state reader must reject.
-        owner_kind=reservation.owner_kind,
-        claim_id=reservation.claim_id,
-        claim_stage=reservation.claim_stage,
-        base_ref=reservation.base_ref,
-        base_sha=reservation.base_sha,
-        reservation_kind=reservation.reservation_kind,
-        repository_id=reservation.repository_id,
-        claimed_at=reservation.claimed_at,
-        owner_token_digest=reservation.owner_token_digest,
+        **_claim_launch_fields(reservation, config),
     )
 
 
@@ -468,7 +489,9 @@ def _record_successful_launch(
     open_prs: Sequence[PrRecord] | None,
     on_launch_committed: LaunchCommitted | None = None,
 ) -> None:
-    active = _build_active_worktree_from_launch(task, plan, launch, run_state, now)
+    active = _build_active_worktree_from_launch(
+        task, plan, launch, run_state, now, config
+    )
     run_state.active_worktrees[str(task.issue_number)] = active
     run_state.launch_history.append(now)
     reclaim_record = run_state.task_reclaim_counts.get(task.issue_number)

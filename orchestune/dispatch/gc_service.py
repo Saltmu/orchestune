@@ -32,7 +32,15 @@ from orchestune.infra.process_utils import (
     file_lock,
     run_state_lock,
 )
-from orchestune.ledger.run_state import ActiveWorktree, _parse_active_worktrees
+from orchestune.ledger.completion_reservations import (
+    completion_handoff_matches_active,
+    completion_mutation_blocked,
+)
+from orchestune.ledger.run_state import (
+    ActiveWorktree,
+    _parse_active_worktrees,
+    load_run_state_readonly,
+)
 from orchestune.worktree_ops.claim_marker import (
     claim_lock_path,
     claim_marker_path,
@@ -118,6 +126,18 @@ def _inspect_or_hold(
     workspace: ClaimWorkspace,
     forge: HandoffForge | None,
 ) -> HandoffPlan:
+    if not _is_handoff_ready(active):
+        return HandoffPlan(
+            key=str(active.issue_number),
+            issue_number=active.issue_number,
+            result=active.completion_result,
+            action="hold",
+            reason="legacy_unverified"
+            if active.completion_handoff_ready
+            or active.completion_stage == "handed_off_to_gc"
+            else "not_handoff_ready",
+            worktree_action="retain",
+        )
     if forge is None:
         return HandoffPlan(
             key=str(active.issue_number),
@@ -140,6 +160,22 @@ def _inspect_or_hold(
         )
 
 
+def _completion_gc_candidates(
+    active: dict[str, ActiveWorktree], state_path: Path
+) -> list[tuple[str, ActiveWorktree]]:
+    state = load_run_state_readonly(state_path)
+    return [
+        (key, item)
+        for key, item in active.items()
+        if item.owner_kind == "interactive"
+        and (
+            item.completion_id
+            or item.completion_handoff_ready
+            or completion_mutation_blocked(state, item.issue_number)
+        )
+    ]
+
+
 def _preview(
     workspace: ClaimWorkspace,
     forge_factory: Callable[[], HandoffForge],
@@ -148,12 +184,10 @@ def _preview(
         _, active = _read_gc_state(workspace.run_state_path)
     except (OSError, ValueError):
         return GcRunResult((), 0, (), 1)
-    candidates = [
-        (key, item) for key, item in active.items() if _is_standalone_gc_candidate(item)
-    ]
+    candidates = _completion_gc_candidates(active, workspace.run_state_path)
     skipped = len(active) - len(candidates)
     forge: HandoffForge | None = None
-    if candidates:
+    if any(_is_handoff_ready(item) for _, item in candidates):
         try:
             forge = forge_factory()
         except Exception:
@@ -279,16 +313,16 @@ def _apply_locked(
         _, active = _read_gc_state(workspace.run_state_path)
     except (OSError, ValueError):
         return GcRunResult((), 0, (), 1)
-    candidates = [
-        (key, item) for key, item in active.items() if _is_standalone_gc_candidate(item)
-    ]
+    candidates = _completion_gc_candidates(active, workspace.run_state_path)
     skipped = len(active) - len(candidates)
     if not candidates:
         return GcRunResult((), skipped, (), 0)
-    try:
-        forge: HandoffForge | None = forge_factory()
-    except Exception:
-        forge = None
+    forge: HandoffForge | None = None
+    if any(_is_handoff_ready(item) for _, item in candidates):
+        try:
+            forge = forge_factory()
+        except Exception:
+            forge = None
     items: list[GcItemResult] = []
     receipts: list[CompletionReceipt] = []
     for key, initial in sorted(candidates):
@@ -340,8 +374,22 @@ def _apply_one(
     except (OSError, ValueError):
         return 1, 0
     current = active.get(key)
-    if current is None or not _is_handoff_ready(current):
+    if current is None:
         return None, 1
+    if _is_handoff_ready(current) and not completion_handoff_matches_active(
+        load_run_state_readonly(workspace.run_state_path), current
+    ):
+        items.append(
+            _make_item(
+                key,
+                current,
+                "held",
+                "completion_evidence_mismatch",
+                "retain",
+                workspace,
+            )
+        )
+        return None, 0
     plan = _inspect_or_hold(current, workspace, forge)
     if plan.action != "release":
         items.append(
