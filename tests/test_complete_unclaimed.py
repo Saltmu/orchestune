@@ -1,5 +1,6 @@
 """Worktree-free completion reservations, recovery, and generation isolation."""
 
+import os
 from dataclasses import replace
 from types import SimpleNamespace
 from uuid import uuid4
@@ -55,7 +56,8 @@ def test_unclaimed_publication_has_independent_reservation_and_pending_review(
         request.state_path.parent.glob(".orchestune/completion-tokens/*.token")
     )
     assert len(tokens) == 1
-    assert tokens[0].stat().st_mode & 0o077 == 0
+    if os.name != "nt":
+        assert tokens[0].stat().st_mode & 0o077 == 0
 
 
 @pytest.mark.parametrize("save_number", [1, 2, 3, 4])
