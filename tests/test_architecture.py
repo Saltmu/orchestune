@@ -101,6 +101,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "complete.journal",
             "complete.posting",
             "complete.preflight",
+            "complete.status_labels",
             "consistency",
             "consistency.desired",
             "consistency.engine",
