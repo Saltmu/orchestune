@@ -75,10 +75,30 @@ def find_replay(
             CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH,
             "Saved completion request differs",
         )
+    _validate_replay_generation(request, state, record)
+    return result_from_record(record, request)
+
+
+def _validate_replay_generation(
+    request: CompleteRequest, state: Any, record: CompletionJournalRecord
+) -> None:
+    explicit = request.completion_id
     active = state.active_worktrees.get(str(request.issue_number))
+    if not explicit and (
+        record.generation_id.startswith("unclaimed-")
+        or (
+            request.result == "not-needed"
+            and active is None
+            and request.claim_id is None
+        )
+    ):
+        raise CompletionJournalError(
+            CompleteFailureReason.GENERATION_MISMATCH,
+            f"Unclaimed history requires --completion-id {record.completion_id}; "
+            "use a new completion-<UUID hex> for an explicitly new request after reopening",
+        )
     if not explicit and active is not None and active.claim_id != record.generation_id:
         raise CompletionJournalError(
             CompleteFailureReason.GENERATION_MISMATCH,
             "Task was reclaimed; specify the old completion ID to replay its saved result",
         )
-    return result_from_record(record, request)

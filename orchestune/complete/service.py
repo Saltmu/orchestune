@@ -31,12 +31,11 @@ from orchestune.complete.journal import (
     completion_journal_lock,
     reserve_completion_locked,
 )
+from orchestune.complete.not_needed_policy import not_needed_policies
 from orchestune.complete.policy import evaluate_publication_policy
 from orchestune.complete.policy_actions import escalate_token_limit_locked
 from orchestune.complete.posting import (
     OutcomePostingError,
-    PostingRequest,
-    post_issue_outcome,
 )
 from orchestune.complete.preflight import _fetch_pr, evaluate_complete_preflight
 from orchestune.complete.publication import (
@@ -44,6 +43,7 @@ from orchestune.complete.publication import (
     publish_reserved_completion_locked,
 )
 from orchestune.complete.replay import find_replay
+from orchestune.complete.unclaimed import complete_unclaimed, validate_unclaimed
 from orchestune.forge import GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.labels import StatusLabel
@@ -153,19 +153,9 @@ def _downstream_policies(
     completion_id: str,
     policy: dict[str, Any],
 ) -> tuple[DownstreamPolicyRecord, ...]:
-    policies: tuple[DownstreamPolicyRecord, ...] = ()
-    if request.result == "not-needed" and active.external_id is not None:
-        policies = (
-            DownstreamPolicyRecord(
-                repository,
-                request.issue_number,
-                active.claim_id,
-                completion_id,
-                "not-needed-review",
-                metadata={"context": policy["context"]},
-            ),
-        )
-    return policies
+    return not_needed_policies(
+        request, active, repository, active.claim_id, completion_id, policy["context"]
+    )
 
 
 def _ensure_validated_head(
@@ -327,20 +317,6 @@ def _preview(request: CompleteRequest) -> CompleteResult:
     )
 
 
-def _unclaimed_not_needed(request: CompleteRequest, forge: Any) -> CompleteResult:
-    outcome = replace(
-        request.to_outcome_record(),
-        completion_id=f"unclaimed-not-needed-{request.issue_number}",
-    )
-    post_issue_outcome(PostingRequest(request.issue_number, outcome), forge=forge)
-    return CompleteResult.success_result(
-        request.issue_number,
-        request.result,
-        outcome_record=outcome,
-        completion_id=outcome.completion_id,
-    )
-
-
 def _policy_for_request(
     request: CompleteRequest, state: Any, repository: str, worktree: Path, forge: Any
 ) -> dict[str, Any]:
@@ -460,6 +436,15 @@ def _complete(
         return replay
     forge = forge or GitHubForge(timeout_seconds=30)
     progress.stage = CompleteStage.PREFLIGHT_VALIDATING
+    if str(request.issue_number) not in state.active_worktrees:
+        if request.dry_run:
+            validate_unclaimed(
+                request, state, workspace.repository_identity, forge, state_path
+            )
+            return _preview(request)
+        return complete_unclaimed(
+            request, workspace.repository_identity, state_path, forge, progress.report
+        )
     _validate_claim_context(
         state.active_worktrees.get(str(request.issue_number)),
         workspace.repository_identity,
@@ -469,8 +454,6 @@ def _complete(
     _check(request, state, worktree, forge)
     if request.dry_run:
         return _preview(request)
-    if str(request.issue_number) not in state.active_worktrees:
-        return _unclaimed_not_needed(request, forge)
     progress.stage = CompleteStage.EVIDENCE_VERIFYING
     policy = _policy_for_request(
         request, state, workspace.repository_identity, worktree, forge

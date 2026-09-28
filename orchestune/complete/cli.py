@@ -10,6 +10,11 @@ from pathlib import Path
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.complete.contracts import CompleteRequest, CompleteStage
 from orchestune.complete.service import complete_task
+from orchestune.complete.unclaimed import token_directory
+from orchestune.infra.private_tokens import (
+    _read_owner_token as read_private_owner_token,
+)
+from orchestune.ledger.completion_reservations import completion_record
 from orchestune.ledger.run_state import load_run_state_readonly
 
 
@@ -36,7 +41,18 @@ def _credentials(issue_number: int) -> tuple[str | None, str | None, Path]:
     workspace = resolve_claim_workspace()
     state = load_run_state_readonly(workspace.run_state_path)
     active = state.active_worktrees.get(str(issue_number))
-    if active is None or not active.claim_id:
+    if active is None:
+        record = completion_record(state, issue_number)
+        if record is not None and record.get("stage") != "handed_off":
+            return (
+                read_private_owner_token(
+                    token_directory(workspace.run_state_path), record["completion_id"]
+                ),
+                None,
+                workspace.run_state_path,
+            )
+        return None, None, workspace.run_state_path
+    if not active.claim_id:
         return None, None, workspace.run_state_path
     token_path = (
         workspace.run_state_path.parent

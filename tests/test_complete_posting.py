@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -107,40 +106,33 @@ class TestPostIssueOutcome:
 
 
 class TestCompletionService:
-    def test_dry_run_has_no_ci_journal_or_post_side_effects(self, tmp_path) -> None:
+    def test_dry_run_has_no_ci_journal_or_post_side_effects(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from complete_lifecycle_test_support import lifecycle_environment
+
         from orchestune.complete.contracts import CompleteRequest
-        from orchestune.complete.preflight import CompletePreflight
         from orchestune.complete.service import complete_task
 
+        request, forge, _ = lifecycle_environment(tmp_path, monkeypatch)
         request = CompleteRequest.not_needed(
-            1003, dry_run=True, state_path=tmp_path / "run_state.json"
+            1110,
+            dry_run=True,
+            state_path=request.state_path,
+            owner_token="token",
+            claim_id="claim-1110",
+            worktree_root=tmp_path,
         )
-        workspace = SimpleNamespace(
-            run_state_path=tmp_path / "run_state.json", repository_identity="repo"
-        )
-        state = SimpleNamespace(active_worktrees={}, completion_replay_receipts={})
+        assert request.state_path is not None
+        before = request.state_path.read_bytes()
         with (
-            patch(
-                "orchestune.complete.service.resolve_claim_workspace",
-                return_value=workspace,
-            ),
-            patch(
-                "orchestune.complete.service.load_run_state_readonly",
-                return_value=state,
-            ),
-            patch(
-                "orchestune.complete.service.evaluate_complete_preflight",
-                return_value=CompletePreflight(accepted=True),
-            ),
             patch("orchestune.complete.service.run_local_ci_if_needed") as run_ci,
             patch("orchestune.complete.service.reserve_completion_locked") as reserve,
-            patch("orchestune.complete.service.post_issue_outcome") as post,
+            patch("orchestune.complete.publication.post_issue_outcome") as post,
         ):
-            result = complete_task(request, forge=SimpleNamespace(_run=lambda *_: "[]"))
-
-        assert result.success is True
-        assert result.preview is True
-        assert result.handed_off_to_gc is False
+            result = complete_task(request, forge=forge)
+        assert result.success and result.preview and not result.handed_off_to_gc
+        assert request.state_path.read_bytes() == before
         run_ci.assert_not_called()
         reserve.assert_not_called()
         post.assert_not_called()
@@ -165,48 +157,37 @@ class TestCompletionService:
         assert active.completion_comment_url.endswith("/1")
         assert active.completion_payload is not None
         assert active.completion_payload["body"] == result.outcome_record.render()
+        assert active.completion_payload["outcome"] == active.completion_payload["body"]
         assert active.completion_handoff_ready
         assert state.completion_replay_receipts
 
-    def test_unclaimed_not_needed_posts_with_a_stable_identity(self, tmp_path) -> None:
+    def test_unclaimed_not_needed_posts_with_a_durable_unique_identity(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from complete_lifecycle_test_support import PublicationForge
+
         from orchestune.complete.contracts import CompleteRequest
-        from orchestune.complete.posting import PostingResult
-        from orchestune.complete.preflight import CompletePreflight
         from orchestune.complete.service import complete_task
+        from orchestune.ledger.run_state import load_run_state_readonly
 
         request = CompleteRequest.not_needed(
-            1003, state_path=tmp_path / "run_state.json", worktree_root=Path.cwd()
+            1003, state_path=tmp_path / "run_state.json"
         )
         workspace = SimpleNamespace(
             run_state_path=request.state_path, repository_identity="repo"
         )
-        state = SimpleNamespace(active_worktrees={}, completion_replay_receipts={})
-        with (
-            patch(
-                "orchestune.complete.service.resolve_claim_workspace",
-                return_value=workspace,
-            ),
-            patch(
-                "orchestune.complete.service.load_run_state_readonly",
-                return_value=state,
-            ),
-            patch(
-                "orchestune.complete.service.evaluate_complete_preflight",
-                return_value=CompletePreflight(accepted=True),
-            ),
-            patch("orchestune.complete.service.reserve_completion_locked") as reserve,
-            patch(
-                "orchestune.complete.service.post_issue_outcome",
-                return_value=PostingResult(
-                    "7", "https://example.test/comments/7", False
-                ),
-            ) as post,
-        ):
-            result = complete_task(request, forge=SimpleNamespace())
-
-        assert result.success is True
+        monkeypatch.setattr(
+            "orchestune.complete.service.resolve_claim_workspace", lambda **_: workspace
+        )
+        forge = PublicationForge()
+        forge.labels = {"status:queued"}
+        result = complete_task(request, forge=forge)
+        assert result.success, result.failure
+        assert result.completion_id is not None
         assert result.outcome_record is not None
-        assert result.outcome_record is not None
-        assert result.outcome_record.completion_id == "unclaimed-not-needed-1003"
-        reserve.assert_not_called()
-        assert post.call_args.args[0].outcome_record == result.outcome_record
+        assert request.state_path is not None
+        assert result.completion_id.startswith("completion-")
+        assert result.completion_id != "unclaimed-not-needed-1003"
+        state = load_run_state_readonly(request.state_path)
+        assert not state.active_worktrees and state.completion_replay_receipts
+        assert forge.comments[0]["body"] == result.outcome_record.render()
