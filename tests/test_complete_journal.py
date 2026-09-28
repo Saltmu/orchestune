@@ -335,6 +335,28 @@ class TestLabelConfirmedCompletionContract:
         restored = CompletionJournalRecord.from_dict(serialized)
         assert restored == record
 
+    def test_duplicate_downstream_policy_kind_is_rejected(self):
+        from orchestune.complete.journal import DownstreamPolicyRecord
+
+        first = DownstreamPolicyRecord(
+            repository_id="Saltmu/orchestune",
+            issue_number=1108,
+            generation_id="claim-1108",
+            completion_id="completion-1108",
+            policy_kind="merge_queue",
+        )
+        applied = DownstreamPolicyRecord(
+            repository_id="Saltmu/orchestune",
+            issue_number=1108,
+            generation_id="claim-1108",
+            completion_id="completion-1108",
+            policy_kind="merge_queue",
+            status="applied",
+        )
+
+        with pytest.raises(ValueError, match="policy kinds must be unique"):
+            _new_journal_record(downstream_policy_records=(first, applied))
+
     def test_failed_handoff_save_does_not_create_a_replay_receipt(
         self, tmp_path, monkeypatch
     ):

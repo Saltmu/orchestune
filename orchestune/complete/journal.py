@@ -210,11 +210,17 @@ class CompletionJournalRecord:
         self._validate_stage_evidence()
 
     def _validate_policies(self) -> None:
+        policy_kinds: set[str] = set()
         for policy in self.downstream_policy_records:
             if not isinstance(policy, DownstreamPolicyRecord):
                 raise ValueError(
                     "downstream_policy_records must contain policy records"
                 )
+            if policy.policy_kind in policy_kinds:
+                raise ValueError(
+                    "downstream policy kinds must be unique per completion"
+                )
+            policy_kinds.add(policy.policy_kind)
             if (
                 policy.repository_id,
                 policy.issue_number,
