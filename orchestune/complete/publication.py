@@ -56,7 +56,10 @@ def _save(
         active.completion_id = record.completion_id
         active.completion_result = record.result
         active.completion_stage = record.stage.value
-        active.completion_payload = record.outcome_payload
+        active.completion_payload = {
+            **record.outcome_payload,
+            "outcome": record.outcome_payload["body"],
+        }
         if record.posting_evidence:
             active.completion_comment_id = record.posting_evidence["comment_id"]
             active.completion_comment_url = record.posting_evidence["comment_url"]

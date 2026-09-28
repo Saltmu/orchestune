@@ -142,7 +142,7 @@ def test_read_owner_token_uses_windows_acl_instead_of_posix_mode_bits(tmp_path):
     token_record.write_text("stored-owner-token\n", encoding="utf-8")
     token_record.chmod(0o644)
 
-    with patch("orchestune.claim.cli.os.name", "nt"):
+    with patch("orchestune.infra.private_tokens.os.name", "nt"):
         assert _read_owner_token(tmp_path, "claim-123") == "stored-owner-token"
 
 
