@@ -50,7 +50,8 @@ If `orchestune claim` fails (non-zero exit code):
 
 For dispatcher-launched (`owner_kind=dispatch`) and claimed interactive
 (`owner_kind=interactive`) worktrees, run `orchestune complete` for the task
-outcome. It posts to the task Issue and preserves the worktree. Do not remove
+outcome. It posts the fixed Outcome, confirms its result label, saves durable
+handoff/replay evidence, and preserves the worktree. Do not remove
 the worktree as part of completion. The dispatch cycle handles dispatcher
 worktrees. For an interactive task after its PR is merged, run the local GC
 command from the primary checkout:
@@ -60,11 +61,23 @@ orchestune gc --no-apply
 orchestune gc
 ```
 
-Review the preview before applying it. This command handles handoff-ready
-interactive reservations only; the dispatch cycle owns dispatch worktrees. It
-verifies the matching Outcome and merged PR for `done` tasks, and retains dirty
-worktrees for `blocked` and `not-needed` outcomes. It does not update GitHub or
-start a dispatch cycle.
+Review the preview before applying it. Standalone GC physically collects interactive
+claims; Dispatcher collects dispatch worktrees through the same guarded collector.
+Both discover label-confirmed journal/receipt generations and pending policies even
+without active entries or in-progress labels. GC can change Issue labels/comments,
+close approved subjects, and launch independent not-needed review. Without Dispatcher,
+rerun GC; cloud review needs routine credentials. Unknown launch results remain pending
+unless the provider can reconcile the saved attempt ID; never launch again blindly.
+Independent approval uses the exact operation marker, not a generic result label.
+
+Save pending policy context and replay receipts before active/claim collection.
+`done` requires matching Outcome and merged PR/head/base/owner evidence. Dirty
+blocked/not-needed worktrees remain; unapproved not-needed produces no GC completion
+receipt or dependency completion. Worktree-free reservations never enter removal.
+The same resolved state path shares a reentrant ledger lock across bounded remote
+operations and saves; physical GC also holds the claim lock. Different state paths
+are separate exclusion domains. Legacy `handed_off_to_gc` stays held until verified
+migration; recover publication with the original completion ID and credentials.
 
 ## Initial Footprint Procedure
 

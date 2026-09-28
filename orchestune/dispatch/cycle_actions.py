@@ -50,6 +50,7 @@ from orchestune.dispatch.gc import (
     _rule_not_needed,
     _rule_stale_entry_hold,
 )
+from orchestune.dispatch.gc.policies import process_completion_policies
 from orchestune.dispatch.gc.unclaimed import unclaimed_completion_events
 from orchestune.dispatch.launch import (
     LaunchContext,
@@ -148,6 +149,9 @@ def _run_active_worktree_rules(
     所有する。戻り値はレポート用イベントだけであり、状態の正本ではない。
     """
     aggregates = _ActiveWorktreeAggregates()
+    aggregates.completion_events.extend(
+        process_completion_policies(ctx.run_state, ctx.config)
+    )
     aggregates.completion_events.extend(unclaimed_completion_events(ctx.run_state))
 
     for key, active in list(ctx.run_state.active_worktrees.items()):

@@ -538,7 +538,9 @@ The new footprint is the union of the held footprint, the Issue footprint, and e
 
 ## 8. Local CI Evidence Storage and Task Completion (`orchestune complete`)
 
-Upon completing task implementation, the `orchestune complete` command verifies local CI evidence and records the Outcome Record on the task Issue.
+`orchestune complete` succeeds when it has posted the fixed Outcome Record, confirmed the corresponding Issue label (`status:done`, `status:blocked`, or `status:not-needed`), and durably saved the handoff and replay receipt in the shared ledger. Success does not mean the PR is merged, an independent not-needed review is approved, or the worktree is collected. `done` validates local CI, PR/head and token-limit evidence before publication; GC consumes that evidence. Legacy completion paths still perform their own token-limit checks.
+
+Run `orchestune complete --issue <N> --pr <PR> --result done` from the claimed worktree; `blocked` requires `--reason`, and `not-needed` can also reserve an unclaimed Issue without creating a worktree. The command prints a completion ID before remote effects. To resume interrupted publication, repeat the same arguments with `--completion-id <ID>` using the original owner credentials. A changed request or owner/generation cannot overwrite the frozen request. After handoff, replay returns the stored result even if a later policy queued the Issue or GC removed the active entry; it does not restore old labels.
 
 ### Evidence Storage Location and Git State
 - **Default Storage Location**: `.orchestune/ci/ci_evidence.json` inside each worktree.
@@ -556,9 +558,15 @@ orchestune gc --no-apply  # inspect decisions without changes
 orchestune gc             # apply the decisions
 ```
 
-The command inspects handoff-ready interactive entries (`owner_kind=interactive`) only. The dispatch cycle owns dispatch worktrees. A `done` entry is released only after it verifies the exact journaled Outcome comment, the merged PR, the PR head and base, and worktree ownership. A matching `blocked` or `not-needed` Outcome releases the reservation; a clean worktree is removed, while a dirty worktree is retained without done history or a receipt. Missing or mismatched Outcome, PR, or ownership evidence leaves the entry on hold with a reason.
+Both the Dispatcher and `orchestune gc` discover verified completion journals and pending downstream policies independently of the Issue's `status:in-progress` label. Only matching label-confirmed handoff and replay receipt evidence allows new-format processing. Pending publication, inconsistent or unavailable evidence, and unverified legacy handoffs are retained. Legacy tasks without completion reservations keep their existing PR/cloud/Outcome detection paths.
 
-`--no-apply` is a read-only preview. Apply mode operates on the local ledger and worktrees; it does not change GitHub Issues, labels, PRs, comments, branches, or start a dispatch cycle. If the current working directory is inside a worktree that would be removed, the command holds it as `current_worktree`; rerun from the primary checkout or another directory.
+The standalone command physically collects interactive worktrees; the Dispatcher collects dispatch worktrees through the same guarded collector. `done` requires the exact Outcome comment, a merged PR with matching head/base, reachable merge commit, worktree head and ownership. Clean `blocked`/`not-needed` worktrees are removed; dirty ones are retained without done history or a GC CompletionReceipt. Worktree-free reservations are policy subjects and are never passed to worktree removal.
+
+Replay receipts and downstream context remain after active removal. Each policy uses a stable `(repository, generation, completion_id, policy_kind)` operation ID, saved with its decision and retry count before effects. Labels and close are reconciled against live state; comments use operation markers. Review-timeout retries retain pending/count/backoff state, and base-branch-red preserves attempt/marker/escalation behavior. Local not-needed subjects are closed; cloud and unclaimed subjects require independent review before close or dependency completion.
+
+`--no-apply` is a read-only preview and creates no locks. Apply mode can update Issue labels, comments and close state, and launch independent reviews. Without a running Dispatcher, rerun `orchestune gc` to advance pending policies; cloud reviews require `ORCHESTUNE_ROUTINE_ID` and `ORCHESTUNE_ROUTINE_TOKEN`. With no review provider or an unknown launch result, the review remains pending. A saved launch/attempt ID is reconciled when the provider supports lookup; unknown launches are never started twice. Review verdict comments carry the exact policy operation marker; generic labels alone do not approve a generation.
+
+All writers using the same resolved state path share its reentrant ledger lock across bounded remote operations and durable saves; physical removal also holds the per-worktree claim lock. Different state paths do not share that exclusion boundary. Running/current worktrees and ownership mismatches remain protected. If GC reports `current_worktree`, rerun from the primary checkout. Old `handed_off_to_gc` records are held for explicit evidence migration rather than automatically promoted; resume a recoverable publication through `complete` with its original ID and credentials.
 
 | Option | Default | Description |
 | :--- | :--- | :--- |

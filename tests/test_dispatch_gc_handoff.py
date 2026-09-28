@@ -505,3 +505,14 @@ def test_inspect_holds_if_run_from_worktree_that_would_be_removed(tmp_path: Path
 
     assert plan.action == "hold"
     assert plan.reason == "current_worktree"
+
+
+def test_inspect_retains_running_worktree_after_handoff(tmp_path: Path):
+    repo, worktree, branch = _create_repo(tmp_path)
+    active, comment = _make_active(repo, worktree, branch)
+    active = replace(active, pid=os.getpid())
+    forge = _forge(comment, branch, _head_sha(active))
+    plan = _inspect(active, repo, forge)
+    assert plan.action == "hold"
+    assert plan.reason == "running_worktree"
+    assert worktree.exists()

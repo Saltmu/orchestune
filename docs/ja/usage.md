@@ -526,7 +526,9 @@ orchestune claim <N> --amend-footprint
 
 ## 8. ローカルCI証跡の保存と完了処理 (`orchestune complete`)
 
-タスク実装完了時、`orchestune complete` コマンドによりローカルCIの検証結果とOutcome RecordをIssueに記録します。
+`orchestune complete` の成功は、固定したOutcome Recordの投稿、結果に対応するIssueラベル（`status:done` / `status:blocked` / `status:not-needed`）の確認、および共有台帳へのhandoffとreplay receiptの永続保存が成立したことを意味します。PRマージ、対応不要の独立レビュー承認、worktree回収の完了までは意味しません。`done` は公開前にローカルCI、PR/head、トークン上限の証跡を検証し、GCはその証跡を消費します。予約なしの旧完了経路ではGC側のトークン上限判定を維持します。
+
+claim済みworktreeから `orchestune complete --issue <N> --pr <PR> --result done` を実行します。`blocked` は `--reason` が必要です。`not-needed` は未claimのIssueにもworktreeを作らず予約できます。コマンドは外部操作前にcompletion IDを表示します。途中から再開するには、元の所有者認証を使い、同一引数に `--completion-id <ID>` を付けて再実行してください。引数・所有者・generationが変わると固定済み要求を上書きできません。handoff後の再実行は、後続ポリシーがIssueをqueuedにした後やactive回収後でも保存結果を返し、古いラベルへ戻しません。
 
 ### CI証跡の保存場所とGit管理
 - **既定保存先**: 各worktree内の `.orchestune/ci/ci_evidence.json`
@@ -544,9 +546,15 @@ orchestune gc --no-apply  # 判定を確認する（状態・worktree・lockは�
 orchestune gc             # 確認後に適用する
 ```
 
-このコマンドはhandoff-readyな対話タスク（`owner_kind=interactive`）だけを調べます。dispatch所有のworktreeはdispatchサイクルが扱います。`done` は、台帳が指す同一OutcomeコメントとPRのマージ、およびPRのhead/baseとworktree所有者を確認できた場合に解放します。`blocked` または `not-needed` は同一Outcomeを確認できれば解放し、cleanなworktreeは削除します。dirtyなworktreeは保持し、done履歴やreceiptは作りません。Outcome、PR、所有者を確認できない場合は理由を表示して保留します。
+Dispatcherと `orchestune gc` の両方が、Issueの `status:in-progress` 一覧に依存せず、確定journalとpendingの後続ポリシーを探索します。新形式はラベル確認済みhandoffとreplay receiptの整合が必要です。公開途中、証跡不一致・取得不能、未検証の旧handoffは保留します。予約なしの従来PR/cloud/Outcome検出経路は維持します。
 
-`--no-apply` は読み取り専用のプレビューです。applyモードもローカル台帳とworktreeのみを扱い、GitHubのIssue、ラベル、PR、コメント、branchやdispatchサイクルは変更しません。実行中のworktree自身を削除する必要がある場合は `current_worktree` で保留されるため、primary checkoutなど別の場所から再実行してください。
+独立GCはinteractive所有、Dispatcherはdispatch所有のworktreeを共通の保護付き回収処理で扱います。`done` は同一Outcomeコメント、マージ済みPRのhead/base、merge commitの到達可能性、worktreeのheadと所有者を確認します。`blocked` / `not-needed` のcleanなworktreeは削除し、dirtyなworktreeは保持します。これらにdone履歴やGC CompletionReceiptは作りません。worktreeなし予約は後続ポリシーだけの対象であり、worktree削除へ渡しません。
+
+active回収後もreplay receiptと後続処理の対象・設定情報を保持します。各ポリシーは `(repository, generation, completion_id, policy_kind)` の固定operation IDを持ち、判断・再試行回数を副作用前に保存します。ラベルとcloseはlive照合、コメントはmarkerで復旧します。review-timeoutのpending/count/backoff、base-branch-redのattempt/marker/エスカレーションを維持します。ローカルの対応不要はcloseし、cloud・未claimの対象は独立レビュー承認までclose・依存完了を保留します。
+
+`--no-apply` はlockも作らない読み取り専用プレビューです。applyモードではIssueのラベル・コメント・closeを更新し、独立レビューを起動する場合があります。Dispatcher不在でも `orchestune gc` を再実行してpending処理を進められます。cloudレビューには `ORCHESTUNE_ROUTINE_ID` / `ORCHESTUNE_ROUTINE_TOKEN` が必要です。provider不在・起動結果不明ならレビューを保留します。保存済みlaunch/attempt IDをproviderのlookupで照合できる場合は復旧し、不明な起動を二重実行しません。レビュー結果コメントには当該operationのmarkerが必要で、一般的な結果ラベルだけではgenerationの承認にしません。
+
+同じ解決済みstate pathを使うwriterは、上限付き外部操作と保存を含めて共通の再入可能な台帳lockを保持し、物理回収はworktree別claim lockも保持します。異なるstate path間にはこの排他は成立しません。実行中/current worktree、所有者不一致の保護は維持します。`current_worktree` の場合はprimary checkoutから再実行してください。旧 `handed_off_to_gc` は自動昇格せず証跡移行まで保留します。再開可能な公開処理は元のIDと所有者認証で `complete` から再開してください。
 
 | オプション | デフォルト | 説明 |
 | :--- | :--- | :--- |

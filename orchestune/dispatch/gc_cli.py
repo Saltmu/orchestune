@@ -26,12 +26,12 @@ def _timeout_value(value: str) -> float:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="orchestune gc",
-        description="Release locally handoff-ready task reservations.",
+        description="Resume verified completion policies and collect interactive worktrees.",
     )
     parser.add_argument(
         "--no-apply",
         action="store_true",
-        help="preview decisions without changing local state or worktrees",
+        help="preview decisions without changing state, worktrees, or GitHub",
     )
     parser.add_argument(
         "--state",
@@ -95,7 +95,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     result = run_handoff_gc(request)
     if args.no_apply:
-        print("Preview only; no local state or worktree changes were made.")
+        print("Preview only; no state, worktree, or GitHub changes were made.")
     if result.items:
         _print_items(result.items, args.no_apply)
     _print_summary(result.items, result.skipped, result.exit_code, args.no_apply)

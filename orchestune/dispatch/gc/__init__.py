@@ -10,6 +10,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
@@ -37,6 +38,7 @@ from orchestune.dispatch.gc.completion import (
     is_completion_hold_event,
     warn_forge_failure,
 )
+from orchestune.dispatch.gc.confirmed import collect_confirmed_completion
 from orchestune.dispatch.gc.git import (
     VerifiedWorktreeRemovalRequest,
     WorktreeRemovalEvaluation,
@@ -50,6 +52,9 @@ from orchestune.dispatch.gc.git import (
     worktree_has_uncommitted_changes,
 )
 from orchestune.dispatch.gc.outcome_decision import _is_handoff_ready
+from orchestune.dispatch.gc.records import (
+    _completed_worktree_record as _completed_worktree_record,
+)
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
@@ -64,12 +69,11 @@ from orchestune.ledger.completion_reservations import (
 from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import (
     ActiveWorktree,
-    CompletedWorktree,
     RunState,
     TaskReclaimRecord,
     save_run_state,
 )
-from orchestune.models import PrRecord, Usage
+from orchestune.models import PrRecord
 from orchestune.outcome_record import RESULT_NOT_NEEDED, OutcomeLookupState
 from orchestune.task_metadata import TaskMetadata
 
@@ -128,6 +132,10 @@ def _rule_not_needed(
                 "action": "completion_reserved_hold",
             },
             terminal=True,
+        )
+    if active.completion_id is not None:
+        return collect_confirmed_completion(
+            ctx.run_state, ctx.config, key, active, ctx.record_completion, active_task
         )
     has_not_needed_label = (
         active_task is not None and StatusLabel.NOT_NEEDED in active_task.status_labels
@@ -269,31 +277,6 @@ def _apply_dirty_worktree_hold(
 # genuine confirmed completion, and `escalated_token_limit_exceeded` is still
 # recorded to history below but must never confirm completion.
 _CONFIRMED_COMPLETION_ACTIONS = frozenset({"completed", "already_merged"})
-
-
-def _completed_worktree_record(
-    completion_active: ActiveWorktree,
-    active_task: TaskMetadata | None,
-    completion_event: dict,
-) -> CompletedWorktree:
-    raw_usage = completion_event.get("usage")
-    usage_obj = Usage(**raw_usage) if raw_usage else None
-    return CompletedWorktree(
-        issue_number=completion_active.issue_number,
-        subtask_id=active_task.subtask_id if active_task else "",
-        branch=completion_active.branch,
-        started_at=completion_active.started_at,
-        completed_at=time.time(),
-        recompute_count=completion_active.recompute_count,
-        forced_serial=completion_active.forced_serial,
-        commit_sha=completion_event.get("commit_sha"),
-        base_branch=completion_active.base_branch,
-        usage=usage_obj,
-        profile=completion_active.profile,
-        model=completion_active.model,
-        reasoning_effort=completion_active.reasoning_effort,
-        selection_reason=completion_active.selection_reason,
-    )
 
 
 def _persist_and_confirm_completion(
@@ -673,9 +656,9 @@ def _resolve_completion(
     is_handoff_ready = _is_handoff_ready(active) and ctx.handoff_matches(active)
     if active.completion_id is not None and not is_handoff_ready:
         return CompletionResolution.pending()
+    if is_handoff_ready:
+        return CompletionResolution.ready(active)
     if active.owner_kind == "interactive":
-        if is_handoff_ready:
-            return CompletionResolution.ready(active)
         return CompletionResolution.pending()
     if active.started_at is None and active.external_id is None:
         return _resolve_recovered_completion(ctx, key, active, active_task)
@@ -731,6 +714,10 @@ def _rule_completed(
     active: ActiveWorktree,
     active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
+    if active.completion_id is not None:
+        return collect_confirmed_completion(
+            ctx.run_state, ctx.config, key, active, ctx.record_completion, active_task
+        )
     resolution = _resolve_completion(ctx, key, active, active_task)
     if resolution.state == "pending":
         return None
@@ -738,30 +725,6 @@ def _rule_completed(
         return resolution.rule_outcome
     completion_active = resolution.completion_active
     assert completion_active is not None
-
-    def _settle_early_death_requeue() -> None:
-        ctx.run_state.active_worktrees.pop(key, None)
-        record = ctx.run_state.task_reclaim_counts.get(active.issue_number)
-        if record is not None:
-            record.early_death_retry_pending = False
-        save_run_state(
-            ctx.run_state,
-            ctx.config.run_state_path,
-            launch_window_seconds=ctx.config.window_seconds,
-            open_prs=ctx.prs,
-        )
-
-    def _settle_review_timeout_requeue() -> None:
-        ctx.run_state.active_worktrees.pop(key, None)
-        record = ctx.run_state.task_reclaim_counts.get(active.issue_number)
-        if record is not None:
-            record.review_timeout_retry_pending = False
-        save_run_state(
-            ctx.run_state,
-            ctx.config.run_state_path,
-            launch_window_seconds=ctx.config.window_seconds,
-            open_prs=ctx.prs,
-        )
 
     completion_event = _finalize_completed_worktree(
         completion_active,
@@ -771,10 +734,46 @@ def _rule_completed(
         run_state=ctx.run_state,
         now=time.time(),
         open_prs=ctx.prs,
-        on_early_death_requeue=_settle_early_death_requeue,
-        on_review_timeout_requeue=_settle_review_timeout_requeue,
+        on_early_death_requeue=partial(
+            _settle_completion_requeue,
+            ctx.run_state,
+            ctx.config,
+            key,
+            active.issue_number,
+            "early_death_retry_pending",
+            ctx.prs,
+        ),
+        on_review_timeout_requeue=partial(
+            _settle_completion_requeue,
+            ctx.run_state,
+            ctx.config,
+            key,
+            active.issue_number,
+            "review_timeout_retry_pending",
+            ctx.prs,
+        ),
         issue=ctx.issue_records_by_number.get(active.issue_number),
     )
     return _handle_completed_event_outcome(
         ctx, key, completion_active, active_task, completion_event
+    )
+
+
+def _settle_completion_requeue(
+    state: RunState,
+    config: DispatcherConfig,
+    key: str,
+    issue: int,
+    pending_field: str,
+    prs: tuple[PrRecord, ...],
+) -> None:
+    state.active_worktrees.pop(key, None)
+    record = state.task_reclaim_counts.get(issue)
+    if record is not None:
+        setattr(record, pending_field, False)
+    save_run_state(
+        state,
+        config.run_state_path,
+        launch_window_seconds=config.window_seconds,
+        open_prs=prs,
     )
