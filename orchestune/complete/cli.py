@@ -93,6 +93,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 40
 
     result = complete_task(request)
+    if result.completion_id is not None:
+        print(f"Completion ID: {result.completion_id}")
+    print(f"Reached stage: {result.stage.value}")
     if result.success:
         if result.preview:
             print(f"Completion preview validated for Issue #{result.issue_number}.")

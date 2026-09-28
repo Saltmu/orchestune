@@ -146,6 +146,11 @@ class RunState:
     # `to_unlock`に現れないため、ここに残さないとIssue上の通知が「ロック中」の
     # まま取り残される。投稿できた時点で消える。
     pending_lock_release_notices: list[int] = field(default_factory=list)
+    # #1108: versioned completion lifecycle state. These remain opaque JSON
+    # records here to keep the ledger independent from the completion package.
+    completion_journal: dict[str, dict[str, Any]] = field(default_factory=dict)
+    completion_reservations: dict[str, dict[str, Any]] = field(default_factory=dict)
+    completion_replay_receipts: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def _parse_non_negative_int(value: object, default: int = 0) -> int:
@@ -492,6 +497,36 @@ def _parse_active_worktrees(data: dict[str, object]) -> dict[str, ActiveWorktree
     }
 
 
+def _parse_completion_records(
+    data: dict[str, object], key: str
+) -> dict[str, dict[str, Any]]:
+    raw_records = data.get(key, {})
+    if not isinstance(raw_records, dict):
+        raise ValueError(f"{key} schema error: value must be an object")
+    records: dict[str, dict[str, Any]] = {}
+    for record_key, value in raw_records.items():
+        if not isinstance(record_key, str) or not isinstance(value, dict):
+            raise ValueError(f"{key} schema error: entries must be named objects")
+        version = value.get("schema_version")
+        if version != 1 or isinstance(version, bool):
+            raise ValueError(f"{key} schema_version is unsupported for {record_key!r}")
+        policies = value.get("downstream_policy_records", {})
+        if not isinstance(policies, dict):
+            raise ValueError(f"{key} downstream_policy_records schema error")
+        for policy_key, policy in policies.items():
+            if (
+                not isinstance(policy_key, str)
+                or not isinstance(policy, dict)
+                or policy.get("schema_version") != 1
+                or isinstance(policy.get("schema_version"), bool)
+            ):
+                raise ValueError(
+                    f"{key} downstream policy schema_version is unsupported"
+                )
+        records[record_key] = value
+    return records
+
+
 def _parse_completed_worktrees(data: dict) -> list[CompletedWorktree]:
     return [
         CompletedWorktree(
@@ -536,6 +571,13 @@ def load_run_state(path: str | Path) -> RunState:
         ),
         pending_lock_release_notices=_parse_pending_lock_release_notices(
             data.get("pending_lock_release_notices")
+        ),
+        completion_journal=_parse_completion_records(data, "completion_journal"),
+        completion_reservations=_parse_completion_records(
+            data, "completion_reservations"
+        ),
+        completion_replay_receipts=_parse_completion_records(
+            data, "completion_replay_receipts"
         ),
     )
 
@@ -659,6 +701,9 @@ def prune_run_state(
         pending_lock_release_notices=state.pending_lock_release_notices[
             -MAX_PENDING_LOCK_RELEASE_NOTICES:
         ],
+        completion_journal=state.completion_journal,
+        completion_reservations=state.completion_reservations,
+        completion_replay_receipts=state.completion_replay_receipts,
     )
 
 
@@ -733,4 +778,12 @@ def save_run_state(
             -MAX_PENDING_LOCK_RELEASE_NOTICES:
         ],
     }
+    # Keep the established serialization of pre-#1108 state unchanged. New
+    # completion maps appear only once populated and are never retention-pruned.
+    if state.completion_journal:
+        data["completion_journal"] = state.completion_journal
+    if state.completion_reservations:
+        data["completion_reservations"] = state.completion_reservations
+    if state.completion_replay_receipts:
+        data["completion_replay_receipts"] = state.completion_replay_receipts
     write_json_atomic(path, data)

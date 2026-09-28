@@ -10,15 +10,32 @@ calls — so ownership survives long-running work without holding the lock.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, overload
 from uuid import uuid4
 
 from orchestune.claim.ownership import owner_token_digest
-from orchestune.complete.contracts import CompleteFailureReason, CompleteStage
-from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
+from orchestune.complete.contracts import (
+    CompleteFailureReason,
+    CompleteStage,
+    CompletionLabelStatus,
+    CompletionLabelTransitionResult,
+    DownstreamPolicyRecord,
+    _required_digest,
+    _required_text,
+    _validate_fixed_outcome,
+    can_transition,
+)
+from orchestune.infra.process_utils import (
+    FileLockContentionError,
+    assert_run_state_lock_held,
+    run_state_lock,
+)
 from orchestune.ledger.run_state import load_run_state, save_run_state
+from orchestune.outcome_record import VALID_RESULTS
 
 
 @dataclass(frozen=True)
@@ -34,6 +51,321 @@ class CompletionJournal:
     comment_id: str | None = None
     comment_url: str | None = None
     handoff_ready: bool = False
+
+
+_COMPLETION_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class CompletionJournalRecord:
+    """Versioned completion identity and separately recorded publication proof."""
+
+    repository_id: str
+    issue_number: int
+    generation_id: str
+    completion_id: str
+    owner_token_digest: str
+    request_fingerprint: str
+    result: str
+    target_label: str
+    outcome_payload: dict[str, Any]
+    stage: CompleteStage
+    posting_evidence: dict[str, Any] | None = None
+    label_evidence: dict[str, Any] | None = None
+    prepublication_policy_evidence: dict[str, Any] | None = None
+    downstream_policy_records: tuple[DownstreamPolicyRecord, ...] = ()
+    schema_version: int = _COMPLETION_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        self._validate_identity()
+        self._validate_payload()
+        self._validate_evidence()
+        self._validate_policies()
+
+    def _validate_identity(self) -> None:
+        _required_text(self.repository_id, "repository_id")
+        _required_text(self.generation_id, "generation_id")
+        _required_text(self.completion_id, "completion_id")
+        _required_text(self.target_label, "target_label")
+        _required_digest(self.owner_token_digest, "owner_token_digest")
+        _required_digest(self.request_fingerprint, "request_fingerprint")
+        if (
+            not isinstance(self.issue_number, int)
+            or isinstance(self.issue_number, bool)
+            or self.issue_number <= 0
+        ):
+            raise ValueError("issue_number must be a positive integer")
+        if self.result not in VALID_RESULTS:
+            raise ValueError(f"invalid completion result: {self.result!r}")
+
+    def _validate_payload(self) -> None:
+        if not isinstance(self.outcome_payload, dict):
+            raise ValueError("outcome_payload must be an object")
+        _validate_fixed_outcome(self.outcome_payload, self.issue_number, self.result)
+        if not isinstance(self.stage, CompleteStage):
+            try:
+                object.__setattr__(self, "stage", CompleteStage(self.stage))
+            except ValueError as error:
+                raise ValueError(f"unknown completion stage: {self.stage!r}") from error
+        if (
+            not isinstance(self.schema_version, int)
+            or isinstance(self.schema_version, bool)
+            or self.schema_version != _COMPLETION_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                f"unsupported completion journal schema_version: {self.schema_version}"
+            )
+
+    def _validate_evidence(self) -> None:
+        if self.posting_evidence is not None and not isinstance(
+            self.posting_evidence, dict
+        ):
+            raise ValueError("posting_evidence must be an object or None")
+        if self.label_evidence is not None and not isinstance(
+            self.label_evidence, dict
+        ):
+            raise ValueError("label_evidence must be an object or None")
+        if self.prepublication_policy_evidence is not None and not isinstance(
+            self.prepublication_policy_evidence, dict
+        ):
+            raise ValueError("prepublication_policy_evidence must be an object or None")
+        self._validate_stage_evidence()
+
+    def _validate_policies(self) -> None:
+        policy_kinds: set[str] = set()
+        for policy in self.downstream_policy_records:
+            if not isinstance(policy, DownstreamPolicyRecord):
+                raise ValueError(
+                    "downstream_policy_records must contain policy records"
+                )
+            if policy.policy_kind in policy_kinds:
+                raise ValueError(
+                    "downstream policy kinds must be unique per completion"
+                )
+            policy_kinds.add(policy.policy_kind)
+            if (
+                policy.repository_id,
+                policy.issue_number,
+                policy.generation_id,
+                policy.completion_id,
+            ) != (
+                self.repository_id,
+                self.issue_number,
+                self.generation_id,
+                self.completion_id,
+            ):
+                raise ValueError("downstream policy identity must match its completion")
+
+    def _validate_stage_evidence(self) -> None:
+        if self.stage in {
+            CompleteStage.OUTCOME_POSTED,
+            CompleteStage.LABEL_CONFIRMED,
+            CompleteStage.HANDED_OFF,
+        }:
+            evidence = self.posting_evidence
+            if not evidence or not _has_posting_evidence(
+                evidence.get("comment_id"), evidence.get("comment_url")
+            ):
+                raise ValueError(
+                    "outcome-posted stage requires durable comment id and url"
+                )
+        if self.stage in {CompleteStage.LABEL_CONFIRMED, CompleteStage.HANDED_OFF}:
+            evidence = self.label_evidence
+            if (
+                not evidence
+                or evidence.get("status") != CompletionLabelStatus.CONFIRMED.value
+            ):
+                raise ValueError(
+                    "label-confirmed stage requires confirmed label evidence"
+                )
+            observed = evidence.get("observed_labels")
+            if (
+                not isinstance(observed, list | tuple)
+                or self.target_label not in observed
+            ):
+                raise ValueError(
+                    "confirmed label evidence must include the target label"
+                )
+
+    @property
+    def journal_key(self) -> str:
+        return f"{self.repository_id}::{self.issue_number}::{self.generation_id}::{self.completion_id}"
+
+    @property
+    def reservation_key(self) -> str:
+        return f"{self.repository_id}::{self.issue_number}"
+
+    @property
+    def receipt_key(self) -> str:
+        return self.journal_key
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "repository_id": self.repository_id,
+            "issue_number": self.issue_number,
+            "generation_id": self.generation_id,
+            "completion_id": self.completion_id,
+            "owner_token_digest": self.owner_token_digest,
+            "request_fingerprint": self.request_fingerprint,
+            "result": self.result,
+            "target_label": self.target_label,
+            "outcome_payload": self.outcome_payload,
+            "stage": self.stage.value,
+            "posting_evidence": self.posting_evidence,
+            "label_evidence": self.label_evidence,
+            "prepublication_policy_evidence": self.prepublication_policy_evidence,
+            "downstream_policy_records": {
+                record.policy_key: record.to_dict()
+                for record in self.downstream_policy_records
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> CompletionJournalRecord:
+        if (
+            not isinstance(value, dict)
+            or value.get("schema_version") != _COMPLETION_SCHEMA_VERSION
+        ):
+            raise ValueError("completion_journal schema_version is unsupported")
+        parsed = dict(value)
+        parsed["stage"] = CompleteStage(parsed["stage"])
+        raw_policies = parsed.get("downstream_policy_records", {})
+        if not isinstance(raw_policies, dict):
+            raise ValueError("downstream_policy_records must be a keyed object")
+        policies = tuple(
+            DownstreamPolicyRecord.from_dict(record) for record in raw_policies.values()
+        )
+        if any(
+            policy.policy_key != key
+            for key, policy in zip(raw_policies, policies, strict=True)
+        ):
+            raise ValueError(
+                "downstream_policy_records key does not match its identity"
+            )
+        parsed["downstream_policy_records"] = policies
+        return cls(**parsed)
+
+    def advance(self, stage: CompleteStage, **evidence: Any) -> CompletionJournalRecord:
+        if not can_transition(self.stage, stage):
+            raise ValueError(
+                f"invalid completion stage transition: {self.stage.value} -> {stage.value}"
+            )
+        allowed = {
+            "posting_evidence",
+            "label_evidence",
+            "prepublication_policy_evidence",
+            "downstream_policy_records",
+        }
+        if extra := set(evidence) - allowed:
+            raise ValueError(f"unknown completion evidence fields: {sorted(extra)}")
+        return replace(self, stage=stage, **evidence)
+
+
+@dataclass(frozen=True)
+class CompletionReservation:
+    """Issue-level exclusive reservation, independent of worktree existence."""
+
+    repository_id: str
+    issue_number: int
+    generation_id: str
+    completion_id: str
+    owner_token_digest: str
+    request_fingerprint: str
+    result: str
+    target_label: str
+    outcome_payload: dict[str, Any]
+    schema_version: int = _COMPLETION_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        _required_text(self.repository_id, "repository_id")
+        _required_text(self.generation_id, "generation_id")
+        _required_text(self.completion_id, "completion_id")
+        _required_text(self.target_label, "target_label")
+        _required_digest(self.owner_token_digest, "owner_token_digest")
+        _required_digest(self.request_fingerprint, "request_fingerprint")
+        if (
+            not isinstance(self.issue_number, int)
+            or isinstance(self.issue_number, bool)
+            or self.issue_number <= 0
+        ):
+            raise ValueError("issue_number must be a positive integer")
+        if self.result not in VALID_RESULTS or not isinstance(
+            self.outcome_payload, dict
+        ):
+            raise ValueError("reservation result or outcome_payload is invalid")
+        _validate_fixed_outcome(self.outcome_payload, self.issue_number, self.result)
+        if (
+            not isinstance(self.schema_version, int)
+            or isinstance(self.schema_version, bool)
+            or self.schema_version != _COMPLETION_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                f"unsupported completion reservation schema_version: {self.schema_version}"
+            )
+
+    @property
+    def reservation_key(self) -> str:
+        return f"{self.repository_id}::{self.issue_number}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "repository_id": self.repository_id,
+            "issue_number": self.issue_number,
+            "generation_id": self.generation_id,
+            "completion_id": self.completion_id,
+            "owner_token_digest": self.owner_token_digest,
+            "request_fingerprint": self.request_fingerprint,
+            "result": self.result,
+            "target_label": self.target_label,
+            "outcome_payload": self.outcome_payload,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> CompletionReservation:
+        if (
+            not isinstance(value, dict)
+            or value.get("schema_version") != _COMPLETION_SCHEMA_VERSION
+        ):
+            raise ValueError("completion_reservations schema_version is unsupported")
+        return cls(**value)
+
+    @classmethod
+    def from_journal(cls, record: CompletionJournalRecord) -> CompletionReservation:
+        return cls(
+            repository_id=record.repository_id,
+            issue_number=record.issue_number,
+            generation_id=record.generation_id,
+            completion_id=record.completion_id,
+            owner_token_digest=record.owner_token_digest,
+            request_fingerprint=record.request_fingerprint,
+            result=record.result,
+            target_label=record.target_label,
+            outcome_payload=record.outcome_payload,
+        )
+
+
+@dataclass(frozen=True)
+class CompletionReplayReceipt:
+    """Immutable replay data written only after label proof and durable handoff."""
+
+    record: CompletionJournalRecord
+
+    def __post_init__(self) -> None:
+        if self.record.stage is not CompleteStage.HANDED_OFF:
+            raise ValueError("replay receipt requires a handed_off completion record")
+
+    @property
+    def receipt_key(self) -> str:
+        return self.record.receipt_key
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.record.to_dict()
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> CompletionReplayReceipt:
+        return cls(CompletionJournalRecord.from_dict(value))
 
 
 class CompletionJournalError(RuntimeError):
@@ -208,24 +540,254 @@ def _apply_handoff_evidence(
     return False
 
 
-def reserve_completion(
+@contextmanager
+def completion_journal_lock(
+    state_path: Path, timeout_seconds: float = 0.0
+) -> Iterator[None]:
+    """Acquire the shared run_state lock for a journal read-modify-write."""
+    cm = _acquire_run_state_lock(_lock_path_for(state_path), timeout_seconds)
+    try:
+        yield
+    finally:
+        cm.__exit__(None, None, None)
+
+
+def _invalid_completion_state(message: str, error: Exception) -> CompletionJournalError:
+    return CompletionJournalError(
+        CompleteFailureReason.INVALID_COMPLETION_STATE,
+        f"Invalid persisted completion state: {message}",
+    )
+
+
+def _load_contract_state(state_path: Path) -> Any:
+    try:
+        return load_run_state(state_path)
+    except (TypeError, ValueError) as error:
+        raise _invalid_completion_state(str(error), error) from error
+
+
+def _parse_contract_record(raw: dict[str, Any]) -> CompletionJournalRecord:
+    try:
+        return CompletionJournalRecord.from_dict(raw)
+    except (KeyError, TypeError, ValueError) as error:
+        raise _invalid_completion_state(str(error), error) from error
+
+
+def _parse_contract_reservation(raw: dict[str, Any]) -> CompletionReservation:
+    try:
+        return CompletionReservation.from_dict(raw)
+    except (KeyError, TypeError, ValueError) as error:
+        raise _invalid_completion_state(str(error), error) from error
+
+
+def _has_durable_handoff_receipt(state: Any, record: CompletionJournalRecord) -> bool:
+    return (
+        record.stage is CompleteStage.HANDED_OFF
+        and state.completion_replay_receipts.get(record.receipt_key) == record.to_dict()
+    )
+
+
+def _new_contract_record(
+    state: Any, candidate: CompletionJournalRecord
+) -> CompletionJournalRecord | None:
+    raw = state.completion_journal.get(candidate.journal_key)
+    if raw is not None:
+        return _parse_contract_record(raw)
+    for key, value in state.completion_journal.items():
+        if (
+            not isinstance(value, dict)
+            or value.get("issue_number") != candidate.issue_number
+        ):
+            continue
+        if value.get("repository_id") != candidate.repository_id:
+            raise CompletionJournalError(
+                CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH,
+                "Completion repository identity does not match the persisted reservation",
+            )
+        persisted = _parse_contract_record(value)
+        if value.get("generation_id") != candidate.generation_id:
+            if _has_durable_handoff_receipt(state, persisted):
+                continue
+            raise CompletionJournalError(
+                CompleteFailureReason.GENERATION_MISMATCH,
+                "Completion generation does not match the persisted reservation",
+            )
+        if key != candidate.journal_key:
+            raise CompletionJournalError(
+                CompleteFailureReason.CONCURRENT_COMPLETION,
+                "A different completion id is already reserved for this generation",
+            )
+    return None
+
+
+def _verify_contract_identity(
+    candidate: CompletionJournalRecord,
+    persisted: CompletionJournalRecord,
+    owner_token: str,
+) -> None:
+    if candidate.repository_id != persisted.repository_id:
+        reason = CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH
+    elif candidate.generation_id != persisted.generation_id:
+        reason = CompleteFailureReason.GENERATION_MISMATCH
+    elif candidate.completion_id != persisted.completion_id:
+        reason = CompleteFailureReason.CONCURRENT_COMPLETION
+    elif owner_token_digest(owner_token) != persisted.owner_token_digest:
+        reason = CompleteFailureReason.OWNER_TOKEN_MISMATCH
+    elif candidate.owner_token_digest != persisted.owner_token_digest:
+        reason = CompleteFailureReason.OWNER_TOKEN_MISMATCH
+    elif candidate.request_fingerprint != persisted.request_fingerprint:
+        reason = CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH
+    elif candidate.result != persisted.result:
+        reason = CompleteFailureReason.INVALID_STAGE_TRANSITION
+    elif (
+        candidate.target_label != persisted.target_label
+        or candidate.outcome_payload != persisted.outcome_payload
+    ):
+        reason = CompleteFailureReason.CONCURRENT_COMPLETION
+    else:
+        return
+    raise CompletionJournalError(
+        reason, f"Completion identity check failed: {reason.value}"
+    )
+
+
+def _validate_reservation_request(
+    record: CompletionJournalRecord, owner_token: str
+) -> None:
+    if record.stage is not CompleteStage.RESERVED:
+        raise CompletionJournalError(
+            CompleteFailureReason.INVALID_STAGE_TRANSITION,
+            "A new completion reservation must begin at the reserved stage",
+        )
+    if owner_token_digest(owner_token) != record.owner_token_digest:
+        raise CompletionJournalError(
+            CompleteFailureReason.OWNER_TOKEN_MISMATCH,
+            "Owner token does not match the completion reservation",
+        )
+
+
+def _resume_reserved_contract(
+    record: CompletionJournalRecord,
+    current: CompletionJournalRecord | None,
+    raw_reservation: dict[str, Any],
+    owner_token: str,
+) -> CompletionJournalRecord:
+    reservation = _parse_contract_reservation(raw_reservation)
+    if reservation.repository_id != record.repository_id:
+        reason = CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH
+    elif reservation.generation_id != record.generation_id:
+        reason = CompleteFailureReason.GENERATION_MISMATCH
+    elif reservation.completion_id != record.completion_id:
+        reason = CompleteFailureReason.CONCURRENT_COMPLETION
+    elif reservation.request_fingerprint != record.request_fingerprint:
+        reason = CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH
+    elif reservation.owner_token_digest != record.owner_token_digest:
+        reason = CompleteFailureReason.OWNER_TOKEN_MISMATCH
+    elif (
+        reservation.result != record.result
+        or reservation.target_label != record.target_label
+        or reservation.outcome_payload != record.outcome_payload
+    ):
+        reason = CompleteFailureReason.CONCURRENT_COMPLETION
+    else:
+        if current is None:
+            raise CompletionJournalError(
+                CompleteFailureReason.STATE_SAVE_FAILED,
+                "Reservation exists without its completion journal record",
+            )
+        _verify_contract_identity(record, current, owner_token)
+        return current
+    raise CompletionJournalError(reason, f"Issue reservation conflict: {reason.value}")
+
+
+def _allow_terminal_generation_replacement(
+    state: Any,
+    reservation: CompletionReservation,
+    candidate: CompletionJournalRecord,
+) -> None:
+    if (reservation.repository_id, reservation.issue_number) != (
+        candidate.repository_id,
+        candidate.issue_number,
+    ):
+        raise CompletionJournalError(
+            CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH,
+            "Issue reservation belongs to a different repository or issue",
+        )
+    old_key = (
+        f"{reservation.repository_id}::{reservation.issue_number}::"
+        f"{reservation.generation_id}::{reservation.completion_id}"
+    )
+    raw = state.completion_journal.get(old_key)
+    if raw is None:
+        raise CompletionJournalError(
+            CompleteFailureReason.INVALID_COMPLETION_STATE,
+            "Issue reservation has no matching journal record",
+        )
+    previous = _parse_contract_record(raw)
+    if (
+        reservation.owner_token_digest != previous.owner_token_digest
+        or reservation.request_fingerprint != previous.request_fingerprint
+        or reservation.result != previous.result
+        or reservation.target_label != previous.target_label
+        or reservation.outcome_payload != previous.outcome_payload
+    ):
+        raise CompletionJournalError(
+            CompleteFailureReason.INVALID_COMPLETION_STATE,
+            "Issue reservation identity does not match its journal record",
+        )
+    if not _has_durable_handoff_receipt(state, previous):
+        raise CompletionJournalError(
+            CompleteFailureReason.GENERATION_MISMATCH,
+            "A new generation cannot replace an incomplete completion reservation",
+        )
+
+
+def reserve_completion_locked(
+    record: CompletionJournalRecord,
+    *,
+    owner_token: str,
+    state_path: Path,
+) -> CompletionJournalRecord:
+    """Reserve a new-contract completion when the caller already holds the state lock."""
+    assert_run_state_lock_held(_lock_path_for(state_path))
+    _validate_reservation_request(record, owner_token)
+    run_state = _load_contract_state(state_path)
+    current = _new_contract_record(run_state, record)
+    reservation_key = record.reservation_key
+    raw_reservation = run_state.completion_reservations.get(reservation_key)
+    if raw_reservation is not None:
+        reservation = _parse_contract_reservation(raw_reservation)
+        if reservation.generation_id == record.generation_id:
+            return _resume_reserved_contract(
+                record, current, raw_reservation, owner_token
+            )
+        _allow_terminal_generation_replacement(run_state, reservation, record)
+        if current is not None:
+            raise CompletionJournalError(
+                CompleteFailureReason.INVALID_COMPLETION_STATE,
+                "A new generation journal exists without its Issue reservation",
+            )
+    if current is not None:
+        _verify_contract_identity(record, current, owner_token)
+        return current
+    reservation = CompletionReservation.from_journal(record)
+    run_state.completion_reservations[reservation_key] = reservation.to_dict()
+    run_state.completion_journal[record.journal_key] = record.to_dict()
+    _save_or_raise(run_state, state_path)
+    return record
+
+
+def _reserve_legacy_completion(
     *,
     issue_number: int,
     claim_id: str,
     owner_token: str,
     result: str,
-    completion_id: str | None = None,
-    payload: dict[str, Any] | None = None,
+    completion_id: str | None,
+    payload: dict[str, Any] | None,
     state_path: Path,
-    timeout_seconds: float = 0.0,
+    timeout_seconds: float,
 ) -> CompletionJournal:
-    """Reserve (or idempotently resume) a completion under the claim's state lock.
-
-    Rejects: the issue's claim no longer matching ``claim_id`` (re-claim),
-    an owner-token mismatch, a different ``completion_id`` already reserved
-    (concurrent completion), and reserving a different ``result`` than what
-    is already reserved for this claim (double-complete / overwrite).
-    """
     cm = _acquire_run_state_lock(_lock_path_for(state_path), timeout_seconds)
     try:
         run_state = load_run_state(state_path)
@@ -240,7 +802,6 @@ def reserve_completion(
                 CompleteFailureReason.OWNER_TOKEN_MISMATCH,
                 "Owner token does not match the active claim",
             )
-
         if active.completion_id is not None:
             return _resume_existing_reservation(
                 active,
@@ -251,7 +812,6 @@ def reserve_completion(
                 run_state,
                 state_path,
             )
-
         active.completion_id = completion_id or _new_completion_id()
         active.completion_result = result
         active.completion_stage = CompleteStage.JOURNALING.value
@@ -263,7 +823,81 @@ def reserve_completion(
         cm.__exit__(None, None, None)
 
 
-def mark_handoff_ready(
+@overload
+def reserve_completion(
+    *,
+    record: CompletionJournalRecord,
+    owner_token: str,
+    state_path: Path,
+    timeout_seconds: float = 0.0,
+) -> CompletionJournalRecord: ...
+
+
+@overload
+def reserve_completion(
+    *,
+    issue_number: int,
+    claim_id: str,
+    owner_token: str,
+    result: str,
+    completion_id: str | None = None,
+    payload: dict[str, Any] | None = None,
+    state_path: Path,
+    timeout_seconds: float = 0.0,
+) -> CompletionJournal: ...
+
+
+def reserve_completion(
+    *,
+    issue_number: int | None = None,
+    claim_id: str | None = None,
+    owner_token: str | None = None,
+    result: str | None = None,
+    completion_id: str | None = None,
+    payload: dict[str, Any] | None = None,
+    state_path: Path,
+    timeout_seconds: float = 0.0,
+    record: CompletionJournalRecord | None = None,
+) -> CompletionJournal | CompletionJournalRecord:
+    """Reserve (or idempotently resume) a completion under the claim's state lock.
+
+    Rejects: the issue's claim no longer matching ``claim_id`` (re-claim),
+    an owner-token mismatch, a different ``completion_id`` already reserved
+    (concurrent completion), and reserving a different ``result`` than what
+    is already reserved for this claim (double-complete / overwrite).
+    """
+    if record is not None:
+        if owner_token is None:
+            raise CompletionJournalError(
+                CompleteFailureReason.OWNER_TOKEN_MISMATCH,
+                "Owner token is required to reserve a completion",
+            )
+        with completion_journal_lock(state_path, timeout_seconds):
+            return reserve_completion_locked(
+                record, owner_token=owner_token, state_path=state_path
+            )
+    if (
+        issue_number is None
+        or claim_id is None
+        or owner_token is None
+        or result is None
+    ):
+        raise TypeError(
+            "legacy reserve_completion requires issue_number, claim_id, owner_token, and result"
+        )
+    return _reserve_legacy_completion(
+        issue_number=issue_number,
+        claim_id=claim_id,
+        owner_token=owner_token,
+        result=result,
+        completion_id=completion_id,
+        payload=payload,
+        state_path=state_path,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _mark_legacy_handoff_ready(
     journal: CompletionJournal,
     *,
     comment_id: str | None = None,
@@ -312,9 +946,225 @@ def mark_handoff_ready(
         cm.__exit__(None, None, None)
 
 
+def _load_contract_for_update(
+    run_state: Any,
+    candidate: CompletionJournalRecord,
+    owner_token: str,
+) -> CompletionJournalRecord:
+    persisted = _new_contract_record(run_state, candidate)
+    if persisted is None:
+        raise CompletionJournalError(
+            CompleteFailureReason.COMPLETION_RESERVATION_NOT_FOUND,
+            "No matching completion reservation exists",
+        )
+    _verify_contract_identity(candidate, persisted, owner_token)
+    raw_reservation = run_state.completion_reservations.get(candidate.reservation_key)
+    if raw_reservation is None:
+        raise CompletionJournalError(
+            CompleteFailureReason.COMPLETION_RESERVATION_NOT_FOUND,
+            "No Issue-level completion reservation exists",
+        )
+    reservation = _parse_contract_reservation(raw_reservation)
+    if reservation.generation_id != persisted.generation_id:
+        reason = CompleteFailureReason.GENERATION_MISMATCH
+    elif reservation.completion_id != persisted.completion_id:
+        reason = CompleteFailureReason.CONCURRENT_COMPLETION
+    elif reservation.request_fingerprint != persisted.request_fingerprint:
+        reason = CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH
+    elif reservation.owner_token_digest != persisted.owner_token_digest:
+        reason = CompleteFailureReason.OWNER_TOKEN_MISMATCH
+    else:
+        return persisted
+    raise CompletionJournalError(
+        reason, f"Persisted reservation check failed: {reason.value}"
+    )
+
+
+def record_posting_evidence(
+    record: CompletionJournalRecord,
+    *,
+    comment_id: str,
+    comment_url: str,
+    owner_token: str,
+    state_path: Path,
+    timeout_seconds: float = 0.0,
+) -> CompletionJournalRecord:
+    """Persist Issue outcome-comment evidence without claiming label proof."""
+    if not _has_posting_evidence(comment_id, comment_url):
+        raise CompletionJournalError(
+            CompleteFailureReason.EVIDENCE_MISSING,
+            "Posting evidence requires a non-empty comment id and url",
+        )
+    with completion_journal_lock(state_path, timeout_seconds):
+        run_state = _load_contract_state(state_path)
+        persisted = _load_contract_for_update(run_state, record, owner_token)
+        evidence = {"comment_id": comment_id, "comment_url": comment_url}
+        if persisted.stage is not CompleteStage.RESERVED:
+            if persisted.posting_evidence != evidence:
+                raise CompletionJournalError(
+                    CompleteFailureReason.INVALID_STAGE_TRANSITION,
+                    "Posting evidence conflicts with the already-recorded comment",
+                )
+            return persisted
+        updated = persisted.advance(
+            CompleteStage.OUTCOME_POSTED, posting_evidence=evidence
+        )
+        run_state.completion_journal[updated.journal_key] = updated.to_dict()
+        _save_or_raise(run_state, state_path)
+        return updated
+
+
+def record_label_confirmation(
+    record: CompletionJournalRecord,
+    result: CompletionLabelTransitionResult,
+    *,
+    owner_token: str,
+    state_path: Path,
+    timeout_seconds: float = 0.0,
+) -> CompletionJournalRecord:
+    """Persist positive live label proof as a stage separate from posting."""
+    if result.status is not CompletionLabelStatus.CONFIRMED:
+        reason = result.failure_reason or CompleteFailureReason.LABEL_STATE_UNKNOWN
+        raise CompletionJournalError(
+            reason, f"Completion label transition failed: {reason.value}"
+        )
+    if result.target_label != record.target_label:
+        raise CompletionJournalError(
+            CompleteFailureReason.LABEL_CONFLICT,
+            "Observed target label does not match the reserved completion label",
+        )
+    evidence = {
+        "status": result.status.value,
+        "target_label": result.target_label,
+        "observed_labels": sorted(set(result.observed_labels)),
+    }
+    with completion_journal_lock(state_path, timeout_seconds):
+        run_state = _load_contract_state(state_path)
+        persisted = _load_contract_for_update(run_state, record, owner_token)
+        if persisted.stage in {CompleteStage.LABEL_CONFIRMED, CompleteStage.HANDED_OFF}:
+            if persisted.label_evidence != evidence:
+                raise CompletionJournalError(
+                    CompleteFailureReason.LABEL_CONFLICT,
+                    "A different label proof is already recorded",
+                )
+            return persisted
+        if persisted.stage is not CompleteStage.OUTCOME_POSTED:
+            raise CompletionJournalError(
+                CompleteFailureReason.INVALID_STAGE_TRANSITION,
+                "Label confirmation requires a durably posted outcome",
+            )
+        updated = persisted.advance(
+            CompleteStage.LABEL_CONFIRMED, label_evidence=evidence
+        )
+        run_state.completion_journal[updated.journal_key] = updated.to_dict()
+        _save_or_raise(run_state, state_path)
+        return updated
+
+
+def _mark_contract_handoff_ready(
+    record: CompletionJournalRecord,
+    *,
+    owner_token: str,
+    state_path: Path,
+    timeout_seconds: float,
+) -> CompletionJournalRecord:
+    with completion_journal_lock(state_path, timeout_seconds):
+        run_state = _load_contract_state(state_path)
+        persisted = _load_contract_for_update(run_state, record, owner_token)
+        if persisted.stage is CompleteStage.HANDED_OFF:
+            raw_receipt = run_state.completion_replay_receipts.get(
+                persisted.receipt_key
+            )
+            if raw_receipt != persisted.to_dict():
+                raise CompletionJournalError(
+                    CompleteFailureReason.STATE_SAVE_FAILED,
+                    "Handed-off completion does not have a matching replay receipt",
+                )
+            return persisted
+        if persisted.stage is not CompleteStage.LABEL_CONFIRMED:
+            raise CompletionJournalError(
+                CompleteFailureReason.INVALID_STAGE_TRANSITION,
+                "Completion handoff requires confirmed target-label evidence",
+            )
+        handed_off = persisted.advance(CompleteStage.HANDED_OFF)
+        receipt = CompletionReplayReceipt(handed_off)
+        run_state.completion_journal[handed_off.journal_key] = handed_off.to_dict()
+        run_state.completion_replay_receipts[receipt.receipt_key] = receipt.to_dict()
+        _save_or_raise(run_state, state_path)
+        return handed_off
+
+
+@overload
+def mark_handoff_ready(
+    journal: CompletionJournal,
+    *,
+    comment_id: str | None = None,
+    comment_url: str | None = None,
+    payload: dict[str, Any] | None = None,
+    state_path: Path,
+    timeout_seconds: float = 0.0,
+) -> CompletionJournal: ...
+
+
+@overload
+def mark_handoff_ready(
+    journal: CompletionJournalRecord,
+    *,
+    owner_token: str,
+    state_path: Path,
+    timeout_seconds: float = 0.0,
+) -> CompletionJournalRecord: ...
+
+
+def mark_handoff_ready(
+    journal: CompletionJournal | CompletionJournalRecord,
+    *,
+    comment_id: str | None = None,
+    comment_url: str | None = None,
+    payload: dict[str, Any] | None = None,
+    owner_token: str | None = None,
+    state_path: Path,
+    timeout_seconds: float = 0.0,
+) -> CompletionJournal | CompletionJournalRecord:
+    """Use the legacy GC handoff or the label-confirmed replay handoff contract."""
+    if isinstance(journal, CompletionJournalRecord):
+        if owner_token is None:
+            raise CompletionJournalError(
+                CompleteFailureReason.OWNER_TOKEN_MISMATCH,
+                "Owner token is required for completion handoff",
+            )
+        if comment_id is not None or comment_url is not None or payload is not None:
+            raise CompletionJournalError(
+                CompleteFailureReason.INVALID_STAGE_TRANSITION,
+                "Posting evidence and fixed outcome payload must be recorded separately",
+            )
+        return _mark_contract_handoff_ready(
+            journal,
+            owner_token=owner_token,
+            state_path=state_path,
+            timeout_seconds=timeout_seconds,
+        )
+    return _mark_legacy_handoff_ready(
+        journal,
+        comment_id=comment_id,
+        comment_url=comment_url,
+        payload=payload,
+        state_path=state_path,
+        timeout_seconds=timeout_seconds,
+    )
+
+
 __all__ = [
+    "CompletionJournalRecord",
     "CompletionJournal",
     "CompletionJournalError",
+    "CompletionReplayReceipt",
+    "CompletionReservation",
+    "DownstreamPolicyRecord",
+    "completion_journal_lock",
     "mark_handoff_ready",
+    "record_label_confirmation",
+    "record_posting_evidence",
     "reserve_completion",
+    "reserve_completion_locked",
 ]

@@ -550,3 +550,10 @@ class TestCompleteGcHandoff:
         assert not marker_file.exists()
         assert res.removed is True
         assert res.success is True
+
+    def test_replay_receipt_is_separate_from_gc_completion_receipt(self):
+        from orchestune.complete.journal import CompletionReplayReceipt
+
+        assert CompletionReplayReceipt.__name__ == "CompletionReplayReceipt"
+        assert CompletionReceipt.__name__ == "CompletionReceipt"
+        assert CompletionReplayReceipt is not CompletionReceipt
