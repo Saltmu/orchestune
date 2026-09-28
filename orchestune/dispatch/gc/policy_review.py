@@ -52,7 +52,9 @@ def reconcile_review(
         meta["verdict"] = verdict
         return True
     if verdict == "failed":
-        reconcile_labels(forge, issue, StatusLabel.QUEUED)
+        reconcile_labels(
+            forge, issue, StatusLabel.QUEUED, remove=(StatusLabel.NOT_NEEDED,)
+        )
         meta["verdict"] = verdict
         # A rejected completion must never satisfy the dependency gate.
         save({"review_rejected": True})
@@ -60,32 +62,25 @@ def reconcile_review(
     if meta.get("launch_state") == "launched":
         _check_timeout(forge, issue, policy, save, now)
         return False
-    return _launch_review(issue, policy, target, save, now)
+    return _launch_review(forge, issue, policy, target, save, now)
 
 
 def _launch_review(
-    issue: int, policy: DownstreamPolicyRecord, target: Any, save: Any, now: float
+    forge: Any,
+    issue: int,
+    policy: DownstreamPolicyRecord,
+    target: Any,
+    save: Any,
+    now: float,
 ) -> bool:
     meta = policy.metadata
     operation = meta["operation_id"]
+    if meta.get("launch_state") == "launching":
+        return _recover_review_launch(forge, issue, policy, target, save, now)
     if target is None or not callable(getattr(target, "fire_text", None)):
         return False
     target_name = getattr(target, "target_name", None)
     target_name = target_name if isinstance(target_name, str) else type(target).__name__
-    if meta.get("launch_state") == "launching":
-        if meta.get("launch_target") != target_name:
-            return False
-        handle = target.lookup_launch_attempt(operation)
-        if handle is None:
-            return False
-        save(
-            {
-                "launch_state": "launched",
-                "handle": asdict(handle),
-                "launched_at": meta["launch_requested_at"],
-            }
-        )
-        return False
     save(
         {
             "launch_state": "launching",
@@ -112,16 +107,54 @@ def _launch_review(
     return False
 
 
+def _recover_review_launch(
+    forge: Any,
+    issue: int,
+    policy: DownstreamPolicyRecord,
+    target: Any,
+    save: Any,
+    now: float,
+) -> bool:
+    meta = policy.metadata
+    target_name = getattr(target, "target_name", None)
+    target_name = target_name if isinstance(target_name, str) else type(target).__name__
+    handle = None
+    if target is not None and meta.get("launch_target") == target_name:
+        try:
+            handle = target.lookup_launch_attempt(meta["operation_id"])
+        except Exception:
+            # An unavailable lookup never proves that the original POST failed.
+            handle = None
+    if handle is None:
+        _check_timeout(forge, issue, policy, save, now)
+    else:
+        save(
+            {
+                "launch_state": "launched",
+                "handle": asdict(handle),
+                "launched_at": meta["launch_requested_at"],
+            }
+        )
+    return False
+
+
 def _check_timeout(
     forge: Any, issue: int, policy: DownstreamPolicyRecord, save: Any, now: float
 ) -> None:
     meta = policy.metadata
-    if now - meta["launched_at"] >= meta["review_timeout_seconds"]:
-        reconcile_labels(forge, issue, StatusLabel.BLOCKED_HUMAN_REVIEW)
+    if now - meta["launch_requested_at"] >= meta["review_timeout_seconds"]:
+        reconcile_labels(
+            forge,
+            issue,
+            StatusLabel.BLOCKED_HUMAN_REVIEW,
+            remove=(StatusLabel.NOT_NEEDED,),
+        )
         reconcile_comment(
             forge,
             issue,
             policy,
-            "対応不要の独立レビューがタイムアウトしました。人間による確認が必要です。",
+            "対応不要の独立レビューの起動結果を確認できません。人間による確認が必要です。"
+            if meta.get("launch_state") == "launching"
+            else "対応不要の独立レビューがタイムアウトしました。人間による確認が必要です。",
         )
         save({"review_timed_out": True})

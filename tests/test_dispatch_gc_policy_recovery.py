@@ -40,6 +40,63 @@ def test_unknown_review_launch_holds_without_duplicate(tmp_path):
     assert state.completion_replay_receipts
 
 
+@pytest.mark.parametrize("effect", ["label", "comment", "save"])
+def test_unknown_review_launch_escalates_once_after_timeout(
+    tmp_path, monkeypatch, effect
+):
+    from orchestune.dispatch.gc import policies
+
+    state, config, forge, labels, comments = policy_case(tmp_path, result="not-needed")
+    target = make_review(state, config)
+    target.fire_text.side_effect = OSError("response lost")
+    config.not_needed_review_timeout_seconds = 10
+    process_completion_policies(state, config, now=100)
+    process_completion_policies(state, config, now=109)
+    assert labels == ["status:not-needed"]
+    real_save = policies.save_run_state
+
+    if effect == "label":
+
+        def lose_label(issue, label):
+            labels.append(label)
+            raise OSError("label response lost")
+
+        forge.add_label.side_effect = lose_label
+    elif effect == "comment":
+
+        def lose_comment(issue, body):
+            comments.append({"body": body})
+            raise OSError("comment response lost")
+
+        forge.add_comment.side_effect = lose_comment
+    else:
+
+        def lose_save(current, path):
+            policy = confirmed_records(current)[0].downstream_policy_records[0]
+            if policy.metadata.get("review_timed_out"):
+                raise OSError("save failed")
+            real_save(current, path)
+
+        monkeypatch.setattr(policies, "save_run_state", lose_save)
+
+    process_completion_policies(state, config, now=110)
+    forge.add_label.side_effect = lambda issue, label: labels.append(label)
+    forge.add_comment.side_effect = lambda issue, body: comments.append({"body": body})
+    monkeypatch.setattr(policies, "save_run_state", real_save)
+    process_completion_policies(state, config, now=111)
+    process_completion_policies(state, config, now=112)
+    target.fire_text.assert_called_once()
+    assert labels == ["status:blocked-human-review"]
+    assert len(comments) == 2
+    assert "起動結果" in comments[-1]["body"]
+    persisted = load_run_state_readonly(config.run_state_path)
+    policy = confirmed_records(persisted)[0].downstream_policy_records[0]
+    assert policy.metadata["review_timed_out"]
+    assert policy.status == "pending"
+    assert dependency_completion_blocked(persisted, 250)
+    forge.close_issue.assert_not_called()
+
+
 def test_review_approval_required_before_close_and_dependency(tmp_path):
     state, config, forge, _, comments = policy_case(tmp_path, result="not-needed")
     target = make_review(state, config)
@@ -61,6 +118,30 @@ def test_review_approval_required_before_close_and_dependency(tmp_path):
     process_completion_policies(state, config, now=103)
     forge.close_issue.assert_called_once()
     assert not dependency_completion_blocked(state, 250)
+
+
+@pytest.mark.parametrize("verdict", ["timeout", "failed"])
+def test_unapproved_review_removes_not_needed_label_without_unlocking(
+    tmp_path, verdict
+):
+    state, config, forge, labels, comments = policy_case(tmp_path, result="not-needed")
+    make_review(state, config)
+    config.not_needed_review_timeout_seconds = 10
+    process_completion_policies(state, config, now=100)
+    policy = confirmed_records(state)[0].downstream_policy_records[0]
+    if verdict == "failed":
+        comments.append(
+            {
+                "body": f"<!-- orchestune:policy-review {policy.metadata['operation_id']} verdict=failed -->"
+            }
+        )
+    process_completion_policies(state, config, now=111)
+    process_completion_policies(state, config, now=112)
+    assert labels == [
+        "status:queued" if verdict == "failed" else "status:blocked-human-review"
+    ]
+    assert dependency_completion_blocked(state, 250)
+    forge.close_issue.assert_not_called()
 
 
 def test_missing_receipt_and_pending_label_never_mutate(tmp_path):

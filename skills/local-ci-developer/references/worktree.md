@@ -67,7 +67,7 @@ Both discover label-confirmed journal/receipt generations and pending policies e
 without active entries or in-progress labels. GC can change Issue labels/comments,
 close approved subjects, and launch independent not-needed review. Without Dispatcher,
 rerun GC; cloud review needs routine credentials. Unknown launch results remain pending
-unless the provider can reconcile the saved attempt ID; never launch again blindly.
+unless the provider can reconcile the saved attempt ID; never launch again blindly. Unresolved launches escalate to human review after the configured review timeout; the policy and dependency remain pending.
 Independent approval uses the exact operation marker, not a generic result label.
 
 Save pending policy context and replay receipts before active/claim collection.
