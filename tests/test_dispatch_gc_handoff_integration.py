@@ -17,6 +17,8 @@ from orchestune.worktree_ops.claim_marker import claim_marker_path, write_claim_
 class FakeHandoffForge:
     def __init__(self, comment: dict, pr: PrRecord, *, reachable: bool = True):
         self.comment = comment
+        self.extra_comments: list[dict] = []
+        self.issue_state = "OPEN"
         self.pr = pr
         self.reachable = reachable
         self.comment_calls = 0
@@ -26,7 +28,16 @@ class FakeHandoffForge:
     def list_all_issue_comments(self, issue_number: int | str):
         self.comment_calls += 1
         assert int(issue_number) == 250
-        return [self.comment]
+        return [self.comment, *self.extra_comments]
+
+    def get_issue_state(self, issue_number):
+        return self.issue_state
+
+    def add_comment(self, issue_number, body):
+        self.extra_comments.append({"body": body})
+
+    def close_issue(self, issue_number, reason):
+        self.issue_state = "CLOSED"
 
     def get_pull_request(self, pr_number: int | str):
         self.pr_calls.append(int(pr_number))
@@ -205,6 +216,10 @@ def _confirmed_contract_fields(active: ActiveWorktree) -> dict:
             "outcome": outcome.render(),
         },
         stage=CompleteStage.HANDED_OFF,
+        prepublication_policy_evidence={
+            "decision": "allowed",
+            "context": {"active": asdict(active)},
+        },
         posting_evidence={
             "comment_id": active.completion_comment_id,
             "comment_url": active.completion_comment_url,
@@ -381,7 +396,7 @@ def test_save_failure_keeps_reservation_and_mints_no_receipt_then_recovers(
     monkeypatch.chdir(repo)
 
     with patch(
-        "orchestune.dispatch.gc_service.write_json_atomic",
+        "orchestune.dispatch.gc.collection.write_json_atomic",
         side_effect=OSError("disk full"),
     ):
         failed = run_handoff_gc(GcRequest(), forge_factory=lambda: forge)
@@ -584,7 +599,7 @@ def test_claim_lock_contention_returns_exit_22_without_changes(
     monkeypatch.chdir(repo)
 
     with patch(
-        "orchestune.dispatch.gc_service.file_lock",
+        "orchestune.dispatch.gc.collection.file_lock",
         side_effect=FileLockContentionError("busy"),
     ):
         result = run_handoff_gc(GcRequest(), forge_factory=lambda: forge)
@@ -613,7 +628,7 @@ def test_worktree_removal_failure_keeps_reservation_and_no_receipt(
     monkeypatch.chdir(repo)
 
     with patch(
-        "orchestune.dispatch.gc_service.remove_verified_worktree",
+        "orchestune.dispatch.gc.collection.remove_verified_worktree",
         return_value=SimpleNamespace(success=False, removed=False, error="busy"),
     ):
         result = run_handoff_gc(GcRequest(), forge_factory=lambda: forge)

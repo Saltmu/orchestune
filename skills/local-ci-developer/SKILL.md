@@ -66,7 +66,7 @@ before Step 2.6 and maintain its record through Steps 10–12, including zero-fi
 | **3–9** | **TDD & Local CI** | Reproducer test, baseline recording, test-driven implementation, local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`). | [references/tdd.md](references/tdd.md) |
 | **10** | **Pull Request Creation** | Fill `.github/pull_request_template.md` and submit via selected backend (`gh pr create` or GitHub MCP/Web UI). | [references/pr.md](references/pr.md) |
 | **11** | **Automated LLM PR Review** | Atomic review trigger, wait, and feedback resolution loop via `scripts/wait_for_review.py` using selected reviewer bot. | [references/review-loop.md](references/review-loop.md) |
-| **12** | **Outcome Declaration** | From the claimed task worktree, run `orchestune complete --issue <N> --pr <PR> --result done` after review; use the blocked command below if escalation is required. `complete` posts to Issue comments and hands off to GC. | - |
+| **12** | **Outcome Declaration** | From the claimed task worktree, run `orchestune complete --issue <N> --pr <PR> --result done` after review; use the blocked command below if escalation is required. `complete` confirms the result label and saves durable handoff/replay evidence. GC performs downstream policy and physical collection separately. | - |
 
 ### Completion commands
 
@@ -87,4 +87,9 @@ orchestune complete --issue <N> --result blocked --reason <REASON>
 
 For a claimed task whose requirement becomes unnecessary, run the `not-needed`
 command from its worktree. `done` and `blocked` require an existing claim.
-`complete` preserves the worktree and hands claimed completion to GC.
+`complete` preserves the worktree. Success means the matching result label and durable
+handoff/replay receipt are confirmed, not PR merge, independent review approval, or
+physical collection. Resume the same request with `--completion-id <ID>` and original owner credentials;
+replay does not restore labels after requeue. Without a Dispatcher, rerun GC to
+advance policies; cloud/unclaimed not-needed needs independent approval.
+See [worktree.md](references/worktree.md) for locks, review recovery and legacy holds.

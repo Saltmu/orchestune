@@ -16,7 +16,11 @@ from orchestune.dispatch.gc.outcome_decision import (
     _is_handoff_retained_dirty,
 )
 from orchestune.infra.git_cli import run_git
-from orchestune.ledger.completion_reservations import completion_handoff_matches_active
+from orchestune.infra.process_utils import is_process_alive
+from orchestune.ledger.completion_reservations import (
+    completion_handoff_matches_active,
+    completion_record,
+)
 from orchestune.ledger.run_state import ActiveWorktree, load_run_state_readonly
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
@@ -237,10 +241,8 @@ def _inspect_worktree(
         target = primary_root / target
     target = Path(target.absolute())
     current = Path(cwd) if cwd is not None else Path.cwd()
-    if _is_current_worktree(target, current):
-        return "hold", "current_worktree", "retain", None
-    if target.is_symlink():
-        return "hold", "symlink_mismatch", "retain", None
+    if problem := _live_worktree_problem(active, target, current):
+        return "hold", problem, "retain", None
 
     inspected = replace(active, worktree_path=str(target))
     if not target.exists():
@@ -315,8 +317,8 @@ def inspect_handoff(
         return _held_plan(active, "completion_state_invalid")
     if not completion_handoff_matches_active(state, active):
         return _held_plan(active, "completion_evidence_mismatch")
-    if active.repository_id != workspace.repository_identity:
-        return _held_plan(active, "repository_mismatch")
+    if problem := _journal_proof_problem(active, state, workspace):
+        return _held_plan(active, problem)
     outcome, error = _verify_outcome(active, forge)
     if outcome is None:
         return _held_plan(active, error or "outcome_absent")
@@ -337,3 +339,31 @@ def inspect_handoff(
         outcome=outcome,
         removal_request=request,
     )
+
+
+def _journal_proof_problem(
+    active: ActiveWorktree, state: Any, workspace: ClaimWorkspace
+) -> str | None:
+    record = completion_record(state, active.issue_number)
+    assert record is not None
+    if (
+        active.completion_result == "done"
+        and (record.get("prepublication_policy_evidence") or {}).get("decision")
+        != "allowed"
+    ):
+        return "done_policy_evidence_missing"
+    if active.repository_id != workspace.repository_identity:
+        return "repository_mismatch"
+    return None
+
+
+def _live_worktree_problem(
+    active: ActiveWorktree, target: Path, current: Path
+) -> str | None:
+    if _is_current_worktree(target, current):
+        return "current_worktree"
+    if active.pid and is_process_alive(active.pid):
+        return "running_worktree"
+    if target.is_symlink():
+        return "symlink_mismatch"
+    return None
