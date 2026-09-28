@@ -59,6 +59,18 @@ from orchestune.dispatch.execution_repair import (
     command_finding_codes,
     derive_execution_desired_state,
 )
+from orchestune.dispatch.execution_repair import (
+    consistency_scope_order as _scope_order,
+)
+from orchestune.dispatch.execution_repair import (
+    is_interactive_restoration as _is_interactive_restoration,
+)
+from orchestune.dispatch.execution_repair import (
+    restorable_active as _restorable,
+)
+from orchestune.dispatch.execution_repair import (
+    skipped_repair as _skipped,
+)
 from orchestune.dispatch.launch_attempts import (
     active_from_attempt,
     reconcile_attempt,
@@ -74,6 +86,9 @@ from orchestune.issue_parsing import (
     recovery_counters_from_body,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.completion_reservations import (
+    completion_subject_mutation_blocked,
+)
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
@@ -123,14 +138,6 @@ class RecoveryBookkeepingSnapshot:
     counter_targets: tuple[_CounterTarget, ...]
     launch_history: tuple[float, ...]
     attempt_tasks: tuple[Task, ...] = ()
-
-
-def _scope_order(scope: ConsistencyScope) -> int:
-    return {
-        ConsistencyScope.REPOSITORY: 0,
-        ConsistencyScope.PARENT: 1,
-        ConsistencyScope.TASK: 2,
-    }[scope]
 
 
 def _with_observations(
@@ -907,29 +914,6 @@ def _persist_recovery_snapshot(
     )
 
 
-def _is_interactive_restoration(
-    subject_id: str | None, snapshot: RecoveryBookkeepingSnapshot
-) -> bool:
-    if subject_id is None:
-        return False
-    return any(
-        item[0] == subject_id and item[2].owner_kind == "interactive"
-        for item in snapshot.restorations
-    )
-
-
-def _restorable(candidate: ActiveWorktree) -> bool:
-    return candidate.external_id is not None or candidate.owner_kind == "interactive"
-
-
-def _skipped(command: RepairCommand, detail: str) -> RepairResult:
-    return RepairResult(
-        command=command,
-        status=RepairStatus.SKIPPED,
-        diagnostics=(detail,),
-    )
-
-
 def _reconcile_durable_attempt_for_requeue(
     command: RepairCommand,
     task: Task | None,
@@ -937,7 +921,7 @@ def _reconcile_durable_attempt_for_requeue(
     snapshot: RecoveryBookkeepingSnapshot,
     config: DispatcherConfig,
 ) -> bool:
-    if _is_interactive_restoration(command.subject_id, snapshot):
+    if _is_interactive_restoration(command.subject_id, snapshot.restorations):
         return False
     if (
         task is not None
@@ -957,6 +941,10 @@ def execute_recovery_requeue_command(
     config: DispatcherConfig,
 ) -> RepairResult:
     """Requeue a task only when fresh recovery inputs expose no resumable resource."""
+    if completion_subject_mutation_blocked(
+        run_state, command.subject_id, config.run_state_path
+    ):
+        return _skipped(command, "unfinished completion reservation")
     if command.code != COMMAND_REQUEUE:
         return RepairResult(
             command=command,
@@ -1101,7 +1089,7 @@ def _reconcile_attempt_for_bookkeeping(
     config: DispatcherConfig,
     finding_codes: set[str],
 ) -> bool:
-    if _is_interactive_restoration(command.subject_id, snapshot):
+    if _is_interactive_restoration(command.subject_id, snapshot.restorations):
         return False
     if not (
         config.apply and (finding_codes & {LAUNCH_ATTEMPT_PENDING, RUN_STATE_MISSING})
@@ -1129,6 +1117,10 @@ def execute_bookkeeping_repair_command(
     config: DispatcherConfig,
 ) -> RepairResult:
     """Apply one typed, observed, crash-safe recovery bookkeeping mutation."""
+    if completion_subject_mutation_blocked(
+        run_state, command.subject_id, config.run_state_path
+    ):
+        return _skipped(command, "unfinished completion reservation")
     if command.code != COMMAND_BOOKKEEPING:
         return RepairResult(
             command=command,

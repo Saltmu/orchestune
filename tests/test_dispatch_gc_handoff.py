@@ -17,12 +17,14 @@ from tests.test_dispatch_gc_handoff_integration import (
     _forge,
     _head_sha,
     _make_active,
+    _write_state,
 )
 
 
 def _inspect(active, repo: Path, forge, *, cwd: Path | None = None):
     from orchestune.dispatch.gc.handoff import inspect_handoff
 
+    _write_state(repo, active)
     previous = Path.cwd()
     os.chdir(repo)
     try:
@@ -268,7 +270,7 @@ def test_inspect_holds_for_symlink_worktree_path(tmp_path: Path):
         (True, "journaling"),
     ],
 )
-def test_inspect_keeps_existing_handoff_ready_or_contract(
+def test_inspect_holds_legacy_handoff_without_label_confirmation(
     tmp_path: Path, ready_flag: bool, stage: str
 ):
     repo, worktree, branch = _create_repo(tmp_path)
@@ -279,7 +281,8 @@ def test_inspect_keeps_existing_handoff_ready_or_contract(
 
     plan = _inspect(active, repo, forge)
 
-    assert plan.action == "release"
+    assert plan.action == "hold"
+    assert plan.reason == "legacy_unverified"
 
 
 def test_inspect_holds_when_comment_lookup_is_unknown_even_with_cached_done(

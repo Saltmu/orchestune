@@ -24,6 +24,7 @@ from orchestune.dispatch.status_repair import VerifiedStatusTransition
 from orchestune.forge import Forge
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.labels import StatusLabel
+from orchestune.ledger.completion_reservations import completion_mutation_blocked_fresh
 from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import RunState
 from orchestune.ledger.status_labels import transition_status_label
@@ -200,6 +201,10 @@ def _resolve_one_blocked_recompute_issue(
     run_state: RunState,
     config: DispatcherConfig,
 ) -> dict | None:
+    if completion_mutation_blocked_fresh(
+        run_state, issue.number, config.run_state_path
+    ):
+        return None
     if task.subtask_id in active_conflict_subtask_ids:
         return None
     if config.apply:
@@ -414,6 +419,10 @@ def _apply_single_base_branch_red_decision(
     run_state: RunState,
     config: DispatcherConfig,
 ) -> dict | None:
+    if completion_mutation_blocked_fresh(
+        run_state, decision.issue_number, config.run_state_path
+    ):
+        return None
     rec_sha = (decision.recorded_base_sha or "")[:7]
     cur_sha = (decision.current_base_sha or "")[:7]
     if decision.action == "requeue":

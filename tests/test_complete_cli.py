@@ -100,3 +100,101 @@ def test_help_keeps_argparse_success_exit_code() -> None:
         main(["--help"])
 
     assert excinfo.value.code == 0
+
+
+def test_cli_passes_explicit_replay_identity_without_credentials():
+    from orchestune.complete.cli import main
+
+    with (
+        patch("orchestune.complete.cli._credentials", return_value=(None, None, None)),
+        patch(
+            "orchestune.complete.cli.complete_task",
+            return_value=CompleteResult.success_result(1003, "not-needed"),
+        ) as service,
+    ):
+        assert (
+            main(
+                [
+                    "--issue",
+                    "1003",
+                    "--result",
+                    "not-needed",
+                    "--completion-id",
+                    "completion-old",
+                ]
+            )
+            == 0
+        )
+    assert service.call_args.args[0].completion_id == "completion-old"
+
+
+def test_actual_cli_replays_saved_result_after_gc_without_token(
+    tmp_path, monkeypatch, capsys
+):
+    from complete_lifecycle_test_support import lifecycle_environment
+
+    from orchestune.complete.cli import main
+    from orchestune.complete.journal import completion_journal_lock
+    from orchestune.complete.service import complete_task
+    from orchestune.ledger.run_state import load_run_state_readonly, save_run_state
+
+    request, forge, _ = lifecycle_environment(tmp_path, monkeypatch)
+    result = complete_task(request, forge=forge)
+    with completion_journal_lock(request.state_path):
+        state = load_run_state_readonly(request.state_path)
+        state.active_worktrees.clear()
+        save_run_state(state, request.state_path)
+    monkeypatch.setattr(
+        "orchestune.complete.cli._credentials",
+        lambda _: (None, None, request.state_path),
+    )
+    before = request.state_path.read_bytes()
+    assert (
+        main(
+            [
+                "--issue",
+                "1110",
+                "--result",
+                "not-needed",
+                "--completion-id",
+                result.completion_id,
+            ]
+        )
+        == 0
+    )
+    assert result.completion_id in capsys.readouterr().out
+    assert request.state_path.read_bytes() == before
+
+
+def test_cli_corrupt_state_preview_never_renames_or_backs_up(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from orchestune.complete.cli import main
+
+    path = tmp_path / "run_state.json"
+    path.write_text("{broken")
+    monkeypatch.setattr(
+        "orchestune.complete.cli.resolve_claim_workspace",
+        lambda: SimpleNamespace(run_state_path=path),
+    )
+    before = {item.name: item.read_bytes() for item in tmp_path.iterdir()}
+    assert main(["--issue", "1110", "--result", "not-needed", "--no-apply"]) != 0
+    assert {item.name: item.read_bytes() for item in tmp_path.iterdir()} == before
+
+
+def test_cli_reports_generated_completion_id_before_service_returns(capsys):
+    from orchestune.complete.cli import main
+    from orchestune.complete.contracts import CompleteStage
+
+    def complete(request, *, on_progress):
+        on_progress("completion-start", CompleteStage.RESERVED)
+        assert "completion-start" in capsys.readouterr().out
+        return CompleteResult.success_result(
+            1003, "not-needed", completion_id="completion-start"
+        )
+
+    with (
+        patch("orchestune.complete.cli._credentials", return_value=(None, None, None)),
+        patch("orchestune.complete.cli.complete_task", side_effect=complete),
+    ):
+        assert main(["--issue", "1003", "--result", "not-needed"]) == 0

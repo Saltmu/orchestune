@@ -47,6 +47,7 @@ from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
 from orchestune.labels import STATUS_LABEL_PREFIX, StatusLabel
+from orchestune.ledger.completion_reservations import completion_mutation_blocked
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
@@ -58,6 +59,7 @@ from orchestune.ledger.status_labels import (
     transition_status_label,
 )
 from orchestune.models import IssueRecord
+from orchestune.targets.completion_policy import snapshot_publication_policy
 from orchestune.task_metadata import TaskMetadata
 from orchestune.worktree_ops.preparation import (
     WorktreePreparation,
@@ -544,6 +546,7 @@ def _initialize_reservation(
     reservation.claim_stage = ClaimStage.RESERVED.value
     reservation.claimed_at = time.time()
     reservation.repository_id = repository_identity
+    reservation.completion_policy_config = snapshot_publication_policy(Path.cwd())
     return reservation
 
 
@@ -730,6 +733,16 @@ def _apply_claim_side_effects(
     )
 
 
+def _unfinished_completion_failure(issue_number: int) -> ClaimOutcome:
+    return _claim_failure(
+        issue_number,
+        ClaimFailure(
+            reason=ClaimFailureReason.EXISTING_CLAIM_UNRECOVERED,
+            message="Issue has an unfinished or invalid completion reservation; resume complete first.",
+        ),
+    )
+
+
 def _execute_claim_in_lock(
     request: ClaimRequest,
     raw_token: str,
@@ -741,6 +754,8 @@ def _execute_claim_in_lock(
 ) -> ClaimOutcome:
     """State-locked claim execution sequencing §5 lifecycle steps."""
     run_state = load_run_state(workspace.run_state_path)
+    if completion_mutation_blocked(run_state, request.issue_number):
+        return _unfinished_completion_failure(request.issue_number)
     resume_outcome = _handle_request_resume(
         request,
         raw_token,
@@ -1018,6 +1033,14 @@ def _execute_resume_in_lock(
     if auth_error is not None or active is None:
         assert auth_error is not None
         return auth_error
+    if completion_mutation_blocked(run_state, active.issue_number):
+        return _claim_failure(
+            active.issue_number,
+            ClaimFailure(
+                reason=ClaimFailureReason.EXISTING_CLAIM_UNRECOVERED,
+                message="Issue has an unfinished or invalid completion reservation; resume complete first.",
+            ),
+        )
     return _resume_from_active(
         active,
         workspace,

@@ -30,6 +30,7 @@ from orchestune.consistency.invariants.execution import (
     LOCAL_PROCESS_DEAD,
 )
 from orchestune.consistency.models import (
+    ConsistencyScope,
     DesiredRepositoryState,
     ObservedRepositoryState,
     RepairCommand,
@@ -57,6 +58,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
+from orchestune.ledger.completion_reservations import completion_mutation_blocked_fresh
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.task_metadata import TaskMetadata
@@ -398,6 +400,10 @@ def revalidate_reclaim_preconditions(
     now: float | None = None,
 ) -> ReclaimPrecondition | None:
     """Return fresh known facts only while the typed command is still safe."""
+    if completion_mutation_blocked_fresh(
+        run_state, expected_active.issue_number, config.run_state_path
+    ):
+        return None
     active = run_state.active_worktrees.get(key)
     finding_codes = frozenset(command_finding_codes(command))
     if (
@@ -484,3 +490,34 @@ __all__ = [
     "derive_execution_desired_state",
     "revalidate_reclaim_preconditions",
 ]
+
+
+def skipped_repair(command: RepairCommand, detail: str) -> RepairResult:
+    return RepairResult(
+        command=command,
+        status=RepairStatus.SKIPPED,
+        diagnostics=(detail,),
+    )
+
+
+def consistency_scope_order(scope: ConsistencyScope) -> int:
+    return (
+        ConsistencyScope.REPOSITORY,
+        ConsistencyScope.PARENT,
+        ConsistencyScope.TASK,
+    ).index(scope)
+
+
+def restorable_active(candidate: ActiveWorktree) -> bool:
+    return candidate.external_id is not None or candidate.owner_kind == "interactive"
+
+
+def is_interactive_restoration(
+    subject_id: str | None, restorations: Sequence[tuple[str, str, ActiveWorktree]]
+) -> bool:
+    if subject_id is None:
+        return False
+    return any(
+        item[0] == subject_id and item[2].owner_kind == "interactive"
+        for item in restorations
+    )

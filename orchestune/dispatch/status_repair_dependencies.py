@@ -43,9 +43,15 @@ class ConfirmedCompletionView:
     confirmed: frozenset[int] = frozenset()
 
     def is_completion_confirmed(self, issue_number: int) -> bool:
+        if self.is_completion_blocked(issue_number):
+            return False
         return issue_number in self.confirmed or self.source.is_completion_confirmed(
             issue_number
         )
+
+    def is_completion_blocked(self, issue_number: int) -> bool:
+        blocked = getattr(self.source, "is_completion_blocked", None)
+        return bool(blocked(issue_number)) if callable(blocked) else False
 
     def assess_dependencies(self, issue_number: int) -> DependencyAssessment | None:
         assessment = self.source.assess_dependencies(issue_number)
@@ -110,6 +116,9 @@ class _FreshDependencyStateView:
     labels_by_issue: Mapping[int, tuple[str, ...]]
 
     def is_effectively_done(self, issue_number: int) -> bool:
+        blocked = getattr(self.completion_evidence, "is_completion_blocked", None)
+        if callable(blocked) and blocked(issue_number):
+            return False
         if self.completion_evidence.is_completion_confirmed(issue_number):
             return True
         return task_lifecycle(self.labels_by_issue.get(issue_number, ())) in (
