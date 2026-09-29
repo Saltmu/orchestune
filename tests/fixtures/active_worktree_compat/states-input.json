@@ -1,0 +1,131 @@
+{
+  "active_worktrees": {
+    "101": {
+      "issue_number": 101,
+      "branch": "parent/issue-1106",
+      "worktree_path": "worktrees/issue-101",
+      "pid": null,
+      "started_at": null,
+      "declared_footprint": [
+        "src/z.py",
+        "./src/a.py",
+        "src/a.py"
+      ],
+      "owner_kind": "interactive",
+      "claim_id": "claim-101",
+      "claim_stage": "reserved",
+      "base_ref": "parent/issue-1106",
+      "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "reservation_kind": "footprint",
+      "repository_id": "Saltmu/orchestune",
+      "claimed_at": 1699999900.0,
+      "owner_token_digest": "digest-101"
+    },
+    "102": {
+      "issue_number": 102,
+      "branch": "dispatch/102",
+      "worktree_path": "worktrees/dispatch-102",
+      "pid": null,
+      "started_at": null,
+      "declared_footprint": [],
+      "owner_kind": "dispatch",
+      "claim_id": "claim-102",
+      "claim_stage": "completed",
+      "base_ref": "origin/main",
+      "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "reservation_kind": "footprint",
+      "repository_id": "Saltmu/orchestune",
+      "claimed_at": 1699999901.0,
+      "owner_token_digest": "digest-102",
+      "estimated_tokens": null,
+      "launch_attempt_id": "attempt-102",
+      "launch_phase": "launching"
+    },
+    "103": {
+      "issue_number": 103,
+      "branch": "dispatch/103",
+      "worktree_path": "worktrees/dispatch-103",
+      "pid": 31337,
+      "started_at": 1699999902.0,
+      "declared_footprint": [
+        "tests/example.py"
+      ],
+      "owner_kind": "dispatch",
+      "claim_id": "claim-103",
+      "claim_stage": "completed",
+      "base_ref": "origin/main",
+      "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+      "reservation_kind": "footprint",
+      "repository_id": "Saltmu/orchestune",
+      "claimed_at": 1699999902.0,
+      "owner_token_digest": "digest-103",
+      "launch_attempt_id": "attempt-103",
+      "launch_phase": "launched",
+      "completion_id": "completion-103",
+      "completion_result": "done",
+      "completion_stage": "posting",
+      "completion_payload": {
+        "pr": 203,
+        "review": {
+          "bot": "claude",
+          "rounds": 1
+        }
+      },
+      "completion_comment_id": "1003",
+      "completion_comment_url": "https://github.com/Saltmu/orchestune/issues/103#issuecomment-1003",
+      "completion_handoff_ready": false,
+      "completion_policy_config": {
+        "max_tokens_per_task": null,
+        "source": "baseline"
+      }
+    },
+    "104": {
+      "issue_number": 104,
+      "branch": "dispatch/104",
+      "worktree_path": "worktrees/dispatch-104",
+      "pid": null,
+      "started_at": null,
+      "declared_footprint": [],
+      "owner_kind": "dispatch",
+      "claim_id": "claim-104",
+      "claim_stage": "completed",
+      "base_ref": "origin/main",
+      "base_sha": "dddddddddddddddddddddddddddddddddddddddd",
+      "reservation_kind": "footprint",
+      "repository_id": "Saltmu/orchestune",
+      "claimed_at": 1699999904.0,
+      "owner_token_digest": "digest-104",
+      "completion_id": "completion-104",
+      "completion_result": "done",
+      "completion_stage": "handed_off_to_gc",
+      "completion_handoff_ready": true
+    },
+    "105": {
+      "issue_number": 105,
+      "branch": "dispatch/105",
+      "worktree_path": "worktrees/dispatch-105",
+      "pid": null,
+      "started_at": null,
+      "declared_footprint": [],
+      "owner_kind": "interactive",
+      "claim_id": "claim-105",
+      "claim_stage": "completed",
+      "base_ref": "parent/issue-1106",
+      "base_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "reservation_kind": "repository",
+      "repository_id": "Saltmu/orchestune",
+      "claimed_at": 1699999905.0,
+      "owner_token_digest": "digest-105",
+      "completion_id": "completion-105",
+      "completion_result": "done",
+      "completion_stage": "handed_off",
+      "completion_payload": {
+        "issue": 105,
+        "pr": 205
+      },
+      "completion_comment_id": "1005",
+      "completion_comment_url": "https://github.com/Saltmu/orchestune/issues/105#issuecomment-1005",
+      "completion_handoff_ready": true
+    }
+  }
+}
