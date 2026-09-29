@@ -25,6 +25,12 @@ from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.rules import CycleContext
 from orchestune.forge import Forge
 from orchestune.infra.process_utils import run_state_lock
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import ActiveWorktree, RunState, save_run_state
 from orchestune.models import IssueRecord, Task
 from tests.conftest import make_issue
@@ -121,7 +127,58 @@ def make_test_active_worktree(
         "declared_footprint": (),
     }
     values.update(overrides)
-    return ActiveWorktree(**values)
+    try:
+        return ActiveWorktree.from_records(
+            core=ActiveWorktreeCore(
+                issue_number=values["issue_number"],
+                branch=values["branch"],
+                worktree_path=values["worktree_path"],
+                declared_footprint=tuple(values["declared_footprint"]),
+                base_branch=values.get("base_branch", "origin/main"),
+            ),
+            launch=LaunchInfo(
+                pid=values.get("pid"),
+                started_at=values.get("started_at"),
+                recompute_count=values.get("recompute_count", 0),
+                forced_serial=values.get("forced_serial", False),
+                external_id=values.get("external_id"),
+                external_url=values.get("external_url"),
+                estimated_tokens=values.get("estimated_tokens"),
+                token_estimate_recorded=values.get("token_estimate_recorded", False),
+                profile=values.get("profile"),
+                model=values.get("model"),
+                reasoning_effort=values.get("reasoning_effort"),
+                selection_reason=values.get("selection_reason"),
+                launch_attempt_id=values.get("launch_attempt_id"),
+                launch_phase=values.get("launch_phase"),
+            ),
+            claim=ClaimInfo(
+                owner_kind=values.get("owner_kind", "dispatch"),
+                claim_id=values.get("claim_id"),
+                claim_stage=values.get("claim_stage"),
+                base_ref=values.get("base_ref"),
+                base_sha=values.get("base_sha"),
+                reservation_kind=values.get("reservation_kind", "footprint"),
+                repository_id=values.get("repository_id"),
+                claimed_at=values.get("claimed_at"),
+                owner_token_digest=values.get("owner_token_digest"),
+            ),
+            completion=ActiveCompletionJournal(
+                completion_id=values.get("completion_id"),
+                completion_result=values.get("completion_result"),
+                completion_stage=values.get("completion_stage"),
+                completion_payload=values.get("completion_payload"),
+                completion_comment_id=values.get("completion_comment_id"),
+                completion_comment_url=values.get("completion_comment_url"),
+                completion_handoff_ready=values.get("completion_handoff_ready", False),
+                completion_policy_config=values.get("completion_policy_config"),
+            ),
+        )
+    except (TypeError, ValueError):
+        # Some reader tests deliberately need malformed legacy records. Keep
+        # those on the flat compatibility constructor so canonical validation
+        # remains exercised independently of the reader under test.
+        return ActiveWorktree(**values)
 
 
 def make_test_cycle_context(
