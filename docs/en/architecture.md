@@ -239,8 +239,8 @@ New code belongs in the layer that owns the behaviour, and this section and `tes
   | `RUNNING` | PID, external handle, or launched phase is present. |
   | `LAUNCHING` | Start time, launch attempt ID, or another launch phase is present. |
   | `RECOVERY_REQUIRED` | Recovered claim ID or unverifiable-owner digest sentinel is present. |
-  | `CLAIMED` | Owner is interactive and claim stage is not `reserved`. |
-  | `RESERVED` | No higher-priority candidate matched, including an initial `reserved` claim. |
+  | `CLAIMED` | Interactive owner with a non-null claim stage other than `reserved`. |
+  | `RESERVED` | Fallback, including an initial `reserved` claim or an in-memory record with no claim stage. Persisted records require this field. |
 - `ledger.status_labels`: shared status-label constants and transitions.
 - `ledger.escalation`: the shared escalation operation. It adds the terminal
   label, invokes the caller's state-commit callback, removes the specified old

@@ -107,6 +107,21 @@ def test_completed_interactive_claim_is_classified_as_claimed() -> None:
     assert lifecycle(active) is ActiveWorktreeLifecycle.CLAIMED
 
 
+def test_interactive_owner_without_claim_stage_falls_back_to_reservation() -> None:
+    active = ActiveWorktree(
+        issue_number=44,
+        branch="task/44",
+        worktree_path="worktrees/task-44",
+        pid=None,
+        started_at=None,
+        declared_footprint=(),
+        owner_kind="interactive",
+        claim_id="claim-44",
+    )
+
+    assert lifecycle(active) is ActiveWorktreeLifecycle.RESERVED
+
+
 def test_handoff_ready_is_a_candidate_without_receipt_evidence() -> None:
     active = ActiveWorktree(
         issue_number=42,

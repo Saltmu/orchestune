@@ -231,8 +231,8 @@ L2 の基盤で、次の3つの責務を持ちます。
   | `RUNNING` | PID、external handle、またはlaunched phaseがある。 |
   | `LAUNCHING` | 開始時刻、launch attempt ID、または別のlaunch phaseがある。 |
   | `RECOVERY_REQUIRED` | recovered claim ID、またはowner不確実を示すdigest sentinelがある。 |
-  | `CLAIMED` | ownerがinteractiveで、claim stageが`reserved`ではない。 |
-  | `RESERVED` | 優先条件に一致しない。初期の`reserved` claimもここに含む。 |
+  | `CLAIMED` | ownerがinteractiveで、`reserved`以外のclaim stageが設定されている。 |
+  | `RESERVED` | 優先条件に一致しない。初期の`reserved` claimと、in-memory recordでclaim stageが未設定の場合も含む。永続recordでは`claim_stage`が必須。 |
 - `ledger.status_labels`: 共通の状態ラベル定数と遷移。
 - `ledger.escalation`: 共通エスカレーション操作。終端ラベル追加、利用側の台帳確定
   コールバック、指定された旧ラベル削除、理由コメント投稿の順で実行します。

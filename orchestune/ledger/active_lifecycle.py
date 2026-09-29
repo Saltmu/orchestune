@@ -12,6 +12,8 @@ from enum import Enum
 from hashlib import sha256
 from typing import Protocol
 
+from orchestune.ownership_contracts import ClaimStage, OwnerKind
+
 
 class _ActiveWorktreeState(Protocol):
     issue_number: int
@@ -41,9 +43,11 @@ class ActiveWorktreeLifecycle(str, Enum):
     HANDOFF_READY = "handoff_ready"
 
 
+# Keep persisted completion-stage values local: importing complete.contracts
+# here would add a complete <-> ledger package cycle.
 _HANDOFF_STAGES = frozenset({"handed_off_to_gc", "handed_off"})
-_INTERACTIVE_OWNER = "interactive"
-_RESERVED_CLAIM_STAGE = "reserved"
+_LAUNCHED_PHASE = "launched"
+_RESERVED_CLAIM_STAGE = ClaimStage.RESERVED.value
 _RECOVERED_CLAIM_PREFIX = "recovered-"
 
 
@@ -62,7 +66,7 @@ def lifecycle(active: _ActiveWorktreeState) -> ActiveWorktreeLifecycle:
     if (
         active.pid is not None
         or active.external_id is not None
-        or active.launch_phase == "launched"
+        or active.launch_phase == _LAUNCHED_PHASE
     ):
         return ActiveWorktreeLifecycle.RUNNING
     if (
@@ -76,7 +80,8 @@ def lifecycle(active: _ActiveWorktreeState) -> ActiveWorktreeLifecycle:
         return ActiveWorktreeLifecycle.RECOVERY_REQUIRED
 
     if (
-        active.owner_kind == _INTERACTIVE_OWNER
+        active.owner_kind == OwnerKind.INTERACTIVE.value
+        and active.claim_stage is not None
         and active.claim_stage != _RESERVED_CLAIM_STAGE
     ):
         return ActiveWorktreeLifecycle.CLAIMED
