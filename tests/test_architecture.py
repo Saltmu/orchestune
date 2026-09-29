@@ -192,6 +192,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "issue_notice",
             "issue_parsing",
             "ledger",
+            "ledger.active_lifecycle",
             "ledger.completion_reservations",
             "ledger.escalation",
             "ledger.run_state",
