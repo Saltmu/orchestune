@@ -64,7 +64,7 @@ Serenaで各フィールドの参照を検索した。件数はsymbol indexが�
 | Live PIDとcompletionの併存 | 上のcompletion途中の状態に非null `pid` | completionはプロセス終了を意味しない |
 | Legacy handoff | `completion_stage="handed_off_to_gc"`, `completion_handoff_ready=true` | 旧mainのhandoff表現を保持する |
 | 新handoff | `completion_stage="handed_off"`, `completion_handoff_ready=true` | #1122以降のhandoff表現を保持する |
-| Recovery sentinel | 保存時に欠けていたclaim値を`recovered-<issue>`、`recovered-unverifiable:<claim>`へmaterialize | 復旧由来の不確実性を通常claimと取り違えない |
+| Recovery sentinel | save時にin-memory DTOの欠けていたclaim値を`recovered-<issue>`、`recovered-unverifiable:<claim>`へmaterializeする（on-diskの欠落は`_parse_active_worktree`が拒否） | 復旧由来の不確実性を通常claimと取り違えない |
 
 これらは排他的なLifecycle enumではなく、dispatch/claim/completion/復旧の独立した既存値である。fixtureとテストは上記の併存ケースを保存して読み戻し、baseline SHAのserializerが作るbyte列をgoldenとして比較する。
 
@@ -195,8 +195,9 @@ Serenaは36フィールド全てについて参照を列挙し、型/constructor
 
 - `run_state.json`のtop-level keyとActiveWorktree fieldはflatのまま。JSON key順はdataclass field宣言順。indentは2 spaces、末尾はnewline。
 - `completion_policy_config`は非null時のみ最後のfieldとして出力する。nullならkey自体を省略する。
-- load時のdefaultsと`declared_footprint` canonicalization、各invalid fieldの既存ValueError、sibling `run_state.lock`未保持でsaveを拒否する契約をgolden/contract testsで固定する。
+- load時のdefaultsと`declared_footprint` canonicalization、unknown ownerと非booleanの`completion_handoff_ready`という代表2件の既存ValueError、sibling `run_state.lock`未保持でsaveを拒否する契約をgolden/contract testsで固定する。
 - 新規fixtureはbaselineの`load_run_state`と`save_run_state`を通して採取する。別codecや独自JSON再生成でgoldenを作らない。
+- 注: 上記Serializer要約の末尾newlineとfootprint順は、末尾のSnapshot correctionに正しい値を記す。
 
 ## #822 observation record proposal
 
@@ -216,3 +217,9 @@ Serenaは36フィールド全てについて参照を列挙し、型/constructor
 
 - このPRは上記3パスだけを変更する。テストconstructorは対象moduleごとにT04–T11へ割り当て済み。共通test helperはT03 (#1125)、baseline serializer/modelの最終切替はT12 (#1134)。
 - Issue #1123はrun-time logicを変えない。既存consumerのパスと所有タスクを固定し、後続子タスクはこの一覧を再照合してから実装する。
+
+## Snapshot correction (2026-09-29)
+
+Inspection of the baseline `write_json_atomic` implementation showed that it writes `json.dumps(..., ensure_ascii=False, indent=2)` without appending a terminal newline. The Serializer section above incorrectly says there is a final newline; the frozen byte contract is **no terminal newline**. This correction is appended without changing the original field or consumer tables.
+
+Inspection of `canonicalize_footprint()` showed that it normalizes path separators and dot components, removes duplicates, and preserves first-seen order. The golden contract pins this preserved input order. This correction is appended without changing the original field or consumer tables.
