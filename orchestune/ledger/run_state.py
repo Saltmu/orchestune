@@ -14,6 +14,12 @@ from typing import Any
 from orchestune.dag.models import canonicalize_footprint
 from orchestune.infra.json_state import read_json_with_recovery, write_json_atomic
 from orchestune.infra.process_utils import assert_run_state_lock_held
+from orchestune.ledger.active_lifecycle import (
+    ActiveWorktreeLifecycle as ActiveWorktreeLifecycle,
+)
+from orchestune.ledger.active_lifecycle import (
+    lifecycle as lifecycle,
+)
 from orchestune.models import Usage
 from orchestune.ownership_contracts import ClaimStage, OwnerKind, ReservationKind
 
