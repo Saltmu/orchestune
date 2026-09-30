@@ -37,7 +37,6 @@ from orchestune.dispatch.summary import (
     SkipRecord,
 )
 from orchestune.ledger.run_state import (
-    ActiveWorktree,
     CompletedWorktree,
     RunState,
     load_run_state,
@@ -46,11 +45,12 @@ from orchestune.models import PrRecord, Task
 from orchestune.outcome_record import OutcomeRecord
 from tests.dispatch_test_support import make_footprint_issue as _issue
 from tests.dispatch_test_support import (
-    save_locked_run_state as save_run_state,
-)
-from tests.dispatch_test_support import (
+    make_test_active_worktree,
     stub_forge_check_auth,
     stub_label_actor_permission,
+)
+from tests.dispatch_test_support import (
+    save_locked_run_state as save_run_state,
 )
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
@@ -269,7 +269,7 @@ class TestRecoveredActiveTask:
             log_dir=tmp_path / "logs",
             apply=True,
         )
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=1,
             branch="claude/issue-1-task-a",
             worktree_path=str(tmp_path / "worktrees" / "missing-worktree"),
@@ -462,7 +462,7 @@ class TestStaleActiveEntryReconciliation:
         save_run_state(
             RunState(
                 active_worktrees={
-                    "1": ActiveWorktree(
+                    "1": make_test_active_worktree(
                         issue_number=1,
                         branch="claude/issue-1-task-a",
                         worktree_path=str(tmp_path / "w1"),

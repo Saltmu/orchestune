@@ -228,9 +228,9 @@ def _reserved_token_estimate(run_state: RunState, cost_model: CostModel) -> int:
         for active in run_state.active_worktrees.values()
         if (
             tokens := (
-                active.estimated_tokens
-                if active.token_estimate_recorded
-                else cost_model.tokens_for_issue(active.issue_number)
+                active.launch.estimated_tokens
+                if active.launch.token_estimate_recorded
+                else cost_model.tokens_for_issue(active.core.issue_number)
             )
         )
         is not None

@@ -209,34 +209,34 @@ def build_status_snapshot(
 
     worktrees = []
     for active in run_state.active_worktrees.values():
+        core = active.core
+        launch = active.launch
         alive: bool | None
-        if active.pid is None and active.external_id is not None:
+        if launch.pid is None and launch.external_id is not None:
             alive = None
         else:
-            alive = is_process_alive(active.pid)
+            alive = is_process_alive(launch.pid)
 
-        slug = active.branch.replace("/", "-")
+        slug = core.branch.replace("/", "-")
         log_tail = _read_log_tail(log_dir / f"{slug}.log", tail_lines)
 
-        labels = _fetch_labels_cached(
-            active.issue_number, label_cache, now, forge=forge
-        )
-        state = _derive_monitor_state(labels, alive, active.external_id)
+        labels = _fetch_labels_cached(core.issue_number, label_cache, now, forge=forge)
+        state = _derive_monitor_state(labels, alive, launch.external_id)
 
         worktrees.append(
             WorktreeStatus(
-                issue_number=active.issue_number,
-                subtask_id=_extract_subtask_id(active.branch, active.issue_number),
-                branch=active.branch,
-                pid=active.pid,
+                issue_number=core.issue_number,
+                subtask_id=_extract_subtask_id(core.branch, core.issue_number),
+                branch=core.branch,
+                pid=launch.pid,
                 alive=alive,
-                started_at=active.started_at,
+                started_at=launch.started_at,
                 elapsed_seconds=(
-                    now - active.started_at if active.started_at is not None else None
+                    now - launch.started_at if launch.started_at is not None else None
                 ),
-                worktree_path=active.worktree_path,
-                external_id=active.external_id,
-                external_url=active.external_url,
+                worktree_path=core.worktree_path,
+                external_id=launch.external_id,
+                external_url=launch.external_url,
                 log_tail=log_tail,
                 state=state,
                 labels_fetch_failed=labels is None,

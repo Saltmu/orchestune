@@ -13,7 +13,6 @@ from orchestune.dispatch.targets import (
     LocalProcessDispatchTarget,
 )
 from orchestune.ledger.run_state import (
-    ActiveWorktree,
     CompletedWorktree,
     RunState,
     load_run_state,
@@ -22,6 +21,7 @@ from orchestune.models import Task, Usage
 from orchestune.outcome_record import OutcomeRecord
 from orchestune.task_metadata import TaskMetadata
 from tests.dispatch_gc_test_support import _rule_ctx
+from tests.dispatch_test_support import make_test_active_worktree
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
@@ -336,7 +336,7 @@ class TestQuotaAvailableTokens:
 
 class TestTaskTokenLimitEscalation:
     def test_exceeding_max_tokens_per_task_escalates_to_human_review(self, tmp_path):
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=42,
             branch="claude/issue-42-task-x",
             worktree_path=str(tmp_path / "wt"),
@@ -397,7 +397,7 @@ class TestTaskTokenLimitEscalation:
     ):
         from orchestune.dispatch.gc import _rule_completed
 
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=42,
             branch="claude/issue-42-task-x",
             worktree_path=str(tmp_path / "wt"),

@@ -12,8 +12,9 @@ from unittest.mock import Mock
 
 import pytest
 
-from orchestune.ledger.run_state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.monitor import main
+from tests.dispatch_test_support import make_test_active_worktree
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
@@ -35,7 +36,7 @@ def _active(**overrides):
         declared_footprint=("orchestune/monitor.py",),
     )
     defaults.update(overrides)
-    return ActiveWorktree(**defaults)
+    return make_test_active_worktree(**defaults)
 
 
 class TestMain:

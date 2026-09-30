@@ -3,18 +3,21 @@
 import pytest
 
 from orchestune.dag.models import ConflictEdge, ConflictGraph
+from orchestune.dispatch.cost_model import CostModel
 from orchestune.dispatch.scoring import (
     MIN_PRIORITY_GAP,
     QUALITY_SPAN,
     SCHEDULING_MODE_CRITICAL_PATH,
+    _reserved_token_estimate,
     decision_to_dict,
     reconcile_decisions_with_launches,
     remaining_token_budget,
     select_next_tasks,
     select_tasks_with_decisions,
 )
-from orchestune.ledger.run_state import ActiveWorktree, CompletedWorktree, RunState
+from orchestune.ledger.run_state import CompletedWorktree, RunState
 from orchestune.models import Task, Usage
+from tests.dispatch_test_support import make_test_active_worktree
 
 NOW = 1_800_000_000.0
 CREATED_AT = "2026-01-01T00:00:00+00:00"
@@ -623,7 +626,9 @@ class TestIneligibleCandidatesAreStillReported:
     def test_already_active_candidate_is_reported(self):
         state = RunState(
             active_worktrees={
-                "2": ActiveWorktree(2, "b", "w", 1, NOW - 600, ()),
+                "2": make_test_active_worktree(
+                    2, branch="b", worktree_path="w", pid=1, started_at=NOW - 600
+                ),
             }
         )
 
@@ -686,7 +691,13 @@ class TestTokenBudgetAcrossCycles:
             # ウィンドウ内で実測400消費済み（上限1000に対して残600）。
             completed_worktrees=[_completed(9, NOW - 300, total_tokens=400)],
             active_worktrees=(
-                {"1": ActiveWorktree(1, "b", "w", 1, NOW - 120, ())} if active else {}
+                {
+                    "1": make_test_active_worktree(
+                        1, branch="b", worktree_path="w", pid=1, started_at=NOW - 120
+                    )
+                }
+                if active
+                else {}
             ),
         )
 
@@ -716,13 +727,12 @@ class TestTokenBudgetAcrossCycles:
                 _completed(92, NOW - 300, total_tokens=0),
             ],
             active_worktrees={
-                "1": ActiveWorktree(
+                "1": make_test_active_worktree(
                     1,
-                    "b",
-                    "w",
-                    1,
-                    NOW - 120,
-                    (),
+                    branch="b",
+                    worktree_path="w",
+                    pid=1,
+                    started_at=NOW - 120,
                     estimated_tokens=400,
                     token_estimate_recorded=True,
                 )
@@ -768,7 +778,11 @@ class TestTokenBudgetAcrossCycles:
         # usage記録が皆無なら見積りも不明。根拠の無い予約で枠を潰さない。
         state = RunState(
             completed_worktrees=[_completed(9, NOW - 300)],
-            active_worktrees={"1": ActiveWorktree(1, "b", "w", 1, NOW - 120, ())},
+            active_worktrees={
+                "1": make_test_active_worktree(
+                    1, branch="b", worktree_path="w", pid=1, started_at=NOW - 120
+                )
+            },
         )
 
         result = _select(
@@ -786,13 +800,12 @@ class TestTokenBudgetAcrossCycles:
         state = RunState(
             completed_worktrees=[_completed(9, NOW - 300, total_tokens=400)],
             active_worktrees={
-                "1": ActiveWorktree(
+                "1": make_test_active_worktree(
                     1,
-                    "b",
-                    "w",
-                    1,
-                    NOW - 120,
-                    (),
+                    branch="b",
+                    worktree_path="w",
+                    pid=1,
+                    started_at=NOW - 120,
                     estimated_tokens=None,
                     token_estimate_recorded=True,
                 )
@@ -814,3 +827,28 @@ class TestTokenBudgetAcrossCycles:
         )
 
         assert [t.issue_number for t in result.selected] == [2]
+
+
+class _NestedOnlyActive:
+    """flat fieldを持たず`core`/`launch`だけを公開するactive（view経由の読取を強制）。"""
+
+    def __init__(self, active):
+        self.core = active.core
+        self.launch = active.launch
+
+
+class TestReservedTokenEstimateReadsNestedViews:
+    """#1128: 予約トークン見積りはflat fieldではなくnested viewから読む。"""
+
+    @staticmethod
+    def _state(**launch_overrides):
+        active = make_test_active_worktree(1, **launch_overrides)
+        return RunState(active_worktrees={"1": _NestedOnlyActive(active)})
+
+    def test_recorded_estimate_is_reserved_as_is(self):
+        state = self._state(estimated_tokens=400, token_estimate_recorded=True)
+        assert _reserved_token_estimate(state, CostModel()) == 400
+
+    def test_recorded_unknown_estimate_reserves_nothing(self):
+        state = self._state(estimated_tokens=None, token_estimate_recorded=True)
+        assert _reserved_token_estimate(state, CostModel()) == 0

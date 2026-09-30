@@ -326,10 +326,10 @@ Testing full lifecycle of execution profiles.
                 for wt in state.active_worktrees.values()
                 if wt.issue_number == issue_num
             )
-            assert active_wt.profile == expected_sel.profile
-            assert active_wt.model == expected_sel.model
-            assert active_wt.reasoning_effort == expected_sel.reasoning_effort
-            assert active_wt.selection_reason == expected_sel.reason
+            assert active_wt.launch.profile == expected_sel.profile
+            assert active_wt.launch.model == expected_sel.model
+            assert active_wt.launch.reasoning_effort == expected_sel.reasoning_effort
+            assert active_wt.launch.selection_reason == expected_sel.reason
 
         # Verify events.jsonl contents
         assert events_log_path.exists()
@@ -559,9 +559,9 @@ Testing full lifecycle of execution profiles.
         state = load_run_state(run_state_path)
         assert len(state.active_worktrees) == 1
         active_wt = next(iter(state.active_worktrees.values()))
-        assert active_wt.profile == "deep-reasoning"
-        assert active_wt.model == "o3-mini"
-        assert active_wt.reasoning_effort == "high"
+        assert active_wt.launch.profile == "deep-reasoning"
+        assert active_wt.launch.model == "o3-mini"
+        assert active_wt.launch.reasoning_effort == "high"
 
         # Check events log
         log_lines = [
