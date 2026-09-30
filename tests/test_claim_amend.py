@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,7 @@ from orchestune.claim.contracts import (
     OwnerKind,
     ReservationKind,
 )
-from orchestune.claim.ownership import new_owner_token, owner_token_digest
+from orchestune.claim.ownership import new_owner_token, owner_token_digest, with_claim
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import run_state_lock
@@ -24,6 +25,7 @@ from orchestune.ledger.run_state import (
     save_run_state,
 )
 from tests.claim_helpers import MockForge, _make_issue
+from tests.dispatch_test_support import make_test_active_worktree
 
 CLAIM_ID = "claim-amend-201"
 
@@ -62,7 +64,7 @@ def _active(
         owner_token_digest=token_digest,
     )
     fields.update(overrides)
-    return ActiveWorktree(**fields)  # type: ignore[arg-type]
+    return make_test_active_worktree(**fields)  # type: ignore[arg-type]
 
 
 @pytest.fixture
@@ -120,7 +122,9 @@ def _amend(env: dict, *, apply: bool = True, token: str | None = "default"):
 
 
 def _held_footprint(env: dict, key: str = "201") -> tuple[str, ...]:
-    return load_run_state(env["state_path"]).active_worktrees[key].declared_footprint
+    return (
+        load_run_state(env["state_path"]).active_worktrees[key].core.declared_footprint
+    )
 
 
 def test_amend_merges_issue_footprint_and_uncommitted_and_untracked_changes(amend_env):
@@ -143,9 +147,9 @@ def test_amend_merges_issue_footprint_and_uncommitted_and_untracked_changes(amen
     assert set(outcome.added) == {"docs/plan.md", "README.md", "new_module.py"}
     assert set(_held_footprint(amend_env)) == set(outcome.amended_footprint)
     active = load_run_state(amend_env["state_path"]).active_worktrees["201"]
-    assert active.claim_id == CLAIM_ID
-    assert active.claim_stage == ClaimStage.COMPLETED.value
-    assert active.worktree_path == str(worktree)
+    assert active.claim.claim_id == CLAIM_ID
+    assert active.claim.claim_stage == ClaimStage.COMPLETED.value
+    assert active.core.worktree_path == str(worktree)
 
 
 def test_amend_includes_committed_changes_since_base(amend_env):
@@ -349,7 +353,7 @@ def test_amend_rejects_closed_issue(amend_env):
 def test_amend_fails_closed_when_changed_files_cannot_be_listed(amend_env):
     state = load_run_state(amend_env["state_path"])
     active = state.active_worktrees["201"]
-    active.base_sha = None
+    active = with_claim(active, replace(active.claim, base_sha=None))
     _save({"201": active}, amend_env["state_path"])
 
     outcome = _amend(amend_env)
@@ -494,7 +498,9 @@ def test_held_claim_next_actions_offer_amend_only_when_eligible(
 def test_amend_rejection_for_dispatcher_claim_advises_blocked_outcome(amend_env):
     state = load_run_state(amend_env["state_path"])
     active = state.active_worktrees["201"]
-    active.owner_kind = OwnerKind.DISPATCH.value
+    active = with_claim(
+        active, replace(active.claim, owner_kind=OwnerKind.DISPATCH.value)
+    )
     _save({"201": active}, amend_env["state_path"])
 
     outcome = _amend(amend_env)

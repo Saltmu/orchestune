@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from orchestune.claim.contracts import (
     ClaimExitCode,
     ClaimFailureReason,
@@ -18,13 +20,13 @@ from orchestune.claim.service import claim_task, resume_claim
 from orchestune.infra.process_utils import run_state_lock
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import (
-    ActiveWorktree,
     RunState,
     load_run_state,
     save_run_state,
 )
 from orchestune.worktree_ops.preparation import WorktreePreparation
 from tests.claim_helpers import MockForge, _make_issue
+from tests.dispatch_test_support import make_test_active_worktree
 
 
 class TestClaimLifecycleOrderAndSuccess:
@@ -64,7 +66,7 @@ class TestClaimLifecycleOrderAndSuccess:
         def tracked_save(state, path, **kwargs):
             active = state.active_worktrees.get("101")
             if active is not None:
-                call_order.append(f"save_state:{active.claim_stage}")
+                call_order.append(f"save_state:{active.claim.claim_stage}")
             return original_save(state, path, **kwargs)
 
         with (
@@ -103,9 +105,11 @@ class TestClaimLifecycleOrderAndSuccess:
         persisted = load_run_state(state_path)
         assert "101" in persisted.active_worktrees
         active = persisted.active_worktrees["101"]
-        assert active.claim_id == outcome.claim_id
-        assert active.claim_stage == ClaimStage.COMPLETED.value
-        assert active.owner_token_digest == owner_token_digest(outcome.owner_token)
+        assert active.claim.claim_id == outcome.claim_id
+        assert active.claim.claim_stage == ClaimStage.COMPLETED.value
+        assert active.claim.owner_token_digest == owner_token_digest(
+            outcome.owner_token
+        )
 
     def test_claim_task_dry_run_no_side_effects(
         self, claim_env: dict[str, Path]
@@ -177,7 +181,7 @@ class TestClaimPreflightAndConflictRejections:
         forge = MockForge({104: issue})
 
         # Inject existing active worktree for issue 104
-        existing = ActiveWorktree(
+        existing = make_test_active_worktree(
             issue_number=104,
             branch="claude/issue-104-task",
             worktree_path="/tmp/worktree",
@@ -268,7 +272,8 @@ class TestInterruptionAndPreservation:
         persisted = load_run_state(state_path)
         assert "106" in persisted.active_worktrees
         assert (
-            persisted.active_worktrees["106"].claim_stage == ClaimStage.RESERVED.value
+            persisted.active_worktrees["106"].claim.claim_stage
+            == ClaimStage.RESERVED.value
         )
         assert len(forge.labels_added) == 0
         assert len(forge.labels_removed) == 0
@@ -375,15 +380,18 @@ class TestInterruptionAndPreservation:
         persisted = load_run_state(state_path)
         assert "107" in persisted.active_worktrees
         active = persisted.active_worktrees["107"]
-        assert active.claim_stage == ClaimStage.ACTIVE_SAVED.value
-        assert active.worktree_path == str(worktree_path)
+        assert active.claim.claim_stage == ClaimStage.ACTIVE_SAVED.value
+        assert active.core.worktree_path == str(worktree_path)
         assert worktree_path.exists()
 
 
 class TestResumeClaim:
     """Verifies resume_claim idempotency and authorization."""
 
-    def test_resume_claim_from_reserved_stage(self, claim_env: dict[str, Path]) -> None:
+    @pytest.mark.parametrize("state_key", ["108", "held-108"])
+    def test_resume_claim_from_reserved_stage(
+        self, claim_env: dict[str, Path], state_key: str
+    ) -> None:
         repo_root = claim_env["repo_root"]
         state_path = claim_env["state_path"]
         issue = _make_issue(number=108)
@@ -392,7 +400,7 @@ class TestResumeClaim:
         token = new_owner_token()
         claim_id = new_claim_id()
 
-        reserved_active = ActiveWorktree(
+        reserved_active = make_test_active_worktree(
             issue_number=108,
             branch="claude/issue-108-test-task",
             worktree_path="",
@@ -411,7 +419,7 @@ class TestResumeClaim:
         )
         with run_state_lock(state_path.with_suffix(".lock")):
             save_run_state(
-                RunState(active_worktrees={"108": reserved_active}), state_path
+                RunState(active_worktrees={state_key: reserved_active}), state_path
             )
 
         worktree_path = claim_env["worktrees_dir"] / "claude-issue-108-test-task"
@@ -451,8 +459,10 @@ class TestResumeClaim:
         assert (108, StatusLabel.IN_PROGRESS) in forge.labels_added
 
         persisted = load_run_state(state_path)
+        assert set(persisted.active_worktrees) == {state_key}
         assert (
-            persisted.active_worktrees["108"].claim_stage == ClaimStage.COMPLETED.value
+            persisted.active_worktrees[state_key].claim.claim_stage
+            == ClaimStage.COMPLETED.value
         )
 
     def test_resume_claim_token_mismatch_rejected(
@@ -463,7 +473,7 @@ class TestResumeClaim:
         token = new_owner_token()
         claim_id = new_claim_id()
 
-        reserved_active = ActiveWorktree(
+        reserved_active = make_test_active_worktree(
             issue_number=109,
             branch="claude/issue-109-test-task",
             worktree_path="",
@@ -502,7 +512,7 @@ class TestResumeClaim:
         claim_id = new_claim_id()
         worktree_path = claim_env["worktrees_dir"] / "claude-issue-110-test-task"
 
-        completed_active = ActiveWorktree(
+        completed_active = make_test_active_worktree(
             issue_number=110,
             branch="claude/issue-110-test-task",
             worktree_path=str(worktree_path),
@@ -623,5 +633,5 @@ class TestLockReentrancy:
         saved_state = load_run_state(state_path)
         active = saved_state.active_worktrees.get("101")
         assert active is not None
-        assert active.base_ref == "parent/issue-894"
-        assert active.base_branch == "parent/issue-894"
+        assert active.claim.base_ref == "parent/issue-894"
+        assert active.core.base_branch == "parent/issue-894"

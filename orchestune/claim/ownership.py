@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from hashlib import sha256
 from secrets import token_urlsafe
@@ -16,6 +16,13 @@ from orchestune.claim.contracts import (
     ReservationKind,
 )
 from orchestune.dag.contracts import is_contract_writer
+from orchestune.ledger.active_lifecycle import ActiveWorktreeLifecycle, lifecycle
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.task_metadata import TaskMetadata
 
@@ -79,14 +86,8 @@ def owner_token_digest(token: OwnerToken | str) -> str:
     return sha256(value.encode("utf-8")).hexdigest()
 
 
-def build_reservation(
-    request: ClaimRequest, task_metadata: TaskMetadata
-) -> ActiveWorktree:
-    """Build a pre-worktree reservation without persisting it or performing I/O.
-
-    Paths in ``task_metadata.footprint`` are assumed to be canonical POSIX paths
-    normalized by upstream parsing (e.g. ``parse_task_from_issue``).
-    """
+def build_claim_info(request: ClaimRequest, task_metadata: TaskMetadata) -> ClaimInfo:
+    """Build claim identity for interactive or dispatch records without I/O."""
     footprint = tuple(task_metadata.footprint)
     if not request.owner_token or not request.owner_token.strip():
         raise ValueError("owner token must be generated and retained by the caller")
@@ -94,13 +95,7 @@ def build_reservation(
     reservation_kind = (
         ReservationKind.FOOTPRINT if footprint else ReservationKind.REPOSITORY
     )
-    return ActiveWorktree(
-        issue_number=request.issue_number,
-        branch="",
-        worktree_path="",
-        pid=None,
-        started_at=None,
-        declared_footprint=footprint,
+    return ClaimInfo(
         owner_kind=request.owner_kind.value,
         claim_id=new_claim_id(),
         claim_stage=ClaimStage.RESERVED.value,
@@ -109,8 +104,57 @@ def build_reservation(
     )
 
 
+def build_reservation(
+    request: ClaimRequest, task_metadata: TaskMetadata
+) -> ActiveWorktree:
+    """Build a reservation from upstream-canonicalized footprint paths."""
+    return ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            request.issue_number, "", "", tuple(task_metadata.footprint)
+        ),
+        launch=LaunchInfo(),
+        claim=build_claim_info(request, task_metadata),
+        completion=ActiveCompletionJournal(),
+    )
+
+
+def with_claim(active: ActiveWorktree, claim: ClaimInfo) -> ActiveWorktree:
+    """Return a copy replacing only claim-owned fields through the owner boundary."""
+    if not isinstance(claim, ClaimInfo):
+        raise TypeError("claim must be ClaimInfo")
+    return replace(
+        active,
+        owner_kind=claim.owner_kind,
+        claim_id=claim.claim_id,
+        claim_stage=claim.claim_stage,
+        base_ref=claim.base_ref,
+        base_sha=claim.base_sha,
+        reservation_kind=claim.reservation_kind,
+        repository_id=claim.repository_id,
+        claimed_at=claim.claimed_at,
+        owner_token_digest=claim.owner_token_digest,
+    )
+
+
+def has_completion_reservation(active: ActiveWorktree) -> bool:
+    """Require journal identity as well as the candidate completion lifecycle.
+
+    Legacy ledgers allow handoff markers without a completion ID. Lifecycle
+    classifies these as candidates, not proof of a journal reservation; keep
+    their existing claim/amend eligibility instead of tightening validation.
+    """
+    return (
+        lifecycle(active)
+        in {
+            ActiveWorktreeLifecycle.COMPLETING,
+            ActiveWorktreeLifecycle.HANDOFF_READY,
+        }
+        and active.completion.completion_id is not None
+    )
+
+
 def _is_repository_reservation(reservation: ActiveWorktree) -> bool:
-    return reservation.reservation_kind == ReservationKind.REPOSITORY.value
+    return reservation.claim.reservation_kind == ReservationKind.REPOSITORY.value
 
 
 def _shared_contract_conflicts(
@@ -135,18 +179,19 @@ def evaluate_claim_conflicts(
     ``run_state`` are canonical POSIX paths (normalized on reservation build
     and on run state loading).
     """
-    reservation_task = view.task(reservation.issue_number)
+    reservation_task = view.task(reservation.core.issue_number)
     for active in run_state.active_worktrees.values():
-        if active.issue_number == reservation.issue_number:
+        if active.core.issue_number == reservation.core.issue_number:
             return ClaimConflict(ClaimConflictReason.SAME_ISSUE, active)
         if _is_repository_reservation(reservation) or _is_repository_reservation(
             active
         ):
             return ClaimConflict(ClaimConflictReason.REPOSITORY_RESERVATION, active)
         footprint_overlap = bool(
-            set(reservation.declared_footprint) & set(active.declared_footprint)
+            set(reservation.core.declared_footprint)
+            & set(active.core.declared_footprint)
         )
-        if active.forced_serial and footprint_overlap:
+        if active.launch.forced_serial and footprint_overlap:
             # #943: dispatchのlaunchはclaim_task経由に一本化されたが、dispatch自身の
             # スケジューラ（`orchestune.dispatch.filters._candidate_conflicts_with_forced_serial_active`）
             # は既に「force-serialは衝突範囲（footprintの重なり／依存関係）だけを
@@ -160,34 +205,36 @@ def evaluate_claim_conflicts(
             return ClaimConflict(ClaimConflictReason.FORCED_SERIAL, active)
         if footprint_overlap:
             return ClaimConflict(ClaimConflictReason.FOOTPRINT_OVERLAP, active)
-        if _shared_contract_conflicts(reservation_task, view.task(active.issue_number)):
+        if _shared_contract_conflicts(
+            reservation_task, view.task(active.core.issue_number)
+        ):
             return ClaimConflict(ClaimConflictReason.SHARED_CONTRACT, active)
     return None
 
 
 def held_claim_next_actions(active: ActiveWorktree) -> tuple[str, ...]:
     """Recovery hints for a re-claim rejected because the issue is already held."""
-    n = active.issue_number
+    n = active.core.issue_number
     actions = []
-    if active.worktree_path:
+    if active.core.worktree_path:
         actions.append(
-            f"Continue work in the existing worktree: {active.worktree_path}"
+            f"Continue work in the existing worktree: {active.core.worktree_path}"
         )
-    if active.owner_kind != OwnerKind.INTERACTIVE.value:
+    if active.claim.owner_kind != OwnerKind.INTERACTIVE.value:
         actions.append(
             "If the task needs files outside its reservation, run: orchestune complete "
             f"--issue {n} --result blocked --reason footprint-expansion-required"
         )
         return tuple(actions)
-    if active.claim_id:
+    if active.claim.claim_id:
         actions.append(
-            f"If the claim was interrupted, run: orchestune claim {n} --resume {active.claim_id}"
+            f"If the claim was interrupted, run: orchestune claim {n} --resume {active.claim.claim_id}"
         )
     if _is_repository_reservation(active):
         actions.append("The claim already reserves the whole repository.")
     elif (
-        active.claim_stage == ClaimStage.COMPLETED.value
-        and active.completion_id is None
+        active.claim.claim_stage == ClaimStage.COMPLETED.value
+        and not has_completion_reservation(active)
     ):
         actions.append(
             "If the task needs files outside its reservation, update the Issue footprint "

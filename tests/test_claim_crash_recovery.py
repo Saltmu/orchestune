@@ -70,7 +70,7 @@ def _crash_claim_process(
             "reservation": ClaimStage.RESERVED.value,
             "worktree": ClaimStage.ACTIVE_SAVED.value,
         }.get(boundary)
-        if not crashed and active is not None and active.claim_stage == expected:
+        if not crashed and active is not None and active.claim.claim_stage == expected:
             crashed = True
             os._exit(_CRASH_EXIT)
 
@@ -216,8 +216,8 @@ def test_resume_after_hard_crash_does_not_duplicate_ownership_or_worktree(
     interrupted = load_run_state(state_path)
     assert list(interrupted.active_worktrees) == [str(issue_number)]
     active = interrupted.active_worktrees[str(issue_number)]
-    assert active.claim_id is not None
-    original_claim_id = active.claim_id
+    assert active.claim.claim_id is not None
+    original_claim_id = active.claim.claim_id
 
     ctx = multiprocessing.get_context("spawn")
     results = ctx.Queue()
@@ -237,12 +237,12 @@ def test_resume_after_hard_crash_does_not_duplicate_ownership_or_worktree(
     recovered = load_run_state(state_path)
     assert list(recovered.active_worktrees) == [str(issue_number)]
     final = recovered.active_worktrees[str(issue_number)]
-    assert final.claim_id == original_claim_id
-    assert final.claim_stage == "completed"
+    assert final.claim.claim_id == original_claim_id
+    assert final.claim.claim_stage == "completed"
     assert recovered.launch_history == []
     paths = _worktree_paths(repo)
     assert len(paths) == 2
-    assert paths.count(Path(final.worktree_path)) == 1
+    assert paths.count(Path(final.core.worktree_path)) == 1
 
 
 @pytest.mark.parametrize("dirty", [False, True], ids=["clean", "dirty"])
