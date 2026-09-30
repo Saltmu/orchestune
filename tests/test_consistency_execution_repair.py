@@ -41,6 +41,12 @@ from orchestune.dispatch.execution_repair import (
 )
 from orchestune.dispatch.phase_gc import _gc_supervisor, _GcReclaimAdapter
 from orchestune.dispatch.scoring import Task
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import PrRecord
 from tests.dispatch_gc_test_support import (
@@ -73,25 +79,32 @@ def _active(
     started_at: float | None = 1_000.0,
 ) -> ActiveWorktree:
     worktree = tmp_path / f"worktree-{issue_number}"
-    worktree.mkdir()
-    return ActiveWorktree(
-        issue_number=issue_number,
-        branch=f"codex/issue-{issue_number}",
-        worktree_path=str(worktree),
-        pid=pid,
-        started_at=started_at,
-        declared_footprint=(),
-        external_id=external_id,
-        base_branch="parent/issue-700",
-        owner_kind="dispatch",
-        claim_id=f"claim-{issue_number}",
-        claim_stage="completed",
-        base_ref="parent/issue-700",
-        base_sha=None,
-        reservation_kind="footprint",
-        repository_id="test-repository",
-        claimed_at=1_000.0,
-        owner_token_digest=f"digest-{issue_number}",
+    worktree.mkdir(parents=True, exist_ok=True)
+    return ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=issue_number,
+            branch=f"codex/issue-{issue_number}",
+            worktree_path=str(worktree),
+            declared_footprint=(),
+            base_branch="parent/issue-700",
+        ),
+        launch=LaunchInfo(
+            pid=pid,
+            started_at=started_at,
+            external_id=external_id,
+        ),
+        claim=ClaimInfo(
+            owner_kind="dispatch",
+            claim_id=f"claim-{issue_number}",
+            claim_stage="completed",
+            base_ref="parent/issue-700",
+            base_sha=None,
+            reservation_kind="footprint",
+            repository_id="test-repository",
+            claimed_at=1_000.0,
+            owner_token_digest=f"digest-{issue_number}",
+        ),
+        completion=ActiveCompletionJournal(),
     )
 
 
@@ -521,17 +534,25 @@ def test_dispatch_prelaunch_orphan_is_mapped_to_reclaim_and_requeue(
 ):
     worktree_path = tmp_path / "worktrees" / "task-964"
     worktree_path.mkdir(parents=True, exist_ok=True)
-    active = ActiveWorktree(
-        issue_number=964,
-        branch="claude/issue-964",
-        worktree_path=str(worktree_path),
-        pid=None,
-        started_at=None,
-        declared_footprint=(),
-        owner_kind="dispatch",
-        claim_id="claim-964",
-        claim_stage="completed",
-        launch_phase=None,
+    active = ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=964,
+            branch="claude/issue-964",
+            worktree_path=str(worktree_path),
+            declared_footprint=(),
+            base_branch="origin/main",
+        ),
+        launch=LaunchInfo(
+            pid=None,
+            started_at=None,
+            launch_phase=None,
+        ),
+        claim=ClaimInfo(
+            owner_kind="dispatch",
+            claim_id="claim-964",
+            claim_stage="completed",
+        ),
+        completion=ActiveCompletionJournal(),
     )
     run_state = RunState(active_worktrees={"964": active})
     config = _config(tmp_path, fake_forge)
@@ -552,29 +573,45 @@ def test_revalidate_preconditions_skips_when_active_changes_to_launched(
 ):
     worktree_path = tmp_path / "worktrees" / "task-964"
     worktree_path.mkdir(parents=True, exist_ok=True)
-    active_at_finding = ActiveWorktree(
-        issue_number=964,
-        branch="claude/issue-964",
-        worktree_path=str(worktree_path),
-        pid=None,
-        started_at=None,
-        declared_footprint=(),
-        owner_kind="dispatch",
-        claim_id="claim-964",
-        claim_stage="completed",
-        launch_phase=None,
+    active_at_finding = ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=964,
+            branch="claude/issue-964",
+            worktree_path=str(worktree_path),
+            declared_footprint=(),
+            base_branch="origin/main",
+        ),
+        launch=LaunchInfo(
+            pid=None,
+            started_at=None,
+            launch_phase=None,
+        ),
+        claim=ClaimInfo(
+            owner_kind="dispatch",
+            claim_id="claim-964",
+            claim_stage="completed",
+        ),
+        completion=ActiveCompletionJournal(),
     )
-    active_now = ActiveWorktree(
-        issue_number=964,
-        branch="claude/issue-964",
-        worktree_path=str(worktree_path),
-        pid=1234,
-        started_at=2000.0,
-        declared_footprint=(),
-        owner_kind="dispatch",
-        claim_id="claim-964",
-        claim_stage="completed",
-        launch_phase="launched",
+    active_now = ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=964,
+            branch="claude/issue-964",
+            worktree_path=str(worktree_path),
+            declared_footprint=(),
+            base_branch="origin/main",
+        ),
+        launch=LaunchInfo(
+            pid=1234,
+            started_at=2000.0,
+            launch_phase="launched",
+        ),
+        claim=ClaimInfo(
+            owner_kind="dispatch",
+            claim_id="claim-964",
+            claim_stage="completed",
+        ),
+        completion=ActiveCompletionJournal(),
     )
     run_state = RunState(active_worktrees={"964": active_now})
     config = _config(tmp_path, fake_forge)
@@ -597,3 +634,39 @@ def test_revalidate_preconditions_skips_when_active_changes_to_launched(
     )
 
     assert result is None
+
+
+def test_execution_record_from_active_projection():
+    active = ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=42,
+            branch="claude/issue-42",
+            worktree_path="/path/to/worktree",
+            declared_footprint=("a.py",),
+            base_branch="origin/main",
+        ),
+        launch=LaunchInfo(
+            pid=123,
+            started_at=100.0,
+            external_id=None,
+            launch_phase="launched",
+        ),
+        claim=ClaimInfo(
+            owner_kind="dispatch",
+            claim_id="claim-42",
+            claim_stage="active_saved",
+        ),
+        completion=ActiveCompletionJournal(),
+    )
+    record = execution_repair.execution_record_from_active(active)
+    assert record.issue_number == 42
+    assert record.branch == "claude/issue-42"
+    assert record.worktree_path == "/path/to/worktree"
+    assert record.pid == 123
+    assert record.external_id is None
+    assert record.started_at == 100.0
+    assert record.kind == "local"
+    assert record.owner_kind == "dispatch"
+    assert record.claim_id == "claim-42"
+    assert record.claim_stage == "active_saved"
+    assert record.launch_phase == "launched"

@@ -28,6 +28,12 @@ from orchestune.dispatch.reconciliation import (
 )
 from orchestune.dispatch.scoring import Task
 from orchestune.labels import StatusLabel
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from tests.conftest import make_issue
 from tests.dispatch_test_support import make_plain_issue as _issue
@@ -759,13 +765,22 @@ class TestHandleBlockedRecomputeRecovery:
         fake_forge = MagicMock()
         fake_forge.get_issue_state.return_value = "OPEN"
         fake_forge.get_issue_labels.return_value = (StatusLabel.QUEUED,)
-        active = ActiveWorktree(
-            issue_number=1,
-            branch="claude/issue-1-task-a",
-            worktree_path="worktrees/w1",
-            pid=111,
-            started_at=1_699_999_000.0,
-            declared_footprint=(),
+        active = ActiveWorktree.from_records(
+            core=ActiveWorktreeCore(
+                issue_number=1,
+                branch="claude/issue-1-task-a",
+                worktree_path="worktrees/w1",
+                declared_footprint=(),
+            ),
+            launch=LaunchInfo(
+                pid=111,
+                started_at=1_699_999_000.0,
+            ),
+            claim=ClaimInfo(
+                claim_id="claim-1",
+                claim_stage="launched",
+            ),
+            completion=ActiveCompletionJournal(),
         )
         run_state = RunState(active_worktrees={"1": active})
         ctx = _ctx(
