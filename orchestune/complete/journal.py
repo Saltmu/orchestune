@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, overload
 from uuid import uuid4
 
-from orchestune.claim.ownership import owner_token_digest
 from orchestune.complete.contracts import (
     CompleteFailureReason,
     CompleteStage,
@@ -299,8 +298,6 @@ def _verify_contract_identity(
         reason = CompleteFailureReason.GENERATION_MISMATCH
     elif candidate.completion_id != persisted.completion_id:
         reason = CompleteFailureReason.CONCURRENT_COMPLETION
-    elif owner_token_digest(owner_token) != persisted.owner_token_digest:
-        reason = CompleteFailureReason.OWNER_TOKEN_MISMATCH
     elif candidate.owner_token_digest != persisted.owner_token_digest:
         reason = CompleteFailureReason.OWNER_TOKEN_MISMATCH
     elif candidate.request_fingerprint != persisted.request_fingerprint:
@@ -326,11 +323,6 @@ def _validate_reservation_request(
         raise CompletionJournalError(
             CompleteFailureReason.INVALID_STAGE_TRANSITION,
             "A new completion reservation must begin at the reserved stage",
-        )
-    if owner_token_digest(owner_token) != record.owner_token_digest:
-        raise CompletionJournalError(
-            CompleteFailureReason.OWNER_TOKEN_MISMATCH,
-            "Owner token does not match the completion reservation",
         )
 
 
@@ -413,7 +405,7 @@ def _allow_terminal_generation_replacement(
 def reserve_completion_locked(
     record: CompletionJournalRecord,
     *,
-    owner_token: str,
+    owner_token: str = "",
     state_path: Path,
 ) -> CompletionJournalRecord:
     """Reserve a new-contract completion when the caller already holds the state lock."""
@@ -465,11 +457,6 @@ def _reserve_legacy_completion(
                 CompleteFailureReason.CLAIM_NOT_FOUND,
                 f"No active claim {claim_id!r} found for issue #{issue_number}",
             )
-        if owner_token_digest(owner_token) != active.owner_token_digest:
-            raise CompletionJournalError(
-                CompleteFailureReason.OWNER_TOKEN_MISMATCH,
-                "Owner token does not match the active claim",
-            )
         if active.completion_id is not None:
             return _resume_existing_reservation(
                 active,
@@ -495,7 +482,7 @@ def _reserve_legacy_completion(
 def reserve_completion(
     *,
     record: CompletionJournalRecord,
-    owner_token: str,
+    owner_token: str = "",
     state_path: Path,
     timeout_seconds: float = 0.0,
 ) -> CompletionJournalRecord: ...
@@ -506,7 +493,7 @@ def reserve_completion(
     *,
     issue_number: int,
     claim_id: str,
-    owner_token: str,
+    owner_token: str = "",
     result: str,
     completion_id: str | None = None,
     payload: dict[str, Any] | None = None,
@@ -530,33 +517,23 @@ def reserve_completion(
     """Reserve (or idempotently resume) a completion under the claim's state lock.
 
     Rejects: the issue's claim no longer matching ``claim_id`` (re-claim),
-    an owner-token mismatch, a different ``completion_id`` already reserved
+    a claim-generation mismatch, a different ``completion_id`` already reserved
     (concurrent completion), and reserving a different ``result`` than what
     is already reserved for this claim (double-complete / overwrite).
     """
     if record is not None:
-        if owner_token is None:
-            raise CompletionJournalError(
-                CompleteFailureReason.OWNER_TOKEN_MISMATCH,
-                "Owner token is required to reserve a completion",
-            )
         with completion_journal_lock(state_path, timeout_seconds):
             return reserve_completion_locked(
-                record, owner_token=owner_token, state_path=state_path
+                record, owner_token=owner_token or "", state_path=state_path
             )
-    if (
-        issue_number is None
-        or claim_id is None
-        or owner_token is None
-        or result is None
-    ):
+    if issue_number is None or claim_id is None or result is None:
         raise TypeError(
-            "legacy reserve_completion requires issue_number, claim_id, owner_token, and result"
+            "legacy reserve_completion requires issue_number, claim_id, and result"
         )
     return _reserve_legacy_completion(
         issue_number=issue_number,
         claim_id=claim_id,
-        owner_token=owner_token,
+        owner_token=owner_token or "",
         result=result,
         completion_id=completion_id,
         payload=payload,
@@ -653,7 +630,7 @@ def record_posting_evidence(
     *,
     comment_id: str,
     comment_url: str,
-    owner_token: str,
+    owner_token: str = "",
     state_path: Path,
     timeout_seconds: float = 0.0,
 ) -> CompletionJournalRecord:
@@ -686,7 +663,7 @@ def record_label_confirmation(
     record: CompletionJournalRecord,
     result: CompletionLabelTransitionResult,
     *,
-    owner_token: str,
+    owner_token: str = "",
     state_path: Path,
     timeout_seconds: float = 0.0,
 ) -> CompletionJournalRecord:
@@ -778,7 +755,7 @@ def mark_handoff_ready(
 def mark_handoff_ready(
     journal: CompletionJournalRecord,
     *,
-    owner_token: str,
+    owner_token: str = "",
     state_path: Path,
     timeout_seconds: float = 0.0,
 ) -> CompletionJournalRecord: ...
@@ -796,11 +773,6 @@ def mark_handoff_ready(
 ) -> CompletionJournal | CompletionJournalRecord:
     """Use the legacy GC handoff or the label-confirmed replay handoff contract."""
     if isinstance(journal, CompletionJournalRecord):
-        if owner_token is None:
-            raise CompletionJournalError(
-                CompleteFailureReason.OWNER_TOKEN_MISMATCH,
-                "Owner token is required for completion handoff",
-            )
         if comment_id is not None or comment_url is not None or payload is not None:
             raise CompletionJournalError(
                 CompleteFailureReason.INVALID_STAGE_TRANSITION,
@@ -808,7 +780,7 @@ def mark_handoff_ready(
             )
         return _mark_contract_handoff_ready(
             journal,
-            owner_token=owner_token,
+            owner_token=owner_token or "",
             state_path=state_path,
             timeout_seconds=timeout_seconds,
         )

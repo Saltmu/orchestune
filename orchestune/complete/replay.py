@@ -97,6 +97,11 @@ def _validate_replay_generation(
             f"Unclaimed history requires --completion-id {record.completion_id}; "
             "use a new completion-<UUID hex> for an explicitly new request after reopening",
         )
+    if not explicit and request.claim_id != record.generation_id:
+        raise CompletionJournalError(
+            CompleteFailureReason.GENERATION_MISMATCH,
+            "Replay requires the caller generation or explicit --completion-id",
+        )
     if not explicit and active is not None and active.claim_id != record.generation_id:
         raise CompletionJournalError(
             CompleteFailureReason.GENERATION_MISMATCH,

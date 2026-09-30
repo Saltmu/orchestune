@@ -98,3 +98,35 @@ fresh母集団から依存先が欠ける場合や再解決できない場合を
 成功処理や検証済み先行マージによる確定完了証拠を区別します。live verificationと
 journal確定後にだけ`record_transition`へ橋渡しし、executionの生死が不明なら記録を
 保留します。
+
+## ローカルclaimの復旧（`orchestune recover`）
+
+ローカルのclaim再開・footprint変更・completeはowner tokenファイルを読み書きしません。
+呼び出し元のclaim markerにある世代、Git common dir、登録worktree、checkout中のbranchを検証します。
+旧tokenファイルは残っていても支障ありません。旧state/journalの`owner_token_digest`は
+互換用メタデータとして読めるため、一括移行やstate全削除は不要です。Routine API認証は従来どおりです。
+
+primary checkoutから診断してください。既定は変更を行わないpreviewです。
+
+```bash
+orchestune recover --issue <N>
+orchestune recover --issue <N> --claim-id <ID> --reason "worker停止を確認" --apply
+# marker欠損時は修復し、未完了のcompleteを再開する:
+orchestune recover --issue <N> --claim-id <ID> --reason "marker消失" --restore-marker --apply
+```
+
+診断で確認したclaim IDを指定します。適用時も共有state lockとworktree lock内で再検証します。
+稼働中worker、不確かな起動・外部起動、世代変更、別repository、未完了のcompletion公開は保留します。
+起動状況が不確かな場合はDispatcherで照合してください。公開途中ならmarkerを修復し、
+元のcompletion IDでcompleteを再開します。停止確認後のinteractive / dispatch双方を扱えます。
+`--state <path>`はDispatcherと同じ台帳を選択するために使用します。
+
+解放は対象active予約だけを除去し、世代と理由を復旧receiptへ保存します。
+dirtyな変更・commit・worktree・branch、他claim、回数、intent、completion証拠を保持します。
+GitHubのラベルやIssue状態は変更しません。再queue・完了・closeは既存のengine / Outcome経路で行います。
+Dispatcherは明示解放された旧世代を復元しません。同じ解放の再実行は冪等です。
+`run_state.json`全体を削除する必要はありません。
+
+merge済みPRも通常のcompleteコマンドで事後完了できます。Issue、claim作成時刻、head、予定base、
+repository、merge commitの到達性、Issue再open時刻を照合します。親branchへのmergeも対象です。
+CIとOutcome公開の要件は維持し、必要証拠が不足する場合は保留します。

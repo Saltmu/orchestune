@@ -77,7 +77,7 @@ receipt or dependency completion. Worktree-free reservations never enter removal
 The same resolved state path shares a reentrant ledger lock across bounded remote
 operations and saves; physical GC also holds the claim lock. Different state paths
 are separate exclusion domains. Legacy `handed_off_to_gc` stays held until verified
-migration; recover publication with the original completion ID and credentials.
+migration; recover publication with the original completion ID and matching claim marker.
 
 ## Initial Footprint Procedure
 

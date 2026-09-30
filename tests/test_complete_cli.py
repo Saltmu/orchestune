@@ -146,7 +146,7 @@ def test_actual_cli_replays_saved_result_after_gc_without_token(
         save_run_state(state, request.state_path)
     monkeypatch.setattr(
         "orchestune.complete.cli._credentials",
-        lambda _: (None, None, request.state_path),
+        lambda *args: (None, None, request.state_path),
     )
     before = request.state_path.read_bytes()
     assert (

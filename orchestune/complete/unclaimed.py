@@ -27,7 +27,6 @@ from orchestune.complete.publication import (
     publish_reserved_completion_locked,
 )
 from orchestune.complete.replay import find_replay
-from orchestune.infra.private_tokens import _read_owner_token, _write_owner_token
 from orchestune.labels import StatusLabel
 from orchestune.ledger.completion_reservations import (
     completion_record,
@@ -159,16 +158,12 @@ def _validate_pending_identity(
 def _authenticate(
     request: CompleteRequest, record: CompletionJournalRecord, state_path: Path
 ) -> str:
-    token = request.owner_token or _read_owner_token(
-        token_directory(state_path), record.completion_id
-    )
-    if not token or owner_token_digest(token) != record.owner_token_digest:
+    if request.completion_id != record.completion_id:
         _reject(
-            CompleteFailureReason.OWNER_TOKEN_MISMATCH,
-            "Unclaimed completion owner token is missing or differs",
+            CompleteFailureReason.GENERATION_MISMATCH,
+            f"Resume this local completion with --completion-id {record.completion_id}",
         )
-    assert token is not None
-    return token
+    return ""
 
 
 def _new_record(
@@ -249,14 +244,10 @@ def complete_unclaimed(
         if record is None:
             completion_id = request.completion_id or f"completion-{uuid4().hex}"
             _validate_id(completion_id)
-            token = request.owner_token or _read_owner_token(
-                token_directory(state_path), completion_id
-            )
-            token = token or new_owner_token().value
+            token = new_owner_token().value
             evidence = _issue_evidence(forge, request.issue_number, pending=False)
             record = _new_record(request, repository, completion_id, token, evidence)
             report(record)
-            _write_owner_token(token_directory(state_path), completion_id, token)
             record = reserve_completion_locked(
                 record, owner_token=token, state_path=state_path
             )

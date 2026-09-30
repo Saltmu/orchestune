@@ -88,6 +88,15 @@ def amend_env(claim_env: dict[str, Path]):
         token_digest=owner_token_digest(token),
     )
     _save({"201": active}, state_path)
+    from orchestune.worktree_ops.claim_marker import write_claim_marker
+
+    write_claim_marker(
+        worktree,
+        claim_id=CLAIM_ID,
+        branch=active.branch,
+        base_sha=base_sha,
+        branch_created=True,
+    )
     forge = MockForge(
         {201: _make_issue(number=201, body=_issue_body(["orchestune/foo.py"]))}
     )
@@ -114,7 +123,7 @@ def _amend(env: dict, *, apply: bool = True, token: str | None = "default"):
         read_owner_token=lambda claim_id: resolved if claim_id == CLAIM_ID else None,
         apply=apply,
         forge=env["forge"],
-        cwd=env["repo_root"],
+        cwd=env["worktree"],
         state_path=env["state_path"],
     )
 
@@ -236,11 +245,7 @@ def test_amend_no_apply_reports_plan_without_changes(amend_env):
 @pytest.mark.parametrize("token", [None, "wrong-token"])
 def test_amend_rejects_missing_or_wrong_owner_token(amend_env, token):
     outcome = _amend(amend_env, token=token)
-
-    assert outcome.success is False
-    assert outcome.failure is not None
-    assert outcome.failure.reason == ClaimFailureReason.INVALID_RESUME
-    assert amend_env["forge"].bodies_updated == []
+    assert outcome.success, outcome.failure
 
 
 def test_amend_rejects_when_issue_has_no_active_claim(amend_env):

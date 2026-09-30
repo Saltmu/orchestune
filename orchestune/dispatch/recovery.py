@@ -92,6 +92,7 @@ from orchestune.ledger.completion_reservations import (
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
+    claim_was_released,
     recovered_claim_id,
     recovered_owner_token_digest,
     recovery_repository_id,
@@ -759,8 +760,7 @@ def _include_queued_attempts(
         if MARKER in issue.body
     )
     combined = {issue.number: issue for issue in (*issues, *queued)}
-    # Keep legacy recovery unchanged, but do not widen journal recovery to tasks
-    # owned by a different parent dispatcher.
+    # Journal recovery is limited to tasks owned by this parent Dispatcher.
     return tuple(
         issue
         for issue in combined.values()
@@ -1058,6 +1058,8 @@ def _apply_missing_entry_bookkeeping(
     if len(selected) != 1 or not config.apply or not _restorable(selected[0][2]):
         return _skipped(command, "missing-entry precondition no longer holds")
     key, subtask_id, active = selected[0]
+    if claim_was_released(run_state, active.issue_number, active.claim_id):
+        return _skipped(command, "claim generation was explicitly released")
     labels = config.resolved_forge.get_issue_labels(active.issue_number)
     if (
         StatusLabel.IN_PROGRESS not in labels
