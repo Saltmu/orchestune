@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 
@@ -15,14 +15,122 @@ from orchestune.claim.contracts import (
 from orchestune.claim.ownership import (
     ClaimConflictReason,
     OwnerToken,
+    build_claim_info,
     build_reservation,
     evaluate_claim_conflicts,
     new_claim_id,
     new_owner_token,
     owner_token_digest,
+    with_claim,
+)
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
 )
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.task_metadata import CycleTask
+from tests.dispatch_test_support import make_test_active_worktree
+
+
+def test_dispatch_claim_identity_factory_preserves_owner_and_scope() -> None:
+    request = ClaimRequest(
+        issue_number=10, owner_kind=OwnerKind.DISPATCH, owner_token="dispatch-token"
+    )
+    claim = build_claim_info(request, _task(10, footprint=("a.py",)))
+    assert claim.owner_kind == "dispatch"
+    assert claim.claim_id and claim.claim_stage == "reserved"
+    assert claim.owner_token_digest == owner_token_digest("dispatch-token")
+    assert claim.reservation_kind == "footprint"
+    assert build_claim_info(request, _task(10)).reservation_kind == "repository"
+
+
+def test_claim_update_replaces_only_claim_and_keeps_original_generation() -> None:
+    original = ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(10, "task/10", "worktrees/10", ("a.py",)),
+        launch=LaunchInfo(pid=123, launch_phase="launched"),
+        claim=ClaimInfo(
+            owner_kind="dispatch",
+            claim_id="generation-1",
+            owner_token_digest="digest-1",
+        ),
+        completion=ActiveCompletionJournal(
+            completion_id="completion-1", completion_payload={"items": [1]}
+        ),
+    )
+    updated = with_claim(
+        original, replace(original.claim, claim_stage="completed", base_sha="base")
+    )
+    assert updated.claim == replace(
+        original.claim, claim_stage="completed", base_sha="base"
+    )
+    assert updated.core == original.core
+    assert updated.launch == original.launch
+    assert updated.completion == original.completion
+    assert original.claim.claim_stage is None
+    assert original.claim.claim_id == updated.claim.claim_id == "generation-1"
+    assert updated.claim.owner_token_digest == "digest-1"
+
+
+@pytest.mark.parametrize(
+    "journal",
+    [
+        ActiveCompletionJournal(completion_id="completion-1"),
+        ActiveCompletionJournal(
+            completion_id="completion-1", completion_stage="handed_off"
+        ),
+        ActiveCompletionJournal(
+            completion_id="completion-1", completion_handoff_ready=True
+        ),
+    ],
+)
+def test_completion_lifecycle_suppresses_amend_recovery_hint(
+    journal: ActiveCompletionJournal,
+) -> None:
+    from orchestune.claim.ownership import held_claim_next_actions
+
+    active = ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(10, "task/10", "worktrees/10", ("a.py",)),
+        launch=LaunchInfo(pid=123),
+        claim=ClaimInfo(
+            owner_kind="interactive", claim_id="generation-1", claim_stage="completed"
+        ),
+        completion=journal,
+    )
+    assert not any(
+        "--amend-footprint" in action for action in held_claim_next_actions(active)
+    )
+
+
+@pytest.mark.parametrize(
+    "journal",
+    [
+        ActiveCompletionJournal(completion_stage="handed_off"),
+        ActiveCompletionJournal(completion_handoff_ready=True),
+    ],
+)
+def test_handoff_candidate_without_identity_preserves_legacy_claim_eligibility(
+    journal: ActiveCompletionJournal,
+) -> None:
+    from orchestune.claim.amend import _check_eligibility
+    from orchestune.claim.ownership import held_claim_next_actions
+
+    active = ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(10, "task/10", "worktrees/10", ("a.py",)),
+        launch=LaunchInfo(pid=123),
+        claim=ClaimInfo(
+            owner_kind="interactive",
+            claim_id="generation-1",
+            claim_stage="completed",
+            repository_id="repo/.git",
+        ),
+        completion=journal,
+    )
+    assert any(
+        "--amend-footprint" in action for action in held_claim_next_actions(active)
+    )
+    _check_eligibility(active, "repo/.git")
 
 
 @dataclass(frozen=True)
@@ -62,7 +170,7 @@ def _active(
     reservation_kind: str = "footprint",
     forced_serial: bool = False,
 ) -> ActiveWorktree:
-    return ActiveWorktree(
+    return make_test_active_worktree(
         issue_number=issue_number,
         branch=f"feat/issue-{issue_number}",
         worktree_path=f"/tmp/issue-{issue_number}",
@@ -82,7 +190,7 @@ def _conflict(
 ) -> ClaimConflictReason:
     result = evaluate_claim_conflicts(
         candidate,
-        RunState(active_worktrees={str(active.issue_number): active}),
+        RunState(active_worktrees={str(active.core.issue_number): active}),
         _View(
             {
                 candidate_task.issue_number: candidate_task,
@@ -120,12 +228,12 @@ def test_build_reservation_uses_footprint_or_explicit_repository_scope() -> None
     footprint = build_reservation(request, _task(10, footprint=("a.py",)))
     repository = build_reservation(request, _task(10))
 
-    assert footprint.declared_footprint == ("a.py",)
-    assert footprint.reservation_kind == ReservationKind.FOOTPRINT.value
-    assert repository.declared_footprint == ()
-    assert repository.reservation_kind == ReservationKind.REPOSITORY.value
-    assert footprint.claim_id and footprint.claim_stage == "reserved"
-    assert footprint.owner_token_digest is not None
+    assert footprint.core.declared_footprint == ("a.py",)
+    assert footprint.claim.reservation_kind == ReservationKind.FOOTPRINT.value
+    assert repository.core.declared_footprint == ()
+    assert repository.claim.reservation_kind == ReservationKind.REPOSITORY.value
+    assert footprint.claim.claim_id and footprint.claim.claim_stage == "reserved"
+    assert footprint.claim.owner_token_digest is not None
 
 
 def test_build_reservation_requires_the_caller_to_retain_an_owner_token() -> None:
@@ -216,7 +324,7 @@ def test_forced_serial_without_footprint_overlap_does_not_conflict() -> None:
     active = _active(11, forced_serial=True, footprint=("z.py",))
     result = evaluate_claim_conflicts(
         candidate,
-        RunState(active_worktrees={str(active.issue_number): active}),
+        RunState(active_worktrees={str(active.core.issue_number): active}),
         _View({10: _task(10, footprint=("a.py",)), 11: _task(11, footprint=("z.py",))}),
     )
     assert result is None
