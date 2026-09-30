@@ -832,3 +832,13 @@ def claim_was_released(
         and receipt.get("claim_id") == claim_id
         for receipt in state.recovery_receipts.values()
     )
+
+
+def attempt_was_released(state: RunState, issue_number: int, attempt_id: str) -> bool:
+    """A released claim's launch journal must not reconstruct another generation."""
+    return any(
+        receipt.get("operation") == "release"
+        and receipt.get("issue_number") == issue_number
+        and receipt.get("active", {}).get("launch_attempt_id") == attempt_id
+        for receipt in state.recovery_receipts.values()
+    )

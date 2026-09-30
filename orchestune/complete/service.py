@@ -75,7 +75,11 @@ def _head_sha(worktree: Path) -> str | None:
 
 
 def _validate_claim_context(
-    active: Any | None, repository: str, worktree: Path, state_path: Path
+    active: Any | None,
+    repository: str,
+    worktree: Path,
+    state_path: Path,
+    expected_claim_id: str | None,
 ) -> None:
     if active is None:
         return
@@ -94,7 +98,7 @@ def _validate_claim_context(
         )
     try:
         validate_local_claim(
-            active, active.claim_id, cwd=worktree, state_path=state_path
+            active, expected_claim_id, cwd=worktree, state_path=state_path
         )
     except ValueError as error:
         raise CompletionJournalError(
@@ -359,7 +363,9 @@ def _select_record(
     request, active = context.request, context.active
     assert active is not None
     assert context.worktree is not None
-    _validate_claim_context(active, repository, context.worktree, context.state_path)
+    _validate_claim_context(
+        active, repository, context.worktree, context.state_path, request.claim_id
+    )
     record = _pending(request, state, repository, active.claim_id or "")
     if record is None:
         assert context.worktree is not None
@@ -431,6 +437,7 @@ def _publish_request(
             repository,
             worktree,
             state_path,
+            request.claim_id,
         )
         _check(request, state, worktree, forge)
         context = PublicationContext(request, state_path, worktree, forge, active)
@@ -477,6 +484,7 @@ def _complete(
         workspace.repository_identity,
         worktree,
         state_path,
+        request.claim_id,
     )
     _check(request, state, worktree, forge)
     if request.dry_run:

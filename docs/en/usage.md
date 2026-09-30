@@ -582,6 +582,11 @@ registered worktree and checked-out branch. Existing token files can remain;
 `owner_token_digest` in old state/journals remains readable as compatibility metadata,
 and no bulk state migration is needed. Routine API authentication is unchanged.
 
+A marker identifies a worktree generation, not an OS process. Stop old agents
+before reusing that worktree: a process that reads a replaced marker cannot be
+distinguished from the new agent. Service callers should keep the expected claim
+ID captured at launch; that old ID remains rejected after reassignment.
+
 Run diagnosis from the primary checkout. Preview is read-only:
 
 ```bash

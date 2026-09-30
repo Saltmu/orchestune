@@ -146,3 +146,19 @@ def test_dispatch_release_and_old_preview_hold(local_claim):
     with run_state_lock(workspace.lock_path):
         save_run_state(state, workspace.run_state_path)
     assert not recover_claim(request, cwd=workspace.repository_root).success
+
+
+def test_unprepared_claim_reports_no_worktree(local_claim):
+    from orchestune.recovery.contracts import RecoveryRequest
+    from orchestune.recovery.service import recover_claim
+
+    workspace, active, _ = local_claim
+    state = load_run_state_readonly(workspace.run_state_path)
+    state.active_worktrees["7"] = replace(
+        active, worktree_path="", claim_stage="reserved"
+    )
+    with run_state_lock(workspace.lock_path):
+        save_run_state(state, workspace.run_state_path)
+    result = recover_claim(RecoveryRequest(7), cwd=workspace.repository_root)
+    assert result.success
+    assert result.diagnostics["worktree_status"] == "absent"

@@ -89,6 +89,7 @@ def _apply_recovery(
             )
         if request.restore_marker:
             assert active.claim_id is not None
+            # Recovery cannot prove who created the branch; retain it on rollback.
             write_claim_marker(
                 target,
                 claim_id=active.claim_id,

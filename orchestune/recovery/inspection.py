@@ -26,7 +26,7 @@ def inspect_claim(
     restore_marker: bool,
 ) -> tuple[dict[str, Any], str | None]:
     target = registered_claim_path(active, workspace.run_state_path)
-    marker = read_claim_marker(target)
+    marker = read_claim_marker(target) if active.worktree_path else None
     running = bool(active.pid and is_process_alive(active.pid))
     diagnostics = {
         "claim_id": active.claim_id,
@@ -40,7 +40,7 @@ def inspect_claim(
         "completion_id": active.completion_id,
         "completion_stage": active.completion_stage,
         "worktree_status": inspect_worktree_status(target).value
-        if target.exists()
+        if active.worktree_path and target.exists()
         else "absent",
         "marker": "missing" if marker is None else "present",
         "worktree_action": "retain",
@@ -55,7 +55,7 @@ def _worktree_problem(
     active: ActiveWorktree, workspace: ClaimWorkspace, cwd: Path, restore_marker: bool
 ) -> str | None:
     target = registered_claim_path(active, workspace.run_state_path)
-    marker = read_claim_marker(target)
+    marker = read_claim_marker(target) if active.worktree_path else None
     if active.repository_id != workspace.repository_identity:
         return "repository identity differs"
     if active.worktree_path and (

@@ -569,6 +569,10 @@ active回収後もreplay receiptと後続処理の対象・設定情報を保持
 旧tokenファイルは残っていても支障ありません。旧state/journalの`owner_token_digest`は
 互換用メタデータとして読めるため、一括移行やstate全削除は不要です。Routine API認証は従来どおりです。
 
+markerはworktreeの世代を識別し、OS processの認証は行いません。同じworktreeを再利用する前に
+古いagentを停止してください。置換後のmarkerを読み直すprocessは、新agentと区別できません。
+サービス呼び出し側は起動時に取得した期待claim IDを保持してください。古いIDによる操作は再割当て後も拒否します。
+
 primary checkoutから診断してください。既定は変更を行わないpreviewです。
 
 ```bash
