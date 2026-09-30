@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import fields
 from pathlib import Path
@@ -111,6 +111,43 @@ def make_test_task(issue_number: int = 1, **overrides: Any) -> Task:
     return Task(**values)
 
 
+def _is_json_value(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return all(
+            isinstance(key, str) and _is_json_value(item) for key, item in value.items()
+        )
+    if isinstance(value, list | tuple):
+        return all(_is_json_value(item) for item in value)
+    return value is None or isinstance(value, str | bool | int | float)
+
+
+def _has_canonical_active_worktree_shape(values: dict[str, Any]) -> bool:
+    issue_number = values["issue_number"]
+    core_is_valid = (
+        isinstance(issue_number, int)
+        and not isinstance(issue_number, bool)
+        and issue_number > 0
+        and all(
+            isinstance(value, str)
+            for value in (
+                values["branch"],
+                values["worktree_path"],
+                values.get("base_branch", "origin/main"),
+            )
+        )
+        and isinstance(values["declared_footprint"], tuple)
+        and all(isinstance(path, str) for path in values["declared_footprint"])
+    )
+    completion_is_valid = all(
+        value is None or (isinstance(value, Mapping) and _is_json_value(value))
+        for value in (
+            values.get("completion_payload"),
+            values.get("completion_policy_config"),
+        )
+    )
+    return core_is_valid and completion_is_valid
+
+
 def make_test_active_worktree(
     issue_number: int = 1, **overrides: Any
 ) -> ActiveWorktree:
@@ -134,58 +171,57 @@ def make_test_active_worktree(
             "ActiveWorktree.__init__() got an unexpected keyword argument "
             f"{unknown[0]!r}"
         )
-    try:
-        return ActiveWorktree.from_records(
-            core=ActiveWorktreeCore(
-                issue_number=values["issue_number"],
-                branch=values["branch"],
-                worktree_path=values["worktree_path"],
-                declared_footprint=tuple(values["declared_footprint"]),
-                base_branch=values.get("base_branch", "origin/main"),
-            ),
-            launch=LaunchInfo(
-                pid=values.get("pid"),
-                started_at=values.get("started_at"),
-                recompute_count=values.get("recompute_count", 0),
-                forced_serial=values.get("forced_serial", False),
-                external_id=values.get("external_id"),
-                external_url=values.get("external_url"),
-                estimated_tokens=values.get("estimated_tokens"),
-                token_estimate_recorded=values.get("token_estimate_recorded", False),
-                profile=values.get("profile"),
-                model=values.get("model"),
-                reasoning_effort=values.get("reasoning_effort"),
-                selection_reason=values.get("selection_reason"),
-                launch_attempt_id=values.get("launch_attempt_id"),
-                launch_phase=values.get("launch_phase"),
-            ),
-            claim=ClaimInfo(
-                owner_kind=values.get("owner_kind", "dispatch"),
-                claim_id=values.get("claim_id"),
-                claim_stage=values.get("claim_stage"),
-                base_ref=values.get("base_ref"),
-                base_sha=values.get("base_sha"),
-                reservation_kind=values.get("reservation_kind", "footprint"),
-                repository_id=values.get("repository_id"),
-                claimed_at=values.get("claimed_at"),
-                owner_token_digest=values.get("owner_token_digest"),
-            ),
-            completion=ActiveCompletionJournal(
-                completion_id=values.get("completion_id"),
-                completion_result=values.get("completion_result"),
-                completion_stage=values.get("completion_stage"),
-                completion_payload=values.get("completion_payload"),
-                completion_comment_id=values.get("completion_comment_id"),
-                completion_comment_url=values.get("completion_comment_url"),
-                completion_handoff_ready=values.get("completion_handoff_ready", False),
-                completion_policy_config=values.get("completion_policy_config"),
-            ),
-        )
-    except (TypeError, ValueError):
+    if not _has_canonical_active_worktree_shape(values):
         # Some reader tests deliberately need malformed legacy records. Keep
         # those on the flat compatibility constructor so canonical validation
         # remains exercised independently of the reader under test.
         return ActiveWorktree(**values)
+    return ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=values["issue_number"],
+            branch=values["branch"],
+            worktree_path=values["worktree_path"],
+            declared_footprint=tuple(values["declared_footprint"]),
+            base_branch=values.get("base_branch", "origin/main"),
+        ),
+        launch=LaunchInfo(
+            pid=values.get("pid"),
+            started_at=values.get("started_at"),
+            recompute_count=values.get("recompute_count", 0),
+            forced_serial=values.get("forced_serial", False),
+            external_id=values.get("external_id"),
+            external_url=values.get("external_url"),
+            estimated_tokens=values.get("estimated_tokens"),
+            token_estimate_recorded=values.get("token_estimate_recorded", False),
+            profile=values.get("profile"),
+            model=values.get("model"),
+            reasoning_effort=values.get("reasoning_effort"),
+            selection_reason=values.get("selection_reason"),
+            launch_attempt_id=values.get("launch_attempt_id"),
+            launch_phase=values.get("launch_phase"),
+        ),
+        claim=ClaimInfo(
+            owner_kind=values.get("owner_kind", "dispatch"),
+            claim_id=values.get("claim_id"),
+            claim_stage=values.get("claim_stage"),
+            base_ref=values.get("base_ref"),
+            base_sha=values.get("base_sha"),
+            reservation_kind=values.get("reservation_kind", "footprint"),
+            repository_id=values.get("repository_id"),
+            claimed_at=values.get("claimed_at"),
+            owner_token_digest=values.get("owner_token_digest"),
+        ),
+        completion=ActiveCompletionJournal(
+            completion_id=values.get("completion_id"),
+            completion_result=values.get("completion_result"),
+            completion_stage=values.get("completion_stage"),
+            completion_payload=values.get("completion_payload"),
+            completion_comment_id=values.get("completion_comment_id"),
+            completion_comment_url=values.get("completion_comment_url"),
+            completion_handoff_ready=values.get("completion_handoff_ready", False),
+            completion_policy_config=values.get("completion_policy_config"),
+        ),
+    )
 
 
 def make_test_cycle_context(

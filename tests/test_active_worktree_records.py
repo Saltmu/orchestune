@@ -170,3 +170,17 @@ def test_existing_flat_constructor_remains_available_during_migration() -> None:
 def test_shared_active_worktree_factory_rejects_unknown_override_keys() -> None:
     with pytest.raises(TypeError, match="unexpected keyword argument 'claim_stge'"):
         make_test_active_worktree(claim_stge="completed")
+
+
+def test_shared_active_worktree_factory_propagates_nested_factory_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_nested_factory(cls: type[ActiveWorktree], **kwargs: Any) -> ActiveWorktree:
+        del cls, kwargs
+        raise TypeError("nested factory regression")
+
+    monkeypatch.setattr(
+        ActiveWorktree, "from_records", classmethod(fail_nested_factory)
+    )
+    with pytest.raises(TypeError, match="nested factory regression"):
+        make_test_active_worktree()

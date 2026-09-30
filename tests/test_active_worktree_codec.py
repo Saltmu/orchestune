@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 
 from orchestune.ledger.active_codec import (
+    _ACTIVE_FIELD_NAMES,
     decode_active_worktree,
     encode_active_worktree,
 )
+from orchestune.ledger.active_records import ActiveWorktree
 from orchestune.ledger.run_state import load_run_state
 
 FIXTURES = Path(__file__).parent / "fixtures" / "active_worktree_compat"
+
+
+def test_codec_field_order_covers_the_flat_active_worktree_schema() -> None:
+    assert _ACTIVE_FIELD_NAMES == tuple(item.name for item in fields(ActiveWorktree))
 
 
 def test_flat_codec_matches_frozen_normalized_records_and_field_order() -> None:
