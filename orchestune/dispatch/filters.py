@@ -7,7 +7,6 @@ from orchestune.dependencies.resolution import (
     EMPTY_DEPENDENCIES,
     TaskDependencies,
 )
-from orchestune.ledger.active_lifecycle import ActiveWorktreeLifecycle, lifecycle
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.task_metadata import TaskMetadata
 
@@ -58,7 +57,6 @@ def _is_serializing_active(active: ActiveWorktree) -> bool:
         active.launch.forced_serial
         or active.claim.reservation_kind == ReservationKind.REPOSITORY
         or active.claim.claim_stage == ClaimStage.RESERVED
-        or lifecycle(active) is ActiveWorktreeLifecycle.RESERVED
     )
 
 
