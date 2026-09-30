@@ -121,6 +121,8 @@ def _is_json_value(value: Any) -> bool:
     return value is None or isinstance(value, str | bool | int | float)
 
 
+# Mirror the canonical shape checks in ActiveWorktree.from_records. Keep these
+# aligned so only malformed reader fixtures bypass the nested factory.
 def _has_canonical_active_worktree_shape(values: dict[str, Any]) -> bool:
     issue_number = values["issue_number"]
     core_is_valid = (
@@ -135,7 +137,7 @@ def _has_canonical_active_worktree_shape(values: dict[str, Any]) -> bool:
                 values.get("base_branch", "origin/main"),
             )
         )
-        and isinstance(values["declared_footprint"], tuple)
+        and isinstance(values["declared_footprint"], tuple | list)
         and all(isinstance(path, str) for path in values["declared_footprint"])
     )
     completion_is_valid = all(

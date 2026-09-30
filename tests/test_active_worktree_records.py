@@ -184,3 +184,9 @@ def test_shared_active_worktree_factory_propagates_nested_factory_errors(
     )
     with pytest.raises(TypeError, match="nested factory regression"):
         make_test_active_worktree()
+
+
+def test_shared_active_worktree_factory_normalizes_list_footprints() -> None:
+    active = make_test_active_worktree(declared_footprint=["src/example.py"])
+
+    assert active.declared_footprint == ("src/example.py",)
