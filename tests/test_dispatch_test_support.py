@@ -11,6 +11,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, Task
 from tests.conftest import make_issue
@@ -64,13 +70,16 @@ class TestMakeTestTask:
 
 class TestMakeTestActiveWorktree:
     def test_defaults_describe_a_live_worktree(self):
-        assert make_test_active_worktree() == ActiveWorktree(
-            issue_number=1,
-            branch="claude/issue-1-task-a",
-            worktree_path="worktrees/w1",
-            pid=111,
-            started_at=1_699_999_000.0,
-            declared_footprint=(),
+        assert make_test_active_worktree() == ActiveWorktree.from_records(
+            core=ActiveWorktreeCore(
+                issue_number=1,
+                branch="claude/issue-1-task-a",
+                worktree_path="worktrees/w1",
+                declared_footprint=(),
+            ),
+            launch=LaunchInfo(pid=111, started_at=1_699_999_000.0),
+            claim=ClaimInfo(),
+            completion=ActiveCompletionJournal(),
         )
 
     def test_branch_follows_the_issue_number_unless_overridden(self):

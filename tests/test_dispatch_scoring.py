@@ -5,8 +5,9 @@ from orchestune.dispatch.scoring import (
     quota_available,
     select_next_tasks,
 )
-from orchestune.ledger.run_state import ActiveWorktree, CompletedWorktree, RunState
+from orchestune.ledger.run_state import CompletedWorktree, RunState
 from orchestune.models import IssueRecord
+from tests.dispatch_test_support import make_test_active_worktree
 
 
 def _issue(
@@ -320,8 +321,20 @@ class TestQuotaAvailable:
     def test_zero_when_concurrent_limit_reached(self):
         state = RunState(
             active_worktrees={
-                "1": ActiveWorktree(1, "b1", "w1", 1, 1_699_999_000.0, ()),
-                "2": ActiveWorktree(2, "b2", "w2", 2, 1_699_999_000.0, ()),
+                "1": make_test_active_worktree(
+                    1,
+                    branch="b1",
+                    worktree_path="w1",
+                    pid=1,
+                    started_at=1_699_999_000.0,
+                ),
+                "2": make_test_active_worktree(
+                    2,
+                    branch="b2",
+                    worktree_path="w2",
+                    pid=2,
+                    started_at=1_699_999_000.0,
+                ),
             },
             launch_history=[],
         )
@@ -387,7 +400,11 @@ class TestSelectNextTasks:
 
     def test_excludes_candidates_conflicting_with_an_active_task(self):
         state = RunState(
-            active_worktrees={"1": ActiveWorktree(1, "b", "w", 1, 1_699_999_000.0, ())},
+            active_worktrees={
+                "1": make_test_active_worktree(
+                    1, branch="b", worktree_path="w", pid=1, started_at=1_699_999_000.0
+                )
+            },
             launch_history=[],
         )
         conflicting = _task(2, priority="high")
@@ -429,7 +446,11 @@ class TestSelectNextTasks:
 
     def test_excludes_already_active_issue(self):
         state = RunState(
-            active_worktrees={"1": ActiveWorktree(1, "b", "w", 1, 1_699_999_000.0, ())},
+            active_worktrees={
+                "1": make_test_active_worktree(
+                    1, branch="b", worktree_path="w", pid=1, started_at=1_699_999_000.0
+                )
+            },
             launch_history=[],
         )
         active_task = _task(1)
