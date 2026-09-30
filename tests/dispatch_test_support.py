@@ -15,6 +15,7 @@ from __future__ import annotations
 import tempfile
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
+from dataclasses import fields
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -127,6 +128,12 @@ def make_test_active_worktree(
         "declared_footprint": (),
     }
     values.update(overrides)
+    unknown = sorted(set(values) - {field.name for field in fields(ActiveWorktree)})
+    if unknown:
+        raise TypeError(
+            "ActiveWorktree.__init__() got an unexpected keyword argument "
+            f"{unknown[0]!r}"
+        )
     try:
         return ActiveWorktree.from_records(
             core=ActiveWorktreeCore(

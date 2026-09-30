@@ -65,9 +65,10 @@ def decode_active_worktree(value: Mapping[str, Any]) -> ActiveWorktree:
 def encode_active_worktree(active: ActiveWorktree) -> dict[str, Any]:
     """Encode the transitional DTO as the established flat JSON object.
 
-    Iteration follows the frozen dataclass field order. Footprints and nested
-    JSON values are copied back to ordinary list/dict containers, and a null
-    ``completion_policy_config`` retains its historical omission.
+    Iteration follows the frozen ``_ACTIVE_FIELD_NAMES`` schema order.
+    Footprints and nested JSON values are copied back to ordinary list/dict
+    containers, and a null ``completion_policy_config`` retains its historical
+    omission.
     """
     if not isinstance(active, ActiveWorktree):
         raise TypeError("active must be ActiveWorktree")

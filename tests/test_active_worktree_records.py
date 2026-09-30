@@ -14,6 +14,7 @@ from orchestune.ledger.active_records import (
     ClaimInfo,
     LaunchInfo,
 )
+from tests.dispatch_test_support import make_test_active_worktree
 
 
 def _records(
@@ -164,3 +165,8 @@ def test_existing_flat_constructor_remains_available_during_migration() -> None:
     assert active.claim.owner_kind == "dispatch"
     assert active.completion.completion_id is None
     assert replace(active, branch="task/18b").branch == "task/18b"
+
+
+def test_shared_active_worktree_factory_rejects_unknown_override_keys() -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument 'claim_stge'"):
+        make_test_active_worktree(claim_stge="completed")
