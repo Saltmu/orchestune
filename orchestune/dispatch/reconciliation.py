@@ -47,14 +47,14 @@ def _collect_active_conflict_subtask_ids(
     """アクティブなワークツリーが持つフットプリントと競合するサブタスクIDの集合を収集する。"""
     active_conflict_subtask_ids = set()
     for active in run_state.active_worktrees.values():
-        active_task = ctx.task(active.issue_number)
+        active_task = ctx.task(active.core.issue_number)
         if not active_task or not active_task.subtask_id:
             continue
 
         deviated = check_footprint_deviation(
-            active.worktree_path,
-            active.declared_footprint,
-            base=active.base_branch,
+            active.core.worktree_path,
+            active.core.declared_footprint,
+            base=active.core.base_branch,
             min_changed_lines=config.deviation_buffer_lines,
         )
         if deviated is None:
@@ -62,7 +62,9 @@ def _collect_active_conflict_subtask_ids(
             for subtask_id in subtasks_for_recompute:
                 active_conflict_subtask_ids.add(subtask_id)
             continue
-        merged_footprint = tuple(dict.fromkeys([*active.declared_footprint, *deviated]))
+        merged_footprint = tuple(
+            dict.fromkeys([*active.core.declared_footprint, *deviated])
+        )
         try:
             _, conflicts = recompute_dag_for_footprint_change(
                 subtasks_for_recompute,
@@ -150,7 +152,7 @@ def _confirm_queued_recovery(
                 ctx,
                 receipt,
                 has_active_entry=lambda number: any(
-                    active.issue_number == number
+                    active.core.issue_number == number
                     for active in run_state.active_worktrees.values()
                 ),
             ),
