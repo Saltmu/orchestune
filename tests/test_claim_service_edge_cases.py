@@ -41,7 +41,18 @@ class TestAdditionalClaimServiceEdgeCases:
         token = new_owner_token()
         claim_id = new_claim_id()
         wt_path = claim_env["worktrees_dir"] / "claude-issue-112-test-task"
-        wt_path.mkdir(parents=True, exist_ok=True)
+        from orchestune.infra.git_cli import run_git
+        from orchestune.worktree_ops.claim_marker import write_claim_marker
+
+        branch = wt_path.name.replace("claude-issue-", "claude/issue-")
+        run_git(["worktree", "add", "-b", branch, str(wt_path)], cwd=repo_root)
+        write_claim_marker(
+            wt_path,
+            claim_id=claim_id,
+            branch=branch,
+            base_sha=None,
+            branch_created=True,
+        )
 
         active = make_test_active_worktree(
             issue_number=112,
@@ -87,7 +98,18 @@ class TestAdditionalClaimServiceEdgeCases:
         token = new_owner_token()
         claim_id = new_claim_id()
         wt_path = claim_env["worktrees_dir"] / "claude-issue-113-test-task"
-        wt_path.mkdir(parents=True, exist_ok=True)
+        from orchestune.infra.git_cli import run_git
+        from orchestune.worktree_ops.claim_marker import write_claim_marker
+
+        branch = wt_path.name.replace("claude-issue-", "claude/issue-")
+        run_git(["worktree", "add", "-b", branch, str(wt_path)], cwd=repo_root)
+        write_claim_marker(
+            wt_path,
+            claim_id=claim_id,
+            branch=branch,
+            base_sha=None,
+            branch_created=True,
+        )
 
         active = make_test_active_worktree(
             issue_number=113,
@@ -313,7 +335,7 @@ class TestAdditionalClaimServiceEdgeCases:
         active = make_test_active_worktree(
             issue_number=122,
             branch="claude/issue-122-task",
-            worktree_path="/tmp/wt122",
+            worktree_path=str(claim_env["worktrees_dir"] / "wt122"),
             pid=None,
             started_at=None,
             declared_footprint=(),
@@ -326,6 +348,20 @@ class TestAdditionalClaimServiceEdgeCases:
             repository_id=(repo_root / ".git").as_posix(),
             claimed_at=0.0,
             owner_token_digest=owner_token_digest(token),
+        )
+        from orchestune.infra.git_cli import run_git
+        from orchestune.worktree_ops.claim_marker import write_claim_marker
+
+        run_git(
+            ["worktree", "add", "-b", active.branch, active.worktree_path],
+            cwd=repo_root,
+        )
+        write_claim_marker(
+            Path(active.worktree_path),
+            claim_id=claim_id,
+            branch=active.branch,
+            base_sha=None,
+            branch_created=True,
         )
         with run_state_lock(state_path.with_suffix(".lock")):
             save_run_state(RunState(active_worktrees={"122": active}), state_path)
@@ -361,7 +397,7 @@ class TestAdditionalClaimServiceEdgeCases:
         active = make_test_active_worktree(
             issue_number=123,
             branch="claude/issue-123-task",
-            worktree_path="/tmp/wt123",
+            worktree_path=str(claim_env["worktrees_dir"] / "wt123"),
             pid=None,
             started_at=None,
             declared_footprint=(),
@@ -374,6 +410,20 @@ class TestAdditionalClaimServiceEdgeCases:
             repository_id=(repo_root / ".git").as_posix(),
             claimed_at=0.0,
             owner_token_digest=owner_token_digest(token),
+        )
+        from orchestune.infra.git_cli import run_git
+        from orchestune.worktree_ops.claim_marker import write_claim_marker
+
+        run_git(
+            ["worktree", "add", "-b", active.branch, active.worktree_path],
+            cwd=repo_root,
+        )
+        write_claim_marker(
+            Path(active.worktree_path),
+            claim_id=claim_id,
+            branch=active.branch,
+            base_sha=None,
+            branch_created=True,
         )
         with run_state_lock(state_path.with_suffix(".lock")):
             save_run_state(RunState(active_worktrees={"123": active}), state_path)
@@ -596,6 +646,23 @@ class TestAdditionalClaimServiceEdgeCases:
         with run_state_lock(state_path.with_suffix(".lock")):
             save_run_state(RunState(active_worktrees={"129": active}), state_path)
 
+        from orchestune.infra.git_cli import run_git
+        from orchestune.worktree_ops.claim_marker import write_claim_marker
+
+        run_git(
+            ["worktree", "add", "-b", active.branch, active.worktree_path],
+            cwd=repo_root,
+        )
+        active.repository_id = (repo_root / ".git").as_posix()
+        with run_state_lock(state_path.with_suffix(".lock")):
+            save_run_state(RunState(active_worktrees={"129": active}), state_path)
+        write_claim_marker(
+            Path(active.worktree_path),
+            claim_id=claim_id,
+            branch=active.branch,
+            base_sha=None,
+            branch_created=True,
+        )
         request = ClaimRequest(
             issue_number=129,
             state_path=state_path,

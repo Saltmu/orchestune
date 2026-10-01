@@ -99,3 +99,4 @@ class PrRecord:
     is_files_truncated: bool = False
     title: str = ""
     body: str = ""
+    head_sha: str = ""

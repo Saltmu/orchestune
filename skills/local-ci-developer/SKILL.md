@@ -89,7 +89,7 @@ For a claimed task whose requirement becomes unnecessary, run the `not-needed`
 command from its worktree. `done` and `blocked` require an existing claim.
 `complete` preserves the worktree. Success means the matching result label and durable
 handoff/replay receipt are confirmed, not PR merge, independent review approval, or
-physical collection. Resume the same request with `--completion-id <ID>` and original owner credentials;
+physical collection. Resume the same request with `--completion-id <ID>` and the matching claim marker (or the explicit completion ID for an unclaimed Issue);
 replay does not restore labels after requeue. Without a Dispatcher, rerun GC to
 advance policies; cloud/unclaimed not-needed needs independent approval.
 See [worktree.md](references/worktree.md) for locks, review recovery and legacy holds.

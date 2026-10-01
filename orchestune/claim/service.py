@@ -21,6 +21,7 @@ from orchestune.claim.contracts import (
     OwnerKind,
     ReservationKind,
 )
+from orchestune.claim.local_identity import validate_local_claim
 from orchestune.claim.ownership import (
     ClaimConflict,
     ClaimConflictReason,
@@ -29,7 +30,6 @@ from orchestune.claim.ownership import (
     evaluate_claim_conflicts,
     held_claim_next_actions,
     new_owner_token,
-    owner_token_digest,
     with_claim,
 )
 from orchestune.claim.preflight import (
@@ -612,14 +612,15 @@ def _validate_resume_active(
         )
 
     active = matching[0]
-    expected_digest = owner_token_digest(owner_token)
-    if active.claim.owner_token_digest != expected_digest:
+    if len(matching) != 1 or (
+        fallback_issue_number and active.core.issue_number != fallback_issue_number
+    ):
         return None, ClaimOutcome(
             success=False,
             issue_number=active.core.issue_number,
             failure=ClaimFailure(
                 reason=ClaimFailureReason.INVALID_RESUME,
-                message="Owner token does not match active claim.",
+                message="Claim ID does not uniquely match the requested Issue.",
             ),
         )
     return active, None
@@ -647,6 +648,9 @@ def _handle_request_resume(
     if auth_error is not None or active is None:
         assert auth_error is not None
         return auth_error
+    identity_error = _check_resume_identity(workspace, active, raw_token)
+    if identity_error is not None:
+        return identity_error
     if not apply:
         return ClaimOutcome(
             success=True,
@@ -905,6 +909,23 @@ def _check_resume_identity(
             ),
             owner_token=owner_token,
         )
+    try:
+        validate_local_claim(
+            active,
+            active.claim_id,
+            cwd=workspace.repository_root,
+            state_path=workspace.run_state_path,
+            allow_primary=True,
+            allow_unprepared=True,
+        )
+    except ValueError as error:
+        return _claim_failure(
+            active.issue_number,
+            ClaimFailure(
+                reason=ClaimFailureReason.INVALID_RESUME,
+                message=str(error),
+            ),
+        )
     return None
 
 
@@ -1095,7 +1116,7 @@ def _execute_resume_in_lock(
 
 def resume_claim(
     claim_id: str,
-    owner_token: str | OwnerToken,
+    owner_token: str | OwnerToken = "",
     *,
     forge: Forge | None = None,
     cwd: str | Path | None = None,
@@ -1104,17 +1125,8 @@ def resume_claim(
     default_base: str = "origin/main",
     timeout_seconds: float | None = None,
 ) -> ClaimOutcome:
-    """Resume an interrupted claim session matching a claim_id and owner token."""
-    raw_token = _normalize_owner_token(owner_token)
-    if raw_token is None:
-        return ClaimOutcome(
-            success=False,
-            issue_number=0,
-            failure=ClaimFailure(
-                reason=ClaimFailureReason.INVALID_RESUME,
-                message="Owner token must not be empty.",
-            ),
-        )
+    """Resume the explicitly selected local claim generation."""
+    raw_token = _normalize_owner_token(owner_token) or ""
 
     workspace = resolve_claim_workspace(cwd, explicit_state_path=state_path)
     active_forge = forge or GitHubForge()
