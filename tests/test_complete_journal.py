@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -985,3 +986,45 @@ class TestJournalOwnerApi:
         assert (
             ev_updated.completion.completion_comment_url == "https://example.test/456"
         )
+
+    def test_publication_save_preserves_comment_evidence_when_record_lacks_it(
+        self, tmp_path
+    ):
+        from orchestune.complete.publication import PublicationContext, _save
+
+        state_path = tmp_path / "run_state.json"
+        core = ActiveWorktreeCore(10, "claude/issue-10", "wt", ())
+        active = ActiveWorktree.from_records(
+            core=core,
+            launch=LaunchInfo(),
+            claim=ClaimInfo(claim_id="claim-10"),
+            completion=ActiveCompletionJournal(
+                completion_comment_id="comment-123",
+                completion_comment_url="https://example.test/123",
+            ),
+        )
+        save_run_state_unlocked(RunState(active_worktrees={"10": active}), state_path)
+        context = PublicationContext(
+            request=None,  # type: ignore[arg-type]
+            state_path=state_path,
+            worktree=Path("wt"),
+            forge=None,
+            active=active,
+        )
+        record = CompletionJournalRecord(
+            repository_id="Saltmu/orchestune",
+            issue_number=10,
+            generation_id="claim-10",
+            completion_id="comp-10",
+            owner_token_digest=owner_token_digest(OWNER_TOKEN),
+            request_fingerprint=owner_token_digest("request-fp"),
+            result="done",
+            target_label="status:done",
+            outcome_payload={"issue": 10, "result": "done", "body": "body"},
+            stage=CompleteStage.RESERVED,
+        )
+        with run_state_lock(state_path.with_suffix(".lock")):
+            _save(context, record)
+        saved = load_run_state(state_path).active_worktrees["10"]
+        assert saved.completion.completion_comment_id == "comment-123"
+        assert saved.completion.completion_comment_url == "https://example.test/123"

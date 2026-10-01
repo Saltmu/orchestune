@@ -15,13 +15,7 @@ def not_needed_policies(
 ) -> tuple[DownstreamPolicyRecord, ...]:
     # A missing worktree does not establish an independent-review exemption.
     if request.result != "not-needed" or (
-        active is not None
-        and (
-            active.launch.external_id
-            if hasattr(active, "launch")
-            else getattr(active, "external_id", None)
-        )
-        is None
+        active is not None and active.launch.external_id is None
     ):
         return ()
     return (
