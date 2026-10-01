@@ -97,12 +97,11 @@ def _validate_replay_generation(
             f"Unclaimed history requires --completion-id {record.completion_id}; "
             "use a new completion-<UUID hex> for an explicitly new request after reopening",
         )
-    active_claim_id = (
-        active.claim.claim_id
-        if getattr(active, "claim", None) is not None
-        else getattr(active, "claim_id", None)
-    )
-    if not explicit and active is not None and active_claim_id != record.generation_id:
+    if (
+        not explicit
+        and active is not None
+        and active.claim.claim_id != record.generation_id
+    ):
         raise CompletionJournalError(
             CompleteFailureReason.GENERATION_MISMATCH,
             "Task was reclaimed; specify the old completion ID to replay its saved result",

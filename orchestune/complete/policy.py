@@ -6,7 +6,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from orchestune.ledger.active_records import _thaw_json
+from orchestune.complete.journal import thaw_json
+from orchestune.complete.preflight import _active_field
 from orchestune.models import Usage
 from orchestune.targets.completion_policy import (
     snapshot_publication_policy as snapshot_publication_policy,
@@ -22,16 +23,14 @@ def _collect_policy_usage(active: Any, snapshot: dict[str, Any]) -> Usage | None
     limit = snapshot.get("max_tokens_per_task")
     if limit is None:
         return None
-    launch = getattr(active, "launch", active)
-    core = getattr(active, "core", active)
     handle = DispatchHandle(
-        pid=launch.pid,
-        external_id=launch.external_id,
-        external_url=launch.external_url,
-        branch_name=core.branch,
-        issue_number=core.issue_number,
-        started_at=launch.started_at,
-        launch_attempt_id=launch.launch_attempt_id,
+        pid=_active_field(active, "launch", "pid"),
+        external_id=_active_field(active, "launch", "external_id"),
+        external_url=_active_field(active, "launch", "external_url"),
+        branch_name=_active_field(active, "core", "branch"),
+        issue_number=_active_field(active, "core", "issue_number"),
+        started_at=_active_field(active, "launch", "started_at"),
+        launch_attempt_id=_active_field(active, "launch", "launch_attempt_id"),
     )
     supported_targets = {"auto", "local", "claude-cli", "agy-cli", "codex-cli"}
     if (
@@ -46,13 +45,9 @@ def evaluate_publication_policy(
     active: Any, worktree: Path, forge: Any
 ) -> dict[str, Any]:
     try:
-        policy_config = (
-            active.completion.completion_policy_config
-            if hasattr(active, "completion")
-            else getattr(active, "completion_policy_config", None)
-        )
+        policy_config = _active_field(active, "completion", "completion_policy_config")
         snapshot = (
-            _thaw_json(policy_config)
+            thaw_json(policy_config)
             if policy_config is not None
             else snapshot_publication_policy(worktree)
         )
@@ -68,9 +63,5 @@ def evaluate_publication_policy(
         return {
             "decision": "unknown",
             "error": str(error),
-            "config": getattr(
-                getattr(active, "completion", active),
-                "completion_policy_config",
-                None,
-            ),
+            "config": _active_field(active, "completion", "completion_policy_config"),
         }

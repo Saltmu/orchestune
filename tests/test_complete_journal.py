@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -943,7 +944,9 @@ class TestJournalOwnerApi:
             launch=launch,
             claim=claim,
             completion=ActiveCompletionJournal(
-                completion_policy_config={"max_tokens_per_task": 1000}
+                completion_comment_id="comment-123",
+                completion_comment_url="https://example.test/123",
+                completion_policy_config={"max_tokens_per_task": 1000},
             ),
         )
         record = CompletionJournalRecord(
@@ -963,6 +966,22 @@ class TestJournalOwnerApi:
         assert updated.completion.completion_policy_config == {
             "max_tokens_per_task": 1000
         }
+        assert updated.completion.completion_comment_id == "comment-123"
+        assert updated.completion.completion_comment_url == "https://example.test/123"
         assert updated.core == core
         assert updated.launch == launch
         assert updated.claim == claim
+
+        # When posting evidence is present, comments are updated
+        ev_record = replace(
+            record,
+            posting_evidence={
+                "comment_id": "new-456",
+                "comment_url": "https://example.test/456",
+            },
+        )
+        ev_updated = apply_completion_record(updated, ev_record)
+        assert ev_updated.completion.completion_comment_id == "new-456"
+        assert (
+            ev_updated.completion.completion_comment_url == "https://example.test/456"
+        )
