@@ -464,8 +464,8 @@ class TestApplyTaskLaunches:
             )
 
         active = run_state.active_worktrees["1"]
-        assert active.started_at == dispatch_boundary_time
-        assert active.started_at != cycle_now
+        assert active.launch.started_at == dispatch_boundary_time
+        assert active.launch.started_at != cycle_now
 
     def test_apply_task_launches_passes_base_branch_to_target(self, tmp_path):
         from unittest.mock import MagicMock, patch
@@ -595,11 +595,12 @@ class TestApplyTaskLaunches:
             )
 
         active = run_state.active_worktrees["1"]
-        assert active.profile == "deep"
-        assert active.model == "claude-3-7-sonnet-20250219"
-        assert active.reasoning_effort == "high"
+        assert active.launch.profile == "deep"
+        assert active.launch.model == "claude-3-7-sonnet-20250219"
+        assert active.launch.reasoning_effort == "high"
         assert (
-            active.selection_reason == "profile 'deep' resolved for target 'claude-cli'"
+            active.launch.selection_reason
+            == "profile 'deep' resolved for target 'claude-cli'"
         )
 
     def test_invalid_subtask_id_with_resolved_dependency_is_not_requeued_on_next_cycle(

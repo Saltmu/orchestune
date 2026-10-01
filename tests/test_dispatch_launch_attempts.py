@@ -92,7 +92,7 @@ def test_saved_handle_restored_after_crash_without_pr(launch_env, stop):
 
         def fail_after_launch(rs, path, **kwargs):
             active = rs.active_worktrees.get("1")
-            if active is not None and active.launch_phase == "launched":
+            if active is not None and active.launch.launch_phase == "launched":
                 raise OSError("crash")
             return original_save(rs, path, **kwargs)
 
@@ -121,9 +121,9 @@ def test_saved_handle_restored_after_crash_without_pr(launch_env, stop):
     _apply_task_launches([plan], fresh, 110.0, config, claim_fn=real_claim_fn(config))
     assert launch.call_count == 1
     active = fresh.active_worktrees["1"]
-    assert active.external_id == "task_remote"
-    assert active.launch_attempt_id
-    assert active.launch_phase == "launched"
+    assert active.launch.external_id == "task_remote"
+    assert active.launch.launch_attempt_id
+    assert active.launch.launch_phase == "launched"
     assert load_run_state(config.run_state_path).active_worktrees["1"] == active
 
 
@@ -138,14 +138,15 @@ def test_reconcile_attempt_adopts_confirmed_launch_over_claim_placeholder(launch
     してはならない——プレースホルダーは採用してよい。"""
     from orchestune.dispatch.attempt_record import LaunchAttempt
     from orchestune.dispatch.launch_attempts import reconcile_attempt
-    from orchestune.ledger.run_state import ActiveWorktree, RunState
+    from orchestune.ledger.run_state import RunState
+    from tests.dispatch_test_support import make_test_active_worktree
 
     forge, config, plan, launch = launch_env
     task = plan.task
     key = str(task.issue_number)
     state = RunState(
         active_worktrees={
-            key: ActiveWorktree(
+            key: make_test_active_worktree(
                 issue_number=task.issue_number,
                 branch=plan.branch_name,
                 worktree_path="worktrees/w1",
@@ -175,12 +176,12 @@ def test_reconcile_attempt_adopts_confirmed_launch_over_claim_placeholder(launch
 
     assert consumed is True
     adopted = state.active_worktrees[key]
-    assert adopted.launch_attempt_id == "confirmed-attempt-1"
-    assert adopted.external_id == "ext-1"
+    assert adopted.launch.launch_attempt_id == "confirmed-attempt-1"
+    assert adopted.launch.external_id == "ext-1"
     # 全面予約が黙って"footprint"へ縮小し、以後の同時実行排他が緩んでは
     # ならない。
-    assert adopted.reservation_kind == "repository"
-    assert adopted.claim_id == "claim-xyz"
+    assert adopted.claim.reservation_kind == "repository"
+    assert adopted.claim.claim_id == "claim-xyz"
 
 
 def test_reconcile_attempt_uses_validated_in_memory_state(launch_env):
@@ -202,7 +203,7 @@ def test_reconcile_attempt_uses_validated_in_memory_state(launch_env):
     state = RunState()
 
     assert reconcile_attempt(attempt, plan.task, state, config) is True
-    assert state.active_worktrees["1"].external_id == "ext-2"
+    assert state.active_worktrees["1"].launch.external_id == "ext-2"
 
 
 def test_unknown_launch_is_not_retried_after_state_loss(launch_env):
@@ -330,7 +331,7 @@ def test_startup_recovery_without_pr_never_requeues_a_possible_launch(
     assert "status:queued" not in forge.get_issue_labels(1)
     assert launch.call_count == 1
     if known:
-        assert fresh.active_worktrees["1"].external_id == "task_remote"
+        assert fresh.active_worktrees["1"].launch.external_id == "task_remote"
     else:
         assert "status:blocked-human-review" in forge.get_issue_labels(1)
 
@@ -360,7 +361,7 @@ def test_lookup_never_implies_permission_to_relaunch(launch_env, result):
     lookup.assert_called_once()
     assert launch.call_count == 1
     if result == "matched":
-        assert fresh.active_worktrees["1"].external_id == "task_matched"
+        assert fresh.active_worktrees["1"].launch.external_id == "task_matched"
     else:
         assert "status:blocked-human-review" in forge.get_issue_labels(1)
 
@@ -403,7 +404,7 @@ def test_hard_stop_before_provider_resumes_same_prepared_attempt(launch_env):
     _reap_stuck_claim_reservations(config)
     fresh = RunState()
     _apply_task_launches([plan], fresh, 110.0, config, claim_fn=real_claim_fn(config))
-    assert fresh.active_worktrees["1"].launch_attempt_id == prepared.attempt_id
+    assert fresh.active_worktrees["1"].launch.launch_attempt_id == prepared.attempt_id
     assert launch.call_count == 1
 
 
@@ -447,8 +448,8 @@ def test_journal_does_not_override_recovery_counter_bookkeeping(launch_env):
     )
     forge.update_issue_body(1, body)
     _run_recovery_bookkeeping_boundary(state, config, now=110.0)
-    assert state.active_worktrees["1"].recompute_count == 3
-    assert state.active_worktrees["1"].forced_serial
+    assert state.active_worktrees["1"].launch.recompute_count == 3
+    assert state.active_worktrees["1"].launch.forced_serial
 
 
 @pytest.mark.parametrize(
@@ -500,7 +501,7 @@ def test_unknown_launch_does_not_abort_other_selected_tasks(launch_env):
     )
     assert selected == [second.task]
     assert read_attempt(forge, 1).phase == "unknown"
-    assert state.active_worktrees["2"].external_id == "task_second"
+    assert state.active_worktrees["2"].launch.external_id == "task_second"
     assert state.launch_history == [100.0, 100.0]
     assert launch.call_count == 2
 
@@ -521,8 +522,8 @@ def test_other_parent_counters_remain_monotonic(launch_env):
         ),
     )
     _run_recovery_bookkeeping_boundary(state, config, now=110.0)
-    assert state.active_worktrees["1"].recompute_count == 3
-    assert state.active_worktrees["1"].forced_serial
+    assert state.active_worktrees["1"].launch.recompute_count == 3
+    assert state.active_worktrees["1"].launch.forced_serial
 
 
 def test_launch_phase_launching_persisted_before_provider_and_failure_holds_launch(
@@ -542,10 +543,10 @@ def test_launch_phase_launching_persisted_before_provider_and_failure_holds_laun
     def mock_save(rs, path, **kwargs):
         active = rs.active_worktrees.get("1")
         if active is not None:
-            save_calls.append(active.launch_phase)
+            save_calls.append(active.launch.launch_phase)
             save_open_prs.append(kwargs.get("open_prs"))
             save_nows.append(kwargs.get("now"))
-            if active.launch_phase == "launching":
+            if active.launch.launch_phase == "launching":
                 raise OSError("disk full during launching save")
         return original_save(rs, path, **kwargs)
 
@@ -571,6 +572,10 @@ def test_launch_phase_launching_persisted_before_provider_and_failure_holds_laun
     assert selected == []
     assert launch.call_count == 0
     assert "launching" in save_calls
+    # #1130: the failed save restores the previous record, not a mutated copy.
+    restored = state.active_worktrees["1"]
+    assert restored.launch.launch_phase is None
+    assert restored.claim.claim_id is not None
     # Claude review findings: open_prs and now must be threaded into launching phase save_run_state
     assert any(prs == [test_pr] for prs in save_open_prs)
     assert any(n == 100.0 for n in save_nows)
@@ -602,7 +607,7 @@ def test_clear_launch_failure_persists_failed_phase(launch_env):
 
     assert selected == []
     persisted = load_run_state(config.run_state_path)
-    assert persisted.active_worktrees["1"].launch_phase == "failed"
+    assert persisted.active_worktrees["1"].launch.launch_phase == "failed"
 
 
 def test_launch_outcome_unknown_preserves_launching_phase_and_worktree(launch_env):
@@ -618,7 +623,38 @@ def test_launch_outcome_unknown_preserves_launching_phase_and_worktree(launch_en
     assert selected == []
     persisted = load_run_state(config.run_state_path)
     assert "1" in persisted.active_worktrees
-    assert persisted.active_worktrees["1"].launch_phase == "launching"
+    assert persisted.active_worktrees["1"].launch.launch_phase == "launching"
+
+
+def test_launched_record_keeps_the_reservation_claim_identity(launch_env):
+    # #1130: launch owner API copies the claim record unchanged from the
+    # reservation and only adds launch-owned fields.
+    forge, config, plan, launch = launch_env
+    state = RunState()
+    original_save = save_run_state
+    reservations = []
+
+    def capture_save(rs, path, **kwargs):
+        active = rs.active_worktrees.get("1")
+        if active is not None and active.launch.launch_phase == "launching":
+            reservations.append(active)
+        return original_save(rs, path, **kwargs)
+
+    with patch("orchestune.dispatch.launch.save_run_state", side_effect=capture_save):
+        selected = _apply_task_launches(
+            [plan], state, 100.0, config, claim_fn=real_claim_fn(config)
+        )
+
+    assert [task.issue_number for task in selected] == [1]
+    persisted = load_run_state(config.run_state_path).active_worktrees["1"]
+    assert reservations, "launching phase must be saved before the provider call"
+    assert persisted.claim == reservations[0].claim
+    assert persisted.claim.owner_token_digest is not None
+    assert persisted.launch.launch_phase == "launched"
+    assert persisted.launch.external_id == "task_remote"
+    assert persisted.launch.token_estimate_recorded is True
+    assert persisted.completion.completion_id is None
+    assert persisted.completion.completion_policy_config is not None
 
 
 def test_released_attempt_is_not_recovered_or_relaunched(launch_env):
