@@ -161,6 +161,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.gc.policy_review",
             "dispatch.launch",
             "dispatch.launch_attempts",
+            "dispatch.launch_state",
             "dispatch.locks",
             "dispatch.rebase",
             "dispatch.reconciliation",

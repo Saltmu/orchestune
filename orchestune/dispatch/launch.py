@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.claim.contracts import (
@@ -32,6 +32,12 @@ from orchestune.dispatch.launch_attempts import (
     LaunchOutcomeUnknown,
     prepare_journaled_target,
 )
+from orchestune.dispatch.launch_state import (
+    build_launch_record,
+    launch_info_with_selection,
+    launch_info_with_token_estimate,
+    with_launch_phase,
+)
 from orchestune.dispatch.worktree import LaunchResult, _launch_on_prepared_worktree
 from orchestune.infra.git_cli import run_git
 from orchestune.issue_parsing import (
@@ -40,6 +46,11 @@ from orchestune.issue_parsing import (
     launch_history_in_window,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    LaunchInfo,
+)
 from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import (
     ActiveWorktree,
@@ -405,31 +416,16 @@ def _handle_launch_failure(
         )
 
 
-def _claim_launch_fields(
-    reservation: ActiveWorktree, config: DispatcherConfig
-) -> dict[str, Any]:
-    return {
-        name: getattr(reservation, name)
-        for name in (
-            "owner_kind",
-            "claim_id",
-            "claim_stage",
-            "base_ref",
-            "base_sha",
-            "reservation_kind",
-            "repository_id",
-            "claimed_at",
-            "owner_token_digest",
-        )
-    } | {
-        "completion_policy_config": {
+def _completion_policy_snapshot(config: DispatcherConfig) -> ActiveCompletionJournal:
+    return ActiveCompletionJournal(
+        completion_policy_config={
             "max_tokens_per_task": config.max_tokens_per_task,
             "source": "dispatcher-effective-config",
             "log_dir": str(Path(config.log_dir).resolve()),
             "dispatch_target": getattr(config.dispatch_target, "target_name", None)
             or "auto",
         }
-    }
+    )
 
 
 def _build_active_worktree_from_launch(
@@ -446,36 +442,36 @@ def _build_active_worktree_from_launch(
             f"Cannot record launch for issue #{task.issue_number} without its claim reservation"
         )
 
-    selection = plan.execution_selection
-    profile = selection.profile if selection else task.execution_profile
-    model = selection.model if selection else None
-    reasoning_effort = selection.reasoning_effort if selection else None
-    selection_reason = selection.reason if selection else None
-
-    return ActiveWorktree(
-        issue_number=task.issue_number,
-        branch=launch.branch,
-        worktree_path=launch.worktree_path,
+    launch_info = LaunchInfo(
         pid=launch.pid,
         started_at=launch.dispatch_started_at or now,
-        declared_footprint=task.footprint,
         external_id=launch.external_id,
         external_url=launch.external_url,
-        base_branch=launch.base_ref or plan.base_branch_for_state,
-        estimated_tokens=build_cost_model(run_state).tokens_for_issue(
-            task.issue_number
-        ),
-        token_estimate_recorded=True,
-        profile=profile,
-        model=model,
-        reasoning_effort=reasoning_effort,
-        selection_reason=selection_reason,
         launch_attempt_id=launch.launch_attempt_id,
         launch_phase="launched",
+    )
+    launch_info = launch_info_with_selection(
+        launch_info,
+        plan.execution_selection,
+        fallback_profile=task.execution_profile,
+    )
+    launch_info = launch_info_with_token_estimate(
+        launch_info, build_cost_model(run_state).tokens_for_issue(task.issue_number)
+    )
+    return build_launch_record(
+        core=ActiveWorktreeCore(
+            issue_number=task.issue_number,
+            branch=launch.branch,
+            worktree_path=launch.worktree_path,
+            declared_footprint=tuple(task.footprint),
+            base_branch=launch.base_ref or plan.base_branch_for_state,
+        ),
+        launch=launch_info,
         # The claim reservation is the only authoritative source for durable
         # ownership and identity.  Reconstructing any of these defaults here
         # would produce a ledger that the strict state reader must reject.
-        **_claim_launch_fields(reservation, config),
+        claim=reservation.claim,
+        completion=_completion_policy_snapshot(config),
     )
 
 
@@ -623,8 +619,8 @@ def _persist_launching_phase(
     active_entry = run_state.active_worktrees.get(str(issue_number))
     if active_entry is None:
         return None
-    prev_phase = active_entry.launch_phase
-    active_entry.launch_phase = "launching"
+    key = str(issue_number)
+    run_state.active_worktrees[key] = with_launch_phase(active_entry, "launching")
     try:
         save_run_state(
             run_state,
@@ -635,7 +631,7 @@ def _persist_launching_phase(
         )
         return None
     except Exception as exc:
-        active_entry.launch_phase = prev_phase
+        run_state.active_worktrees[key] = active_entry
         print(
             f"Holding launch of issue #{issue_number}: failed to persist launching phase: {exc}",
             file=sys.stderr,
@@ -719,7 +715,9 @@ def _record_failed_launch_phase(
     active_entry = run_state.active_worktrees.get(str(issue_number))
     if active_entry is None:
         return
-    active_entry.launch_phase = "failed"
+    run_state.active_worktrees[str(issue_number)] = with_launch_phase(
+        active_entry, "failed"
+    )
     try:
         save_run_state(
             run_state,

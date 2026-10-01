@@ -20,9 +20,9 @@ from orchestune.dispatch.gc.completion import (
     _local_pr_completion_status,
 )
 from orchestune.dispatch.summary import WARN_PREFIX
-from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeLookupState
+from tests.dispatch_test_support import make_test_active_worktree
 
 
 def _active(tmp_path, **overrides):
@@ -35,7 +35,7 @@ def _active(tmp_path, **overrides):
         declared_footprint=(),
     )
     defaults.update(overrides)
-    return ActiveWorktree(**defaults)
+    return make_test_active_worktree(**defaults)
 
 
 def _config(tmp_path, forge):
