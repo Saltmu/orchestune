@@ -7,13 +7,23 @@ import json
 import pytest
 
 from orchestune.claim.ownership import owner_token_digest
-from orchestune.complete.contracts import CompleteFailureReason
+from orchestune.complete.contracts import CompleteFailureReason, CompleteStage
 from orchestune.complete.journal import (
     CompletionJournalError,
+    CompletionJournalRecord,
+    active_completion_from_record,
+    apply_completion_record,
     mark_handoff_ready,
     reserve_completion,
+    with_completion,
 )
 from orchestune.infra.process_utils import run_state_lock
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import ActiveWorktree, RunState, load_run_state
 from orchestune.ledger.run_state import save_run_state as save_run_state_unlocked
 from tests.dispatch_test_support import save_locked_run_state
@@ -23,25 +33,44 @@ OWNER_TOKEN = "owner-token-abc"
 
 def _seed_active(tmp_path, **overrides):
     path = tmp_path / "run_state.json"
-    fields = {
-        "issue_number": 10,
-        "branch": "claude/issue-10-x",
-        "worktree_path": "worktrees/claude-issue-10-x",
-        "pid": 12345,
-        "started_at": 1700000000.0,
-        "declared_footprint": (),
-        "owner_kind": "interactive",
-        "claim_id": "claim-10",
-        "claim_stage": "completed",
-        "base_ref": "origin/main",
-        "base_sha": "a" * 40,
-        "reservation_kind": "footprint",
-        "repository_id": "Saltmu/orchestune",
-        "claimed_at": 1700000001.0,
-        "owner_token_digest": owner_token_digest(OWNER_TOKEN),
+    core = ActiveWorktreeCore(
+        issue_number=overrides.get("issue_number", 10),
+        branch=overrides.get("branch", "claude/issue-10-x"),
+        worktree_path=overrides.get("worktree_path", "worktrees/claude-issue-10-x"),
+        declared_footprint=tuple(overrides.get("declared_footprint", ())),
+    )
+    launch = LaunchInfo(
+        pid=overrides.get("pid", 12345),
+        started_at=overrides.get("started_at", 1700000000.0),
+    )
+    claim = ClaimInfo(
+        owner_kind=overrides.get("owner_kind", "interactive"),
+        claim_id=overrides.get("claim_id", "claim-10"),
+        claim_stage=overrides.get("claim_stage", "completed"),
+        base_ref=overrides.get("base_ref", "origin/main"),
+        base_sha=overrides.get("base_sha", "a" * 40),
+        reservation_kind=overrides.get("reservation_kind", "footprint"),
+        repository_id=overrides.get("repository_id", "Saltmu/orchestune"),
+        claimed_at=overrides.get("claimed_at", 1700000001.0),
+        owner_token_digest=overrides.get(
+            "owner_token_digest", owner_token_digest(OWNER_TOKEN)
+        ),
+    )
+    comp_keys = {
+        "completion_id",
+        "completion_result",
+        "completion_stage",
+        "completion_payload",
+        "completion_comment_id",
+        "completion_comment_url",
+        "completion_handoff_ready",
+        "completion_policy_config",
     }
-    fields.update(overrides)
-    active = ActiveWorktree(**fields)
+    comp_kwargs = {k: overrides[k] for k in comp_keys if k in overrides}
+    completion = ActiveCompletionJournal(**comp_kwargs)
+    active = ActiveWorktree.from_records(
+        core=core, launch=launch, claim=claim, completion=completion
+    )
     save_locked_run_state(RunState(active_worktrees={"10": active}), path)
     return path
 
@@ -709,22 +738,23 @@ class TestLabelConfirmedCompletionContract:
 
         with run_state_lock(path.with_suffix(".lock")):
             state = load_run_state(path)
-            state.active_worktrees["10"] = ActiveWorktree(
-                issue_number=10,
-                branch="claude/issue-10-x",
-                worktree_path="worktrees/claude-issue-10-x",
-                pid=54321,
-                started_at=1700000100.0,
-                declared_footprint=(),
-                owner_kind="interactive",
-                claim_id="claim-10-b",
-                claim_stage="completed",
-                base_ref="origin/main",
-                base_sha="b" * 40,
-                reservation_kind="footprint",
-                repository_id="Saltmu/orchestune",
-                claimed_at=1700000101.0,
-                owner_token_digest=owner_token_digest(OWNER_TOKEN),
+            state.active_worktrees["10"] = ActiveWorktree.from_records(
+                core=ActiveWorktreeCore(
+                    10, "claude/issue-10-x", "worktrees/claude-issue-10-x", ()
+                ),
+                launch=LaunchInfo(pid=54321, started_at=1700000100.0),
+                claim=ClaimInfo(
+                    owner_kind="interactive",
+                    claim_id="claim-10-b",
+                    claim_stage="completed",
+                    base_ref="origin/main",
+                    base_sha="b" * 40,
+                    reservation_kind="footprint",
+                    repository_id="Saltmu/orchestune",
+                    claimed_at=1700000101.0,
+                    owner_token_digest=owner_token_digest(OWNER_TOKEN),
+                ),
+                completion=ActiveCompletionJournal(),
             )
             save_run_state_unlocked(state, path)
 
@@ -826,3 +856,113 @@ class TestLabelConfirmedCompletionContract:
 
         persisted = load_run_state(path).active_worktrees["10"]
         assert persisted.completion_handoff_ready is False
+
+
+class TestJournalOwnerApi:
+    def test_with_completion_replaces_only_completion_fields(self):
+        core = ActiveWorktreeCore(10, "claude/issue-10", "wt", ())
+        launch = LaunchInfo(pid=123)
+        claim = ClaimInfo(claim_id="claim-10")
+        active = ActiveWorktree.from_records(
+            core=core,
+            launch=launch,
+            claim=claim,
+            completion=ActiveCompletionJournal(completion_id="old-id"),
+        )
+        new_comp = ActiveCompletionJournal(
+            completion_id="new-id",
+            completion_result="done",
+            completion_stage="handed_off",
+            completion_payload={"outcome": "test"},
+            completion_comment_id="c1",
+            completion_comment_url="u1",
+            completion_handoff_ready=True,
+            completion_policy_config={"test": True},
+        )
+        updated = with_completion(active, new_comp)
+
+        assert updated.core == core
+        assert updated.launch == launch
+        assert updated.claim == claim
+        assert updated.completion == new_comp
+
+        with pytest.raises(
+            TypeError, match="completion must be ActiveCompletionJournal"
+        ):
+            with_completion(active, "not-a-record")  # type: ignore[arg-type]
+
+    def test_active_completion_from_record_explicit_conversion(self):
+        record = CompletionJournalRecord(
+            repository_id="Saltmu/orchestune",
+            issue_number=10,
+            generation_id="claim-10",
+            completion_id="comp-10",
+            owner_token_digest=owner_token_digest(OWNER_TOKEN),
+            request_fingerprint=owner_token_digest("request-fp"),
+            result="done",
+            target_label="status:done",
+            outcome_payload={"issue": 10, "result": "done", "body": "outcome body"},
+            stage=CompleteStage.LABEL_CONFIRMED,
+            posting_evidence={
+                "comment_id": "123",
+                "comment_url": "https://example.test/123",
+            },
+            label_evidence={
+                "status": "confirmed",
+                "target_label": "status:done",
+                "observed_labels": ["status:done"],
+            },
+        )
+        comp = active_completion_from_record(
+            record, handoff=True, completion_policy_config={"source": "test"}
+        )
+        assert isinstance(comp, ActiveCompletionJournal)
+        assert not isinstance(comp, CompletionJournalRecord)
+        assert comp.completion_id == "comp-10"
+        assert comp.completion_result == "done"
+        assert comp.completion_stage == "label_confirmed"
+        assert comp.completion_payload == {
+            "issue": 10,
+            "result": "done",
+            "body": "outcome body",
+            "outcome": "outcome body",
+        }
+        assert comp.completion_comment_id == "123"
+        assert comp.completion_comment_url == "https://example.test/123"
+        assert comp.completion_handoff_ready is True
+        assert comp.completion_policy_config == {"source": "test"}
+
+    def test_apply_completion_record_preserves_policy_config_and_other_subrecords(
+        self,
+    ):
+        core = ActiveWorktreeCore(10, "claude/issue-10", "wt", ())
+        launch = LaunchInfo(pid=123)
+        claim = ClaimInfo(claim_id="claim-10")
+        active = ActiveWorktree.from_records(
+            core=core,
+            launch=launch,
+            claim=claim,
+            completion=ActiveCompletionJournal(
+                completion_policy_config={"max_tokens_per_task": 1000}
+            ),
+        )
+        record = CompletionJournalRecord(
+            repository_id="Saltmu/orchestune",
+            issue_number=10,
+            generation_id="claim-10",
+            completion_id="comp-10",
+            owner_token_digest=owner_token_digest(OWNER_TOKEN),
+            request_fingerprint=owner_token_digest("request-fp"),
+            result="done",
+            target_label="status:done",
+            outcome_payload={"issue": 10, "result": "done", "body": "body"},
+            stage=CompleteStage.RESERVED,
+        )
+        updated = apply_completion_record(active, record, handoff=False)
+        assert updated.completion.completion_id == "comp-10"
+        assert updated.completion.completion_policy_config == {
+            "max_tokens_per_task": 1000
+        }
+        assert updated.core == core
+        assert updated.launch == launch
+        assert updated.claim == claim

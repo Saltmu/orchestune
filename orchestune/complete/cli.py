@@ -52,17 +52,17 @@ def _credentials(issue_number: int) -> tuple[str | None, str | None, Path]:
                 workspace.run_state_path,
             )
         return None, None, workspace.run_state_path
-    if not active.claim_id:
+    if not active.claim.claim_id:
         return None, None, workspace.run_state_path
     token_path = (
         workspace.run_state_path.parent
         / ".orchestune"
         / "claim-tokens"
-        / f"{active.claim_id}.token"
+        / f"{active.claim.claim_id}.token"
     )
     return (
         _read_owner_token(token_path),
-        active.claim_id,
+        active.claim.claim_id,
         workspace.run_state_path,
     )
 

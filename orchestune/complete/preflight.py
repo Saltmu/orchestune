@@ -35,11 +35,45 @@ def _resolve_worktree_path(
 ) -> Path | None:
     if worktree_path is not None:
         return Path(worktree_path)
-    if active is not None and getattr(active, "worktree_path", None):
-        return Path(active.worktree_path)
+    if active is not None:
+        wt_path = (
+            active.core.worktree_path
+            if hasattr(active, "core")
+            else getattr(active, "worktree_path", None)
+        )
+        if wt_path:
+            return Path(wt_path)
     if request.worktree_root is not None:
         return Path(request.worktree_root)
     return None
+
+
+def _active_owner_digest(active: Any | None) -> str | None:
+    if active is None:
+        return None
+    digest = (
+        active.claim.owner_token_digest
+        if hasattr(active, "claim")
+        else getattr(active, "owner_token_digest", None)
+    )
+    return str(digest) if isinstance(digest, str) else None
+
+
+def _validate_not_needed_ownership(
+    active: Any | None, token: str | None, owner_digest: str | None
+) -> tuple[bool, str | None, CompleteFailureReason | None, Any | None]:
+    if active is None and token is None:
+        return True, None, None, None
+    if active is not None:
+        if token is None or owner_digest != owner_token_digest(token):
+            return (
+                False,
+                "Owner token mismatch",
+                CompleteFailureReason.OWNER_TOKEN_MISMATCH,
+                None,
+            )
+        return True, None, None, active
+    return False, "Claim not found", CompleteFailureReason.CLAIM_NOT_FOUND, None
 
 
 def _validate_ownership(
@@ -53,20 +87,10 @@ def _validate_ownership(
         if isinstance(request.owner_token, str) and request.owner_token.strip()
         else None
     )
+    owner_digest = _active_owner_digest(active)
 
     if request.result == RESULT_NOT_NEEDED:
-        if active is None and token is None:
-            return True, None, None, None
-        if active is not None:
-            if token is None or active.owner_token_digest != owner_token_digest(token):
-                return (
-                    False,
-                    "Owner token mismatch",
-                    CompleteFailureReason.OWNER_TOKEN_MISMATCH,
-                    None,
-                )
-            return True, None, None, active
-        return False, "Claim not found", CompleteFailureReason.CLAIM_NOT_FOUND, None
+        return _validate_not_needed_ownership(active, token, owner_digest)
 
     if active is None:
         return (
@@ -76,21 +100,9 @@ def _validate_ownership(
             None,
         )
 
-    if token is None:
-        return (
-            False,
-            "Owner token is required",
-            CompleteFailureReason.OWNER_TOKEN_MISMATCH,
-            None,
-        )
-
-    if active.owner_token_digest != owner_token_digest(token):
-        return (
-            False,
-            "Owner token mismatch",
-            CompleteFailureReason.OWNER_TOKEN_MISMATCH,
-            None,
-        )
+    if token is None or owner_digest != owner_token_digest(token):
+        reason = "Owner token is required" if token is None else "Owner token mismatch"
+        return False, reason, CompleteFailureReason.OWNER_TOKEN_MISMATCH, None
 
     return True, None, None, active
 
@@ -123,11 +135,8 @@ def _normalize_branch_ref(branch_ref: str) -> str:
     return branch_ref
 
 
-def _check_pr_identity_and_branches(
-    pr: Any,
-    payload_pr: int,
-    active: Any | None,
-    expected_base_ref: str | None,
+def _check_pr_state(
+    pr: Any, payload_pr: int
 ) -> tuple[bool, str | None, CompleteFailureReason | None]:
     pr_state = getattr(pr, "state", "").upper()
     if pr_state == "MERGED":
@@ -142,19 +151,22 @@ def _check_pr_identity_and_branches(
             f"Pull request #{payload_pr} is closed without being merged",
             CompleteFailureReason.INVALID_REQUEST,
         )
+    return True, None, None
 
-    active_branch = getattr(active, "branch", None) if active else None
-    pr_head_ref = getattr(pr, "head_ref", None)
-    if active_branch and pr_head_ref and pr_head_ref != active_branch:
-        return (
-            False,
-            f"Pull request head branch mismatch: expected {active_branch}, got {pr_head_ref}",
-            CompleteFailureReason.INVALID_REQUEST,
+
+def _check_pr_base_branch(
+    pr: Any, active: Any | None, expected_base_ref: str | None
+) -> tuple[bool, str | None, CompleteFailureReason | None]:
+    active_base_ref = (
+        (
+            active.claim.base_ref
+            if hasattr(active, "claim")
+            else getattr(active, "base_ref", None)
         )
-
-    expected_base = expected_base_ref or (
-        getattr(active, "base_ref", None) if active else None
+        if active
+        else None
     )
+    expected_base = expected_base_ref or active_base_ref
     if not expected_base:
         return (
             False,
@@ -174,6 +186,36 @@ def _check_pr_identity_and_branches(
             CompleteFailureReason.INVALID_REQUEST,
         )
     return True, None, None
+
+
+def _check_pr_identity_and_branches(
+    pr: Any,
+    payload_pr: int,
+    active: Any | None,
+    expected_base_ref: str | None,
+) -> tuple[bool, str | None, CompleteFailureReason | None]:
+    state_ok, reason, failure_reason = _check_pr_state(pr, payload_pr)
+    if not state_ok:
+        return state_ok, reason, failure_reason
+
+    active_branch = (
+        (
+            active.core.branch
+            if hasattr(active, "core")
+            else getattr(active, "branch", None)
+        )
+        if active
+        else None
+    )
+    pr_head_ref = getattr(pr, "head_ref", None)
+    if active_branch and pr_head_ref and pr_head_ref != active_branch:
+        return (
+            False,
+            f"Pull request head branch mismatch: expected {active_branch}, got {pr_head_ref}",
+            CompleteFailureReason.INVALID_REQUEST,
+        )
+
+    return _check_pr_base_branch(pr, active, expected_base_ref)
 
 
 def _check_pr_diff(

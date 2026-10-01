@@ -18,6 +18,7 @@ from orchestune.complete.journal import (
     CompletionJournalRecord,
     CompletionReplayReceipt,
     _save_or_raise,
+    apply_completion_record,
 )
 from orchestune.complete.posting import PostingRequest, post_issue_outcome
 from orchestune.complete.replay import result_from_record
@@ -48,22 +49,14 @@ def _save(
     state.completion_journal[record.journal_key] = record.to_dict()
     active = state.active_worktrees.get(str(record.issue_number))
     if active is not None:
-        if active.claim_id != record.generation_id:
+        if active.claim.claim_id != record.generation_id:
             raise CompletionJournalError(
                 CompleteFailureReason.GENERATION_MISMATCH,
                 "Claim changed during publication",
             )
-        active.completion_id = record.completion_id
-        active.completion_result = record.result
-        active.completion_stage = record.stage.value
-        active.completion_payload = {
-            **record.outcome_payload,
-            "outcome": record.outcome_payload["body"],
-        }
-        if record.posting_evidence:
-            active.completion_comment_id = record.posting_evidence["comment_id"]
-            active.completion_comment_url = record.posting_evidence["comment_url"]
-        active.completion_handoff_ready = handoff
+        state.active_worktrees[str(record.issue_number)] = apply_completion_record(
+            active, record, handoff=handoff
+        )
     if handoff:
         state.completion_replay_receipts[record.receipt_key] = CompletionReplayReceipt(
             record
@@ -86,9 +79,9 @@ def generation_matches(
     if context.active is not None:
         return (
             active is not None
-            and active.repository_id == record.repository_id
-            and active.claim_id == record.generation_id
-            and active.owner_token_digest == record.owner_token_digest
+            and active.claim.repository_id == record.repository_id
+            and active.claim.claim_id == record.generation_id
+            and active.claim.owner_token_digest == record.owner_token_digest
         )
     return active is None
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -47,6 +47,7 @@ from orchestune.complete.unclaimed import complete_unclaimed, validate_unclaimed
 from orchestune.forge import GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.labels import StatusLabel
+from orchestune.ledger.active_codec import encode_active_worktree
 from orchestune.ledger.run_state import load_run_state_readonly
 
 
@@ -78,12 +79,12 @@ def _validate_claim_context(
 ) -> None:
     if active is None:
         return
-    if active.repository_id != repository:
+    if active.claim.repository_id != repository:
         raise CompletionJournalError(
             CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH,
             "Claim belongs to another repository",
         )
-    claimed_path = Path(active.worktree_path)
+    claimed_path = Path(active.core.worktree_path)
     if not claimed_path.is_absolute():
         claimed_path = state_path.parent / claimed_path
     if claimed_path.resolve() != worktree.resolve():
@@ -95,7 +96,7 @@ def _validate_claim_context(
 
 def _check(request: CompleteRequest, state: Any, worktree: Path, forge: Any) -> None:
     active = state.active_worktrees.get(str(request.issue_number))
-    if active is not None and request.claim_id != active.claim_id:
+    if active is not None and request.claim_id != active.claim.claim_id:
         raise CompletionJournalError(
             CompleteFailureReason.GENERATION_MISMATCH, "Claim generation differs"
         )
@@ -104,7 +105,7 @@ def _check(request: CompleteRequest, state: Any, worktree: Path, forge: Any) -> 
         worktree_path=worktree,
         forge=forge,
         run_state=state,
-        expected_base_ref=getattr(active, "base_ref", None),
+        expected_base_ref=(active.claim.base_ref if active else None),
     )
     if not preflight.accepted:
         raise CompletionJournalError(
@@ -154,7 +155,12 @@ def _downstream_policies(
     policy: dict[str, Any],
 ) -> tuple[DownstreamPolicyRecord, ...]:
     return not_needed_policies(
-        request, active, repository, active.claim_id, completion_id, policy["context"]
+        request,
+        active,
+        repository,
+        active.claim.claim_id,
+        completion_id,
+        policy["context"],
     )
 
 
@@ -195,7 +201,7 @@ def _new_record(
     completion_id = request.completion_id or f"completion-{uuid4().hex}"
     outcome = replace(
         request.to_outcome_record(),
-        claim_id=active.claim_id,
+        claim_id=active.claim.claim_id,
         completion_id=completion_id,
         head_sha=_head_sha(worktree),
     )
@@ -203,7 +209,7 @@ def _new_record(
     policy = {
         **policy,
         "initial_issue": _initial_issue_evidence(forge, request.issue_number),
-        "context": {"active": asdict(active)},
+        "context": {"active": encode_active_worktree(active)},
     }
     target = {
         "done": StatusLabel.DONE,
@@ -214,7 +220,7 @@ def _new_record(
     return CompletionJournalRecord(
         repository,
         request.issue_number,
-        active.claim_id,
+        active.claim.claim_id,
         completion_id,
         owner_token_digest(request.owner_token or ""),
         request.request_fingerprint,
@@ -321,7 +327,7 @@ def _policy_for_request(
     request: CompleteRequest, state: Any, repository: str, worktree: Path, forge: Any
 ) -> dict[str, Any]:
     active = state.active_worktrees[str(request.issue_number)]
-    pending = _pending(request, state, repository, active.claim_id or "")
+    pending = _pending(request, state, repository, active.claim.claim_id or "")
     ci = None
     if request.result == "done":
         ci = (
@@ -351,7 +357,7 @@ def _select_record(
     assert active is not None
     assert context.worktree is not None
     _validate_claim_context(active, repository, context.worktree, context.state_path)
-    record = _pending(request, state, repository, active.claim_id or "")
+    record = _pending(request, state, repository, active.claim.claim_id or "")
     if record is None:
         assert context.worktree is not None
         record = _new_record(
