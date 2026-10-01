@@ -89,6 +89,9 @@ def lifecycle_environment(tmp_path: Path, monkeypatch, result="not-needed"):
     )
     check = Mock()
     monkeypatch.setattr("orchestune.complete.service._check", check)
+    monkeypatch.setattr(
+        "orchestune.complete.service.validate_local_claim", lambda *a, **kw: None
+    )
     monkeypatch.setattr("orchestune.complete.service._head_sha", lambda _: "a" * 40)
     ci = SimpleNamespace(to_dict=lambda: {"head_sha": "a" * 40, "definition": "fixed"})
     monkeypatch.setattr(

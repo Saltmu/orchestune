@@ -13,13 +13,13 @@ from orchestune.models import PrRecord
 from orchestune.validation import validate_issue_number, validate_ref_name
 
 _PR_JSON_FIELDS = (
-    "number,headRefName,baseRefName,isCrossRepository,state,createdAt,closedAt,"
+    "number,headRefName,headRefOid,baseRefName,isCrossRepository,state,createdAt,closedAt,"
     "mergedAt,mergeCommit,reviewDecision,statusCheckRollup,files,"
     "closingIssuesReferences,title,body"
 )
 
 _PR_LIGHT_JSON_FIELDS = (
-    "number,headRefName,baseRefName,isCrossRepository,state,createdAt,closedAt,"
+    "number,headRefName,headRefOid,baseRefName,isCrossRepository,state,createdAt,closedAt,"
     "mergedAt,mergeCommit,reviewDecision,statusCheckRollup,"
     "closingIssuesReferences,title,body"
 )
@@ -301,6 +301,7 @@ class GitHubPullRequestMixin:
             is_files_truncated=is_truncated,
             title=raw.get("title") or "",
             body=raw.get("body") or "",
+            head_sha=raw.get("headRefOid") or "",
         )
 
     def get_pull_request(self, pr_number: int | str) -> PrRecord:

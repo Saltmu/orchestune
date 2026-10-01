@@ -655,3 +655,29 @@ def test_launched_record_keeps_the_reservation_claim_identity(launch_env):
     assert persisted.launch.token_estimate_recorded is True
     assert persisted.completion.completion_id is None
     assert persisted.completion.completion_policy_config is not None
+
+
+def test_released_attempt_is_not_recovered_or_relaunched(launch_env):
+    from orchestune.dispatch.attempt_record import LaunchAttempt
+    from orchestune.dispatch.launch_attempts import reconcile_attempt
+
+    _, config, plan, launch = launch_env
+    attempt = LaunchAttempt(
+        "released-attempt",
+        "launched",
+        config.dispatch_target.target_name,
+        plan.branch_name,
+        plan.base_branch_for_state,
+        100.0,
+        external_id="old-remote",
+    )
+    state = RunState()
+    state.recovery_receipts["release"] = {
+        "operation": "release",
+        "issue_number": 1,
+        "claim_id": "old-claim",
+        "active": {"launch_attempt_id": attempt.attempt_id},
+    }
+    assert reconcile_attempt(attempt, plan.task, state, config)
+    assert not state.active_worktrees
+    launch.assert_not_called()

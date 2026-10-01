@@ -3,19 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import os
 from collections.abc import Sequence
 from pathlib import Path
 
+from orchestune.claim.local_identity import caller_claim_id
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.complete.contracts import CompleteRequest, CompleteStage
 from orchestune.complete.service import complete_task
-from orchestune.complete.unclaimed import token_directory
-from orchestune.infra.private_tokens import (
-    _read_owner_token as read_private_owner_token,
-)
-from orchestune.ledger.completion_reservations import completion_record
-from orchestune.ledger.run_state import load_run_state_readonly
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -26,6 +20,7 @@ def _parser() -> argparse.ArgumentParser:
         "--result", required=True, choices=("done", "not-needed", "blocked")
     )
     parser.add_argument("--reason")
+    parser.add_argument("--state", type=Path, help="shared run_state.json path")
     parser.add_argument(
         "--completion-id", help="resume or read an immutable completion result"
     )
@@ -37,48 +32,19 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _credentials(issue_number: int) -> tuple[str | None, str | None, Path]:
-    workspace = resolve_claim_workspace()
-    state = load_run_state_readonly(workspace.run_state_path)
-    active = state.active_worktrees.get(str(issue_number))
-    if active is None:
-        record = completion_record(state, issue_number)
-        if record is not None and record.get("stage") != "handed_off":
-            return (
-                read_private_owner_token(
-                    token_directory(workspace.run_state_path), record["completion_id"]
-                ),
-                None,
-                workspace.run_state_path,
-            )
-        return None, None, workspace.run_state_path
-    if not active.claim_id:
-        return None, None, workspace.run_state_path
-    token_path = (
-        workspace.run_state_path.parent
-        / ".orchestune"
-        / "claim-tokens"
-        / f"{active.claim_id}.token"
+def _credentials(
+    issue_number: int, state_path: Path | None = None
+) -> tuple[str | None, str | None, Path]:
+    workspace = (
+        resolve_claim_workspace(explicit_state_path=state_path)
+        if state_path is not None
+        else resolve_claim_workspace()
     )
-    return (
-        _read_owner_token(token_path),
-        active.claim_id,
-        workspace.run_state_path,
-    )
-
-
-def _read_owner_token(path: Path) -> str | None:
-    try:
-        if os.name != "nt" and path.stat().st_mode & 0o077:
-            return None
-        token = path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return token or None
+    return None, caller_claim_id(), workspace.run_state_path
 
 
 def _request_from_args(args: argparse.Namespace) -> CompleteRequest:
-    token, claim_id, state_path = _credentials(args.issue)
+    token, claim_id, state_path = _credentials(args.issue, args.state)
     common = {
         "completion_id": args.completion_id,
         "owner_token": token,

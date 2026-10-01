@@ -1,6 +1,5 @@
 """Worktree-free completion reservations, recovery, and generation isolation."""
 
-import os
 from dataclasses import replace
 from types import SimpleNamespace
 from uuid import uuid4
@@ -55,9 +54,7 @@ def test_unclaimed_publication_has_independent_reservation_and_pending_review(
     tokens = list(
         request.state_path.parent.glob(".orchestune/completion-tokens/*.token")
     )
-    assert len(tokens) == 1
-    if os.name != "nt":
-        assert tokens[0].stat().st_mode & 0o077 == 0
+    assert tokens == []
 
 
 @pytest.mark.parametrize("save_number", [1, 2, 3, 4])
@@ -213,11 +210,11 @@ def test_pending_resume_requires_matching_owner(unclaimed):
     assert first.completion_id
     forge.inject = lambda *_: None
     denied = complete_task(
-        replace(request, completion_id=first.completion_id, owner_token="other-owner"),
+        replace(request, completion_id=None, owner_token=None),
         forge=forge,
     )
     assert not denied.success
-    assert denied.failure.reason == CompleteFailureReason.OWNER_TOKEN_MISMATCH
+    assert denied.failure.reason == CompleteFailureReason.GENERATION_MISMATCH
     assert not forge.comments
 
 
@@ -312,10 +309,6 @@ def test_pending_id_from_other_issue_cannot_create_another_reservation(unclaimed
     first = complete_task(request, forge=forge)
     assert first.completion_id
     before = request.state_path.read_bytes()
-    token_path = next(
-        request.state_path.parent.glob(".orchestune/completion-tokens/*.token")
-    )
-    token_before = token_path.read_bytes()
     forge.inject = lambda *_: None
     result = complete_task(
         replace(request, issue_number=1112, completion_id=first.completion_id),
@@ -324,4 +317,4 @@ def test_pending_id_from_other_issue_cannot_create_another_reservation(unclaimed
     assert not result.success
     assert result.failure.reason == CompleteFailureReason.GENERATION_MISMATCH
     assert request.state_path.read_bytes() == before
-    assert token_path.read_bytes() == token_before and not forge.comments
+    assert not forge.comments

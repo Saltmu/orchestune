@@ -34,6 +34,7 @@ from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
+    attempt_was_released,
     save_run_state,
 )
 from orchestune.ledger.status_labels import (
@@ -276,6 +277,8 @@ def reconcile_attempt(
     config: DispatcherConfig,
 ) -> bool:
     """True means the journal consumed the task; never launch it as queued."""
+    if attempt_was_released(state, task.issue_number, attempt.attempt_id):
+        return True
     if not _recovery_allowed(task, config):
         return True
     target = config.dispatch_target

@@ -41,6 +41,10 @@ def _dispatch_command(cmd: str) -> None:
         from orchestune.complete.cli import main as complete_main
 
         sys.exit(complete_main())
+    elif cmd == "recover":
+        from orchestune.recovery.cli import main as recover_main
+
+        sys.exit(recover_main())
     elif cmd == "gc":
         from orchestune.dispatch.gc_cli import main as gc_main
 
@@ -63,6 +67,7 @@ def main() -> None:
         print("  replan    Preview or replace an unstarted decomposition generation")
         print("  claim     Claim a task issue (--no-apply for a read-only preview)")
         print("  complete  Complete a claimed task issue")
+        print("  recover   Inspect or recover one stopped claim (preview by default)")
         print(
             "  gc        Release handoff-ready task reservations (--no-apply to preview)"
         )

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -310,19 +311,55 @@ def evaluate_finding_with_jev(
     return _evaluate_request(req, timeout, max_retries, initial_backoff)
 
 
+def _shared_log_root() -> Path:
+    """Return the primary checkout root so logs outlive task worktrees.
+
+    A non-linked checkout (including ``--separate-git-dir``) uses its own
+    toplevel. A linked worktree uses the parent of the shared ``.git``
+    directory, i.e. the primary checkout. Outside git, or when a linked
+    worktree's common dir is not a ``.git`` directory, fall back to cwd.
+    """
+    cwd = Path.cwd()
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return cwd
+    lines = result.stdout.strip().splitlines()
+    if result.returncode != 0 or len(lines) != 3:
+        return cwd
+    toplevel, git_dir, common_dir = (
+        Path(lines[0]).resolve(),
+        (cwd / lines[1]).resolve(),
+        (cwd / lines[2]).resolve(),
+    )
+    if git_dir == common_dir:
+        return toplevel
+    return common_dir.parent if common_dir.name == ".git" else cwd
+
+
 def _append_jev_log(
     record: dict[str, Any],
     log_path: str | Path | None = None,
 ) -> None:
     """Append a Jev evaluation record to a JSONL log file.
 
-    Defaults to JEV_LOG_PATH env var, or DEFAULT_JEV_LOG_PATH.
+    Defaults to JEV_LOG_PATH env var, or DEFAULT_JEV_LOG_PATH. A relative
+    default/env path is resolved against the primary checkout root, so logs
+    written from a task worktree survive its removal.
     Creates parent directories if necessary.
     Handles I/O errors gracefully by warning to stderr.
     """
     target = log_path or os.environ.get("JEV_LOG_PATH") or DEFAULT_JEV_LOG_PATH
     try:
         path = Path(target)
+        if log_path is None and not path.is_absolute():
+            path = _shared_log_root() / path
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
