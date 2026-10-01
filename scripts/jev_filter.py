@@ -314,14 +314,15 @@ def evaluate_finding_with_jev(
 def _shared_log_root() -> Path:
     """Return the primary checkout root so logs outlive task worktrees.
 
-    Linked worktrees share ``git-common-dir`` (the primary ``.git``); its parent
-    is the primary checkout. Outside git, or for layouts where the common dir is
-    not a ``.git`` directory (bare / ``--separate-git-dir``), fall back to cwd.
+    A non-linked checkout (including ``--separate-git-dir``) uses its own
+    toplevel. A linked worktree uses the parent of the shared ``.git``
+    directory, i.e. the primary checkout. Outside git, or when a linked
+    worktree's common dir is not a ``.git`` directory, fall back to cwd.
     """
     cwd = Path.cwd()
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--git-common-dir"],
+            ["git", "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir"],
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -329,10 +330,16 @@ def _shared_log_root() -> Path:
         )
     except OSError:
         return cwd
-    raw = result.stdout.strip()
-    if result.returncode != 0 or not raw:
+    lines = result.stdout.strip().splitlines()
+    if result.returncode != 0 or len(lines) != 3:
         return cwd
-    common_dir = (cwd / raw).resolve()
+    toplevel, git_dir, common_dir = (
+        Path(lines[0]).resolve(),
+        (cwd / lines[1]).resolve(),
+        (cwd / lines[2]).resolve(),
+    )
+    if git_dir == common_dir:
+        return toplevel
     return common_dir.parent if common_dir.name == ".git" else cwd
 
 

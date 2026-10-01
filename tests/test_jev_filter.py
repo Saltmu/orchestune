@@ -1184,3 +1184,24 @@ class TestJevLogSharedLocation:
         _append_jev_log({"k": 3})
 
         assert (outside / DEFAULT_JEV_LOG_PATH).exists()
+
+    def test_separate_git_dir_checkout_uses_its_own_toplevel(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        metadata = tmp_path / "metadata"
+        metadata.mkdir()
+        checkout = tmp_path / "checkout"
+        _git(
+            tmp_path,
+            "init",
+            "-q",
+            f"--separate-git-dir={metadata / '.git'}",
+            str(checkout),
+        )
+        monkeypatch.delenv("JEV_LOG_PATH", raising=False)
+        monkeypatch.chdir(checkout)
+
+        _append_jev_log({"k": 4})
+
+        assert (checkout.resolve() / DEFAULT_JEV_LOG_PATH).exists()
+        assert not (metadata / DEFAULT_JEV_LOG_PATH).exists()
