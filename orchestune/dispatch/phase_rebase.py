@@ -55,7 +55,7 @@ def _decide_external_lock_sync(
     `resolve_all_dependencies`はここでは再実行しない。
     """
     remote_branch_names = list_remote_branches()
-    active_branches = [aw.branch for aw in run_state.active_worktrees.values()]
+    active_branches = [aw.core.branch for aw in run_state.active_worktrees.values()]
     pr_head_refs = {pr.head_ref for pr in prs}
     bare_branches = [
         b

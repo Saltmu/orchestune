@@ -173,7 +173,7 @@ class TestDecideFootprintDeviationOutcome:
         assert decision.action == "forced_serial"
         assert decision.recompute_count == 2
         # decide層はactive.forced_serialを書き換えない
-        assert active.forced_serial is False
+        assert active.launch.forced_serial is False
 
     def test_under_retry_limit_recomputes(self, tmp_path, fake_forge):
         active = _active(recompute_count=0)
@@ -190,7 +190,7 @@ class TestDecideFootprintDeviationOutcome:
         assert decision.action == "recomputed"
         assert decision.subtask_id == "task-a"
         # decide層はactive.recompute_countを書き換えない
-        assert active.recompute_count == 0
+        assert active.launch.recompute_count == 0
 
     def test_recompute_reports_conflict_for_shared_manifest_by_default(
         self, tmp_path, fake_forge
@@ -557,7 +557,7 @@ class TestApplyFootprintDeviationOutcomePersistsRecoveryCounters:
             active, ["src/bar.py"], decision, {"task-a": 1}, config
         )
 
-        assert active.recompute_count == 2
+        assert active.launch.recompute_count == 2
         forge.get_issue.assert_called_once_with(1)
         written_body = forge.update_issue_body.call_args.args[1]
         assert "recompute_count: 2" in written_body
@@ -582,7 +582,7 @@ class TestApplyFootprintDeviationOutcomePersistsRecoveryCounters:
             active, ["src/bar.py"], decision, {"task-a": 1}, config
         )
 
-        assert active.forced_serial is True
+        assert active.launch.forced_serial is True
         written_body = forge.update_issue_body.call_args.args[1]
         assert "forced_serial: true" in written_body
 

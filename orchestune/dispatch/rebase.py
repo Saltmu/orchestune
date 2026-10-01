@@ -8,7 +8,7 @@ import os
 import subprocess
 import time
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from orchestune.bounded_limit import exceeds_limit
@@ -21,6 +21,7 @@ from orchestune.dependencies.policy import (
 from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.execution_profiles import ExecutionSelection
+from orchestune.dispatch.launch_state import with_launch
 from orchestune.dispatch.locks import check_footprint_deviation
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.dispatch.worktree import _provision_and_launch
@@ -143,14 +144,14 @@ def _persist_recovery_counters(
     `notify_force_serial`のコメント投稿と同程度——追加のAPI呼び出しは
     このイベントに比例する。
     """
-    issue = config.resolved_forge.get_issue(active.issue_number)
+    issue = config.resolved_forge.get_issue(active.core.issue_number)
     if issue is None:
         return
     patched_body = backfill_recovery_counters(
-        issue.body, active.recompute_count, active.forced_serial
+        issue.body, active.launch.recompute_count, active.launch.forced_serial
     )
     if patched_body is not None:
-        config.resolved_forge.update_issue_body(active.issue_number, patched_body)
+        config.resolved_forge.update_issue_body(active.core.issue_number, patched_body)
 
 
 def _decide_footprint_deviation_outcome(
@@ -166,22 +167,24 @@ def _decide_footprint_deviation_outcome(
     既に強制直列化済みなら何もしない（チャーン防止）。リトライ上限超過なら
     強制直列化にフォールバックし、それ以外はConflict Graph再計算を行う。
     """
-    if active.forced_serial:
+    if active.launch.forced_serial:
         return FootprintDeviationDecision(action="already_forced_serial")
 
-    active_task = tasks_by_issue.get(active.issue_number)
+    active_task = tasks_by_issue.get(active.core.issue_number)
     if active_task is None or not active_task.subtask_id:
         return FootprintDeviationDecision(action="skipped_unknown_subtask")
 
     # The next recomputation would exceed the allowed retry count.
-    if exceeds_limit(active.recompute_count + 1, config.max_recompute_retries):
+    if exceeds_limit(active.launch.recompute_count + 1, config.max_recompute_retries):
         return FootprintDeviationDecision(
             action="forced_serial",
             subtask_id=active_task.subtask_id,
-            recompute_count=active.recompute_count,
+            recompute_count=active.launch.recompute_count,
         )
 
-    merged_footprint = tuple(dict.fromkeys([*active.declared_footprint, *deviated]))
+    merged_footprint = tuple(
+        dict.fromkeys([*active.core.declared_footprint, *deviated])
+    )
     _, conflicts = recompute_dag_for_footprint_change(
         _build_subtasks_for_recompute(derived_inputs),
         active_task.subtask_id,
@@ -203,16 +206,19 @@ def _apply_forced_serial_event(
 ) -> dict:
     notify_force_serial(
         decision.subtask_id,
-        active.issue_number,
+        active.core.issue_number,
         config.parent_issue_number,
         decision.recompute_count,
         apply=config.apply,
         forge=config.resolved_forge,
     )
     if config.apply:
-        active.forced_serial = True
-        _persist_recovery_counters(active, config)
-        config.resolved_forge.add_label(active.issue_number, StatusLabel.FORCE_SERIAL)
+        updated = with_launch(active, replace(active.launch, forced_serial=True))
+        _persist_recovery_counters(updated, config)
+        config.resolved_forge.add_label(
+            active.core.issue_number, StatusLabel.FORCE_SERIAL
+        )
+        active.forced_serial = updated.launch.forced_serial
     return {"recompute_count": decision.recompute_count}
 
 
@@ -233,8 +239,12 @@ def _apply_recomputed_event(
             forge=config.resolved_forge,
         )
     if config.apply:
-        active.recompute_count += 1
-        _persist_recovery_counters(active, config)
+        updated = with_launch(
+            active,
+            replace(active.launch, recompute_count=active.launch.recompute_count + 1),
+        )
+        _persist_recovery_counters(updated, config)
+        active.recompute_count = updated.launch.recompute_count
     return {"conflicts": [dataclasses.asdict(c) for c in decision.conflicts]}
 
 
@@ -246,7 +256,7 @@ def _apply_footprint_deviation_outcome(
     config: DispatcherConfig,
 ) -> dict:
     event: dict = {
-        "issue_number": active.issue_number,
+        "issue_number": active.core.issue_number,
         "deviated_files": deviated,
         "action": decision.action,
     }
@@ -359,27 +369,27 @@ def _decide_rebase_needed(
 def _prepare_wip_backup_for_rebase(
     active: ActiveWorktree, config: DispatcherConfig, ctx: RebaseContext
 ) -> bool:
-    if active.pid:
+    if active.launch.pid:
         try:
-            os.kill(active.pid, 9)
-            _wait_for_process_terminate(active.pid)
+            os.kill(active.launch.pid, 9)
+            _wait_for_process_terminate(active.launch.pid)
         except Exception:
             pass
 
     backup_error = dispatch_gc.backup_wip_commit(
-        active.worktree_path, "WIP: backup by Orchestune auto-rebase"
+        active.core.worktree_path, "WIP: backup by Orchestune auto-rebase"
     )
     if backup_error is not None:
         transition_status_label(
             config.resolved_forge,
-            active.issue_number,
+            active.core.issue_number,
             StatusLabel.MANUAL_MERGE_REQUIRED,
             (StatusLabel.IN_PROGRESS,),
         )
         config.resolved_forge.add_comment(
-            active.issue_number,
+            active.core.issue_number,
             "自動リベース前のWIPバックアップコミットの作成に失敗しました。\n"
-            f"未コミットの作業データが worktree（{active.worktree_path}）に残っている"
+            f"未コミットの作業データが worktree（{active.core.worktree_path}）に残っている"
             "可能性があるため、削除・再作成される前に手動で確認してください。\n"
             f"エラー詳細:\n```\n{backup_error}\n```",
         )
@@ -396,13 +406,13 @@ def _handle_rebase_failure(
     ctx: RebaseContext,
 ) -> None:
     try:
-        run_git(["rebase", "--abort"], cwd=active.worktree_path, check=False)
+        run_git(["rebase", "--abort"], cwd=active.core.worktree_path, check=False)
     except Exception:
         pass
 
     transition_status_label(
         config.resolved_forge,
-        active.issue_number,
+        active.core.issue_number,
         StatusLabel.MANUAL_MERGE_REQUIRED,
         (StatusLabel.IN_PROGRESS,),
     )
@@ -419,7 +429,7 @@ def _handle_rebase_failure(
         msg = "自動リベース中にコンフリクトが発生しました。手動でマージを行ってください。\n"
 
     config.resolved_forge.add_comment(
-        active.issue_number,
+        active.core.issue_number,
         f"{msg}対象の依存元ブランチ: {parent_branch}",
     )
     del ctx.run_state.active_worktrees[ctx.key]
@@ -450,32 +460,37 @@ def _relaunch_rebased_worktree(
     active_task: TaskMetadata,
     config: DispatcherConfig,
     parent_branch: str,
-) -> None:
+) -> ActiveWorktree:
     assert config.dispatch_target is not None
     selection = (
         ExecutionSelection(
-            profile=active.profile,
-            model=active.model,
-            reasoning_effort=active.reasoning_effort,
-            reason=active.selection_reason or "",
+            profile=active.launch.profile,
+            model=active.launch.model,
+            reasoning_effort=active.launch.reasoning_effort,
+            reason=active.launch.selection_reason or "",
         )
-        if active.profile is not None
+        if active.launch.profile is not None
         else None
     )
     handle, started_at = _provision_and_launch(
         config.dispatch_target,
         active_task,
-        active.branch,
-        Path(active.worktree_path),
+        active.core.branch,
+        Path(active.core.worktree_path),
         force_push=True,
         execution_selection=selection,
         base_branch=parent_branch,
     )
-    active.pid = handle.pid
-    active.external_id = handle.external_id
-    active.external_url = handle.external_url
-    active.started_at = started_at
-    active.base_branch = parent_branch
+    rebased_launch = replace(
+        active.launch,
+        pid=handle.pid,
+        external_id=handle.external_id,
+        external_url=handle.external_url,
+        started_at=started_at,
+    )
+    return with_launch(active, rebased_launch).with_core(
+        replace(active.core, base_branch=parent_branch)
+    )
 
 
 def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
@@ -490,15 +505,20 @@ def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
         return
 
     resolved_parent = resolve_local_or_remote_branch(
-        active.worktree_path,
+        active.core.worktree_path,
         parent_branch,
         prefer_remote=parent_branch.startswith("parent/"),
     )
 
     try:
-        run_git(["rebase", resolved_parent], cwd=active.worktree_path, check=True)
-        _run_rebase_ci_check(active.worktree_path, config.worktree_root)
-        _relaunch_rebased_worktree(active, active_task, config, parent_branch)
+        run_git(["rebase", resolved_parent], cwd=active.core.worktree_path, check=True)
+        _run_rebase_ci_check(active.core.worktree_path, config.worktree_root)
+        rebased = _relaunch_rebased_worktree(active, active_task, config, parent_branch)
+        active.pid = rebased.launch.pid
+        active.external_id = rebased.launch.external_id
+        active.external_url = rebased.launch.external_url
+        active.started_at = rebased.launch.started_at
+        active.base_branch = rebased.core.base_branch
     except (subprocess.CalledProcessError, OSError) as e:
         _handle_rebase_failure(active, parent_branch, e, config, ctx)
 
@@ -513,7 +533,7 @@ def _try_auto_rebase(ctx: RebaseContext) -> bool:
         return False
 
     if _decide_rebase_needed(
-        parent_branch, ctx.active.branch, ctx.active.worktree_path
+        parent_branch, ctx.active.core.branch, ctx.active.core.worktree_path
     ):
         _apply_auto_rebase(ctx, parent_branch)
         return True
@@ -527,7 +547,7 @@ def _rule_auto_rebase(
     active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
     """#201: 自動リベース判定＆実行。"""
-    if not dispatch_gc.is_process_alive(active.pid):
+    if not dispatch_gc.is_process_alive(active.launch.pid):
         return None
     rebase_ctx = RebaseContext(
         active=active,
@@ -553,9 +573,9 @@ def _rule_footprint_deviation(
     非Noneの結果を返し必ずこのactive worktreeの処理を終える。
     """
     deviated = check_footprint_deviation(
-        active.worktree_path,
-        active.declared_footprint,
-        base=active.base_branch,
+        active.core.worktree_path,
+        active.core.declared_footprint,
+        base=active.core.base_branch,
         min_changed_lines=ctx.config.deviation_buffer_lines,
     )
     if deviated is None:
