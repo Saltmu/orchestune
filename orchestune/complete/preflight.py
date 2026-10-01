@@ -28,7 +28,7 @@ class CompletePreflight:
     diagnostics: tuple[str, ...] = ()
 
 
-def _active_field(active: Any, subrecord: str, field_name: str) -> Any:
+def active_field(active: Any, subrecord: str, field_name: str) -> Any:
     """Read a field from a typed ActiveWorktree subrecord with flat mock fallback."""
     sub = getattr(active, subrecord, None)
     if sub is not None and hasattr(sub, field_name):
@@ -44,7 +44,7 @@ def _resolve_worktree_path(
     if worktree_path is not None:
         return Path(worktree_path)
     if active is not None:
-        wt_path = _active_field(active, "core", "worktree_path")
+        wt_path = active_field(active, "core", "worktree_path")
         if wt_path:
             return Path(wt_path)
     if request.worktree_root is not None:
@@ -55,7 +55,7 @@ def _resolve_worktree_path(
 def _active_owner_digest(active: Any | None) -> str | None:
     if active is None:
         return None
-    digest = _active_field(active, "claim", "owner_token_digest")
+    digest = active_field(active, "claim", "owner_token_digest")
     return str(digest) if isinstance(digest, str) else None
 
 
@@ -157,7 +157,7 @@ def _check_pr_state(
 def _check_pr_base_branch(
     pr: Any, active: Any | None, expected_base_ref: str | None
 ) -> tuple[bool, str | None, CompleteFailureReason | None]:
-    active_base_ref = _active_field(active, "claim", "base_ref") if active else None
+    active_base_ref = active_field(active, "claim", "base_ref") if active else None
     expected_base = expected_base_ref or active_base_ref
     if not expected_base:
         return (
@@ -190,7 +190,7 @@ def _check_pr_identity_and_branches(
     if not state_ok:
         return state_ok, reason, failure_reason
 
-    active_branch = _active_field(active, "core", "branch") if active else None
+    active_branch = active_field(active, "core", "branch") if active else None
     pr_head_ref = getattr(pr, "head_ref", None)
     if active_branch and pr_head_ref and pr_head_ref != active_branch:
         return (
@@ -381,6 +381,7 @@ def evaluate_complete_preflight(
 __all__ = [
     "CompletePreflight",
     "WorktreeStatus",
+    "active_field",
     "evaluate_complete_preflight",
     "inspect_worktree_status",
 ]
