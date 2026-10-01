@@ -22,6 +22,7 @@ from orchestune.ledger.completion_reservations import (
     completion_record,
 )
 from orchestune.ledger.run_state import ActiveWorktree, load_run_state_readonly
+from orchestune.merge_evidence import merged_pr_problem
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
 from orchestune.worktree_ops.claim_marker import claim_marker_path, read_claim_marker
@@ -169,25 +170,13 @@ def _verify_merged_pr(
     expected_base = _normalise_base_ref(
         active.base_ref or active.base_branch, remote_names=remote_names
     )
-    actual_base = pr.base_ref
-    if (
-        pr.number != outcome.pr
-        or pr.head_ref != active.branch
-        or actual_base != expected_base
-        or pr.is_cross_repository is not False
-    ):
-        return "pr_mismatch"
-    if pr.state.upper() != "MERGED":
-        return "pr_not_merged"
-    if not pr.merged_at or not pr.merge_commit_oid:
-        return "merge_unverified"
-    try:
-        reachable = forge.is_merge_commit_reachable_from(
-            pr.merge_commit_oid, expected_base
-        )
-    except Exception:
-        return "merge_unverified"
-    return None if reachable else "merge_unverified"
+    return merged_pr_problem(
+        pr,
+        pr_number=pr_number,
+        branch=active.branch,
+        base=expected_base,
+        reachable=forge.is_merge_commit_reachable_from,
+    )
 
 
 def _marker_problem(

@@ -18,6 +18,7 @@ def _cli_environment(request, forge, monkeypatch):
         run_state_path=request.state_path, repository_identity="repo"
     )
     monkeypatch.setattr(cli, "resolve_claim_workspace", lambda: workspace)
+    monkeypatch.setattr(cli, "caller_claim_id", lambda: None)
     monkeypatch.setattr(
         cli,
         "complete_task",
@@ -45,7 +46,7 @@ def test_cli_displays_uuid_and_resumes_after_post_failure(
     assert completion_id.startswith("completion-")
     assert "Reached stage: reserved" in out
     token, claim, state_path = cli._credentials(1111)
-    assert token and claim is None and state_path == request.state_path
+    assert token is None and claim is None and state_path == request.state_path
     forge.inject = lambda *_: None
     assert (
         cli.main(
@@ -93,9 +94,7 @@ def test_cli_dry_run_never_generates_private_credentials(unclaimed, monkeypatch)
     assert not (request.state_path.parent / ".orchestune").exists()
 
 
-def test_missing_pending_token_cannot_resume_but_completed_receipt_can(
-    unclaimed, monkeypatch
-):
+def test_pending_completion_resumes_without_token(unclaimed, monkeypatch):
     request, forge = unclaimed
     forge.inject = (
         lambda op, after: (_ for _ in ()).throw(OSError("offline"))
@@ -119,9 +118,9 @@ def test_missing_pending_token_cannot_resume_but_completed_receipt_can(
                 first.completion_id,
             ]
         )
-        != 0
+        == 0
     )
-    assert not forge.comments
+    assert len(forge.comments) == 1
 
 
 def test_cli_foreign_completion_id_cannot_apply_to_another_issue(unclaimed):

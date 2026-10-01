@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from orchestune.infra.json_state import write_json_atomic
+
 
 def claim_marker_path(worktree_path: Path) -> Path:
     """Return the ownership marker path beside the worktree."""
@@ -13,6 +15,8 @@ def claim_marker_path(worktree_path: Path) -> Path:
 
 
 def read_claim_marker(worktree_path: Path) -> dict[str, Any] | None:
+    if claim_marker_path(worktree_path).is_symlink():
+        return None
     try:
         raw = claim_marker_path(worktree_path).read_text(encoding="utf-8")
     except OSError:
@@ -36,16 +40,16 @@ def write_claim_marker(
 ) -> None:
     marker_path = claim_marker_path(worktree_path)
     marker_path.parent.mkdir(parents=True, exist_ok=True)
-    marker_path.write_text(
-        json.dumps(
-            {
-                "claim_id": claim_id,
-                "branch": branch,
-                "base_sha": base_sha,
-                "branch_created": branch_created,
-            }
-        ),
-        encoding="utf-8",
+    if marker_path.is_symlink():
+        raise ValueError("Refusing to replace a symlink claim marker")
+    write_json_atomic(
+        marker_path,
+        {
+            "claim_id": claim_id,
+            "branch": branch,
+            "base_sha": base_sha,
+            "branch_created": branch_created,
+        },
     )
 
 

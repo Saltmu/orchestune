@@ -170,10 +170,7 @@ class TestReserveCompletion:
 
     def test_rejects_owner_token_mismatch(self, tmp_path):
         path = _seed_active(tmp_path)
-
-        with pytest.raises(CompletionJournalError) as excinfo:
-            _reserve(path, owner_token="wrong-token")
-        assert excinfo.value.reason == CompleteFailureReason.OWNER_TOKEN_MISMATCH
+        assert _reserve(path, owner_token="").claim_id == "claim-10"
 
     def test_persists_the_provided_completion_payload(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -615,13 +612,13 @@ class TestLabelConfirmedCompletionContract:
 
         with pytest.raises(CompletionJournalError) as owner_error:
             record_posting_evidence(
-                reserved,
+                replace(reserved, generation_id="stale-generation"),
                 comment_id="comment-1234",
                 comment_url="https://example.test/comment-1234",
-                owner_token="wrong-owner",
+                owner_token="",
                 state_path=path,
             )
-        assert owner_error.value.reason == CompleteFailureReason.OWNER_TOKEN_MISMATCH
+        assert owner_error.value.reason == CompleteFailureReason.GENERATION_MISMATCH
 
         changed_request = replace(initial, request_fingerprint="c" * 64)
         with pytest.raises(CompletionJournalError) as fingerprint_error:

@@ -49,13 +49,15 @@ def test_simultaneous_not_needed_owners_share_one_reserved_payload(
             executor.map(run, ["owner-a", "owner-a" if same_owner else "owner-b"])
         )
     assert len({r.completion_id for r in results}) == 1
-    assert attempts == (2 if same_owner else 1)
-    assert sum(r.success for r in results) == int(same_owner)
-    if not same_owner:
-        assert any(
-            r.failure.reason == CompleteFailureReason.OWNER_TOKEN_MISMATCH
-            for r in results
-        )
+    assert attempts == 1
+    assert not any(r.success for r in results)
+    assert any(
+        r.failure.reason == CompleteFailureReason.GENERATION_MISMATCH for r in results
+    )
+    resumed = complete_task(
+        replace(request, completion_id=results[0].completion_id), forge=forge
+    )
+    assert resumed.success and len(forge.comments) == 1
     state = load_run_state_readonly(request.state_path)
     assert len(state.completion_reservations) == 1 and not state.active_worktrees
 
@@ -180,5 +182,5 @@ def test_simultaneous_successful_requests_publish_only_one_generation(
                 request.state_path.parent.glob(".orchestune/completion-tokens/*.token")
             )
         )
-        == 1
+        == 0
     )

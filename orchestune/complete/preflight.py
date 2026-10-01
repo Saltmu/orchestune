@@ -6,13 +6,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orchestune.claim.ownership import owner_token_digest
 from orchestune.complete.contracts import (
     BlockedPayload,
     CompleteFailureReason,
     CompleteRequest,
     DonePayload,
 )
+from orchestune.complete.merged import validate_merged_completion
 from orchestune.infra.git_cli import WorktreeStatus, inspect_worktree_status
 from orchestune.outcome_record import RESULT_BLOCKED, RESULT_DONE, RESULT_NOT_NEEDED
 
@@ -52,58 +52,24 @@ def _resolve_worktree_path(
     return None
 
 
-def _active_owner_digest(active: Any | None) -> str | None:
-    if active is None:
-        return None
-    digest = active_field(active, "claim", "owner_token_digest")
-    return str(digest) if isinstance(digest, str) else None
-
-
-def _validate_not_needed_ownership(
-    active: Any | None, token: str | None, owner_digest: str | None
-) -> tuple[bool, str | None, CompleteFailureReason | None, Any | None]:
-    if active is None and token is None:
-        return True, None, None, None
-    if active is not None:
-        if token is None or owner_digest != owner_token_digest(token):
-            return (
-                False,
-                "Owner token mismatch",
-                CompleteFailureReason.OWNER_TOKEN_MISMATCH,
-                None,
-            )
-        return True, None, None, active
-    return False, "Claim not found", CompleteFailureReason.CLAIM_NOT_FOUND, None
-
-
 def _validate_ownership(
     request: CompleteRequest,
     run_state: Any | None,
 ) -> tuple[bool, str | None, CompleteFailureReason | None, Any | None]:
     active_worktrees = getattr(run_state, "active_worktrees", {}) if run_state else {}
     active = active_worktrees.get(str(request.issue_number))
-    token = (
-        request.owner_token.strip()
-        if isinstance(request.owner_token, str) and request.owner_token.strip()
-        else None
-    )
-    owner_digest = _active_owner_digest(active)
-
-    if request.result == RESULT_NOT_NEEDED:
-        return _validate_not_needed_ownership(active, token, owner_digest)
-
     if active is None:
+        if request.result == RESULT_NOT_NEEDED and request.claim_id is None:
+            return True, None, None, None
+        return False, "Claim not found", CompleteFailureReason.CLAIM_NOT_FOUND, None
+    actual_claim_id = active_field(active, "claim", "claim_id")
+    if not request.claim_id or request.claim_id != actual_claim_id:
         return (
             False,
-            f"Task #{request.issue_number} is not claimed",
-            CompleteFailureReason.CLAIM_NOT_FOUND,
+            "Claim generation differs",
+            CompleteFailureReason.GENERATION_MISMATCH,
             None,
         )
-
-    if token is None or owner_digest != owner_token_digest(token):
-        reason = "Owner token is required" if token is None else "Owner token mismatch"
-        return False, reason, CompleteFailureReason.OWNER_TOKEN_MISMATCH, None
-
     return True, None, None, active
 
 
@@ -139,13 +105,7 @@ def _check_pr_state(
     pr: Any, payload_pr: int
 ) -> tuple[bool, str | None, CompleteFailureReason | None]:
     pr_state = getattr(pr, "state", "").upper()
-    if pr_state == "MERGED":
-        return (
-            False,
-            f"Pull request #{payload_pr} is already merged",
-            CompleteFailureReason.INVALID_REQUEST,
-        )
-    if pr_state != "OPEN":
+    if pr_state not in {"OPEN", "MERGED"}:
         return (
             False,
             f"Pull request #{payload_pr} is closed without being merged",
@@ -285,6 +245,10 @@ def _validate_pull_request(
     if not ok:
         return ok, reason, failure_reason
 
+    if getattr(pr, "state", "").upper() == "MERGED":
+        problem = validate_merged_completion(pr, active, forge)
+        if problem:
+            return False, problem, CompleteFailureReason.EVIDENCE_MISSING
     return _check_pr_diff(pr, payload.pr)
 
 

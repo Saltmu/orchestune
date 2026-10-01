@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
+from orchestune.claim.local_identity import validate_local_claim
 from orchestune.claim.ownership import owner_token_digest
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.complete.ci_evidence import (
@@ -75,7 +76,11 @@ def _head_sha(worktree: Path) -> str | None:
 
 
 def _validate_claim_context(
-    active: Any | None, repository: str, worktree: Path, state_path: Path
+    active: Any | None,
+    repository: str,
+    worktree: Path,
+    state_path: Path,
+    expected_claim_id: str | None,
 ) -> None:
     if active is None:
         return
@@ -92,6 +97,14 @@ def _validate_claim_context(
             CompleteFailureReason.INVALID_REQUEST,
             "Completion must run from the claimed worktree",
         )
+    try:
+        validate_local_claim(
+            active, expected_claim_id, cwd=worktree, state_path=state_path
+        )
+    except ValueError as error:
+        raise CompletionJournalError(
+            CompleteFailureReason.GENERATION_MISMATCH, str(error)
+        ) from error
 
 
 def _check(request: CompleteRequest, state: Any, worktree: Path, forge: Any) -> None:
@@ -222,7 +235,8 @@ def _new_record(
         request.issue_number,
         active.claim.claim_id,
         completion_id,
-        owner_token_digest(request.owner_token or ""),
+        active.claim.owner_token_digest
+        or owner_token_digest(active.claim.claim_id or ""),
         request.request_fingerprint,
         request.result,
         target,
@@ -286,7 +300,7 @@ def _validation_policy(
                     "head_ref",
                     "base_ref",
                     "changed_files",
-                    "state",
+                    "head_sha",
                     "is_ci_passing",
                 )
             },
@@ -356,7 +370,9 @@ def _select_record(
     request, active = context.request, context.active
     assert active is not None
     assert context.worktree is not None
-    _validate_claim_context(active, repository, context.worktree, context.state_path)
+    _validate_claim_context(
+        active, repository, context.worktree, context.state_path, request.claim_id
+    )
     record = _pending(request, state, repository, active.claim.claim_id or "")
     if record is None:
         assert context.worktree is not None
@@ -376,9 +392,7 @@ def _select_record(
         )
     previous = record.prepublication_policy_evidence or {}
     _ensure_validated_head(request, record.outcome_payload.get("head_sha"), policy)
-    if request.result == "done" and previous.get("validation") != policy.get(
-        "validation"
-    ):
+    if request.result == "done" and not _same_validation(previous, policy):
         raise CompletionJournalError(
             CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH,
             "CI or PR evidence changed since reservation",
@@ -390,6 +404,19 @@ def _select_record(
         _save_or_raise(state, context.state_path)
     progress.report(record)
     return record
+
+
+def _same_validation(previous: dict[str, Any], current: dict[str, Any]) -> bool:
+    old = json.loads(json.dumps(previous.get("validation")))
+    new = json.loads(json.dumps(current.get("validation")))
+    if isinstance(old, dict) and isinstance(new, dict):
+        old_pr, new_pr = old.get("pr", {}), new.get("pr", {})
+        old_pr.pop("state", None)
+        new_pr.pop("state", None)
+        # Legacy journals predate head_sha; payload HEAD and CI bind that head.
+        if "head_sha" not in old_pr:
+            new_pr.pop("head_sha", None)
+    return bool(old == new)
 
 
 def _publish_request(
@@ -417,6 +444,7 @@ def _publish_request(
             repository,
             worktree,
             state_path,
+            request.claim_id,
         )
         _check(request, state, worktree, forge)
         context = PublicationContext(request, state_path, worktree, forge, active)
@@ -425,17 +453,24 @@ def _publish_request(
         return publish_reserved_completion_locked(context, record)
 
 
+def _request_worktree(request: CompleteRequest, workspace: Any) -> Path:
+    return Path(
+        getattr(workspace, "repository_root", request.worktree_root or Path.cwd())
+    ).resolve()
+
+
 def _complete(
     request: CompleteRequest, forge: Any | None, progress: _Progress
 ) -> CompleteResult:
     request.validate()
     workspace = resolve_claim_workspace(
+        cwd=request.worktree_root,
         explicit_state_path=request.state_path,
         explicit_worktree_root=request.worktree_root,
     )
     state_path = Path(request.state_path or workspace.run_state_path)
     progress.state_path = state_path
-    worktree = Path(request.worktree_root or Path.cwd()).resolve()
+    worktree = _request_worktree(request, workspace)
     state = load_run_state_readonly(state_path)
     replay = find_replay(request, state, workspace.repository_identity)
     if replay is not None:
@@ -456,6 +491,7 @@ def _complete(
         workspace.repository_identity,
         worktree,
         state_path,
+        request.claim_id,
     )
     _check(request, state, worktree, forge)
     if request.dry_run:
