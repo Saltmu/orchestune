@@ -9,8 +9,6 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.claim.contracts import (
     ClaimFailure,
@@ -21,6 +19,7 @@ from orchestune.claim.contracts import (
     OwnerKind,
     ReservationKind,
 )
+from orchestune.claim.issue_metadata import publish_claim_ownership_to_issue
 from orchestune.claim.local_identity import validate_local_claim
 from orchestune.claim.ownership import (
     ClaimConflict,
@@ -46,7 +45,7 @@ from orchestune.claim.workspace import (
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
+from orchestune.issue_parsing import parse_task_from_issue
 from orchestune.labels import STATUS_LABEL_PREFIX, StatusLabel
 from orchestune.ledger.active_records import ActiveCompletionJournal
 from orchestune.ledger.completion_reservations import completion_mutation_blocked
@@ -128,10 +127,9 @@ def _evaluate_conflict_step(
     try:
         conflict = evaluate_claim_conflicts(reservation, run_state, conflict_view)
     except Exception as e:
-        return ClaimOutcome(
-            success=False,
-            issue_number=issue_number,
-            failure=ClaimFailure(
+        return _claim_failure(
+            issue_number,
+            ClaimFailure(
                 reason=ClaimFailureReason.CLAIM_CONFLICT,
                 message=f"Failed to evaluate claim conflicts due to metadata lookup failure: {e}",
             ),
@@ -365,66 +363,6 @@ def _apply_status_label(
         )
 
 
-def _update_issue_claim_metadata(
-    body: str,
-    owner_kind: str,
-    claim_id: str,
-    reservation_kind: str,
-) -> str:
-    """Inject or update owner_kind, claim_id, and reservation_kind in Issue body."""
-    match = FOOTPRINT_BLOCK_PATTERN.search(body)
-    if match:
-        try:
-            data = yaml.safe_load(match.group(1))
-            if not isinstance(data, dict):
-                data = {}
-        except Exception:
-            data = {}
-        data["owner_kind"] = owner_kind
-        data["claim_id"] = claim_id
-        data["reservation_kind"] = reservation_kind
-        new_block = yaml.dump(data, allow_unicode=True, default_flow_style=False)
-        start, end = match.span(1)
-        return body[:start] + new_block + body[end:]
-
-    new_yaml = yaml.dump(
-        {
-            "owner_kind": owner_kind,
-            "claim_id": claim_id,
-            "reservation_kind": reservation_kind,
-        },
-        allow_unicode=True,
-        default_flow_style=False,
-    )
-    separator = "" if body.endswith("\n") else "\n"
-    return f"{body}{separator}\n## Footprint\n```yaml\n{new_yaml}```\n"
-
-
-def _publish_claim_ownership_to_issue(
-    forge: Forge,
-    issue: IssueRecord,
-    owner_kind: OwnerKind,
-    claim_id: str,
-    reservation_kind: ReservationKind,
-) -> ClaimFailure | None:
-    """Persist non-secret recovery metadata to the Issue body before completion."""
-    try:
-        new_body = _update_issue_claim_metadata(
-            issue.body,
-            owner_kind.value,
-            claim_id,
-            reservation_kind.value,
-        )
-        if new_body != issue.body:
-            forge.update_issue_body(issue.number, new_body)
-        return None
-    except Exception as e:
-        return ClaimFailure(
-            reason=ClaimFailureReason.STATE_SAVE_FAILED,
-            message=f"Failed to publish claim ownership metadata to issue #{issue.number}: {e}",
-        )
-
-
 def _make_active_saved_failure(
     reservation: ActiveWorktree,
     failure: ClaimFailure,
@@ -494,7 +432,7 @@ def _validate_and_publish_issue_finalization(
             reservation, validation_error, raw_token
         )
 
-    publish_error = _publish_claim_ownership_to_issue(
+    publish_error = publish_claim_ownership_to_issue(
         forge,
         fresh_issue,
         owner_kind,
@@ -602,10 +540,9 @@ def _validate_resume_active(
         a for a in run_state.active_worktrees.values() if a.claim.claim_id == claim_id
     ]
     if not matching:
-        return None, ClaimOutcome(
-            success=False,
-            issue_number=fallback_issue_number,
-            failure=ClaimFailure(
+        return None, _claim_failure(
+            fallback_issue_number,
+            ClaimFailure(
                 reason=ClaimFailureReason.INVALID_RESUME,
                 message=f"No active claim found with ID {claim_id}",
             ),
@@ -615,10 +552,9 @@ def _validate_resume_active(
     if len(matching) != 1 or (
         fallback_issue_number and active.core.issue_number != fallback_issue_number
     ):
-        return None, ClaimOutcome(
-            success=False,
-            issue_number=active.core.issue_number,
-            failure=ClaimFailure(
+        return None, _claim_failure(
+            active.core.issue_number,
+            ClaimFailure(
                 reason=ClaimFailureReason.INVALID_RESUME,
                 message="Claim ID does not uniquely match the requested Issue.",
             ),
@@ -867,10 +803,9 @@ def claim_task(
         cm = run_state_lock(workspace.lock_path, timeout=timeout)
         cm.__enter__()
     except (FileLockContentionError, RuntimeError) as e:
-        return ClaimOutcome(
-            success=False,
-            issue_number=request.issue_number,
-            failure=ClaimFailure(
+        return _claim_failure(
+            request.issue_number,
+            ClaimFailure(
                 reason=ClaimFailureReason.STATE_LOCK_FAILED,
                 message=f"Could not acquire run_state lock: {e}",
             ),
@@ -1136,10 +1071,9 @@ def resume_claim(
         cm = run_state_lock(workspace.lock_path, timeout=timeout)
         cm.__enter__()
     except (FileLockContentionError, RuntimeError) as e:
-        return ClaimOutcome(
-            success=False,
-            issue_number=0,
-            failure=ClaimFailure(
+        return _claim_failure(
+            0,
+            ClaimFailure(
                 reason=ClaimFailureReason.STATE_LOCK_FAILED,
                 message=f"Could not acquire run_state lock: {e}",
             ),

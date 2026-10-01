@@ -101,6 +101,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "claim.preflight",
             "claim.workspace",
             "claim.local_identity",
+            "claim.issue_metadata",
             "recovery",
             "recovery.inspection",
             "complete.merged",
