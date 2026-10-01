@@ -16,10 +16,10 @@ from orchestune.claim.contracts import (
     OwnerKind,
     ReservationKind,
 )
+from orchestune.claim.local_identity import caller_claim_id, validate_local_claim
 from orchestune.claim.ownership import (
     evaluate_claim_conflicts,
     held_claim_next_actions,
-    owner_token_digest,
 )
 from orchestune.claim.service import _DefaultConflictView, _validate_issue_for_resume
 from orchestune.claim.workspace import (
@@ -106,14 +106,17 @@ def _check_eligibility(active: ActiveWorktree, repository_identity: str) -> None
         )
 
 
-def _authenticate(active: ActiveWorktree, read_owner_token: OwnerTokenReader) -> None:
-    token = read_owner_token(active.claim_id or "")
-    if token is None or owner_token_digest(token) != active.owner_token_digest:
+def _authenticate(active: ActiveWorktree, cwd: Path, state_path: Path) -> None:
+    try:
+        validate_local_claim(
+            active, caller_claim_id(cwd), cwd=cwd, state_path=state_path
+        )
+    except ValueError as error:
         raise _reject(
             ClaimFailureReason.INVALID_RESUME,
-            f"No matching protected owner token exists for claim {active.claim_id}.",
-            "Run the command from the workspace that created the claim.",
-        )
+            str(error),
+            "Run the command from the claimed worktree, or inspect orchestune recover.",
+        ) from error
 
 
 def _issue_footprint(forge: Forge, active: ActiveWorktree) -> IssueRecord:
@@ -248,7 +251,7 @@ def _publish_issue_footprint(
 
 def _amend_in_lock(
     issue_number: int,
-    read_owner_token: OwnerTokenReader,
+    caller_root: Path,
     *,
     apply: bool,
     forge: Forge,
@@ -258,7 +261,7 @@ def _amend_in_lock(
     run_state = load_run_state(run_state_path)
     key, active = _find_held_reservation(run_state, issue_number)
     _check_eligibility(active, repository_identity)
-    _authenticate(active, read_owner_token)
+    _authenticate(active, caller_root, run_state_path)
     issue = _issue_footprint(forge, active)
 
     previous = tuple(active.declared_footprint)
@@ -299,7 +302,7 @@ def _amend_in_lock(
 def amend_claim_footprint(
     issue_number: int,
     *,
-    read_owner_token: OwnerTokenReader,
+    read_owner_token: OwnerTokenReader | None = None,
     apply: bool = True,
     forge: Forge | None = None,
     cwd: str | Path | None = None,
@@ -318,7 +321,7 @@ def amend_claim_footprint(
         with run_state_lock(workspace.lock_path, timeout=timeout):
             return _amend_in_lock(
                 issue_number,
-                read_owner_token,
+                workspace.repository_root,
                 apply=apply,
                 forge=forge or GitHubForge(),
                 run_state_path=workspace.run_state_path,

@@ -153,6 +153,7 @@ class RunState:
     completion_journal: dict[str, dict[str, Any]] = field(default_factory=dict)
     completion_reservations: dict[str, dict[str, Any]] = field(default_factory=dict)
     completion_replay_receipts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    recovery_receipts: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def _parse_non_negative_int(value: object, default: int = 0) -> int:
@@ -600,6 +601,7 @@ def _run_state_from_data(data: dict[str, Any]) -> RunState:
         completion_replay_receipts=_parse_completion_records(
             data, "completion_replay_receipts"
         ),
+        recovery_receipts=_parse_completion_records(data, "recovery_receipts"),
     )
 
 
@@ -725,6 +727,7 @@ def prune_run_state(
         completion_journal=state.completion_journal,
         completion_reservations=state.completion_reservations,
         completion_replay_receipts=state.completion_replay_receipts,
+        recovery_receipts=state.recovery_receipts,
     )
 
 
@@ -814,4 +817,28 @@ def save_run_state(
         data["completion_reservations"] = state.completion_reservations
     if state.completion_replay_receipts:
         data["completion_replay_receipts"] = state.completion_replay_receipts
+    if state.recovery_receipts:
+        data["recovery_receipts"] = state.recovery_receipts
     write_json_atomic(path, data)
+
+
+def claim_was_released(
+    state: RunState, issue_number: int, claim_id: str | None
+) -> bool:
+    """Prevent recovery from resurrecting an explicitly released generation."""
+    return any(
+        receipt.get("operation") == "release"
+        and receipt.get("issue_number") == issue_number
+        and receipt.get("claim_id") == claim_id
+        for receipt in state.recovery_receipts.values()
+    )
+
+
+def attempt_was_released(state: RunState, issue_number: int, attempt_id: str) -> bool:
+    """A released claim's launch journal must not reconstruct another generation."""
+    return any(
+        receipt.get("operation") == "release"
+        and receipt.get("issue_number") == issue_number
+        and receipt.get("active", {}).get("launch_attempt_id") == attempt_id
+        for receipt in state.recovery_receipts.values()
+    )

@@ -16,7 +16,6 @@ from orchestune.claim.contracts import (
 )
 from orchestune.claim.service import claim_task, resume_claim
 from orchestune.claim.workspace import resolve_claim_workspace
-from orchestune.infra.private_tokens import _read_owner_token, _write_owner_token
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -103,28 +102,9 @@ def _resume_or_preview(args: argparse.Namespace, token: str) -> ClaimOutcome:
     )
 
 
-def _missing_token_outcome(issue_number: int) -> ClaimOutcome:
-    return ClaimOutcome(
-        success=False,
-        issue_number=issue_number,
-        failure=ClaimFailure(
-            reason=ClaimFailureReason.INVALID_RESUME,
-            message="No protected local owner-token record exists for the requested claim.",
-            next_actions=(
-                "Run the original claim from the owning workspace or start a new claim.",
-            ),
-        ),
-    )
-
-
 def _run_claim(args: argparse.Namespace, token_dir: Path) -> ClaimOutcome:
     if args.resume:
-        token = _read_owner_token(token_dir, args.resume)
-        return (
-            _resume_or_preview(args, token)
-            if token is not None
-            else _missing_token_outcome(args.issue_number)
-        )
+        return _resume_or_preview(args, "")
     request = ClaimRequest(
         issue_number=args.issue_number,
         dry_run=args.no_apply,
@@ -137,7 +117,6 @@ def _run_claim(args: argparse.Namespace, token_dir: Path) -> ClaimOutcome:
 def _run_amend(args: argparse.Namespace, token_dir: Path) -> FootprintAmendOutcome:
     return amend_claim_footprint(
         args.issue_number,
-        read_owner_token=lambda claim_id: _read_owner_token(token_dir, claim_id),
         apply=not args.no_apply,
         state_path=args.state,
         timeout_seconds=args.timeout,
@@ -168,15 +147,6 @@ def _render_outcome(outcome: ClaimOutcome, token_dir: Path, *, preview: bool) ->
         assert outcome.failure is not None
         _print_failure(outcome.failure)
         return int(outcome.failure.exit_code)
-    if not preview and outcome.claim_id and outcome.owner_token:
-        try:
-            _write_owner_token(token_dir, outcome.claim_id, outcome.owner_token)
-        except (OSError, ValueError) as error:
-            print(
-                f"Claim failed: reason=generic_error\nMessage: unable to save protected resume credential: {error}",
-                file=sys.stderr,
-            )
-            return 1
     _print_success(outcome, preview=preview)
     return 0
 
