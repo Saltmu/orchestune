@@ -28,6 +28,14 @@ class CompletePreflight:
     diagnostics: tuple[str, ...] = ()
 
 
+def active_field(active: Any, subrecord: str, field_name: str) -> Any:
+    """Read a field from a typed ActiveWorktree subrecord with flat mock fallback."""
+    sub = getattr(active, subrecord, None)
+    if sub is not None and hasattr(sub, field_name):
+        return getattr(sub, field_name)
+    return getattr(active, field_name, None)
+
+
 def _resolve_worktree_path(
     request: CompleteRequest,
     worktree_path: Path | str | None,
@@ -35,8 +43,10 @@ def _resolve_worktree_path(
 ) -> Path | None:
     if worktree_path is not None:
         return Path(worktree_path)
-    if active is not None and getattr(active, "worktree_path", None):
-        return Path(active.worktree_path)
+    if active is not None:
+        wt_path = active_field(active, "core", "worktree_path")
+        if wt_path:
+            return Path(wt_path)
     if request.worktree_root is not None:
         return Path(request.worktree_root)
     return None
@@ -52,7 +62,8 @@ def _validate_ownership(
         if request.result == RESULT_NOT_NEEDED and request.claim_id is None:
             return True, None, None, None
         return False, "Claim not found", CompleteFailureReason.CLAIM_NOT_FOUND, None
-    if not request.claim_id or request.claim_id != getattr(active, "claim_id", None):
+    actual_claim_id = active_field(active, "claim", "claim_id")
+    if not request.claim_id or request.claim_id != actual_claim_id:
         return (
             False,
             "Claim generation differs",
@@ -90,11 +101,8 @@ def _normalize_branch_ref(branch_ref: str) -> str:
     return branch_ref
 
 
-def _check_pr_identity_and_branches(
-    pr: Any,
-    payload_pr: int,
-    active: Any | None,
-    expected_base_ref: str | None,
+def _check_pr_state(
+    pr: Any, payload_pr: int
 ) -> tuple[bool, str | None, CompleteFailureReason | None]:
     pr_state = getattr(pr, "state", "").upper()
     if pr_state not in {"OPEN", "MERGED"}:
@@ -103,19 +111,14 @@ def _check_pr_identity_and_branches(
             f"Pull request #{payload_pr} is closed without being merged",
             CompleteFailureReason.INVALID_REQUEST,
         )
+    return True, None, None
 
-    active_branch = getattr(active, "branch", None) if active else None
-    pr_head_ref = getattr(pr, "head_ref", None)
-    if active_branch and pr_head_ref and pr_head_ref != active_branch:
-        return (
-            False,
-            f"Pull request head branch mismatch: expected {active_branch}, got {pr_head_ref}",
-            CompleteFailureReason.INVALID_REQUEST,
-        )
 
-    expected_base = expected_base_ref or (
-        getattr(active, "base_ref", None) if active else None
-    )
+def _check_pr_base_branch(
+    pr: Any, active: Any | None, expected_base_ref: str | None
+) -> tuple[bool, str | None, CompleteFailureReason | None]:
+    active_base_ref = active_field(active, "claim", "base_ref") if active else None
+    expected_base = expected_base_ref or active_base_ref
     if not expected_base:
         return (
             False,
@@ -135,6 +138,28 @@ def _check_pr_identity_and_branches(
             CompleteFailureReason.INVALID_REQUEST,
         )
     return True, None, None
+
+
+def _check_pr_identity_and_branches(
+    pr: Any,
+    payload_pr: int,
+    active: Any | None,
+    expected_base_ref: str | None,
+) -> tuple[bool, str | None, CompleteFailureReason | None]:
+    state_ok, reason, failure_reason = _check_pr_state(pr, payload_pr)
+    if not state_ok:
+        return state_ok, reason, failure_reason
+
+    active_branch = active_field(active, "core", "branch") if active else None
+    pr_head_ref = getattr(pr, "head_ref", None)
+    if active_branch and pr_head_ref and pr_head_ref != active_branch:
+        return (
+            False,
+            f"Pull request head branch mismatch: expected {active_branch}, got {pr_head_ref}",
+            CompleteFailureReason.INVALID_REQUEST,
+        )
+
+    return _check_pr_base_branch(pr, active, expected_base_ref)
 
 
 def _check_pr_diff(
@@ -320,6 +345,7 @@ def evaluate_complete_preflight(
 __all__ = [
     "CompletePreflight",
     "WorktreeStatus",
+    "active_field",
     "evaluate_complete_preflight",
     "inspect_worktree_status",
 ]
