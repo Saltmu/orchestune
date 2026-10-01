@@ -10,18 +10,17 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime
 from enum import StrEnum
 from functools import cache
 from typing import cast
 
-from orchestune.branch_naming import branch_matches_task, parse_task_branch_name
 from orchestune.issue_parsing import effective_parent_number
 from orchestune.labels import StatusLabel
 from orchestune.ledger.status_labels import (
     PRIMARY_STATUS_LABELS,
     transition_status_label,
 )
+from orchestune.merge_evidence import _identity_status, _is_after_reopen
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.pr_link_notice import ensure_pr_merged_notice
 from orchestune.task_metadata import TaskMetadata
@@ -62,42 +61,6 @@ class PriorParentMergeReconciliation:
     # に構築されうるため、subtask_id文字列は別EPICの同名タスクと衝突しうる。
     completed_issue_numbers: frozenset[int]
     events: tuple[dict[str, object], ...]
-
-
-def _is_after_reopen(merged_at: str, reopened_at: str | None) -> bool | None:
-    """Return whether the merge is provably later than the latest reopen.
-
-    GitHub timestamps used here are ISO-8601 UTC strings with second precision.
-    Lexicographic comparison is valid only after checking their normal shape;
-    unknown formats are intentionally an indeterminate result rather than a
-    reason to close an Issue.
-    """
-    if not merged_at:
-        return None
-    if reopened_at is None:
-        return True
-    if not reopened_at:
-        return None
-    if not (merged_at.endswith("Z") and reopened_at.endswith("Z")):
-        return None
-    try:
-        merged = datetime.fromisoformat(merged_at.removesuffix("Z") + "+00:00")
-        reopened = datetime.fromisoformat(reopened_at.removesuffix("Z") + "+00:00")
-    except ValueError:
-        return None
-    return merged > reopened
-
-
-def _identity_status(pr: PrRecord, issue_number: int, subtask_id: str) -> str:
-    """Return ``match``, ``none``, or ``conflict`` for strict Issue identity."""
-    explicit = issue_number in pr.closes_issue_numbers
-    canonical = branch_matches_task(pr.head_ref, issue_number, subtask_id)
-    parsed = parse_task_branch_name(pr.head_ref)
-    if parsed is not None and parsed.issue_number != issue_number:
-        return "conflict" if explicit else "none"
-    if canonical and pr.closes_issue_numbers and not explicit:
-        return "conflict"
-    return "match" if canonical or explicit else "none"
 
 
 def _validated_candidate(

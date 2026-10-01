@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -72,13 +71,7 @@ def test_success_renders_claim_details_and_persists_token(tmp_path, capsys):
     assert "Owner kind: interactive" in output
     assert "owner-token-should-not-be-printed" not in output
     assert claim.call_args.kwargs["apply"] is True
-    token_record = tmp_path / "claim-123.token"
-    assert (
-        token_record.read_text(encoding="utf-8")
-        == "owner-token-should-not-be-printed\n"
-    )
-    if os.name != "nt":
-        assert token_record.stat().st_mode & 0o777 == 0o600
+    assert not (tmp_path / "claim-123.token").exists()
 
 
 def test_failure_uses_reason_exit_code_and_recovery_diagnostic(capsys):
@@ -130,13 +123,13 @@ def test_resume_uses_protected_token_record(tmp_path, capsys):
     ):
         assert main(["123", "--resume", "claim-123", "--timeout", "3"]) == 0
 
-    assert resume.call_args.args == ("claim-123", "stored-owner-token")
+    assert resume.call_args.args == ("claim-123", "")
     assert resume.call_args.kwargs["timeout_seconds"] == 3.0
     assert "stored-owner-token" not in capsys.readouterr().out
 
 
 def test_read_owner_token_uses_windows_acl_instead_of_posix_mode_bits(tmp_path):
-    from orchestune.claim.cli import _read_owner_token
+    from orchestune.infra.private_tokens import _read_owner_token
 
     token_record = tmp_path / "claim-123.token"
     token_record.write_text("stored-owner-token\n", encoding="utf-8")
@@ -210,8 +203,7 @@ def test_amend_footprint_reads_token_by_claim_id_and_renders_added_files(
     kwargs = amend.call_args.kwargs
     assert kwargs["apply"] is True
     assert kwargs["timeout_seconds"] == 2.0
-    assert kwargs["read_owner_token"]("claim-123") == "stored-owner-token"
-    assert kwargs["read_owner_token"]("claim-other") is None
+    assert "read_owner_token" not in kwargs
     output = capsys.readouterr().out
     assert "Claim ID: claim-123" in output
     assert "Added: docs/plan.md" in output

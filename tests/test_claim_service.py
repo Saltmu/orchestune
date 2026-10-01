@@ -465,7 +465,7 @@ class TestResumeClaim:
             == ClaimStage.COMPLETED.value
         )
 
-    def test_resume_claim_token_mismatch_rejected(
+    def test_resume_claim_generation_mismatch_rejected(
         self, claim_env: dict[str, Path]
     ) -> None:
         repo_root = claim_env["repo_root"]
@@ -492,8 +492,8 @@ class TestResumeClaim:
             )
 
         outcome = resume_claim(
-            claim_id=claim_id,
-            owner_token="wrong-token-value",
+            claim_id="old-generation",
+            owner_token="",
             cwd=repo_root,
             state_path=state_path,
         )
@@ -512,6 +512,20 @@ class TestResumeClaim:
         claim_id = new_claim_id()
         worktree_path = claim_env["worktrees_dir"] / "claude-issue-110-test-task"
 
+        from orchestune.infra.git_cli import run_git
+        from orchestune.worktree_ops.claim_marker import write_claim_marker
+
+        run_git(
+            ["worktree", "add", "-b", "claude/issue-110-test-task", str(worktree_path)],
+            cwd=repo_root,
+        )
+        write_claim_marker(
+            worktree_path,
+            claim_id=claim_id,
+            branch="claude/issue-110-test-task",
+            base_sha=None,
+            branch_created=True,
+        )
         completed_active = make_test_active_worktree(
             issue_number=110,
             branch="claude/issue-110-test-task",

@@ -40,6 +40,8 @@ Offline input may supply a shared top-level optional `context` or a per-inline `
 
 ## Logs and validation limits
 
+Evaluations are appended to `.orchestune/jev/evaluations.jsonl` in the primary checkout, even when `wait_for_review.py` runs inside a task worktree, so the log survives worktree cleanup. A relative `JEV_LOG_PATH` is resolved against the same root; an absolute one is used as is. Outside a Git repository the path is relative to the current directory.
+
 Existing JSONL keys remain, with schema_version, applicability, applicability_confidence, decision_reason (bypass / speculative / low_validity / low_impact / accepted), and context source SHAs, status, missing, and truncated markers added. stderr includes the same decision information. New log fields do not persist code, full PR/rule text, or API keys. Context acquisition failures appear as missing data; evaluation failures are bypassed.
 
 Contrast examples cover documented trusted internal input, external input, destructive internal effects, rule violations, and insufficient information. #1086 remains a disputed example with no universal SPECULATIVE expectation. Mock-based unit and integration tests validate decisions and contracts, not actual Jev accuracy. Any live comparison must separately record the model, examples, results, and false exclusions of findings that should remain.

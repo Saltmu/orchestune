@@ -970,3 +970,42 @@ class TestRecoveryCounterTargets:
         run_state = RunState(active_worktrees={"101": active})
 
         assert _counter_targets(run_state, []) == ()
+
+
+def test_operator_release_blocks_standard_restoration(tmp_path, fake_forge):
+    active = ActiveWorktree(
+        issue_number=101,
+        branch="codex/issue-101",
+        worktree_path="worktrees/issue-101",
+        pid=None,
+        started_at=None,
+        declared_footprint=(),
+        external_id="51",
+        claim_id="released-claim",
+    )
+    state = RunState(
+        recovery_receipts={
+            "release": {
+                "operation": "release",
+                "issue_number": 101,
+                "claim_id": active.claim_id,
+            }
+        }
+    )
+    config = DispatcherConfig(
+        parent_issue_number=100,
+        apply=True,
+        forge=fake_forge,
+        run_state_path=tmp_path / "run_state.json",
+        events_log_path=tmp_path / "events.jsonl",
+        worktree_root=tmp_path / "worktrees",
+    )
+    result = execute_bookkeeping_repair_command(
+        _bookkeeping_command("101"),
+        state,
+        _snapshot(("101", "task-101", active)),
+        config,
+    )
+    assert result.status is RepairStatus.SKIPPED
+    assert not state.active_worktrees
+    fake_forge.get_issue_labels.assert_not_called()

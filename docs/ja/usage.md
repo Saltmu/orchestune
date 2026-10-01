@@ -502,7 +502,7 @@ orchestune claim 123
 | オプション | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
 | `--no-apply` | 無効 | Git、GitHub、台帳の変更を行わず、事前検証と予定値の表示のみを行うプレビュー（ドライラン）モード。 |
-| `--resume <claim_id>` | なし | ネットワーク障害やプロセス中断で途中停止した既存の claim を、保護されたローカル認証情報を用いて再開する。 |
+| `--resume <claim_id>` | なし | 途中停止した既存の claim を、期待する世代と登録worktreeを照合して再開する。 |
 | `--amend-footprint` | 無効 | 保持中の claim のファイル予約を拡張する。`--resume` とは併用不可。詳細は後述。 |
 | `--state <path>` | `run_state.json` | 実行状態台帳ファイルのパスを指定。 |
 | `--timeout <seconds>` | なし | 台帳ロックのタイムアウト秒数。 |
@@ -522,13 +522,13 @@ orchestune claim <N> --amend-footprint --no-apply  # プレビュー
 orchestune claim <N> --amend-footprint
 ```
 
-新しい footprint は、保持中の footprint・Issue の footprint・claim の基点以降に worktree で変更済みのすべてのファイル（コミット済み・未コミット・未追跡）の和集合です。縮小はしません。他のすべての active 予約との衝突を再判定し、衝突した場合は何も変更せずに相手の Issue を表示します。成功すると不足分を Issue の footprint に追記して台帳を更新します。worktree・ブランチ・claim ID・ラベルは変わりません。対象は、claim を作成したワークスペース（保護された owner token がある場所）で完了済みの interactive なファイル予約のみです。リポジトリ予約への切り替えはサポートしません。
+新しい footprint は、保持中の footprint・Issue の footprint・claim の基点以降に worktree で変更済みのすべてのファイル（コミット済み・未コミット・未追跡）の和集合です。縮小はしません。他のすべての active 予約との衝突を再判定し、衝突した場合は何も変更せずに相手の Issue を表示します。成功すると不足分を Issue の footprint に追記して台帳を更新します。worktree・ブランチ・claim ID・ラベルは変わりません。対象は、claim を作成したワークスペース（対応する claim marker がある場所）で完了済みの interactive なファイル予約のみです。リポジトリ予約への切り替えはサポートしません。
 
 ## 8. ローカルCI証跡の保存と完了処理 (`orchestune complete`)
 
 `orchestune complete` の成功は、固定したOutcome Recordの投稿、結果に対応するIssueラベル（`status:done` / `status:blocked` / `status:not-needed`）の確認、および共有台帳へのhandoffとreplay receiptの永続保存が成立したことを意味します。PRマージ、対応不要の独立レビュー承認、worktree回収の完了までは意味しません。`done` は公開前にローカルCI、PR/head、トークン上限の証跡を検証し、GCはその証跡を消費します。予約なしの旧完了経路ではGC側のトークン上限判定を維持します。
 
-claim済みworktreeから `orchestune complete --issue <N> --pr <PR> --result done` を実行します。`blocked` は `--reason` が必要です。`not-needed` は未claimのIssueにもworktreeを作らず予約できます。コマンドは外部操作前にcompletion IDを表示します。途中から再開するには、元の所有者認証を使い、同一引数に `--completion-id <ID>` を付けて再実行してください。引数・所有者・generationが変わると固定済み要求を上書きできません。handoff後の再実行は、後続ポリシーがIssueをqueuedにした後やactive回収後でも保存結果を返し、古いラベルへ戻しません。
+claim済みworktreeから `orchestune complete --issue <N> --pr <PR> --result done` を実行します。`blocked` は `--reason` が必要です。`not-needed` は未claimのIssueにもworktreeを作らず予約できます。コマンドは外部操作前にcompletion IDを表示します。途中から再開するには、対応する claim marker を保持したまま、同一引数に `--completion-id <ID>` を付けて再実行してください。引数・所有者・generationが変わると固定済み要求を上書きできません。handoff後の再実行は、後続ポリシーがIssueをqueuedにした後やactive回収後でも保存結果を返し、古いラベルへ戻しません。
 
 ### CI証跡の保存場所とGit管理
 - **既定保存先**: 各worktree内の `.orchestune/ci/ci_evidence.json`
@@ -554,10 +554,46 @@ active回収後もreplay receiptと後続処理の対象・設定情報を保持
 
 `--no-apply` はlockも作らない読み取り専用プレビューです。applyモードではIssueのラベル・コメント・closeを更新し、独立レビューを起動する場合があります。Dispatcher不在でも `orchestune gc` を再実行してpending処理を進められます。cloudレビューには `ORCHESTUNE_ROUTINE_ID` / `ORCHESTUNE_ROUTINE_TOKEN` が必要です。provider不在・起動結果不明ならレビューを保留します。保存済みlaunch/attempt IDをproviderのlookupで照合できる場合は復旧し、不明な起動を二重実行しません。設定されたレビューtimeoutまで起動結果を確認できない場合は人間の確認へ移行し、policyと依存は保留を維持します。レビュー結果コメントには当該operationのmarkerが必要で、一般的な結果ラベルだけではgenerationの承認にしません。
 
-同じ解決済みstate pathを使うwriterは、上限付き外部操作と保存を含めて共通の再入可能な台帳lockを保持し、物理回収はworktree別claim lockも保持します。異なるstate path間にはこの排他は成立しません。実行中/current worktree、所有者不一致の保護は維持します。`current_worktree` の場合はprimary checkoutから再実行してください。旧 `handed_off_to_gc` は自動昇格せず証跡移行まで保留します。再開可能な公開処理は元のIDと所有者認証で `complete` から再開してください。
+同じ解決済みstate pathを使うwriterは、上限付き外部操作と保存を含めて共通の再入可能な台帳lockを保持し、物理回収はworktree別claim lockも保持します。異なるstate path間にはこの排他は成立しません。実行中/current worktree、所有者不一致の保護は維持します。`current_worktree` の場合はprimary checkoutから再実行してください。旧 `handed_off_to_gc` は自動昇格せず証跡移行まで保留します。再開可能な公開処理は元のcompletion IDと対応するclaim markerで `complete` から再開してください。
 
 | オプション | デフォルト | 説明 |
 | :--- | :--- | :--- |
 | `--no-apply` | 無効 | 変更せずに判定を表示する。 |
 | `--state <path>` | primary checkoutの `run_state.json` | 台帳パスを指定する。相対パスはprimary checkout基準。 |
 | `--timeout <seconds>` | `0` | 台帳とclaim lockの取得待ち秒数。負数・非有限値は引数エラー。 |
+
+## ローカルclaimの復旧（`orchestune recover`）
+
+ローカルのclaim再開・footprint変更・completeはowner tokenファイルを読み書きしません。
+呼び出し元のclaim markerにある世代、Git common dir、登録worktree、checkout中のbranchを検証します。
+旧tokenファイルは残っていても支障ありません。旧state/journalの`owner_token_digest`は
+互換用メタデータとして読めるため、一括移行やstate全削除は不要です。Routine API認証は従来どおりです。
+
+markerはworktreeの世代を識別し、OS processの認証は行いません。同じworktreeを再利用する前に
+古いagentを停止してください。置換後のmarkerを読み直すprocessは、新agentと区別できません。
+サービス呼び出し側は起動時に取得した期待claim IDを保持してください。古いIDによる操作は再割当て後も拒否します。
+
+primary checkoutから診断してください。既定は変更を行わないpreviewです。
+
+```bash
+orchestune recover --issue <N>
+orchestune recover --issue <N> --claim-id <ID> --reason "worker停止を確認" --apply
+# marker欠損時は修復し、未完了のcompleteを再開する:
+orchestune recover --issue <N> --claim-id <ID> --reason "marker消失" --restore-marker --apply
+```
+
+診断で確認したclaim IDを指定します。適用時も共有state lockとworktree lock内で再検証します。
+稼働中worker、不確かな起動・外部起動、世代変更、別repository、未完了のcompletion公開は保留します。
+起動状況が不確かな場合はDispatcherで照合してください。公開途中ならmarkerを修復し、
+元のcompletion IDでcompleteを再開します。停止確認後のinteractive / dispatch双方を扱えます。
+`--state <path>`はDispatcherと同じ台帳を選択するために使用します。
+
+解放は対象active予約だけを除去し、世代と理由を復旧receiptへ保存します。
+dirtyな変更・commit・worktree・branch、他claim、回数、intent、completion証拠を保持します。
+GitHubのラベルやIssue状態は変更しません。再queue・完了・closeは既存のengine / Outcome経路で行います。
+Dispatcherは明示解放された旧世代を復元しません。同じ解放の再実行は冪等です。
+`run_state.json`全体を削除する必要はありません。
+
+merge済みPRも通常のcompleteコマンドで事後完了できます。Issue、claim作成時刻、head、予定base、
+repository、merge commitの到達性、Issue再open時刻を照合します。親branchへのmergeも対象です。
+CIとOutcome公開の要件は維持し、必要証拠が不足する場合は保留します。

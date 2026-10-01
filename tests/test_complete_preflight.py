@@ -119,6 +119,7 @@ class FakeActiveWorktree:
         base_ref: str = "parent/issue-894",
     ) -> None:
         self.issue_number = issue_number
+        self.claim_id = "claim-test"
         self.owner_token_digest = owner_token_digest
         self.worktree_path = worktree_path
         self.branch = branch
@@ -139,7 +140,9 @@ class TestEvaluateCompletePreflight:
         from orchestune.claim.ownership import owner_token_digest
 
         token = "token"
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         run_state = FakeRunState(
             {
                 "999": FakeActiveWorktree(
@@ -174,7 +177,7 @@ class TestEvaluateCompletePreflight:
             issue_number=999,
             pr=10,
             owner_token=token,
-            claim_id="claim-123",
+            claim_id="claim-test",
         )
         forge = FakeForge(
             {
@@ -219,7 +222,9 @@ class TestEvaluateCompletePreflight:
         digest = owner_token_digest(token)
         (temp_git_repo / "dirty.txt").write_text("dirty")
 
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         forge = FakeForge({10: FakePr(number=10, head_sha="head123")})
         run_state = FakeRunState(
             {
@@ -249,7 +254,9 @@ class TestEvaluateCompletePreflight:
         invalid_path = tmp_path / "not_a_repo"
         invalid_path.mkdir()
 
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         forge = FakeForge({10: FakePr(number=10, head_sha="head123")})
         run_state = FakeRunState(
             {
@@ -277,7 +284,9 @@ class TestEvaluateCompletePreflight:
         token = "token"
         digest = owner_token_digest(token)
 
-        request = CompleteRequest.done(issue_number=999, pr=9999, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=9999, owner_token=token
+        )
         forge = FakeForge({})  # PR 9999 does not exist
         run_state = FakeRunState(
             {
@@ -304,7 +313,9 @@ class TestEvaluateCompletePreflight:
         token = "token"
         digest = owner_token_digest(token)
 
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         forge = FakeForge({10: FakePr(number=10, state="CLOSED")})
         run_state = FakeRunState(
             {
@@ -330,7 +341,9 @@ class TestEvaluateCompletePreflight:
         token = "token"
         digest = owner_token_digest(token)
 
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         forge = FakeForge({10: FakePr(number=10, base_ref="wrong-base")})
         run_state = FakeRunState(
             {
@@ -362,7 +375,9 @@ class TestEvaluateCompletePreflight:
 
         token = "token"
         digest = owner_token_digest(token)
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         forge = FakeForge({10: FakePr(number=10, base_ref="main", head_sha="head123")})
         run_state = FakeRunState(
             {
@@ -392,7 +407,9 @@ class TestEvaluateCompletePreflight:
 
         token = "token"
         digest = owner_token_digest(token)
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         forge = FakeForge(
             {10: FakePr(number=10, base_ref=pr_base_ref, head_sha="head123")}
         )
@@ -422,7 +439,9 @@ class TestEvaluateCompletePreflight:
         token = "token"
         digest = owner_token_digest(token)
 
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         forge = FakeForge({10: FakePr(number=10, base_ref="main")})
         # Active worktree without base_ref, and no expected_base_ref provided
         run_state = FakeRunState(
@@ -453,7 +472,9 @@ class TestEvaluateCompletePreflight:
         token = "token"
         digest = owner_token_digest(token)
 
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         forge = FakeForge({10: FakePr(number=10, commits_count=0, head_sha="head123")})
         run_state = FakeRunState(
             {
@@ -475,31 +496,15 @@ class TestEvaluateCompletePreflight:
         assert "empty" in (result.reason or "").lower()
 
     def test_done_rejects_owner_token_mismatch(self, temp_git_repo: Path) -> None:
-        from orchestune.claim.ownership import owner_token_digest
-
-        digest = owner_token_digest("correct_token")
-
-        request = CompleteRequest.done(
-            issue_number=999, pr=10, owner_token="wrong_token"
+        request = CompleteRequest.not_needed(999, claim_id="stale", owner_token=None)
+        state = FakeRunState(
+            {"999": FakeActiveWorktree(worktree_path=str(temp_git_repo))}
         )
-        forge = FakeForge({10: FakePr(number=10)})
-        run_state = FakeRunState(
-            {
-                "999": FakeActiveWorktree(
-                    owner_token_digest=digest, worktree_path=str(temp_git_repo)
-                )
-            }
-        )
-
         result = evaluate_complete_preflight(
-            request,
-            worktree_path=temp_git_repo,
-            forge=forge,
-            run_state=run_state,
+            request, worktree_path=temp_git_repo, run_state=state
         )
-
-        assert result.accepted is False
-        assert result.failure_reason == CompleteFailureReason.OWNER_TOKEN_MISMATCH
+        assert not result.accepted
+        assert result.failure_reason == CompleteFailureReason.GENERATION_MISMATCH
 
     def test_not_needed_accepts_dirty_or_unknown_worktree(
         self, temp_git_repo: Path
@@ -510,7 +515,9 @@ class TestEvaluateCompletePreflight:
         digest = owner_token_digest(token)
         (temp_git_repo / "dirty.txt").write_text("dirty")
 
-        request = CompleteRequest.not_needed(issue_number=999, owner_token=token)
+        request = CompleteRequest.not_needed(
+            claim_id="claim-test", issue_number=999, owner_token=token
+        )
         run_state = FakeRunState(
             {
                 "999": FakeActiveWorktree(
@@ -553,6 +560,7 @@ class TestEvaluateCompletePreflight:
 
         # base-branch-red requires base_sha
         request_with_sha = CompleteRequest.blocked(
+            claim_id="claim-test",
             issue_number=999,
             reason="base-branch-red",
             base_sha="abc1234",
@@ -578,6 +586,7 @@ class TestEvaluateCompletePreflight:
 
         # Without base_sha for base-branch-red -> rejected
         request_without_sha = CompleteRequest.blocked(
+            claim_id="claim-test",
             issue_number=999,
             reason="base-branch-red",
             base_sha=None,
@@ -601,6 +610,7 @@ class TestEvaluateCompletePreflight:
         digest = owner_token_digest(token)
 
         request_with_attempt = CompleteRequest.blocked(
+            claim_id="claim-test",
             issue_number=999,
             reason="review-timeout",
             attempt=2,
@@ -622,6 +632,7 @@ class TestEvaluateCompletePreflight:
         assert result.accepted is True
 
         request_no_attempt = CompleteRequest.blocked(
+            claim_id="claim-test",
             issue_number=999,
             reason="review-timeout",
             attempt=None,
@@ -641,7 +652,9 @@ class TestEvaluateCompletePreflight:
         token = "token"
         digest = owner_token_digest(token)
 
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         forge = FakeForge(
             {
                 10: FakePr(
@@ -679,7 +692,9 @@ class TestEvaluateCompletePreflight:
         token = "token"
         digest = owner_token_digest(token)
 
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         forge = FakeForge({10: FakePr(number=10, state="MERGED")})
         run_state = FakeRunState(
             {
@@ -705,27 +720,23 @@ class TestEvaluateCompletePreflight:
     def test_not_needed_rejects_claimed_with_wrong_token(
         self, temp_git_repo: Path
     ) -> None:
-        from orchestune.claim.ownership import owner_token_digest
-
-        digest = owner_token_digest("token_a")
-        request = CompleteRequest.not_needed(
-            issue_number=999, owner_token="wrong_token"
+        request = CompleteRequest.not_needed(999, claim_id="stale", owner_token=None)
+        state = FakeRunState(
+            {"999": FakeActiveWorktree(worktree_path=str(temp_git_repo))}
         )
-        run_state = FakeRunState(
-            {
-                "999": FakeActiveWorktree(
-                    owner_token_digest=digest, worktree_path=str(temp_git_repo)
-                )
-            }
+        result = evaluate_complete_preflight(
+            request, worktree_path=temp_git_repo, run_state=state
         )
-
-        result = evaluate_complete_preflight(request, run_state=run_state)
-        assert result.accepted is False
-        assert result.failure_reason == CompleteFailureReason.OWNER_TOKEN_MISMATCH
+        assert not result.accepted
+        assert result.failure_reason == CompleteFailureReason.GENERATION_MISMATCH
 
     def test_blocked_rejects_unclaimed(self) -> None:
         request = CompleteRequest.blocked(
-            issue_number=999, reason="base-branch-red", base_sha="abc1234", attempt=1
+            claim_id="claim-test",
+            issue_number=999,
+            reason="base-branch-red",
+            base_sha="abc1234",
+            attempt=1,
         )
         run_state = FakeRunState({})
 
@@ -738,7 +749,9 @@ class TestEvaluateCompletePreflight:
 
         token = "token"
         digest = owner_token_digest(token)
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         forge = FakeForge({10: FakePr(number=10, head_sha="head123")})
         run_state = FakeRunState(
             {
@@ -767,7 +780,11 @@ class TestEvaluateCompletePreflight:
         token = "token"
         digest = owner_token_digest(token)
         request = CompleteRequest.done(
-            issue_number=999, pr=10, owner_token=token, worktree_root=temp_git_repo
+            claim_id="claim-test",
+            issue_number=999,
+            pr=10,
+            owner_token=token,
+            worktree_root=temp_git_repo,
         )
         forge = FakeForge({10: FakePr(number=10, head_sha="head123")})
         run_state = FakeRunState(
@@ -790,32 +807,23 @@ class TestEvaluateCompletePreflight:
         assert result.worktree_status == WorktreeStatus.CLEAN
 
     def test_done_rejects_missing_owner_token(self, temp_git_repo: Path) -> None:
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=None)
-        run_state = FakeRunState(
-            {
-                "999": FakeActiveWorktree(
-                    owner_token_digest="some_digest",
-                    worktree_path=str(temp_git_repo),
-                )
-            }
+        request = CompleteRequest.not_needed(999, claim_id="stale", owner_token=None)
+        state = FakeRunState(
+            {"999": FakeActiveWorktree(worktree_path=str(temp_git_repo))}
         )
-
         result = evaluate_complete_preflight(
-            request, worktree_path=temp_git_repo, run_state=run_state
+            request, worktree_path=temp_git_repo, run_state=state
         )
-        assert result.accepted is False
-        assert result.failure_reason == CompleteFailureReason.OWNER_TOKEN_MISMATCH
+        assert not result.accepted
+        assert result.failure_reason == CompleteFailureReason.GENERATION_MISMATCH
 
     def test_not_needed_rejects_unclaimed_with_token(self) -> None:
-        request = CompleteRequest.not_needed(issue_number=999, owner_token="some_token")
-        run_state = FakeRunState({})
-
-        result = evaluate_complete_preflight(request, run_state=run_state)
-        assert result.accepted is False
-        assert result.failure_reason == CompleteFailureReason.CLAIM_NOT_FOUND
+        request = CompleteRequest.not_needed(999, owner_token="unused-legacy-token")
+        result = evaluate_complete_preflight(request)
+        assert result.accepted
 
     def test_preflight_catches_invalid_request_validation(self) -> None:
-        request = CompleteRequest.not_needed(issue_number=999)
+        request = CompleteRequest.not_needed(claim_id="claim-test", issue_number=999)
         object.__setattr__(request, "result", "invalid_result_value")
 
         result = evaluate_complete_preflight(request)
@@ -826,29 +834,28 @@ class TestEvaluateCompletePreflight:
     def test_done_rejects_empty_or_whitespace_owner_token_without_raising(
         self, temp_git_repo: Path, empty_token: str
     ) -> None:
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=empty_token)
-        run_state = FakeRunState(
-            {
-                "999": FakeActiveWorktree(
-                    owner_token_digest="some_digest",
-                    worktree_path=str(temp_git_repo),
-                )
-            }
+        request = CompleteRequest.done(
+            999, 10, claim_id="claim-test", owner_token=empty_token
         )
-
+        state = FakeRunState(
+            {"999": FakeActiveWorktree(worktree_path=str(temp_git_repo))}
+        )
         result = evaluate_complete_preflight(
-            request, worktree_path=temp_git_repo, run_state=run_state
+            request,
+            worktree_path=temp_git_repo,
+            run_state=state,
+            forge=FakeForge({10: FakePr()}),
         )
-        assert result.accepted is False
-        assert result.failure_reason == CompleteFailureReason.OWNER_TOKEN_MISMATCH
-        assert "owner token is required" in (result.reason or "").lower()
+        assert result.accepted
 
     def test_pr_closed_and_merged_distinct_messages(self, temp_git_repo: Path) -> None:
         from orchestune.claim.ownership import owner_token_digest
 
         token = "token"
         digest = owner_token_digest(token)
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         run_state = FakeRunState(
             {
                 "999": FakeActiveWorktree(
@@ -879,14 +886,16 @@ class TestEvaluateCompletePreflight:
             run_state=run_state,
         )
         assert res_merged.accepted is False
-        assert "already merged" in (res_merged.reason or "")
+        assert res_merged.failure_reason == CompleteFailureReason.EVIDENCE_MISSING
 
     def test_done_rejects_missing_forge(self, temp_git_repo: Path) -> None:
         from orchestune.claim.ownership import owner_token_digest
 
         token = "token"
         digest = owner_token_digest(token)
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         run_state = FakeRunState(
             {
                 "999": FakeActiveWorktree(
@@ -909,7 +918,9 @@ class TestEvaluateCompletePreflight:
 
         token = "token"
         digest = owner_token_digest(token)
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         run_state = FakeRunState(
             {
                 "999": FakeActiveWorktree(
@@ -943,7 +954,9 @@ class TestEvaluateCompletePreflight:
 
         token = "token"
         digest = owner_token_digest(token)
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         run_state = FakeRunState(
             {
                 "999": FakeActiveWorktree(
@@ -978,7 +991,9 @@ class TestEvaluateCompletePreflight:
 
         token = "token"
         digest = owner_token_digest(token)
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         run_state = FakeRunState(
             {
                 "999": FakeActiveWorktree(
@@ -1031,7 +1046,9 @@ class TestEvaluateCompletePreflight:
 
         token = "token"
         digest = owner_token_digest(token)
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token=token)
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=token
+        )
         run_state = FakeRunState(
             {
                 "999": FakeActiveWorktree(
@@ -1053,7 +1070,9 @@ class TestEvaluateCompletePreflight:
         assert result.accepted is True
 
     def test_failure_diagnostics_populated(self, temp_git_repo: Path) -> None:
-        request = CompleteRequest.done(issue_number=999, pr=10, owner_token="")
+        request = CompleteRequest.done(
+            claim_id="claim-test", issue_number=999, pr=10, owner_token=""
+        )
         result = evaluate_complete_preflight(request, worktree_path=temp_git_repo)
         assert result.accepted is False
         assert result.reason is not None

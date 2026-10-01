@@ -514,7 +514,7 @@ Upon success, the command prints the issue number, claim ID, branch name, prepar
 | Option | Default | Description |
 | :--- | :--- | :--- |
 | `--no-apply` | disabled | Dry-run mode: validates prerequisites and previews planned values without modifying Git, GitHub, or local state. |
-| `--resume <claim_id>` | none | Resumes an interrupted claim using protected local credentials. |
+| `--resume <claim_id>` | none | Resumes an interrupted claim using its expected generation and verified local worktree. |
 | `--amend-footprint` | disabled | Widens the held claim's file reservation. Cannot be combined with `--resume`. See below. |
 | `--state <path>` | `run_state.json` | Path to the run-state ledger file. |
 | `--timeout <seconds>` | none | Timeout in seconds for acquiring the run-state lock. |
@@ -534,13 +534,13 @@ orchestune claim <N> --amend-footprint --no-apply  # preview
 orchestune claim <N> --amend-footprint
 ```
 
-The new footprint is the union of the held footprint, the Issue footprint, and every file already changed in the worktree since the claim base (committed, uncommitted, and untracked). It never shrinks. The command re-checks conflicts against every other active reservation and, on conflict, changes nothing and reports the conflicting issue. On success it adds missing files to the Issue footprint and updates the ledger; the worktree, branch, claim ID, and labels stay unchanged. Only completed interactive file reservations in the claiming workspace (with its protected owner token) are eligible. Switching to a repository reservation is not supported.
+The new footprint is the union of the held footprint, the Issue footprint, and every file already changed in the worktree since the claim base (committed, uncommitted, and untracked). It never shrinks. The command re-checks conflicts against every other active reservation and, on conflict, changes nothing and reports the conflicting issue. On success it adds missing files to the Issue footprint and updates the ledger; the worktree, branch, claim ID, and labels stay unchanged. Only completed interactive file reservations in the claiming workspace (with its matching claim marker) are eligible. Switching to a repository reservation is not supported.
 
 ## 8. Local CI Evidence Storage and Task Completion (`orchestune complete`)
 
 `orchestune complete` succeeds when it has posted the fixed Outcome Record, confirmed the corresponding Issue label (`status:done`, `status:blocked`, or `status:not-needed`), and durably saved the handoff and replay receipt in the shared ledger. Success does not mean the PR is merged, an independent not-needed review is approved, or the worktree is collected. `done` validates local CI, PR/head and token-limit evidence before publication; GC consumes that evidence. Legacy completion paths still perform their own token-limit checks.
 
-Run `orchestune complete --issue <N> --pr <PR> --result done` from the claimed worktree; `blocked` requires `--reason`, and `not-needed` can also reserve an unclaimed Issue without creating a worktree. The command prints a completion ID before remote effects. To resume interrupted publication, repeat the same arguments with `--completion-id <ID>` using the original owner credentials. A changed request or owner/generation cannot overwrite the frozen request. After handoff, replay returns the stored result even if a later policy queued the Issue or GC removed the active entry; it does not restore old labels.
+Run `orchestune complete --issue <N> --pr <PR> --result done` from the claimed worktree; `blocked` requires `--reason`, and `not-needed` can also reserve an unclaimed Issue without creating a worktree. The command prints a completion ID before remote effects. To resume interrupted publication, repeat the same arguments with `--completion-id <ID>` using the matching claim marker, or the explicit completion ID for an unclaimed Issue. A changed request or owner/generation cannot overwrite the frozen request. After handoff, replay returns the stored result even if a later policy queued the Issue or GC removed the active entry; it does not restore old labels.
 
 ### Evidence Storage Location and Git State
 - **Default Storage Location**: `.orchestune/ci/ci_evidence.json` inside each worktree.
@@ -566,10 +566,51 @@ Replay receipts and downstream context remain after active removal. Each policy 
 
 `--no-apply` is a read-only preview and creates no locks. Apply mode can update Issue labels, comments and close state, and launch independent reviews. Without a running Dispatcher, rerun `orchestune gc` to advance pending policies; cloud reviews require `ORCHESTUNE_ROUTINE_ID` and `ORCHESTUNE_ROUTINE_TOKEN`. With no review provider or an unknown launch result, the review remains pending. A saved launch/attempt ID is reconciled when the provider supports lookup; unknown launches are never started twice. Unresolved launches escalate to human review after the configured review timeout; the policy and dependency remain pending. Review verdict comments carry the exact policy operation marker; generic labels alone do not approve a generation.
 
-All writers using the same resolved state path share its reentrant ledger lock across bounded remote operations and durable saves; physical removal also holds the per-worktree claim lock. Different state paths do not share that exclusion boundary. Running/current worktrees and ownership mismatches remain protected. If GC reports `current_worktree`, rerun from the primary checkout. Old `handed_off_to_gc` records are held for explicit evidence migration rather than automatically promoted; resume a recoverable publication through `complete` with its original ID and credentials.
+All writers using the same resolved state path share its reentrant ledger lock across bounded remote operations and durable saves; physical removal also holds the per-worktree claim lock. Different state paths do not share that exclusion boundary. Running/current worktrees and ownership mismatches remain protected. If GC reports `current_worktree`, rerun from the primary checkout. Old `handed_off_to_gc` records are held for explicit evidence migration rather than automatically promoted; resume a recoverable publication through `complete` with its original completion ID and matching claim marker.
 
 | Option | Default | Description |
 | :--- | :--- | :--- |
 | `--no-apply` | disabled | Show decisions without applying them. |
 | `--state <path>` | primary checkout's `run_state.json` | Select the ledger path. Relative paths are based on the primary checkout. |
 | `--timeout <seconds>` | `0` | Lock wait time for the ledger and claim lock. Negative and non-finite values are argument errors. |
+
+## Local claim recovery (`orchestune recover`)
+
+Local claim resume, footprint amendment and completion no longer read or write
+owner token files. They verify the caller's claim generation, Git common directory,
+registered worktree and checked-out branch. Existing token files can remain;
+`owner_token_digest` in old state/journals remains readable as compatibility metadata,
+and no bulk state migration is needed. Routine API authentication is unchanged.
+
+A marker identifies a worktree generation, not an OS process. Stop old agents
+before reusing that worktree: a process that reads a replaced marker cannot be
+distinguished from the new agent. Service callers should keep the expected claim
+ID captured at launch; that old ID remains rejected after reassignment.
+
+Run diagnosis from the primary checkout. Preview is read-only:
+
+```bash
+orchestune recover --issue <N>
+orchestune recover --issue <N> --claim-id <ID> --reason "worker stopped" --apply
+# Repair a missing marker before resuming a pending completion:
+orchestune recover --issue <N> --claim-id <ID> --reason "marker lost" --restore-marker --apply
+```
+
+Use the claim ID from diagnosis. Apply repeats checks under the shared state lock
+and worktree lock. Live workers, uncertain/external launches, changed generations,
+foreign repositories and unfinished completion publication are held. Reconcile
+uncertain launches with Dispatcher; restore the marker and resume publication with
+its completion ID. Both interactive and dispatch claims are supported once stopped.
+`--state <path>` selects the same ledger used by Dispatcher.
+
+Release removes only that active reservation and saves a durable recovery receipt
+with its generation and reason. It retains dirty work, commits, worktree, branch,
+other claims, counters, intents and completion evidence. It leaves GitHub state
+unchanged; use the existing engine/Outcome lifecycle for requeue, completion or
+closure. Dispatcher does not resurrect the explicitly released generation.
+Repeated release is idempotent. Do not delete the entire `run_state.json`.
+
+A merged PR can be completed from its claim worktree with the usual `complete`
+command when Issue, claim creation time, head, expected base, repository, merge
+reachability and reopening history match. CI and publication requirements still
+apply, including merges into a parent branch. Missing proof holds completion.

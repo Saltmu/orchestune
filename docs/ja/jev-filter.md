@@ -40,6 +40,8 @@ offline入力ではトップレベルのoptional `context` を共通値として
 
 ## ログと検証の範囲
 
+評価ログは、`wait_for_review.py` をタスクworktree内で実行した場合もprimary checkoutの `.orchestune/jev/evaluations.jsonl` へ追記されるため、worktreeを削除しても残ります。相対パスの `JEV_LOG_PATH` も同じrootを基準に解決し、絶対パスはそのまま使います。Gitリポジトリ外ではカレントディレクトリ基準です。
+
 既存JSONL項目を維持し、schema_version、applicability、applicability_confidence、decision_reason（bypass / speculative / low_validity / low_impact / accepted）、contextのsource SHA・status・missing・truncatedを追加します。stderrにも同じ判定情報を出します。コード、PR全文、規約全文、APIキーを追加ログへ保存しません。context取得の失敗はmissing、Jev評価失敗はbypassedで区別します。
 
 テストの対照例は、文書化された内部の信頼入力、外部入力、内部の破壊的副作用、規約違反、情報不足です。#1086は議論のある例で、一律にSPECULATIVEを期待しません。単体・結合テストはモックによる採否と契約の検証です。実Jevの精度改善を証明するものではありません。実API比較を行う場合はモデル・対象例・結果・保持すべき指摘の誤除外を別途記録してください。
