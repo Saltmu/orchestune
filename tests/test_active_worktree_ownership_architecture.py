@@ -360,6 +360,64 @@ def outer(active: ActiveWorktree):
     assert not violations
 
 
+def test_with_core_propagation_tracks_violations() -> None:
+    source = """
+from orchestune.ledger.active_records import ActiveWorktree
+
+def update_core(active: ActiveWorktree, core):
+    record = active.with_core(core)
+    record.claim = None
+    p = record.pid
+"""
+    violations = active_worktree_boundary_violations(
+        source, module="orchestune.dispatch.scoring"
+    )
+    targets_and_kinds = {(v.target, v.kind) for v in violations}
+    assert targets_and_kinds == {
+        ("claim", "subrecord-direct-assign"),
+        ("pid", "flat-attribute-access"),
+    }
+
+
+def test_payload_and_policy_config_alias_mutation_rejected() -> None:
+    source = """
+from orchestune.ledger.active_records import ActiveWorktree
+
+def mutate_aliased(active: ActiveWorktree):
+    payload = active.completion.completion_payload
+    payload["key"] = "val"
+    payload.update({"sub": 1})
+    del payload["key"]
+
+    cfg = active.completion.completion_policy_config
+    cfg["flag"] = False
+"""
+    violations = active_worktree_boundary_violations(
+        source, module="orchestune.dispatch.scoring"
+    )
+    targets_and_kinds = {(v.target, v.kind) for v in violations}
+    assert targets_and_kinds == {
+        ("completion_payload", "payload-mutation"),
+        ("completion_policy_config", "payload-mutation"),
+    }
+    assert len(violations) == 4
+
+
+def test_positional_only_parameters_recognized() -> None:
+    source = """
+from orchestune.ledger.active_records import ActiveWorktree
+
+def mutate_posonly(record: ActiveWorktree, /):
+    record.claim = None
+"""
+    violations = active_worktree_boundary_violations(
+        source, module="orchestune.dispatch.scoring"
+    )
+    assert len(violations) == 1
+    assert violations[0].target == "claim"
+    assert violations[0].kind == "subrecord-direct-assign"
+
+
 def test_exception_requires_reason() -> None:
     with pytest.raises(ValueError, match="reason must not be empty"):
         ActiveWorktreeBoundaryException(

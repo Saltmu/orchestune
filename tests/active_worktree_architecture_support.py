@@ -257,6 +257,8 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
         self.completion_type_aliases: set[str] = {"ActiveCompletionJournal"}
         self.active_vars_stack: list[set[str]] = [set()]
         self.completion_vars_stack: list[set[str]] = [set()]
+        self.payload_vars_stack: list[set[str]] = [set()]
+        self.policy_config_vars_stack: list[set[str]] = [set()]
         self.other_vars_stack: list[set[str]] = [set()]
 
     def _record(self, target: str, kind: str, line: int) -> None:
@@ -285,6 +287,30 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
             strict=True,
         ):
             if name in comp_scope:
+                return True
+            if name in other_scope:
+                return False
+        return False
+
+    def _is_payload_var(self, name: str) -> bool:
+        for payload_scope, other_scope in zip(
+            reversed(self.payload_vars_stack),
+            reversed(self.other_vars_stack),
+            strict=True,
+        ):
+            if name in payload_scope:
+                return True
+            if name in other_scope:
+                return False
+        return False
+
+    def _is_policy_config_var(self, name: str) -> bool:
+        for config_scope, other_scope in zip(
+            reversed(self.policy_config_vars_stack),
+            reversed(self.other_vars_stack),
+            strict=True,
+        ):
+            if name in config_scope:
                 return True
             if name in other_scope:
                 return False
@@ -336,8 +362,10 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
         self.functions.append(node.name)
         active_scope: set[str] = set()
         completion_scope: set[str] = set()
+        payload_scope: set[str] = set()
+        policy_config_scope: set[str] = set()
         other_scope: set[str] = set()
-        for arg in node.args.args + node.args.kwonlyargs:
+        for arg in node.args.posonlyargs + node.args.args + node.args.kwonlyargs:
             if arg.annotation is not None:
                 types = _extract_type_names(arg.annotation)
                 if any(t in self.active_type_aliases for t in types):
@@ -356,10 +384,14 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
                 other_scope.add(arg.arg)
         self.active_vars_stack.append(active_scope)
         self.completion_vars_stack.append(completion_scope)
+        self.payload_vars_stack.append(payload_scope)
+        self.policy_config_vars_stack.append(policy_config_scope)
         self.other_vars_stack.append(other_scope)
         self.generic_visit(node)
         self.active_vars_stack.pop()
         self.completion_vars_stack.pop()
+        self.payload_vars_stack.pop()
+        self.policy_config_vars_stack.pop()
         self.other_vars_stack.pop()
         self.functions.pop()
 
@@ -404,41 +436,59 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
             or func_name.endswith(".ActiveWorktree.from_records")
         )
 
+    def _track_name_assignment(self, target_id: str, value: ast.Name) -> None:
+        if self._is_active_var(value.id):
+            self.active_vars_stack[-1].add(target_id)
+        elif self._is_completion_var(value.id):
+            self.completion_vars_stack[-1].add(target_id)
+        elif self._is_payload_var(value.id):
+            self.payload_vars_stack[-1].add(target_id)
+        elif self._is_policy_config_var(value.id):
+            self.policy_config_vars_stack[-1].add(target_id)
+        else:
+            for other_scope in reversed(self.other_vars_stack):
+                if value.id in other_scope:
+                    self.other_vars_stack[-1].add(target_id)
+                    break
+
+    def _track_call_assignment(self, target_id: str, value: ast.Call) -> None:
+        func_name = _extract_func_name(value.func)
+        if self._is_constructor_call(func_name) or (
+            func_name is not None
+            and (
+                func_name
+                in {
+                    "with_claim",
+                    "with_completion",
+                    "with_launch",
+                    "with_core",
+                }
+                or func_name.endswith(".with_claim")
+                or func_name.endswith(".with_completion")
+                or func_name.endswith(".with_launch")
+                or func_name.endswith(".with_core")
+            )
+        ):
+            self.active_vars_stack[-1].add(target_id)
+        elif func_name is not None and func_name.split(".")[-1][0].isupper():
+            self.other_vars_stack[-1].add(target_id)
+
     def _track_assigned_var(self, targets: list[ast.expr], value: ast.expr) -> None:
         for target in targets:
             if isinstance(target, ast.Name):
                 if isinstance(value, ast.Name):
-                    if self._is_active_var(value.id):
-                        self.active_vars_stack[-1].add(target.id)
-                    elif self._is_completion_var(value.id):
-                        self.completion_vars_stack[-1].add(target.id)
-                    else:
-                        for other_scope in reversed(self.other_vars_stack):
-                            if value.id in other_scope:
-                                self.other_vars_stack[-1].add(target.id)
-                                break
+                    self._track_name_assignment(target.id, value)
                 elif isinstance(value, ast.Call):
-                    func_name = _extract_func_name(value.func)
-                    if self._is_constructor_call(func_name) or (
-                        func_name is not None
-                        and (
-                            func_name
-                            in {"with_claim", "with_completion", "with_launch"}
-                            or func_name.endswith(".with_claim")
-                            or func_name.endswith(".with_completion")
-                            or func_name.endswith(".with_launch")
-                        )
-                    ):
-                        self.active_vars_stack[-1].add(target.id)
-                    elif (
-                        func_name is not None and func_name.split(".")[-1][0].isupper()
-                    ):
-                        self.other_vars_stack[-1].add(target.id)
+                    self._track_call_assignment(target.id, value)
                 elif isinstance(value, ast.Attribute) and value.attr == "completion":
                     if isinstance(value.value, ast.Name) and self._is_active_var(
                         value.value.id
                     ):
                         self.completion_vars_stack[-1].add(target.id)
+                elif self._is_payload_expr(value):
+                    self.payload_vars_stack[-1].add(target.id)
+                elif self._is_policy_config_expr(value):
+                    self.policy_config_vars_stack[-1].add(target.id)
 
     def _check_assignment(self, targets: list[ast.expr], lineno: int) -> None:
         for target in targets:
@@ -561,6 +611,8 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def _is_payload_expr(self, expr: ast.expr) -> bool:
+        if isinstance(expr, ast.Name):
+            return self._is_payload_var(expr.id)
         if isinstance(expr, ast.Attribute) and expr.attr == "completion_payload":
             if (
                 isinstance(expr.value, ast.Attribute)
@@ -575,6 +627,8 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
         return False
 
     def _is_policy_config_expr(self, expr: ast.expr) -> bool:
+        if isinstance(expr, ast.Name):
+            return self._is_policy_config_var(expr.id)
         if isinstance(expr, ast.Attribute) and expr.attr == "completion_policy_config":
             if (
                 isinstance(expr.value, ast.Attribute)
