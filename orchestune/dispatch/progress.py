@@ -40,7 +40,7 @@ def _stdout_stream() -> tuple[TextIO, bool]:
     """
     try:
         fd = os.dup(sys.stdout.fileno())
-    except (AttributeError, OSError):
+    except (AttributeError, OSError, ValueError):
         return sys.stdout, False
     try:
         return os.fdopen(
@@ -92,22 +92,25 @@ class StdoutProgress:
             parts.append(" ".join(reason.splitlines()))
         try:
             print(" / ".join(parts), file=self.stream, flush=True)
-        except OSError:
-            self.disabled = True
-            if self.owns_stream:
-                try:
-                    self.stream.close()
-                except OSError:
-                    pass
+        except (OSError, ValueError):
+            self.close()
             safe_stderr(
                 "Warning: progress unavailable; continuing dispatch and report saving"
             )
+
+    def close(self) -> None:
+        self.disabled = True
+        if self.owns_stream:
+            try:
+                self.stream.close()
+            except (OSError, ValueError):
+                pass
 
 
 def safe_stderr(message: str) -> None:
     try:
         print(message, file=sys.stderr)
-    except OSError:
+    except (OSError, ValueError):
         pass
 
 

@@ -312,3 +312,34 @@ def test_stdout_failure_does_not_stop_cli_save(tmp_path, monkeypatch):
     ):
         assert main([]) == 0
     assert cfg.report_path.exists()
+
+
+@pytest.mark.parametrize("config_error", [False, True])
+def test_cli_closes_owned_progress_stream_even_on_config_error(tmp_path, config_error):
+    from io import StringIO
+
+    from orchestune.dispatch.config_loader import ConfigError
+    from orchestune.dispatch.dispatcher import main
+
+    stream = StringIO()
+    cfg = config(tmp_path, tmp_path / "result.json")
+    with (
+        patch(
+            "orchestune.dispatch.progress._stdout_stream", return_value=(stream, True)
+        ),
+        patch(
+            "orchestune.dispatch.dispatcher.load_and_resolve_config",
+            side_effect=ConfigError("invalid") if config_error else None,
+            return_value=cfg,
+        ),
+        patch(
+            "orchestune.dispatch.dispatcher.run_dispatch_cycle", return_value=_report()
+        ),
+    ):
+        if config_error:
+            with pytest.raises(SystemExit) as exc:
+                main([])
+            assert exc.value.code == 2
+        else:
+            assert main([]) == 0
+    assert stream.closed

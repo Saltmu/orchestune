@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
@@ -238,8 +239,17 @@ def _post_cycle_exit_code(results: list[PhaseResult]) -> int:
 
 
 def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
-    parser = _build_arg_parser()
     sink = StdoutProgress(new_run_id(), None, None)
+    try:
+        return _main_with_sink(argv, cwd, sink)
+    finally:
+        sink.close()
+
+
+def _main_with_sink(
+    argv: list[str] | None, cwd: Path | None, sink: StdoutProgress
+) -> int:
+    parser = _build_arg_parser()
     sink.emit("configuration", "started")
     try:
         config = load_and_resolve_config(
@@ -258,14 +268,11 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
     sink.emit("configuration", "completed")
     config.progress = sink
     try:
-        with progress_phase(sink, "report_reservation"):
-            reservation = reserve_report(config, sink.run_id)
-            output = reservation.__enter__()
-        try:
+        with ExitStack() as stack:
+            with progress_phase(sink, "report_reservation"):
+                output = stack.enter_context(reserve_report(config, sink.run_id))
             sink.emit("report", "planned", reason=f"report target: {output.path}")
             return _execute_and_save(config, output)
-        finally:
-            reservation.__exit__(None, None, None)
     except KeyboardInterrupt:
         sink.emit("execution", "failed", reason="interrupted; report not created")
         raise

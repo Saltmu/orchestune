@@ -37,6 +37,16 @@ def test_broken_stream_stops_sink_once(capsys):
     assert capsys.readouterr().err.count("progress unavailable") == 1
 
 
+def test_closed_python_stream_is_best_effort(capsys):
+    stream = StringIO()
+    stream.close()
+    sink = StdoutProgress("run", 1070, True, stream=stream)
+    sink.emit("cycle", "started")
+    sink.emit("cycle", "completed")
+    assert sink.disabled
+    assert capsys.readouterr().err.count("progress unavailable") == 1
+
+
 def test_phase_failure_does_not_emit_completed():
     events = []
 

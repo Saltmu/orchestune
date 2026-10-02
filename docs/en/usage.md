@@ -254,6 +254,8 @@ TOML `report-dir` defaults to `.orchestune/reports/dispatch`, resolved from the 
 
 `--no-apply` skips dispatch actions while saving local results and creating report directories/locks. `planned` means dry-run selection; `launched` means the launch procedure completed, not task completion (`local` is a dummy target). Progress failure does not stop result saving.
 
+The dedicated `<result-name>.report.lock` remains beside the result, including for explicit paths. Exclusion covers cooperating dispatch runs; unrelated external writers are outside this guarantee. Do not remove a lock while other executions may use it.
+
 Preserve the exit code before reading the current run result. These examples handle nonzero exits under Bash `set -e` and PowerShell native error promotion:
 
 ```bash

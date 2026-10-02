@@ -247,6 +247,8 @@ TOML `report-dir` の既定は `.orchestune/reports/dispatch` で、linked workt
 
 `--no-apply` はdispatch対象へ適用せず、ローカル結果と報告用ディレクトリ/lockを作ります。`planned` はdry-runの選定、`launched` は起動手順の成立で、タスク完了を意味しません（`local` はダミー起動）。進捗表示障害でも保存を継続します。
 
+専用の `<result-name>.report.lock` は明示パスでも結果の隣に残ります。排他の保証は協調するdispatch間に限り、無関係な外部writerは対象外です。他の実行が利用する可能性のあるlockは削除しないでください。
+
 機械処理では終了コードを先に保持して今回のファイルを確認します。以下はBashの `set -e` とPowerShellのnativeエラー昇格でも非ゼロ終了後の結果を読める例です。
 
 ```bash

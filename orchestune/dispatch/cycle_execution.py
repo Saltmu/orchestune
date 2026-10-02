@@ -8,6 +8,7 @@ surfaces without duplicating business decisions or introducing import cycles.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from pathlib import Path
 from types import ModuleType
 from typing import cast
@@ -84,10 +85,9 @@ def execute_locked_cycle(api: ModuleType, config: DispatcherConfig) -> CycleRepo
 def execute_cycle(api: ModuleType, config: DispatcherConfig) -> CycleReport:
     sink = config.progress
     with progress_phase(sink, "cycle"):
-        with progress_phase(sink, "state_lock"):
-            lock = api.run_state_lock(Path(config.run_state_path).with_suffix(".lock"))
-            lock.__enter__()
-        try:
+        with ExitStack() as stack:
+            with progress_phase(sink, "state_lock"):
+                stack.enter_context(
+                    api.run_state_lock(Path(config.run_state_path).with_suffix(".lock"))
+                )
             return execute_locked_cycle(api, config)
-        finally:
-            lock.__exit__(None, None, None)
