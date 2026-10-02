@@ -192,7 +192,8 @@ def _cached_merge_reachability_probe(
         if key not in cache:
             try:
                 cache[key] = forge.is_merge_commit_reachable_from(commit_oid, base)
-            except Exception:  # noqa: BLE001 - cache lookup failures fail closed
+            except Exception:  # noqa: BLE001 - reachability probe failures fail closed
+                # Siblings share this fail-closed result until the next cycle retries.
                 cache[key] = None
         return cache[key]
 
@@ -358,7 +359,7 @@ def _reconcile_prior_parent_merge(
     issue: IssueRecord | None,
     merged_prs_by_base: dict[str, list[PrRecord] | Exception],
     merge_reachability_by_key: dict[tuple[str, str], bool | None],
-) -> tuple[PriorParentMergeEvidence, dict[str, object] | None, bool]:
+) -> tuple[PriorParentMergeEvidence, dict[str, object], bool]:
     evidence, _ = inspect_prior_parent_merge(
         forge,
         issue_number,
@@ -368,7 +369,7 @@ def _reconcile_prior_parent_merge(
         merge_reachability_by_key,
     )
     if evidence.status is PriorParentMergeStatus.NOT_FOUND:
-        return evidence, None, False
+        return evidence, _evidence_event(issue_number, evidence), False
     event = _evidence_event(issue_number, evidence)
     if evidence.status is PriorParentMergeStatus.INDETERMINATE:
         return evidence, event, False
@@ -424,7 +425,6 @@ def reconcile_prior_parent_merges(
         held.add(issue_number)
         if repair_completed:
             completed.add(issue_number)
-        assert event is not None
         events.append(event)
     return PriorParentMergeReconciliation(
         evidence_by_issue=evidence_by_issue,

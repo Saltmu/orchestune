@@ -287,6 +287,44 @@ def test_initial_scan_shares_reachability_cache_between_sibling_tasks():
     )
 
 
+@pytest.mark.parametrize(
+    "probe_failure",
+    [None, RuntimeError("temporary reachability error")],
+)
+def test_initial_scan_holds_siblings_for_cached_reachability_failure(probe_failure):
+    first = _issue()
+    second = dataclasses.replace(first, number=102)
+    forge = _forge_for_reconciliation(first)
+    forge.list_merged_prs_for_base.return_value = [
+        _merged_pr(head_ref="fix/shared-child-work", closes_issue_numbers=(101, 102))
+    ]
+    if isinstance(probe_failure, Exception):
+        forge.is_merge_commit_reachable_from.side_effect = probe_failure
+    else:
+        forge.is_merge_commit_reachable_from.return_value = probe_failure
+    tasks = {
+        101: _task(),
+        102: dataclasses.replace(_task(), issue_number=102, subtask_id="second-child"),
+    }
+
+    result = reconcile_prior_parent_merges(
+        forge,
+        tasks,
+        apply=False,
+        issues_by_number={101: first, 102: second},
+    )
+
+    assert result.held_issue_numbers == {101, 102}
+    assert result.completed_issue_numbers == set()
+    assert [event["action"] for event in result.events] == [
+        "indeterminate",
+        "indeterminate",
+    ]
+    forge.is_merge_commit_reachable_from.assert_called_once_with(
+        "a" * 40, "parent/issue-100"
+    )
+
+
 def test_reachability_cache_does_not_survive_the_reconciliation_cycle():
     issue = _issue()
     forge = _forge_for_reconciliation(issue)
