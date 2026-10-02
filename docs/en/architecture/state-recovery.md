@@ -176,7 +176,7 @@ While in-memory representations use nested subrecords, disk persistence strictly
 ### 6.4 Handoff Candidates vs Verified Completion Receipts
 
 - **Distinction between candidate and verified evidence**: The `HANDOFF_READY` returned by `lifecycle(active)` is only a **candidate phase** derived from local ledger flags and stages. It does not establish that completion evidence has been authoritatively verified.
-- **GC and authoritative verification**: Before executing physical GC, deleting worktrees, or completing parent integration, `dispatch.gc.handoff` and `dispatch.gc.confirmed` authoritatively verify GitHub Issue comments (Outcome Record), PR mergeability and reachability, and local Git uncommitted changes (dirty hold).
+- **GC and authoritative verification**: Before executing physical GC, deleting worktrees, or completing parent integration, `dispatch.gc.handoff` and `dispatch.gc.confirmed` authoritatively verify GitHub Issue comments (Outcome Record), PR merged state (`MERGED`), branch/identity matching, and merge commit reachability, as well as local Git uncommitted changes (dirty hold).
 - **CompletionReceipt emission**: Only after successful verification is a **verified** `CompletionReceipt` emitted and recorded through `CycleContext.record_completion`. If verification is incomplete or mismatched, the task is placed on `hold`, preventing deletion or premature completion.
 
 ### 6.5 Consistency Projection
@@ -187,13 +187,14 @@ While in-memory representations use nested subrecords, disk persistence strictly
 
 ### 6.6 Owner Boundaries and AST Guards
 
-- **Strict owner modules**: Constructing and updating subrecords is strictly restricted to designated owner modules:
+- **Strict owner modules**: Constructing `ActiveWorktree` and updating subrecord boundaries is restricted to designated owner modules:
   - `claim`: `orchestune.claim.ownership`, `orchestune.claim.service`, `orchestune.claim.amend` (`build_claim_info`, `with_claim`)
   - `launch`: `orchestune.dispatch.launch_state` (`build_launch_record`, `with_launch`, `with_launch_phase`)
   - `completion`: `orchestune.complete.journal` (`active_completion_from_record`, `with_completion`)
   - `core`: `orchestune.ledger.active_records` (`ActiveWorktree.from_records`, `with_core`)
+  - codec and model construction: `orchestune.ledger.active_codec` (`decode_active_worktree`), `orchestune.ledger.active_records` (`ActiveWorktree`)
 - **Mechanical enforcement via AST guards**: Architecture tests (`tests/test_active_worktree_ownership_architecture.py`) statically inspect source ASTs to enforce:
-  1. No direct assignment to subrecord attributes (`active.claim = ...`)
+  1. No direct assignment to subrecord attributes (`active.claim = ...`), qualifying narrow registered production exceptions for recovery sentinel materialization before save and rebase/recovery event bookkeeping
   2. No unauthorized replacement via `dataclasses.replace` or import aliases
   3. No construction of `ActiveWorktree` / `ActiveWorktree.from_records` outside authorized packages
   4. No mutating method calls (`update`, `pop`, `clear`, `setdefault`) on frozen payloads

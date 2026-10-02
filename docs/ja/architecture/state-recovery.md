@@ -173,7 +173,7 @@ Orchestuneの実行台帳（`ledger`）は、各タスクの作業ディレク�
 ### 6.4 Handoff候補と検証済みReceiptの違い
 
 - **候補段階と検証済み証拠の分離**: `lifecycle(active)` が返す `HANDOFF_READY` は、あくまでローカル台帳のフラグ・段階から導出される「候補段階（candidate phase）」に過ぎず、完了証拠が真に検証済みであることを意味しません。
-- **GCとAuthoritative検証**: 物理的なGC実行やworktree削除、親ブランチ統合を実施する前に、`dispatch.gc.handoff` / `dispatch.gc.confirmed` が GitHub 上の Issue コメント（Outcome Record）、PR のマージ可能性・到達性、Git の未コミット変更（dirty hold）を authoritative に検証します。
+- **GCとAuthoritative検証**: 物理的なGC実行やworktree削除、親ブランチ統合を実施する前に、`dispatch.gc.handoff` / `dispatch.gc.confirmed` が GitHub 上の Issue コメント（Outcome Record）、PR のマージ完了状態（`MERGED`）・ブランチ一致・マージコミット到達性、Git の未コミット変更（dirty hold）を authoritative に検証します。
 - **CompletionReceiptの発行**: 検証に合格した後にのみ**検証済み**の `CompletionReceipt` が発行され、`CycleContext.record_completion` を経由して完了が記録されます。検証未了または不一致の場合は `hold` され、削除や完了記録は行われません。
 
 ### 6.5 整合性プロジェクション（Consistency Projection）
@@ -184,13 +184,14 @@ Orchestuneの実行台帳（`ledger`）は、各タスクの作業ディレク�
 
 ### 6.6 所有者境界とASTガード
 
-- **所有者モジュールの限定**: サブレコードの構築・更新は、正規の所有者モジュールに厳格に制限されます：
+- **所有者モジュールの限定**: `ActiveWorktree` の直接構築およびサブレコードの更新境界は、正規の所有者モジュールに厳格に制限されます：
   - `claim`: `orchestune.claim.ownership`, `orchestune.claim.service`, `orchestune.claim.amend` (`build_claim_info`, `with_claim`)
   - `launch`: `orchestune.dispatch.launch_state` (`build_launch_record`, `with_launch`, `with_launch_phase`)
   - `completion`: `orchestune.complete.journal` (`active_completion_from_record`, `with_completion`)
   - `core`: `orchestune.ledger.active_records` (`ActiveWorktree.from_records`, `with_core`)
+  - コーデック・モデル構築: `orchestune.ledger.active_codec` (`decode_active_worktree`), `orchestune.ledger.active_records` (`ActiveWorktree`)
 - **ASTガードによる機械的検証**: アーキテクチャテスト（`tests/test_active_worktree_ownership_architecture.py`）は AST 解析により以下を機械的に検査します：
-  1. サブレコード属性への直接代入（`active.claim = ...`）
+  1. サブレコード属性への直接代入（`active.claim = ...`。ただし永続化直前のsentinel実体化およびrebase/recoveryイベント更新の狭い登録例外を除く）
   2. `dataclasses.replace` やそのエイリアスによる所有者外での書き換え
   3. 許可されていないモジュールでの `ActiveWorktree` / `ActiveWorktree.from_records` コンストラクタ呼び出し
   4. 不変ペイロードに対する破壊的メソッド（`update`, `pop`, `clear`, `setdefault`）の呼び出し
