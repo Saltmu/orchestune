@@ -13,8 +13,13 @@
 # -----------------------------------------------------------------------------
 apply = true
 max-concurrent = 2
-max-launches-per-window = 1
-window-seconds = 3600
+# Time-based launch cap is disabled by default; concurrency (`max-concurrent`) is
+# the primary launch control. Uncomment to cap launches per window (`0` prohibits
+# new launches while label updates and GC continue):
+# max-launches-per-window = 1
+# To keep the former "1 launch per hour" behavior, set all of these explicitly:
+#   max-launches-per-window = 1 / window-seconds = 3600 / task-timeout-seconds = 7200
+window-seconds = 7200
 deviation-buffer-lines = 5
 max-recompute-retries = 2
 task-timeout-seconds = 0

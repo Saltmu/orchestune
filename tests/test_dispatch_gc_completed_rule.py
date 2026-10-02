@@ -123,6 +123,11 @@ class TestRuleCompleted:
                 return_value="abandoned",
                 create=True,
             ),
+            patch.object(
+                ctx.config.dispatch_target,
+                "execution_status",
+                return_value="stopped",
+            ),
             patch(
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
                 autospec=True,

@@ -203,6 +203,25 @@ def _stale_discard_event(
     }
 
 
+def _stale_precondition(
+    command: RepairCommand, active: ActiveWorktree, config: DispatcherConfig
+) -> tuple[tuple[str, ...], RepairResult | None]:
+    """staleのまま（in-progressが復活していない）ことを直前に再確認する。"""
+    forge = config.resolved_forge
+    issue_state = forge.get_issue_state(active.core.issue_number)
+    live_labels = tuple(forge.get_issue_labels(active.core.issue_number))
+    if issue_state.upper() == "OPEN" and StatusLabel.IN_PROGRESS in live_labels:
+        return live_labels, RepairResult(
+            command=command,
+            status=RepairStatus.SKIPPED,
+            diagnostics=(
+                "stale cleanup precondition no longer holds: "
+                "status:in-progress is live",
+            ),
+        )
+    return live_labels, None
+
+
 def _execute_stale_reclaim(
     command: RepairCommand,
     run_state: RunState,
@@ -222,25 +241,22 @@ def _execute_stale_reclaim(
             diagnostics=("stale cleanup subject is not an observed task",),
         )
 
-    issue_state = config.resolved_forge.get_issue_state(active.core.issue_number)
-    live_labels = tuple(
-        config.resolved_forge.get_issue_labels(active.core.issue_number)
-    )
-    if issue_state.upper() == "OPEN" and StatusLabel.IN_PROGRESS in live_labels:
-        return RepairResult(
-            command=command,
-            status=RepairStatus.SKIPPED,
-            diagnostics=(
-                "stale cleanup precondition no longer holds: "
-                "status:in-progress is live",
-            ),
-        )
+    live_labels, skipped = _stale_precondition(command, active, config)
+    if skipped is not None:
+        return skipped
 
     reason = (
         f"issue label is no longer status:in-progress (labels={sorted(live_labels)})"
     )
     discarded = _apply_stale_active_entry_discard(
-        run_state, key, active, reason, config
+        run_state,
+        key,
+        active,
+        reason,
+        config,
+        status_labels=live_labels,
+        subtask_id=task.subtask_id or "",
+        events=events,
     )
     if not discarded:
         return RepairResult(

@@ -122,6 +122,17 @@ class DispatchTarget(ABC):
             complete = self.is_complete(handle)
         return "completed" if complete else "pending"
 
+    def execution_status(
+        self, handle: DispatchHandle
+    ) -> Literal["running", "stopped", "unknown"]:
+        """Return whether the external execution can still run code (#1154).
+
+        PR・ラベル・成果物は参照しない（それらは`completion_status`の責務）。
+        `stopped`はproviderが当該IDに対し再開不能な終端状態を返した場合のみ。
+        未対応・ID欠落・照合不能・例外は`unknown`であり、停止確認として扱わない。
+        """
+        return "unknown"
+
     def collect_usage(self, handle: DispatchHandle) -> Usage | None:
         """#438: 完了した実行の消費量および動作モデル名を返す。取得できない場合は None。"""
         return None

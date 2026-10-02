@@ -321,3 +321,28 @@ a normally-completed (non-`not-needed`) subtask. The required dispatcher
 the Issue to `status:not-needed`, preserving it as history. Any active, done,
 closed, conflicting, or merged-result Issue is surfaced for manual review
 instead of being replaced.
+
+## Manual label changes and `in-progress` (guidelines)
+
+| Operation | Dispatch reaction | Assessment |
+| :--- | :--- | :--- |
+| Swap between `queued` and `blocked` | Re-evaluated next cycle from dependencies and promotion holds: a `blocked` Issue with resolved dependencies returns to `queued`, an unresolved `queued` may return to `blocked`. | Do not use manual swaps as a durable state or a stop mechanism. |
+| Remove `in-progress` from a dispatch-launched running task (including moving it back to `queued`) | The next apply cycle treats the ledger entry as stale. Local executions: after a successful WIP backup, the PID is stopped and the worktree removed; on backup failure the cleanup is skipped. External executions whose stop is unconfirmed keep their slot and handle and are sent to `status:blocked-human-review`. | Can forcibly abort a local run. Immediate stop or success is not guaranteed. |
+| Remove `in-progress` from a task under an interactive claim | Interactive claims are excluded from automatic reclaim, so the `active_worktrees` entry and its slot remain. | Label and ledger disagree. |
+| Add `in-progress` to an Issue with no claim or launch | Excluded from launch candidates. The consistency check reports `status.in-progress-without-execution` but does not repair it. | Leaves the Issue in limbo. |
+
+Recommended operations:
+
+- Stop a dispatch-launched task: removing `in-progress` on a local run makes the next apply
+  cycle attempt a WIP backup, then stop and removal. This does not guarantee an immediate stop
+  or success, so check the execution state and diagnostics. For cloud runs, stop them on the
+  cloud side and confirm; removing the label does not stop an external execution, and a slot
+  whose stop is unconfirmed is kept.
+- Abandon an interactive claim: leave the label alone and use `orchestune recover` (preview by
+  default). Finish completed work with `orchestune complete`.
+- Update labels without launching: set `max-launches-per-window = 0`.
+- Timeout and external executions: with `task-timeout-seconds` (default 7200) enabled, a
+  dispatch-launched external execution that cannot be confirmed stopped is sent to
+  `status:blocked-human-review` with its slot kept. After checking the cloud-side run and
+  artifacts and confirming it stopped, recover it (operator stop-confirmation recovery is
+  tracked in #1180).

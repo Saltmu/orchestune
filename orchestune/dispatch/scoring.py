@@ -274,18 +274,25 @@ def quota_available(
     run_state: RunState,
     now: float,
     max_concurrent: int,
-    max_launches_per_window: int,
+    max_launches_per_window: int | None,
     window_seconds: int,
     max_tokens_per_window: int | None = None,
 ) -> int:
+    """起動可能数を返す。
+
+    並行数（`max_concurrent`）が主軸。`max_launches_per_window`が`None`なら
+    時間単位の起動数上限なし、`0`なら起動禁止、正数なら期間内上限。
+    """
     concurrent_remaining = max(0, max_concurrent - len(run_state.active_worktrees))
-    recent_launches = [t for t in run_state.launch_history if now - t < window_seconds]
-    rate_remaining = max(0, max_launches_per_window - len(recent_launches))
     budget = remaining_token_budget(
         run_state, now, window_seconds, max_tokens_per_window
     )
     if budget is not None and budget <= 0:
         return 0
+    if max_launches_per_window is None:
+        return concurrent_remaining
+    recent_launches = [t for t in run_state.launch_history if now - t < window_seconds]
+    rate_remaining = max(0, max_launches_per_window - len(recent_launches))
     return min(concurrent_remaining, rate_remaining)
 
 
@@ -637,7 +644,7 @@ def select_tasks_with_decisions(
     run_state: RunState,
     now: float,
     max_concurrent: int,
-    max_launches_per_window: int,
+    max_launches_per_window: int | None,
     window_seconds: int,
     max_tokens_per_window: int | None = None,
     conflict_graph: ConflictGraph | None = None,
@@ -689,7 +696,7 @@ def select_next_tasks(
     run_state: RunState,
     now: float,
     max_concurrent: int,
-    max_launches_per_window: int,
+    max_launches_per_window: int | None,
     window_seconds: int,
     max_tokens_per_window: int | None = None,
     conflict_graph: ConflictGraph | None = None,

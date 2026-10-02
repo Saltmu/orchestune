@@ -309,11 +309,11 @@ Non-routine options (storage paths, rate limits, timeouts, reviewer selection, c
 | :--- | :--- | :--- |
 | `reviewer-bot` | `"auto"` | Reviewer requested after implementation (`"auto"`, `"claude"`, `"codex"`). `auto` evaluates target type and maps Claude targets to Codex, and Codex/agy targets to Claude. |
 | `ci-command` | `"./scripts/local-ci.sh"` | The CI command the Integrator runs on the integration branch (a shell-like string parsed with shlex or string list, e.g. `"make ci"`). Set this explicitly if your repository's CI entrypoint differs. |
-| `max-launches-per-window` | `1` | Rate limiting: maximum number of agent launches allowed in `window-seconds`. |
-| `window-seconds` | `3600` | The sliding window duration in seconds for launch rate-limiting and token quotas (default is 1 hour). |
+| `max-launches-per-window` | unset (no limit) | Time-based launch cap within `window-seconds`. Unset: no cap (concurrency via `max-concurrent` is the primary control; token budget, conflicts, etc. still apply). `0`: launches are prohibited, while label updates, GC and other processing still run. `1` or more: maximum launches per window. Omit the key to leave it unset (TOML has no null). |
+| `window-seconds` | `7200` | Sliding window in seconds (default 2 hours) for the launch cap, `max-tokens-per-window` aggregation, aging normalization, and launch-history retention. |
 | `deviation-buffer-lines` | `5` | Allowed line modifications buffer outside the declared footprint to prevent live-locks. |
 | `max-recompute-retries` | `2` | Maximum runtime Conflict Graph recomputation retries after a footprint deviation is detected. Exceeding it falls back to forced serialization (force-serial). |
-| `task-timeout-seconds` | `0` | Seconds after which a running task is treated as timed out and reclaimed by the GC. `0` (default) disables timeout reclamation and only detects zombies. |
+| `task-timeout-seconds` | `7200` | Seconds after which a dispatch-launched task is treated as timed out. `0` disables timeout reclamation. Interactive claims are never reclaimed by the timeout (the GC zombie reclaim excludes them). Local executions are reclaimed after a WIP backup; an external (cloud) execution whose stop cannot be confirmed keeps its `active_worktrees` slot and handle and is sent to `status:blocked-human-review` instead. Normal tasks longer than 2 hours are reclaimed and requeued (up to `max-task-reclaims`, then `status:blocked-human-review`), so extend this value in `orchestune.toml` for long-running work. |
 | `max-task-reclaims` | `3` | Maximum number of times the zombie/timeout GC may return the same task to `status:queued`. Once exceeded, the task moves to `status:blocked-human-review`. |
 | `early-death-window-seconds` | `120` | Treat a no-commit local process exit within this many seconds of launch as a transient startup failure. |
 | `max-early-death-retries` | `2` | Maximum automatic requeues for transient startup failures. The next no-commit exit escalates to `status:blocked-human-review`. |
@@ -655,3 +655,42 @@ A merged PR can be completed from its claim worktree with the usual `complete`
 command when Issue, claim creation time, head, expected base, repository, merge
 reachability and reopening history match. CI and publication requirements still
 apply, including merges into a parent branch. Missing proof holds completion.
+
+
+## Launch control defaults and migration (#1154)
+
+`max-concurrent` (default `2`, counted from `active_worktrees` including interactive
+claims) is now the primary launch control. `max-launches-per-window` is unset by
+default, so launches are no longer throttled to one per hour. Launch history is still
+recorded while unset, so setting `0` or a positive value later takes effect immediately
+against recent launches. Setting it back after the history was trimmed by a shorter
+window does not restore dropped records.
+
+To keep the former behavior ("1 launch per hour", token aggregation over 1 hour, no
+timeout), set all three explicitly:
+
+```toml
+max-launches-per-window = 1
+window-seconds = 3600
+task-timeout-seconds = 0
+```
+
+Setting `max-launches-per-window` while omitting `window-seconds` now means "per 2 hours".
+`window-seconds` also drives `max-tokens-per-window` aggregation, aging normalization and
+launch-history retention. A limit of `0` only stops new launches; GC, timeouts and label
+synchronization keep running. To stop everything, stop the dispatcher itself.
+
+### External executions are held until stopped
+
+The GC releases a slot for an external (cloud) execution only when the provider reports
+a non-resumable terminal state for that execution. PR/Outcome state (merged/closed PR,
+handoff-ready) says whether the *work* is complete, not whether the cloud run can still
+execute code. When the runtime state is running, unknown, unsupported, or the lookup
+fails, the GC keeps `active_worktrees` and the execution handle, sends the Issue to
+`status:blocked-human-review`, and never auto-requeues it. This applies to timeouts,
+stale-ledger cleanup after `status:in-progress` is removed, and completion collection.
+Currently only Codex Cloud can report a stopped state; other external targets (for
+example Cloud Routine) are always held. To recover, check the cloud-side run and its
+artifacts, stop it there if needed, and confirm the stop; an `orchestune recover` mode
+that accepts an operator's stop confirmation is tracked in #1180 and the existing
+`recover` still refuses external executions.

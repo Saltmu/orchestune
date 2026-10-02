@@ -307,6 +307,11 @@ _CODEX_TASK_ID_RE = re.compile(r"\b(task_[a-zA-Z0-9_-]+)\b")
 _CODEX_CLOUD_TERMINAL_FAILED_STATUSES: frozenset[str] = frozenset(
     {"failed", "cancelled", "canceled", "error"}
 )
+# 今後コードを実行し得る状態。未確認の語彙（成功終端など）は推測で分類せず
+# `unknown`として枠を保持する。
+_CODEX_CLOUD_RUNNING_STATUSES: frozenset[str] = frozenset(
+    {"pending", "queued", "running", "in_progress", "in-progress"}
+)
 
 
 def _parse_codex_cloud_exec_output(output: str) -> tuple[str | None, str | None]:
@@ -513,6 +518,25 @@ class CodexCloudDispatchTarget(DispatchTarget):
             if cloud_status in _CODEX_CLOUD_TERMINAL_FAILED_STATUSES:
                 return "abandoned"
         return "pending"
+
+    def execution_status(
+        self, handle: DispatchHandle
+    ) -> Literal["running", "stopped", "unknown"]:
+        """実タスクIDでprovider状態を照合する。代替ID・照合不能は`unknown`。"""
+        external_id = handle.external_id
+        if not external_id or external_id.startswith("codex-cloud:"):
+            return "unknown"
+        try:
+            cloud_status = self._fetch_task_status(external_id)
+        except Exception:
+            return "unknown"
+        if cloud_status is None:
+            return "unknown"
+        if cloud_status in _CODEX_CLOUD_TERMINAL_FAILED_STATUSES:
+            return "stopped"
+        if cloud_status in _CODEX_CLOUD_RUNNING_STATUSES:
+            return "running"
+        return "unknown"
 
     def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
         return self.completion_status(handle, forge=forge) == "completed"

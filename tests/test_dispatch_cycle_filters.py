@@ -98,6 +98,7 @@ class TestRunDispatchCycleFootprintRecompute:
             max_concurrent=2,
             max_launches_per_window=2,
             window_seconds=3600,
+            task_timeout_seconds=0,
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
             log_dir=tmp_path / "logs",

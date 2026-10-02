@@ -302,11 +302,11 @@ else { Write-Warning 'report not created' }
 | :--- | :--- | :--- |
 | `reviewer-bot` | `"auto"` | 実装後に依頼するレビュアー（`"auto"`, `"claude"`, `"codex"`）。`auto`はターゲットから判定し、Claude系にはCodex、Codex/agy系にはClaudeを割り当てます。 |
 | `ci-command` | `"./scripts/local-ci.sh"` | Integratorが統合ブランチ上で実行するCIコマンド（shlex構文の文字列または文字列リスト。例: `"make ci"`）。導入先リポジトリのCIエントリーポイントが異なる場合は必ず設定してください。 |
-| `max-launches-per-window` | `1` | 指定した時間窓（`window-seconds`）内で最大何回エージェントを起動できるかを制限する、APIバースト制御用設定。 |
-| `window-seconds` | `3600` | バースト制限およびトークン消費上限を適用する時間窓の秒数（デフォルトは1時間）。 |
+| `max-launches-per-window` | 未設定（上限なし） | 時間窓（`window-seconds`）あたりの起動数上限。未設定: 時間単位の上限なし（並行数 `max-concurrent` が主軸。トークン予算・競合などの制約は維持）。`0`: 起動禁止（ラベル更新・GCなどの処理は行う）。`1`以上: 時間窓あたりの起動数上限。TOMLにnullはないため、未設定にするにはキーを省略します。 |
+| `window-seconds` | `7200` | 起動数上限・`max-tokens-per-window`の集計・aging正規化・起動履歴の保持に使う時間窓の秒数（既定は2時間）。 |
 | `deviation-buffer-lines` | `5` | ライブロックを防止するための、フットプリントから逸脱したファイルの変更行数の許容バッファ値。 |
 | `max-recompute-retries` | `2` | フットプリント逸脱を検知した際のruntime Conflict Graph再計算のリトライ上限。超過した場合は強制直列化（force-serial）へフォールバックします。 |
-| `task-timeout-seconds` | `0` | タスクをタイムアウトとみなしてGCで回収するまでの秒数。`0`（既定）ではタイムアウトによる回収を行わず、ゾンビ検知のみ実行します。 |
+| `task-timeout-seconds` | `7200` | dispatch起動タスクをタイムアウトとみなすまでの秒数。`0`でタイムアウト回収を無効化します。対話型claimはタイムアウトの対象外です（GCのゾンビ回収が除外）。ローカル実行はWIP退避後に回収し、停止を確認できない外部（クラウド）実行は`active_worktrees`の枠と実行ハンドルを保持したまま`status:blocked-human-review`へ送ります。2時間を超える正常なタスクも回収・再投入（`max-task-reclaims`超過で`status:blocked-human-review`）の対象になるため、長時間タスクがある環境では`orchestune.toml`で延長してください。 |
 | `max-task-reclaims` | `3` | ゾンビ・タイムアウトGCが同一タスクを`status:queued`へ差し戻せる回数の上限。超過したタスクは`status:blocked-human-review`へ遷移します。 |
 | `early-death-window-seconds` | `120` | 起動からこの秒数以内にローカルプロセスがコミットなしで終了した場合、一時的な起動障害として扱います。 |
 | `max-early-death-retries` | `2` | 一時的な起動障害を自動で再キューイングする上限。次のコミットなし終了は`status:blocked-human-review`へエスカレーションします。 |
@@ -638,3 +638,35 @@ Dispatcherは明示解放された旧世代を復元しません。同じ解放�
 merge済みPRも通常のcompleteコマンドで事後完了できます。Issue、claim作成時刻、head、予定base、
 repository、merge commitの到達性、Issue再open時刻を照合します。親branchへのmergeも対象です。
 CIとOutcome公開の要件は維持し、必要証拠が不足する場合は保留します。
+
+
+## 起動制御の既定値と移行（#1154）
+
+起動制御の主軸は並行数 `max-concurrent`（既定`2`。対話型claimを含む`active_worktrees`の件数）です。
+`max-launches-per-window` は既定で未設定となり、「1時間に1起動」には制限されません。未設定でも
+起動履歴は記録され続けるため、後から`0`や正数を設定すると直近の起動が即座に判定へ反映されます
+（短いwindowで刈り込まれた履歴は、windowを戻しても復元されません）。
+
+従来の挙動（1時間に1起動・トークン集計1時間・タイムアウト無効）を維持するには、次の3つを明示します。
+
+```toml
+max-launches-per-window = 1
+window-seconds = 3600
+task-timeout-seconds = 0
+```
+
+`max-launches-per-window`を明示して`window-seconds`を省略すると「2時間あたり」に変わります。
+`window-seconds`は`max-tokens-per-window`の集計、aging正規化、起動履歴の保持にも使われます。
+上限`0`は新規起動だけを止める設定で、GC・タイムアウト・ラベル同期は止まりません。完全に止める場合は
+dispatch自体を止めてください。
+
+### 外部実行は停止を確認するまで枠を保持
+
+外部（クラウド）実行の枠を解放するのは、providerが当該実行の再開不能な終端状態を返した場合だけです。
+PR/Outcomeの完了判定（MERGED/closed PR、handoff-ready）は成果物の状態であり、クラウド側の実行が
+まだコードを実行し得るかの証拠ではありません。実行中・状態不明・未対応・状態取得失敗の場合、GCは
+`active_worktrees`と実行ハンドルを保持し、Issueを`status:blocked-human-review`へ送って自動再投入しません。
+これはタイムアウト、`status:in-progress`除去に伴う古い台帳エントリの後始末、完了回収のすべてに適用されます。
+現在、停止状態を返せるのはCodex Cloudのみで、それ以外の外部ターゲット（Cloud Routine等）は常に保持されます。
+復旧はクラウド側の実行状態と成果物を確認し、必要なら停止して停止を確認してから行います。停止確認付きの
+`orchestune recover`は#1180で実装予定で、現行の`recover`は外部実行を拒否します。

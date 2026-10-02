@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 from uuid import uuid4
 
 from orchestune.claim.ownership import with_claim
@@ -381,6 +381,16 @@ class JournaledDispatchTarget(DispatchTarget):
 
     def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
         return self.target.is_complete(handle, forge=forge)
+
+    def completion_status(
+        self, handle: DispatchHandle, forge: Forge | None = None
+    ) -> Literal["pending", "completed", "abandoned"]:
+        return self.target.completion_status(handle, forge=forge)
+
+    def execution_status(
+        self, handle: DispatchHandle
+    ) -> Literal["running", "stopped", "unknown"]:
+        return self.target.execution_status(handle)
 
 
 def prepare_journaled_target(

@@ -42,8 +42,9 @@ DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST = frozenset(
 class DispatcherConfig:
     parent_issue_number: int
     max_concurrent: int = 2
-    max_launches_per_window: int = 1
-    window_seconds: int = 3600
+    # #1154: `None`は時間単位の起動数上限なし、`0`は起動禁止、正数は期間内上限。
+    max_launches_per_window: int | None = None
+    window_seconds: int = 7200
     run_state_path: Path = Path("run_state.json")
     worktree_root: Path = Path("worktrees")
     log_dir: Path = Path("logs")
@@ -56,7 +57,7 @@ class DispatcherConfig:
     forge: Forge | None = None
     deviation_buffer_lines: int = 5
     max_recompute_retries: int = 2
-    task_timeout_seconds: int = 0
+    task_timeout_seconds: int = 7200
     zombie_gc: bool = True
     # #512: ゾンビ/タイムアウトGCが同一タスクを`status:queued`へ差し戻せる回数の上限。
     # 超過したタスクは`status:blocked-human-review`へ遷移し、再投入されなくなる。

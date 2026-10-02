@@ -16,6 +16,10 @@ from typing import Literal
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_records import CompletionReceipt
+from orchestune.dispatch.external_execution import (
+    hold_if_not_stopped,
+    send_hold_to_human_review,
+)
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
     ForgeFailure,
@@ -387,13 +391,27 @@ def _apply_stale_active_entry_discard(
     active: ActiveWorktree,
     reason: str,
     config: DispatcherConfig,
+    *,
+    status_labels: tuple[str, ...] = (),
+    subtask_id: str = "",
+    events: list[dict] | None = None,
 ) -> bool:
     """#382: 帳簿(run_state)を破棄する前に、対応する物理worktree・プロセスの
     状態を確認し、必要な後始末を行う。
+
+    #1154: 外部実行の停止を確認できない場合は台帳・ハンドル・枠を保持し、
+    人間確認へ送って`False`を返す（回収成功として扱わない）。
     """
     if completion_mutation_blocked_fresh(
         run_state, active.core.issue_number, config.run_state_path
     ):
+        return False
+    hold = hold_if_not_stopped(active, config, "stale")
+    if hold is not None:
+        if config.apply:
+            send_hold_to_human_review(hold, status_labels, config)
+        if events is not None:
+            events.append(hold.event(subtask_id=subtask_id))
         return False
     if not config.apply:
         return True
@@ -605,6 +623,23 @@ def _resolve_cloud_completion(
 ) -> CompletionResolution:
     failures: list[ForgeFailure] = []
     status = _cloud_worktree_completion_status(active, ctx.config, failures)
+    if status in ("abandoned", "completed"):
+        # #1154: PR/成果物の完了判定は外部実行の停止証拠ではない。
+        # 停止未確認なら台帳・ハンドル・枠を保持する（完了予約は壊さない）。
+        hold = hold_if_not_stopped(active, ctx.config, "completion")
+        if hold is not None:
+            if ctx.config.apply and status == "abandoned" and active_task is not None:
+                send_hold_to_human_review(
+                    hold, tuple(active_task.status_labels), ctx.config
+                )
+            return CompletionResolution.resolved(
+                ActiveWorktreeRuleOutcome(
+                    completion_event=hold.event(
+                        subtask_id=active_task.subtask_id if active_task else ""
+                    ),
+                    terminal=True,
+                )
+            )
     if status == "abandoned":
         return CompletionResolution.resolved(
             _abandoned_worktree_outcome(ctx, key, active, active_task)

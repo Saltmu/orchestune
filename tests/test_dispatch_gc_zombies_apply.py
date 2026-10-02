@@ -184,9 +184,10 @@ class TestApplyZombieOrTimeoutReclaim:
         )
         apply_reclaim.assert_not_called()
 
-    def test_typed_reclaim_fails_closed_when_cloud_status_is_unknown(
+    def test_typed_reclaim_holds_slot_when_cloud_status_is_unknown(
         self, tmp_path, fake_forge
     ):
+        """#1154: 状態取得失敗は停止確認ではない。台帳を保持し人間確認へ送る。"""
         active = _active(
             worktree_path=str(tmp_path),
             pid=None,
@@ -213,27 +214,28 @@ class TestApplyZombieOrTimeoutReclaim:
             task_timeout_seconds=60,
             forge=fake_forge,
         )
+        run_state = RunState(active_worktrees={"280": active})
+        events: list[dict] = []
 
-        with (
-            patch.object(
-                config.dispatch_target,
-                "completion_status",
-                side_effect=RuntimeError("provider unavailable"),
-            ),
-            patch(
-                "orchestune.dispatch.gc.zombies._apply_zombie_or_timeout_reclaim",
-                autospec=True,
-            ) as apply_reclaim,
+        with patch.object(
+            config.dispatch_target,
+            "execution_status",
+            side_effect=RuntimeError("provider unavailable"),
         ):
             result = execute_reclaim_repair_command(
                 command,
-                RunState(active_worktrees={"280": active}),
+                run_state,
                 reclaim,
                 config,
+                event_sink=events.append,
             )
 
         assert result.status is RepairStatus.SKIPPED
-        apply_reclaim.assert_not_called()
+        assert "280" in run_state.active_worktrees
+        assert [e["action"] for e in events] == ["external_execution_held"]
+        assert events[0]["runtime_state"] == "unknown"
+        assert events[0]["reason"] == "timeout"
+        fake_forge.add_label.assert_any_call(280, "status:blocked-human-review")
 
     def test_typed_reclaim_command_reports_dry_run_without_false_precondition(
         self, tmp_path, fake_forge

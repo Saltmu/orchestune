@@ -520,11 +520,11 @@ def _resolve_and_build_target(
 
 def _build_runtime_tuning_kwargs(toml_data: dict[str, Any]) -> dict[str, Any]:
     return {
-        "max_launches_per_window": toml_data.get("max_launches_per_window", 1),
-        "window_seconds": toml_data.get("window_seconds", 3600),
+        "max_launches_per_window": toml_data.get("max_launches_per_window"),
+        "window_seconds": toml_data.get("window_seconds", 7200),
         "deviation_buffer_lines": toml_data.get("deviation_buffer_lines", 5),
         "max_recompute_retries": toml_data.get("max_recompute_retries", 2),
-        "task_timeout_seconds": toml_data.get("task_timeout_seconds", 0),
+        "task_timeout_seconds": toml_data.get("task_timeout_seconds", 7200),
         "max_task_reclaims": toml_data.get("max_task_reclaims", 3),
         "early_death_window_seconds": toml_data.get("early_death_window_seconds", 120),
         "max_early_death_retries": toml_data.get("max_early_death_retries", 2),

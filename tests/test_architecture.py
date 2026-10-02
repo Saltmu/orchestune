@@ -161,6 +161,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.escalation",
             "dispatch.execution_profiles",
             "dispatch.execution_repair",
+            "dispatch.external_execution",
             "dispatch.filters",
             "dispatch.gc",
             "dispatch.gc.completion",
@@ -322,6 +323,7 @@ _BOUNDED_RECOVERY_LIMIT_NAME = re.compile(
 BOUNDED_RECOVERY_TERMINALS = {
     "max_recompute_retries": ("dispatch/rebase.py", "forced_serial"),
     "max_task_reclaims": ("dispatch/gc/zombies.py", "apply_human_review_escalation"),
+    "task_timeout_seconds": ("dispatch/gc/zombies.py", "apply_human_review_escalation"),
     "max_early_death_retries": (
         "dispatch/gc/completion.py",
         "apply_human_review_escalation",
