@@ -1,8 +1,14 @@
-"""Block unmocked GitHub CLI and HTTP calls throughout the test process tree."""
+"""Block unmocked GitHub CLI and HTTP calls throughout the test process tree.
+
+The socket guard is best-effort: it can identify GitHub hostnames, not raw IP
+addresses. Python children started with ``-I`` or ``-S`` also skip the
+``sitecustomize`` startup hook used to install their process-local guards.
+"""
 
 from __future__ import annotations
 
 import http.client
+import inspect
 import ntpath
 import os
 import shlex
@@ -150,7 +156,8 @@ def _environment_value(env: Mapping[str, Any], name: str) -> str:
 
 
 def _child_environment(explicit: Mapping[str, Any] | None) -> dict[str, str]:
-    env = {str(key): _as_text(value) for key, value in (explicit or os.environ).items()}
+    source = os.environ if explicit is None else explicit
+    env = {str(key): _as_text(value) for key, value in source.items()}
     env = {
         key: value for key, value in env.items() if key.lower() not in _SENSITIVE_GH_ENV
     }
@@ -182,17 +189,32 @@ def _child_environment(explicit: Mapping[str, Any] | None) -> dict[str, str]:
     return env
 
 
-def _make_popen_guard(original: type[subprocess.Popen[Any]]) -> Callable[..., Any]:
-    def guarded_popen(*popen_args: Any, **kwargs: Any) -> Any:
-        args = popen_args[0] if popen_args else kwargs.get("args")
+def _make_popen_guard(
+    original: type[subprocess.Popen[Any]],
+) -> type[subprocess.Popen[Any]]:
+    signature = inspect.signature(original.__init__)
+
+    def guarded_init(self: Any, *popen_args: Any, **kwargs: Any) -> None:
+        bound = signature.bind(self, *popen_args, **kwargs)
+        values = bound.arguments
         if _would_launch_github_cli(
-            args, kwargs.get("executable"), shell=kwargs.get("shell", False)
+            values.get("args"),
+            values.get("executable"),
+            shell=values.get("shell", False),
         ):
             _blocked("cli", "CLI process")
-        kwargs["env"] = _child_environment(kwargs.get("env"))
-        return original(*popen_args, **kwargs)
+        values["env"] = _child_environment(values.get("env"))
+        original.__init__(*bound.args, **bound.kwargs)
 
-    return guarded_popen
+    return type(
+        original.__name__,
+        (original,),
+        {
+            "__init__": guarded_init,
+            "__module__": original.__module__,
+            "__qualname__": original.__qualname__,
+        },
+    )
 
 
 def _is_github_host(host: Any) -> bool:
@@ -316,6 +338,8 @@ def _write_cli_shim(bin_dir: Path) -> None:
 
 
 def _write_sitecustomize(python_dir: Path) -> None:
+    # This startup hook intentionally precedes any existing sitecustomize.
+    # Python children using -I or -S skip it; see the module limitation above.
     python_dir.mkdir(parents=True)
     (python_dir / "sitecustomize.py").write_text(
         "from tests.github_isolation import install_child_guards\n"

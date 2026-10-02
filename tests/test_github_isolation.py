@@ -16,6 +16,8 @@ import pytest
 from orchestune.forge import GitHubForge, LabelSpec
 from tests.github_isolation import GitHubAccessBlocked, GitHubAccessMonitor
 
+_ORIGINAL_POPEN = subprocess.Popen
+
 
 @pytest.mark.uses_real_forge
 @pytest.mark.parametrize("operation", ["run", "stdin", "auth", "labels"])
@@ -47,6 +49,17 @@ def test_popen_executable_override_cannot_launch_absolute_gh(
 
     with pytest.raises(GitHubAccessBlocked, match="blocked unmocked GitHub"):
         subprocess.Popen([sys.executable, "-c", "pass"], executable=str(gh_path))
+
+
+def test_popen_guard_preserves_the_popen_class_contract() -> None:
+    assert isinstance(subprocess.Popen, type)
+    assert issubclass(subprocess.Popen, _ORIGINAL_POPEN)
+
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+
+    assert isinstance(process, subprocess.Popen)
+    assert isinstance(process, _ORIGINAL_POPEN)
+    assert process.wait(timeout=10) == 0
 
 
 def test_shell_cannot_launch_absolute_gh(
@@ -130,6 +143,65 @@ def test_python_child_with_explicit_environment_keeps_absolute_cli_guard(
 
     assert result.returncode != 0
     assert "GitHubAccessBlocked" in result.stderr
+
+
+def test_python_child_with_empty_environment_does_not_inherit_parent_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ORCHESTUNE_TEST_EMPTY_ENV_SENTINEL", "parent-value")
+    child_code = (
+        "import json, os; "
+        "print(json.dumps(os.environ.get('ORCHESTUNE_TEST_EMPTY_ENV_SENTINEL')))"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", child_code],
+        env={},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert json.loads(result.stdout) is None
+
+
+def test_positional_child_environment_is_sanitized_and_guarded(
+    github_access_isolation: GitHubAccessMonitor,
+) -> None:
+    github_access_isolation.expect("cli")
+    gh_path = Path(os.sep) / "missing" / ("gh.exe" if os.name == "nt" else "gh")
+    child_code = (
+        "import json, os, subprocess\n"
+        f"gh_path = {str(gh_path.parent)!r} + os.sep + {gh_path.name!r}\n"
+        "blocked = None\n"
+        "try:\n"
+        "    subprocess.run([gh_path])\n"
+        "except Exception as error:\n"
+        "    blocked = type(error).__name__\n"
+        "print(json.dumps({'token': os.environ.get('GH_TOKEN'), 'blocked': blocked}))\n"
+    )
+    explicit_env = {"PATH": os.environ.get("PATH", ""), "GH_TOKEN": "test-secret"}
+
+    process = subprocess.Popen(
+        [sys.executable, "-c", child_code],
+        -1,
+        None,
+        subprocess.DEVNULL,
+        subprocess.PIPE,
+        subprocess.PIPE,
+        None,
+        True,
+        False,
+        None,
+        explicit_env,
+        text=True,
+    )
+    stdout, stderr = process.communicate(timeout=10)
+
+    assert process.returncode == 0, stderr
+    child_result = json.loads(stdout)
+    assert child_result["token"] is None
+    assert child_result["blocked"] == "GitHubAccessBlocked"
 
 
 def test_child_processes_receive_no_github_credentials_or_user_config(
