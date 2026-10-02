@@ -141,6 +141,7 @@ SECTION_CONTRACTS = (
             "CompletionReceipt",
             "ExecutionRecord",
             "MappingProxyType",
+            "_DispatchConsistencyAdapter",
         ),
         ja=(
             "候補段階",
@@ -349,7 +350,9 @@ def test_documented_active_worktree_subrecords_and_lifecycle_exist() -> None:
         with_completion,
     )
     from orchestune.consistency.observation import ExecutionRecord
+    from orchestune.dispatch.cycle import _DispatchConsistencyAdapter
     from orchestune.dispatch.cycle_records import CompletionReceipt
+    from orchestune.dispatch.execution_repair import execution_record_from_active
     from orchestune.ledger.active_codec import (
         decode_active_worktree,
         encode_active_worktree,
@@ -368,6 +371,8 @@ def test_documented_active_worktree_subrecords_and_lifecycle_exist() -> None:
     assert callable(encode_active_worktree)
     assert callable(active_completion_from_record)
     assert callable(with_completion)
+    assert callable(_DispatchConsistencyAdapter._executions)
+    assert callable(execution_record_from_active)
     for expected_phase in (
         "HANDOFF_READY",
         "COMPLETING",

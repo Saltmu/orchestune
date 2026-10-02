@@ -179,7 +179,7 @@ Orchestuneの実行台帳（`ledger`）は、各タスクの作業ディレク�
 ### 6.5 整合性プロジェクション（Consistency Projection）
 
 - **疎結合な整合性カーネル**: リポジトリ全体の整合性を保つ `consistency` カーネルは、ディスパッチ台帳の `ActiveWorktree` に直接依存しません。
-- **ExecutionRecordへの射影**: `CycleContext._executions()` および `execution_repair.py` は、`ActiveWorktree` から必要最小限のフィールド（`issue_number`, `branch`, `worktree_path`, `pid`, `external_id`, `started_at`, `kind`, `owner_kind`, `claim_id`, `claim_stage`, `launch_phase`）を抽出し、不変な `ExecutionRecord` へ**射影**（projection）します。
+- **ExecutionRecordへの射影**: `_DispatchConsistencyAdapter._executions()`（`orchestune.dispatch.cycle`）および `execution_repair.py`（`execution_record_from_active`）は、`ActiveWorktree` から必要最小限のフィールド（`issue_number`, `branch`, `worktree_path`, `pid`, `external_id`, `started_at`, `kind`, `owner_kind`, `claim_id`, `claim_stage`, `launch_phase`）を抽出し、不変な `ExecutionRecord` へ**射影**（projection）します。
 - **境界の尊重**: `ObservationCollector` などの整合性観測処理は、この射影されたレコードのみを取り扱うため、台帳の内部サブレコード構造を侵食することなく独立したモデル突合・修復計画を遂行できます。
 
 ### 6.6 所有者境界とASTガード
@@ -203,7 +203,7 @@ Orchestuneの実行台帳（`ledger`）は、各タスクの作業ディレク�
 
 | #1106 受け入れ基準 | 担当タスク | 検証証拠・テストスイート |
 | :--- | :--- | :--- |
-| `ActiveWorktreeLifecycle` と `lifecycle()` があり、GC・claim・complete・consistency の段階判定がこれを経由している。登録された狭い予約確認例外を除き、`completion_id is (not) None` による直接の段階判定が残っていない。 | T02 (#1124), T04 (#1126), T05 (#1129), T07 (#1131), T08 (#1132), T09 (#1133), T10 (#1127), T13 (#1135) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_ownership_architecture.py`, `tests/test_dispatch_consistency_e2e.py` |
+| `ActiveWorktreeLifecycle` と `lifecycle()` があり、GC（`dispatch.gc.completion` / `dispatch.gc.zombies`）や claim（`claim.ownership`）の段階判定がこれを経由している（consistency は `ExecutionRecord` 射影境界、complete は所有者 API を利用）。登録された狭い予約確認例外を除き、`completion_id is (not) None` による直接の段階判定が残っていない。 | T02 (#1124), T04 (#1126), T05 (#1129), T07 (#1131), T08 (#1132), T09 (#1133), T10 (#1127), T13 (#1135) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_ownership_architecture.py`, `tests/test_dispatch_consistency_e2e.py` |
 | `ActiveWorktree` が共通フィールドと `LaunchInfo` / `ClaimInfo` / `CompletionJournal` のサブレコードで構成され、所有者ごとの不変条件がサブレコード側で検証されている。 | T03 (#1125), T04 (#1126), T05 (#1129), T06 (#1130), T12 (#1134) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_codec.py`, `tests/test_claim_ownership.py` |
 | 所有者以外のモジュールがサブレコードのフィールドを書き換えていないことを、アーキテクチャテストが検査している。違反を検出できることも合成例で実証している。 | T13 (#1135) | `tests/test_active_worktree_ownership_architecture.py` (20件の合成違反・正常系テスト), `tests/test_architecture.py` |
 | 移行直前の main で有効な `run_state.json`（dispatch 起動のみ／interactive claim／completion journal 進行中／handoff-ready を含む代表例）を読み込めること、また保存結果のバイト表現（キー・値・正規化）が変わらないことを回帰テストで確認している。 | T01 (#1123), T03 (#1125), T12 (#1134) | `tests/test_active_worktree_compat_baseline.py`, `tests/test_active_worktree_codec.py` |
