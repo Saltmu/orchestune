@@ -585,7 +585,9 @@ class TestBuildStatusSnapshotReadsNestedViews(_FakeForgeTest):
         )
         path = tmp_path / "run_state.json"
         save_run_state(RunState(active_worktrees={"133": active}), path)
-        expected = build_status_snapshot(path, tmp_path, 1_700_000_100.0)
+        expected = build_status_snapshot(
+            path, tmp_path, 1_700_000_100.0, forge=self.forge
+        )
 
         monkeypatch.setattr(
             status_snapshot_module,
@@ -594,7 +596,9 @@ class TestBuildStatusSnapshotReadsNestedViews(_FakeForgeTest):
                 active_worktrees={"133": _NestedOnlyActive(active)}  # type: ignore[dict-item]
             ),
         )
-        actual = build_status_snapshot(path, tmp_path, 1_700_000_100.0)
+        actual = build_status_snapshot(
+            path, tmp_path, 1_700_000_100.0, forge=self.forge
+        )
 
         assert actual == expected
         assert actual.worktrees[0].external_id == "cloud-1"

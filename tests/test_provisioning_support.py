@@ -50,6 +50,13 @@ subtasks:
 """
 
 
+def initialize_local_git_root(path: Path) -> None:
+    """Keep repo-root discovery inside a test-created directory."""
+    git_dir = path / ".git"
+    git_dir.mkdir(exist_ok=True)
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+
 class FakeForge:
     """Minimal in-memory IssueForge double; no mock.patch.
 
@@ -206,6 +213,20 @@ class FakeForge:
 
     def get_issue_last_reopened_at(self, issue_number: int | str) -> str | None:
         raise NotImplementedError
+
+
+@pytest.fixture
+def provisioning_forge(monkeypatch: pytest.MonkeyPatch) -> FakeForge:
+    """Inject the call-recording FakeForge into the provisioning CLI consumer."""
+    forge = FakeForge()
+    monkeypatch.setattr("orchestune.provisioning.cli.GitHubForge", lambda: forge)
+    return forge
+
+
+@pytest.fixture
+def provisioning_repo_root(tmp_path: Path) -> Path:
+    initialize_local_git_root(tmp_path)
+    return tmp_path
 
 
 @pytest.fixture
