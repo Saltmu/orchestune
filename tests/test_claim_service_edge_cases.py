@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -19,13 +20,13 @@ from orchestune.claim.service import claim_task, resume_claim
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import (
-    ActiveWorktree,
     RunState,
     save_run_state,
 )
 from orchestune.models import IssueRecord
 from orchestune.worktree_ops.preparation import WorktreePreparation
 from tests.claim_helpers import MockForge, _make_issue
+from tests.dispatch_test_support import make_test_active_worktree
 
 
 class TestAdditionalClaimServiceEdgeCases:
@@ -54,7 +55,7 @@ class TestAdditionalClaimServiceEdgeCases:
             branch_created=True,
         )
 
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=112,
             branch="claude/issue-112-test-task",
             worktree_path=str(wt_path),
@@ -111,7 +112,7 @@ class TestAdditionalClaimServiceEdgeCases:
             branch_created=True,
         )
 
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=113,
             branch="claude/issue-113-test-task",
             worktree_path=str(wt_path),
@@ -151,7 +152,7 @@ class TestAdditionalClaimServiceEdgeCases:
         issue = _make_issue(number=114)
         forge = MockForge({114: issue})
 
-        repo_wide_active = ActiveWorktree(
+        repo_wide_active = make_test_active_worktree(
             issue_number=99,
             branch="claude/issue-99-task",
             worktree_path="/tmp/wt99",
@@ -218,7 +219,7 @@ class TestAdditionalClaimServiceEdgeCases:
         token = new_owner_token()
         claim_id = new_claim_id()
 
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=115,
             branch="claude/issue-115-test",
             worktree_path="",
@@ -332,7 +333,7 @@ class TestAdditionalClaimServiceEdgeCases:
 
         token = new_owner_token()
         claim_id = new_claim_id()
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=122,
             branch="claude/issue-122-task",
             worktree_path=str(claim_env["worktrees_dir"] / "wt122"),
@@ -353,13 +354,13 @@ class TestAdditionalClaimServiceEdgeCases:
         from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         run_git(
-            ["worktree", "add", "-b", active.branch, active.worktree_path],
+            ["worktree", "add", "-b", active.core.branch, active.core.worktree_path],
             cwd=repo_root,
         )
         write_claim_marker(
-            Path(active.worktree_path),
+            Path(active.core.worktree_path),
             claim_id=claim_id,
-            branch=active.branch,
+            branch=active.core.branch,
             base_sha=None,
             branch_created=True,
         )
@@ -394,7 +395,7 @@ class TestAdditionalClaimServiceEdgeCases:
 
         token = new_owner_token()
         claim_id = new_claim_id()
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=123,
             branch="claude/issue-123-task",
             worktree_path=str(claim_env["worktrees_dir"] / "wt123"),
@@ -415,13 +416,13 @@ class TestAdditionalClaimServiceEdgeCases:
         from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         run_git(
-            ["worktree", "add", "-b", active.branch, active.worktree_path],
+            ["worktree", "add", "-b", active.core.branch, active.core.worktree_path],
             cwd=repo_root,
         )
         write_claim_marker(
-            Path(active.worktree_path),
+            Path(active.core.worktree_path),
             claim_id=claim_id,
-            branch=active.branch,
+            branch=active.core.branch,
             base_sha=None,
             branch_created=True,
         )
@@ -457,7 +458,7 @@ class TestAdditionalClaimServiceEdgeCases:
 
         forge = FailingForge({124: candidate_issue})
 
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=99,
             branch="claude/issue-99-task",
             worktree_path="/tmp/wt99",
@@ -631,7 +632,7 @@ class TestAdditionalClaimServiceEdgeCases:
         token = new_owner_token()
         claim_id = "claim-129-dryrun"
 
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=129,
             branch="claude/issue-129-task",
             worktree_path=str(claim_env["worktrees_dir"] / "claude-issue-129-task"),
@@ -650,16 +651,18 @@ class TestAdditionalClaimServiceEdgeCases:
         from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         run_git(
-            ["worktree", "add", "-b", active.branch, active.worktree_path],
+            ["worktree", "add", "-b", active.core.branch, active.core.worktree_path],
             cwd=repo_root,
         )
-        active.repository_id = (repo_root / ".git").as_posix()
+        active.claim = replace(
+            active.claim, repository_id=(repo_root / ".git").as_posix()
+        )
         with run_state_lock(state_path.with_suffix(".lock")):
             save_run_state(RunState(active_worktrees={"129": active}), state_path)
         write_claim_marker(
-            Path(active.worktree_path),
+            Path(active.core.worktree_path),
             claim_id=claim_id,
-            branch=active.branch,
+            branch=active.core.branch,
             base_sha=None,
             branch_created=True,
         )

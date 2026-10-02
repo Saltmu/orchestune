@@ -20,8 +20,10 @@ pytest_plugins = ["tests.test_local_claim_identity"]
 @pytest.fixture
 def completion_env(local_claim, monkeypatch):
     workspace, active, worktree = local_claim
-    active.claimed_at = 0
-    active.completion_policy_config = {"max_tokens_per_task": None}
+    active.claim = replace(active.claim, claimed_at=0)
+    active.completion = replace(
+        active.completion, completion_policy_config={"max_tokens_per_task": None}
+    )
     with run_state_lock(workspace.lock_path):
         save_run_state(
             load_with_active(workspace.run_state_path, active), workspace.run_state_path
@@ -53,7 +55,7 @@ def completion_env(local_claim, monkeypatch):
     request = CompleteRequest.done(
         7,
         42,
-        claim_id=active.claim_id,
+        claim_id=active.claim.claim_id,
         worktree_root=worktree,
         state_path=workspace.run_state_path,
     )
@@ -79,7 +81,7 @@ def test_tokenless_merged_completion_and_replay(completion_env):
     )
     state = load_run_state_readonly(workspace.run_state_path)
     assert (
-        state.active_worktrees["7"].completion_handoff_ready
+        state.active_worktrees["7"].completion.completion_handoff_ready
         and state.completion_replay_receipts
     )
 
@@ -118,14 +120,16 @@ def test_merged_evidence_must_match_current_claim(completion_env, problem):
     elif problem == "reopened":
         forge.get_issue_last_reopened_at = lambda _: "2026-10-01T00:00:00Z"
     else:
-        active.claimed_at = 2000000000
+        active.claim = replace(active.claim, claimed_at=2000000000)
     assert validate_merged_completion(forge.pr, active, forge) is not None
 
 
 def test_old_agent_cannot_complete_reassigned_claim(completion_env):
     workspace, active, worktree, request, forge = completion_env
     state = load_run_state_readonly(workspace.run_state_path)
-    state.active_worktrees["7"].claim_id = "new-generation"
+    state.active_worktrees["7"].claim = replace(
+        state.active_worktrees["7"].claim, claim_id="new-generation"
+    )
     with run_state_lock(workspace.lock_path):
         save_run_state(state, workspace.run_state_path)
     result = complete_task(request, forge=forge)
@@ -137,7 +141,9 @@ def test_generation_is_rechecked_after_ci(completion_env, monkeypatch):
 
     def ci(_):
         state = load_run_state_readonly(workspace.run_state_path)
-        state.active_worktrees["7"].claim_id = "new-generation"
+        state.active_worktrees["7"].claim = replace(
+            state.active_worktrees["7"].claim, claim_id="new-generation"
+        )
         with run_state_lock(workspace.lock_path):
             save_run_state(state, workspace.run_state_path)
         head = run_git(["rev-parse", "HEAD"], cwd=worktree).stdout.strip()

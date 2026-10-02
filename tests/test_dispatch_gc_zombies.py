@@ -47,7 +47,7 @@ class TestCollectZombiesAndTimeouts:
             patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
         ):
             events = _collect_zombies_and_timeouts(
-                run_state, {active.issue_number: task}, config
+                run_state, {active.core.issue_number: task}, config
             )
 
         assert len(events) == 1
@@ -91,7 +91,7 @@ class TestCollectZombiesAndTimeouts:
             patch("orchestune.dispatch.gc.zombies.remove_worktree") as mock_remove,
         ):
             events = _collect_zombies_and_timeouts(
-                run_state, {active.issue_number: task}, config
+                run_state, {active.core.issue_number: task}, config
             )
 
         assert len(events) == 1
@@ -129,7 +129,7 @@ class TestCollectZombiesAndTimeouts:
 
         with patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0):
             events = _collect_zombies_and_timeouts(
-                run_state, {active.issue_number: task}, config
+                run_state, {active.core.issue_number: task}, config
             )
 
         assert events == []
@@ -165,7 +165,7 @@ class TestCollectZombiesAndTimeouts:
             ),
         ):
             events = _collect_zombies_and_timeouts(
-                run_state, {active.issue_number: task}, config
+                run_state, {active.core.issue_number: task}, config
             )
 
         assert events[0]["reason"] == "timeout exceeded"
@@ -190,7 +190,7 @@ class TestCollectZombiesAndTimeouts:
             run_state,
             {},
             config,
-            held_worktree_paths={active.worktree_path},
+            held_worktree_paths={active.core.worktree_path},
         )
 
         assert events == []
@@ -410,7 +410,7 @@ class TestDecideZombieOrTimeoutReclaims:
                 run_state,
                 {},
                 config,
-                {active.worktree_path},
+                {active.core.worktree_path},
                 now=2_000.0,
             )
 
@@ -460,7 +460,7 @@ class TestDecideZombieOrTimeoutReclaims:
             return_value=True,
         ):
             reclaims_with_task = _decide_zombie_or_timeout_reclaims(
-                run_state, {active.issue_number: task}, config, None, now=2_000.0
+                run_state, {active.core.issue_number: task}, config, None, now=2_000.0
             )
             reclaims_without_task = _decide_zombie_or_timeout_reclaims(
                 run_state, {}, config, None, now=2_000.0
@@ -535,7 +535,7 @@ class TestInteractiveOwnershipGcExclusion:
             # decide層: 回収候補から除外され、空リストになる
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state,
-                {active_interactive.issue_number: task},
+                {active_interactive.core.issue_number: task},
                 config,
                 None,
                 now=2_000.0,
@@ -544,11 +544,11 @@ class TestInteractiveOwnershipGcExclusion:
 
             # collect/apply層: 回収実行されず、active_worktreesに残り、除外診断イベントが記録される
             events = _collect_zombies_and_timeouts(
-                run_state, {active_interactive.issue_number: task}, config
+                run_state, {active_interactive.core.issue_number: task}, config
             )
 
         assert "280" in run_state.active_worktrees
-        assert run_state.active_worktrees["280"].owner_kind == "interactive"
+        assert run_state.active_worktrees["280"].claim.owner_kind == "interactive"
         fake_forge.remove_label.assert_not_called()
         fake_forge.add_label.assert_not_called()
         assert len(events) == 1
@@ -585,16 +585,16 @@ class TestInteractiveOwnershipGcExclusion:
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state,
-                {active_dispatch.issue_number: task},
+                {active_dispatch.core.issue_number: task},
                 config,
                 None,
                 now=2_000.0,
             )
             assert len(reclaims) == 1
-            assert reclaims[0].active.owner_kind == "dispatch"
+            assert reclaims[0].active.claim.owner_kind == "dispatch"
 
             events = _collect_zombies_and_timeouts(
-                run_state, {active_dispatch.issue_number: task}, config
+                run_state, {active_dispatch.core.issue_number: task}, config
             )
 
         assert run_state.active_worktrees == {}
@@ -796,3 +796,66 @@ class TestInteractiveOwnershipGcExclusion:
         )
         res2 = _resolve_completion(ctx, "302", active_recovered_pr, None)
         assert res2.state == "pending"
+
+
+class TestLegacyCompletionGcExclusion:
+    """旧completion handoffやcompleting状態のactive worktreeがゾンビGCで回収されないことを検証。"""
+
+    def test_legacy_handoff_ready_without_completion_id_is_excluded_from_zombie_gc(
+        self, tmp_path, fake_forge
+    ):
+        """T09: 予約なし legacy handoff (completion_handoff_ready=True, completion_id=None) は回収されない。"""
+        active = _active(
+            pid=None,
+            started_at=1_000.0,
+            completion_handoff_ready=True,
+            completion_stage="handed_off_to_gc",
+            completion_id=None,
+        )
+        run_state = RunState(active_worktrees={"280": active})
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=True,
+            zombie_gc=True,
+            task_timeout_seconds=60,
+            forge=fake_forge,
+        )
+
+        with patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0):
+            reclaims = _decide_zombie_or_timeout_reclaims(
+                run_state, {active.core.issue_number: task}, config, None, now=2_000.0
+            )
+
+        assert reclaims == []
+
+    def test_completing_state_with_completion_id_is_excluded_from_zombie_gc(
+        self, tmp_path, fake_forge
+    ):
+        """T09: completing状態 (completion_id is not None) は回収されない。"""
+        active = _active(
+            pid=None,
+            started_at=1_000.0,
+            completion_id="cmpl-test-123",
+            completion_stage="completing",
+        )
+        run_state = RunState(active_worktrees={"280": active})
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            apply=True,
+            zombie_gc=True,
+            task_timeout_seconds=60,
+            forge=fake_forge,
+        )
+
+        with patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0):
+            reclaims = _decide_zombie_or_timeout_reclaims(
+                run_state, {active.core.issue_number: task}, config, None, now=2_000.0
+            )
+
+        assert reclaims == []

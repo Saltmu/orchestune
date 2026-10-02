@@ -130,13 +130,13 @@ class TestApplyAutoRebase:
         _apply_auto_rebase(_context(active, task, run_state, config), "parent-branch")
 
         # Assert base_branch updated to parent-branch
-        assert active.base_branch == "parent-branch"
-        assert active.pid == 222
+        assert run_state.active_worktrees["1"].core.base_branch == "parent-branch"
+        assert run_state.active_worktrees["1"].launch.pid == 222
         # 再launch時はforce_push=Trueを明示的に渡し、base_branchも伝達する。
         mock_target.launch.assert_called_once_with(
             task,
-            active.branch,
-            Path(active.worktree_path),
+            active.core.branch,
+            Path(active.core.worktree_path),
             force_push=True,
             execution_selection=None,
             base_branch="parent-branch",
@@ -176,7 +176,7 @@ class TestApplyAutoRebase:
                 "--force-with-lease",
                 "--set-upstream",
                 "origin",
-                active.branch,
+                active.core.branch,
             ],
         )
         config = DispatcherConfig(
@@ -245,7 +245,7 @@ class TestApplyAutoRebase:
             )
 
         # Assert base_branch is still origin/main (not updated)
-        assert active.base_branch == "origin/main"
+        assert active.core.base_branch == "origin/main"
 
     @patch("orchestune.dispatch.rebase.os.kill")
     @patch("orchestune.dispatch.rebase.subprocess.run")
@@ -549,7 +549,7 @@ class TestApplyAutoRebase:
         _apply_auto_rebase(_context(active, task, run_state, config), "parent-branch")
 
         mock_backup.assert_called_once_with(
-            active.worktree_path, "WIP: backup by Orchestune auto-rebase"
+            active.core.worktree_path, "WIP: backup by Orchestune auto-rebase"
         )
         # rebaseコマンドが実行されている（退避成功時は通常フローを継続する）
         rebase_calls = [
@@ -558,7 +558,7 @@ class TestApplyAutoRebase:
             if "rebase" in call_args.args[0]
         ]
         assert rebase_calls
-        assert active.base_branch == "parent-branch"
+        assert run_state.active_worktrees["1"].core.base_branch == "parent-branch"
 
     @patch("orchestune.dispatch.rebase.os.kill")
     @patch("orchestune.dispatch.rebase.dispatch_gc.backup_wip_commit", autospec=True)
@@ -598,12 +598,14 @@ class TestApplyAutoRebase:
             )
 
         mock_backup.assert_called_once_with(
-            active.worktree_path, "WIP: backup by Orchestune auto-rebase"
+            active.core.worktree_path, "WIP: backup by Orchestune auto-rebase"
         )
         mock_run.assert_not_called()  # rebaseは一切試みられない
-        mock_remove.assert_called_once_with(active.issue_number, "status:in-progress")
+        mock_remove.assert_called_once_with(
+            active.core.issue_number, "status:in-progress"
+        )
         mock_add_label.assert_called_once_with(
-            active.issue_number, "status:manual-merge-required"
+            active.core.issue_number, "status:manual-merge-required"
         )
         mock_comment.assert_called_once()
         assert (
@@ -611,7 +613,7 @@ class TestApplyAutoRebase:
             in mock_comment.call_args.args[1]
         )
         assert "1" not in run_state.active_worktrees
-        assert active.base_branch == "origin/main"
+        assert active.core.base_branch == "origin/main"
 
     @patch("orchestune.dispatch.rebase.os.kill")
     @patch("orchestune.dispatch.rebase.dispatch_gc.backup_wip_commit", autospec=True)

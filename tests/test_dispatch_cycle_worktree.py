@@ -465,7 +465,7 @@ class TestProcessActiveWorktrees:
             config=DispatcherConfig(
                 parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
-                run_state_path=Path("dummy.json"),
+                run_state_path=tmp_path / "run_state.json",
                 worktree_root=Path("worktrees"),
                 apply=True,
             ),
@@ -513,7 +513,7 @@ class TestProcessActiveWorktrees:
             config=DispatcherConfig(
                 parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
-                run_state_path=Path("dummy.json"),
+                run_state_path=tmp_path / "run_state.json",
                 worktree_root=Path("worktrees"),
                 apply=True,
             ),
@@ -583,7 +583,7 @@ class TestProcessActiveWorktrees:
             config=DispatcherConfig(
                 parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
-                run_state_path=Path("dummy.json"),
+                run_state_path=tmp_path / "run_state.json",
                 worktree_root=Path("worktrees"),
                 apply=True,
             ),
@@ -623,7 +623,7 @@ class TestProcessActiveWorktrees:
             config=DispatcherConfig(
                 parent_issue_number=100,
                 events_log_path=tmp_path / "events.jsonl",
-                run_state_path=Path("dummy.json"),
+                run_state_path=tmp_path / "run_state.json",
                 worktree_root=Path("worktrees"),
                 apply=True,
             ),

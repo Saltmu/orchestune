@@ -15,10 +15,10 @@ from orchestune.claim.service import claim_task
 from orchestune.complete.contracts import CompleteFailureReason
 from orchestune.complete.service import complete_task
 from orchestune.ledger.run_state import (
-    ActiveWorktree,
     load_run_state_readonly,
     save_run_state,
 )
+from tests.dispatch_test_support import flat_active_worktree
 
 unclaimed = _unclaimed_fixture
 
@@ -102,7 +102,7 @@ def test_claim_wins_before_not_needed_without_post_or_completion_token(
     monkeypatch.setattr("orchestune.complete.service.complete_unclaimed", delayed)
 
     def apply(workspace, req, issue, preflight, branch, base, state, forge, token, **_):
-        state.active_worktrees["1111"] = ActiveWorktree(
+        state.active_worktrees["1111"] = flat_active_worktree(
             1111,
             branch,
             str(request.worktree_root),

@@ -52,6 +52,12 @@ from orchestune.dispatch.scoring import (
 )
 from orchestune.dispatch.summary import merge_skips
 from orchestune.dispatch.worktree import LaunchResult
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import ActiveWorktree, RunState, TaskReclaimRecord
 from tests.conftest import make_task
 
@@ -353,22 +359,29 @@ def test_successful_launch_partial_update_contract(
     config = _config(tmp_path, forge, apply=True)
     run_state = RunState(
         active_worktrees={
-            "10": ActiveWorktree(
-                issue_number=10,
-                branch=plan.branch_name,
-                worktree_path="",
-                pid=None,
-                started_at=None,
-                declared_footprint=task.footprint,
-                owner_kind="dispatch",
-                claim_id="claim-10",
-                claim_stage="reserved",
-                base_ref="origin/main",
-                base_sha=None,
-                reservation_kind="footprint",
-                repository_id="repository-10",
-                claimed_at=99.0,
-                owner_token_digest="digest-10",
+            "10": ActiveWorktree.from_records(
+                core=ActiveWorktreeCore(
+                    issue_number=10,
+                    branch=plan.branch_name,
+                    worktree_path="",
+                    declared_footprint=task.footprint,
+                ),
+                launch=LaunchInfo(
+                    pid=None,
+                    started_at=None,
+                ),
+                claim=ClaimInfo(
+                    owner_kind="dispatch",
+                    claim_id="claim-10",
+                    claim_stage="reserved",
+                    base_ref="origin/main",
+                    base_sha=None,
+                    reservation_kind="footprint",
+                    repository_id="repository-10",
+                    claimed_at=99.0,
+                    owner_token_digest="digest-10",
+                ),
+                completion=ActiveCompletionJournal(),
             )
         }
     )

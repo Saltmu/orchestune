@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -62,10 +63,11 @@ class HandoffPlan:
 def _held_plan(
     active: ActiveWorktree, reason: str, outcome: OutcomeRecord | None = None
 ) -> HandoffPlan:
+    core = active.core
     return HandoffPlan(
-        key=str(active.issue_number),
-        issue_number=active.issue_number,
-        result=active.completion_result,
+        key=str(core.issue_number),
+        issue_number=core.issue_number,
+        result=active.completion.completion_result,
         action="hold",
         reason=reason,
         worktree_action="retain",
@@ -76,24 +78,26 @@ def _held_plan(
 def _verify_outcome(
     active: ActiveWorktree, forge: HandoffForge
 ) -> tuple[OutcomeRecord | None, str | None]:
+    claim = active.claim
+    completion = active.completion
     required = (
-        active.claim_id,
-        active.completion_id,
-        active.completion_result,
-        active.completion_comment_id,
-        active.completion_comment_url,
+        claim.claim_id,
+        completion.completion_id,
+        completion.completion_result,
+        completion.completion_comment_id,
+        completion.completion_comment_url,
     )
     if not all(isinstance(value, str) and value for value in required):
         return None, "handoff_evidence_missing"
-    payload = active.completion_payload
+    payload = completion.completion_payload
     if (
-        not isinstance(payload, dict)
+        not isinstance(payload, Mapping)
         or not isinstance(payload.get("outcome"), str)
         or not payload["outcome"]
     ):
         return None, "handoff_evidence_missing"
     try:
-        comments = forge.list_all_issue_comments(active.issue_number)
+        comments = forge.list_all_issue_comments(active.core.issue_number)
     except Exception:
         return None, "outcome_unknown"
 
@@ -101,13 +105,13 @@ def _verify_outcome(
         (
             item
             for item in comments
-            if str(item.get("id")) == active.completion_comment_id
+            if str(item.get("id")) == completion.completion_comment_id
         ),
         None,
     )
     if comment is None:
         return None, "outcome_absent"
-    if comment.get("html_url") != active.completion_comment_url:
+    if comment.get("html_url") != completion.completion_comment_url:
         return None, "outcome_mismatch"
     if comment.get("body") != payload["outcome"]:
         return None, "outcome_mismatch"
@@ -121,10 +125,10 @@ def _verify_outcome(
 
 def _outcome_matches_active(outcome: OutcomeRecord, active: ActiveWorktree) -> bool:
     if (
-        outcome.issue != active.issue_number
-        or outcome.claim_id != active.claim_id
-        or outcome.completion_id != active.completion_id
-        or outcome.result != active.completion_result
+        outcome.issue != active.core.issue_number
+        or outcome.claim_id != active.claim.claim_id
+        or outcome.completion_id != active.completion.completion_id
+        or outcome.result != active.completion.completion_result
     ):
         return False
     if outcome.result == "done":
@@ -168,12 +172,12 @@ def _verify_merged_pr(
     except OSError:
         remote_names = frozenset()
     expected_base = _normalise_base_ref(
-        active.base_ref or active.base_branch, remote_names=remote_names
+        active.claim.base_ref or active.core.base_branch, remote_names=remote_names
     )
     return merged_pr_problem(
         pr,
         pr_number=pr_number,
-        branch=active.branch,
+        branch=active.core.branch,
         base=expected_base,
         reachable=forge.is_merge_commit_reachable_from,
     )
@@ -192,8 +196,8 @@ def _marker_problem(
     if marker is None:
         return "owner_unknown"
     if (
-        marker.get("claim_id") != active.claim_id
-        or marker.get("branch") != active.branch
+        marker.get("claim_id") != active.claim.claim_id
+        or marker.get("branch") != active.core.branch
     ):
         return "owner_mismatch"
     return None
@@ -221,7 +225,7 @@ def _inspect_worktree(
     workspace: ClaimWorkspace,
     cwd: str | Path | None,
 ) -> tuple[str, str, str, VerifiedWorktreeRemovalRequest | None]:
-    raw_path = active.worktree_path.strip()
+    raw_path = active.core.worktree_path.strip()
     if not raw_path:
         return "hold", "worktree_path_missing", "retain", None
     primary_root = workspace.worktree_root.parent
@@ -233,7 +237,7 @@ def _inspect_worktree(
     if problem := _live_worktree_problem(active, target, current):
         return "hold", problem, "retain", None
 
-    inspected = replace(active, worktree_path=str(target))
+    inspected = active.with_core(replace(active.core, worktree_path=str(target)))
     if not target.exists():
         return _inspect_absent_worktree(inspected, target, outcome, primary_root)
     if problem := _marker_problem(inspected, target, required=True):
@@ -286,18 +290,19 @@ def inspect_handoff(
     cwd: str | Path | None = None,
 ) -> HandoffPlan:
     """Verify durable completion evidence and evaluate a single handoff entry."""
+    completion = active.completion
     if not _is_handoff_ready(active):
         if (
-            active.completion_handoff_ready
-            or active.completion_stage == "handed_off_to_gc"
+            completion.completion_handoff_ready
+            or completion.completion_stage == "handed_off_to_gc"
         ):
             return _held_plan(active, "legacy_unverified")
         return _held_plan(active, "not_handoff_ready")
     if (
-        not active.completion_comment_id
-        or not active.completion_comment_url
-        or not isinstance(active.completion_payload, dict)
-        or not active.completion_payload.get("outcome")
+        not completion.completion_comment_id
+        or not completion.completion_comment_url
+        or not isinstance(completion.completion_payload, Mapping)
+        or not completion.completion_payload.get("outcome")
     ):
         return _held_plan(active, "handoff_evidence_missing")
     try:
@@ -318,9 +323,10 @@ def inspect_handoff(
     action, reason, worktree_action, request = _inspect_worktree(
         active, outcome, workspace, cwd
     )
+    core = active.core
     return HandoffPlan(
-        key=str(active.issue_number),
-        issue_number=active.issue_number,
+        key=str(core.issue_number),
+        issue_number=core.issue_number,
         result=outcome.result,
         action=action,
         reason=reason,
@@ -333,15 +339,15 @@ def inspect_handoff(
 def _journal_proof_problem(
     active: ActiveWorktree, state: Any, workspace: ClaimWorkspace
 ) -> str | None:
-    record = completion_record(state, active.issue_number)
+    record = completion_record(state, active.core.issue_number)
     assert record is not None
     if (
-        active.completion_result == "done"
+        active.completion.completion_result == "done"
         and (record.get("prepublication_policy_evidence") or {}).get("decision")
         != "allowed"
     ):
         return "done_policy_evidence_missing"
-    if active.repository_id != workspace.repository_identity:
+    if active.claim.repository_id != workspace.repository_identity:
         return "repository_mismatch"
     return None
 
@@ -351,7 +357,8 @@ def _live_worktree_problem(
 ) -> str | None:
     if _is_current_worktree(target, current):
         return "current_worktree"
-    if active.pid and is_process_alive(active.pid):
+    pid = active.launch.pid
+    if pid and is_process_alive(pid):
         return "running_worktree"
     if target.is_symlink():
         return "symlink_mismatch"

@@ -12,13 +12,20 @@ from unittest.mock import ANY, MagicMock, patch
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
 from orchestune.dispatch.targets import DispatchHandle
-from orchestune.ledger.run_state import ActiveWorktree, RunState, load_run_state
+from orchestune.ledger.run_state import RunState, load_run_state
 from orchestune.models import PrRecord
-from tests.dispatch_test_support import make_footprint_issue as _issue
+from tests.dispatch_test_support import (
+    make_footprint_issue as _issue,
+)
+from tests.dispatch_test_support import (
+    make_test_active_worktree,
+)
 from tests.dispatch_test_support import (
     patch_gc_process_alive as _patch_gc_process_alive,
 )
-from tests.dispatch_test_support import save_locked_run_state as save_run_state
+from tests.dispatch_test_support import (
+    save_locked_run_state as save_run_state,
+)
 
 
 class TestBranchStacking:
@@ -315,7 +322,7 @@ class TestBranchStacking:
 
         run_state = RunState(
             active_worktrees={
-                "2": ActiveWorktree(
+                "2": make_test_active_worktree(
                     issue_number=2,
                     branch="claude/issue-2-task-2",
                     worktree_path=str(tmp_path / "worktrees/claude-issue-2-task-2"),
@@ -407,7 +414,7 @@ class TestBranchStacking:
 
         # 新しいPIDで状態が保存されていることを確認
         loaded = load_run_state(config.run_state_path)
-        assert loaded.active_worktrees["2"].pid == 99999
+        assert loaded.active_worktrees["2"].launch.pid == 99999
 
     def test_auto_rebase_passes_base_branch_and_execution_selection_to_dispatch_target(
         self, tmp_path
@@ -434,7 +441,7 @@ class TestBranchStacking:
         )
         run_state = RunState(
             active_worktrees={
-                "2": ActiveWorktree(
+                "2": make_test_active_worktree(
                     issue_number=2,
                     branch="claude/issue-2-task-2",
                     worktree_path=str(tmp_path / "worktrees/claude-issue-2-task-2"),
@@ -630,7 +637,7 @@ class TestBranchStacking:
         # タスクA（issue 1）は active_worktrees に登録されており、このサイクルで完了する
         run_state = RunState(
             active_worktrees={
-                "1": ActiveWorktree(
+                "1": make_test_active_worktree(
                     issue_number=1,
                     branch="claude/issue-1-task-1",
                     worktree_path=str(tmp_path / "worktrees/claude-issue-1-task-1"),
@@ -779,7 +786,7 @@ class TestBranchStacking:
 
         run_state = RunState(
             active_worktrees={
-                "2": ActiveWorktree(
+                "2": make_test_active_worktree(
                     issue_number=2,
                     branch="claude/issue-2-task-2",
                     worktree_path=str(tmp_path / "worktrees/claude-issue-2-task-2"),
@@ -904,7 +911,7 @@ class TestBranchStacking:
 
         run_state = RunState(
             active_worktrees={
-                "2": ActiveWorktree(
+                "2": make_test_active_worktree(
                     issue_number=2,
                     branch="claude/issue-2-task-2",
                     worktree_path=str(tmp_path / "worktrees/claude-issue-2-task-2"),

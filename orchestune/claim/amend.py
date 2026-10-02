@@ -19,6 +19,7 @@ from orchestune.claim.contracts import (
 from orchestune.claim.local_identity import caller_claim_id, validate_local_claim
 from orchestune.claim.ownership import (
     evaluate_claim_conflicts,
+    has_completion_reservation,
     held_claim_next_actions,
 )
 from orchestune.claim.service import _DefaultConflictView, _validate_issue_for_resume
@@ -73,7 +74,7 @@ def _find_held_reservation(
     run_state: RunState, issue_number: int
 ) -> tuple[str, ActiveWorktree]:
     for key, active in run_state.active_worktrees.items():
-        if active.issue_number == issue_number:
+        if active.core.issue_number == issue_number:
             return key, active
     raise _reject(
         ClaimFailureReason.INVALID_RESUME,
@@ -83,17 +84,19 @@ def _find_held_reservation(
 
 
 def _check_eligibility(active: ActiveWorktree, repository_identity: str) -> None:
-    n = active.issue_number
+    n = active.core.issue_number
     problems = []
-    if active.owner_kind != OwnerKind.INTERACTIVE.value:
+    if active.claim.owner_kind != OwnerKind.INTERACTIVE.value:
         problems.append("it is owned by the dispatcher")
-    if active.claim_stage != ClaimStage.COMPLETED.value:
-        problems.append(f"its claim stage is {active.claim_stage}")
-    if active.reservation_kind != ReservationKind.FOOTPRINT.value:
+    if active.claim.claim_stage != ClaimStage.COMPLETED.value:
+        problems.append(f"its claim stage is {active.claim.claim_stage}")
+    if active.claim.reservation_kind != ReservationKind.FOOTPRINT.value:
         problems.append("it already reserves the whole repository")
-    if active.completion_id is not None:
+    if has_completion_reservation(active):
         problems.append("completion has already started")
-    if not check_repository_identity_match(repository_identity, active.repository_id):
+    if not check_repository_identity_match(
+        repository_identity, active.claim.repository_id
+    ):
         problems.append("it belongs to a different repository checkout")
     if problems:
         actions = [
@@ -120,11 +123,11 @@ def _authenticate(active: ActiveWorktree, cwd: Path, state_path: Path) -> None:
 
 
 def _issue_footprint(forge: Forge, active: ActiveWorktree) -> IssueRecord:
-    issue = forge.get_issue(active.issue_number)
+    issue = forge.get_issue(active.core.issue_number)
     if issue is None:
         raise _reject(
             ClaimFailureReason.ISSUE_NOT_FOUND,
-            f"Issue #{active.issue_number} was not found.",
+            f"Issue #{active.core.issue_number} was not found.",
         )
     failure = _validate_issue_for_resume(issue)
     if failure is not None:
@@ -165,18 +168,18 @@ def _git_paths(args: list[str], cwd: str) -> list[str]:
 
 def _changed_files(active: ActiveWorktree) -> list[str]:
     """Files changed since the claim base, including uncommitted and untracked ones."""
-    if not active.base_sha or not active.worktree_path:
+    if not active.claim.base_sha or not active.core.worktree_path:
         raise _reject(
             ClaimFailureReason.INVALID_RESUME,
-            f"Claim {active.claim_id} has no recorded base commit or worktree path.",
+            f"Claim {active.claim.claim_id} has no recorded base commit or worktree path.",
             "Inspect the worktree manually; the reservation was left unchanged.",
         )
     diff = _git_paths(
-        ["diff", "--name-only", "--no-renames", "-z", active.base_sha],
-        active.worktree_path,
+        ["diff", "--name-only", "--no-renames", "-z", active.claim.base_sha],
+        active.core.worktree_path,
     )
     untracked = _git_paths(
-        ["ls-files", "--others", "--exclude-standard", "-z"], active.worktree_path
+        ["ls-files", "--others", "--exclude-standard", "-z"], active.core.worktree_path
     )
     return [*diff, *untracked]
 
@@ -204,16 +207,16 @@ def _check_conflicts(
             ClaimFailure(
                 reason=ClaimFailureReason.CLAIM_CONFLICT,
                 message=(
-                    f"Amended footprint conflicts with issue #{other.issue_number}: "
+                    f"Amended footprint conflicts with issue #{other.core.issue_number}: "
                     f"{conflict.reason.value}"
                 ),
-                conflicting_issue_number=other.issue_number,
-                conflicting_branch=other.branch or None,
-                conflicting_path=Path(other.worktree_path)
-                if other.worktree_path
+                conflicting_issue_number=other.core.issue_number,
+                conflicting_branch=other.core.branch or None,
+                conflicting_path=Path(other.core.worktree_path)
+                if other.core.worktree_path
                 else None,
                 next_actions=(
-                    f"Wait for issue #{other.issue_number} to finish, or revert the overlapping changes and retry.",
+                    f"Wait for issue #{other.core.issue_number} to finish, or revert the overlapping changes and retry.",
                 ),
             )
         )
@@ -264,7 +267,7 @@ def _amend_in_lock(
     _authenticate(active, caller_root, run_state_path)
     issue = _issue_footprint(forge, active)
 
-    previous = tuple(active.declared_footprint)
+    previous = tuple(active.core.declared_footprint)
     candidates = [
         *previous,
         *parse_task_from_issue(issue).footprint,
@@ -272,13 +275,15 @@ def _amend_in_lock(
     ]
     amended_footprint = canonicalize_footprint(candidates)
     added = tuple(p for p in amended_footprint if p not in previous)
-    amended = dataclasses.replace(active, declared_footprint=amended_footprint)
+    amended = active.with_core(
+        dataclasses.replace(active.core, declared_footprint=amended_footprint)
+    )
     _check_conflicts(key, amended, run_state, forge)
 
     body_updated = False
     if apply:
         body_updated = _publish_issue_footprint(forge, issue, amended_footprint)
-        active.declared_footprint = amended_footprint
+        run_state.active_worktrees[key] = amended
         try:
             save_run_state(run_state, run_state_path)
         except Exception as error:
@@ -290,8 +295,8 @@ def _amend_in_lock(
     return FootprintAmendOutcome(
         success=True,
         issue_number=issue_number,
-        claim_id=active.claim_id,
-        worktree_path=Path(active.worktree_path),
+        claim_id=active.claim.claim_id,
+        worktree_path=Path(active.core.worktree_path),
         previous_footprint=previous,
         amended_footprint=amended_footprint,
         added=added,

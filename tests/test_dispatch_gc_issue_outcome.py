@@ -10,10 +10,10 @@ from orchestune.dispatch.gc.completion import (
     _fetch_outcome_for_active,
     _local_pr_completion_status,
 )
-from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeLookupState, OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _rule_ctx, _task
+from tests.dispatch_test_support import flat_active_worktree
 
 
 def _config(tmp_path, forge):
@@ -27,7 +27,7 @@ def _config(tmp_path, forge):
 
 
 def test_issue_outcome_is_found_without_listing_pull_requests(tmp_path):
-    active = ActiveWorktree(
+    active = flat_active_worktree(
         issue_number=702,
         branch="claude/issue-702-task-a",
         worktree_path=str(tmp_path / "worktree"),
@@ -54,7 +54,7 @@ def test_issue_outcome_is_found_without_listing_pull_requests(tmp_path):
 
 
 def test_pr_only_outcome_is_ignored_by_local_completion(tmp_path):
-    active = ActiveWorktree(
+    active = flat_active_worktree(
         issue_number=702,
         branch="claude/issue-702-task-a",
         worktree_path=str(tmp_path / "worktree"),
@@ -66,14 +66,14 @@ def test_pr_only_outcome_is_ignored_by_local_completion(tmp_path):
     forge.list_prs.return_value = [
         PrRecord(
             number=703,
-            head_ref=active.branch,
+            head_ref=active.core.branch,
             changed_files=(),
             state="OPEN",
         )
     ]
     forge.list_comments.side_effect = lambda number: (
         []
-        if number == active.issue_number
+        if number == active.core.issue_number
         else [
             {
                 "body": OutcomeRecord(result="done", issue=702).render(),
@@ -96,9 +96,9 @@ def test_issue_comment_lookup_failure_holds_before_closed_pr_reclaim(
     fake_forge.list_prs.return_value = [
         PrRecord(
             number=210,
-            head_ref=active.branch,
+            head_ref=active.core.branch,
             changed_files=(),
-            closes_issue_numbers=(active.issue_number,),
+            closes_issue_numbers=(active.core.issue_number,),
             state="CLOSED",
         )
     ]

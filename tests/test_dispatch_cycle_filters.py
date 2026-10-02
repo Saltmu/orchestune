@@ -22,10 +22,13 @@ from orchestune.dispatch.filters import (
 )
 from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.ledger.run_state import (
-    ActiveWorktree,
     RunState,
 )
 from orchestune.models import IssueRecord
+from tests.dispatch_test_support import (
+    flat_active_worktree,
+    stub_label_actor_permission,
+)
 from tests.dispatch_test_support import make_footprint_issue as _full_issue
 from tests.dispatch_test_support import make_test_active_worktree as _active
 from tests.dispatch_test_support import make_test_cycle_context as _cycle_context
@@ -34,7 +37,6 @@ from tests.dispatch_test_support import (
     patch_gc_process_alive as _patch_gc_process_alive,
 )
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
-from tests.dispatch_test_support import stub_label_actor_permission
 
 
 @pytest.fixture(autouse=True)
@@ -126,7 +128,7 @@ class TestRunDispatchCycleFootprintRecompute:
         save_run_state(
             RunState(
                 active_worktrees={
-                    "1": ActiveWorktree(
+                    "1": flat_active_worktree(
                         issue_number=1,
                         branch="claude/issue-1-task-a",
                         worktree_path=str(tmp_path / "w1"),
@@ -220,7 +222,7 @@ class TestRunDispatchCycleFootprintRecompute:
         save_run_state(
             RunState(
                 active_worktrees={
-                    "1": ActiveWorktree(
+                    "1": flat_active_worktree(
                         issue_number=1,
                         branch="claude/issue-1-task-a",
                         worktree_path=str(tmp_path / "w1"),
@@ -299,7 +301,7 @@ class TestRunDispatchCycleFootprintRecompute:
         save_run_state(
             RunState(
                 active_worktrees={
-                    "1": ActiveWorktree(
+                    "1": flat_active_worktree(
                         issue_number=1,
                         branch="claude/issue-1-task-a",
                         worktree_path=str(tmp_path / "w1"),
@@ -397,7 +399,7 @@ class TestRunDispatchCycleFootprintRecompute:
         save_run_state(
             RunState(
                 active_worktrees={
-                    "1": ActiveWorktree(
+                    "1": flat_active_worktree(
                         issue_number=1,
                         branch="claude/issue-1-task-a",
                         worktree_path=str(tmp_path / "w1"),
@@ -490,7 +492,7 @@ class TestRunDispatchCycleFootprintRecompute:
         save_run_state(
             RunState(
                 active_worktrees={
-                    "1": ActiveWorktree(
+                    "1": flat_active_worktree(
                         issue_number=1,
                         branch="claude/issue-1-task-a",
                         worktree_path=str(tmp_path / "w1"),

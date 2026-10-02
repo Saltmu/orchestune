@@ -11,6 +11,7 @@ from orchestune.infra.process_utils import run_state_lock
 from orchestune.ledger.completion_reservations import dependency_completion_blocked
 from orchestune.ledger.run_state import load_run_state_readonly, save_run_state
 from orchestune.targets.contracts import DispatchHandle
+from tests.dispatch_test_support import replace_flat
 from tests.test_dispatch_gc_policies import policy_case
 
 
@@ -161,7 +162,7 @@ def test_missing_receipt_and_pending_label_never_mutate(tmp_path):
 
 def test_new_claim_never_replays_old_policy(tmp_path):
     state, config, forge, _, _ = policy_case(tmp_path)
-    state.active_worktrees["250"] = replace(
+    state.active_worktrees["250"] = replace_flat(
         state.active_worktrees["250"], claim_id="new-generation"
     )
     with run_state_lock(config.run_state_path.with_suffix(".lock")):
@@ -348,7 +349,7 @@ def matrix_case(tmp_path, result, owner):
     from tests.test_dispatch_gc_handoff_integration import _forge
 
     state, config, forge, labels, comments = policy_case(tmp_path, result=result)
-    active = replace(state.active_worktrees["250"], owner_kind=owner)
+    active = replace_flat(state.active_worktrees["250"], owner_kind=owner)
     state.active_worktrees["250"] = active
     # Freeze the final active ownership in durable policy context.
     record = confirmed_records(state)[0]
@@ -362,7 +363,7 @@ def matrix_case(tmp_path, result, owner):
     update_record(state, record)
     with run_state_lock(config.run_state_path.with_suffix(".lock")):
         save_run_state(state, config.run_state_path)
-    merged = _forge(comments[0], active.branch, active.base_sha)
+    merged = _forge(comments[0], active.core.branch, active.claim.base_sha)
     forge.get_pull_request.return_value = merged.pr
     forge.is_merge_commit_reachable_from.return_value = True
     forge.close_issue.side_effect = lambda *args: setattr(
@@ -396,7 +397,9 @@ def test_receipt_reclaims_token_only_after_active_release(tmp_path):
     record = confirmed_records(state)[0]
     digest = owner_token_digest("test-owned-token")
     record = replace(record, owner_token_digest=digest)
-    state.active_worktrees["250"].owner_token_digest = digest
+    state.active_worktrees["250"] = replace_flat(
+        state.active_worktrees["250"], owner_token_digest=digest
+    )
     update_record(state, record)
     state.completion_reservations[record.reservation_key] = (
         CompletionReservation.from_journal(record).to_dict()
@@ -426,7 +429,7 @@ def test_simultaneous_gc_paths_keep_single_done_history(tmp_path, monkeypatch):
 
     state, config, forge, _, comments = policy_case(tmp_path, result="done")
     active = state.active_worktrees["250"]
-    merged = _forge(comments[0], active.branch, active.base_sha)
+    merged = _forge(comments[0], active.core.branch, active.claim.base_sha)
     forge.get_pull_request.return_value = merged.pr
     forge.is_merge_commit_reachable_from.return_value = True
     monkeypatch.chdir(config.worktree_root.parent)
@@ -459,7 +462,7 @@ def test_stale_dispatcher_cannot_resurrect_active_after_standalone_gc(
 
     state, config, forge, _, comments = policy_case(tmp_path, result="done")
     active = state.active_worktrees["250"]
-    merged = _forge(comments[0], active.branch, active.base_sha)
+    merged = _forge(comments[0], active.core.branch, active.claim.base_sha)
     forge.get_pull_request.return_value = merged.pr
     forge.is_merge_commit_reachable_from.return_value = True
     monkeypatch.chdir(config.worktree_root.parent)

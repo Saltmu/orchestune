@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import math
 import sys
@@ -38,6 +39,7 @@ from orchestune.forge import Forge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
+from orchestune.ledger.active_lifecycle import ActiveWorktreeLifecycle, lifecycle
 from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import (
     ActiveWorktree,
@@ -169,11 +171,11 @@ def _fetch_outcome_for_active(
     Outcome escalation or a reclaim.
     """
     try:
-        comments = list(forge.list_comments(active.issue_number))
+        comments = list(forge.list_comments(active.core.issue_number))
     except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
-        warn_forge_failure("list_comments", active.issue_number, error, error_sink)
+        warn_forge_failure("list_comments", active.core.issue_number, error, error_sink)
         return OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN)
-    outcome = parse_from_comments(comments, since=active.started_at)
+    outcome = parse_from_comments(comments, since=active.launch.started_at)
     if outcome is None:
         return OutcomeLookupResult(state=OutcomeLookupState.ABSENT)
     return OutcomeLookupResult(state=OutcomeLookupState.FOUND, record=outcome)
@@ -182,13 +184,15 @@ def _fetch_outcome_for_active(
 def _detect_worktree_commits(
     active: ActiveWorktree, repository_root: str | Path | None
 ) -> tuple[bool, str | None]:
-    if active.external_id is not None:
-        repo_root = repository_root or Path(active.worktree_path).parent
-        sha = remote_branch_commit_sha_if_ahead(
-            repo_root, active.branch, active.base_branch
-        )
-        return sha is not None, sha
-    return worktree_has_new_commits(active.worktree_path, active.base_branch), None
+    if active.launch.external_id is None:
+        return worktree_has_new_commits(
+            active.core.worktree_path, active.core.base_branch
+        ), None
+    repo_root = repository_root or Path(active.core.worktree_path).parent
+    sha = remote_branch_commit_sha_if_ahead(
+        repo_root, active.core.branch, active.core.base_branch
+    )
+    return sha is not None, sha
 
 
 def _prior_merge_decision(
@@ -198,7 +202,7 @@ def _prior_merge_decision(
     issue: IssueRecord | None,
 ) -> CompletedWorktreeDecision | None:
     prior_merge = decide_prior_parent_merge_completion(
-        active.issue_number, active_task, forge, issue
+        active.core.issue_number, active_task, forge, issue
     )
     if prior_merge is None:
         return None
@@ -255,7 +259,7 @@ def _decide_completed_worktree_outcome(
     issue: IssueRecord | None = None,
 ) -> CompletedWorktreeDecision:
     subtask_id = active_task.subtask_id if active_task else ""
-    is_dirty = worktree_has_uncommitted_changes(active.worktree_path)
+    is_dirty = worktree_has_uncommitted_changes(active.core.worktree_path)
 
     outcome: OutcomeRecord | None = None
     if is_dirty:
@@ -279,7 +283,7 @@ def _decide_completed_worktree_outcome(
             return err_decision
 
     retry_count, retry_pending = _get_review_timeout_retry_state(
-        run_state, active.issue_number
+        run_state, active.core.issue_number
     )
     action = _decide_action_from_outcome(
         outcome,
@@ -316,9 +320,9 @@ def _prepare_apply_escalation(
         return None
     if not (
         _is_handoff_retained_dirty(active, outcome)
-        and worktree_has_uncommitted_changes(active.worktree_path)
+        and worktree_has_uncommitted_changes(active.core.worktree_path)
     ):
-        remove_worktree(active.worktree_path)
+        remove_worktree(active.core.worktree_path)
     return _stale_status_labels(active_task)
 
 
@@ -334,7 +338,7 @@ def _apply_escalation(
     )
     if stale_labels is not None:
         apply_human_review_escalation(
-            active.issue_number,
+            active.core.issue_number,
             stale_labels,
             message,
             forge=config.resolved_forge,
@@ -356,13 +360,13 @@ def _apply_blocked_hold(
         return
     transition_status_label(
         config.resolved_forge,
-        active.issue_number,
+        active.core.issue_number,
         StatusLabel.BLOCKED,
         stale_labels,
     )
     if extra_label:
-        config.resolved_forge.add_label(active.issue_number, extra_label)
-    config.resolved_forge.add_comment(active.issue_number, comment)
+        config.resolved_forge.add_label(active.core.issue_number, extra_label)
+    config.resolved_forge.add_comment(active.core.issue_number, comment)
 
 
 def _apply_blocked_base_branch_red(
@@ -374,7 +378,7 @@ def _apply_blocked_base_branch_red(
         ctx.active,
         ctx.config,
         ctx.active_task,
-        f"ベースブランチ（`{ctx.active.base_branch}`）由来のCI失敗を検知したため、"
+        f"ベースブランチ（`{ctx.active.core.base_branch}`）由来のCI失敗を検知したため、"
         f"`ci:base-branch-red`マーカーを付与して`status:blocked`で保留しました{attempt_str}。"
         "ベースブランチの前進（新コミット）時に自動で再キューイングされます。",
         extra_label="ci:base-branch-red",
@@ -401,7 +405,7 @@ def _apply_escalated_base_branch_red(
     )
     try:
         ctx.config.resolved_forge.remove_label(
-            ctx.active.issue_number, "ci:base-branch-red"
+            ctx.active.core.issue_number, "ci:base-branch-red"
         )
     except Exception:
         pass
@@ -457,7 +461,7 @@ def _apply_no_commits_escalation(ctx: _CompletionContext) -> None:
     _apply_escalation(
         ctx.active,
         ctx.config,
-        f"エージェントプロセスの終了を検知しましたが、ベースブランチ(`{ctx.active.base_branch}`)に対する新規コミットが1件も検出できませんでした。"
+        f"エージェントプロセスの終了を検知しましたが、ベースブランチ(`{ctx.active.core.base_branch}`)に対する新規コミットが1件も検出できませんでした。"
         "権限拒否やエラーにより実際の作業が行われなかった可能性があるため、自動的な完了・依存タスクの昇格を見送り、"
         "`status:blocked-human-review`に変更しました。ログを確認の上、必要であれば`status:queued`へ再設定してください。",
         ctx.active_task,
@@ -510,15 +514,15 @@ def _publish_requeue(
         launch_window_seconds=config.window_seconds,
         open_prs=open_prs,
     )
-    remove_worktree(active.worktree_path)
+    remove_worktree(active.core.worktree_path)
     transition_status_label(
         config.resolved_forge,
-        active.issue_number,
+        active.core.issue_number,
         StatusLabel.QUEUED,
         _stale_status_labels(active_task),
         on_label_added=on_requeue_applied,
     )
-    config.resolved_forge.add_comment(active.issue_number, comment)
+    config.resolved_forge.add_comment(active.core.issue_number, comment)
 
 
 def _apply_backoff_retry(
@@ -534,7 +538,7 @@ def _apply_backoff_retry(
     prefix, max_retries, total_allowed, backoff, reason, action = spec
     res = _reserve_backoff_retry(
         run_state,
-        active.issue_number,
+        active.core.issue_number,
         now,
         f"{prefix}_count",
         f"{prefix}_at",
@@ -573,10 +577,10 @@ def _apply_early_death_retry(
 ) -> dict | None:
     """起動直後・コミットなし終了を指数バックオフ付きで再投入する。"""
     if (
-        active.owner_kind == "interactive"
-        or active.external_id is not None
-        or active.started_at is None
-        or not 0 <= now - active.started_at <= config.early_death_window_seconds
+        active.claim.owner_kind == "interactive"
+        or active.launch.external_id is not None
+        or active.launch.started_at is None
+        or not 0 <= now - active.launch.started_at <= config.early_death_window_seconds
     ):
         return None
     spec = (
@@ -602,7 +606,7 @@ def _apply_review_timeout_retry(
     on_requeue_applied: Callable[[], None] | None = None,
 ) -> dict | None:
     """AIレビュー待機タイムアウトを指数バックオフ付きで再投入する。"""
-    if active.owner_kind == "interactive":
+    if active.claim.owner_kind == "interactive":
         return None
     spec = (
         "review_timeout_retry",
@@ -644,42 +648,39 @@ def _apply_token_limit_escalation(
 
 def _apply_done_worktree_cleanup(ctx: _CompletionContext) -> str | None:
     commit_sha = None
-    if ctx.active.external_id is None:
-        try:
+    if ctx.active.launch.external_id is None:
+        with contextlib.suppress(Exception):
             commit_sha = run_git(
-                ["rev-parse", "HEAD"], cwd=ctx.active.worktree_path, check=True
+                ["rev-parse", "HEAD"], cwd=ctx.active.core.worktree_path, check=True
             ).stdout.strip()
-        except Exception:
-            pass
-    remove_worktree(ctx.active.worktree_path)
+    remove_worktree(ctx.active.core.worktree_path)
     transition_status_label(
         ctx.config.resolved_forge,
-        ctx.active.issue_number,
+        ctx.active.core.issue_number,
         StatusLabel.DONE,
         _stale_status_labels(ctx.active_task),
     )
     return commit_sha
 
 
+_BLOCKED_ACTION_HANDLERS = {
+    "completed_without_outcome": lambda ctx, _: _apply_without_outcome_escalation(ctx),
+    "blocked_base_branch_red": _apply_blocked_base_branch_red,
+    "escalated_base_branch_red": _apply_escalated_base_branch_red,
+    "blocked_review_timeout": _apply_blocked_review_timeout_hold,
+    "escalated_review_timeout": _apply_escalated_review_timeout,
+    "blocked_unknown_reason": _apply_blocked_unknown_reason,
+}
+
+
 def _dispatch_terminal_or_blocked_action(
     ctx: _CompletionContext, decision: CompletedWorktreeDecision
 ) -> bool:
-    action = decision.action
-    if action == "completed_without_outcome":
-        _apply_without_outcome_escalation(ctx)
-    elif action == "blocked_base_branch_red":
-        _apply_blocked_base_branch_red(ctx, decision)
-    elif action == "escalated_base_branch_red":
-        _apply_escalated_base_branch_red(ctx, decision)
-    elif action == "blocked_review_timeout":
-        _apply_blocked_review_timeout_hold(ctx, decision)
-    elif action == "escalated_review_timeout":
-        _apply_escalated_review_timeout(ctx, decision)
-    elif action == "blocked_unknown_reason":
-        _apply_blocked_unknown_reason(ctx, decision)
-    else:
-        return False
-    return True
+    handler = _BLOCKED_ACTION_HANDLERS.get(decision.action)
+    if handler is not None:
+        handler(ctx, decision)
+        return True
+    return False
 
 
 def _handle_special_retry(
@@ -735,14 +736,16 @@ def _check_token_limit_exceeded(
     decision: CompletedWorktreeDecision,
     event: dict,
 ) -> bool:
-    if token_limit_decision(ctx.config.max_tokens_per_task, usage) == "exceeded":
-        assert isinstance(usage, Usage)
-        _apply_token_limit_escalation(ctx.active, ctx.config, usage)
-        event["action"] = "escalated_token_limit_exceeded"
-        event["subtask_id"] = decision.subtask_id
-        event["commit_sha"] = None
-        return True
-    return False
+    if token_limit_decision(ctx.config.max_tokens_per_task, usage) != "exceeded":
+        return False
+    assert isinstance(usage, Usage)
+    _apply_token_limit_escalation(ctx.active, ctx.config, usage)
+    event.update(
+        action="escalated_token_limit_exceeded",
+        subtask_id=decision.subtask_id,
+        commit_sha=None,
+    )
+    return True
 
 
 def _is_completion_hold(decision: CompletedWorktreeDecision, event: dict) -> bool:
@@ -761,8 +764,8 @@ def _apply_completed_decision(
 ) -> dict:
     usage = _collect_completed_usage(ctx.active, ctx.config)
     event: dict = {
-        "issue_number": ctx.active.issue_number,
-        "worktree_path": ctx.active.worktree_path,
+        "issue_number": ctx.active.core.issue_number,
+        "worktree_path": ctx.active.core.worktree_path,
         "action": decision.action,
     }
     if isinstance(usage, Usage):
@@ -854,13 +857,12 @@ def _finalize_completed_worktree(
 def _collect_completed_usage(
     active: ActiveWorktree, config: DispatcherConfig
 ) -> Usage | None:
-    if config.dispatch_target is None:
-        return None
-    return config.dispatch_target.collect_usage(_active_dispatch_handle(active))
+    target = config.dispatch_target
+    return target.collect_usage(_active_dispatch_handle(active)) if target else None
 
 
 def _decide_not_needed_dirty_worktree(active: ActiveWorktree) -> bool:
-    return worktree_has_uncommitted_changes(active.worktree_path)
+    return worktree_has_uncommitted_changes(active.core.worktree_path)
 
 
 def _finalize_not_needed_worktree(
@@ -871,42 +873,43 @@ def _finalize_not_needed_worktree(
 ) -> dict:
     subtask_id = active_task.subtask_id if active_task else ""
     event: dict = {
-        "issue_number": active.issue_number,
+        "issue_number": active.core.issue_number,
         "subtask_id": subtask_id,
-        "worktree_path": active.worktree_path,
+        "worktree_path": active.core.worktree_path,
     }
     if _decide_not_needed_dirty_worktree(active) and not _is_handoff_ready(active):
         event["action"] = "completion_skipped_dirty_worktree"
         return event
+    event["action"] = "not_needed"
     if not config.apply:
-        event["action"] = "not_needed"
         return event
-    if not worktree_has_uncommitted_changes(active.worktree_path):
-        remove_worktree(active.worktree_path)
-    config.resolved_forge.remove_label(active.issue_number, StatusLabel.IN_PROGRESS)
-    if isinstance(config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
-        if dispatch_not_needed_review is None:
-            raise RuntimeError("not-needed review dispatcher is not configured")
-        dispatch_not_needed_review(active.issue_number, subtask_id, config)
-        event["action"] = "not_needed_review_dispatched"
-    else:
+    if not worktree_has_uncommitted_changes(active.core.worktree_path):
+        remove_worktree(active.core.worktree_path)
+    config.resolved_forge.remove_label(
+        active.core.issue_number, StatusLabel.IN_PROGRESS
+    )
+    if not isinstance(config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
         config.resolved_forge.close_issue(
-            active.issue_number,
+            active.core.issue_number,
             "not planned",
             comment="対応不要（status:not-needed）と判定されたため、Orchestuneが自動的にクローズしました。",
         )
-        event["action"] = "not_needed"
+        return event
+    if dispatch_not_needed_review is None:
+        raise RuntimeError("not-needed review dispatcher is not configured")
+    dispatch_not_needed_review(active.core.issue_number, subtask_id, config)
+    event["action"] = "not_needed_review_dispatched"
     return event
 
 
 def _active_dispatch_handle(active: ActiveWorktree) -> DispatchHandle:
     return DispatchHandle(
-        pid=active.pid,
-        external_id=active.external_id,
-        external_url=active.external_url,
-        branch_name=active.branch,
-        issue_number=active.issue_number,
-        started_at=active.started_at,
+        pid=active.launch.pid,
+        external_id=active.launch.external_id,
+        external_url=active.launch.external_url,
+        branch_name=active.core.branch,
+        issue_number=active.core.issue_number,
+        started_at=active.launch.started_at,
     )
 
 
@@ -920,13 +923,11 @@ def _parse_github_timestamp(value: str) -> float | None:
 
 
 def _is_stale_pr_for_active(pr: PrRecord, active: ActiveWorktree) -> bool:
-    if active.started_at is None:
+    if active.launch.started_at is None:
         return False
     ts_str = pr.closed_at if pr.state == "CLOSED" else pr.created_at
-    if not ts_str:
-        return False
-    ts = _parse_github_timestamp(ts_str)
-    return ts is not None and ts < math.floor(active.started_at)
+    ts = _parse_github_timestamp(ts_str) if ts_str else None
+    return ts is not None and ts < math.floor(active.launch.started_at)
 
 
 def _local_pr_completion_status(
@@ -944,7 +945,7 @@ def _local_pr_completion_status(
     try:
         candidate_prs = config.resolved_forge.list_prs(state="all")
     except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
-        warn_forge_failure("list_prs", active.issue_number, error, error_sink)
+        warn_forge_failure("list_prs", active.core.issue_number, error, error_sink)
         return "unknown"
     matching_prs = [
         pr
@@ -958,12 +959,13 @@ def _local_pr_completion_status(
         )
         and not _is_stale_pr_for_active(pr, active)
     ]
-    if any(pr.state == "MERGED" for pr in matching_prs):
-        return "completed"
-    if any(pr.state == "OPEN" for pr in matching_prs):
-        return "pending"
-    if any(pr.state == "CLOSED" for pr in matching_prs):
-        return "abandoned"
+    for state, status in (
+        ("MERGED", "completed"),
+        ("OPEN", "pending"),
+        ("CLOSED", "abandoned"),
+    ):
+        if any(pr.state == state for pr in matching_prs):
+            return status
     return "pending"
 
 
@@ -989,7 +991,9 @@ def _cloud_worktree_completion_status(
             handle, forge=config.resolved_forge
         )
     except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
-        warn_forge_failure("completion_status", active.issue_number, error, error_sink)
+        warn_forge_failure(
+            "completion_status", active.core.issue_number, error, error_sink
+        )
         return "unknown"
     if isinstance(status, str):
         return status
@@ -1007,9 +1011,7 @@ def _reserve_cloud_reclaim_record(
     count = (
         1
         if previous is None
-        else previous.count
-        if previous.pending
-        else previous.count + 1
+        else (previous.count if previous.pending else previous.count + 1)
     )
     run_state.task_reclaim_counts[issue_number] = TaskReclaimRecord(
         count=count, last_reclaimed_at=time.time(), pending=True
@@ -1033,7 +1035,7 @@ def _handle_abandoned_cloud_reclaim(
     reclaim_count: int,
     on_settle: Callable[[], None],
 ) -> str:
-    remove_worktree(active.worktree_path)
+    remove_worktree(active.core.worktree_path)
     if exceeds_limit(reclaim_count, config.max_task_reclaims):
         msg = (
             "タスクのPRがクローズされたか、Cloudタスクの失敗により回収を行いました。\n"
@@ -1042,7 +1044,7 @@ def _handle_abandoned_cloud_reclaim(
             "status:blocked-human-reviewへ遷移しました。\nタスクの実装方針や実行環境を確認してください。"
         )
         apply_human_review_escalation(
-            active.issue_number,
+            active.core.issue_number,
             status_labels,
             msg,
             forge=config.resolved_forge,
@@ -1054,20 +1056,20 @@ def _handle_abandoned_cloud_reclaim(
     )
     transition_status_label(
         config.resolved_forge,
-        active.issue_number,
+        active.core.issue_number,
         StatusLabel.QUEUED,
         stale_labels,
         on_label_added=on_settle,
     )
     try:
         config.resolved_forge.add_comment(
-            active.issue_number,
+            active.core.issue_number,
             "タスクのPRがマージされずにクローズされたか、Cloudタスクが終了したため、完了扱いにはせず、"
             f"GCによりタスクを再キューイング（status:queued）しました（回収{reclaim_count}回目 / 上限{config.max_task_reclaims}回）。",
         )
     except Exception as e:
         print(
-            f"Warning: requeued issue #{active.issue_number} but failed to post comment: {e}",
+            f"Warning: requeued issue #{active.core.issue_number} but failed to post comment: {e}",
             file=sys.stderr,
         )
     return "abandoned_pr_requeued"
@@ -1083,11 +1085,11 @@ def _finalize_abandoned_cloud_worktree(
 ) -> dict:
     subtask_id = active_task.subtask_id if active_task else ""
     event = {
-        "issue_number": active.issue_number,
+        "issue_number": active.core.issue_number,
         "subtask_id": subtask_id,
-        "worktree_path": active.worktree_path,
+        "worktree_path": active.core.worktree_path,
     }
-    if worktree_has_uncommitted_changes(active.worktree_path):
+    if worktree_has_uncommitted_changes(active.core.worktree_path):
         event["action"] = "completion_skipped_dirty_worktree"
         return event
     if not config.apply:
@@ -1098,9 +1100,9 @@ def _finalize_abandoned_cloud_worktree(
         active_task.status_labels if active_task else (StatusLabel.IN_PROGRESS,)
     )
     if any(label in status_labels for label in TERMINAL_ESCALATION_LABELS):
-        remove_worktree(active.worktree_path)
+        remove_worktree(active.core.worktree_path)
         config.resolved_forge.add_comment(
-            active.issue_number,
+            active.core.issue_number,
             "タスクのPRがマージされずにクローズされたためworktreeを回収しました。"
             "既に人間の確認が必要な状態のため、status:*ラベルは変更していません。",
         )
@@ -1108,12 +1110,12 @@ def _finalize_abandoned_cloud_worktree(
         return event
 
     reclaim_count = _reserve_cloud_reclaim_record(
-        active.issue_number, run_state, on_reclaim_reserved=on_reclaim_reserved
+        active.core.issue_number, run_state, on_reclaim_reserved=on_reclaim_reserved
     )
 
     def _settle_reclaim() -> None:
         if run_state is not None:
-            rec = run_state.task_reclaim_counts.get(active.issue_number)
+            rec = run_state.task_reclaim_counts.get(active.core.issue_number)
             if rec is not None:
                 rec.pending = False
         if on_label_applied is not None:
@@ -1128,19 +1130,26 @@ def _finalize_abandoned_cloud_worktree(
 def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> bool:
     if _is_handoff_ready(active):
         return True
-    if active.completion_id is not None:
+    if (
+        lifecycle(active)
+        in (
+            ActiveWorktreeLifecycle.COMPLETING,
+            ActiveWorktreeLifecycle.HANDOFF_READY,
+        )
+        or active.claim.owner_kind == "interactive"
+    ):
         return False
-    if active.owner_kind == "interactive":
-        return False
-    if active.external_id is not None:
+    if active.launch.external_id is not None:
         assert config.dispatch_target is not None
         handle = _active_dispatch_handle(active)
         status = config.dispatch_target.completion_status(
             handle, forge=config.resolved_forge
         )
-        if isinstance(status, str):
-            return status == "completed"
-        return _call_is_complete(config, handle)
-    if active.started_at is None:
+        return (
+            status == "completed"
+            if isinstance(status, str)
+            else _call_is_complete(config, handle)
+        )
+    if active.launch.started_at is None:
         return False
-    return not is_process_alive(active.pid)
+    return not is_process_alive(active.launch.pid)

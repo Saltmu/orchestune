@@ -1,17 +1,25 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.infra.git_cli import run_git
+from orchestune.ledger.active_codec import encode_active_worktree
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord
 from orchestune.worktree_ops.claim_marker import claim_marker_path, write_claim_marker
+from tests.dispatch_test_support import replace_flat
 
 
 class FakeHandoffForge:
@@ -92,30 +100,38 @@ def _make_active(
         "created_at": "2026-09-25T00:00:00Z",
         "body": outcome.render(),
     }
-    active = ActiveWorktree(
-        issue_number=250,
-        branch=branch,
-        worktree_path=str(worktree),
-        pid=None,
-        started_at=1.0,
-        declared_footprint=(),
-        owner_kind="interactive",
-        claim_id=claim_id,
-        claim_stage="completed",
-        base_ref="origin/main",
-        base_branch="main",
-        reservation_kind="repository",
-        claimed_at=1.0,
-        base_sha=head_sha,
-        owner_token_digest="d" * 64,
-        repository_id=workspace.repository_identity,
-        completion_id=completion_id,
-        completion_result="done",
-        completion_stage="handed_off",
-        completion_payload={"outcome": outcome.render()},
-        completion_comment_id=comment_id,
-        completion_comment_url=comment_url,
-        completion_handoff_ready=True,
+    active = ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=250,
+            branch=branch,
+            worktree_path=str(worktree),
+            declared_footprint=(),
+            base_branch="main",
+        ),
+        launch=LaunchInfo(
+            pid=None,
+            started_at=1.0,
+        ),
+        claim=ClaimInfo(
+            owner_kind="interactive",
+            claim_id=claim_id,
+            claim_stage="completed",
+            base_ref="origin/main",
+            reservation_kind="repository",
+            claimed_at=1.0,
+            base_sha=head_sha,
+            owner_token_digest="d" * 64,
+            repository_id=workspace.repository_identity,
+        ),
+        completion=ActiveCompletionJournal(
+            completion_id=completion_id,
+            completion_result="done",
+            completion_stage="handed_off",
+            completion_payload={"outcome": outcome.render()},
+            completion_comment_id=comment_id,
+            completion_comment_url=comment_url,
+            completion_handoff_ready=True,
+        ),
     )
     write_claim_marker(
         worktree,
@@ -128,8 +144,8 @@ def _make_active(
 
 
 def _head_sha(active: ActiveWorktree) -> str:
-    assert active.base_sha is not None
-    return active.base_sha
+    assert active.claim.base_sha is not None
+    return active.claim.base_sha
 
 
 def _forge(comment: dict, branch: str, head_sha: str) -> FakeHandoffForge:
@@ -147,30 +163,46 @@ def _forge(comment: dict, branch: str, head_sha: str) -> FakeHandoffForge:
     return FakeHandoffForge(comment, pr)
 
 
+def _flat_dict(active: ActiveWorktree) -> dict[str, Any]:
+    """Persisted flat record for ``active`` (null policy config kept, as ``asdict`` did)."""
+    record = encode_active_worktree(active)
+    record.setdefault("completion_policy_config", None)
+    return record
+
+
 def _write_state(repo: Path, active: ActiveWorktree) -> Path:
-    running = ActiveWorktree(
-        issue_number=251,
-        branch="claude/issue-251-running",
-        worktree_path=str(repo / "worktrees" / "issue-251"),
-        pid=123,
-        started_at=2.0,
-        declared_footprint=("orchestune/example.py",),
-        owner_kind="dispatch",
-        claim_id="claim-251",
-        claim_stage="completed",
-        base_ref="origin/main",
-        reservation_kind="footprint",
-        repository_id=resolve_claim_workspace(repo).repository_identity,
-        claimed_at=2.0,
-        base_sha=None,
-        owner_token_digest="e" * 64,
-        completion_id="completion-251",
-        completion_result="done",
-        completion_stage="handed_off_to_gc",
-        completion_handoff_ready=True,
+    running = ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=251,
+            branch="claude/issue-251-running",
+            worktree_path=str(repo / "worktrees" / "issue-251"),
+            declared_footprint=("orchestune/example.py",),
+            base_branch="origin/main",
+        ),
+        launch=LaunchInfo(
+            pid=123,
+            started_at=2.0,
+        ),
+        claim=ClaimInfo(
+            owner_kind="dispatch",
+            claim_id="claim-251",
+            claim_stage="completed",
+            base_ref="origin/main",
+            reservation_kind="footprint",
+            repository_id=resolve_claim_workspace(repo).repository_identity,
+            claimed_at=2.0,
+            base_sha=None,
+            owner_token_digest="e" * 64,
+        ),
+        completion=ActiveCompletionJournal(
+            completion_id="completion-251",
+            completion_result="done",
+            completion_stage="handed_off_to_gc",
+            completion_handoff_ready=True,
+        ),
     )
     state = {
-        "active_worktrees": {"250": asdict(active), "251": asdict(running)},
+        "active_worktrees": {"250": _flat_dict(active), "251": _flat_dict(running)},
         "launch_history": [1.0, 2.0],
         "completed_worktrees": [],
         "task_reclaim_counts": {"251": {"count": 3, "last_reclaimed_at": 2.0}},
@@ -184,6 +216,8 @@ def _write_state(repo: Path, active: ActiveWorktree) -> Path:
 
 
 def _confirmed_contract_fields(active: ActiveWorktree) -> dict:
+    from collections.abc import Mapping
+
     from orchestune.complete.contracts import CompleteStage
     from orchestune.complete.journal import (
         CompletionJournalRecord,
@@ -191,25 +225,28 @@ def _confirmed_contract_fields(active: ActiveWorktree) -> dict:
     )
     from orchestune.outcome_record import parse_from_comments
 
+    completion = active.completion
+    claim = active.claim
+    core = active.core
     if (
-        not active.completion_comment_id
-        or not isinstance(active.completion_payload, dict)
-        or not active.completion_payload.get("outcome")
+        not completion.completion_comment_id
+        or not isinstance(completion.completion_payload, Mapping)
+        or not completion.completion_payload.get("outcome")
     ):
         return {}
-    outcome = parse_from_comments([{"body": active.completion_payload["outcome"]}])
+    outcome = parse_from_comments([{"body": completion.completion_payload["outcome"]}])
     assert outcome is not None
-    assert active.repository_id and active.claim_id and active.completion_id
-    assert active.owner_token_digest and active.completion_result
+    assert claim.repository_id and claim.claim_id and completion.completion_id
+    assert claim.owner_token_digest and completion.completion_result
     record = CompletionJournalRecord(
-        repository_id=active.repository_id,
-        issue_number=active.issue_number,
-        generation_id=active.claim_id,
-        completion_id=active.completion_id,
-        owner_token_digest=active.owner_token_digest,
+        repository_id=claim.repository_id,
+        issue_number=core.issue_number,
+        generation_id=claim.claim_id,
+        completion_id=completion.completion_id,
+        owner_token_digest=claim.owner_token_digest,
         request_fingerprint="f" * 64,
-        result=active.completion_result,
-        target_label=f"status:{active.completion_result}",
+        result=completion.completion_result,
+        target_label=f"status:{completion.completion_result}",
         outcome_payload={
             "issue": outcome.issue,
             "result": outcome.result,
@@ -218,16 +255,16 @@ def _confirmed_contract_fields(active: ActiveWorktree) -> dict:
         stage=CompleteStage.HANDED_OFF,
         prepublication_policy_evidence={
             "decision": "allowed",
-            "context": {"active": asdict(active)},
+            "context": {"active": _flat_dict(active)},
         },
         posting_evidence={
-            "comment_id": active.completion_comment_id,
-            "comment_url": active.completion_comment_url,
+            "comment_id": completion.completion_comment_id,
+            "comment_url": completion.completion_comment_url,
         },
         label_evidence={
             "status": "confirmed",
-            "target_label": f"status:{active.completion_result}",
-            "observed_labels": [f"status:{active.completion_result}"],
+            "target_label": f"status:{completion.completion_result}",
+            "observed_labels": [f"status:{completion.completion_result}"],
         },
     )
     return {
@@ -354,12 +391,15 @@ def test_apply_releases_non_done_without_receipt_and_preserves_dirty_worktree(
         result=result_name,
         issue=250,
         reason=reason,
-        claim_id=active.claim_id,
+        claim_id=active.claim.claim_id,
         head_sha=head_sha,
-        completion_id=active.completion_id,
+        completion_id=active.completion.completion_id,
     ).render()
-    active.completion_result = result_name
-    active.completion_payload = {"outcome": comment["body"]}
+    active = replace_flat(
+        active,
+        completion_result=result_name,
+        completion_payload={"outcome": comment["body"]},
+    )
     if dirty:
         (worktree / "README.md").write_text("keep this work\n", encoding="utf-8")
     state_path = _write_state(repo, active)
@@ -648,8 +688,11 @@ def test_no_interactive_handoff_targets_do_not_construct_forge_or_rewrite_state(
 
     repo, worktree, branch = _create_repo(tmp_path)
     active, _ = _make_active(repo, worktree, branch)
-    active.completion_handoff_ready = False
-    active.completion_stage = "journaling"
+    active = replace_flat(
+        active,
+        completion_handoff_ready=False,
+        completion_stage="journaling",
+    )
     state_path = _write_state(repo, active)
     before = state_path.read_bytes()
     monkeypatch.chdir(repo)

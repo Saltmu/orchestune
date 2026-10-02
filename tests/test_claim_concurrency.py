@@ -19,6 +19,7 @@ from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import ActiveWorktree, RunState, load_run_state
 from orchestune.models import IssueRecord
 from tests.claim_helpers import MockForge
+from tests.dispatch_test_support import make_test_active_worktree
 
 pytestmark = pytest.mark.integration
 _PROCESS_TIMEOUT = 60
@@ -275,7 +276,7 @@ def _active(issue_number: int, **overrides: Any) -> ActiveWorktree:
         "forced_serial": False,
     }
     values.update(overrides)
-    return ActiveWorktree(**values)
+    return make_test_active_worktree(**values)
 
 
 def test_claim_claim_same_issue_has_exactly_one_owner(
@@ -303,7 +304,7 @@ def test_claim_dispatch_same_issue_has_exactly_one_owner(
 
     assert sum(item["success"] for item in results) == 1
     state = load_run_state(claim_env["state_path"])
-    assert state.active_worktrees["102"].owner_kind in {"interactive", "dispatch"}
+    assert state.active_worktrees["102"].claim.owner_kind in {"interactive", "dispatch"}
 
 
 def test_claim_dispatch_overlapping_footprints_have_exactly_one_owner(
@@ -463,4 +464,4 @@ def test_interactive_claim_stays_active_after_owning_process_exits(
     assert [
         item["issue_number"] for item in list_unattended_interactive_claims(state)
     ] == [108]
-    assert state.active_worktrees["108"].owner_kind == "interactive"
+    assert state.active_worktrees["108"].claim.owner_kind == "interactive"

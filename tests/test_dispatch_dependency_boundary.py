@@ -238,3 +238,14 @@ def test_argparse_private_registry_has_a_line_local_reasoned_noqa() -> None:
 
     assert "# noqa: SLF001" in action_line
     assert "argparse" in action_line
+
+
+def test_dispatch_does_not_import_active_codec() -> None:
+    from architecture_test_support import _import_graph
+
+    graph = _import_graph()
+    for name, deps in graph.items():
+        if name.startswith("dispatch.") or name == "dispatch":
+            assert (
+                "ledger.active_codec" not in deps
+            ), f"{name} imports ledger.active_codec"

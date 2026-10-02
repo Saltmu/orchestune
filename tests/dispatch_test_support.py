@@ -13,8 +13,9 @@
 from __future__ import annotations
 
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import ExitStack, contextmanager
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -25,6 +26,13 @@ from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.rules import CycleContext
 from orchestune.forge import Forge
 from orchestune.infra.process_utils import run_state_lock
+from orchestune.ledger.active_codec import _ACTIVE_FIELD_NAMES
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import ActiveWorktree, RunState, save_run_state
 from orchestune.models import IssueRecord, Task
 from tests.conftest import make_issue
@@ -104,6 +112,45 @@ def make_test_task(issue_number: int = 1, **overrides: Any) -> Task:
     return Task(**values)
 
 
+def _is_json_value(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return all(
+            isinstance(key, str) and _is_json_value(item) for key, item in value.items()
+        )
+    if isinstance(value, list | tuple):
+        return all(_is_json_value(item) for item in value)
+    return value is None or isinstance(value, str | bool | int | float)
+
+
+# Mirror the canonical shape checks in ActiveWorktree.from_records. Keep these
+# aligned so only malformed reader fixtures bypass the nested factory.
+def _has_canonical_active_worktree_shape(values: dict[str, Any]) -> bool:
+    issue_number = values["issue_number"]
+    core_is_valid = (
+        isinstance(issue_number, int)
+        and not isinstance(issue_number, bool)
+        and issue_number > 0
+        and all(
+            isinstance(value, str)
+            for value in (
+                values["branch"],
+                values["worktree_path"],
+                values.get("base_branch", "origin/main"),
+            )
+        )
+        and isinstance(values["declared_footprint"], tuple | list)
+        and all(isinstance(path, str) for path in values["declared_footprint"])
+    )
+    completion_is_valid = all(
+        value is None or (isinstance(value, Mapping) and _is_json_value(value))
+        for value in (
+            values.get("completion_payload"),
+            values.get("completion_policy_config"),
+        )
+    )
+    return core_is_valid and completion_is_valid
+
+
 def make_test_active_worktree(
     issue_number: int = 1, **overrides: Any
 ) -> ActiveWorktree:
@@ -121,7 +168,128 @@ def make_test_active_worktree(
         "declared_footprint": (),
     }
     values.update(overrides)
-    return ActiveWorktree(**values)
+    unknown = sorted(set(values) - set(_ACTIVE_FIELD_NAMES))
+    if unknown:
+        raise TypeError(
+            "ActiveWorktree.__init__() got an unexpected keyword argument "
+            f"{unknown[0]!r}"
+        )
+    return _active_worktree_from_flat(
+        values, validate=_has_canonical_active_worktree_shape(values)
+    )
+
+
+def flat_active_worktree(*args: Any, **values: Any) -> ActiveWorktree:
+    """Build an ActiveWorktree from the pre-cutover flat constructor arguments.
+
+    Test-only adapter for fixtures that still describe an entry with the legacy
+    flat field list (positional order included). It does not exist on the model:
+    production code constructs ActiveWorktree from ``core`` and subrecords.
+    """
+    if len(args) > len(_ACTIVE_FIELD_NAMES):
+        raise TypeError("too many positional arguments for flat ActiveWorktree")
+    for name, value in zip(_ACTIVE_FIELD_NAMES, args, strict=False):
+        if name in values:
+            raise TypeError(f"flat ActiveWorktree got multiple values for {name!r}")
+        values[name] = value
+    values.setdefault("pid", None)
+    values.setdefault("started_at", None)
+    unknown = sorted(set(values) - set(_ACTIVE_FIELD_NAMES))
+    if unknown:
+        raise TypeError(
+            "flat ActiveWorktree got an unexpected keyword argument " f"{unknown[0]!r}"
+        )
+    return _active_worktree_from_flat(values, validate=False)
+
+
+def replace_flat(active: ActiveWorktree, **values: Any) -> ActiveWorktree:
+    """Copy ``active`` with legacy flat field names routed to their subrecords."""
+    groups = {
+        "core": ActiveWorktreeCore,
+        "launch": LaunchInfo,
+        "claim": ClaimInfo,
+        "completion": ActiveCompletionJournal,
+    }
+    changes: dict[str, dict[str, Any]] = {name: {} for name in groups}
+    for key, value in values.items():
+        for name, record_type in groups.items():
+            if key in {item.name for item in fields(record_type)}:
+                changes[name][key] = value
+                break
+        else:
+            raise TypeError(f"unknown ActiveWorktree field {key!r}")
+    return ActiveWorktree(
+        **{name: replace(getattr(active, name), **changes[name]) for name in groups}
+    )
+
+
+def _active_worktree_from_flat(
+    values: dict[str, Any], *, validate: bool
+) -> ActiveWorktree:
+    """Distribute flat field values onto the nested records.
+
+    Some reader tests deliberately need malformed legacy records, so only
+    canonical values go through ``from_records`` validation.
+    """
+    core = ActiveWorktreeCore(
+        issue_number=values["issue_number"],
+        branch=values["branch"],
+        worktree_path=values["worktree_path"],
+        declared_footprint=tuple(values["declared_footprint"]),
+        base_branch=values.get("base_branch", "origin/main"),
+    )
+    launch = LaunchInfo(
+        pid=values.get("pid"),
+        started_at=values.get("started_at"),
+        recompute_count=values.get("recompute_count", 0),
+        forced_serial=values.get("forced_serial", False),
+        external_id=values.get("external_id"),
+        external_url=values.get("external_url"),
+        estimated_tokens=values.get("estimated_tokens"),
+        token_estimate_recorded=values.get("token_estimate_recorded", False),
+        profile=values.get("profile"),
+        model=values.get("model"),
+        reasoning_effort=values.get("reasoning_effort"),
+        selection_reason=values.get("selection_reason"),
+        launch_attempt_id=values.get("launch_attempt_id"),
+        launch_phase=values.get("launch_phase"),
+        _legacy=True,
+    )
+    claim = ClaimInfo(
+        owner_kind=values.get("owner_kind", "dispatch"),
+        claim_id=values.get("claim_id"),
+        claim_stage=values.get("claim_stage"),
+        base_ref=values.get("base_ref"),
+        base_sha=values.get("base_sha"),
+        reservation_kind=values.get("reservation_kind", "footprint"),
+        repository_id=values.get("repository_id"),
+        claimed_at=values.get("claimed_at"),
+        owner_token_digest=values.get("owner_token_digest"),
+        _legacy=True,
+    )
+    completion = ActiveCompletionJournal(
+        completion_id=values.get("completion_id"),
+        completion_result=values.get("completion_result"),
+        completion_stage=values.get("completion_stage"),
+        completion_payload=values.get("completion_payload"),
+        completion_comment_id=values.get("completion_comment_id"),
+        completion_comment_url=values.get("completion_comment_url"),
+        completion_handoff_ready=values.get("completion_handoff_ready", False),
+        completion_policy_config=values.get("completion_policy_config"),
+        _legacy=True,
+    )
+    if validate:
+        try:
+            launch.validate()
+            claim.validate()
+            completion.validate()
+        except ValueError:
+            validate = False
+    if validate:
+        return ActiveWorktree.from_records(
+            core=core, launch=launch, claim=claim, completion=completion
+        )
+    return ActiveWorktree(core=core, launch=launch, claim=claim, completion=completion)
 
 
 def make_test_cycle_context(

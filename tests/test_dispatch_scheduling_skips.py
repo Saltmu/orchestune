@@ -22,10 +22,13 @@ from orchestune.dispatch.summary import (
     REASON_REVIEW_TIMEOUT_BACKOFF,
     merge_skips,
 )
-from orchestune.ledger.run_state import ActiveWorktree, RunState, TaskReclaimRecord
+from orchestune.ledger.run_state import RunState, TaskReclaimRecord
 from orchestune.models import Task
 from orchestune.task_metadata import CycleTask
-from tests.dispatch_test_support import make_test_cycle_context
+from tests.dispatch_test_support import (
+    make_test_active_worktree,
+    make_test_cycle_context,
+)
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
@@ -320,7 +323,7 @@ class TestInProgressTasksAreNotSkipCandidates:
         task = _task(issue_number=5, status_labels=("status:external-lock",))
         run_state = RunState(
             active_worktrees={
-                "5": ActiveWorktree(
+                "5": make_test_active_worktree(
                     issue_number=5,
                     branch="claude/issue-5-task-a",
                     worktree_path="worktrees/w5",

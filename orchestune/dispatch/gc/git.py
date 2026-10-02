@@ -270,9 +270,11 @@ def _resolve_target_info(
     branch: str | None
     claim_id: str | None
     if active is not None:
-        target_path = Path(active.worktree_path)
-        branch = active.branch if expected_branch is None else expected_branch
-        claim_id = active.claim_id if expected_claim_id is None else expected_claim_id
+        target_path = Path(active.core.worktree_path)
+        branch = active.core.branch if expected_branch is None else expected_branch
+        claim_id = (
+            active.claim.claim_id if expected_claim_id is None else expected_claim_id
+        )
     elif worktree_path is not None:
         target_path = Path(worktree_path)
         branch = expected_branch

@@ -117,7 +117,7 @@ def _planned_reclaims(
     now: float | None,
 ) -> dict[str, ZombieOrTimeoutReclaim]:
     active_by_subject = {
-        str(active.issue_number): (key, replace(active))
+        str(active.core.issue_number): (key, replace(active))
         for key, active in run_state.active_worktrees.items()
     }
     observed_at = time.time() if now is None else now
@@ -133,7 +133,7 @@ def _planned_reclaims(
         for command in commands
     )
     return {
-        str(reclaim.active.issue_number): reclaim
+        str(reclaim.active.core.issue_number): reclaim
         for reclaim in planned
         if reclaim is not None
     }
@@ -156,7 +156,7 @@ def _reclaim_handler(
                 status=RepairStatus.SKIPPED,
                 diagnostics=("no planned GC reclaim matches the typed command",),
             )
-        if not config.apply and reclaim.active.worktree_path not in held_paths:
+        if not config.apply and reclaim.active.core.worktree_path not in held_paths:
             events.append(_preview_reclaim_event(reclaim))
         return execute_reclaim_repair_command(
             command,
@@ -186,7 +186,7 @@ def _stale_active_entry(
         (
             (key, active)
             for key, active in run_state.active_worktrees.items()
-            if str(active.issue_number) == command.subject_id
+            if str(active.core.issue_number) == command.subject_id
         ),
         None,
     )
@@ -196,7 +196,7 @@ def _stale_discard_event(
     active: ActiveWorktree, task: TaskMetadata, reason: str
 ) -> dict:
     return {
-        "issue_number": active.issue_number,
+        "issue_number": active.core.issue_number,
         "subtask_id": task.subtask_id,
         "action": "stale_active_entry_discarded",
         "reason": reason,
@@ -214,7 +214,7 @@ def _execute_stale_reclaim(
     if resolved is None:
         return None
     key, active = resolved
-    task = tasks_by_issue.get(active.issue_number)
+    task = tasks_by_issue.get(active.core.issue_number)
     if task is None:
         return RepairResult(
             command=command,
@@ -222,8 +222,10 @@ def _execute_stale_reclaim(
             diagnostics=("stale cleanup subject is not an observed task",),
         )
 
-    issue_state = config.resolved_forge.get_issue_state(active.issue_number)
-    live_labels = tuple(config.resolved_forge.get_issue_labels(active.issue_number))
+    issue_state = config.resolved_forge.get_issue_state(active.core.issue_number)
+    live_labels = tuple(
+        config.resolved_forge.get_issue_labels(active.core.issue_number)
+    )
     if issue_state.upper() == "OPEN" and StatusLabel.IN_PROGRESS in live_labels:
         return RepairResult(
             command=command,
@@ -266,12 +268,12 @@ def _check_interactive_exclusion(
         (
             (k, a)
             for k, a in run_state.active_worktrees.items()
-            if str(a.issue_number) == subject_id
+            if str(a.core.issue_number) == subject_id
         ),
         None,
     )
-    if active_entry is not None and active_entry[1].owner_kind == "interactive":
-        task = tasks_by_issue.get(active_entry[1].issue_number)
+    if active_entry is not None and active_entry[1].claim.owner_kind == "interactive":
+        task = tasks_by_issue.get(active_entry[1].core.issue_number)
         events.append(build_interactive_exclusion_event(active_entry[1], task))
         return RepairResult(
             command=command,

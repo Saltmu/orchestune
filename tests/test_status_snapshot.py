@@ -11,7 +11,7 @@ import os
 import pytest
 
 import orchestune.status_snapshot as status_snapshot_module
-from orchestune.ledger.run_state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.status_snapshot import (
     MonitorState,
     StatusSnapshot,
@@ -24,6 +24,7 @@ from orchestune.status_snapshot import (
     build_status_snapshot,
     format_status_report,
 )
+from tests.dispatch_test_support import make_test_active_worktree
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
@@ -51,7 +52,7 @@ def _active(**overrides):
         declared_footprint=("orchestune/monitor.py",),
     )
     defaults.update(overrides)
-    return ActiveWorktree(**defaults)
+    return make_test_active_worktree(**defaults)
 
 
 class TestExtractSubtaskId:
@@ -558,3 +559,43 @@ class TestFormatStatusReport:
         )
         assert "最終dispatchサイクル" in report
         assert "未記録" in report
+
+
+class _NestedOnlyActive:
+    """flat fieldを持たず`core`/`launch`だけを公開するactive（view経由の読取を強制）。"""
+
+    def __init__(self, active):
+        self.core = active.core
+        self.launch = active.launch
+
+
+class TestBuildStatusSnapshotReadsNestedViews(_FakeForgeTest):
+    """#1128: monitor projectionはflat fieldではなくnested viewから読む。"""
+
+    def test_projection_matches_flat_dto_using_only_core_and_launch(
+        self, tmp_path, monkeypatch
+    ):
+        active = make_test_active_worktree(
+            133,
+            branch="claude/issue-133-monitor-cli",
+            pid=None,
+            started_at=1_700_000_000.0,
+            external_id="cloud-1",
+            external_url="https://example.test/cloud-1",
+        )
+        path = tmp_path / "run_state.json"
+        save_run_state(RunState(active_worktrees={"133": active}), path)
+        expected = build_status_snapshot(path, tmp_path, 1_700_000_100.0)
+
+        monkeypatch.setattr(
+            status_snapshot_module,
+            "load_run_state",
+            lambda _path: RunState(
+                active_worktrees={"133": _NestedOnlyActive(active)}  # type: ignore[dict-item]
+            ),
+        )
+        actual = build_status_snapshot(path, tmp_path, 1_700_000_100.0)
+
+        assert actual == expected
+        assert actual.worktrees[0].external_id == "cloud-1"
+        assert actual.worktrees[0].elapsed_seconds == 100.0

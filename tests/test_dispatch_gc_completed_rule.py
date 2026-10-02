@@ -23,9 +23,9 @@ class TestRuleCompleted:
         prs = [
             PrRecord(
                 number=210,
-                head_ref=active.branch,
+                head_ref=active.core.branch,
                 changed_files=(),
-                closes_issue_numbers=(active.issue_number,),
+                closes_issue_numbers=(active.core.issue_number,),
                 state="CLOSED",
             )
         ]
@@ -55,7 +55,7 @@ class TestRuleCompleted:
         assert outcome.completion_event["action"] == "abandoned_pr_requeued"
         assert "1" not in ctx.run_state.active_worktrees
         fake_forge.list_prs.assert_called_once_with(state="all")
-        mock_remove.assert_called_once_with(active.worktree_path)
+        mock_remove.assert_called_once_with(active.core.worktree_path)
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
         fake_forge.add_comment.assert_called_once()
@@ -70,9 +70,9 @@ class TestRuleCompleted:
         prs = [
             PrRecord(
                 number=210,
-                head_ref=active.branch,
+                head_ref=active.core.branch,
                 changed_files=(),
-                closes_issue_numbers=(active.issue_number,),
+                closes_issue_numbers=(active.core.issue_number,),
                 state="CLOSED",
             )
         ]
@@ -138,7 +138,7 @@ class TestRuleCompleted:
         assert outcome.terminal is True
         assert outcome.completion_event["action"] == "abandoned_pr_requeued"
         assert "1" not in ctx.run_state.active_worktrees
-        mock_remove.assert_called_once_with(active.worktree_path)
+        mock_remove.assert_called_once_with(active.core.worktree_path)
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
         fake_forge.add_comment.assert_called_once()
@@ -169,9 +169,9 @@ class TestRuleCompleted:
         ctx.run_state.active_worktrees["1"] = active
         stale_pr = PrRecord(
             number=210,
-            head_ref=active.branch,
+            head_ref=active.core.branch,
             changed_files=(),
-            closes_issue_numbers=(active.issue_number,),
+            closes_issue_numbers=(active.core.issue_number,),
             created_at="2026-01-01T00:00:00Z",
             closed_at="2026-01-02T00:00:00Z",
             state="CLOSED",
@@ -203,9 +203,9 @@ class TestRuleCompleted:
         ctx.run_state.active_worktrees["1"] = active
         closed_pr = PrRecord(
             number=210,
-            head_ref=active.branch,
+            head_ref=active.core.branch,
             changed_files=(),
-            closes_issue_numbers=(active.issue_number,),
+            closes_issue_numbers=(active.core.issue_number,),
             created_at="2026-01-01T00:00:00Z",
             closed_at="2030-01-01T00:00:00Z",
             state="CLOSED",
@@ -252,8 +252,8 @@ class TestRuleCompleted:
 
         assert outcome is not None
         assert outcome.completion_event == {
-            "issue_number": active.issue_number,
-            "worktree_path": active.worktree_path,
+            "issue_number": active.core.issue_number,
+            "worktree_path": active.core.worktree_path,
             "action": "completion_skipped_forge_error",
             # #787: どのForge呼び出しがなぜ失敗して保留になったのかを残す。
             "operation": "list_prs",
@@ -272,9 +272,9 @@ class TestRuleCompleted:
         ctx.run_state.active_worktrees["1"] = active
         closed_pr = PrRecord(
             number=210,
-            head_ref=active.branch,
+            head_ref=active.core.branch,
             changed_files=(),
-            closes_issue_numbers=(active.issue_number,),
+            closes_issue_numbers=(active.core.issue_number,),
             state="CLOSED",
         )
         fake_forge.list_prs.return_value = [closed_pr]

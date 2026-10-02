@@ -14,61 +14,19 @@ from typing import Any
 from orchestune.dag.models import canonicalize_footprint
 from orchestune.infra.json_state import read_json_with_recovery, write_json_atomic
 from orchestune.infra.process_utils import assert_run_state_lock_held
+from orchestune.ledger.active_codec import (
+    decode_active_worktree,
+    encode_active_worktree,
+)
+from orchestune.ledger.active_lifecycle import (
+    ActiveWorktreeLifecycle as ActiveWorktreeLifecycle,
+)
+from orchestune.ledger.active_lifecycle import (
+    lifecycle as lifecycle,
+)
+from orchestune.ledger.active_records import ActiveWorktree as ActiveWorktree
 from orchestune.models import Usage
 from orchestune.ownership_contracts import ClaimStage, OwnerKind, ReservationKind
-
-
-@dataclass
-class ActiveWorktree:
-    issue_number: int
-    branch: str
-    worktree_path: str
-    pid: int | None
-    started_at: float | None
-    declared_footprint: tuple[str, ...]
-    recompute_count: int = 0
-    forced_serial: bool = False
-    external_id: str | None = None
-    external_url: str | None = None
-    base_branch: str = "origin/main"
-    # 起動時点のcost modelで見積もったトークン量。実行中にfleet中央値が変化しても
-    # 予約量を変動させず、複数サイクルを跨ぐ予算判定を安定させる。
-    estimated_tokens: int | None = None
-    # `estimated_tokens=None`が「起動時に不明として記録済み」なのか、本フィールド
-    # 導入前の状態で未記録なのかを区別する。後者だけ現行cost modelへ縮退する。
-    token_estimate_recorded: bool = False
-    profile: str | None = None
-    model: str | None = None
-    reasoning_effort: str | None = None
-    selection_reason: str | None = None
-    launch_attempt_id: str | None = None
-    launch_phase: str | None = None
-    # #936: interactive claim と dispatcher 起動を同じ台帳で識別する。
-    # 既存の dispatcher が生成するエントリは、すべて下記の既定値と同義である。
-    owner_kind: str = "dispatch"
-    claim_id: str | None = None
-    claim_stage: str | None = None
-    base_ref: str | None = None
-    base_sha: str | None = None
-    reservation_kind: str = "footprint"
-    repository_id: str | None = None
-    claimed_at: float | None = None
-    # owner token 自体は絶対に台帳へ保存しない。照合用途には一方向digestだけを使う。
-    owner_token_digest: str | None = None
-    # #1001: completion journal（claimと同じrun_state.jsonの排他ロック下での
-    # complete予約・投稿evidence・handoff-ready遷移の永続化）。存在
-    # （completion_id is not None）自体が「completing」状態を表し、GCの通常
-    # reclaimから除外する判定に使う（#1004）。旧形式状態の読取互換は本Issueの
-    # 受け入れ条件ではないが、追加フィールドはすべて省略可能にして既存の
-    # 永続化済みレコードを壊さない。
-    completion_id: str | None = None
-    completion_result: str | None = None
-    completion_stage: str | None = None
-    completion_payload: dict[str, Any] | None = None
-    completion_comment_id: str | None = None
-    completion_comment_url: str | None = None
-    completion_handoff_ready: bool = False
-    completion_policy_config: dict[str, Any] | None = None
 
 
 @dataclass
@@ -402,41 +360,42 @@ def _build_active_worktree(
     identity: tuple[str, str, str, float, str | None],
 ) -> ActiveWorktree:
     owner_kind, claim_stage, reservation_kind, claimed_at, base_sha = identity
-    return ActiveWorktree(
-        issue_number=issue_number,
-        branch=branch,
-        worktree_path=worktree_path,
-        pid=pid,
-        started_at=_parse_optional_finite_float(started_at),
-        declared_footprint=canonicalize_footprint(
+    normalized = {
+        "issue_number": issue_number,
+        "branch": branch,
+        "worktree_path": worktree_path,
+        "pid": pid,
+        "started_at": _parse_optional_finite_float(started_at),
+        "declared_footprint": canonicalize_footprint(
             item for item in declared_footprint if isinstance(item, str)
         ),
-        recompute_count=value.get("recompute_count", 0),
-        forced_serial=value.get("forced_serial", False),
-        external_id=value.get("external_id"),
-        external_url=value.get("external_url"),
-        base_branch=value.get("base_branch", "origin/main"),
-        estimated_tokens=value.get("estimated_tokens"),
-        token_estimate_recorded=value.get(
+        "recompute_count": value.get("recompute_count", 0),
+        "forced_serial": value.get("forced_serial", False),
+        "external_id": value.get("external_id"),
+        "external_url": value.get("external_url"),
+        "base_branch": value.get("base_branch", "origin/main"),
+        "estimated_tokens": value.get("estimated_tokens"),
+        "token_estimate_recorded": value.get(
             "token_estimate_recorded", "estimated_tokens" in value
         ),
-        profile=value.get("profile"),
-        model=value.get("model"),
-        reasoning_effort=value.get("reasoning_effort"),
-        selection_reason=value.get("selection_reason"),
-        launch_attempt_id=value.get("launch_attempt_id"),
-        launch_phase=value.get("launch_phase"),
-        owner_kind=owner_kind,
-        claim_id=_required_active_string(value, "claim_id", key),
-        claim_stage=claim_stage,
-        base_ref=_required_active_string(value, "base_ref", key),
-        base_sha=base_sha,
-        reservation_kind=reservation_kind,
-        repository_id=_required_active_string(value, "repository_id", key),
-        claimed_at=claimed_at,
-        owner_token_digest=_required_active_string(value, "owner_token_digest", key),
+        "profile": value.get("profile"),
+        "model": value.get("model"),
+        "reasoning_effort": value.get("reasoning_effort"),
+        "selection_reason": value.get("selection_reason"),
+        "launch_attempt_id": value.get("launch_attempt_id"),
+        "launch_phase": value.get("launch_phase"),
+        "owner_kind": owner_kind,
+        "claim_id": _required_active_string(value, "claim_id", key),
+        "claim_stage": claim_stage,
+        "base_ref": _required_active_string(value, "base_ref", key),
+        "base_sha": base_sha,
+        "reservation_kind": reservation_kind,
+        "repository_id": _required_active_string(value, "repository_id", key),
+        "claimed_at": claimed_at,
+        "owner_token_digest": _required_active_string(value, "owner_token_digest", key),
         **_parse_completion_journal_fields(value, key),
-    )
+    }
+    return decode_active_worktree(normalized)
 
 
 def _parse_active_worktree(key: object, value: object) -> ActiveWorktree:
@@ -732,39 +691,12 @@ def prune_run_state(
 
 
 def _materialize_active_worktree_for_persistence(active: ActiveWorktree) -> None:
-    """Make an in-memory legacy DTO explicit before it crosses the JSON boundary.
-
-    This is deliberately not a reader fallback: an on-disk record without any
-    of these fields is rejected by `_parse_active_worktree`.  Some internal
-    recovery callers still construct the older DTO directly, though, and their
-    unknown ownership must become explicitly non-resumable rather than create
-    an unreadable ledger on the next process start.
-    """
-    if active.owner_kind not in {kind.value for kind in OwnerKind}:
-        raise ValueError("active worktree owner_kind must be a known value")
-    if active.reservation_kind not in {kind.value for kind in ReservationKind}:
-        raise ValueError("active worktree reservation_kind must be a known value")
-    if active.claim_id is None:
-        active.claim_id = f"recovered-{active.issue_number}"
-    if active.claim_stage is None:
-        active.claim_stage = ClaimStage.COMPLETED.value
-    if active.base_ref is None:
-        active.base_ref = active.base_branch
-    if active.repository_id is None:
-        active.repository_id = "unverified-recovery"
-    if active.claimed_at is None:
-        active.claimed_at = active.started_at if active.started_at is not None else 0.0
-    if active.owner_token_digest is None:
-        active.owner_token_digest = sha256(
-            f"recovered-unverifiable:{active.claim_id}".encode()
-        ).hexdigest()
+    """Preserve pre-save materialization order through the model owner API."""
+    active.materialize_claim_for_persistence()
 
 
 def _active_worktree_data(active: ActiveWorktree) -> dict[str, Any]:
-    data = dataclasses.asdict(active)
-    if active.completion_policy_config is None:
-        data.pop("completion_policy_config")
-    return data
+    return encode_active_worktree(active)
 
 
 def save_run_state(

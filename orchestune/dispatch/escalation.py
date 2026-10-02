@@ -45,20 +45,20 @@ def _apply_changes_requested_escalation(
     """依存元PRがCHANGES_REQUESTEDになったタスクを一時停止する
     （プロセスkill・githubラベル/コメント・run_state削除はすべてact）。"""
     if config.apply:
-        if active.pid:
+        if active.launch.pid:
             try:
-                os.kill(active.pid, 9)
+                os.kill(active.launch.pid, 9)
             except OSError:
                 pass
         apply_human_review_escalation(
-            active.issue_number,
+            active.core.issue_number,
             (StatusLabel.IN_PROGRESS,),
             "依存元PRが変更要求（Request Changes）を受けたため、スタックされたタスクを一時停止しました。",
             forge=config.resolved_forge,
         )
         del run_state.active_worktrees[key]
     return {
-        "issue_number": active.issue_number,
+        "issue_number": active.core.issue_number,
         "subtask_id": active_task.subtask_id,
         "action": "escalated_due_to_changes_requested",
     }

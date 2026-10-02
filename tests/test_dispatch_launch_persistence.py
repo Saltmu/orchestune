@@ -8,9 +8,10 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
-from orchestune.ledger.run_state import ActiveWorktree, CompletedWorktree, RunState
+from orchestune.ledger.run_state import CompletedWorktree, RunState
 from orchestune.models import PrRecord, Usage
 from tests.conftest import make_issue, real_claim_fn, register_task_issue
+from tests.dispatch_test_support import make_test_active_worktree
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
@@ -74,7 +75,7 @@ class TestFinalizeLaunchContextRecording:
             dependency_resolution={1: TaskDependencies()},
             config=config,
         )
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=1,
             branch="feat/issue-1-task-a",
             worktree_path=str(tmp_path / "worktrees" / "task-a"),
@@ -114,7 +115,7 @@ class TestFinalizeLaunchContextRecording:
             apply=True,
         )
         ctx = _ctx(config=config)
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=999,
             branch="feat/issue-999-unknown",
             worktree_path=str(tmp_path / "worktrees" / "unknown"),
@@ -257,8 +258,8 @@ class TestApplyTaskLaunchesRunStatePersistence:
             )
 
         active = load_run_state(run_state_path).active_worktrees["1"]
-        assert active.estimated_tokens == 400
-        assert active.token_estimate_recorded is True
+        assert active.launch.estimated_tokens == 400
+        assert active.launch.token_estimate_recorded is True
 
     def test_protects_open_pr_completed_worktree_via_open_prs(self, tmp_path):
         from unittest.mock import MagicMock, patch

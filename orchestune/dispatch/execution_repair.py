@@ -250,27 +250,35 @@ def _active_task_ids(tasks_by_issue: Mapping[int, TaskMetadata]) -> tuple[str, .
     )
 
 
+def execution_record_from_active(active: ActiveWorktree) -> ExecutionRecord:
+    """Project an ActiveWorktree onto the consistency ExecutionRecord boundary."""
+    core = active.core
+    launch = active.launch
+    claim = active.claim
+    return ExecutionRecord(
+        issue_number=core.issue_number,
+        branch=core.branch,
+        worktree_path=core.worktree_path,
+        pid=launch.pid,
+        external_id=launch.external_id,
+        started_at=launch.started_at,
+        kind=(
+            EXECUTION_KIND_CLOUD
+            if launch.external_id is not None
+            else EXECUTION_KIND_LOCAL
+            if launch.pid is not None
+            else None
+        ),
+        owner_kind=claim.owner_kind,
+        claim_id=claim.claim_id,
+        claim_stage=claim.claim_stage,
+        launch_phase=launch.launch_phase,
+    )
+
+
 def _execution_records(run_state: RunState) -> tuple[ExecutionRecord, ...]:
     return tuple(
-        ExecutionRecord(
-            issue_number=active.issue_number,
-            branch=active.branch,
-            worktree_path=active.worktree_path,
-            pid=active.pid,
-            external_id=active.external_id,
-            started_at=active.started_at,
-            kind=(
-                EXECUTION_KIND_CLOUD
-                if active.external_id is not None
-                else EXECUTION_KIND_LOCAL
-                if active.pid is not None
-                else None
-            ),
-            owner_kind=active.owner_kind,
-            claim_id=active.claim_id,
-            claim_stage=active.claim_stage,
-            launch_phase=active.launch_phase,
-        )
+        execution_record_from_active(active)
         for _, active in sorted(run_state.active_worktrees.items())
     )
 
@@ -279,7 +287,7 @@ def _branches_by_issue(
     run_state: RunState, declared: Mapping[int, str] | None
 ) -> dict[int, str]:
     branches = {
-        active.issue_number: active.branch
+        active.core.issue_number: active.core.branch
         for active in run_state.active_worktrees.values()
     }
     for issue_number, branch in (declared or {}).items():
@@ -308,13 +316,14 @@ class ReclaimPrecondition:
 def _external_execution_is_running(
     active: ActiveWorktree, config: DispatcherConfig
 ) -> bool:
-    if active.external_id is None:
+    external_id = active.launch.external_id
+    if external_id is None:
         return True
     if config.dispatch_target is None:
         return False
     try:
         status = config.dispatch_target.completion_status(
-            DispatchHandle(external_id=active.external_id),
+            DispatchHandle(external_id=external_id),
             forge=config.resolved_forge,
         )
     except Exception:
@@ -328,11 +337,12 @@ def _timed_out(
     config: DispatcherConfig,
     observed_at: float,
 ) -> bool:
+    started_at = active.launch.started_at
     return bool(
         EXECUTION_TIMED_OUT in finding_codes
-        and active.started_at is not None
+        and started_at is not None
         and config.task_timeout_seconds > 0
-        and observed_at - active.started_at > config.task_timeout_seconds
+        and observed_at - started_at > config.task_timeout_seconds
         and _external_execution_is_running(active, config)
     )
 
@@ -343,10 +353,11 @@ def _dead_local_process(
     config: DispatcherConfig,
     process_alive: bool,
 ) -> bool:
+    launch = active.launch
     return bool(
         LOCAL_PROCESS_DEAD in finding_codes
-        and active.external_id is None
-        and active.pid is not None
+        and launch.external_id is None
+        and launch.pid is not None
         and not process_alive
         and config.zombie_gc
     )
@@ -357,12 +368,14 @@ def _handleless_orphan(
     finding_codes: frozenset[str],
     config: DispatcherConfig,
 ) -> bool:
+    launch = active.launch
+    core = active.core
     return bool(
         HANDLELESS_EXECUTION_ORPHAN in finding_codes
-        and active.pid is None
-        and active.external_id is None
-        and active.started_at is None
-        and not os.path.exists(active.worktree_path)
+        and launch.pid is None
+        and launch.external_id is None
+        and launch.started_at is None
+        and not os.path.exists(core.worktree_path)
         and config.zombie_gc
     )
 
@@ -372,19 +385,22 @@ def _dispatch_prelaunch_orphan(
     finding_codes: frozenset[str],
     config: DispatcherConfig,
 ) -> bool:
+    launch = active.launch
+    claim = active.claim
+    core = active.core
     return bool(
         DISPATCH_PRELAUNCH_ORPHAN in finding_codes
         and config.zombie_gc
-        and active.pid is None
-        and active.external_id is None
-        and active.started_at is None
-        and os.path.exists(active.worktree_path)
-        and active.owner_kind == "dispatch"
-        and bool(active.claim_id and active.claim_id.strip())
-        and isinstance(active.claim_stage, str)
-        and active.claim_stage.lower()
+        and launch.pid is None
+        and launch.external_id is None
+        and launch.started_at is None
+        and os.path.exists(core.worktree_path)
+        and claim.owner_kind == "dispatch"
+        and bool(claim.claim_id and claim.claim_id.strip())
+        and isinstance(claim.claim_stage, str)
+        and claim.claim_stage.lower()
         in {ClaimStage.ACTIVE_SAVED.value, ClaimStage.COMPLETED.value}
-        and active.launch_phase in {None, "failed"}
+        and launch.launch_phase in {None, "failed"}
     )
 
 
@@ -401,21 +417,22 @@ def revalidate_reclaim_preconditions(
 ) -> ReclaimPrecondition | None:
     """Return fresh known facts only while the typed command is still safe."""
     if completion_mutation_blocked_fresh(
-        run_state, expected_active.issue_number, config.run_state_path
+        run_state, expected_active.core.issue_number, config.run_state_path
     ):
         return None
     active = run_state.active_worktrees.get(key)
     finding_codes = frozenset(command_finding_codes(command))
     if (
         active is None
-        or command.subject_id != str(expected_active.issue_number)
+        or command.subject_id != str(expected_active.core.issue_number)
         or active != expected_active
         or not finding_codes.intersection(expected_finding_codes)
-        or active.worktree_path in held_worktree_paths
+        or active.core.worktree_path in held_worktree_paths
     ):
         return None
     observed_at = time.time() if now is None else now
-    process_alive = bool(active.pid is not None and is_process_alive(active.pid))
+    pid = active.launch.pid
+    process_alive = bool(pid is not None and is_process_alive(pid))
     timed_out = _timed_out(active, finding_codes, config, observed_at)
     if not (
         timed_out
@@ -488,6 +505,7 @@ __all__ = [
     "collect_execution_observed_state",
     "command_finding_codes",
     "derive_execution_desired_state",
+    "execution_record_from_active",
     "revalidate_reclaim_preconditions",
 ]
 
@@ -509,7 +527,10 @@ def consistency_scope_order(scope: ConsistencyScope) -> int:
 
 
 def restorable_active(candidate: ActiveWorktree) -> bool:
-    return candidate.external_id is not None or candidate.owner_kind == "interactive"
+    return (
+        candidate.launch.external_id is not None
+        or candidate.claim.owner_kind == "interactive"
+    )
 
 
 def is_interactive_restoration(
@@ -518,6 +539,6 @@ def is_interactive_restoration(
     if subject_id is None:
         return False
     return any(
-        item[0] == subject_id and item[2].owner_kind == "interactive"
+        item[0] == subject_id and item[2].claim.owner_kind == "interactive"
         for item in restorations
     )

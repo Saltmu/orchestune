@@ -102,7 +102,11 @@ def _validate_replay_generation(
             CompleteFailureReason.GENERATION_MISMATCH,
             "Replay requires the caller generation or explicit --completion-id",
         )
-    if not explicit and active is not None and active.claim_id != record.generation_id:
+    if (
+        not explicit
+        and active is not None
+        and active.claim.claim_id != record.generation_id
+    ):
         raise CompletionJournalError(
             CompleteFailureReason.GENERATION_MISMATCH,
             "Task was reclaimed; specify the old completion ID to replay its saved result",

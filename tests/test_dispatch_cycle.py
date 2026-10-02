@@ -32,17 +32,17 @@ from orchestune.dispatch.phase_scheduling import (
 from orchestune.issue_parsing import PARENT_MARKER
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import (
-    ActiveWorktree,
     RunState,
     TaskReclaimRecord,
     load_run_state,
 )
 from orchestune.models import IssueRecord, PrRecord
-from tests.dispatch_test_support import make_footprint_issue as _full_issue
 from tests.dispatch_test_support import (
+    flat_active_worktree,
     make_test_cycle_context,
     stub_label_actor_permission,
 )
+from tests.dispatch_test_support import make_footprint_issue as _full_issue
 from tests.dispatch_test_support import make_test_task as _task
 from tests.dispatch_test_support import (
     patch_gc_process_alive as _patch_gc_process_alive,
@@ -103,7 +103,7 @@ class TestConflictAwareSchedulingPhase:
         )
         run_state = RunState(
             active_worktrees={
-                "1": ActiveWorktree(
+                "1": flat_active_worktree(
                     issue_number=1,
                     branch="task/active",
                     worktree_path=str(tmp_path / "active"),
@@ -649,8 +649,8 @@ class TestRunDispatchCycle:
         save_run_state(
             RunState(
                 active_worktrees={
-                    "9": ActiveWorktree(9, "b", "w", 1, 1_699_999_000.0, ()),
-                    "8": ActiveWorktree(8, "b2", "w2", 2, 1_699_999_000.0, ()),
+                    "9": flat_active_worktree(9, "b", "w", 1, 1_699_999_000.0, ()),
+                    "8": flat_active_worktree(8, "b2", "w2", 2, 1_699_999_000.0, ()),
                 },
                 launch_history=[],
             ),

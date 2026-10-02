@@ -20,10 +20,11 @@ from orchestune.dispatch.recovery import (
     execute_bookkeeping_repair_command,
     execute_recovery_requeue_command,
 )
-from orchestune.ledger.run_state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.models import IssueRecord
 from orchestune.task_branch_resolution import TaskBranchResolver
 from tests.dispatch_gc_test_support import _task
+from tests.dispatch_test_support import make_test_active_worktree
 
 
 def _snapshot(*restorations):
@@ -90,9 +91,9 @@ class TestRestorationPreservesClaimOwnership:
             config=config,
         )
 
-        assert active.owner_kind == "interactive"
-        assert active.claim_id == "claim-recovery-999"
-        assert active.reservation_kind == "repository"
+        assert active.claim.owner_kind == "interactive"
+        assert active.claim.claim_id == "claim-recovery-999"
+        assert active.claim.reservation_kind == "repository"
 
     def test_restored_active_worktree_defaults_missing_to_dispatch(
         self, tmp_path, fake_forge
@@ -131,10 +132,10 @@ class TestRestorationPreservesClaimOwnership:
             config=config,
         )
 
-        assert active.owner_kind == "dispatch"
-        assert active.claim_id == "recovered-941"
-        assert active.owner_token_digest is not None
-        assert active.reservation_kind == "footprint"
+        assert active.claim.owner_kind == "dispatch"
+        assert active.claim.claim_id == "recovered-941"
+        assert active.claim.owner_token_digest is not None
+        assert active.claim.reservation_kind == "footprint"
 
     def test_restored_active_worktree_with_launched_attempt_preserves_interactive_claim(
         self, tmp_path, fake_forge
@@ -189,16 +190,16 @@ class TestRestorationPreservesClaimOwnership:
             config=config,
         )
 
-        assert active.owner_kind == "interactive"
-        assert active.claim_id == "claim-recovery-launched-123"
-        assert active.reservation_kind == "footprint"
-        assert active.branch == "claude/issue-942-interactive-task"
-        assert active.worktree_path == str(
+        assert active.claim.owner_kind == "interactive"
+        assert active.claim.claim_id == "claim-recovery-launched-123"
+        assert active.claim.reservation_kind == "footprint"
+        assert active.core.branch == "claude/issue-942-interactive-task"
+        assert active.core.worktree_path == str(
             tmp_path / "worktrees" / "claude-issue-942-interactive-task"
         )
-        assert active.external_id is None
-        assert active.launch_attempt_id is None
-        assert active.launch_phase is None
+        assert active.launch.external_id is None
+        assert active.launch.launch_attempt_id is None
+        assert active.launch.launch_phase is None
 
     def test_restored_active_worktree_with_launched_attempt_and_omitted_subtask_id_restores_claim_workspace(
         self, tmp_path, fake_forge
@@ -252,16 +253,16 @@ class TestRestorationPreservesClaimOwnership:
             config=config,
         )
 
-        assert active.owner_kind == "interactive"
-        assert active.claim_id == "claim-recovery-launched-943"
-        assert active.reservation_kind == "footprint"
-        assert active.branch == "claude/issue-943-task-943"
-        assert active.worktree_path == str(
+        assert active.claim.owner_kind == "interactive"
+        assert active.claim.claim_id == "claim-recovery-launched-943"
+        assert active.claim.reservation_kind == "footprint"
+        assert active.core.branch == "claude/issue-943-task-943"
+        assert active.core.worktree_path == str(
             tmp_path / "worktrees" / "claude-issue-943-task-943"
         )
-        assert active.external_id is None
-        assert active.launch_attempt_id is None
-        assert active.launch_phase is None
+        assert active.launch.external_id is None
+        assert active.launch.launch_attempt_id is None
+        assert active.launch.launch_phase is None
 
     def test_restored_active_worktree_with_launched_attempt_defaults_to_dispatch(
         self, tmp_path, fake_forge
@@ -314,19 +315,19 @@ class TestRestorationPreservesClaimOwnership:
             config=config,
         )
 
-        assert active.owner_kind == "dispatch"
-        assert active.claim_id == "recovered-943"
-        assert active.owner_token_digest is not None
-        assert active.reservation_kind == "footprint"
-        assert active.external_id == "ext-job-88888"
-        assert active.launch_attempt_id == "attempt-cloud-888"
-        assert active.launch_phase == "launched"
+        assert active.claim.owner_kind == "dispatch"
+        assert active.claim.claim_id == "recovered-943"
+        assert active.claim.owner_token_digest is not None
+        assert active.claim.reservation_kind == "footprint"
+        assert active.launch.external_id == "ext-job-88888"
+        assert active.launch.launch_attempt_id == "attempt-cloud-888"
+        assert active.launch.launch_phase == "launched"
         fake_forge.get_issue.assert_called_once_with(943)
 
     def test_interactive_candidate_without_external_id_is_restorable_and_persisted(
         self, tmp_path, fake_forge
     ):
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=105,
             branch="codex/issue-105-task",
             worktree_path=str(tmp_path / "worktrees" / "issue-105"),
@@ -358,7 +359,7 @@ class TestRestorationPreservesClaimOwnership:
             config,
         )
         assert result.status is RepairStatus.APPLIED
-        assert run_state.active_worktrees["105"].owner_kind == "interactive"
+        assert run_state.active_worktrees["105"].claim.owner_kind == "interactive"
 
         run_state_empty = RunState(active_worktrees={})
         requeue_cmd = RepairCommand(
@@ -382,7 +383,7 @@ class TestRestorationPreservesClaimOwnership:
     def test_interactive_issue_with_launched_attempt_skips_reconcile_attempt_override(
         self, tmp_path, fake_forge
     ):
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=106,
             branch="codex/issue-106-task",
             worktree_path=str(tmp_path / "worktrees" / "issue-106"),
@@ -442,7 +443,7 @@ class TestRestorationPreservesClaimOwnership:
             )
             mock_reconcile.assert_not_called()
             assert result.status is RepairStatus.APPLIED
-            assert run_state.active_worktrees["106"].owner_kind == "interactive"
+            assert run_state.active_worktrees["106"].claim.owner_kind == "interactive"
 
 
 class TestInteractiveClaimSubtaskIdAlignment:
@@ -549,12 +550,12 @@ class TestInteractiveClaimSubtaskIdAlignment:
         subject_id, subtask_id, active = candidates[0]
         assert subject_id == "940"
         assert subtask_id == "task-940"
-        assert active.branch == "claude/issue-940-task-940"
-        assert active.worktree_path == str(
+        assert active.core.branch == "claude/issue-940-task-940"
+        assert active.core.worktree_path == str(
             tmp_path / "worktrees" / "claude-issue-940-task-940"
         )
-        assert active.owner_kind == "interactive"
-        assert active.claim_id == "claim-recovery-candidate-940"
+        assert active.claim.owner_kind == "interactive"
+        assert active.claim.claim_id == "claim-recovery-candidate-940"
 
     def test_build_restored_active_worktree_aligns_subtask_id_for_interactive(
         self, tmp_path, fake_forge
@@ -594,7 +595,7 @@ class TestInteractiveClaimSubtaskIdAlignment:
             dependency_resolution={},
             config=config,
         )
-        assert active.branch == "claude/issue-940-task-940"
-        assert active.worktree_path == str(
+        assert active.core.branch == "claude/issue-940-task-940"
+        assert active.core.worktree_path == str(
             tmp_path / "worktrees" / "claude-issue-940-task-940"
         )

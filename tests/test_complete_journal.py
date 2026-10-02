@@ -3,17 +3,29 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from orchestune.claim.ownership import owner_token_digest
-from orchestune.complete.contracts import CompleteFailureReason
+from orchestune.complete.contracts import CompleteFailureReason, CompleteStage
 from orchestune.complete.journal import (
     CompletionJournalError,
+    CompletionJournalRecord,
+    active_completion_from_record,
+    apply_completion_record,
     mark_handoff_ready,
     reserve_completion,
+    with_completion,
 )
 from orchestune.infra.process_utils import run_state_lock
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import ActiveWorktree, RunState, load_run_state
 from orchestune.ledger.run_state import save_run_state as save_run_state_unlocked
 from tests.dispatch_test_support import save_locked_run_state
@@ -23,25 +35,44 @@ OWNER_TOKEN = "owner-token-abc"
 
 def _seed_active(tmp_path, **overrides):
     path = tmp_path / "run_state.json"
-    fields = {
-        "issue_number": 10,
-        "branch": "claude/issue-10-x",
-        "worktree_path": "worktrees/claude-issue-10-x",
-        "pid": 12345,
-        "started_at": 1700000000.0,
-        "declared_footprint": (),
-        "owner_kind": "interactive",
-        "claim_id": "claim-10",
-        "claim_stage": "completed",
-        "base_ref": "origin/main",
-        "base_sha": "a" * 40,
-        "reservation_kind": "footprint",
-        "repository_id": "Saltmu/orchestune",
-        "claimed_at": 1700000001.0,
-        "owner_token_digest": owner_token_digest(OWNER_TOKEN),
+    core = ActiveWorktreeCore(
+        issue_number=overrides.get("issue_number", 10),
+        branch=overrides.get("branch", "claude/issue-10-x"),
+        worktree_path=overrides.get("worktree_path", "worktrees/claude-issue-10-x"),
+        declared_footprint=tuple(overrides.get("declared_footprint", ())),
+    )
+    launch = LaunchInfo(
+        pid=overrides.get("pid", 12345),
+        started_at=overrides.get("started_at", 1700000000.0),
+    )
+    claim = ClaimInfo(
+        owner_kind=overrides.get("owner_kind", "interactive"),
+        claim_id=overrides.get("claim_id", "claim-10"),
+        claim_stage=overrides.get("claim_stage", "completed"),
+        base_ref=overrides.get("base_ref", "origin/main"),
+        base_sha=overrides.get("base_sha", "a" * 40),
+        reservation_kind=overrides.get("reservation_kind", "footprint"),
+        repository_id=overrides.get("repository_id", "Saltmu/orchestune"),
+        claimed_at=overrides.get("claimed_at", 1700000001.0),
+        owner_token_digest=overrides.get(
+            "owner_token_digest", owner_token_digest(OWNER_TOKEN)
+        ),
+    )
+    comp_keys = {
+        "completion_id",
+        "completion_result",
+        "completion_stage",
+        "completion_payload",
+        "completion_comment_id",
+        "completion_comment_url",
+        "completion_handoff_ready",
+        "completion_policy_config",
     }
-    fields.update(overrides)
-    active = ActiveWorktree(**fields)
+    comp_kwargs = {k: overrides[k] for k in comp_keys if k in overrides}
+    completion = ActiveCompletionJournal(**comp_kwargs)
+    active = ActiveWorktree.from_records(
+        core=core, launch=launch, claim=claim, completion=completion
+    )
     save_locked_run_state(RunState(active_worktrees={"10": active}), path)
     return path
 
@@ -72,10 +103,10 @@ class TestReserveCompletion:
         assert journal.handoff_ready is False
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_id == journal.completion_id
-        assert persisted.completion_result == "done"
-        assert persisted.completion_stage == "journaling"
-        assert persisted.completion_handoff_ready is False
+        assert persisted.completion.completion_id == journal.completion_id
+        assert persisted.completion.completion_result == "done"
+        assert persisted.completion.completion_stage == "journaling"
+        assert persisted.completion.completion_handoff_ready is False
 
     def test_resuming_without_a_known_completion_id_is_idempotent(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -100,7 +131,7 @@ class TestReserveCompletion:
         assert excinfo.value.reason == CompleteFailureReason.INVALID_STAGE_TRANSITION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_result == "done"
+        assert persisted.completion.completion_result == "done"
 
     def test_rejects_a_different_result_even_without_an_explicit_completion_id(
         self, tmp_path
@@ -147,9 +178,9 @@ class TestReserveCompletion:
         journal = _reserve(path, payload={"pr": 42})
 
         assert journal.payload == {"pr": 42}
-        assert load_run_state(path).active_worktrees["10"].completion_payload == {
-            "pr": 42
-        }
+        assert load_run_state(path).active_worktrees[
+            "10"
+        ].completion.completion_payload == {"pr": 42}
 
     def test_resuming_with_an_identical_payload_is_idempotent(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -168,7 +199,7 @@ class TestReserveCompletion:
         assert excinfo.value.reason == CompleteFailureReason.CONCURRENT_COMPLETION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_payload == {"pr": 1}
+        assert persisted.completion.completion_payload == {"pr": 1}
 
     def test_rejects_a_conflicting_payload_after_handoff(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -183,7 +214,7 @@ class TestReserveCompletion:
         assert excinfo.value.reason == CompleteFailureReason.CONCURRENT_COMPLETION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_payload == {"pr": 1}
+        assert persisted.completion.completion_payload == {"pr": 1}
 
     def test_rejects_a_payload_added_after_handoff_when_none_was_set(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -197,7 +228,7 @@ class TestReserveCompletion:
         assert excinfo.value.reason == CompleteFailureReason.CONCURRENT_COMPLETION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_payload is None
+        assert persisted.completion.completion_payload is None
 
     def test_save_failure_does_not_leave_a_half_applied_reservation(
         self, tmp_path, monkeypatch
@@ -215,7 +246,7 @@ class TestReserveCompletion:
         assert excinfo.value.reason == CompleteFailureReason.STATE_SAVE_FAILED
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_id is None
+        assert persisted.completion.completion_id is None
 
     def test_releases_the_lock_even_when_reservation_is_rejected(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -246,10 +277,10 @@ class TestMarkHandoffReady:
         assert ready.stage == "handed_off_to_gc"
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_handoff_ready is True
-        assert persisted.completion_comment_id == "999"
-        assert persisted.completion_comment_url.endswith("999")
-        assert persisted.completion_payload == {
+        assert persisted.completion.completion_handoff_ready is True
+        assert persisted.completion.completion_comment_id == "999"
+        assert persisted.completion.completion_comment_url.endswith("999")
+        assert persisted.completion.completion_payload == {
             "pr": 42,
             "review": {"bot": "codex", "rounds": 1},
         }
@@ -282,8 +313,8 @@ class TestMarkHandoffReady:
         assert excinfo.value.reason == CompleteFailureReason.CONCURRENT_COMPLETION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_handoff_ready is False
-        assert persisted.completion_payload == {"pr": 1}
+        assert persisted.completion.completion_handoff_ready is False
+        assert persisted.completion.completion_payload == {"pr": 1}
 
 
 def _new_journal_record(**overrides):
@@ -658,8 +689,8 @@ class TestLabelConfirmedCompletionContract:
         assert excinfo.value.reason == CompleteFailureReason.EVIDENCE_MISSING
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_handoff_ready is False
-        assert persisted.completion_comment_id is None
+        assert persisted.completion.completion_handoff_ready is False
+        assert persisted.completion.completion_comment_id is None
 
     def test_rejects_marking_handoff_ready_with_only_a_comment_id(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -684,7 +715,7 @@ class TestLabelConfirmedCompletionContract:
         assert excinfo.value.reason == CompleteFailureReason.EVIDENCE_MISSING
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_handoff_ready is False
+        assert persisted.completion.completion_handoff_ready is False
 
     def test_accepts_evidence_already_persisted_by_a_prior_call(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -706,22 +737,23 @@ class TestLabelConfirmedCompletionContract:
 
         with run_state_lock(path.with_suffix(".lock")):
             state = load_run_state(path)
-            state.active_worktrees["10"] = ActiveWorktree(
-                issue_number=10,
-                branch="claude/issue-10-x",
-                worktree_path="worktrees/claude-issue-10-x",
-                pid=54321,
-                started_at=1700000100.0,
-                declared_footprint=(),
-                owner_kind="interactive",
-                claim_id="claim-10-b",
-                claim_stage="completed",
-                base_ref="origin/main",
-                base_sha="b" * 40,
-                reservation_kind="footprint",
-                repository_id="Saltmu/orchestune",
-                claimed_at=1700000101.0,
-                owner_token_digest=owner_token_digest(OWNER_TOKEN),
+            state.active_worktrees["10"] = ActiveWorktree.from_records(
+                core=ActiveWorktreeCore(
+                    10, "claude/issue-10-x", "worktrees/claude-issue-10-x", ()
+                ),
+                launch=LaunchInfo(pid=54321, started_at=1700000100.0),
+                claim=ClaimInfo(
+                    owner_kind="interactive",
+                    claim_id="claim-10-b",
+                    claim_stage="completed",
+                    base_ref="origin/main",
+                    base_sha="b" * 40,
+                    reservation_kind="footprint",
+                    repository_id="Saltmu/orchestune",
+                    claimed_at=1700000101.0,
+                    owner_token_digest=owner_token_digest(OWNER_TOKEN),
+                ),
+                completion=ActiveCompletionJournal(),
             )
             save_run_state_unlocked(state, path)
 
@@ -740,9 +772,13 @@ class TestLabelConfirmedCompletionContract:
         with run_state_lock(path.with_suffix(".lock")):
             state = load_run_state(path)
             active = state.active_worktrees["10"]
-            active.completion_id = "completion-other"
-            active.completion_result = "blocked"
-            active.completion_stage = "journaling"
+            active.completion = replace(
+                active.completion, completion_id="completion-other"
+            )
+            active.completion = replace(active.completion, completion_result="blocked")
+            active.completion = replace(
+                active.completion, completion_stage="journaling"
+            )
             save_run_state_unlocked(state, path)
 
         with pytest.raises(CompletionJournalError) as excinfo:
@@ -779,7 +815,7 @@ class TestLabelConfirmedCompletionContract:
         assert excinfo.value.reason == CompleteFailureReason.INVALID_STAGE_TRANSITION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_comment_id == "1"
+        assert persisted.completion.completion_comment_id == "1"
 
     def test_rejects_a_retry_with_a_different_payload_after_handoff(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -803,7 +839,7 @@ class TestLabelConfirmedCompletionContract:
         assert excinfo.value.reason == CompleteFailureReason.INVALID_STAGE_TRANSITION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_payload == {"pr": 1}
+        assert persisted.completion.completion_payload == {"pr": 1}
 
     def test_save_failure_does_not_report_handoff_ready(self, tmp_path, monkeypatch):
         path = _seed_active(tmp_path)
@@ -822,4 +858,176 @@ class TestLabelConfirmedCompletionContract:
         assert excinfo.value.reason == CompleteFailureReason.STATE_SAVE_FAILED
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_handoff_ready is False
+        assert persisted.completion.completion_handoff_ready is False
+
+
+class TestJournalOwnerApi:
+    def test_with_completion_replaces_only_completion_fields(self):
+        core = ActiveWorktreeCore(10, "claude/issue-10", "wt", ())
+        launch = LaunchInfo(pid=123)
+        claim = ClaimInfo(claim_id="claim-10")
+        active = ActiveWorktree.from_records(
+            core=core,
+            launch=launch,
+            claim=claim,
+            completion=ActiveCompletionJournal(completion_id="old-id"),
+        )
+        new_comp = ActiveCompletionJournal(
+            completion_id="new-id",
+            completion_result="done",
+            completion_stage="handed_off",
+            completion_payload={"outcome": "test"},
+            completion_comment_id="c1",
+            completion_comment_url="u1",
+            completion_handoff_ready=True,
+            completion_policy_config={"test": True},
+        )
+        updated = with_completion(active, new_comp)
+
+        assert updated.core == core
+        assert updated.launch == launch
+        assert updated.claim == claim
+        assert updated.completion == new_comp
+
+        with pytest.raises(
+            TypeError, match="completion must be ActiveCompletionJournal"
+        ):
+            with_completion(active, "not-a-record")  # type: ignore[arg-type]
+
+    def test_active_completion_from_record_explicit_conversion(self):
+        record = CompletionJournalRecord(
+            repository_id="Saltmu/orchestune",
+            issue_number=10,
+            generation_id="claim-10",
+            completion_id="comp-10",
+            owner_token_digest=owner_token_digest(OWNER_TOKEN),
+            request_fingerprint=owner_token_digest("request-fp"),
+            result="done",
+            target_label="status:done",
+            outcome_payload={"issue": 10, "result": "done", "body": "outcome body"},
+            stage=CompleteStage.LABEL_CONFIRMED,
+            posting_evidence={
+                "comment_id": "123",
+                "comment_url": "https://example.test/123",
+            },
+            label_evidence={
+                "status": "confirmed",
+                "target_label": "status:done",
+                "observed_labels": ["status:done"],
+            },
+        )
+        comp = active_completion_from_record(
+            record, handoff=True, completion_policy_config={"source": "test"}
+        )
+        assert isinstance(comp, ActiveCompletionJournal)
+        assert not isinstance(comp, CompletionJournalRecord)
+        assert comp.completion_id == "comp-10"
+        assert comp.completion_result == "done"
+        assert comp.completion_stage == "label_confirmed"
+        assert comp.completion_payload == {
+            "issue": 10,
+            "result": "done",
+            "body": "outcome body",
+            "outcome": "outcome body",
+        }
+        assert comp.completion_comment_id == "123"
+        assert comp.completion_comment_url == "https://example.test/123"
+        assert comp.completion_handoff_ready is True
+        assert comp.completion_policy_config == {"source": "test"}
+
+    def test_apply_completion_record_preserves_policy_config_and_other_subrecords(
+        self,
+    ):
+        core = ActiveWorktreeCore(10, "claude/issue-10", "wt", ())
+        launch = LaunchInfo(pid=123)
+        claim = ClaimInfo(claim_id="claim-10")
+        active = ActiveWorktree.from_records(
+            core=core,
+            launch=launch,
+            claim=claim,
+            completion=ActiveCompletionJournal(
+                completion_id="comp-10",
+                completion_comment_id="comment-123",
+                completion_comment_url="https://example.test/123",
+                completion_policy_config={"max_tokens_per_task": 1000},
+            ),
+        )
+        record = CompletionJournalRecord(
+            repository_id="Saltmu/orchestune",
+            issue_number=10,
+            generation_id="claim-10",
+            completion_id="comp-10",
+            owner_token_digest=owner_token_digest(OWNER_TOKEN),
+            request_fingerprint=owner_token_digest("request-fp"),
+            result="done",
+            target_label="status:done",
+            outcome_payload={"issue": 10, "result": "done", "body": "body"},
+            stage=CompleteStage.RESERVED,
+        )
+        updated = apply_completion_record(active, record, handoff=False)
+        assert updated.completion.completion_id == "comp-10"
+        assert updated.completion.completion_policy_config == {
+            "max_tokens_per_task": 1000
+        }
+        assert updated.completion.completion_comment_id == "comment-123"
+        assert updated.completion.completion_comment_url == "https://example.test/123"
+        assert updated.core == core
+        assert updated.launch == launch
+        assert updated.claim == claim
+
+        # When posting evidence is present, comments are updated
+        ev_record = replace(
+            record,
+            posting_evidence={
+                "comment_id": "new-456",
+                "comment_url": "https://example.test/456",
+            },
+        )
+        ev_updated = apply_completion_record(updated, ev_record)
+        assert ev_updated.completion.completion_comment_id == "new-456"
+        assert (
+            ev_updated.completion.completion_comment_url == "https://example.test/456"
+        )
+
+    def test_publication_save_preserves_comment_evidence_when_record_lacks_it(
+        self, tmp_path
+    ):
+        from orchestune.complete.publication import PublicationContext, _save
+
+        state_path = tmp_path / "run_state.json"
+        core = ActiveWorktreeCore(10, "claude/issue-10", "wt", ())
+        active = ActiveWorktree.from_records(
+            core=core,
+            launch=LaunchInfo(),
+            claim=ClaimInfo(claim_id="claim-10"),
+            completion=ActiveCompletionJournal(
+                completion_id="comp-10",
+                completion_comment_id="comment-123",
+                completion_comment_url="https://example.test/123",
+            ),
+        )
+        save_run_state_unlocked(RunState(active_worktrees={"10": active}), state_path)
+        context = PublicationContext(
+            request=None,  # type: ignore[arg-type]
+            state_path=state_path,
+            worktree=Path("wt"),
+            forge=None,
+            active=active,
+        )
+        record = CompletionJournalRecord(
+            repository_id="Saltmu/orchestune",
+            issue_number=10,
+            generation_id="claim-10",
+            completion_id="comp-10",
+            owner_token_digest=owner_token_digest(OWNER_TOKEN),
+            request_fingerprint=owner_token_digest("request-fp"),
+            result="done",
+            target_label="status:done",
+            outcome_payload={"issue": 10, "result": "done", "body": "body"},
+            stage=CompleteStage.RESERVED,
+        )
+        with run_state_lock(state_path.with_suffix(".lock")):
+            _save(context, record)
+        saved = load_run_state(state_path).active_worktrees["10"]
+        assert saved.completion.completion_comment_id == "comment-123"
+        assert saved.completion.completion_comment_url == "https://example.test/123"

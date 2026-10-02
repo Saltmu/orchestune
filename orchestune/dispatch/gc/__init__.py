@@ -59,9 +59,11 @@ from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
 )
+from orchestune.dispatch.launch_state import with_launch
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
+from orchestune.ledger.active_lifecycle import has_completion_reservation
 from orchestune.ledger.completion_reservations import (
     completion_handoff_matches_active,
     completion_mutation_blocked_fresh,
@@ -122,18 +124,18 @@ def _rule_not_needed(
     （PID/PR存在ベース）は永遠にマッチしない。ラベルまたはoutcome検知を最優先の
     完了シグナルとして扱い、stale判定より先に評価する。
     """
-    if active.completion_id is not None and not completion_handoff_matches_active(
+    if has_completion_reservation(active) and not completion_handoff_matches_active(
         ctx.run_state, active
     ):
         return ActiveWorktreeRuleOutcome(
             completion_event={
-                "issue_number": active.issue_number,
-                "worktree_path": active.worktree_path,
+                "issue_number": active.core.issue_number,
+                "worktree_path": active.core.worktree_path,
                 "action": "completion_reserved_hold",
             },
             terminal=True,
         )
-    if active.completion_id is not None:
+    if has_completion_reservation(active):
         return collect_confirmed_completion(
             ctx.run_state, ctx.config, key, active, ctx.record_completion, active_task
         )
@@ -197,13 +199,13 @@ def _persist_run_state_best_effort(ctx: _RuleExecutionContext, what: str) -> Non
 
 def _update_hold_record(ctx: _RuleExecutionContext, active: ActiveWorktree) -> int:
     """dirty worktreeの保留回数を記録・永続化して返す。"""
-    previous = ctx.run_state.task_reclaim_counts.get(active.issue_number)
+    previous = ctx.run_state.task_reclaim_counts.get(active.core.issue_number)
     hold_count = (previous.count if previous else 0) + 1
-    ctx.run_state.task_reclaim_counts[active.issue_number] = TaskReclaimRecord(
+    ctx.run_state.task_reclaim_counts[active.core.issue_number] = TaskReclaimRecord(
         count=hold_count, last_reclaimed_at=time.time()
     )
     _persist_run_state_best_effort(
-        ctx, f"the dirty-worktree hold count for issue #{active.issue_number}"
+        ctx, f"the dirty-worktree hold count for issue #{active.core.issue_number}"
     )
     return hold_count
 
@@ -223,7 +225,7 @@ def _escalate_held_dirty_worktree(
         released = True
         ctx.run_state.active_worktrees.pop(key, None)
         _persist_run_state_best_effort(
-            ctx, f"the released ledger entry for issue #{active.issue_number}"
+            ctx, f"the released ledger entry for issue #{active.core.issue_number}"
         )
 
     status_labels = (
@@ -233,7 +235,7 @@ def _escalate_held_dirty_worktree(
     )
     try:
         apply_human_review_escalation(
-            active.issue_number,
+            active.core.issue_number,
             status_labels,
             "エージェントプロセスの終了を検知しましたが、worktreeに未コミットの変更が"
             "残っているため、完了処理を保留しました。\n"
@@ -241,14 +243,14 @@ def _escalate_held_dirty_worktree(
             f"{ctx.config.max_task_reclaims}）を超えた（今回で{hold_count}回目）ため、"
             "自動処理を打ち切り、status:blocked-human-reviewへ遷移しました。\n"
             "未コミットの作業データを保全するため、worktreeは削除せずに残しています: "
-            f"{active.worktree_path}",
+            f"{active.core.worktree_path}",
             forge=ctx.config.resolved_forge,
             on_label_applied=_release_entry,
         )
     except Exception as e:  # noqa: BLE001 - 1タスクの失敗でサイクルを止めない
         print(
             f"Warning: failed to escalate the held dirty worktree of issue "
-            f"#{active.issue_number}: {e}",
+            f"#{active.core.issue_number}: {e}",
             file=sys.stderr,
         )
         if not released:
@@ -302,7 +304,7 @@ def _persist_and_confirm_completion(
     except Exception as e:  # noqa: BLE001 - 保存失敗はrecordを止めるだけ
         print(
             "Warning: failed to persist the completion of issue "
-            f"#{completion_active.issue_number}: {e}",
+            f"#{completion_active.core.issue_number}: {e}",
             file=sys.stderr,
         )
         return False
@@ -329,7 +331,7 @@ def _record_completed_worktree(
     """完了（またはトークン上限超過）で終端したworktreeを完了履歴へ退避する。"""
     action = completion_event["action"]
     receipt = (
-        CompletionReceipt(issue_number=completion_active.issue_number)
+        CompletionReceipt(issue_number=completion_active.core.issue_number)
         if action in _CONFIRMED_COMPLETION_ACTIONS
         else None
     )
@@ -350,14 +352,15 @@ def _cleanup_stale_active_worktree(
     active: ActiveWorktree, reason: str, config: DispatcherConfig
 ) -> bool:
     """古い帳簿エントリに対応するworktreeのWIPバックアップとクリーンアップを行う。"""
-    worktree_exists = os.path.exists(active.worktree_path)
+    worktree_exists = os.path.exists(active.core.worktree_path)
     if worktree_exists:
         backup_error = backup_wip_commit(
-            active.worktree_path, "WIP: backup by Orchestune GC (stale active entry)"
+            active.core.worktree_path,
+            "WIP: backup by Orchestune GC (stale active entry)",
         )
         if backup_error is not None:
             config.resolved_forge.add_comment(
-                active.issue_number,
+                active.core.issue_number,
                 "run_stateの古い帳簿エントリを検知しました"
                 f"（{reason}）。対象プロセスの後始末を試みましたが、WIP"
                 "バックアップコミットの作成に失敗しました。\n"
@@ -367,14 +370,14 @@ def _cleanup_stale_active_worktree(
             )
             return False
 
-    if active.pid and is_process_alive(active.pid):
+    if active.launch.pid and is_process_alive(active.launch.pid):
         try:
-            os.kill(active.pid, 9)
+            os.kill(active.launch.pid, 9)
         except Exception:
             pass
 
     if worktree_exists:
-        remove_worktree(active.worktree_path)
+        remove_worktree(active.core.worktree_path)
     return True
 
 
@@ -389,7 +392,7 @@ def _apply_stale_active_entry_discard(
     状態を確認し、必要な後始末を行う。
     """
     if completion_mutation_blocked_fresh(
-        run_state, active.issue_number, config.run_state_path
+        run_state, active.core.issue_number, config.run_state_path
     ):
         return False
     if not config.apply:
@@ -397,7 +400,7 @@ def _apply_stale_active_entry_discard(
     if not _cleanup_stale_active_worktree(active, reason, config):
         return False
     del run_state.active_worktrees[key]
-    record = run_state.task_reclaim_counts.get(active.issue_number)
+    record = run_state.task_reclaim_counts.get(active.core.issue_number)
     if record is not None and record.pending:
         record.pending = False
     return True
@@ -412,7 +415,7 @@ def _create_abandonment_callbacks(
     def _release_entry() -> None:
         nonlocal released
         ctx.run_state.active_worktrees.pop(key, None)
-        rec = ctx.run_state.task_reclaim_counts.get(active.issue_number)
+        rec = ctx.run_state.task_reclaim_counts.get(active.core.issue_number)
         if rec is not None:
             rec.pending = False
         save_run_state(
@@ -457,15 +460,15 @@ def _abandoned_worktree_outcome(
         )
     except Exception as e:
         print(
-            f"Warning: skipping abandonment of issue #{active.issue_number}: "
+            f"Warning: skipping abandonment of issue #{active.core.issue_number}: "
             f"failed to persist the reclaim count: {e}",
             file=sys.stderr,
         )
         return ActiveWorktreeRuleOutcome(
             completion_event={
-                "issue_number": active.issue_number,
+                "issue_number": active.core.issue_number,
                 "subtask_id": active_task.subtask_id if active_task else "",
-                "worktree_path": active.worktree_path,
+                "worktree_path": active.core.worktree_path,
                 "action": "abandonment_skipped_persistence_failure",
             },
             terminal=True,
@@ -479,7 +482,7 @@ def _abandoned_worktree_outcome(
     ):
         ctx.run_state.active_worktrees.pop(key, None)
         _persist_run_state_best_effort(
-            ctx, f"the released ledger entry for issue #{active.issue_number}"
+            ctx, f"the released ledger entry for issue #{active.core.issue_number}"
         )
     return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)
 
@@ -489,7 +492,7 @@ def _find_recovery_pr(
 ) -> PrRecord | None:
     all_prs = config.resolved_forge.list_prs(state="all")
     matching_prs = [
-        pr for pr in all_prs if active.issue_number in pr.closes_issue_numbers
+        pr for pr in all_prs if active.core.issue_number in pr.closes_issue_numbers
     ]
     return next(
         (pr for pr in matching_prs if pr.state.upper() in {"OPEN", "MERGED"}),
@@ -548,8 +551,8 @@ def _completion_forge_error_hold(
     サイクルレポートの警告セクションから辿れるようにする。
     """
     event: dict[str, object] = {
-        "issue_number": active.issue_number,
-        "worktree_path": active.worktree_path,
+        "issue_number": active.core.issue_number,
+        "worktree_path": active.core.worktree_path,
         "action": "completion_skipped_forge_error",
     }
     if operation:
@@ -573,7 +576,7 @@ def _resolve_recovered_completion(
             _completion_forge_error_hold(
                 active,
                 "find_recovery_pr",
-                warn_forge_failure("find_recovery_pr", active.issue_number, error),
+                warn_forge_failure("find_recovery_pr", active.core.issue_number, error),
             )
         )
     if recovery_pr is None:
@@ -583,11 +586,13 @@ def _resolve_recovered_completion(
             _abandoned_worktree_outcome(ctx, key, active, active_task)
         )
     return CompletionResolution.ready(
-        replace(
-            active,
-            branch=recovery_pr.head_ref,
-            external_id=f"recovered-pr:{recovery_pr.number}",
-            external_url=f"PR#{recovery_pr.number}",
+        with_launch(
+            active.with_core(replace(active.core, branch=recovery_pr.head_ref)),
+            replace(
+                active.launch,
+                external_id=f"recovered-pr:{recovery_pr.number}",
+                external_url=f"PR#{recovery_pr.number}",
+            ),
         )
     )
 
@@ -651,18 +656,21 @@ def _resolve_completion(
     active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     """完了候補・保留・早期終端を明示的な値として解決する。"""
-    if ctx.completion_reserved(active.issue_number):
+    core = active.core
+    claim = active.claim
+    launch = active.launch
+    if ctx.completion_reserved(core.issue_number):
         return CompletionResolution.pending()
     is_handoff_ready = _is_handoff_ready(active) and ctx.handoff_matches(active)
-    if active.completion_id is not None and not is_handoff_ready:
+    if has_completion_reservation(active) and not is_handoff_ready:
         return CompletionResolution.pending()
     if is_handoff_ready:
         return CompletionResolution.ready(active)
-    if active.owner_kind == "interactive":
+    if claim.owner_kind == "interactive":
         return CompletionResolution.pending()
-    if active.started_at is None and active.external_id is None:
+    if launch.started_at is None and launch.external_id is None:
         return _resolve_recovered_completion(ctx, key, active, active_task)
-    if active.external_id is not None:
+    if launch.external_id is not None:
         return _resolve_cloud_completion(ctx, key, active, active_task)
     return _resolve_local_completion(ctx, key, active, active_task)
 
@@ -714,7 +722,7 @@ def _rule_completed(
     active: ActiveWorktree,
     active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
-    if active.completion_id is not None:
+    if has_completion_reservation(active):
         return collect_confirmed_completion(
             ctx.run_state, ctx.config, key, active, ctx.record_completion, active_task
         )
@@ -739,7 +747,7 @@ def _rule_completed(
             ctx.run_state,
             ctx.config,
             key,
-            active.issue_number,
+            active.core.issue_number,
             "early_death_retry_pending",
             ctx.prs,
         ),
@@ -748,11 +756,11 @@ def _rule_completed(
             ctx.run_state,
             ctx.config,
             key,
-            active.issue_number,
+            active.core.issue_number,
             "review_timeout_retry_pending",
             ctx.prs,
         ),
-        issue=ctx.issue_records_by_number.get(active.issue_number),
+        issue=ctx.issue_records_by_number.get(active.core.issue_number),
     )
     return _handle_completed_event_outcome(
         ctx, key, completion_active, active_task, completion_event

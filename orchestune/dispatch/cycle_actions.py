@@ -96,6 +96,7 @@ from orchestune.dispatch.summary import (
     REASON_REVIEW_TIMEOUT_BACKOFF,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.active_lifecycle import has_completion_reservation
 from orchestune.ledger.completion_reservations import (
     completion_handoff_matches_active,
     completion_mutation_blocked_fresh,
@@ -156,25 +157,25 @@ def _run_active_worktree_rules(
 
     for key, active in list(ctx.run_state.active_worktrees.items()):
         if (
-            active.completion_id is not None
+            has_completion_reservation(active)
             and not completion_handoff_matches_active(ctx.run_state, active)
         ) or completion_mutation_blocked_fresh(
-            ctx.run_state, active.issue_number, ctx.config.run_state_path
+            ctx.run_state, active.core.issue_number, ctx.config.run_state_path
         ):
             aggregates.completion_events.append(
                 {
-                    "issue_number": active.issue_number,
-                    "worktree_path": active.worktree_path,
+                    "issue_number": active.core.issue_number,
+                    "worktree_path": active.core.worktree_path,
                     "action": "completion_reserved_hold",
                 }
             )
             continue
-        active_task = ctx.queries.task(active.issue_number)
+        active_task = ctx.queries.task(active.core.issue_number)
 
         if _EARLY_ACTIVE_WORKTREE_RULES.run(ctx, key, active, active_task, aggregates):
             continue
 
-        if active.forced_serial:
+        if active.launch.forced_serial:
             aggregates.any_forced_serial = True
 
         # _MAIN_ACTIVE_WORKTREE_RULESの末尾(_rule_footprint_deviation)は必ず
@@ -449,7 +450,7 @@ class CycleActionAdapter:
         active_subtask_ids = {
             active_task.subtask_id
             for active in self._run_state.active_worktrees.values()
-            if (active_task := view.task(active.issue_number)) is not None
+            if (active_task := view.task(active.core.issue_number)) is not None
             and active_task.subtask_id
         }
         result = select_tasks_with_decisions(
@@ -499,7 +500,7 @@ class CycleActionAdapter:
             if result.status is RecordStatus.CONFLICT:
                 raise RuntimeError(
                     "record_launch conflict for issue "
-                    f"#{active.issue_number}: {result.reason}"
+                    f"#{active.core.issue_number}: {result.reason}"
                 )
 
         launched = _launch_selected_tasks(
@@ -590,7 +591,7 @@ class CycleActionAdapter:
             on_verified=_on_status_transition_verified(
                 ctx,
                 has_active_entry=lambda issue_number: any(
-                    active.issue_number == issue_number
+                    active.core.issue_number == issue_number
                     for active in self._run_state.active_worktrees.values()
                 ),
             ),

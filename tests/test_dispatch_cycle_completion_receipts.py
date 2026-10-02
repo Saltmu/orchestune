@@ -50,7 +50,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
         def _fake_save(*_args, **_kwargs):
             calls.append("save")
             assert not ctx.is_completion_confirmed(
-                active.issue_number
+                active.core.issue_number
             ), "record_completion must not fire before save_run_state succeeds"
 
         with patch(
@@ -65,7 +65,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
             open_prs=ctx.prs,
         )
         assert calls == ["save"]
-        assert ctx.is_completion_confirmed(active.issue_number) is True
+        assert ctx.is_completion_confirmed(active.core.issue_number) is True
         assert "1" not in ctx.run_state.active_worktrees
         assert len(ctx.run_state.completed_worktrees) == 1
 
@@ -79,7 +79,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
                 ctx, "1", active, task, {"action": "already_merged"}
             )
 
-        assert ctx.is_completion_confirmed(active.issue_number) is True
+        assert ctx.is_completion_confirmed(active.core.issue_number) is True
 
     def test_escalated_token_limit_exceeded_does_not_record_completion(self):
         ctx, task = self._ctx_with_task()
@@ -95,7 +95,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
                 {"action": "escalated_token_limit_exceeded"},
             )
 
-        assert ctx.is_completion_confirmed(active.issue_number) is False
+        assert ctx.is_completion_confirmed(active.core.issue_number) is False
         # History bookkeeping is unaffected by the receipt decision.
         assert len(ctx.run_state.completed_worktrees) == 1
 
@@ -110,7 +110,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
         ):
             _record_completed_worktree(ctx, "1", active, task, {"action": "completed"})
 
-        assert ctx.is_completion_confirmed(active.issue_number) is False
+        assert ctx.is_completion_confirmed(active.core.issue_number) is False
         # The in-memory ledger mutation (Forge success already confirmed it)
         # is not rolled back by a persistence failure.
         assert len(ctx.run_state.completed_worktrees) == 1
@@ -128,7 +128,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
             )
 
         mock_save.assert_not_called()
-        assert ctx.is_completion_confirmed(active.issue_number) is False
+        assert ctx.is_completion_confirmed(active.core.issue_number) is False
         assert outcome.completion_event["action"] == "completed"
 
     def test_confirmed_completion_reflects_immediately_in_dependent_assessment(self):

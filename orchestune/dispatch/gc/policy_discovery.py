@@ -28,8 +28,8 @@ def confirmed_records(state: RunState) -> list[CompletionJournalRecord]:
             continue
         active = state.active_worktrees.get(str(issue))
         if active is not None and (
-            not active.completion_handoff_ready
-            or active.completion_stage != "handed_off"
+            not active.completion.completion_handoff_ready
+            or active.completion.completion_stage != CompleteStage.HANDED_OFF.value
             or not completion_handoff_matches_active(state, active)
         ):
             continue
@@ -151,7 +151,7 @@ def reclaim_completed_tokens(
         if record.stage is not CompleteStage.HANDED_OFF:
             continue
         if record.repository_id != repository_id or (
-            active and active.claim_id == record.generation_id
+            active and active.claim.claim_id == record.generation_id
         ):
             continue
         journal = state.completion_journal.get(record.journal_key)

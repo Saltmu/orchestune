@@ -1,5 +1,6 @@
 """Completion reservations protect all mutation readers before publication."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -9,11 +10,12 @@ from orchestune.claim.service import _execute_claim_in_lock
 from orchestune.dispatch.execution_repair import revalidate_reclaim_preconditions
 from orchestune.dispatch.gc import _resolve_completion
 from orchestune.dispatch.gc_service import _is_standalone_gc_candidate
-from orchestune.ledger.run_state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import RunState
+from tests.dispatch_test_support import flat_active_worktree
 
 
 def _active(**fields):
-    return ActiveWorktree(
+    return flat_active_worktree(
         issue_number=10,
         branch="task-10",
         worktree_path="worktrees/task-10",
@@ -217,8 +219,6 @@ def test_competing_writer_waits_for_completion_lock_and_holds_pending(
 def test_review_pending_holds_dependencies_until_durable_policy_is_applied(
     tmp_path, monkeypatch
 ):
-    from dataclasses import replace
-
     from complete_lifecycle_test_support import lifecycle_environment
 
     from orchestune.complete.journal import (
@@ -233,7 +233,9 @@ def test_review_pending_holds_dependencies_until_durable_policy_is_applied(
     request, forge, _ = lifecycle_environment(tmp_path, monkeypatch)
     with completion_journal_lock(request.state_path):
         state = load_run_state_readonly(request.state_path)
-        state.active_worktrees["1110"].external_id = "cloud-task"
+        state.active_worktrees["1110"].launch = replace(
+            state.active_worktrees["1110"].launch, external_id="cloud-task"
+        )
         save_run_state(state, request.state_path)
     assert complete_task(request, forge=forge).success
     state = load_run_state_readonly(request.state_path)

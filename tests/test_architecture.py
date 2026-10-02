@@ -10,6 +10,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from active_worktree_architecture_support import (
+    production_active_worktree_violations,
+    unused_active_worktree_exceptions,
+)
 from architecture_test_support import (
     _SUBPROCESS_CALLS,
     PACKAGE_NAME,
@@ -44,6 +48,11 @@ PACKAGING_EXCLUDED_SKILLS = frozenset({"local-ci-developer"})
 def test_dispatch_dependency_boundary() -> None:
     assert production_boundary_violations(REPO_ROOT) == ()
     assert unused_production_boundary_exceptions(REPO_ROOT) == ()
+
+
+def test_active_worktree_ownership_boundary() -> None:
+    assert production_active_worktree_violations(REPO_ROOT) == ()
+    assert unused_active_worktree_exceptions(REPO_ROOT) == ()
 
 
 # The layer assignment is a design decision, so it lives here rather than being
@@ -101,6 +110,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "claim.preflight",
             "claim.workspace",
             "claim.local_identity",
+            "claim.issue_metadata",
             "recovery",
             "recovery.inspection",
             "complete.merged",
@@ -167,6 +177,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.gc.policy_review",
             "dispatch.launch",
             "dispatch.launch_attempts",
+            "dispatch.launch_state",
             "dispatch.locks",
             "dispatch.rebase",
             "dispatch.reconciliation",
@@ -198,6 +209,9 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "issue_notice",
             "issue_parsing",
             "ledger",
+            "ledger.active_codec",
+            "ledger.active_lifecycle",
+            "ledger.active_records",
             "ledger.completion_reservations",
             "ledger.escalation",
             "ledger.run_state",

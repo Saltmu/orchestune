@@ -18,19 +18,21 @@ from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
 from orchestune.ledger.run_state import (
-    ActiveWorktree,
     RunState,
     TaskReclaimRecord,
     load_run_state,
 )
 from orchestune.outcome_record import OutcomeRecord, ReviewSummary
+from tests.dispatch_test_support import (
+    flat_active_worktree,
+    stub_label_actor_permission,
+)
 from tests.dispatch_test_support import make_footprint_issue as _full_issue
 from tests.dispatch_test_support import make_test_active_worktree as _active
 from tests.dispatch_test_support import (
     patch_gc_process_alive as _patch_gc_process_alive,
 )
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
-from tests.dispatch_test_support import stub_label_actor_permission
 
 
 @pytest.fixture(autouse=True)
@@ -68,7 +70,8 @@ class TestRunDispatchCycleCompletion:
         defaults.update(overrides)
         save_run_state(
             RunState(
-                active_worktrees={"1": ActiveWorktree(**defaults)}, launch_history=[]
+                active_worktrees={"1": flat_active_worktree(**defaults)},
+                launch_history=[],
             ),
             run_state_path,
         )
@@ -804,7 +807,8 @@ class TestRunDispatchCycleNotNeeded:
         defaults.update(overrides)
         save_run_state(
             RunState(
-                active_worktrees={"1": ActiveWorktree(**defaults)}, launch_history=[]
+                active_worktrees={"1": flat_active_worktree(**defaults)},
+                launch_history=[],
             ),
             run_state_path,
         )

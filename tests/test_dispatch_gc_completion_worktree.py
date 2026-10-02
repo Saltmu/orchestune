@@ -25,7 +25,7 @@ from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     CodexCloudDispatchTarget,
 )
-from orchestune.ledger.run_state import ActiveWorktree, RunState, TaskReclaimRecord
+from orchestune.ledger.run_state import RunState, TaskReclaimRecord
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _task
@@ -792,7 +792,7 @@ class TestIsWorktreeComplete:
             dispatch_target=fake_target,
             forge=fake_forge,
         )
-        active = ActiveWorktree(
+        active = _active(
             issue_number=218,
             branch="claude/issue-218-review-history-backend-api",
             worktree_path=str(tmp_path / "w1"),
@@ -819,7 +819,7 @@ class TestIsWorktreeComplete:
             dispatch_target=target,
             forge=fake_forge,
         )
-        active = ActiveWorktree(
+        active = _active(
             issue_number=1,
             branch="claude/issue-1-task-a",
             worktree_path=str(tmp_path / "w1"),
@@ -849,7 +849,7 @@ class TestIsWorktreeComplete:
             dispatch_target=target,
             forge=fake_forge,
         )
-        active = ActiveWorktree(
+        active = _active(
             issue_number=1,
             branch="claude/issue-1-task-a",
             worktree_path=str(tmp_path / "w1"),
@@ -875,7 +875,7 @@ class TestIsWorktreeComplete:
             run_state_path=tmp_path / "run_state.json",
             forge=fake_forge,
         )
-        active = ActiveWorktree(
+        active = _active(
             issue_number=1,
             branch="claude/issue-1-task-a",
             worktree_path=str(tmp_path / "missing-worktree"),
@@ -885,6 +885,55 @@ class TestIsWorktreeComplete:
         )
 
         assert _is_worktree_complete(active, config) is False
+
+    def test_legacy_handoff_without_completion_id_is_not_complete(
+        self, tmp_path, fake_forge
+    ):
+        """T09: 予約なし legacy handoff (completion_handoff_ready=True, completion_id=None) はプロセス終了でも False。"""
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            forge=fake_forge,
+        )
+        active = _active(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path=str(tmp_path / "w1"),
+            pid=123,
+            started_at=1_699_999_000.0,
+            completion_handoff_ready=True,
+            completion_stage="handed_off_to_gc",
+            completion_id=None,
+        )
+        with patch(
+            "orchestune.dispatch.gc.completion.is_process_alive", return_value=False
+        ):
+            assert _is_worktree_complete(active, config) is False
+
+    def test_completing_state_with_completion_id_is_not_complete(
+        self, tmp_path, fake_forge
+    ):
+        """T09: completing状態 (completion_id is not None) は False。"""
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            forge=fake_forge,
+        )
+        active = _active(
+            issue_number=1,
+            branch="claude/issue-1-task-a",
+            worktree_path=str(tmp_path / "w1"),
+            pid=123,
+            started_at=1_699_999_000.0,
+            completion_id="cmpl-123",
+            completion_stage="completing",
+        )
+        with patch(
+            "orchestune.dispatch.gc.completion.is_process_alive", return_value=False
+        ):
+            assert _is_worktree_complete(active, config) is False
 
 
 class TestFinalizeBaseBranchRedWorktree:

@@ -134,17 +134,20 @@ def _launch_fact_from_active(active: ActiveWorktree) -> LaunchFact:
     branch / worktree_pathは`_has_valid_launch_handle`が非空`str`を必須と
     しているため、ここへ到達する時点で健全な値であることが保証されている。
     """
+    core = active.core
+    launch = active.launch
+    claim = active.claim
     return LaunchFact(
-        issue_number=active.issue_number,
-        branch=active.branch,
-        worktree_path=active.worktree_path,
-        pid=active.pid if _is_usable_pid(active.pid) else None,
-        started_at=_usable_started_at_or_none(active.started_at),
-        external_id=_usable_str_or_none(active.external_id),
-        launch_attempt_id=_usable_str_or_none(active.launch_attempt_id),
-        owner_kind=active.owner_kind,
-        claim_id=_usable_str_or_none(active.claim_id),
-        reservation_kind=active.reservation_kind,
+        issue_number=core.issue_number,
+        branch=core.branch,
+        worktree_path=core.worktree_path,
+        pid=launch.pid if _is_usable_pid(launch.pid) else None,
+        started_at=_usable_started_at_or_none(launch.started_at),
+        external_id=_usable_str_or_none(launch.external_id),
+        launch_attempt_id=_usable_str_or_none(launch.launch_attempt_id),
+        owner_kind=claim.owner_kind,
+        claim_id=_usable_str_or_none(claim.claim_id),
+        reservation_kind=claim.reservation_kind,
     )
 
 
@@ -221,10 +224,12 @@ def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
     片方だけが有効な場合ももう片方の不正値ごと通る。型付きの`LaunchFact`へ
     載せる前の健全化は`_launch_fact_from_active`が個別に行う。
     """
+    core = active.core
+    launch = active.launch
     return (
-        _is_non_empty_str(active.branch)
-        and _is_non_empty_str(active.worktree_path)
-        and (_is_usable_pid(active.pid) or _is_non_empty_str(active.external_id))
+        _is_non_empty_str(core.branch)
+        and _is_non_empty_str(core.worktree_path)
+        and (_is_usable_pid(launch.pid) or _is_non_empty_str(launch.external_id))
     )
 
 
@@ -233,7 +238,7 @@ def _build_launch_states(
 ) -> dict[int, _LaunchState]:
     by_issue: dict[int, list[ActiveWorktree]] = {}
     for active in active_worktrees.values():
-        by_issue.setdefault(active.issue_number, []).append(active)
+        by_issue.setdefault(active.core.issue_number, []).append(active)
 
     states: dict[int, _LaunchState] = {}
     for issue_number, entries in by_issue.items():
@@ -245,7 +250,7 @@ def _build_launch_states(
             )
             continue
         active = entries[0]
-        if active.launch_phase not in _ACCEPTED_LAUNCH_PHASES or (
+        if active.launch.launch_phase not in _ACCEPTED_LAUNCH_PHASES or (
             not _has_valid_launch_handle(active)
         ):
             # 起動前(prepared)・結果不明(unknown)、またはhandle欠如
@@ -570,11 +575,11 @@ class _CycleState:
         return any(label in self._labels(issue_number) for label in _ESCALATION_TARGETS)
 
     def record_launch(self, active: ActiveWorktree) -> RecordResult:
-        issue_number = active.issue_number
+        issue_number = active.core.issue_number
         if issue_number not in self._tasks:
             return RecordResult(RecordStatus.CONFLICT, REASON_UNKNOWN_ISSUE)
         if not _has_valid_launch_handle(active) or (
-            active.launch_phase not in _ACCEPTED_LAUNCH_PHASES
+            active.launch.launch_phase not in _ACCEPTED_LAUNCH_PHASES
         ):
             return RecordResult(RecordStatus.CONFLICT, REASON_INVALID_LAUNCH)
         if self._is_terminal_for_launch(issue_number):

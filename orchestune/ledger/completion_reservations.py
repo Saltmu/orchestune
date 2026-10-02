@@ -133,20 +133,20 @@ def dependency_completion_blocked(state: Any, issue_number: int) -> bool:
 
 
 def completion_handoff_matches_active(state: Any, active: Any) -> bool:
-    if completion_reservation_status(state, active.issue_number) != "handed_off":
+    if completion_reservation_status(state, active.core.issue_number) != "handed_off":
         return False
-    record = completion_record(state, active.issue_number)
+    record = completion_record(state, active.core.issue_number)
     assert record is not None
     posting = record["posting_evidence"]
     return all(
         (
-            record["repository_id"] == active.repository_id,
-            record["generation_id"] == active.claim_id,
-            record["completion_id"] == active.completion_id,
-            record["result"] == active.completion_result,
-            record["owner_token_digest"] == active.owner_token_digest,
-            posting["comment_id"] == active.completion_comment_id,
-            posting["comment_url"] == active.completion_comment_url,
+            record["repository_id"] == active.claim.repository_id,
+            record["generation_id"] == active.claim.claim_id,
+            record["completion_id"] == active.completion.completion_id,
+            record["result"] == active.completion.completion_result,
+            record["owner_token_digest"] == active.claim.owner_token_digest,
+            posting["comment_id"] == active.completion.completion_comment_id,
+            posting["comment_url"] == active.completion.completion_comment_url,
         )
     )
 

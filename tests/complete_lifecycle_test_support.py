@@ -8,6 +8,12 @@ from unittest.mock import Mock
 from orchestune.claim.ownership import owner_token_digest
 from orchestune.complete.contracts import CompleteRequest
 from orchestune.complete.journal import completion_journal_lock
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import ActiveWorktree, RunState, save_run_state
 from orchestune.models import PrRecord
 
@@ -64,22 +70,30 @@ class PublicationForge:
 
 def lifecycle_environment(tmp_path: Path, monkeypatch, result="not-needed"):
     state_path = tmp_path / "run_state.json"
-    active = ActiveWorktree(
-        issue_number=1110,
-        branch="task-1110",
-        worktree_path=str(tmp_path),
-        pid=None,
-        started_at=1,
-        declared_footprint=(),
-        owner_kind="interactive",
-        claim_id="claim-1110",
-        claim_stage="reserved",
-        base_ref="parent/issue-1059",
-        base_sha="b" * 40,
-        repository_id="repo",
-        claimed_at=1,
-        owner_token_digest=owner_token_digest("token"),
-        completion_policy_config={"max_tokens_per_task": None, "source": "test"},
+    active = ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=1110,
+            branch="task-1110",
+            worktree_path=str(tmp_path),
+            declared_footprint=(),
+        ),
+        launch=LaunchInfo(
+            pid=None,
+            started_at=1.0,
+        ),
+        claim=ClaimInfo(
+            owner_kind="interactive",
+            claim_id="claim-1110",
+            claim_stage="reserved",
+            base_ref="parent/issue-1059",
+            base_sha="b" * 40,
+            repository_id="repo",
+            claimed_at=1.0,
+            owner_token_digest=owner_token_digest("token"),
+        ),
+        completion=ActiveCompletionJournal(
+            completion_policy_config={"max_tokens_per_task": None, "source": "test"},
+        ),
     )
     with completion_journal_lock(state_path):
         save_run_state(RunState(active_worktrees={"1110": active}), state_path)

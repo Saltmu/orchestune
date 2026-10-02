@@ -38,6 +38,12 @@ from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase_gc import run_gc_phase
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.status_repair import status_intent_journal_path
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import ActiveWorktree, RunState, load_run_state
 from tests.conftest import make_issue, make_pr, make_task
 
@@ -93,7 +99,9 @@ def test_recovery_boundary_restores_missing_run_state_and_reobserves(
         "recovery-bookkeeping",
         "repair-1",
     ]
-    assert run_state.active_worktrees["744"].worktree_path == str(restored_worktree)
+    assert run_state.active_worktrees["744"].core.worktree_path == str(
+        restored_worktree
+    )
     assert (
         load_run_state(config.run_state_path).active_worktrees["744"]
         == (run_state.active_worktrees["744"])
@@ -156,24 +164,32 @@ def test_recovery_bookkeeping_is_monotonic_and_idempotent_after_restart(
     )
     in_memory_forge.seed_issue(parent)
     in_memory_forge.seed_issue(child)
-    active = ActiveWorktree(
-        issue_number=744,
-        branch="codex/issue-744-recovery-cutover",
-        worktree_path=str(tmp_path / "worktrees" / "issue-744"),
-        pid=744,
-        started_at=now - 120,
-        declared_footprint=(),
-        recompute_count=1,
-        forced_serial=False,
-        owner_kind="dispatch",
-        claim_id="claim-744",
-        claim_stage="completed",
-        base_ref="origin/main",
-        base_sha=None,
-        reservation_kind="footprint",
-        repository_id="repository-744",
-        claimed_at=now - 120,
-        owner_token_digest="digest-744",
+    active = ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=744,
+            branch="codex/issue-744-recovery-cutover",
+            worktree_path=str(tmp_path / "worktrees" / "issue-744"),
+            declared_footprint=(),
+            base_branch="origin/main",
+        ),
+        launch=LaunchInfo(
+            pid=744,
+            started_at=now - 120,
+            recompute_count=1,
+            forced_serial=False,
+        ),
+        claim=ClaimInfo(
+            owner_kind="dispatch",
+            claim_id="claim-744",
+            claim_stage="completed",
+            base_ref="origin/main",
+            base_sha=None,
+            reservation_kind="footprint",
+            repository_id="repository-744",
+            claimed_at=now - 120,
+            owner_token_digest="digest-744",
+        ),
+        completion=ActiveCompletionJournal(),
     )
     run_state = RunState(
         active_worktrees={"744": active},
@@ -199,8 +215,8 @@ def test_recovery_bookkeeping_is_monotonic_and_idempotent_after_restart(
         second = _run_recovery_bookkeeping_boundary(restarted, config, now=now + 1)
 
     assert _repair_command_codes(first) == [COMMAND_BOOKKEEPING, COMMAND_BOOKKEEPING]
-    assert restarted.active_worktrees["744"].recompute_count == 3
-    assert restarted.active_worktrees["744"].forced_serial is True
+    assert restarted.active_worktrees["744"].launch.recompute_count == 3
+    assert restarted.active_worktrees["744"].launch.forced_serial is True
     assert restarted.launch_history == [now - 60, now - 60]
     assert second.repair_passes == ()
 
@@ -219,24 +235,32 @@ def test_recovery_counters_use_repository_wide_in_progress_snapshot(
         parent={"number": 999},
     )
     in_memory_forge.seed_issue(issue)
-    active = ActiveWorktree(
-        issue_number=745,
-        branch="codex/issue-745-recovery-other-parent",
-        worktree_path=str(tmp_path / "worktrees" / "issue-745"),
-        pid=745,
-        started_at=900.0,
-        declared_footprint=(),
-        recompute_count=1,
-        forced_serial=False,
-        owner_kind="dispatch",
-        claim_id="claim-745",
-        claim_stage="completed",
-        base_ref="origin/main",
-        base_sha=None,
-        reservation_kind="footprint",
-        repository_id="repository-745",
-        claimed_at=900.0,
-        owner_token_digest="digest-745",
+    active = ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=745,
+            branch="codex/issue-745-recovery-other-parent",
+            worktree_path=str(tmp_path / "worktrees" / "issue-745"),
+            declared_footprint=(),
+            base_branch="origin/main",
+        ),
+        launch=LaunchInfo(
+            pid=745,
+            started_at=900.0,
+            recompute_count=1,
+            forced_serial=False,
+        ),
+        claim=ClaimInfo(
+            owner_kind="dispatch",
+            claim_id="claim-745",
+            claim_stage="completed",
+            base_ref="origin/main",
+            base_sha=None,
+            reservation_kind="footprint",
+            repository_id="repository-745",
+            claimed_at=900.0,
+            owner_token_digest="digest-745",
+        ),
+        completion=ActiveCompletionJournal(),
     )
     run_state = RunState(active_worktrees={"745": active})
     config = DispatcherConfig(
@@ -256,11 +280,11 @@ def test_recovery_counters_use_repository_wide_in_progress_snapshot(
         report = _run_recovery_bookkeeping_boundary(run_state, config, now=1_000.0)
 
     assert _repair_command_codes(report) == [COMMAND_BOOKKEEPING]
-    assert run_state.active_worktrees["745"].recompute_count == 4
-    assert run_state.active_worktrees["745"].forced_serial is True
+    assert run_state.active_worktrees["745"].launch.recompute_count == 4
+    assert run_state.active_worktrees["745"].launch.forced_serial is True
     persisted = load_run_state(config.run_state_path).active_worktrees["745"]
-    assert persisted.recompute_count == 4
-    assert persisted.forced_serial is True
+    assert persisted.launch.recompute_count == 4
+    assert persisted.launch.forced_serial is True
 
 
 def test_recovery_launch_history_updates_preview_without_persisting(
@@ -310,13 +334,22 @@ def _pipeline_report() -> CycleReport:
 
 
 def test_gc_reclaim_runs_as_a_supervisor_typed_repair(tmp_path, fake_forge) -> None:
-    active = ActiveWorktree(
-        issue_number=745,
-        branch="codex/issue-745-gc-reclaim",
-        worktree_path=str(tmp_path / "missing-worktree"),
-        pid=745,
-        started_at=None,
-        declared_footprint=(),
+    active = ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=745,
+            branch="codex/issue-745-gc-reclaim",
+            worktree_path=str(tmp_path / "missing-worktree"),
+            declared_footprint=(),
+            base_branch="origin/main",
+        ),
+        launch=LaunchInfo(
+            pid=745,
+            started_at=None,
+        ),
+        claim=ClaimInfo(
+            owner_kind="dispatch",
+        ),
+        completion=ActiveCompletionJournal(),
     )
     run_state = RunState(active_worktrees={"745": active})
     task = make_task(

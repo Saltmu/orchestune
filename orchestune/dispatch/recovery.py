@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import yaml
 
 from orchestune.branch_naming import build_task_branch_name
+from orchestune.claim.ownership import with_claim
 from orchestune.claim.preflight import resolve_claim_subtask_id
 from orchestune.consistency.invariants.execution import (
     RUN_STATE_MISSING,
@@ -72,10 +73,12 @@ from orchestune.dispatch.execution_repair import (
     skipped_repair as _skipped,
 )
 from orchestune.dispatch.launch_attempts import (
+    _completed_claim,
     active_from_attempt,
     reconcile_attempt,
     restored_active_record,
 )
+from orchestune.dispatch.launch_state import with_launch
 from orchestune.dispatch.scoring import Task
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
@@ -145,7 +148,7 @@ def _with_observations(
     observed: ObservedRepositoryState,
     additions: Sequence[tuple[ConsistencyScope, str | None, Observation]],
 ) -> ObservedRepositoryState:
-    grouped = {
+    grouped: dict[tuple[ConsistencyScope, str | None], dict[str, Observation]] = {
         (scope.scope, scope.subject_id): {fact.name: fact for fact in scope.facts}
         for scope in observed.observations
     }
@@ -174,19 +177,15 @@ def _with_observations(
 def _with_desired_facts(
     desired: DesiredRepositoryState, additions: Sequence[DesiredFact]
 ) -> DesiredRepositoryState:
-    facts = (*desired.facts, *additions)
+    facts = tuple(
+        sorted(
+            (*desired.facts, *additions),
+            key=lambda f: (_scope_order(f.scope), f.subject_id or "", f.name),
+        )
+    )
     return DesiredRepositoryState(
         repository_id=desired.repository_id,
-        facts=tuple(
-            sorted(
-                facts,
-                key=lambda fact: (
-                    _scope_order(fact.scope),
-                    fact.subject_id or "",
-                    fact.name,
-                ),
-            )
-        ),
+        facts=facts,
         transition_intents=desired.transition_intents,
     )
 
@@ -217,28 +216,26 @@ class _RecoveryBookkeepingInvariant:
         observed: ObservedRepositoryState,
         desired: DesiredRepositoryState,
     ) -> tuple[ConsistencyFinding, ...]:
+        codes = {
+            FACT_LAUNCH_ATTEMPT: LAUNCH_ATTEMPT_PENDING,
+            FACT_RECOVERY_COUNTERS: RECOVERY_COUNTERS_STALE,
+            FACT_LAUNCH_HISTORY: LAUNCH_HISTORY_STALE,
+        }
         findings = []
         for expected in desired.facts:
-            if expected.name not in {
-                FACT_RECOVERY_COUNTERS,
-                FACT_LAUNCH_HISTORY,
-                FACT_LAUNCH_ATTEMPT,
-            }:
+            code = codes.get(expected.name)
+            if code is None:
                 continue
             actual = _observed_fact(observed, expected)
-            if actual is None or actual.certainty is not ObservationCertainty.KNOWN:
-                continue
-            if actual.value == expected.value:
+            if (
+                actual is None
+                or actual.certainty is not ObservationCertainty.KNOWN
+                or actual.value == expected.value
+            ):
                 continue
             findings.append(
                 ConsistencyFinding(
-                    code=(
-                        LAUNCH_ATTEMPT_PENDING
-                        if expected.name == FACT_LAUNCH_ATTEMPT
-                        else RECOVERY_COUNTERS_STALE
-                        if expected.name == FACT_RECOVERY_COUNTERS
-                        else LAUNCH_HISTORY_STALE
-                    ),
+                    code=code,
                     scope=expected.scope,
                     subject_id=expected.subject_id,
                     severity=FindingSeverity.WARNING,
@@ -247,8 +244,7 @@ class _RecoveryBookkeepingInvariant:
                         value=expected.value,
                     ),
                     observed=Evidence(
-                        summary="recovery bookkeeping is stale",
-                        value=actual.value,
+                        summary="recovery bookkeeping is stale", value=actual.value
                     ),
                     repairability=Repairability.AUTOMATIC,
                 )
@@ -298,16 +294,13 @@ def _extract_raw_subtask_id(issue: IssueRecord) -> str | None:
     合成IDへフォールバックするが、依存解決用マップでは未検出issueを含めない）ため、
     フォールバックを持たない共通の抽出処理として切り出している。
     """
-    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
-    if not match:
+    if not (match := FOOTPRINT_BLOCK_PATTERN.search(issue.body)):
         return None
     try:
         data = yaml.safe_load(match.group(1))
     except Exception:
         return None
-    if not isinstance(data, dict):
-        return None
-    subtask_id = data.get("subtask_id")
+    subtask_id = data.get("subtask_id") if isinstance(data, dict) else None
     return str(subtask_id) if subtask_id else None
 
 
@@ -344,14 +337,13 @@ def _parse_subtask_info_from_issue(
     parsed = task if task is not None else parse_task_from_issue(issue)
     declared_footprint = () if parsed.footprint_error else parsed.footprint
     subtask_id = _extract_raw_subtask_id(issue)
-
     if not subtask_id:
         owner_kind, _, _ = _parse_claim_info_from_issue(issue)
-        if owner_kind == "interactive":
-            subtask_id = resolve_claim_subtask_id(issue)
-        else:
-            subtask_id = f"issue-{issue.number}"
-
+        subtask_id = (
+            resolve_claim_subtask_id(issue)
+            if owner_kind == "interactive"
+            else f"issue-{issue.number}"
+        )
     return subtask_id, declared_footprint
 
 
@@ -433,35 +425,26 @@ def _recovery_counters_for_issue(issue: IssueRecord) -> tuple[int, bool]:
 
 
 def _tasks_from_issues(issues: Sequence[IssueRecord]) -> dict[int, Task]:
-    issue_to_subtask_id = {
-        issue.number: raw
-        for issue in issues
-        if (raw := _extract_raw_subtask_id(issue)) is not None
+    mapping = {
+        i.number: raw for i in issues if (raw := _extract_raw_subtask_id(i)) is not None
     }
-    return {
-        issue.number: parse_task_from_issue(issue, issue_to_subtask_id)
-        for issue in issues
-    }
+    return {i.number: parse_task_from_issue(i, mapping) for i in issues}
 
 
 def _counter_targets(
     run_state: RunState, issues: Sequence[IssueRecord]
 ) -> tuple[_CounterTarget, ...]:
     issues_by_number = {issue.number: issue for issue in issues}
-    targets = []
-    for key, active in sorted(run_state.active_worktrees.items()):
-        issue = issues_by_number.get(active.issue_number)
-        if issue is None:
-            continue
-        persisted_count, persisted_serial = _recovery_counters_for_issue(issue)
-        targets.append(
-            (
-                key,
-                max(active.recompute_count, persisted_count),
-                active.forced_serial or persisted_serial,
-            )
+    return tuple(
+        (
+            key,
+            max(active.launch.recompute_count, persisted[0]),
+            active.launch.forced_serial or persisted[1],
         )
-    return tuple(targets)
+        for key, active in sorted(run_state.active_worktrees.items())
+        if (issue := issues_by_number.get(active.core.issue_number)) is not None
+        and (persisted := _recovery_counters_for_issue(issue))
+    )
 
 
 def _merged_launch_history(
@@ -539,17 +522,18 @@ def _build_restored_from_attempt(
 ) -> ActiveWorktree:
     parsed = task if task is not None else parse_task_from_issue(issue)
     active = active_from_attempt(attempt, parsed, config)
-    return replace(
+    effective_claim_id = claim_id or recovered_claim_id(issue.number)
+    return with_claim(
         active,
-        owner_kind=owner_kind,
-        claim_id=claim_id or recovered_claim_id(issue.number),
-        claim_stage="completed",
-        base_ref=attempt.base_branch,
-        base_sha=None,
-        reservation_kind=reservation_kind,
-        repository_id=recovery_repository_id(config.run_state_path),
-        claimed_at=attempt.started_at,
-        owner_token_digest=recovered_owner_token_digest(issue.number, claim_id),
+        _completed_claim(
+            owner_kind=owner_kind,
+            claim_id=effective_claim_id,
+            base_ref=attempt.base_branch,
+            reservation_kind=reservation_kind,
+            repository_id=recovery_repository_id(config.run_state_path),
+            claimed_at=attempt.started_at,
+            owner_token_digest=recovered_owner_token_digest(issue.number, claim_id),
+        ),
     )
 
 
@@ -734,19 +718,13 @@ def _bookkeeping_observations(
         )
     ]
     for key, _, _ in snapshot.counter_targets:
-        active = run_state.active_worktrees.get(key)
-        if active is not None:
+        if (active := run_state.active_worktrees.get(key)) is not None:
+            val = (active.launch.recompute_count, active.launch.forced_serial)
+            obs = _observation(
+                FACT_RECOVERY_COUNTERS, val, observed_at, source="run-state"
+            )
             additions.append(
-                (
-                    ConsistencyScope.TASK,
-                    str(active.issue_number),
-                    _observation(
-                        FACT_RECOVERY_COUNTERS,
-                        (active.recompute_count, active.forced_serial),
-                        observed_at,
-                        source="run-state",
-                    ),
-                )
+                (ConsistencyScope.TASK, str(active.core.issue_number), obs)
             )
     return additions
 
@@ -829,7 +807,8 @@ class RecoveryBookkeepingAdapter:
         snapshot = self._refresh_snapshot()
         observed_at = datetime.fromtimestamp(self._now, UTC)
         branches = {
-            active.issue_number: active.branch for _, _, active in snapshot.restorations
+            active.core.issue_number: active.core.branch
+            for _, _, active in snapshot.restorations
         }
         base = collect_execution_observed_state(
             self._run_state,
@@ -850,7 +829,7 @@ class RecoveryBookkeepingAdapter:
                     _observation(
                         FACT_LAUNCH_ATTEMPT,
                         active is not None
-                        and active.launch_attempt_id is not None
+                        and active.launch.launch_attempt_id is not None
                         and StatusLabel.IN_PROGRESS in task.status_labels,
                         observed_at,
                         source="launch-attempt-journal",
@@ -884,7 +863,7 @@ class RecoveryBookkeepingAdapter:
                     name=FACT_RECOVERY_COUNTERS,
                     value=(recompute_count, forced_serial),
                     scope=ConsistencyScope.TASK,
-                    subject_id=str(active.issue_number),
+                    subject_id=str(active.core.issue_number),
                     reason="never roll recovery bookkeeping backward",
                 )
             )
@@ -962,20 +941,20 @@ def execute_recovery_requeue_command(
         item for item in snapshot.restorations if item[0] == command.subject_id
     )
     if len(selected) != 1 or any(
-        str(active.issue_number) == command.subject_id
+        str(active.core.issue_number) == command.subject_id
         for active in run_state.active_worktrees.values()
     ):
         return _skipped(command, "requeue precondition no longer holds")
     if _restorable(selected[0][2]):
         return _skipped(command, "a resumable execution resource is available")
-    labels = config.resolved_forge.get_issue_labels(selected[0][2].issue_number)
+    labels = config.resolved_forge.get_issue_labels(selected[0][2].core.issue_number)
     if StatusLabel.IN_PROGRESS not in labels or any(
         label in labels for label in TERMINAL_ESCALATION_LABELS
     ):
         return _skipped(command, "task is no longer eligible for recovery requeue")
     transition_status_label(
         config.resolved_forge,
-        selected[0][2].issue_number,
+        selected[0][2].core.issue_number,
         StatusLabel.QUEUED,
         (label for label in PRIMARY_STATUS_LABELS if label in labels),
     )
@@ -1022,26 +1001,33 @@ def _apply_counter_bookkeeping(
     snapshot: RecoveryBookkeepingSnapshot,
     config: DispatcherConfig,
 ) -> RepairResult:
-    selected = []
-    for key, recompute_count, forced_serial in snapshot.counter_targets:
-        active = run_state.active_worktrees.get(key)
-        if active is not None and str(active.issue_number) == command.subject_id:
-            selected.append((active, recompute_count, forced_serial))
+    selected = [
+        (key, active, recompute_count, forced_serial)
+        for key, recompute_count, forced_serial in snapshot.counter_targets
+        if (active := run_state.active_worktrees.get(key)) is not None
+        and str(active.core.issue_number) == command.subject_id
+    ]
     if len(selected) != 1 or not config.apply:
         return _skipped(command, "counter bookkeeping precondition no longer holds")
-    active, recompute_count, forced_serial = selected[0]
-    target = (
-        max(active.recompute_count, recompute_count),
-        active.forced_serial or forced_serial,
-    )
-    previous = (active.recompute_count, active.forced_serial)
-    if target == previous:
+    key, active, recompute_count, forced_serial = selected[0]
+    target_count = max(active.launch.recompute_count, recompute_count)
+    target_serial = active.launch.forced_serial or forced_serial
+    if (
+        target_count == active.launch.recompute_count
+        and target_serial == active.launch.forced_serial
+    ):
         return _skipped(command, "recovery counters already match durable state")
-    active.recompute_count, active.forced_serial = target
+    updated = with_launch(
+        active,
+        replace(
+            active.launch, recompute_count=target_count, forced_serial=target_serial
+        ),
+    )
+    run_state.active_worktrees[key] = updated
     try:
         _persist_recovery_snapshot(run_state, snapshot, config)
     except Exception:
-        active.recompute_count, active.forced_serial = previous
+        run_state.active_worktrees[key] = active
         raise
     return RepairResult(command=command, status=RepairStatus.APPLIED)
 
@@ -1058,14 +1044,14 @@ def _apply_missing_entry_bookkeeping(
     if len(selected) != 1 or not config.apply or not _restorable(selected[0][2]):
         return _skipped(command, "missing-entry precondition no longer holds")
     key, subtask_id, active = selected[0]
-    if claim_was_released(run_state, active.issue_number, active.claim_id):
+    if claim_was_released(run_state, active.core.issue_number, active.claim.claim_id):
         return _skipped(command, "claim generation was explicitly released")
-    labels = config.resolved_forge.get_issue_labels(active.issue_number)
+    labels = config.resolved_forge.get_issue_labels(active.core.issue_number)
     if (
         StatusLabel.IN_PROGRESS not in labels
         or key in run_state.active_worktrees
         or any(
-            str(item.issue_number) == command.subject_id
+            str(item.core.issue_number) == command.subject_id
             for item in run_state.active_worktrees.values()
         )
     ):
@@ -1078,7 +1064,7 @@ def _apply_missing_entry_bookkeeping(
         raise
     print(
         f"Self-healing: Restored active worktree state for subtask '{subtask_id}' "
-        f"(Issue #{active.issue_number})",
+        f"(Issue #{active.core.issue_number})",
         file=sys.stderr,
     )
     return RepairResult(command=command, status=RepairStatus.APPLIED)

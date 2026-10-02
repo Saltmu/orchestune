@@ -204,30 +204,30 @@ class _DispatchConsistencyAdapter:
     def _executions(self) -> tuple[ExecutionRecord, ...]:
         return tuple(
             ExecutionRecord(
-                issue_number=active.issue_number,
-                branch=active.branch,
-                worktree_path=active.worktree_path,
-                pid=active.pid,
-                external_id=active.external_id,
-                started_at=active.started_at,
+                issue_number=active.core.issue_number,
+                branch=active.core.branch,
+                worktree_path=active.core.worktree_path,
+                pid=active.launch.pid,
+                external_id=active.launch.external_id,
+                started_at=active.launch.started_at,
                 kind=(
                     EXECUTION_KIND_CLOUD
-                    if active.external_id is not None
+                    if active.launch.external_id is not None
                     else EXECUTION_KIND_LOCAL
-                    if active.pid is not None
+                    if active.launch.pid is not None
                     else None
                 ),
-                owner_kind=active.owner_kind,
-                claim_id=active.claim_id,
-                claim_stage=active.claim_stage,
-                launch_phase=active.launch_phase,
+                owner_kind=active.claim.owner_kind,
+                claim_id=active.claim.claim_id,
+                claim_stage=active.claim.claim_stage,
+                launch_phase=active.launch.launch_phase,
             )
             for _, active in sorted(self._run_state.active_worktrees.items())
         )
 
     def _branches_by_issue(self) -> dict[int, str]:
         branches = {
-            active.issue_number: active.branch
+            active.core.issue_number: active.core.branch
             for active in self._run_state.active_worktrees.values()
         }
         for task in self._tasks_by_issue.values():
@@ -282,9 +282,9 @@ class _DispatchConsistencyAdapter:
         未解決」を表現する（依存なし扱いへ倒さない）。
         """
         forced_serial_issues = {
-            active.issue_number
+            active.core.issue_number
             for active in self._run_state.active_worktrees.values()
-            if active.forced_serial
+            if active.launch.forced_serial
         }
         assessments = {
             task.issue_number: self._completion_evidence.assess_dependencies(
@@ -1004,7 +1004,7 @@ def _prepare_cycle_context(run_state, config: DispatcherConfig, now: float):
         apply=config.apply,
         issues_by_number={issue.number: issue for issue in issues.all()},
         active_issue_numbers=frozenset(
-            active.issue_number for active in run_state.active_worktrees.values()
+            active.core.issue_number for active in run_state.active_worktrees.values()
         ),
     )
     actions = CycleActionAdapter(run_state, config, now)

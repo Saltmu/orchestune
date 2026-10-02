@@ -8,8 +8,9 @@ CI validation runs before acquiring that lock.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, overload
 from uuid import uuid4
@@ -32,7 +33,21 @@ from orchestune.infra.process_utils import (
     assert_run_state_lock_held,
     run_state_lock,
 )
+from orchestune.ledger.active_lifecycle import has_completion_reservation
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktree,
+)
 from orchestune.ledger.run_state import load_run_state, save_run_state
+
+
+def thaw_json(value: Any) -> Any:
+    """Copy immutable JSON views back into dict/list containers."""
+    if isinstance(value, Mapping):
+        return {key: thaw_json(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [thaw_json(item) for item in value]
+    return value
 
 
 class CompletionJournalError(RuntimeError):
@@ -59,22 +74,84 @@ def _lock_path_for(state_path: Path) -> Path:
     return Path(state_path).with_suffix(".lock")
 
 
+def with_completion(
+    active: ActiveWorktree, completion: ActiveCompletionJournal
+) -> ActiveWorktree:
+    """Return a copy replacing only completion-owned fields through the owner boundary."""
+    if not isinstance(completion, ActiveCompletionJournal):
+        raise TypeError("completion must be ActiveCompletionJournal")
+    return replace(active, completion=completion)
+
+
+def active_completion_from_record(
+    record: CompletionJournalRecord,
+    *,
+    handoff: bool = False,
+    completion_policy_config: Any | None = None,
+) -> ActiveCompletionJournal:
+    """Explicitly convert durable CompletionJournalRecord to transient ActiveCompletionJournal."""
+    payload = {
+        **record.outcome_payload,
+        "outcome": record.outcome_payload["body"],
+    }
+    comment_id = None
+    comment_url = None
+    if record.posting_evidence:
+        comment_id = record.posting_evidence.get("comment_id")
+        comment_url = record.posting_evidence.get("comment_url")
+    return ActiveCompletionJournal(
+        completion_id=record.completion_id,
+        completion_result=record.result,
+        completion_stage=record.stage.value,
+        completion_payload=payload,
+        completion_comment_id=comment_id,
+        completion_comment_url=comment_url,
+        completion_handoff_ready=handoff,
+        completion_policy_config=completion_policy_config,
+    )
+
+
+def apply_completion_record(
+    active: ActiveWorktree,
+    record: CompletionJournalRecord,
+    *,
+    handoff: bool = False,
+) -> ActiveWorktree:
+    """Replace all completion fields on active with the state derived from record."""
+    completion = active_completion_from_record(
+        record,
+        handoff=handoff,
+        completion_policy_config=active.completion.completion_policy_config,
+    )
+    if (
+        completion.completion_comment_id is None
+        and active.completion.completion_comment_id is not None
+    ):
+        completion = replace(
+            completion,
+            completion_comment_id=active.completion.completion_comment_id,
+            completion_comment_url=active.completion.completion_comment_url,
+        )
+    return with_completion(active, completion)
+
+
 def _to_journal(active: Any) -> CompletionJournal:
-    assert active.completion_id is not None
-    assert active.completion_result is not None
-    assert active.completion_stage is not None
+    completion = active.completion
+    assert completion.completion_id is not None
+    assert completion.completion_result is not None
+    assert completion.completion_stage is not None
     return CompletionJournal(
-        issue_number=active.issue_number,
-        claim_id=active.claim_id,
-        completion_id=active.completion_id,
-        result=active.completion_result,
-        stage=active.completion_stage,
-        payload=dict(active.completion_payload)
-        if active.completion_payload is not None
+        issue_number=active.core.issue_number,
+        claim_id=active.claim.claim_id,
+        completion_id=completion.completion_id,
+        result=completion.completion_result,
+        stage=completion.completion_stage,
+        payload=dict(completion.completion_payload)
+        if completion.completion_payload is not None
         else None,
-        comment_id=active.completion_comment_id,
-        comment_url=active.completion_comment_url,
-        handoff_ready=active.completion_handoff_ready,
+        comment_id=completion.completion_comment_id,
+        comment_url=completion.completion_comment_url,
+        handoff_ready=completion.completion_handoff_ready,
     )
 
 
@@ -101,32 +178,31 @@ def _acquire_run_state_lock(lock_path: Path, timeout_seconds: float) -> Any:
 
 
 def _apply_or_reject_conflicting_payload(
-    active: Any, payload: dict[str, Any] | None
-) -> bool:
-    """Apply a first-time payload in-memory, accept an identical resend as a
-    no-op, or reject a differing one — including once the completion has
-    already been handed off (with or without a payload on record yet).
+    active: ActiveWorktree, payload: dict[str, Any] | None
+) -> tuple[ActiveWorktree, bool]:
+    """Apply a first-time payload, accept an identical resend as a no-op, or
+    reject a differing one.
 
-    A concurrent or restarted caller resuming the same completion/result, or
-    recording handoff evidence for it, must not silently overwrite payload
-    content another attempt already reserved (and may already have posted):
-    the persisted payload is the one that evidence (comment id/url) will end
-    up describing. Returns True if the in-memory payload changed, so the
-    caller knows whether it still needs to persist it.
+    Returns (active, True) if the payload changed, so the caller knows whether
+    it still needs to persist the updated active worktree. Returns (active, False)
+    if the payload is None or already identical.
     """
-    if payload is None or active.completion_payload == payload:
-        return False
-    if active.completion_handoff_ready or active.completion_payload is not None:
+    if payload is None or active.completion.completion_payload == payload:
+        return active, False
+    if (
+        active.completion.completion_handoff_ready
+        or active.completion.completion_payload is not None
+    ):
         raise CompletionJournalError(
             CompleteFailureReason.CONCURRENT_COMPLETION,
-            "A different completion payload is already reserved for this " "completion",
+            "A different completion payload is already reserved for this completion",
         )
-    active.completion_payload = dict(payload)
-    return True
+    new_comp = replace(active.completion, completion_payload=dict(payload))
+    return with_completion(active, new_comp), True
 
 
 def _resume_existing_reservation(
-    active: Any,
+    active: ActiveWorktree,
     issue_number: int,
     completion_id: str | None,
     result: str,
@@ -135,34 +211,38 @@ def _resume_existing_reservation(
     state_path: Path,
 ) -> CompletionJournal:
     """Idempotently resume an already-reserved completion, or reject the attempt."""
-    if completion_id is not None and completion_id != active.completion_id:
+    if completion_id is not None and completion_id != active.completion.completion_id:
         raise CompletionJournalError(
             CompleteFailureReason.CONCURRENT_COMPLETION,
-            f"A different completion ({active.completion_id!r}) is "
+            f"A different completion ({active.completion.completion_id!r}) is "
             f"already reserved for issue #{issue_number}",
         )
-    if active.completion_result != result:
+    if active.completion.completion_result != result:
         raise CompletionJournalError(
             CompleteFailureReason.INVALID_STAGE_TRANSITION,
             f"Cannot change reserved completion result from "
-            f"{active.completion_result!r} to {result!r}",
+            f"{active.completion.completion_result!r} to {result!r}",
         )
-    if _apply_or_reject_conflicting_payload(active, payload):
+    active, changed = _apply_or_reject_conflicting_payload(active, payload)
+    if changed:
+        run_state.active_worktrees[str(issue_number)] = active
         _save_or_raise(run_state, state_path)
     return _to_journal(active)
 
 
-def _validate_resumable_claim(active: Any, journal: CompletionJournal) -> None:
+def _validate_resumable_claim(
+    active: ActiveWorktree | None, journal: CompletionJournal
+) -> None:
     """Reject a stale resume: the claim and reserved completion must be unchanged."""
-    if active is None or active.claim_id != journal.claim_id:
+    if active is None or active.claim.claim_id != journal.claim_id:
         raise CompletionJournalError(
             CompleteFailureReason.CLAIM_NOT_FOUND,
             f"No active claim {journal.claim_id!r} found for issue "
             f"#{journal.issue_number}",
         )
     if (
-        active.completion_id != journal.completion_id
-        or active.completion_result != journal.result
+        active.completion.completion_id != journal.completion_id
+        or active.completion.completion_result != journal.result
     ):
         raise CompletionJournalError(
             CompleteFailureReason.INVALID_STAGE_TRANSITION,
@@ -171,25 +251,31 @@ def _validate_resumable_claim(active: Any, journal: CompletionJournal) -> None:
 
 
 def _apply_handoff_evidence(
-    active: Any,
+    active: ActiveWorktree,
     comment_id: str | None,
     comment_url: str | None,
     payload: dict[str, Any] | None,
-) -> bool:
+) -> tuple[ActiveWorktree, bool]:
     """Apply new posting evidence onto ``active``.
 
-    Returns True if the completion was already terminal (handed off), in
-    which case the caller should return the existing record unchanged.
+    Returns (active, True) if the completion was already terminal (handed off),
+    in which case the caller should return the existing record unchanged.
+    Returns (active, False) if new evidence was applied. Caller must store the
+    returned active worktree on run_state.
     Raises if the supplied evidence conflicts with an already-terminal
     record instead of matching it exactly.
     """
-    if active.completion_handoff_ready:
+    if active.completion.completion_handoff_ready:
         conflicts = (
-            (comment_id is not None and comment_id != active.completion_comment_id)
-            or (
-                comment_url is not None and comment_url != active.completion_comment_url
+            (
+                comment_id is not None
+                and comment_id != active.completion.completion_comment_id
             )
-            or (payload is not None and payload != active.completion_payload)
+            or (
+                comment_url is not None
+                and comment_url != active.completion.completion_comment_url
+            )
+            or (payload is not None and payload != active.completion.completion_payload)
         )
         if conflicts:
             raise CompletionJournalError(
@@ -197,14 +283,26 @@ def _apply_handoff_evidence(
                 "Completion already handed off to GC with different evidence; "
                 "retried evidence must match exactly",
             )
-        return True
+        return active, True
 
-    if comment_id is not None:
-        active.completion_comment_id = comment_id
-    if comment_url is not None:
-        active.completion_comment_url = comment_url
-    _apply_or_reject_conflicting_payload(active, payload)
-    return False
+    cid = (
+        comment_id
+        if comment_id is not None
+        else active.completion.completion_comment_id
+    )
+    curl = (
+        comment_url
+        if comment_url is not None
+        else active.completion.completion_comment_url
+    )
+    new_comp = replace(
+        active.completion,
+        completion_comment_id=cid,
+        completion_comment_url=curl,
+    )
+    active = with_completion(active, new_comp)
+    active, _ = _apply_or_reject_conflicting_payload(active, payload)
+    return active, False
 
 
 @contextmanager
@@ -452,12 +550,12 @@ def _reserve_legacy_completion(
     try:
         run_state = load_run_state(state_path)
         active = run_state.active_worktrees.get(str(issue_number))
-        if active is None or active.claim_id != claim_id:
+        if active is None or active.claim.claim_id != claim_id:
             raise CompletionJournalError(
                 CompleteFailureReason.CLAIM_NOT_FOUND,
                 f"No active claim {claim_id!r} found for issue #{issue_number}",
             )
-        if active.completion_id is not None:
+        if has_completion_reservation(active):
             return _resume_existing_reservation(
                 active,
                 issue_number,
@@ -467,11 +565,19 @@ def _reserve_legacy_completion(
                 run_state,
                 state_path,
             )
-        active.completion_id = completion_id or _new_completion_id()
-        active.completion_result = result
-        active.completion_stage = CompleteStage.JOURNALING.value
-        if payload is not None:
-            active.completion_payload = dict(payload)
+        new_comp = replace(
+            active.completion,
+            completion_id=completion_id or _new_completion_id(),
+            completion_result=result,
+            completion_stage=CompleteStage.JOURNALING.value,
+            completion_payload=(
+                dict(payload)
+                if payload is not None
+                else active.completion.completion_payload
+            ),
+        )
+        active = with_completion(active, new_comp)
+        run_state.active_worktrees[str(issue_number)] = active
         _save_or_raise(run_state, state_path)
         return _to_journal(active)
     finally:
@@ -571,11 +677,15 @@ def _mark_legacy_handoff_ready(
         _validate_resumable_claim(active, journal)
         assert active is not None  # narrowed by _validate_resumable_claim above
 
-        if _apply_handoff_evidence(active, comment_id, comment_url, payload):
+        active, ready = _apply_handoff_evidence(
+            active, comment_id, comment_url, payload
+        )
+        if ready:
             return _to_journal(active)
 
         if not _has_posting_evidence(
-            active.completion_comment_id, active.completion_comment_url
+            active.completion.completion_comment_id,
+            active.completion.completion_comment_url,
         ):
             raise CompletionJournalError(
                 CompleteFailureReason.EVIDENCE_MISSING,
@@ -583,8 +693,13 @@ def _mark_legacy_handoff_ready(
                 "comment id and url",
             )
 
-        active.completion_handoff_ready = True
-        active.completion_stage = CompleteStage.HANDED_OFF_TO_GC.value
+        new_comp = replace(
+            active.completion,
+            completion_handoff_ready=True,
+            completion_stage=CompleteStage.HANDED_OFF_TO_GC.value,
+        )
+        active = with_completion(active, new_comp)
+        run_state.active_worktrees[str(journal.issue_number)] = active
         _save_or_raise(run_state, state_path)
         return _to_journal(active)
     finally:
@@ -801,10 +916,14 @@ __all__ = [
     "CompletionReplayReceipt",
     "CompletionReservation",
     "DownstreamPolicyRecord",
+    "active_completion_from_record",
+    "apply_completion_record",
     "completion_journal_lock",
     "mark_handoff_ready",
     "record_label_confirmation",
     "record_posting_evidence",
     "reserve_completion",
     "reserve_completion_locked",
+    "thaw_json",
+    "with_completion",
 ]

@@ -49,8 +49,8 @@ def collect_confirmed_completion(
     task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome:
     event = {
-        "issue_number": active.issue_number,
-        "worktree_path": active.worktree_path,
+        "issue_number": active.core.issue_number,
+        "worktree_path": active.core.worktree_path,
         "action": "completion_reserved_hold",
     }
     try:
@@ -62,9 +62,12 @@ def collect_confirmed_completion(
             fresh = load_run_state_readonly(config.run_state_path).active_worktrees.get(
                 key
             )
-            if fresh is None or (fresh.claim_id, fresh.completion_id) != (
-                active.claim_id,
-                active.completion_id,
+            if fresh is None or (
+                fresh.claim.claim_id,
+                fresh.completion.completion_id,
+            ) != (
+                active.claim.claim_id,
+                active.completion.completion_id,
             ):
                 _sync_after_gc(state, config)
                 event["reason"] = "state_changed"
@@ -89,13 +92,17 @@ def _prepare_collection(
 ) -> dict[str, Any]:
     policies = process_completion_policies(state, config)
     if any(
-        e["issue_number"] == active.issue_number
+        e["issue_number"] == active.core.issue_number
         and e["action"] == "completion_policy_hold"
         for e in policies
     ):
         return {"action": "completion_reserved_hold"}
     record = next(
-        (r for r in confirmed_records(state) if r.issue_number == active.issue_number),
+        (
+            r
+            for r in confirmed_records(state)
+            if r.issue_number == active.core.issue_number
+        ),
         None,
     )
     if record is None or journal_outcome(record) is None:

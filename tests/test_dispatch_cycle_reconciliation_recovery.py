@@ -17,12 +17,14 @@ from orchestune.dispatch.cycle_action_contracts import ActivePhaseResult
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.ledger.run_state import (
-    ActiveWorktree,
     RunState,
 )
 from orchestune.models import IssueRecord
+from tests.dispatch_test_support import (
+    flat_active_worktree,
+    stub_label_actor_permission,
+)
 from tests.dispatch_test_support import make_test_task as _task
-from tests.dispatch_test_support import stub_label_actor_permission
 
 
 @pytest.fixture(autouse=True)
@@ -245,7 +247,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         )
 
         # アクティブワークツリーが存在する（逸脱検知を走らせるため）
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1,
             branch="branch-active",
             worktree_path="worktrees/w1",
@@ -362,7 +364,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             apply=True,
         )
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1,
             branch="branch-active",
             worktree_path="worktrees/w1",

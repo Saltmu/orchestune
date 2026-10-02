@@ -42,6 +42,27 @@ def test_state_and_label_modules_are_owned_by_ledger() -> None:
     assert (PACKAGE_ROOT / "ledger" / "status_labels.py").exists()
 
 
+def test_active_worktree_modules_are_owned_by_ledger() -> None:
+    assert (PACKAGE_ROOT / "ledger" / "active_records.py").exists()
+    assert (PACKAGE_ROOT / "ledger" / "active_codec.py").exists()
+    assert (PACKAGE_ROOT / "ledger" / "active_lifecycle.py").exists()
+    assert not (PACKAGE_ROOT / "dispatch" / "active_records.py").exists()
+    assert not (PACKAGE_ROOT / "claim" / "active_records.py").exists()
+
+
+def test_active_worktree_modules_do_not_import_complete() -> None:
+    graph = _import_graph()
+    for mod in [
+        "ledger.active_records",
+        "ledger.active_codec",
+        "ledger.active_lifecycle",
+    ]:
+        deps = graph.get(mod, set())
+        assert not any(
+            dep == "complete" or dep.startswith("complete.") for dep in deps
+        ), f"{mod} imports complete: {deps}"
+
+
 def test_ledger_does_not_import_claim_or_dispatch() -> None:
     ledger_modules = {
         name: dependencies
