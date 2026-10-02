@@ -165,6 +165,16 @@ class TestMatch:
 
         assert report.match_thread(_row(line=10), threads) is threads[1]
 
+    def test_identical_repeated_threads_prefer_the_latest_on_equal_distance(
+        self,
+    ) -> None:
+        older = _thread(line=10, outdated=True)
+        newer = _thread(line=10, resolved=True)
+        threads = report.parse_threads([older, newer])
+
+        assert report.match_thread(_row(line=10), threads) is threads[1]
+        assert report.match_thread(_row(line=None), threads) is threads[1]
+
 
 class TestBuildReport:
     def _fetcher(self, by_pr: dict[int, list[dict[str, Any]]]) -> Any:

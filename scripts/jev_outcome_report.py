@@ -175,6 +175,12 @@ def classify(thread: Thread) -> str:
 
 
 def match_thread(row: dict[str, Any], threads: Sequence[Thread]) -> Thread | None:
+    """Return the thread for a finding.
+
+    ``dedupe()`` keeps the latest evaluation of a repeated finding, so among
+    identical threads the one closest to the logged line wins and, on a tie, the
+    latest posted thread (GitHub returns threads in creation order).
+    """
     path = str(row.get("path") or "")
     body = normalize_body(row.get("comment"))
     candidates = [t for t in threads if t.path == path and t.body == body]
@@ -182,9 +188,9 @@ def match_thread(row: dict[str, Any], threads: Sequence[Thread]) -> Thread | Non
         return None
     row_line = _as_int(row.get("line"))
     if row_line is None or len(candidates) == 1:
-        return candidates[0]
+        return candidates[-1]
     return min(
-        candidates,
+        reversed(candidates),
         key=lambda t: abs(t.line - row_line) if t.line is not None else float("inf"),
     )
 
