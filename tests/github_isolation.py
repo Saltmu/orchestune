@@ -1,7 +1,8 @@
 """Block unmocked GitHub CLI and HTTP calls throughout the test process tree.
 
-The socket guard is best-effort: it can identify GitHub hostnames, not raw IP
-addresses. Python children started with ``-I`` or ``-S`` also skip the
+The guards are best-effort: the socket check can identify GitHub hostnames,
+not raw IP addresses, and shell command matching is heuristic rather than a
+full shell parser. Python children started with ``-I`` or ``-S`` also skip the
 ``sitecustomize`` startup hook used to install their process-local guards.
 """
 
@@ -130,12 +131,26 @@ def _command_parts(args: Any) -> list[str]:
     return [_as_text(args)]
 
 
+def _is_shell_command_option(value: str) -> bool:
+    lowered = value.lower()
+    return (
+        lowered == "/c"
+        or lowered == "-c"
+        or (
+            lowered.startswith("-")
+            and not lowered.startswith("--")
+            and "c" in lowered[1:]
+        )
+    )
+
+
 def _shell_contains_absolute_gh(args: Any, shell: bool = False) -> bool:
     parts = _command_parts(args)
     if shell and isinstance(args, bytes | str):
         commands = parts
     elif shell:
-        commands = parts[1:]
+        # Popen(shell=True) treats the first sequence item as the shell command.
+        commands = parts[:1]
     elif parts and ntpath.basename(parts[0].replace("/", "\\")).lower() in (
         _SHELL_EXECUTABLES
     ):
@@ -144,7 +159,7 @@ def _shell_contains_absolute_gh(args: Any, shell: bool = False) -> bool:
             (
                 index + 1
                 for index, value in enumerate(shell_args)
-                if value.lower() in {"-c", "/c"}
+                if _is_shell_command_option(value)
             ),
             len(shell_args),
         )

@@ -105,6 +105,37 @@ def test_shell_list_cannot_launch_absolute_gh(
         subprocess.Popen(command)
 
 
+def test_shell_true_sequence_scans_command_position_for_absolute_gh(
+    github_access_isolation: GitHubAccessMonitor,
+) -> None:
+    github_access_isolation.expect("cli")
+    gh_path = Path(os.sep) / "missing" / ("gh.exe" if os.name == "nt" else "gh")
+    command = f"echo safe; {gh_path} api /user"
+
+    with pytest.raises(GitHubAccessBlocked, match="blocked unmocked GitHub"):
+        subprocess.Popen([command], shell=True)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell sequence semantics")
+def test_shell_true_sequence_does_not_scan_extra_arguments_as_commands() -> None:
+    gh_path = Path(os.sep) / "missing" / "gh"
+
+    result = subprocess.run(["true", str(gh_path)], shell=True, check=True)
+
+    assert result.returncode == 0
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell command flags")
+def test_combined_shell_command_flag_cannot_launch_absolute_gh(
+    github_access_isolation: GitHubAccessMonitor,
+) -> None:
+    github_access_isolation.expect("cli")
+    gh_path = Path(os.sep) / "missing" / "gh"
+
+    with pytest.raises(GitHubAccessBlocked, match="blocked unmocked GitHub"):
+        subprocess.Popen(["sh", "-ec", f"{gh_path} api /user"])
+
+
 def test_shell_child_uses_the_guarded_path_shim(
     github_access_isolation: GitHubAccessMonitor,
 ) -> None:
