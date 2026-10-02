@@ -305,6 +305,61 @@ def build(core, launch, claim, completion):
     )
 
 
+def test_assignment_alias_propagation_tracks_violations() -> None:
+    source = """
+from orchestune.ledger.active_records import ActiveWorktree
+
+def alias_flow(active: ActiveWorktree):
+    record = active
+    record.claim = None
+    p = record.pid
+"""
+    violations = active_worktree_boundary_violations(
+        source, module="orchestune.dispatch.scoring"
+    )
+    targets_and_kinds = {(v.target, v.kind) for v in violations}
+    assert targets_and_kinds == {
+        ("claim", "subrecord-direct-assign"),
+        ("pid", "flat-attribute-access"),
+    }
+
+
+def test_imported_type_alias_in_annotation_recognized() -> None:
+    source = """
+from orchestune.ledger.active_records import ActiveWorktree as Worktree
+
+def check_alias(record: Worktree):
+    record.launch = None
+"""
+    violations = active_worktree_boundary_violations(
+        source, module="orchestune.dispatch.scoring"
+    )
+    targets_and_kinds = {(v.target, v.kind) for v in violations}
+    assert targets_and_kinds == {
+        ("launch", "subrecord-direct-assign"),
+    }
+
+
+def test_inner_scope_shadowing_honors_inner_binding() -> None:
+    source = """
+from dataclasses import dataclass
+from orchestune.ledger.active_records import ActiveWorktree
+
+@dataclass
+class OtherDTO:
+    claim: str
+
+def outer(active: ActiveWorktree):
+    def inner(active: OtherDTO):
+        active.claim = "safe"
+    return inner
+"""
+    violations = active_worktree_boundary_violations(
+        source, module="orchestune.dispatch.scoring"
+    )
+    assert not violations
+
+
 def test_exception_requires_reason() -> None:
     with pytest.raises(ValueError, match="reason must not be empty"):
         ActiveWorktreeBoundaryException(

@@ -253,6 +253,8 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
             "ActiveWorktree",
             "ActiveWorktree.from_records",
         }
+        self.active_type_aliases: set[str] = {"ActiveWorktree"}
+        self.completion_type_aliases: set[str] = {"ActiveCompletionJournal"}
         self.active_vars_stack: list[set[str]] = [set()]
         self.completion_vars_stack: list[set[str]] = [set()]
         self.other_vars_stack: list[set[str]] = [set()]
@@ -265,18 +267,27 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
         )
 
     def _is_active_var(self, name: str) -> bool:
-        for scope in reversed(self.active_vars_stack):
-            if name in scope:
+        for active_scope, other_scope in zip(
+            reversed(self.active_vars_stack),
+            reversed(self.other_vars_stack),
+            strict=True,
+        ):
+            if name in active_scope:
                 return True
-        for scope in reversed(self.other_vars_stack):
-            if name in scope:
+            if name in other_scope:
                 return False
         return name in {"active", "active_worktree"}
 
     def _is_completion_var(self, name: str) -> bool:
-        for scope in reversed(self.completion_vars_stack):
-            if name in scope:
+        for comp_scope, other_scope in zip(
+            reversed(self.completion_vars_stack),
+            reversed(self.other_vars_stack),
+            strict=True,
+        ):
+            if name in comp_scope:
                 return True
+            if name in other_scope:
+                return False
         return False
 
     def visit_Import(self, node: ast.Import) -> None:
@@ -288,6 +299,7 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
                 mod_name = alias.asname or alias.name
                 self.constructor_names.add(f"{mod_name}.ActiveWorktree")
                 self.constructor_names.add(f"{mod_name}.ActiveWorktree.from_records")
+                self.active_type_aliases.add(f"{mod_name}.ActiveWorktree")
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -302,10 +314,16 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
                 ctor_name = alias.asname or "ActiveWorktree"
                 self.constructor_names.add(ctor_name)
                 self.constructor_names.add(f"{ctor_name}.from_records")
+                self.active_type_aliases.add(ctor_name)
+            elif alias.name == "ActiveCompletionJournal":
+                self.completion_type_aliases.add(
+                    alias.asname or "ActiveCompletionJournal"
+                )
             elif alias.name == "active_records":
                 mod_name = alias.asname or "active_records"
                 self.constructor_names.add(f"{mod_name}.ActiveWorktree")
                 self.constructor_names.add(f"{mod_name}.ActiveWorktree.from_records")
+                self.active_type_aliases.add(f"{mod_name}.ActiveWorktree")
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -322,9 +340,9 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
         for arg in node.args.args + node.args.kwonlyargs:
             if arg.annotation is not None:
                 types = _extract_type_names(arg.annotation)
-                if "ActiveWorktree" in types:
+                if any(t in self.active_type_aliases for t in types):
                     active_scope.add(arg.arg)
-                elif "ActiveCompletionJournal" in types:
+                elif any(t in self.completion_type_aliases for t in types):
                     completion_scope.add(arg.arg)
                 elif types - {"None", "NoneType"}:
                     other_scope.add(arg.arg)
@@ -354,9 +372,9 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
         self._check_assignment([node.target], node.lineno)
         if isinstance(node.target, ast.Name):
             types = _extract_type_names(node.annotation)
-            if "ActiveWorktree" in types:
+            if any(t in self.active_type_aliases for t in types):
                 self.active_vars_stack[-1].add(node.target.id)
-            elif "ActiveCompletionJournal" in types:
+            elif any(t in self.completion_type_aliases for t in types):
                 self.completion_vars_stack[-1].add(node.target.id)
             elif types - {"None", "NoneType"}:
                 self.other_vars_stack[-1].add(node.target.id)
@@ -389,7 +407,17 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
     def _track_assigned_var(self, targets: list[ast.expr], value: ast.expr) -> None:
         for target in targets:
             if isinstance(target, ast.Name):
-                if isinstance(value, ast.Call):
+                if isinstance(value, ast.Name):
+                    if self._is_active_var(value.id):
+                        self.active_vars_stack[-1].add(target.id)
+                    elif self._is_completion_var(value.id):
+                        self.completion_vars_stack[-1].add(target.id)
+                    else:
+                        for other_scope in reversed(self.other_vars_stack):
+                            if value.id in other_scope:
+                                self.other_vars_stack[-1].add(target.id)
+                                break
+                elif isinstance(value, ast.Call):
                     func_name = _extract_func_name(value.func)
                     if self._is_constructor_call(func_name) or (
                         func_name is not None
