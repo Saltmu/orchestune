@@ -86,9 +86,9 @@ def decide_gc_reclaims(
         return []
     held_paths = held_worktree_paths or set()
     held_issues = {
-        active.issue_number
+        active.core.issue_number
         for active in run_state.active_worktrees.values()
-        if active.worktree_path in held_paths
+        if active.core.worktree_path in held_paths
     }
     adapter = _GcReclaimAdapter(
         run_state=run_state,
@@ -100,7 +100,7 @@ def decide_gc_reclaims(
     scan = _gc_supervisor().full_scan("gc", observer=adapter, deriver=adapter)
     held_subjects = {str(issue_number) for issue_number in held_issues}
     active_by_subject = {
-        str(active.issue_number): (key, active)
+        str(active.core.issue_number): (key, active)
         for key, active in run_state.active_worktrees.items()
     }
     planned = (

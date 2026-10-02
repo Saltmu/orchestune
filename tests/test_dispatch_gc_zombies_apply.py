@@ -96,7 +96,7 @@ class TestApplyZombieOrTimeoutReclaim:
 
         assert result.status is RepairStatus.APPLIED
         backup.assert_called_once()
-        remove.assert_called_once_with(active.worktree_path)
+        remove.assert_called_once_with(active.core.worktree_path)
         assert run_state.active_worktrees == {}
 
     def test_typed_reclaim_command_defers_after_active_execution_changes(
@@ -296,10 +296,11 @@ class TestApplyZombieOrTimeoutReclaim:
             event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
         mock_backup.assert_called_once_with(
-            active.worktree_path, "WIP: backup by Orchestune GC (process disappeared)"
+            active.core.worktree_path,
+            "WIP: backup by Orchestune GC (process disappeared)",
         )
         mock_kill.assert_not_called()
-        mock_remove_worktree.assert_called_once_with(active.worktree_path)
+        mock_remove_worktree.assert_called_once_with(active.core.worktree_path)
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
         fake_forge.add_comment.assert_called_once()

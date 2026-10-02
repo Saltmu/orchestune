@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.consistency.invariants.execution import (
@@ -27,8 +27,10 @@ from orchestune.dispatch.gc.git import (
     backup_wip_commit,
     remove_worktree,
 )
+from orchestune.dispatch.launch_state import with_launch
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
+from orchestune.ledger.active_lifecycle import ActiveWorktreeLifecycle, lifecycle
 from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import (
     ActiveWorktree,
@@ -70,6 +72,18 @@ def _resolve_reclaim_count(run_state: RunState, issue_number: int) -> int:
     return previous_record.count + 1
 
 
+def _is_completing_or_handoff(active: ActiveWorktree) -> bool:
+    """completionまたはhandoff状態（未確定の古いhandoffを含む）か判定する。"""
+    return (
+        lifecycle(active)
+        in {
+            ActiveWorktreeLifecycle.COMPLETING,
+            ActiveWorktreeLifecycle.HANDOFF_READY,
+        }
+        or active.completion.completion_id is not None
+    )
+
+
 def build_interactive_exclusion_event(
     active: ActiveWorktree,
     task: TaskMetadata | None = None,
@@ -80,11 +94,11 @@ def build_interactive_exclusion_event(
     """owner_kind=interactive の active が GC 回収から除外された診断イベントを構築する。"""
     resolved_subtask_id = subtask_id or (task.subtask_id if task else "")
     return {
-        "issue_number": active.issue_number,
+        "issue_number": active.core.issue_number,
         "subtask_id": resolved_subtask_id,
         "action": "gc_reclaim_excluded_interactive",
         "reason": reason,
-        "owner_kind": active.owner_kind,
+        "owner_kind": active.claim.owner_kind,
     }
 
 
@@ -95,20 +109,22 @@ def list_unattended_interactive_claims(
     """レポート・診断向けに、放置された（activeに存在する）interactive claimを列挙する。"""
     results: list[dict] = []
     for key, active in sorted(
-        run_state.active_worktrees.items(), key=lambda item: item[1].issue_number
+        run_state.active_worktrees.items(), key=lambda item: item[1].core.issue_number
     ):
-        if active.owner_kind == "interactive":
-            task = tasks_by_issue.get(active.issue_number) if tasks_by_issue else None
+        if active.claim.owner_kind == "interactive":
+            task = (
+                tasks_by_issue.get(active.core.issue_number) if tasks_by_issue else None
+            )
             results.append(
                 {
                     "key": key,
-                    "issue_number": active.issue_number,
+                    "issue_number": active.core.issue_number,
                     "subtask_id": task.subtask_id if task else "",
-                    "worktree_path": active.worktree_path,
-                    "branch": active.branch,
-                    "claim_id": active.claim_id,
-                    "reservation_kind": active.reservation_kind,
-                    "started_at": active.started_at,
+                    "worktree_path": active.core.worktree_path,
+                    "branch": active.core.branch,
+                    "claim_id": active.claim.claim_id,
+                    "reservation_kind": active.claim.reservation_kind,
+                    "started_at": active.launch.started_at,
                     "reason": "interactive claim requires manual completion or inspection",
                 }
             )
@@ -144,11 +160,11 @@ def _build_reclaim_candidate(
     now: float,
 ) -> ZombieOrTimeoutReclaim | None:
     """判定結果からZombieOrTimeoutReclaimインスタンスを構築する。
-    owner_kind=interactive の場合は回収候補から除外し None を返す。
+    owner_kind=interactive の場合および完了進行中・handoff状態の場合は回収候補から除外し None を返す。
     """
-    if active.owner_kind == "interactive":
+    if active.claim.owner_kind == "interactive":
         return None
-    if active.completion_id is not None:
+    if _is_completing_or_handoff(active):
         return None
     is_timeout = EXECUTION_TIMED_OUT in finding_codes
     reason = _resolve_reclaim_reason(finding_codes, timed_out=is_timeout)
@@ -199,12 +215,12 @@ def _reclaim_candidate_from_command(
     return _build_reclaim_candidate(
         key=key,
         active=active,
-        active_task=tasks_by_issue.get(active.issue_number),
+        active_task=tasks_by_issue.get(active.core.issue_number),
         finding_codes=finding_codes,
         process_alive=(
-            active.pid is not None and LOCAL_PROCESS_DEAD not in finding_codes
+            active.launch.pid is not None and LOCAL_PROCESS_DEAD not in finding_codes
         ),
-        reclaim_count=_resolve_reclaim_count(run_state, active.issue_number),
+        reclaim_count=_resolve_reclaim_count(run_state, active.core.issue_number),
         max_task_reclaims=max_task_reclaims,
         now=now,
     )
@@ -236,8 +252,8 @@ def _record_reclaim(
     渡さないと既定の24時間窓で起動履歴を削り、`open_prs`を渡さないと重複起動
     判定に必要な完了履歴の保護が外れる）。
     """
-    previous = run_state.task_reclaim_counts.get(reclaim.active.issue_number)
-    run_state.task_reclaim_counts[reclaim.active.issue_number] = TaskReclaimRecord(
+    previous = run_state.task_reclaim_counts.get(reclaim.active.core.issue_number)
+    run_state.task_reclaim_counts[reclaim.active.core.issue_number] = TaskReclaimRecord(
         count=reclaim.reclaim_count, last_reclaimed_at=reclaim.now, pending=True
     )
     try:
@@ -250,11 +266,11 @@ def _record_reclaim(
         )
     except Exception as e:  # noqa: BLE001 - 保存失敗時は回収を見送る
         if previous is None:
-            run_state.task_reclaim_counts.pop(reclaim.active.issue_number, None)
+            run_state.task_reclaim_counts.pop(reclaim.active.core.issue_number, None)
         else:
-            run_state.task_reclaim_counts[reclaim.active.issue_number] = previous
+            run_state.task_reclaim_counts[reclaim.active.core.issue_number] = previous
         print(
-            f"Warning: skipping GC reclaim of issue #{reclaim.active.issue_number}: "
+            f"Warning: skipping GC reclaim of issue #{reclaim.active.core.issue_number}: "
             f"failed to persist the reclaim count to {config.run_state_path}: {e}",
             file=sys.stderr,
         )
@@ -265,7 +281,7 @@ def _record_reclaim(
 def _reclaim_event(reclaim: ZombieOrTimeoutReclaim, action: str, counted: bool) -> dict:
     """回収結果イベントを組み立てる（`_apply_zombie_or_timeout_reclaim`の戻り値）。"""
     return {
-        "issue_number": reclaim.active.issue_number,
+        "issue_number": reclaim.active.core.issue_number,
         "subtask_id": reclaim.subtask_id,
         "action": action,
         "reason": reclaim.reason,
@@ -305,7 +321,7 @@ def _escalate_backup_failure(
 
     try:
         apply_human_review_escalation(
-            reclaim.active.issue_number,
+            reclaim.active.core.issue_number,
             reclaim.status_labels,
             f"タスク実行が {reclaim.reason} のためGCによる回収を試みましたが、"
             "WIPバックアップコミットの作成に失敗しました。\n"
@@ -313,7 +329,7 @@ def _escalate_backup_failure(
             f"を超えた（今回で{reclaim.reclaim_count}回目）ため、自動回収を打ち切り、"
             "status:blocked-human-reviewへ遷移しました。\n"
             "未コミットの作業データを保全するため、worktreeは削除せずに残しています: "
-            f"{reclaim.active.worktree_path}\n"
+            f"{reclaim.active.core.worktree_path}\n"
             f"エラー詳細:\n```\n{backup_error}\n```",
             forge=config.resolved_forge,
             on_label_applied=_release_entry,
@@ -321,7 +337,7 @@ def _escalate_backup_failure(
     except Exception as e:  # noqa: BLE001 - 1タスクの失敗でサイクルを止めない
         print(
             f"Warning: failed to escalate the GC reclaim of issue "
-            f"#{reclaim.active.issue_number} after a WIP backup failure: {e}",
+            f"#{reclaim.active.core.issue_number} after a WIP backup failure: {e}",
             file=sys.stderr,
         )
         if not released:
@@ -340,7 +356,7 @@ def _skip_backup_failure(
     _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=False)
     try:
         config.resolved_forge.add_comment(
-            reclaim.active.issue_number,
+            reclaim.active.core.issue_number,
             f"タスク実行が {reclaim.reason} のためGCによる回収を試みましたが、"
             "WIPバックアップコミットの作成に失敗しました。\n"
             "未コミットの作業データ消失を防ぐため、今回のGC回収およびworktree削除処理を"
@@ -350,7 +366,7 @@ def _skip_backup_failure(
     except Exception as e:  # noqa: BLE001 - 通知の失敗で確定を巻き戻さない
         print(
             f"Warning: skipped the GC reclaim of issue "
-            f"#{reclaim.active.issue_number} but failed to post the reason: {e}",
+            f"#{reclaim.active.core.issue_number} but failed to post the reason: {e}",
             file=sys.stderr,
         )
 
@@ -381,7 +397,7 @@ def _notify_escalated_reclaim(
     active = reclaim.active
     reason = reclaim.reason
     apply_human_review_escalation(
-        active.issue_number,
+        active.core.issue_number,
         reclaim.status_labels,
         f"タスク実行が {reason} のため、GCにより{worktree_note}"
         "後始末しました。\n"
@@ -412,21 +428,21 @@ def _notify_requeued_reclaim(
     )
     transition_status_label(
         config.resolved_forge,
-        active.issue_number,
+        active.core.issue_number,
         StatusLabel.QUEUED,
         stale_labels,
     )
     settle()
     try:
         config.resolved_forge.add_comment(
-            active.issue_number,
+            active.core.issue_number,
             f"タスク実行が {reason} のため、GCにより{worktree_note}"
             "タスクを再キューイング（status:queued）しました"
             f"（回収{reclaim.reclaim_count}回目 / 上限{config.max_task_reclaims}回）。",
         )
     except Exception as e:  # noqa: BLE001 - 通知の失敗で回収をやり直さない
         print(
-            f"Warning: requeued issue #{active.issue_number} but failed to post "
+            f"Warning: requeued issue #{active.core.issue_number} but failed to post "
             f"the GC reclaim comment: {e}",
             file=sys.stderr,
         )
@@ -445,7 +461,7 @@ def _notify_reclaim(
     reason = reclaim.reason
     if already_escalated:
         config.resolved_forge.add_comment(
-            active.issue_number,
+            active.core.issue_number,
             f"タスク実行が {reason} のため、GCにより{worktree_note}"
             "後始末しました。既に人間の確認が必要な状態のため、"
             "status:*ラベルは変更していません。",
@@ -470,13 +486,19 @@ def _mark_reclaim_for_retry(
     """
     print(
         f"Warning: failed to apply the GC reclaim of issue "
-        f"#{reclaim.active.issue_number} on GitHub: {error}",
+        f"#{reclaim.active.core.issue_number} on GitHub: {error}",
         file=sys.stderr,
     )
     active = run_state.active_worktrees.get(reclaim.key)
-    if active is None or active.started_at is None or is_process_alive(active.pid):
+    if (
+        active is None
+        or active.launch.started_at is None
+        or is_process_alive(active.launch.pid)
+    ):
         return
-    active.started_at = None
+    run_state.active_worktrees[reclaim.key] = with_launch(
+        active, replace(active.launch, started_at=None)
+    )
     try:
         save_run_state(
             run_state,
@@ -488,7 +510,7 @@ def _mark_reclaim_for_retry(
     except Exception as e:  # noqa: BLE001 - ベストエフォートの後始末
         print(
             f"Warning: failed to persist the retry marker for issue "
-            f"#{reclaim.active.issue_number}: {e}",
+            f"#{reclaim.active.core.issue_number}: {e}",
             file=sys.stderr,
         )
 
@@ -502,7 +524,7 @@ def _settle_reclaim(
     release_entry: bool,
 ) -> None:
     """今サイクル分の回収を確定させ、その場でディスクへ書く。"""
-    record = run_state.task_reclaim_counts.get(reclaim.active.issue_number)
+    record = run_state.task_reclaim_counts.get(reclaim.active.core.issue_number)
     if record is not None and record.pending:
         record.pending = False
     if release_entry:
@@ -518,17 +540,34 @@ def _settle_reclaim(
     except Exception as e:  # noqa: BLE001 - サイクル終端の保存に委ねる
         print(
             f"Warning: failed to persist the settled GC reclaim of issue "
-            f"#{reclaim.active.issue_number}: {e}",
+            f"#{reclaim.active.core.issue_number}: {e}",
             file=sys.stderr,
         )
 
 
 def _stop_reclaimed_process(reclaim: ZombieOrTimeoutReclaim) -> None:
-    if reclaim.active.pid and reclaim.process_alive:
+    if reclaim.active.launch.pid and reclaim.process_alive:
         try:
-            os.kill(reclaim.active.pid, 9)
+            os.kill(reclaim.active.launch.pid, 9)
         except Exception:
             pass
+
+
+def _cleanup_reclaimed_worktree(
+    reclaim: ZombieOrTimeoutReclaim,
+) -> tuple[bool, str | None]:
+    """物理worktreeが存在すればWIPバックアップコミットを作成して削除する。"""
+    active = reclaim.active
+    if not os.path.exists(active.core.worktree_path):
+        return False, None
+    backup_error = backup_wip_commit(
+        active.core.worktree_path,
+        f"WIP: backup by Orchestune GC ({reclaim.reason})",
+    )
+    if backup_error is not None:
+        return True, backup_error
+    remove_worktree(active.core.worktree_path)
+    return True, None
 
 
 def _execute_reclaim_lifecycle(
@@ -542,17 +581,12 @@ def _execute_reclaim_lifecycle(
     is_settled: Callable[[], bool],
 ) -> dict | None:
     active = reclaim.active
-    worktree_exists = os.path.exists(active.worktree_path)
     try:
-        if worktree_exists:
-            backup_error = backup_wip_commit(
-                active.worktree_path, f"WIP: backup by Orchestune GC ({reclaim.reason})"
+        worktree_exists, backup_error = _cleanup_reclaimed_worktree(reclaim)
+        if backup_error is not None:
+            return _apply_backup_failure(
+                run_state, reclaim, config, escalating, backup_error, open_prs
             )
-            if backup_error is not None:
-                return _apply_backup_failure(
-                    run_state, reclaim, config, escalating, backup_error, open_prs
-                )
-            remove_worktree(active.worktree_path)
         worktree_note = (
             "作業ブランチにWIPコミットを退避した上で、"
             if worktree_exists
@@ -572,7 +606,7 @@ def _execute_reclaim_lifecycle(
             return None
         print(
             f"Warning: applied the GC reclaim of issue "
-            f"#{active.issue_number} but a later step failed: {e}",
+            f"#{active.core.issue_number} but a later step failed: {e}",
             file=sys.stderr,
         )
     settle_once()
@@ -590,17 +624,17 @@ def _apply_zombie_or_timeout_reclaim(
     open_prs: Sequence[PrRecord] | None = None,
 ) -> dict | None:
     """decide層が判定した回収対象に基づき、安全に副作用を適用する。"""
-    if reclaim.active.completion_id is not None:
+    if _is_completing_or_handoff(reclaim.active):
         return {
-            "issue_number": reclaim.active.issue_number,
+            "issue_number": reclaim.active.core.issue_number,
             "subtask_id": reclaim.subtask_id,
             "action": "gc_reclaim_excluded_completing",
             "reason": "task is currently completing and is excluded from automatic GC reclaim",
-            "owner_kind": reclaim.active.owner_kind,
-            "completion_id": reclaim.active.completion_id,
-            "completion_stage": reclaim.active.completion_stage,
+            "owner_kind": reclaim.active.claim.owner_kind,
+            "completion_id": reclaim.active.completion.completion_id,
+            "completion_stage": reclaim.active.completion.completion_stage,
         }
-    if reclaim.active.owner_kind == "interactive":
+    if reclaim.active.claim.owner_kind == "interactive":
         return build_interactive_exclusion_event(
             reclaim.active,
             subtask_id=reclaim.subtask_id,
@@ -643,7 +677,9 @@ def _refresh_reclaim(
     config: DispatcherConfig,
     precondition: ReclaimPrecondition,
 ) -> ZombieOrTimeoutReclaim:
-    reclaim_count = _resolve_reclaim_count(run_state, precondition.active.issue_number)
+    reclaim_count = _resolve_reclaim_count(
+        run_state, precondition.active.core.issue_number
+    )
     return ZombieOrTimeoutReclaim(
         key=reclaim.key,
         active=precondition.active,
@@ -722,13 +758,13 @@ def _handle_completing_reclaim_exclusion(
     if event_sink is not None:
         event_sink(
             {
-                "issue_number": reclaim.active.issue_number,
+                "issue_number": reclaim.active.core.issue_number,
                 "subtask_id": reclaim.subtask_id,
                 "action": "gc_reclaim_excluded_completing",
                 "reason": "task is currently completing and is excluded from automatic GC reclaim",
-                "owner_kind": reclaim.active.owner_kind,
-                "completion_id": reclaim.active.completion_id,
-                "completion_stage": reclaim.active.completion_stage,
+                "owner_kind": reclaim.active.claim.owner_kind,
+                "completion_id": reclaim.active.completion.completion_id,
+                "completion_stage": reclaim.active.completion.completion_stage,
             }
         )
     return RepairResult(
@@ -758,9 +794,9 @@ def execute_reclaim_repair_command(
         )
     if not config.apply:
         return RepairResult(command=command, status=RepairStatus.SKIPPED)
-    if reclaim.active.completion_id is not None:
+    if _is_completing_or_handoff(reclaim.active):
         return _handle_completing_reclaim_exclusion(command, reclaim, event_sink)
-    if reclaim.active.owner_kind == "interactive":
+    if reclaim.active.claim.owner_kind == "interactive":
         return _handle_interactive_reclaim_exclusion(command, reclaim, event_sink)
     precondition = revalidate_reclaim_preconditions(
         command,
