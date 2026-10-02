@@ -16,9 +16,10 @@ from orchestune.outcome_record import (
 
 def _is_handoff_ready(active: ActiveWorktree) -> bool:
     """#1004: handoff-ready 状態かどうかを判定する。"""
+    completion = active.completion
     return bool(
-        active.completion_handoff_ready
-        and active.completion_stage == CompleteStage.HANDED_OFF.value
+        completion.completion_handoff_ready
+        and completion.completion_stage == CompleteStage.HANDED_OFF.value
     )
 
 
