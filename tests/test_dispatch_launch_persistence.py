@@ -253,6 +253,54 @@ class TestApplyTaskLaunchesRunStatePersistence:
         persisted = load_run_state(run_state_path)
         assert launch_36h_ago in persisted.launch_history
 
+    def test_records_history_without_launch_limit_and_applies_it_later(self, tmp_path):
+        """#1154: 上限未設定でも起動履歴を残し、後から上限を設定すると即座に効く。"""
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.scoring import quota_available
+        from orchestune.ledger.run_state import load_run_state
+
+        plans, dispatch_target = self._launch_plan(tmp_path)
+        run_state_path = tmp_path / "run_state.json"
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=run_state_path,
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+        )
+        assert config.max_launches_per_window is None
+        now = 5_000_000.0
+
+        with (
+            patch(
+                "orchestune.worktree_ops.preparation._branch_exists",
+                autospec=True,
+                return_value=False,
+            ),
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
+            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
+        ):
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            mock_popen.return_value.pid = 1234
+            _apply_task_launches(
+                plans,
+                RunState(active_worktrees={}),
+                now,
+                config,
+                claim_fn=real_claim_fn(config),
+            )
+
+        persisted = load_run_state(run_state_path)
+        assert persisted.launch_history == [now]
+        persisted.active_worktrees.clear()
+        window = config.window_seconds
+        assert quota_available(persisted, now + 1, 2, None, window) == 2
+        assert quota_available(persisted, now + 1, 2, 1, window) == 0
+
     def test_persists_the_launch_time_token_estimate(self, tmp_path):
         from unittest.mock import MagicMock, patch
 

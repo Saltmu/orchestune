@@ -18,6 +18,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.external_execution import (
     hold_if_not_stopped,
+    notify_completed_hold,
     send_hold_to_human_review,
 )
 from orchestune.dispatch.gc.completion import (
@@ -628,7 +629,9 @@ def _resolve_cloud_completion(
         # 停止未確認なら台帳・ハンドル・枠を保持する（完了予約は壊さない）。
         hold = hold_if_not_stopped(active, ctx.config, "completion")
         if hold is not None:
-            if ctx.config.apply and status == "abandoned" and active_task is not None:
+            if ctx.config.apply and status == "completed":
+                notify_completed_hold(hold, ctx.config)
+            elif ctx.config.apply and active_task is not None:
                 send_hold_to_human_review(
                     hold, tuple(active_task.status_labels), ctx.config
                 )

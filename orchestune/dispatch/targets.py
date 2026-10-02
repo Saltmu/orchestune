@@ -307,7 +307,12 @@ _CODEX_TASK_ID_RE = re.compile(r"\b(task_[a-zA-Z0-9_-]+)\b")
 _CODEX_CLOUD_TERMINAL_FAILED_STATUSES: frozenset[str] = frozenset(
     {"failed", "cancelled", "canceled", "error"}
 )
-# 今後コードを実行し得る状態。未確認の語彙（成功終端など）は推測で分類せず
+# 成功した終端状態。codex CLI（rust-v0.159.3, codex-rs/cloud-tasks-client
+# `map_status`）はbackendのturn状態`completed`を`ready`へ、`failed`/`cancelled`を
+# `error`へ写し、未知の状態は`pending`へ倒す。`applied`は`ready`の差分を
+# ローカルへ適用した後の状態で、クラウド側の実行は終わっている。
+_CODEX_CLOUD_TERMINAL_SUCCESS_STATUSES: frozenset[str] = frozenset({"ready", "applied"})
+# 今後コードを実行し得る状態。未確認の語彙は推測で分類せず
 # `unknown`として枠を保持する。
 _CODEX_CLOUD_RUNNING_STATUSES: frozenset[str] = frozenset(
     {"pending", "queued", "running", "in_progress", "in-progress"}
@@ -532,7 +537,10 @@ class CodexCloudDispatchTarget(DispatchTarget):
             return "unknown"
         if cloud_status is None:
             return "unknown"
-        if cloud_status in _CODEX_CLOUD_TERMINAL_FAILED_STATUSES:
+        if cloud_status in (
+            _CODEX_CLOUD_TERMINAL_FAILED_STATUSES
+            | _CODEX_CLOUD_TERMINAL_SUCCESS_STATUSES
+        ):
             return "stopped"
         if cloud_status in _CODEX_CLOUD_RUNNING_STATUSES:
             return "running"

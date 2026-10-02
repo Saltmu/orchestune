@@ -667,6 +667,9 @@ PR/Outcomeの完了判定（MERGED/closed PR、handoff-ready）は成果物の�
 まだコードを実行し得るかの証拠ではありません。実行中・状態不明・未対応・状態取得失敗の場合、GCは
 `active_worktrees`と実行ハンドルを保持し、Issueを`status:blocked-human-review`へ送って自動再投入しません。
 これはタイムアウト、`status:in-progress`除去に伴う古い台帳エントリの後始末、完了回収のすべてに適用されます。
-現在、停止状態を返せるのはCodex Cloudのみで、それ以外の外部ターゲット（Cloud Routine等）は常に保持されます。
+成果物の完了（マージ済みPRやOutcome）を検出したが停止を確認できない場合は、完了結果のラベルを変えず、
+枠を保持している理由をIssueへコメントします（理由が変わったときだけ再投稿します）。
+現在、停止状態を返せるのはCodex Cloudのみです（`codex cloud list`の`ready`・`applied`・`error`を停止、
+`pending`を実行中と扱います）。それ以外の外部ターゲット（Cloud Routine等）は、終了後も常に保持されます。
 復旧はクラウド側の実行状態と成果物を確認し、必要なら停止して停止を確認してから行います。停止確認付きの
 `orchestune recover`は#1180で実装予定で、現行の`recover`は外部実行を拒否します。

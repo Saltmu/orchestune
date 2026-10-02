@@ -493,11 +493,15 @@ class TestCodexExecutionStatus:
     def test_terminal_failures_are_stopped(self, status):
         assert self._status(status) == "stopped"
 
+    @pytest.mark.parametrize("status", ["ready", "applied"])
+    def test_terminal_successes_are_stopped(self, status):
+        assert self._status(status) == "stopped"
+
     @pytest.mark.parametrize("status", ["running", "pending"])
     def test_in_flight_states_are_running(self, status):
         assert self._status(status) == "running"
 
-    @pytest.mark.parametrize("status", [None, "ready", "something-new"])
+    @pytest.mark.parametrize("status", [None, "something-new"])
     def test_unverified_vocabulary_is_unknown(self, status):
         assert self._status(status) == "unknown"
 

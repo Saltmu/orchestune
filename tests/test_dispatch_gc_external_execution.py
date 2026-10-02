@@ -173,3 +173,65 @@ def test_runtime_status_exception_and_invalid_value_are_unknown(tmp_path, fake_f
         assert observe_runtime_state(active, config) == "unknown"
     with patch.object(config.dispatch_target, "execution_status", return_value="done"):
         assert observe_runtime_state(active, config) == "unknown"
+
+
+class TestCompletedCloudHoldNotice:
+    """#1154レビュー対応: 成果物完了でも停止未確認なら枠を保持し、理由をIssueへ残す。
+
+    完了予約・結果ラベルを人間確認ラベルで上書きしないため、ラベルは変えない。
+    """
+
+    def _run(self, fake_forge, *, apply=True):
+        from orchestune.dispatch.gc import _rule_completed
+        from tests.dispatch_gc_test_support import _rule_ctx, _task
+
+        active = _active(external_id="session-1")
+        ctx = _rule_ctx(forge=fake_forge)
+        ctx.config.apply = apply
+        ctx.run_state.active_worktrees["1"] = active
+        target = ctx.config.dispatch_target
+        with (
+            patch.object(
+                target, "completion_status", return_value="completed", create=True
+            ),
+            patch.object(target, "execution_status", return_value="unknown"),
+        ):
+            outcome = _rule_completed(
+                ctx, "1", active, _task(status_labels=("status:in-progress",))
+            )
+        return ctx, outcome
+
+    def test_posts_notice_without_changing_labels(self, fake_forge):
+        fake_forge.list_comments.return_value = []
+        ctx, outcome = self._run(fake_forge)
+
+        assert outcome is not None and outcome.terminal is True
+        assert outcome.completion_event["action"] == ACTION_EXTERNAL_EXECUTION_HELD
+        assert outcome.completion_event["reason"] == "completion"
+        assert "1" in ctx.run_state.active_worktrees
+        fake_forge.add_label.assert_not_called()
+        fake_forge.remove_label.assert_not_called()
+        fake_forge.add_comment.assert_called_once()
+        issue_number, body = fake_forge.add_comment.call_args.args
+        assert issue_number == 280
+        assert "<!-- orchestune:notice:external-execution-held -->" in body
+        assert "session-1" in body
+
+    def test_does_not_repeat_unchanged_notice(self, fake_forge):
+        fake_forge.list_comments.return_value = []
+        self._run(fake_forge)
+        posted = fake_forge.add_comment.call_args.args[1]
+        fake_forge.add_comment.reset_mock()
+        fake_forge.list_comments.return_value = [{"body": posted}]
+
+        self._run(fake_forge)
+
+        fake_forge.add_comment.assert_not_called()
+
+    def test_dry_run_does_not_post(self, fake_forge):
+        fake_forge.list_comments.return_value = []
+        ctx, outcome = self._run(fake_forge, apply=False)
+
+        assert outcome.completion_event["action"] == ACTION_EXTERNAL_EXECUTION_HELD
+        fake_forge.add_comment.assert_not_called()
+        fake_forge.list_comments.assert_not_called()

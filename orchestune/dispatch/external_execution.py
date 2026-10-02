@@ -18,6 +18,7 @@ from typing import Literal
 
 from orchestune.dispatch.attempt_record import read_attempt
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.issue_notice import post_notice_if_changed
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_records import ActiveWorktree
 from orchestune.ledger.escalation import apply_human_review_escalation
@@ -27,6 +28,7 @@ RuntimeState = Literal["running", "stopped", "unknown"]
 HoldReason = Literal["timeout", "stale", "completion"]
 
 ACTION_EXTERNAL_EXECUTION_HELD = "external_execution_held"
+HELD_NOTICE_KIND = "external-execution-held"
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,3 +187,29 @@ def send_hold_to_human_review(
         )
         return False
     return True
+
+
+def _completed_hold_notice(hold: ExternalExecutionHold) -> str:
+    return (
+        "成果物（PR/Outcome）の完了を検出しましたが、外部実行の停止を確認できないため、"
+        "台帳（active_worktrees）と実行ハンドルを保持し、並行枠も占有したままにしています。\n"
+        f"実行状態: `{hold.runtime_state}`（external_id: `{hold.external_id}`）\n"
+        "完了結果を保つためラベルは変更していません。"
+        "providerが停止を返すと次のGCサイクルで回収されます。"
+        "停止を確認できないtarget（Cloud Routine等）は、クラウド側で停止を確認してから復旧してください。"
+    )
+
+
+def notify_completed_hold(
+    hold: ExternalExecutionHold, config: DispatcherConfig
+) -> None:
+    """成果物完了後の保持をIssueへ残す。完了結果のラベルは上書きしない。
+
+    毎サイクル再評価されるため、本文が前回と同じなら投稿しない。
+    """
+    post_notice_if_changed(
+        config.resolved_forge,
+        hold.issue_number,
+        HELD_NOTICE_KIND,
+        _completed_hold_notice(hold),
+    )

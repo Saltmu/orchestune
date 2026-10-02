@@ -346,3 +346,8 @@ Recommended operations:
   `status:blocked-human-review` with its slot kept. After checking the cloud-side run and
   artifacts and confirming it stopped, recover it (operator stop-confirmation recovery is
   tracked in #1180).
+- Finished but unconfirmed external executions: when the PR/Outcome shows the work is
+  complete but the run cannot be confirmed stopped (for example Cloud Routine), the slot
+  stays occupied and the labels are left as they are; the reason is posted once as an
+  Issue comment. If new launches stop because `max-concurrent` is full, look for these
+  comments first.

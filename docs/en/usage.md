@@ -689,8 +689,12 @@ execute code. When the runtime state is running, unknown, unsupported, or the lo
 fails, the GC keeps `active_worktrees` and the execution handle, sends the Issue to
 `status:blocked-human-review`, and never auto-requeues it. This applies to timeouts,
 stale-ledger cleanup after `status:in-progress` is removed, and completion collection.
-Currently only Codex Cloud can report a stopped state; other external targets (for
-example Cloud Routine) are always held. To recover, check the cloud-side run and its
+When the work is already complete (merged PR or Outcome) but the run is not confirmed
+stopped, the GC keeps the completion result labels and instead posts one Issue comment
+explaining the held slot (it is posted again only when the reason changes).
+Currently only Codex Cloud can report a stopped state (`ready`, `applied` and `error`
+from `codex cloud list` are stopped; `pending` is running); other external targets (for
+example Cloud Routine) are always held, including after they finish. To recover, check the cloud-side run and its
 artifacts, stop it there if needed, and confirm the stop; an `orchestune recover` mode
 that accepts an operator's stop confirmation is tracked in #1180 and the existing
 `recover` still refuses external executions.
