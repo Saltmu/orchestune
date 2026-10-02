@@ -17,6 +17,13 @@ from orchestune.complete.preflight import (
     evaluate_complete_preflight,
     inspect_worktree_status,
 )
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktree,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 
 
 @pytest.fixture
@@ -109,26 +116,33 @@ class FakeForge:
         return self.prs.get(pr_number)
 
 
-class FakeActiveWorktree:
-    def __init__(
-        self,
-        issue_number: int = 999,
-        owner_token_digest: str = "digest_123",
-        worktree_path: str = "/path/to/worktree",
-        branch: str = "claude/issue-999-complete-preflight",
-        base_ref: str = "parent/issue-894",
-    ) -> None:
-        self.issue_number = issue_number
-        self.claim_id = "claim-test"
-        self.owner_token_digest = owner_token_digest
-        self.worktree_path = worktree_path
-        self.branch = branch
-        self.base_ref = base_ref
+def FakeActiveWorktree(
+    issue_number: int = 999,
+    owner_token_digest: str = "digest_123",
+    worktree_path: str = "/path/to/worktree",
+    branch: str = "claude/issue-999-complete-preflight",
+    base_ref: str = "parent/issue-894",
+) -> ActiveWorktree:
+    return ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=issue_number,
+            branch=branch,
+            worktree_path=worktree_path,
+            declared_footprint=(),
+        ),
+        launch=LaunchInfo(),
+        claim=ClaimInfo(
+            claim_id="claim-test",
+            owner_token_digest=owner_token_digest,
+            base_ref=base_ref,
+        ),
+        completion=ActiveCompletionJournal(),
+    )
 
 
 class FakeRunState:
     def __init__(
-        self, active_worktrees: dict[str, FakeActiveWorktree] | None = None
+        self, active_worktrees: dict[str, ActiveWorktree] | None = None
     ) -> None:
         self.active_worktrees = active_worktrees or {}
 
@@ -1077,3 +1091,52 @@ class TestEvaluateCompletePreflight:
         assert result.accepted is False
         assert result.reason is not None
         assert result.diagnostics == (result.reason,)
+
+
+class _Broken:
+    """Object lacking nested records but carrying plausible flat values."""
+
+    claim_id = "claim-test"
+    base_ref = "parent/issue-894"
+    branch = "claude/issue-999-complete-preflight"
+    worktree_path = "/path/to/worktree"
+
+
+class TestNestedOnlyReferences:
+    def test_missing_claim_record_is_not_masked_by_flat_values(self) -> None:
+        from orchestune.complete.preflight import _validate_ownership
+
+        request = CompleteRequest.blocked(
+            claim_id="claim-test", issue_number=999, reason="x"
+        )
+        state = FakeRunState({"999": _Broken()})  # type: ignore[dict-item]
+        with pytest.raises(AttributeError):
+            _validate_ownership(request, state)
+
+    def test_missing_core_record_is_not_masked_by_flat_values(self) -> None:
+        from orchestune.complete.preflight import _resolve_worktree_path
+
+        request = CompleteRequest.blocked(
+            claim_id="claim-test", issue_number=999, reason="x"
+        )
+        with pytest.raises(AttributeError):
+            _resolve_worktree_path(request, None, _Broken())
+
+    def test_pr_checks_require_nested_records(self) -> None:
+        from orchestune.complete.preflight import (
+            _check_pr_base_branch,
+            _check_pr_identity_and_branches,
+        )
+
+        pr = FakePr()
+        with pytest.raises(AttributeError):
+            _check_pr_base_branch(pr, _Broken(), None)
+        with pytest.raises(AttributeError):
+            _check_pr_identity_and_branches(pr, 10, _Broken(), "parent/issue-894")
+
+    def test_none_values_inside_records_remain_valid(self) -> None:
+        from orchestune.complete.preflight import _check_pr_base_branch
+
+        active = FakeActiveWorktree(base_ref=None)  # type: ignore[arg-type]
+        ok, reason, _ = _check_pr_base_branch(FakePr(), active, None)
+        assert not ok and "required" in (reason or "")
