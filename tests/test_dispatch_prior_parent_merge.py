@@ -3,6 +3,8 @@ from __future__ import annotations
 import dataclasses
 from unittest.mock import MagicMock
 
+import pytest
+
 from orchestune.dispatch.prior_parent_merge import (
     PriorParentMergeStatus,
     evaluate_prior_parent_merge,
@@ -182,6 +184,219 @@ def test_reconciliation_dry_run_does_not_mutate_and_reports_the_repair():
     forge.add_label.assert_not_called()
     forge.add_comment.assert_not_called()
     forge.close_issue.assert_not_called()
+
+
+def test_dry_run_uses_initial_evidence_without_second_inspection():
+    issue = _issue()
+    forge = _forge_for_reconciliation(issue)
+
+    result = reconcile_prior_parent_merges(
+        forge, {101: _task()}, apply=False, issues_by_number={101: issue}
+    )
+
+    assert result.held_issue_numbers == {101}
+    assert result.completed_issue_numbers == {101}
+    assert result.events[0]["action"] == "already_merged_dry_run"
+    forge.get_issue.assert_not_called()
+    forge.list_merged_prs_for_base.assert_called_once_with("parent/issue-100")
+    forge.get_issue_last_reopened_at.assert_called_once_with(101)
+    forge.is_merge_commit_reachable_from.assert_called_once_with(
+        "a" * 40, "parent/issue-100"
+    )
+    forge.add_label.assert_not_called()
+    forge.remove_label.assert_not_called()
+    forge.add_comment.assert_not_called()
+    forge.close_issue.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("reachable", "expected_status"),
+    [
+        (True, PriorParentMergeStatus.ALREADY_MERGED),
+        (False, PriorParentMergeStatus.NOT_FOUND),
+        (None, PriorParentMergeStatus.INDETERMINATE),
+        (
+            RuntimeError("temporary reachability error"),
+            PriorParentMergeStatus.INDETERMINATE,
+        ),
+    ],
+)
+def test_initial_scan_shares_reachability_result_for_duplicate_candidate_keys(
+    reachable, expected_status
+):
+    issue = _issue()
+    forge = _forge_for_reconciliation(issue)
+    duplicate = _merged_pr(number=301)
+    forge.list_merged_prs_for_base.return_value = [_merged_pr(), duplicate]
+    if isinstance(reachable, Exception):
+        forge.is_merge_commit_reachable_from.side_effect = reachable
+    else:
+        forge.is_merge_commit_reachable_from.return_value = reachable
+
+    result = reconcile_prior_parent_merges(
+        forge, {101: _task()}, apply=False, issues_by_number={101: issue}
+    )
+
+    assert result.evidence_by_issue[101].status is expected_status
+    forge.is_merge_commit_reachable_from.assert_called_once_with(
+        "a" * 40, "parent/issue-100"
+    )
+
+
+def test_apply_revalidation_uses_fresh_reachability_and_holds_if_merge_disappeared():
+    issue = _issue()
+    forge = _forge_for_reconciliation(issue)
+    forge.is_merge_commit_reachable_from.side_effect = [True, False]
+
+    result = reconcile_prior_parent_merges(
+        forge, {101: _task()}, apply=True, issues_by_number={101: issue}
+    )
+
+    assert result.held_issue_numbers == {101}
+    assert result.completed_issue_numbers == set()
+    assert result.events[0]["action"] == "prior_merge_changed_before_repair"
+    assert forge.is_merge_commit_reachable_from.call_count == 2
+    forge.add_label.assert_not_called()
+    forge.close_issue.assert_not_called()
+
+
+def test_initial_scan_shares_reachability_cache_between_sibling_tasks():
+    first = _issue()
+    second = dataclasses.replace(first, number=102)
+    forge = _forge_for_reconciliation(first)
+    shared_pr = _merged_pr(
+        head_ref="fix/shared-child-work",
+        closes_issue_numbers=(101, 102),
+    )
+    forge.list_merged_prs_for_base.return_value = [shared_pr]
+    tasks = {
+        101: _task(),
+        102: dataclasses.replace(_task(), issue_number=102, subtask_id="second-child"),
+    }
+
+    result = reconcile_prior_parent_merges(
+        forge,
+        tasks,
+        apply=False,
+        issues_by_number={101: first, 102: second},
+    )
+
+    assert result.completed_issue_numbers == {101, 102}
+    forge.is_merge_commit_reachable_from.assert_called_once_with(
+        "a" * 40, "parent/issue-100"
+    )
+
+
+@pytest.mark.parametrize(
+    "probe_failure",
+    [None, RuntimeError("temporary reachability error")],
+)
+def test_initial_scan_holds_siblings_for_cached_reachability_failure(probe_failure):
+    first = _issue()
+    second = dataclasses.replace(first, number=102)
+    forge = _forge_for_reconciliation(first)
+    forge.list_merged_prs_for_base.return_value = [
+        _merged_pr(head_ref="fix/shared-child-work", closes_issue_numbers=(101, 102))
+    ]
+    if isinstance(probe_failure, Exception):
+        forge.is_merge_commit_reachable_from.side_effect = probe_failure
+    else:
+        forge.is_merge_commit_reachable_from.return_value = probe_failure
+    tasks = {
+        101: _task(),
+        102: dataclasses.replace(_task(), issue_number=102, subtask_id="second-child"),
+    }
+
+    result = reconcile_prior_parent_merges(
+        forge,
+        tasks,
+        apply=False,
+        issues_by_number={101: first, 102: second},
+    )
+
+    assert result.held_issue_numbers == {101, 102}
+    assert result.completed_issue_numbers == set()
+    assert [event["action"] for event in result.events] == [
+        "indeterminate",
+        "indeterminate",
+    ]
+    forge.is_merge_commit_reachable_from.assert_called_once_with(
+        "a" * 40, "parent/issue-100"
+    )
+
+
+def test_reachability_cache_does_not_survive_the_reconciliation_cycle():
+    issue = _issue()
+    forge = _forge_for_reconciliation(issue)
+
+    for _ in range(2):
+        result = reconcile_prior_parent_merges(
+            forge, {101: _task()}, apply=False, issues_by_number={101: issue}
+        )
+        assert result.completed_issue_numbers == {101}
+
+    assert forge.is_merge_commit_reachable_from.call_count == 2
+
+
+def test_reachability_cache_key_separates_parent_bases():
+    first = _issue()
+    second = dataclasses.replace(first, number=102, parent={"number": 200})
+    first_pr = _merged_pr()
+    second_pr = _merged_pr(
+        head_ref="fix/second-child-task",
+        base_ref="parent/issue-200",
+        closes_issue_numbers=(102,),
+    )
+    forge = _forge_for_reconciliation(first)
+    forge.list_merged_prs_for_base.side_effect = lambda base: [
+        pr for pr in (first_pr, second_pr) if pr.base_ref == base
+    ]
+    tasks = {
+        101: _task(),
+        102: dataclasses.replace(
+            _task(), issue_number=102, subtask_id="second-child", parent_number=200
+        ),
+    }
+
+    result = reconcile_prior_parent_merges(
+        forge,
+        tasks,
+        apply=False,
+        issues_by_number={101: first, 102: second},
+    )
+
+    assert result.completed_issue_numbers == {101, 102}
+    assert forge.is_merge_commit_reachable_from.call_args_list == [
+        (("a" * 40, "parent/issue-100"), {}),
+        (("a" * 40, "parent/issue-200"), {}),
+    ]
+
+
+def test_apply_revalidations_use_independent_reachability_caches_per_issue():
+    first = _issue()
+    second = dataclasses.replace(first, number=102)
+    forge = _forge_for_reconciliation(first)
+    shared_pr = _merged_pr(
+        head_ref="fix/shared-child-work",
+        closes_issue_numbers=(101, 102),
+    )
+    forge.list_merged_prs_for_base.return_value = [shared_pr]
+    forge.get_issue.side_effect = lambda number: {101: first, 102: second}[number]
+    tasks = {
+        101: _task(),
+        102: dataclasses.replace(_task(), issue_number=102, subtask_id="second-child"),
+    }
+
+    result = reconcile_prior_parent_merges(
+        forge,
+        tasks,
+        apply=True,
+        issues_by_number={101: first, 102: second},
+    )
+
+    assert result.completed_issue_numbers == {101, 102}
+    assert forge.is_merge_commit_reachable_from.call_count == 3
+    assert forge.get_issue.call_args_list == [((101,), {}), ((102,), {})]
 
 
 def test_indeterminate_evidence_holds_only_its_own_task_without_mutation():
