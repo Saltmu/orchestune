@@ -33,6 +33,7 @@ from orchestune.infra.process_utils import (
     assert_run_state_lock_held,
     run_state_lock,
 )
+from orchestune.ledger.active_lifecycle import has_completion_reservation
 from orchestune.ledger.active_records import (
     ActiveCompletionJournal,
     ActiveWorktree,
@@ -554,7 +555,7 @@ def _reserve_legacy_completion(
                 CompleteFailureReason.CLAIM_NOT_FOUND,
                 f"No active claim {claim_id!r} found for issue #{issue_number}",
             )
-        if active.completion.completion_id is not None:
+        if has_completion_reservation(active):
             return _resume_existing_reservation(
                 active,
                 issue_number,

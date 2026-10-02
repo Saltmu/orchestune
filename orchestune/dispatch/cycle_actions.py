@@ -96,6 +96,7 @@ from orchestune.dispatch.summary import (
     REASON_REVIEW_TIMEOUT_BACKOFF,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.active_lifecycle import has_completion_reservation
 from orchestune.ledger.completion_reservations import (
     completion_handoff_matches_active,
     completion_mutation_blocked_fresh,
@@ -156,7 +157,7 @@ def _run_active_worktree_rules(
 
     for key, active in list(ctx.run_state.active_worktrees.items()):
         if (
-            active.completion.completion_id is not None
+            has_completion_reservation(active)
             and not completion_handoff_matches_active(ctx.run_state, active)
         ) or completion_mutation_blocked_fresh(
             ctx.run_state, active.core.issue_number, ctx.config.run_state_path

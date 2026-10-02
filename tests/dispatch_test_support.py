@@ -253,6 +253,7 @@ def _active_worktree_from_flat(
         selection_reason=values.get("selection_reason"),
         launch_attempt_id=values.get("launch_attempt_id"),
         launch_phase=values.get("launch_phase"),
+        _legacy=True,
     )
     claim = ClaimInfo(
         owner_kind=values.get("owner_kind", "dispatch"),
@@ -264,6 +265,7 @@ def _active_worktree_from_flat(
         repository_id=values.get("repository_id"),
         claimed_at=values.get("claimed_at"),
         owner_token_digest=values.get("owner_token_digest"),
+        _legacy=True,
     )
     completion = ActiveCompletionJournal(
         completion_id=values.get("completion_id"),
@@ -274,7 +276,15 @@ def _active_worktree_from_flat(
         completion_comment_url=values.get("completion_comment_url"),
         completion_handoff_ready=values.get("completion_handoff_ready", False),
         completion_policy_config=values.get("completion_policy_config"),
+        _legacy=True,
     )
+    if validate:
+        try:
+            launch.validate()
+            claim.validate()
+            completion.validate()
+        except ValueError:
+            validate = False
     if validate:
         return ActiveWorktree.from_records(
             core=core, launch=launch, claim=claim, completion=completion

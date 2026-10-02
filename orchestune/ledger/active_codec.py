@@ -79,10 +79,10 @@ def decode_active_worktree(value: Mapping[str, Any]) -> ActiveWorktree:
         core_values["declared_footprint"] = tuple(core_values["declared_footprint"])
     return ActiveWorktree(
         core=ActiveWorktreeCore(**core_values),
-        launch=LaunchInfo(**_group_values(value, LaunchInfo)),
-        claim=ClaimInfo(**_group_values(value, ClaimInfo)),
+        launch=LaunchInfo(**_group_values(value, LaunchInfo), _legacy=True),
+        claim=ClaimInfo(**_group_values(value, ClaimInfo), _legacy=True),
         completion=ActiveCompletionJournal(
-            **_group_values(value, ActiveCompletionJournal)
+            **_group_values(value, ActiveCompletionJournal), _legacy=True
         ),
     )
 

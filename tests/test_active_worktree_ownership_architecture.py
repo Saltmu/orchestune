@@ -485,3 +485,47 @@ def test_exception_requires_reason() -> None:
 def test_production_active_worktree_boundary_clean() -> None:
     assert production_active_worktree_violations(REPO_ROOT) == ()
     assert unused_active_worktree_exceptions(REPO_ROOT) == ()
+
+
+def test_only_central_lifecycle_predicates_may_use_raw_completion_checks() -> None:
+    from active_worktree_architecture_support import (
+        ACTIVE_WORKTREE_PRODUCTION_EXCEPTIONS,
+    )
+
+    assert all(
+        exception.module == "orchestune.ledger.active_lifecycle"
+        for exception in ACTIVE_WORKTREE_PRODUCTION_EXCEPTIONS
+    )
+
+
+def test_legacy_bypass_is_reserved_for_the_persistence_codec() -> None:
+    source = """
+from orchestune.ledger.active_records import LaunchInfo
+def build():
+    return LaunchInfo(launch_phase="unknown-old-value", _legacy=True)
+"""
+    violations = active_worktree_boundary_violations(
+        source, module="orchestune.dispatch.launch_state"
+    )
+    assert len(violations) == 1
+    assert violations[0].kind == "unauthorized-legacy-construction"
+    assert not active_worktree_boundary_violations(
+        source, module="orchestune.ledger.active_codec"
+    )
+
+
+def test_owner_can_update_whole_record_but_not_mutate_frozen_fields() -> None:
+    source = """
+from orchestune.ledger.active_records import ActiveWorktree, LaunchInfo
+def update(active: ActiveWorktree):
+    active.launch = LaunchInfo()
+    active.launch.pid = 123
+    active.claim = None
+"""
+    violations = active_worktree_boundary_violations(
+        source, module="orchestune.dispatch.launch_state"
+    )
+    assert {(item.target, item.kind) for item in violations} == {
+        ("launch.pid", "subrecord-direct-assign"),
+        ("claim", "subrecord-direct-assign"),
+    }

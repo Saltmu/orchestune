@@ -48,6 +48,7 @@ FLAT_ATTRIBUTES = frozenset(
 
 CLAIM_OWNER_MODULES = frozenset(
     {
+        "orchestune.ledger.active_records",
         "orchestune.claim.ownership",
         "orchestune.claim.service",
         "orchestune.claim.amend",
@@ -71,6 +72,13 @@ CORE_OWNER_MODULES = frozenset(
         "orchestune.ledger.active_records",
     }
 )
+
+SUBRECORD_OWNER_MODULES = {
+    "launch": LAUNCH_OWNER_MODULES,
+    "claim": CLAIM_OWNER_MODULES,
+    "completion": COMPLETE_OWNER_MODULES,
+    "core": CORE_OWNER_MODULES,
+}
 
 ALLOWED_CONSTRUCTOR_MODULES = frozenset(
     {
@@ -114,131 +122,16 @@ def _exception(
     return ActiveWorktreeBoundaryException(module, function, target, kind, reason)
 
 
-_PERSISTENCE = "Materialize recovery sentinel in memory before persistence."
-_RECOVERY = (
-    "In-place recovery counter update of in-memory active entry after with_launch."
-)
-_REBASE = "In-place rebase update of in-memory active entry."
-_RECOVERY_PR = "Recovery PR head_ref adoption before completion resolution."
-_LIFECYCLE = "Authoritative candidate lifecycle calculation from persisted state."
-_RESERVATION_CHECK = "Completion reservation check before action or exclusion."
-
 ACTIVE_WORKTREE_PRODUCTION_EXCEPTIONS: frozenset[ActiveWorktreeBoundaryException] = (
     frozenset(
-        {
-            _exception(
-                "orchestune.ledger.run_state",
-                "_materialize_active_worktree_for_persistence",
-                "claim",
-                "subrecord-direct-assign",
-                _PERSISTENCE,
-            ),
-            _exception(
-                "orchestune.dispatch.rebase",
-                "_apply_forced_serial_event",
-                "launch",
-                "subrecord-direct-assign",
-                _RECOVERY,
-            ),
-            _exception(
-                "orchestune.dispatch.rebase",
-                "_apply_recomputed_event",
-                "launch",
-                "subrecord-direct-assign",
-                _RECOVERY,
-            ),
-            _exception(
-                "orchestune.dispatch.rebase",
-                "_apply_auto_rebase",
-                "launch",
-                "subrecord-direct-assign",
-                _REBASE,
-            ),
-            _exception(
-                "orchestune.dispatch.rebase",
-                "_apply_auto_rebase",
-                "core",
-                "subrecord-direct-assign",
-                _REBASE,
-            ),
-            _exception(
-                "orchestune.dispatch.gc",
-                "_resolve_recovered_completion",
-                "launch",
-                "unauthorized-replace",
-                _RECOVERY_PR,
-            ),
-            _exception(
-                "orchestune.dispatch.gc",
-                "_resolve_recovered_completion",
-                "core",
-                "unauthorized-replace",
-                _RECOVERY_PR,
-            ),
-            _exception(
-                "orchestune.ledger.active_lifecycle",
-                "lifecycle",
-                "completion_id",
-                "completion-stage-is-none",
-                _LIFECYCLE,
-            ),
-            _exception(
-                "orchestune.claim.ownership",
-                "has_completion_reservation",
-                "completion_id",
-                "completion-stage-is-none",
-                _RESERVATION_CHECK,
-            ),
-            _exception(
-                "orchestune.complete.journal",
-                "_reserve_legacy_completion",
-                "completion_id",
-                "completion-stage-is-none",
-                _RESERVATION_CHECK,
-            ),
-            _exception(
-                "orchestune.dispatch.cycle_actions",
-                "_run_active_worktree_rules",
-                "completion_id",
-                "completion-stage-is-none",
-                _RESERVATION_CHECK,
-            ),
-            _exception(
-                "orchestune.dispatch.gc",
-                "_rule_not_needed",
-                "completion_id",
-                "completion-stage-is-none",
-                _RESERVATION_CHECK,
-            ),
-            _exception(
-                "orchestune.dispatch.gc",
-                "_resolve_completion",
-                "completion_id",
-                "completion-stage-is-none",
-                _RESERVATION_CHECK,
-            ),
-            _exception(
-                "orchestune.dispatch.gc",
-                "_rule_completed",
-                "completion_id",
-                "completion-stage-is-none",
-                _RESERVATION_CHECK,
-            ),
-            _exception(
-                "orchestune.dispatch.gc.completion",
-                "_is_worktree_complete",
-                "completion_id",
-                "completion-stage-is-none",
-                _RESERVATION_CHECK,
-            ),
-            _exception(
-                "orchestune.dispatch.gc.zombies",
-                "_is_completing_or_handoff",
-                "completion_id",
-                "completion-stage-is-none",
-                _RESERVATION_CHECK,
-            ),
-        }
+        _exception(
+            "orchestune.ledger.active_lifecycle",
+            function,
+            "completion_id",
+            "completion-stage-is-none",
+            "Central candidate lifecycle and journal reservation predicates.",
+        )
+        for function in ("lifecycle", "has_completion_reservation")
     )
 )
 
@@ -526,7 +419,10 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
                 # active.launch = ...
                 if isinstance(target.value, ast.Name):
                     if self._is_active_var(target.value.id):
-                        if target.attr in SUBRECORDS:
+                        if (
+                            target.attr in SUBRECORDS
+                            and self.module not in SUBRECORD_OWNER_MODULES[target.attr]
+                        ):
                             self._record(target.attr, "subrecord-direct-assign", lineno)
                         elif target.attr in FLAT_ATTRIBUTES:
                             self._record(target.attr, "flat-attribute-access", lineno)
@@ -552,6 +448,13 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         func_name = _extract_func_name(node.func)
+        if any(
+            keyword.arg == "_legacy" for keyword in node.keywords
+        ) and self.module not in {
+            "orchestune.ledger.active_records",
+            "orchestune.ledger.active_codec",
+        }:
+            self._record("_legacy", "unauthorized-legacy-construction", node.lineno)
         # Check constructor: ActiveWorktree(...) or ActiveWorktree.from_records(...)
         if self._is_constructor_call(func_name):
             if self.module not in ALLOWED_CONSTRUCTOR_MODULES:

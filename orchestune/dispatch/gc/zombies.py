@@ -74,14 +74,10 @@ def _resolve_reclaim_count(run_state: RunState, issue_number: int) -> int:
 
 def _is_completing_or_handoff(active: ActiveWorktree) -> bool:
     """completionまたはhandoff状態（未確定の古いhandoffを含む）か判定する。"""
-    return (
-        lifecycle(active)
-        in {
-            ActiveWorktreeLifecycle.COMPLETING,
-            ActiveWorktreeLifecycle.HANDOFF_READY,
-        }
-        or active.completion.completion_id is not None
-    )
+    return lifecycle(active) in {
+        ActiveWorktreeLifecycle.COMPLETING,
+        ActiveWorktreeLifecycle.HANDOFF_READY,
+    }
 
 
 def build_interactive_exclusion_event(

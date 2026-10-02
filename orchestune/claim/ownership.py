@@ -16,7 +16,9 @@ from orchestune.claim.contracts import (
     ReservationKind,
 )
 from orchestune.dag.contracts import is_contract_writer
-from orchestune.ledger.active_lifecycle import ActiveWorktreeLifecycle, lifecycle
+from orchestune.ledger.active_lifecycle import (
+    has_completion_reservation as has_completion_reservation,
+)
 from orchestune.ledger.active_records import (
     ActiveCompletionJournal,
     ActiveWorktreeCore,
@@ -123,23 +125,6 @@ def with_claim(active: ActiveWorktree, claim: ClaimInfo) -> ActiveWorktree:
     if not isinstance(claim, ClaimInfo):
         raise TypeError("claim must be ClaimInfo")
     return replace(active, claim=claim)
-
-
-def has_completion_reservation(active: ActiveWorktree) -> bool:
-    """Require journal identity as well as the candidate completion lifecycle.
-
-    Legacy ledgers allow handoff markers without a completion ID. Lifecycle
-    classifies these as candidates, not proof of a journal reservation; keep
-    their existing claim/amend eligibility instead of tightening validation.
-    """
-    return (
-        lifecycle(active)
-        in {
-            ActiveWorktreeLifecycle.COMPLETING,
-            ActiveWorktreeLifecycle.HANDOFF_READY,
-        }
-        and active.completion.completion_id is not None
-    )
 
 
 def _is_repository_reservation(reservation: ActiveWorktree) -> bool:

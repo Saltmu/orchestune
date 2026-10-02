@@ -132,9 +132,17 @@ def test_stale_writes_to_removed_flat_attributes_fail_loudly() -> None:
 
 def test_canonical_factory_restricts_payload_objects_to_json_objects() -> None:
     core, launch, claim, _ = _records()
-    legacy = ActiveCompletionJournal(
-        completion_policy_config=["legacy-shape"]  # type: ignore[arg-type]
-    )
+    from orchestune.ledger.active_codec import decode_active_worktree
+
+    legacy = decode_active_worktree(
+        {
+            "issue_number": 17,
+            "branch": "b",
+            "worktree_path": "p",
+            "declared_footprint": [],
+            "completion_policy_config": ["legacy-shape"],
+        }
+    ).completion
 
     assert legacy.completion_policy_config == ("legacy-shape",)
     with pytest.raises(ValueError, match="completion_policy_config must be an object"):
@@ -145,7 +153,9 @@ def test_canonical_factory_restricts_payload_objects_to_json_objects() -> None:
 
 def test_frozen_completion_payload_is_deeply_immutable_and_detached() -> None:
     source = {"events": [{"labels": ["queued"]}]}
-    journal = ActiveCompletionJournal(completion_payload=source)
+    journal = ActiveCompletionJournal(
+        completion_id="completion-17", completion_payload=source
+    )
     source["events"][0]["labels"].append("mutated-at-source")
 
     assert journal.completion_payload == {"events": ({"labels": ("queued",)},)}

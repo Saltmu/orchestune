@@ -778,7 +778,7 @@ class TestHandleBlockedRecomputeRecovery:
             ),
             claim=ClaimInfo(
                 claim_id="claim-1",
-                claim_stage="launched",
+                claim_stage="completed",
             ),
             completion=ActiveCompletionJournal(),
         )
