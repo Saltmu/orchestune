@@ -26,34 +26,109 @@ def test_limit_boundary_and_exceeded():
     )
 
 
-def test_effective_snapshot_overrides_repository_config_and_uses_shared_usage(tmp_path):
-    from types import SimpleNamespace
+def _active(config=None, **launch):
+    from orchestune.ledger.active_records import (
+        ActiveCompletionJournal,
+        ActiveWorktree,
+        ActiveWorktreeCore,
+        ClaimInfo,
+        LaunchInfo,
+    )
 
+    return ActiveWorktree.from_records(
+        core=ActiveWorktreeCore(
+            issue_number=1110, branch="task", worktree_path="/wt", declared_footprint=()
+        ),
+        launch=LaunchInfo(**{"started_at": 1, **launch}),
+        claim=ClaimInfo(claim_id="claim-test"),
+        completion=ActiveCompletionJournal(completion_policy_config=config),
+    )
+
+
+def test_effective_snapshot_overrides_repository_config_and_uses_shared_usage(tmp_path):
     from orchestune.complete.policy import evaluate_publication_policy
 
     (tmp_path / "orchestune.toml").write_text("max_tokens_per_task = 999")
     (tmp_path / "task.log").write_text(
         '{"usage":{"input_tokens":60,"output_tokens":41}}'
     )
-    active = SimpleNamespace(
-        completion_policy_config={
+    active = _active(
+        {
             "max_tokens_per_task": 100,
             "source": "dispatcher-effective-config",
             "dispatch_target": "claude-cli",
             "log_dir": str(tmp_path),
-        },
-        branch="task",
-        pid=None,
-        external_id=None,
-        external_url=None,
-        issue_number=1110,
-        started_at=1,
-        launch_attempt_id=None,
+        }
     )
     verdict = evaluate_publication_policy(active, tmp_path, None)
     assert verdict["decision"] == "exceeded"
     assert verdict["limit"] == 100
     assert verdict["usage"]["total_tokens"] == 101
+
+
+def test_unlimited_snapshot_skips_usage_collection(tmp_path):
+    from orchestune.complete.policy import evaluate_publication_policy
+
+    active = _active({"max_tokens_per_task": None})
+    assert evaluate_publication_policy(active, tmp_path, None)["decision"] == "allowed"
+
+
+def test_missing_snapshot_reads_repository_config(tmp_path):
+    from orchestune.complete.policy import evaluate_publication_policy
+
+    (tmp_path / "orchestune.toml").write_text("max_tokens_per_task = 50")
+    verdict = evaluate_publication_policy(_active(), tmp_path, None)
+    assert verdict["limit"] == 50
+
+
+def test_finite_limit_with_unknown_usage_is_unknown(tmp_path):
+    from orchestune.complete.policy import evaluate_publication_policy
+
+    active = _active(
+        {"max_tokens_per_task": 10, "dispatch_target": "external", "log_dir": "x"}
+    )
+    assert evaluate_publication_policy(active, tmp_path, None)["decision"] == "unknown"
+
+
+class _FlatOnly:
+    """No nested records, but plausible flat values."""
+
+    completion_policy_config = {"max_tokens_per_task": 1}
+    branch = "task"
+    pid = None
+    external_id = None
+    external_url = None
+    issue_number = 1
+    started_at = 1
+    launch_attempt_id = None
+
+
+def test_missing_completion_record_raises_at_entry(tmp_path):
+    from orchestune.complete.policy import evaluate_publication_policy
+
+    with pytest.raises(AttributeError):
+        evaluate_publication_policy(_FlatOnly(), tmp_path, None)
+
+
+def test_missing_core_or_launch_during_usage_is_unknown_with_error(tmp_path):
+    from types import SimpleNamespace
+
+    from orchestune.complete.policy import evaluate_publication_policy
+
+    active = SimpleNamespace(
+        completion=SimpleNamespace(
+            completion_policy_config={
+                "max_tokens_per_task": 10,
+                "dispatch_target": "local",
+                "log_dir": str(tmp_path),
+            }
+        ),
+        branch="task",
+        pid=None,
+        issue_number=1,
+    )
+    verdict = evaluate_publication_policy(active, tmp_path, None)
+    assert verdict["decision"] == "unknown" and verdict["error"]
 
 
 @pytest.mark.parametrize("decision", ["unknown", "exceeded"])

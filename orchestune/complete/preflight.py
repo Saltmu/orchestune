@@ -28,14 +28,6 @@ class CompletePreflight:
     diagnostics: tuple[str, ...] = ()
 
 
-def active_field(active: Any, subrecord: str, field_name: str) -> Any:
-    """Read a field from a typed ActiveWorktree subrecord with flat mock fallback."""
-    sub = getattr(active, subrecord, None)
-    if sub is not None and hasattr(sub, field_name):
-        return getattr(sub, field_name)
-    return getattr(active, field_name, None)
-
-
 def _resolve_worktree_path(
     request: CompleteRequest,
     worktree_path: Path | str | None,
@@ -44,7 +36,7 @@ def _resolve_worktree_path(
     if worktree_path is not None:
         return Path(worktree_path)
     if active is not None:
-        wt_path = active_field(active, "core", "worktree_path")
+        wt_path = active.core.worktree_path
         if wt_path:
             return Path(wt_path)
     if request.worktree_root is not None:
@@ -62,7 +54,7 @@ def _validate_ownership(
         if request.result == RESULT_NOT_NEEDED and request.claim_id is None:
             return True, None, None, None
         return False, "Claim not found", CompleteFailureReason.CLAIM_NOT_FOUND, None
-    actual_claim_id = active_field(active, "claim", "claim_id")
+    actual_claim_id = active.claim.claim_id
     if not request.claim_id or request.claim_id != actual_claim_id:
         return (
             False,
@@ -117,7 +109,7 @@ def _check_pr_state(
 def _check_pr_base_branch(
     pr: Any, active: Any | None, expected_base_ref: str | None
 ) -> tuple[bool, str | None, CompleteFailureReason | None]:
-    active_base_ref = active_field(active, "claim", "base_ref") if active else None
+    active_base_ref = active.claim.base_ref if active else None
     expected_base = expected_base_ref or active_base_ref
     if not expected_base:
         return (
@@ -150,7 +142,7 @@ def _check_pr_identity_and_branches(
     if not state_ok:
         return state_ok, reason, failure_reason
 
-    active_branch = active_field(active, "core", "branch") if active else None
+    active_branch = active.core.branch if active else None
     pr_head_ref = getattr(pr, "head_ref", None)
     if active_branch and pr_head_ref and pr_head_ref != active_branch:
         return (
@@ -345,7 +337,6 @@ def evaluate_complete_preflight(
 __all__ = [
     "CompletePreflight",
     "WorktreeStatus",
-    "active_field",
     "evaluate_complete_preflight",
     "inspect_worktree_status",
 ]
