@@ -137,6 +137,7 @@ SECTION_CONTRACTS = (
             "ClaimInfo",
             "ActiveCompletionJournal",
             "active_codec",
+            "active_completion_from_record",
             "CompletionReceipt",
             "ExecutionRecord",
             "MappingProxyType",
@@ -343,6 +344,10 @@ def test_documented_cycle_context_record_apis_exist() -> None:
 
 
 def test_documented_active_worktree_subrecords_and_lifecycle_exist() -> None:
+    from orchestune.complete.journal import (
+        active_completion_from_record,
+        with_completion,
+    )
     from orchestune.consistency.observation import ExecutionRecord
     from orchestune.dispatch.cycle_records import CompletionReceipt
     from orchestune.ledger.active_codec import (
@@ -361,6 +366,8 @@ def test_documented_active_worktree_subrecords_and_lifecycle_exist() -> None:
     assert callable(lifecycle)
     assert callable(decode_active_worktree)
     assert callable(encode_active_worktree)
+    assert callable(active_completion_from_record)
+    assert callable(with_completion)
     for expected_phase in (
         "HANDOFF_READY",
         "COMPLETING",

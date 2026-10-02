@@ -140,7 +140,7 @@ CI verification and Outcome publication requirements remain enforced; missing ev
 
 ## 6. Execution Ledger Model, Lifecycle, and Ownership Contracts (ActiveWorktree & Lifecycle)
 
-Orchestune's execution ledger (`ledger`) is the L2 foundation responsible for immutably and safely managing task worktrees, execution states, ownership boundaries, and completion records. In #1106, the legacy flat structure of 35 mixed fields was redesigned into explicit owner subrecords and a deterministic candidate lifecycle derivation model.
+Orchestune's execution ledger (`ledger`) is the L2 foundation responsible for immutably and safely managing task worktrees, execution states, ownership boundaries, and completion records. In #1106, the legacy flat structure of 35 mixed fields (in a 36-field schema including optional `completion_policy_config`) was redesigned into explicit owner subrecords and a deterministic candidate lifecycle derivation model.
 
 ### 6.1 Subrecords Architecture and Immutability
 
@@ -154,7 +154,7 @@ Orchestune's execution ledger (`ledger`) is the L2 foundation responsible for im
 
 While in-memory representations use nested subrecords, disk persistence strictly maintains backward compatibility.
 
-- **Flat JSON invariance**: The JSON format persisted to `run_state.json` strictly preserves the pre-migration (T01 baseline) 35-field flat structure (`_ACTIVE_FIELD_NAMES` fixed ordering and omitting `completion_policy_config` when null).
+- **Flat JSON invariance**: The JSON format persisted to `run_state.json` strictly preserves the pre-migration (T01 baseline) flat JSON structure (the frozen 36-field `_ACTIVE_FIELD_NAMES` ordering, with `completion_policy_config` omitted when null, producing 35 keys by default).
 - **No schema_version introduced**: Neither a `schema_version` nor nested JSON is introduced, preventing file corruption or version incompatibility with existing Orchestune installations, and ensuring seamless rollback safety.
 - **Explicit codec**: `ledger.active_codec` (`decode_active_worktree` / `encode_active_worktree`) exclusively owns bidirectional translation between in-memory nested structures and persisted flat JSON records.
 - **Concurrency control and lock protection**: Preconditions requiring `run_state_lock` before saving and CAS defense-in-depth remain invariant.
@@ -190,7 +190,7 @@ While in-memory representations use nested subrecords, disk persistence strictly
 - **Strict owner modules**: Constructing and updating subrecords is strictly restricted to designated owner modules:
   - `claim`: `orchestune.claim.ownership`, `orchestune.claim.service`, `orchestune.claim.amend` (`build_claim_info`, `with_claim`)
   - `launch`: `orchestune.dispatch.launch_state` (`build_launch_record`, `with_launch`, `with_launch_phase`)
-  - `completion`: `orchestune.complete.journal` (`build_completion_journal`, `with_completion`)
+  - `completion`: `orchestune.complete.journal` (`active_completion_from_record`, `with_completion`)
   - `core`: `orchestune.ledger.active_records` (`ActiveWorktree.from_records`, `with_core`)
 - **Mechanical enforcement via AST guards**: Architecture tests (`tests/test_active_worktree_ownership_architecture.py`) statically inspect source ASTs to enforce:
   1. No direct assignment to subrecord attributes (`active.claim = ...`)
@@ -205,11 +205,11 @@ All acceptance criteria defined in parent Epic #1106 are verified and satisfied 
 
 | #1106 Acceptance Criteria | Implemented Subtasks | Verification Evidence & Test Suites |
 | :--- | :--- | :--- |
-| `ActiveWorktreeLifecycle` and `lifecycle()` exist, and GC, claim, complete, and consistency stage checks pass through them. No raw `completion_id is (not) None` stage checks remain. | T02 (#1124), T04 (#1126), T05 (#1129), T07 (#1131), T08 (#1132), T09 (#1133), T10 (#1127), T13 (#1135) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_ownership_architecture.py`, `tests/test_dispatch_consistency_e2e.py` |
+| `ActiveWorktreeLifecycle` and `lifecycle()` exist, and GC, claim, complete, and consistency stage checks pass through them. No unexempted direct `completion_id is (not) None` stage checks remain (qualifying narrow registered reservation exceptions). | T02 (#1124), T04 (#1126), T05 (#1129), T07 (#1131), T08 (#1132), T09 (#1133), T10 (#1127), T13 (#1135) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_ownership_architecture.py`, `tests/test_dispatch_consistency_e2e.py` |
 | `ActiveWorktree` is composed of core fields and `LaunchInfo` / `ClaimInfo` / `CompletionJournal` subrecords, with owner invariants validated at subrecord boundaries. | T03 (#1125), T04 (#1126), T05 (#1129), T06 (#1130), T12 (#1134) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_codec.py`, `tests/test_claim_ownership.py` |
 | Architecture tests verify that non-owner modules do not modify subrecord fields, demonstrated with synthetic violation and valid cases. | T13 (#1135) | `tests/test_active_worktree_ownership_architecture.py` (20 synthetic cases), `tests/test_architecture.py` |
 | Valid `run_state.json` files from prior main (representative examples: dispatch launch, interactive claim, completion journal in progress, handoff ready) load successfully, and saved canonical byte representations match golden. | T01 (#1123), T03 (#1125), T12 (#1134) | `tests/test_active_worktree_compat_baseline.py`, `tests/test_active_worktree_codec.py` |
 | Persistence rejection without holding locks and existing mutual exclusion guarantees are preserved. | T01 (#1123), T03 (#1125), T12 (#1134) | `tests/test_ledger_run_state.py`, `tests/test_active_worktree_codec.py` |
 | Bilingual state-recovery architecture documents are updated and synchronized. | T14 (#1136, this task) | `docs/ja/architecture/state-recovery.md`, `docs/en/architecture/state-recovery.md`, `tests/test_dependency_architecture_docs.py` |
 | Local CI (`./scripts/local-ci.sh`) passes cleanly on Linux/macOS. | T01–T14 all PRs | Clean pass on `./scripts/local-ci.sh` |
-| Reference enumeration across all 35 fields with classified rationale completed before implementation. | T01 (#1123) and subtasks | T01 inventory, Walkthrough / Impact Scope tables in each PR |
+| Reference enumeration across all 35 fields (and 36 in full schema) with classified rationale completed before implementation. | T01 (#1123) and subtasks | T01 inventory, Walkthrough / Impact Scope tables in each PR |

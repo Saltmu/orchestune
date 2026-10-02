@@ -137,7 +137,7 @@ CIとOutcome公開の要件は維持し、必要証拠が不足する場合は�
 
 ## 6. 実行台帳モデル・ライフサイクルと所有権（ActiveWorktree & Lifecycle）
 
-Orchestuneの実行台帳（`ledger`）は、各タスクの作業ディレクトリ（worktree）、実行状態、所有権、完了記録を不変かつ安全に管理するL2基盤です。#1106 において、従来の35フィールド混在フラット構造から、関心事・所有者ごとの明示的なサブレコード分割とライフサイクル導出モデルへと刷新されました。
+Orchestuneの実行台帳（`ledger`）は、各タスクの作業ディレクトリ（worktree）、実行状態、所有権、完了記録を不変かつ安全に管理するL2基盤です。#1106 において、従来の35フィールド混在フラット構造（および任意設定の `completion_policy_config` を含む全36フィールドのスキーマ）から、関心事・所有者ごとの明示的なサブレコード分割とライフサイクル導出モデルへと刷新されました。
 
 ### 6.1 サブレコード分割と不変構造
 
@@ -151,7 +151,7 @@ Orchestuneの実行台帳（`ledger`）は、各タスクの作業ディレク�
 
 メモリ上の構造はサブレコードへ分割されましたが、ディスク上の永続化表現は厳格な互換性を維持しています。
 
-- **フラットJSONの不変性**: `run_state.json` に保存されるJSON形式は、移行前（T01 baseline）と同一の35フィールドのフラットJSON構造（`_ACTIVE_FIELD_NAMES` の固定順序、`completion_policy_config` がnullのときのキー省略）を完全に維持します。
+- **フラットJSONの不変性**: `run_state.json` に保存されるJSON形式は、移行前（T01 baseline）と同一のフラットJSON構造（`_ACTIVE_FIELD_NAMES` の全36フィールドの固定順序、`completion_policy_config` がnullのときのキー省略により通常35キー）を完全に維持します。
 - **schema_version 不導入**: 新たな `schema_version` や入れ子JSON構造は導入しないため、旧バージョンの Orchestune との間でファイル破損や相互運用性の問題が発生せず、ロールバック時も安全です。
 - **明示的コーデック**: `ledger.active_codec`（`decode_active_worktree` / `encode_active_worktree`）が、メモリ上の入れ子表現とディスク上のフラットJSONとの間の双方向変換を単一所有します。
 - **排他制御とロック保護**: `run_state_lock` によるファイルロック未保持での保存拒否条件やCAS多層防御は従来どおり厳格に維持されます。
@@ -187,7 +187,7 @@ Orchestuneの実行台帳（`ledger`）は、各タスクの作業ディレク�
 - **所有者モジュールの限定**: サブレコードの構築・更新は、正規の所有者モジュールに厳格に制限されます：
   - `claim`: `orchestune.claim.ownership`, `orchestune.claim.service`, `orchestune.claim.amend` (`build_claim_info`, `with_claim`)
   - `launch`: `orchestune.dispatch.launch_state` (`build_launch_record`, `with_launch`, `with_launch_phase`)
-  - `completion`: `orchestune.complete.journal` (`build_completion_journal`, `with_completion`)
+  - `completion`: `orchestune.complete.journal` (`active_completion_from_record`, `with_completion`)
   - `core`: `orchestune.ledger.active_records` (`ActiveWorktree.from_records`, `with_core`)
 - **ASTガードによる機械的検証**: アーキテクチャテスト（`tests/test_active_worktree_ownership_architecture.py`）は AST 解析により以下を機械的に検査します：
   1. サブレコード属性への直接代入（`active.claim = ...`）
@@ -202,11 +202,11 @@ Orchestuneの実行台帳（`ledger`）は、各タスクの作業ディレク�
 
 | #1106 受け入れ基準 | 担当タスク | 検証証拠・テストスイート |
 | :--- | :--- | :--- |
-| `ActiveWorktreeLifecycle` と `lifecycle()` があり、GC・claim・complete・consistency の段階判定がこれを経由している。`completion_id is (not) None` による直接の段階判定が残っていない。 | T02 (#1124), T04 (#1126), T05 (#1129), T07 (#1131), T08 (#1132), T09 (#1133), T10 (#1127), T13 (#1135) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_ownership_architecture.py`, `tests/test_dispatch_consistency_e2e.py` |
+| `ActiveWorktreeLifecycle` と `lifecycle()` があり、GC・claim・complete・consistency の段階判定がこれを経由している。登録された狭い予約確認例外を除き、`completion_id is (not) None` による直接の段階判定が残っていない。 | T02 (#1124), T04 (#1126), T05 (#1129), T07 (#1131), T08 (#1132), T09 (#1133), T10 (#1127), T13 (#1135) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_ownership_architecture.py`, `tests/test_dispatch_consistency_e2e.py` |
 | `ActiveWorktree` が共通フィールドと `LaunchInfo` / `ClaimInfo` / `CompletionJournal` のサブレコードで構成され、所有者ごとの不変条件がサブレコード側で検証されている。 | T03 (#1125), T04 (#1126), T05 (#1129), T06 (#1130), T12 (#1134) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_codec.py`, `tests/test_claim_ownership.py` |
 | 所有者以外のモジュールがサブレコードのフィールドを書き換えていないことを、アーキテクチャテストが検査している。違反を検出できることも合成例で実証している。 | T13 (#1135) | `tests/test_active_worktree_ownership_architecture.py` (20件の合成違反・正常系テスト), `tests/test_architecture.py` |
 | 移行直前の main で有効な `run_state.json`（dispatch 起動のみ／interactive claim／completion journal 進行中／handoff-ready を含む代表例）を読み込めること、また保存結果のバイト表現（キー・値・正規化）が変わらないことを回帰テストで確認している。 | T01 (#1123), T03 (#1125), T12 (#1134) | `tests/test_active_worktree_compat_baseline.py`, `tests/test_active_worktree_codec.py` |
 | ロック未保持での保存拒否と、既存の排他条件が維持されている。 | T01 (#1123), T03 (#1125), T12 (#1134) | `tests/test_ledger_run_state.py`, `tests/test_active_worktree_codec.py` |
 | 日英の state-recovery 文書が更新されている。 | T14 (#1136, 本タスク) | `docs/ja/architecture/state-recovery.md`, `docs/en/architecture/state-recovery.md`, `tests/test_dependency_architecture_docs.py` |
 | 実行 OS に対応するローカル CI（Linux/macOS：`./scripts/local-ci.sh`、Windows：`.\scripts\local-ci.ps1`）がグリーンである。 | T01〜T14 各 PR | 全PRで `./scripts/local-ci.sh` 合格 |
-| 着手前に、全 35 フィールドの参照を列挙し、修正対象と対象外を根拠付きで分類している。 | T01 (#1123) および各タスク | T01 インベントリ、各 PR の Walkthrough / Impact Scope テーブル |
+| 着手前に、全 35 フィールド（および任意設定を含む全36フィールド）の参照を列挙し、修正対象と対象外を根拠付きで分類している。 | T01 (#1123) および各タスク | T01 インベントリ、各 PR の Walkthrough / Impact Scope テーブル |
