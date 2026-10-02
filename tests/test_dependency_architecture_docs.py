@@ -395,6 +395,26 @@ def test_documented_active_worktree_subrecords_and_lifecycle_exist() -> None:
         assert isinstance(expected_cls, type)
 
 
+@pytest.mark.parametrize("language", sorted(DOCUMENTS))
+def test_acceptance_criteria_evidence_table_references_active_completion_journal(
+    language: str,
+) -> None:
+    """Ensure the acceptance mapping table names ActiveCompletionJournal, not CompletionJournal."""
+    documents = _load_documents(language)
+    section = _anchor_section(documents["state"], "active-worktree-lifecycle")
+    table_rows = [
+        line
+        for line in section.splitlines()
+        if line.startswith("|")
+        and "ActiveWorktreeCore" in line
+        and "LaunchInfo" in line
+    ]
+    assert len(table_rows) == 1
+    row = table_rows[0]
+    assert "ActiveCompletionJournal" in row
+    assert re.search(r"(?<!Active)CompletionJournal", row) is None
+
+
 # --- Regression: the contract must detect these mutations (#911) -------------
 #
 # These reproduce the two mutations recorded in Issue #911 plus a section-scope
@@ -534,3 +554,22 @@ def test_each_lifecycle_guarantee_is_required(language: str) -> None:
         mutated = _mutate(documents, "state", section, section.replace(phrase, "..."))
         with pytest.raises(AssertionError):
             _check_section_contracts(language, mutated)
+
+
+@pytest.mark.parametrize("language", sorted(DOCUMENTS))
+def test_raw_completion_journal_in_subrecord_row_is_rejected(language: str) -> None:
+    """Replacing ActiveCompletionJournal with CompletionJournal in the subrecord row must fail."""
+    documents = _load_documents(language)
+    section = _anchor_section(documents["state"], "active-worktree-lifecycle")
+    assert "ActiveCompletionJournal" in section
+    mutated_section = section.replace("ActiveCompletionJournal", "CompletionJournal")
+    table_rows = [
+        line
+        for line in mutated_section.splitlines()
+        if line.startswith("|")
+        and "ActiveWorktreeCore" in line
+        and "LaunchInfo" in line
+    ]
+    assert len(table_rows) == 1
+    row = table_rows[0]
+    assert re.search(r"(?<!Active)CompletionJournal", row) is not None
