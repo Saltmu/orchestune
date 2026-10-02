@@ -17,8 +17,9 @@ from orchestune.dispatch.recovery import (
     _restoration_candidates,
     execute_bookkeeping_repair_command,
 )
-from orchestune.ledger.run_state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.models import IssueRecord, PrRecord
+from tests.dispatch_test_support import make_test_active_worktree
 
 
 def _snapshot(*restorations):
@@ -299,8 +300,8 @@ class TestRestorationCandidateProjection:
             result = _project_restoration_candidates(run_state, [issue], config)
 
         active = result[0][2]
-        assert active.recompute_count == 0
-        assert active.forced_serial is False
+        assert active.launch.recompute_count == 0
+        assert active.launch.forced_serial is False
 
     def test_treats_legacy_force_serial_label_as_authoritative(self, tmp_path):
         """#516再2巡目レビュー指摘: 本フィールド導入前からforced_serialだった
@@ -386,8 +387,8 @@ class TestRestorationCandidateProjection:
             result = _project_restoration_candidates(run_state, [issue], config)
 
         active = result[0][2]
-        assert active.external_id == "42"
-        assert active.started_at is None
+        assert active.launch.external_id == "42"
+        assert active.launch.started_at is None
 
     def test_missing_issue_base_branch_uses_own_parent_not_multiple_parent_config(
         self,
@@ -418,8 +419,8 @@ class TestRestorationCandidateProjection:
             )
 
         active_by_key = {key: active for key, _, active in result}
-        assert active_by_key["101"].base_branch == "parent/issue-100"
-        assert active_by_key["201"].base_branch == "parent/issue-200"
+        assert active_by_key["101"].core.base_branch == "parent/issue-100"
+        assert active_by_key["201"].core.base_branch == "parent/issue-200"
 
     def test_yaml_dependency_restores_open_dependency_pr_as_base_branch(self, tmp_path):
         """#305: GitHub MCP起票でnative blocked_byが空でも、Footprint YAMLの
@@ -464,7 +465,7 @@ class TestRestorationCandidateProjection:
             )
 
         active_by_key = {key: active for key, _, active in result}
-        assert active_by_key["102"].base_branch == "claude/issue-101-task-a"
+        assert active_by_key["102"].core.base_branch == "claude/issue-101-task-a"
 
     def test_native_blocked_by_takes_precedence_over_yaml_dependency(self, tmp_path):
         run_state = RunState(active_worktrees={})
@@ -508,7 +509,7 @@ class TestRestorationCandidateProjection:
             )
 
         active_by_key = {key: active for key, _, active in result}
-        assert active_by_key["102"].base_branch == "claude/issue-103-task-c"
+        assert active_by_key["102"].core.base_branch == "claude/issue-103-task-c"
 
     def test_unresolved_yaml_dependency_keeps_parent_base_branch(self, tmp_path):
         run_state = RunState(active_worktrees={})
@@ -589,7 +590,7 @@ class TestRestorationCandidateProjection:
         active_by_key = {key: active for key, _, active in result}
         # epic_b_dependent (parent=200) must resolve "task-a" to epic_b's own
         # #301, never epic_a's #201, regardless of open_prs iteration order.
-        assert active_by_key["302"].base_branch == "claude/issue-301-task-a"
+        assert active_by_key["302"].core.base_branch == "claude/issue-301-task-a"
 
     def test_partially_unresolved_dependencies_still_use_the_resolved_ones(
         self, tmp_path
@@ -632,7 +633,7 @@ class TestRestorationCandidateProjection:
             )
 
         active_by_key = {key: active for key, _, active in result}
-        assert active_by_key["102"].base_branch == "claude/issue-101-task-a"
+        assert active_by_key["102"].core.base_branch == "claude/issue-101-task-a"
 
     def test_native_blocked_by_without_subtask_identity_fails_closed(self, tmp_path):
         """#783: blockerのsubtask identityが母集団から取得できない場合、
@@ -671,7 +672,7 @@ class TestRestorationCandidateProjection:
             )
 
         active_by_key = {key: active for key, _, active in result}
-        assert active_by_key["102"].base_branch == "origin/main"
+        assert active_by_key["102"].core.base_branch == "origin/main"
 
     def test_restores_active_worktree_from_open_pr_with_empty_closes_issues_via_head_ref(
         self, tmp_path
@@ -713,9 +714,9 @@ class TestRestorationCandidateProjection:
         key, subtask_id, active = result[0]
         assert key == "709"
         assert subtask_id == "guarded-repair-rollout"
-        assert active.branch == "codex/issue-709-guarded-repair-rollout"
-        assert active.external_id == "737"
-        assert active.external_url == "PR#737"
+        assert active.core.branch == "codex/issue-709-guarded-repair-rollout"
+        assert active.launch.external_id == "737"
+        assert active.launch.external_url == "PR#737"
 
     def test_restores_open_dependency_pr_with_empty_closes_issues_as_base_branch(
         self, tmp_path
@@ -766,7 +767,7 @@ class TestRestorationCandidateProjection:
             )
 
         active_by_key = {key: active for key, _, active in result}
-        assert active_by_key["710"].base_branch == "codex/issue-709-task-a"
+        assert active_by_key["710"].core.base_branch == "codex/issue-709-task-a"
         mock_branch_exists.assert_called_once_with("claude/issue-709-task-a")
 
 
@@ -777,7 +778,7 @@ class TestBookkeepingRepairCommand:
         self, tmp_path, fake_forge
     ):
         run_state = RunState(active_worktrees={})
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=101,
             branch="claude/issue-101-task-a",
             worktree_path="worktrees/claude-issue-101-task-a",
@@ -832,7 +833,7 @@ class TestBookkeepingRepairCommand:
     def test_typed_bookkeeping_command_does_not_overwrite_an_occupied_key(
         self, tmp_path, fake_forge
     ):
-        occupied = ActiveWorktree(
+        occupied = make_test_active_worktree(
             issue_number=999,
             branch="codex/issue-999",
             worktree_path="worktrees/issue-999",
@@ -840,7 +841,7 @@ class TestBookkeepingRepairCommand:
             started_at=1.0,
             declared_footprint=(),
         )
-        restoration = ActiveWorktree(
+        restoration = make_test_active_worktree(
             issue_number=101,
             branch="codex/issue-101",
             worktree_path="worktrees/issue-101",
@@ -883,7 +884,7 @@ class TestRecoveryCounterTargets:
     def test_reconciles_forced_serial_from_body_into_stale_existing_entry(
         self, tmp_path
     ):
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=101,
             branch="claude/issue-101-task-a",
             worktree_path="worktrees/w1",
@@ -909,7 +910,7 @@ class TestRecoveryCounterTargets:
     def test_never_rolls_back_recompute_count_when_body_lags_behind(self, tmp_path):
         """本文の書き込みがまだ追いついていないだけの一時的なラグで、
         run_state側の進捗（より大きいrecompute_count）を巻き戻してはならない。"""
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=101,
             branch="claude/issue-101-task-a",
             worktree_path="worktrees/w1",
@@ -933,7 +934,7 @@ class TestRecoveryCounterTargets:
         assert targets == (("101", 2, False),)
 
     def test_target_matches_current_values_when_already_consistent(self, tmp_path):
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=101,
             branch="claude/issue-101-task-a",
             worktree_path="worktrees/w1",
@@ -957,7 +958,7 @@ class TestRecoveryCounterTargets:
     def test_skips_entries_with_no_corresponding_in_progress_issue(self, tmp_path):
         """対応するIssueがin_progress_issuesに無い（クローズ済み等）場合は
         スキップする（推測で書き換えない）。"""
-        active = ActiveWorktree(
+        active = make_test_active_worktree(
             issue_number=101,
             branch="claude/issue-101-task-a",
             worktree_path="worktrees/w1",
@@ -973,7 +974,7 @@ class TestRecoveryCounterTargets:
 
 
 def test_operator_release_blocks_standard_restoration(tmp_path, fake_forge):
-    active = ActiveWorktree(
+    active = make_test_active_worktree(
         issue_number=101,
         branch="codex/issue-101",
         worktree_path="worktrees/issue-101",
@@ -988,7 +989,7 @@ def test_operator_release_blocks_standard_restoration(tmp_path, fake_forge):
             "release": {
                 "operation": "release",
                 "issue_number": 101,
-                "claim_id": active.claim_id,
+                "claim_id": active.claim.claim_id,
             }
         }
     )
@@ -1009,3 +1010,104 @@ def test_operator_release_blocks_standard_restoration(tmp_path, fake_forge):
     assert result.status is RepairStatus.SKIPPED
     assert not state.active_worktrees
     fake_forge.get_issue_labels.assert_not_called()
+
+
+class TestRecoveryCounterBookkeepingExecution:
+    """Counter bookkeeping applies updates via launch owner API and rolls back on failure."""
+
+    def test_counter_bookkeeping_updates_via_launch_owner_api(
+        self, tmp_path, fake_forge
+    ):
+        from orchestune.dispatch.recovery import RECOVERY_COUNTERS_STALE
+        from tests.dispatch_test_support import make_test_active_worktree
+
+        active = make_test_active_worktree(
+            issue_number=101,
+            recompute_count=1,
+            forced_serial=False,
+        )
+        run_state = RunState(active_worktrees={"101": active})
+        snapshot = RecoveryBookkeepingSnapshot(
+            tasks_by_issue={},
+            open_prs=(),
+            restorations=(),
+            counter_targets=(("101", 2, True),),
+            launch_history=(),
+        )
+        command = RepairCommand(
+            code=COMMAND_BOOKKEEPING,
+            scope=ConsistencyScope.TASK,
+            subject_id="101",
+            idempotency_key="execution:101:bookkeeping",
+            parameters=(("finding_codes", (RECOVERY_COUNTERS_STALE,)),),
+        )
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            apply=True,
+            run_state_path=tmp_path / "run_state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
+        )
+
+        result = execute_bookkeeping_repair_command(
+            command, run_state, snapshot, config
+        )
+
+        assert result.status is RepairStatus.APPLIED
+        updated = run_state.active_worktrees["101"]
+        # Updated record has new counter values
+        assert updated.launch.recompute_count == 2
+        assert updated.launch.forced_serial is True
+        # Original instance was not mutated in place
+        assert active.recompute_count == 1
+        assert active.forced_serial is False
+
+    def test_counter_bookkeeping_rolls_back_on_persist_failure(
+        self, tmp_path, fake_forge
+    ):
+        import pytest
+
+        from orchestune.dispatch.recovery import RECOVERY_COUNTERS_STALE
+        from tests.dispatch_test_support import make_test_active_worktree
+
+        active = make_test_active_worktree(
+            issue_number=101,
+            recompute_count=1,
+            forced_serial=False,
+        )
+        run_state = RunState(active_worktrees={"101": active})
+        snapshot = RecoveryBookkeepingSnapshot(
+            tasks_by_issue={},
+            open_prs=(),
+            restorations=(),
+            counter_targets=(("101", 3, True),),
+            launch_history=(),
+        )
+        command = RepairCommand(
+            code=COMMAND_BOOKKEEPING,
+            scope=ConsistencyScope.TASK,
+            subject_id="101",
+            idempotency_key="execution:101:bookkeeping",
+            parameters=(("finding_codes", (RECOVERY_COUNTERS_STALE,)),),
+        )
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            apply=True,
+            run_state_path=tmp_path / "run_state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
+        )
+
+        with patch(
+            "orchestune.dispatch.recovery._persist_recovery_snapshot",
+            side_effect=OSError("disk full"),
+        ):
+            with pytest.raises(IOError, match="disk full"):
+                execute_bookkeeping_repair_command(command, run_state, snapshot, config)
+
+        # After rollback, run_state still holds the original active record
+        assert run_state.active_worktrees["101"] is active
+        assert run_state.active_worktrees["101"].launch.recompute_count == 1
+        assert run_state.active_worktrees["101"].launch.forced_serial is False
