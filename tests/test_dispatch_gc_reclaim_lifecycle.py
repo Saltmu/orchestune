@@ -165,7 +165,7 @@ class TestDirtyWorktreeHoldLimit:
                 return_value={
                     "action": "completion_skipped_dirty_worktree",
                     "issue_number": 280,
-                    "worktree_path": active.worktree_path,
+                    "worktree_path": active.core.worktree_path,
                 },
             ),
         ):
@@ -251,7 +251,7 @@ class TestDirtyWorktreeHoldLimit:
                 return_value={
                     "action": "completion_skipped_dirty_worktree",
                     "issue_number": 280,
-                    "worktree_path": active.worktree_path,
+                    "worktree_path": active.core.worktree_path,
                 },
             ),
         ):
@@ -292,7 +292,7 @@ class TestDirtyWorktreeHoldLimit:
                 return_value={
                     "action": "completion_skipped_dirty_worktree",
                     "issue_number": 280,
-                    "worktree_path": active.worktree_path,
+                    "worktree_path": active.core.worktree_path,
                 },
             ),
         ):

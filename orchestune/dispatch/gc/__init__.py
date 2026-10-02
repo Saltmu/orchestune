@@ -198,13 +198,13 @@ def _persist_run_state_best_effort(ctx: _RuleExecutionContext, what: str) -> Non
 
 def _update_hold_record(ctx: _RuleExecutionContext, active: ActiveWorktree) -> int:
     """dirty worktreeの保留回数を記録・永続化して返す。"""
-    previous = ctx.run_state.task_reclaim_counts.get(active.issue_number)
+    previous = ctx.run_state.task_reclaim_counts.get(active.core.issue_number)
     hold_count = (previous.count if previous else 0) + 1
-    ctx.run_state.task_reclaim_counts[active.issue_number] = TaskReclaimRecord(
+    ctx.run_state.task_reclaim_counts[active.core.issue_number] = TaskReclaimRecord(
         count=hold_count, last_reclaimed_at=time.time()
     )
     _persist_run_state_best_effort(
-        ctx, f"the dirty-worktree hold count for issue #{active.issue_number}"
+        ctx, f"the dirty-worktree hold count for issue #{active.core.issue_number}"
     )
     return hold_count
 
@@ -224,7 +224,7 @@ def _escalate_held_dirty_worktree(
         released = True
         ctx.run_state.active_worktrees.pop(key, None)
         _persist_run_state_best_effort(
-            ctx, f"the released ledger entry for issue #{active.issue_number}"
+            ctx, f"the released ledger entry for issue #{active.core.issue_number}"
         )
 
     status_labels = (
@@ -234,7 +234,7 @@ def _escalate_held_dirty_worktree(
     )
     try:
         apply_human_review_escalation(
-            active.issue_number,
+            active.core.issue_number,
             status_labels,
             "エージェントプロセスの終了を検知しましたが、worktreeに未コミットの変更が"
             "残っているため、完了処理を保留しました。\n"
@@ -242,14 +242,14 @@ def _escalate_held_dirty_worktree(
             f"{ctx.config.max_task_reclaims}）を超えた（今回で{hold_count}回目）ため、"
             "自動処理を打ち切り、status:blocked-human-reviewへ遷移しました。\n"
             "未コミットの作業データを保全するため、worktreeは削除せずに残しています: "
-            f"{active.worktree_path}",
+            f"{active.core.worktree_path}",
             forge=ctx.config.resolved_forge,
             on_label_applied=_release_entry,
         )
     except Exception as e:  # noqa: BLE001 - 1タスクの失敗でサイクルを止めない
         print(
             f"Warning: failed to escalate the held dirty worktree of issue "
-            f"#{active.issue_number}: {e}",
+            f"#{active.core.issue_number}: {e}",
             file=sys.stderr,
         )
         if not released:
@@ -351,14 +351,15 @@ def _cleanup_stale_active_worktree(
     active: ActiveWorktree, reason: str, config: DispatcherConfig
 ) -> bool:
     """古い帳簿エントリに対応するworktreeのWIPバックアップとクリーンアップを行う。"""
-    worktree_exists = os.path.exists(active.worktree_path)
+    worktree_exists = os.path.exists(active.core.worktree_path)
     if worktree_exists:
         backup_error = backup_wip_commit(
-            active.worktree_path, "WIP: backup by Orchestune GC (stale active entry)"
+            active.core.worktree_path,
+            "WIP: backup by Orchestune GC (stale active entry)",
         )
         if backup_error is not None:
             config.resolved_forge.add_comment(
-                active.issue_number,
+                active.core.issue_number,
                 "run_stateの古い帳簿エントリを検知しました"
                 f"（{reason}）。対象プロセスの後始末を試みましたが、WIP"
                 "バックアップコミットの作成に失敗しました。\n"
@@ -368,14 +369,14 @@ def _cleanup_stale_active_worktree(
             )
             return False
 
-    if active.pid and is_process_alive(active.pid):
+    if active.launch.pid and is_process_alive(active.launch.pid):
         try:
-            os.kill(active.pid, 9)
+            os.kill(active.launch.pid, 9)
         except Exception:
             pass
 
     if worktree_exists:
-        remove_worktree(active.worktree_path)
+        remove_worktree(active.core.worktree_path)
     return True
 
 
@@ -390,7 +391,7 @@ def _apply_stale_active_entry_discard(
     状態を確認し、必要な後始末を行う。
     """
     if completion_mutation_blocked_fresh(
-        run_state, active.issue_number, config.run_state_path
+        run_state, active.core.issue_number, config.run_state_path
     ):
         return False
     if not config.apply:
@@ -398,7 +399,7 @@ def _apply_stale_active_entry_discard(
     if not _cleanup_stale_active_worktree(active, reason, config):
         return False
     del run_state.active_worktrees[key]
-    record = run_state.task_reclaim_counts.get(active.issue_number)
+    record = run_state.task_reclaim_counts.get(active.core.issue_number)
     if record is not None and record.pending:
         record.pending = False
     return True
@@ -413,7 +414,7 @@ def _create_abandonment_callbacks(
     def _release_entry() -> None:
         nonlocal released
         ctx.run_state.active_worktrees.pop(key, None)
-        rec = ctx.run_state.task_reclaim_counts.get(active.issue_number)
+        rec = ctx.run_state.task_reclaim_counts.get(active.core.issue_number)
         if rec is not None:
             rec.pending = False
         save_run_state(
@@ -458,15 +459,15 @@ def _abandoned_worktree_outcome(
         )
     except Exception as e:
         print(
-            f"Warning: skipping abandonment of issue #{active.issue_number}: "
+            f"Warning: skipping abandonment of issue #{active.core.issue_number}: "
             f"failed to persist the reclaim count: {e}",
             file=sys.stderr,
         )
         return ActiveWorktreeRuleOutcome(
             completion_event={
-                "issue_number": active.issue_number,
+                "issue_number": active.core.issue_number,
                 "subtask_id": active_task.subtask_id if active_task else "",
-                "worktree_path": active.worktree_path,
+                "worktree_path": active.core.worktree_path,
                 "action": "abandonment_skipped_persistence_failure",
             },
             terminal=True,
@@ -480,7 +481,7 @@ def _abandoned_worktree_outcome(
     ):
         ctx.run_state.active_worktrees.pop(key, None)
         _persist_run_state_best_effort(
-            ctx, f"the released ledger entry for issue #{active.issue_number}"
+            ctx, f"the released ledger entry for issue #{active.core.issue_number}"
         )
     return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)
 
@@ -490,7 +491,7 @@ def _find_recovery_pr(
 ) -> PrRecord | None:
     all_prs = config.resolved_forge.list_prs(state="all")
     matching_prs = [
-        pr for pr in all_prs if active.issue_number in pr.closes_issue_numbers
+        pr for pr in all_prs if active.core.issue_number in pr.closes_issue_numbers
     ]
     return next(
         (pr for pr in matching_prs if pr.state.upper() in {"OPEN", "MERGED"}),
@@ -549,8 +550,8 @@ def _completion_forge_error_hold(
     サイクルレポートの警告セクションから辿れるようにする。
     """
     event: dict[str, object] = {
-        "issue_number": active.issue_number,
-        "worktree_path": active.worktree_path,
+        "issue_number": active.core.issue_number,
+        "worktree_path": active.core.worktree_path,
         "action": "completion_skipped_forge_error",
     }
     if operation:
@@ -574,7 +575,7 @@ def _resolve_recovered_completion(
             _completion_forge_error_hold(
                 active,
                 "find_recovery_pr",
-                warn_forge_failure("find_recovery_pr", active.issue_number, error),
+                warn_forge_failure("find_recovery_pr", active.core.issue_number, error),
             )
         )
     if recovery_pr is None:

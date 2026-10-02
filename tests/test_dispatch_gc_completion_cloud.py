@@ -15,7 +15,7 @@ from orchestune.dispatch.gc.completion import (
     _finalize_abandoned_cloud_worktree,
     _local_pr_completion_status,
 )
-from orchestune.ledger.run_state import ActiveWorktree, RunState, TaskReclaimRecord
+from orchestune.ledger.run_state import RunState, TaskReclaimRecord
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _task
@@ -491,7 +491,7 @@ class TestLocalPrCompletionStatusWithFakeForge:
             worktree_root=tmp_path / "worktrees",
             forge=fake_forge,
         )
-        active = ActiveWorktree(
+        active = _active(
             issue_number=1,
             branch="claude/issue-1-task-1",
             worktree_path=str(tmp_path / "worktrees/claude-issue-1-task-1"),
@@ -523,7 +523,7 @@ class TestLocalPrCompletionStatusWithFakeForge:
             worktree_root=tmp_path / "worktrees",
             forge=fake_forge,
         )
-        active = ActiveWorktree(
+        active = _active(
             issue_number=1,
             branch="claude/issue-1-task-1",
             worktree_path=str(tmp_path / "worktrees/claude-issue-1-task-1"),
@@ -557,7 +557,7 @@ class TestLocalPrCompletionStatusWithFakeForge:
             worktree_root=tmp_path / "worktrees",
             forge=fake_forge,
         )
-        active = ActiveWorktree(
+        active = _active(
             issue_number=1,
             branch="claude/issue-1-task-1",
             worktree_path=str(tmp_path / "worktrees/claude-issue-1-task-1"),
@@ -588,7 +588,7 @@ class TestLocalPrCompletionStatusWithFakeForge:
             worktree_root=tmp_path / "worktrees",
             forge=fake_forge,
         )
-        active = ActiveWorktree(
+        active = _active(
             issue_number=1,
             branch="claude/issue-1-task-1",
             worktree_path=str(tmp_path / "worktrees/claude-issue-1-task-1"),
@@ -631,7 +631,7 @@ class TestLocalPrCompletionStatusWithFakeForge:
             worktree_root=tmp_path / "worktrees",
             forge=fake_forge,
         )
-        active = ActiveWorktree(
+        active = _active(
             issue_number=1,
             branch="claude/issue-1-task-1",
             worktree_path=str(tmp_path / "worktrees/claude-issue-1-task-1"),
