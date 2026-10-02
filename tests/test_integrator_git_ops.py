@@ -454,7 +454,9 @@ class TestFetchTaskBranch:
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         with (
             patch.object(
-                merger.forge, "is_current_branch_tip_merged_into", return_value=False
+                merger.forge,
+                "get_current_branch_tip_sha_if_merged_into",
+                return_value=None,
             ),
             patch(
                 "orchestune.integrator.git_ops.fetch_remote_branch",
