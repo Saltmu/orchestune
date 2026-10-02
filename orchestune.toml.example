@@ -68,6 +68,9 @@ run-state-path = "run_state.json"
 worktree-root = "worktrees"
 log-dir = "logs"
 events-log-path = "events.jsonl"
+# Relative to the primary checkout; each run saves a unique result.json (also in dry-run).
+report-dir = ".orchestune/reports/dispatch"
+# ORCHESTUNE_DISPATCH_REPORT_PATH overrides this with one unused file path (relative to invocation cwd).
 not-needed-review-state-path = "not_needed_review_state.json"
 not-needed-review-timeout-seconds = 86400
 

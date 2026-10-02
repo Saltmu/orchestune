@@ -41,6 +41,74 @@ def _test_workspace_roots() -> tuple[Path, Path]:
     return workspace.repository_root, workspace.common_dir.parent
 
 
+@pytest.mark.parametrize("value", ["relative/result.json", "absolute"])
+def test_report_env_resolves_from_explicit_cwd(tmp_path, monkeypatch, value):
+    import json
+
+    from orchestune.dispatch.config_loader import load_and_resolve_config
+
+    report_path = tmp_path / "absolute.json" if value == "absolute" else Path(value)
+    monkeypatch.setenv("ORCHESTUNE_DISPATCH_REPORT_PATH", str(report_path))
+    with (
+        patch(
+            "orchestune.dispatch.config_loader._resolve_checkout_roots",
+            return_value=(tmp_path / "primary", tmp_path),
+        ),
+        patch(
+            "orchestune.dispatch.config_loader._default_resolve_dispatch_shared_paths",
+            return_value=(tmp_path / "state.json", tmp_path / "worktrees"),
+        ),
+    ):
+        config = load_and_resolve_config(
+            ["-p", "100", "--no-apply"],
+            cwd=tmp_path,
+            load_config_fn=lambda _: {"report-dir": "configured"},
+            build_target_fn=lambda _: None,
+        )
+    assert config.report_dir == tmp_path / "primary/configured"
+    assert config.report_path == (
+        report_path if report_path.is_absolute() else tmp_path / report_path
+    )
+    with (
+        patch(
+            "orchestune.dispatch.dispatcher.load_and_resolve_config",
+            return_value=config,
+        ),
+        patch(
+            "orchestune.dispatch.dispatcher.run_dispatch_cycle",
+            return_value=_empty_report(),
+        ),
+    ):
+        assert main([], cwd=tmp_path) == 0
+    assert json.loads(config.report_path.read_text())["post_cycle_results"] == []
+
+
+@pytest.mark.parametrize(
+    "value", ["", " ", ".", "state.json", "state.lock", "events.jsonl"]
+)
+def test_invalid_report_env_is_config_error(tmp_path, monkeypatch, value):
+    from orchestune.dispatch.config_loader import ConfigError, load_and_resolve_config
+
+    monkeypatch.setenv("ORCHESTUNE_DISPATCH_REPORT_PATH", value)
+    with (
+        patch(
+            "orchestune.dispatch.config_loader._resolve_checkout_roots",
+            return_value=(tmp_path, tmp_path),
+        ),
+        patch(
+            "orchestune.dispatch.config_loader._default_resolve_dispatch_shared_paths",
+            return_value=(tmp_path / "state.json", tmp_path / "worktrees"),
+        ),
+        pytest.raises(ConfigError),
+    ):
+        load_and_resolve_config(
+            ["-p", "100", "--no-apply"],
+            cwd=tmp_path,
+            load_config_fn=lambda _: {},
+            build_target_fn=lambda _: None,
+        )
+
+
 @pytest.mark.parametrize("cwd_suffix", [Path("."), Path("orchestune")])
 def test_shared_relative_paths_use_primary_repository_root(cwd_suffix):
     worktree_root, repository_root = _test_workspace_roots()
@@ -72,6 +140,7 @@ def test_shared_relative_paths_use_primary_repository_root(cwd_suffix):
     config = mock_run.call_args.args[0]
     assert config.run_state_path == (repository_root / "shared/state.json").resolve()
     assert config.worktree_root == (repository_root / "shared/worktrees").resolve()
+    assert config.report_dir == repository_root / ".orchestune/reports/dispatch"
 
 
 def test_absolute_shared_paths_are_preserved(tmp_path):

@@ -246,6 +246,46 @@ orchestune-dispatch --no-apply
 orchestune-dispatch
 ```
 
+### Progress and result files
+
+stdout displays flushed progress with a run ID, parent, mode and phase, including on pipes. Final JSON is saved atomically; read the absolute `report saved` path. `report target` is only the intended path. Migrate `dispatch | jq` and JSON redirects to file reads. The JSON schema and GitHub Step Summary stay unchanged.
+
+TOML `report-dir` defaults to `.orchestune/reports/dispatch`, resolved from the primary checkout even in linked worktrees. Each run saves `parent-<N>/<UTC YYYYMMDDTHHMMSSZ>-<UUID>/result.json`. `ORCHESTUNE_DISPATCH_REPORT_PATH` overrides it with an unused file path, relative to invocation cwd or absolute. Existing results, symlinks, empty values, directories and business-state/lock paths are rejected. Reruns need fresh paths; never select the newest file or reuse an earlier result.
+
+`--no-apply` skips dispatch actions while saving local results and creating report directories/locks. `planned` means dry-run selection; `launched` means the launch procedure completed, not task completion (`local` is a dummy target). Progress failure does not stop result saving.
+
+The dedicated `<result-name>.report.lock` remains beside the result, including for explicit paths. Exclusion covers cooperating dispatch runs; unrelated external writers are outside this guarantee. Do not remove a lock while other executions may use it.
+
+Preserve the exit code before reading the current run result. These examples handle nonzero exits under Bash `set -e` and PowerShell native error promotion:
+
+```bash
+session_dir=$(./scripts/create-session-dir.sh dispatch-result 100)
+result_path="$session_dir/dispatch-result.json"
+dispatch_code=0
+ORCHESTUNE_DISPATCH_REPORT_PATH="$result_path" orchestune-dispatch -p 100 || dispatch_code=$?
+if [ -f "$result_path" ]; then jq . "$result_path"; else echo "report not created" >&2; fi
+# dispatch_code remains available under set -e; file existence alone is not success.
+```
+
+```powershell
+$sessionDir = .\scripts\create-session-dir.ps1 dispatch-result 100
+$resultPath = Join-Path $sessionDir 'dispatch-result.json'
+$env:ORCHESTUNE_DISPATCH_REPORT_PATH = $resultPath
+$savedPreference = $PSNativeCommandUseErrorActionPreference
+try {
+    $PSNativeCommandUseErrorActionPreference = $false
+    orchestune-dispatch -p 100
+    $dispatchCode = $LASTEXITCODE
+} finally {
+    $PSNativeCommandUseErrorActionPreference = $savedPreference
+    Remove-Item Env:ORCHESTUNE_DISPATCH_REPORT_PATH
+}
+if (Test-Path -LiteralPath $resultPath -PathType Leaf) { Get-Content -Raw $resultPath | ConvertFrom-Json }
+else { Write-Warning 'report not created' }
+```
+
+A nonzero run can still save a complete failure report. Argument/configuration errors, output reservation failure and exceptions before a complete cycle report may leave no file (`report not created`). Check exit code and JSON: 0 success, 1 fatal/save failure, 2 retryable failure (or argument/configuration error). File existence alone is not success. There is no automatic retention; `.orchestune/reports/` is ignored here.
+
 ### Major Options
 
 Routine dispatch execution uses strictly the following 6 options. Detailed parameters (rate limits, token budgets, timeouts, paths, etc.) are configured via configuration files (`orchestune.toml`) or environment variables.
@@ -287,6 +327,7 @@ Non-routine options (storage paths, rate limits, timeouts, reviewer selection, c
 | `consistency-mode` | `"off"` | Additional repository-wide consistency loop (`"off"`, `"shadow"`, `"repair"`). |
 | `consistency-repair-code` | `[]` | List of finding codes or command codes allowed in the `repair` loop. |
 | `consistency-max-repair-passes` | `1` | Maximum guarded repair/re-observation passes per dispatch cycle (1-5). |
+| `report-dir` | `.orchestune/reports/dispatch` | Automatic result root, relative to primary checkout; overridden per run by `ORCHESTUNE_DISPATCH_REPORT_PATH`. |
 | `run-state-path` | `"run_state.json"` | Where the run state carried across dispatch cycles is persisted. Relative paths resolve against the primary checkout root. |
 | `worktree-root` | `"worktrees"` | Root directory for agent worktrees. Relative paths resolve against the primary checkout root. |
 | `log-dir` | `"logs"` | Directory where agent execution logs are stored. |
@@ -299,7 +340,7 @@ The default self-healing allowlist is intentionally separate from `consistency-r
 
 Use `off` for unchanged behavior, `shadow` to inspect additional start/end findings, `repair` with no repair codes to inspect final dispositions without enabling a new policy, and then a limited set of `consistency-repair-code` options to opt in. `--apply` permits the established repairs and opted-in policies to mutate; `--no-apply` permits no external or durable repair side effects (GC output is a preview and recovery may update only ephemeral in-memory preview bookkeeping).
 
-Inspect `consistency.scans`, `consistency.repair_passes`, and `consistency.repair_outcomes` in `--json` output or `events.jsonl`. Outcomes are `resolved`, `unresolved`, `deferred`, `failed`, or `observation-unknown`. Unknown/stale observations and non-repairable findings remain visible without being mutated. A skipped command-level result caused by dry-run or a failed live precondition is represented by the finding's final disposition; there is no fallback to an old phase-owned repair path. A failed partial status transition leaves its Intent journal beside `run_state.json` so the next cycle can resume it without duplicating the external side effect.
+Inspect `consistency.scans`, `consistency.repair_passes`, and `consistency.repair_outcomes` in the saved dispatch JSON or `events.jsonl`. Outcomes are `resolved`, `unresolved`, `deferred`, `failed`, or `observation-unknown`. Unknown/stale observations and non-repairable findings remain visible without being mutated. A skipped command-level result caused by dry-run or a failed live precondition is represented by the finding's final disposition; there is no fallback to an old phase-owned repair path. A failed partial status transition leaves its Intent journal beside `run_state.json` so the next cycle can resume it without duplicating the external side effect.
 
 ### Cloud Environment Variables and Secrets
 

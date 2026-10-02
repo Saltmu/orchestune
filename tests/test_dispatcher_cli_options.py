@@ -49,7 +49,10 @@ def _resolve_legacy_temp_cwds(monkeypatch):
     repository_cwd = Path(__file__).resolve().parents[1]
 
     def _resolve(args, cwd):
-        if cwd is not None and not cwd.resolve().is_relative_to(repository_cwd):
+        if cwd is not None and (
+            not cwd.resolve().is_relative_to(repository_cwd)
+            or cwd.resolve().is_relative_to(repository_cwd / ".orchestune/tmp")
+        ):
             cwd = repository_cwd
         return resolve(args, cwd)
 
