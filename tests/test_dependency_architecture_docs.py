@@ -415,6 +415,17 @@ def test_acceptance_criteria_evidence_table_references_active_completion_journal
     assert re.search(r"(?<!Active)CompletionJournal", row) is None
 
 
+@pytest.mark.parametrize("language", sorted(DOCUMENTS))
+def test_acceptance_criteria_evidence_table_references_both_local_ci_scripts(
+    language: str,
+) -> None:
+    """Ensure the acceptance mapping table documents both Linux/macOS and Windows local-ci scripts."""
+    documents = _load_documents(language)
+    section = _anchor_section(documents["state"], "active-worktree-lifecycle")
+    assert "./scripts/local-ci.sh" in section
+    assert r".\scripts\local-ci.ps1" in section
+
+
 # --- Regression: the contract must detect these mutations (#911) -------------
 #
 # These reproduce the two mutations recorded in Issue #911 plus a section-scope

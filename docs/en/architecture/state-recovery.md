@@ -202,7 +202,7 @@ While in-memory representations use nested subrecords, disk persistence strictly
 
 ### 6.7 Epic #1106 Acceptance Criteria and Evidence Mapping
 
-All acceptance criteria defined in parent Epic #1106 are verified and satisfied by the completed implementations and tests of T01–T13.
+All acceptance criteria defined in parent Epic #1106 are verified and satisfied by the completed implementations, documentation, and tests of T01–T14.
 
 | #1106 Acceptance Criteria | Implemented Subtasks | Verification Evidence & Test Suites |
 | :--- | :--- | :--- |
@@ -212,5 +212,5 @@ All acceptance criteria defined in parent Epic #1106 are verified and satisfied 
 | Valid `run_state.json` files from prior main (representative examples: dispatch launch, interactive claim, completion journal in progress, handoff ready) load successfully, and saved canonical byte representations match golden. | T01 (#1123), T03 (#1125), T12 (#1134) | `tests/test_active_worktree_compat_baseline.py`, `tests/test_active_worktree_codec.py` |
 | Persistence rejection without holding locks and existing mutual exclusion guarantees are preserved. | T01 (#1123), T03 (#1125), T12 (#1134) | `tests/test_ledger_run_state.py`, `tests/test_active_worktree_codec.py` |
 | Bilingual state-recovery architecture documents are updated and synchronized. | T14 (#1136, this task) | `docs/ja/architecture/state-recovery.md`, `docs/en/architecture/state-recovery.md`, `tests/test_dependency_architecture_docs.py` |
-| Local CI (`./scripts/local-ci.sh`) passes cleanly on Linux/macOS. | T01–T14 all PRs | Clean pass on `./scripts/local-ci.sh` |
+| Local CI passes cleanly for the operating system (Linux/macOS: `./scripts/local-ci.sh`, Windows: `.\scripts\local-ci.ps1`). | T01–T14 all PRs | Clean pass on `./scripts/local-ci.sh` (Linux CI) |
 | Reference enumeration across all 35 fields (and 36 in full schema) with classified rationale completed before implementation. | T01 (#1123) and subtasks | T01 inventory, Walkthrough / Impact Scope tables in each PR |
