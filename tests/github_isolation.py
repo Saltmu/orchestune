@@ -39,6 +39,24 @@ _SENSITIVE_GH_ENV = frozenset(
     }
 )
 _GH_EXECUTABLES = frozenset({"gh", "gh.exe", "gh.cmd", "gh.bat"})
+_SHELL_EXECUTABLES = frozenset(
+    {
+        "bash",
+        "csh",
+        "cmd",
+        "cmd.exe",
+        "dash",
+        "fish",
+        "ksh",
+        "powershell",
+        "powershell.exe",
+        "pwsh",
+        "pwsh.exe",
+        "sh",
+        "tcsh",
+        "zsh",
+    }
+)
 _GITHUB_SUFFIXES = ("github.com", "githubusercontent.com", "githubassets.com")
 _CHILD_GUARDS_INSTALLED = False
 
@@ -116,8 +134,23 @@ def _shell_contains_absolute_gh(args: Any, shell: bool = False) -> bool:
     parts = _command_parts(args)
     if shell and isinstance(args, bytes | str):
         commands = parts
-    else:
+    elif shell:
         commands = parts[1:]
+    elif parts and ntpath.basename(parts[0].replace("/", "\\")).lower() in (
+        _SHELL_EXECUTABLES
+    ):
+        shell_args = parts[1:]
+        command_start = next(
+            (
+                index + 1
+                for index, value in enumerate(shell_args)
+                if value.lower() in {"-c", "/c"}
+            ),
+            len(shell_args),
+        )
+        commands = shell_args[command_start:]
+    else:
+        return False
     for command in commands:
         try:
             tokens = shlex.split(command, posix=os.name != "nt")
@@ -340,6 +373,7 @@ def _write_cli_shim(bin_dir: Path) -> None:
 def _write_sitecustomize(python_dir: Path) -> None:
     # This startup hook intentionally precedes any existing sitecustomize.
     # Python children using -I or -S skip it; see the module limitation above.
+    # _child_environment must keep the project root on PYTHONPATH to import the guard.
     python_dir.mkdir(parents=True)
     (python_dir / "sitecustomize.py").write_text(
         "from tests.github_isolation import install_child_guards\n"

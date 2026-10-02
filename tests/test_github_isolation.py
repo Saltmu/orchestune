@@ -62,6 +62,24 @@ def test_popen_guard_preserves_the_popen_class_contract() -> None:
     assert process.wait(timeout=10) == 0
 
 
+def test_non_shell_argument_with_absolute_gh_path_is_not_a_cli_launch() -> None:
+    gh_path = Path(os.sep) / "missing" / ("gh.exe" if os.name == "nt" else "gh")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; print(sys.argv[1])",
+            str(gh_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == str(gh_path)
+
+
 def test_shell_cannot_launch_absolute_gh(
     github_access_isolation: GitHubAccessMonitor,
 ) -> None:
@@ -71,6 +89,20 @@ def test_shell_cannot_launch_absolute_gh(
 
     with pytest.raises(GitHubAccessBlocked, match="blocked unmocked GitHub"):
         subprocess.Popen(command, shell=True)
+
+
+def test_shell_list_cannot_launch_absolute_gh(
+    github_access_isolation: GitHubAccessMonitor,
+) -> None:
+    github_access_isolation.expect("cli")
+    gh_path = Path(os.sep) / "missing" / ("gh.exe" if os.name == "nt" else "gh")
+    if os.name == "nt":
+        command = ["cmd.exe", "/c", f'"{gh_path}" api /user']
+    else:
+        command = ["sh", "-c", f"{gh_path} api /user"]
+
+    with pytest.raises(GitHubAccessBlocked, match="blocked unmocked GitHub"):
+        subprocess.Popen(command)
 
 
 def test_shell_child_uses_the_guarded_path_shim(
