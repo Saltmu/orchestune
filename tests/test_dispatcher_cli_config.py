@@ -64,7 +64,10 @@ def _resolve_legacy_temp_cwds(monkeypatch):
     repository_cwd = Path.cwd()
 
     def _resolve(args, cwd):
-        if cwd is not None and not cwd.resolve().is_relative_to(repository_cwd):
+        if cwd is not None and (
+            not cwd.resolve().is_relative_to(repository_cwd)
+            or cwd.resolve().is_relative_to(repository_cwd / ".orchestune/tmp")
+        ):
             cwd = repository_cwd
         return resolve(args, cwd)
 
@@ -623,7 +626,11 @@ class TestDispatcherConfigLoading:
                 cwd=tmp_path,
             )
             assert code == 0
-            out = json.loads(capsys.readouterr().out)
+            captured = capsys.readouterr()
+            saved_line = next(
+                line for line in captured.out.splitlines() if "report saved: " in line
+            )
+            out = json.loads(Path(saved_line.split("report saved: ", 1)[1]).read_text())
             assert "post_cycle_results" in out
             assert len(out["post_cycle_results"]) == 5
             assert out["post_cycle_results"][0]["status"] == "success"
@@ -671,7 +678,11 @@ class TestDispatcherConfigLoading:
                 cwd=tmp_path,
             )
             assert code == 2
-            out = json.loads(capsys.readouterr().out)
+            captured = capsys.readouterr()
+            saved_line = next(
+                line for line in captured.out.splitlines() if "report saved: " in line
+            )
+            out = json.loads(Path(saved_line.split("report saved: ", 1)[1]).read_text())
             assert out["post_cycle_results"][1]["status"] == "retryable_failure"
             assert out["post_cycle_results"][1]["error_message"] == "retryable-error"
 
@@ -718,7 +729,11 @@ class TestDispatcherConfigLoading:
                 cwd=tmp_path,
             )
             assert code == 1
-            out = json.loads(capsys.readouterr().out)
+            captured = capsys.readouterr()
+            saved_line = next(
+                line for line in captured.out.splitlines() if "report saved: " in line
+            )
+            out = json.loads(Path(saved_line.split("report saved: ", 1)[1]).read_text())
             assert out["post_cycle_results"][1]["status"] == "fatal_failure"
 
         # ケース4: main()のcheck_auth()自体がForgeAuthErrorを投げる場合
@@ -741,7 +756,11 @@ class TestDispatcherConfigLoading:
                 cwd=tmp_path,
             )
             assert code == 1
-            out = json.loads(capsys.readouterr().out)
+            captured = capsys.readouterr()
+            saved_line = next(
+                line for line in captured.out.splitlines() if "report saved: " in line
+            )
+            out = json.loads(Path(saved_line.split("report saved: ", 1)[1]).read_text())
             assert "post_cycle_results" in out
             assert len(out["post_cycle_results"]) == 5
             for res in out["post_cycle_results"]:

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
@@ -35,7 +34,9 @@ from orchestune.dispatch.postcycle import (
     _process_parent_completion,
     _run_semantic_integrator,
 )
+from orchestune.dispatch.progress import StdoutProgress, progress_phase, safe_stderr
 from orchestune.dispatch.report import _report_to_dict, write_github_step_summary
+from orchestune.dispatch.report_output import ReportOutput, new_run_id, reserve_report
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.summary import (
     merge_skips,
@@ -87,55 +88,117 @@ def _resolve_dispatch_shared_paths(
     return workspace.run_state_path, workspace.worktree_root
 
 
-def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
-    report = run_dispatch_cycle(config)
-    post_cycle_results: list[PhaseResult] = []
-    integrator_run_report = None
-
-    if config.apply:
-        auth_error = None
-        try:
-            config.resolved_forge.check_auth()
-        except ForgeAuthError as e:
-            auth_error = e
-
-        semantic_review_enabled = _decide_semantic_review_enabled()
-        if semantic_review_enabled:
-            result = _poll_pending_not_needed_reviews(
+def _post_cycle_steps(config, report, semantic_review_enabled, auth_error):
+    return [
+        (
+            "poll_pending_not_needed_reviews",
+            lambda: _poll_pending_not_needed_reviews(
                 config.not_needed_review_state_path,
                 forge=config.forge,
                 auth_error=auth_error,
                 timeout_seconds=config.not_needed_review_timeout_seconds,
-            )
-            post_cycle_results.append(result)
-        result = _run_semantic_integrator(
-            config, semantic_review_enabled, auth_error=auth_error
-        )
-        post_cycle_results.append(result)
-        integrator_run_report = result.report
-        post_cycle_results.append(
-            _process_parent_completion(config, auth_error=auth_error)
-        )
-        post_cycle_results.append(
-            _post_event_log_comment(config, report, auth_error=auth_error)
-        )
-        post_cycle_results.append(
-            _post_finding_notices(config, report, auth_error=auth_error)
-        )
+            ),
+            semantic_review_enabled,
+        ),
+        (
+            "run_semantic_integrator",
+            lambda: _run_semantic_integrator(
+                config,
+                semantic_review_enabled,
+                auth_error=auth_error,
+            ),
+            True,
+        ),
+        (
+            "process_parent_completion",
+            lambda: _process_parent_completion(config, auth_error=auth_error),
+            True,
+        ),
+        (
+            "post_event_log_comment",
+            lambda: _post_event_log_comment(config, report, auth_error=auth_error),
+            True,
+        ),
+        (
+            "post_finding_notices",
+            lambda: _post_finding_notices(config, report, auth_error=auth_error),
+            True,
+        ),
+    ]
 
-    return _DispatcherRunResult(
-        report=report,
-        post_cycle_results=post_cycle_results,
-        integrator_run_report=integrator_run_report,
-    )
+
+def _run_post_cycle_step(
+    config: DispatcherConfig, name: str, call: Callable[[], PhaseResult]
+) -> tuple[PhaseResult, bool]:
+    config.progress.emit(name, "started")
+    fatal_exception = False
+    try:
+        result = call()
+    except Exception as exc:
+        result = PhaseResult(name, PhaseStatus.FATAL_FAILURE, error_message=str(exc))
+        fatal_exception = True
+    event = {
+        PhaseStatus.SUCCESS: "completed",
+        PhaseStatus.WARNING: "warning",
+        PhaseStatus.RETRYABLE_FAILURE: "failed",
+        PhaseStatus.FATAL_FAILURE: "failed",
+    }[result.status]
+    config.progress.emit(name, event)
+    if result.error_message:
+        safe_stderr(f"{name}: {result.status.value}: {result.error_message}")
+    return result, fatal_exception
+
+
+def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
+    report = run_dispatch_cycle(config)
+    results: list[PhaseResult] = []
+    integrator_report = None
+    auth_error = None
+    semantic_review_enabled = False
+    preparation_failed = False
+    if config.apply:
+        try:
+            with progress_phase(config.progress, "post_cycle_preparation"):
+                try:
+                    config.resolved_forge.check_auth()
+                except ForgeAuthError as exc:
+                    auth_error = exc
+                semantic_review_enabled = _decide_semantic_review_enabled()
+        except Exception as exc:
+            results.append(
+                PhaseResult(
+                    "post_cycle_preparation",
+                    PhaseStatus.FATAL_FAILURE,
+                    error_message=str(exc),
+                )
+            )
+            safe_stderr(f"post_cycle_preparation: {exc}")
+            preparation_failed = True
+    stopped = preparation_failed
+    for name, call, enabled in _post_cycle_steps(
+        config, report, semantic_review_enabled, auth_error
+    ):
+        if not config.apply or stopped or not enabled:
+            reason = (
+                "dry_run"
+                if not config.apply
+                else "prior_failure"
+                if stopped
+                else "semantic_review_disabled"
+            )
+            config.progress.emit(name, "skipped", reason=reason)
+            continue
+        result, stopped = _run_post_cycle_step(config, name, call)
+        results.append(result)
+        if name == "run_semantic_integrator":
+            integrator_report = result.report
+    return _DispatcherRunResult(report, results, integrator_report)
 
 
 def _emit_human_summary(report: CycleReport) -> None:
     """#787: 未選定タスクとForge障害の要約をstderrへ出す。
 
-    stdoutはスキル・CIがパースするJSON専用の経路なので触らない。Markdownの
-    サマリーはGITHUB_STEP_SUMMARYがある実行環境でしか作られず、ローカル実行や
-    Codex Cloudでは人間向けの出力が一切無かった。
+    stdoutの進捗と結果JSONのファイル保存とは独立したbest-effort経路。
 
     整形の失敗でサイクルの結果報告を落とさないよう、ベストエフォートで囲む
     （`write_github_step_summary`と同じ方針）。stderrがcp932のコンソールへ
@@ -146,17 +209,12 @@ def _emit_human_summary(report: CycleReport) -> None:
             merge_skips(report.skips, report.scheduling_decisions)
         ) + render_forge_warnings_text(report.forge_warnings)
         for line in lines:
-            print(line, file=sys.stderr)
+            safe_stderr(line)
     except Exception as e:  # noqa: BLE001 - 要約はベストエフォート
-        print(f"Warning: Failed to render the cycle summary: {e}", file=sys.stderr)
+        safe_stderr(f"Warning: Failed to render the cycle summary: {e}")
 
 
 def _emit_dispatcher_report(result: _DispatcherRunResult) -> None:
-    final_dict = _report_to_dict(result.report)
-    final_dict["post_cycle_results"] = [
-        phase.to_dict() for phase in result.post_cycle_results
-    ]
-    print(json.dumps(final_dict, ensure_ascii=False, indent=2))
     _emit_human_summary(result.report)
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -181,6 +239,8 @@ def _post_cycle_exit_code(results: list[PhaseResult]) -> int:
 
 def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
     parser = _build_arg_parser()
+    sink = StdoutProgress(new_run_id(), None, None)
+    sink.emit("configuration", "started")
     try:
         config = load_and_resolve_config(
             argv,
@@ -190,15 +250,61 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
             resolve_paths_fn=_resolve_dispatch_shared_paths,
         )
     except (ConfigError, ValueError) as e:
+        sink.emit("configuration", "failed")
         _config_error(parser, str(e))
 
+    sink.parent_issue = config.parent_issue_number
+    sink.apply = config.apply
+    sink.emit("configuration", "completed")
+    config.progress = sink
+    try:
+        with progress_phase(sink, "report_reservation"):
+            reservation = reserve_report(config, sink.run_id)
+            output = reservation.__enter__()
+        try:
+            sink.emit("report", "planned", reason=f"report target: {output.path}")
+            return _execute_and_save(config, output)
+        finally:
+            reservation.__exit__(None, None, None)
+    except KeyboardInterrupt:
+        sink.emit("execution", "failed", reason="interrupted; report not created")
+        raise
+    except Exception as exc:
+        safe_stderr(f"Error: {exc}")
+        return 1
+
+
+def _execute_and_save(config: DispatcherConfig, output: ReportOutput) -> int:
     try:
         result = _run_dispatcher(config)
-        _emit_dispatcher_report(result)
-    except RuntimeError as e:
-        print(f"Error: {e}", file=sys.stderr)
+    except Exception as exc:
+        config.progress.emit(
+            "report", "skipped", reason=f"report not created: {output.path}"
+        )
+        safe_stderr(f"Error: {exc}; report not created: {output.path}")
         return 1
-    return _post_cycle_exit_code(result.post_cycle_results)
+    code = _post_cycle_exit_code(result.post_cycle_results)
+    try:
+        with progress_phase(config.progress, "report_save"):
+            final_dict = _report_to_dict(result.report)
+            final_dict["post_cycle_results"] = [
+                phase.to_dict() for phase in result.post_cycle_results
+            ]
+            output.save(final_dict)
+        config.progress.emit(
+            "report", "completed", reason=f"report saved: {output.path}"
+        )
+    except Exception as exc:
+        safe_stderr(f"report save failed: {output.path}: {exc}")
+        code = 1
+    try:
+        _emit_dispatcher_report(result)
+    except Exception as exc:
+        safe_stderr(f"Warning: summary unavailable: {exc}")
+    config.progress.emit(
+        "execution", "completed" if code == 0 else "failed", reason=f"exit_code={code}"
+    )
+    return code
 
 
 if __name__ == "__main__":

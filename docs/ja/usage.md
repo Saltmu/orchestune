@@ -232,12 +232,50 @@ dag_similarity_threshold = 0.35
 準備が整い、計画が承認されたら、ディスパッチャーを起動してサブタスクをエージェントに割り振り、実装を開始します。
 
 ```bash
-# ドライラン（影響を出さずに実行計画のプレビューのみを行う）
+# ドライラン（対象へ適用せず、ローカル結果を保存する）
 orchestune-dispatch --no-apply
 
 # 実際に適用して並列ワークスペースを起動し、エージェントを起動する
 orchestune-dispatch
 ```
+
+### 進捗と結果ファイル
+
+stdoutはrun ID・親Issue・apply/dry-run・phase付きの進捗を改行・flush付きで表示します。pipeでも表示されます。最終JSONはatomicに保存され、絶対パスの `report saved` で確認できます。`report target` は予定パスです。`dispatch | jq` やstdoutのJSONリダイレクトは結果ファイル読取りへ移行してください。JSONスキーマとGitHub Step Summaryは維持します。
+
+TOML `report-dir` の既定は `.orchestune/reports/dispatch` で、linked worktreeでもprimary checkout基準です。実行ごとに `parent-<N>/<UTC YYYYMMDDTHHMMSSZ>-<UUID>/result.json` へ保存します。環境変数 `ORCHESTUNE_DISPATCH_REPORT_PATH` は未使用ファイルへの明示指定で優先され、相対値は呼出し時cwd基準、絶対値はそのままです。既存結果・symlink・空値・ディレクトリ・業務状態/lockと重なる指定は拒否します。再実行は新しいパスを使い、最新mtime検索や前回結果の流用はしません。
+
+`--no-apply` はdispatch対象へ適用せず、ローカル結果と報告用ディレクトリ/lockを作ります。`planned` はdry-runの選定、`launched` は起動手順の成立で、タスク完了を意味しません（`local` はダミー起動）。進捗表示障害でも保存を継続します。
+
+機械処理では終了コードを先に保持して今回のファイルを確認します。以下はBashの `set -e` とPowerShellのnativeエラー昇格でも非ゼロ終了後の結果を読める例です。
+
+```bash
+session_dir=$(./scripts/create-session-dir.sh dispatch-result 100)
+result_path="$session_dir/dispatch-result.json"
+dispatch_code=0
+ORCHESTUNE_DISPATCH_REPORT_PATH="$result_path" orchestune-dispatch -p 100 || dispatch_code=$?
+if [ -f "$result_path" ]; then jq . "$result_path"; else echo "report not created" >&2; fi
+# dispatch_code remains available under set -e; file existence alone is not success.
+```
+
+```powershell
+$sessionDir = .\scripts\create-session-dir.ps1 dispatch-result 100
+$resultPath = Join-Path $sessionDir 'dispatch-result.json'
+$env:ORCHESTUNE_DISPATCH_REPORT_PATH = $resultPath
+$savedPreference = $PSNativeCommandUseErrorActionPreference
+try {
+    $PSNativeCommandUseErrorActionPreference = $false
+    orchestune-dispatch -p 100
+    $dispatchCode = $LASTEXITCODE
+} finally {
+    $PSNativeCommandUseErrorActionPreference = $savedPreference
+    Remove-Item Env:ORCHESTUNE_DISPATCH_REPORT_PATH
+}
+if (Test-Path -LiteralPath $resultPath -PathType Leaf) { Get-Content -Raw $resultPath | ConvertFrom-Json }
+else { Write-Warning 'report not created' }
+```
+
+非ゼロ終了でも失敗を含むJSONが保存される場合があります。引数/設定不正、出力予約失敗、完全なcycle reportが返る前の例外ではファイル未生成（`report not created`）となり得ます。終了コード（0:成功、1:fatal/保存失敗、2:retryableまたは引数/設定エラー）とJSONを併用し、ファイルの存在だけで成功と判断しないでください。自動削除は行わず、このリポジトリでは `.orchestune/reports/` をignoreします。
 
 ### 主要なオプション
 
@@ -280,6 +318,7 @@ orchestune-dispatch
 | `consistency-mode` | `"off"` | 追加のrepository-wide整合性loop（`"off"`, `"shadow"`, `"repair"`）。 |
 | `consistency-repair-code` | `[]` | 追加の`repair` loopで許可するfinding codeまたはcommand codeのリスト。 |
 | `consistency-max-repair-passes` | `1` | dispatch cycleあたりのguarded repair／再観測pass上限（1〜5）。 |
+| `report-dir` | `.orchestune/reports/dispatch` | primary checkout基準の自動結果保存root。実行単位の `ORCHESTUNE_DISPATCH_REPORT_PATH` が優先。 |
 | `run-state-path` | `"run_state.json"` | ディスパッチサイクル間で引き継ぐ実行状態の永続化先。相対パスはprimary checkoutルート基準で解決されます。 |
 | `worktree-root` | `"worktrees"` | agent worktreeのルートディレクトリ。相対パスはprimary checkoutルート基準で解決されます。 |
 | `log-dir` | `"logs"` | エージェント実行ログの出力先ディレクトリ。 |
@@ -292,7 +331,7 @@ default self-healing allowlistは`consistency-repair-code`から意図的に分�
 
 既存動作を保つ場合は`off`、開始／終了findingを追加確認する場合は`shadow`、新規policyを有効にせず最終dispositionを確認する場合はrepair codeなしの`repair`、有効化する場合は限定した`consistency-repair-code`を使用します。`--apply`は既存修復とopt-in policyの変更を許可し、`--no-apply`は外部または永続的な修復副作用を許可しません（GC出力はpreviewとなり、recoveryは一時的なmemory上のpreview bookkeepingだけを更新する場合があります）。
 
-`--json`出力または`events.jsonl`の`consistency.scans`、`consistency.repair_passes`、`consistency.repair_outcomes`を確認してください。Outcomeは`resolved`、`unresolved`、`deferred`、`failed`、`observation-unknown`を区別します。unknown／staleな観測とnon-repairable findingは変更されずreportに残ります。dry-runまたはlive precondition不成立によるcommand単位のskipped resultはfindingの最終dispositionで表され、旧phase所有の修復経路へfallbackすることはありません。status遷移が途中で失敗した場合はIntent journalが`run_state.json`の隣に残り、次cycleが外部副作用を重複させず再開できます。
+保存したdispatch JSONまたは`events.jsonl`の`consistency.scans`、`consistency.repair_passes`、`consistency.repair_outcomes`を確認してください。Outcomeは`resolved`、`unresolved`、`deferred`、`failed`、`observation-unknown`を区別します。unknown／staleな観測とnon-repairable findingは変更されずreportに残ります。dry-runまたはlive precondition不成立によるcommand単位のskipped resultはfindingの最終dispositionで表され、旧phase所有の修復経路へfallbackすることはありません。status遷移が途中で失敗した場合はIntent journalが`run_state.json`の隣に残り、次cycleが外部副作用を重複させず再開できます。
 
 ### クラウド環境変数とシークレット
 

@@ -6,6 +6,7 @@ import sys
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Generic, TypeVar
 
@@ -742,44 +743,85 @@ def _apply_single_task_launch(
     open_prs: Sequence[PrRecord] | None,
     on_launch_committed: LaunchCommitted | None,
 ) -> TTask | None:
-    """1件のplanに対する予約→起動→記録の一連の流れ。成功時のみtaskを返す。"""
-    task = plan.task
     assert config.dispatch_target is not None
-
+    emit = partial(
+        config.progress.emit, "task_launch", task_issue=plan.task.issue_number
+    )
+    emit("started")
     with _launch_reservation(
-        now, config, issue_number=task.issue_number
-    ) as commit_reservation:
-        if commit_reservation is None:
+        now, config, issue_number=plan.task.issue_number
+    ) as commit:
+        if commit is None:
+            emit("held", reason="launch reservation failed")
             return None
-
-        target = prepare_journaled_target(
-            plan, run_state, now, config, commit_reservation
-        )
+        target = prepare_journaled_target(plan, run_state, now, config, commit)
         if target is None:
+            emit("held", reason="durable attempt recovery hold")
             return None
-
-        launch = _try_planned_launch(
+        launch = _try_launch_with_progress(
             plan, target, config, run_state, claim_fn, now=now, open_prs=open_prs
         )
         if launch is None:
-            # LaunchOutcomeUnknown: providerを実際に呼んだかどうか不明なため、
-            # 安全側に倒してquotaを消費したものとして扱う（既存挙動）。
+            emit("unknown", reason="provider outcome unknown")
             run_state.launch_history.append(now)
             return None
         if launch.held is True:
+            emit("held", reason=launch.error_message)
             return None
         if not launch.launched:
+            emit("failed", reason="provider launch failed; see stderr")
             _record_failed_launch_phase(
-                task.issue_number, run_state, config, now=now, open_prs=open_prs
+                plan.task.issue_number, run_state, config, now=now, open_prs=open_prs
             )
-            _handle_launch_failure(task, launch, config)
+            _handle_launch_failure(plan.task, launch, config)
             return None
-
-        commit_reservation()
-        _record_successful_launch(
-            task, plan, launch, run_state, now, config, open_prs, on_launch_committed
+        commit()
+        _commit_task_launch(
+            plan, launch, run_state, now, config, open_prs, on_launch_committed
         )
-        return task
+        emit("launched", reason=f"target={config.dispatch_target.target_name}")
+        return plan.task
+
+
+def _try_launch_with_progress(
+    plan, target, config, run_state, claim_fn, *, now, open_prs
+):
+    try:
+        return _try_planned_launch(
+            plan, target, config, run_state, claim_fn, now=now, open_prs=open_prs
+        )
+    except Exception:
+        config.progress.emit(
+            "task_launch",
+            "unknown",
+            task_issue=plan.task.issue_number,
+            reason="launch procedure failed; outcome unconfirmed",
+        )
+        raise
+
+
+def _commit_task_launch(
+    plan, launch, run_state, now, config, open_prs, on_launch_committed
+):
+    try:
+        _record_successful_launch(
+            plan.task,
+            plan,
+            launch,
+            run_state,
+            now,
+            config,
+            open_prs,
+            on_launch_committed,
+        )
+    except Exception:
+        config.progress.emit(
+            "task_launch",
+            "unknown",
+            task_issue=plan.task.issue_number,
+            reason="launch occurred; persistence or label update failed",
+        )
+        raise
 
 
 def _apply_task_launches(

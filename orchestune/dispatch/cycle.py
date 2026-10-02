@@ -12,7 +12,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import sys
-import time
+import time as time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -79,10 +79,15 @@ from orchestune.dispatch.cycle_context import (
     _fetch_issues,
     discard_reclaim_counts_for_closed_issues,
 )
+from orchestune.dispatch.cycle_execution import execute_cycle, execute_pipeline
 from orchestune.dispatch.cycle_report import (
     CycleReport,
-    append_event_log,
-    build_event_log_entry,
+)
+from orchestune.dispatch.cycle_report import (
+    append_event_log as append_event_log,
+)
+from orchestune.dispatch.cycle_report import (
+    build_event_log_entry as build_event_log_entry,
 )
 from orchestune.dispatch.execution_repair import (
     DispatchRepairExecutorAdapter,
@@ -91,8 +96,11 @@ from orchestune.dispatch.execution_repair import (
 from orchestune.dispatch.phase_rebase import (
     ensure_parent_branch_ready,
 )
-from orchestune.dispatch.phase_scheduling import run_scheduling_phase
+from orchestune.dispatch.phase_scheduling import (
+    run_scheduling_phase as run_scheduling_phase,
+)
 from orchestune.dispatch.prior_parent_merge import reconcile_prior_parent_merges
+from orchestune.dispatch.progress import progress_phase
 from orchestune.dispatch.recovery import (
     LAUNCH_ATTEMPT_PENDING,
     LAUNCH_HISTORY_STALE,
@@ -119,9 +127,10 @@ from orchestune.dispatch.status_repair_dependencies import (
     DependencyAssessmentView,
 )
 from orchestune.dispatch.targets import DispatchHandle
-from orchestune.infra.process_utils import is_process_alive, run_state_lock
+from orchestune.infra.process_utils import is_process_alive
+from orchestune.infra.process_utils import run_state_lock as run_state_lock
 from orchestune.labels import StatusLabel
-from orchestune.ledger.run_state import load_run_state
+from orchestune.ledger.run_state import load_run_state as load_run_state
 from orchestune.pr_link_notice import (
     notice_expected_bases,
     notify_open_pr_links,
@@ -848,8 +857,10 @@ def _recovery_requeued(report: ConsistencyCycleReport) -> bool:
 
 
 def _prepare_cycle_issues(run_state, config: DispatcherConfig, _now: float):
-    ensure_parent_branch_ready(config)
-    issues = _fetch_issues(config)
+    with progress_phase(config.progress, "parent_branch"):
+        ensure_parent_branch_ready(config)
+    with progress_phase(config.progress, "issues_fetch"):
+        issues = _fetch_issues(config)
     # #512: 完了・クローズ済みIssueの回収回数を台帳から落とす。親Issueでの
     # 絞り込み前の一覧で判定し、他の親配下のIssueも取り漏らさないようにする。
     discard_reclaim_counts_for_closed_issues(run_state, issues, config)
@@ -959,97 +970,52 @@ def _execute_cycle_pipeline(
     repair_cycle: _RepairCycleState,
     prior_parent_merge_events: tuple[dict[str, object], ...] = (),
 ) -> CycleReport:
-    """Execute the v3 phase sequence through one bound Context."""
-    active = ctx.process_active_worktrees()
-    completion_events = [*prior_parent_merge_events, *active.completion_events]
-    _notify_pr_links(ctx, config)
-
-    completion_events = _run_gc_reclaim_phase(
-        ctx, config, completion_events, repair_cycle
-    )
-    promotion_events, lock_result = _run_pre_scheduling_reconciliation(
-        ctx=ctx,
-        issues=issues,
-        run_state=run_state,
-        config=config,
-        repair_cycle=repair_cycle,
-    )
-    scheduling = run_scheduling_phase(
+    return execute_pipeline(
+        sys.modules[__name__],
         ctx,
-        lock_result,
-        list(active.deviation_events),
+        issues,
+        run_state,
+        config,
+        now,
+        repair_cycle,
+        prior_parent_merge_events,
     )
-    report = _pipeline_report(
-        scheduling,
-        lock_result,
-        deviation_events=list(active.deviation_events),
-        completion_events=completion_events,
-        promotion_events=promotion_events,
-        applied=config.apply,
-    )
-    return report
 
 
 def _prepare_cycle_context(run_state, config: DispatcherConfig, now: float):
     """Issue取得・status intent整合・recovery・先行マージ整合を経てContextを構築する。"""
     issues = _prepare_cycle_issues(run_state, config, now)
-    reconcile_status_repair_intents(config, now=datetime.fromtimestamp(now, UTC))
-    recovery_report = _run_recovery_bookkeeping_boundary(run_state, config, now=now)
+    with progress_phase(config.progress, "status_intents"):
+        reconcile_status_repair_intents(config, now=datetime.fromtimestamp(now, UTC))
+    with progress_phase(config.progress, "recovery"):
+        recovery_report = _run_recovery_bookkeeping_boundary(run_state, config, now=now)
     if _recovery_requeued(recovery_report):
         issues = _fetch_issues(config)
     tasks_by_issue, _, _ = _build_task_mappings(issues.all())
-    prior_merges = reconcile_prior_parent_merges(
-        config.resolved_forge,
-        tasks_by_issue,
-        apply=config.apply,
-        issues_by_number={issue.number: issue for issue in issues.all()},
-        active_issue_numbers=frozenset(
-            active.core.issue_number for active in run_state.active_worktrees.values()
-        ),
-    )
-    actions = CycleActionAdapter(run_state, config, now)
-    ctx = _build_cycle_context(
-        issues,
-        run_state,
-        config,
-        prior_parent_merge_hold_issue_numbers=prior_merges.held_issue_numbers,
-        prior_parent_merge_completed_issue_numbers=prior_merges.completed_issue_numbers,
-        actions=actions,
-    )
-    actions.bind_context(ctx)
+    with progress_phase(config.progress, "prior_parent_merges"):
+        prior_merges = reconcile_prior_parent_merges(
+            config.resolved_forge,
+            tasks_by_issue,
+            apply=config.apply,
+            issues_by_number={issue.number: issue for issue in issues.all()},
+            active_issue_numbers=frozenset(
+                active.core.issue_number
+                for active in run_state.active_worktrees.values()
+            ),
+        )
+    with progress_phase(config.progress, "context_build"):
+        actions = CycleActionAdapter(run_state, config, now)
+        ctx = _build_cycle_context(
+            issues,
+            run_state,
+            config,
+            prior_parent_merge_hold_issue_numbers=prior_merges.held_issue_numbers,
+            prior_parent_merge_completed_issue_numbers=prior_merges.completed_issue_numbers,
+            actions=actions,
+        )
+        actions.bind_context(ctx)
     return issues, ctx, recovery_report, prior_merges
 
 
 def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
-    lock_path = Path(config.run_state_path).with_suffix(".lock")
-    with run_state_lock(lock_path):
-        run_state = load_run_state(config.run_state_path)
-        now = time.time()
-        issues, ctx, recovery_report, prior_merges = _prepare_cycle_context(
-            run_state, config, now
-        )
-        consistency_runtime = _start_consistency_runtime(config, run_state, issues, ctx)
-        repair_cycle = _RepairCycleState()
-        repair_cycle.add_report(recovery_report)
-        report = _execute_cycle_pipeline(
-            ctx,
-            issues,
-            run_state,
-            config,
-            now,
-            repair_cycle,
-            prior_merges.events,
-        )
-        _finish_consistency_runtime(
-            consistency_runtime,
-            report,
-            ctx,
-            now,
-            config,
-            repair_cycle,
-        )
-
-        if config.apply:
-            append_event_log(build_event_log_entry(report, now), config.events_log_path)
-
-        return report
+    return execute_cycle(sys.modules[__name__], config)

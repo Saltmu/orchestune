@@ -380,6 +380,14 @@ def run_scheduling_phase(
 
     scheduling = ctx.select_tasks(tuple(candidate_tasks))
     decisions = _collect_selection_skips(ctx, candidate_tasks, scheduling, skips)
+    if not ctx.config.apply:
+        for task in scheduling.selected:
+            ctx.config.progress.emit(
+                "task_launch", "planned", task_issue=task.issue_number
+            )
+            ctx.config.progress.emit(
+                "task_launch", "skipped", task_issue=task.issue_number, reason="dry_run"
+            )
     selected = list(
         ctx.launch_tasks(
             tuple(scheduling.selected),

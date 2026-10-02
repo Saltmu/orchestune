@@ -17,6 +17,47 @@ from tests.dispatch_test_support import save_locked_run_state as save_run_state
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
 
 
+def test_progress_never_claims_success_when_launch_persistence_fails(
+    tmp_path, fake_forge
+):
+    from contextlib import nullcontext
+    from unittest.mock import Mock, patch
+
+    from orchestune.dispatch.launch import TaskLaunchPlan, _apply_single_task_launch
+
+    task = _task(42)
+    target, sink = Mock(target_name="local"), Mock()
+    config = DispatcherConfig(
+        parent_issue_number=100,
+        forge=fake_forge,
+        events_log_path=tmp_path / "events.jsonl",
+        run_state_path=tmp_path / "state.json",
+        dispatch_target=target,
+        progress=sink,
+    )
+    plan = TaskLaunchPlan(task, "branch", "base", "base", None)
+    launch = Mock(held=False, launched=True)
+    with (
+        patch(
+            "orchestune.dispatch.launch._launch_reservation",
+            return_value=nullcontext(Mock()),
+        ),
+        patch(
+            "orchestune.dispatch.launch.prepare_journaled_target", return_value=target
+        ),
+        patch("orchestune.dispatch.launch._try_planned_launch", return_value=launch),
+        patch(
+            "orchestune.dispatch.launch._record_successful_launch",
+            side_effect=OSError("label/save failed"),
+        ),
+        pytest.raises(OSError),
+    ):
+        _apply_single_task_launch(
+            plan, RunState(active_worktrees={}), 10.0, config, Mock(), None, None
+        )
+    assert [c.args[1] for c in sink.emit.call_args_list] == ["started", "unknown"]
+
+
 def _ctx(**overrides):
     defaults = dict(
         run_state=RunState(active_worktrees={}),

@@ -8,7 +8,7 @@ dispatch_cycle.py経由の循環importを避けるため独立モジュールと
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from orchestune.consistency.invariants.status import (
@@ -23,6 +23,7 @@ from orchestune.consistency.repairs.execution import (
 from orchestune.consistency.supervisor import MAX_REPAIR_PASSES, ConsistencyMode
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch.execution_profiles import ExecutionProfileConfig
+from orchestune.dispatch.progress import NoopProgress, ProgressSink
 from orchestune.dispatch.targets import DispatchTarget, LocalProcessDispatchTarget
 from orchestune.forge import Forge, GitHubForge
 
@@ -48,6 +49,9 @@ class DispatcherConfig:
     log_dir: Path = Path("logs")
     events_log_path: Path = Path("events.jsonl")
     apply: bool = False
+    report_dir: Path = Path(".orchestune/reports/dispatch")
+    report_path: Path | None = None
+    progress: ProgressSink = field(default_factory=NoopProgress)
     dispatch_target: DispatchTarget | None = None
     forge: Forge | None = None
     deviation_buffer_lines: int = 5

@@ -36,6 +36,22 @@ def _read_usage(lang: str) -> str:
     return USAGE_DOCS[lang].read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("lang", ["ja", "en"])
+def test_dispatch_report_file_migration_documented(lang):
+    text = _section(lang, 4)
+    for marker in (
+        "report-dir",
+        "ORCHESTUNE_DISPATCH_REPORT_PATH",
+        "report saved",
+        "report not created",
+        "dispatch_code",
+        "$LASTEXITCODE",
+        "dispatch | jq",
+    ):
+        assert marker in text
+    assert "report-dir" in (REPO_ROOT / "orchestune.toml.example").read_text()
+
+
 def _section(lang: str, heading_number: int) -> str:
     """Usageの`## <heading_number>.`見出し節（次の`## `見出しの直前まで）を切り出す。"""
     text = _read_usage(lang)

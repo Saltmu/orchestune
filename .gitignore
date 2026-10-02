@@ -26,6 +26,7 @@ decomposition_plan.md
 
 # Agent scratch artifacts (plans, PR bodies, review replies; never commit)
 .orchestune/tmp/
+.orchestune/reports/
 
 # Local CI evidence (never commit)
 .orchestune/ci/

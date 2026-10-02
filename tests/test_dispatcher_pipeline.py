@@ -868,7 +868,7 @@ class TestEmitHumanSummary:
         defaults.update(overrides)
         return CycleReport(**defaults)
 
-    def test_keeps_stdout_as_pure_json(self, capsys):
+    def test_summary_does_not_emit_json(self, capsys):
         report = self._report(
             skips=[
                 SkipRecord(
@@ -883,7 +883,7 @@ class TestEmitHumanSummary:
         _emit_dispatcher_report(self._result(report))
 
         captured = capsys.readouterr()
-        json.loads(captured.out)
+        assert captured.out == ""
         assert SUMMARY_PREFIX in captured.err
         assert "#695" in captured.err
         assert "fix/issue-777 [tests/conftest.py]" in captured.err
@@ -921,7 +921,7 @@ class TestEmitHumanSummary:
             _emit_dispatcher_report(self._result(self._report()))
 
         captured = capsys.readouterr()
-        json.loads(captured.out)
+        assert captured.out == ""
         assert "Failed to render the cycle summary" in captured.err
 
 

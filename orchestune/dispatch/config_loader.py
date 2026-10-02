@@ -34,6 +34,7 @@ from orchestune.dispatch.execution_profiles import (
     extract_target_name,
     validate_profile_for_target,
 )
+from orchestune.dispatch.report_output import _check_target
 from orchestune.dispatch.targets import (
     ROUTINE_ID_ENV_VAR,
     ROUTINE_TOKEN_ENV_VAR,
@@ -86,7 +87,7 @@ def _add_cli_arguments(parser: argparse.ArgumentParser) -> None:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="実際にラベル更新・worktree作成・エージェント起動を行う（既定）。"
-        "--no-applyでdry-run（何も変更しない）にできる。",
+        "--no-applyでdry-run（dispatch対象へ適用せず、ローカル結果を保存）にできる。",
     )
     parser.add_argument(
         "--dispatch-target",
@@ -189,6 +190,7 @@ _PATH_CONFIG_KEYS = frozenset(
         "log_dir",
         "events_log_path",
         "not_needed_review_state_path",
+        "report_dir",
     }
 )
 
@@ -448,6 +450,7 @@ def _resolve_paths(
         "log_dir": "logs",
         "events_log_path": "events.jsonl",
         "not_needed_review_state_path": "not_needed_review_state.json",
+        "report_dir": ".orchestune/reports/dispatch",
     }
     for key, default_val in defaults.items():
         val = toml_data.get(key)
@@ -565,11 +568,7 @@ def _assemble_dispatcher_config(
             if args.max_concurrent is not None
             else toml_data.get("max_concurrent", 2)
         ),
-        "run_state_path": paths["run_state_path"],
-        "worktree_root": paths["worktree_root"],
-        "log_dir": paths["log_dir"],
-        "events_log_path": paths["events_log_path"],
-        "not_needed_review_state_path": paths["not_needed_review_state_path"],
+        **paths,
         "dispatch_target": dispatch_target,
         "profile": args.profile,
         "ci_command": ci_cmd,
@@ -583,9 +582,9 @@ def _assemble_dispatcher_config(
         ),
         **_build_runtime_tuning_kwargs(toml_data),
     }
-    if forge is not None:
-        config_kwargs["forge"] = forge
-    return DispatcherConfig(**config_kwargs)
+    return DispatcherConfig(
+        **config_kwargs, **({"forge": forge} if forge is not None else {})
+    )
 
 
 def load_and_resolve_config(
@@ -625,7 +624,7 @@ def load_and_resolve_config(
         exec_profile_cfg,
         build_target_fn=build_target_fn,
     )
-    return _assemble_dispatcher_config(
+    config = _assemble_dispatcher_config(
         args,
         toml_data,
         paths,
@@ -634,3 +633,20 @@ def load_and_resolve_config(
         exec_profile_cfg,
         forge=forge,
     )
+    _resolve_report_override(config, target_cwd)
+    return config
+
+
+def _resolve_report_override(config: DispatcherConfig, target_cwd: Path) -> None:
+    if "ORCHESTUNE_DISPATCH_REPORT_PATH" in os.environ:
+        value = os.environ["ORCHESTUNE_DISPATCH_REPORT_PATH"]
+        if not value.strip():
+            raise ConfigError("ORCHESTUNE_DISPATCH_REPORT_PATH must not be empty")
+        candidate = Path(value)
+        config.report_path = (
+            candidate if candidate.is_absolute() else target_cwd / candidate
+        )
+        try:
+            _check_target(config.report_path, config)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
