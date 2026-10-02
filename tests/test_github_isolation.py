@@ -14,7 +14,12 @@ from pathlib import Path
 import pytest
 
 from orchestune.forge import GitHubForge, LabelSpec
-from tests.github_isolation import GitHubAccessBlocked, GitHubAccessMonitor
+from tests.github_isolation import (
+    GitHubAccessBlocked,
+    GitHubAccessMonitor,
+    _is_github_host,
+    _shell_contains_absolute_gh,
+)
 
 _ORIGINAL_POPEN = subprocess.Popen
 
@@ -134,6 +139,25 @@ def test_combined_shell_command_flag_cannot_launch_absolute_gh(
 
     with pytest.raises(GitHubAccessBlocked, match="blocked unmocked GitHub"):
         subprocess.Popen(["sh", "-ec", f"{gh_path} api /user"])
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell positional arguments")
+def test_shell_command_payload_does_not_scan_positional_arguments() -> None:
+    gh_path = Path(os.sep) / "missing" / "gh"
+
+    result = subprocess.run(["sh", "-c", "true", str(gh_path)], check=True)
+
+    assert result.returncode == 0
+
+
+def test_unrecognized_shell_option_does_not_select_a_command_payload() -> None:
+    gh_path = Path(os.sep) / "missing" / "gh"
+
+    assert not _shell_contains_absolute_gh(["bash", "-norc", str(gh_path)])
+
+
+def test_unbalanced_bracket_host_is_not_mistaken_for_a_github_host() -> None:
+    assert not _is_github_host("sock[1")
 
 
 def test_shell_child_uses_the_guarded_path_shim(

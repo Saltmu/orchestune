@@ -2,7 +2,9 @@
 
 The guards are best-effort: the socket check can identify GitHub hostnames,
 not raw IP addresses, and shell command matching is heuristic rather than a
-full shell parser. Python children started with ``-I`` or ``-S`` also skip the
+full shell parser. The process guard wraps ``subprocess.Popen``; direct
+``os.system``, ``os.exec*``, ``os.spawn*`` and ``os.posix_spawn`` calls are
+outside it. Python children started with ``-I`` or ``-S`` also skip the
 ``sitecustomize`` startup hook used to install their process-local guards.
 """
 
@@ -58,6 +60,10 @@ _SHELL_EXECUTABLES = frozenset(
         "zsh",
     }
 )
+_POSIX_SHELL_EXECUTABLES = frozenset(
+    {"bash", "csh", "dash", "fish", "ksh", "sh", "tcsh", "zsh"}
+)
+_POSIX_SHELL_FLAGS = frozenset("abefhiklmnptuvx")
 _GITHUB_SUFFIXES = ("github.com", "githubusercontent.com", "githubassets.com")
 _CHILD_GUARDS_INSTALLED = False
 
@@ -131,16 +137,21 @@ def _command_parts(args: Any) -> list[str]:
     return [_as_text(args)]
 
 
-def _is_shell_command_option(value: str) -> bool:
+def _is_shell_command_option(value: str, shell_name: str) -> bool:
     lowered = value.lower()
+    if shell_name in {"cmd", "cmd.exe"}:
+        return lowered == "/c"
+    if shell_name in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}:
+        return lowered in {"-c", "-command"}
+    if lowered == "-c":
+        return True
+    if shell_name not in _POSIX_SHELL_EXECUTABLES or not lowered.startswith("-"):
+        return False
+    flags = lowered[1:]
     return (
-        lowered == "/c"
-        or lowered == "-c"
-        or (
-            lowered.startswith("-")
-            and not lowered.startswith("--")
-            and "c" in lowered[1:]
-        )
+        flags.endswith("c")
+        and bool(flags[:-1])
+        and set(flags[:-1]) <= _POSIX_SHELL_FLAGS
     )
 
 
@@ -154,16 +165,25 @@ def _shell_contains_absolute_gh(args: Any, shell: bool = False) -> bool:
     elif parts and ntpath.basename(parts[0].replace("/", "\\")).lower() in (
         _SHELL_EXECUTABLES
     ):
+        shell_name = ntpath.basename(parts[0].replace("/", "\\")).lower()
         shell_args = parts[1:]
-        command_start = next(
+        command_option = next(
             (
-                index + 1
+                index
                 for index, value in enumerate(shell_args)
-                if _is_shell_command_option(value)
+                if _is_shell_command_option(value, shell_name)
             ),
-            len(shell_args),
+            None,
         )
-        commands = shell_args[command_start:]
+        if command_option is None:
+            commands = []
+        else:
+            command_arguments = shell_args[command_option + 1 :]
+            commands = (
+                command_arguments[:1]
+                if shell_name in _POSIX_SHELL_EXECUTABLES
+                else command_arguments
+            )
     else:
         return False
     for command in commands:
@@ -267,7 +287,11 @@ def _make_popen_guard(
 
 def _is_github_host(host: Any) -> bool:
     candidate = str(host).strip()
-    normalized = (urlsplit(f"//{candidate}").hostname or candidate).rstrip(".").lower()
+    try:
+        hostname = urlsplit(f"//{candidate}").hostname or candidate
+    except ValueError:
+        hostname = candidate
+    normalized = hostname.rstrip(".").lower()
     return any(
         normalized == suffix or normalized.endswith(f".{suffix}")
         for suffix in _GITHUB_SUFFIXES
