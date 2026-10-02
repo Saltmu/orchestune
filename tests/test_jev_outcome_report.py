@@ -274,7 +274,8 @@ class TestRender:
         assert "decision_reason" in text
         assert "resolved" in text
         assert "1/1" in text
-        assert "選択バイアス" in text
+        assert "交絡" in text
+        assert "助言" in text
         assert "有効性の証拠ではありません" in text
 
     def test_json_is_round_trippable(self) -> None:

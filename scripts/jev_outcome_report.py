@@ -18,9 +18,10 @@ returned by GitHub GraphQL) instead of calling ``gh``. The script only runs a
 GraphQL *query*; it never writes to GitHub or to the evaluation log.
 
 The labels are **not** ground truth. A resolved thread does not prove the finding
-was valid and an ignored one does not prove it was not. Findings Jev filtered out
-are never shown to the agent, so their fix rate is structurally lower. Treat the
-output as a rough signal and sample-check by hand.
+was valid and an ignored one does not prove it was not. Jev's decision is advisory:
+``filtered`` findings stay in ``inline_comments`` and the agent still sees them, but
+the Jev label may sway how it judges them, so outcomes mix Jev's accuracy with its
+influence on the agent. Treat the output as a rough signal and sample-check by hand.
 """
 
 from __future__ import annotations
@@ -54,8 +55,9 @@ THREADS_QUERY = (
 CAVEATS = (
     "ラベルは有効性の証拠ではありません。resolved でも指摘が妥当だったとは限らず、"
     "未解決・無視でも妥当でなかったとは限りません。",
-    "選択バイアス: Jev が除外した指摘はエージェントに渡らないため、修正率が構造的に"
-    "低くなります。除外側の妥当性は修正率だけでは判定できず、少数を人手で確認してください。",
+    "交絡: Jev の判定は助言であり、filtered の指摘も inline_comments に残ってエージェントが"
+    "確認します。ただし判定結果が対応判断に影響しうるため、帰結には Jev の精度と判定が"
+    "与えた影響が混ざります。少数を人手で確認してください。",
     "applicability（SPECULATIVE など）の妥当性はコード上の事実の問題で、PR の経過では測れません。",
 )
 
