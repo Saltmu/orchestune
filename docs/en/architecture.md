@@ -226,19 +226,11 @@ New code belongs in the layer that owns the behaviour, and this section and `tes
 - `ledger.run_state`: execution-state models, loading, validation, normalization,
   persistence, and retention helpers. Moving it out of dispatch preserves the
   JSON format and the requirement to hold the existing state lock when saving.
-- `ledger.active_records`: the flat `ActiveWorktree` compatibility DTO and its
-  derived immutable `core`, `launch`, `claim`, and `completion` snapshots.
-  `from_records()` is the typed nested construction path, while `with_core()` is
-  the shared-field update boundary; records are not stored twice.
-  Owner fields are replaced only through their owner APIs: claim fields through
-  `claim.ownership` (`build_claim_info()`, `with_claim()`) and launch fields
-  through `dispatch.launch_state` (`build_launch_record()`, `with_launch()`,
-  `with_launch_phase()`, execution selection and token-estimate helpers).
-  Launch attempt markers and dispatch handles are a separate contract.
+- `ledger.active_records`: the only in-memory source of truth (`core` plus three frozen subrecords: `launch`, `claim`, `completion`) in `ActiveWorktree` and its immutable structure. Historical flat attribute properties have been eliminated, and `slots=True` rejects stale writes or accesses. `from_records()` is the typed nested construction path, while `with_core()` is the shared-field update boundary; records are not stored twice. Owner fields are replaced only through their owner APIs: claim fields through `claim.ownership` (`build_claim_info()`, `with_claim()`), launch fields through `dispatch.launch_state` (`build_launch_record()`, `with_launch()`, `with_launch_phase()`), and completion fields through `complete.journal` (`build_completion_journal()`, `with_completion()`). For detailed specifications and lifecycle priority rules, see [Stateless CI & Self-Healing State Recovery (state-recovery.md)](architecture/state-recovery.md#active-worktree-lifecycle).
 - `ledger.active_codec`: explicit decoding and encoding of the established flat
   ActiveWorktree JSON shape. It preserves the field order and omission of a null
   `completion_policy_config` while keeping codec details out of state validation.
-- `ledger.active_lifecycle`: `lifecycle(active)` maps the existing flat fields to
+- `ledger.active_lifecycle`: `lifecycle(active)` maps persisted fields to
   a candidate phase in completion, launch, recovery sentinel, claim, reservation
   order. `HANDOFF_READY` is only a candidate; existing code still verifies
   completion receipts and remote evidence. `ledger.run_state` re-exports the

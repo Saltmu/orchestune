@@ -130,3 +130,83 @@ Dispatcherは明示解放された旧世代を復元しません。同じ解放�
 merge済みPRも通常のcompleteコマンドで事後完了できます。Issue、claim作成時刻、head、予定base、
 repository、merge commitの到達性、Issue再open時刻を照合します。親branchへのmergeも対象です。
 CIとOutcome公開の要件は維持し、必要証拠が不足する場合は保留します。
+
+---
+
+<a id="active-worktree-lifecycle"></a>
+
+## 6. 実行台帳モデル・ライフサイクルと所有権（ActiveWorktree & Lifecycle）
+
+Orchestuneの実行台帳（`ledger`）は、各タスクの作業ディレクトリ（worktree）、実行状態、所有権、完了記録を不変かつ安全に管理するL2基盤です。#1106 において、従来の35フィールド混在フラット構造から、関心事・所有者ごとの明示的なサブレコード分割とライフサイクル導出モデルへと刷新されました。
+
+### 6.1 サブレコード分割と不変構造
+
+`ActiveWorktree` は、共通識別子を担う `core: ActiveWorktreeCore` と、関心事・所有者ごとに分離された3つの frozen dataclass サブレコード（`launch: LaunchInfo`、`claim: ClaimInfo`、`completion: ActiveCompletionJournal`）で構成されます。
+
+- **メモリ上の唯一の正本**: `core`、`launch`、`claim`、`completion` の4つがメモリ上における状態の**唯一の正本**です。以前の後方互換フラット属性プロパティは全廃されており、`slots=True` が指定されているため、未定義属性への代入や読み出しは直ちに `AttributeError` となります。
+- **深層不変性とイミュータブルペイロード**: `completion.completion_payload` および `completion.completion_policy_config` は内部関数 `_freeze_json` により `MappingProxyType` や `tuple` へ変換され、深層不変化されます。これにより、`completion_payload` に対する辞書破壊操作（`update`、`pop`、`clear`、`setdefault`）は実行時に拒絶されます。
+- **不変更新境界**: サブレコードはすべて frozen であり、変更時は内部書き換えではなく、各所有者が提供する境界ヘルパー（`with_claim`、`with_launch`、`with_completion`、`with_core`）または `dataclasses.replace` による複製生成を経由します。
+
+### 6.2 永続JSONのflat不変性と後方互換性
+
+メモリ上の構造はサブレコードへ分割されましたが、ディスク上の永続化表現は厳格な互換性を維持しています。
+
+- **フラットJSONの不変性**: `run_state.json` に保存されるJSON形式は、移行前（T01 baseline）と同一の35フィールドのフラットJSON構造（`_ACTIVE_FIELD_NAMES` の固定順序、`completion_policy_config` がnullのときのキー省略）を完全に維持します。
+- **schema_version 不導入**: 新たな `schema_version` や入れ子JSON構造は導入しないため、旧バージョンの Orchestune との間でファイル破損や相互運用性の問題が発生せず、ロールバック時も安全です。
+- **明示的コーデック**: `ledger.active_codec`（`decode_active_worktree` / `encode_active_worktree`）が、メモリ上の入れ子表現とディスク上のフラットJSONとの間の双方向変換を単一所有します。
+- **排他制御とロック保護**: `run_state_lock` によるファイルロック未保持での保存拒否条件やCAS多層防御は従来どおり厳格に維持されます。
+
+### 6.3 ライフサイクル優先順位（ActiveWorktreeLifecycle）
+
+`ledger.active_lifecycle.lifecycle(active)` は、台帳の永続フィールドから以下の厳格な優先順序（上から順に判定）に基づいて、タスクが現在位置する「**候補段階**（candidate phase）」を導出します。
+
+| 候補段階 (`ActiveWorktreeLifecycle`) | 上から順に評価する条件 |
+| --- | --- |
+| `HANDOFF_READY` | `completion.completion_handoff_ready == True`、または `completion.completion_stage in ("handed_off_to_gc", "handed_off")` |
+| `COMPLETING` | `completion.completion_id is not None` |
+| `RUNNING` | `launch.pid is not None`、`launch.external_id is not None`、または `launch.launch_phase == "launched"` |
+| `LAUNCHING` | `launch.started_at is not None`、`launch.launch_attempt_id is not None`、または別の `launch.launch_phase` が設定されている |
+| `RECOVERY_REQUIRED` | `claim.claim_id` が `"recovered-"` で始まる、または `claim.owner_token_digest` が `sha256("recovered-unverifiable:...".encode()).hexdigest()` のsentinel値と一致 |
+| `CLAIMED` | `claim.owner_kind == "interactive"` かつ `claim.claim_stage is not None` かつ `claim.claim_stage != "reserved"` |
+| `RESERVED` | 上記いずれにも該当しない初期予約状態（in-memoryで `claim_stage` が未設定の場合を含む。永続recordでは `claim_stage` 必須） |
+
+### 6.4 Handoff候補と検証済みReceiptの違い
+
+- **候補段階と検証済み証拠の分離**: `lifecycle(active)` が返す `HANDOFF_READY` は、あくまでローカル台帳のフラグ・段階から導出される「候補段階（candidate phase）」に過ぎず、完了証拠が真に検証済みであることを意味しません。
+- **GCとAuthoritative検証**: 物理的なGC実行やworktree削除、親ブランチ統合を実施する前に、`dispatch.gc.handoff` / `dispatch.gc.confirmed` が GitHub 上の Issue コメント（Outcome Record）、PR のマージ可能性・到達性、Git の未コミット変更（dirty hold）を authoritative に検証します。
+- **CompletionReceiptの発行**: 検証に合格した後にのみ**検証済み**の `CompletionReceipt` が発行され、`CycleContext.record_completion` を経由して完了が記録されます。検証未了または不一致の場合は `hold` され、削除や完了記録は行われません。
+
+### 6.5 整合性プロジェクション（Consistency Projection）
+
+- **疎結合な整合性カーネル**: リポジトリ全体の整合性を保つ `consistency` カーネルは、ディスパッチ台帳の `ActiveWorktree` に直接依存しません。
+- **ExecutionRecordへの射影**: `CycleContext._executions()` および `execution_repair.py` は、`ActiveWorktree` から必要最小限のフィールド（`issue_number`, `branch`, `worktree_path`, `pid`, `external_id`, `started_at`, `kind`, `owner_kind`, `claim_id`, `claim_stage`, `launch_phase`）を抽出し、不変な `ExecutionRecord` へ**射影**（projection）します。
+- **境界の尊重**: `ObservationCollector` などの整合性観測処理は、この射影されたレコードのみを取り扱うため、台帳の内部サブレコード構造を侵食することなく独立したモデル突合・修復計画を遂行できます。
+
+### 6.6 所有者境界とASTガード
+
+- **所有者モジュールの限定**: サブレコードの構築・更新は、正規の所有者モジュールに厳格に制限されます：
+  - `claim`: `orchestune.claim.ownership`, `orchestune.claim.service`, `orchestune.claim.amend` (`build_claim_info`, `with_claim`)
+  - `launch`: `orchestune.dispatch.launch_state` (`build_launch_record`, `with_launch`, `with_launch_phase`)
+  - `completion`: `orchestune.complete.journal` (`build_completion_journal`, `with_completion`)
+  - `core`: `orchestune.ledger.active_records` (`ActiveWorktree.from_records`, `with_core`)
+- **ASTガードによる機械的検証**: アーキテクチャテスト（`tests/test_active_worktree_ownership_architecture.py`）は AST 解析により以下を機械的に検査します：
+  1. サブレコード属性への直接代入（`active.claim = ...`）
+  2. `dataclasses.replace` やそのエイリアスによる所有者外での書き換え
+  3. 許可されていないモジュールでの `ActiveWorktree` / `ActiveWorktree.from_records` コンストラクタ呼び出し
+  4. 不変ペイロードに対する破壊的メソッド（`update`, `pop`, `clear`, `setdefault`）の呼び出し
+  5. ライフサイクル導出関数を経由しない安易な `completion_id is (not) None` 判定（明示的な狭い例外リストを除く）
+
+### 6.7 Epic #1106 受け入れ基準と検証証拠の照合
+
+親エピック #1106 で定義されたすべての受け入れ基準は、T01〜T13 の実装およびテストスイートによって完全に満たされています。
+
+| #1106 受け入れ基準 | 担当タスク | 検証証拠・テストスイート |
+| :--- | :--- | :--- |
+| `ActiveWorktreeLifecycle` と `lifecycle()` があり、GC・claim・complete・consistency の段階判定がこれを経由している。`completion_id is (not) None` による直接の段階判定が残っていない。 | T02 (#1124), T04 (#1126), T05 (#1129), T07 (#1131), T08 (#1132), T09 (#1133), T10 (#1127), T13 (#1135) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_ownership_architecture.py`, `tests/test_dispatch_consistency_e2e.py` |
+| `ActiveWorktree` が共通フィールドと `LaunchInfo` / `ClaimInfo` / `CompletionJournal` のサブレコードで構成され、所有者ごとの不変条件がサブレコード側で検証されている。 | T03 (#1125), T04 (#1126), T05 (#1129), T06 (#1130), T12 (#1134) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_codec.py`, `tests/test_claim_ownership.py` |
+| 所有者以外のモジュールがサブレコードのフィールドを書き換えていないことを、アーキテクチャテストが検査している。違反を検出できることも合成例で実証している。 | T13 (#1135) | `tests/test_active_worktree_ownership_architecture.py` (20件の合成違反・正常系テスト), `tests/test_architecture.py` |
+| 移行直前の main で有効な `run_state.json`（dispatch 起動のみ／interactive claim／completion journal 進行中／handoff-ready を含む代表例）を読み込めること、また保存結果のバイト表現（キー・値・正規化）が変わらないことを回帰テストで確認している。 | T01 (#1123), T03 (#1125), T12 (#1134) | `tests/test_active_worktree_compat_baseline.py`, `tests/test_active_worktree_codec.py` |
+| ロック未保持での保存拒否と、既存の排他条件が維持されている。 | T01 (#1123), T03 (#1125), T12 (#1134) | `tests/test_ledger_run_state.py`, `tests/test_active_worktree_codec.py` |
+| 日英の state-recovery 文書が更新されている。 | T14 (#1136, 本タスク) | `docs/ja/architecture/state-recovery.md`, `docs/en/architecture/state-recovery.md`, `tests/test_dependency_architecture_docs.py` |
+| 実行 OS に対応するローカル CI（Linux/macOS：`./scripts/local-ci.sh`、Windows：`.\scripts\local-ci.ps1`）がグリーンである。 | T01〜T14 各 PR | 全PRで `./scripts/local-ci.sh` 合格 |
+| 着手前に、全 35 フィールドの参照を列挙し、修正対象と対象外を根拠付きで分類している。 | T01 (#1123) および各タスク | T01 インベントリ、各 PR の Walkthrough / Impact Scope テーブル |

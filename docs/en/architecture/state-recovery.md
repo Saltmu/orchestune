@@ -102,3 +102,114 @@ observed `DONE` label from confirmed completion evidence created by a successful
 same-cycle action or verified prior merge. Only live verification and journal
 settlement bridge the result to `record_transition`; unknown execution liveness
 holds the record instead of guessing.
+
+---
+
+## Local claim recovery (`orchestune recover`)
+
+Local claim resumption, footprint amendment, and completion do not read or write owner token files.
+Instead, they verify the generation, Git common directory, registered worktree, and currently checked-out branch recorded in the caller's claim marker.
+Any surviving legacy token files do no harm. Old state or journal records retaining `owner_token_digest` are read as compatibility metadata, so neither a wholesale migration nor wiping the state file is required. Routine API authentication remains unchanged.
+
+Run diagnostics from the primary checkout. The default mode is a preview with no side effects:
+
+```bash
+orchestune recover --issue <N>
+orchestune recover --issue <N> --claim-id <ID> --reason "worker process stopped" --apply
+# Repair a missing marker and resume uncompleted completion:
+orchestune recover --issue <N> --claim-id <ID> --reason "missing marker" --restore-marker --apply
+```
+
+Specify the claim ID discovered in diagnostics. When applying, the command re-evaluates preconditions under shared state and worktree locks.
+Active workers, ambiguous or external launches, generation mismatches, different repositories, and pending completion publication are held rather than touched.
+If execution status is uncertain, verify via Dispatcher. If publication is midway, restore the marker and resume completion with the original completion ID. Both interactive and dispatch claims are supported after confirming process termination.
+Use `--state <path>` to target the same ledger file as the Dispatcher.
+
+Release removes only the targeted active reservation, saving the generation and reason into a recovery receipt.
+Dirty changes, commits, worktrees, branches, other claims, reclaim counts, transition intents, and completion evidence are strictly preserved.
+GitHub Issue labels and state are not modified. Requeuing, completion, and closing follow existing engine/Outcome paths.
+The Dispatcher never resurrects an explicitly released generation. Re-executing the same release is idempotent.
+There is no need to delete `run_state.json`.
+
+Merged PRs can also be completed retroactively through the standard complete command. It verifies the Issue number, claim timestamp, head branch, target base branch, repository identity, merge commit reachability, and Issue reopen timestamp. Merges into parent branches are also eligible.
+CI verification and Outcome publication requirements remain enforced; missing evidence results in a hold.
+
+---
+
+<a id="active-worktree-lifecycle"></a>
+
+## 6. Execution Ledger Model, Lifecycle, and Ownership Contracts (ActiveWorktree & Lifecycle)
+
+Orchestune's execution ledger (`ledger`) is the L2 foundation responsible for immutably and safely managing task worktrees, execution states, ownership boundaries, and completion records. In #1106, the legacy flat structure of 35 mixed fields was redesigned into explicit owner subrecords and a deterministic candidate lifecycle derivation model.
+
+### 6.1 Subrecords Architecture and Immutability
+
+`ActiveWorktree` is composed of `core: ActiveWorktreeCore` holding common identity fields, and three frozen dataclass subrecords segregated by concern and owner: `launch: LaunchInfo`, `claim: ClaimInfo`, and `completion: ActiveCompletionJournal`.
+
+- **Only in-memory source of truth**: `core`, `launch`, `claim`, and `completion` constitute the **only in-memory source of truth**. Legacy flat attribute compatibility properties have been completely removed. `ActiveWorktree` defines `slots=True`, so attempting to read or assign to an unmapped flat attribute fails immediately with `AttributeError`.
+- **Deep immutability and immutable payload**: `completion.completion_payload` and `completion.completion_policy_config` are recursively converted by `_freeze_json` into `MappingProxyType` and nested tuples. Mutating dictionary operations (`update`, `pop`, `clear`, `setdefault`) on `completion_payload` are rejected at runtime.
+- **Immutable update boundaries**: All subrecords are frozen. In-place attribute modification is prohibited. Updates require generating copies via owner copy boundaries (`with_claim`, `with_launch`, `with_completion`, `with_core`) or `dataclasses.replace`.
+
+### 6.2 Flat JSON Invariance and Backward Compatibility
+
+While in-memory representations use nested subrecords, disk persistence strictly maintains backward compatibility.
+
+- **Flat JSON invariance**: The JSON format persisted to `run_state.json` strictly preserves the pre-migration (T01 baseline) 35-field flat structure (`_ACTIVE_FIELD_NAMES` fixed ordering and omitting `completion_policy_config` when null).
+- **No schema_version introduced**: Neither a `schema_version` nor nested JSON is introduced, preventing file corruption or version incompatibility with existing Orchestune installations, and ensuring seamless rollback safety.
+- **Explicit codec**: `ledger.active_codec` (`decode_active_worktree` / `encode_active_worktree`) exclusively owns bidirectional translation between in-memory nested structures and persisted flat JSON records.
+- **Concurrency control and lock protection**: Preconditions requiring `run_state_lock` before saving and CAS defense-in-depth remain invariant.
+
+### 6.3 Candidate Lifecycle Priority Table (ActiveWorktreeLifecycle)
+
+`ledger.active_lifecycle.lifecycle(active)` derives the highest-priority **candidate phase** for a task from its persisted fields using the following strict order of precedence (evaluated top-down):
+
+| Candidate phase (`ActiveWorktreeLifecycle`) | Condition, checked in order |
+| --- | --- |
+| `HANDOFF_READY` | `completion.completion_handoff_ready == True` or `completion.completion_stage in ("handed_off_to_gc", "handed_off")` |
+| `COMPLETING` | `completion.completion_id is not None` |
+| `RUNNING` | `launch.pid is not None`, `launch.external_id is not None`, or `launch.launch_phase == "launched"` |
+| `LAUNCHING` | `launch.started_at is not None`, `launch.launch_attempt_id is not None`, or another `launch.launch_phase` is present |
+| `RECOVERY_REQUIRED` | `claim.claim_id` starts with `"recovered-"`, or `claim.owner_token_digest` matches the sentinel `sha256("recovered-unverifiable:...".encode()).hexdigest()` |
+| `CLAIMED` | `claim.owner_kind == "interactive"`, `claim.claim_stage is not None`, and `claim.claim_stage != "reserved"` |
+| `RESERVED` | Initial reservation fallback when none of the above conditions match (including in-memory records where `claim_stage` is omitted; persisted records require `claim_stage`) |
+
+### 6.4 Handoff Candidates vs Verified Completion Receipts
+
+- **Distinction between candidate and verified evidence**: The `HANDOFF_READY` returned by `lifecycle(active)` is only a **candidate phase** derived from local ledger flags and stages. It does not establish that completion evidence has been authoritatively verified.
+- **GC and authoritative verification**: Before executing physical GC, deleting worktrees, or completing parent integration, `dispatch.gc.handoff` and `dispatch.gc.confirmed` authoritatively verify GitHub Issue comments (Outcome Record), PR mergeability and reachability, and local Git uncommitted changes (dirty hold).
+- **CompletionReceipt emission**: Only after successful verification is a **verified** `CompletionReceipt` emitted and recorded through `CycleContext.record_completion`. If verification is incomplete or mismatched, the task is placed on `hold`, preventing deletion or premature completion.
+
+### 6.5 Consistency Projection
+
+- **Decoupled consistency kernel**: The repository-wide `consistency` kernel does not depend directly on the internal structure of `ActiveWorktree`.
+- **Projection to ExecutionRecord**: `CycleContext._executions()` and `execution_repair.py` extract minimal fields (`issue_number`, `branch`, `worktree_path`, `pid`, `external_id`, `started_at`, `kind`, `owner_kind`, `claim_id`, `claim_stage`, `launch_phase`) from `ActiveWorktree` and map them into an immutable `ExecutionRecord` **projection**.
+- **Boundary preservation**: Consistency observation (`ObservationCollector`) interacts exclusively with projected records, inspecting facts and planning repairs without encroaching on ledger subrecord ownership boundaries.
+
+### 6.6 Owner Boundaries and AST Guards
+
+- **Strict owner modules**: Constructing and updating subrecords is strictly restricted to designated owner modules:
+  - `claim`: `orchestune.claim.ownership`, `orchestune.claim.service`, `orchestune.claim.amend` (`build_claim_info`, `with_claim`)
+  - `launch`: `orchestune.dispatch.launch_state` (`build_launch_record`, `with_launch`, `with_launch_phase`)
+  - `completion`: `orchestune.complete.journal` (`build_completion_journal`, `with_completion`)
+  - `core`: `orchestune.ledger.active_records` (`ActiveWorktree.from_records`, `with_core`)
+- **Mechanical enforcement via AST guards**: Architecture tests (`tests/test_active_worktree_ownership_architecture.py`) statically inspect source ASTs to enforce:
+  1. No direct assignment to subrecord attributes (`active.claim = ...`)
+  2. No unauthorized replacement via `dataclasses.replace` or import aliases
+  3. No construction of `ActiveWorktree` / `ActiveWorktree.from_records` outside authorized packages
+  4. No mutating method calls (`update`, `pop`, `clear`, `setdefault`) on frozen payloads
+  5. No raw `completion_id is (not) None` stage checks outside narrow registered exceptions
+
+### 6.7 Epic #1106 Acceptance Criteria and Evidence Mapping
+
+All acceptance criteria defined in parent Epic #1106 are verified and satisfied by the completed implementations and tests of T01–T13.
+
+| #1106 Acceptance Criteria | Implemented Subtasks | Verification Evidence & Test Suites |
+| :--- | :--- | :--- |
+| `ActiveWorktreeLifecycle` and `lifecycle()` exist, and GC, claim, complete, and consistency stage checks pass through them. No raw `completion_id is (not) None` stage checks remain. | T02 (#1124), T04 (#1126), T05 (#1129), T07 (#1131), T08 (#1132), T09 (#1133), T10 (#1127), T13 (#1135) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_ownership_architecture.py`, `tests/test_dispatch_consistency_e2e.py` |
+| `ActiveWorktree` is composed of core fields and `LaunchInfo` / `ClaimInfo` / `CompletionJournal` subrecords, with owner invariants validated at subrecord boundaries. | T03 (#1125), T04 (#1126), T05 (#1129), T06 (#1130), T12 (#1134) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_codec.py`, `tests/test_claim_ownership.py` |
+| Architecture tests verify that non-owner modules do not modify subrecord fields, demonstrated with synthetic violation and valid cases. | T13 (#1135) | `tests/test_active_worktree_ownership_architecture.py` (20 synthetic cases), `tests/test_architecture.py` |
+| Valid `run_state.json` files from prior main (representative examples: dispatch launch, interactive claim, completion journal in progress, handoff ready) load successfully, and saved canonical byte representations match golden. | T01 (#1123), T03 (#1125), T12 (#1134) | `tests/test_active_worktree_compat_baseline.py`, `tests/test_active_worktree_codec.py` |
+| Persistence rejection without holding locks and existing mutual exclusion guarantees are preserved. | T01 (#1123), T03 (#1125), T12 (#1134) | `tests/test_ledger_run_state.py`, `tests/test_active_worktree_codec.py` |
+| Bilingual state-recovery architecture documents are updated and synchronized. | T14 (#1136, this task) | `docs/ja/architecture/state-recovery.md`, `docs/en/architecture/state-recovery.md`, `tests/test_dependency_architecture_docs.py` |
+| Local CI (`./scripts/local-ci.sh`) passes cleanly on Linux/macOS. | T01–T14 all PRs | Clean pass on `./scripts/local-ci.sh` |
+| Reference enumeration across all 35 fields with classified rationale completed before implementation. | T01 (#1123) and subtasks | T01 inventory, Walkthrough / Impact Scope tables in each PR |
