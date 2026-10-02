@@ -159,3 +159,19 @@ def test_close_response_loss_does_not_close_or_comment_twice(tmp_path):
     process_completion_policies(state, config)
     forge.close_issue.assert_called_once()
     forge.add_comment.assert_called_once()
+
+
+def test_confirmed_records_skips_when_not_handoff_ready(tmp_path):
+    from orchestune.dispatch.gc.policy_discovery import confirmed_records
+
+    state, _, _, _, _ = policy_case(tmp_path)
+    assert len(confirmed_records(state)) == 1
+
+    # When completion_handoff_ready is False and stage is handed_off,
+    # confirmed_records must skip the active entry.
+    state.active_worktrees["250"] = replace(
+        state.active_worktrees["250"],
+        completion_handoff_ready=False,
+        completion_stage="handed_off",
+    )
+    assert confirmed_records(state) == []

@@ -11,10 +11,6 @@ from orchestune.complete.contracts import CompleteStage, DownstreamPolicyRecord
 from orchestune.complete.journal_models import CompletionJournalRecord
 from orchestune.infra.private_tokens import _read_owner_token, _token_record_path
 from orchestune.infra.process_utils import assert_run_state_lock_held
-from orchestune.ledger.active_lifecycle import (
-    ActiveWorktreeLifecycle,
-    lifecycle,
-)
 from orchestune.ledger.completion_reservations import (
     completion_handoff_matches_active,
     completion_record,
@@ -32,7 +28,7 @@ def confirmed_records(state: RunState) -> list[CompletionJournalRecord]:
             continue
         active = state.active_worktrees.get(str(issue))
         if active is not None and (
-            lifecycle(active) is not ActiveWorktreeLifecycle.HANDOFF_READY
+            not active.completion.completion_handoff_ready
             or active.completion.completion_stage != CompleteStage.HANDED_OFF.value
             or not completion_handoff_matches_active(state, active)
         ):
