@@ -79,17 +79,7 @@ def with_completion(
     """Return a copy replacing only completion-owned fields through the owner boundary."""
     if not isinstance(completion, ActiveCompletionJournal):
         raise TypeError("completion must be ActiveCompletionJournal")
-    return replace(
-        active,
-        completion_id=completion.completion_id,
-        completion_result=completion.completion_result,
-        completion_stage=completion.completion_stage,
-        completion_payload=thaw_json(completion.completion_payload),
-        completion_comment_id=completion.completion_comment_id,
-        completion_comment_url=completion.completion_comment_url,
-        completion_handoff_ready=completion.completion_handoff_ready,
-        completion_policy_config=thaw_json(completion.completion_policy_config),
-    )
+    return replace(active, completion=completion)
 
 
 def active_completion_from_record(

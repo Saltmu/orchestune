@@ -122,18 +122,7 @@ def with_claim(active: ActiveWorktree, claim: ClaimInfo) -> ActiveWorktree:
     """Return a copy replacing only claim-owned fields through the owner boundary."""
     if not isinstance(claim, ClaimInfo):
         raise TypeError("claim must be ClaimInfo")
-    return replace(
-        active,
-        owner_kind=claim.owner_kind,
-        claim_id=claim.claim_id,
-        claim_stage=claim.claim_stage,
-        base_ref=claim.base_ref,
-        base_sha=claim.base_sha,
-        reservation_kind=claim.reservation_kind,
-        repository_id=claim.repository_id,
-        claimed_at=claim.claimed_at,
-        owner_token_digest=claim.owner_token_digest,
-    )
+    return replace(active, claim=claim)
 
 
 def has_completion_reservation(active: ActiveWorktree) -> bool:

@@ -5,7 +5,6 @@ import pytest
 from orchestune.infra.process_utils import run_state_lock
 from orchestune.ledger.run_state import (
     MAX_PENDING_LOCK_RELEASE_NOTICES,
-    ActiveWorktree,
     CompletedWorktree,
     RunState,
     TaskReclaimRecord,
@@ -13,6 +12,7 @@ from orchestune.ledger.run_state import (
     prune_run_state,
 )
 from orchestune.ledger.run_state import save_run_state as save_run_state_unlocked
+from tests.dispatch_test_support import flat_active_worktree
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
@@ -57,13 +57,13 @@ def _current_active_worktree(**overrides):
         "owner_token_digest": "sha256:abc123",
     }
     fields.update(overrides)
-    return ActiveWorktree(**fields)
+    return flat_active_worktree(**fields)
 
 
 class TestRunState:
     def test_new_claim_ownership_fields_round_trip_without_owner_token(self, tmp_path):
         path = tmp_path / "run_state.json"
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=10,
             branch="claim/10",
             worktree_path="worktrees/claim-10",
@@ -96,7 +96,7 @@ class TestRunState:
         )
         path.write_text(json.dumps({"active_worktrees": {"10": raw_active}}))
         loaded = load_run_state(path)
-        assert loaded.active_worktrees["10"].declared_footprint == (
+        assert loaded.active_worktrees["10"].core.declared_footprint == (
             "src/a.py",
             "src/b.py",
         )
@@ -226,7 +226,7 @@ class TestRunState:
         save_run_state(state, path)
 
         reloaded = load_run_state(path)
-        assert reloaded.active_worktrees["1"].branch == "claude/issue-1-x"
+        assert reloaded.active_worktrees["1"].core.branch == "claude/issue-1-x"
 
     def test_save_and_load_roundtrip(self, tmp_path):
         path = tmp_path / "run_state.json"
@@ -242,9 +242,9 @@ class TestRunState:
         )
         save_run_state(state, path, now=now)
         loaded = load_run_state(path)
-        assert loaded.active_worktrees["10"].branch == "claude/issue-10-x"
-        assert loaded.active_worktrees["10"].estimated_tokens == 400
-        assert loaded.active_worktrees["10"].token_estimate_recorded is True
+        assert loaded.active_worktrees["10"].core.branch == "claude/issue-10-x"
+        assert loaded.active_worktrees["10"].launch.estimated_tokens == 400
+        assert loaded.active_worktrees["10"].launch.token_estimate_recorded is True
         assert loaded.launch_history == [1700000000.0]
 
     def test_current_active_worktree_without_token_estimate_loads_compatibly(
@@ -262,12 +262,13 @@ class TestRunState:
         )
 
         active = load_run_state(path).active_worktrees["10"]
-        assert active.estimated_tokens is None
-        assert active.token_estimate_recorded is False
+        assert active.launch.estimated_tokens is None
+        assert active.launch.token_estimate_recorded is False
 
         save_run_state(RunState(active_worktrees={"10": active}), path)
         assert (
-            load_run_state(path).active_worktrees["10"].token_estimate_recorded is False
+            load_run_state(path).active_worktrees["10"].launch.token_estimate_recorded
+            is False
         )
 
     def test_save_and_load_roundtrip_with_execution_profile_fields(self, tmp_path):
@@ -300,11 +301,12 @@ class TestRunState:
         save_run_state(state, path, now=now)
         loaded = load_run_state(path)
         active = loaded.active_worktrees["10"]
-        assert active.profile == "deep"
-        assert active.model == "claude-3-7-sonnet-20250219"
-        assert active.reasoning_effort == "high"
+        assert active.launch.profile == "deep"
+        assert active.launch.model == "claude-3-7-sonnet-20250219"
+        assert active.launch.reasoning_effort == "high"
         assert (
-            active.selection_reason == "profile 'deep' resolved for target 'claude-cli'"
+            active.launch.selection_reason
+            == "profile 'deep' resolved for target 'claude-cli'"
         )
 
         completed = loaded.completed_worktrees[0]
@@ -336,10 +338,10 @@ class TestRunState:
 
         loaded = load_run_state(path)
         active = loaded.active_worktrees["10"]
-        assert active.profile is None
-        assert active.model is None
-        assert active.reasoning_effort is None
-        assert active.selection_reason is None
+        assert active.launch.profile is None
+        assert active.launch.model is None
+        assert active.launch.reasoning_effort is None
+        assert active.launch.selection_reason is None
 
         completed = loaded.completed_worktrees[0]
         assert completed.profile is None
@@ -354,13 +356,13 @@ class TestRunState:
         save_run_state(state, path)
         active = load_run_state(path).active_worktrees["10"]
 
-        assert active.completion_id is None
-        assert active.completion_result is None
-        assert active.completion_stage is None
-        assert active.completion_payload is None
-        assert active.completion_comment_id is None
-        assert active.completion_comment_url is None
-        assert active.completion_handoff_ready is False
+        assert active.completion.completion_id is None
+        assert active.completion.completion_result is None
+        assert active.completion.completion_stage is None
+        assert active.completion.completion_payload is None
+        assert active.completion.completion_comment_id is None
+        assert active.completion.completion_comment_url is None
+        assert active.completion.completion_handoff_ready is False
 
     def test_save_and_load_roundtrip_with_completion_journal_fields(self, tmp_path):
         path = tmp_path / "run_state.json"
@@ -384,13 +386,16 @@ class TestRunState:
         save_run_state(state, path)
         active = load_run_state(path).active_worktrees["10"]
 
-        assert active.completion_id == "completion-abc123"
-        assert active.completion_result == "done"
-        assert active.completion_stage == "handed_off_to_gc"
-        assert active.completion_payload == {"pr": 42, "review": {"bot": "codex"}}
-        assert active.completion_comment_id == "999"
-        assert active.completion_comment_url.endswith("999")
-        assert active.completion_handoff_ready is True
+        assert active.completion.completion_id == "completion-abc123"
+        assert active.completion.completion_result == "done"
+        assert active.completion.completion_stage == "handed_off_to_gc"
+        assert active.completion.completion_payload == {
+            "pr": 42,
+            "review": {"bot": "codex"},
+        }
+        assert active.completion.completion_comment_id == "999"
+        assert active.completion.completion_comment_url.endswith("999")
+        assert active.completion.completion_handoff_ready is True
 
     def test_old_data_without_completion_journal_fields_loads_compatibly(
         self, tmp_path
@@ -407,12 +412,14 @@ class TestRunState:
         )
 
         active = load_run_state(path).active_worktrees["10"]
-        assert active.completion_id is None
-        assert active.completion_handoff_ready is False
+        assert active.completion.completion_id is None
+        assert active.completion.completion_handoff_ready is False
 
         save_run_state(RunState(active_worktrees={"10": active}), path)
         assert (
-            load_run_state(path).active_worktrees["10"].completion_handoff_ready
+            load_run_state(path)
+            .active_worktrees["10"]
+            .completion.completion_handoff_ready
             is False
         )
 
@@ -453,7 +460,7 @@ class TestRunState:
 
         save_run_state(state, path)
 
-        assert load_run_state(path).active_worktrees["10"].started_at is None
+        assert load_run_state(path).active_worktrees["10"].launch.started_at is None
 
     def test_save_and_load_roundtrip_with_completed_worktrees(self, tmp_path):
         path = tmp_path / "run_state.json"
@@ -922,7 +929,7 @@ class TestTaskReclaimCounts:
         now = 1700000000.0
         state = RunState(
             active_worktrees={
-                "10": ActiveWorktree(
+                "10": flat_active_worktree(
                     issue_number=10,
                     branch="claude/issue-10-x",
                     worktree_path="worktrees/claude-issue-10-x",

@@ -324,7 +324,7 @@ Testing full lifecycle of execution profiles.
             active_wt = next(
                 wt
                 for wt in state.active_worktrees.values()
-                if wt.issue_number == issue_num
+                if wt.core.issue_number == issue_num
             )
             assert active_wt.launch.profile == expected_sel.profile
             assert active_wt.launch.model == expected_sel.model

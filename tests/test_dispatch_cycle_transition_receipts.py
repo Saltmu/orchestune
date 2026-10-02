@@ -17,7 +17,6 @@ CONFLICT/NOOP/APPLIED outcome comes straight from `record_transition`.
 
 from __future__ import annotations
 
-import dataclasses
 from unittest.mock import patch
 
 from orchestune.dispatch.cycle_context_state import (
@@ -33,8 +32,13 @@ from orchestune.dispatch.status_repair import (
     VerifiedStatusTransition,
     execute_status_repair_command,
 )
-from orchestune.ledger.run_state import ActiveWorktree, RunState
-from tests.dispatch_test_support import make_test_cycle_context, make_test_task
+from orchestune.ledger.run_state import RunState
+from tests.dispatch_test_support import (
+    flat_active_worktree,
+    make_test_cycle_context,
+    make_test_task,
+    replace_flat,
+)
 from tests.test_consistency_status_repair import _plan
 
 
@@ -139,7 +143,7 @@ class TestApplyVerifiedTransition:
 
 
 def _ctx_with_active_launch(tmp_path, **overrides):
-    active = ActiveWorktree(
+    active = flat_active_worktree(
         issue_number=280,
         branch="claude/issue-280-task-a",
         worktree_path="worktrees/w1",
@@ -169,7 +173,7 @@ class TestAuthoritativeExecutionActive:
         report `None` (ambiguous), but the bookkeeping entries are still
         present -- this must hold, not fall through to `False`.
         """
-        duplicate = ActiveWorktree(
+        duplicate = flat_active_worktree(
             issue_number=280,
             branch="claude/issue-280-task-a",
             worktree_path="worktrees/w1",
@@ -183,7 +187,7 @@ class TestAuthoritativeExecutionActive:
             run_state=RunState(
                 active_worktrees={
                     "1": duplicate,
-                    "2": dataclasses.replace(duplicate, worktree_path="worktrees/w2"),
+                    "2": replace_flat(duplicate, worktree_path="worktrees/w2"),
                 }
             ),
         )

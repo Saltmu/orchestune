@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import fields
+from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
 
 from orchestune.infra.process_utils import run_state_lock
+from orchestune.ledger.active_codec import encode_active_worktree
+from orchestune.ledger.active_records import ActiveWorktreeCore
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
@@ -60,11 +62,18 @@ ACTIVE_WORKTREE_FIELDS = (
 )
 
 
-def test_post_1122_active_worktree_field_order_is_frozen() -> None:
-    names = tuple(field.name for field in fields(ActiveWorktree))
+def test_post_1122_persisted_field_order_is_frozen_after_cutover() -> None:
+    state = load_run_state(FIXTURES / "states-input.json")
+    names = tuple(encode_active_worktree(state.active_worktrees["103"]))
 
     assert len(names) == 36
     assert names == ACTIVE_WORKTREE_FIELDS
+    assert tuple(field.name for field in fields(ActiveWorktree)) == (
+        "core",
+        "launch",
+        "claim",
+        "completion",
+    )
 
 
 def test_normalized_run_state_bytes_match_post_1122_golden(tmp_path: Path) -> None:
@@ -90,28 +99,28 @@ def test_independent_dispatch_claim_and_completion_facts_survive_load() -> None:
     state = load_run_state(FIXTURES / "states-input.json")
 
     reserved = state.active_worktrees["101"]
-    assert reserved.claim_stage == "reserved"
-    assert reserved.pid is None
-    assert reserved.started_at is None
+    assert reserved.claim.claim_stage == "reserved"
+    assert reserved.launch.pid is None
+    assert reserved.launch.started_at is None
 
     dispatch_with_claim = state.active_worktrees["102"]
-    assert dispatch_with_claim.owner_kind == "dispatch"
-    assert dispatch_with_claim.claim_id == "claim-102"
-    assert dispatch_with_claim.claim_stage == "completed"
-    assert dispatch_with_claim.launch_phase == "launching"
+    assert dispatch_with_claim.claim.owner_kind == "dispatch"
+    assert dispatch_with_claim.claim.claim_id == "claim-102"
+    assert dispatch_with_claim.claim.claim_stage == "completed"
+    assert dispatch_with_claim.launch.launch_phase == "launching"
 
     completing = state.active_worktrees["103"]
-    assert completing.pid == 31337
-    assert completing.completion_id == "completion-103"
-    assert completing.completion_stage == "posting"
+    assert completing.launch.pid == 31337
+    assert completing.completion.completion_id == "completion-103"
+    assert completing.completion.completion_stage == "posting"
 
     legacy_handoff = state.active_worktrees["104"]
-    assert legacy_handoff.completion_stage == "handed_off_to_gc"
-    assert legacy_handoff.completion_handoff_ready is True
+    assert legacy_handoff.completion.completion_stage == "handed_off_to_gc"
+    assert legacy_handoff.completion.completion_handoff_ready is True
 
     handoff = state.active_worktrees["105"]
-    assert handoff.completion_stage == "handed_off"
-    assert handoff.completion_handoff_ready is True
+    assert handoff.completion.completion_stage == "handed_off"
+    assert handoff.completion.completion_handoff_ready is True
 
 
 def test_live_pid_and_completion_can_be_saved_together(tmp_path: Path) -> None:
@@ -119,34 +128,34 @@ def test_live_pid_and_completion_can_be_saved_together(tmp_path: Path) -> None:
     path.write_bytes((FIXTURES / "states-input.json").read_bytes())
     state = load_run_state(path)
     active = state.active_worktrees["103"]
-    active.pid = os.getpid()
+    active.launch = replace(active.launch, pid=os.getpid())
 
     with run_state_lock(path.with_suffix(".lock")):
         save_run_state(state, path, now=BASELINE_NOW)
 
     persisted = load_run_state(path).active_worktrees["103"]
-    assert persisted.pid == os.getpid()
-    assert persisted.completion_id == "completion-103"
-    assert persisted.completion_stage == "posting"
+    assert persisted.launch.pid == os.getpid()
+    assert persisted.completion.completion_id == "completion-103"
+    assert persisted.completion.completion_stage == "posting"
 
 
 def test_recovery_sentinel_bytes_match_post_1122_golden(tmp_path: Path) -> None:
     path = tmp_path / "run_state.json"
     active = ActiveWorktree(
-        issue_number=14107,
-        branch="dispatch/14107",
-        worktree_path="worktrees/dispatch-14107",
-        pid=None,
-        started_at=None,
-        declared_footprint=(),
+        core=ActiveWorktreeCore(
+            issue_number=14107,
+            branch="dispatch/14107",
+            worktree_path="worktrees/dispatch-14107",
+            declared_footprint=(),
+        )
     )
     state = RunState(active_worktrees={"14107": active})
 
     with run_state_lock(path.with_suffix(".lock")):
         save_run_state(state, path, now=BASELINE_NOW)
 
-    assert active.claim_id == "recovered-14107"
-    assert active.claim_stage == "completed"
+    assert active.claim.claim_id == "recovered-14107"
+    assert active.claim.claim_stage == "completed"
 
     assert (
         path.read_bytes()
@@ -156,10 +165,10 @@ def test_recovery_sentinel_bytes_match_post_1122_golden(tmp_path: Path) -> None:
     expected = json.loads(
         (FIXTURES / "recovery-sentinel-normalized.json").read_text(encoding="utf-8")
     )["active_worktrees"]["14107"]
-    assert recovered.claim_id == "recovered-14107"
-    assert recovered.claim_stage == "completed"
-    assert recovered.owner_token_digest == expected["owner_token_digest"]
-    assert active.owner_token_digest == expected["owner_token_digest"]
+    assert recovered.claim.claim_id == "recovered-14107"
+    assert recovered.claim.claim_stage == "completed"
+    assert recovered.claim.owner_token_digest == expected["owner_token_digest"]
+    assert active.claim.owner_token_digest == expected["owner_token_digest"]
 
 
 @pytest.mark.parametrize(

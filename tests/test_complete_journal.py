@@ -103,10 +103,10 @@ class TestReserveCompletion:
         assert journal.handoff_ready is False
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_id == journal.completion_id
-        assert persisted.completion_result == "done"
-        assert persisted.completion_stage == "journaling"
-        assert persisted.completion_handoff_ready is False
+        assert persisted.completion.completion_id == journal.completion_id
+        assert persisted.completion.completion_result == "done"
+        assert persisted.completion.completion_stage == "journaling"
+        assert persisted.completion.completion_handoff_ready is False
 
     def test_resuming_without_a_known_completion_id_is_idempotent(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -131,7 +131,7 @@ class TestReserveCompletion:
         assert excinfo.value.reason == CompleteFailureReason.INVALID_STAGE_TRANSITION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_result == "done"
+        assert persisted.completion.completion_result == "done"
 
     def test_rejects_a_different_result_even_without_an_explicit_completion_id(
         self, tmp_path
@@ -178,9 +178,9 @@ class TestReserveCompletion:
         journal = _reserve(path, payload={"pr": 42})
 
         assert journal.payload == {"pr": 42}
-        assert load_run_state(path).active_worktrees["10"].completion_payload == {
-            "pr": 42
-        }
+        assert load_run_state(path).active_worktrees[
+            "10"
+        ].completion.completion_payload == {"pr": 42}
 
     def test_resuming_with_an_identical_payload_is_idempotent(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -199,7 +199,7 @@ class TestReserveCompletion:
         assert excinfo.value.reason == CompleteFailureReason.CONCURRENT_COMPLETION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_payload == {"pr": 1}
+        assert persisted.completion.completion_payload == {"pr": 1}
 
     def test_rejects_a_conflicting_payload_after_handoff(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -214,7 +214,7 @@ class TestReserveCompletion:
         assert excinfo.value.reason == CompleteFailureReason.CONCURRENT_COMPLETION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_payload == {"pr": 1}
+        assert persisted.completion.completion_payload == {"pr": 1}
 
     def test_rejects_a_payload_added_after_handoff_when_none_was_set(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -228,7 +228,7 @@ class TestReserveCompletion:
         assert excinfo.value.reason == CompleteFailureReason.CONCURRENT_COMPLETION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_payload is None
+        assert persisted.completion.completion_payload is None
 
     def test_save_failure_does_not_leave_a_half_applied_reservation(
         self, tmp_path, monkeypatch
@@ -246,7 +246,7 @@ class TestReserveCompletion:
         assert excinfo.value.reason == CompleteFailureReason.STATE_SAVE_FAILED
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_id is None
+        assert persisted.completion.completion_id is None
 
     def test_releases_the_lock_even_when_reservation_is_rejected(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -277,10 +277,10 @@ class TestMarkHandoffReady:
         assert ready.stage == "handed_off_to_gc"
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_handoff_ready is True
-        assert persisted.completion_comment_id == "999"
-        assert persisted.completion_comment_url.endswith("999")
-        assert persisted.completion_payload == {
+        assert persisted.completion.completion_handoff_ready is True
+        assert persisted.completion.completion_comment_id == "999"
+        assert persisted.completion.completion_comment_url.endswith("999")
+        assert persisted.completion.completion_payload == {
             "pr": 42,
             "review": {"bot": "codex", "rounds": 1},
         }
@@ -313,8 +313,8 @@ class TestMarkHandoffReady:
         assert excinfo.value.reason == CompleteFailureReason.CONCURRENT_COMPLETION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_handoff_ready is False
-        assert persisted.completion_payload == {"pr": 1}
+        assert persisted.completion.completion_handoff_ready is False
+        assert persisted.completion.completion_payload == {"pr": 1}
 
 
 def _new_journal_record(**overrides):
@@ -689,8 +689,8 @@ class TestLabelConfirmedCompletionContract:
         assert excinfo.value.reason == CompleteFailureReason.EVIDENCE_MISSING
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_handoff_ready is False
-        assert persisted.completion_comment_id is None
+        assert persisted.completion.completion_handoff_ready is False
+        assert persisted.completion.completion_comment_id is None
 
     def test_rejects_marking_handoff_ready_with_only_a_comment_id(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -715,7 +715,7 @@ class TestLabelConfirmedCompletionContract:
         assert excinfo.value.reason == CompleteFailureReason.EVIDENCE_MISSING
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_handoff_ready is False
+        assert persisted.completion.completion_handoff_ready is False
 
     def test_accepts_evidence_already_persisted_by_a_prior_call(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -772,9 +772,13 @@ class TestLabelConfirmedCompletionContract:
         with run_state_lock(path.with_suffix(".lock")):
             state = load_run_state(path)
             active = state.active_worktrees["10"]
-            active.completion_id = "completion-other"
-            active.completion_result = "blocked"
-            active.completion_stage = "journaling"
+            active.completion = replace(
+                active.completion, completion_id="completion-other"
+            )
+            active.completion = replace(active.completion, completion_result="blocked")
+            active.completion = replace(
+                active.completion, completion_stage="journaling"
+            )
             save_run_state_unlocked(state, path)
 
         with pytest.raises(CompletionJournalError) as excinfo:
@@ -811,7 +815,7 @@ class TestLabelConfirmedCompletionContract:
         assert excinfo.value.reason == CompleteFailureReason.INVALID_STAGE_TRANSITION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_comment_id == "1"
+        assert persisted.completion.completion_comment_id == "1"
 
     def test_rejects_a_retry_with_a_different_payload_after_handoff(self, tmp_path):
         path = _seed_active(tmp_path)
@@ -835,7 +839,7 @@ class TestLabelConfirmedCompletionContract:
         assert excinfo.value.reason == CompleteFailureReason.INVALID_STAGE_TRANSITION
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_payload == {"pr": 1}
+        assert persisted.completion.completion_payload == {"pr": 1}
 
     def test_save_failure_does_not_report_handoff_ready(self, tmp_path, monkeypatch):
         path = _seed_active(tmp_path)
@@ -854,7 +858,7 @@ class TestLabelConfirmedCompletionContract:
         assert excinfo.value.reason == CompleteFailureReason.STATE_SAVE_FAILED
 
         persisted = load_run_state(path).active_worktrees["10"]
-        assert persisted.completion_handoff_ready is False
+        assert persisted.completion.completion_handoff_ready is False
 
 
 class TestJournalOwnerApi:

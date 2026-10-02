@@ -6,7 +6,7 @@ import dataclasses
 import json
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -691,7 +691,7 @@ def prune_run_state(
 
 
 def _materialize_active_worktree_for_persistence(active: ActiveWorktree) -> None:
-    """Make an in-memory legacy DTO explicit before it crosses the JSON boundary.
+    """Make an in-memory record explicit before it crosses the JSON boundary.
 
     This is deliberately not a reader fallback: an on-disk record without any
     of these fields is rejected by `_parse_active_worktree`.  Some internal
@@ -699,24 +699,40 @@ def _materialize_active_worktree_for_persistence(active: ActiveWorktree) -> None
     unknown ownership must become explicitly non-resumable rather than create
     an unreadable ledger on the next process start.
     """
-    if active.owner_kind not in {kind.value for kind in OwnerKind}:
+    claim = active.claim
+    if claim.owner_kind not in {kind.value for kind in OwnerKind}:
         raise ValueError("active worktree owner_kind must be a known value")
-    if active.reservation_kind not in {kind.value for kind in ReservationKind}:
+    if claim.reservation_kind not in {kind.value for kind in ReservationKind}:
         raise ValueError("active worktree reservation_kind must be a known value")
-    if active.claim_id is None:
-        active.claim_id = f"recovered-{active.issue_number}"
-    if active.claim_stage is None:
-        active.claim_stage = ClaimStage.COMPLETED.value
-    if active.base_ref is None:
-        active.base_ref = active.base_branch
-    if active.repository_id is None:
-        active.repository_id = "unverified-recovery"
-    if active.claimed_at is None:
-        active.claimed_at = active.started_at if active.started_at is not None else 0.0
-    if active.owner_token_digest is None:
-        active.owner_token_digest = sha256(
-            f"recovered-unverifiable:{active.claim_id}".encode()
-        ).hexdigest()
+    claim_id = claim.claim_id
+    if claim_id is None:
+        claim_id = recovered_claim_id(active.core.issue_number)
+    started_at = active.launch.started_at
+    active.claim = replace(
+        claim,
+        claim_id=claim_id,
+        claim_stage=(
+            ClaimStage.COMPLETED.value
+            if claim.claim_stage is None
+            else claim.claim_stage
+        ),
+        base_ref=active.core.base_branch if claim.base_ref is None else claim.base_ref,
+        repository_id=(
+            "unverified-recovery"
+            if claim.repository_id is None
+            else claim.repository_id
+        ),
+        claimed_at=(
+            (started_at if started_at is not None else 0.0)
+            if claim.claimed_at is None
+            else claim.claimed_at
+        ),
+        owner_token_digest=(
+            sha256(f"recovered-unverifiable:{claim_id}".encode()).hexdigest()
+            if claim.owner_token_digest is None
+            else claim.owner_token_digest
+        ),
+    )
 
 
 def _active_worktree_data(active: ActiveWorktree) -> dict[str, Any]:

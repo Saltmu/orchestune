@@ -1,4 +1,4 @@
-"""Candidate lifecycle classification for the flat ActiveWorktree record.
+"""Candidate lifecycle classification for the nested ActiveWorktree record.
 
 Priority is completion, launch, recovery sentinel, interactive claim, then
 reservation. The result describes a candidate stage only. In particular,
@@ -10,25 +10,9 @@ from __future__ import annotations
 
 from enum import Enum
 from hashlib import sha256
-from typing import Protocol
 
+from orchestune.ledger.active_records import ActiveWorktree
 from orchestune.ownership_contracts import ClaimStage, OwnerKind
-
-
-class _ActiveWorktreeState(Protocol):
-    issue_number: int
-    owner_kind: str
-    claim_id: str | None
-    claim_stage: str | None
-    owner_token_digest: str | None
-    pid: int | None
-    started_at: float | None
-    external_id: str | None
-    launch_attempt_id: str | None
-    launch_phase: str | None
-    completion_id: str | None
-    completion_stage: str | None
-    completion_handoff_ready: bool
 
 
 class ActiveWorktreeLifecycle(str, Enum):
@@ -51,28 +35,34 @@ _RESERVED_CLAIM_STAGE = ClaimStage.RESERVED.value
 _RECOVERED_CLAIM_PREFIX = "recovered-"
 
 
-def lifecycle(active: _ActiveWorktreeState) -> ActiveWorktreeLifecycle:
+def lifecycle(active: ActiveWorktree) -> ActiveWorktreeLifecycle:
     """Return a candidate phase without verifying completion evidence.
 
     Precedence preserves overlapping baseline facts: completion takes priority
     over launch, launch over recovery sentinels, and recovery over claim state.
     A claim at its initial ``reserved`` stage remains a reservation.
     """
-    if active.completion_handoff_ready or active.completion_stage in _HANDOFF_STAGES:
+    completion = active.completion
+    launch = active.launch
+    claim = active.claim
+    if (
+        completion.completion_handoff_ready
+        or completion.completion_stage in _HANDOFF_STAGES
+    ):
         return ActiveWorktreeLifecycle.HANDOFF_READY
-    if active.completion_id is not None:
+    if completion.completion_id is not None:
         return ActiveWorktreeLifecycle.COMPLETING
 
     if (
-        active.pid is not None
-        or active.external_id is not None
-        or active.launch_phase == _LAUNCHED_PHASE
+        launch.pid is not None
+        or launch.external_id is not None
+        or launch.launch_phase == _LAUNCHED_PHASE
     ):
         return ActiveWorktreeLifecycle.RUNNING
     if (
-        active.started_at is not None
-        or active.launch_attempt_id is not None
-        or active.launch_phase is not None
+        launch.started_at is not None
+        or launch.launch_attempt_id is not None
+        or launch.launch_phase is not None
     ):
         return ActiveWorktreeLifecycle.LAUNCHING
 
@@ -80,21 +70,21 @@ def lifecycle(active: _ActiveWorktreeState) -> ActiveWorktreeLifecycle:
         return ActiveWorktreeLifecycle.RECOVERY_REQUIRED
 
     if (
-        active.owner_kind == OwnerKind.INTERACTIVE.value
-        and active.claim_stage is not None
-        and active.claim_stage != _RESERVED_CLAIM_STAGE
+        claim.owner_kind == OwnerKind.INTERACTIVE.value
+        and claim.claim_stage is not None
+        and claim.claim_stage != _RESERVED_CLAIM_STAGE
     ):
         return ActiveWorktreeLifecycle.CLAIMED
 
     return ActiveWorktreeLifecycle.RESERVED
 
 
-def _has_recovery_sentinel(active: _ActiveWorktreeState) -> bool:
-    claim_id = active.claim_id
+def _has_recovery_sentinel(active: ActiveWorktree) -> bool:
+    claim_id = active.claim.claim_id
     if claim_id is not None and claim_id.startswith(_RECOVERED_CLAIM_PREFIX):
         return True
 
     # Keep this digest derivation aligned with run_state.recovered_owner_token_digest.
-    identity = claim_id or f"{_RECOVERED_CLAIM_PREFIX}{active.issue_number}"
+    identity = claim_id or f"{_RECOVERED_CLAIM_PREFIX}{active.core.issue_number}"
     expected = sha256(f"recovered-unverifiable:{identity}".encode()).hexdigest()
-    return active.owner_token_digest == expected
+    return active.claim.owner_token_digest == expected

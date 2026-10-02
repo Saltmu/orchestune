@@ -9,6 +9,8 @@ CONFLICT時は状態を一切変更しない。ここではAPI単体の整合性
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from orchestune.dispatch.cycle_context_state import (
@@ -106,7 +108,7 @@ class TestRecordLaunch:
         active = _active(1)
         result = ctx.record_launch(active)
         assert result.status == RecordStatus.APPLIED
-        assert ctx.launch_fact(1).branch == active.branch
+        assert ctx.launch_fact(1).branch == active.core.branch
         assert StatusLabel.IN_PROGRESS in ctx.task(1).status_labels
 
     def test_identical_re_record_is_noop(self):
@@ -250,7 +252,7 @@ class TestRecordLaunch:
         ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
         active = _active(1, branch="claude/issue-1-original")
         ctx.record_launch(active)
-        active.branch = "claude/issue-1-mutated-after"
+        active.core = replace(active.core, branch="claude/issue-1-mutated-after")
         assert ctx.launch_fact(1).branch == "claude/issue-1-original"
 
 

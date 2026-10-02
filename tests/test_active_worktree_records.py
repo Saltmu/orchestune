@@ -42,28 +42,28 @@ def _records(
     )
 
 
-def test_nested_factory_builds_the_legacy_flat_dataclass_and_views() -> None:
+def test_nested_factory_stores_core_and_subrecords_as_the_only_fields() -> None:
     records = _records()
     active = ActiveWorktree.from_records(
         core=records[0], launch=records[1], claim=records[2], completion=records[3]
     )
 
-    assert active.core == records[0]
-    assert active.launch == records[1]
-    assert active.claim == records[2]
-    assert active.completion == records[3]
-    assert [item.name for item in fields(active)][:6] == [
-        "issue_number",
-        "branch",
-        "worktree_path",
-        "pid",
-        "started_at",
-        "declared_footprint",
+    assert active.core is records[0]
+    assert active.launch is records[1]
+    assert active.claim is records[2]
+    assert active.completion is records[3]
+    assert [item.name for item in fields(active)] == [
+        "core",
+        "launch",
+        "claim",
+        "completion",
     ]
-    assert asdict(active)["completion_id"] == "completion-17"
+    assert not hasattr(active, "claim_id")
+    assert not hasattr(active, "pid")
+    assert asdict(active)["completion"]["completion_id"] == "completion-17"
 
 
-def test_core_update_returns_a_flat_compatible_copy() -> None:
+def test_core_update_returns_a_copy_with_other_subrecords_shared() -> None:
     core, launch, claim, completion = _records()
     active = ActiveWorktree.from_records(
         core=core, launch=launch, claim=claim, completion=completion
@@ -72,10 +72,10 @@ def test_core_update_returns_a_flat_compatible_copy() -> None:
 
     updated = active.with_core(updated_core)
 
-    assert updated.branch == "task/17-amended"
-    assert updated.claim_id == active.claim_id
+    assert updated.core.branch == "task/17-amended"
+    assert updated.claim is active.claim
     assert updated is not active
-    assert active.branch == "task/17"
+    assert active.core.branch == "task/17"
 
 
 def test_new_nested_construction_rejects_flat_or_invalid_core_values() -> None:
@@ -97,28 +97,49 @@ def test_new_nested_construction_rejects_flat_or_invalid_core_values() -> None:
         )
 
 
-def test_canonical_factory_restricts_payload_objects_but_flat_dto_stays_compatible() -> (
-    None
-):
-    legacy = ActiveWorktree(
-        issue_number=19,
-        branch="task/19",
-        worktree_path="worktrees/task-19",
-        pid=None,
-        started_at=None,
-        declared_footprint=(),
-        completion_policy_config=["legacy-shape"],  # type: ignore[arg-type]
+def test_direct_construction_checks_record_types_and_defaults_owner_records() -> None:
+    core, _, _, _ = _records()
+
+    active = ActiveWorktree(core=core)
+
+    assert active.launch == LaunchInfo()
+    assert active.claim == ClaimInfo()
+    assert active.completion == ActiveCompletionJournal()
+    with pytest.raises(TypeError, match="launch must be LaunchInfo"):
+        ActiveWorktree(core=core, launch={"pid": 1})  # type: ignore[arg-type]
+
+
+def test_flat_constructor_and_attributes_are_removed() -> None:
+    with pytest.raises(TypeError):
+        ActiveWorktree(  # type: ignore[call-arg]
+            issue_number=18,
+            branch="task/18",
+            worktree_path="worktrees/task-18",
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+        )
+
+
+def test_stale_writes_to_removed_flat_attributes_fail_loudly() -> None:
+    active = ActiveWorktree(core=_records()[0])
+
+    with pytest.raises(AttributeError):
+        active.pid = 1  # type: ignore[attr-defined]
+    with pytest.raises(AttributeError):
+        active.claim_id = "stale"  # type: ignore[attr-defined]
+
+
+def test_canonical_factory_restricts_payload_objects_to_json_objects() -> None:
+    core, launch, claim, _ = _records()
+    legacy = ActiveCompletionJournal(
+        completion_policy_config=["legacy-shape"]  # type: ignore[arg-type]
     )
 
-    # Existing flat construction and derived snapshots can still represent old
-    # values; only the new nested factory applies the canonical object constraint.
-    assert legacy.completion.completion_policy_config == ("legacy-shape",)
+    assert legacy.completion_policy_config == ("legacy-shape",)
     with pytest.raises(ValueError, match="completion_policy_config must be an object"):
         ActiveWorktree.from_records(
-            core=legacy.core,
-            launch=legacy.launch,
-            claim=legacy.claim,
-            completion=legacy.completion,
+            core=core, launch=launch, claim=claim, completion=legacy
         )
 
 
@@ -137,7 +158,7 @@ def test_frozen_completion_payload_is_deeply_immutable_and_detached() -> None:
         journal.completion_id = "changed"  # type: ignore[misc]
 
 
-def test_nested_factory_keeps_json_payloads_as_detached_flat_dicts_and_lists() -> None:
+def test_nested_factory_detaches_json_payloads_from_the_source() -> None:
     source = {"events": [{"labels": ["queued"]}]}
     core, launch, claim, completion = _records(payload=source)
     active = ActiveWorktree.from_records(
@@ -145,26 +166,9 @@ def test_nested_factory_keeps_json_payloads_as_detached_flat_dicts_and_lists() -
     )
     source["events"][0]["labels"].append("later")
 
-    assert active.completion_payload == {"events": [{"labels": ["queued"]}]}
-    assert isinstance(active.completion_payload, dict)
-    assert isinstance(active.completion_payload["events"], list)
-
-
-def test_existing_flat_constructor_remains_available_during_migration() -> None:
-    active = ActiveWorktree(
-        issue_number=18,
-        branch="task/18",
-        worktree_path="worktrees/task-18",
-        pid=None,
-        started_at=None,
-        declared_footprint=(),
-    )
-
-    assert active.core.issue_number == 18
-    assert active.launch.pid is None
-    assert active.claim.owner_kind == "dispatch"
-    assert active.completion.completion_id is None
-    assert replace(active, branch="task/18b").branch == "task/18b"
+    assert active.completion.completion_payload == {
+        "events": ({"labels": ("queued",)},)
+    }
 
 
 def test_shared_active_worktree_factory_rejects_unknown_override_keys() -> None:
@@ -189,4 +193,4 @@ def test_shared_active_worktree_factory_propagates_nested_factory_errors(
 def test_shared_active_worktree_factory_normalizes_list_footprints() -> None:
     active = make_test_active_worktree(declared_footprint=["src/example.py"])
 
-    assert active.declared_footprint == ("src/example.py",)
+    assert active.core.declared_footprint == ("src/example.py",)

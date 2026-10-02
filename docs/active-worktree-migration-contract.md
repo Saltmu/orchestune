@@ -223,3 +223,14 @@ Serenaは36フィールド全てについて参照を列挙し、型/constructor
 Inspection of the baseline `write_json_atomic` implementation showed that it writes `json.dumps(..., ensure_ascii=False, indent=2)` without appending a terminal newline. The Serializer section above incorrectly says there is a final newline; the frozen byte contract is **no terminal newline**. This correction is appended without changing the original field or consumer tables.
 
 Inspection of `canonicalize_footprint()` showed that it normalizes path separators and dot components, removes duplicates, and preserves first-seen order. The golden contract pins this preserved input order. This correction is appended without changing the original field or consumer tables.
+
+## T12 cutover reconciliation (#1134)
+
+T12はこのドキュメントの固定表を書き換えず、ここに照合結果を追記する。
+
+- `ActiveWorktree`は`core`と凍結サブレコード（`launch`/`claim`/`completion`）だけを保持する。flat属性のproperty、flat constructor、`active_field`互換は削除した。`slots=True`により、旧flat属性への書き込みは`AttributeError`で失敗する。
+- 永続JSONは`active_codec`の明示codecが従来のキー・順序・default・正規化で読み書きする。`schema_version`やnested JSONは導入していない。`states-normalized.json`/`recovery-sentinel-normalized.json`のgoldenバイト列は変更なし。
+- save前のrecovery sentinel materializeは`run_state.save_run_state`内で、prune直後・JSON構築前という従来の順序のまま、in-memoryの`active.claim`を置換する形で行う。
+- recovery receiptの`active`スナップショットは従来の`asdict`と同じflat形（`completion_policy_config`のnullも保持）をcodec経由で出力する。
+- 列挙漏れの記録: T04–T11の移行後も、`claim/local_identity.py`、`claim/service.py`、`recovery/inspection.py`、`recovery/service.py`、`dispatch/rebase.py`（代入）、`dispatch/gc/__init__.py`（`replace`）、`dispatch/cycle.py`、`complete/merged.py`、`ledger/completion_reservations.py`にflat属性の利用が残っていた。型が`Any`/未注釈でmypyが検出できない箇所（最後の3つ）を含む。cutoverの前提として本PRで移行した。
+- テストfixture: flat constructorに依存する既存テストは、テスト専用アダプタ`tests/dispatch_test_support.py`の`flat_active_worktree`/`replace_flat`へ機械的に置換した（モデル側にflat APIは残していない）。サブレコード形への個別書き換えは後続で行える。

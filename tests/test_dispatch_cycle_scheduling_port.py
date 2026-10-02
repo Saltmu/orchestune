@@ -13,9 +13,10 @@ import pytest
 
 from orchestune.dispatch.cycle_action_contracts import StackBase
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.ledger.run_state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.task_metadata import CycleTask
 from tests.dispatch_gc_test_support import _ctx, _task
+from tests.dispatch_test_support import flat_active_worktree
 
 
 class TestScanExternalLocks:
@@ -169,7 +170,7 @@ class TestLaunchTasks:
         ctx = _ctx(tasks_by_issue={280: task}, run_state=run_state)
         ctx.config.apply = True
         adapter = self._adapter(run_state, ctx)
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=280,
             branch="claude/issue-280-task-a",
             worktree_path="worktrees/w1",
@@ -200,7 +201,7 @@ class TestLaunchTasks:
         ctx = _ctx(tasks_by_issue={}, run_state=run_state)
         ctx.config.apply = True
         adapter = self._adapter(run_state, ctx)
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=999,
             branch="claude/issue-999-unknown",
             worktree_path="worktrees/unknown",

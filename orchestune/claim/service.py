@@ -847,7 +847,7 @@ def _check_resume_identity(
     try:
         validate_local_claim(
             active,
-            active.claim_id,
+            active.claim.claim_id,
             cwd=workspace.repository_root,
             state_path=workspace.run_state_path,
             allow_primary=True,
@@ -855,7 +855,7 @@ def _check_resume_identity(
         )
     except ValueError as error:
         return _claim_failure(
-            active.issue_number,
+            active.core.issue_number,
             ClaimFailure(
                 reason=ClaimFailureReason.INVALID_RESUME,
                 message=str(error),

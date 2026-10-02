@@ -11,6 +11,7 @@ from orchestune.infra.process_utils import run_state_lock
 from orchestune.ledger.completion_reservations import dependency_completion_blocked
 from orchestune.ledger.run_state import load_run_state_readonly, save_run_state
 from orchestune.targets.contracts import DispatchHandle
+from tests.dispatch_test_support import replace_flat
 from tests.test_dispatch_gc_policies import policy_case
 
 
@@ -161,7 +162,7 @@ def test_missing_receipt_and_pending_label_never_mutate(tmp_path):
 
 def test_new_claim_never_replays_old_policy(tmp_path):
     state, config, forge, _, _ = policy_case(tmp_path)
-    state.active_worktrees["250"] = replace(
+    state.active_worktrees["250"] = replace_flat(
         state.active_worktrees["250"], claim_id="new-generation"
     )
     with run_state_lock(config.run_state_path.with_suffix(".lock")):
@@ -348,7 +349,7 @@ def matrix_case(tmp_path, result, owner):
     from tests.test_dispatch_gc_handoff_integration import _forge
 
     state, config, forge, labels, comments = policy_case(tmp_path, result=result)
-    active = replace(state.active_worktrees["250"], owner_kind=owner)
+    active = replace_flat(state.active_worktrees["250"], owner_kind=owner)
     state.active_worktrees["250"] = active
     # Freeze the final active ownership in durable policy context.
     record = confirmed_records(state)[0]
@@ -396,7 +397,7 @@ def test_receipt_reclaims_token_only_after_active_release(tmp_path):
     record = confirmed_records(state)[0]
     digest = owner_token_digest("test-owned-token")
     record = replace(record, owner_token_digest=digest)
-    state.active_worktrees["250"] = replace(
+    state.active_worktrees["250"] = replace_flat(
         state.active_worktrees["250"], owner_token_digest=digest
     )
     update_record(state, record)

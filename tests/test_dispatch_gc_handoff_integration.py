@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.infra.git_cli import run_git
+from orchestune.ledger.active_codec import encode_active_worktree
 from orchestune.ledger.active_records import (
     ActiveCompletionJournal,
     ActiveWorktreeCore,
@@ -18,6 +19,7 @@ from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord
 from orchestune.worktree_ops.claim_marker import claim_marker_path, write_claim_marker
+from tests.dispatch_test_support import replace_flat
 
 
 class FakeHandoffForge:
@@ -161,6 +163,13 @@ def _forge(comment: dict, branch: str, head_sha: str) -> FakeHandoffForge:
     return FakeHandoffForge(comment, pr)
 
 
+def _flat_dict(active: ActiveWorktree) -> dict[str, Any]:
+    """Persisted flat record for ``active`` (null policy config kept, as ``asdict`` did)."""
+    record = encode_active_worktree(active)
+    record.setdefault("completion_policy_config", None)
+    return record
+
+
 def _write_state(repo: Path, active: ActiveWorktree) -> Path:
     running = ActiveWorktree.from_records(
         core=ActiveWorktreeCore(
@@ -193,7 +202,7 @@ def _write_state(repo: Path, active: ActiveWorktree) -> Path:
         ),
     )
     state = {
-        "active_worktrees": {"250": asdict(active), "251": asdict(running)},
+        "active_worktrees": {"250": _flat_dict(active), "251": _flat_dict(running)},
         "launch_history": [1.0, 2.0],
         "completed_worktrees": [],
         "task_reclaim_counts": {"251": {"count": 3, "last_reclaimed_at": 2.0}},
@@ -246,7 +255,7 @@ def _confirmed_contract_fields(active: ActiveWorktree) -> dict:
         stage=CompleteStage.HANDED_OFF,
         prepublication_policy_evidence={
             "decision": "allowed",
-            "context": {"active": asdict(active)},
+            "context": {"active": _flat_dict(active)},
         },
         posting_evidence={
             "comment_id": completion.completion_comment_id,
@@ -386,7 +395,7 @@ def test_apply_releases_non_done_without_receipt_and_preserves_dirty_worktree(
         head_sha=head_sha,
         completion_id=active.completion.completion_id,
     ).render()
-    active = replace(
+    active = replace_flat(
         active,
         completion_result=result_name,
         completion_payload={"outcome": comment["body"]},
@@ -679,7 +688,7 @@ def test_no_interactive_handoff_targets_do_not_construct_forge_or_rewrite_state(
 
     repo, worktree, branch = _create_repo(tmp_path)
     active, _ = _make_active(repo, worktree, branch)
-    active = replace(
+    active = replace_flat(
         active,
         completion_handoff_ready=False,
         completion_stage="journaling",

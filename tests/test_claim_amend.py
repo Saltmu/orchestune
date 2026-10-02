@@ -25,7 +25,7 @@ from orchestune.ledger.run_state import (
     save_run_state,
 )
 from tests.claim_helpers import MockForge, _make_issue
-from tests.dispatch_test_support import make_test_active_worktree
+from tests.dispatch_test_support import make_test_active_worktree, replace_flat
 
 CLAIM_ID = "claim-amend-201"
 
@@ -95,7 +95,7 @@ def amend_env(claim_env: dict[str, Path]):
     write_claim_marker(
         worktree,
         claim_id=CLAIM_ID,
-        branch=active.branch,
+        branch=active.core.branch,
         base_sha=base_sha,
         branch_created=True,
     )
@@ -274,9 +274,7 @@ def test_amend_rejects_when_issue_has_no_active_claim(amend_env):
 )
 def test_amend_rejects_ineligible_reservations(amend_env, overrides):
     state = load_run_state(amend_env["state_path"])
-    active = state.active_worktrees["201"]
-    for key, value in overrides.items():
-        setattr(active, key, value)
+    active = replace_flat(state.active_worktrees["201"], **overrides)
     _save({"201": active}, amend_env["state_path"])
 
     outcome = _amend(amend_env)

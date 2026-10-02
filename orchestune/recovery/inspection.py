@@ -26,21 +26,21 @@ def inspect_claim(
     restore_marker: bool,
 ) -> tuple[dict[str, Any], str | None]:
     target = registered_claim_path(active, workspace.run_state_path)
-    marker = read_claim_marker(target) if active.worktree_path else None
-    running = bool(active.pid and is_process_alive(active.pid))
+    marker = read_claim_marker(target) if active.core.worktree_path else None
+    running = bool(active.launch.pid and is_process_alive(active.launch.pid))
     diagnostics = {
-        "claim_id": active.claim_id,
-        "owner_kind": active.owner_kind,
-        "claim_stage": active.claim_stage,
-        "worktree": active.worktree_path,
-        "branch": active.branch,
-        "pid": active.pid,
+        "claim_id": active.claim.claim_id,
+        "owner_kind": active.claim.owner_kind,
+        "claim_stage": active.claim.claim_stage,
+        "worktree": active.core.worktree_path,
+        "branch": active.core.branch,
+        "pid": active.launch.pid,
         "running": running,
-        "launch_phase": active.launch_phase,
-        "completion_id": active.completion_id,
-        "completion_stage": active.completion_stage,
+        "launch_phase": active.launch.launch_phase,
+        "completion_id": active.completion.completion_id,
+        "completion_stage": active.completion.completion_stage,
         "worktree_status": inspect_worktree_status(target).value
-        if active.worktree_path and target.exists()
+        if active.core.worktree_path and target.exists()
         else "absent",
         "marker": "missing" if marker is None else "present",
         "worktree_action": "retain",
@@ -55,22 +55,22 @@ def _worktree_problem(
     active: ActiveWorktree, workspace: ClaimWorkspace, cwd: Path, restore_marker: bool
 ) -> str | None:
     target = registered_claim_path(active, workspace.run_state_path)
-    marker = read_claim_marker(target) if active.worktree_path else None
-    if active.repository_id != workspace.repository_identity:
+    marker = read_claim_marker(target) if active.core.worktree_path else None
+    if active.claim.repository_id != workspace.repository_identity:
         return "repository identity differs"
-    if active.worktree_path and (
+    if active.core.worktree_path and (
         target.resolve() == cwd or target.resolve() in cwd.parents
     ):
         return "run recovery from the primary checkout, outside the target worktree"
-    if active.pid and is_process_alive(active.pid):
+    if active.launch.pid and is_process_alive(active.launch.pid):
         return "agent is still running; stop it before recovery"
-    if active.external_id or active.launch_phase in {
+    if active.launch.external_id or active.launch.launch_phase in {
         "launching",
         "unknown",
         "prepared",
     }:
         return "launch status is uncertain or external; reconcile it with the Dispatcher first"
-    if active.worktree_path and target.exists():
+    if active.core.worktree_path and target.exists():
         try:
             validate_claim_worktree(
                 active, workspace.run_state_path, require_marker=False
@@ -82,8 +82,8 @@ def _worktree_problem(
     if claim_marker_path(target).is_symlink():
         return "claim marker is a symlink"
     if marker and (
-        marker.get("claim_id") != active.claim_id
-        or marker.get("branch") != active.branch
+        marker.get("claim_id") != active.claim.claim_id
+        or marker.get("branch") != active.core.branch
     ):
         return "claim marker belongs to another generation"
     return None
@@ -91,10 +91,13 @@ def _worktree_problem(
 
 def _completion_problem(active: ActiveWorktree, state: RunState) -> str | None:
     try:
-        status = completion_reservation_status(state, active.issue_number)
+        status = completion_reservation_status(state, active.core.issue_number)
     except ValueError:
         return "completion state is invalid; inspect and resume completion"
-    if active.completion_id and not active.completion_handoff_ready:
+    if (
+        active.completion.completion_id
+        and not active.completion.completion_handoff_ready
+    ):
         return (
             "completion publication is unfinished; restore marker and resume complete"
         )

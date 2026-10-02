@@ -229,9 +229,9 @@ class TestRestorationCandidateProjection:
         key, subtask_id, active = result[0]
         assert key == "101"
         assert subtask_id == "task-a"
-        assert active.branch == "claude/issue-101-task-a"
-        assert active.declared_footprint == ("src/foo.py",)
-        assert active.reservation_kind == "footprint"
+        assert active.core.branch == "claude/issue-101-task-a"
+        assert active.core.declared_footprint == ("src/foo.py",)
+        assert active.claim.reservation_kind == "footprint"
         # decide層はrun_stateを変更しない
         assert run_state.active_worktrees == {}
 
@@ -252,8 +252,8 @@ class TestRestorationCandidateProjection:
 
         assert len(result) == 1
         _, _, active = result[0]
-        assert active.declared_footprint == ()
-        assert active.reservation_kind == "repository"
+        assert active.core.declared_footprint == ()
+        assert active.claim.reservation_kind == "repository"
 
     def test_restores_recompute_count_and_forced_serial_from_issue_body(self, tmp_path):
         """#513再現テスト: run_state.json消失時、Issue本文に永続化された
@@ -279,8 +279,8 @@ class TestRestorationCandidateProjection:
             result = _project_restoration_candidates(run_state, [issue], config)
 
         active = result[0][2]
-        assert active.recompute_count == 2
-        assert active.forced_serial is True
+        assert active.launch.recompute_count == 2
+        assert active.launch.forced_serial is True
 
     def test_restores_zero_and_false_when_issue_predates_the_fields(self, tmp_path):
         """#513: 本フィールド導入前に作られたIssue（フェンスにフィールドが
@@ -330,7 +330,7 @@ class TestRestorationCandidateProjection:
         with patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]):
             result = _project_restoration_candidates(run_state, [issue], config)
 
-        assert result[0][2].forced_serial is True
+        assert result[0][2].launch.forced_serial is True
 
     def test_restored_old_issue_has_unknown_start_time(self, tmp_path):
         """#198: Issue作成日時はdispatch開始日時ではないため、復元Taskの
@@ -351,7 +351,7 @@ class TestRestorationCandidateProjection:
         with patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]):
             result = _project_restoration_candidates(run_state, [issue], config)
 
-        assert result[0][2].started_at is None
+        assert result[0][2].launch.started_at is None
 
     def test_restored_cloud_task_has_unknown_start_time(self, tmp_path):
         """PRに紐付くクラウドTaskでも、PRメタデータから実行開始時刻は復元できない。"""
@@ -533,7 +533,7 @@ class TestRestorationCandidateProjection:
                 config,
             )
 
-        assert result[0][2].base_branch == "parent/issue-100"
+        assert result[0][2].core.base_branch == "parent/issue-100"
 
     def test_cross_epic_same_subtask_id_does_not_collide(self, tmp_path):
         """#886: 2つの異なるEPIC（親Issue）配下に、同名subtask_idを持つ
@@ -1060,8 +1060,8 @@ class TestRecoveryCounterBookkeepingExecution:
         assert updated.launch.recompute_count == 2
         assert updated.launch.forced_serial is True
         # Original instance was not mutated in place
-        assert active.recompute_count == 1
-        assert active.forced_serial is False
+        assert active.launch.recompute_count == 1
+        assert active.launch.forced_serial is False
 
     def test_counter_bookkeeping_rolls_back_on_persist_failure(
         self, tmp_path, fake_forge

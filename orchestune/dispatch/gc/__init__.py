@@ -587,9 +587,12 @@ def _resolve_recovered_completion(
     return CompletionResolution.ready(
         replace(
             active,
-            branch=recovery_pr.head_ref,
-            external_id=f"recovered-pr:{recovery_pr.number}",
-            external_url=f"PR#{recovery_pr.number}",
+            core=replace(active.core, branch=recovery_pr.head_ref),
+            launch=replace(
+                active.launch,
+                external_id=f"recovered-pr:{recovery_pr.number}",
+                external_url=f"PR#{recovery_pr.number}",
+            ),
         )
     )
 
