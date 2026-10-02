@@ -78,6 +78,7 @@ class Thread:
     path: str
     body: str
     line: int | None
+    original_line: int | None
     outdated: bool
     resolved: bool
     comment_count: int
@@ -150,12 +151,12 @@ def parse_threads(nodes: Iterable[Any]) -> list[Thread]:
         if not comments or not isinstance(comments[0], dict):
             continue
         first = comments[0]
-        line = _as_int(first.get("originalLine"))
         threads.append(
             Thread(
                 path=str(first.get("path") or ""),
                 body=normalize_body(first.get("body")),
-                line=line if line is not None else _as_int(first.get("line")),
+                line=_as_int(first.get("line")),
+                original_line=_as_int(first.get("originalLine")),
                 outdated=bool(node.get("isOutdated")),
                 resolved=bool(node.get("isResolved")),
                 comment_count=len(comments),
@@ -174,6 +175,17 @@ def classify(thread: Thread) -> str:
     return "unresolved"
 
 
+def _line_distance(thread: Thread, row_line: int) -> float:
+    # The log stores the comment's current line, or its original line when the
+    # current one is gone, so compare against whichever coordinate is closer.
+    distances = [
+        abs(line - row_line)
+        for line in (thread.line, thread.original_line)
+        if line is not None
+    ]
+    return min(distances) if distances else float("inf")
+
+
 def match_thread(row: dict[str, Any], threads: Sequence[Thread]) -> Thread | None:
     """Return the thread for a finding.
 
@@ -189,10 +201,7 @@ def match_thread(row: dict[str, Any], threads: Sequence[Thread]) -> Thread | Non
     row_line = _as_int(row.get("line"))
     if row_line is None or len(candidates) == 1:
         return candidates[-1]
-    return min(
-        reversed(candidates),
-        key=lambda t: abs(t.line - row_line) if t.line is not None else float("inf"),
-    )
+    return min(reversed(candidates), key=lambda t: _line_distance(t, row_line))
 
 
 def _run_gh(cmd: list[str]) -> dict[str, Any]:

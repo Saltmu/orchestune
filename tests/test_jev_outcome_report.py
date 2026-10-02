@@ -175,6 +175,14 @@ class TestMatch:
         assert report.match_thread(_row(line=10), threads) is threads[1]
         assert report.match_thread(_row(line=None), threads) is threads[1]
 
+    def test_current_and_original_line_are_both_compared(self) -> None:
+        old = _thread(line=10, outdated=True)
+        new = _thread(line=100, resolved=True)
+        new["comments"]["nodes"][0]["line"] = 15
+        threads = report.parse_threads([old, new])
+
+        assert report.match_thread(_row(line=15), threads) is threads[1]
+
 
 class TestBuildReport:
     def _fetcher(self, by_pr: dict[int, list[dict[str, Any]]]) -> Any:
