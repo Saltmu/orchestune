@@ -175,13 +175,22 @@ class TestMatch:
         assert report.match_thread(_row(line=10), threads) is threads[1]
         assert report.match_thread(_row(line=None), threads) is threads[1]
 
-    def test_current_and_original_line_are_both_compared(self) -> None:
-        old = _thread(line=10, outdated=True)
+    def test_current_line_is_preferred_and_original_is_only_a_fallback(self) -> None:
+        old = _thread(line=50, outdated=True)
         new = _thread(line=100, resolved=True)
-        new["comments"]["nodes"][0]["line"] = 15
+        new["comments"]["nodes"][0]["line"] = 55
         threads = report.parse_threads([old, new])
 
-        assert report.match_thread(_row(line=15), threads) is threads[1]
+        # Logged 55 is the newer thread's current line, not the older original 50.
+        assert report.match_thread(_row(line=55), threads) is threads[1]
+
+    def test_original_line_is_used_when_current_line_is_gone(self) -> None:
+        near = _thread(line=10, outdated=True)
+        near["comments"]["nodes"][0]["line"] = None
+        far = _thread(line=200, resolved=True)
+        threads = report.parse_threads([near, far])
+
+        assert report.match_thread(_row(line=10), threads) is threads[0]
 
 
 class TestBuildReport:

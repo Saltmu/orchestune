@@ -176,14 +176,10 @@ def classify(thread: Thread) -> str:
 
 
 def _line_distance(thread: Thread, row_line: int) -> float:
-    # The log stores the comment's current line, or its original line when the
-    # current one is gone, so compare against whichever coordinate is closer.
-    distances = [
-        abs(line - row_line)
-        for line in (thread.line, thread.original_line)
-        if line is not None
-    ]
-    return min(distances) if distances else float("inf")
+    # Mirror how the log builds its ``line`` (review_verdict._normalize_inline_item):
+    # the comment's current line, falling back to its original line.
+    line = thread.line if thread.line is not None else thread.original_line
+    return float("inf") if line is None else abs(line - row_line)
 
 
 def match_thread(row: dict[str, Any], threads: Sequence[Thread]) -> Thread | None:
@@ -191,7 +187,9 @@ def match_thread(row: dict[str, Any], threads: Sequence[Thread]) -> Thread | Non
 
     ``dedupe()`` keeps the latest evaluation of a repeated finding, so among
     identical threads the one closest to the logged line wins and, on a tie, the
-    latest posted thread (GitHub returns threads in creation order).
+    latest posted thread (GitHub returns threads in creation order). The log keeps
+    no comment id, so repeated identical findings are matched heuristically and may
+    still be attributed to the wrong occurrence.
     """
     path = str(row.get("path") or "")
     body = normalize_body(row.get("comment"))
