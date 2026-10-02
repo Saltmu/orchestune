@@ -184,54 +184,91 @@ def _matching_current_parent(
     return actual_parent, ""
 
 
+def _cached_merge_reachability_probe(
+    forge, cache: dict[tuple[str, str], bool | None]
+) -> MergeReachabilityProbe:
+    def probe(commit_oid: str, base: str) -> bool | None:
+        key = (commit_oid, base)
+        if key not in cache:
+            try:
+                cache[key] = forge.is_merge_commit_reachable_from(commit_oid, base)
+            except Exception:  # noqa: BLE001 - cache lookup failures fail closed
+                cache[key] = None
+        return cache[key]
+
+    return probe
+
+
+def _inspect_prior_parent_merge(
+    forge,
+    issue_number: int,
+    task: TaskMetadata,
+    issue: IssueRecord | None,
+    merged_prs_by_base: dict[str, list[PrRecord] | Exception] | None,
+    merge_reachability_by_key: dict[tuple[str, str], bool | None] | None,
+) -> tuple[PriorParentMergeEvidence, IssueRecord | None]:
+    issue = issue or forge.get_issue(issue_number)
+    if issue is None:
+        return (
+            PriorParentMergeEvidence(
+                PriorParentMergeStatus.INDETERMINATE,
+                reason="current Issue metadata was unavailable",
+            ),
+            None,
+        )
+    actual_parent, parent_error = _matching_current_parent(issue, task)
+    if parent_error:
+        return (
+            PriorParentMergeEvidence(
+                PriorParentMergeStatus.INDETERMINATE,
+                reason=parent_error,
+            ),
+            issue,
+        )
+    assert actual_parent is not None
+    prs = _merged_prs_for_parent_base(
+        forge, f"parent/issue-{actual_parent}", merged_prs_by_base
+    )
+    reachability_cache = (
+        merge_reachability_by_key if merge_reachability_by_key is not None else {}
+    )
+    evidence = evaluate_prior_parent_merge(
+        issue_number=issue_number,
+        parent_issue_number=actual_parent,
+        subtask_id=task.subtask_id,
+        prs=prs,
+        get_last_reopened_at=lambda: forge.get_issue_last_reopened_at(issue_number),
+        merge_commit_is_reachable=_cached_merge_reachability_probe(
+            forge, reachability_cache
+        ),
+    )
+    return evidence, issue
+
+
 def inspect_prior_parent_merge(
     forge,
     issue_number: int,
     task: TaskMetadata,
     issue: IssueRecord | None = None,
     merged_prs_by_base: dict[str, list[PrRecord] | Exception] | None = None,
+    merge_reachability_by_key: dict[tuple[str, str], bool | None] | None = None,
 ) -> tuple[PriorParentMergeEvidence, IssueRecord | None]:
     """Read a current Issue and its parent-scoped PR history without mutation."""
     try:
-        issue = issue or forge.get_issue(issue_number)
-        if issue is None:
-            return (
-                PriorParentMergeEvidence(
-                    PriorParentMergeStatus.INDETERMINATE,
-                    reason="current Issue metadata was unavailable",
-                ),
-                None,
-            )
-        actual_parent, parent_error = _matching_current_parent(issue, task)
-        if parent_error:
-            return (
-                PriorParentMergeEvidence(
-                    PriorParentMergeStatus.INDETERMINATE,
-                    reason=parent_error,
-                ),
-                issue,
-            )
-        assert actual_parent is not None
-        prs = _merged_prs_for_parent_base(
-            forge, f"parent/issue-{actual_parent}", merged_prs_by_base
+        return _inspect_prior_parent_merge(
+            forge,
+            issue_number,
+            task,
+            issue,
+            merged_prs_by_base,
+            merge_reachability_by_key,
         )
-        evidence = evaluate_prior_parent_merge(
-            issue_number=issue_number,
-            parent_issue_number=actual_parent,
-            subtask_id=task.subtask_id,
-            prs=prs,
-            get_last_reopened_at=lambda: forge.get_issue_last_reopened_at(issue_number),
-            merge_commit_is_reachable=forge.is_merge_commit_reachable_from,
-        )
-        return evidence, issue
     except Exception as error:  # noqa: BLE001 - evidence collection fails closed
-        return (
-            PriorParentMergeEvidence(
-                PriorParentMergeStatus.INDETERMINATE,
-                reason=f"prior merge evidence lookup failed: {type(error).__name__}",
-            ),
-            None,
+        evidence = PriorParentMergeEvidence(
+            PriorParentMergeStatus.INDETERMINATE,
+            reason=f"prior merge evidence lookup failed: {type(error).__name__}",
         )
+        return evidence, None
 
 
 def _apply_verified_repair(
@@ -286,18 +323,15 @@ def _evidence_event(
     }
 
 
-def _apply_or_preview_verified_repair(
-    forge, issue_number: int, task: TaskMetadata, *, apply: bool
+def _reverify_and_apply_repair(
+    forge, issue_number: int, task: TaskMetadata
 ) -> tuple[dict[str, object], bool]:
-    """Re-verify a successful scan, then apply its idempotent repair."""
+    """Freshly verify a successful scan, then apply its idempotent repair."""
     fresh, fresh_issue = inspect_prior_parent_merge(forge, issue_number, task)
     event = _evidence_event(issue_number, fresh)
     if fresh.status is not PriorParentMergeStatus.ALREADY_MERGED or fresh_issue is None:
         event["action"] = "prior_merge_changed_before_repair"
         return event, False
-    if not apply:
-        event["action"] = "already_merged_dry_run"
-        return event, True
     if fresh_issue.state.upper() != "OPEN":
         try:
             _normalize_closed_issue_label(forge, fresh_issue)
@@ -315,6 +349,37 @@ def _apply_or_preview_verified_repair(
     return event, True
 
 
+def _reconcile_prior_parent_merge(
+    forge,
+    issue_number: int,
+    task: TaskMetadata,
+    *,
+    apply: bool,
+    issue: IssueRecord | None,
+    merged_prs_by_base: dict[str, list[PrRecord] | Exception],
+    merge_reachability_by_key: dict[tuple[str, str], bool | None],
+) -> tuple[PriorParentMergeEvidence, dict[str, object] | None, bool]:
+    evidence, _ = inspect_prior_parent_merge(
+        forge,
+        issue_number,
+        task,
+        issue,
+        merged_prs_by_base,
+        merge_reachability_by_key,
+    )
+    if evidence.status is PriorParentMergeStatus.NOT_FOUND:
+        return evidence, None, False
+    event = _evidence_event(issue_number, evidence)
+    if evidence.status is PriorParentMergeStatus.INDETERMINATE:
+        return evidence, event, False
+    if apply:
+        event, completed = _reverify_and_apply_repair(forge, issue_number, task)
+    else:
+        event["action"] = "already_merged_dry_run"
+        completed = True
+    return evidence, event, completed
+
+
 def reconcile_prior_parent_merges(
     forge,
     tasks_by_issue: dict[int, TaskMetadata],
@@ -325,15 +390,17 @@ def reconcile_prior_parent_merges(
 ) -> PriorParentMergeReconciliation:
     """Repair only verified historical merges and hold only indeterminate tasks.
 
-    The evaluator is intentionally repeated immediately before mutation: a
+    In apply mode, the evaluator is repeated immediately before mutation: a
     reopen, reparent, or branch recreation observed between the initial scan
-    and the close must invalidate the repair rather than be overwritten.
+    and the close must invalidate the repair rather than be overwritten. A
+    dry-run preview uses the evidence gathered during the initial scan.
     """
     evidence_by_issue: dict[int, PriorParentMergeEvidence] = {}
     held: set[int] = set()
     completed: set[int] = set()
     events: list[dict[str, object]] = []
     merged_prs_by_base: dict[str, list[PrRecord] | Exception] = {}
+    merge_reachability_by_key: dict[tuple[str, str], bool | None] = {}
     for issue_number, task in tasks_by_issue.items():
         if task.parent_number is None or not task.subtask_id:
             continue
@@ -342,26 +409,22 @@ def reconcile_prior_parent_merges(
         # still has unsaved work; GC re-evaluates the same evidence afterward.
         if issue_number in active_issue_numbers:
             continue
-        evidence, issue = inspect_prior_parent_merge(
+        evidence, event, repair_completed = _reconcile_prior_parent_merge(
             forge,
             issue_number,
             task,
-            (issues_by_number or {}).get(issue_number),
-            merged_prs_by_base,
+            apply=apply,
+            issue=(issues_by_number or {}).get(issue_number),
+            merged_prs_by_base=merged_prs_by_base,
+            merge_reachability_by_key=merge_reachability_by_key,
         )
         evidence_by_issue[issue_number] = evidence
         if evidence.status is PriorParentMergeStatus.NOT_FOUND:
             continue
         held.add(issue_number)
-        event = _evidence_event(issue_number, evidence)
-        if evidence.status is PriorParentMergeStatus.INDETERMINATE:
-            events.append(event)
-            continue
-        event, repair_completed = _apply_or_preview_verified_repair(
-            forge, issue_number, task, apply=apply
-        )
         if repair_completed:
             completed.add(issue_number)
+        assert event is not None
         events.append(event)
     return PriorParentMergeReconciliation(
         evidence_by_issue=evidence_by_issue,
