@@ -122,18 +122,19 @@ def _rule_not_needed(
     （PID/PR存在ベース）は永遠にマッチしない。ラベルまたはoutcome検知を最優先の
     完了シグナルとして扱い、stale判定より先に評価する。
     """
-    if active.completion_id is not None and not completion_handoff_matches_active(
-        ctx.run_state, active
+    if (
+        active.completion.completion_id is not None
+        and not completion_handoff_matches_active(ctx.run_state, active)
     ):
         return ActiveWorktreeRuleOutcome(
             completion_event={
-                "issue_number": active.issue_number,
-                "worktree_path": active.worktree_path,
+                "issue_number": active.core.issue_number,
+                "worktree_path": active.core.worktree_path,
                 "action": "completion_reserved_hold",
             },
             terminal=True,
         )
-    if active.completion_id is not None:
+    if active.completion.completion_id is not None:
         return collect_confirmed_completion(
             ctx.run_state, ctx.config, key, active, ctx.record_completion, active_task
         )
@@ -302,7 +303,7 @@ def _persist_and_confirm_completion(
     except Exception as e:  # noqa: BLE001 - 保存失敗はrecordを止めるだけ
         print(
             "Warning: failed to persist the completion of issue "
-            f"#{completion_active.issue_number}: {e}",
+            f"#{completion_active.core.issue_number}: {e}",
             file=sys.stderr,
         )
         return False
@@ -329,7 +330,7 @@ def _record_completed_worktree(
     """完了（またはトークン上限超過）で終端したworktreeを完了履歴へ退避する。"""
     action = completion_event["action"]
     receipt = (
-        CompletionReceipt(issue_number=completion_active.issue_number)
+        CompletionReceipt(issue_number=completion_active.core.issue_number)
         if action in _CONFIRMED_COMPLETION_ACTIONS
         else None
     )
@@ -651,18 +652,22 @@ def _resolve_completion(
     active_task: TaskMetadata | None,
 ) -> CompletionResolution:
     """完了候補・保留・早期終端を明示的な値として解決する。"""
-    if ctx.completion_reserved(active.issue_number):
+    core = active.core
+    claim = active.claim
+    completion = active.completion
+    launch = active.launch
+    if ctx.completion_reserved(core.issue_number):
         return CompletionResolution.pending()
     is_handoff_ready = _is_handoff_ready(active) and ctx.handoff_matches(active)
-    if active.completion_id is not None and not is_handoff_ready:
+    if completion.completion_id is not None and not is_handoff_ready:
         return CompletionResolution.pending()
     if is_handoff_ready:
         return CompletionResolution.ready(active)
-    if active.owner_kind == "interactive":
+    if claim.owner_kind == "interactive":
         return CompletionResolution.pending()
-    if active.started_at is None and active.external_id is None:
+    if launch.started_at is None and launch.external_id is None:
         return _resolve_recovered_completion(ctx, key, active, active_task)
-    if active.external_id is not None:
+    if launch.external_id is not None:
         return _resolve_cloud_completion(ctx, key, active, active_task)
     return _resolve_local_completion(ctx, key, active, active_task)
 
@@ -714,7 +719,7 @@ def _rule_completed(
     active: ActiveWorktree,
     active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
-    if active.completion_id is not None:
+    if active.completion.completion_id is not None:
         return collect_confirmed_completion(
             ctx.run_state, ctx.config, key, active, ctx.record_completion, active_task
         )
@@ -739,7 +744,7 @@ def _rule_completed(
             ctx.run_state,
             ctx.config,
             key,
-            active.issue_number,
+            active.core.issue_number,
             "early_death_retry_pending",
             ctx.prs,
         ),
@@ -748,11 +753,11 @@ def _rule_completed(
             ctx.run_state,
             ctx.config,
             key,
-            active.issue_number,
+            active.core.issue_number,
             "review_timeout_retry_pending",
             ctx.prs,
         ),
-        issue=ctx.issue_records_by_number.get(active.issue_number),
+        issue=ctx.issue_records_by_number.get(active.core.issue_number),
     )
     return _handle_completed_event_outcome(
         ctx, key, completion_active, active_task, completion_event

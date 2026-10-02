@@ -48,7 +48,7 @@ def _is_standalone_gc_candidate(active: ActiveWorktree) -> bool:
     Dispatch-owned worktrees need TaskMetadata to record their subtask id in
     CompletedWorktree; the dispatch cycle owns that lifecycle and KPI record.
     """
-    return active.owner_kind == "interactive" and _is_handoff_ready(active)
+    return active.claim.owner_kind == "interactive" and _is_handoff_ready(active)
 
 
 def _completion_gc_candidates(
@@ -58,11 +58,11 @@ def _completion_gc_candidates(
     return [
         (key, item)
         for key, item in active.items()
-        if item.owner_kind == "interactive"
+        if item.claim.owner_kind == "interactive"
         and (
-            item.completion_id
-            or item.completion_handoff_ready
-            or completion_mutation_blocked(state, item.issue_number)
+            item.completion.completion_id
+            or item.completion.completion_handoff_ready
+            or completion_mutation_blocked(state, item.core.issue_number)
         )
     ]
 
@@ -166,7 +166,7 @@ def _run_candidates(
     skipped: int,
 ) -> GcRunResult:
     for key, initial in sorted(candidates):
-        if initial.issue_number in held_issues:
+        if initial.core.issue_number in held_issues:
             items.append(
                 _make_item(
                     key, initial, "held", "completion_policy_hold", "retain", workspace

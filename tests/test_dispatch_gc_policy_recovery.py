@@ -362,7 +362,7 @@ def matrix_case(tmp_path, result, owner):
     update_record(state, record)
     with run_state_lock(config.run_state_path.with_suffix(".lock")):
         save_run_state(state, config.run_state_path)
-    merged = _forge(comments[0], active.branch, active.base_sha)
+    merged = _forge(comments[0], active.core.branch, active.claim.base_sha)
     forge.get_pull_request.return_value = merged.pr
     forge.is_merge_commit_reachable_from.return_value = True
     forge.close_issue.side_effect = lambda *args: setattr(
@@ -396,7 +396,9 @@ def test_receipt_reclaims_token_only_after_active_release(tmp_path):
     record = confirmed_records(state)[0]
     digest = owner_token_digest("test-owned-token")
     record = replace(record, owner_token_digest=digest)
-    state.active_worktrees["250"].owner_token_digest = digest
+    state.active_worktrees["250"] = replace(
+        state.active_worktrees["250"], owner_token_digest=digest
+    )
     update_record(state, record)
     state.completion_reservations[record.reservation_key] = (
         CompletionReservation.from_journal(record).to_dict()
@@ -426,7 +428,7 @@ def test_simultaneous_gc_paths_keep_single_done_history(tmp_path, monkeypatch):
 
     state, config, forge, _, comments = policy_case(tmp_path, result="done")
     active = state.active_worktrees["250"]
-    merged = _forge(comments[0], active.branch, active.base_sha)
+    merged = _forge(comments[0], active.core.branch, active.claim.base_sha)
     forge.get_pull_request.return_value = merged.pr
     forge.is_merge_commit_reachable_from.return_value = True
     monkeypatch.chdir(config.worktree_root.parent)
@@ -459,7 +461,7 @@ def test_stale_dispatcher_cannot_resurrect_active_after_standalone_gc(
 
     state, config, forge, _, comments = policy_case(tmp_path, result="done")
     active = state.active_worktrees["250"]
-    merged = _forge(comments[0], active.branch, active.base_sha)
+    merged = _forge(comments[0], active.core.branch, active.claim.base_sha)
     forge.get_pull_request.return_value = merged.pr
     forge.is_merge_commit_reachable_from.return_value = True
     monkeypatch.chdir(config.worktree_root.parent)

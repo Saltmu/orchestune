@@ -60,7 +60,7 @@ def test_inspect_strips_configured_remote_prefix_from_expected_base(tmp_path: Pa
         cwd=repo,
     )
     active, comment = _make_active(repo, worktree, branch)
-    active.base_ref = "custom-remote/release/next"
+    active = replace(active, base_ref="custom-remote/release/next")
     forge = _forge(comment, branch, _head_sha(active))
     forge.pr = replace(forge.pr, base_ref="release/next")
 
@@ -82,7 +82,7 @@ def test_inspect_normalizes_full_git_base_refs(
 ):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active.base_ref = base_ref
+    active = replace(active, base_ref=base_ref)
     forge = _forge(comment, branch, _head_sha(active))
     forge.pr = replace(forge.pr, base_ref=expected_base)
 
@@ -98,7 +98,7 @@ def test_inspect_preserves_slash_containing_local_base_branch(
 ):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active.base_ref = base_ref
+    active = replace(active, base_ref=base_ref)
     forge = _forge(comment, branch, _head_sha(active))
     forge.pr = replace(forge.pr, base_ref=base_ref)
 
@@ -139,7 +139,9 @@ def test_inspect_holds_when_comment_body_disagrees_with_journaled_payload(
 ):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active.completion_payload = {"outcome": comment["body"] + "tampered"}
+    active = replace(
+        active, completion_payload={"outcome": comment["body"] + "tampered"}
+    )
     forge = _forge(comment, branch, _head_sha(active))
 
     plan = _inspect(active, repo, forge)
@@ -160,7 +162,7 @@ def test_inspect_holds_when_outcome_does_not_match_claim_and_completion_ids(
         pr=125,
         claim_id="another-claim",
         head_sha=_head_sha(active),
-        completion_id=active.completion_id,
+        completion_id=active.completion.completion_id,
     ).render()
     forge = _forge(comment, branch, _head_sha(active))
 
@@ -275,8 +277,9 @@ def test_inspect_holds_legacy_handoff_without_label_confirmation(
 ):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active.completion_handoff_ready = ready_flag
-    active.completion_stage = stage
+    active = replace(
+        active, completion_handoff_ready=ready_flag, completion_stage=stage
+    )
     forge = _forge(comment, branch, _head_sha(active))
 
     plan = _inspect(active, repo, forge)
@@ -308,7 +311,7 @@ def test_inspect_holds_before_forge_when_handoff_evidence_is_missing(
 ):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active.completion_comment_id = None
+    active = replace(active, completion_comment_id=None)
     forge = _forge(comment, branch, _head_sha(active))
 
     plan = _inspect(active, repo, forge)
@@ -323,7 +326,7 @@ def test_inspect_holds_before_forge_when_journaled_outcome_body_is_missing(
 ):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active.completion_payload = {"other": "payload"}
+    active = replace(active, completion_payload={"other": "payload"})
     forge = _forge(comment, branch, _head_sha(active))
 
     plan = _inspect(active, repo, forge)
@@ -336,7 +339,7 @@ def test_inspect_holds_before_forge_when_journaled_outcome_body_is_missing(
 def test_inspect_holds_on_repository_mismatch_before_forge_calls(tmp_path: Path):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active.repository_id = "/another/repository"
+    active = replace(active, repository_id="/another/repository")
     forge = _forge(comment, branch, _head_sha(active))
 
     plan = _inspect(active, repo, forge)
@@ -449,12 +452,15 @@ def test_inspect_releases_dirty_not_needed_but_retains_worktree(tmp_path: Path):
     comment["body"] = OutcomeRecord(
         result="not-needed",
         issue=250,
-        claim_id=active.claim_id,
+        claim_id=active.claim.claim_id,
         head_sha=head_sha,
-        completion_id=active.completion_id,
+        completion_id=active.completion.completion_id,
     ).render()
-    active.completion_result = "not-needed"
-    active.completion_payload = {"outcome": comment["body"]}
+    active = replace(
+        active,
+        completion_result="not-needed",
+        completion_payload={"outcome": comment["body"]},
+    )
     (worktree / "README.md").write_text("work in progress\n", encoding="utf-8")
     forge = _forge(comment, branch, head_sha)
 

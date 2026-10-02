@@ -79,7 +79,7 @@ def _read_gc_state(path: Path) -> tuple[dict[str, Any], dict[str, ActiveWorktree
 
 
 def _absolute_worktree_path(active: ActiveWorktree, workspace: ClaimWorkspace) -> Path:
-    path = Path(active.worktree_path)
+    path = Path(active.core.worktree_path)
     if not path.is_absolute():
         path = workspace.worktree_root.parent / path
     return path
@@ -95,13 +95,13 @@ def _make_item(
 ) -> GcItemResult:
     worktree_path = (
         str(_absolute_worktree_path(active, workspace))
-        if active.worktree_path.strip()
+        if active.core.worktree_path.strip()
         else ""
     )
     return GcItemResult(
         key=key,
-        issue_number=active.issue_number,
-        result=active.completion_result,
+        issue_number=active.core.issue_number,
+        result=active.completion.completion_result,
         action=action,
         reason=reason,
         worktree_path=worktree_path,
@@ -119,8 +119,8 @@ def _remove_absent_claim_marker(active: ActiveWorktree, target: Path) -> str | N
     if marker is None:
         return "owner_unknown"
     if (
-        marker.get("claim_id") != active.claim_id
-        or marker.get("branch") != active.branch
+        marker.get("claim_id") != active.claim.claim_id
+        or marker.get("branch") != active.core.branch
     ):
         return "owner_mismatch"
     try:
@@ -133,7 +133,7 @@ def _remove_absent_claim_marker(active: ActiveWorktree, target: Path) -> str | N
 def _remove_verified_worktree(
     active: ActiveWorktree, target: Path, workspace: ClaimWorkspace
 ) -> str | None:
-    inspected = replace(active, worktree_path=str(target))
+    inspected = active.with_core(replace(active.core, worktree_path=str(target)))
     evaluation = evaluate_worktree_removal(
         inspected, repo_root=workspace.worktree_root.parent
     )
@@ -189,7 +189,11 @@ def _apply_release(
 ) -> tuple[bool, str]:
     state = load_run_state_readonly(workspace.run_state_path)
     record = next(
-        (r for r in policy_candidates(state) if r.issue_number == active.issue_number),
+        (
+            r
+            for r in policy_candidates(state)
+            if r.issue_number == active.core.issue_number
+        ),
         None,
     )
     if record is None:
@@ -231,7 +235,7 @@ def _apply_candidate(
     receipts: list[CompletionReceipt],
     task: TaskMetadata | None = None,
 ) -> tuple[int | None, int]:
-    if not initial.worktree_path.strip():
+    if not initial.core.worktree_path.strip():
         items.append(
             _make_item(
                 key, initial, "held", "worktree_path_missing", "retain", workspace
@@ -265,8 +269,8 @@ def _apply_one(
     current = active.get(key)
     if current is None or (
         expected is not None
-        and (current.claim_id, current.completion_id)
-        != (expected.claim_id, expected.completion_id)
+        and (current.claim.claim_id, current.completion.completion_id)
+        != (expected.claim.claim_id, expected.completion.completion_id)
     ):
         return None, 1
     if held := _handoff_contract_hold(key, current, workspace):
@@ -292,7 +296,7 @@ def _apply_one(
         )
     )
     if plan.outcome is not None and plan.outcome.result == "done":
-        receipts.append(CompletionReceipt(issue_number=current.issue_number))
+        receipts.append(CompletionReceipt(issue_number=current.core.issue_number))
     return None, 0
 
 
@@ -301,23 +305,25 @@ def _inspect_or_hold(
     workspace: ClaimWorkspace,
     forge: HandoffForge | None,
 ) -> HandoffPlan:
+    core = active.core
+    completion = active.completion
     if not _is_handoff_ready(active):
         return HandoffPlan(
-            key=str(active.issue_number),
-            issue_number=active.issue_number,
-            result=active.completion_result,
+            key=str(core.issue_number),
+            issue_number=core.issue_number,
+            result=completion.completion_result,
             action="hold",
             reason="legacy_unverified"
-            if active.completion_handoff_ready
-            or active.completion_stage == "handed_off_to_gc"
+            if completion.completion_handoff_ready
+            or completion.completion_stage == "handed_off_to_gc"
             else "not_handoff_ready",
             worktree_action="retain",
         )
     if forge is None:
         return HandoffPlan(
-            key=str(active.issue_number),
-            issue_number=active.issue_number,
-            result=active.completion_result,
+            key=str(core.issue_number),
+            issue_number=core.issue_number,
+            result=completion.completion_result,
             action="hold",
             reason="outcome_unknown",
             worktree_action="retain",
@@ -326,9 +332,9 @@ def _inspect_or_hold(
         return inspect_handoff(active, workspace, forge)
     except Exception:
         return HandoffPlan(
-            key=str(active.issue_number),
-            issue_number=active.issue_number,
-            result=active.completion_result,
+            key=str(core.issue_number),
+            issue_number=core.issue_number,
+            result=completion.completion_result,
             action="hold",
             reason="inspection_failed",
             worktree_action="retain",

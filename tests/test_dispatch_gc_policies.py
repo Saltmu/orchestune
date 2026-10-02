@@ -24,9 +24,9 @@ def policy_case(tmp_path, result="blocked", reason="review-timeout", attempt=Non
         issue=250,
         reason=reason if result == "blocked" else None,
         attempt=attempt,
-        claim_id=active.claim_id,
-        completion_id=active.completion_id,
-        head_sha=active.base_sha,
+        claim_id=active.claim.claim_id,
+        completion_id=active.completion.completion_id,
+        head_sha=active.claim.base_sha,
     )
     active = replace(
         active,
