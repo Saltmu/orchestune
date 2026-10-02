@@ -11,6 +11,19 @@ KIND_PR = "pr"
 
 
 @dataclass(frozen=True)
+class CompletedDependencyBranchEvidence:
+    """One scan's observed canonical tip contained in the dependent launch base.
+
+    This is neither a completion label nor historical merged-PR evidence. It is
+    passed per (dependent issue, dependency issue), never persisted across scans.
+    """
+
+    branch_name: str
+    base_ref: str
+    head_sha: str
+
+
+@dataclass(frozen=True)
 class ExternalLockConflict:
     """#787: 外部ロック1件分の理由。運用者が「なぜ起動しないのか」を追える最小単位。
 

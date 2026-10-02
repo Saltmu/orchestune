@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 from orchestune.dispatch.config import DispatcherConfig
@@ -13,11 +14,13 @@ from orchestune.dispatch.locks import (
     NOTICE_KIND_EXTERNAL_LOCK,
     ExternalLockScanResult,
     LockDependencyView,
+    _completed_dependency_candidates,
     _strip_remote_prefix,
     render_external_lock_notice,
     render_external_lock_release_notice,
     scan_external_locks,
 )
+from orchestune.forge import Forge
 from orchestune.infra.git_cli import (
     branch_changed_files,
     ensure_parent_branch,
@@ -27,6 +30,7 @@ from orchestune.issue_notice import post_notice_if_changed
 from orchestune.issue_parsing import is_epic_issue
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import MAX_PENDING_LOCK_RELEASE_NOTICES, RunState
+from orchestune.lock_contracts import CompletedDependencyBranchEvidence
 from orchestune.models import PrRecord
 from orchestune.task_metadata import TaskMetadata
 
@@ -40,12 +44,47 @@ def _is_base_or_parent_branch(branch_name: str) -> bool:
     return False
 
 
+def _collect_completed_dependency_evidence(
+    tasks: list[TaskMetadata],
+    view: LockDependencyView,
+    observed_branches: set[str],
+    forge: Forge | None,
+    parent_issue_number: int | None,
+) -> dict[tuple[int, int], CompletedDependencyBranchEvidence]:
+    """Read current-tip containment once per observed (head, base) in this scan."""
+    if forge is None or parent_issue_number is None:
+        return {}
+    base = f"parent/issue-{parent_issue_number}"
+    cache: dict[tuple[str, str], CompletedDependencyBranchEvidence | None] = {}
+    evidence = {}
+    for task in tasks:
+        candidates = _completed_dependency_candidates(task, view, parent_issue_number)
+        for dep_issue, branch in candidates.items():
+            if branch not in observed_branches:
+                continue
+            key = (branch, base)
+            if key not in cache:
+                cache[key] = None
+                try:
+                    sha = forge.get_current_branch_tip_sha_if_merged_into(branch, base)
+                except Exception:
+                    # Failed observations remain conflicts; retry only next scan.
+                    continue
+                if isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{40}", sha):
+                    cache[key] = CompletedDependencyBranchEvidence(branch, base, sha)
+            if (proof := cache[key]) is not None:
+                evidence[(task.issue_number, dep_issue)] = proof
+    return evidence
+
+
 def _decide_external_lock_sync(
     tasks_by_issue: Mapping[int, TaskMetadata],
     prs: list[PrRecord],
     run_state: RunState,
     *,
     view: LockDependencyView,
+    forge: Forge | None = None,
+    parent_issue_number: int | None = None,
 ) -> ExternalLockScanResult:
     """githubからの読み取り(list_remote_branches/branch_changed_files)と
     scan_external_locksの純粋計算のみを行い、ラベルの書き込みは行わない。
@@ -77,8 +116,20 @@ def _decide_external_lock_sync(
         )
 
     all_tasks = list(tasks_by_issue.values())
+    evidence = _collect_completed_dependency_evidence(
+        all_tasks,
+        view,
+        {_strip_remote_prefix(branch) for branch in remote_branch_names} | pr_head_refs,
+        forge,
+        parent_issue_number,
+    )
     return scan_external_locks(
-        all_tasks, remote_branch_footprints, prs, active_branches, view
+        all_tasks,
+        remote_branch_footprints,
+        prs,
+        active_branches,
+        view,
+        completed_dependency_evidence=evidence,
     )
 
 
@@ -169,7 +220,14 @@ def _sync_external_locks(
     view: LockDependencyView,
 ) -> ExternalLockScanResult:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
-    lock_result = _decide_external_lock_sync(tasks_by_issue, prs, run_state, view=view)
+    lock_result = _decide_external_lock_sync(
+        tasks_by_issue,
+        prs,
+        run_state,
+        view=view,
+        forge=config.resolved_forge,
+        parent_issue_number=config.parent_issue_number,
+    )
     _apply_external_lock_sync(lock_result, config, run_state)
     return lock_result
 

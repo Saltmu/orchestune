@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
 from orchestune.dispatch.locks import (
@@ -17,6 +18,7 @@ from orchestune.dispatch.locks import (
 from orchestune.dispatch.phase_rebase import (
     _apply_external_lock_sync,
     _is_base_or_parent_branch,
+    _sync_external_locks,
 )
 from orchestune.dispatch.phase_rebase import (
     _decide_external_lock_sync as _decide_external_lock_sync_impl,
@@ -57,6 +59,57 @@ def _decide_external_lock_sync(tasks_by_issue, prs, run_state):
 def _stub_label_actor_permission_by_default(fake_forge):
     """#119のactor権限検証が実際の`gh api`を叩かないようスタブする。"""
     stub_label_actor_permission(fake_forge)
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_sync_completed_dependency_unlock_uses_config_and_existing_apply(
+    fake_forge, apply, tmp_path
+):
+    dep = _task(2, subtask_id="dep", parent_number=100, status_labels=("status:done",))
+    task = _task(
+        1,
+        parent_number=100,
+        depends_on=("dep",),
+        status_labels=("status:queued", "status:external-lock"),
+    )
+    branch = build_task_branch_name(2, "dep")
+    fake_forge.get_current_branch_tip_sha_if_merged_into.return_value = "a" * 40
+    config = DispatcherConfig(
+        parent_issue_number=100,
+        apply=apply,
+        forge=fake_forge,
+        events_log_path=tmp_path / "events.jsonl",
+    )
+    with (
+        patch(
+            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            return_value=["origin/" + branch],
+        ),
+        patch(
+            "orchestune.dispatch.phase_rebase.branch_changed_files", return_value=None
+        ),
+        patch("orchestune.dispatch.phase_rebase._notify_external_locks") as notify,
+    ):
+        result = _sync_external_locks(
+            {1: task, 2: dep},
+            [],
+            RunState(),
+            config,
+            view=LockDependencyTestView.from_tasks([dep, task]),
+        )
+    assert result.to_unlock == [task]
+    fake_forge.get_current_branch_tip_sha_if_merged_into.assert_called_once_with(
+        branch, "parent/issue-100"
+    )
+    if apply:
+        fake_forge.remove_label.assert_called_once_with(1, "status:external-lock")
+        fake_forge.add_label.assert_called_once_with(1, "status:queued")
+        notify.assert_called_once()
+    else:
+        fake_forge.remove_label.assert_not_called()
+        fake_forge.add_label.assert_not_called()
+        fake_forge.add_comment.assert_not_called()
+        notify.assert_not_called()
 
 
 class TestIsBaseOrParentBranch:

@@ -5,9 +5,12 @@
 同じ方針）。
 """
 
+import pytest
+
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.locks import scan_external_locks as _scan_external_locks
 from orchestune.dispatch.scoring import Task
+from orchestune.lock_contracts import CompletedDependencyBranchEvidence
 from orchestune.models import PrRecord
 from tests.dispatch_lock_test_support import LockDependencyTestView
 
@@ -468,3 +471,23 @@ class TestDependencyExclusion:
             active_branches=[],
         )
         assert [t.issue_number for t in result.to_lock] == [1]
+
+
+@pytest.mark.parametrize("status", ["status:blocked", "status:queued"])
+def test_completed_dependency_in_parent_does_not_keep_external_lock(status):
+    dep = _task(1128, subtask_id="aw-readers", status_labels=("status:done",))
+    task = _task(
+        1134, depends_on=("aw-readers",), status_labels=(status, "status:external-lock")
+    )
+    branch = build_task_branch_name(dep.issue_number, dep.subtask_id)
+    evidence = CompletedDependencyBranchEvidence(branch, "parent/issue-100", "a" * 40)
+    result = _scan_external_locks(
+        [task],
+        [(branch, ("src/foo.py",))],
+        [],
+        [],
+        LockDependencyTestView.from_tasks([dep, task]),
+        completed_dependency_evidence={(1134, 1128): evidence},
+    )
+    assert result.to_unlock == [task]
+    assert result.conflicts == {}

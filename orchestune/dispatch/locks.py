@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Protocol
 
@@ -19,6 +19,7 @@ from orchestune.labels import StatusLabel
 from orchestune.lock_contracts import (
     KIND_BRANCH,
     KIND_PR,
+    CompletedDependencyBranchEvidence,
     ExternalLockConflict,
     ExternalLockScanResult,
 )
@@ -122,7 +123,8 @@ def _direct_dependency_canonical_branches(
     へ昇格した上で）通常のparent/mainからそのまま起動され得る。このときの
     依存元PR・ブランチとの重複は、Integratorのマージが未完了で実際にはbaseへ
     取り込まれていない変更を意味しうる、正真正銘の外部衝突であり除外しては
-    ならない。
+    ならない。完了依存の現在先端が通常起動baseへ取り込み済みの場合だけ、
+    別経路の走査限定証拠で除外する（#1162）。本helperのスタッキング条件は維持する。
 
     Codexレビュー対応(PR#797 P2, Finding 5): タスク自身が`status:blocked`で
     ない場合は除外しない。`_get_stack_eligible_tasks`がbaseを割り当てるのは
@@ -186,11 +188,80 @@ def _is_dependency_branch(branch: str, dependency_branches: frozenset[str]) -> b
     return branch in dependency_branches
 
 
+def _completed_dependency_candidates(
+    task: TaskMetadata,
+    view: LockDependencyView,
+    parent_issue_number: int | None,
+) -> dict[int, str]:
+    """Identify completed direct dependencies whose canonical tip may be verified."""
+    if (
+        not {StatusLabel.BLOCKED, StatusLabel.QUEUED}.intersection(task.status_labels)
+        or parent_issue_number is None
+        or parent_issue_number <= 0
+        or task.parent_number != parent_issue_number
+    ):
+        return {}
+    assessment = view.assess_dependencies(task.issue_number)
+    if assessment is None or assessment.unresolved:
+        return {}
+    candidates = {}
+    for dep in assessment.resolved:
+        if dep.state is not DependencyState.COMPLETED:
+            continue
+        dep_task = view.task(dep.issue_number)
+        if (
+            dep_task is None
+            or dep_task.issue_number != dep.issue_number
+            or dep_task.parent_number != parent_issue_number
+            or not dep_task.subtask_id.strip()
+        ):
+            continue
+        branch = build_task_branch_name(dep.issue_number, dep_task.subtask_id)
+        if view.canonical_branch(dep.issue_number) == branch:
+            candidates[dep.issue_number] = branch
+    return candidates
+
+
+def _validated_completed_dependency_evidence(
+    task: TaskMetadata,
+    view: LockDependencyView,
+    evidence: Mapping[tuple[int, int], CompletedDependencyBranchEvidence],
+) -> tuple[CompletedDependencyBranchEvidence, ...]:
+    """Recheck identity, lifecycle, parent/base and SHA immediately before use."""
+    if not evidence:
+        return ()
+    candidates = _completed_dependency_candidates(task, view, task.parent_number)
+    return tuple(
+        proof
+        for dep_issue, branch in candidates.items()
+        if (proof := evidence.get((task.issue_number, dep_issue))) is not None
+        and proof.branch_name == branch
+        and proof.base_ref == f"parent/issue-{task.parent_number}"
+        and re.fullmatch(r"[0-9a-fA-F]{40}", proof.head_sha)
+    )
+
+
+def _is_completed_dependency_pr(
+    pr: PrRecord, evidence: tuple[CompletedDependencyBranchEvidence, ...]
+) -> bool:
+    return (
+        pr.state in {"OPEN", "MERGED"}
+        and pr.is_cross_repository is False
+        and any(
+            pr.head_ref == proof.branch_name
+            and pr.base_ref == proof.base_ref
+            and pr.head_sha == proof.head_sha
+            for proof in evidence
+        )
+    )
+
+
 def _external_prs(
     task: TaskMetadata,
     prs: list[PrRecord],
     active_set: set[str],
     dependency_branches: frozenset[str],
+    completed_evidence: tuple[CompletedDependencyBranchEvidence, ...],
 ) -> list[PrRecord]:
     return sorted(
         (
@@ -199,6 +270,7 @@ def _external_prs(
             if pr.head_ref not in active_set
             and not pr_matches_issue(pr, task.issue_number, task.subtask_id)
             and not _is_dependency_pr(pr, dependency_branches)
+            and not _is_completed_dependency_pr(pr, completed_evidence)
         ),
         key=lambda pr: pr.number,
     )
@@ -218,6 +290,7 @@ def _collect_task_conflicts(
     branch_footprints: list[tuple[str, set[str]]],
     unknown_branches: list[str],
     dependency_branches: frozenset[str],
+    completed_evidence: tuple[CompletedDependencyBranchEvidence, ...],
 ) -> tuple[ExternalLockConflict, ...]:
     """タスクが外部ロックされる理由をすべて集める。空タプルなら衝突なし。
 
@@ -230,11 +303,16 @@ def _collect_task_conflicts(
     task_footprint = {path for path in task.footprint if not _is_hotspot(path)}
     if not task_footprint:
         return ()
-    external_prs = _external_prs(task, prs, active_set, dependency_branches)
+    external_prs = _external_prs(
+        task, prs, active_set, dependency_branches, completed_evidence
+    )
+    excluded_branches = dependency_branches | frozenset(
+        proof.branch_name for proof in completed_evidence
+    )
     conflicts = [
         ExternalLockConflict(KIND_BRANCH, branch, files)
         for branch, footprint in branch_footprints
-        if not _is_dependency_branch(branch, dependency_branches)
+        if not _is_dependency_branch(branch, excluded_branches)
         and (files := _overlapping_files(task_footprint, footprint))
     ]
     conflicts.extend(
@@ -245,7 +323,7 @@ def _collect_task_conflicts(
     conflicts.extend(
         ExternalLockConflict(KIND_BRANCH_DIFF_UNKNOWN, branch)
         for branch in unknown_branches
-        if not _is_dependency_branch(branch, dependency_branches)
+        if not _is_dependency_branch(branch, excluded_branches)
     )
     conflicts.extend(
         ExternalLockConflict(KIND_PR_FILES_TRUNCATED, f"#{pr.number}")
@@ -261,10 +339,18 @@ def scan_external_locks(
     prs: list[PrRecord],
     active_branches: Iterable[str],
     view: LockDependencyView,
+    *,
+    completed_dependency_evidence: Mapping[
+        tuple[int, int], CompletedDependencyBranchEvidence
+    ]
+    | None = None,
 ) -> ExternalLockScanResult:
     """`view`(#869)は`depends_on`の依存識別・実効状態(`DependencyAssessment`)・
     正規branchの参照に使う。実運用(`phase_rebase._decide_external_lock_sync`)
     は`CycleContext`自身を渡し、そこで既に構築済みの依存解決を再利用する。
+    #1162: completed_dependency_evidenceは直接依存ごとの現在先端取り込み証拠。
+    未指定なら従来の判定を維持する。純粋判定はForge/Gitを呼ばず、証拠の
+    SHAは観測時点のもの（検証後の同時pushを原子的に防ぐ契約ではない）。
     """
     active_set = set(active_branches)
     branch_footprints, unknown_branches = _collect_branch_footprints(
@@ -291,6 +377,9 @@ def scan_external_locks(
             branch_footprints,
             unknown_branches,
             dependency_branches,
+            _validated_completed_dependency_evidence(
+                task, view, completed_dependency_evidence or {}
+            ),
         )
         if conflicts:
             conflicts_by_issue[task.issue_number] = conflicts
