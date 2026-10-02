@@ -40,6 +40,7 @@ ANCHORS = {
     "state": (
         "dependency-record-postconditions",
         "dependency-fresh-validation",
+        "active-worktree-lifecycle",
     ),
     "integration": ("dependency-target-fallback",),
 }
@@ -119,6 +120,42 @@ SECTION_CONTRACTS = (
         ja=("公開`DispatchSnapshot`や サイクル凍結点は導入しません",),
         en=("neither a public `DispatchSnapshot` nor a cycle freeze point",),
     ),
+    _SectionContract(
+        document="state",
+        anchor="active-worktree-lifecycle",
+        shared=(
+            "ActiveWorktreeLifecycle",
+            "HANDOFF_READY",
+            "COMPLETING",
+            "RUNNING",
+            "LAUNCHING",
+            "RECOVERY_REQUIRED",
+            "CLAIMED",
+            "RESERVED",
+            "ActiveWorktreeCore",
+            "LaunchInfo",
+            "ClaimInfo",
+            "ActiveCompletionJournal",
+            "active_codec",
+            "active_completion_from_record",
+            "CompletionReceipt",
+            "ExecutionRecord",
+            "MappingProxyType",
+            "_DispatchConsistencyAdapter",
+        ),
+        ja=(
+            "候補段階",
+            "検証済み",
+            "唯一の正本",
+            "射影",
+        ),
+        en=(
+            "candidate phase",
+            "verified",
+            "only in-memory source of truth",
+            "projection",
+        ),
+    ),
 )
 
 
@@ -168,6 +205,7 @@ CONTRACT_LINKS = {
     "overview": (
         "architecture/dag-and-scheduling.md#dependency-three-layers",
         "architecture/state-recovery.md#dependency-record-postconditions",
+        "architecture/state-recovery.md#active-worktree-lifecycle",
         "architecture/integration.md#dependency-target-fallback",
     ),
     "dag": ("integration.md#dependency-target-fallback",),
@@ -249,6 +287,7 @@ def _check_section_contracts(language: str, documents: dict[str, str]) -> None:
         )
         for phrase in contract.expected(language):
             assert phrase in section, (language, contract.anchor, phrase)
+    _check_completion_subrecord_row(documents["state"])
 
 
 def _check_fallback_rows(language: str, integration: str) -> None:
@@ -304,6 +343,84 @@ def test_dependency_contract_link_anchors_exist(language: str) -> None:
 def test_documented_cycle_context_record_apis_exist() -> None:
     for method in ("record_completion", "record_launch", "record_transition"):
         assert callable(getattr(CycleContext, method))
+
+
+def test_documented_active_worktree_subrecords_and_lifecycle_exist() -> None:
+    from orchestune.complete.journal import (
+        active_completion_from_record,
+        with_completion,
+    )
+    from orchestune.consistency.observation import ExecutionRecord
+    from orchestune.dispatch.cycle import _DispatchConsistencyAdapter
+    from orchestune.dispatch.cycle_records import CompletionReceipt
+    from orchestune.dispatch.execution_repair import execution_record_from_active
+    from orchestune.ledger.active_codec import (
+        decode_active_worktree,
+        encode_active_worktree,
+    )
+    from orchestune.ledger.active_lifecycle import ActiveWorktreeLifecycle, lifecycle
+    from orchestune.ledger.active_records import (
+        ActiveCompletionJournal,
+        ActiveWorktree,
+        ActiveWorktreeCore,
+        ClaimInfo,
+        LaunchInfo,
+    )
+
+    assert callable(lifecycle)
+    assert callable(decode_active_worktree)
+    assert callable(encode_active_worktree)
+    assert callable(active_completion_from_record)
+    assert callable(with_completion)
+    assert callable(_DispatchConsistencyAdapter._executions)
+    assert callable(execution_record_from_active)
+    for expected_phase in (
+        "HANDOFF_READY",
+        "COMPLETING",
+        "RUNNING",
+        "LAUNCHING",
+        "RECOVERY_REQUIRED",
+        "CLAIMED",
+        "RESERVED",
+    ):
+        assert hasattr(ActiveWorktreeLifecycle, expected_phase)
+    for expected_cls in (
+        ActiveWorktree,
+        ActiveWorktreeCore,
+        LaunchInfo,
+        ClaimInfo,
+        ActiveCompletionJournal,
+        ExecutionRecord,
+        CompletionReceipt,
+    ):
+        assert isinstance(expected_cls, type)
+
+
+def _check_completion_subrecord_row(state: str) -> None:
+    """Ensure the acceptance mapping table names ActiveCompletionJournal, not CompletionJournal."""
+    section = _anchor_section(state, "active-worktree-lifecycle")
+    table_rows = [
+        line
+        for line in section.splitlines()
+        if line.startswith("|")
+        and "ActiveWorktreeCore" in line
+        and "LaunchInfo" in line
+    ]
+    assert len(table_rows) == 1
+    row = table_rows[0]
+    assert "ActiveCompletionJournal" in row
+    assert re.search(r"(?<!Active)CompletionJournal", row) is None
+
+
+@pytest.mark.parametrize("language", sorted(DOCUMENTS))
+def test_acceptance_criteria_evidence_table_references_both_local_ci_scripts(
+    language: str,
+) -> None:
+    """Ensure the acceptance mapping table documents both Linux/macOS and Windows local-ci scripts."""
+    documents = _load_documents(language)
+    section = _anchor_section(documents["state"], "active-worktree-lifecycle")
+    assert "./scripts/local-ci.sh" in section
+    assert r".\scripts\local-ci.ps1" in section
 
 
 # --- Regression: the contract must detect these mutations (#911) -------------
@@ -431,3 +548,41 @@ def test_each_ordering_guarantee_is_required(language: str) -> None:
         mutated = _mutate(documents, "dag", section, section.replace(phrase, "..."))
         with pytest.raises(AssertionError):
             _check_section_contracts(language, mutated)
+
+
+@pytest.mark.parametrize("language", sorted(DOCUMENTS))
+def test_each_lifecycle_guarantee_is_required(language: str) -> None:
+    """Deleting any single active worktree lifecycle guarantee must fail on its own."""
+    documents = _load_documents(language)
+    contract = next(
+        c for c in SECTION_CONTRACTS if c.anchor == "active-worktree-lifecycle"
+    )
+    section = _anchor_section(documents["state"], "active-worktree-lifecycle")
+    for phrase in contract.expected(language):
+        mutated = _mutate(documents, "state", section, section.replace(phrase, "..."))
+        with pytest.raises(AssertionError):
+            _check_section_contracts(language, mutated)
+
+
+@pytest.mark.parametrize("language", sorted(DOCUMENTS))
+def test_raw_completion_journal_in_subrecord_row_is_rejected(language: str) -> None:
+    """Replacing ActiveCompletionJournal with CompletionJournal in the subrecord row must fail."""
+    documents = _load_documents(language)
+    section = _anchor_section(documents["state"], "active-worktree-lifecycle")
+    table_rows = [
+        line
+        for line in section.splitlines()
+        if line.startswith("|")
+        and "ActiveWorktreeCore" in line
+        and "LaunchInfo" in line
+    ]
+    assert len(table_rows) == 1
+    row = table_rows[0]
+    mutated = _mutate(
+        documents,
+        "state",
+        row,
+        row.replace("ActiveCompletionJournal", "CompletionJournal"),
+    )
+    with pytest.raises(AssertionError):
+        _check_section_contracts(language, mutated)
