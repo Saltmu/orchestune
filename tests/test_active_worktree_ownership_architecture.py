@@ -237,9 +237,14 @@ from dataclasses import replace
 from orchestune.ledger.active_records import ActiveWorktree
 
 def access_flat(active: ActiveWorktree):
+    # Writes
     active.pid = 9999
     active.claim_id = "old"
     replace(active, pid=9999)
+    # Reads
+    p = active.pid
+    if active.claim_id:
+        return active.launch_phase
 """
     violations = active_worktree_boundary_violations(
         source, module="orchestune.dispatch.scoring"
@@ -248,7 +253,56 @@ def access_flat(active: ActiveWorktree):
     assert targets_and_kinds == {
         ("pid", "flat-attribute-access"),
         ("claim_id", "flat-attribute-access"),
+        ("launch_phase", "flat-attribute-access"),
     }
+
+
+def test_union_and_optional_annotated_parameters_recognized() -> None:
+    source = """
+from typing import Optional
+from orchestune.ledger.active_records import ActiveWorktree
+
+def handle_pipe_union(active: ActiveWorktree | None):
+    if active is not None:
+        active.launch.pid = 9999
+
+def handle_optional(worktree: Optional[ActiveWorktree]):
+    if worktree:
+        worktree.completion.completion_payload["flag"] = True
+"""
+    violations = active_worktree_boundary_violations(
+        source, module="orchestune.dispatch.scoring"
+    )
+    targets_and_kinds = {(v.target, v.kind) for v in violations}
+    assert targets_and_kinds == {
+        ("launch.pid", "subrecord-direct-assign"),
+        ("completion_payload", "payload-mutation"),
+    }
+
+
+def test_constructor_aliases_and_qualified_access_rejected_in_unauthorized_module() -> (
+    None
+):
+    source = """
+from orchestune.ledger.active_records import ActiveWorktree as Worktree
+import orchestune.ledger.active_records as ar
+
+def build(core, launch, claim, completion):
+    a = Worktree(core=core, launch=launch, claim=claim, completion=completion)
+    b = ar.ActiveWorktree.from_records(core=core, launch=launch, claim=claim, completion=completion)
+    return a, b
+"""
+    # Unauthorized module
+    violations = active_worktree_boundary_violations(
+        source, module="orchestune.dispatch.scoring"
+    )
+    assert len(violations) == 2
+    assert all(v.kind == "unauthorized-constructor" for v in violations)
+
+    # Allowed constructor module
+    assert not active_worktree_boundary_violations(
+        source, module="orchestune.ledger.active_codec"
+    )
 
 
 def test_exception_requires_reason() -> None:

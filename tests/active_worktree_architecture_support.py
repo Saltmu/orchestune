@@ -249,6 +249,10 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
         self.functions: list[str] = ["<module>"]
         self.violations: list[ActiveWorktreeBoundaryViolation] = []
         self.replace_aliases: set[str] = set()
+        self.constructor_names: set[str] = {
+            "ActiveWorktree",
+            "ActiveWorktree.from_records",
+        }
         self.active_vars_stack: list[set[str]] = [set()]
         self.completion_vars_stack: list[set[str]] = [set()]
         self.other_vars_stack: list[set[str]] = [set()]
@@ -280,6 +284,10 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
             if alias.name == "dataclasses":
                 name = alias.asname or "dataclasses"
                 self.replace_aliases.add(f"{name}.replace")
+            if alias.name.endswith("active_records"):
+                mod_name = alias.asname or alias.name
+                self.constructor_names.add(f"{mod_name}.ActiveWorktree")
+                self.constructor_names.add(f"{mod_name}.ActiveWorktree.from_records")
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -289,6 +297,15 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
                     self.replace_aliases.add(alias.asname or "replace")
                 elif alias.name == "*":
                     self.replace_aliases.add("replace")
+        for alias in node.names:
+            if alias.name == "ActiveWorktree":
+                ctor_name = alias.asname or "ActiveWorktree"
+                self.constructor_names.add(ctor_name)
+                self.constructor_names.add(f"{ctor_name}.from_records")
+            elif alias.name == "active_records":
+                mod_name = alias.asname or "active_records"
+                self.constructor_names.add(f"{mod_name}.ActiveWorktree")
+                self.constructor_names.add(f"{mod_name}.ActiveWorktree.from_records")
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -304,11 +321,15 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
         other_scope: set[str] = set()
         for arg in node.args.args + node.args.kwonlyargs:
             if arg.annotation is not None:
-                type_name = _extract_type_name(arg.annotation)
-                if type_name == "ActiveWorktree":
+                types = _extract_type_names(arg.annotation)
+                if "ActiveWorktree" in types:
                     active_scope.add(arg.arg)
-                elif type_name == "ActiveCompletionJournal":
+                elif "ActiveCompletionJournal" in types:
                     completion_scope.add(arg.arg)
+                elif types - {"None", "NoneType"}:
+                    other_scope.add(arg.arg)
+                elif arg.arg in {"active", "active_worktree"}:
+                    active_scope.add(arg.arg)
                 else:
                     other_scope.add(arg.arg)
             elif arg.arg in {"active", "active_worktree"}:
@@ -332,12 +353,12 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         self._check_assignment([node.target], node.lineno)
         if isinstance(node.target, ast.Name):
-            type_name = _extract_type_name(node.annotation)
-            if type_name == "ActiveWorktree":
+            types = _extract_type_names(node.annotation)
+            if "ActiveWorktree" in types:
                 self.active_vars_stack[-1].add(node.target.id)
-            elif type_name == "ActiveCompletionJournal":
+            elif "ActiveCompletionJournal" in types:
                 self.completion_vars_stack[-1].add(node.target.id)
-            elif type_name is not None:
+            elif types - {"None", "NoneType"}:
                 self.other_vars_stack[-1].add(node.target.id)
         self.generic_visit(node)
 
@@ -353,20 +374,37 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
                 self._record("completion_payload", "payload-mutation", node.lineno)
         self.generic_visit(node)
 
+    def _is_constructor_call(self, func_name: str | None) -> bool:
+        if func_name is None:
+            return False
+        if func_name in self.constructor_names:
+            return True
+        return (
+            func_name == "ActiveWorktree"
+            or func_name.endswith(".ActiveWorktree")
+            or func_name == "ActiveWorktree.from_records"
+            or func_name.endswith(".ActiveWorktree.from_records")
+        )
+
     def _track_assigned_var(self, targets: list[ast.expr], value: ast.expr) -> None:
         for target in targets:
             if isinstance(target, ast.Name):
                 if isinstance(value, ast.Call):
                     func_name = _extract_func_name(value.func)
-                    if func_name in {
-                        "ActiveWorktree",
-                        "ActiveWorktree.from_records",
-                        "with_claim",
-                        "with_completion",
-                        "with_launch",
-                    }:
+                    if self._is_constructor_call(func_name) or (
+                        func_name is not None
+                        and (
+                            func_name
+                            in {"with_claim", "with_completion", "with_launch"}
+                            or func_name.endswith(".with_claim")
+                            or func_name.endswith(".with_completion")
+                            or func_name.endswith(".with_launch")
+                        )
+                    ):
                         self.active_vars_stack[-1].add(target.id)
-                    elif func_name is not None and func_name[0].isupper():
+                    elif (
+                        func_name is not None and func_name.split(".")[-1][0].isupper()
+                    ):
                         self.other_vars_stack[-1].add(target.id)
                 elif isinstance(value, ast.Attribute) and value.attr == "completion":
                     if isinstance(value.value, ast.Name) and self._is_active_var(
@@ -402,10 +440,17 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
                                 lineno,
                             )
 
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if isinstance(node.ctx, ast.Load | ast.Del):
+            if isinstance(node.value, ast.Name) and self._is_active_var(node.value.id):
+                if node.attr in FLAT_ATTRIBUTES:
+                    self._record(node.attr, "flat-attribute-access", node.lineno)
+        self.generic_visit(node)
+
     def visit_Call(self, node: ast.Call) -> None:
         func_name = _extract_func_name(node.func)
         # Check constructor: ActiveWorktree(...) or ActiveWorktree.from_records(...)
-        if func_name in {"ActiveWorktree", "ActiveWorktree.from_records"}:
+        if self._is_constructor_call(func_name):
             if self.module not in ALLOWED_CONSTRUCTOR_MODULES:
                 self._record("ActiveWorktree", "unauthorized-constructor", node.lineno)
 
@@ -534,12 +579,28 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
         return False
 
 
-def _extract_type_name(node: ast.expr) -> str | None:
+def _extract_type_names(node: ast.expr) -> set[str]:
+    names: set[str] = set()
     if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return None
+        names.add(node.id)
+    elif isinstance(node, ast.Attribute):
+        names.add(node.attr)
+    elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        names.update(_extract_type_names(node.left))
+        names.update(_extract_type_names(node.right))
+    elif isinstance(node, ast.Subscript):
+        if isinstance(node.slice, ast.Tuple):
+            for elt in node.slice.elts:
+                names.update(_extract_type_names(elt))
+        else:
+            names.update(_extract_type_names(node.slice))
+    elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+        try:
+            parsed = ast.parse(node.value, mode="eval")
+            names.update(_extract_type_names(parsed.body))
+        except SyntaxError:
+            pass
+    return names
 
 
 def _extract_func_name(node: ast.expr) -> str | None:
