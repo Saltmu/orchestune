@@ -12,6 +12,8 @@ from __future__ import annotations
 import inspect
 from dataclasses import dataclass, field
 
+import pytest
+
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dependencies.assessment import (
     AssessedDependency,
@@ -24,6 +26,7 @@ from orchestune.dispatch.locks import (
     scan_external_locks,
 )
 from orchestune.dispatch.scoring import Task
+from orchestune.lock_contracts import CompletedDependencyBranchEvidence
 from orchestune.models import PrRecord
 from orchestune.task_branch_resolution import (
     CanonicalBranchState,
@@ -76,6 +79,40 @@ class _FakeLockDependencyView:
 
     def branch_resolution(self, issue_number: int) -> TaskBranchResolution | None:
         return self.resolutions.get(issue_number)
+
+
+@pytest.mark.parametrize("status", ["status:blocked", "status:queued"])
+@pytest.mark.parametrize("evidenced", [False, True])
+def test_effective_completion_requires_current_tip_evidence(status, evidenced):
+    """Same-cycle/prior-merge completion comes from assessment, not DONE labels."""
+    dep = _task(issue_number=2, subtask_id="dep-a", status_labels=())
+    task = _task(depends_on=("dep-a",), status_labels=(status,))
+    branch = build_task_branch_name(2, "dep-a")
+    view = _FakeLockDependencyView(
+        tasks={2: dep},
+        branches={2: branch},
+        assessments={
+            1: DependencyAssessment(
+                resolved=(AssessedDependency(2, DependencyState.COMPLETED),)
+            )
+        },
+    )
+    result = scan_external_locks(
+        [task],
+        [(branch, ("src/shared.py",))],
+        [],
+        [],
+        view,
+        completed_dependency_evidence={
+            (1, 2): CompletedDependencyBranchEvidence(
+                branch, "parent/issue-100", "a" * 40
+            )
+        }
+        if evidenced
+        else None,
+    )
+    assert result.to_lock == ([] if evidenced else [task])
+    assert _direct_dependency_canonical_branches(task, view) == frozenset()
 
 
 class TestDirectDependencyCanonicalBranches:
