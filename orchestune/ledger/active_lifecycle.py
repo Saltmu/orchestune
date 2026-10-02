@@ -79,6 +79,15 @@ def lifecycle(active: ActiveWorktree) -> ActiveWorktreeLifecycle:
     return ActiveWorktreeLifecycle.RESERVED
 
 
+def has_completion_reservation(active: ActiveWorktree) -> bool:
+    """A journal identity reserves completion; a handoff marker alone does not."""
+    return (
+        lifecycle(active)
+        in {ActiveWorktreeLifecycle.COMPLETING, ActiveWorktreeLifecycle.HANDOFF_READY}
+        and active.completion.completion_id is not None
+    )
+
+
 def _has_recovery_sentinel(active: ActiveWorktree) -> bool:
     claim_id = active.claim.claim_id
     if claim_id is not None and claim_id.startswith(_RECOVERED_CLAIM_PREFIX):

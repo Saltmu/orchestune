@@ -59,9 +59,11 @@ from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
 )
+from orchestune.dispatch.launch_state import with_launch
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
+from orchestune.ledger.active_lifecycle import has_completion_reservation
 from orchestune.ledger.completion_reservations import (
     completion_handoff_matches_active,
     completion_mutation_blocked_fresh,
@@ -122,9 +124,8 @@ def _rule_not_needed(
     （PID/PR存在ベース）は永遠にマッチしない。ラベルまたはoutcome検知を最優先の
     完了シグナルとして扱い、stale判定より先に評価する。
     """
-    if (
-        active.completion.completion_id is not None
-        and not completion_handoff_matches_active(ctx.run_state, active)
+    if has_completion_reservation(active) and not completion_handoff_matches_active(
+        ctx.run_state, active
     ):
         return ActiveWorktreeRuleOutcome(
             completion_event={
@@ -134,7 +135,7 @@ def _rule_not_needed(
             },
             terminal=True,
         )
-    if active.completion.completion_id is not None:
+    if has_completion_reservation(active):
         return collect_confirmed_completion(
             ctx.run_state, ctx.config, key, active, ctx.record_completion, active_task
         )
@@ -585,10 +586,9 @@ def _resolve_recovered_completion(
             _abandoned_worktree_outcome(ctx, key, active, active_task)
         )
     return CompletionResolution.ready(
-        replace(
-            active,
-            core=replace(active.core, branch=recovery_pr.head_ref),
-            launch=replace(
+        with_launch(
+            active.with_core(replace(active.core, branch=recovery_pr.head_ref)),
+            replace(
                 active.launch,
                 external_id=f"recovered-pr:{recovery_pr.number}",
                 external_url=f"PR#{recovery_pr.number}",
@@ -658,12 +658,11 @@ def _resolve_completion(
     """完了候補・保留・早期終端を明示的な値として解決する。"""
     core = active.core
     claim = active.claim
-    completion = active.completion
     launch = active.launch
     if ctx.completion_reserved(core.issue_number):
         return CompletionResolution.pending()
     is_handoff_ready = _is_handoff_ready(active) and ctx.handoff_matches(active)
-    if completion.completion_id is not None and not is_handoff_ready:
+    if has_completion_reservation(active) and not is_handoff_ready:
         return CompletionResolution.pending()
     if is_handoff_ready:
         return CompletionResolution.ready(active)
@@ -723,7 +722,7 @@ def _rule_completed(
     active: ActiveWorktree,
     active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
-    if active.completion.completion_id is not None:
+    if has_completion_reservation(active):
         return collect_confirmed_completion(
             ctx.run_state, ctx.config, key, active, ctx.record_completion, active_task
         )

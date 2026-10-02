@@ -106,26 +106,30 @@ def test_completion_lifecycle_suppresses_amend_recovery_hint(
 @pytest.mark.parametrize(
     "journal",
     [
-        ActiveCompletionJournal(completion_stage="handed_off"),
-        ActiveCompletionJournal(completion_handoff_ready=True),
+        {"completion_stage": "handed_off"},
+        {"completion_handoff_ready": True},
     ],
 )
 def test_handoff_candidate_without_identity_preserves_legacy_claim_eligibility(
-    journal: ActiveCompletionJournal,
+    journal: dict,
 ) -> None:
     from orchestune.claim.amend import _check_eligibility
     from orchestune.claim.ownership import held_claim_next_actions
+    from orchestune.ledger.active_codec import decode_active_worktree
 
-    active = ActiveWorktree.from_records(
-        core=ActiveWorktreeCore(10, "task/10", "worktrees/10", ("a.py",)),
-        launch=LaunchInfo(pid=123),
-        claim=ClaimInfo(
-            owner_kind="interactive",
-            claim_id="generation-1",
-            claim_stage="completed",
-            repository_id="repo/.git",
-        ),
-        completion=journal,
+    active = decode_active_worktree(
+        {
+            "issue_number": 10,
+            "branch": "task/10",
+            "worktree_path": "worktrees/10",
+            "declared_footprint": ["a.py"],
+            "pid": 123,
+            "owner_kind": "interactive",
+            "claim_id": "generation-1",
+            "claim_stage": "completed",
+            "repository_id": "repo/.git",
+            **journal,
+        }
     )
     assert any(
         "--amend-footprint" in action for action in held_claim_next_actions(active)

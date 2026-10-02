@@ -234,3 +234,14 @@ T12はこのドキュメントの固定表を書き換えず、ここに照合�
 - recovery receiptの`active`スナップショットは従来の`asdict`と同じflat形（`completion_policy_config`のnullも保持）をcodec経由で出力する。
 - 列挙漏れの記録: T04–T11の移行後も、`claim/local_identity.py`、`claim/service.py`、`recovery/inspection.py`、`recovery/service.py`、`dispatch/rebase.py`（代入）、`dispatch/gc/__init__.py`（`replace`）、`dispatch/cycle.py`、`complete/merged.py`、`ledger/completion_reservations.py`にflat属性の利用が残っていた。型が`Any`/未注釈でmypyが検出できない箇所（最後の3つ）を含む。cutoverの前提として本PRで移行した。
 - テストfixture: flat constructorに依存する既存テストは、テスト専用アダプタ`tests/dispatch_test_support.py`の`flat_active_worktree`/`replace_flat`へ機械的に置換した（モデル側にflat APIは残していない）。サブレコード形への個別書き換えは後続で行える。
+
+
+## Acceptance follow-up (#1170)
+
+新規構築の不変条件検証をサブレコード側へ追加した。codecだけが私有の `_legacy` InitVarを使い、既存の有効JSON・default・保存バイトを保持する。互換modeは読込レコードの置換で維持し、canonical `from_records` では再検証して解除する。dispatch+claim/live PID+completionの併存は引き続き有効。
+
+予約判定は `ledger.active_lifecycle.has_completion_reservation` に集約した。IDのない旧handoffは候補段階であって予約ではない。GC・claim・completeの直接None判定の例外は削除し、ID照合/assert/markerは別用途として残した。consistencyはExecutionRecord射影を維持する。
+
+復旧PR採用は `with_core`/`with_launch`、rebaseのin-place通知は `update_launch`/`update_core`、保存直前のsentinel実体化はmodelの `materialize_claim_for_persistence` を使う。既存のactive identityと処理順序を保ち、利用側の所有者外更新例外を除去した。
+
+参照分類原本: https://github.com/Saltmu/orchestune/issues/1170#issuecomment-5948633663 。Serenaはworktreeがactive projectでignoredとなり利用できず、rgの静的/動的/mock/JSON/doc補完へfallback。判明した分類missは `tests/test_dispatch_reconciliation_promotions.py` のcanonical constructor（claim_stageにlaunch phaseを使用）で、footprintをamendして修正した。原本を改変しない。

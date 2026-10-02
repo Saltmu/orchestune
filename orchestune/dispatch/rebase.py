@@ -21,7 +21,7 @@ from orchestune.dependencies.policy import (
 from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.execution_profiles import ExecutionSelection
-from orchestune.dispatch.launch_state import with_launch
+from orchestune.dispatch.launch_state import update_launch, with_launch
 from orchestune.dispatch.locks import check_footprint_deviation
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.dispatch.worktree import _provision_and_launch
@@ -218,8 +218,8 @@ def _apply_forced_serial_event(
         config.resolved_forge.add_label(
             active.core.issue_number, StatusLabel.FORCE_SERIAL
         )
-        active.launch = replace(
-            active.launch, forced_serial=updated.launch.forced_serial
+        update_launch(
+            active, replace(active.launch, forced_serial=updated.launch.forced_serial)
         )
     return {"recompute_count": decision.recompute_count}
 
@@ -246,8 +246,9 @@ def _apply_recomputed_event(
             replace(active.launch, recompute_count=active.launch.recompute_count + 1),
         )
         _persist_recovery_counters(updated, config)
-        active.launch = replace(
-            active.launch, recompute_count=updated.launch.recompute_count
+        update_launch(
+            active,
+            replace(active.launch, recompute_count=updated.launch.recompute_count),
         )
     return {"conflicts": [dataclasses.asdict(c) for c in decision.conflicts]}
 
@@ -518,14 +519,17 @@ def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
         run_git(["rebase", resolved_parent], cwd=active.core.worktree_path, check=True)
         _run_rebase_ci_check(active.core.worktree_path, config.worktree_root)
         rebased = _relaunch_rebased_worktree(active, active_task, config, parent_branch)
-        active.launch = replace(
-            active.launch,
-            pid=rebased.launch.pid,
-            external_id=rebased.launch.external_id,
-            external_url=rebased.launch.external_url,
-            started_at=rebased.launch.started_at,
+        update_launch(
+            active,
+            replace(
+                active.launch,
+                pid=rebased.launch.pid,
+                external_id=rebased.launch.external_id,
+                external_url=rebased.launch.external_url,
+                started_at=rebased.launch.started_at,
+            ),
         )
-        active.core = replace(active.core, base_branch=rebased.core.base_branch)
+        active.update_core(replace(active.core, base_branch=rebased.core.base_branch))
     except (subprocess.CalledProcessError, OSError) as e:
         _handle_rebase_failure(active, parent_branch, e, config, ctx)
 

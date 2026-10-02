@@ -47,6 +47,13 @@ def with_launch(active: ActiveWorktree, launch: LaunchInfo) -> ActiveWorktree:
     return replace(active, launch=launch)
 
 
+def update_launch(active: ActiveWorktree, launch: LaunchInfo) -> None:
+    """Apply a launch update in place for observers retaining the active object."""
+    if not isinstance(launch, LaunchInfo):
+        raise TypeError("launch must be LaunchInfo")
+    active.launch = launch
+
+
 def with_launch_phase(active: ActiveWorktree, phase: str | None) -> ActiveWorktree:
     """Return a copy with only ``launch_phase`` changed."""
     return with_launch(active, replace(active.launch, launch_phase=phase))

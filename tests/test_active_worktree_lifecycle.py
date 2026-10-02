@@ -163,3 +163,25 @@ def test_unmarked_record_falls_back_to_reservation() -> None:
     active = _active(43)
 
     assert lifecycle(active) is ActiveWorktreeLifecycle.RESERVED
+
+
+def test_reservation_predicate_preserves_legacy_identity_semantics() -> None:
+    from orchestune.ledger.active_codec import decode_active_worktree
+    from orchestune.ledger.active_lifecycle import has_completion_reservation
+
+    for completion_id in (None, "c"):
+        for stage in (None, "posting", "handed_off", "handed_off_to_gc"):
+            for ready in (False, True):
+                active = decode_active_worktree(
+                    {
+                        "issue_number": 1,
+                        "branch": "b",
+                        "worktree_path": "p",
+                        "declared_footprint": [],
+                        "pid": 42,
+                        "completion_id": completion_id,
+                        "completion_stage": stage,
+                        "completion_handoff_ready": ready,
+                    }
+                )
+                assert has_completion_reservation(active) == (completion_id is not None)

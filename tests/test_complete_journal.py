@@ -946,6 +946,7 @@ class TestJournalOwnerApi:
             launch=launch,
             claim=claim,
             completion=ActiveCompletionJournal(
+                completion_id="comp-10",
                 completion_comment_id="comment-123",
                 completion_comment_url="https://example.test/123",
                 completion_policy_config={"max_tokens_per_task": 1000},
@@ -1000,6 +1001,7 @@ class TestJournalOwnerApi:
             launch=LaunchInfo(),
             claim=ClaimInfo(claim_id="claim-10"),
             completion=ActiveCompletionJournal(
+                completion_id="comp-10",
                 completion_comment_id="comment-123",
                 completion_comment_url="https://example.test/123",
             ),

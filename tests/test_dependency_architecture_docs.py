@@ -142,6 +142,10 @@ SECTION_CONTRACTS = (
             "ExecutionRecord",
             "MappingProxyType",
             "_DispatchConsistencyAdapter",
+            "has_completion_reservation",
+            "materialize_claim_for_persistence",
+            "update_launch",
+            "_legacy",
         ),
         ja=(
             "候補段階",

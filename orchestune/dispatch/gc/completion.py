@@ -1136,7 +1136,6 @@ def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> b
             ActiveWorktreeLifecycle.COMPLETING,
             ActiveWorktreeLifecycle.HANDOFF_READY,
         )
-        or active.completion.completion_id is not None
         or active.claim.owner_kind == "interactive"
     ):
         return False
