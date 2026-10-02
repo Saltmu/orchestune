@@ -99,7 +99,9 @@ def test_recovery_boundary_restores_missing_run_state_and_reobserves(
         "recovery-bookkeeping",
         "repair-1",
     ]
-    assert run_state.active_worktrees["744"].worktree_path == str(restored_worktree)
+    assert run_state.active_worktrees["744"].core.worktree_path == str(
+        restored_worktree
+    )
     assert (
         load_run_state(config.run_state_path).active_worktrees["744"]
         == (run_state.active_worktrees["744"])
@@ -213,8 +215,8 @@ def test_recovery_bookkeeping_is_monotonic_and_idempotent_after_restart(
         second = _run_recovery_bookkeeping_boundary(restarted, config, now=now + 1)
 
     assert _repair_command_codes(first) == [COMMAND_BOOKKEEPING, COMMAND_BOOKKEEPING]
-    assert restarted.active_worktrees["744"].recompute_count == 3
-    assert restarted.active_worktrees["744"].forced_serial is True
+    assert restarted.active_worktrees["744"].launch.recompute_count == 3
+    assert restarted.active_worktrees["744"].launch.forced_serial is True
     assert restarted.launch_history == [now - 60, now - 60]
     assert second.repair_passes == ()
 
@@ -278,11 +280,11 @@ def test_recovery_counters_use_repository_wide_in_progress_snapshot(
         report = _run_recovery_bookkeeping_boundary(run_state, config, now=1_000.0)
 
     assert _repair_command_codes(report) == [COMMAND_BOOKKEEPING]
-    assert run_state.active_worktrees["745"].recompute_count == 4
-    assert run_state.active_worktrees["745"].forced_serial is True
+    assert run_state.active_worktrees["745"].launch.recompute_count == 4
+    assert run_state.active_worktrees["745"].launch.forced_serial is True
     persisted = load_run_state(config.run_state_path).active_worktrees["745"]
-    assert persisted.recompute_count == 4
-    assert persisted.forced_serial is True
+    assert persisted.launch.recompute_count == 4
+    assert persisted.launch.forced_serial is True
 
 
 def test_recovery_launch_history_updates_preview_without_persisting(

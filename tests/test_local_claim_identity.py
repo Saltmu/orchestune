@@ -1,14 +1,13 @@
 """Real Git/worktree regression coverage for local claim generations."""
 
-from dataclasses import replace
-
 import pytest
 
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import run_state_lock
-from orchestune.ledger.run_state import ActiveWorktree, RunState, save_run_state
+from orchestune.ledger.run_state import RunState, save_run_state
 from orchestune.worktree_ops.claim_marker import write_claim_marker
+from tests.dispatch_test_support import flat_active_worktree, replace_flat
 
 
 @pytest.fixture
@@ -28,7 +27,7 @@ def local_claim(tmp_path):
     run_git(["worktree", "add", "-b", "task", str(worktree)], cwd=repo)
     workspace = resolve_claim_workspace(repo)
     base = run_git(["rev-parse", "HEAD"], cwd=worktree).stdout.strip()
-    active = ActiveWorktree(
+    active = flat_active_worktree(
         7,
         "task",
         str(worktree),
@@ -45,7 +44,7 @@ def local_claim(tmp_path):
     )
     write_claim_marker(
         worktree,
-        claim_id=active.claim_id,
+        claim_id=active.claim.claim_id,
         branch="task",
         base_sha=base,
         branch_created=True,
@@ -62,7 +61,7 @@ def test_local_generation_needs_no_token(local_claim):
 
     workspace, active, worktree = local_claim
     validate_local_claim(
-        active, active.claim_id, cwd=worktree, state_path=workspace.run_state_path
+        active, active.claim.claim_id, cwd=worktree, state_path=workspace.run_state_path
     )
 
 
@@ -76,13 +75,13 @@ def test_stale_or_wrong_worktree_rejected(local_claim, problem):
     workspace, active, worktree = local_claim
     caller = worktree
     if problem == "generation":
-        active = replace(active, claim_id="claim-new")
+        active = replace_flat(active, claim_id="claim-new")
     elif problem == "marker":
         claim_marker_path(worktree).unlink()
     elif problem == "branch":
         run_git(["checkout", "-b", "other"], cwd=worktree)
     elif problem == "repository":
-        active = replace(active, repository_id="other")
+        active = replace_flat(active, repository_id="other")
     else:
         caller = workspace.repository_root
     with pytest.raises(ValueError):
@@ -107,8 +106,8 @@ def test_atomic_marker_failure_preserves_previous_generation(local_claim, monkey
         claim_marker.write_claim_marker(
             worktree,
             claim_id="replacement",
-            branch=active.branch,
-            base_sha=active.base_sha,
+            branch=active.core.branch,
+            base_sha=active.claim.base_sha,
             branch_created=False,
         )
     assert claim_marker.claim_marker_path(worktree).read_bytes() == before

@@ -29,17 +29,19 @@ from orchestune.dispatch.status_repair import (
     execute_status_repair_command as execute_status_repair_command_real,
 )
 from orchestune.ledger.run_state import (
-    ActiveWorktree,
     RunState,
 )
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeRecord
+from tests.dispatch_test_support import (
+    flat_active_worktree,
+    stub_label_actor_permission,
+)
 from tests.dispatch_test_support import make_footprint_issue as _full_issue
 from tests.dispatch_test_support import (
     patch_gc_process_alive as _patch_gc_process_alive,
 )
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
-from tests.dispatch_test_support import stub_label_actor_permission
 
 
 def _track_forge_labels(fake_forge, *issues: IssueRecord) -> None:
@@ -320,7 +322,7 @@ class TestRunDispatchCycleBlockedPromotion:
         save_run_state(
             RunState(
                 active_worktrees={
-                    "1": ActiveWorktree(
+                    "1": flat_active_worktree(
                         issue_number=1,
                         branch="claude/issue-1-task-a",
                         worktree_path=str(tmp_path / "w1"),

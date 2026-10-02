@@ -1,6 +1,5 @@
 """Durable downstream policy operations survive GC order and response loss."""
 
-from dataclasses import replace
 from unittest.mock import Mock
 
 import pytest
@@ -8,6 +7,7 @@ import pytest
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.ledger.run_state import load_run_state_readonly
 from orchestune.outcome_record import OutcomeRecord
+from tests.dispatch_test_support import replace_flat
 from tests.test_dispatch_gc_handoff_integration import (
     _create_repo,
     _make_active,
@@ -28,7 +28,7 @@ def policy_case(tmp_path, result="blocked", reason="review-timeout", attempt=Non
         completion_id=active.completion.completion_id,
         head_sha=active.claim.base_sha,
     )
-    active = replace(
+    active = replace_flat(
         active,
         completion_result=result,
         completion_payload={"outcome": outcome.render()},
@@ -169,7 +169,7 @@ def test_confirmed_records_skips_when_not_handoff_ready(tmp_path):
 
     # When completion_handoff_ready is False and stage is handed_off,
     # confirmed_records must skip the active entry.
-    state.active_worktrees["250"] = replace(
+    state.active_worktrees["250"] = replace_flat(
         state.active_worktrees["250"],
         completion_handoff_ready=False,
         completion_stage="handed_off",

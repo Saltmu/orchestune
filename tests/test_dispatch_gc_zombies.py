@@ -535,7 +535,7 @@ class TestInteractiveOwnershipGcExclusion:
             # decide層: 回収候補から除外され、空リストになる
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state,
-                {active_interactive.issue_number: task},
+                {active_interactive.core.issue_number: task},
                 config,
                 None,
                 now=2_000.0,
@@ -544,11 +544,11 @@ class TestInteractiveOwnershipGcExclusion:
 
             # collect/apply層: 回収実行されず、active_worktreesに残り、除外診断イベントが記録される
             events = _collect_zombies_and_timeouts(
-                run_state, {active_interactive.issue_number: task}, config
+                run_state, {active_interactive.core.issue_number: task}, config
             )
 
         assert "280" in run_state.active_worktrees
-        assert run_state.active_worktrees["280"].owner_kind == "interactive"
+        assert run_state.active_worktrees["280"].claim.owner_kind == "interactive"
         fake_forge.remove_label.assert_not_called()
         fake_forge.add_label.assert_not_called()
         assert len(events) == 1
@@ -585,16 +585,16 @@ class TestInteractiveOwnershipGcExclusion:
         ):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state,
-                {active_dispatch.issue_number: task},
+                {active_dispatch.core.issue_number: task},
                 config,
                 None,
                 now=2_000.0,
             )
             assert len(reclaims) == 1
-            assert reclaims[0].active.owner_kind == "dispatch"
+            assert reclaims[0].active.claim.owner_kind == "dispatch"
 
             events = _collect_zombies_and_timeouts(
-                run_state, {active_dispatch.issue_number: task}, config
+                run_state, {active_dispatch.core.issue_number: task}, config
             )
 
         assert run_state.active_worktrees == {}

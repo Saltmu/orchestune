@@ -1,5 +1,6 @@
 """Label-confirmed publication and read-only replay regressions for #1110."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -151,8 +152,6 @@ def test_simultaneous_identical_completes_publish_only_once(tmp_path, monkeypatc
 def test_replay_after_reclaim_and_requeue_has_no_remote_or_state_writes(
     tmp_path, monkeypatch
 ):
-    from dataclasses import replace
-
     from complete_lifecycle_test_support import lifecycle_environment
 
     from orchestune.complete.journal import completion_journal_lock
@@ -163,7 +162,9 @@ def test_replay_after_reclaim_and_requeue_has_no_remote_or_state_writes(
     assert first.success
     with completion_journal_lock(request.state_path):
         state = run_state.load_run_state_readonly(request.state_path)
-        state.active_worktrees["1110"].claim_id = "claim-new"
+        state.active_worktrees["1110"].claim = replace(
+            state.active_worktrees["1110"].claim, claim_id="claim-new"
+        )
         run_state.save_run_state(state, request.state_path)
     forge.labels = {"status:queued"}
     before = request.state_path.read_bytes()
@@ -227,7 +228,6 @@ def test_simultaneous_different_payloads_cannot_overwrite_reservation(
 
 @pytest.mark.parametrize("drift", ["HEAD", "CI", "PR"])
 def test_pending_resume_rejects_changed_validation_inputs(tmp_path, monkeypatch, drift):
-    from dataclasses import replace
     from types import SimpleNamespace
 
     from complete_lifecycle_test_support import lifecycle_environment
@@ -302,7 +302,6 @@ def test_failure_at_final_label_readback_resumes_before_handoff(
 
 
 def test_no_apply_keeps_state_remote_and_ci_unchanged(tmp_path, monkeypatch):
-    from dataclasses import replace
     from unittest.mock import Mock
 
     from complete_lifecycle_test_support import lifecycle_environment
@@ -330,8 +329,6 @@ def test_request_keeps_existing_positional_claim_identity():
 def test_new_completion_rejects_foreign_claim_context_before_publication(
     tmp_path, monkeypatch, mismatch
 ):
-    from dataclasses import replace
-
     from complete_lifecycle_test_support import lifecycle_environment
 
     from orchestune.complete.journal import completion_journal_lock
@@ -341,7 +338,9 @@ def test_new_completion_rejects_foreign_claim_context_before_publication(
     if mismatch == "repository":
         with completion_journal_lock(request.state_path):
             state = run_state.load_run_state_readonly(request.state_path)
-            state.active_worktrees["1110"].repository_id = "foreign-repo"
+            state.active_worktrees["1110"].claim = replace(
+                state.active_worktrees["1110"].claim, repository_id="foreign-repo"
+            )
             run_state.save_run_state(state, request.state_path)
     else:
         request = replace(request, worktree_root=tmp_path / "different-checkout")

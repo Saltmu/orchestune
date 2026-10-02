@@ -65,7 +65,7 @@ class TestProcessActiveWorktrees:
                 autospec=True,
                 return_value={
                     "action": "completion_skipped_dirty_worktree",
-                    "worktree_path": active.worktree_path,
+                    "worktree_path": active.core.worktree_path,
                 },
             ),
         ):

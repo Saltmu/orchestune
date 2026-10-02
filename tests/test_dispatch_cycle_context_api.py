@@ -15,6 +15,8 @@ record系（`record_completion` / `record_launch` / `record_transition`）は
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from orchestune.dependencies.assessment import DependencyState
@@ -103,7 +105,7 @@ class TestOwnership:
             run_state=RunState(active_worktrees={"1": active}),
         )
 
-        active.branch = "claude/issue-1-mutated"
+        active.core = replace(active.core, branch="claude/issue-1-mutated")
 
         assert ctx.launch_fact(1).branch == "claude/issue-1-original"
 

@@ -11,6 +11,7 @@ from orchestune.ledger.run_state import (
     save_run_state,
 )
 from orchestune.worktree_ops.claim_marker import claim_marker_path
+from tests.dispatch_test_support import replace_flat
 
 pytest_plugins = ["tests.test_local_claim_identity"]
 
@@ -22,7 +23,7 @@ def test_preview_release_and_replay_preserve_work(local_claim):
     workspace, active, worktree = local_claim
     (worktree / "file").write_text("unsaved work")
     state = load_run_state_readonly(workspace.run_state_path)
-    state.active_worktrees["8"] = replace(active, issue_number=8, claim_id="other")
+    state.active_worktrees["8"] = replace_flat(active, issue_number=8, claim_id="other")
     state.task_reclaim_counts[7] = TaskReclaimRecord()
     with run_state_lock(workspace.lock_path):
         save_run_state(state, workspace.run_state_path)
@@ -31,7 +32,7 @@ def test_preview_release_and_replay_preserve_work(local_claim):
     assert preview.success and preview.action == "would_release"
     assert workspace.run_state_path.read_bytes() == before
     request = RecoveryRequest(
-        7, claim_id=active.claim_id, reason="worker stopped", apply=True
+        7, claim_id=active.claim.claim_id, reason="worker stopped", apply=True
     )
     result = recover_claim(request, cwd=workspace.repository_root)
     assert result.success and result.action == "released"
@@ -55,12 +56,12 @@ def test_changed_generation_and_live_process_hold(local_claim):
         7, claim_id="old-generation", reason="stopped", apply=True
     )
     assert not recover_claim(request, cwd=workspace.repository_root).success
-    active.pid = os.getpid()
+    active.launch = replace(active.launch, pid=os.getpid())
     state = load_run_state_readonly(workspace.run_state_path)
     state.active_worktrees["7"] = active
     with run_state_lock(workspace.lock_path):
         save_run_state(state, workspace.run_state_path)
-    request = replace(request, claim_id=active.claim_id)
+    request = replace(request, claim_id=active.claim.claim_id)
     assert not recover_claim(request, cwd=workspace.repository_root).success
 
 
@@ -72,7 +73,7 @@ def test_missing_marker_can_be_restored_or_released(local_claim):
     claim_marker_path(worktree).unlink()
     request = RecoveryRequest(
         7,
-        claim_id=active.claim_id,
+        claim_id=active.claim.claim_id,
         reason="missing marker",
         apply=True,
         restore_marker=True,
@@ -90,11 +91,15 @@ def test_pending_publication_is_held(local_claim):
 
     workspace, active, _ = local_claim
     state = load_run_state_readonly(workspace.run_state_path)
-    state.active_worktrees["7"].completion_id = "pending"
+    state.active_worktrees["7"].completion = replace(
+        state.active_worktrees["7"].completion, completion_id="pending"
+    )
     with run_state_lock(workspace.lock_path):
         save_run_state(state, workspace.run_state_path)
     result = recover_claim(
-        RecoveryRequest(7, claim_id=active.claim_id, reason="stopped", apply=True),
+        RecoveryRequest(
+            7, claim_id=active.claim.claim_id, reason="stopped", apply=True
+        ),
         cwd=workspace.repository_root,
     )
     assert not result.success and "completion" in result.reason
@@ -109,7 +114,9 @@ def test_atomic_release_preserves_extensions_and_retries(local_claim, monkeypatc
     raw["operator_extension"] = {"opaque": [1, 2, 3]}
     workspace.run_state_path.write_text(json.dumps(raw))
     before = workspace.run_state_path.read_bytes()
-    request = RecoveryRequest(7, claim_id=active.claim_id, reason="stopped", apply=True)
+    request = RecoveryRequest(
+        7, claim_id=active.claim.claim_id, reason="stopped", apply=True
+    )
     write = service.write_json_atomic
     monkeypatch.setattr(
         service,
@@ -132,17 +139,19 @@ def test_dispatch_release_and_old_preview_hold(local_claim):
     from orchestune.recovery.service import recover_claim
 
     workspace, active, _ = local_claim
-    active.owner_kind = "dispatch"
+    active.claim = replace(active.claim, owner_kind="dispatch")
     state = load_run_state_readonly(workspace.run_state_path)
     state.active_worktrees["7"] = active
     with run_state_lock(workspace.lock_path):
         save_run_state(state, workspace.run_state_path)
     assert recover_claim(RecoveryRequest(7), cwd=workspace.repository_root).success
-    request = RecoveryRequest(7, claim_id=active.claim_id, reason="stopped", apply=True)
+    request = RecoveryRequest(
+        7, claim_id=active.claim.claim_id, reason="stopped", apply=True
+    )
     assert recover_claim(request, cwd=workspace.repository_root).success
     state = load_run_state_readonly(workspace.run_state_path)
-    assert claim_was_released(state, 7, active.claim_id)
-    state.active_worktrees["7"] = replace(active, claim_id="new-generation")
+    assert claim_was_released(state, 7, active.claim.claim_id)
+    state.active_worktrees["7"] = replace_flat(active, claim_id="new-generation")
     with run_state_lock(workspace.lock_path):
         save_run_state(state, workspace.run_state_path)
     assert not recover_claim(request, cwd=workspace.repository_root).success
@@ -154,7 +163,7 @@ def test_unprepared_claim_reports_no_worktree(local_claim):
 
     workspace, active, _ = local_claim
     state = load_run_state_readonly(workspace.run_state_path)
-    state.active_worktrees["7"] = replace(
+    state.active_worktrees["7"] = replace_flat(
         active, worktree_path="", claim_stage="reserved"
     )
     with run_state_lock(workspace.lock_path):
@@ -162,3 +171,18 @@ def test_unprepared_claim_reports_no_worktree(local_claim):
     result = recover_claim(RecoveryRequest(7), cwd=workspace.repository_root)
     assert result.success
     assert result.diagnostics["worktree_status"] == "absent"
+
+
+def test_release_receipt_keeps_the_flat_active_snapshot_shape(local_claim):
+    """The persisted receipt stays the pre-cutover flat ``asdict`` shape."""
+    from orchestune.ledger.active_codec import _ACTIVE_FIELD_NAMES
+    from orchestune.recovery.service import _legacy_active_snapshot
+
+    _, active, _ = local_claim
+
+    snapshot = _legacy_active_snapshot(active)
+
+    assert tuple(snapshot) == _ACTIVE_FIELD_NAMES
+    assert snapshot["completion_policy_config"] is None
+    assert snapshot["claim_id"] == active.claim.claim_id
+    assert snapshot["declared_footprint"] == list(active.core.declared_footprint)

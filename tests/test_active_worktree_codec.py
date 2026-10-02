@@ -11,14 +11,40 @@ from orchestune.ledger.active_codec import (
     decode_active_worktree,
     encode_active_worktree,
 )
-from orchestune.ledger.active_records import ActiveWorktree
+from orchestune.ledger.active_records import (
+    ActiveCompletionJournal,
+    ActiveWorktree,
+    ActiveWorktreeCore,
+    ClaimInfo,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import load_run_state
 
 FIXTURES = Path(__file__).parent / "fixtures" / "active_worktree_compat"
 
 
-def test_codec_field_order_covers_the_flat_active_worktree_schema() -> None:
-    assert _ACTIVE_FIELD_NAMES == tuple(item.name for item in fields(ActiveWorktree))
+def test_codec_field_order_covers_every_subrecord_field_exactly_once() -> None:
+    record_names = [
+        item.name
+        for record_type in (
+            ActiveWorktreeCore,
+            LaunchInfo,
+            ClaimInfo,
+            ActiveCompletionJournal,
+        )
+        for item in fields(record_type)
+    ]
+
+    assert len(_ACTIVE_FIELD_NAMES) == len(set(_ACTIVE_FIELD_NAMES)) == 36
+    assert sorted(_ACTIVE_FIELD_NAMES) == sorted(record_names)
+    assert _ACTIVE_FIELD_NAMES[:6] == (
+        "issue_number",
+        "branch",
+        "worktree_path",
+        "pid",
+        "started_at",
+        "declared_footprint",
+    )
 
 
 def test_flat_codec_matches_frozen_normalized_records_and_field_order() -> None:
@@ -35,26 +61,50 @@ def test_flat_codec_matches_frozen_normalized_records_and_field_order() -> None:
 
 
 def test_flat_codec_round_trip_keeps_dict_and_list_json_values() -> None:
-    original = replace(
+    original = _with_payload(
         load_run_state(FIXTURES / "states-input.json").active_worktrees["103"],
-        completion_payload={"events": [{"labels": ["queued"]}]},
+        {"events": [{"labels": ["queued"]}]},
     )
 
     restored = decode_active_worktree(encode_active_worktree(original))
 
     assert encode_active_worktree(restored) == encode_active_worktree(original)
-    assert isinstance(restored.completion_payload, dict)
-    assert isinstance(restored.completion_payload["events"], list)
-    assert isinstance(restored.declared_footprint, tuple)
+    assert restored == original
+    assert isinstance(restored.core.declared_footprint, tuple)
+    assert isinstance(encode_active_worktree(restored)["completion_payload"], dict)
 
 
-def test_encoded_nested_json_values_are_detached_from_the_flat_dto() -> None:
-    active = replace(
+def test_encoded_nested_json_values_are_detached_from_the_subrecords() -> None:
+    active = _with_payload(
         load_run_state(FIXTURES / "states-input.json").active_worktrees["103"],
-        completion_payload={"events": [{"labels": ["queued"]}]},
+        {"events": [{"labels": ["queued"]}]},
     )
     encoded = encode_active_worktree(active)
-    assert active.completion_payload is not None
+    assert active.completion.completion_payload is not None
     encoded["completion_payload"]["events"][0]["labels"].append("changed")
 
-    assert "changed" not in active.completion_payload["events"][0]["labels"]
+    assert active.completion.completion_payload["events"][0]["labels"] == ("queued",)
+
+
+def test_decode_applies_subrecord_defaults_for_absent_flat_keys() -> None:
+    active = decode_active_worktree(
+        {
+            "issue_number": 7,
+            "branch": "task/7",
+            "worktree_path": "w",
+            "declared_footprint": ["a.py"],
+        }
+    )
+
+    assert active.core.base_branch == "origin/main"
+    assert active.core.declared_footprint == ("a.py",)
+    assert active.launch == LaunchInfo()
+    assert active.claim == ClaimInfo()
+    assert active.completion == ActiveCompletionJournal()
+    assert "completion_policy_config" not in encode_active_worktree(active)
+
+
+def _with_payload(active: ActiveWorktree, payload: dict) -> ActiveWorktree:
+    return replace(
+        active, completion=replace(active.completion, completion_payload=payload)
+    )

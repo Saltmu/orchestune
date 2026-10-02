@@ -44,10 +44,11 @@ from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.labels import StatusLabel
-from orchestune.ledger.run_state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.task_metadata import TaskMetadata
 from tests.dispatch_cycle_context_test_support import _ctx, _task
+from tests.dispatch_test_support import flat_active_worktree
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -477,7 +478,7 @@ class TestPriorMergeHoldQuery:
 
 
 def _active_worktree(issue_number):
-    return ActiveWorktree(
+    return flat_active_worktree(
         issue_number=issue_number,
         branch=f"claude/issue-{issue_number}-task",
         worktree_path=f"worktrees/w{issue_number}",

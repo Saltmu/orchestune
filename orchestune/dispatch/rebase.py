@@ -218,7 +218,9 @@ def _apply_forced_serial_event(
         config.resolved_forge.add_label(
             active.core.issue_number, StatusLabel.FORCE_SERIAL
         )
-        active.forced_serial = updated.launch.forced_serial
+        active.launch = replace(
+            active.launch, forced_serial=updated.launch.forced_serial
+        )
     return {"recompute_count": decision.recompute_count}
 
 
@@ -244,7 +246,9 @@ def _apply_recomputed_event(
             replace(active.launch, recompute_count=active.launch.recompute_count + 1),
         )
         _persist_recovery_counters(updated, config)
-        active.recompute_count = updated.launch.recompute_count
+        active.launch = replace(
+            active.launch, recompute_count=updated.launch.recompute_count
+        )
     return {"conflicts": [dataclasses.asdict(c) for c in decision.conflicts]}
 
 
@@ -514,11 +518,14 @@ def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
         run_git(["rebase", resolved_parent], cwd=active.core.worktree_path, check=True)
         _run_rebase_ci_check(active.core.worktree_path, config.worktree_root)
         rebased = _relaunch_rebased_worktree(active, active_task, config, parent_branch)
-        active.pid = rebased.launch.pid
-        active.external_id = rebased.launch.external_id
-        active.external_url = rebased.launch.external_url
-        active.started_at = rebased.launch.started_at
-        active.base_branch = rebased.core.base_branch
+        active.launch = replace(
+            active.launch,
+            pid=rebased.launch.pid,
+            external_id=rebased.launch.external_id,
+            external_url=rebased.launch.external_url,
+            started_at=rebased.launch.started_at,
+        )
+        active.core = replace(active.core, base_branch=rebased.core.base_branch)
     except (subprocess.CalledProcessError, OSError) as e:
         _handle_rebase_failure(active, parent_branch, e, config, ctx)
 

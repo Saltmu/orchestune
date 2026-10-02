@@ -16,18 +16,18 @@ from orchestune.merge_evidence import (
 
 
 def validate_merged_completion(pr: Any, active: Any, forge: Any) -> str | None:
-    if active is None or not getattr(active, "worktree_path", None):
+    if active is None or not getattr(active.core, "worktree_path", None):
         return "Merged completion requires its registered claim worktree"
     try:
-        path = Path(active.worktree_path)
-        parsed = parse_task_branch_name(active.branch)
+        path = Path(active.core.worktree_path)
+        parsed = parse_task_branch_name(active.core.branch)
         subtask = parsed.subtask_id if parsed else ""
-        if _identity_status(pr, active.issue_number, subtask) != "match":
+        if _identity_status(pr, active.core.issue_number, subtask) != "match":
             return "Merged PR closing identity does not match the claimed Issue"
         head = run_git(["rev-parse", "HEAD"], cwd=path).stdout.strip()
         if not getattr(pr, "head_sha", None) or pr.head_sha != head:
             return "Merged PR head does not match the claimed worktree HEAD"
-        claimed_at = active.claimed_at
+        claimed_at = active.claim.claimed_at
         if isinstance(claimed_at, str):
             claimed = datetime.fromisoformat(claimed_at.replace("Z", "+00:00"))
         elif isinstance(claimed_at, int | float) and not isinstance(claimed_at, bool):
@@ -37,11 +37,11 @@ def validate_merged_completion(pr: Any, active: Any, forge: Any) -> str | None:
         merged = datetime.fromisoformat(pr.merged_at.replace("Z", "+00:00"))
         if merged < claimed:
             return "Merge predates the current claim generation"
-        reopened = forge.get_issue_last_reopened_at(active.issue_number)
+        reopened = forge.get_issue_last_reopened_at(active.core.issue_number)
         if _is_after_reopen(pr.merged_at, reopened) is not True:
             return "Merge evidence predates reopening or is uncertain"
         remotes = set(run_git(["remote"], cwd=path).stdout.splitlines())
-        expected_base = active.base_ref or active.base_branch
+        expected_base = active.claim.base_ref or active.core.base_branch
         if expected_base.startswith("refs/heads/"):
             expected_base = expected_base.removeprefix("refs/heads/")
         else:
@@ -52,7 +52,7 @@ def validate_merged_completion(pr: Any, active: Any, forge: Any) -> str | None:
         problem = merged_pr_problem(
             pr,
             pr_number=pr.number,
-            branch=active.branch,
+            branch=active.core.branch,
             base=expected_base,
             reachable=forge.is_merge_commit_reachable_from,
         )

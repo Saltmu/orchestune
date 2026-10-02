@@ -14,8 +14,9 @@ from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.rules import CycleContext
 from orchestune.forge import Forge
-from orchestune.ledger.run_state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.models import Task
+from tests.dispatch_test_support import flat_active_worktree
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-same-cycle-"))
 
@@ -70,7 +71,7 @@ class TestConfirmedCompletionFacts:
 
     def test_verified_active_completion_is_recorded_in_context(self):
         task = _task(280, subtask_id="", status_labels=("status:in-progress",))
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=280,
             branch="claude/issue-280-task-a",
             worktree_path="worktrees/w1",
@@ -107,7 +108,7 @@ class TestConfirmedCompletionFacts:
 
     def test_unverified_completion_outcome_does_not_create_a_fact(self):
         task = _task(280, status_labels=("status:in-progress",))
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=280,
             branch="claude/issue-280-task-a",
             worktree_path="worktrees/w1",

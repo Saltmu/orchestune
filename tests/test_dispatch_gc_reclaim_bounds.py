@@ -450,11 +450,11 @@ class TestReclaimRetryBound:
         assert events == []
         # エントリは残したまま、次サイクルのゾンビ判定で再び拾える。
         assert set(run_state.active_worktrees) == {"280"}
-        assert run_state.active_worktrees["280"].started_at is None
+        assert run_state.active_worktrees["280"].launch.started_at is None
         # 回数は永続化済みのまま（二重には数えない）
         persisted = load_run_state(config.run_state_path)
         assert persisted.task_reclaim_counts[280].count == 1
-        assert persisted.active_worktrees["280"].started_at is None
+        assert persisted.active_worktrees["280"].launch.started_at is None
 
     def test_github_failure_marks_for_retry_even_with_timeouts_enabled(self, tmp_path):
         """PR#520レビュー8巡目対応(Codex P2): タイムアウトが有効な構成でも印を付ける。
@@ -498,7 +498,7 @@ class TestReclaimRetryBound:
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
         assert events == []
-        assert run_state.active_worktrees["280"].started_at is None
+        assert run_state.active_worktrees["280"].launch.started_at is None
 
     def test_github_failure_keeps_started_at_while_the_process_is_alive(self, tmp_path):
         """killに失敗してプロセスが生き残っている場合は開始時刻を壊さない。
@@ -542,7 +542,10 @@ class TestReclaimRetryBound:
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
         assert events == []
-        assert run_state.active_worktrees["280"].started_at == active.started_at
+        assert (
+            run_state.active_worktrees["280"].launch.started_at
+            == active.launch.started_at
+        )
 
     def test_settled_reclaim_is_persisted_immediately(self, tmp_path):
         """PR#520レビュー9巡目対応(Codex P1): 反映成功後の帳簿エントリ削除を、

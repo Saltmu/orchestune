@@ -38,6 +38,7 @@ from orchestune.models import PrRecord
 from orchestune.worktree_ops.temp_branches import (
     prune_stale_integration_temp_branches,
 )
+from tests.dispatch_test_support import flat_active_worktree
 
 
 def test_extracted_gc_symbols_remain_available_from_legacy_module():
@@ -645,7 +646,6 @@ class TestEvaluateWorktreeRemoval:
 
     def test_clean_registered_matching_worktree_is_removable(self, tmp_path):
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.ledger.run_state import ActiveWorktree
         from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         repo_root = tmp_path / "repo"
@@ -661,7 +661,7 @@ class TestEvaluateWorktreeRemoval:
             branch_created=True,
         )
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(wt_path),
@@ -700,12 +700,11 @@ class TestEvaluateWorktreeRemoval:
 
     def test_rejects_primary_worktree(self, tmp_path):
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.ledger.run_state import ActiveWorktree
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="main",
             worktree_path=str(repo_root),
@@ -728,14 +727,13 @@ class TestEvaluateWorktreeRemoval:
 
     def test_rejects_unregistered_worktree(self, tmp_path):
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.ledger.run_state import ActiveWorktree
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         wt_path = tmp_path / "worktrees" / "wt-unregistered"
         wt_path.mkdir(parents=True)
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(wt_path),
@@ -769,7 +767,6 @@ class TestEvaluateWorktreeRemoval:
 
     def test_rejects_dirty_worktree(self, tmp_path):
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.ledger.run_state import ActiveWorktree
         from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         repo_root = tmp_path / "repo"
@@ -785,7 +782,7 @@ class TestEvaluateWorktreeRemoval:
             branch_created=True,
         )
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(wt_path),
@@ -825,7 +822,6 @@ class TestEvaluateWorktreeRemoval:
 
     def test_rejects_branch_mismatch(self, tmp_path):
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.ledger.run_state import ActiveWorktree
         from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         repo_root = tmp_path / "repo"
@@ -841,7 +837,7 @@ class TestEvaluateWorktreeRemoval:
             branch_created=True,
         )
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(wt_path),
@@ -877,7 +873,6 @@ class TestEvaluateWorktreeRemoval:
 
     def test_rejects_owner_mismatch(self, tmp_path):
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.ledger.run_state import ActiveWorktree
         from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         repo_root = tmp_path / "repo"
@@ -893,7 +888,7 @@ class TestEvaluateWorktreeRemoval:
             branch_created=True,
         )
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(wt_path),
@@ -931,14 +926,13 @@ class TestEvaluateWorktreeRemoval:
 
     def test_fails_closed_when_git_command_raises(self, tmp_path):
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.ledger.run_state import ActiveWorktree
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         wt_path = tmp_path / "worktrees" / "wt-error"
         wt_path.mkdir(parents=True)
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(wt_path),
@@ -958,7 +952,6 @@ class TestEvaluateWorktreeRemoval:
 
     def test_rejects_symlink_mismatch(self, tmp_path):
         from orchestune.dispatch.gc.git import evaluate_worktree_removal
-        from orchestune.ledger.run_state import ActiveWorktree
 
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
@@ -970,7 +963,7 @@ class TestEvaluateWorktreeRemoval:
         except OSError:
             pytest.skip("Symlink creation not permitted on this system")
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(wt_symlink),

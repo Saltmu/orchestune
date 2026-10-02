@@ -11,6 +11,7 @@ from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.infra.git_cli import run_git
 from orchestune.outcome_record import OutcomeRecord
 from orchestune.worktree_ops.claim_marker import claim_marker_path, write_claim_marker
+from tests.dispatch_test_support import replace_flat
 from tests.test_dispatch_gc_handoff_integration import (
     FakeHandoffForge,
     _create_repo,
@@ -60,7 +61,7 @@ def test_inspect_strips_configured_remote_prefix_from_expected_base(tmp_path: Pa
         cwd=repo,
     )
     active, comment = _make_active(repo, worktree, branch)
-    active = replace(active, base_ref="custom-remote/release/next")
+    active = replace_flat(active, base_ref="custom-remote/release/next")
     forge = _forge(comment, branch, _head_sha(active))
     forge.pr = replace(forge.pr, base_ref="release/next")
 
@@ -82,7 +83,7 @@ def test_inspect_normalizes_full_git_base_refs(
 ):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active = replace(active, base_ref=base_ref)
+    active = replace_flat(active, base_ref=base_ref)
     forge = _forge(comment, branch, _head_sha(active))
     forge.pr = replace(forge.pr, base_ref=expected_base)
 
@@ -98,7 +99,7 @@ def test_inspect_preserves_slash_containing_local_base_branch(
 ):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active = replace(active, base_ref=base_ref)
+    active = replace_flat(active, base_ref=base_ref)
     forge = _forge(comment, branch, _head_sha(active))
     forge.pr = replace(forge.pr, base_ref=base_ref)
 
@@ -139,7 +140,7 @@ def test_inspect_holds_when_comment_body_disagrees_with_journaled_payload(
 ):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active = replace(
+    active = replace_flat(
         active, completion_payload={"outcome": comment["body"] + "tampered"}
     )
     forge = _forge(comment, branch, _head_sha(active))
@@ -277,7 +278,7 @@ def test_inspect_holds_legacy_handoff_without_label_confirmation(
 ):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active = replace(
+    active = replace_flat(
         active, completion_handoff_ready=ready_flag, completion_stage=stage
     )
     forge = _forge(comment, branch, _head_sha(active))
@@ -311,7 +312,7 @@ def test_inspect_holds_before_forge_when_handoff_evidence_is_missing(
 ):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active = replace(active, completion_comment_id=None)
+    active = replace_flat(active, completion_comment_id=None)
     forge = _forge(comment, branch, _head_sha(active))
 
     plan = _inspect(active, repo, forge)
@@ -326,7 +327,7 @@ def test_inspect_holds_before_forge_when_journaled_outcome_body_is_missing(
 ):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active = replace(active, completion_payload={"other": "payload"})
+    active = replace_flat(active, completion_payload={"other": "payload"})
     forge = _forge(comment, branch, _head_sha(active))
 
     plan = _inspect(active, repo, forge)
@@ -339,7 +340,7 @@ def test_inspect_holds_before_forge_when_journaled_outcome_body_is_missing(
 def test_inspect_holds_on_repository_mismatch_before_forge_calls(tmp_path: Path):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active = replace(active, repository_id="/another/repository")
+    active = replace_flat(active, repository_id="/another/repository")
     forge = _forge(comment, branch, _head_sha(active))
 
     plan = _inspect(active, repo, forge)
@@ -456,7 +457,7 @@ def test_inspect_releases_dirty_not_needed_but_retains_worktree(tmp_path: Path):
         head_sha=head_sha,
         completion_id=active.completion.completion_id,
     ).render()
-    active = replace(
+    active = replace_flat(
         active,
         completion_result="not-needed",
         completion_payload={"outcome": comment["body"]},
@@ -516,7 +517,7 @@ def test_inspect_holds_if_run_from_worktree_that_would_be_removed(tmp_path: Path
 def test_inspect_retains_running_worktree_after_handoff(tmp_path: Path):
     repo, worktree, branch = _create_repo(tmp_path)
     active, comment = _make_active(repo, worktree, branch)
-    active = replace(active, pid=os.getpid())
+    active = replace_flat(active, pid=os.getpid())
     forge = _forge(comment, branch, _head_sha(active))
     plan = _inspect(active, repo, forge)
     assert plan.action == "hold"

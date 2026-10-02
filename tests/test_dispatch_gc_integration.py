@@ -12,11 +12,11 @@ from unittest.mock import patch
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
 from orchestune.ledger.run_state import (
-    ActiveWorktree,
     RunState,
     load_run_state,
 )
 from tests.dispatch_gc_test_support import _issue
+from tests.dispatch_test_support import flat_active_worktree
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 
@@ -39,7 +39,7 @@ class TestGC:
 
         run_state = RunState(
             active_worktrees={
-                "1": ActiveWorktree(
+                "1": flat_active_worktree(
                     issue_number=1,
                     branch="claude/issue-1-task-1",
                     worktree_path=str(wt_path),
@@ -133,7 +133,7 @@ class TestGC:
 
         run_state = RunState(
             active_worktrees={
-                "1": ActiveWorktree(
+                "1": flat_active_worktree(
                     issue_number=1,
                     branch="claude/issue-1-task-1",
                     worktree_path=str(wt_path),
@@ -217,7 +217,7 @@ class TestGC:
 
         run_state = RunState(
             active_worktrees={
-                "1": ActiveWorktree(
+                "1": flat_active_worktree(
                     issue_number=1,
                     branch="claude/issue-1-task-1",
                     worktree_path=str(wt_path),
@@ -298,7 +298,7 @@ class TestGC:
 
         run_state = RunState(
             active_worktrees={
-                "1": ActiveWorktree(
+                "1": flat_active_worktree(
                     issue_number=1,
                     branch="claude/issue-1-task-1",
                     worktree_path=str(wt_path),
@@ -375,7 +375,7 @@ class TestGC:
 
         run_state = RunState(
             active_worktrees={
-                "1": ActiveWorktree(
+                "1": flat_active_worktree(
                     issue_number=1,
                     branch="claude/issue-1-task-1",
                     worktree_path=str(wt_path),

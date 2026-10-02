@@ -20,8 +20,9 @@ from orchestune.dispatch.gc.zombies import (
     _apply_zombie_or_timeout_reclaim,
     execute_reclaim_repair_command,
 )
-from orchestune.ledger.run_state import ActiveWorktree, RunState
+from orchestune.ledger.run_state import RunState
 from orchestune.models import Task
+from tests.dispatch_test_support import flat_active_worktree
 
 
 def _make_config(tmp_path: Path) -> DispatcherConfig:
@@ -47,7 +48,7 @@ class TestCompleteGcHandoff:
         config = _make_config(tmp_path)
         run_state = RunState()
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(tmp_path / "worktrees" / "wt-1004"),
@@ -83,7 +84,7 @@ class TestCompleteGcHandoff:
         config = _make_config(tmp_path)
         run_state = RunState()
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(tmp_path / "worktrees" / "wt-1004"),
@@ -133,7 +134,7 @@ class TestCompleteGcHandoff:
         wt_path = tmp_path / "worktrees" / "wt-1004"
         wt_path.mkdir(parents=True)
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(wt_path),
@@ -195,7 +196,7 @@ class TestCompleteGcHandoff:
         wt_path.mkdir(parents=True)
         (wt_path / "dirty.txt").write_text("unsaved work")
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(wt_path),
@@ -257,7 +258,7 @@ class TestCompleteGcHandoff:
         wt_path.mkdir(parents=True)
         (wt_path / "dirty.txt").write_text("unsaved work")
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(wt_path),
@@ -338,7 +339,7 @@ class TestCompleteGcHandoff:
         wt_path = tmp_path / "worktrees" / "wt-clean-blocked"
         wt_path.mkdir(parents=True)
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(wt_path),
@@ -400,7 +401,7 @@ class TestCompleteGcHandoff:
         config = _make_config(tmp_path)
         run_state = RunState()
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path=str(tmp_path / "worktrees" / "wt-1004"),
@@ -434,7 +435,7 @@ class TestCompleteGcHandoff:
         wt_path.mkdir(parents=True)
         (wt_path / "dirty.txt").write_text("uncommitted work")
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1005,
             branch="claude/issue-1005-task",
             worktree_path=str(wt_path),
@@ -475,7 +476,7 @@ class TestCompleteGcHandoff:
         """JOURNALING中（completion_handoff_ready=False）は completion_result があっても handoff-ready とみなさない。"""
         from orchestune.dispatch.gc.outcome_decision import _is_handoff_ready
 
-        active = ActiveWorktree(
+        active = flat_active_worktree(
             issue_number=1004,
             branch="claude/issue-1004-task",
             worktree_path="worktrees/w1",

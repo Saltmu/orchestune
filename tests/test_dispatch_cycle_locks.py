@@ -28,18 +28,20 @@ from orchestune.infra.process_utils import (
 )
 from orchestune.issue_notice import notice_marker, render_notice
 from orchestune.ledger.run_state import (
-    ActiveWorktree,
     RunState,
 )
 from orchestune.models import PrRecord
 from tests.dispatch_lock_test_support import LockDependencyTestView
+from tests.dispatch_test_support import (
+    flat_active_worktree,
+    stub_label_actor_permission,
+)
 from tests.dispatch_test_support import make_footprint_issue as _full_issue
 from tests.dispatch_test_support import make_test_task as _task
 from tests.dispatch_test_support import (
     patch_gc_process_alive as _patch_gc_process_alive,
 )
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
-from tests.dispatch_test_support import stub_label_actor_permission
 
 
 def _decide_external_lock_sync(tasks_by_issue, prs, run_state):
@@ -248,7 +250,7 @@ class TestRunDispatchCycleBranchNormalization:
         save_run_state(
             RunState(
                 active_worktrees={
-                    "1": ActiveWorktree(
+                    "1": flat_active_worktree(
                         issue_number=1,
                         branch="claude/issue-1-task-a",
                         worktree_path=str(tmp_path / "w1"),

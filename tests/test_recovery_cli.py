@@ -11,12 +11,12 @@ def test_preview_and_apply_require_generation_and_reason(
     local_claim, monkeypatch, capsys
 ):
     workspace, active, worktree = local_claim
-    assert active.claim_id
+    assert active.claim.claim_id
     monkeypatch.chdir(workspace.repository_root)
     before = workspace.run_state_path.read_bytes()
     assert main(["--issue", "7"]) == 0
     preview = json.loads(capsys.readouterr().out)
-    assert preview["diagnostics"]["claim_id"] == active.claim_id
+    assert preview["diagnostics"]["claim_id"] == active.claim.claim_id
     assert "owner_token" not in json.dumps(preview)
     assert workspace.run_state_path.read_bytes() == before
     assert main(["--issue", "7", "--apply"]) == 43
@@ -28,7 +28,7 @@ def test_preview_and_apply_require_generation_and_reason(
                 "--issue",
                 "7",
                 "--claim-id",
-                active.claim_id,
+                active.claim.claim_id,
                 "--reason",
                 "stopped",
                 "--apply",

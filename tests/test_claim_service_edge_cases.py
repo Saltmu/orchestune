@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -353,13 +354,13 @@ class TestAdditionalClaimServiceEdgeCases:
         from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         run_git(
-            ["worktree", "add", "-b", active.branch, active.worktree_path],
+            ["worktree", "add", "-b", active.core.branch, active.core.worktree_path],
             cwd=repo_root,
         )
         write_claim_marker(
-            Path(active.worktree_path),
+            Path(active.core.worktree_path),
             claim_id=claim_id,
-            branch=active.branch,
+            branch=active.core.branch,
             base_sha=None,
             branch_created=True,
         )
@@ -415,13 +416,13 @@ class TestAdditionalClaimServiceEdgeCases:
         from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         run_git(
-            ["worktree", "add", "-b", active.branch, active.worktree_path],
+            ["worktree", "add", "-b", active.core.branch, active.core.worktree_path],
             cwd=repo_root,
         )
         write_claim_marker(
-            Path(active.worktree_path),
+            Path(active.core.worktree_path),
             claim_id=claim_id,
-            branch=active.branch,
+            branch=active.core.branch,
             base_sha=None,
             branch_created=True,
         )
@@ -650,16 +651,18 @@ class TestAdditionalClaimServiceEdgeCases:
         from orchestune.worktree_ops.claim_marker import write_claim_marker
 
         run_git(
-            ["worktree", "add", "-b", active.branch, active.worktree_path],
+            ["worktree", "add", "-b", active.core.branch, active.core.worktree_path],
             cwd=repo_root,
         )
-        active.repository_id = (repo_root / ".git").as_posix()
+        active.claim = replace(
+            active.claim, repository_id=(repo_root / ".git").as_posix()
+        )
         with run_state_lock(state_path.with_suffix(".lock")):
             save_run_state(RunState(active_worktrees={"129": active}), state_path)
         write_claim_marker(
-            Path(active.worktree_path),
+            Path(active.core.worktree_path),
             claim_id=claim_id,
-            branch=active.branch,
+            branch=active.core.branch,
             base_sha=None,
             branch_created=True,
         )

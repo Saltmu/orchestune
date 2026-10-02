@@ -153,12 +153,18 @@ class TestCompletionService:
         assert result.outcome_record.completion_id == result.completion_id
         state = load_run_state_readonly(request.state_path)
         active = state.active_worktrees["1110"]
-        assert active.completion_comment_url is not None
-        assert active.completion_comment_url.endswith("/1")
-        assert active.completion_payload is not None
-        assert active.completion_payload["body"] == result.outcome_record.render()
-        assert active.completion_payload["outcome"] == active.completion_payload["body"]
-        assert active.completion_handoff_ready
+        assert active.completion.completion_comment_url is not None
+        assert active.completion.completion_comment_url.endswith("/1")
+        assert active.completion.completion_payload is not None
+        assert (
+            active.completion.completion_payload["body"]
+            == result.outcome_record.render()
+        )
+        assert (
+            active.completion.completion_payload["outcome"]
+            == active.completion.completion_payload["body"]
+        )
+        assert active.completion.completion_handoff_ready
         assert state.completion_replay_receipts
 
     def test_unclaimed_not_needed_posts_with_a_durable_unique_identity(

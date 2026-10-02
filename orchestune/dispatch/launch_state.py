@@ -44,23 +44,7 @@ def with_launch(active: ActiveWorktree, launch: LaunchInfo) -> ActiveWorktree:
     """Return a copy replacing only launch-owned fields."""
     if not isinstance(launch, LaunchInfo):
         raise TypeError("launch must be LaunchInfo")
-    return replace(
-        active,
-        pid=launch.pid,
-        started_at=launch.started_at,
-        recompute_count=launch.recompute_count,
-        forced_serial=launch.forced_serial,
-        external_id=launch.external_id,
-        external_url=launch.external_url,
-        estimated_tokens=launch.estimated_tokens,
-        token_estimate_recorded=launch.token_estimate_recorded,
-        profile=launch.profile,
-        model=launch.model,
-        reasoning_effort=launch.reasoning_effort,
-        selection_reason=launch.selection_reason,
-        launch_attempt_id=launch.launch_attempt_id,
-        launch_phase=launch.launch_phase,
-    )
+    return replace(active, launch=launch)
 
 
 def with_launch_phase(active: ActiveWorktree, phase: str | None) -> ActiveWorktree:
