@@ -403,6 +403,7 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         self._check_assignment([node.target], node.lineno)
         if isinstance(node.target, ast.Name):
+            self._clear_var_classifications(node.target.id)
             types = _extract_type_names(node.annotation)
             if any(t in self.active_type_aliases for t in types):
                 self.active_vars_stack[-1].add(node.target.id)
@@ -410,6 +411,8 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
                 self.completion_vars_stack[-1].add(node.target.id)
             elif types - {"None", "NoneType"}:
                 self.other_vars_stack[-1].add(node.target.id)
+        if node.value is not None:
+            self._track_assigned_var([node.target], node.value)
         self.generic_visit(node)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
@@ -436,6 +439,13 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
             or func_name.endswith(".ActiveWorktree.from_records")
         )
 
+    def _clear_var_classifications(self, name: str) -> None:
+        self.active_vars_stack[-1].discard(name)
+        self.completion_vars_stack[-1].discard(name)
+        self.payload_vars_stack[-1].discard(name)
+        self.policy_config_vars_stack[-1].discard(name)
+        self.other_vars_stack[-1].discard(name)
+
     def _track_name_assignment(self, target_id: str, value: ast.Name) -> None:
         if self._is_active_var(value.id):
             self.active_vars_stack[-1].add(target_id)
@@ -453,29 +463,44 @@ class _ActiveWorktreeVisitor(ast.NodeVisitor):
 
     def _track_call_assignment(self, target_id: str, value: ast.Call) -> None:
         func_name = _extract_func_name(value.func)
-        if self._is_constructor_call(func_name) or (
+        if self._is_constructor_call(func_name):
+            self.active_vars_stack[-1].add(target_id)
+            return
+
+        if isinstance(value.func, ast.Attribute) and value.func.attr in {
+            "with_claim",
+            "with_completion",
+            "with_launch",
+            "with_core",
+        }:
+            if isinstance(value.func.value, ast.Name) and self._is_active_var(
+                value.func.value.id
+            ):
+                self.active_vars_stack[-1].add(target_id)
+                return
+
+        if func_name in {"with_claim", "with_completion", "with_launch"} or (
             func_name is not None
             and (
-                func_name
-                in {
-                    "with_claim",
-                    "with_completion",
-                    "with_launch",
-                    "with_core",
-                }
-                or func_name.endswith(".with_claim")
+                func_name.endswith(".with_claim")
                 or func_name.endswith(".with_completion")
                 or func_name.endswith(".with_launch")
-                or func_name.endswith(".with_core")
             )
         ):
-            self.active_vars_stack[-1].add(target_id)
-        elif func_name is not None and func_name.split(".")[-1][0].isupper():
+            if not value.args or (
+                isinstance(value.args[0], ast.Name)
+                and self._is_active_var(value.args[0].id)
+            ):
+                self.active_vars_stack[-1].add(target_id)
+                return
+
+        if func_name is not None and func_name.split(".")[-1][0].isupper():
             self.other_vars_stack[-1].add(target_id)
 
     def _track_assigned_var(self, targets: list[ast.expr], value: ast.expr) -> None:
         for target in targets:
             if isinstance(target, ast.Name):
+                self._clear_var_classifications(target.id)
                 if isinstance(value, ast.Name):
                     self._track_name_assignment(target.id, value)
                 elif isinstance(value, ast.Call):

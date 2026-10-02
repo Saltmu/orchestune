@@ -418,6 +418,51 @@ def mutate_posonly(record: ActiveWorktree, /):
     assert violations[0].kind == "subrecord-direct-assign"
 
 
+def test_unrelated_dto_with_method_not_treated_as_active() -> None:
+    source = """
+from dataclasses import dataclass
+
+@dataclass
+class OtherDTO:
+    claim: str
+    def with_core(self, core):
+        return self
+
+def handle(dto: OtherDTO, core):
+    record = dto.with_core(core)
+    record.claim = "safe"
+"""
+    violations = active_worktree_boundary_violations(
+        source, module="orchestune.dispatch.scoring"
+    )
+    assert not violations
+
+
+def test_rebound_local_variable_clears_stale_classification() -> None:
+    source = """
+from dataclasses import dataclass
+from orchestune.ledger.active_records import ActiveWorktree
+
+@dataclass
+class OtherDTO:
+    claim: str
+
+def rebind_payload(active: ActiveWorktree):
+    payload = active.completion.completion_payload
+    payload = {}
+    payload["safe"] = 1
+
+def rebind_record(active: ActiveWorktree):
+    record = active
+    record = OtherDTO("safe")
+    record.claim = "safe"
+"""
+    violations = active_worktree_boundary_violations(
+        source, module="orchestune.dispatch.scoring"
+    )
+    assert not violations
+
+
 def test_exception_requires_reason() -> None:
     with pytest.raises(ValueError, match="reason must not be empty"):
         ActiveWorktreeBoundaryException(
