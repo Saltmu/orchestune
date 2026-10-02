@@ -287,6 +287,7 @@ def _check_section_contracts(language: str, documents: dict[str, str]) -> None:
         )
         for phrase in contract.expected(language):
             assert phrase in section, (language, contract.anchor, phrase)
+    _check_completion_subrecord_row(documents["state"])
 
 
 def _check_fallback_rows(language: str, integration: str) -> None:
@@ -395,13 +396,9 @@ def test_documented_active_worktree_subrecords_and_lifecycle_exist() -> None:
         assert isinstance(expected_cls, type)
 
 
-@pytest.mark.parametrize("language", sorted(DOCUMENTS))
-def test_acceptance_criteria_evidence_table_references_active_completion_journal(
-    language: str,
-) -> None:
+def _check_completion_subrecord_row(state: str) -> None:
     """Ensure the acceptance mapping table names ActiveCompletionJournal, not CompletionJournal."""
-    documents = _load_documents(language)
-    section = _anchor_section(documents["state"], "active-worktree-lifecycle")
+    section = _anchor_section(state, "active-worktree-lifecycle")
     table_rows = [
         line
         for line in section.splitlines()
@@ -572,15 +569,20 @@ def test_raw_completion_journal_in_subrecord_row_is_rejected(language: str) -> N
     """Replacing ActiveCompletionJournal with CompletionJournal in the subrecord row must fail."""
     documents = _load_documents(language)
     section = _anchor_section(documents["state"], "active-worktree-lifecycle")
-    assert "ActiveCompletionJournal" in section
-    mutated_section = section.replace("ActiveCompletionJournal", "CompletionJournal")
     table_rows = [
         line
-        for line in mutated_section.splitlines()
+        for line in section.splitlines()
         if line.startswith("|")
         and "ActiveWorktreeCore" in line
         and "LaunchInfo" in line
     ]
     assert len(table_rows) == 1
     row = table_rows[0]
-    assert re.search(r"(?<!Active)CompletionJournal", row) is not None
+    mutated = _mutate(
+        documents,
+        "state",
+        row,
+        row.replace("ActiveCompletionJournal", "CompletionJournal"),
+    )
+    with pytest.raises(AssertionError):
+        _check_section_contracts(language, mutated)

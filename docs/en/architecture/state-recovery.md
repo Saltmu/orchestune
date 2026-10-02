@@ -154,7 +154,7 @@ Orchestune's execution ledger (`ledger`) is the L2 foundation responsible for im
 
 While in-memory representations use nested subrecords, disk persistence strictly maintains backward compatibility.
 
-- **Flat JSON invariance**: The JSON format persisted to `run_state.json` strictly preserves the pre-migration (T01 baseline) flat JSON structure (the frozen 36-field `_ACTIVE_FIELD_NAMES` ordering, with `completion_policy_config` omitted when null, producing 35 keys by default).
+- **Flat JSON invariance**: The JSON format persisted to `run_state.json` preserves the post-#1122 main baseline pinned by `tests/fixtures/active_worktree_compat` (the frozen 36-field `_ACTIVE_FIELD_NAMES` ordering, with `completion_policy_config` omitted when null, producing 35 keys by default). T01's original inventory and subsequent baseline/cutover corrections are retained in the [migration contract](../../active-worktree-migration-contract.md).
 - **No schema_version introduced**: Neither a `schema_version` nor nested JSON is introduced, preventing file corruption or version incompatibility with existing Orchestune installations, and ensuring seamless rollback safety.
 - **Explicit codec**: `ledger.active_codec` (`decode_active_worktree` / `encode_active_worktree`) exclusively owns bidirectional translation between in-memory nested structures and persisted flat JSON records.
 - **Concurrency control and lock protection**: Preconditions requiring `run_state_lock` before saving and CAS defense-in-depth remain invariant.
@@ -176,8 +176,8 @@ While in-memory representations use nested subrecords, disk persistence strictly
 ### 6.4 Handoff Candidates vs Verified Completion Receipts
 
 - **Distinction between candidate and verified evidence**: The `HANDOFF_READY` returned by `lifecycle(active)` is only a **candidate phase** derived from local ledger flags and stages. It does not establish that completion evidence has been authoritatively verified.
-- **GC and authoritative verification**: Before executing physical GC, deleting worktrees, or completing parent integration, `dispatch.gc.handoff` and `dispatch.gc.confirmed` authoritatively verify GitHub Issue comments (Outcome Record), PR merged state (`MERGED`), branch/identity matching, and merge commit reachability, as well as local Git uncommitted changes (dirty hold).
-- **CompletionReceipt emission**: Only after successful verification is a **verified** `CompletionReceipt` emitted and recorded through `CycleContext.record_completion`. If verification is incomplete or mismatched, the task is placed on `hold`, preventing deletion or premature completion.
+- **GC and authoritative verification**: `dispatch.gc.handoff` checks matching ledger/journal generations, repository identity, and the GitHub Issue comment (Outcome Record). For `done`, it additionally verifies PR merged state (`MERGED`), head/base identity, merge commit reachability, and recorded prepublication policy evidence. Worktree removal checks ownership, current/running worktree protection, dirty state, and the recorded done head. A verified `blocked` or `not-needed` outcome may release its reservation while retaining a dirty worktree; these outcomes do not require a merged PR. Parent integration has its own policy checks.
+- **CompletionReceipt emission**: A **verified** `CompletionReceipt` is emitted only for a successfully collected `done` outcome and recorded through `CycleContext.record_completion`. Releasing a `blocked` or `not-needed` reservation does not emit this receipt. Incomplete or mismatched verification produces a `hold`, preventing deletion or premature completion.
 
 ### 6.5 Consistency Projection
 
@@ -195,22 +195,22 @@ While in-memory representations use nested subrecords, disk persistence strictly
   - codec and model construction: `orchestune.ledger.active_codec` (`decode_active_worktree`), `orchestune.ledger.active_records` (`ActiveWorktree`)
 - **Mechanical enforcement via AST guards**: Architecture tests (`tests/test_active_worktree_ownership_architecture.py`) statically inspect source ASTs to enforce:
   1. No direct assignment to subrecord attributes (`active.claim = ...`), qualifying narrow registered production exceptions for recovery sentinel materialization before save and rebase/recovery event bookkeeping
-  2. No unauthorized replacement via `dataclasses.replace` or import aliases
-  3. No construction of `ActiveWorktree` / `ActiveWorktree.from_records` outside authorized packages
+  2. No unauthorized replacement via `dataclasses.replace` or import aliases, except the registered `dispatch.gc._resolve_recovered_completion` core/launch replacement when adopting a recovered PR head
+  3. No construction of `ActiveWorktree` / `ActiveWorktree.from_records` outside `ALLOWED_CONSTRUCTOR_MODULES` (the claim owner modules, `dispatch.launch_state`, `ledger.active_records`, and `ledger.active_codec`; `complete.journal` owns completion updates, not full-record construction)
   4. No mutating method calls (`update`, `pop`, `clear`, `setdefault`) on frozen payloads
   5. No raw `completion_id is (not) None` stage checks outside narrow registered exceptions
 
 ### 6.7 Epic #1106 Acceptance Criteria and Evidence Mapping
 
-All acceptance criteria defined in parent Epic #1106 are verified and satisfied by the completed implementations, documentation, and tests of T01–T14.
+The table maps parent Epic #1106 to the implementation, documentation, and test evidence from T01–T14. It records the implemented contract rather than asserting literal satisfaction of every original criterion: complete and consistency use owner APIs and projections, registered reservation checks still compare `completion_id` directly, semantic validation remains primarily at persistence boundaries, and the AST guard retains narrow registered exceptions. These differences require reconciliation with the parent criteria; this documentation task does not change runtime behavior to remove them.
 
 | #1106 Acceptance Criteria | Implemented Subtasks | Verification Evidence & Test Suites |
 | :--- | :--- | :--- |
 | `ActiveWorktreeLifecycle` and `lifecycle()` exist, and stage checks across GC (`dispatch.gc.completion`, `dispatch.gc.zombies`) and claim (`claim.ownership`) route through it (consistency uses the projected `ExecutionRecord` boundary, and complete uses dedicated owner APIs). No unexempted direct `completion_id is (not) None` stage checks remain (qualifying narrow registered reservation exceptions). | T02 (#1124), T04 (#1126), T05 (#1129), T07 (#1131), T08 (#1132), T09 (#1133), T10 (#1127), T13 (#1135) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_ownership_architecture.py`, `tests/test_dispatch_consistency_e2e.py` |
 | `ActiveWorktree` is composed of core fields (`ActiveWorktreeCore`) and `LaunchInfo` / `ClaimInfo` / `ActiveCompletionJournal` frozen subrecords, with typed structure (`slots=True`) and owner update boundaries enforced per subrecord (semantic validation is enforced at persistence/codec layers). | T03 (#1125), T04 (#1126), T05 (#1129), T06 (#1130), T12 (#1134) | `tests/test_active_worktree_records.py`, `tests/test_active_worktree_codec.py`, `tests/test_claim_ownership.py` |
-| Architecture tests verify that non-owner modules do not modify subrecord fields, demonstrated with synthetic violation and valid cases. | T13 (#1135) | `tests/test_active_worktree_ownership_architecture.py` (20 synthetic cases), `tests/test_architecture.py` |
+| Architecture tests reject non-owner subrecord field updates outside the registered exceptions described in section 6.6, demonstrated with synthetic violation and valid cases. | T13 (#1135) | `tests/test_active_worktree_ownership_architecture.py`, `tests/test_architecture.py` |
 | Valid `run_state.json` files from prior main (representative examples: dispatch launch, interactive claim, completion journal in progress, handoff ready) load successfully, and saved canonical byte representations match golden. | T01 (#1123), T03 (#1125), T12 (#1134) | `tests/test_active_worktree_compat_baseline.py`, `tests/test_active_worktree_codec.py` |
 | Persistence rejection without holding locks and existing mutual exclusion guarantees are preserved. | T01 (#1123), T03 (#1125), T12 (#1134) | `tests/test_ledger_run_state.py`, `tests/test_active_worktree_codec.py` |
 | Bilingual state-recovery architecture documents are updated and synchronized. | T14 (#1136, this task) | `docs/ja/architecture/state-recovery.md`, `docs/en/architecture/state-recovery.md`, `tests/test_dependency_architecture_docs.py` |
 | Local CI passes cleanly for the operating system (Linux/macOS: `./scripts/local-ci.sh`, Windows: `.\scripts\local-ci.ps1`). | T01–T14 all PRs | Clean pass on `./scripts/local-ci.sh` (Linux CI) |
-| Reference enumeration across all 35 fields (and 36 in full schema) with classified rationale completed before implementation. | T01 (#1123) and subtasks | T01 inventory, Walkthrough / Impact Scope tables in each PR |
+| Reference enumeration across all 35 fields (and 36 in full schema) with classified rationale, including the subsequently documented cutover enumeration misses. | T01 (#1123) and subtasks | [T01 inventory and appended T12 corrections](../../active-worktree-migration-contract.md), Walkthrough / Impact Scope tables in each PR |
