@@ -50,6 +50,19 @@ _TEMPLATE = (
 _INVALID_CONFIG = 'dag_ignore_patterns = ["("]\n'
 
 
+@pytest.fixture(autouse=True)
+def _isolate_provisioning_error_cli(request: pytest.FixtureRequest):
+    """Isolate only provisioning-error cases; leave unrelated dispatch setup alone."""
+    if not request.node.name.startswith("test_provision_exits_2"):
+        yield
+        return
+
+    request.getfixturevalue("provisioning_repo_root")
+    forge = request.getfixturevalue("provisioning_forge")
+    yield
+    assert forge.create_issue_calls == []
+
+
 def _write_invalid_orchestune_toml(tmp_path: Path) -> None:
     (tmp_path / "orchestune.toml").write_text(_INVALID_CONFIG, encoding="utf-8")
 

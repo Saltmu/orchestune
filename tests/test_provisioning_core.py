@@ -28,6 +28,7 @@ from tests.test_provisioning_support import (
     _PLAN,
     _TEMPLATE,
     FakeForge,
+    initialize_local_git_root,
 )
 
 
@@ -461,7 +462,11 @@ class TestProvisionIssuesNoApply:
 
 class TestMain:
     def test_no_apply_prints_preview_and_exits_0(
-        self, plan_path: Path, template_path: Path, capsys
+        self,
+        plan_path: Path,
+        template_path: Path,
+        provisioning_forge: FakeForge,
+        capsys,
     ):
         with pytest.raises(SystemExit) as exc_info:
             main(
@@ -477,26 +482,38 @@ class TestMain:
         captured = capsys.readouterr()
         assert "Dry run" in captured.out
         assert "task-a" in captured.out
+        assert provisioning_forge.create_issue_calls == []
 
     def test_apply_mode_prints_summary_and_exits_0(
-        self, plan_path: Path, template_path: Path, capsys, monkeypatch
+        self,
+        plan_path: Path,
+        template_path: Path,
+        provisioning_forge: FakeForge,
+        capsys,
     ):
-        forge = FakeForge()
-        monkeypatch.setattr("orchestune.provisioning.cli.GitHubForge", lambda: forge)
         with pytest.raises(SystemExit) as exc_info:
             main(["--plan", str(plan_path), "--template", str(template_path)])
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert "Parent issue:" in captured.out
         assert "task-a" in captured.out
+        assert len(provisioning_forge.create_issue_calls) == 3
 
+    @pytest.mark.parametrize("plan_in_worktree", [False, True], ids=["tmp", "worktree"])
     def test_resolves_repo_root_from_plan_location_not_cwd(
-        self, plan_path: Path, template_path: Path, capsys
+        self,
+        tmp_path: Path,
+        worktree_tmp_path: Path,
+        template_path: Path,
+        provisioning_forge: FakeForge,
+        plan_in_worktree: bool,
+        capsys,
     ):
-        """#404レビュー指摘: dag_cli.pyと同様に、--planファイル自身の位置を
-        リポジトリルートとして orchestune.toml を読むこと（プロセスのcwdに
-        依存しない）。plan_path/template_pathフィクスチャはtmp_path配下に
-        あるが、テスト実行時のcwdはリポジトリルートのままである点がポイント。"""
+        """#404: resolve config from the plan's isolated Git root, not the cwd."""
+        plan_root = worktree_tmp_path if plan_in_worktree else tmp_path
+        initialize_local_git_root(plan_root)
+        plan_path = plan_root / "decomposition_plan.md"
+        plan_path.write_text(_PLAN, encoding="utf-8")
         plan_path.parent.joinpath("orchestune.toml").write_text(
             "not valid toml [[[", encoding="utf-8"
         )
@@ -507,9 +524,14 @@ class TestMain:
         assert exc_info.value.code == 2
         captured = capsys.readouterr()
         assert "orchestune.toml" in captured.err
+        assert provisioning_forge.create_issue_calls == []
 
     def test_nested_plan_reads_config_from_git_repository_root(
-        self, tmp_path: Path, template_path: Path, capsys
+        self,
+        tmp_path: Path,
+        template_path: Path,
+        provisioning_forge: FakeForge,
+        capsys,
     ):
         """#418: `--plan`がリポジトリルートより下のネストしたパスを指す場合、
         `orchestune-dag`（`dag_cli._resolve_repo_root`、#410）と同様に`.git`を
@@ -540,13 +562,17 @@ class TestMain:
         assert exc_info.value.code == 2
         captured = capsys.readouterr()
         assert "orchestune.toml" in captured.err
+        assert provisioning_forge.create_issue_calls == []
 
-    def test_missing_plan_file_exits_1_with_error(self, tmp_path: Path, capsys):
+    def test_missing_plan_file_exits_1_with_error(
+        self, tmp_path: Path, provisioning_forge: FakeForge, capsys
+    ):
         with pytest.raises(SystemExit) as exc_info:
             main(["--plan", str(tmp_path / "nonexistent.md")])
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "Error:" in captured.err
+        assert provisioning_forge.create_issue_calls == []
 
 
 def test_missing_subtask_id_yaml_placeholder_raises(tmp_path: Path, plan_path: Path):

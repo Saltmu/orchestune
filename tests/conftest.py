@@ -32,10 +32,26 @@ pytest_plugins = [
     "tests.test_provisioning_support",
     "tests.claim_helpers",
     "tests.environment_support",
+    "tests.github_isolation",
 ]
 
 GIT_ENV_VARS_TO_CLEAR = DANGEROUS_GIT_ENV_VARS
 SUITE_MARKERS = frozenset({"unit", "integration", "e2e"})
+
+
+@pytest.fixture(autouse=True)
+def github_access_isolation(
+    monkeypatch: pytest.MonkeyPatch, _isolate_github_env: None
+) -> Iterator[Any]:
+    """Guard every test and inherited Python/shell child against live GitHub access."""
+    from tests.github_isolation import configure_test_isolation
+
+    with configure_test_isolation(
+        monkeypatch.setenv,
+        monkeypatch.setattr,
+        Path(__file__).resolve().parents[1],
+    ) as monitor:
+        yield monitor
 
 
 def _suite_markers(item: Any) -> set[str]:
