@@ -37,6 +37,7 @@ from orchestune.ledger.run_state import (
     RunState,
     load_run_state_readonly,
 )
+from orchestune.lock_contracts import ExternalLockScanResult
 from orchestune.models import IssueRecord, PrRecord, Task
 from orchestune.task_branch_resolution import TaskBranchResolution
 from orchestune.task_metadata import TaskMetadata
@@ -123,7 +124,7 @@ class CycleContext(_CycleState):
     def reconcile_recovery(self) -> tuple[dict[str, object], ...]:
         return self._action_port().reconcile_recovery()
 
-    def scan_external_locks(self):
+    def scan_external_locks(self) -> ExternalLockScanResult:
         return self._action_port().scan_external_locks()
 
     def select_tasks(self, candidates: tuple[TaskMetadata, ...]) -> SchedulingResult:

@@ -20,7 +20,8 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from orchestune.forge import Forge
-from orchestune.models import PrRecord, Task, normalize_newlines
+from orchestune.models import PrRecord, normalize_newlines
+from orchestune.task_metadata import TaskMetadata
 
 KIND_CREATED = "created"
 KIND_MERGED = "merged"
@@ -226,7 +227,7 @@ def target_issue_numbers(pr: PrRecord, expected_bases: Mapping[int, str]) -> lis
     )
 
 
-def notice_expected_bases(tasks: Iterable[Task]) -> dict[int, str]:
+def notice_expected_bases(tasks: Iterable[TaskMetadata]) -> dict[int, str]:
     """作成通知の走査対象タスクと、そのIssueが本来ぶら下がる親ブランチの対応表。
 
     PR#684レビュー対応(Codex P2): 親ブランチ運用では、統合済みタスクの子PRが
