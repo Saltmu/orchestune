@@ -106,7 +106,7 @@ Write-Host "[4/6] Running tests with coverage (pytest)..."
 $PytestWorkerArgs = @()
 if ($env:ORCHESTUNE_TEST_WORKERS) {
     $PytestWorkerArgs += @("-n", $env:ORCHESTUNE_TEST_WORKERS)
-} elseif ($env:PYTEST_ADDOPTS -and ($env:PYTEST_ADDOPTS -match "(^|\s)(-n\b|--numprocesses\b)")) {
+} elseif ($env:PYTEST_ADDOPTS -and ($env:PYTEST_ADDOPTS -match '(^|\s)(-n(\s*(\d+|auto|logical)|=|\s|$)|--numprocesses(\s*|=|\b|$))')) {
     # Respect concurrency already configured in PYTEST_ADDOPTS
 } else {
     $PytestWorkerArgs += @("-n", "2")
