@@ -7,6 +7,7 @@ import subprocess
 from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
+from orchestune.infra.command_metrics import measure_gh_call
 from orchestune.models import IssueRecord, PrRecord, normalize_newlines
 
 from .admin import _LABEL_LIST_LIMIT as _LABEL_LIST_LIMIT
@@ -181,28 +182,29 @@ class GitHubForge(GitHubIssueMixin, GitHubPullRequestMixin, GitHubRepoAdminMixin
         self.timeout_seconds = timeout_seconds
 
     def _run(self, args: list[str], input_text: str | None = None) -> str:
-        timeout_kwargs: dict[str, Any] = (
-            {"timeout": self.timeout_seconds}
-            if self.timeout_seconds is not None
-            else {}
-        )
-        if input_text is None:
-            return _decode(
-                subprocess.run(
-                    args,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=True,
-                    **timeout_kwargs,
-                ).stdout
+        with measure_gh_call(enabled=bool(args) and args[0] == "gh"):
+            timeout_kwargs: dict[str, Any] = (
+                {"timeout": self.timeout_seconds}
+                if self.timeout_seconds is not None
+                else {}
             )
-        if self.timeout_seconds is not None:
-            return self._run_with_stdin(
-                args, input_text, timeout_seconds=self.timeout_seconds
-            )
-        return self._run_with_stdin(args, input_text)
+            if input_text is None:
+                return _decode(
+                    subprocess.run(
+                        args,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        check=True,
+                        **timeout_kwargs,
+                    ).stdout
+                )
+            if self.timeout_seconds is not None:
+                return self._run_with_stdin(
+                    args, input_text, timeout_seconds=self.timeout_seconds
+                )
+            return self._run_with_stdin(args, input_text)
 
     @staticmethod
     def _run_with_stdin(

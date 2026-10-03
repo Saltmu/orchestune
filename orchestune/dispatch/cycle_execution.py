@@ -9,6 +9,7 @@ surfaces without duplicating business decisions or introducing import cycles.
 from __future__ import annotations
 
 from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 from typing import cast
@@ -16,6 +17,12 @@ from typing import cast
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.progress import progress_phase
+from orchestune.dispatch.timings import (
+    CycleTimingCollector,
+    TimingProgress,
+    timing_snapshot,
+)
+from orchestune.infra.command_metrics import command_observer_scope
 
 
 def execute_pipeline(
@@ -55,7 +62,11 @@ def execute_pipeline(
     )
 
 
-def execute_locked_cycle(api: ModuleType, config: DispatcherConfig) -> CycleReport:
+def execute_locked_cycle(
+    api: ModuleType,
+    config: DispatcherConfig,
+    collector: CycleTimingCollector | None = None,
+) -> CycleReport:
     sink = config.progress
     with progress_phase(sink, "state_load"):
         run_state = api.load_run_state(config.run_state_path)
@@ -74,20 +85,27 @@ def execute_locked_cycle(api: ModuleType, config: DispatcherConfig) -> CycleRepo
         api._finish_consistency_runtime(runtime, report, ctx, now, config, repair_cycle)
     if config.apply:
         with progress_phase(sink, "events_record"):
-            api.append_event_log(
-                api.build_event_log_entry(report, now), config.events_log_path
-            )
+            entry = api.build_event_log_entry(report, now)
+            entry["timings"] = timing_snapshot(collector)
+            api.append_event_log(entry, config.events_log_path)
     else:
         sink.emit("events_record", "skipped", reason="dry_run")
     return cast(CycleReport, report)
 
 
 def execute_cycle(api: ModuleType, config: DispatcherConfig) -> CycleReport:
+    collector = None
+    try:
+        candidate = CycleTimingCollector()
+        config = replace(config, progress=TimingProgress(config.progress, candidate))
+        collector = candidate
+    except Exception:
+        pass
     sink = config.progress
-    with progress_phase(sink, "cycle"):
+    with command_observer_scope(collector), progress_phase(sink, "cycle"):
         with ExitStack() as stack:
             with progress_phase(sink, "state_lock"):
                 stack.enter_context(
                     api.run_state_lock(Path(config.run_state_path).with_suffix(".lock"))
                 )
-            return execute_locked_cycle(api, config)
+            return execute_locked_cycle(api, config, collector)
