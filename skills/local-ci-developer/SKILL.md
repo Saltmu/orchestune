@@ -67,7 +67,7 @@ before Step 2.6 and maintain its record through Steps 10–12, including zero-fi
 
 ### Completion commands
 Use `orchestune complete` for every outcome. It creates or reuses the canonical
-Outcome Record in Issue comments; do not compose JSON or post to PR comments.
+Outcome Record in Issue comments; do not compose JSON or post the Outcome Record to PR comments (the `review-reply.md` PR comment of Step 11 is separate and still required).
 Replace placeholders with the task Issue number, PR number, or concrete reason:
 
 ```bash

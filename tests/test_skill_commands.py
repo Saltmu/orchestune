@@ -837,6 +837,7 @@ def test_worker_skills_require_posting_review_reply_as_pr_comment(skill_name: st
     assert "gh pr comment <PR_NUMBER> --body-file <session-dir>/review-reply.md" in loop
     assert "GitHub MCP" in loop and "equivalent PR comment" in loop
     assert "--body-file" in loop and "do not post a separate trigger comment" in loop
+    assert "--issue <N> --result blocked --reason review-round-limit" in loop
     assert "only when the PR head is unchanged" in loop
     assert "adopted fixes always need another `wait_for_review.py` round" in loop
 
@@ -849,6 +850,8 @@ def test_worker_skills_require_posting_review_reply_as_pr_comment(skill_name: st
     )
     assert "review-reply" in review_step and "PR comment" in review_step
     assert "posted" in outcome_step and "PR comment" in outcome_step
+    assert "post to PR comments" not in skill
+    assert "post the Outcome Record to PR comments" in skill
 
 
 def test_issue_footprint_example_selects_file_reservation():
