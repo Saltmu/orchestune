@@ -150,6 +150,29 @@ class TestUnparsableDoneTask:
         assert integrator_env.add_comment.call_args[0][0] == 7
         integrator_env.list_open_prs.assert_not_called()
 
+    def test_a_timed_out_flag_comment_is_an_unknown_write_that_holds(
+        self, integrator_env: IntegratorEnv, tmp_path
+    ):
+        # #820: the comment may have been accepted before gh timed out.
+        from orchestune.infra.execution_deadline import ExecutionCommandTimeout
+
+        integrator_env.set_done_issues(make_done_issue(7, body=_EMPTY_FOOTPRINT_BODY))
+        integrator_env.add_comment.side_effect = ExecutionCommandTimeout(
+            "gh issue", 60, "normal"
+        )
+
+        res = Integrator(
+            IntegratorConfig(
+                parent_issue_number=100, apply=True, repository_root=tmp_path
+            )
+        ).run()
+
+        assert res["status"] == "execution_indeterminate"
+        failure = res["execution_failures"][0]
+        assert failure["stage"] == "PrepareTasksStep"
+        assert failure["side_effect_state"] == "unknown"
+        assert (tmp_path / "worktrees" / ".holds").exists()
+
     def test_flagged_alongside_valid_merged_task(self, integrator_env: IntegratorEnv):
         # subtask_idの取れるタスクが他に存在する場合は、そちらは通常通り統合しつつ、
         # 抽出できなかったタスクの存在も結果に残す。
