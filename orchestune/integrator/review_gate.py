@@ -194,15 +194,23 @@ def decide_child_review_gate(
 
 
 def _instruction_for_reason(reason: str) -> str:
-    if reason in (REASON_LEGACY, REASON_SKIPPED):
+    if reason in (
+        REASON_LEGACY,
+        REASON_SKIPPED,
+        REASON_NOT_PASS,
+        REASON_SHA_MISMATCH,
+    ):
         return (
-            "子PRでコードレビューを実施して合格（pass）とし `orchestune complete` を再実行するか、"
-            "`--child-review-gate off` でゲートを無効化してください。"
+            "完了がhandoff済みの場合、`orchestune complete` の再実行では証跡の追加・差し替えはできません。"
+            "証跡なしで受け入れて進める実行に限り、明示的に `--child-review-gate off` を指定して再開してください"
+            "（その実行のすべての子のレビュー検証が無効になります）。"
+            "handoff前で `complete` が拒否され、何も投稿されていない場合は、"
+            "現在のheadの再レビュー・判断表の補完などで原因を解消して `orchestune complete` を再実行してください。"
+            "詳しい再開手順は usage §4.5（"
+            "[日本語](https://github.com/Saltmu/orchestune/blob/main/docs/ja/usage.md#45-子レビュー証跡ゲート) / "
+            "[English](https://github.com/Saltmu/orchestune/blob/main/docs/en/usage.md#45-child-review-evidence-gate)"
+            "）を参照してください。"
         )
-    if reason == REASON_SHA_MISMATCH:
-        return "子ブランチの更新後に再レビューを実施し、`orchestune complete` を再実行してください。"
-    if reason == REASON_NOT_PASS:
-        return "子PRでレビュー指摘に対応して合格（pass）とし、`orchestune complete` を再実行してください。"
     if reason == REASON_ABSENT:
         return "子タスク完了時に `orchestune complete` を実行してOutcome Recordを投稿してください。"
     if reason == REASON_LOOKUP_UNKNOWN:

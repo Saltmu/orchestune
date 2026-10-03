@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from orchestune.integrator.review_gate import (
     ChildReviewGateFailure,
     ChildReviewGateInput,
@@ -298,9 +300,62 @@ class TestDigestAndCommentFormatting:
         assert "#20" in comment
         assert "`task-b`" in comment
         assert "sha_mismatch" in comment
-        # Restart guidance must distinguish skipped/legacy, sha_mismatch, lookup_unknown
+        # Recovery guidance includes an explicit gate opt-out and pre-handoff review.
         assert "--child-review-gate off" in comment
         assert "再レビュー" in comment
+
+    @pytest.mark.parametrize(
+        "reason", ["legacy", "skipped", "not_pass", "sha_mismatch"]
+    )
+    def test_recovery_instruction_distinguishes_completion_handoff(self, reason):
+        failure = ChildReviewGateFailure(issue_number=10, reason=reason)
+        comment = format_child_review_gate_escalation_comment(
+            [failure], compute_review_gate_digest([failure])
+        )
+        row = next(line for line in comment.splitlines() if line.startswith("| #10 |"))
+
+        assert "handoff済み" in row
+        assert "証跡の追加・差し替えはできません" in row
+        assert "明示的に `--child-review-gate off`" in row
+        assert "その実行のすべての子" in row
+        assert "handoff前" in row
+        assert "`complete` が拒否され、何も投稿されていない場合" in row
+        assert "再レビュー・判断表の補完" in row
+        assert "`orchestune complete` を再実行" in row
+        assert (
+            "https://github.com/Saltmu/orchestune/blob/main/docs/ja/usage.md#45-子レビュー証跡ゲート"
+            in row
+        )
+        assert (
+            "https://github.com/Saltmu/orchestune/blob/main/docs/en/usage.md#45-child-review-evidence-gate"
+            in row
+        )
+        assert "§4.5" in row
+
+    @pytest.mark.parametrize(
+        ("reason", "instruction"),
+        [
+            (
+                "absent",
+                "子タスク完了時に `orchestune complete` を実行してOutcome Recordを投稿してください。",
+            ),
+            (
+                "lookup_unknown",
+                "API障害等の一時的な問題の可能性があるため、ディスパッチまたは統合を再実行してください。",
+            ),
+            (
+                "integration_evidence_missing",
+                "統合証跡と子の対応を復旧して再実行してください。",
+            ),
+        ],
+    )
+    def test_other_recovery_instructions_are_preserved(self, reason, instruction):
+        failure = ChildReviewGateFailure(issue_number=10, reason=reason)
+        comment = format_child_review_gate_escalation_comment(
+            [failure], compute_review_gate_digest([failure])
+        )
+        row = next(line for line in comment.splitlines() if line.startswith("| #10 |"))
+        assert row.endswith(f"| {instruction} |")
 
     def test_digest_parsing_and_idempotency_detection(self):
         digest = "abcdef" * 10 + "1234"
