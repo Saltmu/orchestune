@@ -430,13 +430,31 @@ class ExecutionState:
                 parent_issue_number=self.parent_issue_number,
                 attempt_id=None if self.reserved is None else self.reserved.attempt_id,
                 reason=reason,
-                generation=1 if self.budget is None else self.budget.generation,
+                generation=self._active_generation(),
             )
         except OSError as error:
             print(
                 f"Warning: failed to write the integration hold record: {error}",
                 file=sys.stderr,
             )
+
+    def _active_generation(self) -> int:
+        """The budget generation a hold belongs to, even before an attempt was reserved.
+
+        A hold stamped with a stale generation would be ignored by
+        ``_local_hold_block`` once the parent has moved on from generation 1.
+        """
+        if self.budget is not None:
+            return self.budget.generation
+        try:
+            with self.scope.cleanup_phase():
+                state = self.store.load()
+        except (Exception, ExecutionInterrupt):
+            return 1
+        if state.verdict is BudgetVerdict.INDETERMINATE:
+            return 1
+        self.budget = state
+        return state.generation
 
     @property
     def holding(self) -> bool:

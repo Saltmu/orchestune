@@ -173,6 +173,46 @@ class TestUnparsableDoneTask:
         assert failure["side_effect_state"] == "unknown"
         assert (tmp_path / "worktrees" / ".holds").exists()
 
+    def test_the_hold_of_a_timed_out_flag_comment_uses_the_current_generation(
+        self, integrator_env: IntegratorEnv, fake_forge, tmp_path
+    ):
+        # After an earlier successful integration the parent is in generation 2; a hold
+        # stamped with generation 1 would be ignored and the comment posted again.
+        import json
+
+        from orchestune.infra.execution_deadline import ExecutionCommandTimeout
+        from orchestune.integrator.timeout_retry import (
+            EVENT_FINISHED,
+            EVENT_RESERVED,
+            ExecutionEvent,
+        )
+
+        def event(kind: str, **fields: object) -> None:
+            body = ExecutionEvent(
+                parent_issue_number=100,
+                generation=1,
+                attempt_id="old",
+                event=kind,
+                executed_at="2026-01-01T00:00:00Z",
+                **fields,  # type: ignore[arg-type]
+            ).render()
+            fake_forge.create_issue_comment(100, body)
+
+        event(EVENT_RESERVED, stage="ci")
+        event(EVENT_FINISHED, outcome="success", stop_confirmed=True)
+        integrator_env.set_done_issues(make_done_issue(7, body=_EMPTY_FOOTPRINT_BODY))
+        integrator_env.add_comment.side_effect = ExecutionCommandTimeout(
+            "gh issue", 60, "normal"
+        )
+        config = IntegratorConfig(
+            parent_issue_number=100, apply=True, repository_root=tmp_path
+        )
+
+        Integrator(config).run()
+
+        (hold_file,) = (tmp_path / "worktrees" / ".holds").glob("*.json")
+        assert json.loads(hold_file.read_text())["generation"] == 2
+
     def test_flagged_alongside_valid_merged_task(self, integrator_env: IntegratorEnv):
         # subtask_idの取れるタスクが他に存在する場合は、そちらは通常通り統合しつつ、
         # 抽出できなかったタスクの存在も結果に残す。
