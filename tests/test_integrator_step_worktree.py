@@ -347,3 +347,67 @@ class TestRelativeRepositoryRoot:
             # worktreeの作成先と参照先がずれた場合に発生していた「二重化されたパス」が
             # できていないことも確認する。
             assert not (workspace / "repo" / "repo").exists()
+
+
+class TestHeldWorktrees:
+    """#820: cleanup failures keep the worktree; reclaim never overwrites a hold."""
+
+    def _integrator(self, tmp: str, fake_forge) -> Integrator:
+        return Integrator(
+            IntegratorConfig(
+                parent_issue_number=100,
+                apply=True,
+                repository_root=Path(tmp),
+                forge=fake_forge,
+            )
+        )
+
+    def test_reclaim_refuses_a_held_worktree_even_if_it_looks_removable(
+        self, fake_forge
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            integrator = self._integrator(tmp, fake_forge)
+            held = integrator._temp_worktree_path()
+            held.mkdir(parents=True)
+            (held / ".git").write_text("gitdir: /somewhere/.git/worktrees/x\n")
+            (held / "diagnostics.txt").write_text("keep me")
+            integrator._worktree.write_hold(
+                parent_issue_number=100, attempt_id="a1", reason="rollback failed"
+            )
+
+            with pytest.raises(RuntimeError, match="held"):
+                integrator._reclaim_worktree_path(held)
+
+            assert (held / "diagnostics.txt").exists()
+
+    def test_reclaim_refuses_when_hold_records_cannot_be_reconciled(self, fake_forge):
+        with tempfile.TemporaryDirectory() as tmp:
+            integrator = self._integrator(tmp, fake_forge)
+            leftover = integrator._temp_worktree_path()
+            leftover.mkdir(parents=True)
+            (leftover / ".git").write_text("gitdir: /somewhere/.git/worktrees/x\n")
+            holds = Path(tmp) / "worktrees" / ".holds"
+            holds.mkdir(parents=True)
+            (holds / "other.json").write_text("not json at all")
+
+            with pytest.raises(RuntimeError, match="held"):
+                integrator._reclaim_worktree_path(leftover)
+
+            assert leftover.exists()
+
+    def test_the_hold_record_names_the_branch_worktree_and_reason(self, fake_forge):
+        with tempfile.TemporaryDirectory() as tmp:
+            integrator = self._integrator(tmp, fake_forge)
+
+            path = integrator._worktree.write_hold(
+                parent_issue_number=100, attempt_id="a1", reason="stop unconfirmed"
+            )
+
+            import json
+
+            record = json.loads(path.read_text(encoding="utf-8"))
+            assert record["temp_branch"] == integrator.config.temp_branch
+            assert record["worktree_path"] == str(integrator._temp_worktree_path())
+            assert record["parent_issue_number"] == 100
+            assert record["attempt_id"] == "a1"
+            assert record["reason"] == "stop unconfirmed"

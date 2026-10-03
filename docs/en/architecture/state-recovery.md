@@ -32,6 +32,8 @@ Typically, orchestrator states are tracked in a local state file like `run_state
   By fetching active PR branches and GitHub Issue labels (`status:in-progress`, `status:blocked`, `status:queued`), Orchestune rebuilds the DAG state in memory and resumes the cycle seamlessly from where it left off.
 * **Reclaim counts (#512)**:
   The zombie/timeout reclaim counts (the `task_reclaim_counts` ledger behind `--max-task-reclaims`) live only in `run_state.json`, so losing that file resets them to zero. A task that already exceeded the limit stays stopped even so, because its `status:blocked-human-review` label on GitHub is the source of truth — only tasks still below the limit start their count over.
+* **Integration timeout budget (#820)**:
+  Unlike the reclaim counts above, the integrator's timeout count is *not* kept in `run_state.json`. Each attempt writes canonical `reserved` / `finished` / `terminal` (and operator `reset`) event comments on the parent Issue, and the budget is rebuilt from every comment page, so a new runner, run ID or context cannot lose it. An unreadable, conflicting or unresolved history starts nothing; a `reserved` attempt with no result is held for a human instead of being re-run. A held worktree additionally leaves a local record under `worktrees/.holds/`, which reclaim and the temporary-branch GC honor. See [integration.md](integration.md#bounded-execution).
 
 ---
 

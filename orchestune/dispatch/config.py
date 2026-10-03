@@ -32,6 +32,16 @@ from orchestune.dispatch.retry_policy import (
 )
 from orchestune.dispatch.targets import DispatchTarget, LocalProcessDispatchTarget
 from orchestune.forge import Forge, GitHubForge
+from orchestune.integrator.timeout_policy import (
+    DEFAULT_INTEGRATION_CI_TIMEOUT_SECONDS,
+    DEFAULT_INTEGRATION_CLEANUP_TIMEOUT_SECONDS,
+    DEFAULT_INTEGRATION_COMMAND_TIMEOUT_SECONDS,
+    DEFAULT_INTEGRATION_CYCLE_TIMEOUT_SECONDS,
+    DEFAULT_INTEGRATION_DEPENDENCY_TIMEOUT_SECONDS,
+    DEFAULT_INTEGRATION_TIMEOUT_BACKOFF_SECONDS,
+    DEFAULT_MAX_INTEGRATION_TIMEOUT_RETRIES,
+    IntegrationExecutionPolicy,
+)
 from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
 
 DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST = frozenset(
@@ -117,6 +127,25 @@ class DispatcherConfig:
     profile: str | None = None
     # #1031: 子タスクのレビュー合格証跡（verdict=pass, SHA一致）を検証するゲート
     child_review_gate: str = "required"
+    # #820: Integratorの依存準備・CI・親Issue単位の統合サイクル・期限後の後始末・
+    # 補助git/ghコマンドの待機上限（秒）と、確認済みtimeout後の自動再試行回数。
+    # 既定値はIntegratorConfigと共通のポリシー定数から取る。0による無期限化は
+    # 認めない（終端のない経路を作らないため）。
+    integration_dependency_timeout_seconds: int = (
+        DEFAULT_INTEGRATION_DEPENDENCY_TIMEOUT_SECONDS
+    )
+    integration_ci_timeout_seconds: int = DEFAULT_INTEGRATION_CI_TIMEOUT_SECONDS
+    integration_cycle_timeout_seconds: int = DEFAULT_INTEGRATION_CYCLE_TIMEOUT_SECONDS
+    integration_cleanup_timeout_seconds: int = (
+        DEFAULT_INTEGRATION_CLEANUP_TIMEOUT_SECONDS
+    )
+    integration_command_timeout_seconds: int = (
+        DEFAULT_INTEGRATION_COMMAND_TIMEOUT_SECONDS
+    )
+    max_integration_timeout_retries: int = DEFAULT_MAX_INTEGRATION_TIMEOUT_RETRIES
+    integration_timeout_backoff_seconds: int = (
+        DEFAULT_INTEGRATION_TIMEOUT_BACKOFF_SECONDS
+    )
     # #706/#709/#746: modeは追加のrepository-wide loopを段階化する。
     # Supervisor配下へ移行済みの安全なstatus/recovery/GC自己修復は、後方互換の
     # default動作としてこのmodeおよび追加allowlistとは独立して維持する。
@@ -129,6 +158,7 @@ class DispatcherConfig:
             raise ValueError(
                 f"child_review_gate must be 'required' or 'off', got {self.child_review_gate!r}"
             )
+        _ = self.integration_execution_policy  # validates the seven #820 settings
         if not isinstance(self.consistency_mode, ConsistencyMode):
             self.consistency_mode = ConsistencyMode(self.consistency_mode)
         self.consistency_repair_allowlist = frozenset(self.consistency_repair_allowlist)
@@ -143,6 +173,18 @@ class DispatcherConfig:
             self.dispatch_target = LocalProcessDispatchTarget(log_dir=self.log_dir)
         if self.forge is None:
             self.forge = GitHubForge()
+
+    @property
+    def integration_execution_policy(self) -> IntegrationExecutionPolicy:
+        return IntegrationExecutionPolicy(
+            integration_dependency_timeout_seconds=self.integration_dependency_timeout_seconds,
+            integration_ci_timeout_seconds=self.integration_ci_timeout_seconds,
+            integration_cycle_timeout_seconds=self.integration_cycle_timeout_seconds,
+            integration_cleanup_timeout_seconds=self.integration_cleanup_timeout_seconds,
+            integration_command_timeout_seconds=self.integration_command_timeout_seconds,
+            max_integration_timeout_retries=self.max_integration_timeout_retries,
+            integration_timeout_backoff_seconds=self.integration_timeout_backoff_seconds,
+        )
 
     @property
     def resolved_forge(self) -> Forge:

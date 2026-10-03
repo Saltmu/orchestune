@@ -148,6 +148,17 @@ _INTEGRATOR_SUCCESS_STATUSES = {
 }
 
 
+# #820: execution-bound outcomes that must reach a human instead of being folded into
+# an ordinary retryable failure: the retry limit was reached, a stop/rollback/write
+# could not be confirmed, or the attempt history is unresolved or unreadable. Only a
+# confirmed timeout with budget left (`execution_timed_out`) is retried.
+_INTEGRATOR_HUMAN_REVIEW_STATUSES = {
+    IntegrationStatus.EXECUTION_CLEANUP_FAILED,
+    IntegrationStatus.EXECUTION_RETRY_EXHAUSTED,
+    IntegrationStatus.EXECUTION_INDETERMINATE,
+}
+
+
 def _build_integrator_config(
     config: DispatcherConfig, semantic_review_enabled: bool
 ) -> IntegratorConfig:
@@ -159,6 +170,13 @@ def _build_integrator_config(
         dag_ignore_patterns=config.dag_ignore_patterns,
         dag_similarity_threshold=config.dag_similarity_threshold,
         child_review_gate=config.child_review_gate,
+        integration_dependency_timeout_seconds=config.integration_dependency_timeout_seconds,
+        integration_ci_timeout_seconds=config.integration_ci_timeout_seconds,
+        integration_cycle_timeout_seconds=config.integration_cycle_timeout_seconds,
+        integration_cleanup_timeout_seconds=config.integration_cleanup_timeout_seconds,
+        integration_command_timeout_seconds=config.integration_command_timeout_seconds,
+        max_integration_timeout_retries=config.max_integration_timeout_retries,
+        integration_timeout_backoff_seconds=config.integration_timeout_backoff_seconds,
     )
     if semantic_review_enabled and isinstance(
         config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget
@@ -182,6 +200,8 @@ def _run_semantic_integrator(
     def evaluate_report(report: dict) -> tuple[PhaseStatus, bool]:
         status = report.get("status")
         if status == IntegrationStatus.REVIEW_GATE_BLOCKED:
+            return PhaseStatus.WARNING, False
+        if status in _INTEGRATOR_HUMAN_REVIEW_STATUSES:
             return PhaseStatus.WARNING, False
         if status not in _INTEGRATOR_SUCCESS_STATUSES:
             return PhaseStatus.RETRYABLE_FAILURE, True

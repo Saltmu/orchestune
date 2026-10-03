@@ -212,12 +212,15 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "targets.support",
             "dispatch.worktree",
             "infra.not_needed_review_state",
+            "integrator.ci_execution",
+            "integrator.execution",
             "integrator.finalization",
             "integrator.final_pr_body",
             "integrator.git_ops",
             "integrator.pr",
             "integrator.proofs",
             "integrator.tasks",
+            "integrator.timeout_retry",
             "integrator.worktree",
             "issue_notice",
             "issue_parsing",
@@ -257,6 +260,9 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "forge.issues",
             "forge.prs",
             "infra.git_cli",
+            "infra.managed_process",
+            "infra.managed_process_posix",
+            "infra.managed_process_windows",
             "infra.private_tokens",
             "infra.python_env",
             "infra.repository_config",
@@ -285,8 +291,10 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.retry_policy",
             "infra",
             "infra.command_metrics",
+            "infra.execution_deadline",
             "infra.json_state",
             "infra.process_utils",
+            "integrator.timeout_policy",
             "labels",
             "lock_contracts",
             "models",
@@ -352,6 +360,33 @@ BOUNDED_RECOVERY_TERMINALS = {
     ),
     "not_needed_review_timeout_seconds": (
         "integrator/coordinator.py",
+        "apply_human_review_escalation",
+    ),
+    # #820: every bound on Integrator execution ends in a confirmed-timeout retry
+    # budget whose last timeout, or any unconfirmed stop/rollback/write, escalates
+    # the parent Issue to human review (`ExecutionState.escalate`).
+    "integration_dependency_timeout_seconds": (
+        "integrator/execution.py",
+        "apply_human_review_escalation",
+    ),
+    "integration_ci_timeout_seconds": (
+        "integrator/execution.py",
+        "apply_human_review_escalation",
+    ),
+    "integration_cycle_timeout_seconds": (
+        "integrator/execution.py",
+        "apply_human_review_escalation",
+    ),
+    "integration_cleanup_timeout_seconds": (
+        "integrator/execution.py",
+        "apply_human_review_escalation",
+    ),
+    "integration_command_timeout_seconds": (
+        "integrator/execution.py",
+        "apply_human_review_escalation",
+    ),
+    "max_integration_timeout_retries": (
+        "integrator/execution.py",
         "apply_human_review_escalation",
     ),
 }
@@ -812,9 +847,15 @@ def test_bounded_recovery_limit_registry_covers_every_finite_config_setting() ->
     retry_source = (PACKAGE_ROOT / "dispatch" / "retry_policy.py").read_text(
         encoding="utf-8"
     )
-    assert _bounded_recovery_limits(
-        config_source, _module_int_constants(retry_source)
-    ) == set(BOUNDED_RECOVERY_TERMINALS)
+    policy_source = (PACKAGE_ROOT / "integrator" / "timeout_policy.py").read_text(
+        encoding="utf-8"
+    )
+    constants = _module_int_constants(retry_source) | _module_int_constants(
+        policy_source
+    )
+    assert _bounded_recovery_limits(config_source, constants) == set(
+        BOUNDED_RECOVERY_TERMINALS
+    )
 
 
 def test_bounded_recovery_limit_registry_points_at_terminal_behaviour() -> None:

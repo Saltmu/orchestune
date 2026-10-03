@@ -67,6 +67,8 @@ def _format_integrator_summary(integrator_report: dict) -> list[str]:
             lines.append(f"| `{task_id}` | ❌ 失敗 | {reason.split(chr(10))[0]} |")
         lines.append("")
 
+    lines.extend(_format_execution_failures(integrator_report))
+
     if integration_pr_number:
         repo_slug = os.environ.get("GITHUB_REPOSITORY")
         pr_ref = (
@@ -78,6 +80,43 @@ def _format_integrator_summary(integrator_report: dict) -> list[str]:
             f"➡️ **統合PR #{integration_pr_number}** が作成/検出されました。"
             f"最終マージには人間によるレビューが必要です: {pr_ref}\n"
         )
+    return lines
+
+
+def _format_execution_failures(integrator_report: dict) -> list[str]:
+    """#820: show why an integration attempt stopped, not just that it failed."""
+    failures = list(integrator_report.get("execution_failures", []))
+    for detail in integrator_report.get("details", {}).values():
+        failures.extend(detail.get("execution_failures", []))
+    if not failures:
+        return []
+    lines = [
+        "#### ⏱️ 実行期限・停止の失敗（Execution failures）",
+        "| 原因 | 段階 | 対象 | 上限 (設定/有効 秒) | 試行 | 次回可能日時 | 停止 / rollback / 書き込み |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for failure in failures:
+        target = (
+            f"#{failure.get('issue_number')} `{failure.get('subtask_id')}`"
+            if failure.get("issue_number") is not None
+            else "-"
+        )
+        limits = (
+            f"{failure.get('configured_limit_seconds')} / "
+            f"{failure.get('effective_limit_seconds')}"
+        )
+        attempt = f"{failure.get('attempt')}/{failure.get('max_attempts')}"
+        confirmations = (
+            f"stop={failure.get('stop_confirmed')} "
+            f"rollback={failure.get('rollback_confirmed')} "
+            f"write={failure.get('side_effect_state')}"
+        )
+        lines.append(
+            f"| `{failure.get('cause')}` | `{failure.get('stage')}` | {target} | "
+            f"{limits} | {attempt} | {failure.get('next_retry_at') or '-'} | "
+            f"{confirmations} |"
+        )
+    lines.append("")
     return lines
 
 

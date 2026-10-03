@@ -15,6 +15,10 @@ from contextlib import contextmanager
 from enum import StrEnum
 
 from orchestune.forge import REQUIRED_LABELS
+from orchestune.infra.execution_deadline import (
+    ExecutionCommandTimeout,
+    ExecutionDeadlineExceeded,
+)
 from orchestune.infra.git_cli import (
     ConditionalBranchDeletionResult,
     delete_remote_branch_if_matches,
@@ -141,6 +145,14 @@ class PrepareTasksStep(IntegrationComponent):
                         "`subtask_id`を抽出できなかったため、統合対象から除外しました。\n"
                         "Issue本文のFootprintブロックを確認し、`subtask_id`を修正してください。",
                     )
+                except (ExecutionDeadlineExceeded, ExecutionCommandTimeout) as error:
+                    # #820: a timed-out comment write may have taken effect; hold it
+                    # for reconciliation instead of reporting a safe, retryable timeout.
+                    if ctx.execution is None:
+                        raise
+                    raise ctx.execution.timeout_abort(
+                        error, "PrepareTasksStep", write_step=True, before_start=False
+                    ) from error
                 except Exception as error:
                     print(
                         "Warning: Failed to comment on unparsable done issue "
@@ -335,6 +347,9 @@ class MergeAndTestStep(IntegrationComponent):
             ctx.config.ci_command or default_ci_command(),
             ctx.config.forge,
             branch_resolver=ctx.task_branch_resolver,
+            execution=ctx.execution,
+            policy=ctx.config.execution_policy,
+            process_runner=ctx.config.process_runner,
         )
 
     @staticmethod

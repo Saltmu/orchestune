@@ -8,6 +8,11 @@ from collections.abc import Sequence
 from typing import Any, Protocol, runtime_checkable
 
 from orchestune.infra.command_metrics import measure_gh_call
+from orchestune.infra.execution_deadline import (
+    command_timeout_signal,
+    scope_bound_applies,
+    scoped_command_timeout,
+)
 from orchestune.models import IssueRecord, PrRecord, normalize_newlines
 
 from .admin import _LABEL_LIST_LIMIT as _LABEL_LIST_LIMIT
@@ -173,8 +178,20 @@ def _decode(raw: bytes | str | None) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+#: A Forge that bounds every call by the active execution scope declares this
+#: attribute as ``True``. The Integrator refuses to apply with a Forge that does not.
+BOUNDED_EXECUTION_ATTRIBUTE = "supports_bounded_execution"
+
+
+def forge_supports_bounded_execution(forge: object) -> bool:
+    """Whether ``forge`` explicitly declares scope-bounded execution (#820)."""
+    return getattr(forge, BOUNDED_EXECUTION_ATTRIBUTE, False) is True
+
+
 class GitHubForge(GitHubIssueMixin, GitHubPullRequestMixin, GitHubRepoAdminMixin):
     """Compatibility facade composing focused GitHub Forge implementations."""
+
+    supports_bounded_execution = True
 
     def __init__(self, *, timeout_seconds: float | None = None) -> None:
         if timeout_seconds is not None and timeout_seconds <= 0:
@@ -183,28 +200,42 @@ class GitHubForge(GitHubIssueMixin, GitHubPullRequestMixin, GitHubRepoAdminMixin
 
     def _run(self, args: list[str], input_text: str | None = None) -> str:
         with measure_gh_call(enabled=bool(args) and args[0] == "gh"):
-            timeout_kwargs: dict[str, Any] = (
-                {"timeout": self.timeout_seconds}
-                if self.timeout_seconds is not None
-                else {}
+            timeout = scoped_command_timeout(self.timeout_seconds, "gh")
+            try:
+                return self._run_bounded(args, input_text, timeout)
+            except subprocess.TimeoutExpired as error:
+                # #820: a timeout set by the Integrator's scope must not be swallowed
+                # by best-effort ``except Exception`` clauses; the caller's own
+                # ``timeout_seconds`` keeps its existing ``TimeoutExpired`` behaviour.
+                if timeout is not None and scope_bound_applies(
+                    self.timeout_seconds, timeout
+                ):
+                    raise command_timeout_signal(
+                        f"gh {args[1] if len(args) > 1 else ''}".strip(), timeout, error
+                    ) from error
+                raise
+
+    def _run_bounded(
+        self, args: list[str], input_text: str | None, timeout: float | None
+    ) -> str:
+        timeout_kwargs: dict[str, Any] = (
+            {"timeout": timeout} if timeout is not None else {}
+        )
+        if input_text is None:
+            return _decode(
+                subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=True,
+                    **timeout_kwargs,
+                ).stdout
             )
-            if input_text is None:
-                return _decode(
-                    subprocess.run(
-                        args,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        check=True,
-                        **timeout_kwargs,
-                    ).stdout
-                )
-            if self.timeout_seconds is not None:
-                return self._run_with_stdin(
-                    args, input_text, timeout_seconds=self.timeout_seconds
-                )
-            return self._run_with_stdin(args, input_text)
+        if timeout is not None:
+            return self._run_with_stdin(args, input_text, timeout_seconds=timeout)
+        return self._run_with_stdin(args, input_text)
 
     @staticmethod
     def _run_with_stdin(
@@ -237,6 +268,7 @@ class GitHubForge(GitHubIssueMixin, GitHubPullRequestMixin, GitHubRepoAdminMixin
 
 
 __all__ = [
+    "BOUNDED_EXECUTION_ATTRIBUTE",
     "REQUIRED_LABELS",
     "BootstrapResult",
     "Forge",
@@ -249,4 +281,5 @@ __all__ = [
     "PullRequestForge",
     "RelationshipUnavailableError",
     "RepoAdminForge",
+    "forge_supports_bounded_execution",
 ]

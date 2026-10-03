@@ -17,6 +17,11 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from orchestune.infra.execution_deadline import (
+    command_timeout_signal,
+    scoped_command_timeout,
+)
+
 # git CLIのadapter境界でrefを検証し、不正な値をsubprocessへ渡さない。
 _REF_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
 _COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -107,7 +112,21 @@ def run_git(
     elif isolate_git_env and any(var in os.environ for var in DANGEROUS_GIT_ENV_VARS):
         kwargs["env"] = get_clean_git_env()
 
-    result = subprocess.run(["git", *args], **kwargs)
+    # #820: inside an Integrator execution scope every git call is bounded by the
+    # remaining cycle time (or the cleanup budget during cleanup) and the per-call
+    # limit; outside a scope nothing changes. An expired scope refuses to start.
+    timeout = scoped_command_timeout(None, f"git {args[0] if args else ''}".strip())
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+
+    try:
+        result = subprocess.run(["git", *args], **kwargs)
+    except subprocess.TimeoutExpired as error:
+        if timeout is None:
+            raise
+        raise command_timeout_signal(
+            f"git {args[0] if args else ''}".strip(), timeout, error
+        ) from error
     return GitResult(
         returncode=result.returncode, stdout=result.stdout, stderr=result.stderr
     )

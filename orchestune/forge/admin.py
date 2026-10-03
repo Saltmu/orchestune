@@ -5,8 +5,15 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Any
 
+from orchestune.infra.execution_deadline import (
+    command_timeout_signal,
+    scoped_command_timeout,
+)
 from orchestune.labels import StatusLabel
 from orchestune.validation import validate_label
 
@@ -24,6 +31,23 @@ class RelationshipUnavailableError(ForgeError):
 
 
 _LABEL_LIST_LIMIT = 1000
+
+
+@contextmanager
+def _scoped_gh(stage: str) -> Iterator[dict[str, Any]]:
+    """Yield ``subprocess.run`` kwargs bounding a ``gh`` call by the Integrator scope.
+
+    Outside a scope nothing is added. A scope-bound timeout surfaces as an
+    ``ExecutionInterrupt`` so best-effort ``except Exception`` code cannot absorb it
+    (#820). The ``gh`` argv stays a literal at each call site (architecture partition).
+    """
+    timeout = scoped_command_timeout(None, f"gh {stage}")
+    try:
+        yield {} if timeout is None else {"timeout": timeout}
+    except subprocess.TimeoutExpired as error:
+        if timeout is None:
+            raise
+        raise command_timeout_signal(f"gh {stage}", timeout, error) from error
 
 
 @dataclass(frozen=True)
@@ -47,13 +71,15 @@ class GitHubRepoAdminMixin:
             raise ForgeAuthError(
                 "gh CLIが見つかりません。https://cli.github.com/ からインストールしてください。"
             )
-        result = subprocess.run(
-            ["gh", "auth", "status"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        with _scoped_gh("auth status") as bound:
+            result = subprocess.run(
+                ["gh", "auth", "status"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                **bound,
+            )
         if result.returncode != 0:
             raise ForgeAuthError(
                 f"gh認証が未設定です。`gh auth login`を実行してください: {result.stderr.strip()}"
@@ -69,45 +95,49 @@ class GitHubRepoAdminMixin:
             if label.name in existing_names:
                 existing.append(label.name)
                 continue
-            subprocess.run(
-                [
-                    "gh",
-                    "label",
-                    "create",
-                    label.name,
-                    "--color",
-                    label.color,
-                    "--description",
-                    label.description,
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=True,
-            )
+            with _scoped_gh("label create") as bound:
+                subprocess.run(
+                    [
+                        "gh",
+                        "label",
+                        "create",
+                        label.name,
+                        "--color",
+                        label.color,
+                        "--description",
+                        label.description,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=True,
+                    **bound,
+                )
             created.append(label.name)
         return BootstrapResult(
             created_labels=tuple(created), existing_labels=tuple(existing)
         )
 
     def _list_existing_label_names(self) -> set[str]:
-        result = subprocess.run(
-            [
-                "gh",
-                "label",
-                "list",
-                "--json",
-                "name",
-                "--limit",
-                str(_LABEL_LIST_LIMIT),
-            ],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=True,
-        )
+        with _scoped_gh("label list") as bound:
+            result = subprocess.run(
+                [
+                    "gh",
+                    "label",
+                    "list",
+                    "--json",
+                    "name",
+                    "--limit",
+                    str(_LABEL_LIST_LIMIT),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=True,
+                **bound,
+            )
         raw = json.loads(result.stdout)
 
         if len(raw) >= _LABEL_LIST_LIMIT:

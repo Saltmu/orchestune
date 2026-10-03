@@ -21,6 +21,7 @@ from orchestune.outcome_record import OutcomeRecord
 from orchestune.task_metadata import TaskMetadata
 from tests.conftest import get_clean_git_env
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
+from tests.forge_event_support import EventCommentForgeMixin
 
 pytestmark = pytest.mark.integration
 
@@ -137,7 +138,7 @@ class DummyGitRepo:
         self.temp_dir.cleanup()
 
 
-class DummyGitHub:
+class DummyGitHub(EventCommentForgeMixin):
     def __init__(self, local_repo_path: Path):
         self.local_repo_path = local_repo_path
         self.issues: dict[int, IssueRecord] = {}

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 
 from orchestune.infra.git_cli import run_git
+from orchestune.worktree_ops.temp_branches import holds_dir, load_holds
 
 
 class IntegrationWorktree:
@@ -32,6 +35,43 @@ class IntegrationWorktree:
         key = base_branch.replace("/", "-")
         return self.original_root / "worktrees" / ".locks" / f"{key}.lock"
 
+    def hold_path(self) -> Path:
+        return holds_dir(self.original_root) / f"{self.key()}.json"
+
+    def write_hold(
+        self,
+        *,
+        parent_issue_number: int,
+        attempt_id: str | None,
+        reason: str,
+        generation: int = 1,
+    ) -> Path:
+        """Record that this worktree and temp branch must be kept for a human."""
+        path = self.hold_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "temp_branch": self.temp_branch,
+            "worktree_path": str(self.temp_path()),
+            "parent_issue_number": parent_issue_number,
+            "generation": generation,
+            "attempt_id": attempt_id,
+            "reason": reason,
+            "created_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+        return path
+
+    def is_held(self, path: Path) -> bool:
+        """Whether ``path`` is held, or holds cannot be reconciled (treated as held)."""
+        holds = load_holds(self.original_root)
+        if holds is None:
+            return True
+        return any(
+            hold.get("worktree_path") == str(path)
+            or hold.get("temp_branch") == self.temp_branch
+            for hold in holds
+        )
+
     def reclaim(self, path: Path) -> None:
         """`path`に残存物があれば、所有権を確認した上でのみ除去する。
 
@@ -43,6 +83,10 @@ class IntegrationWorktree:
         """
         if not path.exists():
             return
+        if self.is_held(path):
+            raise RuntimeError(
+                f"Refusing to reclaim a held integration worktree (#820): {path}"
+            )
         git_marker = path / ".git"
         if not git_marker.is_file():
             raise RuntimeError(

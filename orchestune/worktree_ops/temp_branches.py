@@ -2,12 +2,46 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import run_git
+
+HOLDS_DIRNAME = ".holds"
+
+
+def holds_dir(original_root: Path) -> Path:
+    """Where ownership records of held (never auto-reclaimed) worktrees live (#820)."""
+    return original_root / "worktrees" / HOLDS_DIRNAME
+
+
+def load_holds(original_root: Path) -> list[dict[str, Any]] | None:
+    """Every hold record, or ``None`` when the records cannot be read and reconciled.
+
+    ``None`` means "do not reclaim anything": an unreadable or malformed record is
+    never read as "no hold".
+    """
+    directory = holds_dir(original_root)
+    if not directory.exists():
+        return []
+    holds: list[dict[str, Any]] = []
+    try:
+        for entry in sorted(directory.iterdir()):
+            if entry.suffix != ".json":
+                continue
+            record = json.loads(entry.read_text(encoding="utf-8"))
+            if not isinstance(record, dict) or not isinstance(
+                record.get("temp_branch"), str
+            ):
+                return None
+            holds.append(record)
+    except (OSError, ValueError):
+        return None
+    return holds
 
 
 def _list_remote_temp_refs(root: Path, forge: Forge) -> tuple[str, set[str]] | None:
@@ -67,6 +101,17 @@ def prune_stale_integration_temp_branches(
 ) -> list[str]:
     """Delete old integration temp branches that are not open PR heads."""
     forge = forge or GitHubForge()
+    # #820: a held worktree's temp branch is evidence for a human. If the hold records
+    # cannot be read and reconciled, nothing is collected.
+    holds = load_holds(Path(repository_root))
+    if holds is None:
+        print(
+            "Warning: Skipping stale integration temp branch GC: hold records "
+            "could not be reconciled.",
+            file=sys.stderr,
+        )
+        return []
+    held_branches = {str(hold["temp_branch"]) for hold in holds}
     ref_info = _list_remote_temp_refs(Path(repository_root), forge)
     if ref_info is None:
         return []
@@ -75,7 +120,7 @@ def prune_stale_integration_temp_branches(
     cutoff = (time.time() if now is None else now) - max_age_seconds
     deleted: list[str] = []
     for line in refs_stdout.splitlines():
-        branch = _is_stale_temp_branch(line, protected_heads, cutoff)
+        branch = _is_stale_temp_branch(line, protected_heads | held_branches, cutoff)
         if branch is None:
             continue
         try:

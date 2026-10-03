@@ -2,10 +2,24 @@ from __future__ import annotations
 
 import copy
 import subprocess as subprocess  # compatibility patch surface
+import sys
+from contextlib import ExitStack, nullcontext
 from pathlib import Path
 
+from orchestune.infra.execution_deadline import (
+    ExecutionCommandTimeout,
+    ExecutionDeadlineExceeded,
+    ExecutionInterrupt,
+    activate_scope,
+)
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import default_ci_command
+from orchestune.integrator.execution import (
+    ExecutionState,
+    IntegrationExecutionAbort,
+    provisional_status,
+    require_bounded_forge,
+)
 from orchestune.integrator.review_gate import (
     ChildReviewGateDecision,
     decide_child_review_gate,
@@ -33,6 +47,52 @@ from orchestune.integrator.types import (
 from orchestune.integrator.worktree import IntegrationWorktree
 from orchestune.models import Task
 
+# Steps that write to git or GitHub. A timeout *inside* one leaves the write's
+# outcome unknown (#820); a timeout before any of them only ends the cycle.
+_WRITE_STEPS = frozenset(
+    {
+        "RetryChildIssueCloseStep",
+        "PushTempBranchStep",
+        "EnsureIntegrationPrStep",
+        "SemanticReviewStep",
+        "AutoMergeChildIntegrationStep",
+        "LabelIncludedStep",
+    }
+)
+_EXECUTION_TIMEOUTS = (ExecutionDeadlineExceeded, ExecutionCommandTimeout)
+# The only write step with a single write: a refused start there wrote nothing.
+_SINGLE_WRITE_STEPS = frozenset({"PushTempBranchStep"})
+
+
+def _remove_temp_worktree(ctx: IntegrationContext) -> None:
+    """Remove the temporary worktree, on the cleanup budget once time has run out."""
+    if not ctx.temp_worktree_path:
+        return
+    execution = ctx.execution
+    scope = execution.scope if execution is not None else None
+    aborted = execution is not None and execution.abort is not None
+    phase = (
+        scope.cleanup_phase()
+        if scope is not None and (scope.expired() or aborted)
+        else nullcontext()
+    )
+    with phase:
+        try:
+            run_git(
+                ["worktree", "remove", "--force", str(ctx.temp_worktree_path)],
+                cwd=ctx.original_root,
+                check=True,
+            )
+        except (Exception, ExecutionInterrupt) as error:
+            # Best effort, as before #820: the attempt's result is already saved and its
+            # processes stopped, so a leftover worktree holds no unique evidence and is
+            # reclaimed on a later run. Say so instead of failing silently.
+            print(
+                "Warning: could not remove the temporary integration worktree "
+                f"{ctx.temp_worktree_path}: {error}",
+                file=sys.stderr,
+            )
+
 
 class IntegrationPipeline(IntegrationComponent):
     def __init__(self, steps: list[IntegrationComponent]):
@@ -49,7 +109,29 @@ class IntegrationPipeline(IntegrationComponent):
 
     def _run_steps(self, ctx: IntegrationContext, report: IntegrationReport) -> None:
         for step in self.steps:
-            result = step.execute(ctx)
+            try:
+                self._guard_deadline(ctx, step)
+                result = step.execute(ctx)
+            except IntegrationExecutionAbort as abort:
+                self._record_abort(ctx, abort)
+                break
+            except _EXECUTION_TIMEOUTS as error:
+                if ctx.execution is None:
+                    raise
+                self._record_abort(
+                    ctx,
+                    ctx.execution.timeout_abort(
+                        error,
+                        type(step).__name__,
+                        write_step=type(step).__name__ in _WRITE_STEPS,
+                        before_start=isinstance(error, ExecutionDeadlineExceeded)
+                        and (
+                            error.before_step
+                            or type(step).__name__ in _SINGLE_WRITE_STEPS
+                        ),
+                    ),
+                )
+                break
             report.update(result)
             if "status" in result:
                 ctx.status = result["status"]
@@ -59,19 +141,59 @@ class IntegrationPipeline(IntegrationComponent):
                 break
 
     @staticmethod
+    def _guard_deadline(ctx: IntegrationContext, step: IntegrationComponent) -> None:
+        """Start no new step once the parent's cycle deadline has passed."""
+        execution = ctx.execution
+        if execution is not None and execution.scope.expired():
+            raise ExecutionDeadlineExceeded(type(step).__name__, before_step=True)
+
+    @staticmethod
+    def _record_abort(
+        ctx: IntegrationContext, abort: IntegrationExecutionAbort
+    ) -> None:
+        abort.status = provisional_status(abort)
+        ctx.status = IntegrationStatus(abort.status)
+        ctx.error = str(abort)
+        ctx.execution_failures.append(abort.failure.to_dict())
+        execution = ctx.execution
+        if execution is None:
+            return
+        execution.abort = abort
+        if abort.hold:
+            execution.hold(abort.failure.detail or abort.failure.cause.value)
+
+    @staticmethod
     def _cleanup_temp_worktree(ctx: IntegrationContext) -> None:
-        if ctx.temp_worktree_path:
-            try:
-                run_git(
-                    ["worktree", "remove", "--force", str(ctx.temp_worktree_path)],
-                    cwd=ctx.original_root,
-                    check=True,
-                )
-            except Exception:
-                pass
+        execution = ctx.execution
+        if execution is not None and execution.holding:
+            print(
+                "[Integrator] Holding the integration worktree for a human "
+                f"({ctx.temp_worktree_path}): {execution.hold_reason}",
+                file=sys.stderr,
+            )
+            return
+        scope = execution.scope if execution is not None else None
+        aborted = execution is not None and execution.abort is not None
+        if execution is not None:
+            # #820: keep the worktree until the attempt's result is saved; if that
+            # cannot be confirmed the cycle becomes indeterminate and must keep it.
+            execution.worktree_removal_pending = True
+        else:
+            _remove_temp_worktree(ctx)
         # The stale marker is managed separately on CAS rejection.
-        if ctx.config.apply and not ctx.parent_branch_cas_rejected_this_cycle:
-            clear_parent_branch_stale_marker(ctx)
+        if (
+            ctx.config.apply
+            and not ctx.parent_branch_cas_rejected_this_cycle
+            and not aborted
+            and (scope is None or not scope.expired())
+        ):
+            try:
+                clear_parent_branch_stale_marker(ctx)
+            except ExecutionInterrupt as error:
+                print(
+                    f"Warning: stale-marker cleanup was cut short: {error}",
+                    file=sys.stderr,
+                )
 
     @staticmethod
     def _build_final_report(
@@ -97,6 +219,8 @@ class IntegrationPipeline(IntegrationComponent):
             final_report["unparsable_done_issues"] = [
                 task.issue_number for task in ctx.unparsable_done_tasks
             ]
+        if ctx.execution_failures:
+            final_report["execution_failures"] = list(ctx.execution_failures)
         return final_report
 
 
@@ -157,9 +281,61 @@ class SingleIssueIntegrator(IntegrationComponent):
         ctx.config.base_branch = ctx.base_branch
         ctx.config.temp_branch = ctx.temp_branch
 
-        # #435: runごとに一意なworktreeを使うため、CIを含むサイクル全体は
-        # ロックしない。worktree操作だけを各Stepで短く保護する。
-        return self.pipeline.execute(ctx)
+        if not ctx.config.apply:
+            # Dry run: validate the execution policy only. No process, reservation
+            # comment or label change happens.
+            ctx.config.build_execution_policy()
+            return self.pipeline.execute(ctx)
+        return self._execute_bounded(ctx)
+
+    def _execute_bounded(self, ctx: IntegrationContext) -> IntegrationReport:
+        """#820: run one parent's cycle under a monotonic deadline and attempt budget."""
+        forge_error = require_bounded_forge(ctx.config.forge)
+        if forge_error is not None:
+            return {"status": IntegrationStatus.FAILURE, "error": forge_error}
+        state = ExecutionState.create(
+            parent_issue_number=self.parent_issue,
+            policy=ctx.config.execution_policy,
+            forge=ctx.config.forge,
+            original_root=ctx.original_root,
+            temp_branch=ctx.temp_branch,
+        )
+        ctx.execution = state
+        with ExitStack() as stack:
+            stack.enter_context(activate_scope(state.scope))
+            lock_error = state.acquire_parent_lock(stack)
+            if lock_error is not None:
+                return {
+                    "status": IntegrationStatus.INTEGRATION_BRANCH_LOCKED,
+                    "error": lock_error,
+                }
+            # #435: runごとに一意なworktreeを使うため、worktree操作だけを各Stepで
+            # 短く保護する。実行全体は上の親単位ロックで直列化する（#820）。
+            try:
+                report = self.pipeline.execute(ctx)
+                return self._finalize(ctx, state, report)
+            finally:
+                if state.worktree_removal_pending and not state.holding:
+                    _remove_temp_worktree(ctx)
+
+    @staticmethod
+    def _finalize(
+        ctx: IntegrationContext, state: ExecutionState, report: IntegrationReport
+    ) -> IntegrationReport:
+        normal_success = (
+            report.get("status") == IntegrationStatus.SUCCESS
+            and not ctx.failed_tasks
+            and bool(ctx.merged_tasks)
+        )
+        outcome = state.finalize(normal_success=normal_success)
+        if outcome.failures:
+            report["execution_failures"] = [
+                failure.to_dict() for failure in outcome.failures
+            ]
+        if outcome.status is not None:
+            report["status"] = IntegrationStatus(outcome.status)
+            report["error"] = outcome.failures[0].detail if outcome.failures else ""
+        return report
 
 
 class Integrator:

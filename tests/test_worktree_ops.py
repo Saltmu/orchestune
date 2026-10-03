@@ -124,3 +124,43 @@ def test_prune_stale_temp_branches_keeps_open_and_fresh_refs(fake_forge):
     fake_forge.delete_branch.assert_called_once_with(
         "integration/temp-parent-issue-1-old"
     )
+
+
+class TestHeldIntegrationBranches:
+    """#820: a held worktree's temp branch is evidence and is never auto-collected."""
+
+    def _run(self, root: Path, fake_forge, held: bool | str):
+        from orchestune.integrator.worktree import IntegrationWorktree
+
+        if held == "unreadable":
+            holds = root / "worktrees" / ".holds"
+            holds.mkdir(parents=True)
+            (holds / "broken.json").write_text("{not json")
+        elif held:
+            IntegrationWorktree(root, "integration/temp-parent-issue-1-old").write_hold(
+                parent_issue_number=1, attempt_id="a", reason="stop unconfirmed"
+            )
+        with patch("orchestune.worktree_ops.temp_branches.run_git") as run_git:
+            run_git.return_value = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="origin/integration/temp-parent-issue-1-old 100\n",
+                stderr="",
+            )
+            fake_forge.list_open_prs.return_value = []
+            return prune_stale_integration_temp_branches(
+                root, forge=fake_forge, now=1_000, max_age_seconds=100
+            )
+
+    def test_a_stale_branch_without_a_hold_is_collected(self, fake_forge, tmp_path):
+        assert self._run(tmp_path, fake_forge, held=False) == [
+            "integration/temp-parent-issue-1-old"
+        ]
+
+    def test_a_held_branch_is_kept(self, fake_forge, tmp_path):
+        assert self._run(tmp_path, fake_forge, held=True) == []
+        fake_forge.delete_branch.assert_not_called()
+
+    def test_unreadable_hold_records_collect_nothing(self, fake_forge, tmp_path):
+        assert self._run(tmp_path, fake_forge, held="unreadable") == []
+        fake_forge.delete_branch.assert_not_called()

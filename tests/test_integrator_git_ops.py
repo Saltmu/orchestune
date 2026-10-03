@@ -15,10 +15,17 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
+import time
 from pathlib import Path
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from orchestune.infra.managed_process import ManagedProcessRunner
 from orchestune.integrator import Integrator, IntegratorConfig
+from orchestune.integrator.ci_execution import CiStageResult
 from orchestune.integrator.git_ops import IntegrationMerger
 from orchestune.models import PrRecord, Task
 from orchestune.task_branch_resolution import (
@@ -151,18 +158,20 @@ class TestRunCiVenvDetection:
 
         with (
             patch(
-                "orchestune.integrator.git_ops.install_dependencies",
+                "orchestune.integrator.ci_execution.sync_dependencies",
                 return_value=None,
             ) as install,
             patch(
-                "orchestune.integrator.git_ops.resolve_virtualenv_path",
+                "orchestune.integrator.ci_execution.resolve_virtualenv_path",
                 return_value=venv_path,
             ) as resolve,
         ):
             env, error = merger._prepare_ci_environment()
 
         assert error is None
-        install.assert_called_once_with(repo_root, env)
+        install.assert_called_once()
+        assert install.call_args.args == (repo_root, env)
+        assert install.call_args.kwargs["timeout_seconds"] == 600
         resolve.assert_called_once_with(repo_root, original_root, env)
         assert env["VIRTUAL_ENV"] == str(venv_path.resolve())
 
@@ -655,7 +664,10 @@ class TestVerifyCiAndRollback:
     def test_ci_success(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         with patch.object(
-            merger, "run_ci_in_worktree", autospec=True, return_value=(True, "")
+            merger,
+            "run_ci_stages",
+            autospec=True,
+            return_value=CiStageResult(ok=True, stage="ci"),
         ):
             success, reason, out = merger._verify_ci_and_rollback("sha123")
         assert success is True
@@ -667,9 +679,9 @@ class TestVerifyCiAndRollback:
         with (
             patch.object(
                 merger,
-                "run_ci_in_worktree",
+                "run_ci_stages",
                 autospec=True,
-                return_value=(False, "ci failed"),
+                return_value=CiStageResult(ok=False, stage="ci", message="ci failed"),
             ),
             patch.object(
                 merger, "rollback_to", autospec=True, return_value=True
@@ -702,3 +714,168 @@ class TestExecuteCiCommand:
         assert passed is False
         assert "--- stdout ---\nout-text" in out
         assert "--- stderr ---\nerr-text" in out
+
+
+def _event_log(forge: MagicMock) -> list:
+    from orchestune.integrator.timeout_retry import parse_event
+
+    return [
+        parse_event(comment["body"])
+        for comment in forge.event_comments
+        if comment["issue_number"] == 100
+    ]
+
+
+def _git_cmd(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=str(repo), check=True, capture_output=True, text=True
+    ).stdout
+
+
+def _build_real_repo(workspace: Path) -> Path:
+    """A clone with ``main``, ``parent/issue-100`` and one done child branch."""
+    origin = workspace / "origin.git"
+    origin.mkdir()
+    subprocess.run(
+        ["git", "init", "--bare"], cwd=str(origin), check=True, capture_output=True
+    )
+    repo = workspace / "repo"
+    subprocess.run(
+        ["git", "clone", str(origin), str(repo)], check=True, capture_output=True
+    )
+    _git_cmd(repo, "config", "user.name", "test-bot")
+    _git_cmd(repo, "config", "user.email", "test-bot@example.com")
+    subprocess.run(
+        ["git", "checkout", "-b", "main"], cwd=str(repo), capture_output=True
+    )
+    (repo / "README.md").write_text("dummy\n", encoding="utf-8")
+    _git_cmd(repo, "add", "README.md")
+    _git_cmd(repo, "commit", "-m", "Initial commit")
+    _git_cmd(repo, "push", "-u", "origin", "main")
+    _git_cmd(repo, "checkout", "-b", "parent/issue-100")
+    _git_cmd(repo, "push", "-u", "origin", "parent/issue-100")
+    _git_cmd(repo, "checkout", "-b", "claude/issue-1-task-1")
+    (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+    _git_cmd(repo, "add", "feature.txt")
+    _git_cmd(repo, "commit", "-m", "Add feature")
+    _git_cmd(repo, "push", "-u", "origin", "claude/issue-1-task-1")
+    _git_cmd(repo, "checkout", "parent/issue-100")
+    return repo
+
+
+def _alive(pid: int) -> bool:
+    if sys.platform == "win32":  # pragma: no cover - verified in managed_process tests
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return True
+    return stat.rpartition(")")[2].split()[0] not in ("Z", "X")
+
+
+@pytest.mark.integration
+class TestRealGitAndRealProcess:
+    """No git or process doubles: a hanging CI command in a real worktree."""
+
+    def _config(
+        self, repo: Path, forge: MagicMock, ci: list[str], **overrides: Any
+    ) -> IntegratorConfig:
+        return IntegratorConfig(
+            parent_issue_number=100,
+            repository_root=repo,
+            apply=True,
+            forge=forge,
+            child_review_gate="off",
+            ci_command=ci,
+            process_runner=ManagedProcessRunner(),
+            integration_cleanup_timeout_seconds=10,
+            **overrides,
+        )
+
+    def _forge(self, fake_forge: MagicMock) -> MagicMock:
+        issue = make_done_issue(1, subtask_id="task-1")
+        fake_forge.list_issues_by_label.side_effect = lambda label, *a, **k: [issue]
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.create_pull_request.return_value = 999
+        return fake_forge
+
+    def test_a_hanging_ci_command_and_its_child_are_stopped_and_nothing_is_pushed(
+        self, fake_forge: MagicMock, tmp_path: Path
+    ) -> None:
+        repo = _build_real_repo(tmp_path)
+        pids = tmp_path / "pids"
+        child = tmp_path / "child.py"
+        child.write_text(
+            "import os, time\n"
+            f"open({str(pids)!r}, 'a').write(str(os.getpid()) + ' ')\n"
+            "time.sleep(120)\n",
+            encoding="utf-8",
+        )
+        hang = tmp_path / "hang.py"
+        hang.write_text(
+            "import os, subprocess, sys, time\n"
+            f"subprocess.Popen([sys.executable, {str(child)!r}])\n"
+            f"open({str(pids)!r}, 'a').write(str(os.getpid()) + ' ')\n"
+            "time.sleep(120)\n",
+            encoding="utf-8",
+        )
+        parent_before = _git_cmd(repo, "rev-parse", "origin/parent/issue-100").strip()
+        forge = self._forge(fake_forge)
+
+        res = Integrator(
+            self._config(
+                repo,
+                forge,
+                [sys.executable, str(hang)],
+                integration_ci_timeout_seconds=2,
+            )
+        ).run()
+
+        assert res["status"] == "execution_timed_out"
+        failure = res["execution_failures"][0]
+        assert failure["cause"] == "ci_timeout"
+        assert failure["stop_confirmed"] is True
+        assert failure["rollback_confirmed"] is True
+        recorded = [int(p) for p in pids.read_text().split()]
+        assert len(recorded) == 2
+        for pid in recorded:
+            deadline = time.monotonic() + 5
+            while _alive(pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert not _alive(pid), f"pid {pid} survived the timeout"
+        # Nothing reached the remote and the worker was not requeued.
+        remote = _git_cmd(repo, "ls-remote", "origin")
+        assert "integration/temp" not in remote
+        _git_cmd(repo, "fetch", "origin")
+        assert _git_cmd(repo, "rev-parse", "origin/parent/issue-100").strip() == (
+            parent_before
+        )
+        forge.add_label.assert_not_called()
+        forge.close_issue.assert_not_called()
+        forge.create_pull_request.assert_not_called()
+        # The temporary worktree was removed after the confirmed stop.
+        assert not list((repo / "worktrees").glob("integration-temp-*"))
+
+    def test_a_passing_ci_command_still_integrates(
+        self, fake_forge: MagicMock, tmp_path: Path
+    ) -> None:
+        repo = _build_real_repo(tmp_path)
+        ok = tmp_path / "ok.py"
+        ok.write_text("print('ci ok')\n", encoding="utf-8")
+        forge = self._forge(fake_forge)
+
+        res = Integrator(self._config(repo, forge, [sys.executable, str(ok)])).run()
+
+        assert res["status"] == "success"
+        assert res["merged"] == ["task-1"]
+        assert res["integration_pr_number"] == 999
+        outcomes = [
+            e.outcome
+            for e in _event_log(forge)
+            if e is not None and e.event == "finished"
+        ]
+        assert outcomes == ["success"]

@@ -84,6 +84,20 @@ not-needed-review-state-path = "not_needed_review_state.json"
 not-needed-review-timeout-seconds = 86400
 
 # -----------------------------------------------------------------------------
+# Integrator execution bounds (#820)
+# -----------------------------------------------------------------------------
+# Every dependency preparation, CI run and parent-Issue integration cycle is bounded.
+# Seconds must be positive integers; 0 never means "unlimited".
+integration-dependency-timeout-seconds = 600   # one `uv sync`
+integration-ci-timeout-seconds = 1800          # one CI command
+integration-cycle-timeout-seconds = 3600       # whole cycle for one parent Issue
+integration-cleanup-timeout-seconds = 30       # total budget for stop/rollback/record after the deadline
+integration-command-timeout-seconds = 60       # one auxiliary git/gh call inside the cycle
+# Automatic retries after a confirmed timeout (0 = the first timeout is terminal).
+max-integration-timeout-retries = 2
+integration-timeout-backoff-seconds = 60       # first retry wait; the second waits twice as long
+
+# -----------------------------------------------------------------------------
 # DAG defaults
 # -----------------------------------------------------------------------------
 # Add repository-specific regular expressions only when generated or shared
