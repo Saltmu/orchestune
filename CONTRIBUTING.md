@@ -120,6 +120,7 @@ Before committing or pushing your changes, run the local CI script to verify for
   ```powershell
   .\scripts\local-ci.ps1
   ```
+  On Windows, tests run with 2 parallel workers by default (`-n 2`). You can configure concurrency via the `ORCHESTUNE_TEST_WORKERS` environment variable (e.g. `$env:ORCHESTUNE_TEST_WORKERS = "4"` or `"0"`) or via `PYTEST_ADDOPTS`.
 This runs:
 1. **Ruff Format & Lint Check**: `ruff format` and `ruff check`
 2. **Mypy Type Check**: Type hint validation

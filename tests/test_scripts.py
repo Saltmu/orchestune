@@ -22,6 +22,48 @@ def test_powershell_local_ci_contract():
     assert "gitleaks detect" in content
 
 
+def test_powershell_local_ci_configurable_workers():
+    import re
+
+    local_ci_ps1 = PROJECT_ROOT / "scripts" / "local-ci.ps1"
+    content = local_ci_ps1.read_text(encoding="utf-8")
+
+    assert "ORCHESTUNE_TEST_WORKERS" in content
+    assert "term-missing:skip-covered" in content
+    assert "PYTEST_ADDOPTS" in content
+    assert "uv run pytest -n 0" not in content
+
+    # Extract regex pattern from local-ci.ps1 and test against various syntax formats
+    pattern_match = re.search(r"\$env:PYTEST_ADDOPTS -match '([^']+)'", content)
+    assert pattern_match is not None
+    pattern = pattern_match.group(1)
+
+    # Valid concurrency args in PYTEST_ADDOPTS (including compact forms like -n4)
+    positives = [
+        "-n4",
+        "-n 4",
+        "-n=4",
+        "-n auto",
+        "-nauto",
+        "-n logical",
+        "-nlogical",
+        "-n",
+        "--numprocesses 4",
+        "--numprocesses=4",
+        "--numprocesses auto",
+        "--numprocesses=auto",
+        "-v -n4 -s",
+        "-v -n 0 -s",
+    ]
+    for opt in positives:
+        assert re.search(pattern, opt), f"Expected pattern to match: {opt}"
+
+    # Non-concurrency options should not match
+    negatives = ["--no-cov", "-new-option", "-name"]
+    for opt in negatives:
+        assert not re.search(pattern, opt), f"Expected pattern not to match: {opt}"
+
+
 def test_powershell_setup_git_hooks_contract():
     setup_hooks_ps1 = PROJECT_ROOT / "scripts" / "setup-git-hooks.ps1"
     content = setup_hooks_ps1.read_text(encoding="utf-8")
