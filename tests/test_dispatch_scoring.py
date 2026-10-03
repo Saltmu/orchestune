@@ -6,7 +6,7 @@ from orchestune.dispatch.scoring import (
     select_next_tasks,
 )
 from orchestune.ledger.run_state import CompletedWorktree, RunState
-from orchestune.models import IssueRecord
+from orchestune.models import IssueRecord, Usage
 from tests.dispatch_test_support import make_test_active_worktree
 
 
@@ -559,3 +559,65 @@ class TestSelectNextTasks:
         )
         assert normal in selected
         assert blocked not in selected
+
+
+class TestLaunchQuotaPrimaryConcurrency:
+    """#1154: 並行数が主軸。起動数上限は`None`=無効、`0`=起動禁止、正数=上限。"""
+
+    NOW = 1_700_000_000.0
+
+    def _quota(self, state, limit, window=3600, **kwargs):
+        return quota_available(
+            state,
+            now=self.NOW,
+            max_concurrent=kwargs.pop("max_concurrent", 2),
+            max_launches_per_window=limit,
+            window_seconds=window,
+            **kwargs,
+        )
+
+    def test_unset_limit_ignores_recent_launch_history(self):
+        state = RunState(active_worktrees={}, launch_history=[self.NOW - 10])
+        assert self._quota(state, None) == 2
+
+    def test_unset_limit_is_still_bounded_by_active_count(self):
+        state = RunState(
+            active_worktrees={
+                "1": make_test_active_worktree(1, branch="b1", worktree_path="w1"),
+                "2": make_test_active_worktree(2, branch="b2", worktree_path="w2"),
+            },
+            launch_history=[],
+        )
+        assert self._quota(state, None) == 0
+
+    def test_zero_limit_prohibits_launch(self):
+        state = RunState(active_worktrees={}, launch_history=[])
+        assert self._quota(state, 0) == 0
+
+    def test_unset_limit_does_not_bypass_token_budget(self):
+        state = RunState(
+            active_worktrees={},
+            launch_history=[],
+            completed_worktrees=[
+                CompletedWorktree(
+                    issue_number=9,
+                    subtask_id="t9",
+                    branch="b",
+                    started_at=self.NOW - 50,
+                    completed_at=self.NOW - 5,
+                    usage=Usage(input_tokens=250, output_tokens=250, total_tokens=500),
+                )
+            ],
+        )
+        assert self._quota(state, None, max_tokens_per_window=100) == 0
+
+    def test_positive_limit_boundary_is_exclusive_of_window_edge(self):
+        inside = RunState(active_worktrees={}, launch_history=[self.NOW - 3599])
+        edge = RunState(active_worktrees={}, launch_history=[self.NOW - 3600])
+        assert self._quota(inside, 1) == 0
+        assert self._quota(edge, 1) == 1
+
+    def test_window_default_change_counts_90_minute_old_launch(self):
+        state = RunState(active_worktrees={}, launch_history=[self.NOW - 5400])
+        assert self._quota(state, 1, window=7200) == 0
+        assert self._quota(state, 1, window=3600) == 1

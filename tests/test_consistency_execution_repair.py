@@ -7,7 +7,6 @@ from unittest.mock import patch
 import orchestune.dispatch.execution_repair as execution_repair
 from orchestune.consistency.invariants.execution import (
     DISPATCH_PRELAUNCH_ORPHAN,
-    EXECUTION_OBSERVATION_UNKNOWN,
     EXECUTION_TIMED_OUT,
     LOCAL_PROCESS_DEAD,
     RUN_STATE_MISSING,
@@ -115,6 +114,12 @@ class _ExternalTarget:
 
     def completion_status(self, handle, *, forge):
         del handle, forge
+        if self.error is not None:
+            raise self.error
+        return self.status
+
+    def execution_status(self, handle):
+        del handle
         if self.error is not None:
             raise self.error
         return self.status
@@ -356,7 +361,9 @@ def test_elapsed_timeout_is_a_kernel_finding_and_typed_plan(tmp_path, fake_forge
     assert _command_codes(evaluation, 707) == [COMMAND_RECLAIM, COMMAND_REQUEUE]
 
 
-def test_provider_unknown_blocks_same_cycle_timeout_reclaim(tmp_path, fake_forge):
+def test_provider_unknown_still_reaches_hold_capable_timeout_reclaim(
+    tmp_path, fake_forge
+):
     active = _active(
         tmp_path,
         707,
@@ -379,9 +386,10 @@ def test_provider_unknown_blocks_same_cycle_timeout_reclaim(tmp_path, fake_forge
             now=2_000.0,
         )
 
+    # #1154: provider状態が不明でも期限超過は既知の事実。回収handlerへ到達させ、
+    # handler側の停止確認guardが枠を保持して人間確認へ送る。
     assert EXECUTION_TIMED_OUT in _codes(evaluation)
-    assert EXECUTION_OBSERVATION_UNKNOWN in _codes(evaluation)
-    assert _command_codes(evaluation, 707) == []
+    assert _command_codes(evaluation, 707) == [COMMAND_RECLAIM, COMMAND_REQUEUE]
 
 
 def test_missing_and_stale_run_state_use_bookkeeping_commands(tmp_path, fake_forge):

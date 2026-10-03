@@ -323,6 +323,9 @@ class DummyAgentDispatchTarget(DispatchTarget):
     def is_complete(self, handle: DispatchHandle, forge=None) -> bool:
         return handle.external_id in self.completed_ids
 
+    def execution_status(self, handle: DispatchHandle):
+        return "stopped" if handle.external_id in self.completed_ids else "running"
+
     def mark_complete(self, external_id: str):
         self.completed_ids.add(external_id)
 

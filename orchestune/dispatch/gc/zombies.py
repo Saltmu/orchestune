@@ -23,6 +23,11 @@ from orchestune.dispatch.execution_repair import (
     command_finding_codes,
     revalidate_reclaim_preconditions,
 )
+from orchestune.dispatch.external_execution import (
+    ACTION_EXTERNAL_EXECUTION_HELD,
+    hold_if_not_stopped,
+    send_hold_to_human_review,
+)
 from orchestune.dispatch.gc.git import (
     backup_wip_commit,
     remove_worktree,
@@ -613,6 +618,20 @@ def _execute_reclaim_lifecycle(
     )
 
 
+def _external_hold_event(
+    reclaim: ZombieOrTimeoutReclaim, config: DispatcherConfig
+) -> dict | None:
+    """#1154: 外部実行の停止未確認なら人間確認へ送り、保持イベントを返す。"""
+    hold = hold_if_not_stopped(
+        reclaim.active, config, "timeout" if reclaim.is_timeout else "stale"
+    )
+    if hold is None:
+        return None
+    if config.apply:
+        send_hold_to_human_review(hold, reclaim.status_labels, config)
+    return hold.event(subtask_id=reclaim.subtask_id or "")
+
+
 def _apply_zombie_or_timeout_reclaim(
     run_state: RunState,
     reclaim: ZombieOrTimeoutReclaim,
@@ -635,6 +654,11 @@ def _apply_zombie_or_timeout_reclaim(
             reclaim.active,
             subtask_id=reclaim.subtask_id,
         )
+    # #1154: 外部実行の停止を確認できない限り、台帳・ハンドル・枠を保持する。
+    # reclaim countの予約やプロセス停止より前に判定し、保持は回収成功として扱わない。
+    held_event = _external_hold_event(reclaim, config)
+    if held_event is not None:
+        return held_event
     already_escalated = any(
         label in reclaim.status_labels for label in TERMINAL_ESCALATION_LABELS
     )
@@ -735,6 +759,12 @@ def _apply_validated_reclaim(
     event = _apply_zombie_or_timeout_reclaim(run_state, refreshed, config, open_prs)
     if event is not None and event_sink is not None:
         event_sink(event)
+    if event is not None and event.get("action") == ACTION_EXTERNAL_EXECUTION_HELD:
+        return RepairResult(
+            command=command,
+            status=RepairStatus.SKIPPED,
+            diagnostics=("external execution is not confirmed stopped; slot held",),
+        )
     return RepairResult(
         command=command,
         status=RepairStatus.APPLIED if event is not None else RepairStatus.SKIPPED,

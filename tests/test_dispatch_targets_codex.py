@@ -478,3 +478,43 @@ class TestCodexCloudDispatchTarget:
             )
             assert target.is_complete(handle, forge=self.forge) is True
         mock_list_prs.assert_called_once_with(state="all")
+
+
+class TestCodexExecutionStatus:
+    """#1154: 外部実行の停止証拠。PR・成果物は参照しない。"""
+
+    def _status(self, provider_status, external_id="task_1"):
+        target = CodexCloudDispatchTarget("env_123")
+        handle = DispatchHandle(external_id=external_id)
+        with patch.object(target, "_fetch_task_status", return_value=provider_status):
+            return target.execution_status(handle)
+
+    @pytest.mark.parametrize("status", ["failed", "cancelled", "canceled", "error"])
+    def test_terminal_failures_are_stopped(self, status):
+        assert self._status(status) == "stopped"
+
+    @pytest.mark.parametrize("status", ["ready", "applied"])
+    def test_terminal_successes_are_stopped(self, status):
+        assert self._status(status) == "stopped"
+
+    @pytest.mark.parametrize("status", ["running", "pending"])
+    def test_in_flight_states_are_running(self, status):
+        assert self._status(status) == "running"
+
+    @pytest.mark.parametrize("status", [None, "something-new"])
+    def test_unverified_vocabulary_is_unknown(self, status):
+        assert self._status(status) == "unknown"
+
+    def test_fallback_branch_id_is_unknown_without_querying(self):
+        target = CodexCloudDispatchTarget("env_123")
+        with patch.object(target, "_fetch_task_status") as fetch:
+            status = target.execution_status(
+                DispatchHandle(external_id="codex-cloud:claude/issue-1")
+            )
+        assert status == "unknown"
+        fetch.assert_not_called()
+
+    def test_provider_exception_is_unknown(self):
+        target = CodexCloudDispatchTarget("env_123")
+        with patch.object(target, "_fetch_task_status", side_effect=OSError("x")):
+            assert target.execution_status(DispatchHandle(external_id="t")) == "unknown"

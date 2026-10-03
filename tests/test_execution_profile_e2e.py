@@ -83,6 +83,9 @@ class RecordingDispatchTarget(DispatchTarget):
     def is_complete(self, handle: DispatchHandle, forge: Any = None) -> bool:
         return handle.external_id in self.completed_handles
 
+    def execution_status(self, handle: DispatchHandle):
+        return "stopped" if handle.external_id in self.completed_handles else "running"
+
     def mark_completed(self, issue_number: int) -> None:
         self.completed_handles.add(f"handle-{issue_number}")
 

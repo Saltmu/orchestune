@@ -161,6 +161,7 @@ class TestRunDispatchCycleCompletion:
         self._seed_active(tmp_path, run_state_path, external_id="session-1")
         dispatch_target = MagicMock()
         dispatch_target.completion_status.return_value = "completed"
+        dispatch_target.execution_status.return_value = "stopped"
         config = self._config(tmp_path, run_state_path, dispatch_target=dispatch_target)
         in_progress_issue = _full_issue(
             1, labels=("status:in-progress",), subtask_id="task-a"
@@ -225,6 +226,7 @@ class TestRunDispatchCycleCompletion:
         self._seed_active(tmp_path, run_state_path, external_id="session-1")
         dispatch_target = MagicMock()
         dispatch_target.completion_status.return_value = "completed"
+        dispatch_target.execution_status.return_value = "stopped"
         config = self._config(tmp_path, run_state_path, dispatch_target=dispatch_target)
         in_progress_issue = _full_issue(
             1, labels=("status:in-progress",), subtask_id="task-a"

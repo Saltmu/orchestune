@@ -45,6 +45,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
+            task_timeout_seconds=0,
             apply=True,
         )
 
@@ -159,6 +160,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
+            task_timeout_seconds=0,
             apply=True,
         )
 
@@ -243,6 +245,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
+            task_timeout_seconds=0,
             apply=True,
         )
 
@@ -361,6 +364,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             events_log_path=tmp_path / "events.jsonl",
             run_state_path=run_state_path,
             worktree_root=tmp_path / "worktrees",
+            task_timeout_seconds=0,
             apply=True,
         )
 

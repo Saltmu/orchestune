@@ -55,7 +55,7 @@ from orchestune.consistency.repairs.status import (
     COMMAND_TRANSITION_LABEL,
 )
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.targets import DispatchHandle
+from orchestune.dispatch.external_execution import probe_runtime_status
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.ledger.completion_reservations import completion_mutation_blocked_fresh
@@ -184,11 +184,8 @@ class _ExternalExecutionProbe:
     config: DispatcherConfig
 
     def status(self, external_id: str) -> str:
-        assert self.config.dispatch_target is not None
-        return self.config.dispatch_target.completion_status(
-            DispatchHandle(external_id=external_id),
-            forge=self.config.resolved_forge,
-        )
+        """外部実行の実行状態（running/stopped/unknown）。成果物の完了判定ではない。"""
+        return probe_runtime_status(self.config, external_id)
 
 
 def _repository_id() -> str:
@@ -313,24 +310,6 @@ class ReclaimPrecondition:
     timed_out: bool
 
 
-def _external_execution_is_running(
-    active: ActiveWorktree, config: DispatcherConfig
-) -> bool:
-    external_id = active.launch.external_id
-    if external_id is None:
-        return True
-    if config.dispatch_target is None:
-        return False
-    try:
-        status = config.dispatch_target.completion_status(
-            DispatchHandle(external_id=external_id),
-            forge=config.resolved_forge,
-        )
-    except Exception:
-        return False
-    return status == "running"
-
-
 def _timed_out(
     active: ActiveWorktree,
     finding_codes: frozenset[str],
@@ -343,7 +322,6 @@ def _timed_out(
         and started_at is not None
         and config.task_timeout_seconds > 0
         and observed_at - started_at > config.task_timeout_seconds
-        and _external_execution_is_running(active, config)
     )
 
 

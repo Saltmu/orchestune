@@ -93,6 +93,7 @@ from orchestune.dispatch.execution_repair import (
     DispatchRepairExecutorAdapter,
     RepairCommandHandler,
 )
+from orchestune.dispatch.external_execution import probe_runtime_status
 from orchestune.dispatch.phase_rebase import (
     ensure_parent_branch_ready,
 )
@@ -126,7 +127,6 @@ from orchestune.dispatch.status_repair_dependencies import (
     CompletionEvidenceView,
     DependencyAssessmentView,
 )
-from orchestune.dispatch.targets import DispatchHandle
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.infra.process_utils import run_state_lock as run_state_lock
 from orchestune.labels import StatusLabel
@@ -163,11 +163,8 @@ class _ExternalExecutionProbe:
     config: DispatcherConfig
 
     def status(self, external_id: str) -> str:
-        assert self.config.dispatch_target is not None
-        handle = DispatchHandle(external_id=external_id)
-        return self.config.dispatch_target.completion_status(
-            handle, forge=self.config.resolved_forge
-        )
+        """外部実行の実行状態（running/stopped/unknown）。成果物の完了判定ではない。"""
+        return probe_runtime_status(self.config, external_id)
 
 
 def _repository_id() -> str:

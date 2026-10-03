@@ -10,6 +10,7 @@ from typing import Any, cast
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_records import CompletionReceipt
+from orchestune.dispatch.external_execution import hold_if_not_stopped
 from orchestune.dispatch.gc.collection import GcItemResult, _apply_candidate
 from orchestune.dispatch.gc.handoff import GcRequest, HandoffForge
 from orchestune.dispatch.gc.policies import process_completion_policies
@@ -107,6 +108,10 @@ def _prepare_collection(
     )
     if record is None or journal_outcome(record) is None:
         return {"action": "completion_reserved_hold"}
+    # #1154: journalが確認済みでも、外部実行の停止未確認なら物理回収・解放を保留する。
+    hold = hold_if_not_stopped(active, config, "completion")
+    if hold is not None:
+        return hold.event()
     if not config.apply:
         return {"action": "completion_handoff_preview"}
     return _collect(state, config, key, active, record_completion, task)

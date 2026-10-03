@@ -526,7 +526,7 @@ def _resolve_claim_failure_launch_result(
     呼んでいないため、`held=True`の`LaunchResult`を返す（#943レビュー対応
     (Codex P1): 呼び出し元はこれを見てlaunch_history（quotaの消費記録）へ
     計上しない——providerを呼んでいないのにquotaを消費したことにすると、
-    既定の`max_launches_per_window=1`では他の全タスクが1時間ブロックされる）。
+    `max_launches_per_window=1`を明示した設定では他の全タスクが1時間ブロックされる）。
     それ以外の拒否理由は、branch/subtask_id
     の不正（`INVALID_BRANCH_NAME`）だけを`validation_error`として
     `status:blocked-human-review`へ、それ以外（`WORKTREE_CREATION_FAILED`を
