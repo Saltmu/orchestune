@@ -128,6 +128,16 @@ class TestBuildArgParser:
         args = self._parse_args(["--allow-unsafe-agent-execution"])
         assert args.allow_unsafe_agent_execution is True
 
+    def test_child_review_gate_option(self):
+        args = self._parse_args([])
+        assert args.child_review_gate is None
+        args = self._parse_args(["--child-review-gate", "required"])
+        assert args.child_review_gate == "required"
+        args = self._parse_args(["--child-review-gate", "off"])
+        assert args.child_review_gate == "off"
+        with pytest.raises(SystemExit):
+            self._parse_args(["--child-review-gate", "invalid"])
+
     @pytest.mark.parametrize(
         "removed_option",
         [
@@ -180,6 +190,7 @@ class TestDispatcherCliSingleResponsibility:
             "dispatch_target",
             "max_concurrent",
             "profile",
+            "child_review_gate",
             "allow_unsafe_agent_execution",
         }
 

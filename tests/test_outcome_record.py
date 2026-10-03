@@ -9,6 +9,8 @@ from orchestune.outcome_record import (
     OutcomeRecord,
     ReviewSummary,
     calculate_blocked_attempt,
+    find_child_outcome_record,
+    identifies_child,
     parse_from_comments,
 )
 
@@ -562,3 +564,36 @@ class TestCalculateBlockedAttempt:
             )
             == 3
         )
+
+
+class TestFindChildOutcomeRecord:
+    def test_identifies_child_by_issue_and_optional_pr(self):
+        rec_no_pr = OutcomeRecord(result="done", issue=10)
+        rec_pr = OutcomeRecord(result="done", issue=10, pr=20)
+
+        assert identifies_child(rec_no_pr, 10) is True
+        assert identifies_child(rec_no_pr, 99) is False
+        assert identifies_child(rec_no_pr, 10, pr_number=20) is True
+
+        assert identifies_child(rec_pr, 10, pr_number=20) is True
+        assert identifies_child(rec_pr, 10, pr_number=99) is False
+        assert identifies_child(rec_pr, 10, pr_number=None) is True
+
+    def test_find_child_outcome_record_picks_latest_matching(self):
+        r1 = OutcomeRecord(result="done", issue=10, head_sha="sha-1")
+        r_other = OutcomeRecord(result="done", issue=99, head_sha="sha-other")
+        r2 = OutcomeRecord(result="done", issue=10, head_sha="sha-2")
+
+        comments = [
+            {"body": r1.render(), "created_at": "2026-08-01T00:00:00Z"},
+            {"body": r_other.render(), "created_at": "2026-08-02T00:00:00Z"},
+            {"body": r2.render(), "created_at": "2026-08-03T00:00:00Z"},
+        ]
+
+        found = find_child_outcome_record(comments, 10)
+        assert found == r2
+
+    def test_find_child_outcome_record_returns_none_when_no_match(self):
+        r = OutcomeRecord(result="done", issue=99)
+        comments = [{"body": r.render(), "created_at": "2026-08-01T00:00:00Z"}]
+        assert find_child_outcome_record(comments, 10) is None

@@ -12,6 +12,7 @@ from __future__ import annotations
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 from unittest.mock import ANY, patch
 
 import pytest
@@ -45,10 +46,15 @@ class _SimulatedProcessCrash(Exception):
     """#209: プロセス強制終了を模すための、他の例外型と衝突しない専用の例外。"""
 
 
-def _child_config() -> IntegratorConfig:
-    return IntegratorConfig(
-        apply=True, parent_issue_number=100, integration_run_id="test-run"
-    )
+def _child_config(**overrides: Any) -> IntegratorConfig:
+    values: dict[str, Any] = {
+        "apply": True,
+        "parent_issue_number": 100,
+        "integration_run_id": "test-run",
+        "child_review_gate": "off",
+    }
+    values.update(overrides)
+    return IntegratorConfig(**values)
 
 
 class TestIsParentBranchCasRejection:
@@ -642,6 +648,7 @@ def test_parent_push_rejects_stale_base_without_updating_remote(fake_forge):
             integration_run_id="test-run",
             apply=True,
             forge=fake_forge,
+            child_review_gate="off",
         )
         ctx = IntegrationContext(
             config=config,
@@ -890,3 +897,235 @@ class TestChildIssueCloseNotice:
         comment = integrator_env.close_issue.call_args.kwargs["comment"]
         assert "自動的にクローズしました" in comment
         assert "orchestune:pr-link" not in comment
+
+
+class TestChildReviewGateStep:
+    """#1031: AutoMergeChildIntegrationStep における子レビューゲートの検証。"""
+
+    def test_review_gate_passes_when_all_children_have_valid_review_evidence(
+        self, integrator_env: IntegratorEnv, fake_forge
+    ):
+        from orchestune.outcome_record import OutcomeRecord, ReviewSummary
+
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        record = OutcomeRecord(
+            issue=1,
+            head_sha="a" * 40,
+            result="done",
+            review=ReviewSummary(
+                verdict="pass",
+                bot="claude",
+                reviewed_head_sha="a" * 40,
+            ),
+        )
+        fake_forge.list_comments.side_effect = lambda issue_no: (
+            [{"body": record.render(), "created_at": "2026-01-01T00:00:00Z"}]
+            if issue_no == 1
+            else []
+        )
+
+        res = Integrator(_child_config(child_review_gate="required")).run()
+
+        assert res["status"] == "success"
+        assert res["closed_issues"] == [1]
+        integrator_env.close_issue.assert_called_once()
+
+    def test_review_gate_blocks_and_escalates_when_child_lacks_review_evidence(
+        self, integrator_env: IntegratorEnv, fake_forge
+    ):
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        fake_forge.list_comments.return_value = []
+
+        res = Integrator(_child_config(child_review_gate="required")).run()
+
+        assert res["status"] == IntegrationStatus.REVIEW_GATE_BLOCKED
+        assert "closed_issues" not in res
+        integrator_env.close_issue.assert_not_called()
+        integrator_env.delete_branch.assert_not_called()
+        integrator_env.add_label.assert_called_once_with(
+            100, "status:blocked-human-review"
+        )
+        integrator_env.add_comment.assert_called_once()
+        comment_arg = integrator_env.add_comment.call_args
+        assert comment_arg.args[0] == 100
+        assert "<!-- orchestune:child-review-gate digest=" in comment_arg.args[1]
+        assert "#1" in comment_arg.args[1]
+        assert "`absent`" in comment_arg.args[1]
+
+    @pytest.mark.parametrize(
+        (
+            "verdict",
+            "result",
+            "reason",
+            "head_sha",
+            "reviewed_head_sha",
+            "expected_reason",
+        ),
+        [
+            (None, "done", None, "a" * 40, None, "legacy"),
+            ("skipped", "done", None, "a" * 40, "a" * 40, "skipped"),
+            ("fail", "done", None, "a" * 40, "a" * 40, "not_pass"),
+            ("pass", "blocked", "some-reason", "a" * 40, "a" * 40, "not_pass"),
+            ("pass", "done", None, "b" * 40, "a" * 40, "sha_mismatch"),
+            ("pass", "done", None, "a" * 40, "b" * 40, "sha_mismatch"),
+        ],
+    )
+    def test_review_gate_classifies_failure_reasons(
+        self,
+        integrator_env: IntegratorEnv,
+        fake_forge,
+        verdict,
+        result,
+        reason,
+        head_sha,
+        reviewed_head_sha,
+        expected_reason,
+    ):
+        from orchestune.outcome_record import OutcomeRecord, ReviewSummary
+
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        record = OutcomeRecord(
+            issue=1,
+            head_sha=head_sha,
+            result=result,
+            reason=reason,
+            review=ReviewSummary(
+                verdict=verdict,
+                bot="claude",
+                reviewed_head_sha=reviewed_head_sha,
+            ),
+        )
+        fake_forge.list_comments.side_effect = lambda issue_no: (
+            [{"body": record.render(), "created_at": "2026-01-01T00:00:00Z"}]
+            if issue_no == 1
+            else []
+        )
+
+        res = Integrator(_child_config(child_review_gate="required")).run()
+
+        assert res["status"] == IntegrationStatus.REVIEW_GATE_BLOCKED
+        comment_body = integrator_env.add_comment.call_args.args[1]
+        assert f"`{expected_reason}`" in comment_body
+
+    def test_review_gate_idempotent_on_repeated_runs(
+        self, integrator_env: IntegratorEnv, fake_forge
+    ):
+        from orchestune.integrator.review_gate import (
+            ChildReviewGateFailure,
+            compute_review_gate_digest,
+            format_child_review_gate_escalation_comment,
+        )
+
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        failure = ChildReviewGateFailure(
+            issue_number=1,
+            reason="absent",
+            subtask_id="task-1",
+            expected_sha="a" * 40,
+        )
+        digest = compute_review_gate_digest([failure])
+        existing_comment = format_child_review_gate_escalation_comment(
+            [failure], digest
+        )
+
+        # Forge returns existing escalation comment on parent issue 100
+        fake_forge.list_comments.side_effect = lambda issue_no: (
+            [{"body": existing_comment, "created_at": "2026-01-01T00:00:00Z"}]
+            if issue_no == 100
+            else []
+        )
+        fake_forge.get_issue_labels.return_value = ("status:blocked-human-review",)
+
+        res = Integrator(_child_config(child_review_gate="required")).run()
+
+        assert res["status"] == IntegrationStatus.REVIEW_GATE_BLOCKED
+        integrator_env.add_comment.assert_not_called()
+        integrator_env.add_label.assert_not_called()
+
+    def test_review_gate_off_logs_warning_and_proceeds(
+        self, integrator_env: IntegratorEnv, fake_forge, capsys
+    ):
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        fake_forge.list_comments.return_value = []
+
+        res = Integrator(_child_config(child_review_gate="off")).run()
+
+        assert res["status"] == "success"
+        assert res["closed_issues"] == [1]
+        captured = capsys.readouterr()
+        assert "Warning: child_review_gate is off" in captured.err
+
+    def test_review_gate_restores_label_when_matching_comment_exists_but_label_missing(
+        self, integrator_env: IntegratorEnv, fake_forge
+    ):
+        from orchestune.integrator.review_gate import (
+            ChildReviewGateFailure,
+            compute_review_gate_digest,
+            format_child_review_gate_escalation_comment,
+        )
+
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        failure = ChildReviewGateFailure(
+            issue_number=1,
+            reason="absent",
+            subtask_id="task-1",
+            expected_sha="a" * 40,
+        )
+        digest = compute_review_gate_digest([failure])
+        existing_comment = format_child_review_gate_escalation_comment(
+            [failure], digest
+        )
+
+        fake_forge.list_comments.side_effect = lambda issue_no: (
+            [{"body": existing_comment, "created_at": "2026-01-01T00:00:00Z"}]
+            if issue_no == 100
+            else []
+        )
+        # Parent issue does NOT have status:blocked-human-review currently (e.g. human cleared it or queued)
+        fake_forge.get_issue_labels.return_value = ("status:in-progress",)
+
+        res = Integrator(_child_config(child_review_gate="required")).run()
+
+        assert res["status"] == IntegrationStatus.REVIEW_GATE_BLOCKED
+        # Comment is NOT reposted (idempotent)
+        integrator_env.add_comment.assert_not_called()
+        # But status label is restored!
+        integrator_env.add_label.assert_called_once_with(
+            100, "status:blocked-human-review"
+        )
+
+    def test_review_gate_fails_closed_when_task_unmatched(
+        self, integrator_env: IntegratorEnv, fake_forge, tmp_path: Path
+    ):
+        # Done issues only contain task-1, but merged_tasks contains task-1 and task-orphan
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+
+        # We need a context where merged_tasks contains an unmatched subtask_id
+        from orchestune.integrator.steps import AutoMergeChildIntegrationStep
+        from orchestune.integrator.types import IntegrationContext, IntegratorConfig
+
+        config = IntegratorConfig(
+            parent_issue_number=100,
+            apply=True,
+            forge=fake_forge,
+            child_review_gate="required",
+        )
+        ctx = IntegrationContext(
+            config=config,
+            repository_root=tmp_path,
+            original_root=tmp_path,
+            base_branch="origin/parent/issue-100",
+            temp_branch="integration/temp",
+            merged_tasks=["task-orphan"],
+        )
+        fake_forge.list_comments.return_value = []
+        fake_forge.get_issue_labels.return_value = ()
+
+        step = AutoMergeChildIntegrationStep()
+        report = step.execute(ctx)
+
+        assert report["status"] == IntegrationStatus.REVIEW_GATE_BLOCKED
+        integrator_env.add_comment.assert_called_once()
+        comment_arg = integrator_env.add_comment.call_args.args[1]
+        assert "integration_evidence_missing" in comment_arg
+        assert "`task-orphan`" in comment_arg

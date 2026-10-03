@@ -59,6 +59,10 @@ reviewer-bot = "auto"
 # repository receiving this template (for example, "make ci" or "npm run ci").
 # ci-command = "./scripts/local-ci.sh"
 
+# Child sub-issue review gate: "required" (default) or "off".
+# Verifies that every merged child has a valid review evidence pass with matching SHA.
+child-review-gate = "required"
+
 # -----------------------------------------------------------------------------
 # Consistency supervisor defaults
 # -----------------------------------------------------------------------------

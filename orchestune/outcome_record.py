@@ -27,6 +27,12 @@ REASON_BASE_BRANCH_RED = "base-branch-red"
 REASON_REVIEW_TIMEOUT = "review-timeout"
 VALID_REASONS = frozenset({REASON_BASE_BRANCH_RED, REASON_REVIEW_TIMEOUT})
 
+CHILD_REVIEW_GATE_REQUIRED = "required"
+CHILD_REVIEW_GATE_OFF = "off"
+VALID_CHILD_REVIEW_GATE_MODES = frozenset(
+    {CHILD_REVIEW_GATE_REQUIRED, CHILD_REVIEW_GATE_OFF}
+)
+
 MAX_REASON_LENGTH = 100
 
 
@@ -428,3 +434,34 @@ def calculate_blocked_attempt(
         return latest_qualifying.attempt if latest_qualifying.attempt is not None else 1
 
     return max_attempt + 1
+
+
+def identifies_child(
+    record: OutcomeRecord, issue_number: int, pr_number: int | None = None
+) -> bool:
+    """そのレコードの識別フィールドが、指定された子タスクのものだと述べているかを確認する。
+
+    pr_numberが指定された場合は、レコードのprが一致するか（またはレコードがprを省略しているか）を照合する。
+    """
+    if record.issue != issue_number:
+        return False
+    return pr_number is None or record.pr is None or record.pr == pr_number
+
+
+def find_child_outcome_record(
+    comments: Sequence[Mapping[str, Any]],
+    issue_number: int,
+    pr_number: int | None = None,
+) -> OutcomeRecord | None:
+    """コメント一覧から、指定した子タスク（issue_number, 任意のpr_number）に一致する最新のOutcomeRecordを抽出する純粋関数。
+
+    parse_from_commentsの前に子Issue照合を掛けることで、最新が別タスクのレコードであっても
+    対象子タスクの最新レコードを正しく選別する。
+    """
+    owned = [
+        comment
+        for comment in comments
+        if (record := parse_from_comments([comment])) is not None
+        and identifies_child(record, issue_number, pr_number)
+    ]
+    return parse_from_comments(owned)
