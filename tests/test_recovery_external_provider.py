@@ -32,7 +32,7 @@ def provider(local_claim, monkeypatch, fake_forge):
     monkeypatch.setattr(
         external_execution,
         "DispatcherConfig",
-        lambda **kw: DispatcherConfig(forge=fake_forge, **kw),
+        lambda **kw: DispatcherConfig(**(kw | {"forge": fake_forge})),
     )
     attempt = LaunchAttempt(
         "attempt", "launched", "codex-cloud", active.core.branch, "main", 10.0, "run"
@@ -106,3 +106,22 @@ def test_missing_auth_is_unknown_and_never_builds(local_claim, monkeypatch):
     monkeypatch.setattr(external_execution, "build_dispatch_target", build)
     assert external_execution.read_runtime(active, workspace)[0] == "unknown"
     build.assert_not_called()
+
+
+@pytest.mark.uses_real_forge
+def test_provider_attempt_reads_have_a_bounded_timeout(provider):
+    workspace, _, _, _, _ = provider
+    from orchestune.forge import GitHubForge
+
+    captured = {}
+
+    def config(**kwargs):
+        captured.update(kwargs)
+        return DispatcherConfig(**kwargs)
+
+    from unittest.mock import patch
+
+    with patch.object(external_execution, "DispatcherConfig", config):
+        external_execution.provider_config(workspace)
+    assert isinstance(captured["forge"], GitHubForge)
+    assert captured["forge"].timeout_seconds == 30

@@ -22,6 +22,7 @@ from orchestune.dispatch.targets import (
     build_dispatch_target,
     resolve_default_dispatch_target_name,
 )
+from orchestune.forge import GitHubForge
 from orchestune.infra.repository_config import find_and_load_config_file
 from orchestune.ledger.run_state import ActiveWorktree
 
@@ -58,6 +59,8 @@ def provider_config(workspace: ClaimWorkspace) -> DispatcherConfig | None:
             return None
         return DispatcherConfig(
             parent_issue_number=0,
+            # Attempt evidence is read under recovery locks; bound gh I/O too.
+            forge=GitHubForge(timeout_seconds=30),
             dispatch_target=target,
             run_state_path=workspace.run_state_path,
             worktree_root=workspace.worktree_root,
