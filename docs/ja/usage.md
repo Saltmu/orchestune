@@ -290,7 +290,7 @@ else { Write-Warning 'report not created' }
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | 自動選択（非CI: `auto` / GitHub Actions: `cloud-routine`） | エージェントの起動先。未指定時は設定ファイルの値、または実行環境（`GITHUB_ACTIONS`環境変数）から自動選択されます。`auto`はPATH上のローカルCLIを検出します。`local`は後方互換のダミー起動（no-op、テスト・dry-run用途）になります。 |
 | `--max-concurrent <int>` | `2` (設定ファイル未指定時) | 同時に実行（起動）できるサブタスクエージェントの最大数。設定ファイルの値よりもCLI引数が優先されます。 |
 | `--profile <name>` | - | この実行全体で使用するタスクプロファイル（例: `balanced`, `fast-code`, `deep-reasoning`）をオーバーライドします。タスクメタデータのプロファイルやモデルランクより優先されます。 |
-| `--child-review-gate {required,off}` | - | 子サブIssueのレビュー合否検証モード（`required` または `off`）。未指定時は設定ファイル（`child-review-gate`）または環境変数（`ORCHESTUNE_CHILD_REVIEW_GATE`）、既定値は `required`。`off` 指定時は検証をスキップし警告を出力。 |
+| `--child-review-gate {required,off}` | - | 子サブIssueのレビュー合否検証モード（`required` または `off`）。未指定時は設定ファイル（`child-review-gate`）または環境変数（`ORCHESTUNE_CHILD_REVIEW_GATE`）、既定値は `required`。`off` 指定時は検証をスキップし警告を出力。[§4.5](#45-子レビュー証跡ゲート)を参照。 |
 | `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。安全のためCLI引数でのみ指定可能（設定ファイルでの指定は禁止）です。未指定でローカルCLIターゲットを実行しようとした場合は設定エラーで拒否されます（Fail-Closed）。 |
 
 ### 設定ファイル (`orchestune.toml`) による詳細設定
@@ -501,6 +501,41 @@ GitHubの `Closes #N` による自動リンクとIssueサイドバーの「Devel
 
 ---
 
+### 4.5 子レビュー証跡ゲート
+
+Integratorが`parent/issue-{N}`を更新する（4.2の自動マージ）直前に、統合対象の各子が合格したレビュー証跡を持つことを検証します。これが必須の第1層ゲートです。統合PRのセマンティックレビュー（第2層）はadvisoryのままで、マージをブロックしません（[architecture/integration.md](architecture/integration.md)）。
+
+**責務分担**
+
+| 担当 | 責務 |
+| :--- | :--- |
+| 開発スキル（レビューループ・Step 11） | PR作成後に明示的なレビュアー選択（`claude` / `codex` / `skip`）を求め、子PR上でレビューを実行し、指摘ごとにLLMの判断（`adopt` / `decline` / `already_addressed` / `needs_information` / `duplicate`）を判断表へ記録する。 |
+| `orchestune complete --issue <N> --pr <PR> --result done --reviewer <bot> --review-reply <file>` | PRのレビュー状態を取得し直し、判断表が現在の全指摘を網羅していること、`unresolved`・`needs_information`・必須の`deferred`が残っていないこと、レビュー対象SHAがPRのheadおよびローカルHEADと一致することを確認する。`verdict`・`reviewed_head_sha`・判断表のdigestをdone Outcome Recordへ保存する。不一致の場合はcompleteを拒否し（`review_evidence_invalid`・`review_head_mismatch`・`evidence_missing`）、何も投稿しない。`skip`は`verdict=skipped`として記録され、合格にはならない。 |
+| Integrator | 保存済みの証跡を検証するだけで、レビュー自体は実行しない。 |
+
+**合格条件（子ごと）**: 子Issueの最新のOutcome Recordが`result=done`かつ`verdict=pass`で、`head_sha`と`reviewed_head_sha`の両方がマージ対象のコミットSHAと一致すること。レビュー後にリベースやpushを行うとSHAが変わるため、再レビューが必要です。
+
+**ゲートが統合を停止したとき**: 親ブランチは更新されず、子Issueのクローズも子ブランチの削除も行われません。**親Issue**が`status:blocked-human-review`へ遷移し、各子と理由を列挙したコメント1件（マーカー`<!-- orchestune:child-review-gate digest=… -->`）が付きます。同じ失敗の組み合わせは以降のサイクルで再コメントされず、ラベルが外れている場合に限り復元されます。ゲートは統合サイクルごとに再評価されるため、証跡が整えば同じ統合がそのまま進みます。このゲート自身は、親Issueの`status:blocked-human-review`を外しません（[status-labels.md](status-labels.md)を参照）。
+
+| 理由 | 意味 | 再開方法 |
+| :--- | :--- | :--- |
+| `legacy` | Outcomeにレビュー証跡がない（ゲート導入前に記録された） | 下記「再開」を参照 |
+| `skipped` | レビューが明示的にスキップされた | 下記「再開」を参照 |
+| `not_pass` | `verdict`が`pass`でない、または`result`が`done`でない | 指摘を解消してレビューを合格させ、下記「再開」を参照 |
+| `sha_mismatch` | `complete`後に子のheadが動いた（リベース・push） | 新しいheadを再レビューし、下記「再開」を参照 |
+| `absent` | 子IssueにOutcome Recordがない | 子について`orchestune complete`を実行する |
+| `lookup_unknown` | 子Issueのコメント取得に失敗した（API障害等） | dispatchを再実行する（子側の対応は不要） |
+| `integration_evidence_missing` | 統合証跡または子との対応がない | 統合証跡を復旧して再実行する |
+
+**再開**
+
+- **完了がhandoffされる前**（`complete`が拒否され、何も投稿されていない場合）: 原因（現在のheadの再レビュー、判断表の補完）を解消して`orchestune complete`を再実行します。証跡が記録され、次のサイクルで子が統合されます。
+- **証跡が不足したままcompleteがhandoff済みの場合**（`legacy`・`skipped`・`not_pass`・`sha_mismatch`）: 同じclaimで`complete`を再実行しても証跡の追加・差し替えはできません。同一リクエストは保存済みの結果を再生するだけで、レビュー引数を変えたリクエストは`request_fingerprint_mismatch`で拒否されます。進める必要がある実行に限り、ゲートを明示的にOFFにして再開します（下記）。OFFはその実行の**すべての**子で検証を行わないため、レビュー証跡なしで受け入れる子に限って使ってください。
+
+**設定**: `--child-review-gate {required,off}`、設定キー`child-review-gate`、環境変数`ORCHESTUNE_CHILD_REVIEW_GATE`。既定値は`required`です。`off`はその実行のすべての子で検証をスキップし、警告を出力します。明示的なオプトアウトであり、自動で選ばれることはありません。
+
+**移行**: このゲート導入前に投稿されたOutcome Recordにはレビュー証跡がなく、`legacy`として停止します。移行期間中は、(a) 進行中の子の統合が終わるまで明示的に`off`を指定する、または (b) 停止を前提に、まだhandoffされていない子は子PRで再レビューして`orchestune complete`を再実行し、すでにhandoff済みの子は (a) を使います。legacyの子の統合が済んだら`required`へ戻してください。
+
 ## 6. 未着手の分解世代を置き換える（`orchestune replan`）
 
 `orchestune provision` は計画からIssueを**初回作成**するためのコマンドです。親Issue
@@ -569,7 +604,7 @@ orchestune claim <N> --amend-footprint
 
 ## 8. ローカルCI証跡の保存と完了処理 (`orchestune complete`)
 
-`orchestune complete` の成功は、固定したOutcome Recordの投稿、結果に対応するIssueラベル（`status:done` / `status:blocked` / `status:not-needed`）の確認、および共有台帳へのhandoffとreplay receiptの永続保存が成立したことを意味します。PRマージ、対応不要の独立レビュー承認、worktree回収の完了までは意味しません。`done` は公開前にローカルCI、PR/head、トークン上限の証跡を検証し、GCはその証跡を消費します。予約なしの旧完了経路ではGC側のトークン上限判定を維持します。
+`orchestune complete` の成功は、固定したOutcome Recordの投稿、結果に対応するIssueラベル（`status:done` / `status:blocked` / `status:not-needed`）の確認、および共有台帳へのhandoffとreplay receiptの永続保存が成立したことを意味します。PRマージ、対応不要の独立レビュー承認、worktree回収の完了までは意味しません。`done` は公開前にローカルCI、PR/head、子レビュー証跡（[§4.5](#45-子レビュー証跡ゲート)）、トークン上限の証跡を検証し、GCはその証跡を消費します。予約なしの旧完了経路ではGC側のトークン上限判定を維持します。
 
 claim済みworktreeから `orchestune complete --issue <N> --pr <PR> --result done` を実行します。`blocked` は `--reason` が必要です。`not-needed` は未claimのIssueにもworktreeを作らず予約できます。コマンドは外部操作前にcompletion IDを表示します。途中から再開するには、対応する claim marker を保持したまま、同一引数に `--completion-id <ID>` を付けて再実行してください。引数・所有者・generationが変わると固定済み要求を上書きできません。handoff後の再実行は、後続ポリシーがIssueをqueuedにした後やactive回収後でも保存結果を返し、古いラベルへ戻しません。
 

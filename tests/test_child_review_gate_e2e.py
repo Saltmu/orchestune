@@ -20,6 +20,7 @@ from complete_lifecycle_test_support import PublicationForge, lifecycle_environm
 from orchestune.complete.contracts import CompleteFailureReason
 from orchestune.complete.service import complete_task
 from orchestune.integrator import IntegrationStatus, Integrator, IntegratorConfig
+from orchestune.integrator.types import IntegrationReport
 from orchestune.outcome_record import (
     OutcomeRecord,
     ReviewSummary,
@@ -184,7 +185,7 @@ def integrate(
     gate: str = "required",
     parent_comments: list[str] | None = None,
     parent_labels: tuple[str, ...] = (),
-) -> dict[str, Any]:
+) -> IntegrationReport:
     """子Issueのコメントを与えてIntegratorを実行する（統合対象は子1件）。"""
     env.set_done_issues(make_done_issue(CHILD, subtask_id=f"task-{CHILD}"))
     bodies = {CHILD: child_comments, PARENT: parent_comments or []}
@@ -215,7 +216,7 @@ def parent_updated(env: IntegratorEnv) -> bool:
     return any(PARENT_PUSH in call.args[0] for call in env.calls_with("push"))
 
 
-def assert_escalated(env: IntegratorEnv, res: dict[str, Any], reason: str) -> str:
+def assert_escalated(env: IntegratorEnv, res: IntegrationReport, reason: str) -> str:
     """親ブランチを更新せず、親Issueが人間レビューへ送られ、理由が証跡に残る。"""
     assert res["status"] == IntegrationStatus.REVIEW_GATE_BLOCKED
     assert not parent_updated(env)
@@ -224,7 +225,7 @@ def assert_escalated(env: IntegratorEnv, res: dict[str, Any], reason: str) -> st
     env.add_label.assert_called_once_with(PARENT, "status:blocked-human-review")
     env.add_comment.assert_called_once()
     assert env.add_comment.call_args.args[0] == PARENT
-    comment = env.add_comment.call_args.args[1]
+    comment = str(env.add_comment.call_args.args[1])
     assert f"`{reason}`" in comment
     assert f"#{CHILD}" in comment
     return comment
@@ -476,3 +477,51 @@ class TestResumeAfterEscalation:
         )
         assert resumed["status"] == "success"
         assert parent_updated(integrator_env)
+
+
+class TestHandedOffEvidenceCannotBeReplaced:
+    """引き渡し済みのdoneは、同じclaimのcomplete再実行では証跡を差し替えられない。
+
+    docs/{ja,en}/usage.md の再開手順（引き渡し済みで証跡不足の子は明示的な
+    `--child-review-gate off`）の根拠。completeが拒否された場合（何も投稿されない）とは
+    異なり、skipなどで引き渡し済みの子は再レビュー後も同じリクエストの再生しかできない。
+    """
+
+    def test_rerun_with_new_review_args_is_rejected_and_gate_still_stops(
+        self, tmp_path, monkeypatch, integrator_env, fake_forge
+    ):
+        request, forge, _ = lifecycle_environment(tmp_path, monkeypatch, "done")
+        _bind_local_head(monkeypatch, HEAD)
+        first = complete_task(request, forge=forge)
+        assert first.success, first.failure
+        assert find_child_outcome_record(forge.comments, CHILD).review.verdict == (
+            "skipped"
+        )
+
+        # 再レビューして判断表を揃え、claude指定で同じIssueのcompleteを再実行する。
+        pr = ChildPr(tmp_path)
+        pr.judge_clean(round_number=1, source=pr.bot_reply(at="2026-10-03T00:01:00Z"))
+        rerun = replace(
+            request,
+            payload=replace(request.payload, reviewer="claude", review_reply=pr.reply),
+        )
+        original = forge.list_all_issue_comments
+        forge.list_all_issue_comments = lambda number: (
+            pr.comments if number == PR else original(number)
+        )
+        forge.list_pull_request_reviews = lambda number: pr.reviews
+        forge.list_pull_request_review_comments = lambda number: pr.inlines
+
+        second = complete_task(rerun, forge=forge)
+        assert not second.success
+        assert (
+            second.failure.reason == CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH
+        )
+        replayed = complete_task(request, forge=forge)
+        assert replayed.success
+        assert len(forge.comments) == 1  # 新しいOutcomeは投稿されない
+
+        res = integrate(
+            integrator_env, fake_forge, [comment["body"] for comment in forge.comments]
+        )
+        assert_escalated(integrator_env, res, "skipped")

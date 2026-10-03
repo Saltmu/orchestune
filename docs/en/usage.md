@@ -297,7 +297,7 @@ Routine dispatch execution uses strictly the following 7 options. Detailed param
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | auto-selected (non-CI: `auto` / GitHub Actions: `cloud-routine`) | Target environment to launch agents. When unspecified, resolved from configuration file or auto-selected from runtime environment (`GITHUB_ACTIONS`). `auto` detects a local CLI on `PATH`. `local` gives the backward-compatible no-op dummy (for tests/dry-runs). |
 | `--max-concurrent <int>` | `2` (when unset in config) | Maximum number of subtask agents running concurrently. CLI argument overrides configuration file setting. |
 | `--profile <name>` | - | Override the task execution profile (e.g. `balanced`, `fast-code`, `deep-reasoning`) for this entire run, taking precedence over task metadata profile or model tier. |
-| `--child-review-gate {required,off}` | - | Child sub-issue review gate mode (`required` or `off`). When omitted, falls back to config file (`child-review-gate`), env var (`ORCHESTUNE_CHILD_REVIEW_GATE`), or default `required`. `off` skips verification with a warning. |
+| `--child-review-gate {required,off}` | - | Child sub-issue review gate mode (`required` or `off`). When omitted, falls back to config file (`child-review-gate`), env var (`ORCHESTUNE_CHILD_REVIEW_GATE`), or default `required`. `off` skips verification with a warning. See [§4.5](#45-child-review-evidence-gate). |
 | `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`). For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error. |
 
 ### Configuration File (`orchestune.toml`) for Detailed Settings
@@ -508,6 +508,41 @@ Both comments embed a `<!-- orchestune:pr-link:{created|merged}:{pr_number} -->`
 
 ---
 
+### 4.5 Child review-evidence gate
+
+Before the integrator updates `parent/issue-{N}` (the auto-merge in 4.2), it verifies that every child in the merge has passing review evidence. This is the required layer-1 gate. The Semantic Review of the integration PR (layer 2) stays advisory and never blocks the merge ([architecture/integration.md](architecture/integration.md)).
+
+**Who does what**
+
+| Actor | Responsibility |
+| :--- | :--- |
+| Development skill (review loop, Step 11) | After the PR is created, requires an explicit reviewer selection (`claude` / `codex` / `skip`), runs the review on the child PR, and records an LLM judgment (`adopt` / `decline` / `already_addressed` / `needs_information` / `duplicate`) for every finding in a judgment table. |
+| `orchestune complete --issue <N> --pr <PR> --result done --reviewer <bot> --review-reply <file>` | Re-acquires the PR's review state and checks that the table covers every current finding, that none is `unresolved`, `needs_information` or a required `deferred`, and that the review target SHA equals the PR head and the local HEAD. It saves `verdict`, `reviewed_head_sha` and the judgment digest in the done Outcome Record. On any mismatch it rejects the completion (`review_evidence_invalid`, `review_head_mismatch` or `evidence_missing`) and posts nothing. `skip` is recorded as `verdict=skipped`, never as a pass. |
+| Integrator | Only verifies the saved evidence; it never runs a review. |
+
+**Pass condition (per child)**: the child Issue's latest Outcome Record has `result=done` and `verdict=pass`, and both its `head_sha` and `reviewed_head_sha` equal the commit SHA about to be merged. A rebase or push after the review changes that SHA, so it must be reviewed again.
+
+**When the gate stops the integration**: the parent branch is not updated, no child Issue is closed, no child branch is deleted, and the **parent Issue** moves to `status:blocked-human-review` with one comment (marker `<!-- orchestune:child-review-gate digest=… -->`) listing each child and its reason. The same failure set is not commented again on later cycles; the label is only restored if it is missing. The gate is re-evaluated on every integration cycle, so once the evidence is fixed the same integration proceeds. The gate does not remove the parent's `status:blocked-human-review` itself (see [status-labels.md](status-labels.md)).
+
+| Reason | Meaning | How to resume |
+| :--- | :--- | :--- |
+| `legacy` | The Outcome has no review evidence (it was recorded before the gate existed) | See “Resuming” below |
+| `skipped` | The review was explicitly skipped | See “Resuming” below |
+| `not_pass` | `verdict` is not `pass`, or `result` is not `done` | Resolve the findings so the review passes, then see “Resuming” |
+| `sha_mismatch` | The child head moved after `complete` (rebase or push) | Review the new head, then see “Resuming” |
+| `absent` | The child Issue has no Outcome Record | Run `orchestune complete` for the child |
+| `lookup_unknown` | Reading the child Issue's comments failed (e.g. API error) | Re-run dispatch; no action on the child |
+| `integration_evidence_missing` | The integration proof or the child mapping is missing | Restore the integration evidence and re-run |
+
+**Resuming**
+
+- **Before the completion is handed off** (`complete` was rejected, so nothing was posted): fix the cause (review the current head again, complete the judgment table), then re-run `orchestune complete`. The evidence is then recorded and the next cycle integrates the child.
+- **After a completion was already handed off with insufficient evidence** (`legacy`, `skipped`, `not_pass`, `sha_mismatch`): re-running `complete` in the same claim cannot add or replace evidence. The same request only replays the stored result, and a request with different review arguments is rejected with `request_fingerprint_mismatch`. Resume by explicitly turning the gate off (below) for the run that must proceed. This verifies nothing for **every** child in that run, so use it only for children you accept without review evidence.
+
+**Settings**: `--child-review-gate {required,off}`, the `child-review-gate` configuration key and `ORCHESTUNE_CHILD_REVIEW_GATE`; the default is `required`. `off` skips the verification for all children in the run and prints a warning. It is an explicit opt-out, never selected automatically.
+
+**Migration**: Outcome Records posted before this gate have no review evidence and stop as `legacy`. During the migration period either (a) set `off` explicitly until the in-flight children are integrated, or (b) accept the stop and, for children that have not yet been handed off, review on the child PR and run `orchestune complete` again; for children already handed off, use (a). Return to `required` once the legacy children are integrated.
+
 ## 6. Replacing an unstarted decomposition generation (`orchestune replan`)
 
 `orchestune provision` is for the initial creation of a plan's Issues. When a
@@ -581,7 +616,7 @@ The new footprint is the union of the held footprint, the Issue footprint, and e
 
 ## 8. Local CI Evidence Storage and Task Completion (`orchestune complete`)
 
-`orchestune complete` succeeds when it has posted the fixed Outcome Record, confirmed the corresponding Issue label (`status:done`, `status:blocked`, or `status:not-needed`), and durably saved the handoff and replay receipt in the shared ledger. Success does not mean the PR is merged, an independent not-needed review is approved, or the worktree is collected. `done` validates local CI, PR/head and token-limit evidence before publication; GC consumes that evidence. Legacy completion paths still perform their own token-limit checks.
+`orchestune complete` succeeds when it has posted the fixed Outcome Record, confirmed the corresponding Issue label (`status:done`, `status:blocked`, or `status:not-needed`), and durably saved the handoff and replay receipt in the shared ledger. Success does not mean the PR is merged, an independent not-needed review is approved, or the worktree is collected. `done` validates local CI, PR/head, child review evidence ([§4.5](#45-child-review-evidence-gate)) and token-limit evidence before publication; GC consumes that evidence. Legacy completion paths still perform their own token-limit checks.
 
 Run `orchestune complete --issue <N> --pr <PR> --result done` from the claimed worktree; `blocked` requires `--reason`, and `not-needed` can also reserve an unclaimed Issue without creating a worktree. The command prints a completion ID before remote effects. To resume interrupted publication, repeat the same arguments with `--completion-id <ID>` using the matching claim marker, or the explicit completion ID for an unclaimed Issue. A changed request or owner/generation cannot overwrite the frozen request. After handoff, replay returns the stored result even if a later policy queued the Issue or GC removed the active entry; it does not restore old labels.
 

@@ -235,6 +235,14 @@ stateDiagram-v2
 - 他のライフサイクルとは独立に、任意のタイミングで付与・解除され得る
   横断的な状態。
 
+### 14. 親Issue → `status:blocked-human-review`（子レビューゲートによる停止）
+- 発生元: `orchestune/integrator/steps.py`の`AutoMergeChildIntegrationStep._handle_review_gate_block`
+- 対象: 子Issueではなく**親Issue**（`--parent-issue`）。
+- 条件: `child-review-gate`が`required`（既定）で、統合対象の子のうち1件以上が、マージ対象のコミットに対する合格したレビュー証跡を持たない場合（理由は`legacy`・`skipped`・`not_pass`・`sha_mismatch`・`absent`・`lookup_unknown`・`integration_evidence_missing`）。親ブランチは更新されず、子Issueもクローズされない。
+- 仕組み: `apply_human_review_escalation`へ委譲する（現在の`status:*`ラベルを除去→`status:blocked-human-review`付与→マーカー`<!-- orchestune:child-review-gate digest=… -->`付きのコメント投稿）。冪等で、同じdigestのコメントは再投稿せず、ラベルだけが欠けている場合は復元する。
+- ゲートは解除しない: 証跡が整い、後続のサイクルで子が統合された後も、この処理自身がラベルを外すことはない。再開・移行の手順は[使い方 §4.5](./usage.md#45-子レビュー証跡ゲート)を参照。
+
+
 ## Issueのクローズ（子Issue・親Issue）
 
 上記の遷移は、いずれもオープンなIssue上での`status:*`ラベルの変化を扱っている。
@@ -247,7 +255,8 @@ Orchestuneが実際にIssueをクローズする2箇所を説明する。いず�
 ### 子Issue: `status:done`（オープン） → クローズ（`completed`）
 - 発生元: `orchestune/integrator/`の`AutoMergeChildIntegrationStep`
 - 条件: 子ブランチの統合PR（一時ブランチ → `parent/issue-{N}`）がCIを
-  通過し、Integratorによって自動マージされた場合。マージ直後、人間を
+  通過し、統合対象のすべての子が子レビュー証跡ゲートに合格し（既定の
+  `required`の場合。遷移14を参照）、Integratorによって自動マージされた場合。マージ直後、人間を
   介さず`reason=completed`で子Issueをクローズする。自動マージ自体が
   失敗した場合（一時ブランチのCIでは検出できなかったコンフリクト等）は、
   PRはオープンのまま残り、Issueは**クローズされない**。

@@ -248,6 +248,14 @@ independently of the lifecycle above (see "External lock" below).
 - This is a cross-cutting state that can be applied/removed at any point,
   independently of the rest of the lifecycle.
 
+### 14. Parent Issue → `status:blocked-human-review` (child review gate stop)
+- Source: `AutoMergeChildIntegrationStep._handle_review_gate_block` in `orchestune/integrator/steps.py`
+- Target: the **parent Issue** (`--parent-issue`), not the child Issue.
+- Condition: with `child-review-gate` set to `required` (the default), at least one child in the merge lacks passing review evidence for the commit being merged (reasons `legacy`, `skipped`, `not_pass`, `sha_mismatch`, `absent`, `lookup_unknown`, `integration_evidence_missing`). The parent branch is not updated and no child Issue is closed.
+- Mechanism: delegates to `apply_human_review_escalation` (remove the current `status:*` label, add `status:blocked-human-review`, post a comment carrying the marker `<!-- orchestune:child-review-gate digest=… -->`). It is idempotent: a comment with the same digest is not posted again, and if only the label is missing it is restored.
+- Not cleared by the gate: this step never removes the label itself, even after the evidence is fixed and a later cycle integrates the child. Resume and migration steps: [Usage §4.5](./usage.md#45-child-review-evidence-gate).
+
+
 ## Issue closing (child and parent)
 
 The transitions above cover `status:*` label changes on an *open* Issue. This
@@ -259,7 +267,9 @@ a normally-completed (non-`not-needed`) subtask. The required dispatcher
 ### Child Issue: `status:done` (still open) → closed (`completed`)
 - Source: `AutoMergeChildIntegrationStep` in `orchestune/integrator/`
 - Condition: the child's integration PR (temp branch → `parent/issue-{N}`)
-  passed CI and was auto-merged by the Integrator. The child Issue is closed
+  passed CI, every child in the merge passed the child review-evidence gate
+  (with the default `required`; see transition 14), and the PR was auto-merged
+  by the Integrator. The child Issue is closed
   immediately afterward with `reason=completed`, with no human involved. If
   the auto-merge itself fails (e.g. a conflict the temp-branch CI run didn't
   catch), the PR is left open and the Issue is **not** closed.
