@@ -86,3 +86,28 @@ Policy decision. A canonical branch name is also a semantic identifier held by t
 context, not proof that a local or remote Git ref exists. The Git-operation boundary
 checks it with `resolve_local_or_remote_branch` or an equivalent probe and fails
 closed when the ref is absent or unknown.
+
+---
+
+<a id="bounded-execution"></a>
+
+## 5. Bounded execution and the termination guarantee (#820)
+
+Every wait in the integrator is bounded and every timeout ends in a state a human or the next cycle can act on. The pieces live in separate modules so OS-specific code stays apart from policy:
+
+| Module | Owns |
+| --- | --- |
+| `infra.execution_deadline` | The per-parent `ExecutionScope`: one monotonic deadline, one independent cleanup budget, the per-call limit for auxiliary `git`/`gh`, and the `ExecutionInterrupt` signals |
+| `infra.managed_process` (+ `_posix`, `_windows`) | Starts a command in a process group the runner owns, reads output into bounded tails, stops and confirms the group, and returns a typed result (`SUCCESS`, `NONZERO_EXIT`, `TIMED_OUT`, `START_FAILED`, `STOP_UNCONFIRMED`) |
+| `infra.python_env`, `integrator.ci_execution` | Run `uv sync` and the CI command once each under `min(stage limit, remaining cycle time)`; the legacy `(ok, output)` text is derived from the typed result |
+| `integrator.timeout_retry` | The retry budget as canonical events on the parent Issue, rebuilt from every comment page |
+| `integrator.execution` | Per-parent state: attempt reservation, parent execution lock, holds, escalation, failure records |
+| `integrator.timeout_policy` | The seven settings, their defaults and validation, and the failure vocabulary |
+
+**Scope propagation.** `run_git` and `GitHubForge` read the active scope and add `timeout=min(per-call limit, remaining cycle time)`; after the deadline they refuse to start a call, and during cleanup they draw only on the cleanup budget. An injected Forge must declare `supports_bounded_execution = True`; otherwise the integrator does not apply. Execution signals derive from `BaseException`, so the many best-effort `except Exception` clauses in the steps cannot absorb a deadline: it reaches the pipeline, which stops, cleans up and records the cause.
+
+**Stop sequence on a timeout.** (1) stop the process group and confirm it is empty; (2) only then roll back to the SHA saved before the temporary merge and confirm `HEAD`; (3) abandon the rest of the parent's integration — nothing already CI-passed in this cycle is pushed; (4) record the outcome and decide whether a retry remains; (5) if the stop, the rollback, `HEAD` or the cleanup budget cannot be confirmed, hold the worktree, write a hold record (`worktrees/.holds/`), refuse new CI and send the parent to human review. A timeout is never folded into `handle_merge_failure`, so the worker is not re-queued for a hang. A push or other write that times out leaves `side_effect_state=unknown`: nothing is retried, completed or rolled back remotely until a human reconciles it.
+
+**Budget.** `reserved` is written and read back before dependency preparation starts, `finished` records the result and the confirmations, and `terminal` marks the last allowed timeout. A reservation without a result blocks automatic re-runs, because it cannot prove the processes stopped. Only the authenticated executing identity's events count (a reset may also come from a user with write access); the parent, generation and attempt must agree, and any unreadable, conflicting or invalid history starts nothing. See [state-recovery.md](state-recovery.md#2-github-as-the-source-of-truth) and the operator procedure in [Usage §4.6](../usage.md#46-bounded-integration-execution-and-timeout-recovery).
+
+**What is not guaranteed.** The operating system's process-creation API and uninterruptible kernel I/O can still block, so a strict wall-clock limit is not promised. A POSIX process that leaves the managed session/process group (for example with `setsid`) is outside the guarantee; CI commands must keep their descendants inside it, and a cgroup/sandbox is out of scope. On Windows a command that cannot be assigned to the Job Object is not run. Concurrent applies against one parent from different hosts are unsupported because GitHub comments have no atomic compare-and-swap. The worker's `task-timeout-seconds` and reclaim policy are separate and do not make the integrator bounded; and a stop that the OS refuses, or a write whose result cannot be reconciled, is held as undetermined rather than declared stopped.

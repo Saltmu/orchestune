@@ -32,6 +32,14 @@ RUNTIME_TUNING_KEYS: tuple[str, ...] = (
     "max_tokens_per_task",
     "not_needed_review_timeout_seconds",
     "consistency_max_repair_passes",
+    # #820: bounds on the Integrator's dependency preparation, CI and cycle.
+    "integration_dependency_timeout_seconds",
+    "integration_ci_timeout_seconds",
+    "integration_cycle_timeout_seconds",
+    "integration_cleanup_timeout_seconds",
+    "integration_command_timeout_seconds",
+    "max_integration_timeout_retries",
+    "integration_timeout_backoff_seconds",
 )
 
 # Settings standalone GC reads from the repository configuration file.

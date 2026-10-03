@@ -329,6 +329,13 @@ else { Write-Warning 'report not created' }
 | `events-log-path` | `"events.jsonl"` | ディスパッチイベントログの出力先パス。 |
 | `not-needed-review-state-path` | `"not_needed_review_state.json"` | Cloud Routine の not-needed レビュー状態記録パス。 |
 | `not-needed-review-timeout-seconds` | `86400` | not-needed レビューのタイムアウト秒数。 |
+| `integration-dependency-timeout-seconds` | `600` | Integratorの依存準備（`uv sync`）1回の待機上限（秒）。正の整数のみ。 |
+| `integration-ci-timeout-seconds` | `1800` | IntegratorのCIコマンド1回の待機上限（秒）。実際の上限は`min(この値, サイクルの残り時間)`。 |
+| `integration-cycle-timeout-seconds` | `3600` | 親Issue1件の統合サイクル全体（lock待機・準備・仮マージ・依存準備・CI・PR処理・finalization）の実行予算（秒）。サイクル開始時に単調時計で1回だけ作られます。 |
+| `integration-cleanup-timeout-seconds` | `30` | 期限超過後のプロセス停止・出力回収・rollback・記録に使う独立した総予算（秒）。段階ごとに取り直しません。 |
+| `integration-command-timeout-seconds` | `60` | サイクル内の補助`git`/`gh`コマンド1回の待機上限（秒）。 |
+| `max-integration-timeout-retries` | `2` | **確認済み**の統合timeout後に許可する自動再試行回数（既定で合計3試行）。`0`なら最初のtimeoutが終端です。 |
+| `integration-timeout-backoff-seconds` | `60` | 1回目の再試行までの待ち（秒）。2回目はその2倍（既定で60秒、次に120秒）。 |
 | `default_execution_profile` | `"balanced"` | タスクでプロファイルが指定されていない場合に使用するデフォルトプロファイル名。 |
 
 default self-healing allowlistは`consistency-repair-code`から意図的に分離されています。内容は`status.blocked-with-resolved-dependencies`、`status.primary-status-conflict`、`execution.requeue`、`execution.update-bookkeeping`、`execution.reclaim`であり、追加loopより前から存在するstatus promotion／reconciliation、state recovery、GCの動作を維持します。組み込みrepair passへ到達したcodeを後段のrepository-wide repair loopが再試行することはなく、Planner候補に現れただけのcommandはuser allowlistの対象に残ります。opt-inしたexecution commandは、組み込み境界と同じguard付きGC／recovery handlerを使用します。
@@ -455,7 +462,7 @@ reasoning_effort = "high"
 > [!NOTE]
 > 設定項目名は、CLI オプションに対応するケバブケース（例: `max-concurrent`）と、内部変数名に対応するスネークケース（例: `max_concurrent`）のどちらの形式でも記述可能です。
 > コマンドライン引数で明示的にオプションが指定された場合は、設定ファイルの値よりもコマンドライン引数の値が優先されます。
-> 未知のキーや不正な値がある場合は、既定値へフォールバックせず起動時にエラーで停止します。親Issue（`parent_issue`）、安全バイパス（`allow_unsafe_agent_execution`）、ルーチントークン（`routine_token`）、およびトップレベルの `model`/`reasoning_effort` は設定ファイルへの記述が禁止されています。真偽値は TOML の bool、パス・文字列の設定は文字列、整数の設定は TOML の整数で指定してください。`consistency-repair-code`は空でない文字列のlistです。`max-concurrent`、`max-launches-per-window`、`deviation-buffer-lines`、`max-recompute-retries`、`task-timeout-seconds`、`max-task-reclaims`、`early-death-window-seconds`、`max-early-death-retries`、`early-death-backoff-seconds`、`not-needed-review-timeout-seconds` は `0` 以上、`window-seconds` は `1` 以上、`consistency-max-repair-passes`は`1`～`5`です。
+> 未知のキーや不正な値がある場合は、既定値へフォールバックせず起動時にエラーで停止します。親Issue（`parent_issue`）、安全バイパス（`allow_unsafe_agent_execution`）、ルーチントークン（`routine_token`）、およびトップレベルの `model`/`reasoning_effort` は設定ファイルへの記述が禁止されています。真偽値は TOML の bool、パス・文字列の設定は文字列、整数の設定は TOML の整数で指定してください。`consistency-repair-code`は空でない文字列のlistです。`max-concurrent`、`max-launches-per-window`、`deviation-buffer-lines`、`max-recompute-retries`、`task-timeout-seconds`、`max-task-reclaims`、`early-death-window-seconds`、`max-early-death-retries`、`early-death-backoff-seconds`、`not-needed-review-timeout-seconds`、`max-integration-timeout-retries` は `0` 以上、`window-seconds` と`integration-*-seconds`の各設定（`integration-timeout-backoff-seconds`を含む）は `1` 以上、`consistency-max-repair-passes`は`1`～`5`です。
 >
 > `[execution_profiles]`（または `[tool.orchestune.execution_profiles]`）では、各プロファイル名（例: `balanced`, `deep-reasoning`, `fast-code`）配下にターゲット名（`claude-cli`, `agy-cli`, `codex-cli`, `cloud-routine`, `codex-cloud`）別のテーブルを定義します。各ターゲット設定では `model`（文字列）および `reasoning_effort`（`"low"` / `"medium"` / `"high"`）が指定可能です。`execution_profiles` テーブルを定義する場合、`default_execution_profile`（未指定時は `"balanced"`）のエントリが必ず含まれている必要があります。
 
@@ -536,6 +543,46 @@ Integratorが`parent/issue-{N}`を更新する（4.2の自動マージ）直前�
 **設定**: `--child-review-gate {required,off}`、設定キー`child-review-gate`、環境変数`ORCHESTUNE_CHILD_REVIEW_GATE`。既定値は`required`です。`off`はその実行のすべての子で検証をスキップし、警告を出力します。明示的なオプトアウトであり、自動で選ばれることはありません。
 
 **移行**: このゲート導入前に投稿されたOutcome Recordにはレビュー証跡がなく、`legacy`として停止します。移行期間中は、(a) 進行中の子の統合が終わるまで明示的に`off`を指定する、または (b) 停止を前提に、まだhandoffされていない子は子PRで再レビューして`orchestune complete`を再実行し、すでにhandoff済みの子は (a) を使います。legacyの子の統合が済んだら`required`へ戻してください。
+
+### 4.6 統合実行の期限とtimeoutからの復旧
+
+依存準備（`uv sync`）・CIコマンド・親Issue1件の統合サイクル全体に期限を設けています（#820）。7つの設定（`integration-*`と`max-integration-timeout-retries`）は[設定表](#設定ファイル-orchestunetoml-による詳細設定)にあります。専用のCLIフラグや環境変数はなく、`0`が「無期限」を意味することもありません。
+
+**1サイクルの流れ**: 親単位の実行ロック（`worktrees/.locks/integration-parent-issue-<N>-execution.lock`。結果の記録まで保持）を取得 → 子を一時ブランチへマージ → 親Issueへ`reserved`イベントを保存して読み戻し → 依存準備とCIを各1回だけ実行 → timeoutなら管理下のプロセス群全体を停止し、マージ前SHAへrollbackして`HEAD`を確認し、`finished`イベントを記録します。サイクル期限は親のサイクル開始時に単調時計を1回読んだ値で、各段階は`min(段階の上限, サイクルの残り時間)`だけ待ち、期限後に新しい処理は始めません。停止・出力回収・rollback・記録は`integration-cleanup-timeout-seconds`の単一の予算を共有します。
+
+| status | 意味 | 次の動作 |
+| :--- | :--- | :--- |
+| `execution_timed_out` | 段階がtimeout（または期限超過）し、停止とrollbackが**確認済み**。 | push・included付与・Issueクローズ・ブランチ削除は行わず、子Issueは`status:done`のままです（再投入は**しません**）。バックオフ（`integration-timeout-backoff-seconds`、次回は2倍）後のサイクルで、`max-integration-timeout-retries`まで自動再試行します。 |
+| `execution_retry_exhausted` | 許可された最後の試行（既定で3回目）もtimeout。 | `terminal`イベントを保存し、**親Issue**を`status:blocked-human-review`へ送ります。ラベル更新が失敗してもCIは起動せず、ラベルと通知だけを再試行します。 |
+| `execution_cleanup_failed` | 停止・rollback・`HEAD`確認・cleanup予算のいずれかを確認できない。 | worktreeと診断情報を**保持**（再利用・削除・回収しない）し、新しいCIを起動せず、親を人間確認へ送ります。 |
+| `execution_indeterminate` | push/PRの書き込みがtimeoutして結果不明、履歴の読み取り失敗・不整合、予約や結果の保存を確認できない、または結果が未記録の過去の試行がある。 | 推測・再試行・リモートの巻き戻しは行わず、結果不明の書き込みは照合のため保持します。 |
+
+通常の非ゼロ終了や起動失敗はtimeoutでは**ありません**。既存どおり（CI出力付きで子を再投入）に処理し、timeout回数へ加算も消去もしません。通常成功が確認できると現在のgenerationが閉じて回数が戻ります。回数は親Issueとgenerationに結び付き、run ID・タスク集合・CIコマンド・設定には依存しないため、ランナーの再作成や上限の引き下げで消えません。最終レポートとDispatcherの結果には、原因・対象・段階・設定上限と有効上限・試行・次回可能日時・停止/rollback/書き込みの確認状態・出力末尾が残ります。Dispatcherが再試行するのは`execution_timed_out`だけで、残る3つは人間確認の警告として扱います。
+
+**holdや終端状態の解除（運用者の手順）**
+
+1. そのrunのCIプロセスが残っていないことを確認し、保持されたworktree（`worktrees/integration-temp-*`）とリモートref（`parent/issue-<N>`、`integration/temp-*`）を点検します。結果不明の書き込みは、実際のrefと既存の統合証跡に照らして先に照合してください。
+2. **親Issue**へ、理由付きの**reset**コメントを1件投稿します（実行主体、または`write`/`maintain`/`admin`権限のユーザー）。`generation`は現在のgeneration+1、`references`は過去のイベントコメントにあるterminalまたは未確定の`attempt_id`（GitHub上の試行を持たないholdなら`local-hold:<holdファイル名から.jsonを除いたもの>`）です。
+
+<!-- orchestune:integration-execution:v1 -->
+```json
+{
+  "parent_issue_number": 123,
+  "generation": 2,
+  "attempt_id": "reset-2026-01-01-ops",
+  "event": "reset",
+  "targets": [],
+  "executed_at": "2026-01-01T00:00:00Z",
+  "reason": "Processes, worktree and remote refs verified by <operator>",
+  "references": "<attempt_id of the terminal or unconfirmed attempt, or local-hold:<hold file name without .json>>"
+}
+```
+
+3. worktreeとholdの記録（`worktrees/.holds/<key>.json`）は運用者が削除します。holdは、resetで新しいgenerationが開かれるまで親の新しいCIを止め、自動では回収されません。
+
+`status:blocked-human-review`を外すだけでは何もリセットされません。回数はラベルではなくイベントコメントに保存されているためです。
+
+**保証と限界。** 待機は有界で、timeoutの再試行には停止の確認が前提です。Linux/macOSでは専用のsession/process groupで起動し（`SIGTERM`、最大5秒の猶予、`SIGKILL`）、Windowsでは suspended で生成してkill-on-closeのJob Objectへ割り当ててからresumeします（Job割り当てに失敗したらコマンドは実行しません）。出力は並行して有限の末尾バッファへ読み出し、回収待ちにも同じcleanup予算を使います。対象外: OSのプロセス生成APIと割り込み不能なカーネルI/O（厳密な壁時計上限は保証しません）、プロセスグループから意図的に離脱するPOSIXのdaemon、別ホストから同じ親への同時apply（GitHubコメントに原子的なcompare-and-swapはなく、競合を検出したら停止します）、そしてワーカーの`task-timeout-seconds`（別の実行予算で、Integratorを有界にはしません）。LinuxとWindowsはCIマトリクスで検証し、macOSはPOSIX実装を共有します。
 
 ## 6. 未着手の分解世代を置き換える（`orchestune replan`）
 

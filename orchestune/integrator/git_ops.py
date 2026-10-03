@@ -1,23 +1,44 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.forge import Forge, GitHubForge
+from orchestune.infra.execution_deadline import (
+    ExecutionCommandTimeout,
+    ExecutionDeadlineExceeded,
+    ExecutionScope,
+)
 from orchestune.infra.git_cli import (
     fetch_remote_branch,
     is_ancestor_commit,
     resolve_commit_sha,
     run_git,
 )
+from orchestune.infra.managed_process import ProcessRunner
 from orchestune.infra.process_utils import default_ci_command
-from orchestune.infra.python_env import install_dependencies, resolve_virtualenv_path
+from orchestune.integrator.ci_execution import (
+    CiStageResult,
+    prepare_environment,
+    run_ci_command,
+    run_ci_stages,
+)
+from orchestune.integrator.execution import (
+    ExecutionState,
+    IntegrationExecutionAbort,
+    make_failure,
+)
 from orchestune.integrator.pr import handle_merge_failure
 from orchestune.integrator.proofs import TaskIntegrationProof
+from orchestune.integrator.timeout_policy import (
+    ExecutionFailureCause,
+    IntegrationExecutionPolicy,
+)
+from orchestune.integrator.timeout_retry import Target
 from orchestune.ledger.status_labels import TERMINAL_ESCALATION_LABELS
 from orchestune.models import Task
 from orchestune.task_branch_resolution import (
@@ -40,6 +61,9 @@ class IntegrationMerger:
         forge: Forge | None = None,
         *,
         branch_resolver: TaskBranchResolver | None = None,
+        execution: ExecutionState | None = None,
+        policy: IntegrationExecutionPolicy | None = None,
+        process_runner: ProcessRunner | None = None,
     ):
         self.repository_root = repository_root
         self.original_root = original_root
@@ -47,6 +71,15 @@ class IntegrationMerger:
         self.forge = forge or GitHubForge()
         self.branch_resolver = branch_resolver or TaskBranchResolver(())
         self.merged_task_proofs: dict[int, TaskIntegrationProof] = {}
+        # #820: the per-parent execution state (deadline scope, attempt budget). Absent
+        # for a standalone merger, which still bounds each stage by its own limit.
+        self.execution = execution
+        self.policy = (
+            policy
+            or (None if execution is None else execution.policy)
+            or IntegrationExecutionPolicy()
+        )
+        self.process_runner = process_runner
 
     def create_temp_branch(
         self, temp_branch: str, base_branch: str, apply: bool
@@ -130,52 +163,59 @@ class IntegrationMerger:
         except (subprocess.CalledProcessError, OSError):
             pass
 
-    def _prepare_ci_environment(self) -> tuple[dict[str, str], str | None]:
-        env = os.environ.copy()
-        env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
-        error = install_dependencies(self.repository_root, env)
-        if error:
-            return env, error
-        self._configure_virtualenv(env)
-        return env, None
+    @property
+    def scope(self) -> ExecutionScope | None:
+        return None if self.execution is None else self.execution.scope
 
-    def _configure_virtualenv(self, env: dict[str, str]) -> None:
-        venv_path = resolve_virtualenv_path(
-            self.repository_root, self.original_root, env
+    def _cleanup_phase(self) -> AbstractContextManager[object]:
+        scope = self.scope
+        return nullcontext() if scope is None else scope.cleanup_phase()
+
+    def _prepare_ci_environment(self) -> tuple[dict[str, str], str | None]:
+        """Compatibility form of :func:`prepare_environment`: ``(env, error text)``."""
+        env, failure = prepare_environment(
+            self.repository_root,
+            self.original_root,
+            policy=self.policy,
+            scope=self.scope,
+            runner=self.process_runner,
         )
-        if venv_path and venv_path.exists():
-            env["VIRTUAL_ENV"] = str(venv_path.resolve())
-            bin_path = venv_path / "bin"
-            if bin_path.exists():
-                env["PATH"] = f"{bin_path.resolve()}{os.pathsep}{env.get('PATH', '')}"
+        return env, None if failure is None else failure.message
 
     def _execute_ci_command(self, env: dict[str, str]) -> tuple[bool, str]:
-        ci_cmd = self.ci_command or default_ci_command()
-        try:
-            subprocess.run(
-                ci_cmd,
-                cwd=str(self.repository_root),
-                check=True,
-                capture_output=True,
-                env=env,
-            )
-            return True, ""
-        except subprocess.CalledProcessError as e:
-            stdout = (e.stdout or b"").decode(errors="replace")
-            stderr = (e.stderr or b"").decode(errors="replace")
-            return False, f"--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+        """Compatibility form of :func:`run_ci_command`: ``(ok, output text)``."""
+        return self._run_ci_command(env).legacy()
+
+    def _run_ci_command(self, env: dict[str, str]) -> CiStageResult:
+        return run_ci_command(
+            self.ci_command or default_ci_command(),
+            self.repository_root,
+            env,
+            policy=self.policy,
+            scope=self.scope,
+            runner=self.process_runner,
+        )
+
+    def run_ci_stages(self) -> CiStageResult:
+        """Prepare the worktree CI environment and run the command, each at most once."""
+        return run_ci_stages(
+            self.ci_command or default_ci_command(),
+            self.repository_root,
+            self.original_root,
+            policy=self.policy,
+            scope=self.scope,
+            runner=self.process_runner,
+        )
 
     def run_ci_in_worktree(self) -> tuple[bool, str]:
         """Prepare the worktree CI environment and run the configured command.
 
         Dependency installation and virtualenv resolution complete before the
         CI command runs. The integration gate deliberately does not retry the
-        command; the caller rolls back when it fails (#208).
+        command; the caller rolls back when it fails (#208). Compatibility wrapper
+        returning ``(ok, output)``; control flow uses :meth:`run_ci_stages`.
         """
-        env, error = self._prepare_ci_environment()
-        if error is not None:
-            return False, error
-        return self._execute_ci_command(env)
+        return self.run_ci_stages().legacy()
 
     def _check_task_blocking(self, task: Task, unavailable_ids: set[str]) -> str | None:
         # #437レビュー対応: status:blocked-human-review（親branchの
@@ -361,15 +401,20 @@ class IntegrationMerger:
             return False, pre_merge_sha, f"Merge conflict: {merge_error}"
 
     def _verify_ci_and_rollback(
-        self, pre_merge_sha: str
+        self, pre_merge_sha: str, target: Target | None = None
     ) -> tuple[bool, str, str | None]:
         """Run CI and roll back to `pre_merge_sha` if CI verification fails.
 
-        Returns `(success, failure_reason, ci_output)`.
+        Returns `(success, failure_reason, ci_output)`. A timeout, an expired cycle
+        deadline or an unconfirmed stop is *not* a CI failure: it raises
+        ``IntegrationExecutionAbort`` after stopping, rolling back and confirming, so
+        the worker is never re-queued for a hang.
         """
-        ci_success, ci_output = self.run_ci_in_worktree()
-        if ci_success:
+        result = self.run_ci_stages()
+        if result.ok:
             return True, "", None
+        if result.cause is not None:
+            raise self._abort_for_stage(result, pre_merge_sha, target)
 
         reason = "CI verification failed"
         if not self.rollback_to(pre_merge_sha):
@@ -378,7 +423,105 @@ class IntegrationMerger:
                 f"({pre_merge_sha})へのrollbackにも失敗しました。"
                 "統合ブランチの状態を手動で確認してください。"
             )
-        return False, reason, ci_output
+        return False, reason, result.message
+
+    def _rollback_and_confirm(self, sha: str) -> tuple[bool, str]:
+        """Reset to ``sha`` and verify HEAD equals it, within the cleanup budget."""
+        try:
+            run_git(["reset", "--hard", sha], cwd=self.repository_root, check=True)
+            head = self.current_head_sha()
+        except (ExecutionDeadlineExceeded, ExecutionCommandTimeout):
+            return False, "the cleanup budget was exhausted during rollback"
+        except (subprocess.SubprocessError, OSError) as error:
+            return False, f"rollback to {sha} failed: {error}"
+        if head != sha:
+            return False, f"HEAD {head} does not match the pre-merge SHA {sha}"
+        return True, ""
+
+    def _abort_for_stage(
+        self, result: CiStageResult, pre_merge_sha: str, target: Target | None
+    ) -> IntegrationExecutionAbort:
+        cause = result.cause
+        assert cause is not None
+        process = result.process
+        common = {
+            "configured_limit_seconds": result.configured_limit_seconds,
+            "effective_limit_seconds": result.effective_limit_seconds,
+            "output_tail": (
+                "" if process is None else process.stdout_tail + process.stderr_tail
+            )[-4000:],
+        }
+        rolled_back = False
+        if result.stop_unconfirmed:
+            # Never roll back (or start anything) under a process that may still run.
+            stop_confirmed = False
+            detail = "the owned process group could not be confirmed stopped"
+        else:
+            stop_confirmed = True
+            with self._cleanup_phase():
+                rolled_back, detail = self._rollback_and_confirm(pre_merge_sha)
+            if rolled_back:
+                detail = result.message.splitlines()[0] if result.message else ""
+        failure = make_failure(
+            self.execution,
+            cause if rolled_back else ExecutionFailureCause.CLEANUP_FAILED,
+            result.stage,
+            target=target,
+            stop_confirmed=stop_confirmed,
+            rollback_confirmed=rolled_back,
+            detail=detail,
+            **common,
+        )
+        return IntegrationExecutionAbort(failure, hold=not rolled_back)
+
+    def _abort_for_timeout(
+        self, error: BaseException, pre_merge_sha: str | None, target: Target
+    ) -> IntegrationExecutionAbort:
+        """A git call timed out or the deadline passed mid-task: stop, roll back, confirm."""
+        rolled_back, detail = True, ""
+        with self._cleanup_phase():
+            self.abort_merge_quietly()
+            if pre_merge_sha is not None:
+                rolled_back, detail = self._rollback_and_confirm(pre_merge_sha)
+        scope = self.scope
+        fields = {
+            "configured_limit_seconds": float(
+                self.policy.integration_cycle_timeout_seconds
+            ),
+            "effective_limit_seconds": None if scope is None else scope.cycle_seconds,
+        }
+        if rolled_back:
+            return IntegrationExecutionAbort(
+                make_failure(
+                    self.execution,
+                    ExecutionFailureCause.CYCLE_DEADLINE_EXCEEDED,
+                    "merge",
+                    target=target,
+                    stop_confirmed=True,
+                    rollback_confirmed=True,
+                    detail=f"{type(error).__name__}: {error}",
+                    **fields,
+                )
+            )
+        return IntegrationExecutionAbort(
+            make_failure(
+                self.execution,
+                ExecutionFailureCause.CLEANUP_FAILED,
+                "merge",
+                target=target,
+                stop_confirmed=True,
+                rollback_confirmed=False,
+                detail=detail,
+                **fields,
+            ),
+            hold=True,
+        )
+
+    def abort_merge_quietly(self) -> None:
+        try:
+            self.abort_merge()
+        except (ExecutionDeadlineExceeded, ExecutionCommandTimeout):
+            pass
 
     def _recover_from_unexpected_task_error(
         self,
@@ -495,6 +638,10 @@ class IntegrationMerger:
             pre_merge_sha = self._merge_task_if_needed(
                 task, base_branch, apply, merged, failed, failed_reasons, unavailable
             )
+        except (ExecutionDeadlineExceeded, ExecutionCommandTimeout) as error:
+            raise self._abort_for_timeout(
+                error, pre_merge_sha, Target(task.issue_number, task.subtask_id)
+            ) from error
         except Exception as error:
 
             def handle_failure(failed_task: Task, reason: str) -> None:
@@ -667,6 +814,11 @@ class IntegrationMerger:
         failed_reasons: dict[str, str],
         unavailable: set[str],
     ) -> str | None:
+        target = Target(task.issue_number, task.subtask_id, source_sha)
+        if self.execution is not None:
+            # #820: reserve the attempt (and read the retry history) before anything
+            # is merged or prepared; a blocked history starts nothing.
+            self.execution.begin_attempt(target, "dependency")
         merged_ok, pre_merge_sha, reason = self._merge_task_branch(
             resolution.branch_name, source_sha
         )
@@ -676,7 +828,7 @@ class IntegrationMerger:
             )
             return pre_merge_sha
         try:
-            ci_ok, reason, output = self._verify_ci_and_rollback(pre_merge_sha)
+            ci_ok, reason, output = self._verify_ci_and_rollback(pre_merge_sha, target)
         except Exception:
             self.abort_merge()
             self.rollback_to(pre_merge_sha)

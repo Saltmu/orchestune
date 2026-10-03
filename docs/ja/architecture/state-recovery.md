@@ -32,6 +32,8 @@ Orchestuneのディスパッチャーは、GitHub Actionsなどの**「実行が
   現在のブランチやPR、およびGitHub Issueのラベル（`status:in-progress`, `status:blocked`, `status:queued` など）の状態を直接読み取ることで、メモリ上で全体の実行状態を復元し、途中からシームレスに処理を再開します。
 * **回収回数の扱い（#512）**:
   ゾンビ／タイムアウト回収の回数（`--max-task-reclaims`の判定に使う`task_reclaim_counts`台帳）は`run_state.json`にのみ保持されるため、`run_state.json`が消失すると0へ戻ります。ただし、既に上限を超えて`status:blocked-human-review`へ遷移したタスクは、GitHubのラベルが真実であるため復元後も再投入されません（上限判定がやり直しになるのは、まだ上限に達していないタスクだけです）。
+* **統合timeout予算（#820）**:
+  上の回収回数と異なり、Integratorのtimeout回数は`run_state.json`には持ちません。各試行が親Issueへ正規の`reserved`／`finished`／`terminal`（と運用者の`reset`）イベントコメントを書き、予算は全コメントページから復元するため、ランナー・run ID・contextが変わっても失われません。読み取れない・競合する・未解決の履歴では何も開始せず、結果のない`reserved`の試行は再実行せず人間確認のために保持します。holdされたworktreeはローカルにも`worktrees/.holds/`の記録を残し、reclaimと統合仮ブランチのGCがこれを尊重します。[integration.md](integration.md#bounded-execution)を参照してください。
 
 ---
 

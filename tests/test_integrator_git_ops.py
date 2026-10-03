@@ -19,6 +19,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from orchestune.integrator import Integrator, IntegratorConfig
+from orchestune.integrator.ci_execution import CiStageResult
 from orchestune.integrator.git_ops import IntegrationMerger
 from orchestune.models import PrRecord, Task
 from orchestune.task_branch_resolution import (
@@ -151,18 +152,20 @@ class TestRunCiVenvDetection:
 
         with (
             patch(
-                "orchestune.integrator.git_ops.install_dependencies",
+                "orchestune.integrator.ci_execution.sync_dependencies",
                 return_value=None,
             ) as install,
             patch(
-                "orchestune.integrator.git_ops.resolve_virtualenv_path",
+                "orchestune.integrator.ci_execution.resolve_virtualenv_path",
                 return_value=venv_path,
             ) as resolve,
         ):
             env, error = merger._prepare_ci_environment()
 
         assert error is None
-        install.assert_called_once_with(repo_root, env)
+        install.assert_called_once()
+        assert install.call_args.args == (repo_root, env)
+        assert install.call_args.kwargs["timeout_seconds"] == 600
         resolve.assert_called_once_with(repo_root, original_root, env)
         assert env["VIRTUAL_ENV"] == str(venv_path.resolve())
 
@@ -655,7 +658,10 @@ class TestVerifyCiAndRollback:
     def test_ci_success(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         with patch.object(
-            merger, "run_ci_in_worktree", autospec=True, return_value=(True, "")
+            merger,
+            "run_ci_stages",
+            autospec=True,
+            return_value=CiStageResult(ok=True, stage="ci"),
         ):
             success, reason, out = merger._verify_ci_and_rollback("sha123")
         assert success is True
@@ -667,9 +673,9 @@ class TestVerifyCiAndRollback:
         with (
             patch.object(
                 merger,
-                "run_ci_in_worktree",
+                "run_ci_stages",
                 autospec=True,
-                return_value=(False, "ci failed"),
+                return_value=CiStageResult(ok=False, stage="ci", message="ci failed"),
             ),
             patch.object(
                 merger, "rollback_to", autospec=True, return_value=True

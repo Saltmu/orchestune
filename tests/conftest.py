@@ -27,8 +27,13 @@ from orchestune.infra.git_cli import (
 )
 from orchestune.integrator.types import IntegratorConfig
 from orchestune.models import IssueRecord, PrRecord
+from tests.forge_event_support import (
+    EventCommentForgeMixin,
+    install_event_comment_store,
+)
 
 pytest_plugins = [
+    "tests.process_runner_support",
     "tests.test_provisioning_support",
     "tests.claim_helpers",
     "tests.environment_support",
@@ -173,7 +178,7 @@ def make_pr(number: int = 1, **overrides: Any) -> PrRecord:
     return PrRecord(**values)
 
 
-class FakeForge:
+class FakeForge(EventCommentForgeMixin):
     """An in-memory implementation of the Forge protocol for testing."""
 
     def __init__(self) -> None:
@@ -627,6 +632,7 @@ class FakeForge:
 def fake_forge(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     """A configurable Forge double injected into dispatcher configs that request it."""
     forge = MagicMock(spec=Forge)
+    install_event_comment_store(forge)  # #820: bounded + retry-budget comments
     # RepoAdminForge
     forge.check_auth.return_value = None
     forge.ensure_labels.return_value = BootstrapResult((), ())

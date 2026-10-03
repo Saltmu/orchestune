@@ -95,3 +95,28 @@ AssessmentとUse-case Policyが別途許可する必要があります。またc
 Contextが保持する意味付き識別子であって、localまたはremote Git refの実在保証では
 ありません。実際のGit操作境界で`resolve_local_or_remote_branch`等により存在を確認し、
 不明・欠落は安全側に倒します。
+
+---
+
+<a id="bounded-execution"></a>
+
+## 5. 有界な実行と終端保証（#820）
+
+Integratorのすべての待機に上限を設け、あらゆるtimeoutが人間または次サイクルが扱える状態で終わるようにしています。OS固有の処理とポリシーが混ざらないよう、モジュールを分けています。
+
+| モジュール | 責務 |
+| --- | --- |
+| `infra.execution_deadline` | 親単位の`ExecutionScope`（単調時計の期限1つ、独立したcleanup予算、補助`git`/`gh`の1回あたりの上限）と`ExecutionInterrupt`系のシグナル |
+| `infra.managed_process`（と`_posix`、`_windows`） | 実行口が所有するプロセスグループでコマンドを起動し、出力を有限の末尾バッファへ読み出し、グループを停止して確認し、型付き結果（`SUCCESS`・`NONZERO_EXIT`・`TIMED_OUT`・`START_FAILED`・`STOP_UNCONFIRMED`）を返す |
+| `infra.python_env`、`integrator.ci_execution` | `uv sync`とCIコマンドを、`min(段階の上限, サイクルの残り時間)`で各1回だけ実行する。従来の`(ok, output)`は型付き結果から導く |
+| `integrator.timeout_retry` | 親Issue上の正規イベントとして持つ再試行予算。全コメントページから復元する |
+| `integrator.execution` | 親単位の状態（試行の予約・親単位の実行ロック・hold・エスカレーション・失敗記録） |
+| `integrator.timeout_policy` | 7つの設定・既定値・検証と、失敗原因の語彙 |
+
+**スコープの伝播。** `run_git`と`GitHubForge`は有効なスコープを読み、`timeout=min(1回の上限, サイクルの残り時間)`を付けます。期限後は呼び出しの開始自体を拒否し、後始末中はcleanup予算だけを使います。注入するForgeは`supports_bounded_execution = True`を宣言する必要があり、宣言がなければapplyを開始しません。実行期限のシグナルは`BaseException`から派生するため、各Stepに多数ある「ログして継続」の`except Exception`が期限を飲み込むことはなく、パイプラインまで届いて停止・後始末・原因の記録が行われます。
+
+**timeout時の停止手順。** (1) プロセスグループを停止し、空になったことを確認する。(2) その後に限り、仮マージ直前に保存したSHAへrollbackし、`HEAD`の一致を確認する。(3) 親の残りの統合を中断する（このサイクルでCIを通過済みの結果もpushしない）。(4) 結果を記録し、再試行が残るかを判定する。(5) 停止・rollback・`HEAD`・cleanup予算のいずれかを確認できなければ、worktreeを保持してholdの記録（`worktrees/.holds/`）を書き、新しいCIを拒否し、親を人間確認へ送る。timeoutは`handle_merge_failure`へ流さないため、ハングでワーカーが再投入されることはありません。pushなどの書き込みがtimeoutした場合は`side_effect_state=unknown`となり、人間が照合するまで、再試行・完了処理・リモートの巻き戻しは行いません。
+
+**予算。** `reserved`は依存準備の開始前に保存して読み戻し、`finished`は結果と確認状態を記録し、`terminal`は許可された最後のtimeoutを示します。結果のない予約は、プロセスの停止を証明できないため自動再実行を止めます。採用するのは認証された実行主体のイベントだけ（resetは書き込み権限を持つユーザーも可）で、親・generation・attempt IDの整合を要求し、読み取れない・競合する・不正な履歴では何も開始しません。[state-recovery.md](state-recovery.md#2-github-as-single-source-of-truth)と、運用者の手順は[使い方 §4.6](../usage.md#46-統合実行の期限とtimeoutからの復旧)を参照してください。
+
+**保証しないこと。** OSのプロセス生成APIや割り込み不能なカーネルI/Oは待機を妨げうるため、厳密な壁時計上限は保証しません。管理下のsession/process groupから離脱するPOSIXのプロセス（`setsid`など）は保証の対象外で、CIコマンドは子孫をその内側に保つ契約です（cgroup/sandboxは対象外）。WindowsでJob Objectへ割り当てられないコマンドは実行しません。別ホストから同じ親への同時applyは、GitHubコメントに原子的なcompare-and-swapがないため非対応です。ワーカーの`task-timeout-seconds`と回収ポリシーは別物で、Integratorを有界にはしません。OSが受け付けない停止や、照合できない書き込みの結果は、停止済みとは断定せず未確定のまま保持します。

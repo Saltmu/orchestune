@@ -224,10 +224,23 @@ _NON_NEGATIVE_INT_KEYS = frozenset(
         "not_needed_review_timeout_seconds",
         "max_tokens_per_window",
         "max_tokens_per_task",
+        # #820: zero retries means "the first timeout is terminal".
+        "max_integration_timeout_retries",
     }
 )
 
-_POSITIVE_INT_KEYS = frozenset({"window_seconds"})
+# #820: seconds settings never accept 0, so the Integrator cannot be made unbounded.
+_POSITIVE_INT_KEYS = frozenset(
+    {
+        "window_seconds",
+        "integration_dependency_timeout_seconds",
+        "integration_ci_timeout_seconds",
+        "integration_cycle_timeout_seconds",
+        "integration_cleanup_timeout_seconds",
+        "integration_command_timeout_seconds",
+        "integration_timeout_backoff_seconds",
+    }
+)
 
 _BOOLEAN_CONFIG_KEYS = frozenset({"apply", "zombie_gc"})
 

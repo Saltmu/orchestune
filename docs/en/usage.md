@@ -336,6 +336,13 @@ Non-routine options (storage paths, rate limits, timeouts, reviewer selection, c
 | `events-log-path` | `"events.jsonl"` | File path for dispatch event logging. |
 | `not-needed-review-state-path` | `"not_needed_review_state.json"` | State file for pending not-needed reviews on Cloud Routine targets. |
 | `not-needed-review-timeout-seconds` | `86400` | Timeout in seconds for pending not-needed reviews. |
+| `integration-dependency-timeout-seconds` | `600` | Upper bound in seconds for one Integrator dependency preparation (`uv sync`). Positive integers only. |
+| `integration-ci-timeout-seconds` | `1800` | Upper bound in seconds for one Integrator CI command. The effective wait is `min(this, remaining cycle time)`. |
+| `integration-cycle-timeout-seconds` | `3600` | Execution budget in seconds for one parent Issue's integration cycle (lock wait, preparation, merge, dependencies, CI, PR handling, finalization). Created once per cycle on a monotonic clock. |
+| `integration-cleanup-timeout-seconds` | `30` | One independent budget in seconds for stopping processes, draining output, rolling back and recording after the deadline. It is not renewed per step. |
+| `integration-command-timeout-seconds` | `60` | Upper bound in seconds for one auxiliary `git`/`gh` command inside the cycle. |
+| `max-integration-timeout-retries` | `2` | Automatic retries after a **confirmed** integration timeout (3 attempts by default). `0` makes the first timeout terminal. |
+| `integration-timeout-backoff-seconds` | `60` | Wait before the first retry; the second waits twice as long (60 s, then 120 s by default). |
 | `default_execution_profile` | `"balanced"` | Default profile name when none is specified by task or CLI. |
 
 The default self-healing allowlist is intentionally separate from `consistency-repair-code`. It contains `status.blocked-with-resolved-dependencies`, `status.primary-status-conflict`, `execution.requeue`, `execution.update-bookkeeping`, and `execution.reclaim`, preserving the status promotion/reconciliation, state recovery, and GC behavior that predates the optional loop. Codes that reached a built-in repair pass are not attempted again by the later repository-wide repair loop; commands that appeared only as planner candidates remain eligible for the user allowlist. Opted-in execution commands use the same guarded GC and recovery handlers as the built-in boundaries.
@@ -462,7 +469,7 @@ reasoning_effort = "high"
 > [!NOTE]
 > Setting keys can be written in either kebab-case (e.g., `max-concurrent`) to match CLI options, or snake_case (e.g., `max_concurrent`) to match internal variables.
 > If an option is explicitly specified as a command-line argument, it overrides the value in the configuration file.
-> Unknown keys and invalid values stop startup with an error rather than falling back to defaults. Parent issue (`parent_issue`), unsafe execution bypass (`allow_unsafe_agent_execution`), routine tokens (`routine_token`), and top-level `model`/`reasoning_effort` are prohibited in configuration files. Boolean settings must be TOML booleans, paths and string settings must be strings, and integer settings must be TOML integers. `consistency-repair-code` must be a list of non-empty strings. `max-concurrent`, `max-launches-per-window`, `deviation-buffer-lines`, `max-recompute-retries`, `task-timeout-seconds`, `max-task-reclaims`, `early-death-window-seconds`, `max-early-death-retries`, `early-death-backoff-seconds`, and `not-needed-review-timeout-seconds` must be at least `0`; `window-seconds` must be at least `1`, and `consistency-max-repair-passes` must be between `1` and `5`.
+> Unknown keys and invalid values stop startup with an error rather than falling back to defaults. Parent issue (`parent_issue`), unsafe execution bypass (`allow_unsafe_agent_execution`), routine tokens (`routine_token`), and top-level `model`/`reasoning_effort` are prohibited in configuration files. Boolean settings must be TOML booleans, paths and string settings must be strings, and integer settings must be TOML integers. `consistency-repair-code` must be a list of non-empty strings. `max-concurrent`, `max-launches-per-window`, `deviation-buffer-lines`, `max-recompute-retries`, `task-timeout-seconds`, `max-task-reclaims`, `early-death-window-seconds`, `max-early-death-retries`, `early-death-backoff-seconds`, `not-needed-review-timeout-seconds`, and `max-integration-timeout-retries` must be at least `0`; `window-seconds` and the five `integration-*-seconds` settings (plus `integration-timeout-backoff-seconds`) must be at least `1`, and `consistency-max-repair-passes` must be between `1` and `5`.
 >
 > In `[execution_profiles]` (or `[tool.orchestune.execution_profiles]`), define target-specific tables (`claude-cli`, `agy-cli`, `codex-cli`, `cloud-routine`, `codex-cloud`) under each profile name (e.g. `balanced`, `deep-reasoning`, `fast-code`). Each target configuration accepts `model` (string) and `reasoning_effort` (`"low"` / `"medium"` / `"high"`). When defining the `execution_profiles` table, the entry corresponding to `default_execution_profile` (defaults to `"balanced"`) must be included.
 
@@ -543,6 +550,46 @@ Before the integrator updates `parent/issue-{N}` (the auto-merge in 4.2), it ver
 **Settings**: `--child-review-gate {required,off}`, the `child-review-gate` configuration key and `ORCHESTUNE_CHILD_REVIEW_GATE`; the default is `required`. `off` skips the verification for all children in the run and prints a warning. It is an explicit opt-out, never selected automatically.
 
 **Migration**: Outcome Records posted before this gate have no review evidence and stop as `legacy`. During the migration period either (a) set `off` explicitly until the in-flight children are integrated, or (b) accept the stop and, for children that have not yet been handed off, review on the child PR and run `orchestune complete` again; for children already handed off, use (a). Return to `required` once the legacy children are integrated.
+
+### 4.6 Bounded integration execution and timeout recovery
+
+Dependency preparation (`uv sync`), the CI command and the whole integration cycle of one parent Issue are bounded (#820). The seven `integration-*` / `max-integration-timeout-retries` settings are listed in [the configuration table](#configuration-file-orchestunetoml-for-detailed-settings); there is no CLI flag or environment variable for them, and `0` never means "unlimited".
+
+**One cycle, in order**: take the parent execution lock (`worktrees/.locks/integration-parent-issue-<N>-execution.lock`, held until the result is recorded) → merge a child into the temporary branch → write a `reserved` event on the parent Issue and read it back → run dependency preparation and CI once each → on a timeout stop the whole process tree, roll back to the pre-merge SHA, confirm `HEAD`, and record a `finished` event. The cycle deadline is one monotonic reading taken when the parent's cycle starts; every stage waits for `min(stage limit, remaining cycle time)`, and nothing new starts after the deadline. Stopping, draining output, rolling back and recording share the single `integration-cleanup-timeout-seconds` budget.
+
+| Status | Meaning | What happens next |
+| :--- | :--- | :--- |
+| `execution_timed_out` | A stage timed out (or the deadline passed); the stop and the rollback are **confirmed**. | Nothing is pushed, included, closed or deleted, and the child Issues stay `status:done` (they are **not** re-queued). The next cycle after the back-off (`integration-timeout-backoff-seconds`, then twice that) retries automatically, up to `max-integration-timeout-retries`. |
+| `execution_retry_exhausted` | The last allowed attempt timed out (the third by default). | A `terminal` event is saved and the **parent Issue** goes to `status:blocked-human-review`. No further CI starts, even if labelling failed; only the label and notice are retried. |
+| `execution_cleanup_failed` | A stop, the rollback, the `HEAD` check or the cleanup budget could not be confirmed. | The worktree and diagnostics are **held** (never reused, deleted or collected), no new CI starts, and the parent goes to human review. |
+| `execution_indeterminate` | A push/PR write timed out with an unknown result, the history could not be read or is inconsistent, a reservation or result could not be confirmed, or an earlier attempt has no recorded result. | Nothing is guessed, retried or rolled back remotely; a write whose result is unknown is held for reconciliation. |
+
+An ordinary non-zero CI exit or start failure is **not** a timeout: it keeps the existing behaviour (the child is re-queued with the CI output) and neither adds to nor clears the timeout count. A confirmed normal success closes the current generation and resets the count. The count is bound to the parent Issue and its generation, not to the run id, the task set, the CI command or the settings, so a new runner or a lowered limit cannot erase it. The final report and the Dispatcher result show each failure's cause, target, stage, configured and effective limits, attempt, next retry time, stop/rollback/write confirmations and the output tail; the Dispatcher retries only `execution_timed_out` and reports the other three as human-review warnings.
+
+**Releasing a hold or a terminal state (operator procedure)**
+
+1. Confirm that no CI process of that run is still running, and inspect the held worktree (`worktrees/integration-temp-*`) and the remote refs (`parent/issue-<N>`, `integration/temp-*`). A write whose result was unknown must be reconciled against the real refs and the existing integration evidence first.
+2. Post one **reset** comment on the **parent Issue** (as the executing identity or a user with `write`/`maintain`/`admin`). `generation` is the current generation plus one; `references` names the terminal or unconfirmed `attempt_id` found in the earlier event comments, or `local-hold:<hold file name without .json>` for a hold that has no GitHub attempt behind it:
+
+<!-- orchestune:integration-execution:v1 -->
+```json
+{
+  "parent_issue_number": 123,
+  "generation": 2,
+  "attempt_id": "reset-2026-01-01-ops",
+  "event": "reset",
+  "targets": [],
+  "executed_at": "2026-01-01T00:00:00Z",
+  "reason": "Processes, worktree and remote refs verified by <operator>",
+  "references": "<attempt_id of the terminal or unconfirmed attempt, or local-hold:<hold file name without .json>>"
+}
+```
+
+3. Remove the worktree and its hold record (`worktrees/.holds/<key>.json`) yourself. A hold blocks new CI for its parent until a reset opens a newer generation, and it is never collected automatically.
+
+Removing `status:blocked-human-review` alone does **not** reset anything, because the count lives in the event comments, not in a label.
+
+**Guarantees and limits.** Waiting is bounded and a confirmed stop is required before a timeout is retried: on Linux/macOS the command runs in its own session/process group (`SIGTERM`, at most 5 s of grace, then `SIGKILL`); on Windows it is created suspended, assigned to a kill-on-close Job Object and then resumed, and if the Job assignment fails the command is not run. Output is read concurrently into bounded tails and draining uses the same cleanup budget. Not covered: the operating system's process-creation API and uninterruptible kernel I/O (a strict wall-clock limit is not promised), a POSIX daemon that deliberately leaves the process group, concurrent applies against one parent from different hosts (GitHub comments have no atomic compare-and-swap, so a detected conflict stops), and the worker's `task-timeout-seconds`, which is a separate budget and does not bound the Integrator. The first version of this support is verified on Linux and Windows by the CI matrix; macOS shares the POSIX implementation.
 
 ## 6. Replacing an unstarted decomposition generation (`orchestune replan`)
 

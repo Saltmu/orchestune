@@ -335,6 +335,9 @@ class MergeAndTestStep(IntegrationComponent):
             ctx.config.ci_command or default_ci_command(),
             ctx.config.forge,
             branch_resolver=ctx.task_branch_resolver,
+            execution=ctx.execution,
+            policy=ctx.config.execution_policy,
+            process_runner=ctx.config.process_runner,
         )
 
     @staticmethod

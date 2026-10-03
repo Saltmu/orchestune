@@ -925,3 +925,114 @@ class TestGetGitRepositoryPaths:
         not_repo.mkdir()
         with pytest.raises(subprocess.CalledProcessError):
             get_git_repository_paths(not_repo)
+
+
+class TestRunGitExecutionScope:
+    """#820: inside an Integrator scope every git call is bounded; outside nothing changes."""
+
+    def _scope(self, **kwargs):
+        from orchestune.infra.execution_deadline import ExecutionScope
+
+        values = {"cycle_seconds": 100, "cleanup_seconds": 30, "command_seconds": 7}
+        values.update(kwargs)
+        return ExecutionScope(**values)
+
+    def test_no_timeout_is_added_outside_a_scope(self, tmp_path):
+        with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            run_git(["status"], cwd=tmp_path)
+        assert "timeout" not in mock_run.call_args.kwargs
+
+    def test_the_per_call_limit_applies_inside_a_scope(self, tmp_path):
+        from orchestune.infra.execution_deadline import activate_scope
+
+        with (
+            activate_scope(self._scope()),
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            run_git(["status"], cwd=tmp_path)
+        assert mock_run.call_args.kwargs["timeout"] == 7
+
+    def test_the_remaining_cycle_time_wins_when_shorter(self, tmp_path):
+        from orchestune.infra.execution_deadline import activate_scope
+
+        scope = self._scope(cycle_seconds=3)
+        with (
+            activate_scope(scope),
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            run_git(["status"], cwd=tmp_path)
+        assert mock_run.call_args.kwargs["timeout"] <= 3
+
+    def test_an_expired_scope_refuses_to_start_git(self, tmp_path):
+        from orchestune.infra.execution_deadline import (
+            ExecutionDeadlineExceeded,
+            activate_scope,
+        )
+
+        scope = self._scope()
+        scope.started_at -= 1000
+        with (
+            activate_scope(scope),
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
+        ):
+            with pytest.raises(ExecutionDeadlineExceeded):
+                run_git(["status"], cwd=tmp_path)
+        mock_run.assert_not_called()
+
+    def test_cleanup_phase_uses_only_the_cleanup_budget(self, tmp_path):
+        from orchestune.infra.execution_deadline import activate_scope
+
+        scope = self._scope(cycle_seconds=1)
+        scope.started_at -= 1000  # the cycle is long over
+        with (
+            activate_scope(scope),
+            scope.cleanup_phase(),
+            patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            run_git(["reset", "--hard", "x"], cwd=tmp_path)
+        assert 0 < mock_run.call_args.kwargs["timeout"] <= 30
+
+    def test_an_exhausted_cleanup_budget_refuses_to_start_git(self, tmp_path):
+        from orchestune.infra.execution_deadline import (
+            ExecutionDeadlineExceeded,
+            activate_scope,
+        )
+
+        scope = self._scope(cleanup_seconds=1)
+        with activate_scope(scope), scope.cleanup_phase():
+            scope.cleanup._started_at -= 1000
+            with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
+                with pytest.raises(ExecutionDeadlineExceeded):
+                    run_git(["reset"], cwd=tmp_path)
+        mock_run.assert_not_called()
+
+    def test_a_scoped_timeout_cannot_be_swallowed_by_except_exception(self, tmp_path):
+        from orchestune.infra.execution_deadline import (
+            ExecutionCommandTimeout,
+            activate_scope,
+        )
+
+        with (
+            activate_scope(self._scope()),
+            patch(
+                "orchestune.infra.git_cli.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(["git"], 7),
+            ),
+        ):
+            with pytest.raises(ExecutionCommandTimeout):
+                try:
+                    run_git(["push"], cwd=tmp_path)
+                except Exception:  # noqa: BLE001 - this is what best-effort code does
+                    pytest.fail("the timeout was swallowed by `except Exception`")
+
+    def test_an_unscoped_timeout_keeps_its_plain_exception(self, tmp_path):
+        with patch(
+            "orchestune.infra.git_cli.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(["git"], 7),
+        ):
+            with pytest.raises(subprocess.TimeoutExpired):
+                run_git(["status"], cwd=tmp_path)
