@@ -50,7 +50,7 @@ sequenceDiagram
 2. **マージ前CI検証（Integratorの責務）**:
    `status:done`の子Issueを検知すると、`orchestune/integrator/`が一時統合ブランチを`parent/issue-{N}`から作成してローカルCIを走らせます。
 3. **子レベルの自動マージ・自動クローズ（Integratorの責務、人間の確認なし）**:
-   CI通過後、Integratorは一時統合ブランチのPRを**人間の確認を待たずに**`parent/issue-{N}`へ自動マージし、対象の子Issueを`completed`理由で自動的にクローズします。このレベルには人間のレビューゲートは存在せず、CIそのものが品質ゲートとして機能します（詳細は [アーキテクチャと設計思想 §0.2](../architecture.md#02-人間の承認ポイント)）。
+   CI通過後、Integratorは一時統合ブランチのPRを**人間の確認を待たずに**`parent/issue-{N}`へ自動マージし、対象の子Issueを`completed`理由で自動的にクローズします。このレベルには人間のレビューゲートは存在せず、CIと子レビュー証跡ゲート（本節7）が品質ゲートとして機能します。既定の`required`では、このゲートを通過した場合に限り親ブランチを更新します（詳細は [アーキテクチャと設計思想 §0.2](../architecture.md#02-人間の承認ポイント)）。
 4. **自動リベース（Dispatcherの責務、統合パイプラインとは別系統）**:
    このフェーズはIntegratorのマージ列の一部ではなく、`parent/issue-{N}`へのマージを起点ともしません。Dispatcherは毎サイクル、プロセスが生存し、かつ先行するactive worktree rule（`status:not-needed`検知・stale entryのhold・完了検知・`CHANGES_REQUESTED`エスカレーション）で終端しなかったworktreeについてだけ[共通stack target policy](#dependency-target-fallback)へ問い合わせ、**CIを通過済みでまだ実効完了していない単一の依存先タスクのブランチ**がtargetとして返った場合にだけ、`orchestune/dispatch/rebase.py`が下流の仕掛かり中ブランチをそのtargetへ`git rebase`します（マージは行いません）。targetが返らない場合——依存先がまだCI未通過（`WAITING`）、CI通過済みで未完了の依存先が複数、依存先自身の依存が未完了、branch名が不明、あるいは依存先が実効完了して`COMPLETED`——は自動リベースを見送ります。依存先が`CHANGES_REQUESTED`と**分類された**ときは、この問い合わせ自体に到達しません（分類はCOMPLETED優先の短絡評価なので、`status:done`等で実効完了した依存先はPRがCHANGES_REQUESTEDでも`COMPLETED`となり、この経路には入らず`no-stack-dependency`としてpolicyに拒否されます）。先行ruleの`_rule_changes_requested`（`orchestune/dispatch/escalation.py`）が当該worktreeを人間レビューへエスカレーションして終端するため、「rebaseの見送り」ではなくそちらが適用されます。ここでの実効完了は`status:done`（`status:queued`との併記時を除く）や`status:not-needed`、および同一サイクルで確定した完了を含み、`parent/issue-{N}`への実マージを条件としません。そのため、子Issueが`status:done`になった時点でstack targetは消えます。統合が単に遅延しているだけ（`status:done`のまま未マージ）の間もtargetは戻りません。一方、仮マージCIが失敗してIntegratorが`status:queued`を付与し`status:done`を外す（`orchestune/integrator/pr.py`の`handle_merge_failure`）と、その依存先は実効完了ではなくなるため、自身のPRがCIを通過したままであれば次サイクル以降に再び`CI_PASSED_UNMERGED`と分類され、stack targetとして復活し得ます。リベース後はそのworktreeでローカルCIを実行し、成功すればtargetをbaseブランチとしてエージェントを再起動、コンフリクトまたはCI失敗なら`status:manual-merge-required`へ遷移させて人間に引き渡します。
    なお、依存先が`parent/issue-{N}`へマージされた後にその成果物を取り込むのは、この自動リベースではなく**後続タスク起動時のbase選択**の役割です。本節1の`parent/issue-{N}`から分岐するのは、共通policyがtargetを返さなかった場合に限られます。targetが返った場合、起動時のbaseはその依存先ブランチになるため（`orchestune/dispatch/launch.py`の`_decide_task_launch_plan`）、`parent/issue-{N}`へマージ済みの成果物が引き継がれるかどうかは、そのstack先ブランチがそれを含んでいるかに依存します。例えばCが「マージ済みのB」と「CI通過済みで未完了のD」に依存する場合、Cのbaseは`parent/issue-{N}`ではなくDとなり、DがBのマージ前に分岐していてB自体に依存していなければ、CはBの成果物を取り込みません。この使い分けは[§4の共通stack target policy](#dependency-target-fallback)が正本です。
@@ -58,9 +58,10 @@ sequenceDiagram
    親Issue配下の全子Issueがクローズされたことを検知すると、`orchestune/integrator/parent_completion.py`が`parent/issue-{N}` → `main`の最終PRを作成します。このPRは自動マージされません。
 6. **検収マージと親Issueクローズ**:
    人間がこの最終PRをレビューしてマージします（唯一の人間クリック）。マージが検知されると、Integratorが親Issueを`completed`理由で自動的にクローズします。
-7. **セマンティックレビュー（Integratorの責務）**:
-   子レベルの統合PR作成時にAIが自動で変更点の整合性をレビューし、不整合（例えばインターフェースの変更が反映されていないなど）をPRへのコメントとして検出・報告します（自動マージ・自動クローズの後段のため、その結果を待って処理をブロックすることはありません）。
-   このレビューはfire-and-forgetで、Python側が結果を追跡することもありません。所見は子の統合PRに付き、検収PR（親ブランチ→`main`）へ転記もリンクもされません。非同期の所見が子PRのクローズ後に届くこともあるため、読むには子PRを個別に辿る必要があります。
+7. **子レビュー証跡ゲート（第1層・必須）とセマンティックレビュー（第2層・advisory）**: 子のレビュー自体は統合ステップの責務ではなく、Integratorは「レビューが行われたこと」だけを確認します。
+   - **第1層 — 子レビュー証跡ゲート（既定`required`）**: 子PR上で開発スキルのレビューループ（`skills/local-ci-developer/references/review-loop.md`のStep 11）が実行され、LLMが指摘ごとに判断を記録します。`orchestune complete --result done`がPRのレビュー取得状態を取得し直し、判断表とレビュー対象SHAを検証して、結果をレビュー証跡としてdone Outcome Recordへ保存します。検証に失敗した場合はcompleteを拒否し、何も投稿しません。Integratorは`parent/issue-{N}`を更新する直前に、統合対象の各子についてその証跡を**検証するだけ**です。子が合格するのは、最新のOutcome Recordが`result=done`かつ`verdict=pass`で、記録されたheadとレビュー済みheadの両方がマージ対象のコミットと一致する場合に限ります。1件でも満たさなければfail-closedで、親ブランチを更新せず、子Issueのクローズも子ブランチの削除も行わず、**親Issue**を`status:blocked-human-review`へエスカレーションします（失敗の組み合わせごとにコメント1件。理由は`legacy`・`skipped`・`not_pass`・`sha_mismatch`・`absent`・`lookup_unknown`・`integration_evidence_missing`）。再開・移行の手順は[使い方 §4.5](../usage.md#45-子レビュー証跡ゲート)を参照してください。
+   - **第2層 — セマンティックレビュー（advisory）**: 子レベルの統合PR作成時にAIが自動で変更点の整合性をレビューし、不整合（例えばインターフェースの変更が反映されていないなど）をPRへのコメントとして検出・報告します。子の自動マージを待たせることも取り消すこともなく、Python側が結果を追跡することもありません（fire-and-forget）。この層を必須ゲートにするのは後続Epic #1033の範囲です。
+   第2層の所見は子の統合PRに付き、検収PR（親ブランチ→`main`）へ転記もリンクもされません。非同期の所見が子PRのクローズ後に届くこともあるため、読むには子PRを個別に辿る必要があります。
 
 ---
 
