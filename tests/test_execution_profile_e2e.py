@@ -411,9 +411,15 @@ Testing full lifecycle of execution profiles.
                 return_value="abc1234",
             ),
             patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
+            patch(
+                "orchestune.dispatch.gc.external_guard.is_process_alive",
+                return_value=True,
+            ) as pid_probe,
         ):
             report2 = run_dispatch_cycle(config)
 
+        # This target launches no local process, so host PIDs must not affect GC.
+        pid_probe.assert_not_called()
         assert len(report2.completion_events) == 1
         assert report2.completion_events[0]["issue_number"] == deep_num
 
