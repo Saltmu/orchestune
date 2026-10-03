@@ -145,19 +145,30 @@ def _wait_until(predicate: Callable[[], bool], seconds: float) -> bool:
 
 
 def _stop_group(
-    group: ProcessGroup, budget: CleanupBudget, term_grace_seconds: float
+    group: ProcessGroup,
+    budget: CleanupBudget,
+    term_grace_seconds: float,
+    leader: subprocess.Popen[bytes],
 ) -> bool:
-    """Terminate, wait for a grace period, kill, and confirm the group is empty."""
-    if not group.alive():
+    """Terminate, wait for a grace period, kill, and confirm the group is empty.
+
+    The leader is reaped on every poll: a zombie leader still counts as a group member
+    to ``killpg(pgid, 0)`` where ``/proc`` cannot tell it apart (macOS), which would
+    turn every real timeout into an unconfirmed stop.
+    """
+
+    def gone() -> bool:
+        leader.poll()
+        return not group.alive()
+
+    if gone():
         return True
     budget.start()
     group.terminate()
-    if _wait_until(
-        lambda: not group.alive(), min(term_grace_seconds, budget.remaining())
-    ):
+    if _wait_until(gone, min(term_grace_seconds, budget.remaining())):
         return True
     group.kill()
-    return _wait_until(lambda: not group.alive(), budget.remaining())
+    return _wait_until(gone, budget.remaining())
 
 
 def _start(
@@ -263,12 +274,12 @@ def _supervise(
         timed_out = True
 
     if timed_out:
-        confirmed = _stop_group(group, budget, spec.term_grace_seconds)
+        confirmed = _stop_group(group, budget, spec.term_grace_seconds, popen)
         detail = "command exceeded its time limit"
     else:
         # The main process exited; descendants it left behind are still ours to stop.
         leftovers = group.alive()
-        confirmed = _stop_group(group, budget, spec.term_grace_seconds)
+        confirmed = _stop_group(group, budget, spec.term_grace_seconds, popen)
         detail = "descendant processes remained after exit" if leftovers else ""
 
     returncode = _reap(popen, budget)

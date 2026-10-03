@@ -172,3 +172,21 @@ def test_unconfirmed_group_is_never_reported_as_success(
 
     assert result.outcome is ProcessOutcome.STOP_UNCONFIRMED
     assert result.stop_confirmed is False
+
+
+def test_a_timed_out_leader_is_reaped_so_liveness_works_without_proc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without /proc (macOS) a zombie leader keeps ``killpg(pgid, 0)`` succeeding.
+
+    The runner must reap the leader while it waits for the group to disappear,
+    otherwise every real timeout burns the cleanup budget and ends as STOP_UNCONFIRMED.
+    """
+    from orchestune.infra import managed_process_posix
+
+    monkeypatch.setattr(managed_process_posix, "_linux_live_members", lambda _p: None)
+
+    result = run_managed(_spec("import time; time.sleep(60)", timeout=0.5))
+
+    assert result.outcome is ProcessOutcome.TIMED_OUT
+    assert result.stop_confirmed is True

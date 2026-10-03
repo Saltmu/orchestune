@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from collections.abc import Callable
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
 
 from orchestune.branch_naming import build_task_branch_name
@@ -35,6 +35,8 @@ from orchestune.integrator.execution import (
 from orchestune.integrator.pr import handle_merge_failure
 from orchestune.integrator.proofs import TaskIntegrationProof
 from orchestune.integrator.timeout_policy import (
+    SIDE_EFFECT_UNKNOWN,
+    STATUS_EXECUTION_INDETERMINATE,
     ExecutionFailureCause,
     IntegrationExecutionPolicy,
 )
@@ -524,6 +526,34 @@ class IntegrationMerger:
             hold=True,
         )
 
+    @contextmanager
+    def _failure_write(self, task: Task) -> Iterator[None]:
+        """Guard the GitHub writes that *report* a task failure (label swap, comment).
+
+        A deadline or timeout there leaves the write's result unknown (a label may or
+        may not have changed), so it is indeterminate and held, never a counted,
+        safely rolled-back timeout.
+        """
+        try:
+            yield
+        except (ExecutionDeadlineExceeded, ExecutionCommandTimeout) as error:
+            raise IntegrationExecutionAbort(
+                make_failure(
+                    self.execution,
+                    ExecutionFailureCause.SIDE_EFFECT_INDETERMINATE,
+                    "record-task-failure",
+                    target=Target(task.issue_number, task.subtask_id),
+                    side_effect_state=SIDE_EFFECT_UNKNOWN,
+                    detail=(
+                        f"{type(error).__name__} while recording the failure of "
+                        f"{task.subtask_id}; whether the label/comment write took "
+                        f"effect is unknown: {error}"
+                    ),
+                ),
+                hold=True,
+                status=STATUS_EXECUTION_INDETERMINATE,
+            ) from error
+
     def abort_merge_quietly(self) -> None:
         try:
             self.abort_merge()
@@ -654,7 +684,8 @@ class IntegrationMerger:
 
             def handle_failure(failed_task: Task, reason: str) -> None:
                 failed_reasons[failed_task.subtask_id] = reason
-                handle_merge_failure(failed_task, reason, apply, forge=self.forge)
+                with self._failure_write(failed_task):
+                    handle_merge_failure(failed_task, reason, apply, forge=self.forge)
 
             self._recover_from_unexpected_task_error(
                 task, error, pre_merge_sha, handle_failure
@@ -868,6 +899,7 @@ class IntegrationMerger:
         ci_output: str | None = None,
     ) -> None:
         reasons[task.subtask_id] = reason
-        handle_merge_failure(task, reason, apply, ci_output, forge=self.forge)
+        with self._failure_write(task):
+            handle_merge_failure(task, reason, apply, ci_output, forge=self.forge)
         failed.append(task.subtask_id)
         unavailable.add(task.subtask_id)

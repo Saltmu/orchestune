@@ -498,6 +498,50 @@ class TestBounds:
         assert timeouts == {7}
 
 
+class TestFailureRecordingWrites:
+    """A timeout while *reporting* an ordinary failure leaves that write unknown."""
+
+    def _ci_fails(self) -> ScriptedRunner:
+        return ScriptedRunner(lambda spec: _result(spec, ProcessOutcome.NONZERO_EXIT))
+
+    @pytest.mark.parametrize("write", ["add_label", "remove_label", "add_comment"])
+    def test_a_write_timeout_while_reporting_ci_failure_is_indeterminate(
+        self, one_task: IntegratorEnv, write: str, tmp_path: Path
+    ) -> None:
+        from orchestune.infra.execution_deadline import ExecutionCommandTimeout
+
+        getattr(one_task, write).side_effect = ExecutionCommandTimeout(
+            f"gh {write}", 60, "normal"
+        )
+
+        res = _integrator(tmp_path, self._ci_fails()).run()
+
+        assert res["status"] == "execution_indeterminate"
+        failure = res["execution_failures"][0]
+        assert failure["cause"] == "side_effect_indeterminate"
+        assert failure["stage"] == "record-task-failure"
+        assert failure["side_effect_state"] == "unknown"
+        assert (failure["issue_number"], failure["subtask_id"]) == (1, "task-1")
+        assert load_holds(tmp_path)
+        assert not _worktree_removed(one_task)
+
+    def test_the_unknown_write_blocks_the_next_cycle_and_is_not_a_counted_timeout(
+        self, one_task: IntegratorEnv, fake_forge: MagicMock, tmp_path: Path, clock
+    ) -> None:
+        from orchestune.infra.execution_deadline import ExecutionCommandTimeout
+
+        one_task.add_comment.side_effect = ExecutionCommandTimeout("gh", 60, "normal")
+        _integrator(tmp_path, self._ci_fails()).run()
+        second = ScriptedRunner()
+
+        res = _integrator(tmp_path, second).run()
+
+        assert second.calls == []
+        assert res["status"] == "execution_indeterminate"
+        outcomes = [e.outcome for e in _events(fake_forge) if e.event == EVENT_FINISHED]
+        assert outcomes == ["side_effect_indeterminate"]
+
+
 class TestMergeTimeout:
     """A timed-out ``git merge`` never returns its saved SHA; it must still be used."""
 
