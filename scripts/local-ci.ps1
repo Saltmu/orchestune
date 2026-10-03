@@ -101,9 +101,16 @@ uv run mypy orchestune tests
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[4/6] Running tests with coverage (pytest)..."
-# Note: On Windows subshell environments (e.g. agy CLI / ConPTY), pytest-xdist (-n auto) spawns multiple worker
-# processes that inherit pipe handles, which can cause pipe destruction crashes when workers exit.
-# We default to single-process execution (-n 0) for safe Windows execution. Override via PYTEST_ADDOPTS if needed.
+# Note: On Windows, pyproject.toml defaults to -n 2. Historically, -n auto caused ConPTY pipe leak crashes (#273).
+# We allow configuring workers via ORCHESTUNE_TEST_WORKERS or PYTEST_ADDOPTS, defaulting to -n 2.
+$PytestWorkerArgs = @()
+if ($env:ORCHESTUNE_TEST_WORKERS) {
+    $PytestWorkerArgs += @("-n", $env:ORCHESTUNE_TEST_WORKERS)
+} elseif ($env:PYTEST_ADDOPTS -and ($env:PYTEST_ADDOPTS -match "(^|\s)(-n\b|--numprocesses\b)")) {
+    # Respect concurrency already configured in PYTEST_ADDOPTS
+} else {
+    $PytestWorkerArgs += @("-n", "2")
+}
 $CiContextVars = @(
     "ORCHESTUNE_EXPECTED_HEAD", "ORCHESTUNE_EXPECTED_TREE",
     "ORCHESTUNE_BASE_SHA", "ORCHESTUNE_BASE_REF", "ORCHESTUNE_STATE_PATH",
@@ -116,7 +123,7 @@ foreach ($var in $CiContextVars) {
     Remove-Item "Env:$var" -ErrorAction SilentlyContinue
 }
 try {
-    uv run pytest -n 0 --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
+    uv run pytest @PytestWorkerArgs --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing:skip-covered
     $PytestExitCode = $LASTEXITCODE
 } finally {
     foreach ($var in $SavedCiContext.Keys) {

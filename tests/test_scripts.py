@@ -22,6 +22,16 @@ def test_powershell_local_ci_contract():
     assert "gitleaks detect" in content
 
 
+def test_powershell_local_ci_configurable_workers():
+    local_ci_ps1 = PROJECT_ROOT / "scripts" / "local-ci.ps1"
+    content = local_ci_ps1.read_text(encoding="utf-8")
+
+    assert "ORCHESTUNE_TEST_WORKERS" in content
+    assert "term-missing:skip-covered" in content
+    assert "PYTEST_ADDOPTS" in content
+    assert "uv run pytest -n 0" not in content
+
+
 def test_powershell_setup_git_hooks_contract():
     setup_hooks_ps1 = PROJECT_ROOT / "scripts" / "setup-git-hooks.ps1"
     content = setup_hooks_ps1.read_text(encoding="utf-8")
