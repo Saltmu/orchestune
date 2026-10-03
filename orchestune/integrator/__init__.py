@@ -6,6 +6,10 @@ from pathlib import Path
 
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import default_ci_command
+from orchestune.integrator.review_gate import (
+    ChildReviewGateDecision,
+    decide_child_review_gate,
+)
 from orchestune.integrator.steps import (
     AutoMergeChildIntegrationStep,
     EnsureIntegrationPrStep,
@@ -218,6 +222,7 @@ class Integrator:
 
 __all__ = [
     "AutoMergeChildIntegrationStep",
+    "ChildReviewGateDecision",
     "EnsureIntegrationPrStep",
     "IntegrationComponent",
     "IntegrationContext",
@@ -236,4 +241,5 @@ __all__ = [
     "SetupWorktreeStep",
     "SingleIssueIntegrator",
     "_mark_tasks_included",
+    "decide_child_review_gate",
 ]

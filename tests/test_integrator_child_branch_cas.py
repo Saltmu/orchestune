@@ -121,7 +121,9 @@ def test_moved_child_tip_is_not_labeled_or_closed(fake_forge, tmp_path: Path):
         branch_name="claude/issue-1-task-1",
         source_sha="a" * 40,
     )
-    config = IntegratorConfig(apply=True, parent_issue_number=100, forge=fake_forge)
+    config = IntegratorConfig(
+        apply=True, parent_issue_number=100, forge=fake_forge, child_review_gate="off"
+    )
     ctx = IntegrationContext(
         config=config,
         repository_root=tmp_path,

@@ -306,6 +306,7 @@ def test_handle_review_trigger_reposts_when_existing_trigger_lacks_mention(mock_
         body="## Review response",
         body_file=None,
         round_num=2,
+        head_sha="c" * 40,
     )
 
 

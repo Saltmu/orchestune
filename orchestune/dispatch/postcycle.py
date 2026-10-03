@@ -158,6 +158,7 @@ def _build_integrator_config(
         ci_command=config.ci_command,
         dag_ignore_patterns=config.dag_ignore_patterns,
         dag_similarity_threshold=config.dag_similarity_threshold,
+        child_review_gate=config.child_review_gate,
     )
     if semantic_review_enabled and isinstance(
         config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget
@@ -179,7 +180,10 @@ def _run_semantic_integrator(
         return dict(Integrator(integrator_config).run())
 
     def evaluate_report(report: dict) -> tuple[PhaseStatus, bool]:
-        if report.get("status") not in _INTEGRATOR_SUCCESS_STATUSES:
+        status = report.get("status")
+        if status == IntegrationStatus.REVIEW_GATE_BLOCKED:
+            return PhaseStatus.WARNING, False
+        if status not in _INTEGRATOR_SUCCESS_STATUSES:
             return PhaseStatus.RETRYABLE_FAILURE, True
         return PhaseStatus.SUCCESS, False
 
@@ -234,8 +238,17 @@ def _format_completion_item(event: dict) -> str:
     return f"{prefix}: `{action}` [Model: `不明`, Tokens: **不明**]"
 
 
-def _format_event_log_comment(report: CycleReport, deviation_events: list[dict]) -> str:
+def _format_event_log_comment(
+    report: CycleReport,
+    deviation_events: list[dict],
+    child_review_gate: str = "required",
+) -> str:
     lines = ["## 🤖 Orchestune Dispatch Cycle Report\n"]
+    if child_review_gate == "off":
+        lines.append(
+            "> [!WARNING]\n"
+            "> **Child Review Gate is OFF**: 子タスクのレビュー合格証跡の検証は行われません。\n"
+        )
     lines.append(f"Quota slots available: **{report.quota_slots_available}**\n")
 
     sections = [
@@ -305,7 +318,9 @@ def _post_event_log_comment(
         if not has_events:
             return {"posted": False, "reason": "no events in this cycle"}
 
-        body = _format_event_log_comment(report, deviation_events)
+        body = _format_event_log_comment(
+            report, deviation_events, child_review_gate=config.child_review_gate
+        )
         config.resolved_forge.add_comment(config.parent_issue_number, body)
         return {"posted": True, "issue_number": config.parent_issue_number}
 

@@ -584,7 +584,11 @@ class TestOrchestuneTomlExample:
         )
         parser = _build_arg_parser()
         runtime_defaults = vars(parser.parse_args(["--parent-issue", "1"]))
-        default_fallbacks = {"apply": True, "max_concurrent": 2}
+        default_fallbacks = {
+            "apply": True,
+            "max_concurrent": 2,
+            "child_review_gate": "required",
+        }
 
         for key, configured_value in _config_defaults(parser, data).items():
             expected = runtime_defaults.get(key)
@@ -618,6 +622,7 @@ class TestOrchestuneTomlExample:
                 "dispatch_target",
                 "reviewer_bot",
                 "ci_command",
+                "child_review_gate",
                 "consistency_mode",
                 "consistency_repair_code",
                 "consistency_max_repair_passes",

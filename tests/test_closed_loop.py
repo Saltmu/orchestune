@@ -523,6 +523,7 @@ def test_closed_loop_flow():
             temp_branch="integration/temp-main",
             apply=True,
             forge=dummy_github,
+            child_review_gate="off",
         )
         integrator = Integrator(int_config)
         res = integrator.run()
@@ -566,6 +567,7 @@ def test_closed_loop_flow():
             temp_branch="integration/temp-main",
             apply=True,
             forge=dummy_github,
+            child_review_gate="off",
         )
         integrator2 = Integrator(int_config2)
         res2 = integrator2.run()
