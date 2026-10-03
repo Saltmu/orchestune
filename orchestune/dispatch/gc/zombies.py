@@ -25,9 +25,9 @@ from orchestune.dispatch.execution_repair import (
 )
 from orchestune.dispatch.external_execution import (
     ACTION_EXTERNAL_EXECUTION_HELD,
-    hold_if_not_stopped,
     send_hold_to_human_review,
 )
+from orchestune.dispatch.gc.external_guard import fresh_external_hold
 from orchestune.dispatch.gc.git import (
     backup_wip_commit,
     remove_worktree,
@@ -523,8 +523,18 @@ def _settle_reclaim(
     open_prs: Sequence[PrRecord] | None,
     *,
     release_entry: bool,
-) -> None:
+) -> bool:
     """今サイクル分の回収を確定させ、その場でディスクへ書く。"""
+    if (
+        fresh_external_hold(
+            reclaim.active,
+            config,
+            "timeout" if reclaim.is_timeout else "stale",
+            run_state,
+        )
+        is not None
+    ):
+        return False
     record = run_state.task_reclaim_counts.get(reclaim.active.core.issue_number)
     if record is not None and record.pending:
         record.pending = False
@@ -544,6 +554,7 @@ def _settle_reclaim(
             f"#{reclaim.active.core.issue_number}: {e}",
             file=sys.stderr,
         )
+    return True
 
 
 def _stop_reclaimed_process(reclaim: ZombieOrTimeoutReclaim) -> None:
@@ -556,6 +567,8 @@ def _stop_reclaimed_process(reclaim: ZombieOrTimeoutReclaim) -> None:
 
 def _cleanup_reclaimed_worktree(
     reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig | None = None,
+    run_state: RunState | None = None,
 ) -> tuple[bool, str | None]:
     """物理worktreeが存在すればWIPバックアップコミットを作成して削除する。"""
     active = reclaim.active
@@ -567,6 +580,11 @@ def _cleanup_reclaimed_worktree(
     )
     if backup_error is not None:
         return True, backup_error
+    if (
+        config is not None
+        and _external_hold_event(reclaim, config, run_state) is not None
+    ):
+        return True, "external_execution_held"
     remove_worktree(active.core.worktree_path)
     return True, None
 
@@ -583,20 +601,21 @@ def _execute_reclaim_lifecycle(
 ) -> dict | None:
     active = reclaim.active
     try:
-        worktree_exists, backup_error = _cleanup_reclaimed_worktree(reclaim)
+        if held := _external_hold_event(reclaim, config, run_state):
+            return held
+        worktree_exists, backup_error = _cleanup_reclaimed_worktree(
+            reclaim, config, run_state
+        )
+        if backup_error == "external_execution_held":
+            return _external_hold_event(reclaim, config, run_state)
         if backup_error is not None:
             return _apply_backup_failure(
                 run_state, reclaim, config, escalating, backup_error, open_prs
             )
-        worktree_note = (
-            "作業ブランチにWIPコミットを退避した上で、"
-            if worktree_exists
-            else "物理worktreeが見つからなかったため、"
-        )
         _notify_reclaim(
             reclaim,
             config,
-            worktree_note,
+            _reclaimed_worktree_note(worktree_exists),
             already_escalated,
             escalating,
             settle_once,
@@ -611,6 +630,8 @@ def _execute_reclaim_lifecycle(
             file=sys.stderr,
         )
     settle_once()
+    if not is_settled():
+        return _external_hold_event(reclaim, config, run_state)
     return _reclaim_event(
         reclaim,
         "escalated_reclaim_limit_exceeded" if escalating else "gc_reclaimed",
@@ -618,12 +639,22 @@ def _execute_reclaim_lifecycle(
     )
 
 
+def _reclaimed_worktree_note(exists: bool) -> str:
+    return (
+        "作業ブランチにWIPコミットを退避した上で、"
+        if exists
+        else "物理worktreeが見つからなかったため、"
+    )
+
+
 def _external_hold_event(
-    reclaim: ZombieOrTimeoutReclaim, config: DispatcherConfig
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    run_state: RunState | None = None,
 ) -> dict | None:
     """#1154: 外部実行の停止未確認なら人間確認へ送り、保持イベントを返す。"""
-    hold = hold_if_not_stopped(
-        reclaim.active, config, "timeout" if reclaim.is_timeout else "stale"
+    hold = fresh_external_hold(
+        reclaim.active, config, "timeout" if reclaim.is_timeout else "stale", run_state
     )
     if hold is None:
         return None
@@ -654,9 +685,16 @@ def _apply_zombie_or_timeout_reclaim(
             reclaim.active,
             subtask_id=reclaim.subtask_id,
         )
-    # #1154: 外部実行の停止を確認できない限り、台帳・ハンドル・枠を保持する。
-    # reclaim countの予約やプロセス停止より前に判定し、保持は回収成功として扱わない。
-    held_event = _external_hold_event(reclaim, config)
+    return _reclaim_external_or_local(run_state, reclaim, config, open_prs)
+
+
+def _reclaim_external_or_local(
+    run_state: RunState,
+    reclaim: ZombieOrTimeoutReclaim,
+    config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None,
+) -> dict | None:
+    held_event = _external_hold_event(reclaim, config, run_state)
     if held_event is not None:
         return held_event
     already_escalated = any(
@@ -676,8 +714,9 @@ def _apply_zombie_or_timeout_reclaim(
     def _settle_once() -> None:
         nonlocal settled
         if not settled:
-            settled = True
-            _settle_reclaim(run_state, reclaim, config, open_prs, release_entry=True)
+            settled = _settle_reclaim(
+                run_state, reclaim, config, open_prs, release_entry=True
+            )
 
     return _execute_reclaim_lifecycle(
         run_state,

@@ -24,6 +24,7 @@ def inspect_claim(
     cwd: Path,
     *,
     restore_marker: bool,
+    external: bool = False,
 ) -> tuple[dict[str, Any], str | None]:
     target = registered_claim_path(active, workspace.run_state_path)
     marker = read_claim_marker(target) if active.core.worktree_path else None
@@ -45,26 +46,35 @@ def inspect_claim(
         "marker": "missing" if marker is None else "present",
         "worktree_action": "retain",
     }
-    problem = _worktree_problem(active, workspace, cwd, restore_marker)
-    if problem is None and not restore_marker:
+    problem = _worktree_problem(
+        active, workspace, cwd, restore_marker, external=external
+    )
+    if problem is None and not restore_marker and not external:
         problem = _completion_problem(active, state)
     return diagnostics, problem
 
 
 def _worktree_problem(
-    active: ActiveWorktree, workspace: ClaimWorkspace, cwd: Path, restore_marker: bool
+    active: ActiveWorktree,
+    workspace: ClaimWorkspace,
+    cwd: Path,
+    restore_marker: bool,
+    *,
+    external: bool = False,
 ) -> str | None:
     target = registered_claim_path(active, workspace.run_state_path)
     marker = read_claim_marker(target) if active.core.worktree_path else None
     if active.claim.repository_id != workspace.repository_identity:
         return "repository identity differs"
+    if external and target.is_symlink():
+        return "claim worktree is a symlink"
     if active.core.worktree_path and (
         target.resolve() == cwd or target.resolve() in cwd.parents
     ):
         return "run recovery from the primary checkout, outside the target worktree"
     if active.launch.pid and is_process_alive(active.launch.pid):
         return "agent is still running; stop it before recovery"
-    if active.launch.external_id or active.launch.launch_phase in {
+    if (active.launch.external_id and not external) or active.launch.launch_phase in {
         "launching",
         "unknown",
         "prepared",

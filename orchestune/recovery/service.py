@@ -19,6 +19,7 @@ from orchestune.ledger.run_state import (
     load_run_state_readonly,
 )
 from orchestune.recovery.contracts import RecoveryRequest, RecoveryResult
+from orchestune.recovery.external_service import recover_external
 from orchestune.recovery.inspection import inspect_claim
 from orchestune.worktree_ops.claim_marker import claim_lock_path, write_claim_marker
 
@@ -26,6 +27,8 @@ from orchestune.worktree_ops.claim_marker import claim_lock_path, write_claim_ma
 def _recover(
     request: RecoveryRequest, workspace: ClaimWorkspace, cwd: Path
 ) -> RecoveryResult:
+    if request.confirm_external_stopped:
+        return recover_external(request, workspace, cwd)
     state = load_run_state_readonly(workspace.run_state_path)
     matches = [
         (key, active)

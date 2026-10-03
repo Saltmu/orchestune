@@ -10,8 +10,8 @@ from typing import Any, cast
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_records import CompletionReceipt
-from orchestune.dispatch.external_execution import hold_if_not_stopped
 from orchestune.dispatch.gc.collection import GcItemResult, _apply_candidate
+from orchestune.dispatch.gc.external_guard import fresh_external_hold, same_execution
 from orchestune.dispatch.gc.handoff import GcRequest, HandoffForge
 from orchestune.dispatch.gc.policies import process_completion_policies
 from orchestune.dispatch.gc.policy_discovery import (
@@ -39,6 +39,7 @@ def _sync_after_gc(state: RunState, config: DispatcherConfig) -> None:
     state.completion_journal = saved.completion_journal
     state.completion_replay_receipts = saved.completion_replay_receipts
     state.task_reclaim_counts = saved.task_reclaim_counts
+    state.recovery_receipts = saved.recovery_receipts
 
 
 def collect_confirmed_completion(
@@ -60,22 +61,27 @@ def collect_confirmed_completion(
             if config.apply
             else nullcontext()
         ):
-            fresh = load_run_state_readonly(config.run_state_path).active_worktrees.get(
-                key
-            )
-            if fresh is None or (
-                fresh.claim.claim_id,
-                fresh.completion.completion_id,
-            ) != (
-                active.claim.claim_id,
-                active.completion.completion_id,
+            saved = load_run_state_readonly(config.run_state_path)
+            state.recovery_receipts = saved.recovery_receipts
+            fresh = saved.active_worktrees.get(key)
+            if (
+                fresh is None
+                or (
+                    fresh.claim.claim_id,
+                    fresh.completion.completion_id,
+                )
+                != (
+                    active.claim.claim_id,
+                    active.completion.completion_id,
+                )
+                or (fresh is not None and not same_execution(fresh, active))
             ):
                 _sync_after_gc(state, config)
                 event["reason"] = "state_changed"
             else:
                 event.update(
                     _prepare_collection(
-                        state, config, key, active, record_completion, task
+                        state, config, key, fresh, record_completion, task
                     )
                 )
     except Exception as error:
@@ -109,7 +115,7 @@ def _prepare_collection(
     if record is None or journal_outcome(record) is None:
         return {"action": "completion_reserved_hold"}
     # #1154: journalが確認済みでも、外部実行の停止未確認なら物理回収・解放を保留する。
-    hold = hold_if_not_stopped(active, config, "completion")
+    hold = fresh_external_hold(active, config, "completion", state)
     if hold is not None:
         return hold.event()
     if not config.apply:
@@ -131,6 +137,9 @@ def _collect(
     receipts: list[CompletionReceipt] = []
     event: dict[str, Any] = {}
     with run_state_lock(config.run_state_path.with_suffix(".lock")):
+        state.recovery_receipts = load_run_state_readonly(
+            config.run_state_path
+        ).recovery_receipts
         save_run_state(state, config.run_state_path)
         _apply_candidate(
             key,
@@ -141,6 +150,7 @@ def _collect(
             items,
             receipts,
             task=task,
+            config=config,
         )
         _sync_after_gc(state, config)
         reclaim_completed_tokens(

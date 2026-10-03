@@ -344,8 +344,14 @@ Recommended operations:
 - Timeout and external executions: with `task-timeout-seconds` (default 7200) enabled, a
   dispatch-launched external execution that cannot be confirmed stopped is sent to
   `status:blocked-human-review` with its slot kept. After checking the cloud-side run and
-  artifacts and confirming it stopped, recover it (operator stop-confirmation recovery is
-  tracked in #1180).
+  artifacts and confirming it stopped, run `recover --confirm-external-stopped` from
+  the primary checkout with exact claim/external IDs, the attempt ID when recorded,
+  and a nonblank reason. Preview first, then add `--apply`; it does not stop the run
+  or change labels. Fresh running refuses, stopped uses provider evidence, and
+  unknown uses the saved operator confirmation for that execution generation.
+  Pending/handed-off completion keeps active for completion resume/GC; invalid
+  completion refuses. Replays preserve the first record and distinguish released,
+  retained and already-absent active entries (see [usage](./usage.md#operator-confirmed-external-stop)).
 - Finished but unconfirmed external executions: when the PR/Outcome shows the work is
   complete but the run cannot be confirmed stopped (for example Cloud Routine), the slot
   stays occupied and the labels are left as they are; the reason is posted once as an

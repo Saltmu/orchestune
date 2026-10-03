@@ -333,7 +333,12 @@ merged成果物ありのIssueは置換せず、manual reviewとしてpreviewに�
 - ラベル更新だけを行いたいとき: `max-launches-per-window = 0`を使います。
 - タイムアウトと外部実行: `task-timeout-seconds`（既定7200）が有効なため、停止を確認できない
   dispatch起動の外部実行は枠を保持したまま`status:blocked-human-review`へ送られます。クラウド側の実行状態と
-  成果物を確認し、停止を確認してから復旧してください（操作者の停止確認付き復旧は#1180で実装予定）。
+  成果物と停止を確認後、primary checkout から `recover --confirm-external-stopped` を使います。
+  台帳と一致する claim/external ID、記録があれば attempt ID、空白だけでない理由を指定し、preview 後に
+  `--apply` を追加します。このコマンドは実行停止やラベル変更を行いません。fresh な running は拒否し、
+  stopped は provider、unknown は同じ世代の操作者停止確認を根拠にします。pending／handed_off は active を
+  保持して completion 再開／GC へ委譲し、invalid は拒否します。再送は初回記録を保持し、解放済み・保持・
+  active 消失を区別します（[usage](./usage.md#操作者が停止を確認した外部実行の復旧)参照）。
 - 終了したが停止未確認の外部実行: PR/Outcomeで成果物の完了を検出しても停止を確認できない場合
   （Cloud Routine等）は、枠を占有したままラベルは変更せず、理由をIssueへ1度コメントします。
   `max-concurrent`が埋まって新規起動が止まったときは、まずこのコメントを確認してください。

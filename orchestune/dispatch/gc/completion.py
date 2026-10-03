@@ -7,14 +7,45 @@ import dataclasses
 import math
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import cast
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.gc.completion_contracts import (
+    COMPLETION_HOLD_ACTIONS as COMPLETION_HOLD_ACTIONS,
+)
+from orchestune.dispatch.gc.completion_contracts import (
+    CompletedWorktreeDecision as CompletedWorktreeDecision,
+)
+from orchestune.dispatch.gc.completion_contracts import (
+    ForgeFailure as ForgeFailure,
+)
+from orchestune.dispatch.gc.completion_contracts import (
+    _CompletionContext,
+)
+from orchestune.dispatch.gc.completion_contracts import (
+    describe_forge_error as describe_forge_error,
+)
+from orchestune.dispatch.gc.completion_contracts import (
+    failed_operations as failed_operations,
+)
+from orchestune.dispatch.gc.completion_contracts import (
+    failure_descriptions as failure_descriptions,
+)
+from orchestune.dispatch.gc.completion_contracts import (
+    is_completion_hold_event as is_completion_hold_event,
+)
+from orchestune.dispatch.gc.completion_contracts import (
+    warn_forge_failure as warn_forge_failure,
+)
+from orchestune.dispatch.gc.external_guard import (
+    ExternalExecutionChanged,
+    fresh_external_hold,
+    require_external_stop,
+)
 from orchestune.dispatch.gc.git import (
     remote_branch_commit_sha_if_ahead,
     remove_worktree,
@@ -30,7 +61,6 @@ from orchestune.dispatch.gc.outcome_decision import (
 )
 from orchestune.dispatch.gc.prior_merge import decide_prior_parent_merge_completion
 from orchestune.dispatch.rules import NotNeededReviewDispatcher
-from orchestune.dispatch.summary import WARN_PREFIX, ascii_safe
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
@@ -62,102 +92,6 @@ from orchestune.outcome_record import (
 from orchestune.pr_link_notice import pr_matches_issue
 from orchestune.targets.completion_policy import token_limit_decision
 from orchestune.task_metadata import TaskMetadata
-
-
-@dataclass(frozen=True, slots=True)
-class CompletedWorktreeDecision:
-    action: str
-    subtask_id: str = ""
-    commit_sha: str | None = None
-    outcome: OutcomeRecord | None = None
-    # PR#789レビュー対応(Codex P2): 判定を保留させたForge呼び出しと、その失敗内容。
-    # stderrの警告が失われた後もレポートから原因を特定できるようにする。
-    operation: str = ""
-    error: str = ""
-
-
-class _CompletionContext(NamedTuple):
-    active: ActiveWorktree
-    active_task: TaskMetadata | None
-    config: DispatcherConfig
-    dispatch_not_needed_review: NotNeededReviewDispatcher | None
-    run_state: RunState | None
-    now: float
-    open_prs: Sequence[PrRecord] | None
-    on_early_death_requeue: Callable[[], None] | None
-    on_review_timeout_requeue: Callable[[], None] | None
-
-
-COMPLETION_HOLD_ACTIONS = frozenset(
-    {
-        "completion_skipped_dirty_worktree",
-        "completion_skipped_forge_error",
-        "completion_skipped_prior_merge_indeterminate",
-    }
-)
-
-
-def is_completion_hold_event(event: Mapping[str, object]) -> bool:
-    """Return whether a completion event must be excluded from same-cycle GC."""
-    return event.get("action") in COMPLETION_HOLD_ACTIONS
-
-
-class ForgeFailure(NamedTuple):
-    """握り潰したForge呼び出し1件。どの操作がなぜ失敗したのかを対で保つ。
-
-    PR#789レビュー対応(Codex P2): 説明文字列だけを集めると、呼び出し側が
-    「どの操作が失敗したのか」を推測で補うことになる（オープンPRのコメント取得が
-    失敗しても`list_prs`と報告されていた）。
-    """
-
-    operation: str
-    description: str
-
-
-def failed_operations(failures: Sequence[ForgeFailure]) -> str:
-    """失敗した呼び出し名を重複なく並べる。空なら空文字。"""
-    return ", ".join(dict.fromkeys(failure.operation for failure in failures))
-
-
-def failure_descriptions(failures: Sequence[ForgeFailure]) -> str:
-    """同じ説明は畳む。同一の障害で複数の呼び出しが落ちるのが普通のため。"""
-    return "; ".join(dict.fromkeys(failure.description for failure in failures))
-
-
-def describe_forge_error(error: Exception) -> str:
-    """例外を1行へ縮める。原文はUTF-8のレポートに残すためここでは変換しない。"""
-    detail = str(error).strip().splitlines()
-    return f"{type(error).__name__}: {detail[0]}" if detail else type(error).__name__
-
-
-def warn_forge_failure(
-    operation: str,
-    issue_number: int | None,
-    error: Exception,
-    error_sink: list[ForgeFailure] | None = None,
-) -> str:
-    """#787: Forge呼び出しの失敗を握り潰す直前に、その事実を必ず表に出す。
-
-    これらの失敗はいずれも`"unknown"`という保守的な判定へ丸められる。無言で
-    丸めると、API障害による保留とタスク側の問題が運用者から区別できない。
-
-    stderrへ出す1行はWindows(cp932)のコンソールにも出るため`ascii_safe`を通す。
-    例外メッセージは外部由来で非ASCII文字を含みうるが、ここで送出される
-    `UnicodeEncodeError`は保守的な保留をサイクルの失敗に化けさせてしまう。
-    原文はUTF-8で書かれるレポート側に`error_sink`経由で残す。
-    """
-    description = describe_forge_error(error)
-    subject = f"issue #{issue_number}" if issue_number is not None else "the repository"
-    print(
-        ascii_safe(
-            f"{WARN_PREFIX} forge API call '{operation}' failed for {subject}: "
-            f"{description}"
-        ),
-        file=sys.stderr,
-    )
-    if error_sink is not None:
-        error_sink.append(ForgeFailure(operation, description))
-    return description
 
 
 def _fetch_outcome_for_active(
@@ -318,10 +252,14 @@ def _prepare_apply_escalation(
 ) -> tuple[str, ...] | None:
     if not config.apply:
         return None
+    if fresh_external_hold(active, config, "completion") is not None:
+        return None
     if not (
         _is_handoff_retained_dirty(active, outcome)
         and worktree_has_uncommitted_changes(active.core.worktree_path)
     ):
+        if fresh_external_hold(active, config, "completion") is not None:
+            return None
         remove_worktree(active.core.worktree_path)
     return _stale_status_labels(active_task)
 
@@ -507,6 +445,8 @@ def _publish_requeue(
     open_prs: Sequence[PrRecord] | None = None,
     on_requeue_applied: Callable[[], None] | None = None,
 ) -> None:
+    if fresh_external_hold(active, config, "completion", run_state) is not None:
+        raise RuntimeError("external_execution_held")
     save_run_state(
         run_state,
         config.run_state_path,
@@ -514,6 +454,7 @@ def _publish_requeue(
         launch_window_seconds=config.window_seconds,
         open_prs=open_prs,
     )
+    require_external_stop(active, config, run_state)
     remove_worktree(active.core.worktree_path)
     transition_status_label(
         config.resolved_forge,
@@ -653,6 +594,7 @@ def _apply_done_worktree_cleanup(ctx: _CompletionContext) -> str | None:
             commit_sha = run_git(
                 ["rev-parse", "HEAD"], cwd=ctx.active.core.worktree_path, check=True
             ).stdout.strip()
+    require_external_stop(ctx.active, ctx.config)
     remove_worktree(ctx.active.core.worktree_path)
     transition_status_label(
         ctx.config.resolved_forge,
@@ -763,6 +705,8 @@ def _apply_completed_decision(
     ctx: _CompletionContext, decision: CompletedWorktreeDecision
 ) -> dict:
     usage = _collect_completed_usage(ctx.active, ctx.config)
+    if hold := fresh_external_hold(ctx.active, ctx.config, "completion"):
+        return hold.event()
     event: dict = {
         "issue_number": ctx.active.core.issue_number,
         "worktree_path": ctx.active.core.worktree_path,
@@ -804,6 +748,8 @@ def _apply_completed_worktree_outcome(
     on_early_death_requeue: Callable[[], None] | None = None,
     on_review_timeout_requeue: Callable[[], None] | None = None,
 ) -> dict:
+    if hold := fresh_external_hold(active, config, "completion", run_state):
+        return hold.event()
     ctx = _CompletionContext(
         active,
         active_task,
@@ -815,7 +761,10 @@ def _apply_completed_worktree_outcome(
         on_early_death_requeue,
         on_review_timeout_requeue,
     )
-    return _apply_completed_decision(ctx, decision)
+    try:
+        return _apply_completed_decision(ctx, decision)
+    except ExternalExecutionChanged as error:
+        return error.hold.event()
 
 
 def _finalize_completed_worktree(
@@ -871,6 +820,8 @@ def _finalize_not_needed_worktree(
     config: DispatcherConfig,
     dispatch_not_needed_review: NotNeededReviewDispatcher | None = None,
 ) -> dict:
+    if hold := fresh_external_hold(active, config, "completion"):
+        return hold.event()
     subtask_id = active_task.subtask_id if active_task else ""
     event: dict = {
         "issue_number": active.core.issue_number,
@@ -883,7 +834,11 @@ def _finalize_not_needed_worktree(
     event["action"] = "not_needed"
     if not config.apply:
         return event
+    if hold := fresh_external_hold(active, config, "completion"):
+        return hold.event()
     if not worktree_has_uncommitted_changes(active.core.worktree_path):
+        if hold := fresh_external_hold(active, config, "completion"):
+            return hold.event()
         remove_worktree(active.core.worktree_path)
     config.resolved_forge.remove_label(
         active.core.issue_number, StatusLabel.IN_PROGRESS
@@ -1035,6 +990,8 @@ def _handle_abandoned_cloud_reclaim(
     reclaim_count: int,
     on_settle: Callable[[], None],
 ) -> str:
+    if fresh_external_hold(active, config, "completion") is not None:
+        return "external_execution_held"
     remove_worktree(active.core.worktree_path)
     if exceeds_limit(reclaim_count, config.max_task_reclaims):
         msg = (
@@ -1083,6 +1040,8 @@ def _finalize_abandoned_cloud_worktree(
     on_label_applied: Callable[[], None] | None = None,
     on_reclaim_reserved: Callable[[], None] | None = None,
 ) -> dict:
+    if hold := fresh_external_hold(active, config, "completion", run_state):
+        return hold.event()
     subtask_id = active_task.subtask_id if active_task else ""
     event = {
         "issue_number": active.core.issue_number,
@@ -1100,6 +1059,8 @@ def _finalize_abandoned_cloud_worktree(
         active_task.status_labels if active_task else (StatusLabel.IN_PROGRESS,)
     )
     if any(label in status_labels for label in TERMINAL_ESCALATION_LABELS):
+        if hold := fresh_external_hold(active, config, "completion", run_state):
+            return hold.event()
         remove_worktree(active.core.worktree_path)
         config.resolved_forge.add_comment(
             active.core.issue_number,

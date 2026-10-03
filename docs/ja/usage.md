@@ -640,6 +640,46 @@ repository、merge commitの到達性、Issue再open時刻を照合します。�
 CIとOutcome公開の要件は維持し、必要証拠が不足する場合は保留します。
 
 
+### 操作者が停止を確認した外部実行の復旧
+
+provider 側で当該実行を停止し、実行 ID・終端状態・成果物を確認して、再開しない状態にします。
+primary checkout から台帳に記録された ID でプレビューしてください。
+
+```bash
+orchestune recover --issue <N> --claim-id <CLAIM> --external-id <EXECUTION> \
+  --launch-attempt-id <ATTEMPT> --confirm-external-stopped \
+  --reason "確認した実行URLと停止結果"
+# 表示を確認後、同じ引数に --apply を追加して適用します。
+```
+
+claim/external ID と空白だけでない理由はプレビューでも必須です。active に attempt ID があれば
+完全一致する値を指定し、なければオプション自体を省略します。このコマンドは停止・取消要求や PID kill を
+行いません。`--restore-marker` と併用できず、worktree・branch・marker・GitHub は保持します。
+`--state` は既存の共有ワークスペースのパス解決に従います。
+
+`runtime_state`、`stop_evidence_source`、`provider_observation_reason` で根拠を確認してください。
+fresh な `running` は必ず拒否し、`stopped` は provider、`unknown` は操作者の申告を根拠にします。
+認証不足・状態取得非対応・provider 対応不明は unknown ですが、不正設定は `provider_config_invalid` で拒否します。
+apply はプレビューを再利用せず、lock 下で世代・PID・marker・completion・runtime を再検証します。
+
+completion がなければ停止確認と release receipt の保存・active 除去を原子的に行い、
+`external_stop_confirmed_released` を返します。pending／handed_off／当該世代の journal があれば
+停止確認だけを保存し、`external_stop_confirmed_active_retained` として全記録を保持します。
+未完了なら既存 completion を再開し、handed_off 済みなら GC へ引き継ぎます。
+journal だけの場合は `completion_resume_required` を表示します。`completion_state_invalid` は
+既存の出版不整合調査へ進み、台帳直接編集・ラベル変更・force 解放で代替しないでください。
+枠解放後は通常の再キュー、または完成成果物の complete／PR 統合手順へ進みます。
+
+プレビューは `would_external_stop_confirm_release`／`would_external_stop_confirm_active_retained` です。
+再送は初回の理由・日時・snapshot を保持し、`already_external_stop_confirmed_released`、
+`already_external_stop_confirmed_active_retained`、または後続 GC 等で active が消えた場合の
+`already_external_stop_confirmed_active_absent` を返します。最後の結果は recover による解放の証明ではありません。
+新世代や曖昧・破損した証拠は拒否します。成功は終了コード 0、拒否は 43、不正な外部引数の組み合わせは引数エラーです。
+
+GC は unknown の場合だけ、同じ repository と固定実行 identity に限定された操作者 receipt を使えます。
+completion の進行では失効せず、所有権・claim 時刻・branch・attempt・起動時刻が変われば使用できません。
+TTL は設けず、fresh な running を覆しません。Outcome・マージ・所有権・completion・WIP 保全の条件も維持します。
+
 ## 起動制御の既定値と移行（#1154）
 
 起動制御の主軸は並行数 `max-concurrent`（既定`2`。対話型claimを含む`active_worktrees`の件数）です。
@@ -662,7 +702,8 @@ dispatch自体を止めてください。
 
 ### 外部実行は停止を確認するまで枠を保持
 
-外部（クラウド）実行の枠を解放するのは、providerが当該実行の再開不能な終端状態を返した場合だけです。
+外部（クラウド）実行の枠を解放するのは、provider が当該実行の再開不能な終端状態を返した場合、または
+unknown に対して同じ実行世代の有効な操作者停止確認 receipt がある場合です。
 PR/Outcomeの完了判定（MERGED/closed PR、handoff-ready）は成果物の状態であり、クラウド側の実行が
 まだコードを実行し得るかの証拠ではありません。実行中・状態不明・未対応・状態取得失敗の場合、GCは
 `active_worktrees`と実行ハンドルを保持し、Issueを`status:blocked-human-review`へ送って自動再投入しません。
@@ -670,6 +711,5 @@ PR/Outcomeの完了判定（MERGED/closed PR、handoff-ready）は成果物の�
 成果物の完了（マージ済みPRやOutcome）を検出したが停止を確認できない場合は、完了結果のラベルを変えず、
 枠を保持している理由をIssueへコメントします（理由が変わったときだけ再投稿します）。
 現在、停止状態を返せるのはCodex Cloudのみです（`codex cloud list`の`ready`・`applied`・`error`を停止、
-`pending`を実行中と扱います）。それ以外の外部ターゲット（Cloud Routine等）は、終了後も常に保持されます。
-復旧はクラウド側の実行状態と成果物を確認し、必要なら停止して停止を確認してから行います。停止確認付きの
-`orchestune recover`は#1180で実装予定で、現行の`recover`は外部実行を拒否します。
+`pending`を実行中と扱います）。それ以外の外部ターゲット（Cloud Routine等）は、操作者の停止確認がなければ終了後も保持されます。
+クラウド側の実行状態と成果物を確認し、必要なら停止して、上記の停止確認付き `recover` を使ってください。
