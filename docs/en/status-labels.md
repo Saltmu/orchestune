@@ -113,8 +113,8 @@ independently of the lifecycle above (see "External lock" below).
 
 > **Note (#109)**: transitions 5-7 above all delegate to
 > `apply_human_review_escalation` in `orchestune/ledger/escalation.py` (the
-> shared logic: remove the current `status:*` label, add
-> `status:blocked-human-review`, then post the reason as a comment). Each
+> shared logic: add `status:blocked-human-review` first, then remove the
+> current `status:*` label, then post the reason as a comment). Each
 > caller (`_finalize_completed_worktree` / `_apply_duplicate_skip` /
 > `_apply_changes_requested_escalation`) is now a thin layer that only decides
 > *why* to escalate before calling this shared function.
@@ -252,7 +252,7 @@ independently of the lifecycle above (see "External lock" below).
 - Source: `AutoMergeChildIntegrationStep._handle_review_gate_block` in `orchestune/integrator/steps.py`
 - Target: the **parent Issue** (`--parent-issue`), not the child Issue.
 - Condition: with `child-review-gate` set to `required` (the default), at least one child in the merge lacks passing review evidence for the commit being merged (reasons `legacy`, `skipped`, `not_pass`, `sha_mismatch`, `absent`, `lookup_unknown`, `integration_evidence_missing`). The parent branch is not updated and no child Issue is closed.
-- Mechanism: delegates to `apply_human_review_escalation` (remove the current `status:*` label, add `status:blocked-human-review`, post a comment carrying the marker `<!-- orchestune:child-review-gate digest=… -->`). It is idempotent: a comment with the same digest is not posted again, and if only the label is missing it is restored.
+- Mechanism: delegates to `apply_human_review_escalation` (add `status:blocked-human-review` first so the Issue never has no status if the process fails midway, then remove the current `status:*` label, then post a comment carrying the marker `<!-- orchestune:child-review-gate digest=… -->`). It is idempotent: a comment with the same digest is not posted again, and if only the label is missing it is restored.
 - Not cleared by the gate: this step never removes the label itself, even after the evidence is fixed and a later cycle integrates the child. Resume and migration steps: [Usage §4.5](./usage.md#45-child-review-evidence-gate).
 
 
