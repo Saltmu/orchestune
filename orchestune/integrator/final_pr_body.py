@@ -181,6 +181,7 @@ class _CollectionDegraded(Exception):
     """
 
 
+# Backward compatibility alias for tests and external callers
 _identifies_child = identifies_child
 
 

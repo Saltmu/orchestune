@@ -16,6 +16,7 @@ from orchestune.forge import Forge, GitHubForge
 from orchestune.integrator.coordinator import IntegrationCoordinator
 from orchestune.integrator.proofs import TaskIntegrationProof
 from orchestune.models import Task
+from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
 from orchestune.task_branch_resolution import TaskBranchResolver, TaskMergeReceipt
 
 
@@ -84,7 +85,7 @@ class IntegratorConfig:
     child_review_gate: str = "required"
 
     def __post_init__(self) -> None:
-        if self.child_review_gate not in {"required", "off"}:
+        if self.child_review_gate not in VALID_CHILD_REVIEW_GATE_MODES:
             raise ValueError(
                 f"child_review_gate must be 'required' or 'off', got {self.child_review_gate!r}"
             )

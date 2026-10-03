@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -34,6 +35,7 @@ REASON_NOT_PASS = "not_pass"
 REASON_SHA_MISMATCH = "sha_mismatch"
 REASON_ABSENT = "absent"
 REASON_LOOKUP_UNKNOWN = "lookup_unknown"
+REASON_INTEGRATION_EVIDENCE_MISSING = "integration_evidence_missing"
 
 
 @dataclass(frozen=True)
@@ -46,7 +48,7 @@ class ChildReviewGateInput:
 
 @dataclass(frozen=True)
 class ChildReviewGateFailure:
-    issue_number: int
+    issue_number: int | None
     reason: str
     subtask_id: str | None = None
     expected_sha: str | None = None
@@ -66,10 +68,17 @@ def compute_review_gate_digest(failures: Sequence[ChildReviewGateFailure]) -> st
     normalized = [
         {
             "issue": f.issue_number,
+            "subtask": f.subtask_id or "",
             "reason": f.reason,
             "sha": f.expected_sha or "",
         }
-        for f in sorted(failures, key=lambda x: x.issue_number)
+        for f in sorted(
+            failures,
+            key=lambda x: (
+                x.issue_number if x.issue_number is not None else -1,
+                x.subtask_id or "",
+            ),
+        )
     ]
     raw = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -167,9 +176,10 @@ def _evaluate_single_child(
 
 def decide_child_review_gate(
     inputs: Sequence[ChildReviewGateInput],
+    precomputed_failures: Sequence[ChildReviewGateFailure] = (),
 ) -> ChildReviewGateDecision:
     """各子のOutcomeLookupResultとマージ対象SHAを検証する純粋判定関数。"""
-    failures: list[ChildReviewGateFailure] = []
+    failures: list[ChildReviewGateFailure] = list(precomputed_failures)
     for item in inputs:
         failure = _evaluate_single_child(item)
         if failure is not None:
@@ -197,6 +207,8 @@ def _instruction_for_reason(reason: str) -> str:
         return "子タスク完了時に `orchestune complete` を実行してOutcome Recordを投稿してください。"
     if reason == REASON_LOOKUP_UNKNOWN:
         return "API障害等の一時的な問題の可能性があるため、ディスパッチまたは統合を再実行してください。"
+    if reason == REASON_INTEGRATION_EVIDENCE_MISSING:
+        return "統合証跡と子の対応を復旧して再実行してください。"
     return "子タスクの状態を確認の上、再実行してください。"
 
 
@@ -216,19 +228,29 @@ def format_child_review_gate_escalation_comment(
         "| 子Issue | サブタスクID | 判定結果 | 対象SHA | 再開方法 |",
         "| :--- | :--- | :--- | :--- | :--- |",
     ]
-    for failure in sorted(failures, key=lambda f: f.issue_number):
+    for failure in sorted(
+        failures,
+        key=lambda f: (
+            f.issue_number if f.issue_number is not None else -1,
+            f.subtask_id or "",
+        ),
+    ):
+        issue_str = (
+            f"#{failure.issue_number}" if failure.issue_number is not None else "—"
+        )
         subtask = f"`{failure.subtask_id}`" if failure.subtask_id else "—"
         sha = f"`{failure.expected_sha[:7]}`" if failure.expected_sha else "—"
         instruction = _instruction_for_reason(failure.reason)
         lines.append(
-            f"| #{failure.issue_number} | {subtask} | `{failure.reason}` | {sha} | {instruction} |"
+            f"| {issue_str} | {subtask} | `{failure.reason}` | {sha} | {instruction} |"
         )
 
     lines.append("")
     lines.append(
         "> [!NOTE]\n"
         "> レビュー検証を意図的に省略して自動マージを進める場合は、"
-        "`orchestune-dispatch --child-review-gate off` を指定して再実行してください。"
+        "`orchestune-dispatch --child-review-gate off` を指定して再実行してください"
+        "（注: 本オプションは統合対象のすべての子Issueのレビュー検証を無効化します）。"
     )
     return "\n".join(lines)
 
@@ -239,7 +261,11 @@ def fetch_child_review_gate_outcome(
     """Forge経由で子Issueのコメントを取得し、OutcomeLookupResultを返す。"""
     try:
         comments = forge.list_comments(issue_number)
-    except Exception:
+    except Exception as error:
+        print(
+            f"Warning: Failed to fetch comments for child issue #{issue_number}: {error}",
+            file=sys.stderr,
+        )
         return OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN, record=None)
 
     record = find_child_outcome_record(comments, issue_number)

@@ -46,6 +46,7 @@ from orchestune.infra.git_cli import get_git_repository_paths, run_git
 from orchestune.infra.repository_config import (
     find_and_load_config_file as find_and_load_config_file,
 )
+from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
 
 _DISPATCH_TARGET_HELP = (
     "#215/#163: エージェントの実ディスパッチ先。未指定時は実行環境から自動選択される"
@@ -249,7 +250,7 @@ _REVIEWER_BOT_CHOICES = frozenset({"auto", "claude", "codex"})
 
 _CONSISTENCY_MODE_CHOICES = frozenset({"off", "shadow", "repair"})
 
-_CHILD_REVIEW_GATE_CHOICES = frozenset({"required", "off"})
+_CHILD_REVIEW_GATE_CHOICES = VALID_CHILD_REVIEW_GATE_MODES
 
 _EXECUTION_PROFILE_TABLE_KEYS = frozenset(
     {"execution_profiles", "execution-profiles", "model_tiers", "model-tiers"}
@@ -564,6 +565,8 @@ def _resolve_child_review_gate(args: Any, toml_data: dict[str, Any]) -> str:
     env_gate: str | None = None
     if "ORCHESTUNE_CHILD_REVIEW_GATE" in os.environ:
         raw_env = os.environ["ORCHESTUNE_CHILD_REVIEW_GATE"].strip()
+        # Per design specification (#1031 section 160), invalid values across all sources
+        # (including env var) are rejected as ConfigError even if shadowed by higher precedence.
         if raw_env not in _CHILD_REVIEW_GATE_CHOICES:
             choices = ", ".join(repr(c) for c in sorted(_CHILD_REVIEW_GATE_CHOICES))
             raise ConfigError(

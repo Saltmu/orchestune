@@ -314,6 +314,30 @@ class TestDigestAndCommentFormatting:
         assert has_matching_review_gate_comment(comments, digest) is True
         assert has_matching_review_gate_comment(comments, "differentdigest") is False
 
+    def test_precomputed_failures_missing_integration_evidence(self):
+        f = ChildReviewGateFailure(
+            issue_number=None,
+            subtask_id="task-orphan",
+            reason="integration_evidence_missing",
+        )
+        decision = decide_child_review_gate([], precomputed_failures=[f])
+        assert decision.passed is False
+        assert len(decision.failures) == 1
+        assert decision.failures[0].reason == "integration_evidence_missing"
+        assert decision.failures[0].issue_number is None
+        assert len(decision.digest) == 64
+
+    def test_comment_formatting_with_none_issue(self):
+        f = ChildReviewGateFailure(
+            issue_number=None,
+            subtask_id="task-orphan",
+            reason="integration_evidence_missing",
+        )
+        digest = compute_review_gate_digest([f])
+        comment = format_child_review_gate_escalation_comment([f], digest)
+        assert "| — | `task-orphan` | `integration_evidence_missing` | — |" in comment
+        assert "統合証跡と子の対応を復旧" in comment
+
 
 class TestFetchChildReviewGateOutcome:
     """Integration of OutcomeLookup via Forge.list_comments and find_child_outcome_record."""

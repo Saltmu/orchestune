@@ -1054,3 +1054,78 @@ class TestChildReviewGateStep:
         assert res["closed_issues"] == [1]
         captured = capsys.readouterr()
         assert "Warning: child_review_gate is off" in captured.err
+
+    def test_review_gate_restores_label_when_matching_comment_exists_but_label_missing(
+        self, integrator_env: IntegratorEnv, fake_forge
+    ):
+        from orchestune.integrator.review_gate import (
+            ChildReviewGateFailure,
+            compute_review_gate_digest,
+            format_child_review_gate_escalation_comment,
+        )
+
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        failure = ChildReviewGateFailure(
+            issue_number=1,
+            reason="absent",
+            subtask_id="task-1",
+            expected_sha="a" * 40,
+        )
+        digest = compute_review_gate_digest([failure])
+        existing_comment = format_child_review_gate_escalation_comment(
+            [failure], digest
+        )
+
+        fake_forge.list_comments.side_effect = lambda issue_no: (
+            [{"body": existing_comment, "created_at": "2026-01-01T00:00:00Z"}]
+            if issue_no == 100
+            else []
+        )
+        # Parent issue does NOT have status:blocked-human-review currently (e.g. human cleared it or queued)
+        fake_forge.get_issue_labels.return_value = ("status:in-progress",)
+
+        res = Integrator(_child_config(child_review_gate="required")).run()
+
+        assert res["status"] == IntegrationStatus.REVIEW_GATE_BLOCKED
+        # Comment is NOT reposted (idempotent)
+        integrator_env.add_comment.assert_not_called()
+        # But status label is restored!
+        integrator_env.add_label.assert_called_once_with(
+            100, "status:blocked-human-review"
+        )
+
+    def test_review_gate_fails_closed_when_task_unmatched(
+        self, integrator_env: IntegratorEnv, fake_forge, tmp_path: Path
+    ):
+        # Done issues only contain task-1, but merged_tasks contains task-1 and task-orphan
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+
+        # We need a context where merged_tasks contains an unmatched subtask_id
+        from orchestune.integrator.steps import AutoMergeChildIntegrationStep
+        from orchestune.integrator.types import IntegrationContext, IntegratorConfig
+
+        config = IntegratorConfig(
+            parent_issue_number=100,
+            apply=True,
+            forge=fake_forge,
+            child_review_gate="required",
+        )
+        ctx = IntegrationContext(
+            config=config,
+            repository_root=tmp_path,
+            original_root=tmp_path,
+            base_branch="origin/parent/issue-100",
+            temp_branch="integration/temp",
+            merged_tasks=["task-orphan"],
+        )
+        fake_forge.list_comments.return_value = []
+        fake_forge.get_issue_labels.return_value = ()
+
+        step = AutoMergeChildIntegrationStep()
+        report = step.execute(ctx)
+
+        assert report["status"] == IntegrationStatus.REVIEW_GATE_BLOCKED
+        integrator_env.add_comment.assert_called_once()
+        comment_arg = integrator_env.add_comment.call_args.args[1]
+        assert "integration_evidence_missing" in comment_arg
+        assert "`task-orphan`" in comment_arg

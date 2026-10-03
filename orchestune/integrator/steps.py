@@ -29,7 +29,9 @@ from orchestune.integrator.git_ops import IntegrationMerger
 from orchestune.integrator.pr import ensure_integration_pr
 from orchestune.integrator.proofs import TaskIntegrationProof
 from orchestune.integrator.review_gate import (
+    REASON_INTEGRATION_EVIDENCE_MISSING,
     ChildReviewGateDecision,
+    ChildReviewGateFailure,
     ChildReviewGateInput,
     decide_child_review_gate,
     fetch_child_review_gate_outcome,
@@ -44,7 +46,12 @@ from orchestune.integrator.types import (
     IntegrationStatus,
 )
 from orchestune.integrator.worktree import IntegrationWorktree
-from orchestune.ledger.escalation import apply_human_review_escalation
+from orchestune.labels import StatusLabel
+from orchestune.ledger.escalation import (
+    _REMOVABLE_STATUS_LABELS,
+    apply_human_review_escalation,
+)
+from orchestune.ledger.status_labels import transition_status_label
 from orchestune.models import Task
 from orchestune.pr_link_notice import (
     ensure_pr_merged_notice,
@@ -617,13 +624,37 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             )
             return None
 
+        gate_inputs, precomputed_failures = self._build_child_review_gate_inputs(ctx)
+        decision = decide_child_review_gate(
+            gate_inputs, precomputed_failures=precomputed_failures
+        )
+        if decision.passed:
+            return None
+
+        self._handle_review_gate_block(ctx, decision)
+        return {
+            "status": IntegrationStatus.REVIEW_GATE_BLOCKED,
+            "auto_merged": False,
+        }
+
+    def _build_child_review_gate_inputs(
+        self, ctx: IntegrationContext
+    ) -> tuple[list[ChildReviewGateInput], list[ChildReviewGateFailure]]:
         tasks_by_subtask = {
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
         }
         gate_inputs: list[ChildReviewGateInput] = []
+        precomputed_failures: list[ChildReviewGateFailure] = []
         for subtask_id in ctx.merged_tasks:
             task = tasks_by_subtask.get(subtask_id)
             if task is None:
+                precomputed_failures.append(
+                    ChildReviewGateFailure(
+                        issue_number=None,
+                        subtask_id=subtask_id,
+                        reason=REASON_INTEGRATION_EVIDENCE_MISSING,
+                    )
+                )
                 continue
             proof = ctx.merged_task_proofs.get(task.issue_number)
             receipt = ctx.task_merge_receipts.get(
@@ -634,6 +665,15 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 if receipt
                 else (proof.source_sha if proof else "")
             )
+            if not expected_sha:
+                precomputed_failures.append(
+                    ChildReviewGateFailure(
+                        issue_number=task.issue_number,
+                        subtask_id=subtask_id,
+                        reason=REASON_INTEGRATION_EVIDENCE_MISSING,
+                    )
+                )
+                continue
             lookup = fetch_child_review_gate_outcome(ctx.forge, task.issue_number)
             gate_inputs.append(
                 ChildReviewGateInput(
@@ -643,25 +683,42 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     lookup_result=lookup,
                 )
             )
+        return gate_inputs, precomputed_failures
 
-        decision = decide_child_review_gate(gate_inputs)
-        if decision.passed:
-            return None
-
-        self._handle_review_gate_block(ctx, decision)
-        return {
-            "status": IntegrationStatus.REVIEW_GATE_BLOCKED,
-            "auto_merged": False,
-        }
+    def _restore_blocked_label(
+        self,
+        ctx: IntegrationContext,
+        parent_issue_number: int,
+        current_labels: tuple[str, ...],
+    ) -> None:
+        if StatusLabel.BLOCKED_HUMAN_REVIEW not in current_labels:
+            try:
+                transition_status_label(
+                    ctx.forge,
+                    parent_issue_number,
+                    StatusLabel.BLOCKED_HUMAN_REVIEW,
+                    (
+                        label
+                        for label in _REMOVABLE_STATUS_LABELS
+                        if label in current_labels
+                    ),
+                )
+            except Exception as error:
+                print(
+                    f"Warning: Failed to restore status:blocked-human-review on parent issue #{parent_issue_number}: {error}",
+                    file=sys.stderr,
+                )
 
     def _handle_review_gate_block(
         self, ctx: IntegrationContext, decision: ChildReviewGateDecision
     ) -> None:
         parent_issue_number = ctx.config.parent_issue_number
+        has_matching_comment = False
         try:
             parent_comments = ctx.forge.list_comments(parent_issue_number)
-            if has_matching_review_gate_comment(parent_comments, decision.digest):
-                return
+            has_matching_comment = has_matching_review_gate_comment(
+                parent_comments, decision.digest
+            )
         except Exception as error:
             print(
                 f"Warning: Failed to list comments on parent issue #{parent_issue_number} "
@@ -669,15 +726,22 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 file=sys.stderr,
             )
 
-        comment = format_child_review_gate_escalation_comment(
-            decision.failures, decision.digest
-        )
         current_labels: tuple[str, ...] = ()
         try:
             current_labels = ctx.forge.get_issue_labels(parent_issue_number)
-        except Exception:
-            pass
+        except Exception as error:
+            print(
+                f"Warning: Failed to get labels for parent issue #{parent_issue_number}: {error}",
+                file=sys.stderr,
+            )
 
+        if has_matching_comment:
+            self._restore_blocked_label(ctx, parent_issue_number, current_labels)
+            return
+
+        comment = format_child_review_gate_escalation_comment(
+            decision.failures, decision.digest
+        )
         try:
             apply_human_review_escalation(
                 parent_issue_number,

@@ -26,6 +26,7 @@ from orchestune.dispatch.execution_profiles import ExecutionProfileConfig
 from orchestune.dispatch.progress import NoopProgress, ProgressSink
 from orchestune.dispatch.targets import DispatchTarget, LocalProcessDispatchTarget
 from orchestune.forge import Forge, GitHubForge
+from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
 
 DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST = frozenset(
     {
@@ -118,7 +119,7 @@ class DispatcherConfig:
     consistency_max_repair_passes: int = 1
 
     def __post_init__(self) -> None:
-        if self.child_review_gate not in {"required", "off"}:
+        if self.child_review_gate not in VALID_CHILD_REVIEW_GATE_MODES:
             raise ValueError(
                 f"child_review_gate must be 'required' or 'off', got {self.child_review_gate!r}"
             )
