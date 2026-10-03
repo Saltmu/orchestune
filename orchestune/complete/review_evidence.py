@@ -160,6 +160,21 @@ def _judgments(
     return digest, dict(sorted(counts.items()))
 
 
+def _review_binding(result: dict[str, Any]) -> dict[str, Any]:
+    """Bind current review content; unrelated PR conversation is not evidence."""
+    return {
+        "round": result["round"],
+        "trigger_id": result["trigger_id"],
+        "review_target_sha": result["review_target_sha"],
+        **{
+            section: [
+                item for item in result[section] if item["provenance"] == "current"
+            ]
+            for section in ("review_items", "inline_comments")
+        },
+    }
+
+
 def verify_review_evidence(
     request: CompleteRequest,
     forge: ReviewEvidenceForge,
@@ -192,6 +207,7 @@ def verify_review_evidence(
         summary = ReviewSummary(
             bot="skip", verdict="skipped", reviewed_head_sha=head_sha
         )
+        binding = {"selection": ("skip", head_sha)}
     else:
         result = _acquire(state, reviewer, pr.head_sha)
         digest, counts = _judgments(payload, result)
@@ -204,6 +220,7 @@ def verify_review_evidence(
             judgment_digest=digest,
             judgment_counts=counts,
         )
+        binding = _review_binding(result)
     if snapshot is not None:
-        snapshot.update(summary=summary.to_dict(), snapshot_digest=_digest(state))
+        snapshot.update(summary=summary.to_dict(), snapshot_digest=_digest(binding))
     return summary

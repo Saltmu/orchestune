@@ -343,6 +343,51 @@ def test_reserved_judgment_change_is_fingerprint_mismatch(
     assert not forge.comments
 
 
+def test_unrelated_pr_comment_does_not_break_pending_resume(
+    tmp_path, monkeypatch, evidence
+):
+    from orchestune.complete.service import complete_task
+
+    request, forge = publication_with_evidence(tmp_path, monkeypatch, evidence)
+    forge.inject = (
+        lambda op, after: (_ for _ in ()).throw(OSError("offline"))
+        if op == "post"
+        else None
+    )
+    first = complete_task(request, forge=forge)
+    assert first.completion_id
+    forge.inject = lambda *_: None
+    evidence[1].comments.append(
+        dict(
+            id=99,
+            body="Thanks! CI finished.",
+            user={"login": "worker"},
+            created_at="2026-10-03T00:03:00Z",
+        )
+    )
+    resumed = complete_task(request, forge=forge)
+    assert resumed.success, resumed.failure
+    assert len(forge.comments) == 1
+
+
+def test_changed_review_body_breaks_pending_resume(tmp_path, monkeypatch, evidence):
+    from orchestune.complete.service import complete_task
+
+    request, forge = publication_with_evidence(tmp_path, monkeypatch, evidence)
+    forge.inject = (
+        lambda op, after: (_ for _ in ()).throw(OSError("offline"))
+        if op == "post"
+        else None
+    )
+    first = complete_task(request, forge=forge)
+    assert first.completion_id
+    forge.inject = lambda *_: None
+    evidence[1].comments[1]["body"] = "Updated review content on the same source"
+    resumed = complete_task(request, forge=forge)
+    assert resumed.failure.reason == CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH
+    assert not forge.comments
+
+
 def test_legacy_reserved_journal_can_resume_without_new_review(tmp_path, monkeypatch):
     from complete_lifecycle_test_support import lifecycle_environment
 
