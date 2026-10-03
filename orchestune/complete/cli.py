@@ -20,6 +20,8 @@ def _parser() -> argparse.ArgumentParser:
         "--result", required=True, choices=("done", "not-needed", "blocked")
     )
     parser.add_argument("--reason")
+    parser.add_argument("--reviewer", choices=("claude", "codex", "skip"))
+    parser.add_argument("--review-reply", type=Path)
     parser.add_argument("--state", type=Path, help="shared run_state.json path")
     parser.add_argument(
         "--completion-id", help="resume or read an immutable completion result"
@@ -58,7 +60,21 @@ def _request_from_args(args: argparse.Namespace) -> CompleteRequest:
             raise ValueError("--pr is required when --result=done")
         if args.reason is not None:
             raise ValueError("--reason is only valid when --result=blocked")
-        return CompleteRequest.done(args.issue, args.pr, **common)
+        if args.reviewer is None:
+            raise ValueError("--reviewer is required when --result=done")
+        if args.reviewer != "skip" and args.review_reply is None:
+            raise ValueError("--review-reply is required for claude/codex")
+        return CompleteRequest.done(
+            args.issue,
+            args.pr,
+            reviewer=args.reviewer,
+            review_reply=args.review_reply,
+            **common,
+        )
+    if args.reviewer is not None or args.review_reply is not None:
+        raise ValueError(
+            "--reviewer and --review-reply are only valid when --result=done"
+        )
     if args.result == "blocked":
         if args.pr is not None:
             raise ValueError("--pr is only valid when --result=done")

@@ -44,12 +44,14 @@ from orchestune.complete.publication import (
     publish_reserved_completion_locked,
 )
 from orchestune.complete.replay import find_replay
+from orchestune.complete.review_evidence import verify_review_evidence
 from orchestune.complete.unclaimed import complete_unclaimed, validate_unclaimed
 from orchestune.forge import GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_codec import encode_active_worktree
 from orchestune.ledger.run_state import load_run_state_readonly
+from orchestune.outcome_record import ReviewSummary
 
 
 def _failure(
@@ -203,6 +205,20 @@ def _initial_issue_evidence(forge: Any, issue: int) -> dict[str, Any]:
         ) from error
 
 
+def _reviewed_outcome(
+    outcome: Any, request: CompleteRequest, policy: dict[str, Any]
+) -> Any:
+    review = policy.get("validation", {}).get("review")
+    if request.result == "done" and review is not None:
+        outcome = replace(outcome, review=ReviewSummary(**review["summary"]))
+        if outcome.head_sha != outcome.review.reviewed_head_sha:
+            raise CompletionJournalError(
+                CompleteFailureReason.REVIEW_HEAD_MISMATCH,
+                "HEAD changed after review verification; return to Step 11 for re-review",
+            )
+    return outcome
+
+
 def _new_record(
     request: CompleteRequest,
     active: Any,
@@ -218,6 +234,7 @@ def _new_record(
         completion_id=completion_id,
         head_sha=_head_sha(worktree),
     )
+    outcome = _reviewed_outcome(outcome, request, policy)
     _ensure_validated_head(request, outcome.head_sha, policy)
     policy = {
         **policy,
@@ -274,11 +291,34 @@ def _reject_policy(
     )
 
 
+def _fresh_review(
+    request: CompleteRequest, forge: Any, pr: Any, ci: dict[str, Any] | None
+) -> dict[str, Any]:
+    review: dict[str, Any] = {}
+    verify_review_evidence(
+        request, forge, pr, ci.get("head_sha") if ci else None, snapshot=review
+    )
+    latest, _, error = _fetch_pr(forge, pr.number)
+    if error or latest is None:
+        raise CompletionJournalError(
+            CompleteFailureReason.EVIDENCE_MISSING,
+            "PR head could not be rechecked after review acquisition",
+        )
+    if latest.head_sha != pr.head_sha:
+        raise CompletionJournalError(
+            CompleteFailureReason.REVIEW_HEAD_MISMATCH,
+            "PR HEAD changed during review acquisition; return to Step 11",
+        )
+    return review
+
+
 def _validation_policy(
     request: CompleteRequest,
     forge: Any,
     policy: dict[str, Any],
     ci: dict[str, Any] | None,
+    *,
+    legacy_review: bool = False,
 ) -> dict[str, Any]:
     if request.result != "done":
         return policy
@@ -289,10 +329,12 @@ def _validation_policy(
         raise CompletionJournalError(
             CompleteFailureReason.EVIDENCE_MISSING, "PR evidence is unavailable"
         )
+    review = {} if legacy_review else _fresh_review(request, forge, pr, ci)
     return {
         **policy,
         "validation": {
             "ci": ci,
+            **({"review": review} if not legacy_review else {}),
             "pr": {
                 name: getattr(pr, name, None)
                 for name in (
@@ -356,7 +398,23 @@ def _policy_for_request(
     )
     return cast(
         dict[str, Any],
-        json.loads(json.dumps(_validation_policy(request, forge, policy, ci))),
+        json.loads(
+            json.dumps(
+                _validation_policy(
+                    request,
+                    forge,
+                    policy,
+                    ci,
+                    legacy_review=(
+                        pending is not None
+                        and "review"
+                        not in (pending.prepublication_policy_evidence or {}).get(
+                            "validation", {}
+                        )
+                    ),
+                )
+            )
+        ),
     )
 
 
@@ -416,6 +474,8 @@ def _same_validation(previous: dict[str, Any], current: dict[str, Any]) -> bool:
         # Legacy journals predate head_sha; payload HEAD and CI bind that head.
         if "head_sha" not in old_pr:
             new_pr.pop("head_sha", None)
+        if "review" not in old:
+            new.pop("review", None)
     return bool(old == new)
 
 

@@ -19,6 +19,48 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
+from orchestune.review.acquisition import (
+    ACQUISITION_ACQUIRED as ACQUISITION_ACQUIRED,
+)
+from orchestune.review.acquisition import (
+    ACQUISITION_IN_PROGRESS as ACQUISITION_IN_PROGRESS,
+)
+from orchestune.review.acquisition import (
+    ACQUISITION_UNAVAILABLE as ACQUISITION_UNAVAILABLE,
+)
+from orchestune.review.acquisition import (
+    EXIT_ACQUIRED as EXIT_ACQUIRED,
+)
+from orchestune.review.acquisition import (
+    EXIT_IN_PROGRESS as EXIT_IN_PROGRESS,
+)
+from orchestune.review.acquisition import (
+    EXIT_NO_RESULT as EXIT_NO_RESULT,
+)
+from orchestune.review.acquisition import (
+    SCHEMA_VERSION as SCHEMA_VERSION,
+)
+from orchestune.review.acquisition import (
+    _build_snapshot as _build_snapshot,
+)
+from orchestune.review.acquisition import (
+    _filter_bot_items as _filter_bot_items,
+)
+from orchestune.review.acquisition import (
+    _get_item_created_timestamp,
+    _is_explicitly_in_progress,
+    _latest_bot_activity_item,
+    _latest_bot_summary_item,
+    collect_review_state,
+    extract_review_result,
+    normalize_review_state,
+)
+from orchestune.review.acquisition import (
+    _get_item_timestamp as _get_item_timestamp,
+)
+from orchestune.review.acquisition import (
+    _is_bot_user as _is_bot_user,
+)
 from orchestune.review.judgment import parse_judgments, validate_coverage
 from orchestune.review.markers import (
     derive_review_target,
@@ -38,48 +80,6 @@ from orchestune.review.markers import (
 )
 from scripts.jev_context import JevReviewContext, collect_review_context
 from scripts.jev_filter import evaluate_review_findings
-from scripts.review_verdict import (
-    ACQUISITION_ACQUIRED as ACQUISITION_ACQUIRED,
-)
-from scripts.review_verdict import (
-    ACQUISITION_IN_PROGRESS as ACQUISITION_IN_PROGRESS,
-)
-from scripts.review_verdict import (
-    ACQUISITION_UNAVAILABLE as ACQUISITION_UNAVAILABLE,
-)
-from scripts.review_verdict import (
-    EXIT_ACQUIRED as EXIT_ACQUIRED,
-)
-from scripts.review_verdict import (
-    EXIT_IN_PROGRESS as EXIT_IN_PROGRESS,
-)
-from scripts.review_verdict import (
-    EXIT_NO_RESULT as EXIT_NO_RESULT,
-)
-from scripts.review_verdict import (
-    SCHEMA_VERSION as SCHEMA_VERSION,
-)
-from scripts.review_verdict import (
-    _build_snapshot as _build_snapshot,
-)
-from scripts.review_verdict import (
-    _filter_bot_items as _filter_bot_items,
-)
-from scripts.review_verdict import (
-    _get_item_created_timestamp,
-    _is_explicitly_in_progress,
-    _latest_bot_activity_item,
-    _latest_bot_summary_item,
-    collect_review_state,
-    extract_review_result,
-    normalize_review_state,
-)
-from scripts.review_verdict import (
-    _get_item_timestamp as _get_item_timestamp,
-)
-from scripts.review_verdict import (
-    _is_bot_user as _is_bot_user,
-)
 
 EXIT_INTERNAL_ERROR = 2  # Internal error / Unexpected exception / Arg error
 EXIT_MAX_ROUNDS = 12  # Maximum review rounds exceeded

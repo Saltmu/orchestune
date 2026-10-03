@@ -258,7 +258,7 @@ def _review_text(outcome: OutcomeRecord | None, prs: Sequence[PrRecord]) -> str:
         for detail in (
             outcome.reason,
             outcome.review.bot,
-            outcome.review.verdict,
+            outcome.review.verdict or ("未確認" if outcome.result == "done" else None),
             f"{rounds}ラウンド" if rounds is not None else None,
         )
         if detail

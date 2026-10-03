@@ -82,6 +82,8 @@ class CompleteFailureReason(str, Enum):
     REASON_REQUIRED = "reason_required"
     DIRTY_WORKTREE = "dirty_worktree"
     EVIDENCE_MISSING = "evidence_missing"
+    REVIEW_EVIDENCE_INVALID = "review_evidence_invalid"
+    REVIEW_HEAD_MISMATCH = "review_head_mismatch"
     STATE_LOCK_FAILED = "state_lock_failed"
     CONCURRENT_COMPLETION = "concurrent_completion"
     INVALID_STAGE_TRANSITION = "invalid_stage_transition"
@@ -336,6 +338,8 @@ class DonePayload:
     review: ReviewSummary = field(default_factory=ReviewSummary)
     ci: str | None = None
     baseline_regressions: tuple[str, ...] = ()
+    reviewer: str | None = None
+    review_reply: Path | None = None
 
     def __post_init__(self) -> None:
         if not is_valid_pr_number(self.pr):
@@ -446,6 +450,8 @@ class CompleteRequest:
         completion_id: str | None = None,
         owner_kind: OwnerKind = OwnerKind.INTERACTIVE,
         review: ReviewSummary | None = None,
+        reviewer: str | None = None,
+        review_reply: Path | None = None,
         ci: str | None = None,
         baseline_regressions: tuple[str, ...] = (),
         dry_run: bool = False,
@@ -456,6 +462,8 @@ class CompleteRequest:
         payload = DonePayload(
             pr=pr,
             review=review or ReviewSummary(),
+            reviewer=reviewer,
+            review_reply=review_reply,
             ci=ci,
             baseline_regressions=tuple(baseline_regressions),
         )
@@ -630,6 +638,8 @@ def completion_request_fingerprint(request: CompleteRequest) -> str:
                 "baseline_regressions": list(request.payload.baseline_regressions),
             }
         )
+        if request.payload.reviewer is not None:
+            payload["reviewer"] = request.payload.reviewer
     elif isinstance(request.payload, BlockedPayload):
         payload.update(
             {
