@@ -74,7 +74,6 @@ class RecordingDispatchTarget(DispatchTarget):
         )
         handle_id = f"handle-{task.issue_number}"
         return DispatchHandle(
-            pid=1000 + task.issue_number,
             external_id=handle_id,
             branch_name=branch_name,
             issue_number=task.issue_number,

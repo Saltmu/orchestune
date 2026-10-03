@@ -59,7 +59,10 @@ def test_business_paths_rejected(tmp_path, name):
 
 def test_symlink_rejected(tmp_path):
     path = tmp_path / "result.json"
-    path.symlink_to(tmp_path / "missing")
+    try:
+        path.symlink_to(tmp_path / "missing")
+    except OSError:
+        pytest.skip("Symlink creation not permitted on this system")
     with pytest.raises(ValueError):
         with reserve_report(config(tmp_path, path), "run"):
             pytest.fail("symlink accepted")
