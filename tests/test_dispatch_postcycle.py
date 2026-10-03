@@ -425,6 +425,56 @@ class TestRunSemanticIntegrator:
         integrator_config = mock_integrator_cls.call_args.args[0]
         assert integrator_config.ci_command is None
 
+    def test_propagates_child_review_gate_from_dispatcher_config(self, tmp_path):
+        """#1031: DispatcherConfig.child_review_gate が IntegratorConfig へ伝播すること。"""
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
+            child_review_gate="off",
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {"status": "success", "ok": True}
+        with patch(
+            "orchestune.dispatch.postcycle.Integrator",
+            autospec=True,
+            return_value=mock_instance,
+        ) as mock_integrator_cls:
+            _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        integrator_config = mock_integrator_cls.call_args.args[0]
+        assert integrator_config.child_review_gate == "off"
+
+    def test_review_gate_blocked_returns_warning_phase_result(self, tmp_path):
+        """#1031: Integrator が REVIEW_GATE_BLOCKED を返した時、
+        非再試行の WARNING PhaseResult として処理されること。"""
+        from orchestune.integrator.types import IntegrationStatus
+
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
+        )
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = {
+            "status": IntegrationStatus.REVIEW_GATE_BLOCKED
+        }
+        with patch(
+            "orchestune.dispatch.postcycle.Integrator",
+            autospec=True,
+            return_value=mock_instance,
+        ):
+            result = _run_semantic_integrator(config, semantic_review_enabled=False)
+
+        assert isinstance(result, PhaseResult)
+        assert result.status == PhaseStatus.WARNING
+        assert result.retryable is False
+        assert result.report == {"status": IntegrationStatus.REVIEW_GATE_BLOCKED}
+
     def test_returns_none_and_warns_on_failure(self, capsys, tmp_path):
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -925,3 +975,20 @@ class TestPostEventLogComment:
         assert result.retryable is False
         assert "auth-failed" in result.error_message
         assert "auth-failed" in capsys.readouterr().err
+
+    def test_child_review_gate_off_warning_in_report_comment(self, tmp_path):
+        """#1031: child_review_gate == 'off' のとき、ディスパッチサイクルレポートに警告が記載されること。"""
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            parent_issue_number=100,
+            apply=True,
+            child_review_gate="off",
+            forge=MagicMock(),
+        )
+        result = _post_event_log_comment(config, self._report_with_events())
+
+        assert result.status == PhaseStatus.SUCCESS
+        posted_body = config.forge.add_comment.call_args.args[1]
+        assert "Child Review Gate is OFF" in posted_body

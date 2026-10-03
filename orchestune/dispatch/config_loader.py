@@ -74,7 +74,7 @@ def _non_negative_int(value: str) -> int:
     return parsed
 
 
-def _add_cli_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_core_cli_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "-p",
         "--parent-issue",
@@ -109,6 +109,9 @@ def _add_cli_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="同時に実行（起動）できるサブタスクエージェントの最大数（未指定時はTOMLまたは既定値2）",
     )
+
+
+def _add_execution_cli_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--profile",
         type=str,
@@ -116,11 +119,22 @@ def _add_cli_arguments(parser: argparse.ArgumentParser) -> None:
         help="この実行全体で使用するモデル・推論強度のプロファイル（タスク指定より優先）",
     )
     parser.add_argument(
+        "--child-review-gate",
+        choices=["required", "off"],
+        default=None,
+        help="子タスクのレビュー合格証跡（verdict=pass, SHA一致）を検証するゲート（既定: required）。offで検証をスキップ。",
+    )
+    parser.add_argument(
         "--allow-unsafe-agent-execution",
         action="store_true",
         default=False,
         help="ローカルCLI（claude/agy/codex）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可します。",
     )
+
+
+def _add_cli_arguments(parser: argparse.ArgumentParser) -> None:
+    _add_core_cli_arguments(parser)
+    _add_execution_cli_arguments(parser)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -235,6 +249,8 @@ _REVIEWER_BOT_CHOICES = frozenset({"auto", "claude", "codex"})
 
 _CONSISTENCY_MODE_CHOICES = frozenset({"off", "shadow", "repair"})
 
+_CHILD_REVIEW_GATE_CHOICES = frozenset({"required", "off"})
+
 _EXECUTION_PROFILE_TABLE_KEYS = frozenset(
     {"execution_profiles", "execution-profiles", "model_tiers", "model-tiers"}
 )
@@ -285,6 +301,7 @@ def _validate_choice_entry(normalized_key: str, raw_key: str, value: Any) -> Any
         "dispatch_target": _TARGET_CHOICES,
         "reviewer_bot": _REVIEWER_BOT_CHOICES,
         "consistency_mode": _CONSISTENCY_MODE_CHOICES,
+        "child_review_gate": _CHILD_REVIEW_GATE_CHOICES,
     }
     allowed = choice_map[normalized_key]
     if not isinstance(value, str) or value not in allowed:
@@ -329,7 +346,12 @@ def _validate_single_entry(normalized_key: str, raw_key: str, value: Any) -> Any
         or normalized_key == "consistency_max_repair_passes"
     ):
         return _validate_numeric_entry(normalized_key, raw_key, value)
-    if normalized_key in {"dispatch_target", "reviewer_bot", "consistency_mode"}:
+    if normalized_key in {
+        "dispatch_target",
+        "reviewer_bot",
+        "consistency_mode",
+        "child_review_gate",
+    }:
         return _validate_choice_entry(normalized_key, raw_key, value)
     return _validate_compound_entry(normalized_key, raw_key, value)
 
@@ -538,6 +560,26 @@ def _build_runtime_tuning_kwargs(toml_data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _resolve_child_review_gate(args: Any, toml_data: dict[str, Any]) -> str:
+    env_gate: str | None = None
+    if "ORCHESTUNE_CHILD_REVIEW_GATE" in os.environ:
+        raw_env = os.environ["ORCHESTUNE_CHILD_REVIEW_GATE"].strip()
+        if raw_env not in _CHILD_REVIEW_GATE_CHOICES:
+            choices = ", ".join(repr(c) for c in sorted(_CHILD_REVIEW_GATE_CHOICES))
+            raise ConfigError(
+                f"environment variable 'ORCHESTUNE_CHILD_REVIEW_GATE' must be one of: {choices}"
+            )
+        env_gate = raw_env
+
+    cli_gate = getattr(args, "child_review_gate", None)
+    if cli_gate is not None:
+        return str(cli_gate)
+    toml_gate = toml_data.get("child_review_gate")
+    if toml_gate is not None:
+        return str(toml_gate)
+    return env_gate or "required"
+
+
 def _assemble_dispatcher_config(
     args: Any,
     toml_data: dict[str, Any],
@@ -559,6 +601,7 @@ def _assemble_dispatcher_config(
     ci_raw = toml_data.get("ci_command")
     ci_cmd = shlex.split(ci_raw) if isinstance(ci_raw, str) else ci_raw
     repair_codes = list(toml_data.get("consistency_repair_code", []))
+    child_review_gate = _resolve_child_review_gate(args, toml_data)
 
     config_kwargs: dict[str, Any] = {
         "parent_issue_number": parent_issue,
@@ -571,6 +614,7 @@ def _assemble_dispatcher_config(
         **paths,
         "dispatch_target": dispatch_target,
         "profile": args.profile,
+        "child_review_gate": child_review_gate,
         "ci_command": ci_cmd,
         "dag_ignore_patterns": dag_ignore_patterns,
         "dag_similarity_threshold": dag_similarity_threshold,

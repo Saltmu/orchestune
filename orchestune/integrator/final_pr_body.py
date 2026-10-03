@@ -24,7 +24,11 @@ from typing import Any
 
 from orchestune.forge import Forge
 from orchestune.models import IssueRecord, PrRecord, normalize_newlines
-from orchestune.outcome_record import OutcomeRecord, parse_from_comments
+from orchestune.outcome_record import (
+    OutcomeRecord,
+    find_child_outcome_record,
+    identifies_child,
+)
 from orchestune.pr_link_notice import requires_link_notice, target_issue_numbers
 
 #: 空セルのプレースホルダ。空文字のままでは列ずれと見分けが付かない。
@@ -177,6 +181,9 @@ class _CollectionDegraded(Exception):
     """
 
 
+_identifies_child = identifies_child
+
+
 def _outcome_from(
     forge: Forge, number: int, issue_number: int, pr_number: int | None
 ) -> OutcomeRecord | None:
@@ -198,33 +205,7 @@ def _outcome_from(
             file=sys.stderr,
         )
         raise _CollectionDegraded from error
-    owned = [
-        comment
-        for comment in comments
-        if (record := parse_from_comments([comment])) is not None
-        and _identifies_child(record, issue_number, pr_number)
-    ]
-    return parse_from_comments(owned)
-
-
-def _identifies_child(
-    record: OutcomeRecord, issue_number: int, pr_number: int | None
-) -> bool:
-    """PR#690レビュー対応(Codex P2): そのレコードの識別フィールドが、この子
-    タスクのものだと述べているかを確認する。
-
-    1つのPRが複数Issueを閉じる場合や、古いレコードが貼り直された場合、
-    走査対象のコメント欄には別タスクのOutcome Recordが載りうる。`issue`/`pr`は
-    レコード契約上の識別子なので、ここで照合しなければ他タスクの
-    レビュー結果をこの子Issueの行として掲載してしまう。
-
-    `pr`は任意フィールドであり、未設定は「PRを主張していない」を意味する。
-    不一致として弾くと`pr`を省略した正当なレコードが全て失われるため、
-    値が入っているときだけ照合する。
-    """
-    if record.issue != issue_number:
-        return False
-    return pr_number is None or record.pr is None or record.pr == pr_number
+    return find_child_outcome_record(comments, issue_number, pr_number)
 
 
 def _child_outcome(forge: Forge, issue_number: int) -> OutcomeRecord | None:

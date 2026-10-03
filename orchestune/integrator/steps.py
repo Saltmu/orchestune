@@ -28,6 +28,14 @@ from orchestune.integrator.finalization import (
 from orchestune.integrator.git_ops import IntegrationMerger
 from orchestune.integrator.pr import ensure_integration_pr
 from orchestune.integrator.proofs import TaskIntegrationProof
+from orchestune.integrator.review_gate import (
+    ChildReviewGateDecision,
+    ChildReviewGateInput,
+    decide_child_review_gate,
+    fetch_child_review_gate_outcome,
+    format_child_review_gate_escalation_comment,
+    has_matching_review_gate_comment,
+)
 from orchestune.integrator.tasks import get_sorted_done_tasks
 from orchestune.integrator.types import (
     IntegrationComponent,
@@ -582,6 +590,9 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             return {"status": IntegrationStatus.SUCCESS}
         if ctx.failed_tasks or not ctx.merged_tasks:
             return {"status": ctx.status}
+        gate_blocked = self._evaluate_child_review_gate(ctx)
+        if gate_blocked is not None:
+            return gate_blocked
         failure = self._update_parent_branch(ctx)
         if failure is not None:
             return failure
@@ -595,6 +606,91 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             "closed_issues": self._close_merged_child_issues(ctx, finalized_task_ids),
             "newly_included": newly_included,
         }
+
+    def _evaluate_child_review_gate(
+        self, ctx: IntegrationContext
+    ) -> IntegrationReport | None:
+        if ctx.config.child_review_gate == "off":
+            print(
+                "Warning: child_review_gate is off; skipping child review evidence verification",
+                file=sys.stderr,
+            )
+            return None
+
+        tasks_by_subtask = {
+            task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
+        }
+        gate_inputs: list[ChildReviewGateInput] = []
+        for subtask_id in ctx.merged_tasks:
+            task = tasks_by_subtask.get(subtask_id)
+            if task is None:
+                continue
+            proof = ctx.merged_task_proofs.get(task.issue_number)
+            receipt = ctx.task_merge_receipts.get(
+                task.issue_number, proof.merge_receipt if proof else None
+            )
+            expected_sha = (
+                receipt.fetched_commit_oid
+                if receipt
+                else (proof.source_sha if proof else "")
+            )
+            lookup = fetch_child_review_gate_outcome(ctx.forge, task.issue_number)
+            gate_inputs.append(
+                ChildReviewGateInput(
+                    issue_number=task.issue_number,
+                    subtask_id=subtask_id,
+                    expected_commit_oid=expected_sha,
+                    lookup_result=lookup,
+                )
+            )
+
+        decision = decide_child_review_gate(gate_inputs)
+        if decision.passed:
+            return None
+
+        self._handle_review_gate_block(ctx, decision)
+        return {
+            "status": IntegrationStatus.REVIEW_GATE_BLOCKED,
+            "auto_merged": False,
+        }
+
+    def _handle_review_gate_block(
+        self, ctx: IntegrationContext, decision: ChildReviewGateDecision
+    ) -> None:
+        parent_issue_number = ctx.config.parent_issue_number
+        try:
+            parent_comments = ctx.forge.list_comments(parent_issue_number)
+            if has_matching_review_gate_comment(parent_comments, decision.digest):
+                return
+        except Exception as error:
+            print(
+                f"Warning: Failed to list comments on parent issue #{parent_issue_number} "
+                f"while checking review gate idempotency: {error}",
+                file=sys.stderr,
+            )
+
+        comment = format_child_review_gate_escalation_comment(
+            decision.failures, decision.digest
+        )
+        current_labels: tuple[str, ...] = ()
+        try:
+            current_labels = ctx.forge.get_issue_labels(parent_issue_number)
+        except Exception:
+            pass
+
+        try:
+            apply_human_review_escalation(
+                parent_issue_number,
+                current_status_labels=current_labels,
+                comment=comment,
+                forge=ctx.forge,
+            )
+        except Exception as error:
+            print(
+                f"Warning: Failed to escalate parent issue #{parent_issue_number} "
+                f"to status:blocked-human-review: {error}",
+                file=sys.stderr,
+            )
 
     def _update_parent_branch(
         self, ctx: IntegrationContext

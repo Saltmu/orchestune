@@ -101,6 +101,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator",
             "integrator.coordinator",
             "integrator.parent_completion",
+            "integrator.review_gate",
             "integrator.steps",
             "integrator.types",
             "provisioning.flow",

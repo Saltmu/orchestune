@@ -41,6 +41,7 @@ class IntegrationStatus(StrEnum):
     COMPOSITE_SUCCESS = "composite_success"
     COMPOSITE_PARTIAL_SUCCESS = "composite_partial_success"
     COMPOSITE_FAILURE = "composite_failure"
+    REVIEW_GATE_BLOCKED = "review_gate_blocked"
 
 
 class IntegrationReport(TypedDict, total=False):
@@ -79,8 +80,14 @@ class IntegratorConfig:
     dag_ignore_patterns: tuple[re.Pattern[str], ...] = ()
     # #407/#415/#659: Conflict Graphの再現性とAPI後方互換のために保持する。
     dag_similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD
+    # #1031: 子タスクのレビュー合格証跡（verdict=pass, SHA一致）を検証するゲート
+    child_review_gate: str = "required"
 
     def __post_init__(self) -> None:
+        if self.child_review_gate not in {"required", "off"}:
+            raise ValueError(
+                f"child_review_gate must be 'required' or 'off', got {self.child_review_gate!r}"
+            )
         self.base_branch = f"origin/parent/issue-{self.parent_issue_number}"
         self.temp_branch = (
             "integration/temp-parent-issue-"

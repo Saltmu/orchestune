@@ -288,7 +288,7 @@ A nonzero run can still save a complete failure report. Argument/configuration e
 
 ### Major Options
 
-Routine dispatch execution uses strictly the following 6 options. Detailed parameters (rate limits, token budgets, timeouts, paths, etc.) are configured via configuration files (`orchestune.toml`) or environment variables.
+Routine dispatch execution uses strictly the following 7 options. Detailed parameters (rate limits, token budgets, timeouts, paths, etc.) are configured via configuration files (`orchestune.toml`) or environment variables.
 
 | Option | Default | Description |
 | :--- | :--- | :--- |
@@ -297,6 +297,7 @@ Routine dispatch execution uses strictly the following 6 options. Detailed param
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | auto-selected (non-CI: `auto` / GitHub Actions: `cloud-routine`) | Target environment to launch agents. When unspecified, resolved from configuration file or auto-selected from runtime environment (`GITHUB_ACTIONS`). `auto` detects a local CLI on `PATH`. `local` gives the backward-compatible no-op dummy (for tests/dry-runs). |
 | `--max-concurrent <int>` | `2` (when unset in config) | Maximum number of subtask agents running concurrently. CLI argument overrides configuration file setting. |
 | `--profile <name>` | - | Override the task execution profile (e.g. `balanced`, `fast-code`, `deep-reasoning`) for this entire run, taking precedence over task metadata profile or model tier. |
+| `--child-review-gate {required,off}` | - | Child sub-issue review gate mode (`required` or `off`). When omitted, falls back to config file (`child-review-gate`), env var (`ORCHESTUNE_CHILD_REVIEW_GATE`), or default `required`. `off` skips verification with a warning. |
 | `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`). For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error. |
 
 ### Configuration File (`orchestune.toml`) for Detailed Settings
@@ -309,6 +310,7 @@ Non-routine options (storage paths, rate limits, timeouts, reviewer selection, c
 | :--- | :--- | :--- |
 | `reviewer-bot` | `"auto"` | Reviewer requested after implementation (`"auto"`, `"claude"`, `"codex"`). `auto` evaluates target type and maps Claude targets to Codex, and Codex/agy targets to Claude. |
 | `ci-command` | `"./scripts/local-ci.sh"` | The CI command the Integrator runs on the integration branch (a shell-like string parsed with shlex or string list, e.g. `"make ci"`). Set this explicitly if your repository's CI entrypoint differs. |
+| `child-review-gate` | `"required"` | Child sub-issue review gate mode (`"required"`, `"off"`). Verifies review evidence (`verdict=pass`, SHA match) before merging to parent branch. `"off"` skips verification with a warning. |
 | `max-launches-per-window` | unset (no limit) | Time-based launch cap within `window-seconds`. Unset: no cap (concurrency via `max-concurrent` is the primary control; token budget, conflicts, etc. still apply). `0`: launches are prohibited, while label updates, GC and other processing still run. `1` or more: maximum launches per window. Omit the key to leave it unset (TOML has no null). |
 | `window-seconds` | `7200` | Sliding window in seconds (default 2 hours) for the launch cap, `max-tokens-per-window` aggregation, aging normalization, and launch-history retention. |
 | `deviation-buffer-lines` | `5` | Allowed line modifications buffer outside the declared footprint to prevent live-locks. |

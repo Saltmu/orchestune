@@ -281,7 +281,7 @@ else { Write-Warning 'report not created' }
 
 ### 主要なオプション
 
-日常のディスパッチ実行で使用するCLIオプションは以下の6つに集約されています。詳細な動作パラメータ（レート制限、トークン予算、タイムアウト、パス等）は設定ファイル（`orchestune.toml`）または環境変数で設定します。
+日常のディスパッチ実行で使用するCLIオプションは以下の7つに集約されています。詳細な動作パラメータ（レート制限、トークン予算、タイムアウト、パス等）は設定ファイル（`orchestune.toml`）または環境変数で設定します。
 
 | オプション | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
@@ -290,6 +290,7 @@ else { Write-Warning 'report not created' }
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | 自動選択（非CI: `auto` / GitHub Actions: `cloud-routine`） | エージェントの起動先。未指定時は設定ファイルの値、または実行環境（`GITHUB_ACTIONS`環境変数）から自動選択されます。`auto`はPATH上のローカルCLIを検出します。`local`は後方互換のダミー起動（no-op、テスト・dry-run用途）になります。 |
 | `--max-concurrent <int>` | `2` (設定ファイル未指定時) | 同時に実行（起動）できるサブタスクエージェントの最大数。設定ファイルの値よりもCLI引数が優先されます。 |
 | `--profile <name>` | - | この実行全体で使用するタスクプロファイル（例: `balanced`, `fast-code`, `deep-reasoning`）をオーバーライドします。タスクメタデータのプロファイルやモデルランクより優先されます。 |
+| `--child-review-gate {required,off}` | - | 子サブIssueのレビュー合否検証モード（`required` または `off`）。未指定時は設定ファイル（`child-review-gate`）または環境変数（`ORCHESTUNE_CHILD_REVIEW_GATE`）、既定値は `required`。`off` 指定時は検証をスキップし警告を出力。 |
 | `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。安全のためCLI引数でのみ指定可能（設定ファイルでの指定は禁止）です。未指定でローカルCLIターゲットを実行しようとした場合は設定エラーで拒否されます（Fail-Closed）。 |
 
 ### 設定ファイル (`orchestune.toml`) による詳細設定
@@ -302,6 +303,7 @@ else { Write-Warning 'report not created' }
 | :--- | :--- | :--- |
 | `reviewer-bot` | `"auto"` | 実装後に依頼するレビュアー（`"auto"`, `"claude"`, `"codex"`）。`auto`はターゲットから判定し、Claude系にはCodex、Codex/agy系にはClaudeを割り当てます。 |
 | `ci-command` | `"./scripts/local-ci.sh"` | Integratorが統合ブランチ上で実行するCIコマンド（shlex構文の文字列または文字列リスト。例: `"make ci"`）。導入先リポジトリのCIエントリーポイントが異なる場合は必ず設定してください。 |
+| `child-review-gate` | `"required"` | 子タスクのレビュー合格証跡（`verdict=pass`、SHA一致）を検証するゲート（`"required"`, `"off"`）。`"off"`で検証をスキップし警告を出力。 |
 | `max-launches-per-window` | 未設定（上限なし） | 時間窓（`window-seconds`）あたりの起動数上限。未設定: 時間単位の上限なし（並行数 `max-concurrent` が主軸。トークン予算・競合などの制約は維持）。`0`: 起動禁止（ラベル更新・GCなどの処理は行う）。`1`以上: 時間窓あたりの起動数上限。TOMLにnullはないため、未設定にするにはキーを省略します。 |
 | `window-seconds` | `7200` | 起動数上限・`max-tokens-per-window`の集計・aging正規化・起動履歴の保持に使う時間窓の秒数（既定は2時間）。 |
 | `deviation-buffer-lines` | `5` | ライブロックを防止するための、フットプリントから逸脱したファイルの変更行数の許容バッファ値。 |
