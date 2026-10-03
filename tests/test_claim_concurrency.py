@@ -320,6 +320,21 @@ def test_claim_dispatch_overlapping_footprints_have_exactly_one_owner(
     assert len(load_run_state(claim_env["state_path"]).active_worktrees) == 1
 
 
+def test_interactive_overlapping_footprints_both_hold_reservations(
+    claim_env: dict[str, Path],
+) -> None:
+    """#1190: interactive同士の重複は警告に留まり、同時claimでも両方の予約が残る。"""
+    results = _run_claimers(
+        claim_env["repo_root"],
+        claim_env["state_path"],
+        [(105, ("shared.py",), "interactive"), (106, ("shared.py",), "interactive")],
+    )
+
+    assert all(item["success"] for item in results), results
+    state = load_run_state(claim_env["state_path"])
+    assert set(state.active_worktrees) == {"105", "106"}
+
+
 @pytest.mark.parametrize("kind", ["interactive", "dispatch"])
 @pytest.mark.parametrize(
     ("active_overrides", "candidate_footprint"),

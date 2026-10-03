@@ -554,6 +554,19 @@ orchestune claim 123
 
 すでに保持している Issue に対して `orchestune claim <N>` を再実行すると `existing_claim_unrecovered` で失敗し、次のアクションとして worktree のパス、`--resume` コマンド、`--amend-footprint` コマンドが表示されます。
 
+### footprint 重複の警告
+
+interactive の claim では、他の **interactive** な予約と `footprint` が重なるだけなら claim は成功します。その場合、相手の Issue 番号・ブランチ・worktree・重なったファイルが `Warning:` として標準エラー出力に表示されます（`--no-apply` のプレビューでも表示されます）。警告が出たら、相手のタスクとマージの順序を決め、後からマージする側がリベース時にコンフリクトを解消してください。
+
+次の場合は、interactive の claim でも従来どおり `claim_conflict` で拒否されます。
+
+- 重なる相手が dispatch（Dispatcher が起動した自律エージェント）の予約である場合
+- どちらかがリポジトリ予約である場合（`repository_reservation`）
+- 重なる相手が `forced_serial` の場合
+- 同じ `shared_contract` への書き込み同士の場合（`shared_contract`）
+
+dispatch の claim は、footprint が重なれば相手の種類に関わらず拒否されます。
+
 ### 予約の拡張（`--amend-footprint`）
 
 保持中のファイル予約の外にあるファイルの変更が必要になった場合は、Issue 本文の `footprint` に追記してから次を実行します。
@@ -563,7 +576,7 @@ orchestune claim <N> --amend-footprint --no-apply  # プレビュー
 orchestune claim <N> --amend-footprint
 ```
 
-新しい footprint は、保持中の footprint・Issue の footprint・claim の基点以降に worktree で変更済みのすべてのファイル（コミット済み・未コミット・未追跡）の和集合です。縮小はしません。他のすべての active 予約との衝突を再判定し、衝突した場合は何も変更せずに相手の Issue を表示します。成功すると不足分を Issue の footprint に追記して台帳を更新します。worktree・ブランチ・claim ID・ラベルは変わりません。対象は、claim を作成したワークスペース（対応する claim marker がある場所）で完了済みの interactive なファイル予約のみです。リポジトリ予約への切り替えはサポートしません。
+新しい footprint は、保持中の footprint・Issue の footprint・claim の基点以降に worktree で変更済みのすべてのファイル（コミット済み・未コミット・未追跡）の和集合です。縮小はしません。他のすべての active 予約との衝突を再判定し、衝突した場合は何も変更せずに相手の Issue を表示します。interactive な予約との footprint 重複は、新規 claim と同じく警告として表示し、拡張は行います。成功すると不足分を Issue の footprint に追記して台帳を更新します。worktree・ブランチ・claim ID・ラベルは変わりません。対象は、claim を作成したワークスペース（対応する claim marker がある場所）で完了済みの interactive なファイル予約のみです。リポジトリ予約への切り替えはサポートしません。
 
 ## 8. ローカルCI証跡の保存と完了処理 (`orchestune complete`)
 

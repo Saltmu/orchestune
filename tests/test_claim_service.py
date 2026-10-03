@@ -10,6 +10,7 @@ import pytest
 from orchestune.claim.contracts import (
     ClaimExitCode,
     ClaimFailureReason,
+    ClaimOverlapWarning,
     ClaimRequest,
     ClaimStage,
     OwnerKind,
@@ -649,3 +650,117 @@ class TestLockReentrancy:
         assert active is not None
         assert active.claim.base_ref == "parent/issue-894"
         assert active.core.base_branch == "parent/issue-894"
+
+
+def _held_overlap(owner_kind: str) -> RunState:
+    return RunState(
+        active_worktrees={
+            "90": make_test_active_worktree(
+                issue_number=90,
+                branch="claude/issue-90-held",
+                worktree_path="/tmp/wt90",
+                pid=None,
+                started_at=None,
+                declared_footprint=("orchestune/foo.py",),
+                owner_kind=owner_kind,
+                claim_id="claim-held-90",
+                claim_stage=ClaimStage.COMPLETED.value,
+                reservation_kind=ReservationKind.FOOTPRINT.value,
+            )
+        }
+    )
+
+
+def _prepared(branch, worktree_root, base_branch, claim_id, **kwargs):
+    target_path = Path(worktree_root) / branch.replace("/", "-")
+    target_path.mkdir(parents=True, exist_ok=True)
+    return WorktreePreparation(
+        worktree_path=target_path,
+        branch=branch,
+        accepted=True,
+        created=True,
+        base_sha="base_sha_123",
+    )
+
+
+class TestInteractiveFootprintOverlapWarning:
+    """#1190: interactive同士のfootprint重複は警告に留め、dispatchとの重複は拒否する。"""
+
+    _EXPECTED = ClaimOverlapWarning(
+        issue_number=90,
+        paths=("orchestune/foo.py",),
+        branch="claude/issue-90-held",
+        worktree_path=Path("/tmp/wt90"),
+    )
+
+    def test_claim_succeeds_with_warning_and_both_reservations_are_held(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        state_path = claim_env["state_path"]
+        with run_state_lock(state_path.with_suffix(".lock")):
+            save_run_state(_held_overlap(OwnerKind.INTERACTIVE.value), state_path)
+        forge = MockForge({101: _make_issue(number=101), 90: _make_issue(number=90)})
+
+        with (
+            patch(
+                "orchestune.claim.service.run_git",
+                return_value=MagicMock(returncode=0, stdout="abc1234"),
+            ),
+            patch(
+                "orchestune.claim.service.prepare_task_worktree",
+                side_effect=_prepared,
+            ),
+        ):
+            outcome = claim_task(
+                ClaimRequest(issue_number=101, state_path=state_path),
+                forge=forge,
+                cwd=claim_env["repo_root"],
+            )
+
+        assert outcome.success is True, outcome.failure
+        assert outcome.warnings == (self._EXPECTED,)
+        assert set(load_run_state(state_path).active_worktrees) == {"90", "101"}
+        assert (101, StatusLabel.IN_PROGRESS) in forge.labels_added
+
+    def test_dry_run_reports_warning_without_reserving(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        state_path = claim_env["state_path"]
+        with run_state_lock(state_path.with_suffix(".lock")):
+            save_run_state(_held_overlap(OwnerKind.INTERACTIVE.value), state_path)
+        forge = MockForge({101: _make_issue(number=101), 90: _make_issue(number=90)})
+
+        outcome = claim_task(
+            ClaimRequest(issue_number=101, state_path=state_path, dry_run=True),
+            apply=False,
+            forge=forge,
+            cwd=claim_env["repo_root"],
+        )
+
+        assert outcome.success is True, outcome.failure
+        assert outcome.stage == ClaimStage.VALIDATING
+        assert outcome.warnings == (self._EXPECTED,)
+        assert set(load_run_state(state_path).active_worktrees) == {"90"}
+        assert forge.labels_added == []
+
+    def test_overlap_with_dispatch_reservation_is_still_rejected(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        state_path = claim_env["state_path"]
+        with run_state_lock(state_path.with_suffix(".lock")):
+            save_run_state(_held_overlap(OwnerKind.DISPATCH.value), state_path)
+        forge = MockForge({101: _make_issue(number=101), 90: _make_issue(number=90)})
+
+        outcome = claim_task(
+            ClaimRequest(issue_number=101, state_path=state_path),
+            forge=forge,
+            cwd=claim_env["repo_root"],
+        )
+
+        assert outcome.success is False
+        assert outcome.failure is not None
+        assert outcome.failure.reason == ClaimFailureReason.CLAIM_CONFLICT
+        assert outcome.failure.conflicting_issue_number == 90
+        assert "footprint_overlap" in outcome.failure.message
+        assert outcome.warnings == ()
+        assert set(load_run_state(state_path).active_worktrees) == {"90"}

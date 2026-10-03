@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 import pytest
 
 from orchestune.claim.contracts import (
     ClaimOutcome,
+    ClaimOverlapWarning,
     ClaimRequest,
     OwnerKind,
     ReservationKind,
@@ -15,6 +17,7 @@ from orchestune.claim.contracts import (
 from orchestune.claim.ownership import (
     ClaimConflictReason,
     OwnerToken,
+    assess_claim_conflicts,
     build_claim_info,
     build_reservation,
     evaluate_claim_conflicts,
@@ -173,6 +176,7 @@ def _active(
     footprint: tuple[str, ...] = (),
     reservation_kind: str = "footprint",
     forced_serial: bool = False,
+    owner_kind: str = "dispatch",
 ) -> ActiveWorktree:
     return make_test_active_worktree(
         issue_number=issue_number,
@@ -183,6 +187,7 @@ def _active(
         declared_footprint=footprint,
         reservation_kind=reservation_kind,
         forced_serial=forced_serial,
+        owner_kind=owner_kind,
     )
 
 
@@ -359,3 +364,139 @@ def test_footprint_overlap_matches_canonicalized_paths() -> None:
         )
         == ClaimConflictReason.FOOTPRINT_OVERLAP
     )
+
+
+def _assess(candidate: ActiveWorktree, *actives: ActiveWorktree, tasks=None):
+    view_tasks = {
+        active.core.issue_number: _task(
+            active.core.issue_number, footprint=active.core.declared_footprint
+        )
+        for active in (candidate, *actives)
+    }
+    view_tasks.update(tasks or {})
+    return assess_claim_conflicts(
+        candidate,
+        RunState(active_worktrees={str(a.core.issue_number): a for a in actives}),
+        _View(view_tasks),
+    )
+
+
+def test_interactive_overlap_with_interactive_active_is_only_a_warning() -> None:
+    candidate = _active(10, footprint=("a.py", "b.py"), owner_kind="interactive")
+    active = _active(11, footprint=("b.py", "a.py", "z.py"), owner_kind="interactive")
+
+    assessment = _assess(candidate, active)
+
+    assert assessment.conflict is None
+    assert assessment.warnings == (
+        ClaimOverlapWarning(
+            issue_number=11,
+            paths=("a.py", "b.py"),
+            branch="feat/issue-11",
+            worktree_path=Path("/tmp/issue-11"),
+        ),
+    )
+    assert (
+        evaluate_claim_conflicts(
+            candidate,
+            RunState(active_worktrees={"11": active}),
+            _View({10: _task(10), 11: _task(11)}),
+        )
+        is None
+    )
+
+
+def test_overlap_warnings_collect_every_interactive_active() -> None:
+    candidate = _active(10, footprint=("a.py", "b.py"), owner_kind="interactive")
+    first = _active(11, footprint=("a.py",), owner_kind="interactive")
+    unrelated = _active(12, footprint=("z.py",), owner_kind="interactive")
+    second = _active(13, footprint=("b.py",), owner_kind="interactive")
+
+    assessment = _assess(candidate, first, unrelated, second)
+
+    assert assessment.conflict is None
+    assert [(w.issue_number, w.paths) for w in assessment.warnings] == [
+        (11, ("a.py",)),
+        (13, ("b.py",)),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("candidate_kind", "active_kind"),
+    [
+        ("interactive", "dispatch"),
+        ("dispatch", "interactive"),
+        ("dispatch", "dispatch"),
+    ],
+)
+def test_overlap_involving_a_dispatch_reservation_still_blocks(
+    candidate_kind: str, active_kind: str
+) -> None:
+    candidate = _active(10, footprint=("a.py",), owner_kind=candidate_kind)
+    active = _active(11, footprint=("a.py",), owner_kind=active_kind)
+
+    assessment = _assess(candidate, active)
+
+    assert assessment.conflict is not None
+    assert assessment.conflict.reason is ClaimConflictReason.FOOTPRINT_OVERLAP
+    assert assessment.conflict.active is active
+
+
+@pytest.mark.parametrize(
+    ("blocker", "reason"),
+    [
+        (
+            _active(12, reservation_kind="repository", owner_kind="interactive"),
+            ClaimConflictReason.REPOSITORY_RESERVATION,
+        ),
+        (
+            _active(12, footprint=("x.py",), owner_kind="dispatch"),
+            ClaimConflictReason.FOOTPRINT_OVERLAP,
+        ),
+    ],
+    ids=["repository", "dispatch-overlap"],
+)
+def test_blocking_conflict_after_a_warned_overlap_is_not_missed(
+    blocker: ActiveWorktree, reason: ClaimConflictReason
+) -> None:
+    candidate = _active(10, footprint=("a.py", "x.py"), owner_kind="interactive")
+    warned = _active(11, footprint=("a.py",), owner_kind="interactive")
+
+    assessment = _assess(candidate, warned, blocker)
+
+    assert assessment.conflict is not None
+    assert assessment.conflict.reason is reason
+    assert assessment.conflict.active is blocker
+
+
+def test_interactive_overlap_keeps_forced_serial_and_shared_contract_blocking() -> None:
+    candidate = _active(10, footprint=("a.py",), owner_kind="interactive")
+    forced = _active(
+        11, footprint=("a.py",), forced_serial=True, owner_kind="interactive"
+    )
+    assert (
+        _assess(candidate, forced).conflict.reason  # type: ignore[union-attr]
+        is ClaimConflictReason.FORCED_SERIAL
+    )
+
+    writer = _active(11, footprint=("a.py",), owner_kind="interactive")
+    assessment = _assess(
+        candidate,
+        writer,
+        tasks={
+            10: _task(10, footprint=("a.py",), contract="claim", writer=True),
+            11: _task(11, footprint=("a.py",), contract="claim", writer=True),
+        },
+    )
+    assert assessment.conflict is not None
+    assert assessment.conflict.reason is ClaimConflictReason.SHARED_CONTRACT
+
+
+def test_same_issue_blocks_interactive_claim_even_with_overlap() -> None:
+    candidate = _active(10, footprint=("a.py",), owner_kind="interactive")
+    held = _active(10, footprint=("a.py",), owner_kind="interactive")
+
+    assessment = _assess(candidate, held)
+
+    assert assessment.conflict is not None
+    assert assessment.conflict.reason is ClaimConflictReason.SAME_ISSUE

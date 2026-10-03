@@ -566,6 +566,19 @@ If a claim cannot proceed due to unmet dependencies, conflicts, or environmental
 
 When re-running `orchestune claim <N>` for an issue you already hold, it fails with `existing_claim_unrecovered` and prints the worktree path, the `--resume` command, and the `--amend-footprint` command as next actions.
 
+### Footprint overlap warnings
+
+An interactive claim succeeds when its only conflict is a `footprint` overlap with another **interactive** reservation. The command then prints a `Warning:` to stderr with the other Issue number, branch, worktree, and the overlapping files (also in the `--no-apply` preview). When you see it, agree on the merge order with the other task; whichever merges later resolves the conflicts when rebasing.
+
+An interactive claim is still rejected with `claim_conflict` when:
+
+- the overlapping reservation belongs to dispatch (an autonomous agent launched by the Dispatcher)
+- either side is a repository reservation (`repository_reservation`)
+- the overlapping reservation is `forced_serial`
+- both write the same `shared_contract` (`shared_contract`)
+
+A dispatch claim is rejected on any footprint overlap, whoever holds the other reservation.
+
 ### Widening the reservation (`--amend-footprint`)
 
 If the task turns out to need files outside its held file reservation, add them to the `footprint` in the Issue body and run:
@@ -575,7 +588,7 @@ orchestune claim <N> --amend-footprint --no-apply  # preview
 orchestune claim <N> --amend-footprint
 ```
 
-The new footprint is the union of the held footprint, the Issue footprint, and every file already changed in the worktree since the claim base (committed, uncommitted, and untracked). It never shrinks. The command re-checks conflicts against every other active reservation and, on conflict, changes nothing and reports the conflicting issue. On success it adds missing files to the Issue footprint and updates the ledger; the worktree, branch, claim ID, and labels stay unchanged. Only completed interactive file reservations in the claiming workspace (with its matching claim marker) are eligible. Switching to a repository reservation is not supported.
+The new footprint is the union of the held footprint, the Issue footprint, and every file already changed in the worktree since the claim base (committed, uncommitted, and untracked). It never shrinks. The command re-checks conflicts against every other active reservation and, on conflict, changes nothing and reports the conflicting issue. A footprint overlap with an interactive reservation is reported as a warning, as for a new claim, and the reservation is still widened. On success it adds missing files to the Issue footprint and updates the ledger; the worktree, branch, claim ID, and labels stay unchanged. Only completed interactive file reservations in the claiming workspace (with its matching claim marker) are eligible. Switching to a repository reservation is not supported.
 
 ## 8. Local CI Evidence Storage and Task Completion (`orchestune complete`)
 
