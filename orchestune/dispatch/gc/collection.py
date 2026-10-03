@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.claim.workspace import ClaimWorkspace
+from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_records import CompletionReceipt
+from orchestune.dispatch.gc.external_guard import (
+    collection_stop_problem,
+    same_execution,
+)
 from orchestune.dispatch.gc.git import (
     evaluate_worktree_removal,
     remove_verified_worktree,
@@ -186,25 +191,13 @@ def _apply_release(
     raw: dict[str, Any],
     workspace: ClaimWorkspace,
     task: TaskMetadata | None = None,
+    *,
+    config: DispatcherConfig | None = None,
 ) -> tuple[bool, str]:
-    state = load_run_state_readonly(workspace.run_state_path)
-    record = next(
-        (
-            r
-            for r in policy_candidates(state)
-            if r.issue_number == active.core.issue_number
-        ),
-        None,
-    )
-    if record is None:
-        return False, "completion_evidence_mismatch"
-    if (
-        record.result == "done"
-        and (record.prepublication_policy_evidence or {}).get("decision") != "allowed"
-    ):
-        return False, "done_policy_evidence_missing"
-    # Refresh after policy persistence so active removal cannot overwrite its record.
-    raw, _ = _read_gc_state(workspace.run_state_path)
+    if problem := _release_evidence_problem(active, workspace):
+        return False, problem
+    if problem := collection_stop_problem(active, workspace, config):
+        return False, problem
     target = _absolute_worktree_path(active, workspace)
     if plan.worktree_action == "remove":
         reason = _remove_verified_worktree(active, target, workspace)
@@ -214,6 +207,14 @@ def _apply_release(
         reason = None
     if reason:
         return False, reason
+    if problem := collection_stop_problem(active, workspace, config):
+        return False, problem
+    if problem := _release_evidence_problem(active, workspace):
+        return False, problem
+    raw, fresh = _read_gc_state(workspace.run_state_path)
+    current = fresh.get(key)
+    if current is None or not same_execution(current, active):
+        return False, "state_changed"
     updated, reason = _updated_state_after_release(key, active, plan, raw, task)
     if reason or updated is None:
         return False, reason or "state_update_failed"
@@ -225,6 +226,30 @@ def _apply_release(
     return True, "released"
 
 
+def _release_evidence_problem(
+    active: ActiveWorktree, workspace: ClaimWorkspace
+) -> str | None:
+    state = load_run_state_readonly(workspace.run_state_path)
+    if not completion_handoff_matches_active(state, active):
+        return "completion_evidence_mismatch"
+    record = next(
+        (
+            r
+            for r in policy_candidates(state)
+            if r.issue_number == active.core.issue_number
+        ),
+        None,
+    )
+    if record is None:
+        return "completion_evidence_mismatch"
+    if (
+        record.result == "done"
+        and (record.prepublication_policy_evidence or {}).get("decision") != "allowed"
+    ):
+        return "done_policy_evidence_missing"
+    return None
+
+
 def _apply_candidate(
     key: str,
     initial: ActiveWorktree,
@@ -234,6 +259,8 @@ def _apply_candidate(
     items: list[GcItemResult],
     receipts: list[CompletionReceipt],
     task: TaskMetadata | None = None,
+    *,
+    config: DispatcherConfig | None = None,
 ) -> tuple[int | None, int]:
     if not initial.core.worktree_path.strip():
         items.append(
@@ -245,7 +272,9 @@ def _apply_candidate(
     target = _absolute_worktree_path(initial, workspace)
     try:
         with file_lock(claim_lock_path(target), timeout=request.timeout_seconds):
-            return _apply_one(key, workspace, forge, items, receipts, task, initial)
+            return _apply_one(
+                key, workspace, forge, items, receipts, task, initial, config=config
+            )
     except FileLockContentionError:
         items.append(
             _make_item(key, initial, "failed", "lock_timeout", "retain", workspace)
@@ -261,6 +290,8 @@ def _apply_one(
     receipts: list[CompletionReceipt],
     task: TaskMetadata | None = None,
     expected: ActiveWorktree | None = None,
+    *,
+    config: DispatcherConfig | None = None,
 ) -> tuple[int | None, int]:
     try:
         raw, active = _read_gc_state(workspace.run_state_path)
@@ -271,12 +302,14 @@ def _apply_one(
         expected is not None
         and (current.claim.claim_id, current.completion.completion_id)
         != (expected.claim.claim_id, expected.completion.completion_id)
+        or expected is not None
+        and not same_execution(current, expected)
     ):
         return None, 1
     if held := _handoff_contract_hold(key, current, workspace):
         items.append(held)
         return None, 0
-    plan = _inspect_or_hold(current, workspace, forge)
+    plan = _inspect_or_hold(current, workspace, forge, config=config)
     if plan.action != "release":
         items.append(
             _make_item(
@@ -284,7 +317,24 @@ def _apply_one(
             )
         )
         return None, 0
-    success, reason = _apply_release(key, current, plan, raw, workspace, task)
+    success, reason = _apply_release(
+        key, current, plan, raw, workspace, task, config=config
+    )
+    return _record_collection_result(
+        key, current, plan, success, reason, workspace, items, receipts
+    )
+
+
+def _record_collection_result(
+    key: str,
+    current: ActiveWorktree,
+    plan: HandoffPlan,
+    success: bool,
+    reason: str,
+    workspace: ClaimWorkspace,
+    items: list[GcItemResult],
+    receipts: list[CompletionReceipt],
+) -> tuple[int | None, int]:
     if not success:
         items.append(
             _make_item(key, current, "failed", reason, plan.worktree_action, workspace)
@@ -304,6 +354,8 @@ def _inspect_or_hold(
     active: ActiveWorktree,
     workspace: ClaimWorkspace,
     forge: HandoffForge | None,
+    *,
+    config: DispatcherConfig | None = None,
 ) -> HandoffPlan:
     core = active.core
     completion = active.completion
@@ -329,7 +381,7 @@ def _inspect_or_hold(
             worktree_action="retain",
         )
     try:
-        return inspect_handoff(active, workspace, forge)
+        return inspect_handoff(active, workspace, forge, config=config)
     except Exception:
         return HandoffPlan(
             key=str(core.issue_number),

@@ -651,6 +651,55 @@ unchanged; use the existing engine/Outcome lifecycle for requeue, completion or
 closure. Dispatcher does not resurrect the explicitly released generation.
 Repeated release is idempotent. Do not delete the entire `run_state.json`.
 
+### Operator-confirmed external stop
+
+First stop the execution on the provider side, verify its execution ID, terminal
+state and artifacts, and keep it stopped. From the primary checkout, preview:
+
+```bash
+orchestune recover --issue <N> --claim-id <CLAIM> --external-id <EXECUTION> \
+  --launch-attempt-id <ATTEMPT> --confirm-external-stopped \
+  --reason "execution URL and verified stop result"
+# Add --apply to the same arguments after inspecting the preview.
+```
+
+Claim/external IDs and a nonblank reason are required even for preview. Supply
+the exact attempt ID when the active ledger has one; omit the option when it
+does not. This command sends no stop/cancel request, kills no PID, and cannot be
+combined with `--restore-marker`. It retains worktree, branch, marker and GitHub
+state. `--state` follows the usual shared-workspace path rules.
+
+Inspect `runtime_state`, `stop_evidence_source` and
+`provider_observation_reason`: fresh `running` always refuses recovery, `stopped`
+uses provider evidence, and `unknown` uses the operator's confirmation. Missing
+authentication, unsupported lookup or unproven provider identity is unknown;
+invalid configuration refuses with `provider_config_invalid`. Apply independently
+rechecks identity, PID, marker, completion and runtime under locks.
+
+With no current completion, apply atomically records confirmation and release,
+removes only the active entry, and returns `external_stop_confirmed_released`.
+Pending completion, handed-off completion or a current-generation journal keeps
+the entry with `external_stop_confirmed_active_retained`; resume the existing
+completion (journal-only reports `completion_resume_required`) or let GC collect
+a verified handoff. `completion_state_invalid` requires the usual publication
+investigation; do not replace that with ledger edits, label changes or force release.
+After release, use the normal requeue or completion/PR integration workflow.
+
+Preview actions are `would_external_stop_confirm_release` and
+`would_external_stop_confirm_active_retained`. Replays keep the first reason,
+timestamp and snapshot, returning `already_external_stop_confirmed_released`,
+`already_external_stop_confirmed_active_retained`, or
+`already_external_stop_confirmed_active_absent` if another lifecycle removed the
+entry. The last result does not assert that recover released it. A new execution
+generation or ambiguous/corrupt evidence refuses. Success exits 0, refusal 43;
+invalid external argument combinations are argument errors.
+
+GC can use the saved operator confirmation only for unknown runtime and the same
+repository and fixed execution identity. Completion progress does not invalidate
+it; ownership, claim time, branch, attempt or start-time changes do. It has no TTL
+and never overrides a fresh running observation. Normal Outcome, merge, ownership,
+completion and WIP preservation requirements still apply.
+
 A merged PR can be completed from its claim worktree with the usual `complete`
 command when Issue, claim creation time, head, expected base, repository, merge
 reachability and reopening history match. CI and publication requirements still
@@ -682,8 +731,9 @@ synchronization keep running. To stop everything, stop the dispatcher itself.
 
 ### External executions are held until stopped
 
-The GC releases a slot for an external (cloud) execution only when the provider reports
-a non-resumable terminal state for that execution. PR/Outcome state (merged/closed PR,
+The GC releases a slot for an external (cloud) execution when the provider reports
+a non-resumable terminal state, or unknown runtime has a valid operator confirmation
+for the exact execution generation. PR/Outcome state (merged/closed PR,
 handoff-ready) says whether the *work* is complete, not whether the cloud run can still
 execute code. When the runtime state is running, unknown, unsupported, or the lookup
 fails, the GC keeps `active_worktrees` and the execution handle, sends the Issue to
@@ -694,7 +744,6 @@ stopped, the GC keeps the completion result labels and instead posts one Issue c
 explaining the held slot (it is posted again only when the reason changes).
 Currently only Codex Cloud can report a stopped state (`ready`, `applied` and `error`
 from `codex cloud list` are stopped; `pending` is running); other external targets (for
-example Cloud Routine) are always held, including after they finish. To recover, check the cloud-side run and its
-artifacts, stop it there if needed, and confirm the stop; an `orchestune recover` mode
-that accepts an operator's stop confirmation is tracked in #1180 and the existing
-`recover` still refuses external executions.
+example Cloud Routine) remain held without operator confirmation, including after
+they finish. Check the cloud-side run and artifacts, stop it there if needed, and
+use the operator-confirmed external recovery procedure above.

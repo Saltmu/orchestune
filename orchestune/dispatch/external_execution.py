@@ -22,6 +22,8 @@ from orchestune.issue_notice import post_notice_if_changed
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_records import ActiveWorktree
 from orchestune.ledger.escalation import apply_human_review_escalation
+from orchestune.ledger.external_stop_receipts import matching_confirmation
+from orchestune.ledger.run_state import RunState
 from orchestune.targets.contracts import DispatchHandle
 
 RuntimeState = Literal["running", "stopped", "unknown"]
@@ -57,10 +59,13 @@ class ExternalExecutionHold:
 
 
 def is_external_execution(active: ActiveWorktree) -> bool:
-    return active.launch.external_id is not None
+    external_id = active.launch.external_id
+    return external_id is not None and not external_id.startswith("recovered-pr:")
 
 
-def _attempt_matches_provider(active: ActiveWorktree, config: DispatcherConfig) -> bool:
+def _attempt_matches_provider(
+    active: ActiveWorktree, config: DispatcherConfig, *, strict: bool = False
+) -> bool:
     """現在の設定だけを根拠に別providerの同名IDを問い合わせない。
 
     durable attemptを持つtargetでは、保存済みの起動記録（target・外部ID）が
@@ -68,7 +73,7 @@ def _attempt_matches_provider(active: ActiveWorktree, config: DispatcherConfig) 
     """
     target = config.dispatch_target
     assert target is not None
-    if target.launch_capabilities.durable_attempt is not True:
+    if not strict and target.launch_capabilities.durable_attempt is not True:
         return True
     try:
         attempt = read_attempt(config.resolved_forge, active.core.issue_number)
@@ -78,6 +83,15 @@ def _attempt_matches_provider(active: ActiveWorktree, config: DispatcherConfig) 
         attempt is not None
         and attempt.target == target.target_name
         and attempt.external_id == active.launch.external_id
+        and (
+            not strict
+            or (
+                active.launch.launch_attempt_id is not None
+                and attempt.phase == "launched"
+                and attempt.branch == active.core.branch
+                and attempt.started_at == active.launch.started_at
+            )
+        )
         and (
             active.launch.launch_attempt_id is None
             or attempt.attempt_id == active.launch.launch_attempt_id
@@ -129,6 +143,8 @@ def hold_if_not_stopped(
     reason: HoldReason,
     *,
     observe: Callable[[ActiveWorktree, DispatcherConfig], RuntimeState] | None = None,
+    state: RunState | None = None,
+    repository_id: str | None = None,
 ) -> ExternalExecutionHold | None:
     """外部実行が停止確認できなければ保持判定を返す。回収してよければ`None`。
 
@@ -136,13 +152,20 @@ def hold_if_not_stopped(
     """
     if not is_external_execution(active):
         return None
-    state = (observe or observe_runtime_state)(active, config)
-    if state == "stopped":
+    runtime = (observe or observe_runtime_state)(active, config)
+    if runtime == "stopped":
+        return None
+    if (
+        runtime == "unknown"
+        and state is not None
+        and repository_id is not None
+        and matching_confirmation(state, active, repository_id)
+    ):
         return None
     return ExternalExecutionHold(
         issue_number=active.core.issue_number,
         reason=reason,
-        runtime_state=state,
+        runtime_state=runtime,
         claim_id=active.claim.claim_id,
         launch_attempt_id=active.launch.launch_attempt_id,
         external_id=active.launch.external_id,

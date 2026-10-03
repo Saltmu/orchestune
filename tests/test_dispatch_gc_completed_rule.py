@@ -108,12 +108,13 @@ class TestRuleCompleted:
         ]
 
     def test_closed_unmerged_cloud_pr_is_requeued_without_completing_dependency(
-        self, fake_forge
+        self, fake_forge, tmp_path
     ):
         active = _active(external_id="session-1")
         task = _task(status_labels=("status:in-progress",))
         ctx = _ctx(forge=fake_forge)
         ctx.config.apply = True
+        ctx.config.run_state_path = tmp_path / "run_state.json"
         ctx.run_state.active_worktrees["1"] = active
 
         with (

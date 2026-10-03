@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from orchestune.claim.workspace import ClaimWorkspace
+from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.gc.external_guard import collection_stop_problem
 from orchestune.dispatch.gc.git import (
     VerifiedWorktreeRemovalRequest,
     evaluate_worktree_removal,
@@ -288,6 +290,8 @@ def inspect_handoff(
     workspace: ClaimWorkspace,
     forge: HandoffForge,
     cwd: str | Path | None = None,
+    *,
+    config: DispatcherConfig | None = None,
 ) -> HandoffPlan:
     """Verify durable completion evidence and evaluate a single handoff entry."""
     completion = active.completion
@@ -313,13 +317,23 @@ def inspect_handoff(
         return _held_plan(active, "completion_evidence_mismatch")
     if problem := _journal_proof_problem(active, state, workspace):
         return _held_plan(active, problem)
+    if problem := collection_stop_problem(active, workspace, config):
+        return _held_plan(active, problem)
     outcome, error = _verify_outcome(active, forge)
     if outcome is None:
         return _held_plan(active, error or "outcome_absent")
     if outcome.result == "done":
         if error := _verify_merged_pr(active, outcome, forge, workspace):
             return _held_plan(active, error, outcome)
+    return _handoff_worktree_plan(active, outcome, workspace, cwd)
 
+
+def _handoff_worktree_plan(
+    active: ActiveWorktree,
+    outcome: OutcomeRecord,
+    workspace: ClaimWorkspace,
+    cwd: str | Path | None,
+) -> HandoffPlan:
     action, reason, worktree_action, request = _inspect_worktree(
         active, outcome, workspace, cwd
     )

@@ -17,7 +17,7 @@ from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.external_execution import (
-    hold_if_not_stopped,
+    is_external_execution,
     notify_completed_hold,
     send_hold_to_human_review,
 )
@@ -44,6 +44,7 @@ from orchestune.dispatch.gc.completion import (
     warn_forge_failure,
 )
 from orchestune.dispatch.gc.confirmed import collect_confirmed_completion
+from orchestune.dispatch.gc.external_guard import fresh_external_hold
 from orchestune.dispatch.gc.git import (
     VerifiedWorktreeRemovalRequest,
     WorktreeRemovalEvaluation,
@@ -122,13 +123,7 @@ def _rule_not_needed(
     active: ActiveWorktree,
     active_task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome | None:
-    """#280/#552: status:not-neededラベルまたはoutcome(not-needed)検知による即時完了処理。
-
-    セッションが「対応不要」と判断した場合、コミット・PRを作らないため
-    closingIssuesReferences等の完了シグナルが発生せず、`_rule_completed`
-    （PID/PR存在ベース）は永遠にマッチしない。ラベルまたはoutcome検知を最優先の
-    完了シグナルとして扱い、stale判定より先に評価する。
-    """
+    """Handle not-needed label/Outcome before stale and PID-based rules."""
     if has_completion_reservation(active) and not completion_handoff_matches_active(
         ctx.run_state, active
     ):
@@ -144,29 +139,40 @@ def _rule_not_needed(
         return collect_confirmed_completion(
             ctx.run_state, ctx.config, key, active, ctx.record_completion, active_task
         )
-    has_not_needed_label = (
-        active_task is not None and StatusLabel.NOT_NEEDED in active_task.status_labels
-    )
-    has_not_needed_outcome = False
-    if not has_not_needed_label:
-        lookup = _fetch_outcome_for_active(active, ctx.config.resolved_forge)
-        has_not_needed_outcome = (
-            lookup.state is OutcomeLookupState.FOUND
-            and lookup.record is not None
-            and lookup.record.result == RESULT_NOT_NEEDED
-        )
-
-    if not has_not_needed_label and not has_not_needed_outcome:
+    if not _has_not_needed_outcome(active, active_task, ctx.config):
         return None
+    if is_external_execution(active) and (
+        hold := fresh_external_hold(active, ctx.config, "completion", ctx.run_state)
+    ):
+        return ActiveWorktreeRuleOutcome(completion_event=hold.event(), terminal=True)
     completion_event = _finalize_not_needed_worktree(
         active, active_task, ctx.config, ctx.not_needed_review_dispatcher
     )
     if completion_event["action"] in ("not_needed", "not_needed_review_dispatched"):
         if ctx.config.apply:
+            if hold := fresh_external_hold(
+                active, ctx.config, "completion", ctx.run_state
+            ):
+                return ActiveWorktreeRuleOutcome(
+                    completion_event=hold.event(), terminal=True
+                )
             del ctx.run_state.active_worktrees[key]
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
         terminal=True,
+    )
+
+
+def _has_not_needed_outcome(
+    active: ActiveWorktree, task: TaskMetadata | None, config: DispatcherConfig
+) -> bool:
+    if task is not None and StatusLabel.NOT_NEEDED in task.status_labels:
+        return True
+    lookup = _fetch_outcome_for_active(active, config.resolved_forge)
+    return (
+        lookup.state is OutcomeLookupState.FOUND
+        and lookup.record is not None
+        and lookup.record.result == RESULT_NOT_NEEDED
     )
 
 
@@ -341,6 +347,12 @@ def _record_completed_worktree(
         else None
     )
     if ctx.config.apply:
+        if hold := fresh_external_hold(
+            completion_active, ctx.config, "completion", ctx.run_state
+        ):
+            return ActiveWorktreeRuleOutcome(
+                completion_event=hold.event(), terminal=True
+            )
         ctx.run_state.completed_worktrees.append(
             _completed_worktree_record(completion_active, active_task, completion_event)
         )
@@ -382,6 +394,8 @@ def _cleanup_stale_active_worktree(
             pass
 
     if worktree_exists:
+        if fresh_external_hold(active, config, "stale") is not None:
+            return False
         remove_worktree(active.core.worktree_path)
     return True
 
@@ -407,7 +421,7 @@ def _apply_stale_active_entry_discard(
         run_state, active.core.issue_number, config.run_state_path
     ):
         return False
-    hold = hold_if_not_stopped(active, config, "stale")
+    hold = fresh_external_hold(active, config, "stale", run_state)
     if hold is not None:
         if config.apply:
             send_hold_to_human_review(hold, status_labels, config)
@@ -417,6 +431,8 @@ def _apply_stale_active_entry_discard(
     if not config.apply:
         return True
     if not _cleanup_stale_active_worktree(active, reason, config):
+        return False
+    if fresh_external_hold(active, config, "stale", run_state) is not None:
         return False
     del run_state.active_worktrees[key]
     record = run_state.task_reclaim_counts.get(active.core.issue_number)
@@ -433,6 +449,11 @@ def _create_abandonment_callbacks(
 
     def _release_entry() -> None:
         nonlocal released
+        if (
+            fresh_external_hold(active, ctx.config, "completion", ctx.run_state)
+            is not None
+        ):
+            raise RuntimeError("external_execution_held")
         ctx.run_state.active_worktrees.pop(key, None)
         rec = ctx.run_state.task_reclaim_counts.get(active.core.issue_number)
         if rec is not None:
@@ -627,7 +648,7 @@ def _resolve_cloud_completion(
     if status in ("abandoned", "completed"):
         # #1154: PR/成果物の完了判定は外部実行の停止証拠ではない。
         # 停止未確認なら台帳・ハンドル・枠を保持する（完了予約は壊さない）。
-        hold = hold_if_not_stopped(active, ctx.config, "completion")
+        hold = fresh_external_hold(active, ctx.config, "completion")
         if hold is not None:
             if ctx.config.apply and status == "completed":
                 notify_completed_hold(hold, ctx.config)
@@ -746,6 +767,12 @@ def _handle_completed_event_outcome(
         "blocked_unknown_reason",
     ):
         if ctx.config.apply:
+            if hold := fresh_external_hold(
+                completion_active, ctx.config, "completion", ctx.run_state
+            ):
+                return ActiveWorktreeRuleOutcome(
+                    completion_event=hold.event(), terminal=True
+                )
             ctx.run_state.active_worktrees.pop(key, None)
     elif action == "completion_skipped_dirty_worktree":
         completion_event["action"] = _apply_dirty_worktree_hold(
@@ -813,6 +840,12 @@ def _settle_completion_requeue(
     pending_field: str,
     prs: tuple[PrRecord, ...],
 ) -> None:
+    active = state.active_worktrees.get(key)
+    if (
+        active is not None
+        and fresh_external_hold(active, config, "completion", state) is not None
+    ):
+        raise RuntimeError("external_execution_held")
     state.active_worktrees.pop(key, None)
     record = state.task_reclaim_counts.get(issue)
     if record is not None:
