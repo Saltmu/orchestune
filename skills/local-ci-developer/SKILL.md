@@ -62,12 +62,12 @@ before Step 2.6 and maintain its record through Steps 10–12, including zero-fi
 | **2.6** | **Impact Scope Determination** | Before writing code, reconcile the initial footprint and held reservation, enumerate the references of every symbol you intend to change, classify each as in scope / out of scope with a stated reason, and record the table in `<session-dir>/implementation-plan.md` and the PR body. | [references/impact-scope.md](references/impact-scope.md) |
 | **3–9** | **TDD & Local CI** | Reproducer test, baseline recording, test-driven implementation, local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`). | [references/tdd.md](references/tdd.md) |
 | **10** | **Pull Request Creation** | Fill `.github/pull_request_template.md` and submit via selected backend (`gh pr create` or GitHub MCP/Web UI). | [references/pr.md](references/pr.md) |
-| **11** | **Automated LLM PR Review** | Atomic review trigger, wait, and feedback resolution loop via `scripts/wait_for_review.py` using selected reviewer bot; Step 12 requires per-finding procedure Step 5 and verified `review_target_sha` (Exit 0 is acquisition only; Exit 11/30 or unknown SHA forbids done). | [references/review-loop.md](references/review-loop.md) |
-| **12** | **Outcome Declaration** | From the claimed task worktree, run `orchestune complete --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md` after review; use the blocked command below if escalation is required. `complete` confirms the result label and saves durable handoff/replay evidence. GC performs downstream policy and physical collection separately. | - |
+| **11** | **Automated LLM PR Review** | Atomic review trigger, wait, and feedback resolution loop via `scripts/wait_for_review.py` using selected reviewer bot; Step 12 requires per-finding procedure Step 5 and verified `review_target_sha` (Exit 0 is acquisition only; Exit 11/30 or unknown SHA forbids done); when any finding was judged, post `review-reply.md` as a PR comment. | [references/review-loop.md](references/review-loop.md) |
+| **12** | **Outcome Declaration** | From the claimed task worktree, run `orchestune complete --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md` after review (if any finding was judged, `review-reply.md` must already be posted as a PR comment); use the blocked command below if escalation is required. `complete` confirms the result label and saves durable handoff/replay evidence. GC performs downstream policy and physical collection separately. | - |
 
 ### Completion commands
 Use `orchestune complete` for every outcome. It creates or reuses the canonical
-Outcome Record in Issue comments; do not compose JSON or post to PR comments.
+Outcome Record in Issue comments; do not compose JSON or post the Outcome Record to PR comments (the `review-reply.md` PR comment of Step 11 is separate and still required).
 Replace placeholders with the task Issue number, PR number, or concrete reason:
 
 ```bash

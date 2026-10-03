@@ -816,6 +816,44 @@ def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
     assert "--reviewer" in completion and "--review-reply" in completion
 
 
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_worker_skills_require_posting_review_reply_as_pr_comment(skill_name: str):
+    """指摘対応の返信は PR コメントへ一本化し、Step 12 の前提にする (#1197)。"""
+    loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
+        encoding="utf-8"
+    )
+    lines = loop.splitlines()
+
+    assert "review-results" not in loop
+
+    step5 = next(line for line in lines if line.startswith("5. Advance to Step 12"))
+    assert "posted as a PR comment" in step5
+    assert "at least one finding" in step5
+
+    step2 = next(line for line in lines if line.startswith("2. For every distinct"))
+    assert "Zero findings" in step2
+    assert "no PR reply" in step2
+
+    assert "gh pr comment <PR_NUMBER> --body-file <session-dir>/review-reply.md" in loop
+    assert "GitHub MCP" in loop and "equivalent PR comment" in loop
+    assert "--body-file" in loop and "do not post a separate trigger comment" in loop
+    assert "--issue <N> --result blocked --reason review-round-limit" in loop
+    assert "only when the PR head is unchanged" in loop
+    assert "adopted fixes always need another `wait_for_review.py` round" in loop
+
+    skill = (SKILLS_ROOT / skill_name / "SKILL.md").read_text(encoding="utf-8")
+    review_step = next(
+        line for line in skill.splitlines() if "**Automated LLM PR Review**" in line
+    )
+    outcome_step = next(
+        line for line in skill.splitlines() if "**Outcome Declaration**" in line
+    )
+    assert "review-reply" in review_step and "PR comment" in review_step
+    assert "posted" in outcome_step and "PR comment" in outcome_step
+    assert "post to PR comments" not in skill
+    assert "post the Outcome Record to PR comments" in skill
+
+
 def test_issue_footprint_example_selects_file_reservation():
     """起票例を claim/parser へ渡し、実ファイル単位の予約として解釈できる。"""
     from orchestune.claim.contracts import ReservationKind
