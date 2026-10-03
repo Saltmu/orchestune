@@ -55,6 +55,7 @@ def completion_env(local_claim, monkeypatch):
     request = CompleteRequest.done(
         7,
         42,
+        reviewer="skip",
         claim_id=active.claim.claim_id,
         worktree_root=worktree,
         state_path=workspace.run_state_path,

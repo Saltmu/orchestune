@@ -52,7 +52,7 @@ At session start, inspect and record the execution environment:
 | **3–9** | **TDD & Local CI** | Reproducer test, baseline recording, test-driven implementation, local CI (`<CI_ENTRYPOINT>`). | [references/tdd.md](references/tdd.md) |
 | **10** | **Pull Request Creation** | Fill `.github/pull_request_template.md` and submit via selected backend (`gh pr create` or GitHub MCP/Web UI). | [references/pr.md](references/pr.md) |
 | **11** | **Automated LLM PR Review** | Atomic review trigger, wait, and feedback resolution loop (`wait_for_review.py` or fallback) using selected reviewer bot; Step 12 requires per-finding procedure Step 5 and verified `review_target_sha` (Exit 0 is acquisition only; Exit 11/30 or unknown SHA forbids done). | [references/review-loop.md](references/review-loop.md) |
-| **12** | **Outcome Declaration** | From the claimed task worktree, run `orchestune complete --issue <N> --pr <PR> --result done` after review; use the blocked command below if escalation is required. `complete` posts to Issue comments and hands off to GC. | - |
+| **12** | **Outcome Declaration** | From the claimed task worktree, run `orchestune complete --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md` after review; use the blocked command below if escalation is required. `complete` posts to Issue comments and hands off to GC. | - |
 
 ### Completion commands
 Use `orchestune complete` for every outcome. It creates or reuses the canonical
@@ -63,8 +63,8 @@ Replace placeholders with the task Issue number, PR number, or concrete reason:
 # Requirement already satisfied before claim: run from the current checkout.
 orchestune complete --issue <N> --result not-needed
 
-# Claimed task: run from its worktree after review succeeds.
-orchestune complete --issue <N> --pr <PR> --result done
+# Claude/Codex require the current-round judgment table; skip requires its PR marker (skipped, not pass).
+orchestune complete --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md
 
 # Claimed task: run from its worktree when work cannot continue.
 orchestune complete --issue <N> --result blocked --reason <REASON>

@@ -809,6 +809,11 @@ def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
     )
     assert "Exit 11/30" in loop and "forbids done" in loop
     assert "review_target_sha" in loop and "orchestune-review-judgments" in loop
+    assert "review_head_mismatch" in loop and "Step 11 for re-review" in loop
+    completion = next(
+        line for line in skill.splitlines() if "**Outcome Declaration**" in line
+    )
+    assert "--reviewer" in completion and "--review-reply" in completion
 
 
 def test_issue_footprint_example_selects_file_reservation():

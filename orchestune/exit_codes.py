@@ -53,6 +53,8 @@ class TaskExitCode(IntEnum):
     LABEL_STATE_UNKNOWN = 59
     PUBLICATION_POLICY_FAILED = 60
     INVALID_COMPLETION_STATE = 61
+    REVIEW_EVIDENCE_INVALID = 62
+    REVIEW_HEAD_MISMATCH = 63
 
 
 _CLAIM_FAILURE_EXIT_CODES: dict[str, TaskExitCode] = {
@@ -85,6 +87,8 @@ _COMPLETE_FAILURE_EXIT_CODES: dict[str, TaskExitCode] = {
     "reason_required": TaskExitCode.REASON_REQUIRED,
     "dirty_worktree": TaskExitCode.DIRTY_WORKTREE,
     "evidence_missing": TaskExitCode.EVIDENCE_MISSING,
+    "review_evidence_invalid": TaskExitCode.REVIEW_EVIDENCE_INVALID,
+    "review_head_mismatch": TaskExitCode.REVIEW_HEAD_MISMATCH,
     "state_lock_failed": TaskExitCode.STATE_LOCK_FAILED,
     "concurrent_completion": TaskExitCode.CONCURRENT_COMPLETION,
     "invalid_stage_transition": TaskExitCode.INVALID_STAGE_TRANSITION,

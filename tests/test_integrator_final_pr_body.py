@@ -14,6 +14,15 @@ from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeRecord, ReviewSummary
 
 
+def test_skipped_review_is_distinct_from_pass():
+    from orchestune.integrator.final_pr_body import _review_text
+
+    record = OutcomeRecord(
+        result="done", issue=1029, review=ReviewSummary(bot="skip", verdict="skipped")
+    )
+    assert _review_text(record, []) == "done (skip / skipped)"
+
+
 def _child(number: int = 101, title: str = "[FEAT] サブタスクA") -> IssueRecord:
     return IssueRecord(
         number=number,
@@ -338,7 +347,7 @@ class TestCollectChildSummaries:
 
         summaries = collect_child_summaries(self.forge, 100, [_child(101)])
 
-        assert summaries[0].review == "done"
+        assert summaries[0].review == "done (未確認)"
 
     def test_picks_the_latest_record_that_identifies_this_child(self):
         """PR#690レビュー対応(Codex P2) Reproducer: 識別チェックを
@@ -380,7 +389,7 @@ class TestCollectChildSummaries:
 
         summaries = collect_child_summaries(self.forge, 100, [_child(101)])
 
-        assert summaries[0].review == "done"
+        assert summaries[0].review == "done (未確認)"
 
     def test_rejects_a_foreign_outcome_record_on_the_child_issue_itself(self):
         """同(P2): 子Issue側のコメントに載った別タスクのレコードも弾く。"""

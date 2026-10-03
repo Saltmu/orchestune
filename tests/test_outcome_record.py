@@ -14,6 +14,27 @@ from orchestune.outcome_record import (
 
 
 class TestRenderParseRoundTrip:
+    def test_review_evidence_round_trips(self):
+        summary = ReviewSummary(
+            bot="claude",
+            rounds=2,
+            verdict="pass",
+            reviewed_head_sha="a" * 40,
+            review_target_sha_source="review_commit",
+            judgment_digest="b" * 64,
+            judgment_counts={"adopt": 2, "resolved": 2},
+        )
+        record = OutcomeRecord(result="done", issue=1029, pr=42, review=summary)
+        assert parse_from_comments([{"body": record.render()}]) == record
+
+    def test_legacy_review_has_unconfirmed_evidence(self):
+        record = OutcomeRecord(
+            result="done", issue=1029, review=ReviewSummary(bot="claude")
+        )
+        parsed = parse_from_comments([{"body": record.render()}])
+        assert parsed.review.verdict is None
+        assert parsed.review.reviewed_head_sha is None
+
     def test_minimal_done_record_round_trips(self):
         record = OutcomeRecord(result="done", issue=548, pr=560)
         body = record.render()

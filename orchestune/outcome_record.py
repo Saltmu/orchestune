@@ -47,9 +47,28 @@ class ReviewSummary:
     bot: str | None = None
     rounds: int | None = None
     verdict: str | None = None
+    reviewed_head_sha: str | None = None
+    review_target_sha_source: str | None = None
+    judgment_digest: str | None = None
+    judgment_counts: dict[str, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"bot": self.bot, "rounds": self.rounds, "verdict": self.verdict}
+        result: dict[str, Any] = {
+            "bot": self.bot,
+            "rounds": self.rounds,
+            "verdict": self.verdict,
+        }
+        for name in (
+            "reviewed_head_sha",
+            "review_target_sha_source",
+            "judgment_digest",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                result[name] = value
+        if self.judgment_counts:
+            result["judgment_counts"] = dict(self.judgment_counts)
+        return result
 
 
 @dataclass(frozen=True)
@@ -152,7 +171,24 @@ def _review_from_value(value: Any) -> ReviewSummary | object:
     verdict = value.get("verdict")
     if verdict is not None and not isinstance(verdict, str):
         return _INVALID
-    return ReviewSummary(bot=bot, rounds=rounds, verdict=verdict)
+    evidence = {}
+    for name in ("reviewed_head_sha", "review_target_sha_source", "judgment_digest"):
+        raw = value.get(name)
+        if raw is not None and not isinstance(raw, str):
+            return _INVALID
+        evidence[name] = raw
+    counts = value.get("judgment_counts", {})
+    if not isinstance(counts, dict) or any(
+        not isinstance(key, str)
+        or not isinstance(count, int)
+        or isinstance(count, bool)
+        or count < 0
+        for key, count in counts.items()
+    ):
+        return _INVALID
+    return ReviewSummary(
+        bot=bot, rounds=rounds, verdict=verdict, judgment_counts=counts, **evidence
+    )
 
 
 def _baseline_regressions_from_value(value: Any) -> tuple[str, ...] | object:
