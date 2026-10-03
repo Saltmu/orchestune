@@ -837,6 +837,8 @@ def test_worker_skills_require_posting_review_reply_as_pr_comment(skill_name: st
     assert "gh pr comment <PR_NUMBER> --body-file <session-dir>/review-reply.md" in loop
     assert "GitHub MCP" in loop and "equivalent PR comment" in loop
     assert "--body-file" in loop and "do not post a separate trigger comment" in loop
+    assert "only when the PR head is unchanged" in loop
+    assert "adopted fixes always need another `wait_for_review.py` round" in loop
 
     skill = (SKILLS_ROOT / skill_name / "SKILL.md").read_text(encoding="utf-8")
     review_step = next(
