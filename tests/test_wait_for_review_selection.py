@@ -204,6 +204,14 @@ def test_skip_cli_exits_zero_but_prints_not_pass(capsys):
     assert "not a review pass" in capsys.readouterr().out
 
 
+def test_empty_previous_round_can_retry_with_explicit_empty_judgments(tmp_path):
+    from scripts.wait_for_review import _validate_review_reply
+
+    data = previous_round()
+    data["issue_comments"] = data["issue_comments"][:1]
+    _validate_review_reply(data, "claude", 2, write_reply(tmp_path, []))
+
+
 def test_cli_requires_explicit_reviewer():
     with (
         patch("sys.argv", ["wait", "--pr", "1"]),

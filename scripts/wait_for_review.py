@@ -794,8 +794,10 @@ def _validate_review_reply(
         exclude_ids=trigger_ids,
         round_started_at=str(previous.get("created_at") or ""),
     )
+    # A timed-out/stalled round may have no substantive content to judge.
+    # Its empty source set still requires an explicit, valid judgment table.
     if result is None:
-        raise ValueError("previous round has no acquired review content")
+        result = {"review_items": [], "inline_comments": []}
     result["round"] = previous_round
     validate_coverage(judgments, result)
 
