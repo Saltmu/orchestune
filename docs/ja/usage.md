@@ -531,6 +531,7 @@ Integratorが`parent/issue-{N}`を更新する（4.2の自動マージ）直前�
 
 - **完了がhandoffされる前**（`complete`が拒否され、何も投稿されていない場合）: 原因（現在のheadの再レビュー、判断表の補完）を解消して`orchestune complete`を再実行します。証跡が記録され、次のサイクルで子が統合されます。
 - **証跡が不足したままcompleteがhandoff済みの場合**（`legacy`・`skipped`・`not_pass`・`sha_mismatch`）: 同じclaimで`complete`を再実行しても証跡の追加・差し替えはできません。同一リクエストは保存済みの結果を再生するだけで、レビュー引数を変えたリクエストは`request_fingerprint_mismatch`で拒否されます。進める必要がある実行に限り、ゲートを明示的にOFFにして再開します（下記）。OFFはその実行の**すべての**子で検証を行わないため、レビュー証跡なしで受け入れる子に限って使ってください。
+- **親Issueのラベルの解除（どちらの経路でも）**: ゲートは親Issueの`status:blocked-human-review`を外さないため、証跡を整えた、または受け入れた後に自分で外してください。再実行の前に外しても安全で、ゲートが再び統合を停止した場合は、同じコメントを重複投稿せずにラベルだけを復元します。再実行前に外さない場合は、統合の成功後、親Issueがクローズされる前に外してください。
 
 **設定**: `--child-review-gate {required,off}`、設定キー`child-review-gate`、環境変数`ORCHESTUNE_CHILD_REVIEW_GATE`。既定値は`required`です。`off`はその実行のすべての子で検証をスキップし、警告を出力します。明示的なオプトアウトであり、自動で選ばれることはありません。
 
