@@ -176,6 +176,9 @@ class ExecutionState:
     abort: IntegrationExecutionAbort | None = None
     hold_reason: str | None = None
     final_status: str | None = None
+    # The pipeline defers removing the temporary worktree until the attempt's result
+    # is saved, so an unconfirmed result can still hold it.
+    worktree_removal_pending: bool = False
 
     # ------------------------------------------------------------------ setup
 

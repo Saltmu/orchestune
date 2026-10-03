@@ -234,6 +234,25 @@ class TestConfirmedTimeout:
         assert _worktree_removed(one_task)
         assert load_holds(tmp_path) == []
 
+    def test_the_worktree_is_removed_only_after_the_result_is_saved(
+        self, one_task: IntegratorEnv, fake_forge: MagicMock, tmp_path: Path
+    ) -> None:
+        saved_before_removal: list[bool] = []
+        real = one_task.run.side_effect
+
+        def watch(args: list[str], **kwargs: Any) -> Any:
+            if args[:3] == ["git", "worktree", "remove"]:
+                saved_before_removal.append(
+                    (EVENT_FINISHED, "ci_timeout") in _kinds(fake_forge)
+                )
+            return real(args, **kwargs)
+
+        one_task.run.side_effect = watch
+
+        _integrator(tmp_path, ScriptedRunner(ProcessOutcome.TIMED_OUT)).run()
+
+        assert saved_before_removal == [True]
+
     def test_the_attempt_is_reserved_before_ci_and_finished_after(
         self, one_task: IntegratorEnv, fake_forge: MagicMock, tmp_path: Path
     ) -> None:
@@ -480,6 +499,66 @@ class TestBounds:
             if call.args[0][:2] == ["git", "merge"]
         }
         assert timeouts == {7}
+
+
+class TestMergeTimeout:
+    """A timed-out ``git merge`` never returns its saved SHA; it must still be used."""
+
+    def _merge_times_out(self, args: list[str]) -> Any:
+        raise subprocess.TimeoutExpired(args, 60)
+
+    def test_a_merge_timeout_resets_to_the_sha_saved_before_it(
+        self, integrator_env: IntegratorEnv, tmp_path: Path
+    ) -> None:
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+        _git(integrator_env, merge=self._merge_times_out)
+
+        res = _integrator(tmp_path, ScriptedRunner()).run()
+
+        assert res["status"] == "execution_timed_out"
+        resets = integrator_env.calls_with("reset", "--hard")
+        assert [call.args[0] for call in resets] == [
+            ["git", "reset", "--hard", PRE_MERGE_SHA]
+        ]
+        failure = res["execution_failures"][0]
+        assert failure["stage"] == "merge"
+        assert failure["rollback_confirmed"] is True
+        assert "failed" not in res  # not requeued as a merge conflict
+
+    def test_a_failed_reset_after_a_merge_timeout_holds_the_worktree(
+        self, integrator_env: IntegratorEnv, tmp_path: Path
+    ) -> None:
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+
+        def reset_fails(args: list[str]) -> Any:
+            raise subprocess.CalledProcessError(1, args, stderr=b"locked")
+
+        _git(integrator_env, merge=self._merge_times_out, reset=reset_fails)
+
+        res = _integrator(tmp_path, ScriptedRunner()).run()
+
+        assert res["status"] == "execution_cleanup_failed"
+        assert res["execution_failures"][0]["rollback_confirmed"] is False
+        assert load_holds(tmp_path)
+        assert not _worktree_removed(integrator_env)
+
+    def test_a_timeout_before_any_merge_needs_no_rollback(
+        self, integrator_env: IntegratorEnv, tmp_path: Path
+    ) -> None:
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+
+        def fetch_times_out(args: list[str]) -> Any:
+            if "fetch" in args and any("refs/heads/claude" in a for a in args):
+                raise subprocess.TimeoutExpired(args, 60)
+            return None
+
+        integrator_env.stub_git(fetch_times_out)
+
+        res = _integrator(tmp_path, ScriptedRunner()).run()
+
+        assert res["status"] == "execution_timed_out"
+        assert not integrator_env.calls_with("reset", "--hard")
+        assert res["execution_failures"][0]["rollback_confirmed"] is True
 
 
 class TestUnconfirmedStopOrRollback:
@@ -822,6 +901,8 @@ class TestHistoryFailuresStartNothing:
         assert res["status"] == "execution_indeterminate"
         assert res["execution_failures"][-1]["stage"] == "record-result"
         assert load_holds(tmp_path)
+        # The worktree is removed only after the result is saved, so it is still there.
+        assert not _worktree_removed(one_task)
         one_task.add_label.assert_any_call(100, BLOCKED)
 
 

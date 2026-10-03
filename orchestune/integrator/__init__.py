@@ -64,6 +64,29 @@ _EXECUTION_TIMEOUTS = (ExecutionDeadlineExceeded, ExecutionCommandTimeout)
 _SINGLE_WRITE_STEPS = frozenset({"PushTempBranchStep"})
 
 
+def _remove_temp_worktree(ctx: IntegrationContext) -> None:
+    """Remove the temporary worktree, on the cleanup budget once time has run out."""
+    if not ctx.temp_worktree_path:
+        return
+    execution = ctx.execution
+    scope = execution.scope if execution is not None else None
+    aborted = execution is not None and execution.abort is not None
+    phase = (
+        scope.cleanup_phase()
+        if scope is not None and (scope.expired() or aborted)
+        else nullcontext()
+    )
+    with phase:
+        try:
+            run_git(
+                ["worktree", "remove", "--force", str(ctx.temp_worktree_path)],
+                cwd=ctx.original_root,
+                check=True,
+            )
+        except (Exception, ExecutionInterrupt):
+            pass
+
+
 class IntegrationPipeline(IntegrationComponent):
     def __init__(self, steps: list[IntegrationComponent]):
         self.steps = steps
@@ -144,37 +167,26 @@ class IntegrationPipeline(IntegrationComponent):
             return
         scope = execution.scope if execution is not None else None
         aborted = execution is not None and execution.abort is not None
-        # Once the deadline has passed (or the run aborted) cleanup spends only the
-        # cleanup budget; an expired normal phase would refuse to start git at all.
-        phase = (
-            scope.cleanup_phase()
-            if scope is not None and (scope.expired() or aborted)
-            else nullcontext()
-        )
-        with phase:
-            if ctx.temp_worktree_path:
-                try:
-                    run_git(
-                        ["worktree", "remove", "--force", str(ctx.temp_worktree_path)],
-                        cwd=ctx.original_root,
-                        check=True,
-                    )
-                except (Exception, ExecutionInterrupt):
-                    pass
-            # The stale marker is managed separately on CAS rejection.
-            if (
-                ctx.config.apply
-                and not ctx.parent_branch_cas_rejected_this_cycle
-                and not aborted
-                and (scope is None or not scope.expired())
-            ):
-                try:
-                    clear_parent_branch_stale_marker(ctx)
-                except ExecutionInterrupt as error:
-                    print(
-                        f"Warning: stale-marker cleanup was cut short: {error}",
-                        file=sys.stderr,
-                    )
+        if execution is not None:
+            # #820: keep the worktree until the attempt's result is saved; if that
+            # cannot be confirmed the cycle becomes indeterminate and must keep it.
+            execution.worktree_removal_pending = True
+        else:
+            _remove_temp_worktree(ctx)
+        # The stale marker is managed separately on CAS rejection.
+        if (
+            ctx.config.apply
+            and not ctx.parent_branch_cas_rejected_this_cycle
+            and not aborted
+            and (scope is None or not scope.expired())
+        ):
+            try:
+                clear_parent_branch_stale_marker(ctx)
+            except ExecutionInterrupt as error:
+                print(
+                    f"Warning: stale-marker cleanup was cut short: {error}",
+                    file=sys.stderr,
+                )
 
     @staticmethod
     def _build_final_report(
@@ -292,8 +304,12 @@ class SingleIssueIntegrator(IntegrationComponent):
                 }
             # #435: runごとに一意なworktreeを使うため、worktree操作だけを各Stepで
             # 短く保護する。実行全体は上の親単位ロックで直列化する（#820）。
-            report = self.pipeline.execute(ctx)
-            return self._finalize(ctx, state, report)
+            try:
+                report = self.pipeline.execute(ctx)
+                return self._finalize(ctx, state, report)
+            finally:
+                if state.worktree_removal_pending and not state.holding:
+                    _remove_temp_worktree(ctx)
 
     @staticmethod
     def _finalize(

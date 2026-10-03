@@ -6,7 +6,12 @@ import json
 import shutil
 import subprocess
 from dataclasses import dataclass
+from typing import Any
 
+from orchestune.infra.execution_deadline import (
+    command_timeout_signal,
+    scoped_command_timeout,
+)
 from orchestune.labels import StatusLabel
 from orchestune.validation import validate_label
 
@@ -24,6 +29,17 @@ class RelationshipUnavailableError(ForgeError):
 
 
 _LABEL_LIST_LIMIT = 1000
+
+
+def _run_gh(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    """Run ``gh`` bounded by the active Integrator scope (#820); unchanged outside one."""
+    timeout = scoped_command_timeout(None, f"gh {args[1] if len(args) > 1 else ''}")
+    if timeout is None:
+        return subprocess.run(args, **kwargs)
+    try:
+        return subprocess.run(args, timeout=timeout, **kwargs)
+    except subprocess.TimeoutExpired as error:
+        raise command_timeout_signal(" ".join(args[:2]), timeout, error) from error
 
 
 @dataclass(frozen=True)
@@ -47,7 +63,7 @@ class GitHubRepoAdminMixin:
             raise ForgeAuthError(
                 "gh CLIが見つかりません。https://cli.github.com/ からインストールしてください。"
             )
-        result = subprocess.run(
+        result = _run_gh(
             ["gh", "auth", "status"],
             capture_output=True,
             text=True,
@@ -69,7 +85,7 @@ class GitHubRepoAdminMixin:
             if label.name in existing_names:
                 existing.append(label.name)
                 continue
-            subprocess.run(
+            _run_gh(
                 [
                     "gh",
                     "label",
@@ -92,7 +108,7 @@ class GitHubRepoAdminMixin:
         )
 
     def _list_existing_label_names(self) -> set[str]:
-        result = subprocess.run(
+        result = _run_gh(
             [
                 "gh",
                 "label",

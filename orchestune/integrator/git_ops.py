@@ -80,6 +80,9 @@ class IntegrationMerger:
             or IntegrationExecutionPolicy()
         )
         self.process_runner = process_runner
+        # The HEAD saved just before the current task's merge, kept on the merger so a
+        # merge that times out (and never returns) can still be rolled back to it.
+        self._pre_merge_sha: str | None = None
 
     def create_temp_branch(
         self, temp_branch: str, base_branch: str, apply: bool
@@ -381,6 +384,7 @@ class IntegrationMerger:
         except (subprocess.CalledProcessError, OSError) as e:
             head_error = getattr(e, "stderr", None) or str(e)
             return False, None, f"Failed to capture pre-merge HEAD: {head_error}"
+        self._pre_merge_sha = pre_merge_sha
 
         try:
             run_git(
@@ -479,10 +483,13 @@ class IntegrationMerger:
     ) -> IntegrationExecutionAbort:
         """A git call timed out or the deadline passed mid-task: stop, roll back, confirm."""
         rolled_back, detail = True, ""
+        # A merge that timed out never returned its saved SHA, so use the one captured
+        # before it started: a merge that completed has no state left to ``--abort``.
+        saved_sha = pre_merge_sha or self._pre_merge_sha
         with self._cleanup_phase():
             self.abort_merge_quietly()
-            if pre_merge_sha is not None:
-                rolled_back, detail = self._rollback_and_confirm(pre_merge_sha)
+            if saved_sha is not None:
+                rolled_back, detail = self._rollback_and_confirm(saved_sha)
         scope = self.scope
         fields = {
             "configured_limit_seconds": float(
@@ -624,6 +631,7 @@ class IntegrationMerger:
         unavailable: set[str],
     ) -> None:
         pre_merge_sha: str | None = None
+        self._pre_merge_sha = None
         try:
             blocked_reason = self._check_task_blocking(task, unavailable)
             if blocked_reason:

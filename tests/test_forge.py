@@ -568,3 +568,75 @@ class TestGitHubForgeExecutionScope:
         gh_run.side_effect = subprocess.TimeoutExpired(["gh"], 4)
         with activate_scope(self._scope()), pytest.raises(subprocess.TimeoutExpired):
             GitHubForge(timeout_seconds=4)._run(["gh", "issue", "list"])
+
+
+class TestAdminMethodsAreBoundedToo:
+    """#820: `ensure_labels` is reachable from the Integrator, so it must honour the scope."""
+
+    def _scope(self):
+        from orchestune.infra.execution_deadline import ExecutionScope
+
+        return ExecutionScope(cycle_seconds=100, cleanup_seconds=30, command_seconds=9)
+
+    def _label(self):
+        from orchestune.forge import LabelSpec
+
+        return LabelSpec("status:done", "0e8a16", "done")
+
+    def test_label_list_and_create_get_the_scope_timeout(self):
+        from orchestune.infra.execution_deadline import activate_scope
+
+        with (
+            activate_scope(self._scope()),
+            patch("orchestune.forge.admin.subprocess.run") as run,
+        ):
+            run.return_value = subprocess.CompletedProcess(
+                [], 0, stdout="[]", stderr=""
+            )
+            GitHubForge().ensure_labels((self._label(),))
+
+        assert [call.kwargs["timeout"] for call in run.call_args_list] == [9, 9]
+
+    def test_no_timeout_is_added_outside_a_scope(self):
+        with patch("orchestune.forge.admin.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess(
+                [], 0, stdout="[]", stderr=""
+            )
+            GitHubForge().ensure_labels((self._label(),))
+
+        assert all("timeout" not in call.kwargs for call in run.call_args_list)
+
+    def test_an_expired_scope_refuses_to_start_gh(self):
+        from orchestune.infra.execution_deadline import (
+            ExecutionDeadlineExceeded,
+            activate_scope,
+        )
+
+        scope = self._scope()
+        scope.started_at -= 1000
+        with (
+            activate_scope(scope),
+            patch("orchestune.forge.admin.subprocess.run") as run,
+            pytest.raises(ExecutionDeadlineExceeded),
+        ):
+            GitHubForge().ensure_labels((self._label(),))
+        run.assert_not_called()
+
+    def test_a_scoped_timeout_is_not_swallowed_by_best_effort_code(self):
+        from orchestune.infra.execution_deadline import (
+            ExecutionCommandTimeout,
+            activate_scope,
+        )
+
+        with (
+            activate_scope(self._scope()),
+            patch(
+                "orchestune.forge.admin.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(["gh"], 9),
+            ),
+            pytest.raises(ExecutionCommandTimeout),
+        ):
+            try:
+                GitHubForge().ensure_labels((self._label(),))
+            except Exception:  # noqa: BLE001
+                pytest.fail("the scoped timeout was swallowed by `except Exception`")

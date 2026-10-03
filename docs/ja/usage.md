@@ -582,7 +582,7 @@ Integratorが`parent/issue-{N}`を更新する（4.2の自動マージ）直前�
 
 `status:blocked-human-review`を外すだけでは何もリセットされません。回数はラベルではなくイベントコメントに保存されているためです。
 
-**保証と限界。** 待機は有界で、timeoutの再試行には停止の確認が前提です。Linux/macOSでは専用のsession/process groupで起動し（`SIGTERM`、最大5秒の猶予、`SIGKILL`）、Windowsでは suspended で生成してkill-on-closeのJob Objectへ割り当ててからresumeします（Job割り当てに失敗したらコマンドは実行しません）。出力は並行して有限の末尾バッファへ読み出し、回収待ちにも同じcleanup予算を使います。対象外: OSのプロセス生成APIと割り込み不能なカーネルI/O（厳密な壁時計上限は保証しません）、プロセスグループから意図的に離脱するPOSIXのdaemon、別ホストから同じ親への同時apply（GitHubコメントに原子的なcompare-and-swapはなく、競合を検出したら停止します）、そしてワーカーの`task-timeout-seconds`（別の実行予算で、Integratorを有界にはしません）。LinuxとWindowsはCIマトリクスで検証し、macOSはPOSIX実装を共有します。
+**保証と限界。** 待機は有界で、timeoutの再試行には停止の確認が前提です。Linux/macOSでは専用のsession/process groupで起動し（`SIGTERM`、最大5秒の猶予、`SIGKILL`）、Windowsでは suspended で生成してkill-on-closeのJob Objectへ割り当ててからresumeします（Job割り当てに失敗したらコマンドは実行しません）。出力は並行して有限の末尾バッファへ読み出し、回収待ちにも同じcleanup予算を使います。補助`git`/`gh`の呼び出しは直接の子プロセスのtimeoutだけで有界化され、スコープ内`git`のhook・SSH・credential helperが起こす子孫プロセスは所有も停止もしません。対象外: OSのプロセス生成APIと割り込み不能なカーネルI/O（厳密な壁時計上限は保証しません）、プロセスグループから意図的に離脱するPOSIXのdaemon、別ホストから同じ親への同時apply（GitHubコメントに原子的なcompare-and-swapはなく、競合を検出したら停止します）、そしてワーカーの`task-timeout-seconds`（別の実行予算で、Integratorを有界にはしません）。LinuxとWindowsはCIマトリクスで検証し、macOSはPOSIX実装を共有します。
 
 ## 6. 未着手の分解世代を置き換える（`orchestune replan`）
 
