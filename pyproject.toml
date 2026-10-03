@@ -65,6 +65,15 @@ ignore_missing_imports = true
 # "tests.conftest". Drop this only together with making tests/ a package.
 explicit_package_bases = true
 
+[[tool.mypy.overrides]]
+module = [
+    "orchestune.dispatch.cycle",
+    "orchestune.dispatch.cycle_actions",
+    "orchestune.dispatch.cycle_state_changes",
+]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
 [build-system]
 requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"

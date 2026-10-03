@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orchestune.consistency.desired import (
     DesiredTaskInput,
@@ -32,22 +33,15 @@ from orchestune.consistency.invariants.status import (
     status_invariants,
 )
 from orchestune.consistency.models import (
-    ConsistencyScope,
     DesiredRepositoryState,
     ObservedRepositoryState,
     RepairCommand,
     RepairResult,
     RepairStatus,
-    StateChanged,
 )
 from orchestune.consistency.observation import (
     EXECUTION_KIND_CLOUD,
     EXECUTION_KIND_LOCAL,
-    FACT_BRANCH_NAME,
-    FACT_EXECUTION_KIND,
-    FACT_ISSUE_LABELS,
-    FACT_PULL_REQUEST_STATE,
-    FACT_WORKTREE_PATH,
     ExecutionRecord,
     ForgeSnapshot,
     ObservationCollector,
@@ -88,6 +82,21 @@ from orchestune.dispatch.cycle_report import (
 )
 from orchestune.dispatch.cycle_report import (
     build_event_log_entry as build_event_log_entry,
+)
+from orchestune.dispatch.cycle_state_changes import (
+    _event_changes as _event_changes,
+)
+from orchestune.dispatch.cycle_state_changes import (
+    _event_issue_number as _event_issue_number,
+)
+from orchestune.dispatch.cycle_state_changes import (
+    _lock_state_changes as _lock_state_changes,
+)
+from orchestune.dispatch.cycle_state_changes import (
+    _pipeline_state_changes as _pipeline_state_changes,
+)
+from orchestune.dispatch.cycle_state_changes import (
+    _scheduling_state_changes as _scheduling_state_changes,
 )
 from orchestune.dispatch.execution_repair import (
     DispatchRepairExecutorAdapter,
@@ -137,6 +146,17 @@ from orchestune.pr_link_notice import (
 )
 from orchestune.task_metadata import TaskMetadata, require_raw_tasks
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from orchestune.consistency.supervisor import ConsistencyScanResult
+    from orchestune.dispatch.cycle_context import IssuesByStatus
+    from orchestune.dispatch.phase_scheduling import SchedulingPhaseResult
+    from orchestune.dispatch.prior_parent_merge import PriorParentMergeReconciliation
+    from orchestune.ledger.run_state import RunState
+    from orchestune.lock_contracts import ExternalLockScanResult
+    from orchestune.models import PrRecord
+
 __all__ = ["CycleReport", "run_dispatch_cycle"]
 
 
@@ -176,10 +196,10 @@ class _DispatchConsistencyAdapter:
 
     def __init__(
         self,
-        config,
-        run_state,
-        issues,
-        ctx,
+        config: DispatcherConfig,
+        run_state: RunState,
+        issues: IssuesByStatus,
+        ctx: CycleContext,
         *,
         fresh: bool,
         include_status_intents: bool = True,
@@ -200,7 +220,7 @@ class _DispatchConsistencyAdapter:
             task.issue_number: task for task in ctx.tasks()
         }
 
-    def _source_records(self):
+    def _source_records(self) -> tuple[IssuesByStatus, Sequence[PrRecord]]:
         if not self._fresh:
             return self._cached_issues, self._cached_prs
         issues = _fetch_issues(self._config)
@@ -442,7 +462,7 @@ def _attempted_repair_codes(report: ConsistencyCycleReport) -> set[str]:
 
 def _status_repair_commands(
     boundary_report: ConsistencyCycleReport,
-    initial_scan,
+    initial_scan: ConsistencyScanResult,
     finding_code: str,
     *,
     applied: bool,
@@ -464,8 +484,8 @@ def _status_repair_commands(
 
 def _promotion_events(
     commands: tuple[RepairCommand, ...], adapter: _DispatchConsistencyAdapter
-) -> list[dict]:
-    events = []
+) -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []
     for command in commands:
         if command.subject_id is None:
             continue
@@ -481,7 +501,11 @@ def _promotion_events(
 
 
 def _status_boundary_adapters(
-    *, issues, run_state, ctx, config
+    *,
+    issues: IssuesByStatus,
+    run_state: RunState,
+    ctx: CycleContext,
+    config: DispatcherConfig,
 ) -> tuple[_DispatchConsistencyAdapter, _DispatchConsistencyAdapter]:
     common = {
         "include_status_intents": False,
@@ -503,7 +527,7 @@ def _status_boundary_report(
     fresh_adapter: _DispatchConsistencyAdapter,
     ctx: CycleContext,
     config: DispatcherConfig,
-):
+) -> tuple[ConsistencyScanResult, ConsistencyCycleReport]:
     supervisor = _status_repair_supervisor()
     initial_scan = supervisor.full_scan(
         boundary, observer=cached_adapter, deriver=cached_adapter
@@ -527,12 +551,12 @@ def _run_status_repair_boundary(
     boundary: str,
     finding_code: str,
     *,
-    issues,
-    run_state,
-    ctx,
+    issues: IssuesByStatus,
+    run_state: RunState,
+    ctx: CycleContext,
     config: DispatcherConfig,
     cycle_state: _RepairCycleState,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """Run one status finding family through Supervisor and typed executor."""
     cached_adapter, fresh_adapter = _status_boundary_adapters(
         issues=issues,
@@ -607,7 +631,10 @@ def _merge_consistency_reports(
 
 
 def _start_consistency_runtime(
-    config, run_state, issues, ctx
+    config: DispatcherConfig,
+    run_state: RunState,
+    issues: IssuesByStatus,
+    ctx: CycleContext,
 ) -> _ConsistencyRuntime | None:
     if config.consistency_mode is ConsistencyMode.OFF:
         return None
@@ -634,111 +661,11 @@ def _start_consistency_runtime(
     return runtime
 
 
-def _event_issue_number(event: dict, ctx: CycleContext) -> int | None:
-    issue_number = event.get("issue_number")
-    if isinstance(issue_number, int) and not isinstance(issue_number, bool):
-        return issue_number
-    subtask_id = event.get("subtask_id")
-    if isinstance(subtask_id, str):
-        matches: list[int] = [
-            task.issue_number for task in ctx.tasks() if task.subtask_id == subtask_id
-        ]
-        if len(matches) == 1:
-            return matches[0]
-    return None
-
-
-def _event_changes(
-    events: list[dict], ctx, fields: tuple[str, ...], source: str, occurred_at
-) -> list[StateChanged]:
-    return [
-        StateChanged(
-            scope=ConsistencyScope.TASK,
-            subject_id=str(issue_number),
-            fields=fields,
-            source=source,
-            occurred_at=occurred_at,
-        )
-        for event in events
-        if (issue_number := _event_issue_number(event, ctx)) is not None
-    ]
-
-
-def _lock_state_changes(report: CycleReport, occurred_at) -> list[StateChanged]:
-    return [
-        StateChanged(
-            scope=ConsistencyScope.TASK,
-            subject_id=str(task.issue_number),
-            fields=(FACT_ISSUE_LABELS,),
-            source=f"dispatch.external-lock.{action}",
-            occurred_at=occurred_at,
-        )
-        for action, tasks in report.lock_changes.items()
-        for task in tasks
-    ]
-
-
-def _scheduling_state_changes(report: CycleReport, occurred_at) -> list[StateChanged]:
-    if not report.applied:
-        return []
-    return [
-        StateChanged(
-            scope=ConsistencyScope.TASK,
-            subject_id=str(task.issue_number),
-            fields=(
-                FACT_BRANCH_NAME,
-                FACT_EXECUTION_KIND,
-                FACT_ISSUE_LABELS,
-                FACT_WORKTREE_PATH,
-            ),
-            source="dispatch.scheduling",
-            occurred_at=occurred_at,
-        )
-        for task in report.selected
-    ]
-
-
-def _pipeline_state_changes(
-    report: CycleReport, ctx, now: float
-) -> tuple[StateChanged, ...]:
-    if not report.applied:
-        return ()
-    occurred_at = datetime.fromtimestamp(now, UTC)
-    changes = _event_changes(
-        report.promotion_events,
-        ctx,
-        (FACT_ISSUE_LABELS,),
-        "dispatch.promotion",
-        occurred_at,
-    )
-    changes.extend(
-        _event_changes(
-            report.completion_events,
-            ctx,
-            (FACT_EXECUTION_KIND, FACT_ISSUE_LABELS, FACT_PULL_REQUEST_STATE),
-            "dispatch.completion",
-            occurred_at,
-        )
-    )
-    changes.extend(
-        _event_changes(
-            report.deviation_events,
-            ctx,
-            (FACT_BRANCH_NAME, FACT_ISSUE_LABELS),
-            "dispatch.deviation",
-            occurred_at,
-        )
-    )
-    changes.extend(_lock_state_changes(report, occurred_at))
-    changes.extend(_scheduling_state_changes(report, occurred_at))
-    return tuple(changes)
-
-
 def _run_final_repair_pass(
     runtime: _ConsistencyRuntime,
-    final_scan,
+    final_scan: ConsistencyScanResult,
     report: CycleReport,
-    ctx,
+    ctx: CycleContext,
     now: float,
     config: DispatcherConfig,
     repair_cycle: _RepairCycleState,
@@ -767,7 +694,7 @@ def _run_final_repair_pass(
 def _finish_consistency_runtime(
     runtime: _ConsistencyRuntime | None,
     report: CycleReport,
-    ctx,
+    ctx: CycleContext,
     now: float,
     config: DispatcherConfig,
     repair_cycle: _RepairCycleState,
@@ -801,7 +728,7 @@ def _finish_consistency_runtime(
 
 
 def _run_recovery_bookkeeping_boundary(
-    run_state, config: DispatcherConfig, *, now: float
+    run_state: RunState, config: DispatcherConfig, *, now: float
 ) -> ConsistencyCycleReport:
     """Run startup recovery only through Supervisor and typed repair handlers."""
     adapter = RecoveryBookkeepingAdapter(_repository_id(), run_state, config, now=now)
@@ -853,7 +780,9 @@ def _recovery_requeued(report: ConsistencyCycleReport) -> bool:
     )
 
 
-def _prepare_cycle_issues(run_state, config: DispatcherConfig, _now: float):
+def _prepare_cycle_issues(
+    run_state: RunState, config: DispatcherConfig, _now: float
+) -> IssuesByStatus:
     with progress_phase(config.progress, "parent_branch"):
         ensure_parent_branch_ready(config)
     with progress_phase(config.progress, "issues_fetch"):
@@ -864,7 +793,7 @@ def _prepare_cycle_issues(run_state, config: DispatcherConfig, _now: float):
     return issues
 
 
-def _notify_pr_links(ctx, config: DispatcherConfig) -> None:
+def _notify_pr_links(ctx: CycleContext, config: DispatcherConfig) -> None:
     """#676: 親ブランチ宛てPRを、対象Issue側へコメントで相互リンクする。
 
     GitHubは既定ブランチ以外を対象とするPRをIssueの「Development」欄へ
@@ -888,12 +817,12 @@ def _notify_pr_links(ctx, config: DispatcherConfig) -> None:
 
 def _run_pre_scheduling_reconciliation(
     *,
-    ctx,
-    issues,
-    run_state,
-    config,
-    repair_cycle,
-):
+    ctx: CycleContext,
+    issues: IssuesByStatus,
+    run_state: RunState,
+    config: DispatcherConfig,
+    repair_cycle: _RepairCycleState,
+) -> tuple[list[dict[str, object]], ExternalLockScanResult]:
     promotion_events = _run_status_repair_boundary(
         "status-blocked-promotion",
         BLOCKED_WITH_RESOLVED_DEPENDENCIES,
@@ -918,13 +847,13 @@ def _run_pre_scheduling_reconciliation(
 
 
 def _pipeline_report(
-    scheduling,
-    lock_result,
+    scheduling: SchedulingPhaseResult,
+    lock_result: ExternalLockScanResult,
     *,
-    deviation_events,
-    completion_events,
-    promotion_events,
-    applied,
+    deviation_events: list[dict[str, object]],
+    completion_events: list[dict[str, object]],
+    promotion_events: list[dict[str, object]],
+    applied: bool,
 ) -> CycleReport:
     return CycleReport(
         selected=scheduling.selected,
@@ -952,16 +881,21 @@ def _pipeline_report(
     )
 
 
-def _run_gc_reclaim_phase(ctx, config, completion_events, repair_cycle):
+def _run_gc_reclaim_phase(
+    ctx: CycleContext,
+    config: DispatcherConfig,
+    completion_events: list[dict[str, object]],
+    repair_cycle: _RepairCycleState,
+) -> list[dict[str, object]]:
     gc_result = ctx.run_gc(tuple(completion_events))
     repair_cycle.add_report(gc_result.consistency)
     return gc_result.completion_events
 
 
 def _execute_cycle_pipeline(
-    ctx,
-    issues,
-    run_state,
+    ctx: CycleContext,
+    issues: IssuesByStatus,
+    run_state: RunState,
     config: DispatcherConfig,
     now: float,
     repair_cycle: _RepairCycleState,
@@ -979,7 +913,11 @@ def _execute_cycle_pipeline(
     )
 
 
-def _prepare_cycle_context(run_state, config: DispatcherConfig, now: float):
+def _prepare_cycle_context(
+    run_state: RunState, config: DispatcherConfig, now: float
+) -> tuple[
+    IssuesByStatus, CycleContext, ConsistencyCycleReport, PriorParentMergeReconciliation
+]:
     """Issue取得・status intent整合・recovery・先行マージ整合を経てContextを構築する。"""
     issues = _prepare_cycle_issues(run_state, config, now)
     with progress_phase(config.progress, "status_intents"):

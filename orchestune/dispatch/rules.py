@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.dag.models import SubTask
@@ -40,6 +41,9 @@ from orchestune.ledger.run_state import (
 from orchestune.models import IssueRecord, PrRecord, Task
 from orchestune.task_branch_resolution import TaskBranchResolution
 from orchestune.task_metadata import TaskMetadata
+
+if TYPE_CHECKING:
+    from orchestune.lock_contracts import ExternalLockScanResult
 
 NotNeededReviewDispatcher = Callable[[int, str, DispatcherConfig], None]
 
@@ -123,7 +127,7 @@ class CycleContext(_CycleState):
     def reconcile_recovery(self) -> tuple[dict[str, object], ...]:
         return self._action_port().reconcile_recovery()
 
-    def scan_external_locks(self):
+    def scan_external_locks(self) -> ExternalLockScanResult:
         return self._action_port().scan_external_locks()
 
     def select_tasks(self, candidates: tuple[TaskMetadata, ...]) -> SchedulingResult:
