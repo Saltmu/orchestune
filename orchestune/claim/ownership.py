@@ -5,11 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from enum import Enum
 from hashlib import sha256
+from pathlib import Path
 from secrets import token_urlsafe
 from typing import Protocol
 from uuid import uuid4
 
 from orchestune.claim.contracts import (
+    ClaimOverlapWarning,
     ClaimRequest,
     ClaimStage,
     OwnerKind,
@@ -144,46 +146,104 @@ def _shared_contract_conflicts(
     )
 
 
-def evaluate_claim_conflicts(
+@dataclass(frozen=True, slots=True)
+class ClaimConflictAssessment:
+    """A blocking conflict, if any, plus overlaps that only warrant a warning."""
+
+    conflict: ClaimConflict | None
+    warnings: tuple[ClaimOverlapWarning, ...] = ()
+
+
+def _is_interactive(reservation: ActiveWorktree) -> bool:
+    return reservation.claim.owner_kind == OwnerKind.INTERACTIVE.value
+
+
+def _overlap_warning(
+    active: ActiveWorktree, overlap: tuple[str, ...]
+) -> ClaimOverlapWarning:
+    return ClaimOverlapWarning(
+        issue_number=active.core.issue_number,
+        paths=overlap,
+        branch=active.core.branch or None,
+        worktree_path=Path(active.core.worktree_path)
+        if active.core.worktree_path
+        else None,
+    )
+
+
+def assess_claim_conflicts(
     reservation: ActiveWorktree, run_state: RunState, view: ClaimConflictView
-) -> ClaimConflict | None:
-    """Return the first active reservation that excludes ``reservation``.
+) -> ClaimConflictAssessment:
+    """Scan every active reservation for a blocking conflict and overlap warnings.
+
+    A plain footprint overlap only warns when both reservations are interactive:
+    people on both sides can coordinate the merge. Overlap with a dispatch
+    reservation, and every other reason, still blocks. The scan continues past
+    warned overlaps so a later blocking reservation is never missed.
 
     Assumes footprint paths on both ``reservation`` and active worktrees in
     ``run_state`` are canonical POSIX paths (normalized on reservation build
     and on run state loading).
     """
     reservation_task = view.task(reservation.core.issue_number)
+    warnings: list[ClaimOverlapWarning] = []
     for active in run_state.active_worktrees.values():
-        if active.core.issue_number == reservation.core.issue_number:
-            return ClaimConflict(ClaimConflictReason.SAME_ISSUE, active)
-        if _is_repository_reservation(reservation) or _is_repository_reservation(
-            active
-        ):
-            return ClaimConflict(ClaimConflictReason.REPOSITORY_RESERVATION, active)
-        footprint_overlap = bool(
+        conflict, overlap = _conflict_with_active(
+            reservation, reservation_task, active, view
+        )
+        if conflict is not None:
+            return ClaimConflictAssessment(conflict, tuple(warnings))
+        if overlap:
+            warnings.append(_overlap_warning(active, overlap))
+    return ClaimConflictAssessment(None, tuple(warnings))
+
+
+def evaluate_claim_conflicts(
+    reservation: ActiveWorktree, run_state: RunState, view: ClaimConflictView
+) -> ClaimConflict | None:
+    """Return the first active reservation that excludes ``reservation``."""
+    return assess_claim_conflicts(reservation, run_state, view).conflict
+
+
+def _conflict_with_active(
+    reservation: ActiveWorktree,
+    reservation_task: TaskMetadata | None,
+    active: ActiveWorktree,
+    view: ClaimConflictView,
+) -> tuple[ClaimConflict | None, tuple[str, ...]]:
+    """Return a blocking conflict with ``active``, else the overlap to warn about."""
+    if active.core.issue_number == reservation.core.issue_number:
+        return ClaimConflict(ClaimConflictReason.SAME_ISSUE, active), ()
+    if _is_repository_reservation(reservation) or _is_repository_reservation(active):
+        return ClaimConflict(ClaimConflictReason.REPOSITORY_RESERVATION, active), ()
+    overlap = tuple(
+        sorted(
             set(reservation.core.declared_footprint)
             & set(active.core.declared_footprint)
         )
-        if active.launch.forced_serial and footprint_overlap:
-            # #943: dispatchのlaunchはclaim_task経由に一本化されたが、dispatch自身の
-            # スケジューラ（`orchestune.dispatch.filters._candidate_conflicts_with_forced_serial_active`）
-            # は既に「force-serialは衝突範囲（footprintの重なり／依存関係）だけを
-            # 直列化し、無関係な候補の起動は妨げない」という、より精密な既存の
-            # テスト済み挙動を持つ。ここでのblanket block（footprintの重なりを
-            # 問わず、forced_serialなactiveが1件でもあれば他の全claimを拒否する）
-            # はこの既存挙動と衝突し、無関係タスクの起動を不当にブロックしていた。
-            # `claim_task`の呼び出し元は現時点でdispatchのみ（`claim/cli.py`は
-            # 未実装のスタブ）のため、この絞り込みによる既存の対話型claim挙動への
-            # 影響は無い。
-            return ClaimConflict(ClaimConflictReason.FORCED_SERIAL, active)
-        if footprint_overlap:
-            return ClaimConflict(ClaimConflictReason.FOOTPRINT_OVERLAP, active)
-        if _shared_contract_conflicts(
-            reservation_task, view.task(active.core.issue_number)
-        ):
-            return ClaimConflict(ClaimConflictReason.SHARED_CONTRACT, active)
-    return None
+    )
+    footprint_overlap = bool(overlap)
+    if active.launch.forced_serial and footprint_overlap:
+        # #943: dispatchのlaunchはclaim_task経由に一本化されたが、dispatch自身の
+        # スケジューラ（`orchestune.dispatch.filters._candidate_conflicts_with_forced_serial_active`）
+        # は既に「force-serialは衝突範囲（footprintの重なり／依存関係）だけを
+        # 直列化し、無関係な候補の起動は妨げない」という、より精密な既存の
+        # テスト済み挙動を持つ。ここでのblanket block（footprintの重なりを
+        # 問わず、forced_serialなactiveが1件でもあれば他の全claimを拒否する）
+        # はこの既存挙動と衝突し、無関係タスクの起動を不当にブロックしていた。
+        # `claim_task`の呼び出し元は現時点でdispatchのみ（`claim/cli.py`は
+        # 未実装のスタブ）のため、この絞り込みによる既存の対話型claim挙動への
+        # 影響は無い。
+        return ClaimConflict(ClaimConflictReason.FORCED_SERIAL, active), ()
+    if footprint_overlap and not (
+        _is_interactive(reservation) and _is_interactive(active)
+    ):
+        return ClaimConflict(ClaimConflictReason.FOOTPRINT_OVERLAP, active), ()
+    if _shared_contract_conflicts(
+        reservation_task, view.task(active.core.issue_number)
+    ):
+        return ClaimConflict(ClaimConflictReason.SHARED_CONTRACT, active), ()
+    return None, overlap
 
 
 def held_claim_next_actions(active: ActiveWorktree) -> tuple[str, ...]:

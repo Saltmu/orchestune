@@ -14,6 +14,7 @@ from orchestune.claim.contracts import (
     ClaimFailure,
     ClaimFailureReason,
     ClaimOutcome,
+    ClaimOverlapWarning,
     ClaimRequest,
     ClaimStage,
     OwnerKind,
@@ -25,8 +26,8 @@ from orchestune.claim.ownership import (
     ClaimConflict,
     ClaimConflictReason,
     OwnerToken,
+    assess_claim_conflicts,
     build_reservation,
-    evaluate_claim_conflicts,
     held_claim_next_actions,
     new_owner_token,
     with_claim,
@@ -122,10 +123,10 @@ def _evaluate_conflict_step(
     run_state: RunState,
     conflict_view: Any,
     issue_number: int,
-) -> ClaimOutcome | None:
-    """Evaluate conflict rules, returning a structured rejection outcome on conflict or error."""
+) -> tuple[ClaimOutcome | None, tuple[ClaimOverlapWarning, ...]]:
+    """Evaluate conflict rules, returning a rejection outcome or non-blocking warnings."""
     try:
-        conflict = evaluate_claim_conflicts(reservation, run_state, conflict_view)
+        assessment = assess_claim_conflicts(reservation, run_state, conflict_view)
     except Exception as e:
         return _claim_failure(
             issue_number,
@@ -133,10 +134,16 @@ def _evaluate_conflict_step(
                 reason=ClaimFailureReason.CLAIM_CONFLICT,
                 message=f"Failed to evaluate claim conflicts due to metadata lookup failure: {e}",
             ),
-        )
-    if conflict is not None:
-        return _conflict_to_outcome(issue_number, conflict)
-    return None
+        ), ()
+    if assessment.conflict is not None:
+        return _conflict_to_outcome(issue_number, assessment.conflict), ()
+    return None, assessment.warnings
+
+
+def _with_warnings(
+    outcome: ClaimOutcome, warnings: tuple[ClaimOverlapWarning, ...]
+) -> ClaimOutcome:
+    return dataclasses.replace(outcome, warnings=warnings) if warnings else outcome
 
 
 def _claim_failure(issue_number: int, failure: ClaimFailure | None) -> ClaimOutcome:
@@ -149,7 +156,12 @@ def _validate_preflight_and_conflict(
     forge: Forge,
     view: Any,
     default_base: str,
-) -> tuple[PreflightDecision | None, IssueRecord | None, ClaimOutcome | None]:
+) -> tuple[
+    PreflightDecision | None,
+    IssueRecord | None,
+    ClaimOutcome | None,
+    tuple[ClaimOverlapWarning, ...],
+]:
     """Execute preflight and conflict checks in the current run_state snapshot."""
     issue = forge.get_issue(request.issue_number)
     if issue is None:
@@ -157,7 +169,7 @@ def _validate_preflight_and_conflict(
             reason=ClaimFailureReason.ISSUE_NOT_FOUND,
             message=f"Issue #{request.issue_number} was not found.",
         )
-        return None, None, _claim_failure(request.issue_number, failure)
+        return None, None, _claim_failure(request.issue_number, failure), ()
 
     preflight_view = view if isinstance(view, ClaimBaseResolutionView) else None
     preflight = evaluate_claim_preflight(
@@ -167,7 +179,12 @@ def _validate_preflight_and_conflict(
         default_base=default_base,
     )
     if not preflight.allowed:
-        return None, issue, _claim_failure(request.issue_number, preflight.failure)
+        return (
+            None,
+            issue,
+            _claim_failure(request.issue_number, preflight.failure),
+            (),
+        )
 
     task_meta = (
         preflight.task if preflight.task is not None else parse_task_from_issue(issue)
@@ -178,13 +195,13 @@ def _validate_preflight_and_conflict(
         if (view is not None and hasattr(view, "task"))
         else _DefaultConflictView(forge, cache={issue.number: task_meta})
     )
-    conflict_outcome = _evaluate_conflict_step(
+    conflict_outcome, warnings = _evaluate_conflict_step(
         reservation, run_state, conflict_view, request.issue_number
     )
     if conflict_outcome is not None:
-        return None, issue, conflict_outcome
+        return None, issue, conflict_outcome, ()
 
-    return preflight, issue, None
+    return preflight, issue, None, warnings
 
 
 def _perform_git_fetch(repo_root: Path, issue_number: int) -> ClaimFailure | None:
@@ -750,7 +767,23 @@ def _execute_claim_in_lock(
     if resume_outcome is not None:
         return resume_outcome
 
-    preflight, issue, error_outcome = _validate_preflight_and_conflict(
+    return _claim_new_reservation(
+        request, raw_token, workspace, run_state, forge, apply, view, default_base
+    )
+
+
+def _claim_new_reservation(
+    request: ClaimRequest,
+    raw_token: str,
+    workspace: ClaimWorkspace,
+    run_state: RunState,
+    forge: Forge,
+    apply: bool,
+    view: Any,
+    default_base: str,
+) -> ClaimOutcome:
+    """Validate a new claim, then preview it or apply its side effects."""
+    preflight, issue, error_outcome, warnings = _validate_preflight_and_conflict(
         request, run_state, forge, view, default_base
     )
     if error_outcome is not None or preflight is None or issue is None:
@@ -760,23 +793,24 @@ def _execute_claim_in_lock(
     canonical_branch = build_task_branch_name(issue.number, preflight.subtask_id)
     base_ref = preflight.base_ref or default_base
     if not apply:
-        return _build_dry_run_outcome(
+        outcome = _build_dry_run_outcome(
             issue, preflight, canonical_branch, base_ref, request, raw_token
         )
-
-    return _apply_claim_side_effects(
-        workspace,
-        request,
-        issue,
-        preflight,
-        canonical_branch,
-        base_ref,
-        run_state,
-        forge,
-        raw_token,
-        view=view,
-        default_base=default_base,
-    )
+    else:
+        outcome = _apply_claim_side_effects(
+            workspace,
+            request,
+            issue,
+            preflight,
+            canonical_branch,
+            base_ref,
+            run_state,
+            forge,
+            raw_token,
+            view=view,
+            default_base=default_base,
+        )
+    return _with_warnings(outcome, warnings)
 
 
 def claim_task(

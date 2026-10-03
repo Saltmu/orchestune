@@ -9,6 +9,7 @@ from orchestune.claim.contracts import (
     ClaimFailure,
     ClaimFailureReason,
     ClaimOutcome,
+    ClaimOverlapWarning,
     ClaimStage,
     OwnerKind,
     ReservationKind,
@@ -260,3 +261,69 @@ def test_amend_footprint_and_resume_are_mutually_exclusive(capsys):
     with pytest.raises(SystemExit) as exc:
         main(["123", "--amend-footprint", "--resume", "claim-123"])
     assert exc.value.code == 2
+
+
+_OVERLAP = ClaimOverlapWarning(
+    issue_number=90,
+    paths=("docs/ja/architecture.md", "tests/test_architecture.py"),
+    branch="claude/issue-90-held",
+    worktree_path=Path("/tmp/worktrees/issue-90"),
+)
+
+
+def _assert_overlap_warning(stderr: str) -> None:
+    assert (
+        "Warning: footprint overlaps issue #90: "
+        "docs/ja/architecture.md, tests/test_architecture.py"
+    ) in stderr
+    assert "branch=claude/issue-90-held" in stderr
+    assert f"worktree={_OVERLAP.worktree_path}" in stderr
+    assert "merge" in stderr
+
+
+def test_claim_success_and_preview_print_overlap_warnings_to_stderr(tmp_path, capsys):
+    from dataclasses import replace
+
+    from orchestune.claim.cli import main
+
+    outcome = replace(_success(), warnings=(_OVERLAP,))
+    for argv in (["123"], ["123", "--no-apply"]):
+        with (
+            patch("orchestune.claim.cli.claim_task", return_value=outcome),
+            patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
+        ):
+            assert main(argv) == 0
+        captured = capsys.readouterr()
+        _assert_overlap_warning(captured.err)
+        assert "Warning:" not in captured.out
+
+
+def test_claim_without_overlap_prints_no_warning(tmp_path, capsys):
+    from orchestune.claim.cli import main
+
+    with (
+        patch("orchestune.claim.cli.claim_task", return_value=_success()),
+        patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
+    ):
+        assert main(["123"]) == 0
+    assert "Warning:" not in capsys.readouterr().err
+
+
+def test_amend_success_prints_overlap_warnings_to_stderr(tmp_path, capsys):
+    from orchestune.claim.amend import FootprintAmendOutcome
+    from orchestune.claim.cli import main
+
+    outcome = FootprintAmendOutcome(
+        success=True,
+        issue_number=123,
+        claim_id="claim-123",
+        worktree_path=Path("/tmp/worktrees/claim-123"),
+        amended_footprint=("docs/ja/architecture.md",),
+        warnings=(_OVERLAP,),
+    )
+    with (
+        patch("orchestune.claim.cli.amend_claim_footprint", return_value=outcome),
+        patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
+    ):
+        assert main(["123", "--amend-footprint"]) == 0
+    _assert_overlap_warning(capsys.readouterr().err)

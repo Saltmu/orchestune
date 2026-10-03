@@ -10,6 +10,7 @@ import pytest
 from orchestune.claim.amend import amend_claim_footprint
 from orchestune.claim.contracts import (
     ClaimFailureReason,
+    ClaimOverlapWarning,
     ClaimStage,
     OwnerKind,
     ReservationKind,
@@ -209,14 +210,15 @@ def test_amend_leaves_issue_body_when_it_already_covers_footprint(amend_env):
     assert amend_env["forge"].bodies_updated == []
 
 
-def test_amend_rejects_overlap_with_another_reservation_without_changes(amend_env):
-    other_worktree = amend_env["worktree"].parent / "issue-202"
+def _hold_other_reservation(amend_env: dict, owner_kind: OwnerKind) -> Path:
+    other_worktree: Path = amend_env["worktree"].parent / "issue-202"
     other = _active(
         202,
         other_worktree,
         ("shared.py",),
         base_sha=amend_env["base_sha"],
         identity=amend_env["identity"],
+        owner_kind=owner_kind.value,
     )
     state = load_run_state(amend_env["state_path"])
     _save({"201": state.active_worktrees["201"], "202": other}, amend_env["state_path"])
@@ -224,6 +226,13 @@ def test_amend_rejects_overlap_with_another_reservation_without_changes(amend_en
         number=202, body=_issue_body(["shared.py"])
     )
     (amend_env["worktree"] / "shared.py").write_text("touched")
+    return other_worktree
+
+
+def test_amend_rejects_overlap_with_a_dispatch_reservation_without_changes(
+    amend_env,
+):
+    _hold_other_reservation(amend_env, OwnerKind.DISPATCH)
 
     outcome = _amend(amend_env)
 
@@ -233,6 +242,25 @@ def test_amend_rejects_overlap_with_another_reservation_without_changes(amend_en
     assert outcome.failure.conflicting_issue_number == 202
     assert _held_footprint(amend_env) == ("orchestune/foo.py",)
     assert amend_env["forge"].bodies_updated == []
+
+
+@pytest.mark.parametrize("apply", [True, False])
+def test_amend_overlap_with_an_interactive_reservation_only_warns(amend_env, apply):
+    other_worktree = _hold_other_reservation(amend_env, OwnerKind.INTERACTIVE)
+
+    outcome = _amend(amend_env, apply=apply)
+
+    assert outcome.success is True, outcome.failure
+    assert outcome.warnings == (
+        ClaimOverlapWarning(
+            issue_number=202,
+            paths=("shared.py",),
+            branch="claude/issue-202-test-task",
+            worktree_path=other_worktree,
+        ),
+    )
+    expected = ("orchestune/foo.py", "shared.py") if apply else ("orchestune/foo.py",)
+    assert _held_footprint(amend_env) == expected
 
 
 def test_amend_no_apply_reports_plan_without_changes(amend_env):

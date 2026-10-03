@@ -12,6 +12,7 @@ from orchestune.claim.contracts import (
     ClaimFailure,
     ClaimFailureReason,
     ClaimOutcome,
+    ClaimOverlapWarning,
     ClaimRequest,
 )
 from orchestune.claim.service import claim_task, resume_claim
@@ -68,6 +69,26 @@ def _print_success(outcome: ClaimOutcome, *, preview: bool) -> None:
     print(
         f"Owner kind: {(outcome.owner_kind.value if outcome.owner_kind else 'unavailable')}"
     )
+
+
+def _print_overlap_warnings(warnings: tuple[ClaimOverlapWarning, ...]) -> None:
+    for warning in warnings:
+        print(
+            f"Warning: footprint overlaps issue #{warning.issue_number}: "
+            f"{', '.join(warning.paths)}",
+            file=sys.stderr,
+        )
+        print(
+            f"  branch={warning.branch or 'unavailable'} "
+            f"worktree={warning.worktree_path or 'unavailable'}",
+            file=sys.stderr,
+        )
+    if warnings:
+        print(
+            "Warning: the claim is not blocked. Agree on the merge order with the "
+            "overlapping tasks and resolve merge conflicts when rebasing.",
+            file=sys.stderr,
+        )
 
 
 def _print_failure(failure: ClaimFailure) -> None:
@@ -139,6 +160,7 @@ def _render_amend(outcome: FootprintAmendOutcome, *, preview: bool) -> int:
         print(
             f"Issue footprint updated: {'yes' if outcome.issue_body_updated else 'no'}"
         )
+    _print_overlap_warnings(outcome.warnings)
     return 0
 
 
@@ -148,6 +170,7 @@ def _render_outcome(outcome: ClaimOutcome, token_dir: Path, *, preview: bool) ->
         _print_failure(outcome.failure)
         return int(outcome.failure.exit_code)
     _print_success(outcome, preview=preview)
+    _print_overlap_warnings(outcome.warnings)
     return 0
 
 

@@ -33,6 +33,11 @@ the reservation, or reports the conflicting task and changes nothing. Dispatcher
 launched tasks cannot amend; report `orchestune complete --issue <issue_number>
 --result blocked --reason footprint-expansion-required` instead.
 
+If a claim or amend succeeds with `Warning: footprint overlaps issue #<N>`, another
+interactive task reserves some of the same files. Continue, record the overlap in
+the plan and PR body, and rebase and resolve conflicts if that task merges first.
+Overlap with a dispatch reservation is still rejected.
+
 ## Branch naming convention (agent-neutral)
 
 Use the branch assigned by Orchestune or specified by the task. Do not rename

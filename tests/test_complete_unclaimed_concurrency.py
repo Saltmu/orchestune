@@ -75,7 +75,7 @@ def _claim_setup(request, monkeypatch):
     issue = SimpleNamespace(number=1111)
     monkeypatch.setattr(
         "orchestune.claim.service._validate_preflight_and_conflict",
-        lambda *_: (preflight, issue, None),
+        lambda *_: (preflight, issue, None, ()),
     )
     return ClaimRequest(
         1111,

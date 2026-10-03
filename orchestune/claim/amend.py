@@ -12,13 +12,14 @@ import yaml
 from orchestune.claim.contracts import (
     ClaimFailure,
     ClaimFailureReason,
+    ClaimOverlapWarning,
     ClaimStage,
     OwnerKind,
     ReservationKind,
 )
 from orchestune.claim.local_identity import caller_claim_id, validate_local_claim
 from orchestune.claim.ownership import (
-    evaluate_claim_conflicts,
+    assess_claim_conflicts,
     has_completion_reservation,
     held_claim_next_actions,
 )
@@ -56,6 +57,7 @@ class FootprintAmendOutcome:
     added: tuple[str, ...] = ()
     issue_body_updated: bool = False
     failure: ClaimFailure | None = field(default=None)
+    warnings: tuple[ClaimOverlapWarning, ...] = ()
 
 
 class _AmendRejected(Exception):
@@ -186,14 +188,14 @@ def _changed_files(active: ActiveWorktree) -> list[str]:
 
 def _check_conflicts(
     key: str, amended: ActiveWorktree, run_state: RunState, forge: Forge
-) -> None:
+) -> tuple[ClaimOverlapWarning, ...]:
     others = RunState(
         active_worktrees={
             k: v for k, v in run_state.active_worktrees.items() if k != key
         }
     )
     try:
-        conflict = evaluate_claim_conflicts(
+        assessment = assess_claim_conflicts(
             amended, others, _DefaultConflictView(forge)
         )
     except Exception as error:
@@ -201,6 +203,7 @@ def _check_conflicts(
             ClaimFailureReason.CLAIM_CONFLICT,
             f"Failed to evaluate footprint conflicts: {error}",
         ) from error
+    conflict = assessment.conflict
     if conflict is not None:
         other = conflict.active
         raise _AmendRejected(
@@ -220,6 +223,7 @@ def _check_conflicts(
                 ),
             )
         )
+    return assessment.warnings
 
 
 def _rewrite_issue_footprint(body: str, footprint: tuple[str, ...]) -> str:
@@ -278,7 +282,7 @@ def _amend_in_lock(
     amended = active.with_core(
         dataclasses.replace(active.core, declared_footprint=amended_footprint)
     )
-    _check_conflicts(key, amended, run_state, forge)
+    warnings = _check_conflicts(key, amended, run_state, forge)
 
     body_updated = False
     if apply:
@@ -301,6 +305,7 @@ def _amend_in_lock(
         amended_footprint=amended_footprint,
         added=added,
         issue_body_updated=body_updated,
+        warnings=warnings,
     )
 
 
@@ -317,8 +322,9 @@ def amend_claim_footprint(
     """Widen a held interactive file reservation to cover newly needed files.
 
     The footprint only grows: it becomes the union of the held footprint, the
-    Issue footprint and every file already changed in the worktree, and it is
-    rejected when the result overlaps another active reservation.
+    Issue footprint and every file already changed in the worktree. Overlap with
+    another interactive reservation is reported as a warning; overlap with a
+    dispatch reservation and every other conflict reason still rejects it.
     """
     workspace = resolve_claim_workspace(cwd, explicit_state_path=state_path)
     timeout = timeout_seconds if timeout_seconds is not None else 0.0

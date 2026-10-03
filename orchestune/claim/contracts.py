@@ -61,6 +61,16 @@ class ClaimFailure:
 
 
 @dataclass(frozen=True)
+class ClaimOverlapWarning:
+    """A footprint overlap between interactive reservations that does not block a claim."""
+
+    issue_number: int
+    paths: tuple[str, ...]
+    branch: str | None = None
+    worktree_path: Path | None = None
+
+
+@dataclass(frozen=True)
 class ClaimRequest:
     """Parameters required to claim an issue."""
 
@@ -94,3 +104,4 @@ class ClaimOutcome:
     stage: ClaimStage | None = None
     failure: ClaimFailure | None = None
     owner_token: str | None = field(default=None, repr=False)
+    warnings: tuple[ClaimOverlapWarning, ...] = ()
