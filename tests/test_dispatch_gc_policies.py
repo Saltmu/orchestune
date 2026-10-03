@@ -175,3 +175,34 @@ def test_confirmed_records_skips_when_not_handoff_ready(tmp_path):
         completion_stage="handed_off",
     )
     assert confirmed_records(state) == []
+
+
+def test_reserved_retry_is_not_recomputed_after_a_settings_change(tmp_path):
+    """#1189: a reservation already saved keeps its count and time on restart."""
+    from orchestune.dispatch.gc.policies import process_completion_policies
+
+    state, config, forge, labels, _ = policy_case(tmp_path)
+
+    def lost_response(issue, label):
+        labels.append(label)
+        raise OSError("response lost")
+
+    forge.add_label.side_effect = lost_response
+    process_completion_policies(state, config, now=100)
+    reserved = load_run_state_readonly(config.run_state_path).task_reclaim_counts[250]
+    assert (reserved.review_timeout_retry_count, reserved.review_timeout_retry_at) == (
+        1,
+        160.0,
+    )
+
+    forge.add_label.side_effect = lambda issue, label: labels.append(label)
+    config.max_review_timeout_retries = 1  # would now be exhausted if re-evaluated
+    config.review_timeout_backoff_seconds = 999
+    persisted = load_run_state_readonly(config.run_state_path)
+    process_completion_policies(persisted, config, now=500)
+
+    record = persisted.task_reclaim_counts[250]
+    assert record.review_timeout_retry_count == 1
+    assert record.review_timeout_retry_at == 160.0
+    assert not record.review_timeout_retry_pending
+    assert "status:queued" in labels

@@ -24,6 +24,12 @@ from orchestune.consistency.supervisor import MAX_REPAIR_PASSES, ConsistencyMode
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch.execution_profiles import ExecutionProfileConfig
 from orchestune.dispatch.progress import NoopProgress, ProgressSink
+from orchestune.dispatch.retry_policy import (
+    DEFAULT_EARLY_DEATH_BACKOFF_SECONDS,
+    DEFAULT_EARLY_DEATH_MAX_RETRIES,
+    DEFAULT_REVIEW_TIMEOUT_BACKOFF_SECONDS,
+    DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS,
+)
 from orchestune.dispatch.targets import DispatchTarget, LocalProcessDispatchTarget
 from orchestune.forge import Forge, GitHubForge
 
@@ -68,12 +74,12 @@ class DispatcherConfig:
     # API/ストリーム障害として再投入する。回数はRunStateに永続化し、無限再試行を
     # 防ぐため有限の既定値を持つ。
     early_death_window_seconds: int = 120
-    max_early_death_retries: int = 2
-    early_death_backoff_seconds: int = 60
+    max_early_death_retries: int = DEFAULT_EARLY_DEATH_MAX_RETRIES
+    early_death_backoff_seconds: int = DEFAULT_EARLY_DEATH_BACKOFF_SECONDS
     # #795: AIレビュー待機タイムアウト（Exit 20）時に自動再投入できる上限回数と
     # 指数バックオフ秒数。2回に達したタスクはstatus:blocked-human-reviewへエスカレーションされる。
-    max_review_timeout_retries: int = 2
-    review_timeout_backoff_seconds: int = 60
+    max_review_timeout_retries: int = DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS
+    review_timeout_backoff_seconds: int = DEFAULT_REVIEW_TIMEOUT_BACKOFF_SECONDS
 
     # #438: ウィンドウ内の総トークン消費上限およびサブタスクごとの消費上限
     max_tokens_per_window: int | None = None
