@@ -17,11 +17,13 @@ from __future__ import annotations
 import re
 import sys
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from orchestune.forge import Forge
 from orchestune.models import PrRecord, normalize_newlines
-from orchestune.task_metadata import TaskMetadata
+
+if TYPE_CHECKING:
+    from orchestune.task_metadata import TaskMetadata
 
 KIND_CREATED = "created"
 KIND_MERGED = "merged"

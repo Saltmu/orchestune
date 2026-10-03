@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.dag.models import SubTask
@@ -37,10 +38,12 @@ from orchestune.ledger.run_state import (
     RunState,
     load_run_state_readonly,
 )
-from orchestune.lock_contracts import ExternalLockScanResult
 from orchestune.models import IssueRecord, PrRecord, Task
 from orchestune.task_branch_resolution import TaskBranchResolution
 from orchestune.task_metadata import TaskMetadata
+
+if TYPE_CHECKING:
+    from orchestune.lock_contracts import ExternalLockScanResult
 
 NotNeededReviewDispatcher = Callable[[int, str, DispatcherConfig], None]
 
