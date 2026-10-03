@@ -169,6 +169,41 @@ def test_new_trigger_recovers_sha_from_posted_marker_when_first_lookup_failed():
     assert requested == SHA
 
 
+def test_round_two_no_post_still_requires_judgments():
+    data = previous_round()
+    data["issue_comments"].extend(
+        [
+            {
+                "id": 3,
+                "created_at": "2026-01-01T00:02:00Z",
+                "body": f"@claude review\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 2 -->\n<!-- orchestune:review-head {SHA} -->",
+            },
+            {
+                "id": 4,
+                "created_at": "2026-01-01T00:03:00Z",
+                "body": "Clean",
+                "user": {"login": "claude"},
+            },
+        ]
+    )
+    with patch("scripts.wait_for_review._get_initial_pr_data", return_value=data):
+        with pytest.raises(ValueError, match="body-file"):
+            wait_for_review(1, bot_name="claude", post_trigger=False)
+
+
+def test_skip_cli_exits_zero_but_prints_not_pass(capsys):
+    state = {"issue_comments": [], "reviews": [], "inline_comments": []}
+    with (
+        patch("sys.argv", ["wait", "--pr", "1", "--bot-name", "skip"]),
+        patch("scripts.wait_for_review._get_initial_pr_data", return_value=state),
+        patch("scripts.wait_for_review._run_gh", return_value='{"id":1}'),
+    ):
+        with pytest.raises(SystemExit) as exc:
+            main()
+    assert exc.value.code == 0
+    assert "not a review pass" in capsys.readouterr().out
+
+
 def test_cli_requires_explicit_reviewer():
     with (
         patch("sys.argv", ["wait", "--pr", "1"]),

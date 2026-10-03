@@ -97,6 +97,10 @@ def test_markers_validate_and_roundtrip_head():
     assert parse_head_marker(review_head_marker(sha)) == sha
     assert parse_head_marker("legacy trigger") is None
     assert (
+        parse_head_marker(review_head_marker(sha) + "\n" + review_head_marker("b" * 40))
+        is None
+    )
+    assert (
         review_selection_marker("skip", sha)
         == f"<!-- orchestune:review-selection reviewer=skip head={sha} -->"
     )

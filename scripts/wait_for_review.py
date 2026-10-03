@@ -90,6 +90,14 @@ GH_COMMAND_TIMEOUT_SECONDS = 30
 
 _COMPLETENESS_SECTIONS = ("issue_comments", "reviews", "inline_comments")
 
+# How long a bot's own "in progress" tracker comment may report the same
+# unchanged content before it is treated as stalled rather than merely slow.
+# A live job keeps editing that same comment (ticking off checklist items) as
+# it works, so a signature that never changes past this window most likely
+# means the workflow run that owns it already ended without posting a final
+# result (observed directly on PR #923 round 4, run 35411499375: the action
+# posted a "Review in progress" tracker, then finished successfully 2m26s
+# later without ever editing it again). See Issue #926.
 DEFAULT_STALL_GRACE_SECONDS = 600
 
 
@@ -362,6 +370,10 @@ def _print_review_result(result: dict[str, Any], bot_name: str) -> None:
     if status == ACQUISITION_ACQUIRED:
         print(f"[AI Review Content Acquired - @{bot_name}] LLM judgment required")
     else:
+        # A non-acquired status (unavailable/in_progress) is not ready for
+        # judgment; the banner must not claim otherwise even though some
+        # partial content may still be shown below for context (Codex PR
+        # #1114 round 7 finding).
         reason = result.get("reason") or "no reason given"
         print(f"[AI Review NOT Acquired ({status}) - @{bot_name}] {reason}")
     print(f"Round: {result.get('round')}  Timestamp: {result.get('timestamp', '')}")
@@ -380,6 +392,12 @@ def _print_review_result(result: dict[str, Any], bot_name: str) -> None:
             f"({len(current_inlines)} current round)"
         )
         jev_by_id = {e["finding_id"]: e for e in jev_evaluations}
+        # Mirror evaluate_review_findings()'s id-or-index fallback: a missing
+        # id and an explicit `"id": null` are both id-less, and the fallback
+        # index must be positional within `current_inlines` (the list that
+        # was actually passed to evaluate_review_findings), not within the
+        # full inline_items list, which may interleave historical/unassociated
+        # items and shift the index basis (Codex PR #1114 round 5 finding).
         current_index_by_identity = {
             id(current_item): index
             for index, current_item in enumerate(current_inlines)
@@ -391,6 +409,9 @@ def _print_review_result(result: dict[str, Any], bot_name: str) -> None:
             else:
                 position = current_index_by_identity.get(id(item))
                 # Match Jev's position within current inlines, never historical entries.
+                # Matches jev_filter._finding_id()'s string-tagged sentinel:
+                # a bare int fallback could collide with a coincidentally
+                # equal supplied id (Codex PR #1114 round 6 finding).
                 finding_id = f"index:{position}" if position is not None else None
             jev = jev_by_id.get(finding_id) if finding_id is not None else None
             jev_note = (
@@ -539,7 +560,11 @@ def _handle_review_trigger(
     body: str | None,
     body_file: str | None,
 ) -> tuple[str, int | str | None, str | None]:
-    """Post a head-bound trigger, or restore its recorded head on resume."""
+    """Post a head-bound trigger, or restore its recorded head on resume.
+
+    Resume never guesses from the current head, which may have advanced since
+    the trigger. Legacy triggers without a head marker keep requested SHA unknown.
+    """
     existing_trigger = _find_existing_trigger_comment(
         initial_data, bot_name, current_round
     )
@@ -797,6 +822,10 @@ def _record_skip(
                 f"body={body}",
             ]
         )
+    print(
+        "Review skipped; not a review pass. "
+        "Integration gate (required) stops at status:blocked-human-review."
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "reviewer": "skip",
@@ -856,10 +885,10 @@ def wait_for_review(
         )
 
         _check_round_limit(current_round, max_rounds)
+        _validate_review_reply(initial_data, bot_name, current_round, body_file)
 
         trigger_id: int | str | None = None
         if post_trigger:
-            _validate_review_reply(initial_data, bot_name, current_round, body_file)
             latest_trigger_time, trigger_id, requested_head_sha = (
                 _handle_review_trigger(
                     pr_number,
@@ -887,6 +916,12 @@ def wait_for_review(
                     existing_trigger.get("body") or ""
                 )
                 # Bot-authored triggers must not acquire their own request as a review.
+                # A trigger comment authored by the target bot itself (e.g. a
+                # hosted environment re-triggering its own review under its
+                # own bot identity) must not be read as the review it is
+                # asking for -- without this, the trigger's own text can
+                # satisfy the round-content gate before any real review
+                # arrives (Codex PR #1114 round 8 finding).
                 if trigger_id is not None:
                     excluded_ids.add(trigger_id)
             immediate = _check_immediate_review_result(
@@ -918,6 +953,14 @@ def wait_for_review(
                 current_data = _get_pr_data(pr_number, executor=executor)
                 consecutive_errors = 0
 
+                # Track staleness of the current "in progress" tracker comment
+                # independent of `has_changes` below: a comment that keeps
+                # reporting in-progress with an *unchanged* signature across
+                # polls never trips the snapshot-diff gate (nothing about it
+                # looks "new"), so a genuinely dead tracker would otherwise be
+                # invisible until the full timeout elapses. Raises
+                # StalledReviewError once the signature has been unchanged for
+                # longer than stall_grace_seconds.
                 current_bot_activity = _latest_bot_activity_item(
                     current_data, bot_name, exclude_ids=excluded_ids
                 )
@@ -1199,6 +1242,10 @@ def main() -> None:
                 incomplete_sections
                 and result["acquisition_status"] == ACQUISITION_ACQUIRED
             ):
+                # The adapter itself declared a section incomplete: a partial
+                # fetch must not be reported as a trustworthy acquired result,
+                # even though some content was found (issue #1099 PR #1114
+                # round 1 review).
                 result["acquisition_status"] = ACQUISITION_UNAVAILABLE
                 result["reason"] = (
                     "supplied completeness declares "
