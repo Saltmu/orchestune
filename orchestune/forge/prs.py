@@ -313,6 +313,38 @@ class GitHubPullRequestMixin:
             raise ValueError("GitHub did not return a pull request object")
         return self._parse_pr_record(raw, state="all", paginate_files=False)
 
+    def _list_pr_review_items(
+        self, pr_number: int | str, section: str
+    ) -> list[dict[str, Any]]:
+        number = validate_issue_number(pr_number)
+        raw = json.loads(
+            self._run(
+                [
+                    "gh",
+                    "api",
+                    "--paginate",
+                    "--slurp",
+                    f"repos/{{owner}}/{{repo}}/pulls/{number}/{section}?per_page=100",
+                ]
+            )
+        )
+        if not isinstance(raw, list) or any(not isinstance(page, list) for page in raw):
+            raise ValueError("GitHub review response must contain complete pages")
+        items = [item for page in raw for item in page]
+        if any(not isinstance(item, dict) for item in items):
+            raise ValueError("GitHub review items must be objects")
+        return items
+
+    def list_pull_request_reviews(self, pr_number: int | str) -> list[dict[str, Any]]:
+        """Fetch every native PR review, failing rather than returning partial pages."""
+        return self._list_pr_review_items(pr_number, "reviews")
+
+    def list_pull_request_review_comments(
+        self, pr_number: int | str
+    ) -> list[dict[str, Any]]:
+        """Fetch all inline review comments, with native source and review IDs."""
+        return self._list_pr_review_items(pr_number, "comments")
+
     def list_prs(
         self,
         state: str = "open",

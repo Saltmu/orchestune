@@ -16,6 +16,7 @@ from orchestune.ledger.active_records import (
 )
 from orchestune.ledger.run_state import ActiveWorktree, RunState, save_run_state
 from orchestune.models import PrRecord
+from orchestune.review.markers import review_selection_marker
 
 
 class PublicationForge:
@@ -24,7 +25,19 @@ class PublicationForge:
         self.comments = []
         self.operations = []
         self.inject = lambda operation, after: None
-        self.pr = PrRecord(42, "task-1110", ("code.py",), base_ref="parent/issue-1059")
+        self.pr = PrRecord(
+            42,
+            "task-1110",
+            ("code.py",),
+            base_ref="parent/issue-1059",
+            head_sha="a" * 40,
+        )
+
+    def list_all_issue_comments(self, issue):
+        self.inject("search", False)
+        if issue == 42:
+            return [{"body": review_selection_marker("skip", self.pr.head_sha)}]
+        return list(self.comments)
 
     def get_issue_labels(self, issue):
         self.inject("get", False)
@@ -38,10 +51,6 @@ class PublicationForge:
 
     def get_pull_request(self, issue):
         return self.pr
-
-    def list_all_issue_comments(self, issue):
-        self.inject("search", False)
-        return list(self.comments)
 
     def create_issue_comment(self, issue, body):
         self.inject("post", False)
@@ -121,7 +130,7 @@ def lifecycle_environment(tmp_path: Path, monkeypatch, result="not-needed"):
         worktree_root=tmp_path,
     )
     if result == "done":
-        request = CompleteRequest.done(1110, 42, **common)
+        request = CompleteRequest.done(1110, 42, reviewer="skip", **common)
     elif result == "blocked":
         request = CompleteRequest.blocked(1110, "blocked", **common)
     else:

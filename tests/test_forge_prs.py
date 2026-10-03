@@ -19,6 +19,32 @@ def _pr_list_payload(**fields) -> str:
     return json.dumps([{"number": 5, "headRefName": "feat/x", **fields}])
 
 
+@pytest.mark.parametrize(
+    "section,method",
+    [
+        ("reviews", "list_pull_request_reviews"),
+        ("comments", "list_pull_request_review_comments"),
+    ],
+)
+def test_review_reads_paginate_every_page(forge, gh_run, section, method):
+    gh_run.stdout(json.dumps([[{"id": 1}], [{"id": 2}]]))
+    assert getattr(forge, method)(42) == [{"id": 1}, {"id": 2}]
+    assert gh_run.call_args.args[0] == [
+        "gh",
+        "api",
+        "--paginate",
+        "--slurp",
+        f"repos/{{owner}}/{{repo}}/pulls/42/{section}?per_page=100",
+    ]
+
+
+@pytest.mark.parametrize("payload", ["{}", "[{}]", "[[null]]"])
+def test_review_reads_reject_malformed_or_partial_pages(forge, gh_run, payload):
+    gh_run.stdout(payload)
+    with pytest.raises(ValueError):
+        forge.list_pull_request_reviews(42)
+
+
 def _routed(**by_subcommand):
     """`gh pr list` / `gh api graphql` などをサブコマンド単位で振り分ける。"""
 

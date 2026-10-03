@@ -9,6 +9,48 @@ import pytest
 from orchestune.complete.contracts import CompleteResult
 
 
+@pytest.mark.parametrize(
+    "options", [[], ["--reviewer", "claude"], ["--reviewer", "codex"]]
+)
+def test_done_requires_reviewer_and_bot_judgment_file(options):
+    from orchestune.complete.cli import main
+
+    with patch("orchestune.complete.cli._credentials", return_value=(None, None, None)):
+        assert (
+            main(["--issue", "1029", "--pr", "42", "--result", "done", *options]) == 40
+        )
+
+
+def test_done_carries_reviewer_and_reply_path():
+    from pathlib import Path
+
+    from orchestune.complete.cli import main
+
+    with (
+        patch("orchestune.complete.cli._credentials", return_value=(None, None, None)),
+        patch("orchestune.complete.cli.complete_task") as service,
+    ):
+        assert (
+            main(
+                [
+                    "--issue",
+                    "1029",
+                    "--pr",
+                    "42",
+                    "--result",
+                    "done",
+                    "--reviewer",
+                    "codex",
+                    "--review-reply",
+                    "reply.md",
+                ]
+            )
+            == 0
+        )
+    assert service.call_args.args[0].payload.review_reply == Path("reply.md")
+    assert service.call_args.args[0].payload.reviewer == "codex"
+
+
 def test_dry_run_builds_done_request_without_calling_service() -> None:
     from orchestune.complete.cli import main
 
@@ -17,7 +59,17 @@ def test_dry_run_builds_done_request_without_calling_service() -> None:
         patch("orchestune.complete.cli.complete_task") as complete_task,
     ):
         exit_code = main(
-            ["--issue", "1003", "--pr", "42", "--result", "done", "--no-apply"]
+            [
+                "--issue",
+                "1003",
+                "--pr",
+                "42",
+                "--result",
+                "done",
+                "--reviewer",
+                "skip",
+                "--no-apply",
+            ]
         )
 
     assert exit_code == 0
@@ -85,7 +137,9 @@ def test_cli_displays_resumable_completion_id_and_reached_stage(capsys) -> None:
         patch("orchestune.complete.cli._credentials", return_value=(None, None, None)),
         patch("orchestune.complete.cli.complete_task", return_value=failed),
     ):
-        exit_code = main(["--issue", "1003", "--pr", "42", "--result", "done"])
+        exit_code = main(
+            ["--issue", "1003", "--pr", "42", "--result", "done", "--reviewer", "skip"]
+        )
 
     output = capsys.readouterr().out
     assert exit_code == 55

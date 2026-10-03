@@ -90,12 +90,31 @@ class TestIntegratorRun:
 
         assert res["status"] == "no_done_tasks"
 
-    def test_success_integration(self, integrator_env: IntegratorEnv):
+    def test_success_integration(self, integrator_env: IntegratorEnv, fake_forge):
         """依存順にマージし、統合PRを作成し、自動マージとIssueクローズまで到達する。"""
+        from orchestune.outcome_record import OutcomeRecord, ReviewSummary
+
         issue_a = make_done_issue(1, subtask_id="task-1")
         issue_b = make_done_issue(2, subtask_id="task-2", depends_on=("task-1",))
         # `status:done`側は依存と逆順で返し、トポロジカルソートが効くことを示す。
         integrator_env.set_done_issues(issue_a, issue_b, done=[issue_b, issue_a])
+
+        def list_comments_mock(issue_number):
+            if issue_number in (1, 2):
+                record = OutcomeRecord(
+                    issue=issue_number,
+                    head_sha="a" * 40,
+                    result="done",
+                    review=ReviewSummary(
+                        verdict="pass",
+                        bot="claude",
+                        reviewed_head_sha="a" * 40,
+                    ),
+                )
+                return [{"body": record.render(), "created_at": "2026-01-01T00:00:00Z"}]
+            return []
+
+        fake_forge.list_comments.side_effect = list_comments_mock
 
         config = IntegratorConfig(
             apply=True, parent_issue_number=100, integration_run_id="test-run"

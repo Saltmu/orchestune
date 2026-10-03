@@ -26,7 +26,12 @@ NONINTERACTIVE_DISPATCH_INSTRUCTION = (
 
 def _noninteractive_instruction(reviewer_bot: ReviewerBot | None) -> str:
     if reviewer_bot is None:
-        return NONINTERACTIVE_DISPATCH_INSTRUCTION
+        return (
+            NONINTERACTIVE_DISPATCH_INSTRUCTION
+            + "reviewerを解決できないため推測せず `--bot-name skip` を明示指定し、"
+            "選択をPRに記録してください。統合ゲート（既定required）で"
+            "status:blocked-human-reviewとなり人間確認を待ちます。skipはレビュー合格ではありません。"
+        )
     return (
         NONINTERACTIVE_DISPATCH_INSTRUCTION
         + f"PR作成後のレビュー担当には必ず `{reviewer_bot}` を指定し、"

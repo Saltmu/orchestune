@@ -26,6 +26,7 @@ from orchestune.dispatch.execution_profiles import ExecutionProfileConfig
 from orchestune.dispatch.progress import NoopProgress, ProgressSink
 from orchestune.dispatch.targets import DispatchTarget, LocalProcessDispatchTarget
 from orchestune.forge import Forge, GitHubForge
+from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
 
 DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST = frozenset(
     {
@@ -108,6 +109,8 @@ class DispatcherConfig:
     execution_profile_config: ExecutionProfileConfig | None = None
     # #1035: CLI実行時プロファイルオーバーライド
     profile: str | None = None
+    # #1031: 子タスクのレビュー合格証跡（verdict=pass, SHA一致）を検証するゲート
+    child_review_gate: str = "required"
     # #706/#709/#746: modeは追加のrepository-wide loopを段階化する。
     # Supervisor配下へ移行済みの安全なstatus/recovery/GC自己修復は、後方互換の
     # default動作としてこのmodeおよび追加allowlistとは独立して維持する。
@@ -116,6 +119,10 @@ class DispatcherConfig:
     consistency_max_repair_passes: int = 1
 
     def __post_init__(self) -> None:
+        if self.child_review_gate not in VALID_CHILD_REVIEW_GATE_MODES:
+            raise ValueError(
+                f"child_review_gate must be 'required' or 'off', got {self.child_review_gate!r}"
+            )
         if not isinstance(self.consistency_mode, ConsistencyMode):
             self.consistency_mode = ConsistencyMode(self.consistency_mode)
         self.consistency_repair_allowlist = frozenset(self.consistency_repair_allowlist)
