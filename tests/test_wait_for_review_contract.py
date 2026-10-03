@@ -46,7 +46,10 @@ def test_exit_code_table_for_online_acquisition_control_paths(
     test_main_cli_stalled since it needs its own import."""
     from scripts.wait_for_review import main
 
-    with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
+    with patch(
+        "sys.argv",
+        ["wait_for_review.py", "--bot-name", "claude", "--pr", "540", "--no-post"],
+    ):
         with patch(
             "scripts.wait_for_review.wait_for_review",
             autospec=True,
@@ -101,7 +104,16 @@ def test_exit_code_table_for_offline_single_snapshot_paths(
 
     path = tmp_path / "state.json"
     path.write_text(json.dumps(state), encoding="utf-8")
-    with patch("sys.argv", ["wait_for_review.py", "--review-state-file", str(path)]):
+    with patch(
+        "sys.argv",
+        [
+            "wait_for_review.py",
+            "--bot-name",
+            "claude",
+            "--review-state-file",
+            str(path),
+        ],
+    ):
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == expected_exit
@@ -110,7 +122,10 @@ def test_exit_code_table_for_offline_single_snapshot_paths(
 def test_main_cli_success():
     from scripts.wait_for_review import main
 
-    with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
+    with patch(
+        "sys.argv",
+        ["wait_for_review.py", "--bot-name", "claude", "--pr", "540", "--no-post"],
+    ):
         with patch(
             "scripts.wait_for_review.wait_for_review", autospec=True
         ) as mock_wait:
@@ -133,6 +148,8 @@ def test_main_cli_writes_output_file(tmp_path):
         "sys.argv",
         [
             "wait_for_review.py",
+            "--bot-name",
+            "claude",
             "--pr",
             "540",
             "--no-post",
@@ -163,6 +180,8 @@ def test_main_cli_output_file_write_failure_is_not_a_silent_success(tmp_path):
         "sys.argv",
         [
             "wait_for_review.py",
+            "--bot-name",
+            "claude",
             "--pr",
             "540",
             "--no-post",
@@ -183,7 +202,10 @@ def test_main_cli_output_file_write_failure_is_not_a_silent_success(tmp_path):
 def test_main_cli_timeout():
     from scripts.wait_for_review import main
 
-    with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
+    with patch(
+        "sys.argv",
+        ["wait_for_review.py", "--bot-name", "claude", "--pr", "540", "--no-post"],
+    ):
         with patch(
             "scripts.wait_for_review.wait_for_review",
             autospec=True,
@@ -197,7 +219,10 @@ def test_main_cli_timeout():
 def test_main_cli_stalled():
     from scripts.wait_for_review import StalledReviewError, main
 
-    with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
+    with patch(
+        "sys.argv",
+        ["wait_for_review.py", "--bot-name", "claude", "--pr", "540", "--no-post"],
+    ):
         with patch(
             "scripts.wait_for_review.wait_for_review",
             autospec=True,
@@ -213,7 +238,16 @@ def test_main_cli_stall_grace_argument_parsing():
 
     with patch(
         "sys.argv",
-        ["wait_for_review.py", "--pr", "540", "--no-post", "--stall-grace", "120"],
+        [
+            "wait_for_review.py",
+            "--bot-name",
+            "claude",
+            "--pr",
+            "540",
+            "--no-post",
+            "--stall-grace",
+            "120",
+        ],
     ):
         with patch(
             "scripts.wait_for_review.wait_for_review", autospec=True
@@ -227,7 +261,10 @@ def test_main_cli_stall_grace_argument_parsing():
 def test_main_cli_max_rounds():
     from scripts.wait_for_review import main
 
-    with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
+    with patch(
+        "sys.argv",
+        ["wait_for_review.py", "--bot-name", "claude", "--pr", "540", "--no-post"],
+    ):
         with patch(
             "scripts.wait_for_review.wait_for_review",
             autospec=True,
@@ -241,7 +278,10 @@ def test_main_cli_max_rounds():
 def test_main_cli_unexpected_error():
     from scripts.wait_for_review import main
 
-    with patch("sys.argv", ["wait_for_review.py", "--pr", "540", "--no-post"]):
+    with patch(
+        "sys.argv",
+        ["wait_for_review.py", "--bot-name", "claude", "--pr", "540", "--no-post"],
+    ):
         with patch(
             "scripts.wait_for_review.wait_for_review",
             autospec=True,
@@ -259,6 +299,8 @@ def test_main_cli_arguments_parsing():
         "sys.argv",
         [
             "wait_for_review.py",
+            "--bot-name",
+            "claude",
             "--pr",
             "540",
             "--max-rounds",
@@ -288,6 +330,7 @@ def test_main_cli_arguments_parsing():
                 max_retries=2,
                 round_num=2,
                 stall_grace_seconds=600,
+                switch_reviewer=False,
             )
 
 
@@ -298,6 +341,8 @@ def test_main_cli_arguments_parsing_with_jev_threshold():
         "sys.argv",
         [
             "wait_for_review.py",
+            "--bot-name",
+            "claude",
             "--pr",
             "540",
             "--jev-threshold",
@@ -323,6 +368,7 @@ def test_main_cli_arguments_parsing_with_jev_threshold():
                 max_retries=1,
                 round_num=None,
                 stall_grace_seconds=600,
+                switch_reviewer=False,
                 jev_threshold=0.85,
             )
 
@@ -421,7 +467,9 @@ def test_post_review_trigger_includes_round_marker(mock_run):
         }
     )
 
-    result = post_review_trigger(pr_number=540, bot_name="claude", round_num=3)
+    result = post_review_trigger(
+        pr_number=540, bot_name="claude", round_num=3, head_sha="c" * 40
+    )
     assert result["id"] == 12345
     cmd = mock_run.call_args[0][0]
     assert "<!-- orchestune:review-round 3 -->" in cmd[-1]
@@ -825,7 +873,10 @@ def test_three_routes_use_same_context_policy_and_never_drop_the_finding(
             path = tmp_path / "state.json"
             path.write_text(json.dumps(state))
             with (
-                patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+                patch(
+                    "sys.argv",
+                    ["wait", "--bot-name", "claude", "--review-state-file", str(path)],
+                ),
                 pytest.raises(SystemExit) as exc,
             ):
                 main()
@@ -857,6 +908,8 @@ def test_offline_with_key_never_fetches_missing_context(monkeypatch, tmp_path):
             "sys.argv",
             [
                 "wait",
+                "--bot-name",
+                "claude",
                 "--review-state-file",
                 str(path),
                 "--output-file",
@@ -893,7 +946,10 @@ def test_offline_explicit_incomplete_section_is_not_exit_0(tmp_path):
     path.write_text(json.dumps(state), encoding="utf-8")
 
     with (
-        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        patch(
+            "sys.argv",
+            ["wait", "--bot-name", "claude", "--review-state-file", str(path)],
+        ),
         pytest.raises(SystemExit) as exc,
     ):
         main()
@@ -917,7 +973,10 @@ def test_offline_unenumerated_incomplete_status_is_also_not_exit_0(tmp_path):
     path.write_text(json.dumps(state), encoding="utf-8")
 
     with (
-        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        patch(
+            "sys.argv",
+            ["wait", "--bot-name", "claude", "--review-state-file", str(path)],
+        ),
         pytest.raises(SystemExit) as exc,
     ):
         main()
@@ -939,7 +998,10 @@ def test_offline_sparse_completeness_treats_omitted_sections_as_incomplete(tmp_p
     path.write_text(json.dumps(state), encoding="utf-8")
 
     with (
-        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        patch(
+            "sys.argv",
+            ["wait", "--bot-name", "claude", "--review-state-file", str(path)],
+        ),
         pytest.raises(SystemExit) as exc,
     ):
         main()
@@ -960,7 +1022,10 @@ def test_offline_malformed_completeness_value_is_also_not_exit_0(tmp_path):
     path.write_text(json.dumps(state), encoding="utf-8")
 
     with (
-        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        patch(
+            "sys.argv",
+            ["wait", "--bot-name", "claude", "--review-state-file", str(path)],
+        ),
         pytest.raises(SystemExit) as exc,
     ):
         main()
@@ -979,7 +1044,10 @@ def test_offline_unknown_completeness_still_exits_acquired(tmp_path):
     path.write_text(json.dumps(state), encoding="utf-8")
 
     with (
-        patch("sys.argv", ["wait", "--review-state-file", str(path)]),
+        patch(
+            "sys.argv",
+            ["wait", "--bot-name", "claude", "--review-state-file", str(path)],
+        ),
         pytest.raises(SystemExit) as exc,
     ):
         main()

@@ -520,6 +520,13 @@ def test_worker_skills_forbid_direct_label_operations(skill_name: str):
     for md_file in skill_dir.rglob("*.md"):
         file_text = md_file.read_text(encoding="utf-8")
         status_labels = re.findall(r"\bstatus:[a-zA-Z0-9_-]+", file_text)
+        # Review skip warns about the engine's gate; it never mutates labels.
+        if md_file.name == "review-loop.md":
+            status_labels = [
+                label
+                for label in status_labels
+                if label != "status:blocked-human-review"
+            ]
         assert (
             not status_labels
         ), f"{md_file} must not contain status label references: {status_labels}"
@@ -780,67 +787,28 @@ def test_workflow_template_bloat_autonomous_refactoring():
 
 @pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
 def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
-    """Worker skills must specify asking reviewer selection in Step 1 alongside plan approval and bypassing approval when issue-driven."""
-    skill_dir = SKILLS_ROOT / skill_name
-    skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
-    lines = skill_md.splitlines()
-
-    # Locate the Execution Modes table rows
-    plan_approval_row = next(
-        (
-            line
-            for line in lines
-            if "plan approval & reviewer selection" in line.lower()
-        ),
-        None,
+    skill = (SKILLS_ROOT / skill_name / "SKILL.md").read_text(encoding="utf-8")
+    plan = next(
+        line for line in skill.splitlines() if "**Plan Approval (Step 1)**" in line
+    )
+    assert "after PR creation" in plan
+    assert "bypass user approval" in plan and "existing Issue" in plan
+    review = next(
+        line for line in skill.splitlines() if "**Review Execution (Step 11)**" in line
+    )
+    assert "explicit `claude` / `codex` / `skip`" in review
+    assert "no inference/default" in review
+    assert "review, merge, or completion before selection" in review
+    assert "--bot-name skip" in review
+    loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
+        encoding="utf-8"
     )
     assert (
-        plan_approval_row is not None
-    ), f"{skill_name} must contain 'Plan Approval & Reviewer Selection (Step 1)' row in Execution Modes"
-    plan_approval_row_lower = plan_approval_row.lower()
-    # Verify Interactive Mode column in Step 1 row
-    assert (
-        "alongside plan approval" in plan_approval_row_lower
-        and "select reviewer bot" in plan_approval_row_lower
-    ), f"{skill_name} Step 1 row must specify asking for reviewer selection alongside plan approval"
-    # Verify Non-Interactive Mode column in Step 1 row
-    assert (
-        "bypass user approval" in plan_approval_row_lower
-        and "existing issue" in plan_approval_row_lower
-    ), f"{skill_name} Step 1 row must specify bypassing approval when invoked with existing issue"
-
-    # Verify Review Execution (Step 11) row in Execution Modes
-    review_exec_row = next(
-        (line for line in lines if "review execution (step 11)" in line.lower()),
-        None,
+        "Only per-finding procedure Step 5 with Step 6 satisfied permits Step 12"
+        in loop
     )
-    assert (
-        review_exec_row is not None
-    ), f"{skill_name} must contain 'Review Execution (Step 11)' row in Execution Modes"
-    review_exec_row_lower = review_exec_row.lower()
-    assert (
-        "selected in step 1" in review_exec_row_lower
-        and "resolved in step 1" in review_exec_row_lower
-    ), f"{skill_name} Step 11 row must direct using reviewer bot selected/resolved in Step 1"
-
-    # Verify Development Steps table Step 1 and Step 11 rows
-    step1_dev_row = next(
-        (line for line in lines if re.search(r"\|\s*\*\*1\*\*\s*\|", line)),
-        None,
-    )
-    assert (
-        step1_dev_row is not None
-    ), f"{skill_name} must contain Step 1 in Development Steps table"
-    assert "reviewer bot" in step1_dev_row.lower() and "bypass" in step1_dev_row.lower()
-
-    step11_dev_row = next(
-        (line for line in lines if re.search(r"\|\s*\*\*11\*\*\s*\|", line)),
-        None,
-    )
-    assert (
-        step11_dev_row is not None
-    ), f"{skill_name} must contain Step 11 in Development Steps table"
-    assert "selected reviewer bot" in step11_dev_row.lower()
+    assert "Exit 11/30" in loop and "forbids done" in loop
+    assert "review_target_sha" in loop and "orchestune-review-judgments" in loop
 
 
 def test_issue_footprint_example_selects_file_reservation():
