@@ -199,12 +199,14 @@ def scoped_command_timeout(
 
 
 def scope_bound_applies(own_timeout: float | None, effective: float | None) -> bool:
-    """Whether the scope (not the caller's own timeout) set ``effective``."""
-    return (
-        active_scope() is not None
-        and effective is not None
-        and (own_timeout is None or effective < own_timeout)
-    )
+    """Whether a timeout of ``effective`` seconds must become an execution signal.
+
+    Inside a scope *every* timeout does, whichever bound was smaller: a caller's own
+    limit equal to or below the scope's must not let a timed-out write be absorbed as
+    an ordinary ``TimeoutExpired`` by best-effort handlers. Outside a scope the
+    caller's exception is left alone.
+    """
+    return active_scope() is not None and effective is not None
 
 
 def command_timeout_signal(

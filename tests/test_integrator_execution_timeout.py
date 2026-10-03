@@ -231,6 +231,28 @@ class TestConfirmedTimeout:
         assert _worktree_removed(one_task)
         assert load_holds(tmp_path) == []
 
+    def test_a_failed_worktree_removal_is_reported_not_silent_or_fatal(
+        self, integrator_env: IntegratorEnv, tmp_path: Path, capsys: Any
+    ) -> None:
+        integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
+
+        def handler(args: list[str]) -> Any:
+            if args[:3] == ["git", "worktree", "remove"]:
+                raise subprocess.CalledProcessError(1, args, stderr=b"busy")
+            if args[:3] == ["git", "rev-parse", "HEAD"]:
+                return subprocess.CompletedProcess(args, 0, stdout=f"{PRE_MERGE_SHA}\n")
+            return None
+
+        integrator_env.stub_git(handler)
+
+        res = _integrator(tmp_path, ScriptedRunner(ProcessOutcome.TIMED_OUT)).run()
+
+        # The result is already saved and the processes stopped: still a clean timeout.
+        assert res["status"] == "execution_timed_out"
+        assert "could not remove the temporary integration worktree" in (
+            capsys.readouterr().err
+        )
+
     def test_the_worktree_is_removed_only_after_the_result_is_saved(
         self, one_task: IntegratorEnv, fake_forge: MagicMock, tmp_path: Path
     ) -> None:

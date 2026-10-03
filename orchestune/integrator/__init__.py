@@ -83,8 +83,15 @@ def _remove_temp_worktree(ctx: IntegrationContext) -> None:
                 cwd=ctx.original_root,
                 check=True,
             )
-        except (Exception, ExecutionInterrupt):
-            pass
+        except (Exception, ExecutionInterrupt) as error:
+            # Best effort, as before #820: the attempt's result is already saved and its
+            # processes stopped, so a leftover worktree holds no unique evidence and is
+            # reclaimed on a later run. Say so instead of failing silently.
+            print(
+                "Warning: could not remove the temporary integration worktree "
+                f"{ctx.temp_worktree_path}: {error}",
+                file=sys.stderr,
+            )
 
 
 class IntegrationPipeline(IntegrationComponent):

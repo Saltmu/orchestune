@@ -562,11 +562,24 @@ class TestGitHubForgeExecutionScope:
             except Exception:  # noqa: BLE001
                 pytest.fail("the scoped timeout was swallowed by `except Exception`")
 
-    def test_the_forges_own_timeout_keeps_its_existing_exception(self, gh_run):
-        from orchestune.infra.execution_deadline import activate_scope
+    def test_a_forge_timeout_inside_a_scope_is_promoted_even_when_it_is_smaller(
+        self, gh_run
+    ):
+        from orchestune.infra.execution_deadline import (
+            ExecutionCommandTimeout,
+            activate_scope,
+        )
 
         gh_run.side_effect = subprocess.TimeoutExpired(["gh"], 4)
-        with activate_scope(self._scope()), pytest.raises(subprocess.TimeoutExpired):
+        with activate_scope(self._scope()), pytest.raises(ExecutionCommandTimeout):
+            try:
+                GitHubForge(timeout_seconds=4)._run(["gh", "issue", "list"])
+            except Exception:  # noqa: BLE001
+                pytest.fail("the timed-out write was swallowed by `except Exception`")
+
+    def test_the_forges_own_timeout_keeps_its_exception_outside_a_scope(self, gh_run):
+        gh_run.side_effect = subprocess.TimeoutExpired(["gh"], 4)
+        with pytest.raises(subprocess.TimeoutExpired):
             GitHubForge(timeout_seconds=4)._run(["gh", "issue", "list"])
 
 
