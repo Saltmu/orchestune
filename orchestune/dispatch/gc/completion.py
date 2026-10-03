@@ -54,12 +54,24 @@ from orchestune.dispatch.gc.git import (
 )
 from orchestune.dispatch.gc.handoff import HandoffForge, _verify_outcome
 from orchestune.dispatch.gc.outcome_decision import (
+    RetryKind,
     _decide_action_from_outcome,
     _get_review_timeout_retry_state,
     _is_handoff_ready,
     _is_handoff_retained_dirty,
+    read_retry_state,
+    write_retry_state,
 )
 from orchestune.dispatch.gc.prior_merge import decide_prior_parent_merge_completion
+from orchestune.dispatch.retry_policy import (
+    DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS,
+    RetryDisposition,
+    RetryPolicy,
+    RetryState,
+    early_death_policy,
+    plan_retry,
+    review_timeout_policy,
+)
 from orchestune.dispatch.rules import NotNeededReviewDispatcher
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
@@ -189,7 +201,7 @@ def _decide_completed_worktree_outcome(
     repository_root: str | Path | None = None,
     forge: Forge | None = None,
     run_state: RunState | None = None,
-    max_review_timeout_retries: int = 2,
+    max_review_timeout_retries: int = DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS,
     issue: IssueRecord | None = None,
 ) -> CompletedWorktreeDecision:
     subtask_id = active_task.subtask_id if active_task else ""
@@ -410,29 +422,17 @@ def _reserve_backoff_retry(
     run_state: RunState,
     issue_number: int,
     now: float,
-    attr_count: str,
-    attr_at: str,
-    attr_pending: str,
-    max_retries: int,
-    backoff_seconds: float,
-) -> tuple[int, float] | None:
+    kind: RetryKind,
+    policy: RetryPolicy,
+) -> RetryState | None:
     previous = run_state.task_reclaim_counts.get(issue_number)
-    retries = getattr(previous, attr_count, 0) if previous is not None else 0
-    pending = getattr(previous, attr_pending, False) if previous is not None else False
-    if retries >= max_retries and not pending:
+    plan = plan_retry(policy, read_retry_state(previous, kind), now=now)
+    if plan.disposition is RetryDisposition.EXHAUSTED:
         return None
-    retry_count = retries if pending else retries + 1
-    retry_at = (
-        getattr(previous, attr_at, 0.0)
-        if pending and previous is not None
-        else now + backoff_seconds * 2 ** (retry_count - 1)
-    )
     record = previous or TaskReclaimRecord()
-    setattr(record, attr_count, retry_count)
-    setattr(record, attr_at, retry_at)
-    setattr(record, attr_pending, True)
+    write_retry_state(record, kind, plan.state)
     run_state.task_reclaim_counts[issue_number] = record
-    return retry_count, retry_at
+    return plan.state
 
 
 def _publish_requeue(
@@ -472,28 +472,20 @@ def _apply_backoff_retry(
     config: DispatcherConfig,
     run_state: RunState,
     now: float,
-    spec: tuple[str, int, int, float, str, str],
+    spec: tuple[RetryKind, RetryPolicy, int, str, str],
     open_prs: Sequence[PrRecord] | None = None,
     on_requeue: Callable[[], None] | None = None,
 ) -> dict | None:
-    prefix, max_retries, total_allowed, backoff, reason, action = spec
-    res = _reserve_backoff_retry(
-        run_state,
-        active.core.issue_number,
-        now,
-        f"{prefix}_count",
-        f"{prefix}_at",
-        f"{prefix}_pending",
-        max_retries,
-        backoff,
+    kind, policy, total_allowed, reason, action = spec
+    reserved = _reserve_backoff_retry(
+        run_state, active.core.issue_number, now, kind, policy
     )
-    if res is None:
+    if reserved is None:
         return None
-    cnt, at = res
     if config.apply:
         comment = (
-            f"{reason}自動再投入します（{cnt}/{total_allowed}回目）。"
-            f"次回起動は指数バックオフ後（Unix時刻 {at:.0f} 以降）です。"
+            f"{reason}自動再投入します（{reserved.count}/{total_allowed}回目）。"
+            f"次回起動は指数バックオフ後（Unix時刻 {reserved.retry_at:.0f} 以降）です。"
         )
         _publish_requeue(
             active, active_task, config, run_state, now, comment, open_prs, on_requeue
@@ -503,7 +495,7 @@ def _apply_backoff_retry(
         "action": action,
         "subtask_id": subtask_id,
         "commit_sha": None,
-        f"{prefix}_at": at,
+        f"{kind}_retry_at": reserved.retry_at,
     }
 
 
@@ -524,11 +516,12 @@ def _apply_early_death_retry(
         or not 0 <= now - active.launch.started_at <= config.early_death_window_seconds
     ):
         return None
-    spec = (
-        "early_death_retry",
+    spec: tuple[RetryKind, RetryPolicy, int, str, str] = (
+        "early_death",
+        early_death_policy(
+            config.max_early_death_retries, config.early_death_backoff_seconds
+        ),
         config.max_early_death_retries,
-        config.max_early_death_retries,
-        config.early_death_backoff_seconds,
         "起動直後にコミットなしでエージェントプロセスが終了したため、一時的な通信障害として",
         "early_death_requeued",
     )
@@ -549,11 +542,12 @@ def _apply_review_timeout_retry(
     """AIレビュー待機タイムアウトを指数バックオフ付きで再投入する。"""
     if active.claim.owner_kind == "interactive":
         return None
-    spec = (
-        "review_timeout_retry",
-        config.max_review_timeout_retries - 1,
+    spec: tuple[RetryKind, RetryPolicy, int, str, str] = (
+        "review_timeout",
+        review_timeout_policy(
+            config.max_review_timeout_retries, config.review_timeout_backoff_seconds
+        ),
         config.max_review_timeout_retries,
-        config.review_timeout_backoff_seconds,
         "AIレビュー待機のタイムアウト（review-timeout）を検知したため、",
         "blocked_review_timeout",
     )

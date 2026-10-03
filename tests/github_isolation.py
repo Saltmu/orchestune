@@ -234,6 +234,11 @@ def _child_environment(explicit: Mapping[str, Any] | None) -> dict[str, str]:
         if value is not None:
             _set_env_value(env, name, value)
 
+    if os.name == "nt":
+        for name in ("SystemRoot", "COMSPEC", "PATHEXT", "SYSTEMDRIVE"):
+            if not _environment_value(env, name) and name in os.environ:
+                _set_env_value(env, name, os.environ[name])
+
     original_path = _environment_value(env, "PATH") or os.environ.get("PATH", "")
     guarded_path = os.pathsep.join(
         part for part in (os.environ.get(_BIN_ENV, ""), original_path) if part

@@ -15,6 +15,8 @@ from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.complete.contracts import DownstreamPolicyRecord
 from orchestune.complete.journal_models import CompletionJournalRecord
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config_values import completion_policy_overrides
+from orchestune.dispatch.gc.outcome_decision import read_retry_state, write_retry_state
 from orchestune.dispatch.gc.policy_discovery import (
     ensure_policy,
     journal_outcome,
@@ -25,6 +27,11 @@ from orchestune.dispatch.gc.policy_discovery import (
 )
 from orchestune.dispatch.gc.policy_effects import apply_effects
 from orchestune.dispatch.gc.policy_review import reconcile_review
+from orchestune.dispatch.retry_policy import (
+    RetryDisposition,
+    plan_retry,
+    review_timeout_policy,
+)
 from orchestune.infra.json_state import write_json_atomic
 from orchestune.infra.process_utils import assert_run_state_lock_held, run_state_lock
 from orchestune.infra.repository_config import find_and_load_config_file
@@ -72,25 +79,25 @@ def _reserve_retry(
     state: RunState, config: DispatcherConfig, issue: int, now: float
 ) -> dict[str, Any]:
     previous = state.task_reclaim_counts.get(issue)
-    count = previous.review_timeout_retry_count if previous else 0
-    pending = previous.review_timeout_retry_pending if previous else False
-    # Existing semantics: the last timeout is terminal, so N allows N-1 retries.
-    if count >= config.max_review_timeout_retries - 1 and not pending:
-        return {"target_label": StatusLabel.BLOCKED_HUMAN_REVIEW, "retry_count": count}
+    plan = plan_retry(
+        review_timeout_policy(
+            config.max_review_timeout_retries, config.review_timeout_backoff_seconds
+        ),
+        read_retry_state(previous, "review_timeout"),
+        now=now,
+    )
+    if plan.disposition is RetryDisposition.EXHAUSTED:
+        return {
+            "target_label": StatusLabel.BLOCKED_HUMAN_REVIEW,
+            "retry_count": plan.state.count,
+        }
     retry = copy.deepcopy(previous) if previous else TaskReclaimRecord()
-    if not pending:
-        retry.review_timeout_retry_count += 1
-        retry.review_timeout_retry_at = (
-            now
-            + config.review_timeout_backoff_seconds
-            * 2 ** (retry.review_timeout_retry_count - 1)
-        )
-    retry.review_timeout_retry_pending = True
+    write_retry_state(retry, "review_timeout", plan.state)
     state.task_reclaim_counts[issue] = retry
     return {
         "target_label": StatusLabel.QUEUED,
-        "retry_count": retry.review_timeout_retry_count,
-        "retry_at": retry.review_timeout_retry_at,
+        "retry_count": plan.state.count,
+        "retry_at": plan.state.retry_at,
     }
 
 
@@ -302,11 +309,7 @@ def standalone_policies(
         / "not_needed_review_state.json",
         forge=forge,
         dispatch_target=target,
-        max_review_timeout_retries=raw.get("max_review_timeout_retries", 2),
-        review_timeout_backoff_seconds=raw.get("review_timeout_backoff_seconds", 60),
-        not_needed_review_timeout_seconds=raw.get(
-            "not_needed_review_timeout_seconds", 86400
-        ),
+        **completion_policy_overrides(raw),
     )
     return process_completion_policies(
         state, config, repository_id=workspace.repository_identity

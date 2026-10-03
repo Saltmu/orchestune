@@ -28,6 +28,7 @@ from orchestune.dag.models import (
 )
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config_values import runtime_tuning_overrides
 from orchestune.dispatch.execution_profiles import (
     ExecutionProfileConfig,
     extract_execution_profile_config,
@@ -541,26 +542,6 @@ def _resolve_and_build_target(
     return dispatch_target
 
 
-def _build_runtime_tuning_kwargs(toml_data: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "max_launches_per_window": toml_data.get("max_launches_per_window"),
-        "window_seconds": toml_data.get("window_seconds", 7200),
-        "deviation_buffer_lines": toml_data.get("deviation_buffer_lines", 5),
-        "max_recompute_retries": toml_data.get("max_recompute_retries", 2),
-        "task_timeout_seconds": toml_data.get("task_timeout_seconds", 7200),
-        "max_task_reclaims": toml_data.get("max_task_reclaims", 3),
-        "early_death_window_seconds": toml_data.get("early_death_window_seconds", 120),
-        "max_early_death_retries": toml_data.get("max_early_death_retries", 2),
-        "early_death_backoff_seconds": toml_data.get("early_death_backoff_seconds", 60),
-        "zombie_gc": toml_data.get("zombie_gc", True),
-        "max_tokens_per_window": toml_data.get("max_tokens_per_window"),
-        "max_tokens_per_task": toml_data.get("max_tokens_per_task"),
-        "not_needed_review_timeout_seconds": toml_data.get(
-            "not_needed_review_timeout_seconds", 86400
-        ),
-    }
-
-
 def _resolve_child_review_gate(args: Any, toml_data: dict[str, Any]) -> str:
     env_gate: str | None = None
     if "ORCHESTUNE_CHILD_REVIEW_GATE" in os.environ:
@@ -609,11 +590,6 @@ def _assemble_dispatcher_config(
     config_kwargs: dict[str, Any] = {
         "parent_issue_number": parent_issue,
         "apply": args.apply if args.apply is not None else toml_data.get("apply", True),
-        "max_concurrent": (
-            args.max_concurrent
-            if args.max_concurrent is not None
-            else toml_data.get("max_concurrent", 2)
-        ),
         **paths,
         "dispatch_target": dispatch_target,
         "profile": args.profile,
@@ -624,11 +600,10 @@ def _assemble_dispatcher_config(
         "execution_profile_config": execution_profile_config,
         "consistency_mode": ConsistencyMode(toml_data.get("consistency_mode", "off")),
         "consistency_repair_allowlist": frozenset(repair_codes),
-        "consistency_max_repair_passes": toml_data.get(
-            "consistency_max_repair_passes", 1
-        ),
-        **_build_runtime_tuning_kwargs(toml_data),
+        **runtime_tuning_overrides(toml_data),
     }
+    if args.max_concurrent is not None:
+        config_kwargs["max_concurrent"] = args.max_concurrent
     return DispatcherConfig(
         **config_kwargs, **({"forge": forge} if forge is not None else {})
     )

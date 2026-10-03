@@ -859,3 +859,69 @@ class TestLegacyCompletionGcExclusion:
             )
 
         assert reclaims == []
+
+
+class TestRetryLimitMeaningPerKind:
+    """#1189: early-death counts retries; review-timeout counts attempts (N-1 requeues)."""
+
+    @staticmethod
+    def _config(tmp_path, fake_forge, **overrides):
+        return DispatcherConfig(
+            parent_issue_number=100,
+            apply=False,
+            early_death_window_seconds=120,
+            run_state_path=tmp_path / "state.json",
+            events_log_path=tmp_path / "events.jsonl",
+            forge=fake_forge,
+            **overrides,
+        )
+
+    @pytest.mark.parametrize(
+        ("configured", "count", "requeued"),
+        [(0, 0, False), (1, 0, True), (1, 1, False), (2, 1, True), (2, 2, False)],
+    )
+    def test_early_death_allows_exactly_the_configured_requeues(
+        self, tmp_path, fake_forge, configured, count, requeued
+    ):
+        from orchestune.dispatch.gc.completion import _apply_early_death_retry
+        from orchestune.ledger.run_state import TaskReclaimRecord
+
+        record = TaskReclaimRecord(early_death_retry_count=count)
+        run_state = RunState(task_reclaim_counts={280: record})
+        config = self._config(
+            tmp_path,
+            fake_forge,
+            max_early_death_retries=configured,
+            early_death_backoff_seconds=60,
+        )
+        event = _apply_early_death_retry(
+            _active(started_at=100.0), _task(), config, run_state, now=110.0
+        )
+        assert (event is not None) is requeued
+        assert record.early_death_retry_count == count + (1 if requeued else 0)
+        if requeued:
+            assert event["early_death_retry_at"] == 110.0 + 60 * 2**count
+
+    @pytest.mark.parametrize(
+        ("configured", "count", "requeued"),
+        [(0, 0, False), (1, 0, False), (2, 0, True), (2, 1, False), (3, 1, True)],
+    )
+    def test_review_timeout_allows_one_fewer_requeue_than_configured(
+        self, tmp_path, fake_forge, configured, count, requeued
+    ):
+        from orchestune.dispatch.gc.completion import _apply_review_timeout_retry
+        from orchestune.ledger.run_state import TaskReclaimRecord
+
+        record = TaskReclaimRecord(review_timeout_retry_count=count)
+        run_state = RunState(task_reclaim_counts={280: record})
+        config = self._config(
+            tmp_path,
+            fake_forge,
+            max_review_timeout_retries=configured,
+            review_timeout_backoff_seconds=60,
+        )
+        event = _apply_review_timeout_retry(
+            _active(), _task(), config, run_state, now=110.0
+        )
+        assert (event is not None) is requeued
+        assert record.review_timeout_retry_count == count + (1 if requeued else 0)

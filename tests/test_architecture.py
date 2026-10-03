@@ -153,6 +153,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.attempt_record",
             "dispatch.config",
             "dispatch.config_loader",
+            "dispatch.config_values",
             "dispatch.report_output",
             "dispatch.conflicts",
             "dispatch.cost_model",
@@ -281,6 +282,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.progress",
             "dispatch.timings",
             "dispatch.result",
+            "dispatch.retry_policy",
             "infra",
             "infra.command_metrics",
             "infra.json_state",
@@ -744,13 +746,37 @@ def test_architecture_docs_document_the_determinism_principle() -> None:
         )
 
 
-def _bounded_recovery_limits(config_source: str) -> set[str]:
+def _module_int_constants(source: str) -> dict[str, int]:
+    """モジュール直下の`NAME = <int>`を集める（既定値の定数参照の解決用）。"""
+    return {
+        node.targets[0].id: node.value.value
+        for node in ast.parse(source).body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, int)
+    }
+
+
+def _bounded_recovery_limits(
+    config_source: str, constants: dict[str, int] | None = None
+) -> set[str]:
     """有限なリトライ／回収設定だけを`DispatcherConfig`から抽出する。
 
     `0` と `None` は既定で無効なタイムアウトを表すため対象外にする。対象の
     命名規約を持つ正の整数の設定が追加された場合、下のregistry完全性テストに
-    より対応する終端動作なしではCIを通せない。
+    より対応する終端動作なしではCIを通せない。既定値は整数リテラル、または
+    `constants`で解決できる定数名（#1189: 再試行既定値は`retry_policy`が所有）。
     """
+
+    def default_value(value: ast.expr | None) -> object:
+        if isinstance(value, ast.Constant):
+            return value.value
+        if isinstance(value, ast.Name):
+            return (constants or {}).get(value.id)
+        return None
+
     tree = ast.parse(config_source)
     config = next(
         node
@@ -763,9 +789,8 @@ def _bounded_recovery_limits(config_source: str) -> set[str]:
         if isinstance(node, ast.AnnAssign)
         and isinstance(node.target, ast.Name)
         and _BOUNDED_RECOVERY_LIMIT_NAME.fullmatch(node.target.id)
-        and isinstance(node.value, ast.Constant)
-        and isinstance(node.value.value, int)
-        and node.value.value > 0
+        and isinstance(default_value(node.value), int)
+        and default_value(node.value) > 0  # type: ignore[operator]
     }
 
 
@@ -784,7 +809,12 @@ def test_bounded_recovery_limit_registry_covers_every_finite_config_setting() ->
     config_source = (PACKAGE_ROOT / "dispatch" / "config.py").read_text(
         encoding="utf-8"
     )
-    assert _bounded_recovery_limits(config_source) == set(BOUNDED_RECOVERY_TERMINALS)
+    retry_source = (PACKAGE_ROOT / "dispatch" / "retry_policy.py").read_text(
+        encoding="utf-8"
+    )
+    assert _bounded_recovery_limits(
+        config_source, _module_int_constants(retry_source)
+    ) == set(BOUNDED_RECOVERY_TERMINALS)
 
 
 def test_bounded_recovery_limit_registry_points_at_terminal_behaviour() -> None:
@@ -811,6 +841,19 @@ class DispatcherConfig:
         "max_missing_retries",
     }
     assert limits - registry == {"max_missing_retries"}
+
+
+def test_bounded_recovery_limit_detection_resolves_constant_defaults() -> None:
+    """#1189: 既定値を定数参照にしても、有限上限の検出から漏れない。"""
+    source = """
+class DispatcherConfig:
+    max_missing_retries: int = DEFAULT_MISSING
+    max_unresolved_retries: int = SOMEWHERE_ELSE
+    task_timeout_seconds: int = DEFAULT_ZERO
+"""
+    constants = _module_int_constants("DEFAULT_MISSING = 3\nDEFAULT_ZERO = 0\n")
+    assert constants == {"DEFAULT_MISSING": 3, "DEFAULT_ZERO": 0}
+    assert _bounded_recovery_limits(source, constants) == {"max_missing_retries"}
 
 
 def test_bounded_recovery_limit_detection_rejects_a_missing_terminal_marker() -> None:
