@@ -16,13 +16,12 @@ This skill acts as a router orchestrating the standard development workflow: des
 > Never add, remove, or modify GitHub Issue or PR labels directly (e.g., never run `gh issue edit --add-label` / `gh issue edit --remove-label`). Label lifecycles and transitions are managed exclusively by `orchestune claim` and the Orchestune engine (Dispatcher and Integrator). Report every task outcome through `orchestune complete`, which posts the canonical Outcome Record to the task Issue.
 
 ## Execution Modes
-
 | Item | Interactive Mode | Non-Interactive Mode (Auto-Dispatch / Existing Issue) |
 | :--- | :--- | :--- |
-| **Plan Approval & Reviewer Selection (Step 1)** | Present to user and wait for approval; ask user to select reviewer bot (Claude/Codex) alongside plan approval | When invoked with an existing Issue or Auto-Dispatch, bypass user approval after writing `<session-dir>/implementation-plan.md` and proceed directly to implementation; resolve reviewer bot from prompt/dispatch (Claude targets → Codex; Codex and `agy` targets → Claude, or explicit `reviewer-bot` setting) |
+| **Plan Approval (Step 1)** | Present plan to user and wait for approval; reviewer selection occurs only after PR creation | When invoked with an existing Issue or Auto-Dispatch, bypass user approval after writing `<session-dir>/implementation-plan.md` and proceed directly to implementation; resolve reviewer bot from prompt/dispatch (Claude targets → Codex; Codex and `agy` targets → Claude, or explicit `reviewer-bot` setting) |
 | **Issue Creation (Step 2)** | Create via selected backend (`gh` CLI or GitHub MCP/Web UI) if needed | Use issue number provided in prompt (skip creation) |
 | **Worktree (Step 2.5)** | Check the initial footprint, then run `orchestune claim <issue_number>` to prepare and enter task worktree (proceed directly if already inside task worktree) | Check the initial footprint, then run `orchestune claim <issue_number>` to prepare and enter task worktree (proceed directly if already inside task worktree) |
-| **Review Execution (Step 11)** | Execute review using reviewer bot selected in Step 1 | Execute review using reviewer bot resolved in Step 1 |
+| **Review Execution (Step 11)** | After Step 10 creates the PR, require explicit `claude` / `codex` / `skip` selection; no inference/default or review, merge, or completion before selection | Use reviewer bot resolved in Step 1; if unresolved, explicitly use `--bot-name skip` and stop for human review at the integration gate |
 | **Escalation** | Prompt user for decision | Run `orchestune complete --issue <N> --result blocked --reason <REASON>` and terminate safely |
 
 ## Fast-Path for Minor Changes (Typo / Docs)
@@ -48,28 +47,25 @@ At session start, inspect and record the execution environment:
 2. **GitHub Backend Selection**: Check `gh auth status` and GitHub MCP capabilities. Select either `gh` CLI or GitHub MCP as the fixed backend for all downstream GitHub operations throughout the session (Step 2 Issue Creation, Step 10 PR Creation, Step 12 Outcome Declaration), and record the choice in `<planning-session-dir>/implementation-plan.md`; migrate it to `<session-dir>/implementation-plan.md` after Step 2.5. If `gh` CLI is unauthenticated or unavailable, use GitHub MCP (or Web UI) without stalling.
 
 ## Initial Footprint (Before Issue Creation or Claim)
-
 In Step 1, list expected changed files; in Step 2, declare them as Footprint YAML in the Issue body. For existing Issues, check/correct the declaration before claim. Follow [the detailed procedure and YAML example](references/worktree.md#initial-footprint-procedure), including the explicit repository-reservation exception for unknown scope. Step 2.6 refines this initial declaration after claim.
 
 ## Development Steps
-
 During the #822 observation period, read [measurement.md](references/measurement.md)
 before Step 2.6 and maintain its record through Steps 10–12, including zero-finding PRs.
 
 | Step | Item | Summary / Command | Reference |
 | :--- | :--- | :--- | :--- |
 | **0** | **Preflight & Requirement Check** | Verify uv, lockfile, gitleaks, `gh auth status`, and GitHub MCP; fix backend. If requirements are already met before claim, run `orchestune complete --issue <N> --result not-needed` from the current checkout and exit without creating a worktree. | - |
-| **1** | **Design & Implementation Plan** | Write `<planning-session-dir>/implementation-plan.md` (preflight, backend, reviewer bot, design, initial footprint above). Ask user for plan & reviewer approval (bypass approval for existing Issue / Auto-Dispatch). | - |
+| **1** | **Design & Implementation Plan** | Write `<planning-session-dir>/implementation-plan.md` (preflight, backend, reviewer bot, design, initial footprint above). Ask user for plan approval; defer reviewer selection until after PR creation (bypass approval for existing Issue / Auto-Dispatch). | - |
 | **2** | **GitHub Issue Creation** | For an existing Issue, verify/correct its footprint before claim. For a new Issue, include the Footprint YAML from the linked procedure and file via the selected backend (`gh issue create --title "..." --body "..."` or GitHub MCP/Web UI). | - |
 | **2.5** | **Worktree Preparation** | Verify the initial footprint above, then run `orchestune claim <issue_number>` to validate, prepare task worktree, and work there (proceed directly if already inside task worktree). Create worktree-local `<session-dir>` and migrate the approved plan before continuing. | [references/worktree.md](references/worktree.md) |
 | **2.6** | **Impact Scope Determination** | Before writing code, reconcile the initial footprint and held reservation, enumerate the references of every symbol you intend to change, classify each as in scope / out of scope with a stated reason, and record the table in `<session-dir>/implementation-plan.md` and the PR body. | [references/impact-scope.md](references/impact-scope.md) |
 | **3–9** | **TDD & Local CI** | Reproducer test, baseline recording, test-driven implementation, local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`). | [references/tdd.md](references/tdd.md) |
 | **10** | **Pull Request Creation** | Fill `.github/pull_request_template.md` and submit via selected backend (`gh pr create` or GitHub MCP/Web UI). | [references/pr.md](references/pr.md) |
-| **11** | **Automated LLM PR Review** | Atomic review trigger, wait, and feedback resolution loop via `scripts/wait_for_review.py` using selected reviewer bot. | [references/review-loop.md](references/review-loop.md) |
+| **11** | **Automated LLM PR Review** | Atomic review trigger, wait, and feedback resolution loop via `scripts/wait_for_review.py` using selected reviewer bot; Step 12 requires per-finding procedure Step 5 and verified `review_target_sha` (Exit 0 is acquisition only; Exit 11/30 or unknown SHA forbids done). | [references/review-loop.md](references/review-loop.md) |
 | **12** | **Outcome Declaration** | From the claimed task worktree, run `orchestune complete --issue <N> --pr <PR> --result done` after review; use the blocked command below if escalation is required. `complete` confirms the result label and saves durable handoff/replay evidence. GC performs downstream policy and physical collection separately. | - |
 
 ### Completion commands
-
 Use `orchestune complete` for every outcome. It creates or reuses the canonical
 Outcome Record in Issue comments; do not compose JSON or post to PR comments.
 Replace placeholders with the task Issue number, PR number, or concrete reason:
