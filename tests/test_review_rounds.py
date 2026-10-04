@@ -364,3 +364,27 @@ def test_real_markers_after_a_list_nested_fenced_example_are_still_read() -> Non
     body = build_trigger_body(reply, "claude", 4, HEAD)
     parsed = parse_trigger({"id": 9, "body": body, "created_at": at(1)})
     assert parsed is not None and parsed.round == 4
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "- example\n- ```\n  code that is never closed",
+        "1. step\n   ```text\n   never closed\n\ntrailing prose",
+        "- ```\n  open\n- another item",
+    ],
+)
+def test_unclosed_list_fence_ends_with_its_list_item(reply: str) -> None:
+    body = build_trigger_body(reply, "claude", 5, HEAD)
+    parsed = parse_trigger({"id": 9, "body": body, "created_at": at(1)})
+    assert parsed is not None and parsed.round == 5
+
+
+def test_list_prefix_cannot_close_a_top_level_fence() -> None:
+    body = f"```\n- ```\n{MARKERS}\n```"
+    assert parse_trigger({"id": 9, "body": body, "created_at": at(1)}) is None
+
+
+def test_blank_lines_do_not_end_a_list_fence() -> None:
+    body = f"- ```\n\n  still code\n{INDENTED_MARKERS}\n  ```"
+    assert parse_trigger({"id": 9, "body": body, "created_at": at(1)}) is None

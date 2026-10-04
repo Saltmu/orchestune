@@ -23,7 +23,7 @@ from orchestune.review.snapshot import (
     normalize_timestamp,
 )
 
-_FENCE = re.compile(r"^\s{0,3}(?:(?:[-*+]|\d+[.)])\s+)?(`{3,}|~{3,})(.*)$")
+_FENCE = re.compile(r"^\s{0,3}((?:[-*+]|\d+[.)])\s+)?(`{3,}|~{3,})(.*)$")
 _TRIGGER_LINE = re.compile(
     r"<!--\s*orchestune:review-trigger bot=(claude|codex)\s*-->", re.I
 )
@@ -68,21 +68,32 @@ def effective_lines(body: str | None) -> list[str]:
     """Column-0 lines outside fenced code (also inside list items) and block quotes.
 
     A fence closes only on the same character, at least as long as the opener and
-    without an info string (CommonMark); anything else inside it stays content. A
-    backtick opener whose info string has a backtick is not a fence at all.
+    without a list prefix or info string (CommonMark); anything else inside it
+    stays content. A backtick opener whose info string has a backtick is not a
+    fence at all. A fence opened inside a list item (a list prefix or indentation)
+    ends at the next non-blank column-0 line, where the item ends.
     """
     lines: list[str] = []
     fence: str | None = None
+    in_container = False
     for raw in (body or "").splitlines():
+        if in_container and raw.strip() and not raw[:1].isspace():
+            fence, in_container = None, False
         opening = _FENCE.match(raw)
         if opening:
-            token, rest = opening[1], opening[2]
+            prefix, token, rest = opening[1], opening[2], opening[3]
             if fence is None:
                 if token[0] != "`" or "`" not in rest:  # a backtick info string
                     fence = token  # makes the line plain text, not a fence opener
+                    in_container = bool(prefix) or raw[:1].isspace()
                     continue
-            elif token[0] == fence[0] and len(token) >= len(fence) and not rest.strip():
-                fence = None
+            elif (
+                not prefix
+                and token[0] == fence[0]
+                and len(token) >= len(fence)
+                and not rest.strip()
+            ):
+                fence, in_container = None, False
                 continue
         stripped = raw.strip()
         # Real markers start at column 0; indentation means a list item, an indented
