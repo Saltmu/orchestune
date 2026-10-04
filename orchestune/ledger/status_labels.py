@@ -5,24 +5,23 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from orchestune.forge import Forge
-from orchestune.labels import StatusLabel
+from orchestune.ledger.status_machine import (
+    ACTIVE_LABELS,
+    ESCALATION_LABELS,
+    plan_transition,
+)
 
 #: 一次status:*ラベル（他のプライマリラベルと排他的に遷移すべきもの）。
 #: 中断した`transition_status_label`呼び出しの取り残しを一括除去する際に使う。
-PRIMARY_STATUS_LABELS = (
-    StatusLabel.IN_PROGRESS,
-    StatusLabel.QUEUED,
-    StatusLabel.BLOCKED,
-)
+#: 役割表(`status_machine.LABEL_ROLES`)のACTIVEから、既存の明示順序で導出する。
+PRIMARY_STATUS_LABELS = ACTIVE_LABELS
 
 #: 人間の確認・手動対応を明示的に要求している終端エスカレーション状態。
 #: GCなどの自動処理がこれらを検知した場合、status:queuedへの書き換えのような
 #: 自動requeueでラベルを上書きしてはならない（人間の確認を経ないまま
 #: 自動的に再起動されてしまうため）。
-TERMINAL_ESCALATION_LABELS = (
-    StatusLabel.BLOCKED_HUMAN_REVIEW,
-    StatusLabel.MANUAL_MERGE_REQUIRED,
-)
+#: 役割表のESCALATIONから、既存の明示順序で導出する。
+TERMINAL_ESCALATION_LABELS = ESCALATION_LABELS
 
 
 def transition_status_label(
@@ -48,13 +47,24 @@ def transition_status_label(
     ローカルを未確定のまま残すと、Issueは新旧両方のラベルを持つため
     `status:in-progress`として発見され続け、次サイクル以降も同じ遷移を
     再試行しながらクオータを占有してしまう。
+
+    #1217: 追加・除去の内容は純粋関数`plan_transition`が決め、ここはそれを
+    Forgeへ適用するだけにする。`old_labels`は既存のIterableのまま1要素ずつ
+    取得し、要素ごとに計画を立てて除去する——追加前の列挙や削除前の全件
+    materializeをすると、ジェネレーターの評価とForge操作の交互実行、および
+    例外時の呼び出し履歴が変わってしまうため。実ラベルを読んで除去対象を
+    補完したり、不正な遷移を拒否したりはしない。
     """
-    forge.add_label(issue_number, new_label)
+    forge.add_label(issue_number, plan_transition(new_label, ()).add)
     if on_label_added is not None:
         on_label_added()
     for old_label in old_labels:
-        if old_label != new_label:
-            forge.remove_label(issue_number, old_label)
+        for label in plan_transition(new_label, (old_label,)).remove:
+            forge.remove_label(issue_number, label)
 
 
-__all__ = ["transition_status_label"]
+__all__ = [
+    "PRIMARY_STATUS_LABELS",
+    "TERMINAL_ESCALATION_LABELS",
+    "transition_status_label",
+]

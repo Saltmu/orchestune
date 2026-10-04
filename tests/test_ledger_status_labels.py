@@ -1,8 +1,24 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import dataclass
+from typing import Any, cast
 from unittest.mock import MagicMock
 
-from orchestune.ledger.status_labels import transition_status_label
+import pytest
+
+from orchestune.forge import Forge
+from orchestune.labels import StatusLabel
+from orchestune.ledger.status_labels import (
+    PRIMARY_STATUS_LABELS,
+    TERMINAL_ESCALATION_LABELS,
+    transition_status_label,
+)
+from orchestune.ledger.status_machine import (
+    LABEL_ROLES,
+    LabelRole,
+    lifecycle_labels,
+)
 
 
 class TestTransitionStatusLabel:
@@ -248,3 +264,271 @@ class TestCompletionTransition:
             on_label_added=lambda: operations.append("callback"),
         )
         assert operations == ["add", "callback", "remove"]
+
+
+def _legacy_transition_status_label(
+    forge: Any,
+    issue_number: int | str,
+    new_label: str,
+    old_labels: Iterable[str],
+    on_label_added: Callable[[], None] | None = None,
+) -> None:
+    """The adapter body as it was before #1217; the behavioural reference."""
+    forge.add_label(issue_number, new_label)
+    if on_label_added is not None:
+        on_label_added()
+    for old_label in old_labels:
+        if old_label != new_label:
+            forge.remove_label(issue_number, old_label)
+
+
+class _Boom(Exception):
+    """Marker raised by injected failures."""
+
+
+class _RecordingForge:
+    """Records every operation in one shared history and injects failures."""
+
+    def __init__(
+        self,
+        history: list[tuple[Any, ...]],
+        fail_add: bool = False,
+        fail_remove: str | None = None,
+    ) -> None:
+        self.history = history
+        self.fail_add = fail_add
+        self.fail_remove = fail_remove
+
+    def add_label(self, issue_number: int | str, label: str) -> None:
+        self.history.append(("add", issue_number, label))
+        if self.fail_add:
+            raise _Boom("add")
+
+    def remove_label(self, issue_number: int | str, label: str) -> None:
+        self.history.append(("remove", issue_number, label))
+        if label == self.fail_remove:
+            raise _Boom("remove")
+
+
+def _recording_forge(history: list[tuple[Any, ...]]) -> Forge:
+    return cast("Forge", _RecordingForge(history))
+
+
+def _tracked(
+    history: list[tuple[Any, ...]], labels: Sequence[str], fail_after: int | None = None
+) -> Iterator[str]:
+    """A lazy label source whose evaluation order is visible in the history."""
+    for index, label in enumerate(labels):
+        if fail_after is not None and index == fail_after:
+            history.append(("iterate-error", index))
+            raise _Boom("iterate")
+        history.append(("yield", label))
+        yield label
+
+
+@dataclass(frozen=True)
+class _Scenario:
+    new_label: str
+    old_labels: tuple[str, ...]
+    fail_add: bool = False
+    fail_remove: str | None = None
+    callback: str | None = None  # None | "ok" | "raises"
+    iterate_fail_after: int | None = None
+
+
+_HISTORY_SCENARIOS = {
+    "success": _Scenario(
+        "status:in-progress", ("status:queued", "status:blocked"), callback="ok"
+    ),
+    "success-without-callback": _Scenario(
+        "status:done", ("status:in-progress", "status:queued")
+    ),
+    "empty-old-labels": _Scenario("status:in-progress", (), callback="ok"),
+    "add-fails": _Scenario(
+        "status:done", ("status:in-progress",), fail_add=True, callback="ok"
+    ),
+    "callback-raises": _Scenario(
+        "status:done", ("status:in-progress", "status:queued"), callback="raises"
+    ),
+    "first-remove-fails": _Scenario(
+        "status:done",
+        ("status:in-progress", "status:queued"),
+        fail_remove="status:in-progress",
+        callback="ok",
+    ),
+    "middle-remove-fails": _Scenario(
+        "status:done",
+        ("status:in-progress", "status:queued", "status:blocked"),
+        fail_remove="status:queued",
+        callback="ok",
+    ),
+    "iterable-fails-midway": _Scenario(
+        "status:done",
+        ("status:in-progress", "status:queued", "status:blocked"),
+        iterate_fail_after=1,
+        callback="ok",
+    ),
+    "iterable-fails-before-first": _Scenario(
+        "status:done", ("status:in-progress",), iterate_fail_after=0, callback="ok"
+    ),
+    "duplicates-are-removed-each-time": _Scenario(
+        "status:done",
+        ("status:queued", "status:queued", "status:blocked", "status:queued"),
+        callback="ok",
+    ),
+    "self-label-is-skipped-but-evaluated": _Scenario(
+        "status:blocked",
+        ("status:queued", "status:blocked", "status:queued"),
+        callback="ok",
+    ),
+    "only-self-label": _Scenario("status:queued", ("status:queued",), callback="ok"),
+    "unknown-labels": _Scenario(
+        "custom:new", ("custom:old", "", "status:unknown", "status:done"), callback="ok"
+    ),
+    "escalation-and-final-labels-are-not-pruned": _Scenario(
+        "status:queued",
+        ("status:done", "status:blocked-human-review"),
+        callback="ok",
+    ),
+}
+
+
+def _run(
+    implementation: Callable[..., None],
+    scenario: _Scenario,
+    old_labels_kind: str,
+) -> tuple[list[tuple[Any, ...]], str | None]:
+    history: list[tuple[Any, ...]] = []
+    forge = _RecordingForge(history, scenario.fail_add, scenario.fail_remove)
+    old_labels: Iterable[str]
+    if old_labels_kind == "generator":
+        old_labels = _tracked(history, scenario.old_labels, scenario.iterate_fail_after)
+    else:
+        old_labels = scenario.old_labels
+    callback: Callable[[], None] | None = None
+    if scenario.callback == "ok":
+        callback = lambda: history.append(("callback",))  # noqa: E731
+    elif scenario.callback == "raises":
+
+        def callback() -> None:
+            history.append(("callback",))
+            raise _Boom("callback")
+
+    error: str | None = None
+    try:
+        implementation(forge, 7, scenario.new_label, old_labels, callback)
+    except _Boom as exc:
+        error = f"_Boom({exc})"
+    return history, error
+
+
+class TestOperationHistoryMatchesLegacyAdapter:
+    @pytest.mark.parametrize("scenario_name", sorted(_HISTORY_SCENARIOS))
+    @pytest.mark.parametrize("old_labels_kind", ["tuple", "generator"])
+    def test_history_and_exception_are_identical(
+        self, scenario_name: str, old_labels_kind: str
+    ) -> None:
+        scenario = _HISTORY_SCENARIOS[scenario_name]
+        if old_labels_kind == "tuple" and scenario.iterate_fail_after is not None:
+            pytest.skip("iterator failures need a lazy Iterable")
+
+        expected = _run(_legacy_transition_status_label, scenario, old_labels_kind)
+        actual = _run(transition_status_label, scenario, old_labels_kind)
+
+        assert actual == expected
+
+    def test_generator_is_evaluated_between_removes_not_before_add(self) -> None:
+        history: list[tuple[Any, ...]] = []
+        forge = _recording_forge(history)
+
+        transition_status_label(
+            forge,
+            7,
+            "status:done",
+            _tracked(history, ("status:queued", "status:blocked")),
+            lambda: history.append(("callback",)),
+        )
+
+        assert history == [
+            ("add", 7, "status:done"),
+            ("callback",),
+            ("yield", "status:queued"),
+            ("remove", 7, "status:queued"),
+            ("yield", "status:blocked"),
+            ("remove", 7, "status:blocked"),
+        ]
+
+    def test_new_label_that_already_exists_is_still_added(self) -> None:
+        history: list[tuple[Any, ...]] = []
+        transition_status_label(
+            _recording_forge(history), 7, "status:blocked", ("status:blocked",)
+        )
+        assert history == [("add", 7, "status:blocked")]
+
+    def test_callback_runs_on_every_successful_add_including_retries(self) -> None:
+        calls: list[str] = []
+        forge = _recording_forge([])
+        for _ in range(2):
+            transition_status_label(
+                forge, 7, "status:done", ("status:queued",), lambda: calls.append("cb")
+            )
+        assert calls == ["cb", "cb"]
+
+    def test_incomplete_old_labels_leave_the_unlisted_label_in_place(self) -> None:
+        # queued + done held, only queued listed: done survives (current behaviour).
+        labels = {"status:queued", "status:done"}
+
+        class _StatefulForge:
+            def add_label(self, _issue: Any, label: str) -> None:
+                labels.add(label)
+
+            def remove_label(self, _issue: Any, label: str) -> None:
+                labels.discard(label)
+
+        transition_status_label(
+            cast("Forge", _StatefulForge()), 7, "status:in-progress", ("status:queued",)
+        )
+
+        assert labels == {"status:done", "status:in-progress"}
+
+
+class TestStatusLabelConstantsAreDerivedFromTheRoleTable:
+    def test_primary_status_labels_keep_type_value_and_order(self) -> None:
+        assert type(PRIMARY_STATUS_LABELS) is tuple
+        assert PRIMARY_STATUS_LABELS == (
+            StatusLabel.IN_PROGRESS,
+            StatusLabel.QUEUED,
+            StatusLabel.BLOCKED,
+        )
+        assert all(type(label) is StatusLabel for label in PRIMARY_STATUS_LABELS)
+
+    def test_terminal_escalation_labels_keep_type_value_and_order(self) -> None:
+        assert type(TERMINAL_ESCALATION_LABELS) is tuple
+        assert TERMINAL_ESCALATION_LABELS == (
+            StatusLabel.BLOCKED_HUMAN_REVIEW,
+            StatusLabel.MANUAL_MERGE_REQUIRED,
+        )
+        assert all(type(label) is StatusLabel for label in TERMINAL_ESCALATION_LABELS)
+
+    def test_constants_agree_with_the_declared_roles(self) -> None:
+        assert set(PRIMARY_STATUS_LABELS) == {
+            label for label, role in LABEL_ROLES.items() if role is LabelRole.ACTIVE
+        }
+        assert set(TERMINAL_ESCALATION_LABELS) == {
+            label for label, role in LABEL_ROLES.items() if role is LabelRole.ESCALATION
+        }
+
+    def test_consistency_kernel_keeps_its_own_seven_lifecycle_contract(self) -> None:
+        from orchestune.consistency.invariants import status as consistency_status
+
+        assert len(consistency_status.PRIMARY_STATUS_LABELS) == 7
+        assert set(consistency_status.PRIMARY_STATUS_LABELS) == set(
+            lifecycle_labels(tuple(StatusLabel))
+        )
+        assert consistency_status.PRIMARY_STATUS_LABELS != PRIMARY_STATUS_LABELS
+        assert set(PRIMARY_STATUS_LABELS) < set(
+            consistency_status.PRIMARY_STATUS_LABELS
+        )
+        assert (
+            consistency_status.TERMINAL_ESCALATION_LABELS == TERMINAL_ESCALATION_LABELS
+        )
