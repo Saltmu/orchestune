@@ -474,7 +474,9 @@ class TestHandleBlockedRecomputeRecovery:
 
         mock_remove.assert_not_called()
         mock_add.assert_not_called()
-        assert result == [{"issue_number": 1, "subtask_id": "task-a"}]
+        assert [event.to_dict() for event in result] == [
+            {"issue_number": 1, "subtask_id": "task-a"}
+        ]
 
     def test_apply_promotes_when_dependencies_are_resolved(self, tmp_path):
         task = _task(
@@ -515,7 +517,9 @@ class TestHandleBlockedRecomputeRecovery:
             ((1, "status:blocked"),),
         ]
         mock_add.assert_called_once_with(1, "status:queued")
-        assert result == [{"issue_number": 1, "subtask_id": "task-a"}]
+        assert [event.to_dict() for event in result] == [
+            {"issue_number": 1, "subtask_id": "task-a"}
+        ]
 
     def _normal_promotion_dependency_result(
         self, tmp_path, *, dependency_labels, confirmed=()
@@ -714,7 +718,9 @@ class TestHandleBlockedRecomputeRecovery:
             ((1, "status:blocked"),),
         ]
         mock_add.assert_called_once_with(1, "status:queued")
-        assert result == [{"issue_number": 1, "subtask_id": "task-a"}]
+        assert [event.to_dict() for event in result] == [
+            {"issue_number": 1, "subtask_id": "task-a"}
+        ]
 
     def test_transient_forge_read_failure_does_not_abort_the_recovery(self):
         """Codex #899 review: a live-verify read failure must fail closed
@@ -749,7 +755,9 @@ class TestHandleBlockedRecomputeRecovery:
 
         # The label mutation and promotion event still happen; only the
         # ctx-side confirmation is withheld.
-        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
+        assert [event.to_dict() for event in events] == [
+            {"issue_number": 1, "subtask_id": "task-a"}
+        ]
         assert ctx.task(1).status_labels == (StatusLabel.BLOCKED,)
 
     def test_active_worktree_entry_holds_instead_of_reclaiming(self):
@@ -811,6 +819,8 @@ class TestHandleBlockedRecomputeRecovery:
 
         # The label mutation and promotion event still happen; only the
         # ctx-side confirmation is withheld, preserving the launch fact.
-        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
+        assert [event.to_dict() for event in events] == [
+            {"issue_number": 1, "subtask_id": "task-a"}
+        ]
         assert ctx.task(1).status_labels == (StatusLabel.BLOCKED,)
         assert ctx.launch_fact(1) is not None

@@ -51,7 +51,7 @@ class TestCollectZombiesAndTimeouts:
             )
 
         assert len(events) == 1
-        assert events[0]["reason"] == "process disappeared"
+        assert events[0].to_dict()["reason"] == "process disappeared"
         assert run_state.active_worktrees == {}
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
@@ -95,7 +95,7 @@ class TestCollectZombiesAndTimeouts:
             )
 
         assert len(events) == 1
-        assert events[0]["reason"] == "claimed but never launched"
+        assert events[0].to_dict()["reason"] == "claimed but never launched"
         assert run_state.active_worktrees == {}
         assert mock_remove.called
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
@@ -168,7 +168,7 @@ class TestCollectZombiesAndTimeouts:
                 run_state, {active.core.issue_number: task}, config
             )
 
-        assert events[0]["reason"] == "timeout exceeded"
+        assert events[0].to_dict()["reason"] == "timeout exceeded"
         assert run_state.active_worktrees == {}
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
@@ -552,8 +552,8 @@ class TestInteractiveOwnershipGcExclusion:
         fake_forge.remove_label.assert_not_called()
         fake_forge.add_label.assert_not_called()
         assert len(events) == 1
-        assert events[0]["action"] == "gc_reclaim_excluded_interactive"
-        assert events[0]["issue_number"] == 280
+        assert events[0].to_dict()["action"] == "gc_reclaim_excluded_interactive"
+        assert events[0].to_dict()["issue_number"] == 280
 
     def test_dispatch_active_is_reclaimed_as_usual(self, tmp_path, fake_forge):
         """owner_kind=dispatch の active は従来どおりプロセス死亡で回収される（対で検証）。"""
@@ -601,7 +601,7 @@ class TestInteractiveOwnershipGcExclusion:
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
         assert len(events) == 1
-        assert events[0]["action"] == "gc_reclaimed"
+        assert events[0].to_dict()["action"] == "gc_reclaimed"
 
     def test_list_unattended_interactive_claims_helper(self):
         """list_unattended_interactive_claims は active 内の owner_kind=interactive をレポート向けに列挙する。"""
@@ -724,7 +724,7 @@ class TestInteractiveOwnershipGcExclusion:
             assert "280" in run_state.active_worktrees
             assert worktree_path.exists()
             assert any(
-                e.get("action") == "gc_reclaim_excluded_interactive"
+                e.action == "gc_reclaim_excluded_interactive"
                 for e in res1.completion_events
             )
 
@@ -733,7 +733,7 @@ class TestInteractiveOwnershipGcExclusion:
             assert "280" in run_state.active_worktrees
             assert worktree_path.exists()
             assert any(
-                e.get("action") == "gc_reclaim_excluded_interactive"
+                e.action == "gc_reclaim_excluded_interactive"
                 for e in res2.completion_events
             )
 
@@ -900,7 +900,7 @@ class TestRetryLimitMeaningPerKind:
         assert (event is not None) is requeued
         assert record.early_death_retry_count == count + (1 if requeued else 0)
         if requeued:
-            assert event["early_death_retry_at"] == 110.0 + 60 * 2**count
+            assert event.retry_at == 110.0 + 60 * 2**count
 
     @pytest.mark.parametrize(
         ("configured", "count", "requeued"),

@@ -5,10 +5,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import replace
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_events import (
+    ActiveReservationHold,
+    CompletionEvent,
+    ForgeFailureCompletion,
+    HandoffCollectionCompletion,
+    HandoffPreviewCompletion,
+    PolicyHoldCompletion,
+)
 from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.gc.collection import GcItemResult, _apply_candidate
 from orchestune.dispatch.gc.external_guard import fresh_external_hold, same_execution
@@ -50,11 +58,7 @@ def collect_confirmed_completion(
     record_completion: Callable[[int], Any],
     task: TaskMetadata | None,
 ) -> ActiveWorktreeRuleOutcome:
-    event = {
-        "issue_number": active.core.issue_number,
-        "worktree_path": active.core.worktree_path,
-        "action": "completion_reserved_hold",
-    }
+    event: CompletionEvent
     try:
         with (
             run_state_lock(config.run_state_path.with_suffix(".lock"))
@@ -77,15 +81,22 @@ def collect_confirmed_completion(
                 or (fresh is not None and not same_execution(fresh, active))
             ):
                 _sync_after_gc(state, config)
-                event["reason"] = "state_changed"
+                event = ActiveReservationHold(
+                    issue_number=active.core.issue_number,
+                    worktree_path=active.core.worktree_path,
+                    reason="state_changed",
+                )
             else:
-                event.update(
-                    _prepare_collection(
-                        state, config, key, fresh, record_completion, task
-                    )
+                event = _prepare_collection(
+                    state, config, key, fresh, record_completion, task
                 )
     except Exception as error:
-        event.update(action="completion_skipped_forge_error", error=str(error))
+        event = ForgeFailureCompletion(
+            issue_number=active.core.issue_number,
+            worktree_path=active.core.worktree_path,
+            operation="completion_collection",
+            error=str(error),
+        )
     return ActiveWorktreeRuleOutcome(completion_event=event, terminal=True)
 
 
@@ -96,14 +107,17 @@ def _prepare_collection(
     active: ActiveWorktree,
     record_completion: Callable[[int], Any],
     task: TaskMetadata | None,
-) -> dict[str, Any]:
+) -> CompletionEvent:
     policies = process_completion_policies(state, config)
     if any(
-        e["issue_number"] == active.core.issue_number
-        and e["action"] == "completion_policy_hold"
+        isinstance(e, PolicyHoldCompletion)
+        and e.issue_number == active.core.issue_number
         for e in policies
     ):
-        return {"action": "completion_reserved_hold"}
+        return ActiveReservationHold(
+            issue_number=active.core.issue_number,
+            worktree_path=active.core.worktree_path,
+        )
     record = next(
         (
             r
@@ -113,13 +127,19 @@ def _prepare_collection(
         None,
     )
     if record is None or journal_outcome(record) is None:
-        return {"action": "completion_reserved_hold"}
+        return ActiveReservationHold(
+            issue_number=active.core.issue_number,
+            worktree_path=active.core.worktree_path,
+        )
     # #1154: journalが確認済みでも、外部実行の停止未確認なら物理回収・解放を保留する。
     hold = fresh_external_hold(active, config, "completion", state)
     if hold is not None:
-        return hold.event()
+        return hold.event(subtask_id=task.subtask_id if task else "")
     if not config.apply:
-        return {"action": "completion_handoff_preview"}
+        return HandoffPreviewCompletion(
+            issue_number=active.core.issue_number,
+            worktree_path=active.core.worktree_path,
+        )
     return _collect(state, config, key, active, record_completion, task)
 
 
@@ -130,12 +150,14 @@ def _collect(
     active: ActiveWorktree,
     record_completion: Callable[[int], Any],
     task: TaskMetadata | None,
-) -> dict[str, Any]:
+) -> CompletionEvent:
     workspace = resolve_claim_workspace(explicit_state_path=config.run_state_path)
     workspace = replace(workspace, worktree_root=config.worktree_root)
     items: list[GcItemResult] = []
     receipts: list[CompletionReceipt] = []
-    event: dict[str, Any] = {}
+    event: CompletionEvent = HandoffPreviewCompletion(
+        issue_number=active.core.issue_number, worktree_path=active.core.worktree_path
+    )
     with run_state_lock(config.run_state_path.with_suffix(".lock")):
         state.recovery_receipts = load_run_state_readonly(
             config.run_state_path
@@ -157,9 +179,25 @@ def _collect(
             state, config.run_state_path, workspace.repository_identity
         )
     if items:
-        event.update(
-            action="completion_handoff_" + items[0].action, reason=items[0].reason
-        )
+        event = _collection_event(active, items[0])
     for receipt in receipts:
         record_completion(receipt.issue_number)
     return event
+
+
+def _collection_event(
+    active: ActiveWorktree, item: GcItemResult
+) -> HandoffCollectionCompletion:
+    return HandoffCollectionCompletion(
+        issue_number=active.core.issue_number,
+        worktree_path=active.core.worktree_path,
+        action=cast(
+            Literal[
+                "completion_handoff_held",
+                "completion_handoff_failed",
+                "completion_handoff_released",
+            ],
+            "completion_handoff_" + item.action,
+        ),
+        reason=item.reason,
+    )

@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_events import WorktreeCompletion
 from orchestune.dispatch.gc.completion import _apply_completed_worktree_outcome
 from orchestune.dispatch.postcycle import _format_event_log_comment
 from orchestune.dispatch.scoring import quota_available
@@ -382,7 +383,7 @@ class TestTaskTokenLimitEscalation:
         )
         event = _apply_completed_worktree_outcome(active, decision, config, task)
 
-        assert event["action"] == "escalated_token_limit_exceeded"
+        assert event.to_dict()["action"] == "escalated_token_limit_exceeded"
         # status:blocked-human-review への変更
         forge.remove_label.assert_called_with(42, "status:in-progress")
         forge.add_label.assert_called_with(42, "status:blocked-human-review")
@@ -475,7 +476,10 @@ class TestTaskTokenLimitEscalation:
             outcome = _rule_completed(ctx, "42", active, task)
 
         assert outcome is not None
-        assert outcome.completion_event["action"] == "escalated_token_limit_exceeded"
+        assert (
+            outcome.completion_event.to_dict()["action"]
+            == "escalated_token_limit_exceeded"
+        )
         # 帳簿からactiveは消え、completed_worktreesにusage付きで記録されていること
         assert "42" not in run_state.active_worktrees
         assert len(run_state.completed_worktrees) == 1
@@ -508,21 +512,24 @@ class TestPostcycleCycleReportFormatting:
             lock_changes={"to_lock": [], "to_unlock": []},
             deviation_events=[],
             completion_events=[
-                {
-                    "issue_number": 10,
-                    "subtask_id": "task-a",
-                    "action": "completed",
-                    "usage": {
-                        "total_tokens": 1500,
-                        "model": "claude-3-7-sonnet-20250219",
-                    },
-                },
-                {
-                    "issue_number": 11,
-                    "subtask_id": "task-b",
-                    "action": "completed",
-                    "usage": None,
-                },
+                WorktreeCompletion(
+                    issue_number=10,
+                    worktree_path="w",
+                    action="completed",
+                    subtask_id="task-a",
+                    usage=Usage(
+                        input_tokens=1000,
+                        output_tokens=500,
+                        total_tokens=1500,
+                        model="claude-3-7-sonnet-20250219",
+                    ),
+                ),
+                WorktreeCompletion(
+                    issue_number=11,
+                    worktree_path="w",
+                    action="completed",
+                    subtask_id="task-b",
+                ),
             ],
             promotion_events=[],
             applied=True,

@@ -41,6 +41,7 @@ from orchestune.dispatch.cycle_action_contracts import (
     StackBase,
 )
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
+from orchestune.dispatch.cycle_events import CompletionEvent, PromotionEvent
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.labels import StatusLabel
@@ -83,13 +84,13 @@ class _FakeCycleActions:
             completion_events=(), deviation_events=(), any_forced_serial=False
         )
 
-    def run_gc(self, events: tuple[dict[str, object], ...]) -> GcPhaseResult:
+    def run_gc(self, events: tuple[CompletionEvent, ...]) -> GcPhaseResult:
         return GcPhaseResult(
-            completion_events=[],
+            completion_events=(),
             consistency=ConsistencyCycleReport(mode=ConsistencyMode.OFF),
         )
 
-    def reconcile_recovery(self) -> tuple[dict[str, object], ...]:
+    def reconcile_recovery(self) -> tuple[PromotionEvent, ...]:
         return ()
 
     def scan_external_locks(self) -> ExternalLockScanResult:
@@ -257,6 +258,7 @@ from orchestune.dispatch.cycle_action_contracts import (
     GcPhaseResult,
     StackBase,
 )
+from orchestune.dispatch.cycle_events import CompletionEvent, PromotionEvent
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.task_metadata import TaskMetadata
@@ -266,10 +268,10 @@ class CompliantActions:
     def process_active_worktrees(self) -> ActivePhaseResult:
         raise NotImplementedError
 
-    def run_gc(self, events: tuple[dict[str, object], ...]) -> GcPhaseResult:
+    def run_gc(self, events: tuple[CompletionEvent, ...]) -> GcPhaseResult:
         raise NotImplementedError
 
-    def reconcile_recovery(self) -> tuple[dict[str, object], ...]:
+    def reconcile_recovery(self) -> tuple[PromotionEvent, ...]:
         raise NotImplementedError
 
     def scan_external_locks(self) -> ExternalLockScanResult:
@@ -294,10 +296,10 @@ class MissingMethodActions:
     def process_active_worktrees(self) -> ActivePhaseResult:
         raise NotImplementedError
 
-    def run_gc(self, events: tuple[dict[str, object], ...]) -> GcPhaseResult:
+    def run_gc(self, events: tuple[CompletionEvent, ...]) -> GcPhaseResult:
         raise NotImplementedError
 
-    def reconcile_recovery(self) -> tuple[dict[str, object], ...]:
+    def reconcile_recovery(self) -> tuple[PromotionEvent, ...]:
         raise NotImplementedError
 
     def scan_external_locks(self) -> ExternalLockScanResult:
@@ -319,10 +321,10 @@ class WrongReturnActions:
     def process_active_worktrees(self) -> GcPhaseResult:
         raise NotImplementedError
 
-    def run_gc(self, events: tuple[dict[str, object], ...]) -> GcPhaseResult:
+    def run_gc(self, events: tuple[CompletionEvent, ...]) -> GcPhaseResult:
         raise NotImplementedError
 
-    def reconcile_recovery(self) -> tuple[dict[str, object], ...]:
+    def reconcile_recovery(self) -> tuple[PromotionEvent, ...]:
         raise NotImplementedError
 
     def scan_external_locks(self) -> ExternalLockScanResult:

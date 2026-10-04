@@ -165,7 +165,7 @@ def test_reconciliation_repairs_verified_merge_and_excludes_same_cycle_launch():
 
     assert result.held_issue_numbers == {101}
     assert result.completed_issue_numbers == {101}
-    assert result.events[0]["action"] == "already_merged"
+    assert result.events[0].to_dict()["action"] == "already_merged"
     forge.add_label.assert_called_once_with(101, StatusLabel.DONE)
     forge.remove_label.assert_called_once_with(101, StatusLabel.QUEUED)
     forge.close_issue.assert_called_once_with(101, "completed")
@@ -180,7 +180,7 @@ def test_reconciliation_dry_run_does_not_mutate_and_reports_the_repair():
         forge, {101: _task()}, apply=False, issues_by_number={101: issue}
     )
 
-    assert result.events[0]["action"] == "already_merged_dry_run"
+    assert result.events[0].to_dict()["action"] == "already_merged_dry_run"
     forge.add_label.assert_not_called()
     forge.add_comment.assert_not_called()
     forge.close_issue.assert_not_called()
@@ -196,7 +196,7 @@ def test_dry_run_uses_initial_evidence_without_second_inspection():
 
     assert result.held_issue_numbers == {101}
     assert result.completed_issue_numbers == {101}
-    assert result.events[0]["action"] == "already_merged_dry_run"
+    assert result.events[0].to_dict()["action"] == "already_merged_dry_run"
     forge.get_issue.assert_not_called()
     forge.list_merged_prs_for_base.assert_called_once_with("parent/issue-100")
     forge.get_issue_last_reopened_at.assert_called_once_with(101)
@@ -254,7 +254,7 @@ def test_apply_revalidation_uses_fresh_reachability_and_holds_if_merge_disappear
 
     assert result.held_issue_numbers == {101}
     assert result.completed_issue_numbers == set()
-    assert result.events[0]["action"] == "prior_merge_changed_before_repair"
+    assert result.events[0].to_dict()["action"] == "prior_merge_changed_before_repair"
     assert forge.is_merge_commit_reachable_from.call_count == 2
     forge.add_label.assert_not_called()
     forge.close_issue.assert_not_called()
@@ -316,7 +316,7 @@ def test_initial_scan_holds_siblings_for_cached_reachability_failure(probe_failu
 
     assert result.held_issue_numbers == {101, 102}
     assert result.completed_issue_numbers == set()
-    assert [event["action"] for event in result.events] == [
+    assert [event.to_dict()["action"] for event in result.events] == [
         "indeterminate",
         "indeterminate",
     ]
@@ -410,7 +410,7 @@ def test_indeterminate_evidence_holds_only_its_own_task_without_mutation():
 
     assert result.held_issue_numbers == {101}
     assert result.completed_issue_numbers == set()
-    assert result.events[0]["action"] == "indeterminate"
+    assert result.events[0].to_dict()["action"] == "indeterminate"
     forge.add_label.assert_not_called()
     forge.close_issue.assert_not_called()
 
@@ -426,7 +426,7 @@ def test_partial_repair_failure_holds_without_marking_dependencies_completed():
 
     assert result.held_issue_numbers == {101}
     assert result.completed_issue_numbers == set()
-    assert result.events[0]["action"] == "already_merged_repair_pending"
+    assert result.events[0].to_dict()["action"] == "already_merged_repair_pending"
 
 
 def test_closed_without_terminal_label_gets_label_normalized_without_reclose():
@@ -507,7 +507,7 @@ def test_closed_label_normalization_failure_holds_without_marking_completed():
 
     assert result.held_issue_numbers == {101}
     assert result.completed_issue_numbers == set()
-    assert result.events[0]["action"] == "already_merged_repair_pending"
+    assert result.events[0].to_dict()["action"] == "already_merged_repair_pending"
     forge.close_issue.assert_not_called()
 
 
@@ -525,7 +525,7 @@ def test_closed_stale_primary_cleanup_failure_holds_for_retry_next_cycle():
 
     assert result.held_issue_numbers == {101}
     assert result.completed_issue_numbers == set()
-    assert result.events[0]["action"] == "already_merged_repair_pending"
+    assert result.events[0].to_dict()["action"] == "already_merged_repair_pending"
     forge.add_label.assert_not_called()
     forge.close_issue.assert_not_called()
 
@@ -616,7 +616,7 @@ def test_initial_scan_shares_parent_history_failure_and_holds_siblings():
     )
 
     assert result.held_issue_numbers == {101, 102}
-    assert [event["action"] for event in result.events] == [
+    assert [event.to_dict()["action"] for event in result.events] == [
         "indeterminate",
         "indeterminate",
     ]
@@ -710,7 +710,7 @@ def test_lazy_reopen_provider_failure_fails_closed_as_indeterminate_without_muta
 
     assert result.held_issue_numbers == {101}
     assert result.completed_issue_numbers == set()
-    assert result.events[0]["action"] == "indeterminate"
+    assert result.events[0].to_dict()["action"] == "indeterminate"
     forge.add_label.assert_not_called()
     forge.close_issue.assert_not_called()
 

@@ -41,6 +41,12 @@ from orchestune.dispatch.cycle_context import (
     _fetch_issues,
 )
 from orchestune.dispatch.cycle_context_state import RecordStatus
+from orchestune.dispatch.cycle_events import (
+    ActiveReservationHold,
+    CompletionEvent,
+    DeviationEvent,
+    PromotionEvent,
+)
 from orchestune.dispatch.cycle_records import _on_status_transition_verified
 from orchestune.dispatch.escalation import _rule_changes_requested
 from orchestune.dispatch.execution_repair import DispatchRepairExecutorAdapter
@@ -143,7 +149,7 @@ _MAIN_ACTIVE_WORKTREE_RULES = RuleChain(
 
 def _run_active_worktree_rules(
     ctx: _RuleExecutionContext,
-) -> tuple[list[dict], list[dict], bool]:
+) -> tuple[list[CompletionEvent], list[DeviationEvent], bool]:
     """active worktreeを優先順位付きRuleChainで評価する。
 
     完了したentryは以後の判定を行わず、完了receiptはcontextのrecord/queryが
@@ -163,11 +169,10 @@ def _run_active_worktree_rules(
             ctx.run_state, active.core.issue_number, ctx.config.run_state_path
         ):
             aggregates.completion_events.append(
-                {
-                    "issue_number": active.core.issue_number,
-                    "worktree_path": active.core.worktree_path,
-                    "action": "completion_reserved_hold",
-                }
+                ActiveReservationHold(
+                    issue_number=active.core.issue_number,
+                    worktree_path=active.core.worktree_path,
+                )
             )
             continue
         active_task = ctx.queries.task(active.core.issue_number)
@@ -349,7 +354,7 @@ class CycleActionAdapter:
         self._config = config
         self._now = now
         self._view: CycleContext | None = None
-        self._completion_events: list[dict] = []
+        self._completion_events: list[CompletionEvent] = []
 
     def bind_context(self, view: CycleContext) -> None:
         """全portで共有する具体的な`CycleContext`を一度だけ束縛する。
@@ -399,7 +404,7 @@ class CycleActionAdapter:
             any_forced_serial=any_forced_serial,
         )
 
-    def run_gc(self, events: tuple[dict[str, object], ...]) -> GcPhaseResult:
+    def run_gc(self, events: tuple[CompletionEvent, ...]) -> GcPhaseResult:
         view = self._bound_view()
         tasks_by_issue = {task.issue_number: task for task in view.tasks()}
         result = run_gc_phase(
@@ -410,7 +415,7 @@ class CycleActionAdapter:
             view.pull_requests(),
             now=self._now,
         )
-        self._completion_events = result.completion_events
+        self._completion_events = list(result.completion_events)
         return result
 
     def scan_external_locks(self) -> ExternalLockScanResult:
@@ -526,7 +531,7 @@ class CycleActionAdapter:
         )
         return tuple(launched)
 
-    def reconcile_recovery(self) -> tuple[dict[str, object], ...]:
+    def reconcile_recovery(self) -> tuple[PromotionEvent, ...]:
         """通常cycleのpost-GC復帰を、束縛済みcontextの確認済み事実で処理する。"""
         ctx = self._bound_view()
         issues = _IssueRecordsView(ctx.issue_records())

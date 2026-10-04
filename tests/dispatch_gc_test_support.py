@@ -13,6 +13,7 @@ footprint）への薄い上書きと、GC固有の実行ヘルパーだけを持
 from collections.abc import Sequence
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_events import CompletionEvent, WorktreeCompletionHold
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _reclaim_candidate_from_command,
@@ -56,22 +57,23 @@ def run_gc_reclaims(
     config: DispatcherConfig,
     held_worktree_paths: set[str] | None = None,
     open_prs: Sequence[PrRecord] | None = None,
-) -> list[dict]:
+) -> list[CompletionEvent]:
     hold_events = [
-        {
-            "action": "completion_skipped_dirty_worktree",
-            "worktree_path": path,
-        }
+        WorktreeCompletionHold(
+            issue_number=0,
+            worktree_path=path,
+            action="completion_skipped_dirty_worktree",
+        )
         for path in sorted(held_worktree_paths or ())
     ]
     outcome = run_gc_phase(
         run_state,
         tasks_by_issue,
         config,
-        hold_events,
+        list[CompletionEvent](hold_events),
         open_prs=open_prs,
     )
-    return outcome.completion_events[len(hold_events) :]
+    return list(outcome.completion_events[len(hold_events) :])
 
 
 def decide_gc_reclaims(

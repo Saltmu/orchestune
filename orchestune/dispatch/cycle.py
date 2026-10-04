@@ -73,6 +73,14 @@ from orchestune.dispatch.cycle_context import (
     _fetch_issues,
     discard_reclaim_counts_for_closed_issues,
 )
+from orchestune.dispatch.cycle_events import (
+    CompletionEvent,
+    DeviationEvent,
+    ForgeFailureCompletion,
+    PriorMergeEvidenceCompletion,
+    PromotionEvent,
+    WorktreeCompletionHold,
+)
 from orchestune.dispatch.cycle_execution import execute_cycle, execute_pipeline
 from orchestune.dispatch.cycle_report import (
     CycleReport,
@@ -85,9 +93,6 @@ from orchestune.dispatch.cycle_report import (
 )
 from orchestune.dispatch.cycle_state_changes import (
     _event_changes as _event_changes,
-)
-from orchestune.dispatch.cycle_state_changes import (
-    _event_issue_number as _event_issue_number,
 )
 from orchestune.dispatch.cycle_state_changes import (
     _lock_state_changes as _lock_state_changes,
@@ -484,8 +489,8 @@ def _status_repair_commands(
 
 def _promotion_events(
     commands: tuple[RepairCommand, ...], adapter: _DispatchConsistencyAdapter
-) -> list[dict[str, object]]:
-    events: list[dict[str, object]] = []
+) -> list[PromotionEvent]:
+    events: list[PromotionEvent] = []
     for command in commands:
         if command.subject_id is None:
             continue
@@ -495,7 +500,9 @@ def _promotion_events(
             task = None
         if task is not None:
             events.append(
-                {"issue_number": task.issue_number, "subtask_id": task.subtask_id}
+                PromotionEvent(
+                    issue_number=task.issue_number, subtask_id=task.subtask_id
+                )
             )
     return events
 
@@ -556,7 +563,7 @@ def _run_status_repair_boundary(
     ctx: CycleContext,
     config: DispatcherConfig,
     cycle_state: _RepairCycleState,
-) -> list[dict[str, object]]:
+) -> list[PromotionEvent]:
     """Run one status finding family through Supervisor and typed executor."""
     cached_adapter, fresh_adapter = _status_boundary_adapters(
         issues=issues,
@@ -706,7 +713,7 @@ def _finish_consistency_runtime(
         return
     runtime.supervisor.targeted_scan(
         "pipeline",
-        _pipeline_state_changes(report, ctx, now),
+        _pipeline_state_changes(report, now),
         observer=runtime.fresh_adapter,
         deriver=runtime.fresh_adapter,
     )
@@ -822,7 +829,7 @@ def _run_pre_scheduling_reconciliation(
     run_state: RunState,
     config: DispatcherConfig,
     repair_cycle: _RepairCycleState,
-) -> tuple[list[dict[str, object]], ExternalLockScanResult]:
+) -> tuple[list[PromotionEvent], ExternalLockScanResult]:
     promotion_events = _run_status_repair_boundary(
         "status-blocked-promotion",
         BLOCKED_WITH_RESOLVED_DEPENDENCIES,
@@ -850,9 +857,9 @@ def _pipeline_report(
     scheduling: SchedulingPhaseResult,
     lock_result: ExternalLockScanResult,
     *,
-    deviation_events: list[dict[str, object]],
-    completion_events: list[dict[str, object]],
-    promotion_events: list[dict[str, object]],
+    deviation_events: list[DeviationEvent],
+    completion_events: list[CompletionEvent],
+    promotion_events: list[PromotionEvent],
     applied: bool,
 ) -> CycleReport:
     return CycleReport(
@@ -876,7 +883,8 @@ def _pipeline_report(
         forge_warnings=[
             event
             for event in completion_events
-            if event.get("action") == "completion_skipped_forge_error"
+            if isinstance(event, ForgeFailureCompletion | WorktreeCompletionHold)
+            and event.action == "completion_skipped_forge_error"
         ],
     )
 
@@ -884,12 +892,12 @@ def _pipeline_report(
 def _run_gc_reclaim_phase(
     ctx: CycleContext,
     config: DispatcherConfig,
-    completion_events: list[dict[str, object]],
+    completion_events: list[CompletionEvent],
     repair_cycle: _RepairCycleState,
-) -> list[dict[str, object]]:
+) -> list[CompletionEvent]:
     gc_result = ctx.run_gc(tuple(completion_events))
     repair_cycle.add_report(gc_result.consistency)
-    return gc_result.completion_events
+    return list(gc_result.completion_events)
 
 
 def _execute_cycle_pipeline(
@@ -899,7 +907,7 @@ def _execute_cycle_pipeline(
     config: DispatcherConfig,
     now: float,
     repair_cycle: _RepairCycleState,
-    prior_parent_merge_events: tuple[dict[str, object], ...] = (),
+    prior_parent_merge_events: tuple[PriorMergeEvidenceCompletion, ...] = (),
 ) -> CycleReport:
     return execute_pipeline(
         sys.modules[__name__],

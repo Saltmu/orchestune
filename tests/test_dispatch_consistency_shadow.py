@@ -13,6 +13,11 @@ from orchestune.consistency.supervisor import ConsistencyMode, ScanKind
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
 from orchestune.dispatch.cycle_context import IssuesByStatus
+from orchestune.dispatch.cycle_events import (
+    PromotionEvent,
+    RecomputedDeviation,
+    WorktreeCompletion,
+)
 from orchestune.dispatch.cycle_report import CycleReport, build_event_log_entry
 from orchestune.dispatch.dispatcher import _build_arg_parser, main
 from orchestune.dispatch.report import _report_to_dict
@@ -33,7 +38,7 @@ def _issues(issue) -> IssuesByStatus:
 
 
 def _report(
-    *, applied: bool, promotion_events: list[dict] | None = None
+    *, applied: bool, promotion_events: list[PromotionEvent] | None = None
 ) -> CycleReport:
     return CycleReport(
         selected=[],
@@ -272,10 +277,16 @@ def test_shadow_dry_run_ignores_state_changes_that_were_not_applied(
     fake_forge.list_open_prs.return_value = []
     pipeline_report = _report(
         applied=False,
-        promotion_events=[{"subtask_id": "shadow-supervisor"}],
+        promotion_events=[
+            PromotionEvent(issue_number=706, subtask_id="shadow-supervisor")
+        ],
     )
-    pipeline_report.completion_events = [{"issue_number": 706}]
-    pipeline_report.deviation_events = [{"issue_number": 706}]
+    pipeline_report.completion_events = [
+        WorktreeCompletion(issue_number=706, worktree_path="w706", action="completed")
+    ]
+    pipeline_report.deviation_events = [
+        RecomputedDeviation(issue_number=706, deviated_files=(), conflicts=())
+    ]
     pipeline_report.lock_changes = {"to_lock": [task], "to_unlock": [task]}
 
     report = _run_patched_cycle(
@@ -316,7 +327,7 @@ def test_shadow_records_targeted_events_and_authoritative_end_diff(
         pipeline_report=_report(
             applied=True,
             promotion_events=[
-                {"subtask_id": "shadow-supervisor", "action": "promoted"}
+                PromotionEvent(issue_number=706, subtask_id="shadow-supervisor")
             ],
         ),
     )

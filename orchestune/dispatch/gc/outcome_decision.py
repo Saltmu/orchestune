@@ -49,7 +49,17 @@ def _decide_action_from_outcome(
     review_timeout_retry_count: int = 0,
     max_review_timeout_retries: int = DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS,
     review_timeout_retry_pending: bool = False,
-) -> str:
+) -> Literal[
+    "completed",
+    "completed_no_commits",
+    "completed_without_outcome",
+    "not_needed",
+    "escalated_base_branch_red",
+    "blocked_base_branch_red",
+    "escalated_review_timeout",
+    "blocked_review_timeout",
+    "blocked_unknown_reason",
+]:
     if outcome is None:
         return (
             "completed_without_outcome" if has_new_commits else "completed_no_commits"

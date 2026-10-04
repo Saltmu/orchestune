@@ -14,6 +14,14 @@ import pytest
 from orchestune.dag.models import compile_extra_ignore_patterns
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.cycle_events import (
+    AlreadyForcedSerialDeviation,
+    ForcedSerialDeviation,
+    PromotionEvent,
+    RecomputedDeviation,
+    UnknownSubtaskDeviation,
+    WorktreeCompletion,
+)
 from orchestune.dispatch.postcycle import (
     _decide_semantic_review_enabled,
     _poll_pending_not_needed_reviews,
@@ -681,7 +689,11 @@ class TestPostEventLogComment:
             selected=[],
             quota_slots_available=1,
             lock_changes={"to_lock": [], "to_unlock": []},
-            deviation_events=[{"subtask_id": "a", "reason": "footprint deviation"}],
+            deviation_events=[
+                RecomputedDeviation(
+                    issue_number=1, deviated_files=("a.py",), conflicts=()
+                )
+            ],
             completion_events=[],
             promotion_events=[],
             applied=True,
@@ -755,8 +767,15 @@ class TestPostEventLogComment:
             quota_slots_available=1,
             lock_changes={"to_lock": [], "to_unlock": []},
             deviation_events=[],
-            completion_events=[{"subtask_id": "task-c", "issue_number": 7}],
-            promotion_events=[{"subtask_id": "task-p", "issue_number": 8}],
+            completion_events=[
+                WorktreeCompletion(
+                    issue_number=7,
+                    worktree_path="worktree-7",
+                    action="completed",
+                    subtask_id="task-c",
+                )
+            ],
+            promotion_events=[PromotionEvent(issue_number=8, subtask_id="task-p")],
             applied=True,
         )
 
@@ -787,16 +806,8 @@ class TestPostEventLogComment:
             quota_slots_available=1,
             lock_changes={"to_lock": [], "to_unlock": []},
             deviation_events=[
-                {
-                    "issue_number": 5,
-                    "deviated_files": ["a.py"],
-                    "action": "already_forced_serial",
-                },
-                {
-                    "issue_number": 6,
-                    "deviated_files": ["b.py"],
-                    "action": "skipped_unknown_subtask",
-                },
+                AlreadyForcedSerialDeviation(issue_number=5, deviated_files=("a.py",)),
+                UnknownSubtaskDeviation(issue_number=6, deviated_files=("b.py",)),
             ],
             completion_events=[],
             promotion_events=[],
@@ -825,17 +836,10 @@ class TestPostEventLogComment:
             quota_slots_available=1,
             lock_changes={"to_lock": [], "to_unlock": []},
             deviation_events=[
-                {
-                    "issue_number": 5,
-                    "deviated_files": ["a.py"],
-                    "action": "already_forced_serial",
-                },
-                {
-                    "issue_number": 9,
-                    "deviated_files": ["c.py"],
-                    "action": "forced_serial",
-                    "recompute_count": 2,
-                },
+                AlreadyForcedSerialDeviation(issue_number=5, deviated_files=("a.py",)),
+                ForcedSerialDeviation(
+                    issue_number=9, deviated_files=("c.py",), recompute_count=2
+                ),
             ],
             completion_events=[],
             promotion_events=[],
@@ -867,7 +871,7 @@ class TestPostEventLogComment:
         config.forge.add_comment.assert_called_once()
         posted_issue_number, posted_body = config.forge.add_comment.call_args.args
         assert posted_issue_number == 100
-        assert "footprint deviation" in posted_body
+        assert "recomputed" in posted_body
 
     def test_skips_comment_when_cycle_has_no_events(self, tmp_path):
         """頻繁なディスパッチサイクルで親Issueが空コメントに埋め尽くされる

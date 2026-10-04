@@ -190,7 +190,9 @@ class TestRunDispatchCycleBlockedPromotion:
 
         mock_remove_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:queued")
-        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+        assert [event.to_dict() for event in report.promotion_events] == [
+            {"issue_number": 2, "subtask_id": "task-b"}
+        ]
 
     def test_resolves_depends_on_from_blocked_by(self, tmp_path, fake_forge):
         config = self._config(tmp_path)
@@ -234,7 +236,9 @@ class TestRunDispatchCycleBlockedPromotion:
 
         mock_remove_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:queued")
-        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+        assert [event.to_dict() for event in report.promotion_events] == [
+            {"issue_number": 2, "subtask_id": "task-b"}
+        ]
 
     def test_promotes_blocked_task_when_dependency_done_and_closed(
         self, tmp_path, fake_forge
@@ -280,7 +284,9 @@ class TestRunDispatchCycleBlockedPromotion:
 
         mock_remove_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:queued")
-        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+        assert [event.to_dict() for event in report.promotion_events] == [
+            {"issue_number": 2, "subtask_id": "task-b"}
+        ]
 
     def test_does_not_promote_when_dependency_unresolved(self, tmp_path, fake_forge):
         config = self._config(tmp_path)
@@ -312,7 +318,7 @@ class TestRunDispatchCycleBlockedPromotion:
 
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
-        assert report.promotion_events == []
+        assert [event.to_dict() for event in report.promotion_events] == []
 
     def test_promotes_when_dependency_completes_in_same_cycle(
         self, tmp_path, fake_forge
@@ -393,7 +399,9 @@ class TestRunDispatchCycleBlockedPromotion:
 
         mock_remove_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:queued")
-        assert {"issue_number": 2, "subtask_id": "task-b"} in report.promotion_events
+        assert {"issue_number": 2, "subtask_id": "task-b"} in [
+            event.to_dict() for event in report.promotion_events
+        ]
 
     def test_promotes_when_dependency_completes_via_prior_parent_merge(
         self, tmp_path, fake_forge
@@ -467,7 +475,9 @@ class TestRunDispatchCycleBlockedPromotion:
         # #859: その完了が同一サイクル内の依存判定へ届き、依存元が昇格する。
         mock_remove_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:queued")
-        assert {"issue_number": 2, "subtask_id": "task-b"} in report.promotion_events
+        assert {"issue_number": 2, "subtask_id": "task-b"} in [
+            event.to_dict() for event in report.promotion_events
+        ]
 
     def test_dry_run_promotion_does_not_call_github(self, tmp_path, fake_forge):
         config = self._config(tmp_path, apply=False)
@@ -506,7 +516,9 @@ class TestRunDispatchCycleBlockedPromotion:
 
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
-        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+        assert [event.to_dict() for event in report.promotion_events] == [
+            {"issue_number": 2, "subtask_id": "task-b"}
+        ]
 
     def test_prior_parent_merge_promotion_is_previewed_without_github_writes(
         self, tmp_path, fake_forge
@@ -577,7 +589,9 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
         mock_close_issue.assert_not_called()
-        assert {"issue_number": 2, "subtask_id": "task-b"} in report.promotion_events
+        assert {"issue_number": 2, "subtask_id": "task-b"} in [
+            event.to_dict() for event in report.promotion_events
+        ]
 
     def test_status_repairs_use_typed_executor_once_at_ordered_boundaries(
         self, tmp_path, fake_forge
@@ -637,7 +651,9 @@ class TestRunDispatchCycleBlockedPromotion:
         ]
         assert labels[2] == ["status:queued"]
         assert labels[3] == ["status:queued"]
-        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+        assert [event.to_dict() for event in report.promotion_events] == [
+            {"issue_number": 2, "subtask_id": "task-b"}
+        ]
 
     def test_yaml_error_transitions_to_blocked(self, tmp_path, fake_forge):
         config = DispatcherConfig(
@@ -786,7 +802,7 @@ class TestBaseBranchRedCycleReconciliation:
             )
             report = run_dispatch_cycle(config)
 
-            assert report.promotion_events == [
+            assert [event.to_dict() for event in report.promotion_events] == [
                 {"issue_number": 1, "subtask_id": "task-a"}
             ]
             mock_remove_label.assert_any_call(1, "ci:base-branch-red")
@@ -844,7 +860,7 @@ class TestBaseBranchRedCycleReconciliation:
             )
             report = run_dispatch_cycle(config)
 
-            assert report.promotion_events == []
+            assert [event.to_dict() for event in report.promotion_events] == []
             mock_remove_label.assert_any_call(1, "ci:base-branch-red")
             mock_add_label.assert_any_call(1, "status:blocked-human-review")
             mock_add_comment.assert_called_once()

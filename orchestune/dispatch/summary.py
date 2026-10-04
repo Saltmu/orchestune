@@ -16,6 +16,10 @@ import dataclasses
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from orchestune.dispatch.cycle_events import (
+    ForgeFailureCompletion,
+    WorktreeCompletionHold,
+)
 from orchestune.dispatch.scoring import (
     REASON_ALREADY_ACTIVE,
     REASON_BLOCKED_RECOMPUTE,
@@ -190,23 +194,26 @@ def render_skipped_markdown(records: list[SkipRecord]) -> list[str]:
     return lines
 
 
-def _warning_text(warning: dict) -> str:
-    issue_number = warning.get("issue_number")
+def _warning_text(warning: ForgeFailureCompletion | WorktreeCompletionHold) -> str:
+    issue_number = warning.issue_number
     subject = f"issue #{issue_number}" if issue_number else "the repository"
-    return (
-        f"forge API call '{warning.get('operation', 'unknown')}' failed for "
-        f"{subject}: {warning.get('error', 'unknown error')}"
-    )
+    operation = warning.operation if warning.operation is not None else "unknown"
+    error = warning.error if warning.error is not None else "unknown error"
+    return f"forge API call '{operation}' failed for " f"{subject}: {error}"
 
 
-def render_forge_warnings_text(warnings: list[dict]) -> list[str]:
+def render_forge_warnings_text(
+    warnings: list[ForgeFailureCompletion | WorktreeCompletionHold],
+) -> list[str]:
     """stderr向けのForge障害要約。ASCIIのみで組む。"""
     return [
         ascii_safe(f"{WARN_PREFIX} {_warning_text(warning)}") for warning in warnings
     ]
 
 
-def render_forge_warnings_markdown(warnings: list[dict]) -> list[str]:
+def render_forge_warnings_markdown(
+    warnings: list[ForgeFailureCompletion | WorktreeCompletionHold],
+) -> list[str]:
     if not warnings:
         return []
     lines = [
@@ -216,9 +223,9 @@ def render_forge_warnings_markdown(warnings: list[dict]) -> list[str]:
         "| --- | --- | --- |",
     ]
     lines.extend(
-        f"| {f'#{n}' if (n := warning.get('issue_number')) else '-'} | "
-        f"`{warning.get('operation', 'unknown')}` | "
-        f"{warning.get('error', 'unknown error')} |"
+        f"| {f'#{warning.issue_number}' if warning.issue_number else '-'} | "
+        f"`{warning.operation if warning.operation is not None else 'unknown'}` | "
+        f"{warning.error if warning.error is not None else 'unknown error'} |"
         for warning in warnings
     )
     lines.append("")

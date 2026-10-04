@@ -217,7 +217,7 @@ def test_dispatcher_and_standalone_reverse_order_keep_review_receipt(
     outcome = collect_confirmed_completion(
         state, config, "250", active, ctx.record_completion, None
     )
-    assert outcome.completion_event["action"] == "completion_handoff_released"
+    assert outcome.completion_event.to_dict()["action"] == "completion_handoff_released"
     assert "250" not in state.active_worktrees
     run_handoff_gc(
         GcRequest(state_path=config.run_state_path), forge_factory=lambda: forge
@@ -382,7 +382,7 @@ def test_repository_mismatch_holds_policy_effects(tmp_path):
     other_repo, _, _ = _create_repo(other)
     config.worktree_root = other_repo / "worktrees"
     events = process_completion_policies(state, config)
-    assert events[0]["action"] == "completion_policy_hold"
+    assert events[0].action == "completion_policy_hold"
     forge.add_label.assert_not_called()
     forge.add_comment.assert_not_called()
 

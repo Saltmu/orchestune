@@ -255,7 +255,7 @@ def test_confirmed_collection_syncs_receipts_before_policy_save(
     result = confirmed.collect_confirmed_completion(
         stale, config, "250", active, lambda _: None, None
     )
-    assert result.completion_event["action"] == "completion_handoff_preview"
+    assert result.completion_event.to_dict()["action"] == "completion_handoff_preview"
 
 
 def test_timeout_uses_receipt_and_preserves_it_across_saves(
@@ -305,7 +305,7 @@ def test_timeout_uses_receipt_and_preserves_it_across_saves(
     )
     with run_state_lock(workspace.lock_path):
         event = _apply_zombie_or_timeout_reclaim(saved, reclaim, config)
-    assert event["action"] == "gc_reclaimed"
+    assert event.to_dict()["action"] == "gc_reclaimed"
     remove.assert_called_once_with(str(worktree))
     after = load_run_state_readonly(workspace.run_state_path)
     assert (

@@ -21,6 +21,7 @@ from orchestune.dependencies.resolution import (
     describe_unresolved_dependency,
 )
 from orchestune.dispatch.cycle_action_contracts import StackBase
+from orchestune.dispatch.cycle_events import DeviationEvent
 from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
     resolve_task_execution_selection,
@@ -345,7 +346,7 @@ def _collect_selection_skips(
 def _filter_deviated_candidates(
     ctx: CycleContext,
     candidates: list[TaskMetadata],
-    deviation_events: list[dict],
+    deviation_events: list[DeviationEvent],
     skips: list[SkipRecord],
 ) -> list[TaskMetadata]:
     undeviated = _filter_deviation_blocked_candidates(
@@ -363,7 +364,7 @@ def _filter_deviated_candidates(
 def run_scheduling_phase(
     ctx: CycleContext,
     lock_result: ExternalLockScanResult,
-    deviation_events: list[dict],
+    deviation_events: list[DeviationEvent],
 ) -> SchedulingPhaseResult:
     """起動候補の確定からクオータ判定・実起動までの一連を行う。
 

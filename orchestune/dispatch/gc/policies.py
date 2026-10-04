@@ -9,13 +9,17 @@ import time
 from contextlib import nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.complete.contracts import DownstreamPolicyRecord
 from orchestune.complete.journal_models import CompletionJournalRecord
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.config_values import completion_policy_overrides
+from orchestune.dispatch.cycle_events import (
+    PolicyHoldCompletion,
+    PolicyProgressCompletion,
+)
 from orchestune.dispatch.gc.outcome_decision import read_retry_state, write_retry_state
 from orchestune.dispatch.gc.policy_discovery import (
     ensure_policy,
@@ -190,13 +194,10 @@ def _process_one(
     config: DispatcherConfig,
     record: CompletionJournalRecord,
     now: float,
-) -> dict[str, Any]:
-    event: dict[str, Any] = {
-        "issue_number": record.issue_number,
-        "completion_id": record.completion_id,
-        "generation_id": record.generation_id,
-        "action": "completion_policy_pending",
-    }
+) -> PolicyProgressCompletion:
+    action: Literal["completion_policy_pending", "completion_policy_applied"] = (
+        "completion_policy_pending"
+    )
     outcome = journal_outcome(record)
     if outcome is None or not _verified_outcome(record, config.resolved_forge):
         raise ValueError("completion evidence mismatch")
@@ -206,16 +207,14 @@ def _process_one(
     ):
         raise ValueError("done publication policy evidence missing")
     if not config.apply:
-        event["reason"] = "preview"
-        return event
+        return _policy_progress_event(record, action, reason="preview")
     if (
         policy_kind(record, outcome) is None and not record.downstream_policy_records
     ) or (
         record.downstream_policy_records
         and all(p.status == "applied" for p in record.downstream_policy_records)
     ):
-        event["action"] = "completion_policy_applied"
-        return event
+        return _policy_progress_event(record, "completion_policy_applied")
     record = _prepare(state, config, record, now)
     # Reserve intent and retry count before any external effect or physical GC.
     update_record(state, record)
@@ -224,8 +223,23 @@ def _process_one(
         if policy.status != "applied":
             record = _apply_policy(state, config, record, policy, now)
     if all(p.status == "applied" for p in record.downstream_policy_records):
-        event["action"] = "completion_policy_applied"
-    return event
+        action = "completion_policy_applied"
+    return _policy_progress_event(record, action)
+
+
+def _policy_progress_event(
+    record: CompletionJournalRecord,
+    action: Literal["completion_policy_pending", "completion_policy_applied"],
+    *,
+    reason: str | None = None,
+) -> PolicyProgressCompletion:
+    return PolicyProgressCompletion(
+        issue_number=record.issue_number,
+        completion_id=record.completion_id,
+        generation_id=record.generation_id,
+        action=action,
+        reason=reason,
+    )
 
 
 def process_completion_policies(
@@ -234,9 +248,9 @@ def process_completion_policies(
     *,
     now: float | None = None,
     repository_id: str | None = None,
-) -> list[dict[str, Any]]:
+) -> list[PolicyProgressCompletion | PolicyHoldCompletion]:
     """Run only matching, label-confirmed journal/receipt generations under one lock."""
-    events = []
+    events: list[PolicyProgressCompletion | PolicyHoldCompletion] = []
     observed = time.time() if now is None else now
     with (
         run_state_lock(config.run_state_path.with_suffix(".lock"))
@@ -270,12 +284,11 @@ def process_completion_policies(
             except Exception as error:
                 _restore_after_failure(state, config, before)
                 events.append(
-                    {
-                        "issue_number": record.issue_number,
-                        "completion_id": record.completion_id,
-                        "action": "completion_policy_hold",
-                        "reason": str(error),
-                    }
+                    PolicyHoldCompletion(
+                        issue_number=record.issue_number,
+                        completion_id=record.completion_id,
+                        reason=str(error),
+                    )
                 )
     return events
 
@@ -311,9 +324,12 @@ def standalone_policies(
         dispatch_target=target,
         **completion_policy_overrides(raw),
     )
-    return process_completion_policies(
-        state, config, repository_id=workspace.repository_identity
-    )
+    return [
+        event.to_dict()
+        for event in process_completion_policies(
+            state, config, repository_id=workspace.repository_identity
+        )
+    ]
 
 
 def _restore_after_failure(

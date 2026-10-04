@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.models import ConsistencyScope, RepairCommand
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
+from orchestune.dispatch.cycle_events import PromotionEvent
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import RunState
 from tests.conftest import make_issue, make_task
@@ -227,7 +228,7 @@ class TestReconcileRecovery:
         ):
             events = adapter.reconcile_recovery()
 
-        assert events == ({"issue_number": 1, "subtask_id": "task-a"},)
+        assert events == (PromotionEvent(issue_number=1, subtask_id="task-a"),)
         assert ctx.task(1).status_labels == (StatusLabel.QUEUED,)
 
     def test_requires_only_bind_context_not_a_populated_active_worktrees(self):

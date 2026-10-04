@@ -42,11 +42,11 @@ def test_dispatcher_enumerates_unclaimed_review_pending_without_worktree(
     ctx = SimpleNamespace(run_state=state, queries=Mock(), config=config)
     events, deviations, serial = _run_active_worktree_rules(ctx)
     assert len(events) == 2 and not deviations and not serial
-    events = [e for e in events if e["action"] == "completion_reserved_hold"]
-    assert events[0]["issue_number"] == 1111
-    assert events[0]["completion_id"] == result.completion_id
-    assert events[0]["reason"] == "not-needed-review-pending"
-    assert "worktree_path" not in events[0]
+    events = [e for e in events if e.to_dict()["action"] == "completion_reserved_hold"]
+    assert events[0].to_dict()["issue_number"] == 1111
+    assert events[0].to_dict()["completion_id"] == result.completion_id
+    assert events[0].to_dict()["reason"] == "not-needed-review-pending"
+    assert "worktree_path" not in events[0].to_dict()
     assert dependency_completion_blocked(state, 1111)
     record = CompletionJournalRecord.from_dict(
         next(iter(state.completion_journal.values()))
@@ -70,5 +70,5 @@ def test_dispatcher_keeps_interrupted_reservation_without_active_worktree(unclai
     assert not result.success
     state = load_run_state_readonly(request.state_path)
     events = unclaimed_completion_events(state)
-    assert events[0]["reason"] == "pending"
+    assert events[0].to_dict()["reason"] == "pending"
     assert dependency_completion_blocked(state, 1111)

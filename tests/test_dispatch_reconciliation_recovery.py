@@ -193,7 +193,9 @@ class TestBaseBranchRedRecovery:
         task = _task(status_labels=("status:blocked",))
         ctx = _ctx(tasks_by_issue={1: task})
         events = _apply_base_branch_red_recovery([decision], ctx, RunState(), config)
-        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
+        assert [event.to_dict() for event in events] == [
+            {"issue_number": 1, "subtask_id": "task-a"}
+        ]
         fake_forge.remove_label.assert_any_call(1, "ci:base-branch-red")
         fake_forge.add_label.assert_called_once_with(1, "status:queued")
         fake_forge.add_comment.assert_called_once()
@@ -295,7 +297,9 @@ class TestBaseBranchRedRecovery:
                 issues_mock, ctx, run_state, config
             )
 
-        assert events == [{"issue_number": 1, "subtask_id": "task-a"}]
+        assert [event.to_dict() for event in events] == [
+            {"issue_number": 1, "subtask_id": "task-a"}
+        ]
         fake_forge.remove_label.assert_any_call(1, "ci:base-branch-red")
         fake_forge.add_label.assert_called_once_with(1, "status:queued")
 

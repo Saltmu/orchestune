@@ -8,6 +8,7 @@ test_dispatch_gc_integration.py を参照。
 
 from unittest.mock import patch
 
+from orchestune.dispatch.cycle_events import WorktreeCompletion, WorktreeCompletionHold
 from orchestune.dispatch.gc import _rule_completed
 from orchestune.models import PrRecord
 from tests.dispatch_gc_test_support import _active, _task
@@ -40,19 +41,19 @@ class TestRuleCompleted:
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.cloud_completion.worktree_has_uncommitted_changes",
                 autospec=True,
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
+                "orchestune.dispatch.gc.cloud_completion.remove_worktree", autospec=True
             ) as mock_remove,
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
         assert outcome is not None
         assert outcome.terminal is True
-        assert outcome.completion_event["action"] == "abandoned_pr_requeued"
+        assert outcome.completion_event.to_dict()["action"] == "abandoned_pr_requeued"
         assert "1" not in ctx.run_state.active_worktrees
         fake_forge.list_prs.assert_called_once_with(state="all")
         mock_remove.assert_called_once_with(active.core.worktree_path)
@@ -130,19 +131,19 @@ class TestRuleCompleted:
                 return_value="stopped",
             ),
             patch(
-                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc.cloud_completion.worktree_has_uncommitted_changes",
                 autospec=True,
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.remove_worktree", autospec=True
+                "orchestune.dispatch.gc.cloud_completion.remove_worktree", autospec=True
             ) as mock_remove,
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
         assert outcome is not None
         assert outcome.terminal is True
-        assert outcome.completion_event["action"] == "abandoned_pr_requeued"
+        assert outcome.completion_event.to_dict()["action"] == "abandoned_pr_requeued"
         assert "1" not in ctx.run_state.active_worktrees
         mock_remove.assert_called_once_with(active.core.worktree_path)
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
@@ -192,13 +193,17 @@ class TestRuleCompleted:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={"action": "completed_no_commits"},
+                return_value=WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completed_no_commits",
+                ),
             ),
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
         assert outcome is not None
-        assert outcome.completion_event["action"] == "completed_no_commits"
+        assert outcome.completion_event.to_dict()["action"] == "completed_no_commits"
         assert "1" not in ctx.run_state.active_worktrees
 
     def test_local_existing_pr_closed_after_launch_is_requeued(self, fake_forge):
@@ -233,7 +238,7 @@ class TestRuleCompleted:
             outcome = _rule_completed(ctx, "1", active, task)
 
         assert outcome is not None
-        assert outcome.completion_event["action"] == "abandoned_pr_requeued"
+        assert outcome.completion_event.to_dict()["action"] == "abandoned_pr_requeued"
 
     def test_all_state_lookup_failure_holds_local_completion_for_retry(
         self, fake_forge
@@ -251,13 +256,17 @@ class TestRuleCompleted:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={"action": "completed_no_commits"},
+                return_value=WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completed_no_commits",
+                ),
             ) as mock_finalize,
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
         assert outcome is not None
-        assert outcome.completion_event == {
+        assert outcome.completion_event.to_dict() == {
             "issue_number": active.core.issue_number,
             "worktree_path": active.core.worktree_path,
             "action": "completion_skipped_forge_error",
@@ -295,7 +304,7 @@ class TestRuleCompleted:
             outcome = _rule_completed(ctx, "1", active, task)
 
         assert outcome is not None
-        assert outcome.completion_event["action"] == "abandoned_pr_requeued"
+        assert outcome.completion_event.to_dict()["action"] == "abandoned_pr_requeued"
         fake_forge.list_prs.assert_called_once_with(state="all")
 
     def test_pending_cloud_completion_status_returns_none(self):
@@ -325,14 +334,21 @@ class TestRuleCompleted:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={"action": "completion_skipped_dirty_worktree"},
+                return_value=WorktreeCompletionHold(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completion_skipped_dirty_worktree",
+                ),
             ),
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
         assert outcome is not None
         assert outcome.terminal is True
-        assert outcome.completion_event["action"] == "completion_skipped_dirty_worktree"
+        assert (
+            outcome.completion_event.to_dict()["action"]
+            == "completion_skipped_dirty_worktree"
+        )
 
     def test_completed_worktree_inherits_base_branch(self, fake_forge):
         active = _active(base_branch="parent-branch")
@@ -350,7 +366,12 @@ class TestRuleCompleted:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={"action": "completed", "commit_sha": "abc123d"},
+                return_value=WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completed",
+                    commit_sha="abc123d",
+                ),
             ),
         ):
             outcome = _rule_completed(ctx, "1", active, task)
@@ -379,7 +400,12 @@ class TestRuleCompleted:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={"action": "completed", "commit_sha": "abc123d"},
+                return_value=WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completed",
+                    commit_sha="abc123d",
+                ),
             ),
         ):
             _rule_completed(ctx, "1", active, task)

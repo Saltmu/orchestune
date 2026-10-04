@@ -11,10 +11,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.gc.completion import (
-    _finalize_abandoned_cloud_worktree,
-    _local_pr_completion_status,
-)
+from orchestune.dispatch.gc.cloud_completion import _finalize_abandoned_cloud_worktree
+from orchestune.dispatch.gc.completion import _local_pr_completion_status
 from orchestune.ledger.run_state import RunState, TaskReclaimRecord
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord
@@ -52,7 +50,7 @@ class TestFinalizeAbandonedCloudWorktree:
         ):
             event = _finalize_abandoned_cloud_worktree(active, task, config)
 
-        assert event["action"] == "abandoned_pr_requeued"
+        assert event.to_dict()["action"] == "abandoned_pr_requeued"
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
         fake_forge.remove_label.assert_any_call(280, "status:in-progress")
         fake_forge.remove_label.assert_any_call(280, "status:blocked")
@@ -83,7 +81,7 @@ class TestFinalizeAbandonedCloudWorktree:
         ):
             event = _finalize_abandoned_cloud_worktree(active, task, config)
 
-        assert event["action"] == "abandoned_pr_requeued"
+        assert event.to_dict()["action"] == "abandoned_pr_requeued"
         fake_forge.add_label.assert_not_called()
         fake_forge.remove_label.assert_not_called()
         fake_forge.add_comment.assert_called_once()
@@ -119,7 +117,7 @@ class TestFinalizeAbandonedCloudWorktree:
                 active, task, config, run_state=run_state
             )
 
-        assert event["action"] == "abandoned_pr_requeued"
+        assert event.to_dict()["action"] == "abandoned_pr_requeued"
         assert run_state.task_reclaim_counts[280].count == 2
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
@@ -157,7 +155,7 @@ class TestFinalizeAbandonedCloudWorktree:
                 active, task, config, run_state=run_state
             )
 
-        assert event["action"] == "escalated_reclaim_limit_exceeded"
+        assert event.to_dict()["action"] == "escalated_reclaim_limit_exceeded"
         assert run_state.task_reclaim_counts[280].count == 3
         fake_forge.add_label.assert_called_once_with(280, "status:blocked-human-review")
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
@@ -202,7 +200,7 @@ class TestFinalizeAbandonedCloudWorktree:
                 on_label_applied=_on_label,
             )
 
-        assert event["action"] == "escalated_reclaim_limit_exceeded"
+        assert event.to_dict()["action"] == "escalated_reclaim_limit_exceeded"
         assert callback_called is True
 
     def test_requeue_triggers_on_label_applied_callback_and_tolerates_comment_failure(
@@ -247,7 +245,7 @@ class TestFinalizeAbandonedCloudWorktree:
                 on_label_applied=_on_label,
             )
 
-        assert event["action"] == "abandoned_pr_requeued"
+        assert event.to_dict()["action"] == "abandoned_pr_requeued"
         assert callback_called is True
         assert run_state.task_reclaim_counts[280].count == 2
 
@@ -294,7 +292,7 @@ class TestFinalizeAbandonedCloudWorktree:
                 on_reclaim_reserved=_on_reserved,
             )
 
-        assert event["action"] == "abandoned_pr_requeued"
+        assert event.to_dict()["action"] == "abandoned_pr_requeued"
         assert order == ["reserved", "label_applied"]
         assert run_state.task_reclaim_counts[280].pending is False
 
@@ -332,7 +330,7 @@ class TestFinalizeAbandonedCloudWorktree:
                 run_state=run_state,
             )
 
-        assert event["action"] == "abandoned_pr_requeued"
+        assert event.to_dict()["action"] == "abandoned_pr_requeued"
         # Should stay 2, not increment to 3
         assert run_state.task_reclaim_counts[280].count == 2
         assert run_state.task_reclaim_counts[280].pending is False

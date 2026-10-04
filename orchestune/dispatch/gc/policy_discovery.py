@@ -9,6 +9,7 @@ from typing import Any
 from orchestune.claim.ownership import owner_token_digest
 from orchestune.complete.contracts import CompleteStage, DownstreamPolicyRecord
 from orchestune.complete.journal_models import CompletionJournalRecord
+from orchestune.dispatch.cycle_events import TokenHoldCompletion
 from orchestune.infra.private_tokens import _read_owner_token, _token_record_path
 from orchestune.infra.process_utils import assert_run_state_lock_held
 from orchestune.ledger.completion_reservations import (
@@ -141,7 +142,7 @@ def policy_candidates(state: RunState) -> list[CompletionJournalRecord]:
 
 def reclaim_completed_tokens(
     state: RunState, state_path: Path, repository_id: str
-) -> list[dict[str, Any]]:
+) -> list[TokenHoldCompletion]:
     """Reclaim a matching credential after receipt persistence and active release."""
     assert_run_state_lock_held(state_path.with_suffix(".lock"))
     events = []
@@ -179,10 +180,9 @@ def reclaim_completed_tokens(
             token_path.unlink()
         except (OSError, ValueError) as error:
             events.append(
-                {
-                    "issue_number": record.issue_number,
-                    "action": "completion_token_hold",
-                    "reason": type(error).__name__,
-                }
+                TokenHoldCompletion(
+                    issue_number=record.issue_number,
+                    reason=type(error).__name__,
+                )
             )
     return events

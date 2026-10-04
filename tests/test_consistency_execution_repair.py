@@ -499,7 +499,7 @@ def test_gc_supervisor_reobserves_the_authoritative_snapshot(tmp_path, fake_forg
         (707,),
         (708,),
     ]
-    assert [event["issue_number"] for event in events] == [707]
+    assert [event.to_dict()["issue_number"] for event in events] == [707]
 
 
 def test_legacy_execution_repair_entrypoints_are_removed():

@@ -382,7 +382,9 @@ def test_gc_reclaim_runs_as_a_supervisor_typed_repair(tmp_path, fake_forge) -> N
     assert [(result.command.code, result.status) for result in results] == [
         (COMMAND_RECLAIM, RepairStatus.APPLIED)
     ]
-    assert [event["action"] for event in outcome.completion_events] == ["gc_reclaimed"]
+    assert [event.to_dict()["action"] for event in outcome.completion_events] == [
+        "gc_reclaimed"
+    ]
     assert run_state.active_worktrees == {}
 
 

@@ -1,11 +1,19 @@
 """Completion values, application context and Forge diagnostics."""
 
 import sys
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import Literal, NamedTuple, TypeGuard
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_events import (
+    CompletionEvent,
+    ForgeFailureCompletion,
+    TaskWorktreeCompletion,
+    WorktreeCompletionAction,
+    WorktreeCompletionHold,
+    WorktreeCompletionHoldAction,
+)
 from orchestune.dispatch.rules import NotNeededReviewDispatcher
 from orchestune.dispatch.summary import WARN_PREFIX, ascii_safe
 from orchestune.ledger.run_state import ActiveWorktree, RunState
@@ -16,7 +24,9 @@ from orchestune.task_metadata import TaskMetadata
 
 @dataclass(frozen=True, slots=True)
 class CompletedWorktreeDecision:
-    action: str
+    action: (
+        WorktreeCompletionAction | WorktreeCompletionHoldAction | Literal["not_needed"]
+    )
     subtask_id: str = ""
     commit_sha: str | None = None
     outcome: OutcomeRecord | None = None
@@ -45,9 +55,15 @@ COMPLETION_HOLD_ACTIONS = frozenset(
 )
 
 
-def is_completion_hold_event(event: Mapping[str, object]) -> bool:
+def is_completion_hold_event(
+    event: CompletionEvent,
+) -> TypeGuard[
+    WorktreeCompletionHold | TaskWorktreeCompletion | ForgeFailureCompletion
+]:
     """Return whether a completion event must be excluded from same-cycle GC."""
-    return event.get("action") in COMPLETION_HOLD_ACTIONS
+    return isinstance(
+        event, WorktreeCompletionHold | TaskWorktreeCompletion | ForgeFailureCompletion
+    ) and (event.action in COMPLETION_HOLD_ACTIONS)
 
 
 class ForgeFailure(NamedTuple):

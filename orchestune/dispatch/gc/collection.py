@@ -10,6 +10,7 @@ from typing import Any
 
 from orchestune.claim.workspace import ClaimWorkspace
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_events import WorktreeCompletion
 from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.gc.external_guard import (
     collection_stop_problem,
@@ -178,7 +179,13 @@ def _updated_state_after_release(
         record = _completed_worktree_record(
             active,
             task,
-            {"action": "already_merged", "commit_sha": outcome.head_sha},
+            WorktreeCompletion(
+                issue_number=active.core.issue_number,
+                worktree_path=active.core.worktree_path,
+                action="already_merged",
+                subtask_id=task.subtask_id if task else None,
+                commit_sha=outcome.head_sha,
+            ),
         )
         completed.append(asdict(record))
     return updated, None

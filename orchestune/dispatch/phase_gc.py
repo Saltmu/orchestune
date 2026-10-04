@@ -34,6 +34,13 @@ from orchestune.dispatch.config import (
     DispatcherConfig,
 )
 from orchestune.dispatch.cycle_action_contracts import GcPhaseResult
+from orchestune.dispatch.cycle_events import (
+    CompletionEvent,
+    ForgeFailureCompletion,
+    StaleEntryDiscardedCompletion,
+    TaskWorktreeCompletion,
+    WorktreeCompletionHold,
+)
 from orchestune.dispatch.execution_repair import (
     DispatchRepairExecutorAdapter,
     RepairCommandHandler,
@@ -101,11 +108,18 @@ def _gc_supervisor() -> ConsistencySupervisor:
     )
 
 
-def _held_worktree_paths(completion_events: Sequence[dict]) -> frozenset[str]:
+def _held_worktree_paths(
+    completion_events: Sequence[CompletionEvent],
+) -> frozenset[str]:
     return frozenset(
-        event["worktree_path"]
+        event.worktree_path
         for event in completion_events
-        if is_completion_hold_event(event) and event.get("worktree_path")
+        if is_completion_hold_event(event)
+        and isinstance(
+            event,
+            WorktreeCompletionHold | TaskWorktreeCompletion | ForgeFailureCompletion,
+        )
+        and event.worktree_path
     )
 
 
@@ -145,7 +159,7 @@ def _reclaim_handler(
     config: DispatcherConfig,
     open_prs: tuple[PrRecord, ...],
     held_paths: frozenset[str],
-    events: list[dict],
+    events: list[CompletionEvent],
     now: float | None,
 ) -> Callable[[RepairCommand], RepairResult]:
     def execute(command: RepairCommand) -> RepairResult:
@@ -194,13 +208,12 @@ def _stale_active_entry(
 
 def _stale_discard_event(
     active: ActiveWorktree, task: TaskMetadata, reason: str
-) -> dict:
-    return {
-        "issue_number": active.core.issue_number,
-        "subtask_id": task.subtask_id,
-        "action": "stale_active_entry_discarded",
-        "reason": reason,
-    }
+) -> StaleEntryDiscardedCompletion:
+    return StaleEntryDiscardedCompletion(
+        issue_number=active.core.issue_number,
+        subtask_id=task.subtask_id,
+        reason=reason,
+    )
 
 
 def _stale_precondition(
@@ -227,7 +240,7 @@ def _execute_stale_reclaim(
     run_state: RunState,
     tasks_by_issue: Mapping[int, TaskMetadata],
     config: DispatcherConfig,
-    events: list[dict],
+    events: list[CompletionEvent],
 ) -> RepairResult | None:
     resolved = _stale_active_entry(command, run_state)
     if resolved is None:
@@ -275,7 +288,7 @@ def _check_interactive_exclusion(
     command: RepairCommand,
     run_state: RunState,
     tasks_by_issue: Mapping[int, TaskMetadata],
-    events: list[dict],
+    events: list[CompletionEvent],
 ) -> RepairResult | None:
     subject_id = command.subject_id
     if subject_id is None:
@@ -305,10 +318,10 @@ def build_gc_reclaim_handler(
     run_state: RunState,
     tasks_by_issue: Mapping[int, TaskMetadata],
     config: DispatcherConfig,
-    completion_events: list[dict],
+    completion_events: list[CompletionEvent],
     open_prs: Sequence[PrRecord] | None = None,
     *,
-    event_sink: list[dict] | None = None,
+    event_sink: list[CompletionEvent] | None = None,
     now: float | None = None,
 ) -> RepairCommandHandler:
     """Bind the shared typed reclaim command to the guarded GC lifecycle."""
@@ -348,7 +361,7 @@ def run_gc_phase(
     run_state: RunState,
     tasks_by_issue: Mapping[int, TaskMetadata],
     config: DispatcherConfig,
-    completion_events: list[dict],
+    completion_events: list[CompletionEvent],
     open_prs: Sequence[PrRecord] | None = None,
     *,
     now: float | None = None,
@@ -358,7 +371,7 @@ def run_gc_phase(
     adapter = _GcReclaimAdapter(run_state, tasks_by_issue, config, prs, observed_now)
     supervisor = _gc_supervisor()
     initial_scan = supervisor.full_scan("gc-reclaim", observer=adapter, deriver=adapter)
-    events: list[dict] = []
+    events: list[CompletionEvent] = []
     executor = DispatchRepairExecutorAdapter(
         {
             COMMAND_RECLAIM: build_gc_reclaim_handler(
@@ -381,7 +394,7 @@ def run_gc_phase(
         max_passes=1,
     )
     return GcPhaseResult(
-        completion_events=[*completion_events, *events],
+        completion_events=tuple([*completion_events, *events]),
         consistency=supervisor.cycle_report(mode=ConsistencyMode.REPAIR),
     )
 

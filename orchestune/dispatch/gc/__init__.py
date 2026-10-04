@@ -11,15 +11,28 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import Literal
+from typing import Literal, cast
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_events import (
+    AbandonmentPersistenceFailureCompletion,
+    ActiveReservationHold,
+    CompletionEvent,
+    ForgeFailureCompletion,
+    TaskWorktreeCompletion,
+    WorktreeCompletionHold,
+    WorktreeCompletionHoldAction,
+)
 from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.external_execution import (
     is_external_execution,
     notify_completed_hold,
     send_hold_to_human_review,
+)
+from orchestune.dispatch.gc.cloud_completion import (
+    _cloud_worktree_completion_status,
+    _finalize_abandoned_cloud_worktree,
 )
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
@@ -27,11 +40,9 @@ from orchestune.dispatch.gc.completion import (
     _active_dispatch_handle,
     _apply_completed_worktree_outcome,
     _call_is_complete,
-    _cloud_worktree_completion_status,
     _decide_completed_worktree_outcome,
     _decide_not_needed_dirty_worktree,
     _fetch_outcome_for_active,
-    _finalize_abandoned_cloud_worktree,
     _finalize_completed_worktree,
     _finalize_not_needed_worktree,
     _is_stale_pr_for_active,
@@ -128,11 +139,10 @@ def _rule_not_needed(
         ctx.run_state, active
     ):
         return ActiveWorktreeRuleOutcome(
-            completion_event={
-                "issue_number": active.core.issue_number,
-                "worktree_path": active.core.worktree_path,
-                "action": "completion_reserved_hold",
-            },
+            completion_event=ActiveReservationHold(
+                issue_number=active.core.issue_number,
+                worktree_path=active.core.worktree_path,
+            ),
             terminal=True,
         )
     if has_completion_reservation(active):
@@ -148,7 +158,9 @@ def _rule_not_needed(
     completion_event = _finalize_not_needed_worktree(
         active, active_task, ctx.config, ctx.not_needed_review_dispatcher
     )
-    if completion_event["action"] in ("not_needed", "not_needed_review_dispatched"):
+    if isinstance(
+        completion_event, TaskWorktreeCompletion
+    ) and completion_event.action in ("not_needed", "not_needed_review_dispatched"):
         if ctx.config.apply:
             if hold := fresh_external_hold(
                 active, ctx.config, "completion", ctx.run_state
@@ -337,10 +349,10 @@ def _record_completed_worktree(
     key: str,
     completion_active: ActiveWorktree,
     active_task: TaskMetadata | None,
-    completion_event: dict,
+    completion_event: CompletionEvent,
 ) -> ActiveWorktreeRuleOutcome:
     """完了（またはトークン上限超過）で終端したworktreeを完了履歴へ退避する。"""
-    action = completion_event["action"]
+    action = completion_event.action
     receipt = (
         CompletionReceipt(issue_number=completion_active.core.issue_number)
         if action in _CONFIRMED_COMPLETION_ACTIONS
@@ -409,7 +421,7 @@ def _apply_stale_active_entry_discard(
     *,
     status_labels: tuple[str, ...] = (),
     subtask_id: str = "",
-    events: list[dict] | None = None,
+    events: list[CompletionEvent] | None = None,
 ) -> bool:
     """#382: 帳簿(run_state)を破棄する前に、対応する物理worktree・プロセスの
     状態を確認し、必要な後始末を行う。
@@ -505,17 +517,16 @@ def _abandoned_worktree_outcome(
             file=sys.stderr,
         )
         return ActiveWorktreeRuleOutcome(
-            completion_event={
-                "issue_number": active.core.issue_number,
-                "subtask_id": active_task.subtask_id if active_task else "",
-                "worktree_path": active.core.worktree_path,
-                "action": "abandonment_skipped_persistence_failure",
-            },
+            completion_event=AbandonmentPersistenceFailureCompletion(
+                issue_number=active.core.issue_number,
+                subtask_id=active_task.subtask_id if active_task else "",
+                worktree_path=active.core.worktree_path,
+            ),
             terminal=True,
         )
 
     if (
-        completion_event["action"]
+        completion_event.action
         in ("abandoned_pr_requeued", "escalated_reclaim_limit_exceeded")
         and ctx.config.apply
         and not is_released()
@@ -590,15 +601,12 @@ def _completion_forge_error_hold(
     #787: どのForge呼び出しがなぜ失敗して保留になったのかをイベントへ載せ、
     サイクルレポートの警告セクションから辿れるようにする。
     """
-    event: dict[str, object] = {
-        "issue_number": active.core.issue_number,
-        "worktree_path": active.core.worktree_path,
-        "action": "completion_skipped_forge_error",
-    }
-    if operation:
-        event["operation"] = operation
-    if error:
-        event["error"] = error
+    event = ForgeFailureCompletion(
+        issue_number=active.core.issue_number,
+        worktree_path=active.core.worktree_path,
+        operation=operation or None,
+        error=error or None,
+    )
     return ActiveWorktreeRuleOutcome(completion_event=event, terminal=True)
 
 
@@ -739,10 +747,10 @@ def _handle_completed_event_outcome(
     key: str,
     completion_active: ActiveWorktree,
     active_task: TaskMetadata | None,
-    completion_event: dict,
+    completion_event: CompletionEvent,
 ) -> ActiveWorktreeRuleOutcome | None:
     """完了イベントのアクションに応じてクリーンアップまたは履歴保存を行う。"""
-    action = completion_event["action"]
+    action = completion_event.action
     if action in (
         "completion_skipped_forge_error",
         "completion_skipped_prior_merge_indeterminate",
@@ -774,9 +782,14 @@ def _handle_completed_event_outcome(
                     completion_event=hold.event(), terminal=True
                 )
             ctx.run_state.active_worktrees.pop(key, None)
-    elif action == "completion_skipped_dirty_worktree":
-        completion_event["action"] = _apply_dirty_worktree_hold(
+    elif action == "completion_skipped_dirty_worktree" and isinstance(
+        completion_event, WorktreeCompletionHold
+    ):
+        new_action = _apply_dirty_worktree_hold(
             ctx, key, completion_active, active_task
+        )
+        completion_event = replace(
+            completion_event, action=cast(WorktreeCompletionHoldAction, new_action)
         )
     return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)
 

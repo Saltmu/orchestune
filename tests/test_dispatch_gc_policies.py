@@ -123,7 +123,7 @@ def test_save_failure_prevents_external_effects(tmp_path, monkeypatch):
         Mock(side_effect=OSError("disk full")),
     )
     events = process_completion_policies(state, config)
-    assert events[0]["action"] == "completion_policy_hold"
+    assert events[0].action == "completion_policy_hold"
     forge.add_label.assert_not_called()
     forge.add_comment.assert_not_called()
     assert 250 not in load_run_state_readonly(config.run_state_path).task_reclaim_counts

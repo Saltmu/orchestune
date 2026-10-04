@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 import os
 import subprocess
@@ -10,6 +9,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dag.graph import recompute_dag_for_footprint_change
@@ -20,6 +20,14 @@ from orchestune.dependencies.policy import (
 )
 from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_events import (
+    AlreadyForcedSerialDeviation,
+    DeviationConflict,
+    DeviationEvent,
+    ForcedSerialDeviation,
+    RecomputedDeviation,
+    UnknownSubtaskDeviation,
+)
 from orchestune.dispatch.execution_profiles import ExecutionSelection
 from orchestune.dispatch.launch_state import update_launch, with_launch
 from orchestune.dispatch.locks import check_footprint_deviation
@@ -126,7 +134,12 @@ def _build_subtasks_for_recompute(
 
 @dataclass
 class FootprintDeviationDecision:
-    action: str
+    action: Literal[
+        "already_forced_serial",
+        "skipped_unknown_subtask",
+        "forced_serial",
+        "recomputed",
+    ]
     subtask_id: str = ""
     recompute_count: int = 0
     conflicts: list[FootprintConflict] = field(default_factory=list)
@@ -203,7 +216,7 @@ def _apply_forced_serial_event(
     active: ActiveWorktree,
     decision: FootprintDeviationDecision,
     config: DispatcherConfig,
-) -> dict:
+) -> int:
     notify_force_serial(
         decision.subtask_id,
         active.core.issue_number,
@@ -221,7 +234,7 @@ def _apply_forced_serial_event(
         update_launch(
             active, replace(active.launch, forced_serial=updated.launch.forced_serial)
         )
-    return {"recompute_count": decision.recompute_count}
+    return decision.recompute_count
 
 
 def _apply_recomputed_event(
@@ -230,7 +243,7 @@ def _apply_recomputed_event(
     decision: FootprintDeviationDecision,
     issue_number_by_subtask_id: dict[str, int],
     config: DispatcherConfig,
-) -> dict:
+) -> tuple[DeviationConflict, ...]:
     for conflict in decision.conflicts:
         notify_recompute(
             conflict,
@@ -250,7 +263,7 @@ def _apply_recomputed_event(
             active,
             replace(active.launch, recompute_count=updated.launch.recompute_count),
         )
-    return {"conflicts": [dataclasses.asdict(c) for c in decision.conflicts]}
+    return tuple(DeviationConflict.from_conflict(c) for c in decision.conflicts)
 
 
 def _apply_footprint_deviation_outcome(
@@ -259,25 +272,34 @@ def _apply_footprint_deviation_outcome(
     decision: FootprintDeviationDecision,
     issue_number_by_subtask_id: dict[str, int],
     config: DispatcherConfig,
-) -> dict:
-    event: dict = {
-        "issue_number": active.core.issue_number,
-        "deviated_files": deviated,
-        "action": decision.action,
-    }
-    if decision.action in ("already_forced_serial", "skipped_unknown_subtask"):
-        return event
+) -> DeviationEvent:
+    common_issue_number = active.core.issue_number
+    common_deviated_files = tuple(deviated)
+    if decision.action == "already_forced_serial":
+        return AlreadyForcedSerialDeviation(
+            issue_number=common_issue_number, deviated_files=common_deviated_files
+        )
+    if decision.action == "skipped_unknown_subtask":
+        return UnknownSubtaskDeviation(
+            issue_number=common_issue_number, deviated_files=common_deviated_files
+        )
 
     if decision.action == "forced_serial":
-        event.update(_apply_forced_serial_event(active, decision, config))
-        return event
-
-    event.update(
-        _apply_recomputed_event(
-            active, deviated, decision, issue_number_by_subtask_id, config
+        recompute_count = _apply_forced_serial_event(active, decision, config)
+        return ForcedSerialDeviation(
+            issue_number=common_issue_number,
+            deviated_files=common_deviated_files,
+            recompute_count=recompute_count,
         )
+
+    conflicts = _apply_recomputed_event(
+        active, deviated, decision, issue_number_by_subtask_id, config
     )
-    return event
+    return RecomputedDeviation(
+        issue_number=common_issue_number,
+        deviated_files=common_deviated_files,
+        conflicts=conflicts,
+    )
 
 
 def _handle_footprint_deviation(
@@ -287,7 +309,7 @@ def _handle_footprint_deviation(
     issue_number_by_subtask_id: dict[str, int],
     config: DispatcherConfig,
     derived_inputs: tuple[SubTask, ...],
-) -> dict:
+) -> DeviationEvent:
     """decide+applyの薄いラッパー（呼び出し互換のため維持）。"""
     decision = _decide_footprint_deviation_outcome(
         active, deviated, tasks_by_issue, config, derived_inputs
@@ -602,7 +624,9 @@ def _rule_footprint_deviation(
         ctx.config,
         ctx.dag_inputs,
     )
-    forced_serial = event["action"] in ("forced_serial", "already_forced_serial")
+    forced_serial = isinstance(
+        event, ForcedSerialDeviation | AlreadyForcedSerialDeviation
+    )
     return ActiveWorktreeRuleOutcome(
         deviation_event=event, forced_serial=forced_serial, terminal=True
     )

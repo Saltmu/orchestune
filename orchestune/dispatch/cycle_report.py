@@ -12,6 +12,13 @@ from orchestune.consistency.supervisor import (
     ConsistencyMode,
     consistency_cycle_to_dict,
 )
+from orchestune.dispatch.cycle_events import (
+    CompletionEvent,
+    DeviationEvent,
+    ForgeFailureCompletion,
+    PromotionEvent,
+    WorktreeCompletionHold,
+)
 from orchestune.dispatch.scoring import SchedulingDecision, decision_to_dict
 from orchestune.dispatch.summary import SkipRecord, skip_record_to_dict
 from orchestune.task_metadata import TaskMetadata
@@ -25,9 +32,9 @@ class CycleReport:
     selected: list[TaskMetadata]
     quota_slots_available: int
     lock_changes: dict[str, list[TaskMetadata]]
-    deviation_events: list[dict]
-    completion_events: list[dict]
-    promotion_events: list[dict]
+    deviation_events: list[DeviationEvent]
+    completion_events: list[CompletionEvent]
+    promotion_events: list[PromotionEvent]
     applied: bool
     # #660: 全候補分の選定理由・rank・推定cost。既定値を持つのは、
     # スケジューリング以外の関心事でCycleReportを組み立てる呼び出し側
@@ -40,7 +47,9 @@ class CycleReport:
     # Issueコメントを投稿しないため、ドライランでの唯一の観測点になる。
     external_lock_conflicts: dict[int, list[dict]] = field(default_factory=dict)
     # #787: Forge API障害で判定を保留した記録。
-    forge_warnings: list[dict] = field(default_factory=list)
+    forge_warnings: list[ForgeFailureCompletion | WorktreeCompletionHold] = field(
+        default_factory=list
+    )
     consistency: ConsistencyCycleReport = field(
         default_factory=lambda: ConsistencyCycleReport(mode=ConsistencyMode.OFF)
     )
@@ -69,9 +78,9 @@ def build_event_log_entry(report: CycleReport, now: float) -> dict:
         "timestamp": now,
         "quota_slots_available": report.quota_slots_available,
         "selected": selected_entries,
-        "deviation_events": report.deviation_events,
-        "completion_events": report.completion_events,
-        "promotion_events": report.promotion_events,
+        "deviation_events": [event.to_dict() for event in report.deviation_events],
+        "completion_events": [event.to_dict() for event in report.completion_events],
+        "promotion_events": [event.to_dict() for event in report.promotion_events],
         "scheduling_decisions": [
             decision_to_dict(decision) for decision in report.scheduling_decisions
         ],
@@ -79,7 +88,7 @@ def build_event_log_entry(report: CycleReport, now: float) -> dict:
         # PR#789レビュー対応(Codex P2): events.jsonlを歴史的成果物として保持する
         # 運用でも、衝突相手のブランチ/PRと衝突ファイルを後から特定できるようにする。
         "external_lock_conflicts": report.external_lock_conflicts,
-        "forge_warnings": report.forge_warnings,
+        "forge_warnings": [event.to_dict() for event in report.forge_warnings],
         "consistency": consistency_cycle_to_dict(report.consistency),
     }
 

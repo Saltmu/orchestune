@@ -26,6 +26,11 @@ from orchestune.dispatch.cycle_context_state import (
     RecordResult,
     _CycleState,
 )
+from orchestune.dispatch.cycle_events import (
+    CompletionEvent,
+    DeviationEvent,
+    PromotionEvent,
+)
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.ledger.completion_reservations import (
     completion_handoff_matches_active,
@@ -121,10 +126,10 @@ class CycleContext(_CycleState):
     def process_active_worktrees(self) -> ActivePhaseResult:
         return self._action_port().process_active_worktrees()
 
-    def run_gc(self, events: tuple[dict[str, object], ...]) -> GcPhaseResult:
+    def run_gc(self, events: tuple[CompletionEvent, ...]) -> GcPhaseResult:
         return self._action_port().run_gc(events)
 
-    def reconcile_recovery(self) -> tuple[dict[str, object], ...]:
+    def reconcile_recovery(self) -> tuple[PromotionEvent, ...]:
         return self._action_port().reconcile_recovery()
 
     def scan_external_locks(self) -> ExternalLockScanResult:
@@ -196,8 +201,8 @@ class ActiveWorktreeRuleOutcome:
     CHANGES_REQUESTEDや自動リベースのチェックは継続する必要がある）。
     """
 
-    completion_event: dict | None = None
-    deviation_event: dict | None = None
+    completion_event: CompletionEvent | None = None
+    deviation_event: DeviationEvent | None = None
     forced_serial: bool = False
     terminal: bool = True
 
@@ -210,8 +215,8 @@ Rule = Callable[
 
 @dataclass
 class _ActiveWorktreeAggregates:
-    completion_events: list[dict] = field(default_factory=list)
-    deviation_events: list[dict] = field(default_factory=list)
+    completion_events: list[CompletionEvent] = field(default_factory=list)
+    deviation_events: list[DeviationEvent] = field(default_factory=list)
     any_forced_serial: bool = False
 
 

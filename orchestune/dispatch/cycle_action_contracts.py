@@ -16,6 +16,11 @@ from orchestune.dag.models import SubTask
 from orchestune.dependencies.assessment import DependencyAssessment
 from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.cycle_context_state import LaunchFact, RecordResult
+from orchestune.dispatch.cycle_events import (
+    CompletionEvent,
+    DeviationEvent,
+    PromotionEvent,
+)
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.ledger.run_state import ActiveWorktree
@@ -28,12 +33,11 @@ from orchestune.task_metadata import CycleTask, TaskMetadata
 class ActivePhaseResult:
     """active worktreeフェーズが返すレポート用イベントと直列化フラグ。
 
-    イベントdictは既存レポート用のコピーであり、内部Task/RunStateへの別名参照を
-    持たない。
+    typed immutable event values contain no aliases to Task/RunState state.
     """
 
-    completion_events: tuple[dict[str, object], ...]
-    deviation_events: tuple[dict[str, object], ...]
+    completion_events: tuple[CompletionEvent, ...]
+    deviation_events: tuple[DeviationEvent, ...]
     any_forced_serial: bool
 
 
@@ -49,7 +53,7 @@ class StackBase:
 class GcPhaseResult:
     """Events and typed repair audit data produced at the GC boundary."""
 
-    completion_events: list[dict]
+    completion_events: tuple[CompletionEvent, ...]
     consistency: ConsistencyCycleReport
 
 
@@ -114,9 +118,9 @@ class CycleActions(Protocol):
 
     def process_active_worktrees(self) -> ActivePhaseResult: ...
 
-    def run_gc(self, events: tuple[dict[str, object], ...]) -> GcPhaseResult: ...
+    def run_gc(self, events: tuple[CompletionEvent, ...]) -> GcPhaseResult: ...
 
-    def reconcile_recovery(self) -> tuple[dict[str, object], ...]: ...
+    def reconcile_recovery(self) -> tuple[PromotionEvent, ...]: ...
 
     def scan_external_locks(self) -> ExternalLockScanResult: ...
 

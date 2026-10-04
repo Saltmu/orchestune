@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from orchestune.consistency.models import RepairStatus
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_events import TaskWorktreeCompletion
 from orchestune.dispatch.gc import (
     _apply_stale_active_entry_discard,
     _rule_not_needed,
@@ -250,7 +251,7 @@ class TestSupervisorOwnedStaleEntry:
         assert [(result.command.code, result.status) for result in results] == [
             ("execution.reclaim", RepairStatus.APPLIED)
         ]
-        assert [event["action"] for event in outcome.completion_events] == [
+        assert [event.to_dict()["action"] for event in outcome.completion_events] == [
             "stale_active_entry_discarded"
         ]
         assert run_state.active_worktrees == {}
@@ -297,7 +298,7 @@ class TestSupervisorOwnedStaleEntry:
             "stale cleanup precondition no longer holds: status:in-progress is live",
         )
         assert run_state.active_worktrees == {"280": active}
-        assert outcome.completion_events == []
+        assert outcome.completion_events == ()
         fake_forge.get_issue_labels.assert_called_with(280)
         kill.assert_not_called()
         remove.assert_not_called()
@@ -339,7 +340,7 @@ class TestSupervisorOwnedStaleEntry:
         assert result.status is RepairStatus.FAILED
         assert result.diagnostics == ("RuntimeError: Forge unavailable",)
         assert run_state.active_worktrees == {"280": active}
-        assert outcome.completion_events == []
+        assert outcome.completion_events == ()
         fake_forge.get_issue_labels.assert_not_called()
         kill.assert_not_called()
         remove.assert_not_called()
@@ -376,9 +377,14 @@ class TestRuleNotNeededOutcomeStaleness:
         with patch(
             "orchestune.dispatch.gc._finalize_not_needed_worktree",
             autospec=True,
-            return_value={"action": "not_needed", "issue_number": 280},
+            return_value=TaskWorktreeCompletion(
+                issue_number=280,
+                subtask_id=task.subtask_id,
+                worktree_path=active.core.worktree_path,
+                action="not_needed",
+            ),
         ):
             outcome = _rule_not_needed(ctx, "280", active, task)
 
         assert outcome is not None
-        assert outcome.completion_event["action"] == "not_needed"
+        assert outcome.completion_event.to_dict()["action"] == "not_needed"

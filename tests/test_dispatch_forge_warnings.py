@@ -10,11 +10,11 @@ from orchestune.dispatch.gc import (
     _completion_forge_error_hold,
     _resolve_local_completion,
 )
+from orchestune.dispatch.gc.cloud_completion import _cloud_worktree_completion_status
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
     ForgeFailure,
     _apply_completed_worktree_outcome,
-    _cloud_worktree_completion_status,
     _decide_completed_worktree_outcome,
     _fetch_outcome_for_active,
     _local_pr_completion_status,
@@ -127,12 +127,18 @@ class TestCompletionForgeErrorHold:
             operation="list_prs",
             error="RuntimeError: 504 Gateway Timeout",
         )
-        assert outcome.completion_event["operation"] == "list_prs"
-        assert outcome.completion_event["error"] == "RuntimeError: 504 Gateway Timeout"
+        assert outcome.completion_event.to_dict()["operation"] == "list_prs"
+        assert (
+            outcome.completion_event.to_dict()["error"]
+            == "RuntimeError: 504 Gateway Timeout"
+        )
 
     def test_operation_and_error_are_optional(self, tmp_path):
         outcome = _completion_forge_error_hold(_active(tmp_path))
-        assert outcome.completion_event["action"] == "completion_skipped_forge_error"
+        assert (
+            outcome.completion_event.to_dict()["action"]
+            == "completion_skipped_forge_error"
+        )
 
 
 class TestCompletedWorktreeDecisionCarriesForgeError:
@@ -177,9 +183,9 @@ class TestCompletedWorktreeDecisionCarriesForgeError:
             config,
         )
 
-        assert event["operation"] == "list_comments"
+        assert event.to_dict()["operation"] == "list_comments"
         # 同一の障害で複数の呼び出しが落ちても、説明は畳んで1つに保つ。
-        assert event["error"] == "RuntimeError: 502 Bad Gateway"
+        assert event.to_dict()["error"] == "RuntimeError: 502 Bad Gateway"
 
 
 class TestIssueCommentFailures:
@@ -224,9 +230,9 @@ class TestIssueCommentFailures:
             resolution = _resolve_local_completion(ctx, "702", active, None)
 
         event = resolution.rule_outcome.completion_event
-        assert event["operation"] == "list_comments"
+        assert event.to_dict()["operation"] == "list_comments"
         # 同一の障害で複数の呼び出しが落ちても、説明は畳んで1つに保つ。
-        assert event["error"] == "RuntimeError: 502 Bad Gateway"
+        assert event.to_dict()["error"] == "RuntimeError: 502 Bad Gateway"
 
 
 class TestWarningEncoding:

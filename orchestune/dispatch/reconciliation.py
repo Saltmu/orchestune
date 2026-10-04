@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from orchestune.consistency.invariants.status import primary_status_labels
 from orchestune.dag.graph import recompute_dag_for_footprint_change
@@ -13,6 +13,7 @@ from orchestune.dependencies.policy import (
     has_pending_dependencies,
 )
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_events import PromotionEvent
 from orchestune.dispatch.cycle_records import (
     _authoritative_execution_active,
     apply_verified_transition,
@@ -164,9 +165,9 @@ def _handle_blocked_recompute_recovery(
     run_state: RunState,
     ctx: CycleContext,
     config: DispatcherConfig,
-) -> list[dict]:
+) -> list[PromotionEvent]:
     """フットプリント逸脱によるブロック（status:blocked-recompute）の自動復帰（解除）処理を行う。"""
-    recompute_resolved_promoted_events: list[dict] = []
+    recompute_resolved_promoted_events: list[PromotionEvent] = []
     blocked_recompute_issues = [
         issue
         for issue in issues.all()
@@ -202,7 +203,7 @@ def _resolve_one_blocked_recompute_issue(
     ctx: CycleContext,
     run_state: RunState,
     config: DispatcherConfig,
-) -> dict | None:
+) -> PromotionEvent | None:
     if completion_mutation_blocked_fresh(
         run_state, issue.number, config.run_state_path
     ):
@@ -232,14 +233,14 @@ def _resolve_one_blocked_recompute_issue(
             issue_number=issue.number,
             before_labels=before_labels,
         )
-    return {"issue_number": issue.number, "subtask_id": task.subtask_id}
+    return PromotionEvent(issue_number=issue.number, subtask_id=task.subtask_id)
 
 
 @dataclass(frozen=True)
 class BaseBranchRedRecoveryDecision:
     issue_number: int
     subtask_id: str
-    action: str  # "requeue", "unmark_only", "escalate"
+    action: Literal["requeue", "unmark_only", "escalate"]
     recorded_base_sha: str | None = None
     current_base_sha: str | None = None
     attempt: int | None = None
@@ -304,7 +305,7 @@ def _decide_single_base_branch_red_recovery(
     )
     if not has_advanced:
         return None
-    action = (
+    action: Literal["unmark_only", "requeue"] = (
         "unmark_only" if _has_pending_dependencies(task, dependencies) else "requeue"
     )
     return BaseBranchRedRecoveryDecision(
@@ -352,7 +353,7 @@ def _apply_base_branch_red_requeue(
     config: DispatcherConfig,
     rec_sha: str,
     cur_sha: str,
-) -> dict:
+) -> PromotionEvent:
     if config.apply:
         current = ctx.task(decision.issue_number)
         before_labels = tuple(current.status_labels) if current is not None else ()
@@ -375,10 +376,9 @@ def _apply_base_branch_red_requeue(
             f"ベースブランチのコミット前進（{rec_sha} → {cur_sha}）を検知したため、"
             "`ci:base-branch-red`マーカーを解除して再キューイング（`status:queued`）しました。",
         )
-    return {
-        "issue_number": decision.issue_number,
-        "subtask_id": decision.subtask_id,
-    }
+    return PromotionEvent(
+        issue_number=decision.issue_number, subtask_id=decision.subtask_id
+    )
 
 
 def _apply_base_branch_red_unmark(
@@ -420,7 +420,7 @@ def _apply_single_base_branch_red_decision(
     ctx: CycleContext,
     run_state: RunState,
     config: DispatcherConfig,
-) -> dict | None:
+) -> PromotionEvent | None:
     if completion_mutation_blocked_fresh(
         run_state, decision.issue_number, config.run_state_path
     ):
@@ -444,8 +444,8 @@ def _apply_base_branch_red_recovery(
     ctx: CycleContext,
     run_state: RunState,
     config: DispatcherConfig,
-) -> list[dict]:
-    events: list[dict] = []
+) -> list[PromotionEvent]:
+    events: list[PromotionEvent] = []
     for decision in decisions:
         event = _apply_single_base_branch_red_decision(decision, ctx, run_state, config)
         if event is not None:
@@ -496,7 +496,7 @@ def _handle_base_branch_red_recovery(
     ctx: CycleContext,
     run_state: RunState,
     config: DispatcherConfig,
-) -> list[dict]:
+) -> list[PromotionEvent]:
     """#555: ci:base-branch-red マーカーを持つタスクのベースコミット前進検知および再キューを行う。"""
     base_branch_red_issues = [
         issue

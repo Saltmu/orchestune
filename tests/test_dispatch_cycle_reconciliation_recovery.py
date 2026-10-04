@@ -14,6 +14,7 @@ from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
 from orchestune.dispatch.cycle_action_contracts import ActivePhaseResult
+from orchestune.dispatch.cycle_events import DeviationConflict, RecomputedDeviation
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.ledger.run_state import (
@@ -84,17 +85,18 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
 
         # _process_active_worktrees から返される deviation_events をシミュレート
         deviation_events = [
-            {
-                "action": "recomputed",
-                "conflicts": [
-                    {
-                        "subtask_id": "task-active",
-                        "other_subtask_id": "task-blocked",
-                        "similarity": 0.8,
-                        "blocked_subtask_id": "task-blocked",
-                    }
-                ],
-            }
+            RecomputedDeviation(
+                issue_number=1,
+                deviated_files=(),
+                conflicts=(
+                    DeviationConflict(
+                        subtask_id="task-active",
+                        other_subtask_id="task-blocked",
+                        similarity=0.8,
+                        blocked_subtask_id="task-blocked",
+                    ),
+                ),
+            )
         ]
 
         fake_forge.list_open_prs.reset_mock(side_effect=True)

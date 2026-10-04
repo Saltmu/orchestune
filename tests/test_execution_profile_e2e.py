@@ -421,7 +421,7 @@ Testing full lifecycle of execution profiles.
         # This target launches no local process, so host PIDs must not affect GC.
         pid_probe.assert_not_called()
         assert len(report2.completion_events) == 1
-        assert report2.completion_events[0]["issue_number"] == deep_num
+        assert report2.completion_events[0].issue_number == deep_num
 
         # Verify CompletedWorktree in RunState
         state2 = load_run_state(run_state_path)
