@@ -278,3 +278,44 @@ def test_lenient_window_requires_a_previous_trigger_timestamp() -> None:
     item["created_at"] = ""
     with pytest.raises(ValueError, match="timestamp is missing"):
         previous_round_window([item], 2, strict=False)
+
+
+MARKERS = (
+    "<!-- orchestune:review-trigger bot=claude -->\n"
+    "<!-- orchestune:review-round 3 -->\n"
+    f"<!-- orchestune:review-head {HEAD} -->"
+)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # a shorter fence line inside a longer fence does not close it
+        f"````\n```\n{MARKERS}\n````",
+        f"~~~~\n~~~\n{MARKERS}\n~~~~",
+        # a different character never closes the fence
+        f"```\n~~~\n{MARKERS}\n```",
+        # a fence line carrying an info string is not a closer
+        f"```\n```text\n{MARKERS}\n```",
+        # an unclosed fence runs to the end of the comment
+        f"```\n{MARKERS}",
+    ],
+)
+def test_markers_inside_a_markdown_fence_are_not_a_trigger(body: str) -> None:
+    item = {"id": 9, "body": body, "created_at": at(1)}
+    assert parse_trigger(item) is None
+    assert 9 not in trigger_comment_ids([item])
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"````\nexample\n`````\n{MARKERS}",  # a longer closing fence closes it
+        f"```\nexample\n```  \n{MARKERS}",  # trailing spaces are allowed
+        f"~~~\nexample\n~~~~\n{MARKERS}",
+    ],
+)
+def test_markers_after_a_properly_closed_fence_are_still_read(body: str) -> None:
+    item = {"id": 9, "body": f"@claude review\n{body}", "created_at": at(1)}
+    parsed = parse_trigger(item)
+    assert parsed is not None and parsed.round == 3
