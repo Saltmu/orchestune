@@ -150,3 +150,131 @@ def test_transaction_recovery_after_crash(tmp_path: Path):
     # Old skill should be restored
     assert (root / "orchestune" / "SKILL.md").read_text(encoding="utf-8") == "old skill"
     assert not tx.tx_dir.exists()
+
+
+def _make_two_skills_payload(skills_dir: Path) -> BundlePayload:
+    src_dir = skills_dir / "src_two_skills"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    for s_name in ("skill_a", "skill_b"):
+        d = src_dir / s_name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text(f"new {s_name}", encoding="utf-8")
+
+    from orchestune.installer.payload import calculate_file_sha256
+
+    return BundlePayload(
+        bundle_name="standard",
+        package_version="0.5.0",
+        source_kind="installed_distribution",
+        bundle_digest="two_digest",
+        skills={
+            s_name: SkillPayload(
+                name=s_name,
+                files={
+                    "SKILL.md": FileRecord(
+                        relative_path="SKILL.md",
+                        sha256=calculate_file_sha256(src_dir / s_name / "SKILL.md"),
+                        mode="regular",
+                    )
+                },
+                directories=[],
+            )
+            for s_name in ("skill_a", "skill_b")
+        },
+        source_path=src_dir,
+    )
+
+
+def test_transaction_rollback_partial_backup_failure(tmp_path: Path, monkeypatch):
+    import os
+
+    root = tmp_path / "skills"
+    root.mkdir()
+    for s_name in ("skill_a", "skill_b"):
+        d = root / s_name
+        d.mkdir()
+        (d / "SKILL.md").write_text(f"old {s_name}", encoding="utf-8")
+
+    payload = _make_two_skills_payload(tmp_path)
+    tx = SkillTransaction(root)
+
+    # Monkeypatch os.replace to fail when moving skill_b to backup
+    orig_replace = os.replace
+    call_count = 0
+
+    def faulty_replace(src, dst):
+        nonlocal call_count
+        call_count += 1
+        # First call moves skill_a to backup, second call raises error
+        if "skill_b" in str(src) and "backup" in str(dst):
+            raise OSError("Injected disk failure during backup")
+        return orig_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", faulty_replace)
+
+    with pytest.raises(OSError, match="Injected disk failure during backup"):
+        with tx:
+            tx.stage_publish(payload)
+
+    # After rollback, both skill_a and skill_b must still be intact in root
+    assert (root / "skill_a" / "SKILL.md").read_text(encoding="utf-8") == "old skill_a"
+    assert (root / "skill_b" / "SKILL.md").read_text(encoding="utf-8") == "old skill_b"
+
+
+def test_transaction_rollback_partial_publish_failure(tmp_path: Path, monkeypatch):
+    import os
+
+    root = tmp_path / "skills"
+    root.mkdir()
+    for s_name in ("skill_a", "skill_b"):
+        d = root / s_name
+        d.mkdir()
+        (d / "SKILL.md").write_text(f"old {s_name}", encoding="utf-8")
+
+    payload = _make_two_skills_payload(tmp_path)
+    tx = SkillTransaction(root)
+
+    orig_replace = os.replace
+
+    def faulty_replace(src, dst):
+        # Allow moves to backup, but fail when publishing skill_b to root
+        if "skill_b" in str(src) and "stage" in str(src):
+            raise OSError("Injected disk failure during publish")
+        return orig_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", faulty_replace)
+
+    with pytest.raises(OSError, match="Injected disk failure during publish"):
+        with tx:
+            tx.stage_publish(payload)
+
+    # After rollback, both original skills must still be restored intact
+    assert (root / "skill_a" / "SKILL.md").read_text(encoding="utf-8") == "old skill_a"
+    assert (root / "skill_b" / "SKILL.md").read_text(encoding="utf-8") == "old skill_b"
+
+
+def test_transaction_recovery_partial_backup_in_prepared_state(tmp_path: Path):
+    root = tmp_path / "skills"
+    root.mkdir()
+
+    # Old skill_b is in root, old skill_a already moved to backup before crash
+    (root / "skill_b").mkdir()
+    (root / "skill_b" / "SKILL.md").write_text("old skill_b", encoding="utf-8")
+
+    tx = SkillTransaction(root)
+    tx.tx_dir.mkdir(parents=True)
+    tx.backup_dir.mkdir(parents=True)
+    (tx.backup_dir / "skill_a").mkdir()
+    (tx.backup_dir / "skill_a" / "SKILL.md").write_text("old skill_a", encoding="utf-8")
+
+    # Crash happened when journal was still PREPARED or MOVING_BACKUP
+    tx._write_journal(
+        "PREPARED", {"bundle_name": "standard", "skills": ["skill_a", "skill_b"]}
+    )
+
+    recover_pending_transactions(root)
+
+    # Both skills must be present in root
+    assert (root / "skill_a" / "SKILL.md").read_text(encoding="utf-8") == "old skill_a"
+    assert (root / "skill_b" / "SKILL.md").read_text(encoding="utf-8") == "old skill_b"
+    assert not tx.tx_dir.exists()

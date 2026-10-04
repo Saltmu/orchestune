@@ -5,6 +5,8 @@ import re
 import uuid
 from pathlib import Path
 
+from orchestune.infra.git_cli import is_git_ignored
+
 _VALID_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 
@@ -21,19 +23,33 @@ def find_project_root(start_dir: Path | None = None) -> Path:
 
 
 def _is_ignored_in_gitignore(project_dir: Path) -> bool:
+    if is_git_ignored(project_dir, ".orchestune/tmp/test"):
+        return True
+
     gitignore_path = project_dir / ".gitignore"
     if not gitignore_path.is_file():
         return False
 
     content = gitignore_path.read_text(encoding="utf-8")
+    accepted_patterns = (
+        ".orchestune",
+        ".orchestune/",
+        ".orchestune/*",
+        ".orchestune/tmp",
+        ".orchestune/tmp/",
+        "/.orchestune",
+        "/.orchestune/",
+        "/.orchestune/*",
+        "/.orchestune/tmp",
+        "/.orchestune/tmp/",
+        "**/.orchestune",
+        "**/.orchestune/",
+        "**/.orchestune/tmp",
+        "**/.orchestune/tmp/",
+    )
     for line in content.splitlines():
         stripped = line.strip()
-        if stripped in (
-            ".orchestune/tmp",
-            ".orchestune/tmp/",
-            "/.orchestune/tmp",
-            "/.orchestune/tmp/",
-        ):
+        if stripped in accepted_patterns:
             return True
     return False
 
@@ -55,8 +71,8 @@ def create_session_dir(
 
     if not _is_ignored_in_gitignore(base_project):
         raise SessionDirError(
-            f"Directory .orchestune/tmp/ must be ignored in .gitignore at {base_project}. "
-            "Please add '.orchestune/tmp/' to .gitignore."
+            f"Directory .orchestune/tmp/ must be ignored in .gitignore (or git check-ignore) at {base_project}. "
+            "Accepted patterns include '.orchestune/', '.orchestune/*', or '.orchestune/tmp/'."
         )
 
     timestamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")

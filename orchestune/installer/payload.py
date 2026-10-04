@@ -112,27 +112,24 @@ def _resolve_distribution_skills_dir() -> tuple[Path, str]:
             raise PayloadError(
                 f"Installed distribution version '{dist.version}' does not match CLI version '{current_version}'"
             )
-        # Try to locate files from distribution
+        # Try to locate files from distribution relative to distribution root
         if dist.files:
             for f in dist.files:
-                p = Path(str(dist.locate_file(f)))
-                # Check for skills/orchestune/SKILL.md
-                if "skills" in p.parts:
-                    idx = p.parts.index("skills")
-                    skills_candidate = Path(*p.parts[: idx + 1])
+                if "skills" in f.parts:
+                    idx = f.parts.index("skills")
+                    rel_skills = Path(*f.parts[: idx + 1])
+                    skills_candidate = Path(str(dist.locate_file(rel_skills)))
                     if (skills_candidate / "orchestune" / "SKILL.md").is_file():
                         return skills_candidate.resolve(), current_version
     except importlib.metadata.PackageNotFoundError:
         pass
 
-    # Fallback to package relative or cwd parents
+    # Fallback to package relative (for editable installs or source tree execution)
     pkg_dir = Path(__file__).resolve().parent.parent
     candidates = [
         pkg_dir / "skills",
         pkg_dir.parent / "skills",
     ]
-    cwd = Path.cwd()
-    candidates.extend([p / "skills" for p in [cwd] + list(cwd.parents)])
 
     for cand in candidates:
         if cand.is_dir() and (cand / "orchestune" / "SKILL.md").is_file():

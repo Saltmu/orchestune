@@ -35,11 +35,14 @@ class SkillTransaction:
         self.journal_path = self.tx_dir / "journal.json"
         self.status = "INITIALIZED"
         self.journal_data: dict[str, Any] = {}
+        self.moved_to_backup: list[str] = []
+        self.published_skills: list[str] = []
 
     def __enter__(self) -> SkillTransaction:
         self.installer_dir.mkdir(parents=True, exist_ok=True)
         self.lock = FileLock(self.lock_path, timeout=10.0)
         self.lock.acquire()
+        recover_pending_transactions(self.skills_root, skip_tx_id=self.tx_id)
         self.tx_dir.mkdir(parents=True, exist_ok=True)
         return self
 
@@ -104,38 +107,52 @@ class SkillTransaction:
             self.prepare_stage(payload)
 
         self.backup_dir.mkdir(parents=True, exist_ok=True)
-        moved_to_backup: list[str] = []
-
         for skill_name in payload.skills.keys():
             existing = self.skills_root / skill_name
             if existing.exists() or existing.is_symlink():
                 backup_dest = self.backup_dir / skill_name
                 os.replace(existing, backup_dest)
-                moved_to_backup.append(skill_name)
+                self.moved_to_backup.append(skill_name)
+                self._write_journal(
+                    "MOVING_BACKUP",
+                    {
+                        "bundle_name": payload.bundle_name,
+                        "skills": list(payload.skills.keys()),
+                        "moved_to_backup": list(self.moved_to_backup),
+                    },
+                )
 
         self._write_journal(
             "OLD_MOVED",
             {
                 "bundle_name": payload.bundle_name,
                 "skills": list(payload.skills.keys()),
-                "moved_to_backup": moved_to_backup,
+                "moved_to_backup": list(self.moved_to_backup),
             },
         )
 
-        published_skills: list[str] = []
         for skill_name in payload.skills.keys():
             stage_src = self.stage_dir / skill_name
             publish_dest = self.skills_root / skill_name
             os.replace(stage_src, publish_dest)
-            published_skills.append(skill_name)
+            self.published_skills.append(skill_name)
+            self._write_journal(
+                "PUBLISHING",
+                {
+                    "bundle_name": payload.bundle_name,
+                    "skills": list(payload.skills.keys()),
+                    "moved_to_backup": list(self.moved_to_backup),
+                    "published_skills": list(self.published_skills),
+                },
+            )
 
         self._write_journal(
             "NEW_PUBLISHED",
             {
                 "bundle_name": payload.bundle_name,
                 "skills": list(payload.skills.keys()),
-                "moved_to_backup": moved_to_backup,
-                "published_skills": published_skills,
+                "moved_to_backup": list(self.moved_to_backup),
+                "published_skills": list(self.published_skills),
             },
         )
 
@@ -184,24 +201,13 @@ class SkillTransaction:
         if self.status == "MANIFEST_COMMITTED":
             return
 
-        try:
-            if self.status == "NEW_PUBLISHED":
-                published = self.journal_data.get("published_skills", [])
-                for s_name in published:
-                    p_path = self.skills_root / s_name
-                    if p_path.is_dir() and not p_path.is_symlink():
-                        shutil.rmtree(p_path)
-                    elif p_path.exists() or p_path.is_symlink():
-                        p_path.unlink()
+        published = self.journal_data.get(
+            "published_skills", list(self.published_skills)
+        )
+        _remove_published_skills(self.skills_root, published)
 
-            if self.status in ("OLD_MOVED", "NEW_PUBLISHED"):
-                moved = self.journal_data.get("moved_to_backup", [])
-                for s_name in moved:
-                    b_path = self.backup_dir / s_name
-                    r_path = self.skills_root / s_name
-                    if b_path.exists():
-                        os.replace(b_path, r_path)
-        finally:
+        moved = self.journal_data.get("moved_to_backup", list(self.moved_to_backup))
+        if _restore_backups(self.backup_dir, self.skills_root, moved):
             self.cleanup()
 
     def cleanup(self) -> None:
@@ -209,48 +215,67 @@ class SkillTransaction:
             shutil.rmtree(self.tx_dir, ignore_errors=True)
 
 
-def _rollback_sub_transaction(sub: Path, skills_root: Path, journal_data: dict) -> None:
+def _remove_published_skills(skills_root: Path, published: list[str]) -> None:
+    for s_name in published:
+        p_path = skills_root / s_name
+        if p_path.is_dir() and not p_path.is_symlink():
+            shutil.rmtree(p_path)
+        elif p_path.exists() or p_path.is_symlink():
+            p_path.unlink()
+
+
+def _restore_backups(backup_dir: Path, skills_root: Path, moved: list[str]) -> bool:
+    if backup_dir.is_dir():
+        for b_entry in backup_dir.iterdir():
+            if b_entry.name not in moved:
+                moved.append(b_entry.name)
+    restore_failed = False
+    for s_name in moved:
+        b_path = backup_dir / s_name
+        r_path = skills_root / s_name
+        if b_path.exists():
+            if r_path.is_dir() and not r_path.is_symlink():
+                shutil.rmtree(r_path)
+            elif r_path.exists() or r_path.is_symlink():
+                r_path.unlink()
+            try:
+                os.replace(b_path, r_path)
+            except Exception:
+                restore_failed = True
+    return not restore_failed
+
+
+def _rollback_sub_transaction(
+    sub: Path, skills_root: Path, journal_data: dict[str, Any]
+) -> None:
     status = journal_data.get("status")
     backup_dir = sub / "backup"
 
-    if status in ("INITIALIZED", "PREPARED", "MANIFEST_COMMITTED"):
+    if status == "MANIFEST_COMMITTED":
         shutil.rmtree(sub, ignore_errors=True)
-    elif status == "OLD_MOVED":
-        moved = journal_data.get("moved_to_backup", [])
-        for s_name in moved:
-            b_path = backup_dir / s_name
-            r_path = skills_root / s_name
-            if b_path.exists():
-                os.replace(b_path, r_path)
-        shutil.rmtree(sub, ignore_errors=True)
-    elif status == "NEW_PUBLISHED":
-        published = journal_data.get("published_skills", [])
-        for s_name in published:
-            p_path = skills_root / s_name
-            if p_path.is_dir() and not p_path.is_symlink():
-                shutil.rmtree(p_path)
-            elif p_path.exists() or p_path.is_symlink():
-                p_path.unlink()
-        moved = journal_data.get("moved_to_backup", [])
-        for s_name in moved:
-            b_path = backup_dir / s_name
-            r_path = skills_root / s_name
-            if b_path.exists():
-                os.replace(b_path, r_path)
+        return
+
+    published = journal_data.get("published_skills", [])
+    _remove_published_skills(skills_root, published)
+
+    moved = journal_data.get("moved_to_backup", [])
+    if _restore_backups(backup_dir, skills_root, moved):
         shutil.rmtree(sub, ignore_errors=True)
     else:
-        raise TransactionError(
-            f"Unknown transaction status in {sub / 'journal.json'}: {status}"
-        )
+        raise TransactionError(f"Could not cleanly restore backups in {sub}")
 
 
-def recover_pending_transactions(skills_root: Path) -> None:
+def recover_pending_transactions(
+    skills_root: Path, skip_tx_id: str | None = None
+) -> None:
     tx_root = get_installer_dir(skills_root) / TRANSACTIONS_DIR
     if not tx_root.is_dir():
         return
 
     for sub in list(tx_root.iterdir()):
         if not sub.is_dir():
+            continue
+        if skip_tx_id is not None and sub.name == skip_tx_id:
             continue
         journal_file = sub / "journal.json"
         if not journal_file.is_file():

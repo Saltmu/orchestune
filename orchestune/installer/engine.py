@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from orchestune.infra.process_utils import FileLock
 from orchestune.installer.contracts import (
     BundlePayload,
     BundleState,
@@ -14,7 +15,9 @@ from orchestune.installer.contracts import (
 )
 from orchestune.installer.migration import migrate_legacy_skills
 from orchestune.installer.state import (
+    LOCK_FILENAME,
     InstallerManifest,
+    get_installer_dir,
     inspect_bundle_state,
     load_manifest,
     save_manifest,
@@ -50,7 +53,6 @@ class OperationResult:
 
 
 def inspect_status(root: PhysicalRoot, payload: BundlePayload) -> OperationResult:
-    recover_pending_transactions(root.path)
     state = inspect_bundle_state(root.path, payload)
     manifest = load_manifest(root.path)
     consumers = []
@@ -76,6 +78,11 @@ def _install_absent_bundle(
 ) -> OperationResult:
     tx = SkillTransaction(root.path)
     with tx:
+        current_state = inspect_bundle_state(root.path, payload)
+        if current_state not in (BundleState.ABSENT, BundleState.RECOVERY_REQUIRED):
+            raise ConflictError(
+                f"Root state changed concurrently to '{current_state.value}'"
+            )
         tx.prepare_stage(payload)
         manifest = load_manifest(root.path) or InstallerManifest()
         tx.commit(payload, manifest, consumers=requested_consumers)
@@ -152,9 +159,6 @@ def install_skills(
     dry_run: bool = False,
     migrate_legacy: bool = False,
 ) -> OperationResult:
-    if not dry_run:
-        recover_pending_transactions(root.path)
-
     state = inspect_bundle_state(root.path, payload)
     requested_consumers = [t.value for t in root.target_types]
 
@@ -194,11 +198,19 @@ def install_skills(
 def _perform_update(
     root: PhysicalRoot, payload: BundlePayload, state: BundleState
 ) -> OperationResult:
-    manifest = load_manifest(root.path)
-    assert manifest is not None
-    existing_consumers = manifest.bundles[payload.bundle_name].consumers
     tx = SkillTransaction(root.path)
     with tx:
+        current_state = inspect_bundle_state(root.path, payload)
+        if current_state not in (
+            BundleState.MANAGED_OUTDATED,
+            BundleState.RECOVERY_REQUIRED,
+        ):
+            raise ConflictError(
+                f"Root state changed concurrently to '{current_state.value}'"
+            )
+        manifest = load_manifest(root.path)
+        assert manifest is not None
+        existing_consumers = manifest.bundles[payload.bundle_name].consumers
         tx.prepare_stage(payload)
         tx.commit(payload, manifest, consumers=existing_consumers)
     new_state = inspect_bundle_state(root.path, payload)
@@ -218,9 +230,6 @@ def update_skills(
     payload: BundlePayload,
     dry_run: bool = False,
 ) -> OperationResult:
-    if not dry_run:
-        recover_pending_transactions(root.path)
-
     state = inspect_bundle_state(root.path, payload)
 
     if dry_run:
@@ -282,16 +291,19 @@ def _uninstall_consumer_or_bundle(
             f"removed consumers {target_consumers}, remaining: {remaining_consumers}"
         )
     else:
+        # Deregister bundle from manifest first to avoid leaving manifest in MODIFIED state if crash
+        del manifest.bundles[payload.bundle_name]
+        manifest.generation += 1
+        manifest.updated_at = datetime.datetime.now(datetime.UTC).isoformat()
+        save_manifest(root.path, manifest)
+
         for skill_name in entry.skills.keys():
             s_path = root.path / skill_name
             if s_path.is_dir() and not s_path.is_symlink():
                 shutil.rmtree(s_path)
             elif s_path.exists() or s_path.is_symlink():
                 s_path.unlink()
-        del manifest.bundles[payload.bundle_name]
-        manifest.generation += 1
-        manifest.updated_at = datetime.datetime.now(datetime.UTC).isoformat()
-        save_manifest(root.path, manifest)
+
         actions.append(f"removed {payload.bundle_name} bundle files and deregistered")
     return actions
 
@@ -315,9 +327,6 @@ def uninstall_skills(
     payload: BundlePayload,
     dry_run: bool = False,
 ) -> OperationResult:
-    if not dry_run:
-        recover_pending_transactions(root.path)
-
     state = inspect_bundle_state(root.path, payload)
     target_consumers = [t.value for t in root.target_types]
 
@@ -333,11 +342,18 @@ def uninstall_skills(
             "Refusing to uninstall automatically."
         )
 
-    manifest = load_manifest(root.path)
-    if not manifest or payload.bundle_name not in manifest.bundles:
-        return _noop_uninstall(root, payload, state, "unmanaged (no-op)")
+    installer_dir = get_installer_dir(root.path)
+    installer_dir.mkdir(parents=True, exist_ok=True)
+    with FileLock(installer_dir / LOCK_FILENAME, timeout=10.0):
+        recover_pending_transactions(root.path)
+        manifest = load_manifest(root.path)
+        if not manifest or payload.bundle_name not in manifest.bundles:
+            return _noop_uninstall(root, payload, state, "unmanaged (no-op)")
 
-    actions = _uninstall_consumer_or_bundle(root, payload, manifest, target_consumers)
+        actions = _uninstall_consumer_or_bundle(
+            root, payload, manifest, target_consumers
+        )
+
     new_state = inspect_bundle_state(root.path, payload)
     return OperationResult(
         physical_root=root.path,

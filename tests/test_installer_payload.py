@@ -159,3 +159,32 @@ def test_resolve_payload_traversal_or_symlink_rejected(tmp_path: Path):
         PayloadError, match="Symlinks are not allowed in payload source"
     ):
         resolve_payload(source_dir=source_root)
+
+
+def test_resolve_distribution_skills_dir_relative_parts(tmp_path: Path, monkeypatch):
+    import importlib.metadata
+
+    from orchestune.installer.payload import _resolve_distribution_skills_dir
+
+    fake_site = tmp_path / "venv" / "lib" / "site-packages"
+    fake_skills = fake_site / "skills"
+    fake_skills.mkdir(parents=True)
+    (fake_skills / "orchestune").mkdir()
+    (fake_skills / "orchestune" / "SKILL.md").write_text("---\nname: orchestune\n---\n")
+
+    class FakeDistribution:
+        version = get_version()
+        files = [
+            Path("skills/orchestune/SKILL.md"),
+        ]
+
+        def locate_file(self, rel_path):
+            return fake_site / rel_path
+
+    monkeypatch.setattr(
+        importlib.metadata, "distribution", lambda name: FakeDistribution()
+    )
+
+    resolved, ver = _resolve_distribution_skills_dir()
+    assert resolved == fake_skills
+    assert ver == get_version()
