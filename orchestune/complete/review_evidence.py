@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
-from collections import Counter
 from typing import Any, Protocol
 
 from orchestune.complete.contracts import (
@@ -16,13 +13,17 @@ from orchestune.complete.contracts import (
 from orchestune.complete.journal import CompletionJournalError
 from orchestune.outcome_record import ReviewSummary
 from orchestune.review.acquisition import collect_review_state, normalize_review_state
-from orchestune.review.judgment import FIELDS, parse_judgments, validate_coverage
-from orchestune.review.markers import (
-    derive_review_target,
-    parse_head_marker,
-    parse_round_marker,
-    parse_selection_marker,
-    parse_trigger_reviewer,
+from orchestune.review.judgment import (
+    judgment_digest,
+    parse_judgments,
+    stable_digest,
+    validate_coverage,
+)
+from orchestune.review.markers import derive_review_target, parse_selection_marker
+from orchestune.review.rounds import (
+    ReviewTrigger,
+    restore_triggers,
+    trigger_comment_ids,
 )
 
 
@@ -53,13 +54,6 @@ def _head_mismatch() -> CompletionJournalError:
     )
 
 
-def _digest(value: Any) -> str:
-    encoded = json.dumps(
-        value, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-    )
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
 def _fetch(forge: ReviewEvidenceForge, pr: int, reviewer: str) -> dict[str, Any]:
     try:
         state: dict[str, Any] = {"issue_comments": forge.list_all_issue_comments(pr)}
@@ -78,42 +72,31 @@ def _fetch(forge: ReviewEvidenceForge, pr: int, reviewer: str) -> dict[str, Any]
         ) from error
 
 
-def _latest_trigger(comments: list[dict[str, Any]], reviewer: str) -> dict[str, Any]:
-    triggers = [
-        item for item in comments if parse_trigger_reviewer(item.get("body") or "")
-    ]
+def _latest_trigger(comments: list[dict[str, Any]], reviewer: str) -> ReviewTrigger:
+    """The PR-wide latest trigger; ambiguous or contradictory triggers are rejected."""
+    try:
+        triggers = restore_triggers(comments)
+    except ValueError as error:
+        raise _invalid(f"Review triggers are ambiguous: {error}") from error
     if not triggers:
         raise _invalid("Latest review trigger is missing")
-    trigger = max(
-        triggers,
-        key=lambda item: (
-            parse_round_marker(item.get("body") or "") or 0,
-            str(item.get("created_at") or ""),
-        ),
-    )
-    body = trigger.get("body") or ""
-    if parse_trigger_reviewer(body) != reviewer:
+    if triggers[-1].reviewer != reviewer:
         raise _invalid("Latest trigger reviewer differs from --reviewer")
-    if not parse_round_marker(body) or not trigger.get("created_at"):
-        raise _invalid("Latest trigger round/timestamp is missing")
-    return trigger
+    return triggers[-1]
 
 
 def _acquire(state: dict[str, Any], reviewer: str, head: str | None) -> dict[str, Any]:
     trigger = _latest_trigger(state["issue_comments"], reviewer)
-    body = trigger["body"]
-    requested = parse_head_marker(body)
+    requested = trigger.requested_head_sha
     # Even review_commit evidence requires a head-bound trigger; old requests
     # cannot certify which head was requested in this round.
     if requested is None or requested != head:
         raise _head_mismatch()
-    trigger_ids = {
-        item["id"]
-        for item in state["issue_comments"]
-        if parse_trigger_reviewer(item.get("body") or "") and item.get("id") is not None
-    }
     result = collect_review_state(
-        state, reviewer, exclude_ids=trigger_ids, round_started_at=trigger["created_at"]
+        state,
+        reviewer,
+        exclude_issue_comment_ids=trigger_comment_ids(state["issue_comments"]),
+        round_started_at=trigger.created_at,
     )
     if result["acquisition_status"] != "acquired" or any(
         status != "complete" for status in state["completeness"].values()
@@ -124,10 +107,10 @@ def _acquire(state: dict[str, Any], reviewer: str, head: str | None) -> dict[str
         raise _head_mismatch()
     return {
         **result,
-        "round": parse_round_marker(body),
+        "round": trigger.round,
         "review_target_sha": target,
         "review_target_sha_source": source,
-        "trigger_id": trigger.get("id"),
+        "trigger_id": trigger.id,
     }
 
 
@@ -151,13 +134,7 @@ def _judgments(
         raise _invalid(
             "Review judgments contain unresolved or required deferred findings"
         )
-    # Normalize fields, row ordering and irrelevant YAML formatting before hashing.
-    normalized = [{name: row[name].strip() for name in FIELDS} for row in rows]
-    normalized.sort(key=lambda row: tuple(row[name] for name in FIELDS))
-    digest = _digest({"round": table["round"], "findings": normalized})
-    counts = Counter(row["judgment"] for row in normalized)
-    counts.update(row["status"] for row in normalized)
-    return digest, dict(sorted(counts.items()))
+    return judgment_digest(table)
 
 
 def _review_binding(result: dict[str, Any]) -> dict[str, Any]:
@@ -222,5 +199,7 @@ def verify_review_evidence(
         )
         binding = _review_binding(result)
     if snapshot is not None:
-        snapshot.update(summary=summary.to_dict(), snapshot_digest=_digest(binding))
+        snapshot.update(
+            summary=summary.to_dict(), snapshot_digest=stable_digest(binding)
+        )
     return summary

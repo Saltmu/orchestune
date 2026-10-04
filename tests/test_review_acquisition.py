@@ -291,3 +291,192 @@ def test_wait_helpers_ignore_marked_reply():
     assert _extract_review_result(
         data, "claude", exclude_ids={1}
     ) == _extract_review_result(without_reply, "claude", exclude_ids={1})
+
+
+# --- #1210: round boundaries, comment-only exclusion, bounded progress ---------
+
+ROUND_START = "2026-10-04T03:10:00Z"
+ROUND_END = "2026-10-04T03:20:00Z"
+
+
+def _bounded(state, **kwargs):
+    return acquisition.collect_review_state(
+        state,
+        "codex",
+        round_started_at=ROUND_START,
+        round_ended_at=ROUND_END,
+        **kwargs,
+    )
+
+
+def _items(result, section="review_items"):
+    return {item["id"]: item for item in result[section]}
+
+
+def test_items_are_current_only_inside_the_round_interval():
+    state = {
+        "issue_comments": [
+            _comment(1, "before", "codex", "2026-10-04T03:09:59Z"),
+            _comment(2, "start boundary", "codex", ROUND_START),
+            _comment(3, "inside", "codex", "2026-10-04T03:15:00Z"),
+            _comment(4, "end boundary", "codex", ROUND_END),
+            _comment(5, "after", "codex", "2026-10-04T03:30:00Z"),
+        ]
+    }
+    items = _items(_bounded(state))
+    assert {i: items[i]["provenance"] for i in items} == {
+        1: "historical",
+        2: "current",
+        3: "current",
+        4: "unassociated",
+        5: "unassociated",
+    }
+    assert items[4]["provenance_reason"] == "after_round_end"
+    assert items[5]["provenance_reason"] == "after_round_end"
+    assert "provenance_reason" not in items[3]
+
+
+def test_updated_at_never_promotes_an_old_item_into_the_round():
+    old = _comment(1, "old review", "codex", "2026-10-04T03:00:00Z")
+    old["updated_at"] = "2026-10-04T03:15:00Z"
+    current = _comment(2, "this round", "codex", "2026-10-04T03:12:00Z")
+    items = _items(_bounded({"issue_comments": [old, current]}))
+    assert items[1]["provenance"] == "historical"
+    assert items[2]["provenance"] == "current"
+
+
+def test_review_after_the_round_end_is_not_current_and_keeps_its_reason():
+    review = {
+        "id": 8,
+        "body": "late",
+        "user": {"login": "codex"},
+        "submitted_at": "2026-10-04T03:25:00Z",
+        "commit_id": "a" * 40,
+    }
+    current = _comment(2, "this round", "codex", "2026-10-04T03:12:00Z")
+    items = _items(_bounded({"issue_comments": [current], "reviews": [review]}))
+    assert items[8]["provenance"] == "unassociated"
+    assert items[8]["provenance_reason"] == "after_round_end"
+
+
+def _review(id_, at, body="review"):
+    return {
+        "id": id_,
+        "body": body,
+        "user": {"login": "codex"},
+        "submitted_at": at,
+        "commit_id": "a" * 40,
+    }
+
+
+def _inline(id_, parent, at):
+    return {
+        "id": id_,
+        "body": "finding",
+        "user": {"login": "codex"},
+        "pull_request_review_id": parent,
+        "created_at": at,
+        "path": "a.py",
+        "line": 1,
+    }
+
+
+def test_inline_follows_a_confirmed_parent_but_not_past_the_round_end():
+    state = {
+        "reviews": [
+            _review(10, "2026-10-04T03:05:00Z"),
+            _review(11, "2026-10-04T03:12:00Z"),
+        ],
+        "inline_comments": [
+            _inline(1, 10, "2026-10-04T03:12:30Z"),  # late inline on a past review
+            _inline(2, 11, "2026-10-04T03:13:00Z"),
+            _inline(3, 11, "2026-10-04T03:21:00Z"),  # parent ok, created after end
+            _inline(4, 99, "2026-10-04T03:13:00Z"),  # unknown parent
+        ],
+    }
+    inlines = _items(_bounded(state), "inline_comments")
+    assert {i: inlines[i]["provenance"] for i in inlines} == {
+        1: "historical",
+        2: "current",
+        3: "unassociated",
+        4: "unassociated",
+    }
+    assert inlines[3]["provenance_reason"] == "after_round_end"
+
+
+def test_inline_without_parent_uses_its_own_creation_time():
+    inline = _inline(5, None, "2026-10-04T03:30:00Z")
+    inline.pop("pull_request_review_id")
+    current = _comment(2, "this round", "codex", "2026-10-04T03:12:00Z")
+    state = {"issue_comments": [current], "inline_comments": [inline]}
+    inlines = _items(_bounded(state), "inline_comments")
+    assert inlines[5]["provenance"] == "unassociated"
+    assert inlines[5]["provenance_reason"] == "after_round_end"
+
+
+def test_comment_only_exclusion_does_not_hide_other_sections_with_the_same_id():
+    state = {
+        "issue_comments": [
+            _comment(7, "@codex review", "codex", ROUND_START),
+            _comment(2, "real summary", "codex", "2026-10-04T03:12:00Z"),
+        ],
+        "reviews": [_review(7, "2026-10-04T03:13:00Z", "review seven")],
+        "inline_comments": [_inline(7, 7, "2026-10-04T03:13:30Z")],
+    }
+    result = _bounded(state, exclude_issue_comment_ids={7})
+    assert sorted(_items(result)) == [2, 7]
+    assert [i["id"] for i in result["inline_comments"]] == [7]
+    legacy = _bounded(state, exclude_ids={7})
+    assert sorted(_items(legacy)) == [2]  # the old shared set keeps hiding all three
+
+
+def test_comment_only_exclusion_applies_to_activity_and_snapshot_helpers():
+    comment = _comment(7, "Codex is working…", "codex", "2026-10-04T03:12:00Z")
+    state = {"issue_comments": [comment], "reviews": [], "inline_comments": []}
+    kept = acquisition._latest_bot_activity_item(
+        state, "codex", None, exclude_issue_comment_ids={7}
+    )
+    assert kept is None
+
+
+def test_old_in_progress_tracker_edited_later_does_not_block_the_round():
+    tracker = _comment(1, "Codex is working…", "codex", "2026-10-04T02:00:00Z")
+    tracker["updated_at"] = "2026-10-04T03:15:00Z"
+    review = _review(9, "2026-10-04T03:14:00Z", "LGTM no issues")
+    result = _bounded({"issue_comments": [tracker], "reviews": [review]})
+    assert result["acquisition_status"] == "acquired"
+
+
+def test_in_progress_tracker_inside_the_round_still_reports_in_progress():
+    tracker = _comment(1, "Codex is working…", "codex", "2026-10-04T03:12:00Z")
+    result = _bounded({"issue_comments": [tracker]})
+    assert result["acquisition_status"] == "in_progress"
+
+
+def test_in_progress_tracker_after_the_round_end_is_not_this_rounds_activity():
+    tracker = _comment(1, "Codex is working…", "codex", "2026-10-04T03:30:00Z")
+    review = _review(9, "2026-10-04T03:14:00Z", "LGTM no issues")
+    result = _bounded({"issue_comments": [tracker], "reviews": [review]})
+    assert result["acquisition_status"] == "acquired"
+
+
+def test_telemetry_only_round_is_not_acquired():
+    tracker = _comment(
+        1, "**Codex finished** view job", "codex", "2026-10-04T03:12:00Z"
+    )
+    result = _bounded({"issue_comments": [tracker]})
+    assert result["acquisition_status"] == "unavailable"
+
+
+def test_unbounded_collection_is_unchanged_by_the_new_parameters():
+    state = _reviewed_state([_comment(3, "Judgments for round 1 (no marker)")])
+    plain = acquisition.collect_review_state(state, "claude", exclude_ids={1})
+    explicit = acquisition.collect_review_state(
+        state,
+        "claude",
+        exclude_ids={1},
+        round_ended_at="",
+        exclude_issue_comment_ids=None,
+    )
+    assert plain == explicit
+    assert all("provenance_reason" not in i for i in plain["review_items"])
