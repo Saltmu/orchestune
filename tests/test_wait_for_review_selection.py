@@ -319,3 +319,59 @@ def test_round_two_requires_body_file_before_trigger():
         with pytest.raises(ValueError, match="body-file"):
             wait_for_review(1, bot_name="claude")
         trigger.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "extra_args", [[], ["--body-file", "missing-reply.md", "--no-post"]]
+)
+def test_offline_review_state_never_waits_posts_or_calls_gh(tmp_path, extra_args):
+    """MCP 経路: オフライン評価は投稿・待機・gh を行わず、ラウンド/SHA 証明も作らない (#1206)。"""
+    state_file = tmp_path / "review-state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "issue_comments": [
+                    {
+                        "id": 7,
+                        "user": {"login": "claude[bot]"},
+                        "body": "Looks fine.",
+                        "created_at": "2025-01-01T00:00:00Z",
+                    }
+                ],
+                "reviews": [],
+                "inline_comments": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "review-result.json"
+    argv = [
+        "wait",
+        "--pr",
+        "1",
+        "--bot-name",
+        "claude",
+        "--review-state-file",
+        str(state_file),
+        "--output-file",
+        str(output),
+        *extra_args,
+    ]
+    with (
+        patch("sys.argv", argv),
+        patch("scripts.wait_for_review.wait_for_review") as wait,
+        patch("scripts.wait_for_review.post_review_trigger") as trigger,
+        patch("scripts.wait_for_review._run_gh") as run_gh,
+        patch("scripts.wait_for_review._run_gh_api") as run_gh_api,
+        patch("scripts.wait_for_review._get_initial_pr_data") as fetch,
+        patch("scripts.wait_for_review._fetch_pr_head_sha") as head,
+        patch("scripts.wait_for_review._fetch_repository_slug") as slug,
+    ):
+        with pytest.raises(SystemExit):
+            main()
+
+    for forbidden in (wait, trigger, run_gh, run_gh_api, fetch, head, slug):
+        forbidden.assert_not_called()
+    result = json.loads(output.read_text(encoding="utf-8"))
+    for key in ("round", "trigger_id", "requested_head_sha", "current_head_sha"):
+        assert result[key] is None, key
