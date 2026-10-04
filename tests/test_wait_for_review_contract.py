@@ -1053,3 +1053,35 @@ def test_offline_unknown_completeness_still_exits_acquired(tmp_path):
         main()
 
     assert exc.value.code == EXIT_ACQUIRED
+
+
+# --- #1207: a reused reply body keeps trigger round/head detection intact ------
+
+
+def test_reply_marker_coexists_with_trigger_markers_in_reused_body():
+    from orchestune.review.markers import is_review_reply, review_reply_marker
+    from scripts.wait_for_review import (
+        _find_existing_trigger_comment,
+        _get_latest_review_round,
+        _is_trigger_comment,
+        _mark_review_trigger,
+        extract_review_result,
+    )
+
+    reused = f"{review_reply_marker()}\n@claude review\nRound 1 judgments"
+    body = _mark_review_trigger(reused, "claude", round_num=2)
+    assert body.startswith(review_reply_marker())
+    assert is_review_reply(body)  # even so, the trigger is excluded as a trigger
+
+    trigger = {
+        "id": 7,
+        "body": body,
+        "user": {"login": "claude[bot]"},
+        "created_at": "2026-10-03T00:00:00Z",
+    }
+    data = {"issue_comments": [trigger], "reviews": [], "inline_comments": []}
+    assert _is_trigger_comment(trigger, "claude", round_num=2)
+    assert _get_latest_review_round(data, "claude") == 2
+    assert _find_existing_trigger_comment(data, "claude", 2) is trigger
+    assert extract_review_result(data, "claude", exclude_ids={7}) is None
+    assert extract_review_result(data, "claude") is None

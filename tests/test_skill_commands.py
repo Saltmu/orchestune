@@ -982,3 +982,45 @@ def test_issue_footprint_example_selects_file_reservation():
         assert not Path(path).is_absolute()
         assert ".." not in Path(path).parts
         assert (REPO_ROOT / path).is_file()
+
+
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_review_loop_defines_review_reply_marker_contract(skill_name: str):
+    """同一bot名義の返信を証跡から除外する返信マーカーの手順 (#1207)。"""
+    from orchestune.review.judgment import parse_judgments
+    from orchestune.review.markers import is_review_reply, review_reply_marker
+
+    loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
+        encoding="utf-8"
+    )
+    marker = review_reply_marker()
+    no_rereview = next(
+        line for line in loop.splitlines() if line.startswith("No re-review")
+    )
+    # 先頭の非空行・投稿手順・complete への同一ファイル指定
+    assert marker in no_rereview and "first non-blank line" in no_rereview
+    assert "gh pr comment <PR_NUMBER> --body-file <session-dir>/review-reply.md" in (
+        no_rereview
+    )
+    assert "complete --review-reply" in no_rereview
+    assert "GitHub MCP" in no_rereview and "without a mention or trigger markers" in (
+        no_rereview
+    )
+    # 返信専用コメントへ trigger / 新規レビュー要求を付けない・二重 trigger 禁止の維持
+    assert "Never add trigger/round/head markers" in no_rereview
+    assert "`@<bot> review` line" in no_rereview
+    assert "double-posting ban does not apply" in no_rereview
+    # 再レビュー経路とマーカー付きファイル再利用
+    assert "`wait_for_review.py --body-file`" in no_rereview
+    assert "accepted" in no_rereview and "trigger" in no_rereview
+    # ゼロ指摘時の既存例外は維持
+    assert "with zero findings no PR reply is needed" in loop
+
+    # 例は正規マーカーを先頭に持ち、判断表がちょうど1つパースできる
+    example = re.search(
+        r"````markdown\n(<!-- orchestune:review-reply -->\n.*?)````", loop, re.S
+    )
+    assert example, "reply example with the canonical marker is missing"
+    assert is_review_reply(example[1])
+    assert "Round 1/5" in example[1]
+    assert parse_judgments(example[1])["findings"][0]["judgment"] == "adopt"
