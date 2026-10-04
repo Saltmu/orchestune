@@ -1,5 +1,6 @@
 """Tests for safe atomic config storage, locking, backup, and conflict detection."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,8 @@ class TestConfigStorage:
         )
         assert receipt.committed is True
         assert receipt.backup_path is None
-        assert receipt.fsync_confirmed is True
+        # Windows cannot open a directory for fsync via os.open.
+        assert receipt.fsync_confirmed is (os.name != "nt")
         assert doc.target_path.read_bytes() == content
 
     def test_save_init_conflict_if_file_created_meanwhile(self, tmp_path: Path):
@@ -55,6 +57,7 @@ class TestConfigStorage:
             doc.target_path, doc.snapshot, new_content, mode="edit"
         )
         assert receipt.committed is True
+        assert receipt.fsync_confirmed is (os.name != "nt")
         assert receipt.backup_path is not None
         assert receipt.backup_path.exists()
         assert receipt.backup_path.read_bytes() == orig_content
