@@ -453,3 +453,51 @@ def test_recovery_with_corrupted_manifest_raises_transaction_error(
     assert (root / "orchestune" / "SKILL.md").read_text(
         encoding="utf-8"
     ) == "current skill"
+
+
+def test_live_rollback_with_corrupted_manifest_raises(tmp_path: Path):
+    root = tmp_path / "skills"
+    root.mkdir()
+    (root / "orchestune").mkdir()
+    (root / "orchestune" / "SKILL.md").write_text("published skill", encoding="utf-8")
+
+    tx = SkillTransaction(root)
+    tx.tx_dir.mkdir(parents=True)
+    tx.published_skills.append("orchestune")
+    tx._write_journal(
+        "PUBLISHING",
+        {
+            "bundle_name": "standard",
+            "skills": ["orchestune"],
+            "published_skills": ["orchestune"],
+        },
+    )
+
+    manifest_file = root / ".orchestune-installer" / "manifest.json"
+    manifest_file.parent.mkdir(parents=True, exist_ok=True)
+    manifest_file.write_text("{bad json", encoding="utf-8")
+
+    with pytest.raises(TransactionError, match="corrupted manifest"):
+        tx.rollback()
+
+    assert (root / "orchestune" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "published skill"
+
+
+def test_recovery_prepared_journal_with_corrupt_manifest_succeeds(
+    tmp_path: Path,
+):
+    root = tmp_path / "skills"
+    root.mkdir()
+
+    tx = SkillTransaction(root)
+    tx.tx_dir.mkdir(parents=True)
+    tx._write_journal("PREPARED", {"bundle_name": "standard", "skills": ["orchestune"]})
+
+    manifest_file = root / ".orchestune-installer" / "manifest.json"
+    manifest_file.parent.mkdir(parents=True, exist_ok=True)
+    manifest_file.write_text("{bad json", encoding="utf-8")
+
+    recover_pending_transactions(root)
+    assert not tx.tx_dir.exists()

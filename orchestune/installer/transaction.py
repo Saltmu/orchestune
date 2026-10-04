@@ -66,9 +66,12 @@ class SkillTransaction:
                     raise TransactionError(
                         f"Rollback failed after {exc_type.__name__}: {rollback_err}"
                     ) from exc_val
+                # Note: If an error occurred after save_manifest (e.g. journal write error),
+                # rollback() detects that the manifest was committed and leaves it intact.
+                # Propagating the original exception alerts the caller that a post-commit
+                # journal step failed, while keeping root state consistent.
             elif self.status == "MANIFEST_COMMITTED":
                 self.cleanup()
-
         finally:
             if self.lock is not None:
                 self.lock.release()
@@ -226,6 +229,10 @@ class SkillTransaction:
                 self.status = "MANIFEST_COMMITTED"
                 self.cleanup()
                 return
+        except ManifestError as e:
+            raise TransactionError(
+                f"Cannot safely perform live rollback due to corrupted manifest: {e}"
+            ) from e
         except Exception:
             pass
 
@@ -295,7 +302,7 @@ def _rollback_sub_transaction(
         shutil.rmtree(sub, ignore_errors=True)
         return
 
-    if tx_id:
+    if tx_id and status not in ("INITIALIZED", "PREPARED"):
         try:
             manifest = load_manifest(skills_root)
             if manifest is not None and manifest.transaction_id == tx_id:
