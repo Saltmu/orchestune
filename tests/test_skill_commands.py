@@ -854,6 +854,113 @@ def test_worker_skills_require_posting_review_reply_as_pr_comment(skill_name: st
     assert "post the Outcome Record to PR comments" in skill
 
 
+_CI_ENTRYPOINT_LINE = "`./scripts/local-ci.sh` / `.\\\\scripts\\\\local-ci.ps1`"
+
+
+def _mcp_posting_section(skill_name: str) -> str:
+    loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
+        encoding="utf-8"
+    )
+    heading = "### MCP posting (GitHub MCP / App)"
+    assert heading in loop, f"{skill_name} review-loop.md lacks the MCP posting section"
+    return loop.split(heading, 1)[1].split("\n### ", 1)[0]
+
+
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_review_loop_defines_mcp_combined_rereview_posting(skill_name: str):
+    """MCP 経路は結合コメントを MCP クライアントが一度だけ投稿する (#1206 方式 A)。"""
+    section = _mcp_posting_section(skill_name)
+
+    # 投稿主体・投稿先・単一コメント
+    assert "MCP client" in section and "not the offline CLI" in section
+    assert "one combined" in section and "`issue_comments`" in section
+    for forbidden in ("inline reply", "GitHub review", "two separate comments"):
+        assert forbidden in section, forbidden
+
+    # 結合コメントの構成: 前ラウンド r の判断表 + 次ラウンド n の marker
+    assert "`@<bot> review`" in section
+    assert "judged previous round r" in section and "next round n" in section
+    for marker in (
+        "<!-- orchestune:review-trigger bot=<bot> -->",
+        "<!-- orchestune:review-round <n> -->",
+        "<!-- orchestune:review-head <40-hex HEAD SHA> -->",
+    ):
+        assert marker in section, marker
+    assert "inherit" in section and "explicit user instruction" in section
+    # 初回 (n = 1) は前ラウンドが無いため判断表なし、n >= 2 のみ判断表必須
+    # 投稿済みで結果未取得の trigger は再開し、n を進めない
+    assert "no acquired result yet" in section and "it is outstanding" in section
+    assert "resume with its round and skip posting" in section
+    assert "For n >= 2 write" in section
+    assert "n = 1 has no previous round, so no table" in section
+    assert "(omitted when n = 1)" in section
+
+    # 投稿前確認・投稿後の再取得・再送禁止
+    assert "same bot and round" in section and "do not repost" in section
+    assert "re-fetch" in section and "never resend" in section
+    assert "same n" in section
+
+    # オフライン評価の限界と完了条件
+    assert "--review-state-file" in section
+    assert (
+        "`round`, `trigger_id`, `requested_head_sha` and `current_head_sha` are null"
+        in section
+    )
+    assert "Exit 0 is acquisition only" in section
+    assert "do not advance to done" in section
+    assert "do not pass `--body-file`, `--no-post` or `--round`" in section
+    assert "not atomic" in section
+    for line in section.splitlines():
+        if "wait_for_review.py" in line:
+            assert "--body-file" not in line and "--no-post" not in line
+
+
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_review_loop_keeps_cli_body_file_contract_separate_from_mcp(skill_name: str):
+    loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
+        encoding="utf-8"
+    )
+    assert "CLI/gh Round 2+" in loop
+    assert "CLI/gh re-review: pass it via `--body-file`" in loop
+    assert "do not post a separate trigger comment" in loop
+    # 再レビューなしの返信は mention / trigger marker を含めない
+    assert "without a mention or trigger markers" in loop
+    # 再レビュー有無・指摘ゼロ時の既存ルールは維持
+    assert "with zero findings no PR reply is needed" in loop
+    assert "Exit 0\nmeans content for the round was fully acquired" in loop
+
+
+def test_review_loop_copies_match_except_ci_entrypoint():
+    paths = [
+        SKILLS_ROOT / name / "references/review-loop.md"
+        for name in ("local-ci-developer", "workflow-template")
+    ]
+    local_ci, template = (p.read_text(encoding="utf-8") for p in paths)
+    assert local_ci.replace(_CI_ENTRYPOINT_LINE, "`<CI_ENTRYPOINT>`") == template
+
+
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_skill_markdown_total_lines_stay_within_bloat_limit(skill_name: str):
+    total = sum(
+        len(path.read_text(encoding="utf-8").splitlines())
+        for path in (SKILLS_ROOT / skill_name).rglob("*.md")
+    )
+    assert total <= 500, f"{skill_name} skill markdown is {total} lines (limit 500)"
+
+
+def test_agents_rules_allow_single_mcp_combined_post_only():
+    """AGENTS.md の単一 CLI ルールへ、MCP の一度の結合投稿だけを限定例外にする。"""
+    rules = (REPO_ROOT / ".agents/AGENTS.md").read_text(encoding="utf-8")
+    rule = rules.split("外部CI・PRレビュー待機", 1)[1].split("\n- **", 1)[0]
+    assert "uv run python scripts/wait_for_review.py --pr" in rule
+    assert "限定例外" in rule and "GitHub MCP" in rule
+    assert "結合" in rule and "一度だけ" in rule
+    assert "skills/local-ci-developer/references/review-loop.md" in rule
+    assert "別の trigger" in rule and "多重待機" in rule
+    # 絶対ローカルパスを書かない
+    assert "file:///" not in rule
+
+
 def test_issue_footprint_example_selects_file_reservation():
     """起票例を claim/parser へ渡し、実ファイル単位の予約として解釈できる。"""
     from orchestune.claim.contracts import ReservationKind
