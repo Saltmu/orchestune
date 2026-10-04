@@ -131,7 +131,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 **実行と再現**:
 
 - `uv run pytest tests/test_status_machine_stateful.py`（単独で約1.4秒）。CI profileは
-  `tests/conftest.py`に登録した`ci`（`max_examples=100`・`stateful_step_count=30`・
+  `tests/hypothesis_profiles.py`（`tests/conftest.py`の`pytest_plugins`から読み込み）に登録した`ci`（`max_examples=100`・`stateful_step_count=30`・
   `deadline=None`・`print_blob=True`）で、対象の`TestCase`に適用されていることをテストで確認します。
   別のprofileは環境変数`HYPOTHESIS_PROFILE`で選べます。`deadline=None`は総実行時間の上限保証では
   ありません。

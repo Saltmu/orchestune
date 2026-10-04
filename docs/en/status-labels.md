@@ -140,7 +140,7 @@ the compatibility tests).
 **Running and reproducing**:
 
 - `uv run pytest tests/test_status_machine_stateful.py` (about 1.4 seconds on its own). The CI
-  profile is `ci` registered in `tests/conftest.py` (`max_examples=100`, `stateful_step_count=30`,
+  profile is `ci` registered in `tests/hypothesis_profiles.py` (loaded via `pytest_plugins` in `tests/conftest.py`) (`max_examples=100`, `stateful_step_count=30`,
   `deadline=None`, `print_blob=True`); a test checks that it is applied to the stateful
   `TestCase`. Another profile can be chosen with the `HYPOTHESIS_PROFILE` environment variable.
   `deadline=None` is not an upper bound on total run time.
