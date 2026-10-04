@@ -246,6 +246,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "ledger.escalation",
             "ledger.run_state",
             "ledger.status_labels",
+            "ledger.status_machine",
             "pr_link_notice",
             "provisioning.parent",
             "provisioning.plan",
@@ -607,8 +608,8 @@ def test_no_module_imports_a_strictly_higher_layer() -> None:
     assert sorted(violations) == []
 
 
-def test_replan_shared_contract_has_no_forge_or_process_dependencies() -> None:
-    contract_modules = {"replan.models", "replan.plan"}
+def _pure_contract_violations(contract_modules: set[str]) -> list[str]:
+    """Direct or transitive forge/process dependencies of dependency-free modules."""
     forbidden_roots = {
         "subprocess",
         "requests",
@@ -655,7 +656,21 @@ def test_replan_shared_contract_has_no_forge_or_process_dependencies() -> None:
             or dependency.startswith("forge.")
             or dependency == "infra.git_cli"
         )
-    assert violations == []
+    return violations
+
+
+def test_replan_shared_contract_has_no_forge_or_process_dependencies() -> None:
+    assert _pure_contract_violations({"replan.models", "replan.plan"}) == []
+
+
+def test_status_machine_is_pure_and_independent_of_forge_and_process_code() -> None:
+    """#1217: the role table and transition plan are Forge-independent values."""
+    assert _pure_contract_violations({"ledger.status_machine"}) == []
+    assert _import_graph()["ledger.status_machine"] == {"labels"}
+    assert (
+        _module_layer()["ledger.status_machine"]
+        == _module_layer()["ledger.status_labels"]
+    )
 
 
 def test_documented_subprocess_partition_matches_the_enforced_one() -> None:
@@ -726,6 +741,7 @@ def test_pyproject_uses_pep621_metadata_and_hatchling() -> None:
         "mypy>=1.10.1,<2.0.0",
         "types-pyyaml>=6.0.12.20240311,<7.0.0",
         "pytest-xdist>=3.8.0,<4.0.0",
+        "hypothesis>=6.100.0,<7.0.0",
     }
 
 

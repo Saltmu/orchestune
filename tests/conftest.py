@@ -38,6 +38,7 @@ pytest_plugins = [
     "tests.claim_helpers",
     "tests.environment_support",
     "tests.github_isolation",
+    "tests.hypothesis_profiles",
 ]
 
 GIT_ENV_VARS_TO_CLEAR = DANGEROUS_GIT_ENV_VARS

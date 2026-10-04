@@ -231,12 +231,6 @@ def test_isolated_installation_and_skills_portability(
         if (venv_dir / "Scripts" / "python.exe").exists()
         else venv_dir / "bin" / "python"
     )
-    venv_orchestune = (
-        venv_dir / "Scripts" / "orchestune.exe"
-        if (venv_dir / "Scripts" / "orchestune.exe").exists()
-        else venv_dir / "bin" / "orchestune"
-    )
-
     res_install = subprocess.run(
         ["uv", "pip", "install", str(wheel_path), "--python", str(venv_python)],
         capture_output=True,
@@ -245,6 +239,13 @@ def test_isolated_installation_and_skills_portability(
         check=False,
     )
     assert res_install.returncode == 0, f"uv pip install failed: {res_install.stderr}"
+
+    venv_orchestune = (
+        venv_dir / "Scripts" / "orchestune.exe"
+        if (venv_dir / "Scripts" / "orchestune.exe").exists()
+        else venv_dir / "bin" / "orchestune"
+    )
+    assert venv_orchestune.is_file(), f"Missing console script: {venv_orchestune}"
 
     res_help = subprocess.run(
         [str(venv_orchestune), "skills", "--help"],
