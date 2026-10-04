@@ -578,3 +578,32 @@ class TestLoadOrchestuneConfig:
         )
         with pytest.raises(ValueError, match=r"\[tool\]"):
             load_orchestune_config(tmp_path)
+
+
+def test_cli_reports_shared_document_edges_in_text_and_json(tmp_path, capsys):
+    plan_path = tmp_path / "plan.md"
+    _write_plan(
+        plan_path,
+        """\
+        ---
+        subtasks:
+          - id: task-a
+            footprint: ["src/a.py", "docs/ja/architecture.md"]
+          - id: task-b
+            footprint: ["src/b.py", "docs/ja/architecture.md"]
+        ---
+        """,
+    )
+
+    _run_cli(["--plan", str(plan_path)])
+    output = capsys.readouterr().out
+    assert "task-a <-> task-b [reason: shared-document" in output
+    assert "docs/ja/architecture.md" in output
+    assert "Precedence edges:" not in output or "task-a ->" not in output
+
+    data = _run_cli_json(["--plan", str(plan_path)], capsys)
+    document_edges = [
+        e for e in data["conflict_edges"] if e["reason"] == "shared-document"
+    ]
+    assert document_edges[0]["resources"] == ["docs/ja/architecture.md"]
+    assert data["edges"] == []

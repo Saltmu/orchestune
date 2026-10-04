@@ -621,3 +621,64 @@ class TestLaunchQuotaPrimaryConcurrency:
         state = RunState(active_worktrees={}, launch_history=[self.NOW - 5400])
         assert self._quota(state, 1, window=7200) == 0
         assert self._quota(state, 1, window=3600) == 1
+
+
+class TestSharedDocumentConflictsInSelection:
+    """#724: shared-document edges reuse the existing exclusion path."""
+
+    def _graph(self):
+        from orchestune.dag.documents import build_shared_document_conflicts
+        from orchestune.dag.models import SubTask
+
+        subtasks = [
+            SubTask(
+                id=f"task-{n}",
+                description="",
+                footprint=("docs/ja/usage.md",),
+                symbols=(),
+                depends_on=(),
+                risk=False,
+                risk_reasons=(),
+            )
+            for n in (1, 2, 3)
+        ]
+        return ConflictGraph(tuple(build_shared_document_conflicts(subtasks)))
+
+    def test_same_batch_selects_only_one_document_writer(self):
+        state = RunState(active_worktrees={}, launch_history=[])
+        tasks = [_task(1), _task(2), _task(3)]
+
+        selected = select_next_tasks(
+            tasks,
+            state,
+            now=1_700_000_000.0,
+            max_concurrent=3,
+            max_launches_per_window=3,
+            window_seconds=3600,
+            conflict_graph=self._graph(),
+        )
+
+        assert len(selected) == 1
+
+    def test_running_document_writer_blocks_candidates(self):
+        state = RunState(
+            active_worktrees={
+                "1": make_test_active_worktree(
+                    1, branch="b", worktree_path="w", pid=1, started_at=1_699_999_000.0
+                )
+            },
+            launch_history=[],
+        )
+
+        selected = select_next_tasks(
+            [_task(2), _task(3)],
+            state,
+            now=1_700_000_000.0,
+            max_concurrent=3,
+            max_launches_per_window=3,
+            window_seconds=3600,
+            conflict_graph=self._graph(),
+            active_subtask_ids={"task-1"},
+        )
+
+        assert selected == []

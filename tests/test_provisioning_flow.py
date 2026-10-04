@@ -920,3 +920,27 @@ class TestLinkSubtaskRelationships:
         assert result.parent_linked is True
         assert result.unresolved_dependencies == ("dep-1",)
         assert forge.blocked_by[103] == [102]
+
+
+class TestProvisioningDagSharedDocuments:
+    def test_shared_document_edges_are_kept_without_dependencies(self, tmp_path: Path):
+        from orchestune.provisioning.flow import _build_provisioning_dag
+
+        subtasks = [
+            SubTask(
+                id=name,
+                description="",
+                footprint=(f"src/{name}.py", "docs/ja/architecture.md"),
+                symbols=(),
+                depends_on=(),
+                risk=False,
+                risk_reasons=(),
+            )
+            for name in ("a", "b")
+        ]
+
+        dag = _build_provisioning_dag(subtasks, tmp_path)
+
+        assert dag.edges == []
+        (edge,) = (e for e in dag.conflict_graph.edges if e.reason == "shared-document")
+        assert edge.resources == ("docs/ja/architecture.md",)

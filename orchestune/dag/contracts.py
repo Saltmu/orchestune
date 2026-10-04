@@ -30,8 +30,10 @@ import re
 from collections.abc import Iterable
 from typing import Protocol
 
+from orchestune.dag.documents import declares_shared_document, is_shared_document_path
 from orchestune.dag.models import (
     ConflictEdge,
+    ConflictGraph,
     DagEdge,
     SubTask,
     is_ignored_footprint,
@@ -52,6 +54,9 @@ _SHARED_CONTRACT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
 )
+
+
+_CONTRACT_RESOURCE_PREFIX = "shared_contract:"
 
 
 def _categorize(path: str) -> str | None:
@@ -83,17 +88,27 @@ def is_contract_writer(subtask: SharedContractTask) -> bool:
     触れない（依存・importするだけの）消費者サブタスクも同じタグを持ち得る。
     そうした消費者同士は互いに未接続でも安全に並列実行できるため、比較対象
     から除外する必要がある。書き込み者かどうかは、明示的な
-    `writes_shared_contract`フラグ、またはfootprintがいずれかの共有拡張
-    ポイントカテゴリに一致するかで判定する（後者は一般的な命名のレジストリ
+    `writes_shared_contract`フラグ、footprintがいずれかの共有拡張ポイント
+    カテゴリに一致するか、または共有文書（`docs/`配下のMarkdown、#724）を
+    footprintへ宣言しているかで判定する（カテゴリ一致は一般的な命名のレジストリ
     ファイル等を自動検出するためのヒューリスティックであり、命名パターンに
     一致しない独自のファイル名を書き込む場合は明示的なフラグの指定が必要）。
+    文書を読むだけでfootprintへ含めない消費者はwriterにならない。この判定は
+    `dag_ignore_patterns`では解除されない（除外設定は自動検出だけに作用する）。
     """
-    return subtask.writes_shared_contract or _touches_hotspot_category(subtask)
+    return (
+        subtask.writes_shared_contract
+        or _touches_hotspot_category(subtask)
+        or declares_shared_document(subtask)
+    )
 
 
 def _representative_path(subtask: SubTask) -> str:
     for path in subtask.footprint:
         if _categorize(path) is not None:
+            return path
+    for path in subtask.footprint:
+        if is_shared_document_path(path):
             return path
     return subtask.footprint[0] if subtask.footprint else "(footprint未指定)"
 
@@ -210,17 +225,61 @@ def _unordered_pairs(
     ]
 
 
-def _format_warning(label: str, entries: list[tuple[str, str]], hint: str) -> str:
+def _format_warning(
+    label: str,
+    entries: list[tuple[str, str]],
+    hint: str,
+    pairs: list[tuple[str, str]],
+) -> str:
+    """排他と先行関係は別の事実なので、並列実行を断定せず未指定の先行関係を示す。"""
     detail = ", ".join(f"{subtask_id}:{path}" for subtask_id, path in entries)
+    unresolved = ", ".join(f"{left}×{right}" for left, right in pairs)
     return (
-        f"{label}に複数サブタスクが並列実行され得る順序関係のまま触れています。"
-        f"{hint}: {detail}"
+        f"{label}に複数サブタスクが触れていますが、DAG上の先行関係（depends_on）が"
+        "未指定で、共有契約の所有者・順序要否の確認が必要です。"
+        f"{hint}: {detail}（未解決ペア: {unresolved}）"
     )
+
+
+def _protected_contracts(
+    conflict_graph: ConflictGraph | None,
+) -> dict[frozenset[str], set[str]]:
+    """明示契約`shared_contract:C`の排他辺を持つペアと契約IDの対応を返す。"""
+    protected: dict[frozenset[str], set[str]] = {}
+    if conflict_graph is None:
+        return protected
+    for edge in conflict_graph.edges:
+        if edge.reason != "shared-contract":
+            continue
+        for resource in edge.resources:
+            if resource.startswith(_CONTRACT_RESOURCE_PREFIX):
+                protected.setdefault(edge.pair, set()).add(
+                    resource[len(_CONTRACT_RESOURCE_PREFIX) :]
+                )
+    return protected
+
+
+def _is_protected(
+    pair: tuple[str, str],
+    contract_id: str | None,
+    protected: dict[frozenset[str], set[str]],
+) -> bool:
+    return contract_id is not None and contract_id in protected.get(
+        frozenset(pair), set()
+    )
+
+
+def _entries_for_pairs(
+    entries: list[tuple[str, str]], pairs: list[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    involved = {subtask_id for pair in pairs for subtask_id in pair}
+    return [entry for entry in entries if entry[0] in involved]
 
 
 def _check_explicit_contract_warnings(
     subtasks: list[SubTask],
     reachable: dict[str, set[str]],
+    protected: dict[frozenset[str], set[str]],
     warned_pairs: set[frozenset[str]],
     warnings: list[str],
 ) -> None:
@@ -234,15 +293,20 @@ def _check_explicit_contract_warnings(
 
     for contract_id, entries in sorted(explicit_groups.items()):
         ids = sorted({subtask_id for subtask_id, _ in entries})
-        pairs = _unordered_pairs(ids, reachable)
+        pairs = [
+            pair
+            for pair in _unordered_pairs(ids, reachable)
+            if not _is_protected(pair, contract_id, protected)
+        ]
         if len(ids) < 2 or not pairs:
             continue
         warned_pairs.update(frozenset(pair) for pair in pairs)
         warnings.append(
             _format_warning(
                 f"共有コントラクト（shared_contract: {contract_id}）",
-                entries,
+                _entries_for_pairs(entries, pairs),
                 "依存順序（depends_on）の追加を検討してください",
+                pairs,
             )
         )
 
@@ -250,9 +314,15 @@ def _check_explicit_contract_warnings(
 def _check_heuristic_contract_warnings(
     subtasks: list[SubTask],
     reachable: dict[str, set[str]],
+    protected: dict[frozenset[str], set[str]],
     warned_pairs: set[frozenset[str]],
     warnings: list[str],
 ) -> None:
+    contracts = {
+        subtask.id: subtask.shared_contract
+        for subtask in subtasks
+        if is_contract_writer(subtask)
+    }
     heuristic_touches: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for subtask in subtasks:
         seen_keys: set[tuple[str, str]] = set()
@@ -272,22 +342,42 @@ def _check_heuristic_contract_warnings(
             pair
             for pair in _unordered_pairs(ids, reachable)
             if frozenset(pair) not in warned_pairs
+            and not _is_same_protected_contract(pair, contracts, protected)
         ]
         if len(ids) < 2 or not pairs:
             continue
         warnings.append(
             _format_warning(
                 f"共有拡張ポイント（カテゴリ: {category}, scope: {scope or '.'}）",
-                entries,
+                _entries_for_pairs(entries, pairs),
                 "shared_contract識別子の付与、またはshared-contract/"
                 "integration-scaffoldタスクの導入を検討してください",
+                pairs,
             )
         )
+
+
+def _is_same_protected_contract(
+    pair: tuple[str, str],
+    contracts: dict[str, str | None],
+    protected: dict[frozenset[str], set[str]],
+) -> bool:
+    """両者が同じ明示契約のwriterで、その契約の排他辺を確認できるか。"""
+    left, right = pair
+    contract_id = contracts.get(left)
+    return (
+        left in contracts
+        and right in contracts
+        and contract_id == contracts[right]
+        and _is_protected(pair, contract_id, protected)
+    )
 
 
 def find_unowned_shared_contract_hotspots(
     subtasks: list[SubTask],
     edges: list[DagEdge],
+    *,
+    conflict_graph: ConflictGraph | None = None,
 ) -> list[str]:
     """所有者不明の共有拡張ポイントに対する警告メッセージ一覧を返す。
 
@@ -296,12 +386,22 @@ def find_unowned_shared_contract_hotspots(
        明示したサブタスク群）のうち、実際に共有ファイルへ「書き込む」サブタスク
        同士（`is_contract_writer`参照）。
     2. カテゴリとディレクトリスコープに基づくヒューリスティックなフォールバック。
+
+    `conflict_graph`を渡すと、同じ明示契約Cのwriterペアのうち`shared-contract`
+    かつ`shared_contract:C`の排他辺を確認できるものを警告から除外する（#724）。
+    similarity・shared-document・hotspot辺や別契約の辺では抑制しない。
+    省略時は排他確認をせず従来の保守的な判定を維持する。
     """
     reachable = _forward_reachable((subtask.id for subtask in subtasks), edges)
+    protected = _protected_contracts(conflict_graph)
     warnings: list[str] = []
     warned_pairs: set[frozenset[str]] = set()
 
-    _check_explicit_contract_warnings(subtasks, reachable, warned_pairs, warnings)
-    _check_heuristic_contract_warnings(subtasks, reachable, warned_pairs, warnings)
+    _check_explicit_contract_warnings(
+        subtasks, reachable, protected, warned_pairs, warnings
+    )
+    _check_heuristic_contract_warnings(
+        subtasks, reachable, protected, warned_pairs, warnings
+    )
 
     return warnings

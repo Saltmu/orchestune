@@ -167,3 +167,57 @@ def test_json_separates_precedence_and_conflict_edges():
     assert dag["precedence_edges"][0]["reason"] == "explicit"
     assert dag["conflict_edges"][0]["reason"] == "similarity"
     assert set(dag["conflict_edges"][0]["resources"]) == {"src/shared.py"}
+
+
+def _document_subtasks():
+    return [
+        _subtask(f"task-{name}", [f"src/{name}.py", "docs/ja/architecture.md"], [])
+        for name in ("a", "b", "c")
+    ]
+
+
+def test_recompute_detects_added_shared_document_conflict():
+    subtasks = {
+        "a": _subtask("a", ["src/a.py"], []),
+        "b": _subtask("b", ["src/b.py", "docs/ja/architecture.md"], []),
+    }
+
+    after, conflicts = recompute_dag_for_footprint_change(
+        subtasks,
+        subtask_id="a",
+        updated_footprint=["src/a.py", "docs/ja/architecture.md"],
+        threshold=0.99,
+    )
+
+    assert [(c.subtask_id, c.other_subtask_id) for c in conflicts] == [("a", "b")]
+    assert conflicts[0].reason == "shared-document"
+    assert conflicts[0].resources == ("docs/ja/architecture.md",)
+    assert after.edges == []
+    assert after.conflict_graph.has_conflict("a", "b")
+
+
+def test_recompute_keeps_document_edge_for_explicitly_ordered_pair():
+    subtasks = {
+        "a": _subtask("a", ["src/a.py"], []),
+        "b": _subtask("b", ["docs/x.md"], [], depends_on=["a"]),
+    }
+
+    after, conflicts = recompute_dag_for_footprint_change(
+        subtasks, subtask_id="a", updated_footprint=["docs/x.md"]
+    )
+
+    assert conflicts == []
+    assert after.conflict_graph.has_conflict("a", "b")
+    assert [(e.source, e.target) for e in after.edges] == [("a", "b")]
+
+
+def test_document_edges_do_not_change_precedence_or_cycle_detection():
+    dag = build_dag(_document_subtasks())
+    assert dag.edges == []
+    assert dag.topological_order == ["task-a", "task-b", "task-c"]
+    assert {e.reason for e in dag.conflict_graph.edges} >= {"shared-document"}
+    assert to_dict_reasons(dag) >= {"shared-document"}
+
+
+def to_dict_reasons(dag):
+    return {edge["reason"] for edge in dag.to_dict()["conflict_edges"]}
