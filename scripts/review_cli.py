@@ -457,6 +457,15 @@ def _fail(args: argparse.Namespace, error: Exception, exit_code: int) -> int:
     return exit_code
 
 
+def _load_inputs(args: argparse.Namespace) -> tuple[object, str | None]:
+    with open(args.review_state_file, encoding="utf-8") as state_file:
+        state = json.load(state_file)
+    body_text = (
+        Path(args.body_file).read_text(encoding="utf-8") if args.body_file else None
+    )
+    return state, body_text
+
+
 def run_offline(
     args: argparse.Namespace,
     *,
@@ -465,20 +474,17 @@ def run_offline(
 ) -> int:
     """One offline evaluation or pre-post validation; returns the process exit code.
 
-    Never posts, polls, or calls gh. Contract violations return Exit 2 and a
-    round-limit violation Exit 12; unreadable input or output raises, which the
-    caller reports as Exit 2 as well.
+    Never posts, polls, or calls gh. Contract violations and unreadable or malformed
+    input return Exit 2 and a round-limit violation Exit 12 (a failed
+    --validate-request also overwrites any stale receipt); an unwritable output
+    raises, which the caller reports as Exit 2 as well.
     """
-    with open(args.review_state_file, encoding="utf-8") as state_file:
-        state = json.load(state_file)
-    body_text = (
-        Path(args.body_file).read_text(encoding="utf-8") if args.body_file else None
-    )
     try:
+        state, body_text = _load_inputs(args)
         outcome = _offline_outcome(args, state, now or _utc_now(), body_text)
     except RoundLimitError as error:
         return _fail(args, error, EXIT_MAX_ROUNDS)
-    except (EvidenceContractError, ValueError) as error:
+    except (EvidenceContractError, ValueError, OSError) as error:
         return _fail(args, error, EXIT_INTERNAL_ERROR)
     payload = outcome.payload
     if args.validate_request:

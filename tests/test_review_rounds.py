@@ -319,3 +319,21 @@ def test_markers_after_a_properly_closed_fence_are_still_read(body: str) -> None
     item = {"id": 9, "body": f"@claude review\n{body}", "created_at": at(1)}
     parsed = parse_trigger(item)
     assert parsed is not None and parsed.round == 3
+
+
+@pytest.mark.parametrize("opener", ["```lang`x", "``` a`b"])
+def test_backtick_opener_with_a_backtick_info_string_is_not_a_fence(
+    opener: str,
+) -> None:
+    item = {
+        "id": 9,
+        "body": f"@claude review\n{opener}\n{MARKERS}",
+        "created_at": at(1),
+    }
+    parsed = parse_trigger(item)
+    assert parsed is not None and parsed.round == 3
+
+
+def test_tilde_opener_may_contain_backticks_in_its_info_string() -> None:
+    body = f"~~~ a`b\n{MARKERS}\n~~~"
+    assert parse_trigger({"id": 9, "body": body, "created_at": at(1)}) is None

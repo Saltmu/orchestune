@@ -68,7 +68,8 @@ def effective_lines(body: str | None) -> list[str]:
     """Stripped lines outside fenced code, block quotes and indented code.
 
     A fence closes only on the same character, at least as long as the opener and
-    without an info string (CommonMark); anything else inside it stays content.
+    without an info string (CommonMark); anything else inside it stays content. A
+    backtick opener whose info string has a backtick is not a fence at all.
     """
     lines: list[str] = []
     fence: str | None = None
@@ -77,9 +78,10 @@ def effective_lines(body: str | None) -> list[str]:
         if opening:
             token, rest = opening[1], opening[2]
             if fence is None:
-                fence = token
-                continue
-            if token[0] == fence[0] and len(token) >= len(fence) and not rest.strip():
+                if token[0] != "`" or "`" not in rest:  # a backtick info string
+                    fence = token  # makes the line plain text, not a fence opener
+                    continue
+            elif token[0] == fence[0] and len(token) >= len(fence) and not rest.strip():
                 fence = None
                 continue
         stripped = raw.strip()

@@ -926,3 +926,52 @@ def test_cli_unknown_snapshot_version_and_bad_json_are_exit_2(offline):
     with patch("sys.argv", argv), pytest.raises(SystemExit) as exc:
         main()
     assert exc.value.code == 2
+
+
+def test_cli_input_loading_failure_also_overwrites_a_stale_receipt(offline):
+    out = offline.tmp / "request.json"
+    stale = json.dumps({"validation_status": "valid", "trigger_body": "old"})
+    reply = write_text(offline.tmp, "reply.md", table(["issue_comment:30"]))
+    state = first_round(comment(30, 15))
+    cases = [
+        ("broken-json", ["--body-file", reply]),
+        ("good-state", ["--body-file", str(offline.tmp / "missing-reply.md")]),
+    ]
+    for state_name, extra in cases:
+        out.write_text(stale, encoding="utf-8")
+        if state_name == "broken-json":
+            (offline.tmp / "broken.json").write_text("{not json", encoding="utf-8")
+            code = _run_raw(offline, "broken.json", extra, out)
+        else:
+            code = offline(
+                state, "--validate-request", *extra, "--output-file", str(out)
+            )
+        receipt = read_json(out)
+        assert code == 2, state_name
+        assert receipt["validation_status"] == "rejected", state_name
+        assert "trigger_body" not in receipt, state_name
+    missing = offline.tmp / "no-such-state.json"
+    out.write_text(stale, encoding="utf-8")
+    assert _run_raw(offline, missing.name, [], out) == 2
+    assert read_json(out)["validation_status"] == "rejected"
+
+
+def _run_raw(offline, state_name, extra, out) -> int:
+    from scripts.wait_for_review import main
+
+    argv = [
+        "wait",
+        "--bot-name",
+        "claude",
+        "--review-state-file",
+        str(offline.tmp / state_name),
+        "--validate-request",
+        *extra,
+        "--output-file",
+        str(out),
+    ]
+    with patch("sys.argv", argv), pytest.raises(SystemExit) as exc:
+        main()
+    code = exc.value.code
+    assert isinstance(code, int)
+    return code
