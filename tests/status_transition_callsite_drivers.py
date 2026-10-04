@@ -35,7 +35,8 @@ from orchestune.dispatch import (
     status_repair,
 )
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.gc import completion, zombies
+from orchestune.dispatch.cycle_events import CompletionEvent
+from orchestune.dispatch.gc import cloud_completion, completion, zombies
 from orchestune.integrator.steps import AutoMergeChildIntegrationStep
 from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import RunState
@@ -260,7 +261,7 @@ def completion_done_cleanup(env: Env) -> None:
 
 def completion_abandoned_reclaim(env: Env) -> None:
     _stub_completion(env)
-    outcome = completion._handle_abandoned_cloud_reclaim(
+    outcome = cloud_completion._handle_abandoned_cloud_reclaim(
         _active(), env.config, env.held, 1, lambda: None
     )
     assert outcome == "abandoned_pr_requeued"
@@ -324,13 +325,13 @@ def recovery_requeue(env: Env) -> None:
     assert result.status.value == env.params.get("expect", "applied"), result
 
 
-def completion_abandoned_finalize(env: Env) -> dict[str, Any]:
+def completion_abandoned_finalize(env: Env) -> CompletionEvent:
     """Guard path: an Issue that already needs a human is only reclaimed."""
     _stub_completion(env)
     env.monkeypatch.setattr(
-        completion, "worktree_has_uncommitted_changes", lambda *a: False
+        cloud_completion, "worktree_has_uncommitted_changes", lambda *a: False
     )
-    event: dict[str, Any] = completion._finalize_abandoned_cloud_worktree(
+    event = cloud_completion._finalize_abandoned_cloud_worktree(
         _active(), _task(env), env.config
     )
     return event
