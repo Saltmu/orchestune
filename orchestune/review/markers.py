@@ -16,6 +16,22 @@ def review_trigger_marker(bot_name: str) -> str:
     return f"<!-- orchestune:review-trigger bot={bot_name.lower()} -->"
 
 
+def review_reply_marker() -> str:
+    return "<!-- orchestune:review-reply -->"
+
+
+def is_review_reply(body: str | None) -> bool:
+    """True when the first non-blank line declares a review-reply comment.
+
+    A declaration of comment kind, not an authenticated identity: mentions in the
+    body, quotes, code spans and fences are never treated as the declaration.
+    """
+    for line in (body or "").splitlines():
+        if line.strip():
+            return line.strip() == review_reply_marker()
+    return False
+
+
 def review_round_marker(round_num: int) -> str:
     return f"<!-- orchestune:review-round {round_num} -->"
 

@@ -24,17 +24,15 @@ requesting another round.
 
 Interactive: after PR creation require explicit `claude` / `codex` / `skip`; absent input is not selection. Do not review, merge, or report completion before selection. Non-interactive: use resolved reviewer; unresolved means explicit `--bot-name skip`. Skip records `<!-- orchestune:review-selection reviewer=skip head=<SHA> -->`, never pass, and the integration gate (default required) stops at `status:blocked-human-review`. Re-review inherits the previous trigger's reviewer; `--switch-reviewer` requires explicit user instruction.
 
-CLI/gh Round 2+ (including retries/resumes and `--no-post`) requires `--body-file` with exactly one fenced YAML table (info string `orchestune-review-judgments`):
+CLI/gh Round 2+ (including retries/resumes and `--no-post`) requires `--body-file` with exactly one fenced YAML table (info string `orchestune-review-judgments`). Example reply file (its first line is the no-re-review marker; see "No re-review"):
 ````markdown
+<!-- orchestune:review-reply -->
+Round 1/5
+
 ```orchestune-review-judgments
 round: 1
 findings:
-  - source: inline_comment:123
-    location: app.py:42
-    judgment: adopt
-    status: resolved
-    basis: Regression against the interface contract
-    evidence: Commit abc123 and regression test
+  - {source: "inline_comment:123", location: "app.py:42", judgment: adopt, status: resolved, basis: "Regression against the interface contract", evidence: "Commit abc123 and regression test"}
 ```
 ````
 `round` is the judged previous round; all six finding fields are nonempty strings. Judgment/status enums are those in step 2; `deferred` requires a basis and cannot hide required findings. Use `issue_comment:<id>`, `review:<id>`, `inline_comment:<id>` (URL if no id) as source, one row per distinct finding; multiple findings may share a source. Coverage conservatively requires every nonempty current source, including Jev filtered/bypassed and clean summaries (use `already_addressed` with a no-findings basis); an empty acquisition uses `findings: []`. `orchestune.review.judgment` validates structure and source coverage; judgment/status consistency and prose verdicts remain LLM decisions.
@@ -58,7 +56,7 @@ Loop (up to 5 rounds):
 ```
 
 `review-reply.md` (`Round X/5`, per-finding rows from step 2, follow-up Issue links) must reach the PR as a comment when any finding was judged. CLI/gh re-review: pass it via `--body-file`; do not post a separate trigger comment. The offline `--review-state-file` path never reads `--body-file`, posts, or proves round/SHA.
-No re-review (only when the PR head is unchanged since the reviewed trigger, e.g. every finding declined/already_addressed/duplicate): before Step 12 run `gh pr comment <PR_NUMBER> --body-file <session-dir>/review-reply.md` (GitHub MCP backend: post the equivalent PR comment without a mention or trigger markers); this is not a trigger comment, so the double-posting ban does not apply. A fix commit changes the head (`review_head_mismatch`), so adopted fixes always need another `wait_for_review.py` round (CLI/gh via `--body-file`, MCP via the posting below); if the round limit is exhausted, escalate with `orchestune complete --issue <N> --result blocked --reason review-round-limit`.
+No re-review (only when the PR head is unchanged since the reviewed trigger, e.g. every finding declined/already_addressed/duplicate): put `<!-- orchestune:review-reply -->` as the first non-blank line of `review-reply.md` (once; a same-bot comment without it is review evidence and needs its own judgment row), keeping the single judgments block, Round, basis, evidence and follow-up Issues; before Step 12 run `gh pr comment <PR_NUMBER> --body-file <session-dir>/review-reply.md` (GitHub MCP backend: post that file's body as the equivalent PR comment without a mention or trigger markers) and pass the same file to `complete --review-reply`; this is not a trigger comment, so the double-posting ban does not apply. Never add trigger/round/head markers or an `@<bot> review` line to it, never mix review findings into a marker-bearing comment, and re-reviews still use `wait_for_review.py --body-file` (a file that keeps the reply marker is accepted; the script's trigger markers apply and that post is excluded as a trigger). A fix commit changes the head (`review_head_mismatch`), so adopted fixes always need another `wait_for_review.py` round (CLI/gh via `--body-file`, MCP via the posting below); if the round limit is exhausted, escalate with `orchestune complete --issue <N> --result blocked --reason review-round-limit`.
 
 ### MCP posting (GitHub MCP / App)
 The MCP client, not the offline CLI, posts one combined normal PR comment (`issue_comments`): judgments for the previous round plus the next trigger. Never use an inline reply, a GitHub review, or two separate comments.

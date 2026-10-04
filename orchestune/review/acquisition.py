@@ -13,6 +13,8 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from orchestune.review.markers import is_review_reply
+
 SCHEMA_VERSION = 1
 
 ACQUISITION_ACQUIRED = "acquired"
@@ -71,6 +73,23 @@ def _filter_bot_items(
     ]
 
 
+def _filter_bot_issue_comments(
+    items: list[dict[str, Any]],
+    bot_name: str,
+    exclude_ids: set[int | str] | None = None,
+) -> list[dict[str, Any]]:
+    """Bot PR comments minus review replies, which are judgments, not review evidence.
+
+    Only normal PR comments can declare a reply (first non-blank line marker);
+    reviews and inline comments keep using `_filter_bot_items` (#1207).
+    """
+    return [
+        item
+        for item in _filter_bot_items(items, bot_name, exclude_ids)
+        if not is_review_reply(item.get("body"))
+    ]
+
+
 def _get_item_timestamp(item: dict[str, Any]) -> str:
     return str(
         item.get("updated_at")
@@ -88,7 +107,7 @@ def _bot_candidate_items(
     data: ReviewState, bot_name: str, exclude_ids: set[int | str] | None = None
 ) -> list[dict[str, Any]]:
     return [
-        *_filter_bot_items(data["issue_comments"], bot_name, exclude_ids),
+        *_filter_bot_issue_comments(data["issue_comments"], bot_name, exclude_ids),
         *_filter_bot_items(data["reviews"], bot_name, exclude_ids),
     ]
 
@@ -177,8 +196,14 @@ def _build_snapshot(
 ) -> dict[str, str]:
     """Record bot activity for polling without coupling it to a data transport."""
     snapshot: dict[str, str] = {}
-    for prefix, section in (("comment", "issue_comments"), ("review", "reviews")):
-        for item in _filter_bot_items(data[section], bot_name, exclude_ids):
+    for prefix, items in (
+        (
+            "comment",
+            _filter_bot_issue_comments(data["issue_comments"], bot_name, exclude_ids),
+        ),
+        ("review", _filter_bot_items(data["reviews"], bot_name, exclude_ids)),
+    ):
+        for item in items:
             snapshot[f"{prefix}_{item.get('id')}"] = (
                 f"{_get_item_timestamp(item)}:{len(str(item.get('body') or ''))}"
             )
@@ -264,6 +289,24 @@ def _classify_inline_provenance(
     return _classify_provenance(_get_item_created_timestamp(item), round_started_at)
 
 
+def _review_candidates(
+    data: ReviewState, bot_name: str, exclude_ids: set[int | str] | None
+) -> list[tuple[dict[str, Any], str]]:
+    """Bot PR comments (replies excluded) and formal reviews, tagged with their kind."""
+    return [
+        *(
+            (item, "issue_comment")
+            for item in _filter_bot_issue_comments(
+                data["issue_comments"], bot_name, exclude_ids
+            )
+        ),
+        *(
+            (item, "review")
+            for item in _filter_bot_items(data["reviews"], bot_name, exclude_ids)
+        ),
+    ]
+
+
 def extract_review_result(
     data: ReviewState,
     bot_name: str,
@@ -278,16 +321,7 @@ def extract_review_result(
     `unassociated` (no usable timestamp) — nothing is discarded. Returns None only
     when the bot has posted no activity of any kind.
     """
-    review_candidates = [
-        *[
-            (item, "issue_comment")
-            for item in _filter_bot_items(data["issue_comments"], bot_name, exclude_ids)
-        ],
-        *[
-            (item, "review")
-            for item in _filter_bot_items(data["reviews"], bot_name, exclude_ids)
-        ],
-    ]
+    review_candidates = _review_candidates(data, bot_name, exclude_ids)
     inline_candidates = _filter_bot_items(
         data["inline_comments"], bot_name, exclude_ids
     )

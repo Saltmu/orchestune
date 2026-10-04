@@ -11,6 +11,7 @@ from orchestune.complete.journal import CompletionJournalError
 from orchestune.complete.review_evidence import verify_review_evidence
 from orchestune.review.markers import (
     review_head_marker,
+    review_reply_marker,
     review_round_marker,
     review_selection_marker,
     review_trigger_marker,
@@ -444,3 +445,91 @@ def test_legacy_journal_validation_ignores_only_absent_review():
     assert not _same_validation(
         new, {"validation": {**new["validation"], "review": {"verdict": "skipped"}}}
     )
+
+
+# --- #1207: same-bot review replies are not evidence ---------------------------
+
+
+def _reply(id_=9, body=None, login="claude[bot]"):
+    return dict(
+        id=id_,
+        body=body or f"{review_reply_marker()}\nRound 1 judgments",
+        user={"login": login},
+        created_at="2026-10-03T00:05:00Z",
+    )
+
+
+def test_same_bot_marked_reply_is_not_a_required_source(evidence):
+    _, forge, _, _ = evidence
+    forge.comments.append(_reply())
+    summary = verify(evidence)
+    assert summary.verdict == "pass"
+    assert summary.reviewed_head_sha == HEAD
+
+
+def test_same_bot_unmarked_reply_still_requires_judgment(evidence):
+    _, forge, _, _ = evidence
+    forge.comments.append(_reply(body="Round 1 judgments (no marker)"))
+    with pytest.raises(CompletionJournalError):
+        verify(evidence)
+
+
+def test_marked_reply_in_review_body_does_not_hide_source(evidence):
+    _, forge, _, table = evidence
+    forge.reviews = [
+        dict(
+            id=3,
+            body=f"{review_reply_marker()}\nA real finding",
+            submitted_at="2026-10-03T00:02:00Z",
+            commit_id=HEAD,
+            user={"login": "claude[bot]"},
+        )
+    ]
+    with pytest.raises(CompletionJournalError):
+        verify(evidence)
+    table["findings"].append({**table["findings"][0], "source": "review:3"})
+    rewrite(evidence)
+    assert verify(evidence).verdict == "pass"
+
+
+def test_codex_marked_reply_is_not_a_required_source(evidence):
+    request, forge, pr, table = evidence
+    request = replace(request, payload=replace(request.payload, reviewer="codex"))
+    forge.comments = forge.comments[:1]
+    forge.comments[0]["body"] = forge.comments[0]["body"].replace("claude", "codex")
+    forge.reviews = [
+        dict(
+            id=5,
+            body="Reviewed",
+            commit_id=HEAD,
+            submitted_at="2026-10-03T00:01:00Z",
+            user={"login": "chatgpt-codex-connector[bot]"},
+        )
+    ]
+    forge.comments.append(_reply(login="chatgpt-codex-connector[bot]"))
+    table["findings"][0]["source"] = "review:5"
+    rewrite(evidence)
+    summary = verify_review_evidence(request, forge, pr, HEAD)
+    assert (summary.bot, summary.review_target_sha_source) == ("codex", "review_commit")
+
+
+def test_marked_reply_changes_do_not_break_pending_resume(
+    tmp_path, monkeypatch, evidence
+):
+    from orchestune.complete.service import complete_task
+
+    request, forge = publication_with_evidence(tmp_path, monkeypatch, evidence)
+    forge.inject = (
+        lambda op, after: (_ for _ in ()).throw(OSError("offline"))
+        if op == "post"
+        else None
+    )
+    first = complete_task(request, forge=forge)
+    assert first.completion_id
+    forge.inject = lambda *_: None
+    reply = _reply()
+    evidence[1].comments.append(reply)
+    reply["body"] += "\nedited after the first attempt"
+    resumed = complete_task(request, forge=forge)
+    assert resumed.success, resumed.failure
+    assert len(forge.comments) == 1
