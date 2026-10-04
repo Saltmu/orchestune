@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 .venv/
 .pytest_cache/
+.hypothesis/
 .mypy_cache/
 .ruff_cache/
 .coverage

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import re
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from hypothesis import settings as hypothesis_settings
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.scoring import Task
@@ -39,6 +41,18 @@ pytest_plugins = [
     "tests.environment_support",
     "tests.github_isolation",
 ]
+
+# #1217: Hypothesis profile for the stateful status-machine tests. `print_blob`
+# makes a failing run print the `@reproduce_failure` blob; `HYPOTHESIS_PROFILE`
+# may select another registered profile (for example to try more examples).
+hypothesis_settings.register_profile(
+    "ci",
+    max_examples=100,
+    stateful_step_count=30,
+    deadline=None,
+    print_blob=True,
+)
+hypothesis_settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))
 
 GIT_ENV_VARS_TO_CLEAR = DANGEROUS_GIT_ENV_VARS
 SUITE_MARKERS = frozenset({"unit", "integration", "e2e"})
