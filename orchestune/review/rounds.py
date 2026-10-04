@@ -23,7 +23,7 @@ from orchestune.review.snapshot import (
     normalize_timestamp,
 )
 
-_FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
+_FENCE = re.compile(r"^\s{0,3}(?:(?:[-*+]|\d+[.)])\s+)?(`{3,}|~{3,})(.*)$")
 _TRIGGER_LINE = re.compile(
     r"<!--\s*orchestune:review-trigger bot=(claude|codex)\s*-->", re.I
 )
@@ -65,7 +65,7 @@ class PreviousRoundWindow:
 
 
 def effective_lines(body: str | None) -> list[str]:
-    """Stripped lines outside fenced code, block quotes and indented code.
+    """Column-0 lines outside fenced code (also inside list items) and block quotes.
 
     A fence closes only on the same character, at least as long as the opener and
     without an info string (CommonMark); anything else inside it stays content. A
@@ -85,7 +85,9 @@ def effective_lines(body: str | None) -> list[str]:
                 fence = None
                 continue
         stripped = raw.strip()
-        if fence or stripped.startswith(">") or raw.startswith(("    ", "\t")):
+        # Real markers start at column 0; indentation means a list item, an indented
+        # code block or a nested example.
+        if fence or stripped.startswith(">") or raw[:1].isspace():
             continue
         lines.append(stripped)
     return lines

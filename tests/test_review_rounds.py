@@ -337,3 +337,30 @@ def test_backtick_opener_with_a_backtick_info_string_is_not_a_fence(
 def test_tilde_opener_may_contain_backticks_in_its_info_string() -> None:
     body = f"~~~ a`b\n{MARKERS}\n~~~"
     assert parse_trigger({"id": 9, "body": body, "created_at": at(1)}) is None
+
+
+INDENTED_MARKERS = "\n".join(f"  {line}" for line in MARKERS.splitlines())
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # a fenced example nested under a list item
+        f"- example\n- ```\n{INDENTED_MARKERS}\n  ```",
+        f"1. example:\n   ```text\n{INDENTED_MARKERS}\n   ```",
+        # indented marker lines are never a trigger (real markers start at column 0)
+        INDENTED_MARKERS,
+        f"- item\n{INDENTED_MARKERS}",
+    ],
+)
+def test_markers_nested_under_a_list_or_indented_are_not_a_trigger(body: str) -> None:
+    item = {"id": 9, "body": body, "created_at": at(1)}
+    assert parse_trigger(item) is None
+    assert 9 not in trigger_comment_ids([item])
+
+
+def test_real_markers_after_a_list_nested_fenced_example_are_still_read() -> None:
+    reply = f"- example\n- ```\n{INDENTED_MARKERS}\n  ```\n"
+    body = build_trigger_body(reply, "claude", 4, HEAD)
+    parsed = parse_trigger({"id": 9, "body": body, "created_at": at(1)})
+    assert parsed is not None and parsed.round == 4
