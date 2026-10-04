@@ -98,12 +98,13 @@ subtasks:
 * **`proposed_changes`** (文字列のリスト, 任意, 既定値 `[]`): 起票されるIssue本文の「変更内容」に転記される変更方針。
 * **`verification_plan`** (文字列のリスト, 任意, 既定値 `[]`): 起票されるIssue本文の「修正・検証計画」に転記される検証手順。
 * **`risk`** (真偽値, 任意, 既定値 `false`): `true` を指定すると、自動判定の結果によらずリスクありとして明示的にフラグを立てます（リスク理由に `explicit` が追加されます）。`false` を指定してもパスやキーワードによる自動判定は無効化されません。
-* **`shared_contract`** (文字列, 任意, 既定値なし): レジストリやCLI配線のような共有拡張点を識別するタグ。`orchestune-dag` が比較するのは、その共有ファイルへ実際に**書き込む**と判定されたサブタスク同士のみで、契約に `depends_on` するだけの消費者（読み取り・importのみ）は対象外です。書き込み者pairはConflict Graphの排他制約となり、さらにPrecedence DAG上で順序付けられていない（どちらもどちらへも到達不能な）場合は警告も表示されます。
+* **`shared_contract`** (文字列, 任意, 既定値なし): レジストリやCLI配線のような共有拡張点を識別するタグ。`orchestune-dag` が比較するのは、その共有ファイルへ実際に**書き込む**と判定されたサブタスク同士のみで、契約に `depends_on` するだけの消費者（読み取り・importのみ）は対象外です。書き込み者pairはConflict Graphの排他制約となります。さらにPrecedence DAG上で順序付けられていない（どちらもどちらへも到達不能な）pairのうち、同じ契約の`shared-contract`排他辺で保護済みのpairを除いたものは、「先行関係が未指定で、所有者・順序要否の確認が必要」という警告として表示されます（排他と先行順序は別の事実で、排他辺は`depends_on`を生成しません）。
 * **`writes_shared_contract`** (真偽値, 任意, 既定値 `false`): このサブタスクが `shared_contract` のファイルへ書き込むことを明示します。書き込み者かどうかは、まず `footprint` のパスが以下の命名カテゴリに一致するかで自動判定されます。
     * `registry`: `registry` / `registration` / `registrar` を含むファイル名（例: `src/format_registry.py`）
     * `cli-wiring`: `cli.*` / `__main__.*` / `main.*`
     * `public-api`: `__init__.py` / `index.ts` / `index.js` / `index.tsx` / `index.jsx`
     * `dependency-manifest`: `pyproject.toml` / `package.json` / `poetry.lock` / `uv.lock` / `package-lock.json` / `yarn.lock` / `pnpm-lock.yaml` / `Cargo.toml` / `go.mod`
+    * 共有文書: リポジトリルート`docs/`配下の`.md`ファイルを`footprint`へ宣言している場合も書き込み者と判定されます（読むだけで`footprint`へ含めない消費者は書き込み者になりません）。この判定は`dag_ignore_patterns`では解除されません。
 
     上記に一致しない独自のファイル名（例: `src/db/connection.py`、`src/custom_hook.py`）へ書き込む場合は自動判定が働かないため、**`writes_shared_contract: true` の明示が必要です**。指定を怠ると、同じ `shared_contract` タグを付けていても双方が消費者と見なされ、警告は一切出ません。
 * **`execution_profile`** (文字列または`null`, 任意, 既定値 `null`): サブタスクを実行するエージェントの抽象実行プロファイル名（例: `fast-code`、`deep-reasoning`）。英小文字・数字・ハイフン・アンダースコアで構成され、32文字以内である必要があります。
@@ -203,7 +204,7 @@ orchestune dag --plan decomposition_plan.md
 
 | 設定項目 | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
-| `dag_ignore_patterns`（または`dag-ignore-patterns`） | `[]` | 正規表現文字列のリスト。**`footprint`のパスに対してのみ**マッチし、`symbols`は常に類似度スコアの入力に残る。マッチしたパスは、組み込みの無視リスト（`pyproject.toml`、`poetry.lock`、`uv.lock`、`logging.py`、`logger.py`、`config.py`、`settings.py`）に加えて、類似度Conflict Edgeのスコア入力とヒューリスティックなshared-contract hotspot競合から除外される。ただし、別の非除外パスや共有`symbols`があればsimilarity競合は残り、明示的な`shared_contract` writer競合と独立したwriter警告もこの設定では消えない。Precedence DAGは明示的な`depends_on`だけから成るため、`DagCycleError`にも影響しない。空文字列は全パスに一致するため拒否される。 |
+| `dag_ignore_patterns`（または`dag-ignore-patterns`） | `[]` | 正規表現文字列のリスト。**`footprint`のパスに対してのみ**マッチし、`symbols`は常に類似度スコアの入力に残る。マッチしたパスは、組み込みの無視リスト（`pyproject.toml`、`poetry.lock`、`uv.lock`、`logging.py`、`logger.py`、`config.py`、`settings.py`）に加えて、類似度Conflict Edgeのスコア入力、ヒューリスティックなshared-contract hotspot競合、および`shared-document`競合の自動検出から除外される。ただし、別の非除外パスや共有`symbols`があればsimilarity競合は残り、明示的な`shared_contract` writer競合と独立したwriter警告もこの設定では消えない。Precedence DAGは明示的な`depends_on`だけから成るため、`DagCycleError`にも影響しない。空文字列は全パスに一致するため拒否される。 |
 | `dag_similarity_threshold`（または`dag-similarity-threshold`） | `0.2` | `--threshold`（前述）の永続的なフォールバック値。`[0, 1]`の範囲のfloat。同じ設定ファイルから`orchestune provision`側のConflict Graph計算にも読まれるため、ここで調整した閾値がそちらで黙って無視されることはない。注意: `orchestune-dag`と`orchestune provision`はいずれも共通の`resolve_repo_root()`関数を使ってリポジトリルートを解決しており、これは上位へ`.git`を探索してリポジトリルートを特定する。そのため`--plan`がリポジトリルートより下のネストしたファイルを指す場合でも、両ツールは一貫して同じリポジトリルートの設定を参照する。 |
 
 #### 設定ファイルの記述例 (`orchestune.toml`)
@@ -220,7 +221,7 @@ dag_similarity_threshold = 0.35
 ### 主なエラー・警告検出
 1回の`Warnings:`出力に、以下の複数種類の警告が同時に含まれることがあります。各行の文言に応じて種類を判別してください。
 * **`DagCycleError`**: 依存関係（`depends_on`）に循環参照がある場合にエラーを出力します。
-* **競合辺**: `footprint` / `symbols` の類似度とshared-contract writer判定から、priorityやIDに依存しない対称な排他制約を生成します。テキスト出力では`Precedence edges:`と`Conflict edges:`、`--json`では`precedence_edges`と`conflict_edges`として分離されます（後方互換の`edges`はprecedenceだけです）。
+* **競合辺**: `footprint` / `symbols` の類似度、shared-contract writer判定、およびルート`docs/`配下の`.md`文書の正規化パス完全一致（`reason=shared-document`、`resources`は共有文書パス）から、priorityやIDに依存しない対称な排他制約を生成します。別文書（同じディレクトリの別ファイルや日英の別ファイル）は文書検出だけでは排他になりません。同時に更新させたくない契約は同じ`shared_contract`を宣言してwriterとして明示し、先行順序まで必要なら`depends_on`を指定してください。文書競合から`depends_on`は自動生成されず、類似度閾値も変わりません。テキスト出力では`Precedence edges:`と`Conflict edges:`、`--json`では`precedence_edges`と`conflict_edges`として分離されます（後方互換の`edges`はprecedenceだけです）。
 * **Shared-contract writer警告**: writer同士がPrecedence DAGで順序付けられていない場合は、Conflict Edgeに加えて非ブロッキング警告を表示します。
 * **実在検証（`footprint`/`symbols`）**: 宣言された `footprint` のパスや `symbols` のエントリが、現在のコードベース上に実在すると確認できない場合に警告します（例: `<subtask-id>: footprintに実在しないパスがあります` / `<subtask-id>: symbolsが実コードベースに見つかりません`）。これは必ずしもエラーではありません — ただし挙動は`footprint`と`symbols`で異なります: これから新規作成する`footprint`パスは常にこの警告が出ますが、新規追加予定の`symbols`エントリが警告されるのは検証が実際に実行された場合のみです。検証の実行には、footprint中に実在しparseに成功した`.py`ファイルが少なくとも1つあり、かつfootprint中の既存`.py`ファイルにparse失敗（構文エラー・エンコーディングエラー）が1件も無いことの両方が必要です（1件でもparse失敗ファイルがあると、そのsubtask全体で検証自体がスキップされます）。検証が実行されなかった場合、`symbols`の警告は一切出ません。警告が出ないことを「確認済み」と読み替えないでください。typo・パス誤りなのか、`footprint` の記載漏れ（衝突検知の見逃し）を疑うべきかの判断基準は [`orchestune` スキル](../../skills/orchestune/SKILL.md) のStage 2を参照してください。
 * **リスク検出**: 認証情報の露出や危険なコマンド実行の記述がある場合にフラグを設定します。

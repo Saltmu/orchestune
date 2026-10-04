@@ -500,3 +500,27 @@ def test_same_issue_blocks_interactive_claim_even_with_overlap() -> None:
 
     assert assessment.conflict is not None
     assert assessment.conflict.reason is ClaimConflictReason.SAME_ISSUE
+
+
+def test_document_writers_with_same_contract_conflict_but_readers_do_not() -> None:
+    """#724: DAGと同じwriter判定（文書footprint宣言）がclaimにも伝わる。"""
+    candidate = _active(10, footprint=("a.py",))
+    assert (
+        _conflict(
+            candidate,
+            _active(11, footprint=("z.py",)),
+            _task(10, footprint=("docs/ja/a.md",), contract="doc"),
+            _task(11, footprint=("docs/ja/b.md",), contract="doc"),
+        )
+        == ClaimConflictReason.SHARED_CONTRACT
+    )
+    consumer = _task(10, footprint=("src/consumer.py",), contract="doc")
+    writer = _task(11, footprint=("docs/ja/b.md",), contract="doc")
+    assert (
+        evaluate_claim_conflicts(
+            candidate,
+            RunState(active_worktrees={"11": _active(11, footprint=("z.py",))}),
+            _View({10: consumer, 11: writer}),
+        )
+        is None
+    )

@@ -2,6 +2,8 @@
 
 import textwrap
 
+import pytest
+
 from orchestune.dag.contracts import (
     _categorize,
     _scope,
@@ -350,7 +352,11 @@ class TestBuildDagWarningsIntegration:
         ---
         """
 
-    def test_build_dag_from_plan_surfaces_warning(self, tmp_path):
+    def test_build_dag_from_plan_suppresses_pair_protected_by_explicit_contract(
+        self, tmp_path
+    ):
+        """同じ明示契約のwriterペアはshared-contract排他辺で保護済みのため、
+        build_dag経由では警告しない(#724)。"""
         path = tmp_path / "decomposition_plan.md"
         path.write_text(
             textwrap.dedent(self._plan_with_shared_contract_tag()),
@@ -358,10 +364,22 @@ class TestBuildDagWarningsIntegration:
         )
         dag_dict = build_dag_from_plan(path, threshold=0.9)
 
+        assert dag_dict["warnings"] == []
+        assert dag_dict["subtasks"]["task-csv"]["shared_contract"] == "format-registry"
+
+    def test_build_dag_from_plan_surfaces_warning_for_one_sided_tag(self, tmp_path):
+        path = tmp_path / "decomposition_plan.md"
+        plan = self._plan_with_shared_contract_tag().replace(
+            '"src/format_registration.py"]\n            shared_contract: format-registry\n',
+            '"src/formats/registration.py"]\n',
+        )
+        assert "src/formats/registration.py" in plan
+        path.write_text(textwrap.dedent(plan), encoding="utf-8")
+        dag_dict = build_dag_from_plan(path, threshold=0.9)
+
         assert len(dag_dict["warnings"]) == 1
         assert "task-csv" in dag_dict["warnings"][0]
         assert "task-yaml" in dag_dict["warnings"][0]
-        assert dag_dict["subtasks"]["task-csv"]["shared_contract"] == "format-registry"
 
     def test_explicit_owner_task_with_depends_on_still_flags_parallel_siblings(self):
         """所有タスクへdepends_onするだけでは、依存先同士(csv/yaml)が並列の
@@ -456,3 +474,191 @@ class TestDagCliWarnings:
         captured = capsys.readouterr()
         assert "Warnings:" in captured.out
         assert "task-csv" in captured.out
+
+
+class TestDocumentWriter:
+    """#724: footprintに共有文書を宣言したタスクはwriterとして扱う。"""
+
+    def test_document_declaration_is_writer(self):
+        from orchestune.dag.contracts import is_contract_writer
+
+        assert is_contract_writer(_subtask("a", ["docs/ja/usage.md"]))
+
+    def test_read_only_consumer_is_not_writer(self):
+        from orchestune.dag.contracts import is_contract_writer
+
+        assert not is_contract_writer(_subtask("a", ["src/x.py"], shared_contract="c"))
+
+    def test_non_target_markdown_is_not_writer(self):
+        from orchestune.dag.contracts import is_contract_writer
+
+        assert not is_contract_writer(_subtask("a", ["README.md"]))
+
+    def test_representative_path_prefers_document_over_unrelated_code(self):
+        from orchestune.dag.contracts import _representative_path
+
+        subtask = _subtask("a", ["src/x.py", "docs/ja/usage.md"])
+        assert _representative_path(subtask) == "docs/ja/usage.md"
+
+    def test_representative_path_keeps_hotspot_priority(self):
+        from orchestune.dag.contracts import _representative_path
+
+        subtask = _subtask("a", ["docs/a.md", "src/registry.py"])
+        assert _representative_path(subtask) == "src/registry.py"
+
+    def test_documents_in_different_files_with_same_contract_are_writers(self):
+        from orchestune.dag.graph import build_conflict_graph
+
+        subtasks = [
+            _subtask("a", ["docs/ja/a.md"], shared_contract="c"),
+            _subtask("b", ["docs/ja/b.md"], shared_contract="c"),
+        ]
+        graph = build_conflict_graph(subtasks)
+        assert [e.reason for e in graph.edges] == ["shared-contract"]
+
+
+def _graph(*edges):
+    from orchestune.dag.models import ConflictEdge, ConflictGraph
+
+    return ConflictGraph(tuple(ConflictEdge(*edge) for edge in edges))
+
+
+def _contract_edge(left, right, contract="c"):
+    return (left, right, "shared-contract", None, (f"shared_contract:{contract}",))
+
+
+class TestConflictGraphSuppression:
+    def _writers(self, *ids, contract="c"):
+        return [_subtask(i, [f"docs/ja/{i}.md"], shared_contract=contract) for i in ids]
+
+    def test_pair_protected_by_matching_explicit_edge_is_suppressed(self):
+        subtasks = self._writers("a", "b")
+        graph = _graph(_contract_edge("a", "b"))
+        assert (
+            find_unowned_shared_contract_hotspots(subtasks, [], conflict_graph=graph)
+            == []
+        )
+
+    def test_without_graph_warning_is_kept(self):
+        warnings = find_unowned_shared_contract_hotspots(self._writers("a", "b"), [])
+        assert len(warnings) == 1
+
+    @pytest.mark.parametrize(
+        "edge",
+        [
+            ("a", "b", "shared-document", None, ("docs/ja/a.md",)),
+            ("a", "b", "similarity", 0.9, ()),
+            ("a", "b", "shared-contract-hotspot", None, ("shared_contract_hotspot:x",)),
+            _contract_edge("a", "b", contract="other"),
+        ],
+    )
+    def test_other_edges_do_not_suppress_explicit_warning(self, edge):
+        warnings = find_unowned_shared_contract_hotspots(
+            self._writers("a", "b"), [], conflict_graph=_graph(edge)
+        )
+        assert len(warnings) == 1
+
+    def test_only_unresolved_pairs_are_listed(self):
+        subtasks = self._writers("a", "b", "c")
+        graph = _graph(_contract_edge("a", "b"))
+        (warning,) = find_unowned_shared_contract_hotspots(
+            subtasks, [], conflict_graph=graph
+        )
+        assert "a×c" in warning
+        assert "b×c" in warning
+        assert "a×b" not in warning
+
+    def test_dependency_ordered_pair_is_still_not_warned(self):
+        edges = [DagEdge(source="a", target="b", reason="explicit")]
+        assert (
+            find_unowned_shared_contract_hotspots(
+                self._writers("a", "b"), edges, conflict_graph=_graph()
+            )
+            == []
+        )
+
+    def test_warning_wording_does_not_claim_parallel_execution(self):
+        (warning,) = find_unowned_shared_contract_hotspots(self._writers("a", "b"), [])
+        assert "並列実行され得る" not in warning
+        assert "未指定" in warning
+        assert "確認が必要" in warning
+
+
+class TestHeuristicSuppression:
+    def _pair(self, tag_a="c", tag_b="c"):
+        return [
+            _subtask("a", ["src/formats/registry.py"], shared_contract=tag_a),
+            _subtask("b", ["src/formats/registration.py"], shared_contract=tag_b),
+        ]
+
+    def test_same_contract_with_explicit_edge_is_suppressed(self):
+        graph = _graph(_contract_edge("a", "b"))
+        assert (
+            find_unowned_shared_contract_hotspots(
+                self._pair(), [], conflict_graph=graph
+            )
+            == []
+        )
+
+    def test_automatic_hotspot_edge_alone_keeps_warning(self):
+        graph = _graph(
+            (
+                "a",
+                "b",
+                "shared-contract-hotspot",
+                None,
+                ("shared_contract_hotspot:registry:src/formats",),
+            ),
+            ("a", "b", "similarity", 0.9, ()),
+        )
+        warnings = find_unowned_shared_contract_hotspots(
+            self._pair(None, None), [], conflict_graph=graph
+        )
+        assert len(warnings) == 1
+
+    def test_one_sided_tag_keeps_warning(self):
+        graph = _graph(_contract_edge("a", "b"))
+        warnings = find_unowned_shared_contract_hotspots(
+            self._pair("c", None), [], conflict_graph=graph
+        )
+        assert len(warnings) == 1
+
+    def test_different_tags_keep_warning(self):
+        graph = _graph(_contract_edge("a", "b", "c"), _contract_edge("a", "b", "d"))
+        warnings = find_unowned_shared_contract_hotspots(
+            self._pair("c", "d"), [], conflict_graph=graph
+        )
+        assert len(warnings) == 1
+
+    def test_mixed_protected_and_unprotected_third_lists_unresolved_only(self):
+        subtasks = [
+            *self._pair(),
+            _subtask("c", ["src/formats/registrar.py"]),
+        ]
+        graph = _graph(_contract_edge("a", "b"))
+        (warning,) = find_unowned_shared_contract_hotspots(
+            subtasks, [], conflict_graph=graph
+        )
+        assert "a×c" in warning
+        assert "b×c" in warning
+        assert "a×b" not in warning
+
+
+class TestDocumentDetectionIsNotAWarning:
+    def test_shared_document_alone_adds_no_unowned_warning(self):
+        dag = build_dag(
+            [_subtask("a", ["docs/ja/a.md"]), _subtask("b", ["docs/ja/a.md"])]
+        )
+        assert dag.warnings == ()
+        assert "shared-document" in {e.reason for e in dag.conflict_graph.edges}
+
+
+class TestBuildDagSuppression:
+    def test_explicit_writers_with_document_edges_are_not_warned(self):
+        dag = build_dag(
+            [
+                _subtask("a", ["docs/ja/a.md"], shared_contract="c"),
+                _subtask("b", ["docs/ja/b.md"], shared_contract="c"),
+            ]
+        )
+        assert dag.warnings == ()

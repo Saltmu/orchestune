@@ -13,6 +13,7 @@ from orchestune.dag.contracts import (
     build_shared_contract_conflicts,
     find_unowned_shared_contract_hotspots,
 )
+from orchestune.dag.documents import build_shared_document_conflicts
 from orchestune.dag.models import (
     ConflictEdge,
     ConflictGraph,
@@ -139,7 +140,11 @@ def _assemble_dag(
     topological_order = _topological_sort(node_ids, edges)
     targets = {edge.target for edge in edges}
 
-    contract_warnings = list(find_unowned_shared_contract_hotspots(subtasks, edges))
+    contract_warnings = list(
+        find_unowned_shared_contract_hotspots(
+            subtasks, edges, conflict_graph=conflict_graph
+        )
+    )
     existence_warnings = (
         _footprint_and_symbol_warnings(subtasks, repo_root)
         if repo_root is not None
@@ -169,7 +174,8 @@ def build_conflict_graph(
         subtasks, threshold=threshold, ignore_patterns=ignore_patterns
     )
     shared_contracts = build_shared_contract_conflicts(subtasks, ignore_patterns)
-    return ConflictGraph(tuple([*similarity, *shared_contracts]))
+    shared_documents = build_shared_document_conflicts(subtasks, ignore_patterns)
+    return ConflictGraph(tuple([*similarity, *shared_contracts, *shared_documents]))
 
 
 def build_dag(
