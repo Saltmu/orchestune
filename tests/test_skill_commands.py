@@ -887,6 +887,10 @@ def test_review_loop_defines_mcp_combined_rereview_posting(skill_name: str):
     ):
         assert marker in section, marker
     assert "inherit" in section and "explicit user instruction" in section
+    # 初回 (n = 1) は前ラウンドが無いため判断表なし、n >= 2 のみ判断表必須
+    assert "For n >= 2 write" in section
+    assert "n = 1 has no previous round, so no table" in section
+    assert "(omitted when n = 1)" in section
 
     # 投稿前確認・投稿後の再取得・再送禁止
     assert "same bot and round" in section and "do not repost" in section
