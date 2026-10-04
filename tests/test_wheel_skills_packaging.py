@@ -241,9 +241,9 @@ def test_isolated_installation_and_skills_portability(
     assert res_install.returncode == 0, f"uv pip install failed: {res_install.stderr}"
 
     venv_orchestune = (
-        venv_dir / "Scripts" / "orchestune.exe"
-        if (venv_dir / "Scripts" / "orchestune.exe").exists()
-        else venv_dir / "bin" / "orchestune"
+        venv_python.parent / "orchestune.exe"
+        if venv_python.parent.name == "Scripts"
+        else venv_python.parent / "orchestune"
     )
     assert venv_orchestune.is_file(), f"Missing console script: {venv_orchestune}"
 

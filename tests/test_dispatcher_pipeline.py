@@ -27,6 +27,7 @@ from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
 from orchestune.dispatch.cycle_events import (
+    ForgeFailureCompletion,
     PromotionEvent,
     RecomputedDeviation,
     WorktreeCompletion,
@@ -916,7 +917,12 @@ class TestEmitHumanSummary:
                 )
             ],
             forge_warnings=[
-                {"issue_number": 2, "operation": "list_prs", "error": "HTTPError: 504"}
+                ForgeFailureCompletion(
+                    issue_number=2,
+                    worktree_path="",
+                    operation="list_prs",
+                    error="HTTPError: 504",
+                )
             ],
         )
 
