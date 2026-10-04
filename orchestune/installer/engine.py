@@ -159,6 +159,8 @@ def _recover_if_needed(
     if state == BundleState.RECOVERY_REQUIRED:
         installer_dir = get_installer_dir(root.path)
         installer_dir.mkdir(parents=True, exist_ok=True)
+        # The lock is briefly released after recovery finishes and re-acquired
+        # when SkillTransaction enters. In-transaction inspection ensures concurrency safety.
         with FileLock(installer_dir / LOCK_FILENAME, timeout=10.0):
             recover_pending_transactions(root.path)
         return inspect_bundle_state(root.path, payload)

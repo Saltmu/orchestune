@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.infra.process_utils import FileLock
-from orchestune.installer.contracts import BundlePayload, TransactionError
+from orchestune.installer.contracts import (
+    BundlePayload,
+    ManifestError,
+    TransactionError,
+)
 from orchestune.installer.payload import calculate_file_sha256
 from orchestune.installer.state import (
     LOCK_FILENAME,
@@ -56,9 +60,15 @@ class SkillTransaction:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         try:
             if exc_type is not None:
-                self.rollback()
+                try:
+                    self.rollback()
+                except Exception as rollback_err:
+                    raise TransactionError(
+                        f"Rollback failed after {exc_type.__name__}: {rollback_err}"
+                    ) from exc_val
             elif self.status == "MANIFEST_COMMITTED":
                 self.cleanup()
+
         finally:
             if self.lock is not None:
                 self.lock.release()
@@ -202,12 +212,22 @@ class SkillTransaction:
         manifest.updated_at = datetime.datetime.now(datetime.UTC).isoformat()
 
         save_manifest(self.skills_root, manifest)
+        self.status = "MANIFEST_COMMITTED"
         self._write_journal("MANIFEST_COMMITTED", {"bundle_name": payload.bundle_name})
         self.cleanup()
 
     def rollback(self) -> None:
         if self.status == "MANIFEST_COMMITTED":
             return
+
+        try:
+            manifest = load_manifest(self.skills_root)
+            if manifest is not None and manifest.transaction_id == self.tx_id:
+                self.status = "MANIFEST_COMMITTED"
+                self.cleanup()
+                return
+        except Exception:
+            pass
 
         published = list(
             dict.fromkeys(
@@ -243,6 +263,7 @@ def _remove_published_skills(skills_root: Path, published: list[str]) -> None:
 def _restore_backups(
     backup_dir: Path, skills_root: Path, moved: list[str]
 ) -> tuple[bool, list[Exception]]:
+    moved = list(moved)
     if backup_dir.is_dir():
         for b_entry in backup_dir.iterdir():
             if b_entry.name not in moved:
@@ -280,6 +301,10 @@ def _rollback_sub_transaction(
             if manifest is not None and manifest.transaction_id == tx_id:
                 shutil.rmtree(sub, ignore_errors=True)
                 return
+        except ManifestError as e:
+            raise TransactionError(
+                f"Cannot safely recover transaction {sub.name} due to corrupted manifest: {e}"
+            ) from e
         except Exception:
             pass
 

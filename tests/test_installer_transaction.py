@@ -383,3 +383,73 @@ def test_rollback_failure_propagates_underlying_error(tmp_path: Path, monkeypatc
         with tx:
             tx.stage_publish(payload)
             raise RuntimeError("Trigger rollback")
+
+
+def test_commit_journal_failure_does_not_rollback(tmp_path: Path, monkeypatch):
+    root = tmp_path / "skills"
+    root.mkdir()
+    existing_skill = root / "orchestune"
+    existing_skill.mkdir()
+    (existing_skill / "SKILL.md").write_text("old skill", encoding="utf-8")
+
+    payload = _make_dummy_payload(tmp_path, version="0.5.0")
+    tx = SkillTransaction(root)
+
+    orig_write_journal = tx._write_journal
+
+    def faulty_write_journal(status, details):
+        if status == "MANIFEST_COMMITTED":
+            raise OSError("Disk full during commit journal write")
+        return orig_write_journal(status, details)
+
+    monkeypatch.setattr(tx, "_write_journal", faulty_write_journal)
+
+    with pytest.raises(OSError, match="Disk full during commit journal write"):
+        with tx:
+            manifest = load_manifest(root) or InstallerManifest()
+            tx.commit(payload, manifest, consumers=["codex"])
+
+    assert (root / "orchestune" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "dummy skill"
+    updated_manifest = load_manifest(root)
+    assert updated_manifest is not None
+    assert updated_manifest.transaction_id == tx.tx_id
+
+
+def test_recovery_with_corrupted_manifest_raises_transaction_error(
+    tmp_path: Path,
+):
+    root = tmp_path / "skills"
+    root.mkdir()
+    (root / "orchestune").mkdir()
+    (root / "orchestune" / "SKILL.md").write_text("current skill", encoding="utf-8")
+
+    tx = SkillTransaction(root)
+    tx.tx_dir.mkdir(parents=True)
+    tx.backup_dir.mkdir(parents=True)
+    (tx.backup_dir / "orchestune").mkdir()
+    (tx.backup_dir / "orchestune" / "SKILL.md").write_text(
+        "backup skill", encoding="utf-8"
+    )
+
+    tx._write_journal(
+        "NEW_PUBLISHED",
+        {
+            "bundle_name": "standard",
+            "skills": ["orchestune"],
+            "published_skills": ["orchestune"],
+            "moved_to_backup": ["orchestune"],
+        },
+    )
+
+    manifest_file = root / ".orchestune-installer" / "manifest.json"
+    manifest_file.parent.mkdir(parents=True, exist_ok=True)
+    manifest_file.write_text("{invalid json", encoding="utf-8")
+
+    with pytest.raises(TransactionError, match="corrupted manifest"):
+        recover_pending_transactions(root)
+
+    assert (root / "orchestune" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "current skill"
