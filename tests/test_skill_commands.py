@@ -888,6 +888,9 @@ def test_review_loop_defines_mcp_combined_rereview_posting(skill_name: str):
         assert marker in section, marker
     assert "inherit" in section and "explicit user instruction" in section
     # 初回 (n = 1) は前ラウンドが無いため判断表なし、n >= 2 のみ判断表必須
+    # 投稿済みで結果未取得の trigger は再開し、n を進めない
+    assert "no acquired result yet" in section and "it is outstanding" in section
+    assert "resume with its round and skip posting" in section
     assert "For n >= 2 write" in section
     assert "n = 1 has no previous round, so no table" in section
     assert "(omitted when n = 1)" in section
