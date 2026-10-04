@@ -6,6 +6,7 @@ from orchestune.installer.contracts import (
     BundlePayload,
     FileRecord,
     SkillPayload,
+    TransactionError,
 )
 from orchestune.installer.state import (
     BundleManifestEntry,
@@ -278,3 +279,107 @@ def test_transaction_recovery_partial_backup_in_prepared_state(tmp_path: Path):
     assert (root / "skill_a" / "SKILL.md").read_text(encoding="utf-8") == "old skill_a"
     assert (root / "skill_b" / "SKILL.md").read_text(encoding="utf-8") == "old skill_b"
     assert not tx.tx_dir.exists()
+
+
+def test_transaction_enter_releases_lock_on_recovery_error(tmp_path: Path, monkeypatch):
+    root = tmp_path / "skills"
+    root.mkdir()
+
+    def failing_recover(*args, **kwargs):
+        raise RuntimeError("Simulated recovery failure")
+
+    monkeypatch.setattr(
+        "orchestune.installer.transaction.recover_pending_transactions",
+        failing_recover,
+    )
+
+    tx1 = SkillTransaction(root)
+    with pytest.raises(RuntimeError, match="Simulated recovery failure"):
+        with tx1:
+            pass
+
+    # Lock must be released, allowing subsequent acquisition immediately
+    monkeypatch.undo()
+    tx2 = SkillTransaction(root)
+    with tx2:
+        assert tx2.lock is not None
+
+
+def test_recovery_respects_already_committed_manifest(tmp_path: Path):
+    root = tmp_path / "skills"
+    root.mkdir()
+    (root / "orchestune").mkdir()
+    (root / "orchestune" / "SKILL.md").write_text("new skill", encoding="utf-8")
+
+    tx = SkillTransaction(root)
+    committed_tx_id = tx.tx_id
+
+    manifest = InstallerManifest(
+        transaction_id=committed_tx_id,
+        bundles={
+            "standard": BundleManifestEntry(
+                package_version="0.5.0",
+                source_kind="installed_distribution",
+                bundle_digest="digest_new",
+                consumers=["codex"],
+                skills={
+                    "orchestune": {
+                        "files": {"SKILL.md": {"sha256": "new_sha", "mode": "regular"}},
+                        "directories": [],
+                    }
+                },
+            )
+        },
+    )
+    save_manifest(root, manifest)
+
+    # Crash occurred after save_manifest, before MANIFEST_COMMITTED
+    tx.tx_dir.mkdir(parents=True)
+    tx.backup_dir.mkdir(parents=True)
+    (tx.backup_dir / "orchestune").mkdir()
+    (tx.backup_dir / "orchestune" / "SKILL.md").write_text(
+        "old skill", encoding="utf-8"
+    )
+
+    tx._write_journal(
+        "NEW_PUBLISHED",
+        {
+            "bundle_name": "standard",
+            "skills": ["orchestune"],
+            "published_skills": ["orchestune"],
+            "moved_to_backup": ["orchestune"],
+        },
+    )
+
+    recover_pending_transactions(root)
+
+    # Manifest matches tx_id, so new skill is preserved and tx_dir is cleaned up
+    assert (root / "orchestune" / "SKILL.md").read_text(encoding="utf-8") == "new skill"
+    assert not tx.tx_dir.exists()
+
+
+def test_rollback_failure_propagates_underlying_error(tmp_path: Path, monkeypatch):
+    import os
+
+    root = tmp_path / "skills"
+    root.mkdir()
+    existing_skill = root / "orchestune"
+    existing_skill.mkdir()
+    (existing_skill / "SKILL.md").write_text("old skill", encoding="utf-8")
+
+    payload = _make_dummy_payload(tmp_path)
+    tx = SkillTransaction(root)
+
+    orig_replace = os.replace
+
+    def faulty_replace(src, dst):
+        if "backup" in str(src):
+            raise OSError("Disk corruption during restore")
+        return orig_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", faulty_replace)
+
+    with pytest.raises(TransactionError, match="Disk corruption during restore"):
+        with tx:
+            tx.stage_publish(payload)
+            raise RuntimeError("Trigger rollback")

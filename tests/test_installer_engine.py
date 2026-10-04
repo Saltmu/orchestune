@@ -17,6 +17,7 @@ from orchestune.installer.engine import (
     update_skills,
 )
 from orchestune.installer.state import load_manifest
+from orchestune.installer.transaction import SkillTransaction
 
 
 def _create_payload(
@@ -196,3 +197,66 @@ def test_uninstall_skills_consumer_and_full_removal(tmp_path: Path):
     m2 = load_manifest(target_root)
     assert m2 is not None
     assert "standard" not in m2.bundles
+
+
+def test_install_skills_recovers_pending_transaction(tmp_path: Path):
+    target_root = tmp_path / "skills"
+    target_root.mkdir()
+    payload = _create_payload(tmp_path / "src")
+
+    # Simulate a crashed transaction
+    tx = SkillTransaction(target_root)
+    tx.tx_dir.mkdir(parents=True)
+    tx.backup_dir.mkdir(parents=True)
+    tx._write_journal("PREPARED", {"bundle_name": "standard", "skills": ["orchestune"]})
+
+    root = PhysicalRoot(
+        path=target_root, target_types=[TargetType.CODEX], scope=ScopeType.PROJECT
+    )
+    res = install_skills(root, payload)
+    assert res.success is True
+    assert (target_root / "orchestune" / "SKILL.md").is_file()
+    assert not tx.tx_dir.exists()
+
+
+def test_update_skills_recovers_pending_transaction(tmp_path: Path):
+    target_root = tmp_path / "skills"
+    payload_v1 = _create_payload(
+        tmp_path / "src_v1", version="0.5.0", digest="digest_v1"
+    )
+    root = PhysicalRoot(
+        path=target_root, target_types=[TargetType.CODEX], scope=ScopeType.PROJECT
+    )
+    install_skills(root, payload_v1)
+
+    # Simulate crashed transaction during previous update
+    tx = SkillTransaction(target_root)
+    tx.tx_dir.mkdir(parents=True)
+    tx.backup_dir.mkdir(parents=True)
+    (tx.backup_dir / "orchestune").mkdir()
+    (tx.backup_dir / "orchestune" / "SKILL.md").write_text("skill v1", encoding="utf-8")
+    if (target_root / "orchestune" / "SKILL.md").exists():
+        (target_root / "orchestune" / "SKILL.md").unlink()
+    tx._write_journal(
+        "OLD_MOVED", {"bundle_name": "standard", "skills": ["orchestune"]}
+    )
+
+    # Prepare v2 payload
+    src_v2 = tmp_path / "src_v2"
+    payload_v2 = _create_payload(src_v2, version="0.6.0", digest="digest_v2")
+    (src_v2 / "orchestune" / "SKILL.md").write_text("skill v2", encoding="utf-8")
+    from orchestune.installer.payload import calculate_file_sha256
+
+    v2_sha = calculate_file_sha256(src_v2 / "orchestune" / "SKILL.md")
+    payload_v2.skills["orchestune"].files["SKILL.md"] = FileRecord(
+        relative_path="SKILL.md", sha256=v2_sha, mode="regular"
+    )
+
+    update_res = update_skills(root, payload_v2)
+    assert update_res.success is True
+    assert (target_root / "orchestune" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "skill v2"
+    m = load_manifest(target_root)
+    assert m is not None
+    assert m.bundles["standard"].package_version == "0.6.0"

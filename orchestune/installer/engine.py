@@ -153,6 +153,18 @@ def _install_legacy_migration(
     )
 
 
+def _recover_if_needed(
+    root: PhysicalRoot, payload: BundlePayload, state: BundleState
+) -> BundleState:
+    if state == BundleState.RECOVERY_REQUIRED:
+        installer_dir = get_installer_dir(root.path)
+        installer_dir.mkdir(parents=True, exist_ok=True)
+        with FileLock(installer_dir / LOCK_FILENAME, timeout=10.0):
+            recover_pending_transactions(root.path)
+        return inspect_bundle_state(root.path, payload)
+    return state
+
+
 def install_skills(
     root: PhysicalRoot,
     payload: BundlePayload,
@@ -172,6 +184,8 @@ def install_skills(
             actions=["dry_run_preview"],
             success=True,
         )
+
+    state = _recover_if_needed(root, payload, state)
 
     if state == BundleState.ABSENT:
         return _install_absent_bundle(root, payload, requested_consumers, state)
@@ -242,6 +256,8 @@ def update_skills(
             actions=["dry_run_preview"],
             success=True,
         )
+
+    state = _recover_if_needed(root, payload, state)
 
     if state == BundleState.ABSENT:
         raise ConflictError(

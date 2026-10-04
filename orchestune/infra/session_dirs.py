@@ -23,9 +23,12 @@ def find_project_root(start_dir: Path | None = None) -> Path:
 
 
 def _is_ignored_in_gitignore(project_dir: Path) -> bool:
+    # In git repositories, use git check-ignore which respects .gitignore,
+    # .git/info/exclude, and global gitignore settings.
     if is_git_ignored(project_dir, ".orchestune/tmp/test"):
         return True
 
+    # Fallback pattern check for non-git directories or environments where git is unavailable.
     gitignore_path = project_dir / ".gitignore"
     if not gitignore_path.is_file():
         return False

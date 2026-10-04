@@ -18,6 +18,7 @@ from orchestune.installer.state import (
     BundleManifestEntry,
     InstallerManifest,
     get_installer_dir,
+    load_manifest,
     save_manifest,
 )
 
@@ -42,8 +43,14 @@ class SkillTransaction:
         self.installer_dir.mkdir(parents=True, exist_ok=True)
         self.lock = FileLock(self.lock_path, timeout=10.0)
         self.lock.acquire()
-        recover_pending_transactions(self.skills_root, skip_tx_id=self.tx_id)
-        self.tx_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            recover_pending_transactions(self.skills_root, skip_tx_id=self.tx_id)
+            self.tx_dir.mkdir(parents=True, exist_ok=True)
+        except BaseException:
+            if self.lock is not None:
+                self.lock.release()
+                self.lock = None
+            raise
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -131,20 +138,21 @@ class SkillTransaction:
             },
         )
 
+        self._write_journal(
+            "PUBLISHING",
+            {
+                "bundle_name": payload.bundle_name,
+                "skills": list(payload.skills.keys()),
+                "moved_to_backup": list(self.moved_to_backup),
+                "published_skills": list(payload.skills.keys()),
+            },
+        )
+
         for skill_name in payload.skills.keys():
             stage_src = self.stage_dir / skill_name
             publish_dest = self.skills_root / skill_name
             os.replace(stage_src, publish_dest)
             self.published_skills.append(skill_name)
-            self._write_journal(
-                "PUBLISHING",
-                {
-                    "bundle_name": payload.bundle_name,
-                    "skills": list(payload.skills.keys()),
-                    "moved_to_backup": list(self.moved_to_backup),
-                    "published_skills": list(self.published_skills),
-                },
-            )
 
         self._write_journal(
             "NEW_PUBLISHED",
@@ -201,14 +209,22 @@ class SkillTransaction:
         if self.status == "MANIFEST_COMMITTED":
             return
 
-        published = self.journal_data.get(
-            "published_skills", list(self.published_skills)
+        published = list(
+            dict.fromkeys(
+                self.journal_data.get("published_skills", [])
+                + list(self.published_skills)
+            )
         )
         _remove_published_skills(self.skills_root, published)
 
         moved = self.journal_data.get("moved_to_backup", list(self.moved_to_backup))
-        if _restore_backups(self.backup_dir, self.skills_root, moved):
+        success, errors = _restore_backups(self.backup_dir, self.skills_root, moved)
+        if success:
             self.cleanup()
+        else:
+            raise TransactionError(
+                f"Failed to cleanly restore backups during rollback: {errors}"
+            )
 
     def cleanup(self) -> None:
         if self.tx_dir.exists():
@@ -224,12 +240,14 @@ def _remove_published_skills(skills_root: Path, published: list[str]) -> None:
             p_path.unlink()
 
 
-def _restore_backups(backup_dir: Path, skills_root: Path, moved: list[str]) -> bool:
+def _restore_backups(
+    backup_dir: Path, skills_root: Path, moved: list[str]
+) -> tuple[bool, list[Exception]]:
     if backup_dir.is_dir():
         for b_entry in backup_dir.iterdir():
             if b_entry.name not in moved:
                 moved.append(b_entry.name)
-    restore_failed = False
+    restore_errors: list[Exception] = []
     for s_name in moved:
         b_path = backup_dir / s_name
         r_path = skills_root / s_name
@@ -240,29 +258,40 @@ def _restore_backups(backup_dir: Path, skills_root: Path, moved: list[str]) -> b
                 r_path.unlink()
             try:
                 os.replace(b_path, r_path)
-            except Exception:
-                restore_failed = True
-    return not restore_failed
+            except OSError as err:
+                restore_errors.append(err)
+    return len(restore_errors) == 0, restore_errors
 
 
 def _rollback_sub_transaction(
     sub: Path, skills_root: Path, journal_data: dict[str, Any]
 ) -> None:
     status = journal_data.get("status")
+    tx_id = journal_data.get("tx_id")
     backup_dir = sub / "backup"
 
     if status == "MANIFEST_COMMITTED":
         shutil.rmtree(sub, ignore_errors=True)
         return
 
+    if tx_id:
+        try:
+            manifest = load_manifest(skills_root)
+            if manifest is not None and manifest.transaction_id == tx_id:
+                shutil.rmtree(sub, ignore_errors=True)
+                return
+        except Exception:
+            pass
+
     published = journal_data.get("published_skills", [])
     _remove_published_skills(skills_root, published)
 
     moved = journal_data.get("moved_to_backup", [])
-    if _restore_backups(backup_dir, skills_root, moved):
+    success, errors = _restore_backups(backup_dir, skills_root, moved)
+    if success:
         shutil.rmtree(sub, ignore_errors=True)
     else:
-        raise TransactionError(f"Could not cleanly restore backups in {sub}")
+        raise TransactionError(f"Could not cleanly restore backups in {sub}: {errors}")
 
 
 def recover_pending_transactions(
