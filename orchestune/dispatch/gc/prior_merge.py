@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from orchestune.dispatch.prior_parent_merge import (
     PriorParentMergeStatus,
@@ -15,7 +16,7 @@ from orchestune.task_metadata import TaskMetadata
 
 @dataclass(frozen=True, slots=True)
 class PriorMergeCompletion:
-    action: str
+    action: Literal["completion_skipped_prior_merge_indeterminate", "already_merged"]
     error: str = ""
 
 

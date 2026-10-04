@@ -98,7 +98,7 @@ CALL_SITES: dict[str, int] = {
     "dispatch/gc/completion.py::_apply_blocked_hold": 1,
     "dispatch/gc/completion.py::_publish_requeue": 1,
     "dispatch/gc/completion.py::_apply_done_worktree_cleanup": 1,
-    "dispatch/gc/completion.py::_handle_abandoned_cloud_reclaim": 1,
+    "dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim": 1,
     "dispatch/status_repair.py::_apply_command": 1,
     "dispatch/recovery.py::execute_recovery_requeue_command": 1,
     "ledger/escalation.py::apply_human_review_escalation": 1,
@@ -380,7 +380,7 @@ def _prior_parent_and_completion() -> list[Case]:
         "completion_done_cleanup",
     )
     abandoned = _for(
-        "dispatch/gc/completion.py::_handle_abandoned_cloud_reclaim",
+        "dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim",
         "completion_abandoned_reclaim",
     )
     return [
@@ -707,11 +707,11 @@ class TestEscalationProtectionStaysWithTheCallers:
         self, terminal: StatusLabel, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         env = _env(FakeForge(), monkeypatch, tmp_path, (terminal,))
-        calls = _spy("orchestune.dispatch.gc.completion", monkeypatch)
+        calls = _spy("orchestune.dispatch.gc.cloud_completion", monkeypatch)
 
         event = completion_abandoned_finalize(env)
 
-        assert event["action"] == "abandoned_pr_requeued"
+        assert event.action == "abandoned_pr_requeued"
         assert calls == []
         assert set(env.forge.get_issue_labels(ISSUE)) == {terminal}
 

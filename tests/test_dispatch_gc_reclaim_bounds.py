@@ -90,7 +90,7 @@ class TestReclaimRetryBound:
             run_state, config, cycles=5, tmp_path=tmp_path
         )
 
-        assert [event["action"] for event in events] == [
+        assert [event.to_dict()["action"] for event in events] == [
             "gc_reclaimed",
             "gc_reclaimed",
             "gc_reclaimed",
@@ -110,12 +110,12 @@ class TestReclaimRetryBound:
             run_state, config, cycles=3, tmp_path=tmp_path
         )
 
-        assert [event["action"] for event in events] == [
+        assert [event.to_dict()["action"] for event in events] == [
             "gc_reclaimed",
             "gc_reclaimed",
             "escalated_reclaim_limit_exceeded",
         ]
-        assert [event["reclaim_count"] for event in events] == [1, 2, 3]
+        assert [event.to_dict()["reclaim_count"] for event in events] == [1, 2, 3]
         assert labels.count(("add", "status:queued")) == 2
         assert run_state.task_reclaim_counts[280] == TaskReclaimRecord(
             count=3, last_reclaimed_at=_NOW
@@ -130,7 +130,7 @@ class TestReclaimRetryBound:
             run_state, config, cycles=1, tmp_path=tmp_path
         )
 
-        assert events[0]["action"] == "escalated_reclaim_limit_exceeded"
+        assert events[0].to_dict()["action"] == "escalated_reclaim_limit_exceeded"
         assert ("add", "status:queued") not in labels
 
     def test_escalation_transitions_labels_and_reports_reason(self, tmp_path):
@@ -172,8 +172,8 @@ class TestReclaimRetryBound:
                 events = _collect_zombies_and_timeouts(
                     run_state, {280: _task()}, config
                 )
-            assert events[0]["reason"] == "process disappeared"
-            actions.append(events[0]["action"])
+            assert events[0].to_dict()["reason"] == "process disappeared"
+            actions.append(events[0].to_dict()["action"])
 
         assert actions == ["gc_reclaimed", "escalated_reclaim_limit_exceeded"]
 
@@ -204,8 +204,8 @@ class TestReclaimRetryBound:
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
         assert event is not None
-        assert event["action"] == "gc_reclaimed"
-        assert event["reclaim_count"] == 0
+        assert event.to_dict()["action"] == "gc_reclaimed"
+        assert event.to_dict()["reclaim_count"] == 0
         assert run_state.task_reclaim_counts == {}
 
     def test_dry_run_reports_escalation_without_touching_the_ledger(self, tmp_path):
@@ -222,8 +222,8 @@ class TestReclaimRetryBound:
         with patch("orchestune.dispatch.phase_gc.time.time", return_value=_NOW):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
-        assert events[0]["action"] == "escalated_reclaim_limit_exceeded"
-        assert events[0]["reclaim_count"] == 4
+        assert events[0].to_dict()["action"] == "escalated_reclaim_limit_exceeded"
+        assert events[0].to_dict()["reclaim_count"] == 4
         assert run_state.task_reclaim_counts[280] == TaskReclaimRecord(
             count=3, last_reclaimed_at=1.0
         )
@@ -389,7 +389,7 @@ class TestReclaimRetryBound:
         events, comments, mock_add_label, mock_remove_worktree = (
             self._reclaim_with_failing_backup(tmp_path, run_state, config)
         )
-        assert [event["action"] for event in events] == [
+        assert [event.to_dict()["action"] for event in events] == [
             "escalated_reclaim_limit_exceeded"
         ]
         mock_add_label.assert_called_once_with(280, "status:blocked-human-review")
@@ -567,7 +567,7 @@ class TestReclaimRetryBound:
         ):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
-        assert events[0]["action"] == "escalated_reclaim_limit_exceeded"
+        assert events[0].to_dict()["action"] == "escalated_reclaim_limit_exceeded"
         persisted = load_run_state(config.run_state_path)
         assert persisted.active_worktrees == {}
         assert persisted.task_reclaim_counts[280].pending is False
@@ -623,7 +623,7 @@ class TestReclaimRetryBound:
         ):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
-        assert [event["action"] for event in events] == ["gc_reclaimed"]
+        assert [event.to_dict()["action"] for event in events] == ["gc_reclaimed"]
         assert ("add", "status:queued") in labels
         assert run_state.task_reclaim_counts[280] == TaskReclaimRecord(
             count=1, last_reclaimed_at=_NOW, pending=False
@@ -653,7 +653,7 @@ class TestReclaimRetryBound:
         ):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
-        assert [event["action"] for event in events] == [
+        assert [event.to_dict()["action"] for event in events] == [
             "escalated_reclaim_limit_exceeded"
         ]
         assert run_state.active_worktrees == {}
@@ -690,7 +690,7 @@ class TestReclaimRetryBound:
         ):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
-        assert [event["action"] for event in events] == [
+        assert [event.to_dict()["action"] for event in events] == [
             "escalated_reclaim_limit_exceeded"
         ]
         assert ("add", "status:blocked-human-review") in labels
@@ -729,7 +729,7 @@ class TestReclaimRetryBound:
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
         # 再投入は成立しているので回収イベントを返し、予約も確定させる
-        assert [event["action"] for event in events] == ["gc_reclaimed"]
+        assert [event.to_dict()["action"] for event in events] == ["gc_reclaimed"]
         assert ("add", "status:queued") in labels
         assert run_state.active_worktrees == {}
         assert run_state.task_reclaim_counts[280] == TaskReclaimRecord(
@@ -811,7 +811,7 @@ class TestReclaimRetryBound:
         ):
             events = _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
-        assert [event["action"] for event in events] == [
+        assert [event.to_dict()["action"] for event in events] == [
             "escalated_reclaim_limit_exceeded"
         ]
         assert ("add", "status:blocked-human-review") in labels

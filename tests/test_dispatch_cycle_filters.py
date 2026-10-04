@@ -16,6 +16,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
 )
+from orchestune.dispatch.cycle_events import DeviationConflict, RecomputedDeviation
 from orchestune.dispatch.filters import (
     _filter_candidates_for_forced_serial,
     _filter_deviation_blocked_candidates,
@@ -50,13 +51,24 @@ class TestFilterDeviationBlockedCandidates:
         blocked = _task(issue_number=2, subtask_id="task-blocked")
         retained = _task(issue_number=3, subtask_id="task-retained")
         events = [
-            {
-                "action": "recomputed",
-                "conflicts": [
-                    {"blocked_subtask_id": "task-blocked"},
-                    {"blocked_subtask_id": "unknown-task"},
-                ],
-            }
+            RecomputedDeviation(
+                issue_number=1,
+                deviated_files=(),
+                conflicts=(
+                    DeviationConflict(
+                        subtask_id="",
+                        other_subtask_id="",
+                        similarity=0,
+                        blocked_subtask_id="task-blocked",
+                    ),
+                    DeviationConflict(
+                        subtask_id="",
+                        other_subtask_id="",
+                        similarity=0,
+                        blocked_subtask_id="unknown-task",
+                    ),
+                ),
+            )
         ]
 
         result = _filter_deviation_blocked_candidates(
@@ -209,9 +221,9 @@ class TestRunDispatchCycleFootprintRecompute:
         assert mock_notify.call_args.kwargs["apply"] is True
         assert len(report.deviation_events) == 1
         event = report.deviation_events[0]
-        assert event["issue_number"] == 1
-        assert event["action"] == "recomputed"
-        assert event["deviated_files"] == ["src/unexpected.py"]
+        assert event.issue_number == 1
+        assert event.action == "recomputed"
+        assert event.deviated_files == ("src/unexpected.py",)
 
         persisted = json.loads(run_state_path.read_text())
         assert persisted["active_worktrees"]["1"]["recompute_count"] == 1
@@ -388,7 +400,7 @@ class TestRunDispatchCycleFootprintRecompute:
         mock_add_comment.assert_called_once()
         assert [task.issue_number for task in report.selected] == [2]
         assert report.quota_slots_available == 1
-        assert report.deviation_events[0]["action"] == "forced_serial"
+        assert report.deviation_events[0].action == "forced_serial"
 
         persisted = json.loads(run_state_path.read_text())
         assert persisted["active_worktrees"]["1"]["forced_serial"] is True
@@ -553,7 +565,7 @@ class TestRunDispatchCycleFootprintRecompute:
         mock_add_comment.assert_not_called()
         mock_add_label.assert_not_called()
         assert report.selected == []
-        assert report.deviation_events[0]["action"] == "already_forced_serial"
+        assert report.deviation_events[0].action == "already_forced_serial"
 
 
 class TestFilterCandidatesForReservationActives:

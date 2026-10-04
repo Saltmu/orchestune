@@ -129,7 +129,7 @@ class TestRunDispatchCycleCompletion:
         mock_remove_worktree.assert_called_once_with(str(tmp_path / "w1"))
         mock_remove_label.assert_any_call(1, "status:in-progress")
         mock_add_label.assert_any_call(1, "status:done")
-        assert report.completion_events == [
+        assert [event.to_dict() for event in report.completion_events] == [
             {
                 "issue_number": 1,
                 "worktree_path": str(tmp_path / "w1"),
@@ -152,7 +152,9 @@ class TestRunDispatchCycleCompletion:
         events_lines = config.events_log_path.read_text(encoding="utf-8").splitlines()
         assert len(events_lines) == 1
         logged_entry = json.loads(events_lines[0])
-        assert logged_entry["completion_events"] == report.completion_events
+        assert logged_entry["completion_events"] == [
+            event.to_dict() for event in report.completion_events
+        ]
 
     def test_cloud_completion_uses_remote_branch_commits(self, tmp_path, fake_forge):
         """#177: クラウド実行の結果は、起動時のローカルworktreeではなく
@@ -208,8 +210,8 @@ class TestRunDispatchCycleCompletion:
             )
             report = run_dispatch_cycle(config)
 
-        assert report.completion_events[0]["action"] == "completed"
-        assert report.completion_events[0]["commit_sha"] == "remote-commit"
+        assert report.completion_events[0].to_dict()["action"] == "completed"
+        assert report.completion_events[0].to_dict()["commit_sha"] == "remote-commit"
         mock_local_commits.assert_not_called()
         mock_remote_commits.assert_called_once_with(
             config.worktree_root.parent,
@@ -265,11 +267,11 @@ class TestRunDispatchCycleCompletion:
             )
             report = run_dispatch_cycle(config)
 
-        assert report.completion_events[0]["action"] == "completed_no_commits"
+        assert report.completion_events[0].to_dict()["action"] == "completed_no_commits"
         mock_escalate.assert_called_once()
         assert all(
             call.args != (1, "status:done") for call in mock_add_label.call_args_list
-        )
+        ), mock_add_label.call_args_list
 
     def test_early_no_commit_exit_is_requeued_with_persisted_backoff(
         self, tmp_path, fake_forge
@@ -319,7 +321,7 @@ class TestRunDispatchCycleCompletion:
         ):
             report = run_dispatch_cycle(config)
 
-        assert report.completion_events[0]["action"] == "early_death_requeued"
+        assert report.completion_events[0].to_dict()["action"] == "early_death_requeued"
         assert "1" not in json.loads(run_state_path.read_text())["active_worktrees"]
         record = load_run_state(run_state_path).task_reclaim_counts[1]
         assert record.early_death_retry_count == 1
@@ -375,7 +377,7 @@ class TestRunDispatchCycleCompletion:
         ):
             report = run_dispatch_cycle(config)
 
-        assert report.completion_events[0]["action"] == "completed_no_commits"
+        assert report.completion_events[0].to_dict()["action"] == "completed_no_commits"
         mock_escalate.assert_called_once()
 
     def test_review_timeout_is_requeued_with_persisted_backoff(
@@ -439,7 +441,9 @@ class TestRunDispatchCycleCompletion:
         ):
             report = run_dispatch_cycle(config)
 
-        assert report.completion_events[0]["action"] == "blocked_review_timeout"
+        assert (
+            report.completion_events[0].to_dict()["action"] == "blocked_review_timeout"
+        )
         mock_add_label.assert_any_call(1, "status:queued")
         mock_remove_label.assert_called_once_with(1, "status:in-progress")
 
@@ -513,7 +517,10 @@ class TestRunDispatchCycleCompletion:
         ):
             report = run_dispatch_cycle(config)
 
-        assert report.completion_events[0]["action"] == "escalated_review_timeout"
+        assert (
+            report.completion_events[0].to_dict()["action"]
+            == "escalated_review_timeout"
+        )
         mock_escalate.assert_called_once()
 
     def test_dirty_worktree_completion_is_skipped(self, tmp_path, fake_forge):
@@ -563,7 +570,8 @@ class TestRunDispatchCycleCompletion:
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
         assert (
-            report.completion_events[0]["action"] == "completion_skipped_dirty_worktree"
+            report.completion_events[0].to_dict()["action"]
+            == "completion_skipped_dirty_worktree"
         )
 
         persisted = json.loads(run_state_path.read_text())
@@ -622,7 +630,7 @@ class TestRunDispatchCycleCompletion:
         mock_remove_worktree.assert_not_called()
         mock_add_label.assert_not_called()
         mock_remove_label.assert_not_called()
-        assert report.completion_events[0]["action"] == "completed"
+        assert report.completion_events[0].to_dict()["action"] == "completed"
         assert not config.events_log_path.exists()
 
         persisted = json.loads(run_state_path.read_text())
@@ -685,12 +693,12 @@ class TestRunDispatchCycleCompletion:
             )
             report = run_dispatch_cycle(config)
 
-        assert report.completion_events[0]["action"] == "completed_no_commits"
+        assert report.completion_events[0].to_dict()["action"] == "completed_no_commits"
         mock_remove_worktree.assert_called_once_with(str(tmp_path / "w1"))
         mock_remove_label.assert_any_call(1, "status:in-progress")
         mock_add_label.assert_any_call(1, "status:blocked-human-review")
         mock_add_comment.assert_called_once()
-        assert report.promotion_events == []
+        assert [event.to_dict() for event in report.promotion_events] == []
         assert all(
             call.args != (2, "status:queued") for call in mock_add_label.call_args_list
         )
@@ -862,7 +870,7 @@ class TestRunDispatchCycleNotNeeded:
         mock_close_issue.assert_called_once()
         assert mock_close_issue.call_args.args[0] == 1
         assert mock_close_issue.call_args.args[1] == "not planned"
-        assert report.completion_events == [
+        assert [event.to_dict() for event in report.completion_events] == [
             {
                 "issue_number": 1,
                 "worktree_path": str(tmp_path / "w1"),
@@ -915,7 +923,7 @@ class TestRunDispatchCycleNotNeeded:
         mock_remove_worktree.assert_not_called()
         mock_remove_label.assert_not_called()
         mock_close_issue.assert_not_called()
-        assert report.completion_events[0]["action"] == "not_needed"
+        assert report.completion_events[0].to_dict()["action"] == "not_needed"
 
         persisted = json.loads(run_state_path.read_text())
         assert "1" in persisted["active_worktrees"]
@@ -969,4 +977,6 @@ class TestRunDispatchCycleNotNeeded:
 
         mock_remove_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:queued")
-        assert report.promotion_events == [{"issue_number": 2, "subtask_id": "task-b"}]
+        assert [event.to_dict() for event in report.promotion_events] == [
+            {"issue_number": 2, "subtask_id": "task-b"}
+        ]

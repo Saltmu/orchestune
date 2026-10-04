@@ -9,11 +9,12 @@ obtained from a successful, parent-base-scoped Forge query.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import cache
 from typing import cast
 
+from orchestune.dispatch.cycle_events import PriorMergeEvidenceCompletion
 from orchestune.issue_parsing import effective_parent_number
 from orchestune.labels import StatusLabel
 from orchestune.ledger.status_labels import (
@@ -60,7 +61,7 @@ class PriorParentMergeReconciliation:
     # #799: issue番号で保持する。`tasks_by_issue`はグローバル（複数EPIC横断）
     # に構築されうるため、subtask_id文字列は別EPICの同名タスクと衝突しうる。
     completed_issue_numbers: frozenset[int]
-    events: tuple[dict[str, object], ...]
+    events: tuple[PriorMergeEvidenceCompletion, ...]
 
 
 def _validated_candidate(
@@ -313,40 +314,43 @@ def _normalize_closed_issue_label(forge, issue: IssueRecord) -> None:
 
 def _evidence_event(
     issue_number: int, evidence: PriorParentMergeEvidence
-) -> dict[str, object]:
-    return {
-        "issue_number": issue_number,
-        "action": evidence.status.value,
-        "pr_number": evidence.pr_number,
-        "base_ref": evidence.base_ref,
-        "merged_at": evidence.merged_at,
-        "reason": evidence.reason,
-    }
+) -> PriorMergeEvidenceCompletion:
+    return PriorMergeEvidenceCompletion(
+        issue_number=issue_number,
+        action=evidence.status.value,
+        pr_number=evidence.pr_number,
+        base_ref=evidence.base_ref,
+        merged_at=evidence.merged_at,
+        reason=evidence.reason,
+    )
 
 
 def _reverify_and_apply_repair(
     forge, issue_number: int, task: TaskMetadata
-) -> tuple[dict[str, object], bool]:
+) -> tuple[PriorMergeEvidenceCompletion, bool]:
     """Freshly verify a successful scan, then apply its idempotent repair."""
     fresh, fresh_issue = inspect_prior_parent_merge(forge, issue_number, task)
     event = _evidence_event(issue_number, fresh)
     if fresh.status is not PriorParentMergeStatus.ALREADY_MERGED or fresh_issue is None:
-        event["action"] = "prior_merge_changed_before_repair"
-        return event, False
+        return replace(event, action="prior_merge_changed_before_repair"), False
     if fresh_issue.state.upper() != "OPEN":
         try:
             _normalize_closed_issue_label(forge, fresh_issue)
         except Exception as error:  # noqa: BLE001 - retry idempotently next cycle
-            event["action"] = "already_merged_repair_pending"
-            event["reason"] = f"repair failed: {type(error).__name__}"
-            return event, False
+            return replace(
+                event,
+                action="already_merged_repair_pending",
+                reason=f"repair failed: {type(error).__name__}",
+            ), False
         return event, True
     try:
         _apply_verified_repair(forge, fresh_issue, fresh)
     except Exception as error:  # noqa: BLE001 - retry idempotently next cycle
-        event["action"] = "already_merged_repair_pending"
-        event["reason"] = f"repair failed: {type(error).__name__}"
-        return event, False
+        return replace(
+            event,
+            action="already_merged_repair_pending",
+            reason=f"repair failed: {type(error).__name__}",
+        ), False
     return event, True
 
 
@@ -359,7 +363,7 @@ def _reconcile_prior_parent_merge(
     issue: IssueRecord | None,
     merged_prs_by_base: dict[str, list[PrRecord] | Exception],
     merge_reachability_by_key: dict[tuple[str, str], bool | None],
-) -> tuple[PriorParentMergeEvidence, dict[str, object], bool]:
+) -> tuple[PriorParentMergeEvidence, PriorMergeEvidenceCompletion, bool]:
     evidence, _ = inspect_prior_parent_merge(
         forge,
         issue_number,
@@ -376,7 +380,7 @@ def _reconcile_prior_parent_merge(
     if apply:
         event, completed = _reverify_and_apply_repair(forge, issue_number, task)
     else:
-        event["action"] = "already_merged_dry_run"
+        event = replace(event, action="already_merged_dry_run")
         completed = True
     return evidence, event, completed
 
@@ -399,7 +403,7 @@ def reconcile_prior_parent_merges(
     evidence_by_issue: dict[int, PriorParentMergeEvidence] = {}
     held: set[int] = set()
     completed: set[int] = set()
-    events: list[dict[str, object]] = []
+    events: list[PriorMergeEvidenceCompletion] = []
     merged_prs_by_base: dict[str, list[PrRecord] | Exception] = {}
     merge_reachability_by_key: dict[tuple[str, str], bool | None] = {}
     for issue_number, task in tasks_by_issue.items():

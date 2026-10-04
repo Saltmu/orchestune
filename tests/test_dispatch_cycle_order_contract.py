@@ -32,6 +32,10 @@ from orchestune.dispatch.cycle import (
 from orchestune.dispatch.cycle_action_contracts import ActivePhaseResult, GcPhaseResult
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_context import IssuesByStatus
+from orchestune.dispatch.cycle_events import (
+    PriorMergeEvidenceCompletion,
+    WorktreeCompletion,
+)
 from orchestune.dispatch.cycle_report import CycleReport, build_event_log_entry
 from orchestune.dispatch.launch import TaskLaunchPlan, _record_successful_launch
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
@@ -140,7 +144,15 @@ def test_cycle_phase_order_and_batch_selection_contract(tmp_path, fake_forge) ->
     def process():
         order.append("active-completion")
         ctx.record_completion(5)
-        return ActivePhaseResult(({"issue_number": 5},), (), False)
+        return ActivePhaseResult(
+            (
+                WorktreeCompletion(
+                    issue_number=5, worktree_path="w5", action="completed"
+                ),
+            ),
+            (),
+            False,
+        )
 
     def notify(_ctx, _config):
         order.append("pr-link-notification")
@@ -180,7 +192,16 @@ def test_cycle_phase_order_and_batch_selection_contract(tmp_path, fake_forge) ->
             config,
             100.0,
             _RepairCycleState(),
-            ({"issue_number": 7},),
+            (
+                PriorMergeEvidenceCompletion(
+                    issue_number=7,
+                    action="indeterminate",
+                    pr_number=None,
+                    base_ref="main",
+                    merged_at=None,
+                    reason="unknown",
+                ),
+            ),
         )
 
     assert order == [
@@ -338,7 +359,7 @@ def test_skipped_and_failed_repairs_remain_observable_in_cycle_report() -> None:
 
     results = serialized["consistency"]["repair_passes"][0]["results"]
     assert [result["status"] for result in results] == ["skipped", "failed"]
-    assert _pipeline_state_changes(report, MagicMock(), 1.0) == ()
+    assert _pipeline_state_changes(report, 1.0) == ()
 
 
 @pytest.mark.parametrize("failure_surface", ["run-state", "forge-label"])

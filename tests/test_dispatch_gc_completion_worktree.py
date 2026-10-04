@@ -12,9 +12,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.gc.cloud_completion import _cloud_worktree_completion_status
 from orchestune.dispatch.gc.completion import (
     _apply_early_death_retry,
-    _cloud_worktree_completion_status,
     _decide_completed_worktree_outcome,
     _decide_not_needed_dirty_worktree,
     _finalize_completed_worktree,
@@ -60,7 +60,7 @@ class TestFinalizeCompletedWorktree:
         event = _apply_early_death_retry(active, _task(), config, run_state, now=110.0)
 
         assert event is not None
-        assert event["early_death_retry_at"] == 180.0
+        assert event.retry_at == 180.0
         assert run_state.task_reclaim_counts[280].early_death_retry_count == 2
 
     def test_no_new_commits_is_not_treated_as_completed(self, tmp_path, fake_forge):
@@ -91,7 +91,7 @@ class TestFinalizeCompletedWorktree:
         ):
             event = _finalize_completed_worktree(active, task, config)
 
-        assert event["action"] != "completed"
+        assert event.to_dict()["action"] != "completed"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:blocked-human-review")
@@ -131,7 +131,7 @@ class TestFinalizeCompletedWorktree:
             )
             event = _finalize_completed_worktree(active, task, config)
 
-        assert event["action"] == "completed_without_outcome"
+        assert event.to_dict()["action"] == "completed_without_outcome"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:blocked-human-review")
@@ -178,11 +178,11 @@ class TestFinalizeCompletedWorktree:
             )
             event = _finalize_completed_worktree(active, task, config)
 
-        assert event["action"] == "completed"
+        assert event.to_dict()["action"] == "completed"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.add_label.assert_called_once_with(280, "status:done")
-        assert event["commit_sha"] == "deadbeef"
+        assert event.to_dict()["commit_sha"] == "deadbeef"
 
     def test_new_commits_with_outcome_not_needed_is_routed_to_not_needed(
         self, tmp_path, fake_forge
@@ -221,7 +221,7 @@ class TestFinalizeCompletedWorktree:
             )
             event = _finalize_completed_worktree(active, task, config)
 
-        assert event["action"] == "not_needed"
+        assert event.to_dict()["action"] == "not_needed"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.close_issue.assert_called_once()
@@ -255,7 +255,7 @@ class TestFinalizeCompletedWorktree:
         ):
             event = _finalize_completed_worktree(active, task, config)
 
-        assert event["action"] == "completion_skipped_forge_error"
+        assert event.to_dict()["action"] == "completion_skipped_forge_error"
         mock_remove_worktree.assert_not_called()
 
     def test_completed_also_removes_stale_queued_label(self, tmp_path, fake_forge):
@@ -290,7 +290,7 @@ class TestFinalizeCompletedWorktree:
             )
             event = _finalize_completed_worktree(active, task, config)
 
-        assert event["action"] == "completed"
+        assert event.to_dict()["action"] == "completed"
         fake_forge.add_label.assert_called_once_with(280, "status:done")
         fake_forge.remove_label.assert_any_call(280, "status:in-progress")
         fake_forge.remove_label.assert_any_call(280, "status:queued")
@@ -373,7 +373,7 @@ class TestFinalizeNotNeededWorktree:
         close_args = fake_forge.close_issue.call_args.args
         assert close_args[0] == 280
         assert close_args[1] == "not planned"
-        assert event == {
+        assert event.to_dict() == {
             "issue_number": 280,
             "worktree_path": "worktrees/w1",
             "action": "not_needed",
@@ -405,7 +405,7 @@ class TestFinalizeNotNeededWorktree:
         mock_remove_worktree.assert_not_called()
         fake_forge.remove_label.assert_not_called()
         fake_forge.close_issue.assert_not_called()
-        assert event["action"] == "completion_skipped_dirty_worktree"
+        assert event.to_dict()["action"] == "completion_skipped_dirty_worktree"
 
     def test_dry_run_does_not_call_github_or_mutate(self, tmp_path, fake_forge):
         active = _active()
@@ -431,7 +431,7 @@ class TestFinalizeNotNeededWorktree:
         mock_remove_worktree.assert_not_called()
         fake_forge.remove_label.assert_not_called()
         fake_forge.close_issue.assert_not_called()
-        assert event["action"] == "not_needed"
+        assert event.to_dict()["action"] == "not_needed"
 
     def test_none_task_defaults_subtask_id_to_empty_string(self, tmp_path, fake_forge):
         active = _active()
@@ -450,7 +450,7 @@ class TestFinalizeNotNeededWorktree:
             patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
         ):
             event = _finalize_not_needed_worktree(active, None, config)
-        assert event["subtask_id"] == ""
+        assert event.to_dict()["subtask_id"] == ""
 
 
 class TestFinalizeNotNeededWorktreeCloudRoutineReview:
@@ -495,8 +495,8 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
         fake_forge.close_issue.assert_not_called()
         dispatch_review.assert_called_once_with(280, "task-a", config)
-        assert event["action"] == "not_needed_review_dispatched"
-        assert event["subtask_id"] == "task-a"
+        assert event.to_dict()["action"] == "not_needed_review_dispatched"
+        assert event.to_dict()["subtask_id"] == "task-a"
 
     def test_dirty_worktree_does_not_dispatch_review(self, tmp_path, fake_forge):
         active = _active()
@@ -520,7 +520,7 @@ class TestFinalizeNotNeededWorktreeCloudRoutineReview:
             event = _finalize_not_needed_worktree(active, task, config)
 
         mock_fire_text.assert_not_called()
-        assert event["action"] == "completion_skipped_dirty_worktree"
+        assert event.to_dict()["action"] == "completion_skipped_dirty_worktree"
 
 
 class TestDecideCompletedWorktreeOutcome:
@@ -977,7 +977,7 @@ class TestFinalizeBaseBranchRedWorktree:
         ):
             event = _finalize_completed_worktree(active, task, config)
 
-        assert event["action"] == "blocked_base_branch_red"
+        assert event.to_dict()["action"] == "blocked_base_branch_red"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
         fake_forge.add_label.assert_any_call(280, "status:blocked")
         fake_forge.add_label.assert_any_call(280, "ci:base-branch-red")
@@ -1024,7 +1024,7 @@ class TestFinalizeBaseBranchRedWorktree:
         ):
             event = _finalize_completed_worktree(active, task, config)
 
-        assert event["action"] == "escalated_base_branch_red"
+        assert event.to_dict()["action"] == "escalated_base_branch_red"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
         fake_forge.add_label.assert_called_once_with(280, "status:blocked-human-review")
         fake_forge.remove_label.assert_any_call(280, "status:in-progress")

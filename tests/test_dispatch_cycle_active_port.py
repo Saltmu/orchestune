@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
+from orchestune.dispatch.cycle_events import WorktreeCompletion, WorktreeCompletionHold
 from orchestune.dispatch.gc.completion import is_completion_hold_event
 from orchestune.ledger.run_state import RunState
 from orchestune.models import PrRecord
@@ -31,7 +32,12 @@ class TestProcessActiveWorktrees:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={"action": "completed", "commit_sha": "abc123d"},
+                return_value=WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completed",
+                    commit_sha="abc123d",
+                ),
             ),
             patch("orchestune.dispatch.gc.save_run_state", autospec=True) as mock_save,
         ):
@@ -43,7 +49,7 @@ class TestProcessActiveWorktrees:
         assert "1" not in run_state.active_worktrees
         assert len(run_state.completed_worktrees) == 1
         assert len(result.completion_events) == 1
-        assert result.completion_events[0]["action"] == "completed"
+        assert result.completion_events[0].action == "completed"
 
     def test_dirty_hold_event_is_still_recognized_downstream(self, fake_forge):
         active = _active(pid=123, started_at=1_699_999_000.0)
@@ -63,10 +69,11 @@ class TestProcessActiveWorktrees:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={
-                    "action": "completion_skipped_dirty_worktree",
-                    "worktree_path": active.core.worktree_path,
-                },
+                return_value=WorktreeCompletionHold(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completion_skipped_dirty_worktree",
+                ),
             ),
         ):
             result = adapter.process_active_worktrees()

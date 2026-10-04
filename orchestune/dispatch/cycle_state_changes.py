@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -13,29 +14,18 @@ from orchestune.consistency.observation import (
     FACT_PULL_REQUEST_STATE,
     FACT_WORKTREE_PATH,
 )
+from orchestune.dispatch.cycle_events import (
+    CompletionEvent,
+    DeviationEvent,
+    PromotionEvent,
+)
 
 if TYPE_CHECKING:
     from orchestune.dispatch.cycle_report import CycleReport
-    from orchestune.dispatch.rules import CycleContext
-
-
-def _event_issue_number(event: dict[str, object], ctx: CycleContext) -> int | None:
-    issue_number = event.get("issue_number")
-    if isinstance(issue_number, int) and not isinstance(issue_number, bool):
-        return issue_number
-    subtask_id = event.get("subtask_id")
-    if isinstance(subtask_id, str):
-        matches: list[int] = [
-            task.issue_number for task in ctx.tasks() if task.subtask_id == subtask_id
-        ]
-        if len(matches) == 1:
-            return matches[0]
-    return None
 
 
 def _event_changes(
-    events: list[dict[str, object]],
-    ctx: CycleContext,
+    events: Sequence[CompletionEvent | DeviationEvent | PromotionEvent],
     fields: tuple[str, ...],
     source: str,
     occurred_at: datetime,
@@ -43,13 +33,12 @@ def _event_changes(
     return [
         StateChanged(
             scope=ConsistencyScope.TASK,
-            subject_id=str(issue_number),
+            subject_id=str(event.issue_number),
             fields=fields,
             source=source,
             occurred_at=occurred_at,
         )
         for event in events
-        if (issue_number := _event_issue_number(event, ctx)) is not None
     ]
 
 
@@ -92,14 +81,13 @@ def _scheduling_state_changes(
 
 
 def _pipeline_state_changes(
-    report: CycleReport, ctx: CycleContext, now: float
+    report: CycleReport, now: float
 ) -> tuple[StateChanged, ...]:
     if not report.applied:
         return ()
     occurred_at = datetime.fromtimestamp(now, UTC)
     changes = _event_changes(
         report.promotion_events,
-        ctx,
         (FACT_ISSUE_LABELS,),
         "dispatch.promotion",
         occurred_at,
@@ -107,7 +95,6 @@ def _pipeline_state_changes(
     changes.extend(
         _event_changes(
             report.completion_events,
-            ctx,
             (FACT_EXECUTION_KIND, FACT_ISSUE_LABELS, FACT_PULL_REQUEST_STATE),
             "dispatch.completion",
             occurred_at,
@@ -116,7 +103,6 @@ def _pipeline_state_changes(
     changes.extend(
         _event_changes(
             report.deviation_events,
-            ctx,
             (FACT_BRANCH_NAME, FACT_ISSUE_LABELS),
             "dispatch.deviation",
             occurred_at,

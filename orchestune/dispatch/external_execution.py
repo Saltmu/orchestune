@@ -18,6 +18,7 @@ from typing import Literal
 
 from orchestune.dispatch.attempt_record import read_attempt
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_events import ExternalExecutionHeldCompletion
 from orchestune.issue_notice import post_notice_if_changed
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_records import ActiveWorktree
@@ -44,18 +45,17 @@ class ExternalExecutionHold:
     launch_attempt_id: str | None
     external_id: str | None
 
-    def event(self, *, subtask_id: str = "") -> dict:
+    def event(self, *, subtask_id: str = "") -> ExternalExecutionHeldCompletion:
         """イベント化する。トークン・認証情報は含めない。"""
-        return {
-            "issue_number": self.issue_number,
-            "subtask_id": subtask_id,
-            "action": ACTION_EXTERNAL_EXECUTION_HELD,
-            "reason": self.reason,
-            "claim_id": self.claim_id,
-            "launch_attempt_id": self.launch_attempt_id,
-            "external_id": self.external_id,
-            "runtime_state": self.runtime_state,
-        }
+        return ExternalExecutionHeldCompletion(
+            issue_number=self.issue_number,
+            subtask_id=subtask_id,
+            reason=self.reason,
+            claim_id=self.claim_id,
+            launch_attempt_id=self.launch_attempt_id,
+            external_id=self.external_id,
+            runtime_state=self.runtime_state,
+        )
 
 
 def is_external_execution(active: ActiveWorktree) -> bool:

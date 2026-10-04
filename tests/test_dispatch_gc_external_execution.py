@@ -64,9 +64,9 @@ def test_timeout_reclaim_holds_slot_unless_stopped(tmp_path, fake_forge, state):
     ):
         event = _apply_zombie_or_timeout_reclaim(run_state, _reclaim(active), config)
 
-    assert event["action"] == ACTION_EXTERNAL_EXECUTION_HELD
-    assert event["runtime_state"] == state
-    assert event["reason"] == "timeout"
+    assert event.to_dict()["action"] == ACTION_EXTERNAL_EXECUTION_HELD
+    assert event.to_dict()["runtime_state"] == state
+    assert event.to_dict()["reason"] == "timeout"
     assert "280" in run_state.active_worktrees
     assert not run_state.task_reclaim_counts
     kill.assert_not_called()
@@ -92,7 +92,7 @@ def test_timeout_reclaim_hold_does_not_renotify_when_already_in_human_review(
     ):
         event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
-    assert event["action"] == ACTION_EXTERNAL_EXECUTION_HELD
+    assert event.to_dict()["action"] == ACTION_EXTERNAL_EXECUTION_HELD
     fake_forge.add_label.assert_not_called()
     fake_forge.add_comment.assert_not_called()
     assert "280" in run_state.active_worktrees
@@ -107,7 +107,7 @@ def test_dry_run_reports_hold_without_writes(tmp_path, fake_forge):
     ):
         event = _apply_zombie_or_timeout_reclaim(run_state, _reclaim(active), config)
 
-    assert event["action"] == ACTION_EXTERNAL_EXECUTION_HELD
+    assert event.to_dict()["action"] == ACTION_EXTERNAL_EXECUTION_HELD
     fake_forge.add_label.assert_not_called()
     fake_forge.remove_label.assert_not_called()
     fake_forge.add_comment.assert_not_called()
@@ -133,7 +133,7 @@ def test_stale_discard_holds_external_entry(tmp_path, fake_forge, state):
 
     assert discarded is False
     assert "280" in run_state.active_worktrees
-    assert [e["action"] for e in events] == [ACTION_EXTERNAL_EXECUTION_HELD]
+    assert [e.to_dict()["action"] for e in events] == [ACTION_EXTERNAL_EXECUTION_HELD]
     fake_forge.add_label.assert_any_call(280, "status:blocked-human-review")
 
 
@@ -206,8 +206,11 @@ class TestCompletedCloudHoldNotice:
         ctx, outcome = self._run(fake_forge)
 
         assert outcome is not None and outcome.terminal is True
-        assert outcome.completion_event["action"] == ACTION_EXTERNAL_EXECUTION_HELD
-        assert outcome.completion_event["reason"] == "completion"
+        assert (
+            outcome.completion_event.to_dict()["action"]
+            == ACTION_EXTERNAL_EXECUTION_HELD
+        )
+        assert outcome.completion_event.to_dict()["reason"] == "completion"
         assert "1" in ctx.run_state.active_worktrees
         fake_forge.add_label.assert_not_called()
         fake_forge.remove_label.assert_not_called()
@@ -232,6 +235,9 @@ class TestCompletedCloudHoldNotice:
         fake_forge.list_comments.return_value = []
         ctx, outcome = self._run(fake_forge, apply=False)
 
-        assert outcome.completion_event["action"] == ACTION_EXTERNAL_EXECUTION_HELD
+        assert (
+            outcome.completion_event.to_dict()["action"]
+            == ACTION_EXTERNAL_EXECUTION_HELD
+        )
         fake_forge.add_comment.assert_not_called()
         fake_forge.list_comments.assert_not_called()

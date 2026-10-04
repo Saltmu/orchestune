@@ -6,6 +6,7 @@ import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.consistency.invariants.execution import (
@@ -18,13 +19,19 @@ from orchestune.consistency.invariants.execution import (
 from orchestune.consistency.models import RepairCommand, RepairResult, RepairStatus
 from orchestune.consistency.repairs.execution import COMMAND_RECLAIM
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_events import (
+    CompletingExcludedCompletion,
+    CompletionEvent,
+    ExternalExecutionHeldCompletion,
+    InteractiveExcludedCompletion,
+    ReclaimedCompletion,
+)
 from orchestune.dispatch.execution_repair import (
     ReclaimPrecondition,
     command_finding_codes,
     revalidate_reclaim_preconditions,
 )
 from orchestune.dispatch.external_execution import (
-    ACTION_EXTERNAL_EXECUTION_HELD,
     send_hold_to_human_review,
 )
 from orchestune.dispatch.gc.external_guard import fresh_external_hold
@@ -91,16 +98,15 @@ def build_interactive_exclusion_event(
     reason: str = "interactive claim ownership is excluded from automatic GC reclaim",
     *,
     subtask_id: str | None = None,
-) -> dict:
+) -> InteractiveExcludedCompletion:
     """owner_kind=interactive の active が GC 回収から除外された診断イベントを構築する。"""
     resolved_subtask_id = subtask_id or (task.subtask_id if task else "")
-    return {
-        "issue_number": active.core.issue_number,
-        "subtask_id": resolved_subtask_id,
-        "action": "gc_reclaim_excluded_interactive",
-        "reason": reason,
-        "owner_kind": active.claim.owner_kind,
-    }
+    return InteractiveExcludedCompletion(
+        issue_number=active.core.issue_number,
+        subtask_id=resolved_subtask_id,
+        reason=reason,
+        owner_kind=active.claim.owner_kind,
+    )
 
 
 def list_unattended_interactive_claims(
@@ -279,22 +285,24 @@ def _record_reclaim(
     return True
 
 
-def _reclaim_event(reclaim: ZombieOrTimeoutReclaim, action: str, counted: bool) -> dict:
+def _reclaim_event(
+    reclaim: ZombieOrTimeoutReclaim,
+    action: Literal["gc_reclaimed", "escalated_reclaim_limit_exceeded"],
+    counted: bool,
+) -> ReclaimedCompletion:
     """回収結果イベントを組み立てる（`_apply_zombie_or_timeout_reclaim`の戻り値）。"""
-    return {
-        "issue_number": reclaim.active.core.issue_number,
-        "subtask_id": reclaim.subtask_id,
-        "action": action,
-        "reason": reclaim.reason,
+    return ReclaimedCompletion(
+        issue_number=reclaim.active.core.issue_number,
+        subtask_id=reclaim.subtask_id,
+        action=action,
+        reason=reclaim.reason,
         # 数えない分岐（既に人間の確認待ち）では、台帳が保持している既存の
         # 回数（今回分を含まない値）をそのまま報告する。
-        "reclaim_count": (
-            reclaim.reclaim_count if counted else reclaim.reclaim_count - 1
-        ),
-    }
+        reclaim_count=reclaim.reclaim_count if counted else reclaim.reclaim_count - 1,
+    )
 
 
-def _preview_reclaim_event(reclaim: ZombieOrTimeoutReclaim) -> dict:
+def _preview_reclaim_event(reclaim: ZombieOrTimeoutReclaim) -> ReclaimedCompletion:
     already_escalated = any(
         label in reclaim.status_labels for label in TERMINAL_ESCALATION_LABELS
     )
@@ -312,7 +320,7 @@ def _escalate_backup_failure(
     config: DispatcherConfig,
     backup_error: str,
     open_prs: Sequence[PrRecord] | None,
-) -> dict | None:
+) -> ReclaimedCompletion | None:
     released = False
 
     def _release_entry() -> None:
@@ -379,7 +387,7 @@ def _apply_backup_failure(
     escalating: bool,
     backup_error: str,
     open_prs: Sequence[PrRecord] | None = None,
-) -> dict | None:
+) -> ReclaimedCompletion | None:
     """WIPバックアップコミットの作成に失敗した場合の後始末。"""
     if escalating:
         return _escalate_backup_failure(
@@ -598,7 +606,7 @@ def _execute_reclaim_lifecycle(
     already_escalated: bool,
     settle_once: Callable[[], None],
     is_settled: Callable[[], bool],
-) -> dict | None:
+) -> CompletionEvent | None:
     active = reclaim.active
     try:
         if held := _external_hold_event(reclaim, config, run_state):
@@ -651,7 +659,7 @@ def _external_hold_event(
     reclaim: ZombieOrTimeoutReclaim,
     config: DispatcherConfig,
     run_state: RunState | None = None,
-) -> dict | None:
+) -> ExternalExecutionHeldCompletion | None:
     """#1154: 外部実行の停止未確認なら人間確認へ送り、保持イベントを返す。"""
     hold = fresh_external_hold(
         reclaim.active, config, "timeout" if reclaim.is_timeout else "stale", run_state
@@ -668,18 +676,17 @@ def _apply_zombie_or_timeout_reclaim(
     reclaim: ZombieOrTimeoutReclaim,
     config: DispatcherConfig,
     open_prs: Sequence[PrRecord] | None = None,
-) -> dict | None:
+) -> CompletionEvent | None:
     """decide層が判定した回収対象に基づき、安全に副作用を適用する。"""
     if _is_completing_or_handoff(reclaim.active):
-        return {
-            "issue_number": reclaim.active.core.issue_number,
-            "subtask_id": reclaim.subtask_id,
-            "action": "gc_reclaim_excluded_completing",
-            "reason": "task is currently completing and is excluded from automatic GC reclaim",
-            "owner_kind": reclaim.active.claim.owner_kind,
-            "completion_id": reclaim.active.completion.completion_id,
-            "completion_stage": reclaim.active.completion.completion_stage,
-        }
+        return CompletingExcludedCompletion(
+            issue_number=reclaim.active.core.issue_number,
+            subtask_id=reclaim.subtask_id,
+            reason="task is currently completing and is excluded from automatic GC reclaim",
+            owner_kind=reclaim.active.claim.owner_kind,
+            completion_id=reclaim.active.completion.completion_id or "",
+            completion_stage=reclaim.active.completion.completion_stage or "",
+        )
     if reclaim.active.claim.owner_kind == "interactive":
         return build_interactive_exclusion_event(
             reclaim.active,
@@ -693,7 +700,7 @@ def _reclaim_external_or_local(
     reclaim: ZombieOrTimeoutReclaim,
     config: DispatcherConfig,
     open_prs: Sequence[PrRecord] | None,
-) -> dict | None:
+) -> CompletionEvent | None:
     held_event = _external_hold_event(reclaim, config, run_state)
     if held_event is not None:
         return held_event
@@ -768,7 +775,7 @@ def _skipped_reclaim(command: RepairCommand, diagnostic: str) -> RepairResult:
 def _handle_interactive_reclaim_exclusion(
     command: RepairCommand,
     reclaim: ZombieOrTimeoutReclaim,
-    event_sink: Callable[[dict], None] | None,
+    event_sink: Callable[[CompletionEvent], None] | None,
 ) -> RepairResult:
     exclusion_event = build_interactive_exclusion_event(
         reclaim.active,
@@ -792,13 +799,13 @@ def _apply_validated_reclaim(
     precondition: ReclaimPrecondition,
     config: DispatcherConfig,
     open_prs: Sequence[PrRecord] | None,
-    event_sink: Callable[[dict], None] | None,
+    event_sink: Callable[[CompletionEvent], None] | None,
 ) -> RepairResult:
     refreshed = _refresh_reclaim(run_state, reclaim, config, precondition)
     event = _apply_zombie_or_timeout_reclaim(run_state, refreshed, config, open_prs)
     if event is not None and event_sink is not None:
         event_sink(event)
-    if event is not None and event.get("action") == ACTION_EXTERNAL_EXECUTION_HELD:
+    if isinstance(event, ExternalExecutionHeldCompletion):
         return RepairResult(
             command=command,
             status=RepairStatus.SKIPPED,
@@ -818,19 +825,18 @@ def _apply_validated_reclaim(
 def _handle_completing_reclaim_exclusion(
     command: RepairCommand,
     reclaim: ZombieOrTimeoutReclaim,
-    event_sink: Callable[[dict], None] | None,
+    event_sink: Callable[[CompletionEvent], None] | None,
 ) -> RepairResult:
     if event_sink is not None:
         event_sink(
-            {
-                "issue_number": reclaim.active.core.issue_number,
-                "subtask_id": reclaim.subtask_id,
-                "action": "gc_reclaim_excluded_completing",
-                "reason": "task is currently completing and is excluded from automatic GC reclaim",
-                "owner_kind": reclaim.active.claim.owner_kind,
-                "completion_id": reclaim.active.completion.completion_id,
-                "completion_stage": reclaim.active.completion.completion_stage,
-            }
+            CompletingExcludedCompletion(
+                issue_number=reclaim.active.core.issue_number,
+                subtask_id=reclaim.subtask_id,
+                reason="task is currently completing and is excluded from automatic GC reclaim",
+                owner_kind=reclaim.active.claim.owner_kind,
+                completion_id=reclaim.active.completion.completion_id or "",
+                completion_stage=reclaim.active.completion.completion_stage or "",
+            )
         )
     return RepairResult(
         command=command,
@@ -848,7 +854,7 @@ def execute_reclaim_repair_command(
     *,
     held_worktree_paths: frozenset[str] = frozenset(),
     now: float | None = None,
-    event_sink: Callable[[dict], None] | None = None,
+    event_sink: Callable[[CompletionEvent], None] | None = None,
 ) -> RepairResult:
     """Revalidate and apply one typed reclaim through the safe lifecycle."""
     if command.code != COMMAND_RECLAIM:

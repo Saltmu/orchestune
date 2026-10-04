@@ -15,6 +15,11 @@ import pytest
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
 from orchestune.dispatch.cycle_context import _group_by_status
+from orchestune.dispatch.cycle_events import (
+    RecomputedDeviation,
+    TaskWorktreeCompletion,
+    WorktreeCompletionHold,
+)
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.ledger.run_state import (
     RunState,
@@ -112,11 +117,9 @@ class TestProcessActiveWorktrees:
             patch(
                 "orchestune.dispatch.rebase._handle_footprint_deviation",
                 autospec=True,
-                return_value={
-                    "action": "recomputed",
-                    "issue_number": 1,
-                    "deviated_files": ["b.py"],
-                },
+                return_value=RecomputedDeviation(
+                    issue_number=1, deviated_files=("b.py",), conflicts=()
+                ),
             ),
         ):
             (
@@ -128,8 +131,8 @@ class TestProcessActiveWorktrees:
 
         assert completion_events == []
         assert len(deviation_events) == 1
-        assert deviation_events[0]["action"] == "recomputed"
-        assert deviation_events[0]["deviated_files"] == ["b.py"]
+        assert deviation_events[0].to_dict()["action"] == "recomputed"
+        assert deviation_events[0].to_dict()["deviated_files"] == ["b.py"]
         assert any_forced_serial is False
         assert completed_issue_numbers == set()
 
@@ -170,7 +173,11 @@ class TestProcessActiveWorktrees:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={"action": "completion_skipped_dirty_worktree"},
+                return_value=WorktreeCompletionHold(
+                    issue_number=1,
+                    worktree_path="worktrees/w1",
+                    action="completion_skipped_dirty_worktree",
+                ),
             ),
             patch(
                 "orchestune.dispatch.rebase._try_auto_rebase",
@@ -191,7 +198,10 @@ class TestProcessActiveWorktrees:
             ) = _process_active_worktrees(ctx)
 
         assert len(completion_events) == 1
-        assert completion_events[0]["action"] == "completion_skipped_dirty_worktree"
+        assert (
+            completion_events[0].to_dict()["action"]
+            == "completion_skipped_dirty_worktree"
+        )
         assert deviation_events == []
         assert any_forced_serial is False
         assert completed_issue_numbers == set()
@@ -278,7 +288,7 @@ class TestProcessActiveWorktrees:
         ):
             report = run_dispatch_cycle(config)
 
-        assert [event["action"] for event in report.completion_events] == [
+        assert [event.to_dict()["action"] for event in report.completion_events] == [
             "completion_skipped_dirty_worktree"
         ]
         assert run_state.active_worktrees == {"1": active}
@@ -392,7 +402,7 @@ class TestProcessActiveWorktrees:
             tmp_path, fake_forge
         )
 
-        assert [event["action"] for event in report.completion_events] == [
+        assert [event.to_dict()["action"] for event in report.completion_events] == [
             "completion_skipped_forge_error"
         ]
         assert run_state.active_worktrees == {"1": active}
@@ -407,7 +417,7 @@ class TestProcessActiveWorktrees:
             tmp_path, fake_forge
         )
 
-        assert [event["action"] for event in report.completion_events] == [
+        assert [event.to_dict()["action"] for event in report.completion_events] == [
             "completion_skipped_forge_error"
         ]
         assert run_state.active_worktrees == {"1": active}
@@ -429,7 +439,7 @@ class TestProcessActiveWorktrees:
             },
         )
 
-        assert [event["action"] for event in report.completion_events] == [
+        assert [event.to_dict()["action"] for event in report.completion_events] == [
             "completion_skipped_forge_error"
         ]
         assert run_state.active_worktrees == {"1": active}
@@ -447,7 +457,7 @@ class TestProcessActiveWorktrees:
             create_worktree=False,
         )
 
-        assert [event["action"] for event in report.completion_events] == [
+        assert [event.to_dict()["action"] for event in report.completion_events] == [
             "completion_skipped_forge_error"
         ]
         assert run_state.active_worktrees == {"1": active}
@@ -475,7 +485,12 @@ class TestProcessActiveWorktrees:
             patch(
                 "orchestune.dispatch.gc._finalize_not_needed_worktree",
                 autospec=True,
-                return_value={"action": "not_needed"},
+                return_value=TaskWorktreeCompletion(
+                    issue_number=1,
+                    subtask_id="task-a",
+                    worktree_path="worktrees/w1",
+                    action="not_needed",
+                ),
             ),
         ):
             (
@@ -486,7 +501,7 @@ class TestProcessActiveWorktrees:
             ) = _process_active_worktrees(ctx)
 
         assert len(completion_events) == 1
-        assert completion_events[0]["action"] == "not_needed"
+        assert completion_events[0].to_dict()["action"] == "not_needed"
         assert deviation_events == []
         assert completed_issue_numbers == set()
         assert "1" not in run_state.active_worktrees
@@ -593,7 +608,12 @@ class TestProcessActiveWorktrees:
             patch(
                 "orchestune.dispatch.gc._finalize_not_needed_worktree",
                 autospec=True,
-                return_value={"action": "not_needed"},
+                return_value=TaskWorktreeCompletion(
+                    issue_number=1,
+                    subtask_id="task-a",
+                    worktree_path="worktrees/w1",
+                    action="not_needed",
+                ),
             ),
         ):
             (
@@ -604,7 +624,7 @@ class TestProcessActiveWorktrees:
             ) = _process_active_worktrees(ctx)
 
         assert len(completion_events) == 1
-        assert completion_events[0]["action"] == "not_needed"
+        assert completion_events[0].to_dict()["action"] == "not_needed"
         assert deviation_events == []
         assert completed_issue_numbers == set()
         assert any_forced_serial is False
@@ -633,7 +653,12 @@ class TestProcessActiveWorktrees:
             patch(
                 "orchestune.dispatch.gc._finalize_not_needed_worktree",
                 autospec=True,
-                return_value={"action": "not_needed"},
+                return_value=TaskWorktreeCompletion(
+                    issue_number=1,
+                    subtask_id="task-a",
+                    worktree_path="worktrees/w1",
+                    action="not_needed",
+                ),
             ),
             patch(
                 "orchestune.dispatch.gc._is_worktree_complete",

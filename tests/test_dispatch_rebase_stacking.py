@@ -11,6 +11,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.cycle_events import WorktreeCompletion
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.ledger.run_state import RunState, load_run_state
 from orchestune.models import PrRecord
@@ -720,12 +721,13 @@ class TestBranchStacking:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={
-                    "action": "completed",
-                    "issue_number": 1,
-                    "subtask_id": "task-1",
-                    "commit_sha": "abc1234",
-                },
+                return_value=WorktreeCompletion(
+                    issue_number=1,
+                    worktree_path="worktrees/claude-issue-1-task-1",
+                    action="completed",
+                    subtask_id="task-1",
+                    commit_sha="abc1234",
+                ),
             ),
         ):
             mock_subproc_run.return_value = subprocess.CompletedProcess(

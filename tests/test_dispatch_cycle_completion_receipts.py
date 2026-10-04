@@ -18,6 +18,7 @@ import pytest
 from orchestune.dependencies.assessment import DependencyState
 from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.cycle_context_state import RecordStatus
+from orchestune.dispatch.cycle_events import WorktreeCompletion
 from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.gc import _record_completed_worktree
 from tests.dispatch_gc_test_support import _active, _task
@@ -56,7 +57,17 @@ class TestRecordCompletedWorktreeSuccessBoundary:
         with patch(
             "orchestune.dispatch.gc.save_run_state", side_effect=_fake_save
         ) as mock_save:
-            _record_completed_worktree(ctx, "1", active, task, {"action": "completed"})
+            _record_completed_worktree(
+                ctx,
+                "1",
+                active,
+                task,
+                WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completed",
+                ),
+            )
 
         mock_save.assert_called_once_with(
             ctx.run_state,
@@ -76,7 +87,15 @@ class TestRecordCompletedWorktreeSuccessBoundary:
 
         with patch("orchestune.dispatch.gc.save_run_state", autospec=True):
             _record_completed_worktree(
-                ctx, "1", active, task, {"action": "already_merged"}
+                ctx,
+                "1",
+                active,
+                task,
+                WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="already_merged",
+                ),
             )
 
         assert ctx.is_completion_confirmed(active.core.issue_number) is True
@@ -92,7 +111,11 @@ class TestRecordCompletedWorktreeSuccessBoundary:
                 "1",
                 active,
                 task,
-                {"action": "escalated_token_limit_exceeded"},
+                WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="escalated_token_limit_exceeded",
+                ),
             )
 
         assert ctx.is_completion_confirmed(active.core.issue_number) is False
@@ -108,7 +131,17 @@ class TestRecordCompletedWorktreeSuccessBoundary:
             "orchestune.dispatch.gc.save_run_state",
             side_effect=RuntimeError("disk full"),
         ):
-            _record_completed_worktree(ctx, "1", active, task, {"action": "completed"})
+            _record_completed_worktree(
+                ctx,
+                "1",
+                active,
+                task,
+                WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completed",
+                ),
+            )
 
         assert ctx.is_completion_confirmed(active.core.issue_number) is False
         # The in-memory ledger mutation (Forge success already confirmed it)
@@ -124,12 +157,20 @@ class TestRecordCompletedWorktreeSuccessBoundary:
 
         with patch("orchestune.dispatch.gc.save_run_state", autospec=True) as mock_save:
             outcome = _record_completed_worktree(
-                ctx, "1", active, task, {"action": "completed"}
+                ctx,
+                "1",
+                active,
+                task,
+                WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completed",
+                ),
             )
 
         mock_save.assert_not_called()
         assert ctx.is_completion_confirmed(active.core.issue_number) is False
-        assert outcome.completion_event["action"] == "completed"
+        assert outcome.completion_event.to_dict()["action"] == "completed"
 
     def test_confirmed_completion_reflects_immediately_in_dependent_assessment(self):
         upstream = _task(
@@ -156,7 +197,15 @@ class TestRecordCompletedWorktreeSuccessBoundary:
 
         with patch("orchestune.dispatch.gc.save_run_state", autospec=True):
             _record_completed_worktree(
-                ctx, "1", active, upstream, {"action": "completed"}
+                ctx,
+                "1",
+                active,
+                upstream,
+                WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completed",
+                ),
             )
 
         after = ctx.assess_dependencies(281)

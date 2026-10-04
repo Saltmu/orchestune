@@ -9,6 +9,7 @@
 import json
 
 from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.cycle_events import ForgeFailureCompletion
 from orchestune.dispatch.report import _report_to_dict, write_github_step_summary
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.scoring import SchedulingDecision, ScoreComponents, Task
@@ -367,11 +368,12 @@ class TestSkippedTasksSection:
             tmp_path,
             _cycle_report(
                 forge_warnings=[
-                    {
-                        "issue_number": 702,
-                        "operation": "list_prs",
-                        "error": "RuntimeError: 504",
-                    }
+                    ForgeFailureCompletion(
+                        issue_number=702,
+                        worktree_path="",
+                        operation="list_prs",
+                        error="RuntimeError: 504",
+                    )
                 ]
             ),
         )
@@ -393,7 +395,11 @@ class TestReportToDict:
             external_lock_conflicts={
                 1: [{"kind": "branch", "source": "feat/x", "files": ["a.py"]}]
             },
-            forge_warnings=[{"issue_number": 2, "operation": "list_prs"}],
+            forge_warnings=[
+                ForgeFailureCompletion(
+                    issue_number=2, worktree_path="", operation="list_prs"
+                )
+            ],
         )
         as_dict = _report_to_dict(report)
         assert as_dict["skips"] == [

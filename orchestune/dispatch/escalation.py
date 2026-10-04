@@ -9,6 +9,7 @@ from orchestune.dependencies.assessment import (
     DependencyState,
 )
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_events import ChangesRequestedEscalationCompletion
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.labels import StatusLabel
 from orchestune.ledger.escalation import apply_human_review_escalation
@@ -41,7 +42,7 @@ def _apply_changes_requested_escalation(
     key: str,
     run_state: RunState,
     config: DispatcherConfig,
-) -> dict:
+) -> ChangesRequestedEscalationCompletion:
     """依存元PRがCHANGES_REQUESTEDになったタスクを一時停止する
     （プロセスkill・githubラベル/コメント・run_state削除はすべてact）。"""
     if config.apply:
@@ -57,11 +58,9 @@ def _apply_changes_requested_escalation(
             forge=config.resolved_forge,
         )
         del run_state.active_worktrees[key]
-    return {
-        "issue_number": active.core.issue_number,
-        "subtask_id": active_task.subtask_id,
-        "action": "escalated_due_to_changes_requested",
-    }
+    return ChangesRequestedEscalationCompletion(
+        issue_number=active.core.issue_number, subtask_id=active_task.subtask_id
+    )
 
 
 def _rule_changes_requested(

@@ -1,6 +1,10 @@
 import tempfile
 from pathlib import Path
 
+from orchestune.dispatch.cycle_events import (
+    ChangesRequestedEscalationCompletion,
+    RecomputedDeviation,
+)
 from orchestune.dispatch.rules import (
     ActiveWorktreeRuleOutcome,
     RuleChain,
@@ -68,7 +72,10 @@ class TestRuleChainRun:
         def _rule_a(ctx, key, active, active_task):
             calls.append("a")
             return ActiveWorktreeRuleOutcome(
-                completion_event={"action": "skip"}, terminal=False
+                completion_event=ChangesRequestedEscalationCompletion(
+                    issue_number=280, subtask_id="task-a"
+                ),
+                terminal=False,
             )
 
         def _rule_b(ctx, key, active, active_task):
@@ -82,7 +89,9 @@ class TestRuleChainRun:
         assert handled is True
         assert calls == ["a", "b"]
         # non-terminalなruleが記録したイベントもaggregatesへmergeされていること
-        assert aggregates.completion_events == [{"action": "skip"}]
+        assert aggregates.completion_events == [
+            ChangesRequestedEscalationCompletion(issue_number=280, subtask_id="task-a")
+        ]
 
     def test_no_rule_matches_returns_false(self):
         def _rule_a(ctx, key, active, active_task):
@@ -98,8 +107,12 @@ class TestRuleChainRun:
     def test_merges_all_outcome_fields(self):
         def _rule(ctx, key, active, active_task):
             return ActiveWorktreeRuleOutcome(
-                completion_event={"action": "done"},
-                deviation_event={"action": "recomputed"},
+                completion_event=ChangesRequestedEscalationCompletion(
+                    issue_number=42, subtask_id="task-a"
+                ),
+                deviation_event=RecomputedDeviation(
+                    issue_number=42, deviated_files=(), conflicts=()
+                ),
                 forced_serial=True,
                 terminal=True,
             )
@@ -108,6 +121,10 @@ class TestRuleChainRun:
         RuleChain(rules=[_rule]).run(
             _ctx(), "1", _active(issue_number=42), None, aggregates
         )
-        assert aggregates.completion_events == [{"action": "done"}]
-        assert aggregates.deviation_events == [{"action": "recomputed"}]
+        assert aggregates.completion_events == [
+            ChangesRequestedEscalationCompletion(issue_number=42, subtask_id="task-a")
+        ]
+        assert aggregates.deviation_events == [
+            RecomputedDeviation(issue_number=42, deviated_files=(), conflicts=())
+        ]
         assert aggregates.any_forced_serial is True

@@ -232,9 +232,9 @@ class TestApplyZombieOrTimeoutReclaim:
 
         assert result.status is RepairStatus.SKIPPED
         assert "280" in run_state.active_worktrees
-        assert [e["action"] for e in events] == ["external_execution_held"]
-        assert events[0]["runtime_state"] == "unknown"
-        assert events[0]["reason"] == "timeout"
+        assert [e.to_dict()["action"] for e in events] == ["external_execution_held"]
+        assert events[0].to_dict()["runtime_state"] == "unknown"
+        assert events[0].to_dict()["reason"] == "timeout"
         fake_forge.add_label.assert_any_call(280, "status:blocked-human-review")
 
     def test_typed_reclaim_command_reports_dry_run_without_false_precondition(
@@ -307,7 +307,7 @@ class TestApplyZombieOrTimeoutReclaim:
         fake_forge.add_label.assert_called_once_with(280, "status:queued")
         fake_forge.add_comment.assert_called_once()
         assert run_state.active_worktrees == {}
-        assert event == {
+        assert event.to_dict() == {
             "issue_number": 280,
             "subtask_id": "task-a",
             "action": "gc_reclaimed",
@@ -422,7 +422,7 @@ class TestApplyZombieOrTimeoutReclaim:
         fake_forge.remove_label.assert_not_called()
         fake_forge.add_comment.assert_called_once()
         assert event is not None
-        assert event["action"] == "gc_reclaimed"
+        assert event.to_dict()["action"] == "gc_reclaimed"
 
     def test_timeout_apply_kills_alive_process(self, tmp_path, fake_forge):
         active = _active(pid=111, worktree_path=str(tmp_path))
@@ -684,7 +684,7 @@ class TestApplyZombieOrTimeoutReclaim:
         fake_forge.add_label.assert_not_called()
         fake_forge.add_comment.assert_not_called()
         assert run_state.active_worktrees == {"280": active}
-        assert event == {
+        assert event.to_dict() == {
             "issue_number": 280,
             "subtask_id": "task-a",
             "action": "gc_reclaimed",
@@ -708,7 +708,7 @@ class TestApplyZombieOrTimeoutReclaim:
         event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
         assert event is not None
-        assert set(event.keys()) == {
+        assert set(event.to_dict()) == {
             "issue_number",
             "subtask_id",
             "action",
@@ -867,8 +867,8 @@ class TestApplyZombieOrTimeoutReclaim:
         fake_forge.add_label.assert_not_called()
         assert "280" in run_state.active_worktrees
         assert event is not None
-        assert event["action"] == "gc_reclaim_excluded_interactive"
-        assert event["issue_number"] == 280
+        assert event.to_dict()["action"] == "gc_reclaim_excluded_interactive"
+        assert event.to_dict()["issue_number"] == 280
 
     def test_execute_reclaim_repair_command_skips_interactive_ownership(
         self, tmp_path, fake_forge
@@ -908,5 +908,5 @@ class TestApplyZombieOrTimeoutReclaim:
         assert result.status is RepairStatus.SKIPPED
         assert "interactive" in result.diagnostics[0]
         assert len(sink_events) == 1
-        assert sink_events[0]["action"] == "gc_reclaim_excluded_interactive"
+        assert sink_events[0].to_dict()["action"] == "gc_reclaim_excluded_interactive"
         assert "280" in run_state.active_worktrees

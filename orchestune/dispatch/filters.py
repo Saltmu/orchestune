@@ -7,6 +7,7 @@ from orchestune.dependencies.resolution import (
     EMPTY_DEPENDENCIES,
     TaskDependencies,
 )
+from orchestune.dispatch.cycle_events import DeviationEvent, RecomputedDeviation
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.task_metadata import TaskMetadata
 
@@ -87,19 +88,19 @@ def _filter_candidates_for_forced_serial(
 
 def _filter_deviation_blocked_candidates(
     candidate_tasks: list[TTask],
-    deviation_events: list[dict],
+    deviation_events: list[DeviationEvent],
     issue_number_by_subtask_id: dict[str, int],
 ) -> list[TTask]:
     """同一サイクルのfootprint逸脱でブロックされた候補を除外する。"""
     newly_blocked_recompute_issues = set()
     for event in deviation_events:
-        if event.get("action") == "recomputed":
-            for conflict in event.get("conflicts", []):
-                blocked_id = conflict.get("blocked_subtask_id")
-                if blocked_id:
-                    issue_number = issue_number_by_subtask_id.get(blocked_id)
-                    if issue_number is not None:
-                        newly_blocked_recompute_issues.add(issue_number)
+        if isinstance(event, RecomputedDeviation):
+            for conflict in event.conflicts:
+                issue_number = issue_number_by_subtask_id.get(
+                    conflict.blocked_subtask_id
+                )
+                if issue_number is not None:
+                    newly_blocked_recompute_issues.add(issue_number)
 
     if not newly_blocked_recompute_issues:
         return candidate_tasks

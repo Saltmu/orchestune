@@ -111,7 +111,9 @@ def test_issue_comment_lookup_failure_holds_before_closed_pr_reclaim(
         outcome = _rule_completed(ctx, "280", active, task)
 
     assert outcome is not None
-    assert outcome.completion_event["action"] == "completion_skipped_forge_error"
-    assert outcome.completion_event["operation"] == "list_comments"
+    assert (
+        outcome.completion_event.to_dict()["action"] == "completion_skipped_forge_error"
+    )
+    assert outcome.completion_event.to_dict()["operation"] == "list_comments"
     fake_forge.list_prs.assert_not_called()
     fake_forge.add_label.assert_not_called()

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 from orchestune.claim.workspace import ClaimWorkspace, resolve_claim_workspace
+from orchestune.dispatch.cycle_events import TokenHoldCompletion
 from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.gc.collection import GcItemResult as GcItemResult
 from orchestune.dispatch.gc.collection import GcRunResult as GcRunResult
@@ -67,16 +68,27 @@ def _completion_gc_candidates(
     ]
 
 
-def _policy_items(events: list[dict[str, Any]]) -> list[GcItemResult]:
+def _policy_items(
+    events: Sequence[dict[str, Any] | TokenHoldCompletion],
+) -> list[GcItemResult]:
     return [
         GcItemResult(
-            key=str(e["issue_number"]),
-            issue_number=e["issue_number"],
+            key=str(
+                e.issue_number
+                if isinstance(e, TokenHoldCompletion)
+                else e["issue_number"]
+            ),
+            issue_number=e.issue_number
+            if isinstance(e, TokenHoldCompletion)
+            else e["issue_number"],
             result=None,
             action="held"
-            if e["action"] != "completion_policy_applied"
+            if isinstance(e, TokenHoldCompletion)
+            or e["action"] != "completion_policy_applied"
             else "policy_applied",
-            reason=e.get("reason", e["action"]),
+            reason=e.reason
+            if isinstance(e, TokenHoldCompletion)
+            else e.get("reason", e["action"]),
             worktree_path="",
             worktree_action="none",
         )
@@ -233,8 +245,8 @@ def _gc_policy_events(
         ]
     observed = {event["issue_number"] for event in events}
     events.extend(
-        e
+        e.to_dict()
         for e in unclaimed_completion_events(state)
-        if e["issue_number"] not in observed
+        if str(e.issue_number) not in observed
     )
     return events

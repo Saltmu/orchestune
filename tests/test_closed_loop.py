@@ -512,7 +512,7 @@ def test_closed_loop_flow():
         # ---- Cycle 2: Detect Completion ----
         report2 = run_dispatch_cycle(config)
         assert len(report2.completion_events) == 1
-        assert report2.completion_events[0]["action"] == "completed"
+        assert report2.completion_events[0].action == "completed"
         assert "status:done" in dummy_github.issues[1].labels
         assert "status:in-progress" not in dummy_github.issues[1].labels
 
@@ -556,7 +556,7 @@ def test_closed_loop_flow():
         # ---- Cycle 4: Detect Correction Completion ----
         report4 = run_dispatch_cycle(config)
         assert len(report4.completion_events) == 1
-        assert report4.completion_events[0]["action"] == "completed"
+        assert report4.completion_events[0].action == "completed"
         assert "status:done" in dummy_github.issues[1].labels
         assert "status:in-progress" not in dummy_github.issues[1].labels
 
@@ -763,7 +763,7 @@ def test_closed_loop_dag_recomputation_serialization():
 
         # Confirm deviation event and force-serial transition
         assert len(report2.deviation_events) == 1
-        assert report2.deviation_events[0]["action"] == "forced_serial"
+        assert report2.deviation_events[0].action == "forced_serial"
         # Confirm that task-2 has status:force-serial label
         assert "status:force-serial" in dummy_github.issues[2].labels
 

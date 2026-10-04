@@ -27,6 +27,23 @@ from orchestune.consistency.supervisor import (
 )
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.cycle_events import (
+    AbandonedExternalExecutionHeldCompletion,
+    AbandonmentPersistenceFailureCompletion,
+    ChangesRequestedEscalationCompletion,
+    CompletingExcludedCompletion,
+    CompletionEvent,
+    ConfirmedExternalExecutionHeldCompletion,
+    DeviationEvent,
+    EarlyDeathRequeuedCompletion,
+    ExternalExecutionHeldCompletion,
+    InteractiveExcludedCompletion,
+    ReclaimedCompletion,
+    ReviewTimeoutRequeuedCompletion,
+    StaleEntryDiscardedCompletion,
+    TaskWorktreeCompletion,
+    WorktreeCompletion,
+)
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.summary import (
     merge_skips,
@@ -43,6 +60,7 @@ from orchestune.integrator.coordinator import (
 )
 from orchestune.integrator.parent_completion import process_parent_completion
 from orchestune.issue_notice import NoticeOutcome, post_notice_if_changed
+from orchestune.models import Usage
 
 
 def _decide_semantic_review_enabled() -> bool:
@@ -231,28 +249,53 @@ _STEADY_STATE_DEVIATION_ACTIONS = frozenset(
 )
 
 
-def _noteworthy_deviation_events(report: CycleReport) -> list[dict]:
+def _noteworthy_deviation_events(report: CycleReport) -> list[DeviationEvent]:
     """`report.deviation_events`のうち、定常状態の再通知ではないものだけを返す。"""
     return [
         event
         for event in report.deviation_events
-        if event.get("action") not in _STEADY_STATE_DEVIATION_ACTIONS
+        if event.action not in _STEADY_STATE_DEVIATION_ACTIONS
     ]
 
 
-def _format_completion_item(event: dict) -> str:
-    issue_num = event.get("issue_number")
-    subtask_id = event.get("subtask_id")
-    action = event.get("action", "completed")
-    usage = event.get("usage")
+def _completion_item_fields(
+    event: CompletionEvent,
+) -> tuple[int, str | None, str, Usage | None]:
+    if isinstance(
+        event,
+        WorktreeCompletion
+        | EarlyDeathRequeuedCompletion
+        | ReviewTimeoutRequeuedCompletion,
+    ):
+        return event.issue_number, event.subtask_id, event.action, event.usage
+    if isinstance(
+        event,
+        TaskWorktreeCompletion
+        | ExternalExecutionHeldCompletion
+        | ConfirmedExternalExecutionHeldCompletion
+        | AbandonedExternalExecutionHeldCompletion
+        | InteractiveExcludedCompletion
+        | CompletingExcludedCompletion
+        | ReclaimedCompletion
+        | StaleEntryDiscardedCompletion
+        | AbandonmentPersistenceFailureCompletion,
+    ):
+        return event.issue_number, event.subtask_id, event.action, None
+    if isinstance(event, ChangesRequestedEscalationCompletion):
+        return event.issue_number, event.subtask_id, event.action, None
+    return event.issue_number, None, event.action, None
+
+
+def _format_completion_item(event: CompletionEvent) -> str:
+    issue_num, subtask_id, action, usage = _completion_item_fields(event)
 
     if not (issue_num and subtask_id):
-        return f"`{event}`"
+        return f"`{event.to_dict()}`"
 
     prefix = f"Issue #{issue_num}（`{subtask_id}`）"
-    if usage and isinstance(usage, dict):
-        model = usage.get("model") or "不明"
-        tokens = usage.get("total_tokens")
+    if usage is not None:
+        model = usage.model or "不明"
+        tokens = usage.total_tokens
         tokens_str = f"{tokens:,} tokens" if tokens is not None else "不明"
         return f"{prefix}: `{action}` [Model: `{model}`, Tokens: **{tokens_str}**]"
     return f"{prefix}: `{action}` [Model: `不明`, Tokens: **不明**]"
@@ -260,7 +303,7 @@ def _format_completion_item(event: dict) -> str:
 
 def _format_event_log_comment(
     report: CycleReport,
-    deviation_events: list[dict],
+    deviation_events: list[DeviationEvent],
     child_review_gate: str = "required",
 ) -> str:
     lines = ["## 🤖 Orchestune Dispatch Cycle Report\n"]
@@ -278,7 +321,7 @@ def _format_event_log_comment(
         ),
         (
             "⚠️ footprint逸脱イベント（Deviation）",
-            [f"`{event}`" for event in deviation_events],
+            [f"`{event.to_dict()}`" for event in deviation_events],
         ),
         (
             "✅ 完了イベント（Completion）",
@@ -286,7 +329,7 @@ def _format_event_log_comment(
         ),
         (
             "⬆️ 昇格イベント（Promotion）",
-            [f"`{event}`" for event in report.promotion_events],
+            [f"`{event.to_dict()}`" for event in report.promotion_events],
         ),
     ]
     for header, items in sections:

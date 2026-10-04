@@ -11,6 +11,7 @@ from orchestune.consistency.supervisor import ConsistencyMode
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import _finish_consistency_runtime, _RepairCycleState
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
+from orchestune.dispatch.cycle_events import WorktreeCompletion
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.rules import CycleContext
 from orchestune.forge import Forge
@@ -97,13 +98,18 @@ class TestConfirmedCompletionFacts:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={"action": "already_merged", "subtask_id": ""},
+                return_value=WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path="worktrees/w1",
+                    action="already_merged",
+                    subtask_id="",
+                ),
             ),
             patch("orchestune.dispatch.gc.save_run_state", autospec=True),
         ):
             result = ctx.process_active_worktrees()
 
-        assert result.completion_events[0]["action"] == "already_merged"
+        assert result.completion_events[0].action == "already_merged"
         assert ctx.is_completion_confirmed(280) is True
 
     def test_unverified_completion_outcome_does_not_create_a_fact(self):

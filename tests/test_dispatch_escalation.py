@@ -168,5 +168,6 @@ class TestRuleChangesRequested:
         assert outcome is not None
         assert outcome.terminal is True
         assert (
-            outcome.completion_event["action"] == "escalated_due_to_changes_requested"
+            outcome.completion_event.to_dict()["action"]
+            == "escalated_due_to_changes_requested"
         )

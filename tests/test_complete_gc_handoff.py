@@ -76,7 +76,7 @@ class TestCompleteGcHandoff:
 
         event = _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
         assert event is not None
-        assert event.get("action") == "gc_reclaim_excluded_completing"
+        assert event.action == "gc_reclaim_excluded_completing"
         assert "1004" in run_state.active_worktrees
 
     def test_execute_reclaim_repair_command_skips_completing_task(self, tmp_path):
@@ -246,7 +246,7 @@ class TestCompleteGcHandoff:
             )
             mock_remove.assert_not_called()
 
-        assert event["action"] == "not_needed"
+        assert event.to_dict()["action"] == "not_needed"
         assert wt_path.exists()
 
     def test_blocked_outcome_retains_dirty_worktree(self, tmp_path):
@@ -328,7 +328,7 @@ class TestCompleteGcHandoff:
             )
             mock_remove.assert_not_called()
 
-        assert event["action"] == "blocked_unknown_reason"
+        assert event.to_dict()["action"] == "blocked_unknown_reason"
         assert wt_path.exists()
 
     def test_blocked_outcome_removes_clean_worktree(self, tmp_path):
@@ -392,7 +392,7 @@ class TestCompleteGcHandoff:
             )
             mock_remove.assert_called_once_with(str(wt_path))
 
-        assert event["action"] == "blocked_unknown_reason"
+        assert event.to_dict()["action"] == "blocked_unknown_reason"
 
     def test_completion_receipt_not_minted_if_state_save_fails(self, tmp_path):
         """障害注入: 台帳保存が失敗した場合、CompletionReceipt は確定されない。"""

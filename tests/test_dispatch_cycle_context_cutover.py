@@ -41,7 +41,7 @@ def _context(actions: MagicMock, tmp_path: Path) -> CycleContext:
 def test_context_delegates_all_seven_action_ports(tmp_path: Path) -> None:
     actions = MagicMock()
     active = ActivePhaseResult((), (), False)
-    gc = GcPhaseResult([], MagicMock())
+    gc = GcPhaseResult((), MagicMock())
     locks = MagicMock()
     scheduling = SchedulingResult([], [])
     repair = RepairResult(
@@ -59,7 +59,10 @@ def test_context_delegates_all_seven_action_ports(tmp_path: Path) -> None:
     command = repair.command
 
     assert ctx.process_active_worktrees() is active
-    assert ctx.run_gc(({"issue_number": 1},)) is gc
+    from orchestune.dispatch.cycle_events import WorktreeCompletion
+
+    event = WorktreeCompletion(issue_number=1, worktree_path="w", action="completed")
+    assert ctx.run_gc((event,)) is gc
     assert ctx.reconcile_recovery() == ()
     assert ctx.scan_external_locks() is locks
     assert ctx.select_tasks(()) is scheduling
@@ -67,7 +70,7 @@ def test_context_delegates_all_seven_action_ports(tmp_path: Path) -> None:
     assert ctx.execute_repair(command) is repair
 
     actions.process_active_worktrees.assert_called_once_with()
-    actions.run_gc.assert_called_once_with(({"issue_number": 1},))
+    actions.run_gc.assert_called_once_with((event,))
     actions.reconcile_recovery.assert_called_once_with()
     actions.scan_external_locks.assert_called_once_with()
     actions.select_tasks.assert_called_once_with(())

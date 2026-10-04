@@ -250,15 +250,15 @@ def _report_to_dict(report: CycleReport) -> dict:
                 task_metadata_to_dict(t) for t in report.lock_changes["to_unlock"]
             ],
         },
-        "deviation_events": report.deviation_events,
-        "completion_events": report.completion_events,
-        "promotion_events": report.promotion_events,
+        "deviation_events": [event.to_dict() for event in report.deviation_events],
+        "completion_events": [event.to_dict() for event in report.completion_events],
+        "promotion_events": [event.to_dict() for event in report.promotion_events],
         "scheduling_decisions": [
             decision_to_dict(decision) for decision in report.scheduling_decisions
         ],
         "skips": [skip_record_to_dict(record) for record in report.skips],
         "external_lock_conflicts": report.external_lock_conflicts,
-        "forge_warnings": report.forge_warnings,
+        "forge_warnings": [event.to_dict() for event in report.forge_warnings],
         "execution_selections": {
             str(issue): dataclasses.asdict(sel)
             for issue, sel in report.execution_selections.items()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from orchestune.dispatch.cycle_events import ForgeFailureCompletion
 from orchestune.dispatch.scoring import (
     REASON_INVALID_FOOTPRINT,
     REASON_QUOTA_EXHAUSTED,
@@ -138,7 +139,12 @@ class TestRenderForgeWarnings:
 
     def test_reports_operation_and_error(self):
         warnings = [
-            {"issue_number": 702, "operation": "list_prs", "error": "HTTPError: 504"}
+            ForgeFailureCompletion(
+                issue_number=702,
+                worktree_path="",
+                operation="list_prs",
+                error="HTTPError: 504",
+            )
         ]
         text = "\n".join(render_forge_warnings_text(warnings))
         assert "#702" in text
@@ -148,7 +154,12 @@ class TestRenderForgeWarnings:
 
     def test_text_is_ascii_only(self):
         warnings = [
-            {"issue_number": 702, "operation": "list_prs", "error": "HTTPError: 504"}
+            ForgeFailureCompletion(
+                issue_number=702,
+                worktree_path="",
+                operation="list_prs",
+                error="HTTPError: 504",
+            )
         ]
         "\n".join(render_forge_warnings_text(warnings)).encode("ascii")
 
@@ -191,11 +202,12 @@ class TestAsciiSafety:
 
     def test_forge_warning_with_non_ascii_error_is_escaped(self):
         warnings = [
-            {
-                "issue_number": 1,
-                "operation": "list_prs",
-                "error": "RuntimeError: 接続に失敗しました",
-            }
+            ForgeFailureCompletion(
+                issue_number=1,
+                worktree_path="",
+                operation="list_prs",
+                error="RuntimeError: 接続に失敗しました",
+            )
         ]
         "\n".join(render_forge_warnings_text(warnings)).encode("ascii")
 

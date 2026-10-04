@@ -26,6 +26,12 @@ from orchestune.dispatch.cycle import (
     build_event_log_entry,
     run_dispatch_cycle,
 )
+from orchestune.dispatch.cycle_events import (
+    ForgeFailureCompletion,
+    PromotionEvent,
+    RecomputedDeviation,
+    WorktreeCompletion,
+)
 from orchestune.dispatch.dispatcher import (
     _DispatcherRunResult,
     _emit_dispatcher_report,
@@ -97,18 +103,30 @@ class TestAppendEventLog:
             selected=[_task(1)],
             quota_slots_available=0,
             lock_changes={"to_lock": [], "to_unlock": []},
-            deviation_events=[{"issue_number": 1, "action": "recomputed"}],
-            completion_events=[{"issue_number": 2, "action": "completed"}],
-            promotion_events=[{"issue_number": 3, "subtask_id": "task-c"}],
+            deviation_events=[
+                RecomputedDeviation(issue_number=1, deviated_files=(), conflicts=())
+            ],
+            completion_events=[
+                WorktreeCompletion(
+                    issue_number=2, worktree_path="w2", action="completed"
+                )
+            ],
+            promotion_events=[PromotionEvent(issue_number=3, subtask_id="task-c")],
             applied=True,
         )
         entry = build_event_log_entry(report, now=1700000000.0)
         assert entry["timestamp"] == 1700000000.0
         assert entry["quota_slots_available"] == 0
         assert entry["selected"] == [{"issue_number": 1, "subtask_id": "task-1"}]
-        assert entry["deviation_events"] == report.deviation_events
-        assert entry["completion_events"] == report.completion_events
-        assert entry["promotion_events"] == report.promotion_events
+        assert entry["deviation_events"] == [
+            event.to_dict() for event in report.deviation_events
+        ]
+        assert entry["completion_events"] == [
+            event.to_dict() for event in report.completion_events
+        ]
+        assert entry["promotion_events"] == [
+            event.to_dict() for event in report.promotion_events
+        ]
 
     def test_event_log_entry_carries_scheduling_decisions(self):
         """#660: 選定理由・rank・推定costがKPI集計用ログからも観測できること。"""
@@ -325,8 +343,8 @@ class TestRecoveredActiveTask:
 
             report = run_dispatch_cycle(config)
 
-        assert report.completion_events[0]["action"] == "completed"
-        assert report.completion_events[0]["commit_sha"] == "recovered-commit"
+        assert report.completion_events[0].to_dict()["action"] == "completed"
+        assert report.completion_events[0].to_dict()["commit_sha"] == "recovered-commit"
         assert load_run_state(config.run_state_path).active_worktrees == {}
         mock_remove_label.assert_any_call(1, "status:in-progress")
         mock_add_label.assert_any_call(1, "status:done")
@@ -519,7 +537,7 @@ class TestStaleActiveEntryReconciliation:
         fake_forge.get_issue_labels.assert_called_with(1)
 
         assert any(
-            event.get("action") == "stale_active_entry_discarded"
+            event.action == "stale_active_entry_discarded"
             for event in report.completion_events
         )
 
@@ -899,7 +917,12 @@ class TestEmitHumanSummary:
                 )
             ],
             forge_warnings=[
-                {"issue_number": 2, "operation": "list_prs", "error": "HTTPError: 504"}
+                ForgeFailureCompletion(
+                    issue_number=2,
+                    worktree_path="",
+                    operation="list_prs",
+                    error="HTTPError: 504",
+                )
             ],
         )
 

@@ -62,7 +62,10 @@ class TestDispatchGcCompletionReviewTimeout:
                 active, task, config, run_state=run_state, now=1000.0
             )
 
-        assert event["action"] in ("blocked_review_timeout", "review_timeout_requeued")
+        assert event.to_dict()["action"] in (
+            "blocked_review_timeout",
+            "review_timeout_requeued",
+        )
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
         fake_forge.add_label.assert_any_call(280, "status:queued")
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
@@ -125,7 +128,7 @@ class TestDispatchGcCompletionReviewTimeout:
                 active, task, config, run_state=run_state, now=1100.0
             )
 
-        assert event["action"] == "escalated_review_timeout"
+        assert event.to_dict()["action"] == "escalated_review_timeout"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
         fake_forge.add_label.assert_called_once_with(280, "status:blocked-human-review")
         fake_forge.remove_label.assert_any_call(280, "status:in-progress")
@@ -170,7 +173,7 @@ class TestDispatchGcCompletionReviewTimeout:
         ):
             event = _finalize_completed_worktree(active, task, config)
 
-        assert event["action"] == "blocked_unknown_reason"
+        assert event.to_dict()["action"] == "blocked_unknown_reason"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
         fake_forge.add_label.assert_called_once_with(280, "status:blocked")
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
@@ -222,7 +225,7 @@ class TestDispatchGcCompletionReviewTimeout:
                 active, task, config, run_state=run_state, now=1000.0
             )
 
-        assert event["action"] == "blocked_review_timeout"
+        assert event.to_dict()["action"] == "blocked_review_timeout"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
         fake_forge.add_label.assert_any_call(280, "status:queued")
         record = run_state.task_reclaim_counts[280]
@@ -282,7 +285,7 @@ class TestDispatchGcCompletionReviewTimeout:
                 active, task, config, run_state=run_state, now=1000.0
             )
 
-        assert event["action"] == "blocked_review_timeout"
+        assert event.to_dict()["action"] == "blocked_review_timeout"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
         record = run_state.task_reclaim_counts[280]
         assert record.review_timeout_retry_count == 1
@@ -329,7 +332,7 @@ class TestDispatchGcCompletionReviewTimeout:
         ):
             event = _finalize_completed_worktree(active, task, config, run_state=None)
 
-        assert event["action"] == "blocked_review_timeout"
+        assert event.to_dict()["action"] == "blocked_review_timeout"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
         fake_forge.add_label.assert_called_once_with(280, "status:blocked")
         fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
@@ -387,7 +390,7 @@ def _legacy_route(tmp_path, max_attempts, backoff, record, now):
         )
     saved = run_state.task_reclaim_counts.get(280)
     count = saved.review_timeout_retry_count if saved else 0
-    if event["action"] == "escalated_review_timeout":
+    if event.to_dict()["action"] == "escalated_review_timeout":
         return "escalate", count, None
     return "requeue", count, saved.review_timeout_retry_at
 

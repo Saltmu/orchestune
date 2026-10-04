@@ -13,6 +13,11 @@ from orchestune.dispatch.cycle_context import (
     IssuesByStatus,
     discard_reclaim_counts_for_closed_issues,
 )
+from orchestune.dispatch.cycle_events import (
+    TaskWorktreeCompletion,
+    WorktreeCompletion,
+    WorktreeCompletionHold,
+)
 from orchestune.dispatch.gc import _rule_completed, _rule_not_needed
 from orchestune.ledger.run_state import (
     RunState,
@@ -91,7 +96,12 @@ class TestReclaimCounterLifecycle:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={"action": action, "commit_sha": "abc123d"},
+                return_value=WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action=action,
+                    commit_sha="abc123d",
+                ),
             ),
         ):
             outcome = _rule_completed(ctx, "1", active, task)
@@ -136,7 +146,12 @@ class TestReclaimCounterLifecycle:
         with patch(
             "orchestune.dispatch.gc._finalize_not_needed_worktree",
             autospec=True,
-            return_value={"action": "not_needed", "issue_number": 280},
+            return_value=TaskWorktreeCompletion(
+                issue_number=280,
+                subtask_id=task.subtask_id,
+                worktree_path=active.core.worktree_path,
+                action="not_needed",
+            ),
         ):
             outcome = _rule_not_needed(ctx, "1", active, task)
 
@@ -162,11 +177,11 @@ class TestDirtyWorktreeHoldLimit:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={
-                    "action": "completion_skipped_dirty_worktree",
-                    "issue_number": 280,
-                    "worktree_path": active.core.worktree_path,
-                },
+                return_value=WorktreeCompletionHold(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completion_skipped_dirty_worktree",
+                ),
             ),
         ):
             outcome = _rule_completed(ctx, "1", active, task)
@@ -191,7 +206,7 @@ class TestDirtyWorktreeHoldLimit:
             ctx.run_state.active_worktrees.setdefault("1", active)
             outcome, mock_add_label, _ = self._hold_cycle(ctx, active, task)
             assert outcome is not None
-            actions.append(outcome.completion_event["action"])
+            actions.append(outcome.completion_event.to_dict()["action"])
 
         assert actions == [
             "completion_skipped_dirty_worktree",
@@ -248,17 +263,20 @@ class TestDirtyWorktreeHoldLimit:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={
-                    "action": "completion_skipped_dirty_worktree",
-                    "issue_number": 280,
-                    "worktree_path": active.core.worktree_path,
-                },
+                return_value=WorktreeCompletionHold(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completion_skipped_dirty_worktree",
+                ),
             ),
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
         assert outcome is not None
-        assert outcome.completion_event["action"] == "completion_skipped_dirty_worktree"
+        assert (
+            outcome.completion_event.to_dict()["action"]
+            == "completion_skipped_dirty_worktree"
+        )
         assert set(ctx.run_state.active_worktrees) == {"1"}
         # 回数はGitHubへ触れる前にディスクへ載っている
         assert (
@@ -289,17 +307,20 @@ class TestDirtyWorktreeHoldLimit:
             patch(
                 "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value={
-                    "action": "completion_skipped_dirty_worktree",
-                    "issue_number": 280,
-                    "worktree_path": active.core.worktree_path,
-                },
+                return_value=WorktreeCompletionHold(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completion_skipped_dirty_worktree",
+                ),
             ),
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
         assert outcome is not None
-        assert outcome.completion_event["action"] == "escalated_reclaim_limit_exceeded"
+        assert (
+            outcome.completion_event.to_dict()["action"]
+            == "escalated_reclaim_limit_exceeded"
+        )
         assert ctx.run_state.active_worktrees == {}
         assert load_run_state(ctx.config.run_state_path).active_worktrees == {}
 
@@ -315,7 +336,10 @@ class TestDirtyWorktreeHoldLimit:
         outcome, _, _ = self._hold_cycle(ctx, active, task)
 
         assert outcome is not None
-        assert outcome.completion_event["action"] == "completion_skipped_dirty_worktree"
+        assert (
+            outcome.completion_event.to_dict()["action"]
+            == "completion_skipped_dirty_worktree"
+        )
         assert ctx.run_state.task_reclaim_counts == {}
 
 
