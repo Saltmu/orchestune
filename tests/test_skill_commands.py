@@ -889,12 +889,11 @@ def test_review_loop_defines_mcp_combined_rereview_posting(skill_name: str):
     ):
         assert marker in section, marker
     assert "inherit" in section and "explicit user instruction" in section
-    # 初回 (n = 1) は前ラウンドが無いため判断表なし、n >= 2 のみ判断表必須
     # 投稿済みで結果未取得の trigger は再開し、n を進めない
     assert "no acquired result yet" in section and "it is outstanding" in section
-    assert "resume with its round and skip posting" in section
-    assert "For n >= 2 write" in section
-    assert "n = 1 has no previous round, so no table" in section
+    assert "skip posting and resume with its round" in section
+    # 初回 (n = 1) は前ラウンドが無いため判断表なし、n >= 2 のみ判断表必須
+    assert "n = 1 needs no table" in section and "n >= 2 needs" in section
     assert "(omitted when n = 1)" in section
 
     # 投稿前確認・投稿後の再取得・再送禁止
@@ -902,19 +901,74 @@ def test_review_loop_defines_mcp_combined_rereview_posting(skill_name: str):
     assert "re-fetch" in section and "never resend" in section
     assert "same n" in section
 
-    # オフライン評価の限界と完了条件
+    # オフライン評価の完了条件: 取得は合格ではなく、完了は独立再検証 (#1210)
     assert "--review-state-file" in section
-    assert (
-        "`round`, `trigger_id`, `requested_head_sha` and `current_head_sha` are null"
-        in section
-    )
     assert "Exit 0 is acquisition only" in section
     assert "do not advance to done" in section
-    assert "do not pass `--body-file`, `--no-post` or `--round`" in section
     assert "not atomic" in section
-    for line in section.splitlines():
-        if "wait_for_review.py" in line:
-            assert "--body-file" not in line and "--no-post" not in line
+
+
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_review_loop_documents_snapshot_round_evidence_contract(skill_name: str):
+    """MCP/オフライン経路: snapshot v1・投稿前検証・投稿後評価・再開の手順 (#1210)。"""
+    section = _mcp_posting_section(skill_name)
+    # 1. snapshot v1: 入力版は結果の schema_version と別。HEAD は MCP 取得値のみ
+    assert "`snapshot_version` 1 (not the result's `schema_version`)" in section
+    assert "`head_before`/`head_after`" in section
+    assert "`--max-snapshot-age` (default 300s)" in section
+    assert "never substitute the local Git HEAD or a CLI SHA" in section
+    assert "legacy" in section and "Exit 30" in section
+    # 2. 投稿前検証: receipt は valid のときだけ許可証。既投稿は再投稿しない
+    assert "--validate-request" in section and "review-request.json" in section
+    assert "`validation_status: valid`" in section and "`already_posted`" in section
+    assert "`--max-rounds` 1-5 cannot raise it; Exit 12" in section
+    assert "`--switch-reviewer` only on explicit user instruction" in section
+    assert "Any other status: do not post" in section
+    # 3. 投稿は receipt の本文を一度だけ
+    assert "receipt's `trigger_body` once" in section
+    # 4. 投稿後評価: 同一ラウンドの再評価は投稿もラウンド増加もしない
+    assert "re-running never posts or adds a round" in section
+    assert "`reply_validation`" in section
+    assert (
+        "`trigger_head_verified` only when the trigger head equals the fetched head"
+        in section
+    )
+    assert "past rounds, later edits" in section
+    assert "re-verifies fresh evidence itself" in section
+    assert "never passes the gate alone" in section
+
+
+_DOC_COMMAND = re.compile(
+    r"uv(?: --cache-dir \S+)? run python scripts/wait_for_review\.py"
+    r"(?P<args>[^`\n]*--review-state-file[^`\n]*)"
+)
+
+
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_documented_offline_commands_are_accepted_by_the_real_parser(skill_name: str):
+    """文書の例コマンドは実際の CLI 契約 (review_cli.parse_args) に通る (#1210)。"""
+    import shlex
+
+    from scripts.review_cli import parse_args
+
+    loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
+        encoding="utf-8"
+    )
+    commands = [m["args"] for m in _DOC_COMMAND.finditer(loop)]
+    assert len(commands) >= 2, "loop evaluation and --validate-request examples"
+    for args in commands:
+        text = (
+            args.replace("<PR_NUMBER>", "1")
+            .replace("<bot>", "claude")
+            .replace("<n>", "2")
+            .replace("<session-dir>", "/session")
+            .replace("[", "")
+            .replace("]", "")
+        )
+        namespace = parse_args(shlex.split(text), stall_grace_default=600)
+        assert namespace.review_state_file == "/session/review-state.json"
+    flags = {"--validate-request" in a for a in commands}
+    assert flags == {True, False}
 
 
 @pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])

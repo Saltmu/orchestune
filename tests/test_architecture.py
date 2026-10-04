@@ -321,6 +321,9 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "review.markers",
             "review.acquisition",
             "review.judgment",
+            "review.offline",
+            "review.rounds",
+            "review.snapshot",
             "ownership_contracts",
             "plan_identity",
             "plan_writer",
@@ -1141,3 +1144,15 @@ def test_shared_targets_have_no_workflow_imports() -> None:
                 for dependency in dependencies
                 for package in ("dispatch", "integrator")
             ), (module, dependencies)
+
+
+def test_review_core_depends_only_on_itself() -> None:
+    """Round, snapshot and offline evaluation stay pure: no Forge, workflow or I/O."""
+    for module, dependencies in _import_graph().items():
+        if module == "review" or module.startswith("review."):
+            outside = {
+                dependency
+                for dependency in dependencies
+                if dependency != "review" and not dependency.startswith("review.")
+            }
+            assert not outside, (module, outside)

@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+from collections import Counter
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import yaml
+
+from orchestune.review.acquisition import extract_review_result, normalize_review_state
+from orchestune.review.rounds import PreviousRoundWindow
 
 JUDGMENTS = frozenset(
     {"adopt", "decline", "already_addressed", "needs_information", "duplicate"}
@@ -92,3 +100,73 @@ def validate_coverage(judgments: dict[str, Any], result: dict[str, Any]) -> None
         raise ValueError(
             f"judgments omit current sources: {', '.join(sorted(missing))}"
         )
+
+
+def stable_digest(value: Any) -> str:
+    encoded = json.dumps(
+        value, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def normalize_findings(table: dict[str, Any]) -> list[dict[str, str]]:
+    """Strip fields and order rows so irrelevant YAML formatting never matters."""
+    rows = [{name: row[name].strip() for name in FIELDS} for row in table["findings"]]
+    rows.sort(key=lambda row: tuple(row[name] for name in FIELDS))
+    return rows
+
+
+def judgment_digest(table: dict[str, Any]) -> tuple[str, dict[str, int]]:
+    """Digest and judgment/status counts of a validated judgment table."""
+    rows = normalize_findings(table)
+    counts = Counter(row["judgment"] for row in rows)
+    counts.update(row["status"] for row in rows)
+    digest = stable_digest({"round": table["round"], "findings": rows})
+    return digest, dict(sorted(counts.items()))
+
+
+@dataclass(frozen=True)
+class PreviousRoundReply:
+    previous_round: int
+    reviewer: str
+    sources: tuple[str, ...]
+    source_digest: str
+    judgment_digest: str
+    counts: dict[str, int]
+    findings: list[dict[str, str]]
+
+
+def validate_previous_round_reply(
+    state: Mapping[str, Any], window: PreviousRoundWindow, reply_body: str
+) -> PreviousRoundReply:
+    """Structure and coverage of the table judging `window.previous_round`.
+
+    The previous round is limited to its own interval, so a later round's
+    findings never become required sources. Whether each judgment is right stays
+    an LLM decision; a valid table is not a review pass.
+    """
+    judgments = parse_judgments(reply_body)
+    result = extract_review_result(
+        normalize_review_state(state),
+        window.reviewer,
+        round_started_at=window.started_at,
+        round_ended_at=window.ended_at or "",
+        exclude_issue_comment_ids=set(window.exclude_ids),
+    )
+    # A timed-out/stalled round may have no substantive content to judge.
+    # Its empty source set still requires an explicit, valid judgment table.
+    if result is None:
+        result = {"review_items": [], "inline_comments": []}
+    result["round"] = window.previous_round
+    validate_coverage(judgments, result)
+    sources = tuple(sorted(current_sources(result)))
+    digest, counts = judgment_digest(judgments)
+    return PreviousRoundReply(
+        previous_round=window.previous_round,
+        reviewer=window.reviewer,
+        sources=sources,
+        source_digest=stable_digest(list(sources)),
+        judgment_digest=digest,
+        counts=counts,
+        findings=normalize_findings(judgments),
+    )

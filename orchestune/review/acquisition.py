@@ -77,15 +77,19 @@ def _filter_bot_issue_comments(
     items: list[dict[str, Any]],
     bot_name: str,
     exclude_ids: set[int | str] | None = None,
+    exclude_issue_comment_ids: set[int | str] | None = None,
 ) -> list[dict[str, Any]]:
     """Bot PR comments minus review replies, which are judgments, not review evidence.
 
     Only normal PR comments can declare a reply (first non-blank line marker);
     reviews and inline comments keep using `_filter_bot_items` (#1207).
+    `exclude_issue_comment_ids` hides trigger comments without colliding with
+    review or inline ids, which live in a different id namespace (#1210).
     """
+    excluded = (exclude_ids or set()) | (exclude_issue_comment_ids or set())
     return [
         item
-        for item in _filter_bot_items(items, bot_name, exclude_ids)
+        for item in _filter_bot_items(items, bot_name, excluded)
         if not is_review_reply(item.get("body"))
     ]
 
@@ -104,10 +108,15 @@ def _get_item_created_timestamp(item: dict[str, Any]) -> str:
 
 
 def _bot_candidate_items(
-    data: ReviewState, bot_name: str, exclude_ids: set[int | str] | None = None
+    data: ReviewState,
+    bot_name: str,
+    exclude_ids: set[int | str] | None = None,
+    exclude_issue_comment_ids: set[int | str] | None = None,
 ) -> list[dict[str, Any]]:
     return [
-        *_filter_bot_issue_comments(data["issue_comments"], bot_name, exclude_ids),
+        *_filter_bot_issue_comments(
+            data["issue_comments"], bot_name, exclude_ids, exclude_issue_comment_ids
+        ),
         *_filter_bot_items(data["reviews"], bot_name, exclude_ids),
     ]
 
@@ -121,10 +130,39 @@ def _is_finished_progress_tracker(item: dict[str, Any], bot_name: str) -> bool:
     )
 
 
+def _in_round(item: dict[str, Any], round_started_at: str, round_ended_at: str) -> bool:
+    """Created inside [start, end); an item without a creation time is never inside."""
+    created = _get_item_created_timestamp(item)
+    return (
+        bool(created)
+        and created >= round_started_at
+        and (not round_ended_at or created < round_ended_at)
+    )
+
+
 def _latest_bot_activity_item(
-    data: ReviewState, bot_name: str, exclude_ids: set[int | str] | None = None
+    data: ReviewState,
+    bot_name: str,
+    exclude_ids: set[int | str] | None = None,
+    *,
+    exclude_issue_comment_ids: set[int | str] | None = None,
+    round_started_at: str = "",
+    round_ended_at: str = "",
 ) -> dict[str, Any] | None:
-    candidates = _bot_candidate_items(data, bot_name, exclude_ids)
+    """Latest bot activity; with round bounds only that round's own activity.
+
+    A past tracker edited later (newer `updated_at`) belongs to its own round and
+    must not make the evaluated round look still in progress (#1210).
+    """
+    candidates = _bot_candidate_items(
+        data, bot_name, exclude_ids, exclude_issue_comment_ids
+    )
+    if round_started_at or round_ended_at:
+        candidates = [
+            item
+            for item in candidates
+            if _in_round(item, round_started_at, round_ended_at)
+        ]
     return sorted(candidates, key=_get_item_timestamp)[-1] if candidates else None
 
 
@@ -213,7 +251,7 @@ def _build_snapshot(
 
 
 def _normalize_review_item(
-    item: dict[str, Any], kind: str, provenance: str
+    item: dict[str, Any], kind: str, provenance: str, reason: str | None = None
 ) -> dict[str, Any]:
     normalized: dict[str, Any] = {
         "id": item.get("id"),
@@ -227,10 +265,14 @@ def _normalize_review_item(
     if kind == "review":
         normalized["state"] = item.get("state")
         normalized["commit_id"] = item.get("commit_id")
+    if reason:
+        normalized["provenance_reason"] = reason
     return normalized
 
 
-def _normalize_inline_item(item: dict[str, Any], provenance: str) -> dict[str, Any]:
+def _normalize_inline_item(
+    item: dict[str, Any], provenance: str, reason: str | None = None
+) -> dict[str, Any]:
     return {
         "path": item.get("path", "unknown"),
         "line": item.get("line") or item.get("original_line") or "N/A",
@@ -253,21 +295,68 @@ def _normalize_inline_item(item: dict[str, Any], provenance: str) -> dict[str, A
         },
         "position_line": item.get("position_line", item.get("line")),
         "provenance": provenance,
+        **({"provenance_reason": reason} if reason else {}),
     }
 
 
-def _classify_provenance(created: str, round_started_at: str) -> str:
-    """Attribute one item to the current round, an earlier round, or unknown timing.
+AFTER_ROUND_END = "after_round_end"
 
-    An empty `round_started_at` means the caller has no trigger boundary to compare
-    against (e.g. an offline snapshot with no round metadata); such content is not
-    discarded, it is treated as belonging to the only round the caller knows about.
+
+def _classify_round(
+    created: str, round_started_at: str, round_ended_at: str = ""
+) -> tuple[str, str | None]:
+    """Attribute one item to the evaluated round, another round, or unknown timing.
+
+    Without any boundary the caller knows only one round, so nothing is discarded
+    and the item is `current`. With a closed interval `[start, end)`, an item that
+    appeared at or after the end is `unassociated` (reason `after_round_end`)
+    rather than promoted, and the boundary uses creation time, never `updated_at`.
     """
-    if not round_started_at:
-        return "current"
+    if not round_started_at and not round_ended_at:
+        return "current", None
     if not created:
-        return "unassociated"
-    return "current" if created >= round_started_at else "historical"
+        return "unassociated", None
+    if round_started_at and created < round_started_at:
+        return "historical", None
+    if round_ended_at and created >= round_ended_at:
+        return "unassociated", AFTER_ROUND_END
+    return "current", None
+
+
+def _classify_provenance(
+    created: str, round_started_at: str, round_ended_at: str = ""
+) -> str:
+    return _classify_round(created, round_started_at, round_ended_at)[0]
+
+
+def _classify_inline_round(
+    item: dict[str, Any],
+    round_started_at: str,
+    review_provenance_by_id: dict[Any, tuple[str, str | None]],
+    round_ended_at: str = "",
+) -> tuple[str, str | None]:
+    """Prefer the parent review's confirmed provenance over the comment's own
+    timestamp when both are known: an inline comment's `pull_request_review_id`
+    proves which review it belongs to, so a comment attached to a *historical*
+    review must not be promoted to `current` just because it (or a later edit)
+    carries a recent timestamp; a review id that is present but not found among
+    this snapshot's review items cannot be confirmed either way (Codex PR #1114
+    round 3 finding). A confirmed current parent does not rescue an inline
+    created after the round ended (#1210).
+    """
+    created = _get_item_created_timestamp(item)
+    review_id = item.get("pull_request_review_id")
+    if review_id is None:
+        return _classify_round(created, round_started_at, round_ended_at)
+    provenance, reason = review_provenance_by_id.get(review_id, ("unassociated", None))
+    if (
+        provenance == "current"
+        and round_ended_at
+        and created
+        and created >= round_ended_at
+    ):
+        return "unassociated", AFTER_ROUND_END
+    return provenance, reason
 
 
 def _classify_inline_provenance(
@@ -275,29 +364,25 @@ def _classify_inline_provenance(
     round_started_at: str,
     review_provenance_by_id: dict[Any, str],
 ) -> str:
-    """Prefer the parent review's confirmed provenance over the comment's own
-    timestamp when both are known: an inline comment's `pull_request_review_id`
-    proves which review it belongs to, so a comment attached to a *historical*
-    review must not be promoted to `current` just because it (or a later edit)
-    carries a recent timestamp; a review id that is present but not found among
-    this snapshot's review items cannot be confirmed either way (Codex PR #1114
-    round 3 finding).
-    """
-    review_id = item.get("pull_request_review_id")
-    if review_id is not None:
-        return review_provenance_by_id.get(review_id, "unassociated")
-    return _classify_provenance(_get_item_created_timestamp(item), round_started_at)
+    return _classify_inline_round(
+        item,
+        round_started_at,
+        {key: (value, None) for key, value in review_provenance_by_id.items()},
+    )[0]
 
 
 def _review_candidates(
-    data: ReviewState, bot_name: str, exclude_ids: set[int | str] | None
+    data: ReviewState,
+    bot_name: str,
+    exclude_ids: set[int | str] | None,
+    exclude_issue_comment_ids: set[int | str] | None = None,
 ) -> list[tuple[dict[str, Any], str]]:
     """Bot PR comments (replies excluded) and formal reviews, tagged with their kind."""
     return [
         *(
             (item, "issue_comment")
             for item in _filter_bot_issue_comments(
-                data["issue_comments"], bot_name, exclude_ids
+                data["issue_comments"], bot_name, exclude_ids, exclude_issue_comment_ids
             )
         ),
         *(
@@ -307,54 +392,72 @@ def _review_candidates(
     ]
 
 
+def _normalize_review_items(
+    candidates: list[tuple[dict[str, Any], str]],
+    bot_name: str,
+    round_started_at: str,
+    round_ended_at: str,
+) -> list[dict[str, Any]]:
+    """Review-content items only: execution telemetry -- a "job finished" tracker
+    or a body still explicitly reporting in-progress -- is not review content,
+    even when it is the most recent item in the round (Codex PR #1114 round 3
+    finding: an older in-progress body left over once a "finished" tracker
+    arrives with no summary must not be read as a completed review)."""
+    return [
+        _normalize_review_item(
+            item,
+            kind,
+            *_classify_round(
+                _get_item_created_timestamp(item), round_started_at, round_ended_at
+            ),
+        )
+        for item, kind in sorted(
+            candidates, key=lambda pair: _get_item_timestamp(pair[0])
+        )
+        if not _is_finished_progress_tracker(item, bot_name)
+        and not _is_explicitly_in_progress(item)
+    ]
+
+
 def extract_review_result(
     data: ReviewState,
     bot_name: str,
     exclude_ids: set[int | str] | None = None,
     round_started_at: str = "",
+    *,
+    round_ended_at: str = "",
+    exclude_issue_comment_ids: set[int | str] | None = None,
 ) -> dict[str, Any] | None:
     """Collect every bot review item and inline comment, tagged with round provenance.
 
     Unlike the previous single-latest-item extraction, this returns *all* bot
     `issue_comments`/`reviews` and *all* inline comments the bot has posted, each
-    tagged `current` (>= round_started_at), `historical` (before it), or
-    `unassociated` (no usable timestamp) — nothing is discarded. Returns None only
-    when the bot has posted no activity of any kind.
+    tagged `current` (inside `[round_started_at, round_ended_at)`), `historical`
+    (before it), or `unassociated` (no usable timestamp, or after the round end
+    with `provenance_reason=after_round_end`) — nothing is discarded. Returns None
+    only when the bot has posted no activity of any kind.
     """
-    review_candidates = _review_candidates(data, bot_name, exclude_ids)
+    review_candidates = _review_candidates(
+        data, bot_name, exclude_ids, exclude_issue_comment_ids
+    )
     inline_candidates = _filter_bot_items(
         data["inline_comments"], bot_name, exclude_ids
     )
-
-    # Execution telemetry -- a "job finished" tracker or a body that is still
-    # explicitly reporting in-progress -- is not review content, even when it
-    # happens to be the most recent item in the round (Codex PR #1114 round 3
-    # finding: an older in-progress body left over once a "finished" tracker
-    # arrives with no summary must not be read as a completed review).
-    review_items = [
-        _normalize_review_item(
-            item,
-            kind,
-            _classify_provenance(_get_item_created_timestamp(item), round_started_at),
-        )
-        for item, kind in sorted(
-            review_candidates, key=lambda pair: _get_item_timestamp(pair[0])
-        )
-        if not _is_finished_progress_tracker(item, bot_name)
-        and not _is_explicitly_in_progress(item)
-    ]
+    review_items = _normalize_review_items(
+        review_candidates, bot_name, round_started_at, round_ended_at
+    )
     # Only "review" items (not issue_comments) share an id namespace with
     # inline comments' `pull_request_review_id`.
     review_provenance_by_id = {
-        item["id"]: item["provenance"]
+        item["id"]: (item["provenance"], item.get("provenance_reason"))
         for item in review_items
         if item["kind"] == "review" and item["id"] is not None
     }
     inline_items = [
         _normalize_inline_item(
             item,
-            _classify_inline_provenance(
-                item, round_started_at, review_provenance_by_id
+            *_classify_inline_round(
+                item, round_started_at, review_provenance_by_id, round_ended_at
             ),
         )
         for item in sorted(inline_candidates, key=_get_item_timestamp)
@@ -408,50 +511,73 @@ def _review_content_result(
     }
 
 
+def _status_result(
+    status: str, reason: str, result: dict[str, Any] | None, timestamp: str
+) -> dict[str, Any]:
+    """A non-acquired result; any content already seen is kept for context."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "acquisition_status": status,
+        "reason": reason,
+        "review_items": result["review_items"] if result else [],
+        "review_body": result["review_body"] if result else "",
+        "inline_comments": result["inline_comments"] if result else [],
+        "timestamp": timestamp,
+    }
+
+
 def collect_review_state(
     value: object,
     bot_name: str = "claude",
     *,
     exclude_ids: set[int | str] | None = None,
     round_started_at: str = "",
+    round_ended_at: str = "",
+    exclude_issue_comment_ids: set[int | str] | None = None,
 ) -> dict[str, Any]:
     """Assemble an acquisition-state result from an externally acquired snapshot.
 
-    Used by the offline `--review-state-file` path. Online adapters
-    (`scripts/wait_for_review.py`) build the equivalent result while additionally
-    tracking round/trigger/SHA identifiers this transport-neutral entry point does
-    not have.
+    Used by the offline `--review-state-file` path and by completion. Online
+    adapters (`scripts/wait_for_review.py`) build the equivalent result while
+    additionally tracking round/trigger/SHA identifiers this transport-neutral
+    entry point does not have. With round bounds, both the content and the
+    still-in-progress check are limited to that round's own interval.
     """
     data = normalize_review_state(value)
-    result = extract_review_result(data, bot_name, exclude_ids, round_started_at)
+    result = extract_review_result(
+        data,
+        bot_name,
+        exclude_ids,
+        round_started_at,
+        round_ended_at=round_ended_at,
+        exclude_issue_comment_ids=exclude_issue_comment_ids,
+    )
 
     # A single snapshot (no polling loop available to this entry point) whose
     # latest bot activity explicitly reports still-in-progress must not be
     # treated as a final acquired-or-unavailable result (issue #1099 Exit 11).
-    latest_activity = _latest_bot_activity_item(data, bot_name, exclude_ids)
+    latest_activity = _latest_bot_activity_item(
+        data,
+        bot_name,
+        exclude_ids,
+        exclude_issue_comment_ids=exclude_issue_comment_ids,
+        round_started_at=round_started_at,
+        round_ended_at=round_ended_at,
+    )
     if latest_activity is not None and _is_explicitly_in_progress(latest_activity):
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "acquisition_status": ACQUISITION_IN_PROGRESS,
-            "reason": f"@{bot_name} activity is explicitly still in progress",
-            "review_items": result["review_items"] if result else [],
-            "review_body": result["review_body"] if result else "",
-            "inline_comments": result["inline_comments"] if result else [],
-            "timestamp": (
-                result["timestamp"] if result else _get_item_timestamp(latest_activity)
-            ),
-        }
-
+        return _status_result(
+            ACQUISITION_IN_PROGRESS,
+            f"@{bot_name} activity is explicitly still in progress",
+            result,
+            result["timestamp"] if result else _get_item_timestamp(latest_activity),
+        )
     if result is None:
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "acquisition_status": ACQUISITION_UNAVAILABLE,
-            "reason": f"no @{bot_name} activity found in the supplied review state",
-            "review_items": [],
-            "review_body": "",
-            "inline_comments": [],
-            "timestamp": "",
-        }
+        return _status_result(
+            ACQUISITION_UNAVAILABLE,
+            f"no @{bot_name} activity found in the supplied review state",
+            None,
+            "",
+        )
     return {
         "schema_version": SCHEMA_VERSION,
         "acquisition_status": ACQUISITION_ACQUIRED,

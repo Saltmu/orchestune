@@ -9,10 +9,8 @@ review-loop.md for the LLM decision procedure.
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -51,7 +49,6 @@ from orchestune.review.acquisition import (
     _is_explicitly_in_progress,
     _latest_bot_activity_item,
     _latest_bot_summary_item,
-    collect_review_state,
     extract_review_result,
     normalize_review_state,
 )
@@ -61,28 +58,52 @@ from orchestune.review.acquisition import (
 from orchestune.review.acquisition import (
     _is_bot_user as _is_bot_user,
 )
-from orchestune.review.judgment import parse_judgments, validate_coverage
+from orchestune.review.judgment import validate_previous_round_reply
 from orchestune.review.markers import (
+    build_trigger_body,
     derive_review_target,
+    ensure_review_trigger_mention,
+    has_review_trigger_mention,
+    mark_review_trigger,
     parse_head_marker,
     parse_trigger_reviewer,
-    review_head_marker,
+    review_round_marker,
     review_selection_marker,
 )
 from orchestune.review.markers import (
     parse_round_marker as _parse_review_round_marker,
 )
 from orchestune.review.markers import (
-    review_round_marker as _review_round_marker,
-)
-from orchestune.review.markers import (
     review_trigger_marker as _review_trigger_marker,
 )
+from orchestune.review.offline import resolve_legacy_completeness
+from orchestune.review.rounds import previous_round_window
 from scripts.jev_context import JevReviewContext, collect_review_context
 from scripts.jev_filter import evaluate_review_findings
+from scripts.review_cli import (
+    EXIT_INTERNAL_ERROR as EXIT_INTERNAL_ERROR,
+)
+from scripts.review_cli import (
+    EXIT_MAX_ROUNDS as EXIT_MAX_ROUNDS,
+)
+from scripts.review_cli import (
+    parse_args,
+    run_offline,
+)
+from scripts.review_cli import (
+    print_review_result as _print_review_result,
+)
+from scripts.review_cli import (
+    write_output_file as _write_output_file,
+)
 
-EXIT_INTERNAL_ERROR = 2  # Internal error / Unexpected exception / Arg error
-EXIT_MAX_ROUNDS = 12  # Maximum review rounds exceeded
+# Historical private names; tests and callers patch and import them from here.
+_ensure_review_trigger_mention = ensure_review_trigger_mention
+_has_review_trigger_mention = has_review_trigger_mention
+_mark_review_trigger = mark_review_trigger
+_resolve_offline_completeness = resolve_legacy_completeness
+_review_round_marker = review_round_marker
+
 EXIT_TIMEOUT = 20  # Timeout waiting for review activity
 EXIT_STALLED = 21  # In-progress tracker comment stopped changing; job likely ended
 
@@ -246,36 +267,6 @@ def _find_existing_trigger_comment(
     return matching[0]
 
 
-def _mark_review_trigger(body: str, bot_name: str, round_num: int | None = None) -> str:
-    trigger_marker = _review_trigger_marker(bot_name)
-    result = body
-    if trigger_marker not in result.lower():
-        result = f"{result.rstrip()}\n\n{trigger_marker}"
-    if round_num is not None:
-        round_marker = _review_round_marker(round_num)
-        if round_marker not in result.lower():
-            result = f"{result.rstrip()}\n{round_marker}"
-    return result
-
-
-def _has_review_trigger_mention(body: str, bot_name: str) -> bool:
-    body_lower = body.lower()
-    bot = bot_name.lower()
-    if bot == "claude":
-        return "@claude" in body_lower and "review" in body_lower
-    pattern = re.compile(rf"@(?:{re.escape(bot_name)})[,\s:]+review\b", re.IGNORECASE)
-    return pattern.search(body) is not None
-
-
-def _ensure_review_trigger_mention(body: str, bot_name: str) -> str:
-    trimmed = body.strip()
-    if not trimmed:
-        return f"@{bot_name} review"
-    if _has_review_trigger_mention(trimmed, bot_name):
-        return trimmed
-    return f"@{bot_name} review\n\n{trimmed}"
-
-
 def post_review_trigger(
     pr_number: int,
     bot_name: str,
@@ -296,15 +287,7 @@ def post_review_trigger(
     head_sha = head_sha or _fetch_pr_head_sha(pr_number)
     if head_sha is None:
         raise ValueError("cannot record trigger without PR head SHA")
-    raw_body = re.sub(
-        r"<!--\s*orchestune:review-(?:head|round|trigger)\b.*?-->",
-        "",
-        raw_body,
-        flags=re.I,
-    )
-    comment_body = _ensure_review_trigger_mention(raw_body, bot_name)
-    comment_body = _mark_review_trigger(comment_body, bot_name, round_num=round_num)
-    comment_body += "\n" + review_head_marker(head_sha)
+    comment_body = build_trigger_body(raw_body, bot_name, round_num, head_sha)
 
     stdout = _run_gh(
         [
@@ -355,85 +338,6 @@ def _latest_review_trigger_timestamp(
         if _is_trigger_comment(item, bot_name)
     ]
     return max(trigger_timestamps, default="")
-
-
-def _print_review_result(result: dict[str, Any], bot_name: str) -> None:
-    """Render the acquired result. This is raw acquired content, not a verdict:
-    the calling LLM still has to read it and judge whether it is adequate."""
-    inline_items = result.get("inline_comments", [])
-    current_inlines = [
-        item for item in inline_items if item.get("provenance") == "current"
-    ]
-    jev_evaluations = result.get("jev_evaluations", [])
-    status = result.get("acquisition_status")
-    print("\n" + "=" * 72)
-    if status == ACQUISITION_ACQUIRED:
-        print(f"[AI Review Content Acquired - @{bot_name}] LLM judgment required")
-    else:
-        # A non-acquired status (unavailable/in_progress) is not ready for
-        # judgment; the banner must not claim otherwise even though some
-        # partial content may still be shown below for context (Codex PR
-        # #1114 round 7 finding).
-        reason = result.get("reason") or "no reason given"
-        print(f"[AI Review NOT Acquired ({status}) - @{bot_name}] {reason}")
-    print(f"Round: {result.get('round')}  Timestamp: {result.get('timestamp', '')}")
-    print(
-        f"Requested SHA: {result.get('requested_head_sha')}  "
-        f"Reviewed SHA: {result.get('reviewed_head_sha')}  "
-        f"Current SHA: {result.get('current_head_sha')}"
-    )
-    print(
-        f"Target SHA: {result.get('review_target_sha')} "
-        f"({result.get('review_target_sha_source', 'unknown')})"
-    )
-    if inline_items:
-        print(
-            f"Inline comments: {len(inline_items)} total "
-            f"({len(current_inlines)} current round)"
-        )
-        jev_by_id = {e["finding_id"]: e for e in jev_evaluations}
-        # Mirror evaluate_review_findings()'s id-or-index fallback: a missing
-        # id and an explicit `"id": null` are both id-less, and the fallback
-        # index must be positional within `current_inlines` (the list that
-        # was actually passed to evaluate_review_findings), not within the
-        # full inline_items list, which may interleave historical/unassociated
-        # items and shift the index basis (Codex PR #1114 round 5 finding).
-        current_index_by_identity = {
-            id(current_item): index
-            for index, current_item in enumerate(current_inlines)
-        }
-        for index, item in enumerate(inline_items, start=1):
-            item_id = item.get("id")
-            if item_id is not None:
-                finding_id: Any = item_id
-            else:
-                position = current_index_by_identity.get(id(item))
-                # Match Jev's position within current inlines, never historical entries.
-                # Matches jev_filter._finding_id()'s string-tagged sentinel:
-                # a bare int fallback could collide with a coincidentally
-                # equal supplied id (Codex PR #1114 round 6 finding).
-                finding_id = f"index:{position}" if position is not None else None
-            jev = jev_by_id.get(finding_id) if finding_id is not None else None
-            jev_note = (
-                f" [jev: {jev['decision']} ({jev['decision_reason']})]" if jev else ""
-            )
-            print(
-                f"\n--- Inline Comment {index}: {item['path']}:{item['line']} "
-                f"[{item.get('provenance')}]{jev_note} ---"
-            )
-            print(item["body"] or "(No comment body provided)")
-        print("--- End Inline Comments ---")
-    else:
-        print("Inline comments: none")
-    print("=" * 72 + "\n")
-    for index, item in enumerate(result.get("review_items", []), start=1):
-        print(
-            f"--- Review Item {index} [{item.get('kind')}/{item.get('provenance')}] ---"
-        )
-        print(item.get("body") or "(empty body)")
-        print()
-    print("--- review_body (concatenated current-round bodies) ---")
-    print(result.get("review_body", ""))
 
 
 def _extract_review_result(
@@ -752,54 +656,12 @@ def _validate_review_reply(
     if not body_file:
         raise ValueError("round 2+ requires --body-file with review judgments")
     with open(body_file, encoding="utf-8") as stream:
-        judgments = parse_judgments(stream.read())
-    previous_round = round_num - 1
-    triggers = [
-        item
-        for item in data.get("issue_comments", [])
-        if _parse_review_round_marker(item.get("body") or "") == previous_round
-        and parse_trigger_reviewer(item.get("body") or "")
-    ]
-    if not triggers:
-        raise ValueError("previous round trigger is missing")
-    previous = max(triggers, key=lambda item: str(item.get("created_at") or ""))
-    if not previous.get("created_at"):
-        raise ValueError("previous round trigger timestamp is missing")
-    previous_bot = parse_trigger_reviewer(previous.get("body") or "") or bot_name
-    trigger_ids = {
-        item["id"]
-        for item in data.get("issue_comments", [])
-        if parse_trigger_reviewer(item.get("body") or "") and item.get("id") is not None
-    }
-    next_times = [
-        str(item.get("created_at") or "")
-        for item in data.get("issue_comments", [])
-        if (_parse_review_round_marker(item.get("body") or "") or 0) >= round_num
-        and parse_trigger_reviewer(item.get("body") or "")
-        and item.get("created_at")
-    ]
-    cutoff = min(next_times) if next_times else None
-    # Replays must not attribute newer-round findings to the judged previous round.
-    bounded = {
-        section: [
-            item
-            for item in data.get(section, [])
-            if not cutoff or _get_item_created_timestamp(item) < cutoff
-        ]
-        for section in _COMPLETENESS_SECTIONS
-    }
-    result = extract_review_result(
-        normalize_review_state(bounded),
-        previous_bot,
-        exclude_ids=trigger_ids,
-        round_started_at=str(previous.get("created_at") or ""),
+        reply = stream.read()
+    # Legacy-tolerant reading of earlier triggers; the offline path is strict.
+    window = previous_round_window(
+        data.get("issue_comments", []), round_num, strict=False
     )
-    # A timed-out/stalled round may have no substantive content to judge.
-    # Its empty source set still requires an explicit, valid judgment table.
-    if result is None:
-        result = {"review_items": [], "inline_comments": []}
-    result["round"] = previous_round
-    validate_coverage(judgments, result)
+    validate_previous_round_reply(data, window, reply)
 
 
 def _record_skip(
@@ -1043,250 +905,34 @@ def wait_for_review(
     )
 
 
-def _write_output_file(result: dict[str, Any], output_file: str) -> None:
-    try:
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-    except OSError as e:
-        raise RuntimeError(f"Failed to write --output-file {output_file}: {e}") from e
-
-
-def _resolve_offline_completeness(state: object) -> tuple[dict[str, str], list[str]]:
-    """Resolve the offline `--review-state-file` completeness declaration.
-
-    Distinguishes three cases: no `completeness` key at all (legacy input;
-    `.get()` alone can't tell this apart from an explicit `"completeness":
-    null`, so presence is checked separately) keeps every section "unknown"
-    with no incompleteness; a key present but not a usable object (null, a
-    list, a string, ...) is a malformed-but-positive declaration and every
-    section is treated as incomplete; a proper dict normalizes each of the
-    three required sections (an omitted section counts as incomplete, not an
-    implicit "complete") (Codex PR #1114 rounds 1-4 findings).
-    """
-    completeness_key_present = isinstance(state, dict) and "completeness" in state
-    state_completeness = (
-        state.get("completeness")
-        if isinstance(state, dict) and completeness_key_present
-        else None
-    )
-    if isinstance(state_completeness, dict):
-        completeness = {
-            section: state_completeness.get(section, "unknown")
-            for section in _COMPLETENESS_SECTIONS
-        }
-        incomplete_sections = [
-            section for section, status in completeness.items() if status != "complete"
-        ]
-    else:
-        completeness = dict.fromkeys(_COMPLETENESS_SECTIONS, "unknown")
-        incomplete_sections = (
-            list(_COMPLETENESS_SECTIONS) if completeness_key_present else []
-        )
-    return completeness, incomplete_sections
+def _run_online(args: Any) -> None:
+    wait_kwargs: dict[str, Any] = {
+        "timeout": args.timeout,
+        "interval": args.interval,
+        "bot_name": args.bot_name,
+        "post_trigger": not args.no_post,
+        "body": args.body,
+        "body_file": args.body_file,
+        "max_rounds": args.max_rounds,
+        "max_retries": args.max_retries,
+        "round_num": args.round,
+        "stall_grace_seconds": args.stall_grace,
+        "switch_reviewer": args.switch_reviewer,
+    }
+    if args.jev_threshold is not None:
+        wait_kwargs["jev_threshold"] = args.jev_threshold
+    result = wait_for_review(args.pr, **wait_kwargs)
+    if args.output_file:
+        _write_output_file(result, args.output_file)
+    sys.exit(EXIT_ACQUIRED)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Trigger and detect AI review activity on a GitHub PR in a single blocking process."
-    )
-    parser.add_argument(
-        "--pr",
-        type=int,
-        default=None,
-        help="Pull Request number to watch (required unless --review-state-file is used)",
-    )
-    parser.add_argument(
-        "--review-state-file",
-        type=str,
-        default=None,
-        help=(
-            "Path to a normalized JSON review-state snapshot from GitHub MCP or another "
-            "client; evaluates immediately without invoking gh"
-        ),
-    )
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=1800,
-        help="Maximum time to wait in seconds (default: 1800)",
-    )
-    parser.add_argument(
-        "--stall-grace",
-        type=int,
-        default=DEFAULT_STALL_GRACE_SECONDS,
-        help=(
-            "Seconds an in-progress tracker comment may stay unchanged before "
-            f"it is treated as stalled rather than slow (default: {DEFAULT_STALL_GRACE_SECONDS})"
-        ),
-    )
-    parser.add_argument(
-        "--interval",
-        type=int,
-        default=5,
-        help="Polling interval in seconds (default: 5)",
-    )
-    parser.add_argument(
-        "--bot-name",
-        type=str,
-        required=True,
-        choices=("claude", "codex", "skip"),
-        help="Explicit reviewer selection (skip records a blocked human-review choice)",
-    )
-    parser.add_argument(
-        "--body",
-        type=str,
-        default=None,
-        help="Custom comment body to post when triggering review",
-    )
-    parser.add_argument(
-        "--body-file",
-        type=str,
-        default=None,
-        help="Path to file containing custom comment body to post",
-    )
-    parser.add_argument(
-        "--no-post",
-        action="store_true",
-        help="Skip posting a review trigger comment and only wait for activity",
-    )
-    parser.add_argument(
-        "--max-rounds",
-        type=int,
-        default=5,
-        help="Maximum number of review rounds allowed (default: 5)",
-    )
-    parser.add_argument(
-        "--max-retries",
-        type=int,
-        default=1,
-        help="Maximum number of retry attempts on transient failures (default: 1)",
-    )
-    parser.add_argument(
-        "--round",
-        type=int,
-        default=None,
-        help="Explicit review round number (default: auto-detected from PR comments)",
-    )
-    parser.add_argument(
-        "--jev-threshold",
-        type=float,
-        default=None,
-        help="Validity threshold for Jev finding filter (default: 0.7 or JEV_THRESHOLD env)",
-    )
-    parser.add_argument(
-        "--output-file",
-        type=str,
-        default=None,
-        help=(
-            "Write the complete machine-readable acquisition result as JSON to this "
-            "path. A write failure exits non-zero, even if acquisition itself succeeded."
-        ),
-    )
-
-    parser.add_argument(
-        "--switch-reviewer",
-        action="store_true",
-        help="Allow reviewer change only on explicit user instruction",
-    )
-    args = parser.parse_args()
-    if args.bot_name == "skip" and (args.review_state_file or args.no_post):
-        parser.error("skip requires an online PR selection comment")
+    args = parse_args(stall_grace_default=DEFAULT_STALL_GRACE_SECONDS)
     try:
         if args.review_state_file:
-            with open(args.review_state_file, encoding="utf-8") as state_file:
-                state = json.load(state_file)
-            result = collect_review_state(state, args.bot_name)
-            current_inlines = [
-                item
-                for item in result.get("inline_comments", [])
-                if item.get("provenance") == "current"
-            ]
-            jev_evaluations: list[dict[str, Any]] = []
-            if current_inlines:
-                jev_report = evaluate_review_findings(
-                    current_inlines,
-                    bot_name=args.bot_name,
-                    threshold=args.jev_threshold,
-                    pr=args.pr,
-                    context=state.get("context") if isinstance(state, dict) else None,
-                )
-                jev_evaluations = jev_report["jev_evaluations"]
-            reviewed_shas = {
-                item.get("commit_id")
-                for item in result.get("review_items", [])
-                if item.get("kind") == "review"
-                and item.get("provenance") == "current"
-                and item.get("commit_id")
-            }
-            completeness, incomplete_sections = _resolve_offline_completeness(state)
-            result.update(
-                repository=None,
-                pr_number=args.pr,
-                reviewer=args.bot_name,
-                round=None,
-                trigger_id=None,
-                triggered_at="",
-                requested_head_sha=None,
-                reviewed_head_sha=(
-                    next(iter(reviewed_shas)) if len(reviewed_shas) == 1 else None
-                ),
-                current_head_sha=None,
-                review_target_sha=derive_review_target(
-                    result.get("review_items", []), None, None
-                )[0],
-                review_target_sha_source=derive_review_target(
-                    result.get("review_items", []), None, None
-                )[1],
-                jev_evaluations=jev_evaluations,
-                completeness=completeness,
-            )
-            if (
-                incomplete_sections
-                and result["acquisition_status"] == ACQUISITION_ACQUIRED
-            ):
-                # The adapter itself declared a section incomplete: a partial
-                # fetch must not be reported as a trustworthy acquired result,
-                # even though some content was found (issue #1099 PR #1114
-                # round 1 review).
-                result["acquisition_status"] = ACQUISITION_UNAVAILABLE
-                result["reason"] = (
-                    "supplied completeness declares "
-                    f"{', '.join(incomplete_sections)} incomplete"
-                )
-            _print_review_result(result, args.bot_name)
-            if args.output_file:
-                _write_output_file(result, args.output_file)
-            status = result["acquisition_status"]
-            if status == ACQUISITION_ACQUIRED:
-                sys.exit(EXIT_ACQUIRED)
-            elif status == ACQUISITION_IN_PROGRESS:
-                sys.exit(EXIT_IN_PROGRESS)
-            else:
-                sys.exit(EXIT_NO_RESULT)
-        if args.pr is None:
-            parser.error("--pr is required unless --review-state-file is used")
-        wait_kwargs: dict[str, Any] = {
-            "timeout": args.timeout,
-            "interval": args.interval,
-            "bot_name": args.bot_name,
-            "post_trigger": not args.no_post,
-            "body": args.body,
-            "body_file": args.body_file,
-            "max_rounds": args.max_rounds,
-            "max_retries": args.max_retries,
-            "round_num": args.round,
-            "stall_grace_seconds": args.stall_grace,
-            "switch_reviewer": args.switch_reviewer,
-        }
-        if args.jev_threshold is not None:
-            wait_kwargs["jev_threshold"] = args.jev_threshold
-        result = wait_for_review(
-            args.pr,
-            **wait_kwargs,
-        )
-        if args.output_file:
-            _write_output_file(result, args.output_file)
-        sys.exit(EXIT_ACQUIRED)
+            sys.exit(run_offline(args, evaluate=evaluate_review_findings))
+        _run_online(args)
     except MaxRoundsExceededError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(EXIT_MAX_ROUNDS)
