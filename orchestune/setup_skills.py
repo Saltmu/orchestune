@@ -288,6 +288,11 @@ def setup_skills(with_workflow_skill: bool = False) -> int:
     Returns an exit code: 0 on full success (or nothing to do), 1 if any
     required skill link could not be created/verified.
     """
+    print(
+        "Warning: 'orchestune setup' is deprecated and will be removed in a future release. "
+        "Use 'orchestune skills install' instead.",
+        file=sys.stderr,
+    )
     try:
         skills_dir = get_skills_source_dir()
     except FileNotFoundError as e:

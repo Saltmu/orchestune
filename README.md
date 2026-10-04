@@ -49,17 +49,23 @@ The pipeline itself is advanced by deterministic Python. An LLM call is a scarce
 Ensure you have Python 3.12+, uv, and the GitHub CLI installed.
 
 ```bash
-# Install globally using pipx (recommended)
-pipx install git+https://github.com/Saltmu/orchestune.git
+# Install CLI globally using uv tool (recommended) or pipx
+uv tool install "orchestune==<RELEASE_VERSION>"
+# Or install latest from git:
+uv tool install "git+https://github.com/Saltmu/orchestune.git"
 ```
 
-After installation, run the following setup command to automatically link Orchestune skills to your AI assistants (Claude Code, Codex CLI, Antigravity):
+After installation, install Orchestune skills to your AI assistants (Claude Code, Codex CLI, Antigravity IDE, Antigravity CLI):
 
 ```bash
-orchestune setup
+# Install to current project (recommended for team sharing):
+orchestune skills install --target all --scope project
+
+# Or install to user configuration directory globally:
+orchestune skills install --target all --scope user
 ```
 
-👉 For adding Orchestune as a development dependency, manual skill setup, or Cloud Routine configuration, see the [Setup Guide](docs/en/setup.md).
+👉 For diagnostics (`orchestune skills doctor`), update/uninstall, or Cloud Routine configuration, see the [Setup Guide](docs/en/setup.md).
 
 ---
 

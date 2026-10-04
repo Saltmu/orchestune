@@ -471,3 +471,16 @@ def inspect_worktree_status(worktree_path: Path | str | None) -> WorktreeStatus:
     if not res.stdout.strip():
         return WorktreeStatus.CLEAN
     return WorktreeStatus.DIRTY
+
+
+def is_git_ignored(cwd: Path | str, target_path: str) -> bool:
+    """Return True if target_path is ignored by git in cwd, False otherwise.
+
+    Note: Returns False both when the path is not ignored (exit code 1) and when
+    cwd is not inside a git repository or git fails (e.g. exit code 128).
+    """
+    try:
+        res = run_git(["check-ignore", "-q", target_path], cwd=cwd, check=False)
+        return res.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False

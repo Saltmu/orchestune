@@ -181,3 +181,157 @@ def test_build_does_not_pollute_repo(tmp_path: Path) -> None:
     assert (
         not dist_dir.exists()
     ), f"Repository root polluted with dist directory after build: {dist_dir}"
+
+
+def test_bundled_issue_template_matches_canonical_repo_template() -> None:
+    bundled = REPO_ROOT / "skills/orchestune-provision/resources/issue_template.md"
+    canonical = REPO_ROOT / ".github/issue_template.md"
+    assert bundled.is_file(), f"Missing bundled issue template at {bundled}"
+    assert canonical.is_file(), f"Missing canonical issue template at {canonical}"
+    assert bundled.read_text(encoding="utf-8") == canonical.read_text(encoding="utf-8")
+
+
+def test_wheel_and_sdist_contain_nested_skill_assets(
+    built_artifacts: tuple[Path, Path],
+) -> None:
+    wheel_path, sdist_path = built_artifacts
+    expected_nested = {
+        "skills/orchestune-provision/resources/issue_template.md",
+        "skills/orchestune-dispatch/references/child-review-gate.md",
+        "skills/workflow-template/references/scratch.md",
+    }
+    with zipfile.ZipFile(wheel_path) as zf:
+        wheel_entries = set(zf.namelist())
+    for rel_path in expected_nested:
+        assert rel_path in wheel_entries, f"Missing {rel_path} in wheel"
+
+    with tarfile.open(sdist_path) as tf:
+        sdist_entries = {name.split("/", 1)[1] for name in tf.getnames() if "/" in name}
+    for rel_path in expected_nested:
+        assert rel_path in sdist_entries, f"Missing {rel_path} in sdist"
+
+
+def test_isolated_installation_and_skills_portability(
+    built_artifacts: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    wheel_path, _ = built_artifacts
+    venv_dir = tmp_path / "test_venv"
+    res_venv = subprocess.run(
+        ["uv", "venv", str(venv_dir)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert res_venv.returncode == 0, f"uv venv failed: {res_venv.stderr}"
+
+    venv_python = (
+        venv_dir / "Scripts" / "python.exe"
+        if (venv_dir / "Scripts" / "python.exe").exists()
+        else venv_dir / "bin" / "python"
+    )
+    venv_orchestune = (
+        venv_dir / "Scripts" / "orchestune.exe"
+        if (venv_dir / "Scripts" / "orchestune.exe").exists()
+        else venv_dir / "bin" / "orchestune"
+    )
+
+    res_install = subprocess.run(
+        ["uv", "pip", "install", str(wheel_path), "--python", str(venv_python)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert res_install.returncode == 0, f"uv pip install failed: {res_install.stderr}"
+
+    res_help = subprocess.run(
+        [str(venv_orchestune), "skills", "--help"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert (
+        res_help.returncode == 0
+    ), f"orchestune skills --help failed: {res_help.stderr}"
+    assert "install" in res_help.stdout
+    assert "status" in res_help.stdout
+
+    res_scratch_help = subprocess.run(
+        [str(venv_orchestune), "scratch", "--help"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert (
+        res_scratch_help.returncode == 0
+    ), f"orchestune scratch --help failed: {res_scratch_help.stderr}"
+
+    res_version = subprocess.run(
+        [str(venv_orchestune), "--version"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert (
+        res_version.returncode == 0
+    ), f"orchestune --version failed: {res_version.stderr}"
+    assert "orchestune" in res_version.stdout
+
+    external_proj = tmp_path / "ext_project"
+    external_proj.mkdir(parents=True)
+    res_skills_install = subprocess.run(
+        [
+            str(venv_orchestune),
+            "skills",
+            "install",
+            "--target",
+            "codex",
+            "--scope",
+            "project",
+            "--project-dir",
+            str(external_proj),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert (
+        res_skills_install.returncode == 0
+    ), f"skills install failed: {res_skills_install.stderr}\n{res_skills_install.stdout}"
+
+    installed_skills_dir = external_proj / ".agents" / "skills"
+    assert (installed_skills_dir / "orchestune" / "SKILL.md").is_file()
+    assert (installed_skills_dir / "orchestune-provision" / "SKILL.md").is_file()
+    assert (installed_skills_dir / "orchestune-dispatch" / "SKILL.md").is_file()
+    assert (
+        installed_skills_dir
+        / "orchestune-provision"
+        / "resources"
+        / "issue_template.md"
+    ).is_file()
+
+    res_status = subprocess.run(
+        [
+            str(venv_orchestune),
+            "skills",
+            "status",
+            "--target",
+            "codex",
+            "--scope",
+            "project",
+            "--project-dir",
+            str(external_proj),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert res_status.returncode == 0, f"skills status failed: {res_status.stderr}"
+    assert "managed-current" in res_status.stdout

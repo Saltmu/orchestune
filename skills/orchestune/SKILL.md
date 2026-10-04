@@ -39,13 +39,12 @@ Load this skill **when a user presents a 'big rock' task and requests task decom
 ## Decomposition Scratch Path
 
 Create the draft in the repository-local, Git-ignored directory
-`.orchestune/tmp/decomposition-<issue-or-task>-<UTC timestamp>-<random>/`, using
+`.orchestune/tmp/decomposition-<issue-or-task>-<UTC timestamp>-<random>/`
+via `orchestune scratch create decomposition <issue-or-task>`, using
 UTC `YYYYMMDDTHHMMSSZ` and a UUID or equivalent unpredictable `<random>` value.
-Before creating that directory or draft, run
-`git check-ignore -q .orchestune/tmp/orchestune-probe` in the target repository.
-If it is not ignored, add `.orchestune/tmp/` to the target repository's
-`.gitignore` first and verify the probe again; do not rely on Orchestune's own
-repository settings when the skill is installed elsewhere.
+Before creating that directory or draft, ensure `.orchestune/tmp/` is ignored
+in the target repository's `.gitignore` (or verified via `git check-ignore -q .orchestune/tmp/orchestune-probe`);
+`orchestune scratch create` verifies this read-only check automatically and guides the user if missing.
 Use `decomposition-plan.md` inside that session directory and reuse its explicit
 path for every DAG, provision, restore, and replan command. Never use a fixed
 repository-root `decomposition_plan.md` or the OS-global `/tmp`. In the workflow

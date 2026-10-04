@@ -76,6 +76,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "monitor",
             "provisioning.cli",
             "replan.cli",
+            "installer.cli",
+            "scratch.cli",
         }
     ),
     3: frozenset(
@@ -108,6 +110,9 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "provisioning.flow",
             "replan.apply",
             "config_wizard.wizard",
+            "installer.doctor",
+            "installer.engine",
+            "installer.migration",
         }
     ),
     2: frozenset(
@@ -259,6 +264,11 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "worktree_ops.claim_marker",
             "worktree_ops.preparation",
             "worktree_ops.temp_branches",
+            "infra.session_dirs",
+            "installer.payload",
+            "installer.state",
+            "installer.targets",
+            "installer.transaction",
         }
     ),
     1: frozenset(
@@ -324,6 +334,9 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "task_metadata",
             "validation",
             "version",
+            "installer",
+            "installer.contracts",
+            "scratch",
         }
     ),
 }
@@ -340,6 +353,8 @@ ALLOWED_L4_DEPENDENTS = {
     "provisioning.cli": frozenset({"cli"}),
     "replan.cli": frozenset({"cli"}),
     "config_wizard.cli": frozenset({"cli"}),
+    "installer.cli": frozenset({"cli"}),
+    "scratch.cli": frozenset({"cli"}),
 }
 EXPECTED_SUBPROCESS_COMMAND_MODULES = {
     "gh": {"forge.admin"},
