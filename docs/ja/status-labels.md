@@ -22,6 +22,126 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `status:force-serial` | Conflict Graph再計算のリトライ上限超過により強制直列化 |
 | `status:manual-merge-required` | 自動リベース失敗により手動マージが必要 |
 
+## 役割と通常遷移表
+
+`orchestune/ledger/status_machine.py`は、`status:*`ラベルの役割・通常のlifecycle遷移・
+追加／除去の計画を表す、Forgeに依存しない純粋モジュールです（ラベルの読み書きや
+コールバックは行いません）。ラベルを実際に付け替える`transition_status_label`
+（`orchestune/ledger/status_labels.py`）は、この計画を「追加 → 台帳確定コールバック →
+旧ラベルを1要素ずつ列挙して除去」の順にForgeへ適用します。外部から見える挙動
+（呼び出し履歴・Iterableの遅延評価・例外時の部分適用）は変えていません。
+
+### 役割（`LABEL_ROLES`）
+
+| 役割 | ラベル | 扱い |
+|---|---|---|
+| ACTIVE | `queued` / `blocked` / `in-progress` | lifecycle。同時に1つだけ持つ |
+| ESCALATION | `blocked-human-review` / `manual-merge-required` | lifecycle。人間の確認が要る |
+| FINAL | `done` / `not-needed` | lifecycle。終端 |
+| AUXILIARY | `blocked-recompute` / `force-serial` / `external-lock` | lifecycleと共存できる補助ラベル |
+
+単一性の検証対象は、ACTIVE・ESCALATION・FINALを合わせた7種類のlifecycleです
+（`LIFECYCLE_ROLES`）。`orchestune/ledger/status_labels.py`の
+`PRIMARY_STATUS_LABELS`（ACTIVEの3種類。順序は`in-progress` / `queued` / `blocked`）と
+`TERMINAL_ESCALATION_LABELS`（ESCALATIONの2種類）は、この役割表から既存の明示順序で
+導出しており、公開名・型・値・順序は変わりません。`consistency`側の同名
+`PRIMARY_STATUS_LABELS`は7種類のlifecycleを表す別の契約で、統合していません。
+
+### 通常遷移表（`ALLOWED_TRANSITIONS`）
+
+通常のlifecycle遷移の**正は`ALLOWED_TRANSITIONS`**です。下表と図はこれに合わせ、
+`tests/test_status_machine.py`が表と図の整合性を機械的に検証します。全lifecycleラベルは
+同一操作の再実行として**自己遷移**（例: `blocked` → `blocked`）も許可されます。この表は
+方針であり、**本番では不正な遷移を拒否しません**（人間確認ラベルの保護は
+既存の呼び出し側の判断に残っています）。
+
+| source | target | 主な経路 |
+|---|---|---|
+| `status:queued` | `status:in-progress` | 起動成功・claim・`reconcile_attempt` |
+| `status:blocked` | `status:in-progress` | スタッキング起動（依存元ブランチ上で起動） |
+| `status:blocked` | `status:queued` | 依存解決、`blocked-recompute`解除、base_sha前進による再キュー |
+| `status:queued` | `status:blocked` | YAMLパースエラー、依存未解決への降格、起動失敗、footprint逸脱の再計算 |
+| `status:in-progress` | `status:queued` | GC回収、recovery requeue、PRクローズによるCloudタスクの回収 |
+| `status:in-progress` | `status:blocked` | claim後の起動失敗、完了ホールド、base branch red |
+| `status:queued` | `status:blocked-human-review` | footprint不正、重複起動検知、actor権限不足によるエスカレーション |
+| `status:blocked` | `status:blocked-human-review` | 重複起動検知・起動検証失敗によるエスカレーション |
+| `status:in-progress` | `status:blocked-human-review` | outcome不在、CHANGES_REQUESTED、GC回収の上限超過などのエスカレーション |
+| `status:not-needed` | `status:blocked-human-review` | 対応不要の検証レビューのタイムアウト（#511） |
+| `status:in-progress` | `status:manual-merge-required` | 自動リベース失敗 |
+| `status:queued` | `status:done` | 完了の確定（repair・`complete`） |
+| `status:blocked` | `status:done` | 完了の確定（repair・`complete`） |
+| `status:in-progress` | `status:done` | 完了（GCのdone cleanup、`complete`、既マージ検証の修復） |
+| `status:queued` | `status:not-needed` | 対応不要の判定（replan・`complete`） |
+| `status:blocked` | `status:not-needed` | 対応不要の判定（replan・`complete`） |
+| `status:in-progress` | `status:not-needed` | 対応不要の判定（`complete`） |
+
+### 遷移の分類
+
+遷移元は、`old_labels`ではなく**実際に保持しているlifecycleラベル**で決めます。
+`old_labels`には実際には存在しないラベルも含まれます。
+
+| ケース | 定義 | 検証 |
+|---|---|---|
+| 通常遷移 | 単一のlifecycleを保持し、`ALLOWED_TRANSITIONS`にある | 呼び出し箇所ごとの実行テスト |
+| 自己遷移・再実行 | 保持するlifecycleがtargetと同じ | ラベル状態の冪等性（コールバックのexactly-onceは保証しない） |
+| 初期化 | lifecycleを1つも保持しない状態からの付与 | source無しの別ケース。発見可能性の事前条件を満たさない |
+| 修復 | lifecycleを複数保持し、保持集合と削除候補を明示して収束させる | 修復ケースとして別途検証。許可表を広げて通さない |
+| 補助操作 | 補助ラベルの付与・除去 | lifecycle遷移表へ混ぜず、共存・除去として検証 |
+
+呼び出し箇所の棚卸し・実ラベル集合・分類は`tests/test_status_transition_callsites.py`
+にあり、新しい呼び出し箇所が未登録だと失敗します。共通アダプターを使わない経路
+（`complete/status_labels.py`の別アダプター、`dispatch/gc/policy_effects.py`の
+`reconcile_labels`、`replan/operations.py`、Integratorのロールバックなど）も同ファイルに
+記録していますが、今回の保証の対象外です。
+
+### 状態遷移図との関係
+
+下の図には、表と異なる3種類の線があります。いずれも通常のlifecycle遷移ではありません。
+
+- `[*]`からの初期付与: sourceが無い初期化ケース。
+- `blocked` → `blocked_recompute`: 補助ラベルの付与（元の`status:blocked`は残る）。
+- `done` → `queued`: Integratorの仮マージCI失敗による差し戻し。`handle_merge_failure`が
+  Forgeへ直接追加・除去する別経路で、共通アダプターも通常遷移表も経由しません。
+
+### 不変条件と保証の前提
+
+`tests/test_status_machine_stateful.py`は、失敗を注入できるFakeForgeとHypothesisの
+`RuleBasedStateMachine`で、共通アダプターの局所的な安全性を検証します。
+
+**A. 外部変更のない安全性と再試行**（未回復の操作は1件で、その間は新しい遷移を始めません）:
+
+- 自システムの各操作の前後、および障害による停止後も、lifecycleが1つ以上ある。
+- 完全な削除対象を持つ操作が正常完了すると、lifecycleはtargetだけになる。
+- 途中失敗の後、外部変更がなく、add・コールバック・全removeが成功する**1回の完全な
+  再試行**でtargetだけに収束する。以後の同一操作の再実行でラベル集合は変わらない
+  （コールバックの実行回数は増え得る）。
+- 通常ルールはESCALATION → ACTIVEを選ばない。**共通アダプター自身がこれを拒否する
+  保証はない**。
+
+**B. 任意の外部変更**: `external_relabel`はlifecycleの全削除・複数付与・ESCALATION追加を
+行えるため、その直後に「1個以上」「成功後に必ず1個」を無条件には要求しません。モデルは
+世代（epoch）を進めて古いpending retryを自動ルールから外し、必要な事前条件を満たす新しい
+スナップショットからAの検証を再開します（テスト上の区切りで、本番の世代管理ではありません）。
+外部変更後の修復・再計画は#1218、スケジューラー全体のlivenessは#1219の対象です。
+
+保証しないこと: 無限に続く障害・外部変更、システム全体のliveness、別アダプターや直接Forge
+操作、`old_labels`が不完全な場合の収束（例: `queued`と`done`を保持して`queued`だけ除去すると
+`done`が残る現行挙動は互換性テストで固定）。
+
+**実行と再現**:
+
+- `uv run pytest tests/test_status_machine_stateful.py`（単独で約1.4秒）。CI profileは
+  `tests/conftest.py`に登録した`ci`（`max_examples=100`・`stateful_step_count=30`・
+  `deadline=None`・`print_blob=True`）で、対象の`TestCase`に適用されていることをテストで確認します。
+  別のprofileは環境変数`HYPOTHESIS_PROFILE`で選べます。`deadline=None`は総実行時間の上限保証では
+  ありません。
+- 失敗するとHypothesisが最小の反例を`state.<rule>(...)`の手順として表示します。
+  `uv run pytest tests/test_status_machine_stateful.py --hypothesis-seed=<N>`で同じ反例を再現できます
+  （同じseedを2回実行して同一の反例になることを、Hypothesis 6.168.3で確認済み）。
+- `print_blob=True`により`@reproduce_failure`のblobも表示されますが、ステートマシンの
+  `TestCase`や`runTest`に付けてもblobは再生されず新たな探索になるため、再現手順はseedを正とします。
+- `.hypothesis/`は例データベースでGit管理外です。以前の失敗例が次回の実行で再生されます。
+
 ## 状態遷移図
 
 ```mermaid

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 from collections.abc import Iterator
+from pathlib import Path
 from types import MappingProxyType
 
 import pytest
@@ -22,6 +24,7 @@ from orchestune.ledger.status_machine import (
     plan_transition,
 )
 
+AUXILIARY_ROLE = LabelRole.AUXILIARY
 ACTIVE = (StatusLabel.QUEUED, StatusLabel.BLOCKED, StatusLabel.IN_PROGRESS)
 ESCALATION = (StatusLabel.BLOCKED_HUMAN_REVIEW, StatusLabel.MANUAL_MERGE_REQUIRED)
 FINAL = (StatusLabel.DONE, StatusLabel.NOT_NEEDED)
@@ -291,3 +294,63 @@ class TestPlanTransition:
         assert plan_transition("status:done", old) == plan_transition(
             "status:done", old
         )
+
+
+DOCS_ROOT = Path(__file__).resolve().parents[1] / "docs"
+_TABLE_ROW = re.compile(
+    r"^\|\s*`(status:[a-z-]+)`\s*\|\s*`(status:[a-z-]+)`\s*\|", re.M
+)
+_ROLE_ROW = re.compile(r"^\|\s*([A-Z]+)\s*\|([^|]*)\|", re.M)
+_DIAGRAM_EDGE = re.compile(r"^\s*(\w+) --> (\w+)", re.M)
+#: Edges that the diagram draws but that are not normal lifecycle transitions
+#: (the Integrator rollback bypasses the common adapter; see the doc section
+#: "Relation to the state diagram").
+_DIAGRAM_ROLLBACKS = {(StatusLabel.DONE, StatusLabel.QUEUED)}
+
+
+def _doc(lang: str) -> str:
+    return (DOCS_ROOT / lang / "status-labels.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("lang", ["ja", "en"])
+class TestStatusLabelsDocumentMatchesTheTable:
+    def test_transition_table_lists_exactly_the_non_self_allowed_pairs(
+        self, lang: str
+    ) -> None:
+        documented = set(_TABLE_ROW.findall(_doc(lang)))
+        expected = {(s.value, t.value) for s, t in ALLOWED_TRANSITIONS if s != t}
+        assert documented == expected
+
+    def test_role_table_matches_label_roles(self, lang: str) -> None:
+        documented: dict[str, set[str]] = {}
+        for role, cell in _ROLE_ROW.findall(_doc(lang)):
+            if role in {role.name for role in LabelRole}:
+                documented[role] = {
+                    f"status:{name}"
+                    for name in re.findall(r"`([a-z-]+)`", cell)
+                    if name != "status"
+                }
+        expected: dict[str, set[str]] = {}
+        for label, role in LABEL_ROLES.items():
+            expected.setdefault(role.name, set()).add(label.value)
+        assert documented == expected
+
+    def test_diagram_edges_are_allowed_unless_documented_exceptions(
+        self, lang: str
+    ) -> None:
+        block = re.search(r"```mermaid\n(.*?)```", _doc(lang), re.S)
+        assert block is not None
+        edges = [
+            (
+                StatusLabel("status:" + source.replace("_", "-")),
+                StatusLabel("status:" + target.replace("_", "-")),
+            )
+            for source, target in _DIAGRAM_EDGE.findall(block.group(1))
+        ]
+        assert _DIAGRAM_ROLLBACKS <= set(edges), "the documented exception vanished"
+        for source, target in edges:
+            if AUXILIARY_ROLE in {LABEL_ROLES[source], LABEL_ROLES[target]}:
+                continue  # adding an auxiliary label is not a lifecycle transition
+            if (source, target) in _DIAGRAM_ROLLBACKS:
+                continue
+            assert is_allowed(source, target), (source, target)

@@ -105,16 +105,75 @@ CALL_SITES: dict[str, int] = {
     "integrator/steps.py::AutoMergeChildIntegrationStep._restore_blocked_label": 1,
 }
 
-#: Direct-Forge or other-adapter label paths that are intentionally NOT covered by
-#: the common adapter's guarantees (recorded, not exercised here).
-OUT_OF_SCOPE_PATHS = (
-    "complete/status_labels.py::transition_completion_status_label",
-    "dispatch/gc/policy_effects.py::reconcile_labels",
-    "replan/operations.py (direct add not-needed / remove status:*)",
-    "dispatch/rebase.py::notify_recompute (direct add status:blocked-recompute)",
-    "dispatch/reconciliation.py (direct remove status:blocked-recompute / ci:base-branch-red)",
-    "dispatch/prior_parent_merge.py::_normalize_closed_issue_label (terminal-label cleanup)",
-    "dispatch/status_repair.py COMMAND_ADD_LABEL / COMMAND_REMOVE_LABEL branch",
+#: Label paths that bypass the common adapter. They are recorded here, not covered
+#: by the stateful guarantee: (file, function, why it is outside the adapter).
+OUT_OF_SCOPE_PATHS: tuple[tuple[str, str, str], ...] = (
+    (
+        "complete/status_labels.py",
+        "_completion_mutate",
+        "`transition_completion_status_label`: separate adapter with generation checks",
+    ),
+    ("dispatch/gc/policy_effects.py", "reconcile_labels", "direct Forge add/remove"),
+    (
+        "replan/operations.py",
+        "_transition_to_not_needed",
+        "replan: add not-needed, remove status:*",
+    ),
+    (
+        "integrator/pr.py",
+        "handle_merge_failure",
+        "rollback done -> queued, add then remove directly",
+    ),
+    (
+        "dispatch/status_repair.py",
+        "_apply_command",
+        "COMMAND_ADD_LABEL / COMMAND_REMOVE_LABEL branch",
+    ),
+    (
+        "dispatch/rebase.py",
+        "notify_recompute",
+        "adds the auxiliary blocked-recompute directly",
+    ),
+    (
+        "dispatch/rebase.py",
+        "_apply_forced_serial_event",
+        "adds the auxiliary force-serial directly",
+    ),
+    (
+        "dispatch/phase_rebase.py",
+        "_apply_external_lock_sync",
+        "auxiliary external-lock and queued re-add",
+    ),
+    (
+        "dispatch/reconciliation.py",
+        "_resolve_one_blocked_recompute_issue",
+        "removes blocked-recompute directly",
+    ),
+    (
+        "dispatch/reconciliation.py",
+        "_apply_base_branch_red_unmark",
+        "removes ci:base-branch-red",
+    ),
+    (
+        "dispatch/reconciliation.py",
+        "_apply_base_branch_red_escalate",
+        "removes ci:base-branch-red",
+    ),
+    (
+        "dispatch/prior_parent_merge.py",
+        "_normalize_closed_issue_label",
+        "terminal-label cleanup",
+    ),
+    (
+        "dispatch/gc/completion.py",
+        "_apply_escalated_base_branch_red",
+        "removes ci:base-branch-red",
+    ),
+    (
+        "dispatch/gc/completion.py",
+        "_finalize_not_needed_worktree",
+        "direct label removal",
+    ),
 )
 
 
@@ -453,8 +512,21 @@ class TestRegistryMatchesTheSource:
         ids = [case.id for case in CASES]
         assert len(ids) == len(set(ids))
 
-    def test_out_of_scope_paths_are_recorded(self) -> None:
-        assert len(OUT_OF_SCOPE_PATHS) >= 5
+    @pytest.mark.parametrize(("file", "function", "reason"), OUT_OF_SCOPE_PATHS)
+    def test_out_of_scope_paths_still_operate_labels_directly(
+        self, file: str, function: str, reason: str
+    ) -> None:
+        source = (PACKAGE_ROOT / file).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        bodies = [
+            ast.get_source_segment(source, node) or ""
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == function
+        ]
+        assert bodies, f"{file}::{function} no longer exists ({reason})"
+        assert any(
+            "add_label(" in body or "remove_label(" in body for body in bodies
+        ), f"{file}::{function} no longer touches labels directly ({reason})"
 
 
 def _derived_kind(case: Case) -> Kind:

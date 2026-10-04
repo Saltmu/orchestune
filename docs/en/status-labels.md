@@ -24,6 +24,134 @@ The canonical list of labels is `StatusLabel` in `orchestune/labels.py`
 | `status:force-serial` | Forced to run serially after DAG-recompute retries are exhausted |
 | `status:manual-merge-required` | Automatic rebase failed; a human needs to merge manually |
 
+## Roles and the normal transition table
+
+`orchestune/ledger/status_machine.py` is a pure, Forge-independent module holding the
+`status:*` role table, the normal lifecycle transitions, and the add/remove plan derived
+from a label snapshot (it reads or writes no labels and runs no callbacks).
+`transition_status_label` (`orchestune/ledger/status_labels.py`), which actually
+re-labels an Issue, applies that plan in the order "add, then the ledger-commit callback,
+then enumerate the old labels one at a time and remove each". Externally visible behaviour
+(call history, lazy evaluation of the iterable, partial application on an exception) is unchanged.
+
+### Roles (`LABEL_ROLES`)
+
+| Role | Labels | Treatment |
+|---|---|---|
+| ACTIVE | `queued` / `blocked` / `in-progress` | Lifecycle; an Issue holds exactly one |
+| ESCALATION | `blocked-human-review` / `manual-merge-required` | Lifecycle; needs a human |
+| FINAL | `done` / `not-needed` | Lifecycle; terminal |
+| AUXILIARY | `blocked-recompute` / `force-serial` / `external-lock` | Auxiliary; may coexist with a lifecycle label |
+
+Uniqueness is checked over the seven lifecycle labels: ACTIVE, ESCALATION and FINAL together
+(`LIFECYCLE_ROLES`). `PRIMARY_STATUS_LABELS` in `orchestune/ledger/status_labels.py` (the three
+ACTIVE labels, ordered `in-progress` / `queued` / `blocked`) and `TERMINAL_ESCALATION_LABELS`
+(the two ESCALATION labels) are derived from this role table using their existing explicit
+order; their public names, types, values and order are unchanged. The same-named
+`PRIMARY_STATUS_LABELS` in `consistency` is a different contract (the seven lifecycle labels)
+and was not merged.
+
+### Normal transition table (`ALLOWED_TRANSITIONS`)
+
+**`ALLOWED_TRANSITIONS` is the source of truth** for normal lifecycle transitions. The table
+below and the diagram follow it, and `tests/test_status_machine.py` checks them against it
+mechanically. Every lifecycle label also has an explicit **self-transition** (for example
+`blocked` → `blocked`) for re-running the same operation. The table is a policy and **production
+does not reject an invalid transition** (protection of human-review labels stays with the
+existing callers' decisions).
+
+| source | target | Typical path |
+|---|---|---|
+| `status:queued` | `status:in-progress` | Launch success, claim, `reconcile_attempt` |
+| `status:blocked` | `status:in-progress` | Stacked launch on the dependency's branch |
+| `status:blocked` | `status:queued` | Dependency resolved, `blocked-recompute` cleared, requeue after the base SHA advanced |
+| `status:queued` | `status:blocked` | YAML parse error, demotion for unresolved dependencies, launch failure, footprint-deviation recompute |
+| `status:in-progress` | `status:queued` | GC reclaim, recovery requeue, reclaim of an abandoned cloud task |
+| `status:in-progress` | `status:blocked` | Launch failure after a claim, completion hold, base branch red |
+| `status:queued` | `status:blocked-human-review` | Escalation: invalid footprint, duplicate launch, insufficient actor permission |
+| `status:blocked` | `status:blocked-human-review` | Escalation: duplicate launch, failed launch validation |
+| `status:in-progress` | `status:blocked-human-review` | Escalation: missing outcome, CHANGES_REQUESTED, reclaim limit exceeded |
+| `status:not-needed` | `status:blocked-human-review` | Timeout of the not-needed verification review (#511) |
+| `status:in-progress` | `status:manual-merge-required` | Automatic rebase failure |
+| `status:queued` | `status:done` | Completion confirmed (repair, `complete`) |
+| `status:blocked` | `status:done` | Completion confirmed (repair, `complete`) |
+| `status:in-progress` | `status:done` | Completion (GC done cleanup, `complete`, verified prior-merge repair) |
+| `status:queued` | `status:not-needed` | Not-needed decision (replan, `complete`) |
+| `status:blocked` | `status:not-needed` | Not-needed decision (replan, `complete`) |
+| `status:in-progress` | `status:not-needed` | Not-needed decision (`complete`) |
+
+### Classifying a transition
+
+The source is the lifecycle label the Issue **actually holds**, not an element of `old_labels`
+(which may include labels that are not present).
+
+| Case | Definition | Verification |
+|---|---|---|
+| Normal | Exactly one lifecycle label held, and the pair is in `ALLOWED_TRANSITIONS` | Executed test per call site |
+| Self / re-run | The held lifecycle label already equals the target | Label-state idempotency (callbacks are not guaranteed exactly-once) |
+| Initialisation | Adding from a state with no lifecycle label | A separate source-less case; it does not meet the discoverability precondition |
+| Repair | Several lifecycle labels held; the held set and removal candidates are explicit | Verified as a repair case; the normal table is not widened to admit it |
+| Auxiliary | Adding or removing an auxiliary label | Not mixed into the lifecycle table; verified as coexistence/removal |
+
+The call-site inventory, actual label sets and classification live in
+`tests/test_status_transition_callsites.py`, which fails when a new call site is unregistered.
+Paths that do not use the common adapter (the separate adapter in `complete/status_labels.py`,
+`reconcile_labels` in `dispatch/gc/policy_effects.py`, `replan/operations.py`, the Integrator
+rollback, and so on) are recorded in the same file but are outside this guarantee.
+
+### Relation to the state diagram
+
+Three kinds of edges in the diagram below differ from the table; none is a normal lifecycle transition:
+
+- Initial assignment from `[*]`: an initialisation case with no source.
+- `blocked` → `blocked_recompute`: adding an auxiliary label (the original `status:blocked` stays).
+- `done` → `queued`: rollback after the Integrator's provisional-merge CI failed. `handle_merge_failure`
+  adds and removes directly on the Forge, going through neither the common adapter nor the normal table.
+
+### Invariants and the assumptions behind them
+
+`tests/test_status_machine_stateful.py` checks the adapter's local safety with a failure-injecting
+fake Forge and a Hypothesis `RuleBasedStateMachine`.
+
+**A. Safety and retry without external changes** (one unrecovered operation at a time; no new
+transition starts meanwhile):
+
+- The Issue holds at least one lifecycle label before and after every operation of this system,
+  and after a stop caused by a failure.
+- An operation with a complete removal list that finishes normally leaves only the target.
+- After a partial failure, with no external change, **one complete retry** (add, callback and
+  every remove all succeed) converges to the target alone. Re-running the same operation then
+  leaves the label set unchanged (the callback count may grow).
+- Normal rules never choose ESCALATION → ACTIVE. **The common adapter itself is not guaranteed
+  to refuse it.**
+
+**B. Arbitrary external changes**: `external_relabel` may delete every lifecycle label, add
+several, or add an ESCALATION label, so "at least one" / "exactly one after success" is not
+required unconditionally right after it. The model bumps an epoch, drops the old pending retry from
+the automatic rules, and resumes the A checks from a new snapshot that meets A's preconditions
+(a test boundary, not a production generation counter). Repair and replanning after external
+changes belong to #1218; scheduler-wide liveness to #1219.
+
+Not guaranteed: endlessly repeating failures or external changes, system-wide liveness, other
+adapters and direct Forge paths, and convergence when `old_labels` is incomplete (for example, with
+`queued` and `done` held, removing only `queued` leaves `done`; this current behaviour is pinned by
+the compatibility tests).
+
+**Running and reproducing**:
+
+- `uv run pytest tests/test_status_machine_stateful.py` (about 1.4 seconds on its own). The CI
+  profile is `ci` registered in `tests/conftest.py` (`max_examples=100`, `stateful_step_count=30`,
+  `deadline=None`, `print_blob=True`); a test checks that it is applied to the stateful
+  `TestCase`. Another profile can be chosen with the `HYPOTHESIS_PROFILE` environment variable.
+  `deadline=None` is not an upper bound on total run time.
+- On failure Hypothesis prints a minimal counter-example as a `state.<rule>(...)` sequence. Run
+  `uv run pytest tests/test_status_machine_stateful.py --hypothesis-seed=<N>` to reproduce the same
+  counter-example (running the same seed twice gave an identical counter-example on Hypothesis 6.168.3).
+- `print_blob=True` also prints an `@reproduce_failure` blob, but attaching it to the state machine's
+  `TestCase` or `runTest` does not replay the blob (it starts a new search), so the seed is the
+  reproduction path.
+- `.hypothesis/` is the example database and is not tracked by Git; earlier failures are replayed on the next run.
+
 ## State diagram
 
 ```mermaid
