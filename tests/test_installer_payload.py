@@ -13,7 +13,7 @@ from orchestune.version import get_version
 
 def test_calculate_file_sha256(tmp_path: Path):
     f = tmp_path / "test.txt"
-    f.write_text("hello world\n", encoding="utf-8")
+    f.write_bytes(b"hello world\n")
     digest = calculate_file_sha256(f)
     assert len(digest) == 64
     assert digest == "a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447"
