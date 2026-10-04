@@ -325,6 +325,28 @@ def _validate_choice_entry(normalized_key: str, raw_key: str, value: Any) -> Any
     return value
 
 
+def parse_ci_command(value: Any) -> list[str]:
+    """Parse and validate CI command as a string or list of non-empty strings."""
+    if isinstance(value, str):
+        if not value.strip():
+            raise ConfigError("ci-command must not be empty")
+        try:
+            parts = shlex.split(value)
+        except ValueError as exc:
+            raise ConfigError(f"invalid ci-command: {exc}") from exc
+        if not parts:
+            raise ConfigError("ci-command must not be empty")
+        return parts
+    if isinstance(value, list):
+        if not value:
+            raise ConfigError("ci-command must not be empty")
+        for elem in value:
+            if not isinstance(elem, str) or not elem.strip():
+                raise ConfigError("ci-command list elements must be non-empty strings")
+        return list(value)
+    raise ConfigError("ci-command must be a string or list of strings")
+
+
 def _validate_compound_entry(normalized_key: str, raw_key: str, value: Any) -> Any:
     if normalized_key == "consistency_repair_code":
         if not isinstance(value, list) or not all(
@@ -333,8 +355,7 @@ def _validate_compound_entry(normalized_key: str, raw_key: str, value: Any) -> A
             raise ConfigError(f"{raw_key!r} must be a list of non-empty strings")
         return value
     if normalized_key == "ci_command":
-        if not isinstance(value, str | list):
-            raise ConfigError(f"{raw_key!r} must be a string or list of strings")
+        parse_ci_command(value)
         return value
     if raw_key in DAG_TOOL_CONFIG_KEYS:
         return value
@@ -399,6 +420,8 @@ def validate_toml_config(config_data: dict[str, Any]) -> dict[str, Any]:
         or "execution-profiles" in config_data
         or "model_tiers" in config_data
         or "model-tiers" in config_data
+        or "default_execution_profile" in config_data
+        or "default-execution-profile" in config_data
     ):
         extract_execution_profile_config(config_data)
 
@@ -596,7 +619,7 @@ def _assemble_dispatcher_config(
         else DEFAULT_SIMILARITY_THRESHOLD
     )
     ci_raw = toml_data.get("ci_command")
-    ci_cmd = shlex.split(ci_raw) if isinstance(ci_raw, str) else ci_raw
+    ci_cmd = parse_ci_command(ci_raw) if ci_raw is not None else None
     repair_codes = list(toml_data.get("consistency_repair_code", []))
     child_review_gate = _resolve_child_review_gate(args, toml_data)
 

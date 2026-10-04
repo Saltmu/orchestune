@@ -72,16 +72,18 @@ orchestune setup
 4. **追跡と統合**: 各サブタスクのIssue、ブランチ、プルリクエスト、CI結果を追跡しながら、Orchestuneが依存タスクと統合を調整します。
 
 ```bash
-# orchestuneスキルが各段階であなたの代わりに実行するコマンド:
+# 1. 設定ファイルの作成・編集（対話式ウィザード）
+orchestune config init
+# 既存設定の対話式編集: orchestune config edit
 
-# 1. 計画のDAG検証
+# 2. 計画のDAG検証
 orchestune dag --plan decomposition_plan.md
 
-# 2. 承認した計画からGitHub Issueをプレビューし、その後起票する
+# 3. 承認した計画からGitHub Issueをプレビューし、その後起票する
 orchestune provision --plan decomposition_plan.md --no-apply
 orchestune provision --plan decomposition_plan.md
 
-# 3. ディスパッチャーの起動（ドライラン、その後実行）
+# 4. ディスパッチャーの起動（ドライラン、その後実行）
 orchestune dispatch --no-apply
 orchestune dispatch
 ```

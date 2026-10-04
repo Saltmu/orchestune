@@ -4,7 +4,10 @@ version = "0.5.0"
 description = "Multi-agent implementation orchestrator (DAG construction, dispatch cycles, self-healing)"
 authors = [{ name = "Saltmu" }]
 requires-python = ">=3.12,<4.0"
-dependencies = ["pyyaml>=6.0.3,<7.0.0"]
+dependencies = [
+    "pyyaml>=6.0.3,<7.0.0",
+    "tomlkit>=0.13.0,<1.0.0",
+]
 
 [project.scripts]
 orchestune = "orchestune.cli:main"

@@ -73,16 +73,18 @@ In practice, you don't type the commands below yourself. You describe the task t
 4. **Trace and integrate**: Each subtask is tracked through its Issue, branch, pull request, and CI result while Orchestune coordinates dependent work and integration.
 
 ```bash
-# What the orchestune skill runs on your behalf at each stage:
+# 1. Create or edit configuration (interactive wizard)
+orchestune config init
+# Edit existing configuration: orchestune config edit
 
-# 1. Validate the decomposition plan's DAG
+# 2. Validate the decomposition plan's DAG
 orchestune dag --plan decomposition_plan.md
 
-# 2. Preview, then create, the GitHub Issues from the approved plan
+# 3. Preview, then create, the GitHub Issues from the approved plan
 orchestune provision --plan decomposition_plan.md --no-apply
 orchestune provision --plan decomposition_plan.md
 
-# 3. Start the dispatcher (dry-run, then execute)
+# 4. Start the dispatcher (dry-run, then execute)
 orchestune dispatch --no-apply
 orchestune dispatch
 ```
