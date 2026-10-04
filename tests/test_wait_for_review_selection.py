@@ -321,11 +321,14 @@ def test_round_two_requires_body_file_before_trigger():
         trigger.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "extra_args", [[], ["--body-file", "missing-reply.md", "--no-post"]]
-)
+@pytest.mark.parametrize("extra_args", [[], ["--no-post"], ["--body-file", "reply.md"]])
 def test_offline_review_state_never_waits_posts_or_calls_gh(tmp_path, extra_args):
-    """MCP 経路: オフライン評価は投稿・待機・gh を行わず、ラウンド/SHA 証明も作らない (#1206)。"""
+    """MCP 経路: オフライン評価は投稿・待機・gh を行わず、旧形式はラウンド/SHA を証明しない (#1206/#1210)。
+
+    旧形式 snapshot に対する --body-file は再レビュー検証の証拠にならないため Exit 30 になる。
+    """
+    (tmp_path / "reply.md").write_text("no judgments here", encoding="utf-8")
+    extra_args = [str(tmp_path / a) if a == "reply.md" else a for a in extra_args]
     state_file = tmp_path / "review-state.json"
     state_file.write_text(
         json.dumps(
@@ -375,3 +378,8 @@ def test_offline_review_state_never_waits_posts_or_calls_gh(tmp_path, extra_args
     result = json.loads(output.read_text(encoding="utf-8"))
     for key in ("round", "trigger_id", "requested_head_sha", "current_head_sha"):
         assert result[key] is None, key
+    if any(arg.endswith("reply.md") for arg in extra_args):
+        assert result["acquisition_status"] == "unavailable"
+        assert "snapshot_version" in result["reason"]
+    else:
+        assert any("legacy" in warning for warning in result["evidence_warnings"])

@@ -533,3 +533,83 @@ def test_marked_reply_changes_do_not_break_pending_resume(
     resumed = complete_task(request, forge=forge)
     assert resumed.success, resumed.failure
     assert len(forge.comments) == 1
+
+
+# --- #1210: completion shares the strict trigger/round restoration -------------
+
+
+def _trigger(id_, round_num, at, bot="claude", head=HEAD):
+    return dict(
+        id=id_,
+        body="\n".join(
+            (
+                f"@{bot} review",
+                review_trigger_marker(bot),
+                review_round_marker(round_num),
+                review_head_marker(head),
+            )
+        ),
+        created_at=at,
+        user={"login": "worker"},
+    )
+
+
+def _rejects(evidence, reason=CompleteFailureReason.REVIEW_EVIDENCE_INVALID):
+    with pytest.raises(CompletionJournalError) as exc:
+        verify(evidence)
+    assert exc.value.reason == reason
+    return str(exc.value)
+
+
+def test_two_triggers_for_the_latest_round_are_rejected_not_chosen(evidence):
+    _, forge, _, _ = evidence
+    forge.comments.append(_trigger(9, 1, "2026-10-03T00:00:30Z"))
+    assert "ambiguous" in _rejects(evidence)
+
+
+def test_one_trigger_id_with_two_bodies_is_rejected(evidence):
+    _, forge, _, _ = evidence
+    forge.comments.append(_trigger(1, 2, "2026-10-03T00:05:00Z"))
+    assert "different content" in _rejects(evidence)
+
+
+def test_round_order_contradicting_creation_time_is_rejected(evidence):
+    _, forge, _, _ = evidence
+    forge.comments.append(_trigger(9, 2, "2026-10-02T00:00:00Z"))
+    assert "contradicts" in _rejects(evidence)
+
+
+def test_trigger_markers_inside_a_code_fence_are_not_a_trigger(evidence):
+    _, forge, _, _ = evidence
+    forge.comments[0]["body"] = "```\n" + forge.comments[0]["body"] + "\n```"
+    assert "trigger is missing" in _rejects(evidence)
+
+
+def test_a_newer_round_without_a_result_is_not_final_even_with_old_review(evidence):
+    _, forge, _, _ = evidence
+    forge.comments.append(_trigger(9, 2, "2026-10-03T00:10:00Z"))
+    assert "not final" in _rejects(evidence)
+
+
+def test_review_id_equal_to_a_trigger_id_is_still_review_evidence(evidence):
+    request, forge, pr, judgments = evidence
+    forge.reviews = [
+        dict(
+            id=1,  # same number as the trigger comment, a different id namespace
+            body="Review body",
+            submitted_at="2026-10-03T00:02:00Z",
+            commit_id=HEAD,
+            user={"login": "claude[bot]"},
+        )
+    ]
+    assert "review:1" in _rejects(evidence)
+    judgments["findings"].append({**judgments["findings"][0], "source": "review:1"})
+    rewrite(evidence)
+    summary = verify(evidence)
+    assert summary.review_target_sha_source == "review_commit"
+
+
+def test_the_pr_wide_latest_trigger_decides_the_reviewer(evidence):
+    _, forge, _, _ = evidence
+    forge.comments.append(_trigger(9, 2, "2026-10-03T00:10:00Z", bot="codex"))
+    assert "differs from --reviewer" in _rejects(evidence)
