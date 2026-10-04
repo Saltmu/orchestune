@@ -13,7 +13,7 @@ from orchestune.config_wizard.document import (
     ConfigSnapshot,
     verify_snapshot_consistency,
 )
-from orchestune.infra.process_utils import FileLock
+from orchestune.infra.process_utils import FileLock, FileLockContentionError
 
 
 class ConfigConflictError(Exception):
@@ -72,6 +72,7 @@ def _commit_candidate(
 ) -> bool:
     if mode == "init":
         try:
+            # os.link provides POSIX-level atomic exclusivity preventing overwrite
             os.link(temp_path, target_path)
             return True
         except FileExistsError as exc:
@@ -79,6 +80,8 @@ def _commit_candidate(
                 f"File '{target_path}' was created by another process just before commit"
             ) from exc
         except OSError:
+            # Fallback for filesystems without hardlinks (e.g. FAT, cross-device):
+            # Best-effort exclusivity check before os.replace under wizard lock.
             if target_path.exists():
                 raise ConfigConflictError(
                     f"File '{target_path}' already exists; init cannot overwrite"
@@ -181,7 +184,12 @@ def save_config_document(
     """Safely persist configuration bytes with locking, backup, and conflict detection."""
     project_dir = target_path.parent
     lock = _acquire_config_lock(project_dir)
-    with lock:
-        return _persist_under_lock(
-            target_path, project_dir, snapshot, candidate_bytes, mode
-        )
+    try:
+        with lock:
+            return _persist_under_lock(
+                target_path, project_dir, snapshot, candidate_bytes, mode
+            )
+    except FileLockContentionError as exc:
+        raise ConfigStorageError(
+            f"設定保存のロック取得がタイムアウトしました。別のプロセスが実行中か確認してください: {exc}"
+        ) from exc

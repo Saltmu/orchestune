@@ -7,6 +7,7 @@ import pytest
 from orchestune.config_wizard.document import ConfigDocument
 from orchestune.config_wizard.storage import (
     ConfigConflictError,
+    ConfigStorageError,
     save_config_document,
 )
 
@@ -96,3 +97,20 @@ class TestConfigStorage:
             save_config_document(
                 doc.target_path, doc.snapshot, new_content, mode="init"
             )
+
+    def test_save_fails_with_storage_error_on_lock_contention(
+        self, tmp_path: Path, monkeypatch
+    ):
+        doc = ConfigDocument.load(tmp_path, mode="init")
+        doc.set_value("ci-command", "pytest")
+        content = doc.to_toml_string().encode("utf-8")
+
+        from orchestune.infra.process_utils import FileLock, FileLockContentionError
+
+        def mock_enter(self):
+            raise FileLockContentionError("simulated timeout")
+
+        monkeypatch.setattr(FileLock, "__enter__", mock_enter)
+
+        with pytest.raises(ConfigStorageError, match="ロック取得がタイムアウト"):
+            save_config_document(doc.target_path, doc.snapshot, content, mode="init")
