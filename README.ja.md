@@ -48,17 +48,23 @@ DAG検証も、GitHubからの状態自己修復も、人間の判断を2点に�
 Python 3.12以上、uv、GitHub CLIがインストールされていることを確認してください。
 
 ```bash
-# グローバルにインストール（推奨・pipx使用）
-pipx install git+https://github.com/Saltmu/orchestune.git
+# uv toolによるCLIのグローバルインストール（推奨）
+uv tool install "orchestune==<RELEASE_VERSION>"
+# またはGitリポジトリから最新を導入:
+uv tool install "git+https://github.com/Saltmu/orchestune.git"
 ```
 
-インストール後、以下のコマンドで各種AIアシスタント（Claude Code, Codex CLI, Antigravity）へのスキル登録を自動で行うことができます。
+インストール後、以下のコマンドで各種AIアシスタント（Claude Code, Codex CLI, Antigravity IDE, Antigravity CLI）へのスキル配布を行います。
 
 ```bash
-orchestune setup
+# プロジェクトへインストール（チーム共有推奨）:
+orchestune skills install --target all --scope project
+
+# またはユーザー設定ディレクトリへグローバルにインストール:
+orchestune skills install --target all --scope user
 ```
 
-👉 プロジェクト開発依存への追加や手動セットアップ、Cloud Routine の設定方法などの詳細は [セットアップガイド](docs/ja/setup.md) を参照してください。
+👉 状態確認・診断（`orchestune skills doctor`）、更新・削除、プロジェクト開発依存への追加などの詳細は [セットアップガイド](docs/ja/setup.md) を参照してください。
 
 ---
 

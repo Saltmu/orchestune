@@ -4,11 +4,7 @@ Create one repository-local, Git-ignored session directory before writing any
 plan or CLI body file:
 
 ```bash
-# Linux / macOS
-./scripts/create-session-dir.sh <artifact> <issue-or-task>
-
-# Windows PowerShell
-.\scripts\create-session-dir.ps1 <artifact> <issue-or-task>
+orchestune scratch create <artifact> <issue-or-task>
 ```
 
 This generates `.orchestune/tmp/<artifact>-<issue-or-task>-<UTC timestamp>-<random>/`

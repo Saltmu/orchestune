@@ -64,11 +64,14 @@ To run `orchestune-dag` / `orchestune-dispatch` via an agent inside a separate p
 #### Step A: Install the CLI
 
 ```bash
-# Install globally using pipx (recommended)
-pipx install git+https://github.com/Saltmu/orchestune.git
+# Install globally using uv tool (recommended)
+uv tool install "orchestune==<RELEASE_VERSION>"
+
+# Or using pipx
+pipx install "orchestune==<RELEASE_VERSION>"
 
 # Or add as a development dependency of the target project (uv)
-uv add --dev git+https://github.com/Saltmu/orchestune.git
+uv add --dev orchestune
 ```
 
 This makes the core `orchestune` command, as well as `orchestune-dag` and `orchestune-dispatch`, executable directly from that project's directory.
@@ -80,53 +83,74 @@ Orchestune natively supports Windows NT/10/11 environments:
 
 ---
 
-## 2. Registering Skills with AI Assistants
+## 2. Installing and Managing Skills for AI Assistants
 
-The AI agent needs to know that the `orchestune`, `orchestune-provision`, `orchestune-dispatch`, and `local-ci-developer` skills exist. Choose one of the following methods to register them:
+The AI agent needs to know that the `orchestune`, `orchestune-provision`, and `orchestune-dispatch` skills exist. Orchestune provides a dedicated installer (`orchestune skills`) to distribute and manage skills for supported coding agents:
+- **Codex CLI**: `.agents/skills/` (project) or `~/.agents/skills/` (user)
+- **Antigravity IDE**: `.agents/skills/` (project) or `~/.gemini/config/skills/` (user)
+- **Antigravity CLI**: `.agents/skills/` (project) or `~/.gemini/antigravity-cli/skills/` (user)
+- **Claude Code**: `.claude/skills/` (project) or `~/.claude/skills/` (user)
 
-### Method A: Automatic Setup (Recommended)
-Run the setup command to automatically create symlinks in the global configuration directories of all supported AI assistants (Claude Code, Codex CLI, Antigravity). `local-ci-developer` is excluded from automatic linking:
+> [!NOTE]
+> Codex, Antigravity IDE, and Antigravity CLI share the canonical `.agents/skills/` directory at project scope. Orchestune automatically deduplicates targets to prevent redundant copies.
+
+### Installing Skills (`orchestune skills install`)
 
 ```bash
-orchestune setup
+# Preview changes without modifying disk
+orchestune skills install --target all --scope project --dry-run
+
+# Install to project directory (recommended for team sharing via Git)
+orchestune skills install --target all --scope project
+
+# Install to user configuration globally
+orchestune skills install --target all --scope user
+
+# Install for a specific assistant only
+orchestune skills install --target codex --scope project
 ```
+
+Project-scoped skills (`.agents/skills/` and `.claude/skills/`) can be committed to Git so all team members have access to the same skills. Local transaction state and lock files are maintained under `.orchestune-installer/` and should remain gitignored.
 
 #### `--with-workflow-skill`: Deploying a generic workflow skill project-locally
 
-If you need to create the agent discipline file required by Prerequisite (a) above from scratch, run setup with the `--with-workflow-skill` option:
+If you need an agent discipline workflow for a non-Python repository or want a starting point for project-specific rules:
 
 ```bash
-orchestune setup --with-workflow-skill
+orchestune skills install --target all --scope project --with-workflow-skill
 ```
 
-- This **copies** (not symlinks) `skills/workflow-template/SKILL.md` — a template derived from `local-ci-developer` with its Python/uv-specific commands generalized — into each detected assistant's **project-local** skill directory (`.claude/skills/`, `.codex/skills/`, `.gemini/config/skills/`). It is a real copy because the source only exists inside the Orchestune package, not inside the target project.
-- Like `local-ci-developer`, `workflow-template` is excluded from automatic global linking, since this discipline should be project-specific. Running `orchestune setup` without the flag is unaffected.
-- After it's copied, replace the `<TEST_COMMAND>` / `<FORMAT_LINT_COMMAND>` / `<TYPE_CHECK_COMMAND>` / `<CI_ENTRYPOINT>` placeholders in the template with your project's actual commands (`<CI_ENTRYPOINT>` should match the `ci_command` setting from Prerequisite (c) above). Feel free to rename the folder or skill as you like.
+This installs `workflow-template` into project-local skills. Note that `workflow-template` cannot be installed globally (`--scope user`) since workflow rules are inherently project-specific.
 
-### Method B: Manual Setup (Per Project or Global)
+### Managing and Inspecting Skills
 
-* **`.agents/skills.json`** (For Antigravity):
-  In the target project, add an entry to `.agents/skills.json` pointing to this repository's `skills/` directory:
-  ```json
-  {
-    "entries": [
-      { "path": "../path/to/cloned/orchestune/skills" }
-    ]
-  }
-  ```
+```bash
+# Check status of installed skills across all targets
+orchestune skills status --target all --scope project
 
-* **Project-local Skills** (For Claude Code and Codex CLI):
-  Both agents natively auto-discover skills placed under `.claude/skills/<name>/` and `.codex/skills/<name>/`. Symlink or copy the skill folders in your target project:
-  ```bash
-  ln -s ../path/to/cloned/orchestune/skills/orchestune .claude/skills/orchestune
-  ln -s ../path/to/cloned/orchestune/skills/orchestune .codex/skills/orchestune
-  ```
+# Update skills when upgrading Orchestune package version
+orchestune skills update --target all --scope project
 
-* **Global Skill Directories**:
-  If you want the skills to be available globally across all projects, place or symlink the skill folder under the agent's global skills directory:
-  * **Claude Code**: `~/.claude/skills/orchestune/`
-  * **Codex CLI**: `~/.codex/skills/orchestune/`
-  * **Antigravity**: `~/.gemini/config/skills/orchestune/`
+# Uninstall skills
+orchestune skills uninstall --target all --scope project
+
+# Run system and configuration diagnostics
+orchestune skills doctor --target all --scope project --offline
+```
+
+> [!TIP]
+> **Migrating legacy symlinks/copies**: If skills were previously linked or copied using the older `orchestune setup` command or manual symlinks, run `orchestune skills install --target all --scope user --migrate-legacy` to safely upgrade them into managed skill directories. The legacy `orchestune setup` command is deprecated and delegates directly to `orchestune skills install`.
+
+### Creating Scratch Directories (`orchestune scratch create`)
+
+When subagents or skills create temporary planning, decomposition, or review artifacts, use the `orchestune scratch` command:
+
+```bash
+# Creates .orchestune/tmp/<artifact>-<issue-or-task>-<timestamp>-<uuid>/ and prints the path
+orchestune scratch create plan 1191
+```
+
+This command verifies that `.orchestune/tmp/` is present in `.gitignore`, preventing accidental commits of temporary agent drafts.
 
 ---
 

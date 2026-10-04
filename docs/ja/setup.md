@@ -64,11 +64,14 @@ OrchestuneはPython 3.12以上、uv、およびGitHub CLI（`gh auth status` で
 #### ステップA: CLIのインストール
 
 ```bash
-# グローバルにインストール（推奨・pipx使用）
-pipx install git+https://github.com/Saltmu/orchestune.git
+# グローバルにインストール（推奨・uv tool使用）
+uv tool install "orchestune==<RELEASE_VERSION>"
+
+# またはpipxを使用
+pipx install "orchestune==<RELEASE_VERSION>"
 
 # または導入先プロジェクトの開発依存として追加（uv）
-uv add --dev git+https://github.com/Saltmu/orchestune.git
+uv add --dev orchestune
 ```
 
 これにより、導入先プロジェクトのディレクトリから、統一された `orchestune` コマンド、および個別の `orchestune-dag` / `orchestune-dispatch` コマンドを実行できるようになります。
@@ -80,53 +83,74 @@ OrchestuneはWindows NT/10/11環境をネイティブサポートしています
 
 ---
 
-## 2. エージェントへのスキル定義の登録
+## 2. エージェントへのスキル配布と管理
 
-AIエージェントに `orchestune` / `orchestune-provision` / `orchestune-dispatch` / `local-ci-developer` の各スキルの存在を認識させる必要があります。以下のいずれかの方法を選んでください。
+AIエージェントに `orchestune` / `orchestune-provision` / `orchestune-dispatch` の各スキルの存在を認識させる必要があります。Orchestuneはサポートされる各AIコーディングエージェント向けに専用のインストーラー（`orchestune skills`）を提供しています:
+- **Codex CLI**: `.agents/skills/`（プロジェクト）または `~/.agents/skills/`（ユーザー）
+- **Antigravity IDE**: `.agents/skills/`（プロジェクト）または `~/.gemini/config/skills/`（ユーザー）
+- **Antigravity CLI**: `.agents/skills/`（プロジェクト）または `~/.gemini/antigravity-cli/skills/`（ユーザー）
+- **Claude Code**: `.claude/skills/`（プロジェクト）または `~/.claude/skills/`（ユーザー）
 
-### 方法A: 自動セットアップ（推奨）
-セットアップコマンドを実行するだけで、サポートされているすべてのAIアシスタント（Claude Code、Codex CLI、Antigravity）のグローバル設定ディレクトリに対して、自動的にシンボリックリンクを作成します。`local-ci-developer` は自動リンクの対象外です。
+> [!NOTE]
+> Codex、Antigravity IDE、Antigravity CLI はプロジェクトスコープにおいて `.agents/skills/` ディレクトリを共有します。Orchestune は同一物理ディレクトリへの重複配置を自動で集約します。
+
+### スキルのインストール (`orchestune skills install`)
 
 ```bash
-orchestune setup
+# 変更内容を事前に確認（書き込みなし）
+orchestune skills install --target all --scope project --dry-run
+
+# プロジェクトへインストール（Gitでのチーム共有推奨）
+orchestune skills install --target all --scope project
+
+# ユーザー設定ディレクトリへグローバルにインストール
+orchestune skills install --target all --scope user
+
+# 特定のアシスタントのみを対象にインストール
+orchestune skills install --target codex --scope project
 ```
+
+プロジェクトスコープのスキル（`.agents/skills/` および `.claude/skills/`）は、チーム全体で共有するためにGitへコミットできます。ローカルのトランザクション状態やロックファイルは `.orchestune-installer/` 配下で管理され、`.gitignore` に含めて除外します。
 
 #### `--with-workflow-skill`: 汎用ワークフロースキルのプロジェクトローカル配置
 
-上記の「0. 導入要件」(a)にある、エージェント規律を定義したファイルをゼロから用意したい場合は、`--with-workflow-skill` オプションを付けて実行します。
+Python以外のリポジトリや、プロジェクト固有のエージェント規律をゼロから作成したい場合:
 
 ```bash
-orchestune setup --with-workflow-skill
+orchestune skills install --target all --scope project --with-workflow-skill
 ```
 
-- `skills/workflow-template/SKILL.md`（`local-ci-developer` からPython/uv固有のコマンドを一般化したテンプレート）を、検出されたアシスタントごとに**プロジェクトローカル**な `.claude/skills/`・`.codex/skills/`・`.gemini/config/skills/` 配下へ**実体コピー**します（シンボリックリンクではありません。コピー元はOrchestuneパッケージ内にしか存在せず、対象プロジェクト内には存在しないため）。
-- `workflow-template` は `local-ci-developer` と同様、この規律がプロジェクト固有であるべきという理由からグローバル自動リンクの対象外です。オプションを付けない通常の `orchestune setup` の挙動には影響しません。
-- 配置後、テンプレート内の `<TEST_COMMAND>` / `<FORMAT_LINT_COMMAND>` / `<TYPE_CHECK_COMMAND>` / `<CI_ENTRYPOINT>` プレースホルダーを、対象プロジェクトの実際のコマンドに置き換えてから使用してください（`<CI_ENTRYPOINT>` は上記(c)の `ci_command` 設定と一致させることを推奨します）。フォルダ名・スキル名も自由に変更できます。
+これにより、`workflow-template` がプロジェクトのスキルディレクトリへ実体コピーされます。規律ファイルはプロジェクト固有であるため、`workflow-template` をグローバル（`--scope user`）へ配置することはできません。
 
-### 方法B: 手動セットアップ（プロジェクト単位またはグローバル）
+### スキルの管理と診断
 
-* **`.agents/skills.json`** （Antigravity向け）:
-  導入先プロジェクトの `.agents/skills.json` に、本リポジトリの `skills/` ディレクトリへのパスを指定します：
-  ```json
-  {
-    "entries": [
-      { "path": "../path/to/cloned/orchestune/skills" }
-    ]
-  }
-  ```
+```bash
+# インストール済みスキルの状態確認
+orchestune skills status --target all --scope project
 
-* **プロジェクトローカルスキル** （Claude Code、Codex CLI向け）:
-  両エージェントとも、`.claude/skills/<name>/`・`.codex/skills/<name>/` 配下に置かれたスキルを自動検出します。導入先プロジェクトで、スキルフォルダをシンボリックリンクまたはコピーしてください：
-  ```bash
-  ln -s ../path/to/cloned/orchestune/skills/orchestune .claude/skills/orchestune
-  ln -s ../path/to/cloned/orchestune/skills/orchestune .codex/skills/orchestune
-  ```
+# Orchestuneパッケージ更新後のスキル同期
+orchestune skills update --target all --scope project
 
-* **グローバルスキルディレクトリ**:
-  プロジェクトごとの設定なしにどこでも使えるようにしたい場合は、スキルフォルダをエージェントのグローバルスキルディレクトリに配置（またはシンボリックリンク作成）します：
-  * **Claude Code**: `~/.claude/skills/orchestune/`
-  * **Codex CLI**: `~/.codex/skills/orchestune/`
-  * **Antigravity**: `~/.gemini/config/skills/orchestune/`
+# スキルのアンインストール
+orchestune skills uninstall --target all --scope project
+
+# システム環境と設定の自己診断
+orchestune skills doctor --target all --scope project --offline
+```
+
+> [!TIP]
+> **旧セットアップからの移行**: 以前の `orchestune setup` コマンドや手動シンボリックリンクで配置していた場合は、`orchestune skills install --target all --scope user --migrate-legacy` を実行することで、管理された新形式へ安全に移行できます。旧 `orchestune setup` コマンドは非推奨となり、内部で `orchestune skills install` へ委譲されます。
+
+### 作業用セッションディレクトリの作成 (`orchestune scratch create`)
+
+サブエージェントやスキルが一時的な計画・分解・レビュー成果物を作成する際は、`orchestune scratch` コマンドを使用します:
+
+```bash
+# .orchestune/tmp/<artifact>-<issue-or-task>-<timestamp>-<uuid>/ を作成してパスを出力
+orchestune scratch create plan 1191
+```
+
+このコマンドは対象プロジェクトの `.gitignore` に `.orchestune/tmp/` が指定されていることを確認し、一時ファイルの誤コミットを未然に防ぎます。
 
 ---
 

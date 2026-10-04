@@ -14,9 +14,9 @@ test, commit, or push from the primary checkout.
 ## 4. Baseline Recording (Baseline Record)
 - **Prerequisites**: Confirm that the worktree environment is ready before recording the baseline (e.g. check lockfile consistency and execute `<INSTALL_COMMAND>`).
 - Record the baseline status on unmodified code.
-- **When using Orchestune / dedicated baseline scripts**:
+- **When using dedicated baseline scripts**:
   ```bash
-  uv run python scripts/ci_baseline.py record
+  <BASELINE_RECORD_COMMAND>
   ```
 - **Fallback procedure (when no baseline script exists)**:
   Run `<TEST_COMMAND>` (and any bloat inspection command) on unmodified code and note existing test failures or bloat warnings (failures, flaky tests, or pre-existing bloat warnings unrelated to this issue) in a temporary note. Use this record in Step 9 to distinguish new regressions and newly introduced bloat.
@@ -45,7 +45,7 @@ test, commit, or push from the primary checkout.
   ```bash
   <CI_ENTRYPOINT>
   ```
-- In script-supported environments, run `uv run python scripts/ci_baseline.py check` to evaluate results against the recorded baseline.
+- In environments with baseline verification, run `<BASELINE_CHECK_COMMAND>` to evaluate results against the recorded baseline.
 
 ### Error Resolution Procedures
 1. **Format/Lint**: Run `<FORMAT_LINT_COMMAND>` and fix any unresolved errors.

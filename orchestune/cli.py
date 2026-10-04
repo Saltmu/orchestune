@@ -53,6 +53,14 @@ def _dispatch_command(cmd: str) -> None:
         from orchestune.config_wizard.cli import main as config_main
 
         sys.exit(config_main())
+    elif cmd == "skills":
+        from orchestune.installer.cli import main as skills_main
+
+        sys.exit(skills_main())
+    elif cmd == "scratch":
+        from orchestune.scratch.cli import main as scratch_main
+
+        sys.exit(scratch_main())
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
@@ -76,6 +84,8 @@ def main() -> None:
             "  gc        Release handoff-ready task reservations (--no-apply to preview)"
         )
         print("  config    Create or edit orchestune.toml interactively")
+        print("  skills    Install and manage Orchestune skills for AI assistants")
+        print("  scratch   Create scratch session directories for task artifacts")
         sys.exit(1)
 
     cmd = sys.argv[1]

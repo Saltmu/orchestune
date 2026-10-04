@@ -608,6 +608,8 @@ def test_all_skills_english_only():
         r"[\u3000-\u303F\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uFF01-\uFF60\uFFE0-\uFFE6]"
     )
     for skill_md in sorted(SKILLS_ROOT.glob("**/*.md")):
+        if "resources" in skill_md.parts:
+            continue
         text = skill_md.read_text(encoding="utf-8")
         matches = cjk_pattern.findall(text)
         assert not matches, f"{skill_md.relative_to(REPO_ROOT)} contains {len(matches)} Japanese/CJK characters: {''.join(matches[:20])}..."

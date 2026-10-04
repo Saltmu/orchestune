@@ -206,6 +206,41 @@ def test_cli_setup_without_flag_defaults_to_false():
     mock_setup_skills.assert_called_once_with(with_workflow_skill=False)
 
 
+def test_cli_delegates_to_skills_with_its_exit_code():
+    from orchestune.cli import main
+
+    with (
+        patch(
+            "sys.argv",
+            ["orchestune", "skills", "install", "--target", "codex", "--scope", "user"],
+        ),
+        patch(
+            "orchestune.installer.cli.main", autospec=True, return_value=0
+        ) as mock_skills_main,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 0
+    mock_skills_main.assert_called_once()
+
+
+def test_cli_delegates_to_scratch_with_its_exit_code():
+    from orchestune.cli import main
+
+    with (
+        patch("sys.argv", ["orchestune", "scratch", "create", "plan", "123"]),
+        patch(
+            "orchestune.scratch.cli.main", autospec=True, return_value=0
+        ) as mock_scratch_main,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 0
+    mock_scratch_main.assert_called_once()
+
+
 def test_cli_no_args_exits(capsys):
     from orchestune.cli import main
 
@@ -216,6 +251,8 @@ def test_cli_no_args_exits(capsys):
     captured = capsys.readouterr()
     assert "Usage: orchestune <command>" in captured.out
     assert "claim" in captured.out
+    assert "skills" in captured.out
+    assert "scratch" in captured.out
 
 
 def test_cli_invalid_command_exits(capsys):

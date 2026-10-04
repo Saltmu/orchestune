@@ -33,8 +33,8 @@ For documentation updates or typo fixes that do not alter code logic, **Steps 3â
 ## Session Scratch Directory
 
 Before writing any plan or CLI body file, generate the unique directory via
-`./scripts/create-session-dir.sh` (or `.\scripts\create-session-dir.ps1` on Windows)
-as described in [references/scratch.md](references/scratch.md). In the remainder of this skill,
+`orchestune scratch create <artifact> <issue-or-task>` as described in
+[references/scratch.md](references/scratch.md). In the remainder of this skill,
 `<session-dir>` means the unique directory defined there.
 
 ## Preflight & GitHub Backend Selection (Step 0)
