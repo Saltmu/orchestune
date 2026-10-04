@@ -69,6 +69,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "recovery.cli",
             "complete.cli",
             "cli",
+            "config_wizard.cli",
             "dag.cli",
             "dispatch.dispatcher",
             "dispatch.gc_cli",
@@ -106,10 +107,16 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator.types",
             "provisioning.flow",
             "replan.apply",
+            "config_wizard.wizard",
         }
     ),
     2: frozenset(
         {
+            "config_wizard",
+            "config_wizard.document",
+            "config_wizard.questions",
+            "config_wizard.storage",
+            "config_wizard.validation",
             "claim.ownership",
             "claim.preflight",
             "claim.workspace",
@@ -329,6 +336,7 @@ ALLOWED_L4_DEPENDENTS = {
     "monitor": frozenset({"cli"}),
     "provisioning.cli": frozenset({"cli"}),
     "replan.cli": frozenset({"cli"}),
+    "config_wizard.cli": frozenset({"cli"}),
 }
 EXPECTED_SUBPROCESS_COMMAND_MODULES = {
     "gh": {"forge.admin"},
@@ -678,7 +686,10 @@ def test_pyproject_uses_pep621_metadata_and_hatchling() -> None:
         ),
         "authors": [{"name": "Saltmu"}],
         "requires-python": ">=3.12,<4.0",
-        "dependencies": ["pyyaml>=6.0.3,<7.0.0"],
+        "dependencies": [
+            "pyyaml>=6.0.3,<7.0.0",
+            "tomlkit>=0.13.0,<1.0.0",
+        ],
         "scripts": {
             "orchestune": "orchestune.cli:main",
             "orchestune-dispatch": "orchestune.dispatch.dispatcher:main",

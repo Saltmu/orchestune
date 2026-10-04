@@ -208,14 +208,21 @@ class TestSyncDependenciesBounded:
     ) -> None:
         (tmp_path / "pyproject.toml").touch()
         runner = _RecordingRunner(ProcessOutcome.SUCCESS)
-        scope = ExecutionScope(cycle_seconds=15, cleanup_seconds=5, command_seconds=5)
+        now = 100.0
+        scope = ExecutionScope(
+            cycle_seconds=15,
+            cleanup_seconds=5,
+            command_seconds=5,
+            clock=lambda: now,
+        )
+        now += 3.0
 
         with activate_scope(scope):
             python_env.sync_dependencies(
                 tmp_path, {}, timeout_seconds=600, runner=runner
             )
 
-        assert runner.specs[0].timeout_seconds <= 15
+        assert runner.specs[0].timeout_seconds == 12
 
     @pytest.mark.parametrize(
         ("outcome", "fields", "expected"),

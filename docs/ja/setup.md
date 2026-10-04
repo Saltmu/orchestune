@@ -15,7 +15,33 @@ Orchestuneは「エージェントが標準開発ワークフローに従って�
 3. **(c) `ci_command` を自リポジトリのCIエントリーポイントに設定すること**
    Integratorが統合ブランチ上で実行するCIコマンドの既定値は `./scripts/local-ci.sh`（Orchestune自身のリポジトリ固有の値）です。導入先リポジトリのCIエントリーポイントが異なる場合（例: `make ci`、`npm run ci`）は、`orchestune dispatch --ci-command "..."` または `orchestune.toml`/`pyproject.toml` の `[tool.orchestune]` セクションで `ci_command` を明示的に設定してください。
 
-`orchestune.toml.example` をコピーして、プロジェクト固有の `orchestune.toml` を作成します。実ファイルはローカル設定や認証先を含み得るためGit管理外とし、共有する変更は設定例へ反映してください（別リポジトリへ導入する場合も `.gitignore` に追加してください）。
+### 設定ファイルの作成と編集
+
+プロジェクト固有の `orchestune.toml` は、対話式ウィザードまたは手動コピーで作成できます。実ファイルはローカル設定や認証先を含み得るためGit管理外とし、共有する変更は設定例へ反映してください（別リポジトリへ導入する場合も `.gitignore` に追加してください）。
+
+#### 方法A: 対話式設定ウィザード（推奨）
+
+```bash
+# 新規作成
+orchestune config init
+
+# 既存設定の対話式編集
+orchestune config edit
+
+# 対象ディレクトリを明示指定する場合
+orchestune config init --project-dir /path/to/project
+```
+
+- **初期値の引き継ぎと優先順位**:
+  - `orchestune.toml` がない場合、`pyproject.toml` の `[tool.orchestune]` から設定・コメント・テーブル構造を引き継いで新規作成します。
+  - 保存後、新しく作成された `orchestune.toml` は `pyproject.toml` 側の設定全体に優先します。
+- **安全な保存と競合防止**:
+  - 保存直前にウィザード協調ロック（`.orchestune/config-write.lock`）を取得し、読み込み時点のファイルスナップショットと照合します。対話中に他プロセスによってファイルが変更・作成された場合は競合（終了コード3）として保存を中止し、元ファイルを保護します。
+  - 既存ファイルを更新する際は、元の内容を `orchestune.toml.bak.<UTC timestamp>.<uuid>` として自動バックアップしてから、アトミックにファイルを置換します。
+- **取消操作**:
+  - プレビュー画面での取消、または対話中の `Ctrl+C`（終了コード130）や EOF では、設定ファイルおよびバックアップファイルは一切変更・作成されません。
+
+#### 方法B: 手動コピー
 
 ```bash
 cp orchestune.toml.example orchestune.toml

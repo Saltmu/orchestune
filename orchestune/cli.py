@@ -49,6 +49,10 @@ def _dispatch_command(cmd: str) -> None:
         from orchestune.dispatch.gc_cli import main as gc_main
 
         sys.exit(gc_main())
+    elif cmd == "config":
+        from orchestune.config_wizard.cli import main as config_main
+
+        sys.exit(config_main())
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)
@@ -71,6 +75,7 @@ def main() -> None:
         print(
             "  gc        Release handoff-ready task reservations (--no-apply to preview)"
         )
+        print("  config    Create or edit orchestune.toml interactively")
         sys.exit(1)
 
     cmd = sys.argv[1]

@@ -114,6 +114,22 @@ def test_cli_delegates_to_gc_with_its_exit_code():
     mock_gc_main.assert_called_once()
 
 
+def test_cli_delegates_to_config_with_its_exit_code():
+    from orchestune.cli import main
+
+    with (
+        patch("sys.argv", ["orchestune", "config", "init"]),
+        patch(
+            "orchestune.config_wizard.cli.main", autospec=True, return_value=0
+        ) as mock_config_main,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 0
+    mock_config_main.assert_called_once()
+
+
 def test_cli_delegates_to_status():
     from orchestune.cli import main
 
