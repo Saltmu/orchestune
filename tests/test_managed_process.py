@@ -200,6 +200,19 @@ class TestExecutionScope:
         now[0] = 90
         assert scope.stage_limit(30) == 10
 
+    def test_fractional_clock_does_not_inflate_remaining_budget(self) -> None:
+        now = [412.007]
+        scope = self._scope(now, command_seconds=1800)
+
+        assert scope.remaining() == 100
+        assert scope.stage_limit(1800) == 100
+        assert scope.command_timeout() == 100
+        now[0] += 25
+        assert scope.remaining() == 75
+        now[0] += 75
+        assert scope.remaining() == 0
+        assert scope.expired()
+
     def test_ordinary_work_is_refused_after_the_deadline(self) -> None:
         from orchestune.infra.execution_deadline import ExecutionDeadlineExceeded
 

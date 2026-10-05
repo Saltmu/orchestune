@@ -133,7 +133,7 @@ class ExecutionScope:
         return max(0.0, self.clock() - self.started_at)
 
     def remaining(self) -> float:
-        return max(0.0, self.deadline - self.clock())
+        return max(0.0, self.cycle_seconds - self.elapsed())
 
     def expired(self) -> bool:
         return self.remaining() <= 0.0
