@@ -34,6 +34,9 @@ from orchestune.integrator.timeout_policy import (
 
 CI_STAGE = "ci"
 ENVIRONMENT_STAGE = "environment"
+# #1248: Integrator CI verifies a temporary merge worktree; no Orchestune control or
+# completion-context variable of the parent process is a valid input for it.
+_ORCHESTUNE_ENV_PREFIX = "ORCHESTUNE_"
 
 
 @dataclass(frozen=True)
@@ -131,7 +134,11 @@ def _failure_message(process: ManagedProcessResult, subject: str) -> str:
 def _prepare_environment_vars(
     repository_root: Path, original_root: Path
 ) -> dict[str, str]:
-    env = os.environ.copy()
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(_ORCHESTUNE_ENV_PREFIX)
+    }
     env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
     return env
 
