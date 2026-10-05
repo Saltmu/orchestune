@@ -30,6 +30,7 @@ from orchestune.dispatch.doctor_models import (
     ExecutionMode,
     WorkflowFile,
 )
+from orchestune.dispatch.doctor_repository import run_repository_checks
 from orchestune.infra.git_cli import get_git_repository_paths
 from orchestune.infra.repository_config import find_and_load_config_file
 
@@ -237,6 +238,6 @@ def run_doctor(request: DoctorRequest) -> DoctorReport:
     if request.mode == "actions":
         diagnostics.append(check_workflow_readable(context.specified))
         diagnostics.extend(run_actions_checks(context))
-    # Later sub-tasks add: repository-wide checks here.
+    diagnostics.extend(run_repository_checks(context))
     diagnostics.extend(ownership_diagnostics(request.mode))
     return DoctorReport(request.mode, tuple(diagnostics))
