@@ -248,19 +248,111 @@ orchestune dispatch --dispatch-target auto
 
 ## 6. GitHub Actions上での定期実行とcross-runner直列化
 
-`orchestune dispatch` をGitHub Actionsのcron等で定期実行するワークフローを組む場合、`concurrency`グループの設定を強く推奨します。[統合パイプライン (architecture/integration.md)](architecture/integration.md#3-排他制御と設計前提)に記載の設計前提（#377）の通り、Integratorの排他は同一マシン上のファイルロック（`orchestune/infra/process_utils.py`の`file_lock`）でのみ成立しており、複数のCIランナー/マシンをまたいだ同時実行には効きません。`concurrency`グループを使えば、コード変更なしに、リポジトリ全体（＝全ランナー）で親Issue単位の直列化が得られます。
+[統合パイプライン (architecture/integration.md)](architecture/integration.md#3-排他制御と設計前提)に記載の通り、ローカルのファイルロックは複数のCIランナー/マシンをまたいだ同時実行を守りません。このため、`orchestune dispatch` を定期実行する場合は、次の単一実行者契約を運用で満たしてください。
+
+### 6.1 単一実行者契約（サポート範囲）
+
+標準サポート構成は「対象リポジトリにつき同時に1つの制御実行者」です。対象の親Issueがどれであっても、同じリポジトリを扱う全dispatch入口を同一の直列化スコープへ入れます。親単位の並行制御とリポジトリ横断（アカウント共通）のquota保護は対象外です。
+
+| 資源／処理 | 必須の運用条件 | 既存機構の保証範囲 |
+| --- | --- | --- |
+| 候補取得、依存・footprint判定、起動予約、ラベル／本文更新、起動・recovery・GC | 同一リポジトリの制御処理を直列化 | run-stateロックは同一ローカル資源のみ。別path・別clone・別マシンを保護しない |
+| not-needed review、Integrator、Semantic Reviewの起動／復旧、親ブランチ更新、子／親Issue完了 | dispatch開始から後処理終了まで直列化を維持 | 各ローカルロック／ref競合検出は局所的な防御 |
+| run-state、intent journal、review状態、worktree、実行中PID | 1つの運用所有者が継続して管理し、移管時に状態を引き継ぐ | 同時実行を止めるだけではローカル状態の消失・他マシンのPIDを復元できない |
+
+- 「単一実行者」は制御処理の契約です。選ばれた子タスクの開発エージェントは並列に動いてかまいません。通常の `claim`／`complete` も禁止しません（それぞれの既存の所有権・状態ロック契約に従います）。
+- 定期実行する `orchestune gc`（既定で予約解放を適用します）は、dispatchと同じ直列化スコープ（Actionsでは同じgroup）へ入れます。`orchestune recover --apply` などの一回限りの操作は、制御実行者の停止を確認してから行います。
+- 契約外の構成（独立した状態からの同時実行）では、起動予約の上書きや同一タスクの重複選出が起こり得ます。
+- run-stateロックは `execute_cycle` のサイクル部分だけを覆い、その後のnot-needed reviewのポーリング・Integrator（Semantic Reviewを含む）・親Issue完了・報告は覆いません。CLI全体の直列化は、単一所有者またはActionsのgroupという運用で担保します。ローカルロックがCLI全体を保護しているわけではありません。
+
+### 6.2 所有者の単位と移管
+
+- 所有者の単位は run-state の解決先です。同じcloneのlinked worktreeやサブディレクトリからの起動は、`claim/workspace.py:resolve_claim_workspace` によりprimary checkoutの `run_state.json`／`run_state.lock` へ解決されるため、同じ所有者として扱われます。dispatchに `--run-state` 引数はなく、配置は設定の `run_state_path`（相対パスはprimary checkout基準）で決まります。
+- 別clone、`run_state_path` に別の絶対パスを指定した構成、別マシンは独立した所有者です。共有ファイルシステム上のロックは保証しません。
+- ローカル運用では、1つの常駐所有者／スケジューラーからCLI全体（後処理を含む）を直列に起動します。サイクルロックがあることを理由に、複数CLIの同時起動をサポート構成にはしません。
+- 移管手順: (1) 新規tickを止める → (2) 旧制御プロセスと後処理の停止を確認 → (3) 実行中タスク・予約・worktreeを確認して状態を引き継ぐ → (4) 新しい所有者を開始。停止を確認できない場合は、新しい所有者を自動で開始しません。
+- ActionsとローカルCLI／Cloud Routine／外部cronの併用、forkなど別リポジトリのworkflowから同じ対象を更新する構成は、Actionsのgroupでは守れません（非保護）。
+
+### 6.3 GitHub Actionsでの構成要件
+
+標準のconcurrencyは次のとおりです（mapping形で、文字列の短縮形にはしません）。
 
 ```yaml
 concurrency:
-  # 必須の親Issue単位でグループ化する。
-  group: orchestune-integrate-${{ github.repository }}-${{ inputs.parent_issue }}
-  # 必須: trueにするとCI実行中のIntegratorが中断され、temp branchとworktreeが
-  # 残留する（`dispatch_gc`側の回収対象は増えるが、中断タイミング次第で親ブランチが
-  # 中途半端に進む可能性がある）。
+  group: orchestune-control-${{ github.repository }}
   cancel-in-progress: false
 ```
 
-> [!NOTE]
-> GitHub Actionsの`concurrency`は「実行中1本 + 待機1本」しか保持せず、3本目以降にトリガーされた待機中のrunはキャンセルされます。本設計ではこれは無害です。理由は、Dispatcherが毎サイクルGitHub（Issueラベル/PR/ブランチ）から状態を再構成する自己修復設計であるため、キューでキャンセルされたrunは次回のcron tickと状態的に等価だからです。「サイクルが失われて処理が止まる」ことを意味するものではなく、次のトリガーで同じ状態から処理が再開されます。
+- groupに親Issue番号・`github.workflow`・branch/ref・run ID・runner名を入れません。`schedule` と `workflow_dispatch` は同じgroupにします。複数のworkflowが同じ対象を制御する場合も同じgroupにします。jobごとの独立groupや親ごとのgroupは標準構成にしません。文字列短縮形（`concurrency: <group>`）は `cancel-in-progress` を明示できないため使いません。
+- workflowのトップレベルで、診断からdispatch・後処理の終了までを1つのrunに収めます。バックグラウンド化、子workflowへの非同期の引き渡し、matrixによる複製はしません。
+- 待機中のrunは新しいrunに置き換えられ得ます（GitHubの既定のqueue挙動で、FIFOや全tickの実行は保証されません）。実行中のrunは `cancel-in-progress: false` により中断されませんが、手動cancel・timeout・runner消失は防げません。異常終了後は既存のrecovery手順で状態を確認してください。
+- 待機runの置換を無害にするため、1つのrunが対象の全親を同じstepの中で順に処理します（親ごとにrunを分けると、親Aの待機runが親Bのrunに置き換えられて親Aが処理されない飢餓が起こります）。対象親は、`workflow_dispatch` の任意input `parent_issue` が指定されればその親だけ、それ以外（scheduleを含む）はリポジトリ変数 `ORCHESTUNE_PARENT_ISSUES`（空白区切りの正整数）の全親です。手動指定だけの親は、置き換えられると再実行されません。継続運用する親は変数へ登録し、完了したら外してください。
+- 制御jobには `timeout-minutes` を明示します。1 runで全親を処理し、各親でIntegratorのCIも走るため、「親の数 × Integratorのtimeout」に余裕を持たせてください。timeoutは後処理の途中で止まり得るので、超過時はrecovery手順で確認します。
+- Actions上の制御実行は外部target（`cloud-routine`／`codex-cloud`）だけにします。ローカルプロセスtarget（`local`／`claude-cli`／`agy-cli`／`codex-cli`／`auto`）は、ジョブ終了時にプロセスとworktreeが失われるため使いません。外部targetは資格情報が解決できないと警告だけでローカル起動へフォールバックするため、secretsから制御stepの `env:` へ渡します（`cloud-routine`: `ORCHESTUNE_ROUTINE_ID`／`ORCHESTUNE_ROUTINE_TOKEN`、`codex-cloud`: `ORCHESTUNE_CODEX_CLOUD_ENV`。IDとCodex環境は設定の `routine_id`／`codex_cloud_env` でもよいですが、tokenはenvだけです）。
+- `inputs`／`vars` はstepの `env:` で受け取り、`run:` 本文へ `${{ }}` で直接展開しません（script injection対策）。
 
-なお、本リポジトリ自身は現時点でOrchestuneのdispatchをGitHub Actionsのスケジュール実行では回しておらず（Cloud RoutineまたはローカルCLIへのディスパッチが前提）、上記は導入先リポジトリ向けの設定例です。本リポジトリで実際にcron定期実行を有効化する際は、上記`concurrency`設定を含むワークフローファイルを別途`.github/workflows/`へ追加してください。
+**runner上で失われるローカル状態**: 次の状態はキャッシュやartifactで永続化しません（`actions/cache` はキーが不変で後勝ちの書込ができず、所有権の継続を証明できないためです）。影響を許容できない場合は、永続するself-hosted runnerまたはローカルの単一所有者運用にしてください。
+
+| ローカル状態（既定パス） | 失われたときの影響 |
+| --- | --- |
+| `run_state.json`（`run_state_path`）の `task_reclaim_counts` | 回収回数がrunごとに0へ戻り、`--max-task-reclaims` がrunをまたいで効かない（上限超過で `status:blocked-human-review` になったタスクはラベルが残るので再投入されない） |
+| 同 `active_worktrees`／`completed_worktrees`／`launch_history` | 毎回GitHubのラベル・PR・ブランチ・親Issue本文から再構成する。起動枠の予約履歴は親Issue本文側にも保存される |
+| 同 `pending_lock_release_notices` | 未送信の外部ロック解除通知の再送が失われる |
+| 同 `completion_journal`／`completion_reservations`／`completion_replay_receipts`／`recovery_receipts` | 進行中のcompleteの再開用journalと、GCが照合する予約・replay・復旧のreceiptが失われる。正規のOutcome RecordはIssueコメントに残るが、journalやreceiptからの冪等な再開・再発行は保証されないため、異常終了後は `orchestune recover` と[状態復旧](architecture/state-recovery.md)の手順で確認する（個別の復元可否は確認できていない） |
+| `run_state.status-intents.json`（`run_state_path` と同じ場所） | 実行途中のstatus repairのintent journalが失われ、PLANNED／APPLIEDのintentを次サイクルで照合できない。ラベルの実状態はGitHubが真実なので再観測で再計画されるが、途中状態の突合せ記録は確認できていない |
+| `not_needed_review_state.json`（`not_needed_review_state_path`） | 検証依頼済みのnot-needed reviewのpending一覧が失われ、`not-needed-review:passed`／`failed` ラベルのポーリングによるクローズが行われなくなる。依頼済みレビューの追跡が切れるため、該当Issueは人手で確認する |
+| `events.jsonl`（`events_log_path`）・`logs/`（`log_dir`）・`.orchestune/reports/dispatch`（`report_dir`） | ログ・報告の履歴だけが失われる |
+| `worktrees/`（`worktree_root`）と `worktrees/.holds/` | ローカルtargetのworktreeとhold記録が失われる（外部targetに限定する理由） |
+
+#### 6.3.1 導入用workflow例
+
+[`examples/dispatch-single-executor.yml`](../examples/dispatch-single-executor.yml) は上記の要件を満たすworkflow例です（schedule＋手動入口、トップレベルの共通group、単一の同期job、親供給と同一stepでの親の直列処理、自己診断ゲート）。
+
+- 推奨コピー先は `.github/workflows/orchestune-dispatch.yml` です。`.github/workflows/` 直下であれば別名でも、ゲートが `GITHUB_WORKFLOW_REF` から自身のパスを導出するので動きます。dispatchの前に `orchestune doctor --execution-mode actions --workflow <自身のパス>` を1回実行し、診断のerrorや資格情報の空値（名前だけを出し値は出さない）があればdispatchを1件も開始せずjobを止めます。
+- 有効化の前に置き換える箇所は `ORCHESTUNE_VERSION`、cron、`timeout-minutes`、secret名、dispatchのtargetです（`codex-cloud` を使う場合は、target・資格情報のenv名・ゲートの確認を替え、別途Codex CLIをrunnerへ導入して認証します）。
+- 対象の親はリポジトリ変数 `ORCHESTUNE_PARENT_ISSUES`（空白区切りの正整数）へ登録し、完了した親は外します。手動の `parent_issue` input だけで指定した親は、待機runが置き換えられると再実行されません。不正値・重複はdispatchを開始せずrunが失敗し、空なら成功終了します。1つの親が失敗しても残りを処理し、最後に非0で終了します。
+- Actions外の実行（ローカルCLI・Cloud Routine・外部cron）はこの設定では止められません。併用しないか、所有者を移管してください（6.2参照）。
+- 本リポジトリ自身ではこの例を有効化していません。
+
+### 6.4 既存導入先の移行
+
+旧来の親単位group（`orchestune-integrate-…-${{ inputs.parent_issue }}`）は本契約では不合格です。group名の接頭辞も変わるため、移行中に旧workflowと新workflowが同じgroupに入ることはありません。次の順に切り替えてください。
+
+1. 旧workflowを無効化（`gh workflow disable` 等）し、新規tickを止める。
+2. 旧workflowの実行中・待機中のrunがないことを確認する。実行中のものは完了を待つ（cancelしない）。
+3. 旧workflowファイルを `.github/workflows/` から削除する。有効／無効はオフライン診断で判定できないため、非標準groupで直接dispatchを含むファイルが残っていると、新workflowの自己診断が `dispatch.repository.other_entrypoints` のerrorで止まる。
+4. 新workflowを追加し、`orchestune doctor` がerrorなしであることを確認してから有効化する。
+
+### 6.5 `orchestune doctor` による診断
+
+```bash
+orchestune doctor --execution-mode actions --workflow .github/workflows/orchestune-dispatch.yml
+orchestune doctor --execution-mode actions --workflow .github/workflows/orchestune-dispatch.yml --json
+orchestune doctor --execution-mode local
+```
+
+`--workflow` は複数回指定できます。診断は常にオフラインで、GitHub APIの呼出し・認証確認・状態変更を行いません。
+
+- 終了コード: `0` = 静的設定にerrorなし、`1` = 設定errorあり、`2` = 引数不正。warning／not_checkedだけなら `0` です。
+- **設定診断は運用所有権の保証ではありません。** 終了コード0でも、別マシン・別clone・Actions外の入口との競合がないことは確認されていません。
+- statusは `ok`／`warning`／`error`／`not_checked`（静的には判定できず、運用での確認が必要）です。
+
+| code | 内容（error／warning／not_checkedになる条件の要約） |
+| --- | --- |
+| `dispatch.config.readable` | `orchestune.toml`／`pyproject.toml` の読込・検証に失敗するとerror（targetや資格情報も決められない） |
+| `dispatch.workflow.readable` | 指定ファイルの欠落・読取不能・YAML不正・重複keyはerror |
+| `dispatch.actions.group` | トップレベルgroupが標準式 `orchestune-control-${{ github.repository }}` と一致すればok。文字列短縮形・欠落・空・親／workflow／ref／run等による分割・workflow間の不一致はerror |
+| `dispatch.actions.cancel` | 明示的な `cancel-in-progress: false` だけok。欠落・true・文字列・動的式はerror |
+| `dispatch.actions.parallelism` | 直接dispatchを実行するjobのmatrix、job-level concurrency、複数制御job、バックグラウンド起動はerror |
+| `dispatch.actions.entrypoint` | 同期dispatch入口を特定できればok。検出できなければnot_checked |
+| `dispatch.actions.target` | 外部target（`cloud-routine`／`codex-cloud`）はok、ローカルプロセスtargetはerror、静的に決定できなければnot_checked |
+| `dispatch.actions.credentials` | 外部targetに必要な資格情報が制御stepから見える `env:` で受け渡されていればok、欠落はerror |
+| `dispatch.local.serialization` | localモードでは常にnot_checked（単一所有者とCLI全体の直列実行を運用で確認） |
+| `dispatch.repository.other_entrypoints` | 指定外workflowの直接dispatch。標準groupならwarning、欠落・非標準groupはerror（旧workflowの残置を含む）。localモードでは直接dispatchを含むworkflowがあればwarning |
+| `dispatch.repository.other_control_entrypoints` | 適用モードの `orchestune gc`／`orchestune recover --apply` を検出。標準groupならok、それ以外はwarning |
+| `dispatch.external_ownership` | 別マシン・別clone・Actions外入口は常にnot_checked |
+| `dispatch.state.continuity` | 永続状態・worktree／PIDの引継ぎは常にnot_checked（6.3の表を確認） |
+
+直接dispatch入口として検出するのは、`orchestune dispatch`、`orchestune-dispatch`、`python -m orchestune.dispatch.dispatcher` です（`--no-apply` の入口は制御実行者に数えません）。コマンド名の変数展開、分割できない行、`uses:` のactionやreusable workflowの内部、呼び出し先のscriptは検出できないため、`not_checked` になります。その場合は実行入口と後処理までの保護区間を手動で確認してください。
+
+なお、本リポジトリ自身は現時点でOrchestuneのdispatchをGitHub Actionsのスケジュール実行では回しておらず（Cloud RoutineまたはローカルCLIへのディスパッチが前提）、上記は導入先リポジトリ向けの設定です。本リポジトリで実際にcron定期実行を有効化する際は、上記のconcurrency設定を含むworkflowファイルを別途`.github/workflows/`へ追加してください。

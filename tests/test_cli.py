@@ -278,3 +278,19 @@ def test_cli_prints_version(flag, capsys):
 
     captured = capsys.readouterr()
     assert captured.out == "orchestune 0.5.0\n"
+
+
+def test_cli_delegates_to_doctor_with_its_exit_code():
+    from orchestune.cli import main
+
+    with (
+        patch("sys.argv", ["orchestune", "doctor", "--execution-mode", "local"]),
+        patch(
+            "orchestune.dispatch.doctor_cli.main", autospec=True, return_value=1
+        ) as mock_doctor_main,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 1
+    mock_doctor_main.assert_called_once()

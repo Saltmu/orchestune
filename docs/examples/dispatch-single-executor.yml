@@ -1,0 +1,108 @@
+# Example: Orchestune dispatch as a single executor on GitHub Actions.
+# Recommended copy destination: .github/workflows/orchestune-dispatch.yml
+# (any file name directly under .github/workflows/ works; the self-diagnosis
+# step derives the path from GITHUB_WORKFLOW_REF).
+#
+# Replace before enabling: ORCHESTUNE_VERSION, the cron expression,
+# timeout-minutes, the secret names, and the dispatch target.
+# See docs/en/setup.md section 6 for the full contract.
+name: Orchestune dispatch (single executor)
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      parent_issue:
+        description: "Process only this parent Issue (positive integer). Empty: use ORCHESTUNE_PARENT_ISSUES."
+        required: false
+        type: string
+
+concurrency:
+  group: orchestune-control-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    # One run handles every parent and the Integrator CI runs per parent, so
+    # leave headroom for (number of parents x Integrator timeout).
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Orchestune
+        env:
+          # Replace with the release you adopt.
+          ORCHESTUNE_VERSION: "<RELEASE_VERSION>"
+        run: uv tool install "orchestune==${ORCHESTUNE_VERSION}"
+      - name: Self-diagnose before dispatch
+        # A failing diagnosis stops the job, so no dispatch is started.
+        # If routine_id is set in the config file, drop the ID check below.
+        env:
+          ORCHESTUNE_GH_TOKEN: ${{ secrets.ORCHESTUNE_GH_TOKEN }}
+          ORCHESTUNE_ROUTINE_ID: ${{ secrets.ORCHESTUNE_ROUTINE_ID }}
+          ORCHESTUNE_ROUTINE_TOKEN: ${{ secrets.ORCHESTUNE_ROUTINE_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref="${GITHUB_WORKFLOW_REF%"@${GITHUB_REF:-}"}"
+          self="${ref#"${GITHUB_REPOSITORY}/"}"
+          case "$self" in
+            .github/workflows/*.yml|.github/workflows/*.yaml) ;;
+            *) echo "::error::cannot derive this workflow path from GITHUB_WORKFLOW_REF"; exit 1 ;;
+          esac
+          case "${self#.github/workflows/}" in
+            */*) echo "::error::workflow must be directly under .github/workflows"; exit 1 ;;
+          esac
+          missing=0
+          for name in ORCHESTUNE_GH_TOKEN ORCHESTUNE_ROUTINE_ID ORCHESTUNE_ROUTINE_TOKEN; do
+            if [ -z "${!name:-}" ]; then echo "::error::required secret is empty: ${name}"; missing=1; fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          orchestune doctor --execution-mode actions --workflow "$self"
+      - name: Dispatch target parents sequentially
+        # GH_TOKEN needs write access to issues, pull requests and contents
+        # (including branch push). To use codex-cloud, change the target below
+        # and pass ORCHESTUNE_CODEX_CLOUD_ENV instead of the routine variables.
+        # codex-cloud also needs the separate Codex CLI installed and
+        # authenticated on the runner (add a step before this one), and the
+        # gate's credential check must be changed to the codex-cloud variables.
+        env:
+          GH_TOKEN: ${{ secrets.ORCHESTUNE_GH_TOKEN }}
+          ORCHESTUNE_ROUTINE_ID: ${{ secrets.ORCHESTUNE_ROUTINE_ID }}
+          ORCHESTUNE_ROUTINE_TOKEN: ${{ secrets.ORCHESTUNE_ROUTINE_TOKEN }}
+          INPUT_PARENT_ISSUE: ${{ inputs.parent_issue }}
+          VAR_PARENT_ISSUES: ${{ vars.ORCHESTUNE_PARENT_ISSUES }}
+        run: |
+          set -uo pipefail
+          set -f
+          if [ -n "${INPUT_PARENT_ISSUE:-}" ]; then raw="$INPUT_PARENT_ISSUE"; else raw="${VAR_PARENT_ISSUES:-}"; fi
+          parents=""
+          index=0
+          for token in $raw; do
+            index=$((index + 1))
+            case "$token" in
+              ''|*[!0-9]*|0*) echo "::error::parent issue #${index} is not a positive integer"; exit 1 ;;
+            esac
+            case " $parents " in
+              *" $token "*) echo "::error::duplicate parent issue: ${token}"; exit 1 ;;
+            esac
+            parents="$parents $token"
+          done
+          if [ -z "$parents" ]; then echo "No target parent issues."; exit 0; fi
+          failed=0
+          for parent in $parents; do
+            echo "::group::dispatch parent #${parent}"
+            if ! orchestune dispatch -p "$parent" --dispatch-target cloud-routine; then
+              echo "::error::dispatch failed for parent #${parent}"; failed=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$failed"
