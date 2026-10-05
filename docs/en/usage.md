@@ -524,7 +524,7 @@ Before the integrator updates `parent/issue-{N}` (the auto-merge in 4.2), it ver
 
 | Actor | Responsibility |
 | :--- | :--- |
-| Development skill (review loop, Step 11) | After the PR is created, requires an explicit reviewer selection (`claude` / `codex` / `skip`), runs the review on the child PR, and records an LLM judgment (`adopt` / `decline` / `already_addressed` / `needs_information` / `duplicate`) for every finding in a judgment table. |
+| Development skill (review loop, Step 11) | In interactive mode, requires an explicit reviewer selection (`claude` / `codex` / `skip`) right after the start request (before claim) and records it; after the PR is created, runs the review on the child PR with that selection without re-asking, and records an LLM judgment (`adopt` / `decline` / `already_addressed` / `needs_information` / `duplicate`) for every finding in a judgment table. |
 | `orchestune complete --issue <N> --pr <PR> --result done --reviewer <bot> --review-reply <file>` | Re-acquires the PR's review state and checks that the table covers every current finding, that none is `unresolved`, `needs_information` or a required `deferred`, and that the review target SHA equals the PR head and the local HEAD. It saves `verdict`, `reviewed_head_sha` and the judgment digest in the done Outcome Record. On any mismatch it rejects the completion (`review_evidence_invalid`, `review_head_mismatch` or `evidence_missing`) and posts nothing. `skip` is recorded as `verdict=skipped`, never as a pass. |
 | Integrator | Only verifies the saved evidence; it never runs a review. |
 

@@ -346,9 +346,10 @@ def test_setup_skills_with_workflow_skill_distributes_modern_portability_procedu
         "<PREFLIGHT_CHECK_COMMAND>" in skill_md
         or "<preflight_check_command>" in skill_md.lower()
     )
-    # Plan approval precedes the explicit post-PR reviewer gate.
+    # The explicit reviewer gate runs right after the start request, not post-PR.
     assert "plan approval (step 1)" in skill_md.lower()
-    assert "after step 10 creates the pr" in skill_md.lower()
+    assert "right after the start request" in skill_md.lower()
+    assert "after step 10 creates the pr" not in skill_md.lower()
     assert "explicit `claude` / `codex` / `skip` selection" in skill_md
     assert "bypass" in skill_md.lower()
 
