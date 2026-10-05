@@ -304,7 +304,15 @@ concurrency:
 | `events.jsonl`（`events_log_path`）・`logs/`（`log_dir`）・`.orchestune/reports/dispatch`（`report_dir`） | ログ・報告の履歴だけが失われる |
 | `worktrees/`（`worktree_root`）と `worktrees/.holds/` | ローカルtargetのworktreeとhold記録が失われる（外部targetに限定する理由） |
 
-導入用のworkflow例は別途提供します。
+#### 6.3.1 導入用workflow例
+
+[`examples/dispatch-single-executor.yml`](../examples/dispatch-single-executor.yml) は上記の要件を満たすworkflow例です（schedule＋手動入口、トップレベルの共通group、単一の同期job、親供給と同一stepでの親の直列処理、自己診断ゲート）。
+
+- 推奨コピー先は `.github/workflows/orchestune-dispatch.yml` です。`.github/workflows/` 直下であれば別名でも、ゲートが `GITHUB_WORKFLOW_REF` から自身のパスを導出するので動きます。dispatchの前に `orchestune doctor --execution-mode actions --workflow <自身のパス>` を1回実行し、診断のerrorや資格情報の空値（名前だけを出し値は出さない）があればdispatchを1件も開始せずjobを止めます。
+- 有効化の前に置き換える箇所は `ORCHESTUNE_VERSION`、cron、`timeout-minutes`、secret名、dispatchのtargetです（`codex-cloud` を使う場合はtargetと資格情報のenv名の両方を替えます）。
+- 対象の親はリポジトリ変数 `ORCHESTUNE_PARENT_ISSUES`（空白区切りの正整数）へ登録し、完了した親は外します。手動の `parent_issue` input だけで指定した親は、待機runが置き換えられると再実行されません。不正値・重複はdispatchを開始せずrunが失敗し、空なら成功終了します。1つの親が失敗しても残りを処理し、最後に非0で終了します。
+- Actions外の実行（ローカルCLI・Cloud Routine・外部cron）はこの設定では止められません。併用しないか、所有者を移管してください（6.2参照）。
+- 本リポジトリ自身ではこの例を有効化していません。
 
 ### 6.4 既存導入先の移行
 

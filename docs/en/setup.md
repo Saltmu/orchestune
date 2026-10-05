@@ -304,7 +304,15 @@ concurrency:
 | `events.jsonl` (`events_log_path`), `logs/` (`log_dir`), `.orchestune/reports/dispatch` (`report_dir`) | Only the history of logs and reports is lost |
 | `worktrees/` (`worktree_root`) and `worktrees/.holds/` | Local-target worktrees and hold records are lost (the reason for restricting to external targets) |
 
-A workflow example for adoption will be provided separately.
+#### 6.3.1 Example Workflow
+
+[`examples/dispatch-single-executor.yml`](../examples/dispatch-single-executor.yml) is a workflow example that satisfies the requirements above (schedule plus manual entry, the shared top-level group, a single synchronous job, sequential processing of parents in the same step as the parent supply, and a self-diagnosis gate).
+
+- Recommended copy destination: `.github/workflows/orchestune-dispatch.yml`. Another file name directly under `.github/workflows/` also works, because the gate derives its own path from `GITHUB_WORKFLOW_REF`. It runs `orchestune doctor --execution-mode actions --workflow <own path>` once before dispatch, and a diagnosis error or an empty credential (reported by name only, never by value) stops the job before any dispatch starts.
+- Replace before enabling: `ORCHESTUNE_VERSION`, the cron expression, `timeout-minutes`, the secret names, and the dispatch target (to use `codex-cloud`, change both the target and the credential env names).
+- Register the target parents in the repository variable `ORCHESTUNE_PARENT_ISSUES` (whitespace-separated positive integers) and remove parents that are done. A parent given only through the manual `parent_issue` input is not re-run if its pending run is replaced. An invalid or duplicate value fails the run without starting any dispatch; an empty value ends successfully; a failure of one parent does not stop the remaining ones, and the run exits non-zero at the end.
+- Runs outside Actions (local CLI, Cloud Routine, external cron) cannot be stopped by this setup. Do not combine them, or transfer ownership first (see 6.2).
+- This repository does not enable the example itself.
 
 ### 6.4 Migrating Existing Installations
 
