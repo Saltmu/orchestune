@@ -17,6 +17,7 @@ import yaml
 
 from orchestune.dag.models import ConfigError
 from orchestune.dispatch.config_loader import validate_toml_config
+from orchestune.dispatch.doctor_actions import run_actions_checks
 from orchestune.dispatch.doctor_models import (
     CODE_CONFIG_READABLE,
     CODE_EXTERNAL_OWNERSHIP,
@@ -235,6 +236,7 @@ def run_doctor(request: DoctorRequest) -> DoctorReport:
     diagnostics: list[Diagnostic] = [config_diag]
     if request.mode == "actions":
         diagnostics.append(check_workflow_readable(context.specified))
-    # Later sub-tasks add: diagnostics.extend(run_actions_checks(context)) etc.
+        diagnostics.extend(run_actions_checks(context))
+    # Later sub-tasks add: repository-wide checks here.
     diagnostics.extend(ownership_diagnostics(request.mode))
     return DoctorReport(request.mode, tuple(diagnostics))
