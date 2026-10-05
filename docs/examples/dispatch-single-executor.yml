@@ -47,11 +47,12 @@ jobs:
         # A failing diagnosis stops the job, so no dispatch is started.
         # If routine_id is set in the config file, drop the ID check below.
         env:
+          ORCHESTUNE_GH_TOKEN: ${{ secrets.ORCHESTUNE_GH_TOKEN }}
           ORCHESTUNE_ROUTINE_ID: ${{ secrets.ORCHESTUNE_ROUTINE_ID }}
           ORCHESTUNE_ROUTINE_TOKEN: ${{ secrets.ORCHESTUNE_ROUTINE_TOKEN }}
         run: |
           set -euo pipefail
-          ref="${GITHUB_WORKFLOW_REF%@*}"
+          ref="${GITHUB_WORKFLOW_REF%%@*}"
           self="${ref#"${GITHUB_REPOSITORY}/"}"
           case "$self" in
             .github/workflows/*.yml|.github/workflows/*.yaml) ;;
@@ -61,7 +62,7 @@ jobs:
             */*) echo "::error::workflow must be directly under .github/workflows"; exit 1 ;;
           esac
           missing=0
-          for name in ORCHESTUNE_ROUTINE_ID ORCHESTUNE_ROUTINE_TOKEN; do
+          for name in ORCHESTUNE_GH_TOKEN ORCHESTUNE_ROUTINE_ID ORCHESTUNE_ROUTINE_TOKEN; do
             if [ -z "${!name:-}" ]; then echo "::error::required secret is empty: ${name}"; missing=1; fi
           done
           [ "$missing" -eq 0 ] || exit 1
@@ -70,6 +71,9 @@ jobs:
         # GH_TOKEN needs write access to issues, pull requests and contents
         # (including branch push). To use codex-cloud, change the target below
         # and pass ORCHESTUNE_CODEX_CLOUD_ENV instead of the routine variables.
+        # codex-cloud also needs the separate Codex CLI installed and
+        # authenticated on the runner (add a step before this one), and the
+        # gate's credential check must be changed to the codex-cloud variables.
         env:
           GH_TOKEN: ${{ secrets.ORCHESTUNE_GH_TOKEN }}
           ORCHESTUNE_ROUTINE_ID: ${{ secrets.ORCHESTUNE_ROUTINE_ID }}

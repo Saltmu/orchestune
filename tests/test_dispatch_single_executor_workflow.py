@@ -211,6 +211,7 @@ def test_parent_failure_continues_then_fails(tmp_path: Path) -> None:
 GATE_BASE = {
     "GITHUB_REPOSITORY": "o/r",
     "GITHUB_WORKFLOW_REF": "o/r/.github/workflows/any-name.yml@refs/heads/main",
+    "ORCHESTUNE_GH_TOKEN": "gh-sentinel-value",
     "ORCHESTUNE_ROUTINE_ID": "id-sentinel-value",
     "ORCHESTUNE_ROUTINE_TOKEN": "token-sentinel-value",
 }
@@ -277,3 +278,26 @@ def test_cli_help_lists_doctor(
         cli_main()
     captured = capsys.readouterr()
     assert "doctor" in captured.out + captured.err
+
+
+@needs_bash
+def test_gate_fails_on_empty_github_token(tmp_path: Path) -> None:
+    code, out, calls = _run_step(
+        tmp_path, "Self-diagnose", {**GATE_BASE, "ORCHESTUNE_GH_TOKEN": ""}
+    )
+    assert code != 0
+    assert calls == []
+    assert "ORCHESTUNE_GH_TOKEN" in out
+    assert "gh-sentinel-value" not in out
+
+
+@needs_bash
+def test_gate_handles_at_sign_in_branch_name(tmp_path: Path) -> None:
+    ref = "o/r/.github/workflows/any-name.yml@refs/heads/release@candidate"
+    code, _, calls = _run_step(
+        tmp_path, "Self-diagnose", {**GATE_BASE, "GITHUB_WORKFLOW_REF": ref}
+    )
+    assert code == 0
+    assert calls == [
+        "doctor --execution-mode actions --workflow .github/workflows/any-name.yml"
+    ]
