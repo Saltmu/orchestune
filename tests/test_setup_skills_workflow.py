@@ -1,3 +1,5 @@
+import re
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
@@ -365,3 +367,89 @@ def test_setup_skills_with_workflow_skill_distributes_modern_portability_procedu
     # references completeness
     assert (target_skill / "references" / "worktree.md").is_file()
     assert (target_skill / "references" / "review-loop.md").is_file()
+
+
+def test_workflow_template_footprint_guidance_is_self_contained_after_setup(
+    tmp_path,
+):
+    """`--with-workflow-skill` で配布された workflow-template のリンクと手順が完結していることを検証する。"""
+    mock_home = tmp_path / "home"
+    mock_home.mkdir()
+    (mock_home / ".claude").mkdir()
+
+    mock_source = tmp_path / "orchestune_repo"
+    mock_source.mkdir()
+    skills_dir = mock_source / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "orchestune").mkdir()
+    (skills_dir / "orchestune" / "SKILL.md").touch()
+
+    real_wf_dir = Path(__file__).parents[1] / "skills" / "workflow-template"
+    shutil.copytree(real_wf_dir, skills_dir / "workflow-template")
+
+    with (
+        patch("pathlib.Path.home", return_value=mock_home),
+        patch("pathlib.Path.cwd", return_value=mock_source),
+    ):
+        exit_code = setup_skills(with_workflow_skill=True)
+
+    assert exit_code == 0
+    target_skill = mock_source / ".claude" / "skills" / "workflow-template"
+    assert target_skill.is_dir()
+
+    def _to_slug(heading: str) -> str:
+        text = heading.lstrip("#").strip().lower()
+        text = re.sub(r"[^\w\s-]", "", text)
+        return re.sub(r"[\s]+", "-", text)
+
+    link_pattern = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+
+    files_to_check = [
+        target_skill / "SKILL.md",
+        target_skill / "references" / "worktree.md",
+    ]
+
+    assert "references/worktree.md#initial-footprint-procedure" in (
+        target_skill / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "../SKILL.md#initial-footprint-before-issue-creation-or-claim" in (
+        target_skill / "references" / "worktree.md"
+    ).read_text(encoding="utf-8")
+
+    for file_path in files_to_check:
+        content = file_path.read_text(encoding="utf-8")
+
+        # 4. skills/local-ci-developer や Orchestune 固有パスへの参照がないこと
+        assert "skills/local-ci-developer" not in content
+        assert "tests/test_skill_commands.py" not in content
+        for line in content.splitlines():
+            assert (
+                "orchestune/" not in line
+            ), f"Orchestune internal code path found in {file_path.name}: {line}"
+
+        for match in link_pattern.finditer(content):
+            target = match.group(2)
+            if target.startswith("http://") or target.startswith("https://"):
+                continue
+
+            file_part, _, anchor = target.partition("#")
+            if file_part:
+                resolved_target = (file_path.parent / file_part).resolve()
+                assert (
+                    resolved_target.is_file()
+                ), f"Broken relative link '{target}' in {file_path}"
+                assert (
+                    target_skill in resolved_target.parents
+                    or resolved_target == target_skill
+                ), f"Link '{target}' points outside distributed skill: {resolved_target}"
+                target_doc = resolved_target
+            else:
+                target_doc = file_path
+
+            if anchor:
+                doc_lines = target_doc.read_text(encoding="utf-8").splitlines()
+                headings = [line for line in doc_lines if line.startswith("#")]
+                slugs = [_to_slug(h) for h in headings]
+                assert (
+                    anchor in slugs
+                ), f"Anchor '#{anchor}' not found in headings of {target_doc}. Available: {slugs}"
