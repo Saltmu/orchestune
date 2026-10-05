@@ -16,7 +16,21 @@ from orchestune.issue_parsing import (
     parse_task_from_issue,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.status_labels import (
+    PRIMARY_STATUS_LABELS,
+    TERMINAL_ESCALATION_LABELS,
+)
 from orchestune.models import IssueRecord, Task
+
+#: #1251: every open lifecycle state of a child task is a DAG node, so a
+#: dependency that escalated still orders its dependents. Derived from the role
+#: table so a new ACTIVE/ESCALATION label is picked up; EXTERNAL_LOCK is kept
+#: for compatibility although it always coexists with a lifecycle label.
+_OPEN_INTEGRATION_LABELS = (
+    *PRIMARY_STATUS_LABELS,
+    *TERMINAL_ESCALATION_LABELS,
+    StatusLabel.EXTERNAL_LOCK,
+)
 
 
 def build_issue_to_subtask_id_map(issues: list[IssueRecord]) -> dict[int, str]:
@@ -93,22 +107,47 @@ def get_sorted_done_tasks(
 def _load_integration_issues(
     forge: Forge, done: list[IssueRecord], parent_number: int
 ) -> tuple[list[IssueRecord], list[IssueRecord]]:
-    labels = (
-        StatusLabel.QUEUED,
-        StatusLabel.IN_PROGRESS,
-        StatusLabel.BLOCKED,
-        StatusLabel.EXTERNAL_LOCK,
-    )
     issues = [
         issue
-        for label in labels
+        for label in _OPEN_INTEGRATION_LABELS
         for issue in forge.list_issues_by_label(label, state="open")
     ]
+    # not-needed is closed on completion yet still satisfies its dependents.
+    issues.extend(forge.list_issues_by_label(StatusLabel.NOT_NEEDED, state="all"))
     issues.extend(done)
     return (
         [issue for issue in done if effective_parent_number(issue) == parent_number],
-        [issue for issue in issues if effective_parent_number(issue) == parent_number],
+        _without_superseded_generations(
+            [
+                issue
+                for issue in issues
+                if effective_parent_number(issue) == parent_number
+            ]
+        ),
     )
+
+
+def _without_superseded_generations(issues: list[IssueRecord]) -> list[IssueRecord]:
+    """Keep one node per `subtask_id` when a not-needed generation was replaced.
+
+    Replan retires the old generation as not-needed and keeps its body (and so
+    its `parent_issue_number`) while the replacement reuses the `subtask_id`.
+    A not-needed Issue is dropped when a live Issue or a newer Issue shares it.
+    """
+    identifiers = build_issue_to_subtask_id_map(issues)
+    current: dict[str, tuple[bool, int]] = {}
+    for issue in issues:
+        subtask_id = identifiers.get(issue.number)
+        if subtask_id is not None:
+            rank = (StatusLabel.NOT_NEEDED not in issue.labels, issue.number)
+            current[subtask_id] = max(current.get(subtask_id, rank), rank)
+    return [
+        issue
+        for issue in issues
+        if StatusLabel.NOT_NEEDED not in issue.labels
+        or (subtask_id := identifiers.get(issue.number)) is None
+        or current[subtask_id] == (False, issue.number)
+    ]
 
 
 def _unique_issues(issues: list[IssueRecord]) -> list[IssueRecord]:
@@ -124,19 +163,35 @@ def _unique_issues(issues: list[IssueRecord]) -> list[IssueRecord]:
 def _topological_order(
     tasks: list[Task], threshold: float, ignore_patterns: Iterable[re.Pattern[str]]
 ) -> list[str]:
-    subtasks = [
-        SubTask(
-            id=task.subtask_id,
-            description="",
-            footprint=task.footprint,
-            symbols=task.symbols,
-            depends_on=task.depends_on,
-            risk=task.risk,
-            risk_reasons=(),
+    known = {task.subtask_id for task in tasks if task.subtask_id}
+    ignored: list[str] = []
+    subtasks: list[SubTask] = []
+    for task in tasks:
+        if not task.subtask_id:
+            continue
+        # #1251: a reference outside the node set (unlabeled issue, other
+        # EPIC, typo) loses only its own edge, not the whole EPIC's order.
+        depends_on = tuple(dep for dep in task.depends_on if dep in known)
+        ignored.extend(
+            f"{task.subtask_id} -> {dep}" for dep in task.depends_on if dep not in known
         )
-        for task in tasks
-        if task.subtask_id
-    ]
+        subtasks.append(
+            SubTask(
+                id=task.subtask_id,
+                description="",
+                footprint=task.footprint,
+                symbols=task.symbols,
+                depends_on=depends_on,
+                risk=task.risk,
+                risk_reasons=(),
+            )
+        )
+    if ignored:
+        print(
+            "Warning: Ignoring unknown dependencies while ordering integration: "
+            + ", ".join(ignored),
+            file=sys.stderr,
+        )
     try:
         return build_dag(
             subtasks, threshold=threshold, ignore_patterns=ignore_patterns

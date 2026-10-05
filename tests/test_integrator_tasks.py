@@ -6,6 +6,8 @@ from __future__ import annotations
 import re
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from orchestune.integrator.tasks import get_sorted_done_tasks
 from orchestune.models import IssueRecord
 
@@ -25,6 +27,33 @@ def _done_issue(
         created_at="2026-07-13T00:00:00Z",
         parent=parent,
     )
+
+
+PARENT = 100
+
+
+def _labeled_issue(
+    number: int, subtask_id: str, label: str, depends_on: tuple[str, ...] = ()
+) -> IssueRecord:
+    body_lines = ["```yaml", f"subtask_id: {subtask_id}", "footprint: []"]
+    body_lines.append(f"depends_on: [{', '.join(depends_on)}]")
+    body_lines.append("```\n")
+    return IssueRecord(
+        number=number,
+        title=f"Issue {number}",
+        body="\n".join(body_lines),
+        labels=(label,),
+        created_at="2026-07-13T00:00:00Z",
+        parent={"number": PARENT},
+    )
+
+
+def _forge_listing(issues_by_label: dict[tuple[str, str], list[IssueRecord]]):
+    fake_forge = MagicMock()
+    fake_forge.list_issues_by_label.side_effect = lambda label, state="open": (
+        issues_by_label.get((label, state), [])
+    )
+    return fake_forge
 
 
 def test_returns_empty_when_no_done_issues_using_injected_fake_forge():
@@ -211,3 +240,123 @@ def test_threshold_is_forwarded_to_build_dag():
 
     mock_build_dag.assert_called_once()
     assert mock_build_dag.call_args.kwargs.get("threshold") == 0.1
+
+
+@pytest.mark.parametrize(
+    ("label", "state"),
+    [
+        ("status:blocked-human-review", "open"),
+        ("status:manual-merge-required", "open"),
+        ("status:not-needed", "all"),
+    ],
+)
+def test_dependency_in_escalation_or_not_needed_state_keeps_dag_order(
+    label: str, state: str, capsys: pytest.CaptureFixture[str]
+):
+    """#1251: an escalated or not-needed dependency must be a DAG node.
+
+    Before the fix it was never loaded, `build_dag` raised `KeyError` on B's
+    reference, and the whole EPIC fell back to load order (D before C).
+    """
+    upstream = _labeled_issue(1, "task-a", label)
+    dependent = _labeled_issue(2, "task-b", "status:done", ("task-a",))
+    late = _labeled_issue(3, "aaa-task-d", "status:done", ("zzz-task-c",))
+    early = _labeled_issue(4, "zzz-task-c", "status:done")
+    fake_forge = _forge_listing(
+        {
+            (label, state): [upstream],
+            ("status:done", "all"): [late, dependent, early],
+        }
+    )
+
+    sorted_done, unparsable = get_sorted_done_tasks(PARENT, forge=fake_forge)
+
+    assert unparsable == []
+    order = [task.subtask_id for task in sorted_done]
+    assert sorted(order) == ["aaa-task-d", "task-b", "zzz-task-c"]
+    assert order.index("zzz-task-c") < order.index("aaa-task-d")
+    assert "Failed to build DAG" not in capsys.readouterr().err
+
+
+def test_loads_every_lifecycle_label_into_the_dag_node_set():
+    """#1251: open ACTIVE/ESCALATION labels plus closed-on-completion not-needed."""
+    fake_forge = _forge_listing(
+        {("status:done", "all"): [_labeled_issue(1, "task-1", "status:done")]}
+    )
+
+    get_sorted_done_tasks(PARENT, forge=fake_forge)
+
+    calls = {
+        (call.args[0], call.kwargs.get("state", "open"))
+        for call in fake_forge.list_issues_by_label.call_args_list
+    }
+    assert calls == {
+        ("status:in-progress", "open"),
+        ("status:queued", "open"),
+        ("status:blocked", "open"),
+        ("status:blocked-human-review", "open"),
+        ("status:manual-merge-required", "open"),
+        ("status:external-lock", "open"),
+        ("status:done", "all"),
+        ("status:not-needed", "all"),
+    }
+
+
+def test_unknown_dependency_is_ignored_without_losing_topological_order(
+    capsys: pytest.CaptureFixture[str],
+):
+    """#1251: one dangling reference must not drop the EPIC to load order."""
+    dangling = _labeled_issue(1, "task-b", "status:done", ("missing-task",))
+    late = _labeled_issue(2, "aaa-task-d", "status:done", ("zzz-task-c",))
+    early = _labeled_issue(3, "zzz-task-c", "status:done")
+    fake_forge = _forge_listing({("status:done", "all"): [late, dangling, early]})
+
+    sorted_done, _ = get_sorted_done_tasks(PARENT, forge=fake_forge)
+
+    order = [task.subtask_id for task in sorted_done]
+    assert order.index("zzz-task-c") < order.index("aaa-task-d")
+    assert "task-b" in order
+    err = capsys.readouterr().err
+    assert "Failed to build DAG" not in err
+    warnings = [line for line in err.splitlines() if "unknown dependencies" in line]
+    assert warnings == [
+        "Warning: Ignoring unknown dependencies while ordering integration: "
+        "task-b -> missing-task"
+    ]
+
+
+def test_retired_replan_generation_does_not_duplicate_its_replacement(
+    capsys: pytest.CaptureFixture[str],
+):
+    """#1251 review: replan retires an old generation as not-needed, removes its
+    native parent link but keeps the body's `parent_issue_number`, and the
+    replacement reuses the `subtask_id`. Only the current generation is a node.
+    """
+    retired = IssueRecord(
+        number=1,
+        title="Issue 1",
+        body=(
+            "```yaml\nsubtask_id: task-a\nfootprint: []\n"
+            f"parent_issue_number: {PARENT}\n```\n"
+        ),
+        labels=("status:not-needed",),
+        created_at="2026-07-13T00:00:00Z",
+    )
+    # Duplicate node IDs with different `depends_on` make `build_dag` raise.
+    replacement = _labeled_issue(5, "task-a", "status:done", ("zzz-task-c",))
+    late = _labeled_issue(2, "aaa-task-d", "status:done", ("zzz-task-c",))
+    early = _labeled_issue(3, "zzz-task-c", "status:done")
+    fake_forge = _forge_listing(
+        {
+            ("status:not-needed", "all"): [retired],
+            ("status:done", "all"): [late, replacement, early],
+        }
+    )
+
+    sorted_done, _ = get_sorted_done_tasks(PARENT, forge=fake_forge)
+
+    order = [task.subtask_id for task in sorted_done]
+    assert sorted(order) == ["aaa-task-d", "task-a", "zzz-task-c"]
+    assert order.index("zzz-task-c") < order.index("aaa-task-d")
+    assert order.index("zzz-task-c") < order.index("task-a")
+    assert "Failed to build DAG" not in capsys.readouterr().err
