@@ -280,6 +280,8 @@ L2 の `targets.completion_policy` が実効トークン上限を解釈し、共
 `dispatch.config_loader` は共通設定 loader を再公開します。complete policy は
 dispatch の設定・workflow モジュールを import しません。
 
+consistency status kernelはstatus-machineの役割表からlifecycleを導出し、7種tupleとledgerの3種ACTIVEを維持します。invariant・planner・fresh executorはFINAL / ESCALATIONを保護し、正確なdone+queued差し戻し例外を維持し、初期化・競合修復でもpromotion holdを守ります。executorはIntentを永続化・検証し、通常遷移表の警告は観測のみです。Supervisorのpass/cycleの区別と収束の前提は[statusラベル](status-labels.md#status-reconciliation-の安全性と収束性1218)を参照してください。RuleChain・GC・rebase・Integratorの方針選択は別責務です。
+
 ### 4.2 CIで機械的に検証される不変条件
 
 `tests/test_architecture.py` が毎回以下をすべて検証するため、上記の表が

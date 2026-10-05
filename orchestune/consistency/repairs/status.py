@@ -58,6 +58,7 @@ from orchestune.consistency.models import (
     RepairCommand,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.status_machine import status_repair_preserves_protection
 
 COMMAND_ADD_LABEL = "status.add-label"
 COMMAND_REMOVE_LABEL = "status.remove-label"
@@ -135,7 +136,10 @@ def _add_commands(finding: ConsistencyFinding) -> tuple[RepairCommand, ...]:
             "add",
             label,
             (("label", label),),
-            ("absent-primary-status",),
+            (
+                "absent-primary-status",
+                *(("no-promotion-hold",) if label == StatusLabel.QUEUED else ()),
+            ),
         ),
     )
 
@@ -152,6 +156,8 @@ def _remove_commands(finding: ConsistencyFinding) -> tuple[RepairCommand, ...]:
     if keep is None or keep not in observed:
         return ()
     removable = tuple(label for label in observed if label != keep)
+    if not status_repair_preserves_protection(observed, keep):
+        return ()
     if any(label in TERMINAL_ESCALATION_LABELS for label in removable):
         return ()
     return tuple(
@@ -161,7 +167,11 @@ def _remove_commands(finding: ConsistencyFinding) -> tuple[RepairCommand, ...]:
             "remove",
             label,
             (("label", label),),
-            (f"retains-primary-status:{keep}", f"holds-primary-status:{label}"),
+            (
+                f"retains-primary-status:{keep}",
+                f"holds-primary-status:{label}",
+                *(("no-promotion-hold",) if keep == StatusLabel.QUEUED else ()),
+            ),
         )
         for label in removable
     )
