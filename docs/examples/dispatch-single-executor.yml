@@ -52,7 +52,7 @@ jobs:
           ORCHESTUNE_ROUTINE_TOKEN: ${{ secrets.ORCHESTUNE_ROUTINE_TOKEN }}
         run: |
           set -euo pipefail
-          ref="${GITHUB_WORKFLOW_REF%%@*}"
+          ref="${GITHUB_WORKFLOW_REF%"@${GITHUB_REF:-}"}"
           self="${ref#"${GITHUB_REPOSITORY}/"}"
           case "$self" in
             .github/workflows/*.yml|.github/workflows/*.yaml) ;;

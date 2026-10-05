@@ -210,6 +210,7 @@ def test_parent_failure_continues_then_fails(tmp_path: Path) -> None:
 
 GATE_BASE = {
     "GITHUB_REPOSITORY": "o/r",
+    "GITHUB_REF": "refs/heads/main",
     "GITHUB_WORKFLOW_REF": "o/r/.github/workflows/any-name.yml@refs/heads/main",
     "ORCHESTUNE_GH_TOKEN": "gh-sentinel-value",
     "ORCHESTUNE_ROUTINE_ID": "id-sentinel-value",
@@ -295,9 +296,27 @@ def test_gate_fails_on_empty_github_token(tmp_path: Path) -> None:
 def test_gate_handles_at_sign_in_branch_name(tmp_path: Path) -> None:
     ref = "o/r/.github/workflows/any-name.yml@refs/heads/release@candidate"
     code, _, calls = _run_step(
-        tmp_path, "Self-diagnose", {**GATE_BASE, "GITHUB_WORKFLOW_REF": ref}
+        tmp_path,
+        "Self-diagnose",
+        {
+            **GATE_BASE,
+            "GITHUB_WORKFLOW_REF": ref,
+            "GITHUB_REF": "refs/heads/release@candidate",
+        },
     )
     assert code == 0
     assert calls == [
         "doctor --execution-mode actions --workflow .github/workflows/any-name.yml"
+    ]
+
+
+@needs_bash
+def test_gate_handles_at_sign_in_workflow_filename(tmp_path: Path) -> None:
+    ref = "o/r/.github/workflows/dispatch@prod.yml@refs/heads/main"
+    code, _, calls = _run_step(
+        tmp_path, "Self-diagnose", {**GATE_BASE, "GITHUB_WORKFLOW_REF": ref}
+    )
+    assert code == 0
+    assert calls == [
+        "doctor --execution-mode actions --workflow .github/workflows/dispatch@prod.yml"
     ]
