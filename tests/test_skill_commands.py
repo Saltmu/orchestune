@@ -1018,18 +1018,21 @@ def test_agents_rules_allow_single_mcp_combined_post_only():
     assert "file:///" not in rule
 
 
-def test_issue_footprint_example_selects_file_reservation():
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_issue_footprint_example_selects_file_reservation(skill_name: str):
     """起票例を claim/parser へ渡し、実ファイル単位の予約として解釈できる。"""
     from orchestune.claim.contracts import ReservationKind
     from orchestune.claim.preflight import _resolve_reservation_kind
     from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
     from orchestune.models import IssueRecord
 
-    text = (
-        SKILLS_ROOT / "local-ci-developer" / "references" / "worktree.md"
-    ).read_text(encoding="utf-8")
+    text = (SKILLS_ROOT / skill_name / "references" / "worktree.md").read_text(
+        encoding="utf-8"
+    )
     match = FOOTPRINT_BLOCK_PATTERN.search(text)
-    assert match is not None, "起票手順に機械可読な Footprint YAML の例が必要"
+    assert (
+        match is not None
+    ), f"{skill_name} 起票手順に機械可読な Footprint YAML の例が必要"
     issue = IssueRecord(1044, "Example", match.group(0), (), "2026-09-27")
     task = parse_task_from_issue(issue)
     assert not task.yaml_error
@@ -1038,7 +1041,64 @@ def test_issue_footprint_example_selects_file_reservation():
     for path in task.footprint:
         assert not Path(path).is_absolute()
         assert ".." not in Path(path).parts
-        assert (REPO_ROOT / path).is_file()
+        if skill_name == "local-ci-developer":
+            assert (REPO_ROOT / path).is_file()
+        else:
+            assert path.startswith("<") and path.endswith(">")
+            assert not any(
+                p in path
+                for p in ("skills/", "orchestune/", "tests/test_skill_commands.py")
+            )
+
+
+def test_workflow_template_declares_footprint_before_claim():
+    """workflow-template が claim 前の footprint 宣言手順を含んでいることを検証する。"""
+    skill_text = (SKILLS_ROOT / "workflow-template" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    worktree_text = (
+        SKILLS_ROOT / "workflow-template" / "references" / "worktree.md"
+    ).read_text(encoding="utf-8")
+
+    # ## Initial Footprint が ## Development Steps より前にある
+    assert "## Initial Footprint" in skill_text
+    assert "## Development Steps" in skill_text
+    assert skill_text.index("## Initial Footprint") < skill_text.index(
+        "## Development Steps"
+    )
+
+    # Step 1/2/2.5 の各行が footprint に言及している
+    lines_by_step = {}
+    for line in skill_text.splitlines():
+        for step in ("1", "2", "2.5"):
+            if f"| **{step}** |" in line:
+                lines_by_step[step] = line
+    assert set(lines_by_step.keys()) == {"1", "2", "2.5"}
+    for step, line in lines_by_step.items():
+        assert (
+            "footprint" in line.lower()
+        ), f"Step {step} line must mention footprint: {line}"
+
+    # worktree.md に ../SKILL.md#initial-footprint-before-issue-creation-or-claim へのリンクがある
+    assert (
+        "../SKILL.md#initial-footprint-before-issue-creation-or-claim" in worktree_text
+    )
+
+    # 必須の文言が含まれる: re-fetch、Skipping Issue creation does not skip this check、repository reservation、`footprint: []`、does not shrink or expand
+    for required_phrase in (
+        "re-fetch",
+        "Skipping Issue creation does not skip this check",
+        "repository reservation",
+        "`footprint: []`",
+        "does not shrink or expand",
+    ):
+        assert (
+            required_phrase in worktree_text
+        ), f"worktree.md must contain '{required_phrase}'"
+
+    # Step 2.6 に言及していない
+    assert "Step 2.6" not in skill_text
+    assert "Step 2.6" not in worktree_text
 
 
 @pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])

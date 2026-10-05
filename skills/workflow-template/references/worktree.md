@@ -1,5 +1,7 @@
 # Worktree Preparation and Retention (Step 2.5)
 
+Before claim, follow [Initial Footprint](../SKILL.md#initial-footprint-before-issue-creation-or-claim) for new and existing Issues.
+
 For every user-requested change or existing Issue fix, use an isolated task
 worktree before editing source files. First inspect `git status --short`;
 preserve unrelated changes. If already inside the task worktree, proceed there.
@@ -49,3 +51,24 @@ For both dispatcher-managed and interactively claimed worktrees, run `orchestune
 for the task outcome. It posts to the task Issue and preserves the worktree.
 Do not remove the worktree as part of completion. Orchestune's GC phase handles
 the lifecycle transition after handoff, including dispatcher-managed cleanup.
+
+## Initial Footprint Procedure
+
+During Step 1, inspect the request and relevant files to list expected repository-relative file paths, including tests and docs, in the plan.
+For a new Issue (Step 2), put that list in the Issue body's first fenced `yaml` block under `## Footprint`, as below. Prose or comments alone are not read by claim:
+
+```yaml
+subtask_id: <task-slug>
+description: <one-line summary of the change>
+footprint:
+  - <path/to/changed_file>
+  - <path/to/test_file>
+symbols: []
+depends_on: []
+```
+
+Replace placeholders enclosed in `<...>` with the project's repository-relative file paths, including planned tests, docs, and newly created files.
+For an existing Issue, before Step 2.5 fetch its current body with the selected backend and check that this YAML is valid and `footprint` covers the expected changes with repository-relative file paths (including planned new files). Add or correct missing, stale, or invalid declarations in the body, preserving unrelated metadata and content, then re-fetch to verify before claim. Skipping Issue creation does not skip this check.
+If scope cannot be determined, record the concrete reason in the Issue body and plan and explicitly choose a repository reservation by omitting `footprint`. Do not use `footprint: []` to disguise unknown scope or claim a file-scoped reservation. Missing or empty footprints select a repository reservation.
+If the YAML block is corrupted or malformed, `claim` treats it as a repository reservation without raising an error; re-fetch after any edit to verify that the block parses cleanly as YAML.
+Editing an Issue body does not shrink or expand an already acquired reservation. If the task is already claimed, reconcile the declaration with the held reservation before editing files. If additional files are needed beyond the held reservation, follow the `--amend-footprint` procedure in [Claim and enter the worktree](#claim-and-enter-the-worktree).
