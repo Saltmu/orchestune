@@ -152,6 +152,73 @@ the compatibility tests).
   reproduction path.
 - `.hypothesis/` is the example database and is not tracked by Git; earlier failures are replayed on the next run.
 
+## Status reconciliation safety and convergence (#1218)
+
+The status machine owns roles, normal-transition permission and pure one-operation
+plans. The consistency kernel owns observation → desired → findings → typed repair;
+uncertainty defers repair. The dispatch executor rechecks fresh state, persists Intent
+before mutation, applies commands and verifies live state. RuleChain / GC / rebase /
+Integrator select policy transitions; scheduler-wide liveness is outside this guarantee.
+
+FINAL/ESCALATION labels are protected in invariant, planner and fresh executor.
+A retained protected target may remove excess ACTIVE labels. Multiple FINAL labels
+and removal of human gates require manual resolution. Reinsertion requires a person
+to arrange the label state. Completion overrides and dependency completion are unchanged.
+
+The sole FINAL → ACTIVE repair exception is exact lifecycle
+`{status:done, status:queued}`, desired queued: remove done and retain queued.
+See [rollback](#11-statusdone--statusqueued-rollback-on-provisional-merge-ci-failure).
+Integrator adds queued before removing done (#254); repair finishes a failed remove.
+Auxiliary labels do not widen this exception; done+queued+blocked is manual.
+A fresh transition or unrelated removal with newly added done is skipped before
+Intent creation/mutation, including pending Intent resume. The cost is that an
+external tool accidentally adding queued to done also reinserts the task.
+Requiring a rollback Intent is future policy work.
+
+Promotion holds (`ci:base-branch-red`, `status:blocked-recompute`) prevent queued
+initialization and queued-retaining conflict removal, including rollback, as well
+as blocked → queued. Findings remain manual/informational; old commands skip.
+Undeclared-dependency blocked still has an automatic finding/candidate, but skips
+each cycle on dependencies-declared and is outside convergence guarantees.
+
+A cycle verifies pending Intents, performs a fresh full scan, runs one Supervisor
+pass and observes again. Multiple distinct commands can apply within a pass; the
+same idempotency key is never retried in that repair call. FAILED/SKIPPED needs a
+fresh next cycle. With complete KNOWN facts, observable OPEN tasks, stable
+dependency/completion/execution evidence, enabled apply and all three commands
+allowed, no holds/reservations/conflicting Intents/manual execution findings, and
+successful journal/API/verification, repairable cases converge in exactly one
+recovery cycle (upper bound k=3). Matching interrupted Intents resume that cycle.
+Two further cycles preserve labels, empty plans, mutation history and Intent set.
+Except initially missing or externally deleted labels, every system mutation
+leaves at least one lifecycle label.
+
+Unknown Forge facts defer all tasks; unknown/missing/duplicated/malformed task
+facts defer only that task. Ambiguous execution correspondence is observed as
+unknown (the certainty enum is KNOWN/UNKNOWN/STALE). Manual/info findings can remain
+with empty plans. Closed/absent Issues, apply=False, allowlist restrictions,
+completion reservations and conflicting Intents are separate deferred intervals.
+External epoch changes can make a same-target Intent non-resumable, e.g. a transition
+Intent followed by external deletion needing add; convergence waits for resolution
+of that reservation. No atomicity/liveness is promised under unending failures or
+external writes. Auxiliary, ordinary and unknown status labels are preserved;
+forced-serial findings belong to another policy.
+
+Logger `orchestune.dispatch.status_repair` emits WARNING code
+`status.repair-illegal-transition` for transition commands from exactly one known
+lifecycle to another outside the normal table. It includes issue, command, source
+and target, uses already fetched labels and runs before guards, including skipped
+commands. Logging itself does not reject. Initialization, multi-label repair,
+auxiliary operations and valid/self transitions are excluded. This tripwire covers
+only status repair, not every transition path.
+
+Reproduce: `uv --cache-dir .orchestune/uv-cache run pytest -n0 tests/test_status_reconciliation_stateful.py --hypothesis-seed=1218`.
+The CI profile uses 100 examples, 30 steps, deadline=None and print_blob=True.
+Save the shrunk rule sequence as a deterministic regression. Printed blobs require
+a supported Hypothesis replay wrapper, not a TestCase method. deadline=None is not
+a total runtime limit. Deterministic tests cover API before/after failures, journal
+boundaries, verification stop and persisted restart state.
+
 ## State diagram
 
 ```mermaid
@@ -310,6 +377,12 @@ independently of the lifecycle above (see "External lock" below).
 
 
 ### 11. `status:done` → `status:queued` (rollback on provisional-merge CI failure)
+
+An interrupted add-queued/remove-done sequence is the exact done+queued exception
+to [automatic FINAL protection](#status-reconciliation-safety-and-convergence-1218).
+Repair removes done only when queued is retained and no promotion hold is present.
+An accidental external queued label also reinserts a done task; other protected
+conflicts require manual resolution.
 - Source: `handle_merge_failure` in `orchestune/integrator/pr.py`
 - Condition: the Integrator's post-merge local CI run failed, so the merge is
   reverted and the task is sent back to the queue.

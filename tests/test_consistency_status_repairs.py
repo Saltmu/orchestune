@@ -180,12 +180,15 @@ def test_add_command_names_the_label_and_guards_the_transition() -> None:
     assert dict(command.parameters)["label"] == "status:queued"
     assert command.idempotency_key == "status:705:add:status:queued"
     assert "issue-open" in command.preconditions
+    assert "no-promotion-hold" in command.preconditions
 
 
 def test_remove_command_keeps_the_desired_label() -> None:
     report = _evaluate(
         _observed(
-            _task_scope(705, labels=("status:blocked", "status:done", "status:queued"))
+            _task_scope(
+                705, labels=("status:blocked", "status:in-progress", "status:queued")
+            )
         ),
         _desired(_desired_task("status-policy", 705)),
     )
@@ -193,9 +196,11 @@ def test_remove_command_keeps_the_desired_label() -> None:
     commands = plan_status_repairs(report)
     assert [dict(command.parameters)["label"] for command in commands] == [
         "status:blocked",
-        "status:done",
+        "status:in-progress",
     ]
     assert all(command.code == COMMAND_REMOVE_LABEL for command in commands)
+    assert all("no-promotion-hold" in command.preconditions for command in commands)
+
     assert all(
         "retains-primary-status:status:queued" in command.preconditions
         for command in commands

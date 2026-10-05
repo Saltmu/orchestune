@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -37,11 +38,56 @@ from orchestune.dispatch.status_repair_dependencies import (
     evaluate_fresh_dependencies,
     task_lifecycle,
 )
+from orchestune.labels import StatusLabel
 from orchestune.ledger.completion_reservations import completion_mutation_blocked_fresh
 from orchestune.ledger.run_state import RunState
 from orchestune.ledger.status_labels import transition_status_label
+from orchestune.ledger.status_machine import (
+    is_allowed,
+    status_repair_preserves_protection,
+)
 
 _STATUS_REPAIR_OPERATION = "supervisor-status-repair"
+_LOGGER = logging.getLogger(__name__)
+
+
+def _warn_illegal_transition(command: RepairCommand, labels: tuple[str, ...]) -> None:
+    primary = primary_status_labels(labels)
+    target = _expected_label(command)
+    if command.code != COMMAND_TRANSITION_LABEL or len(primary) != 1:
+        return
+    if target not in primary_status_labels((target,) if target is not None else ()):
+        return
+    if not is_allowed(primary[0], target):
+        _LOGGER.warning(
+            "status.repair-illegal-transition issue=%s command=%s source=%s target=%s",
+            command.subject_id,
+            command.code,
+            primary[0],
+            target,
+        )
+
+
+def _repair_guard_holds(command: RepairCommand, labels: tuple[str, ...]) -> bool:
+    target = _expected_label(command)
+    if target == StatusLabel.QUEUED and any(
+        label in labels for label in PROMOTION_HOLD_LABELS
+    ):
+        return False
+    if not status_repair_preserves_protection(labels, target):
+        return False
+    # The rollback exception applies only to a removal of done, never a transition.
+    primary = primary_status_labels(labels)
+    if StatusLabel.DONE in primary and target == StatusLabel.QUEUED:
+        return (
+            command.code == COMMAND_REMOVE_LABEL
+            and _parameters(command).get("label") == StatusLabel.DONE
+        )
+    # A handmade removal must not remove the retained/protected target.
+    return (
+        command.code != COMMAND_REMOVE_LABEL
+        or _parameters(command).get("label") != target
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,9 +212,14 @@ def _fresh_preconditions_hold(
         completion_evidence=completion_evidence,
         forge=config.resolved_forge,
     )
-    if evaluation is None or evaluation.task.issue_state.upper() != "OPEN":
+    if evaluation is None:
         return None
     labels = tuple(evaluation.task.status_labels)
+    _warn_illegal_transition(command, labels)
+    if evaluation.task.issue_state.upper() != "OPEN" or not _repair_guard_holds(
+        command, labels
+    ):
+        return None
     holds = all(
         _precondition_holds(
             precondition,
@@ -406,6 +457,9 @@ def _execute_with_pending_intent(
     return RepairResult(
         command=command,
         status=RepairStatus.APPLIED if evidence is not None else RepairStatus.SKIPPED,
+        diagnostics=()
+        if evidence is not None
+        else ("fresh status repair guard or live verification did not hold",),
     )
 
 

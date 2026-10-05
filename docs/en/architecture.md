@@ -305,6 +305,8 @@ usage through the shared `targets.usage` provider. `dispatch.config_loader`
 re-exports the shared repository loader for compatibility; completion policy
 does not import dispatch configuration or workflow modules.
 
+The consistency status kernel derives lifecycle vocabulary from the status-machine role table, while preserving its seven-label tuple and the ledger's three ACTIVE labels. Its invariant/planner/fresh executor protect FINAL and ESCALATION labels, retain the exact done+queued rollback exception, and honor promotion holds for initialization and conflict repair. The executor persists and verifies Intents; its transition-table warning is observational only. Supervisor pass/cycle distinction and bounded convergence assumptions are documented in [status labels](status-labels.md#status-reconciliation-safety-and-convergence-1218). Policy choices in RuleChain, GC, rebase and Integrator remain separate.
+
 ### 4.2 Invariants enforced by CI
 
 `tests/test_architecture.py` checks all of the following on every run, so the

@@ -62,6 +62,11 @@ from orchestune.consistency.vocabulary import (
     FACT_ISSUE_STATUS_LABELS,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.status_machine import (
+    ESCALATION_LABELS,
+    lifecycle_labels,
+    status_repair_preserves_protection,
+)
 
 # The mutually exclusive lifecycle positions of `docs/ja/status-labels.md`.
 # `orchestune.ledger.status_labels.PRIMARY_STATUS_LABELS` is a deliberately narrower
@@ -76,13 +81,14 @@ PRIMARY_STATUS_LABELS = (
     StatusLabel.NOT_NEEDED,
     StatusLabel.QUEUED,
 )
+if set(PRIMARY_STATUS_LABELS) != lifecycle_labels(PRIMARY_STATUS_LABELS):
+    raise ValueError("primary lifecycle order drifted from LABEL_ROLES")
+if lifecycle_labels(tuple(StatusLabel)) != set(PRIMARY_STATUS_LABELS):
+    raise ValueError("primary lifecycle order does not cover LABEL_ROLES")
 
 # Statuses that record a human gate.  Automation may add a label beside one of
 # these, but must never remove one to settle a conflict on its own.
-TERMINAL_ESCALATION_LABELS = (
-    StatusLabel.BLOCKED_HUMAN_REVIEW,
-    StatusLabel.MANUAL_MERGE_REQUIRED,
-)
+TERMINAL_ESCALATION_LABELS = ESCALATION_LABELS
 
 # Labels that intentionally hold a `status:blocked` task back even once its
 # dependencies resolve during status repair execution.
@@ -320,7 +326,8 @@ class _TaskView:
 
 def primary_status_labels(labels: tuple[str, ...]) -> tuple[str, ...]:
     """The primary statuses among `labels`, in a stable order."""
-    return tuple(label for label in PRIMARY_STATUS_LABELS if label in labels)
+    present = lifecycle_labels(labels)
+    return tuple(label for label in PRIMARY_STATUS_LABELS if label in present)
 
 
 def _desired_status(desired: DesiredRepositoryState, subject_id: str) -> str | None:
@@ -507,10 +514,12 @@ def _guard(
 
 
 def _missing_findings(view: _TaskView) -> tuple[ConsistencyFinding, ...]:
+    holds = tuple(label for label in PROMOTION_HOLD_LABELS if label in view.labels)
     repairability, details = _guard(
         view,
         Repairability.AUTOMATIC
         if view.desired_status is not None
+        and not (view.desired_status == StatusLabel.QUEUED and holds)
         else Repairability.MANUAL,
     )
     return (
@@ -521,7 +530,10 @@ def _missing_findings(view: _TaskView) -> tuple[ConsistencyFinding, ...]:
             expected_summary="the task holds exactly one primary status label",
             observed_summary="the task holds no primary status label",
             repairability=repairability,
-            details=details,
+            details=(
+                *details,
+                *(("hold labels: " + ", ".join(holds),) if holds else ()),
+            ),
         ),
     )
 
@@ -533,12 +545,23 @@ def _removable(view: _TaskView) -> tuple[str, ...]:
 def _conflict_findings(view: _TaskView) -> tuple[ConsistencyFinding, ...]:
     removable = _removable(view)
     gated = tuple(label for label in removable if label in TERMINAL_ESCALATION_LABELS)
-    repairable = view.desired_status in view.primary and not gated
+    holds = tuple(label for label in PROMOTION_HOLD_LABELS if label in view.labels)
+    protected = status_repair_preserves_protection(view.primary, view.desired_status)
+    repairable = (
+        view.desired_status in view.primary
+        and not gated
+        and protected
+        and not (view.desired_status == StatusLabel.QUEUED and holds)
+    )
     repairability, details = _guard(
         view, Repairability.AUTOMATIC if repairable else Repairability.MANUAL
     )
     if gated:
         details = (*details, f"human gate would be removed: {', '.join(gated)}")
+    if not protected:
+        details = (*details, "protected lifecycle would be removed")
+    if view.desired_status == StatusLabel.QUEUED and holds:
+        details = (*details, f"hold labels: {', '.join(holds)}")
     return (
         _task_finding(
             view,

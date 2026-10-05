@@ -92,6 +92,28 @@ def lifecycle_labels(labels: Iterable[str]) -> frozenset[StatusLabel]:
     return frozenset(label for label in _LIFECYCLE_LABELS if label in present)
 
 
+def status_repair_preserves_protection(
+    labels: Iterable[str], target: str | None
+) -> bool:
+    """Permit safe cardinality repair, including the interrupted merge rollback.
+
+    Only the exact done+queued pair may remove a protected lifecycle. Auxiliary
+    labels do not participate. This predicate governs repair, not normal policy.
+    """
+    primary = lifecycle_labels(labels)
+    protected = {
+        label
+        for label in primary
+        if LABEL_ROLES[label] in {LabelRole.FINAL, LabelRole.ESCALATION}
+    }
+    if target == StatusLabel.QUEUED and primary == {
+        StatusLabel.DONE,
+        StatusLabel.QUEUED,
+    }:
+        return True
+    return not protected or protected == {target}
+
+
 def _build_allowed_transitions() -> frozenset[tuple[StatusLabel, StatusLabel]]:
     active = (StatusLabel.QUEUED, StatusLabel.BLOCKED, StatusLabel.IN_PROGRESS)
     pairs: set[tuple[StatusLabel, StatusLabel]] = {
@@ -160,4 +182,5 @@ __all__ = [
     "is_allowed",
     "lifecycle_labels",
     "plan_transition",
+    "status_repair_preserves_protection",
 ]

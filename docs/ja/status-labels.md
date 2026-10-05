@@ -142,6 +142,68 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
   `TestCase`や`runTest`に付けてもblobは再生されず新たな探索になるため、再現手順はseedを正とします。
 - `.hypothesis/`は例データベースでGit管理外です。以前の失敗例が次回の実行で再生されます。
 
+## status reconciliation の安全性と収束性（#1218）
+
+status_machine は役割・通常遷移の許可判定・1操作の純粋計画を担当します。
+consistency kernel は観測→desired→finding→typed repairを担当し、不確実なら保留します。
+dispatch executor はfresh guard、mutation前のIntent永続化、適用、live verificationを担当します。
+RuleChain / GC / rebase / Integratorは遷移選択の方針を担当し、全体のlivenessは保証外です。
+
+FINAL / ESCALATIONはinvariant・planner・fresh executorで保護します。
+保持する保護ラベル以外のACTIVE余剰は除去できますが、複数FINALや人間確認ラベルの
+除去による競合解消はMANUALです。再投入には人間がラベル状態を整える必要があります。
+completion overrideや依存元完了判定は変更しません。
+
+唯一のFINAL→ACTIVE修復例外はlifecycleがちょうど
+`{status:done, status:queued}`、desiredがqueuedの場合のdone除去です。
+[差し戻し](#11-statusdone--statusqueued仮マージci失敗によるロールバック)を参照してください。
+Integratorはqueued追加→done除去の順（#254）で操作し、除去失敗をrepairが完了します。
+補助ラベルは例外を拡張せず、done+queued+blockedはMANUALです。
+fresh状態にdone等が追加されたtransitionや無関係なremoveはIntent新規作成・mutation前に
+SKIPPEDとなり、pending Intentのresumeにも同じguardを適用します。
+代償として外部ツールが誤ってdoneにqueuedを付けた場合も再投入されます。
+差し戻しIntentの証拠を要求する方式は別方針です。
+
+promotion hold（`ci:base-branch-red`、`status:blocked-recompute`）の間は、
+blocked→queuedに加え、queued初期付与とqueued保持の競合除去（差し戻しを含む）も保留します。
+findingはMANUAL / INFOとして残り、古いcommandはSKIPPEDです。
+宣言依存なしblockedはAUTOMATICのfindingとcandidateが残りますが、
+dependencies-declared条件で毎cycle SKIPPEDとなり、収束保証外です。
+
+1cycleはIntentのlive verification、fresh full scan、Supervisorの1pass、再観測です。
+1passで複数commandを適用できますが、同じkeyを同じrepair呼び出し内で再実行しません。
+FAILED / SKIPPEDの再試行は次cycleのfresh scanから行います。
+完全・KNOWNなfact、OPENで観測可能なtask、安定した依存・completion・execution証拠、
+apply有効、3command許可、hold・reservation・競合Intent・manual execution findingなし、
+journal/API/verification成功の前提で、自動修復可能なケースは回復後ちょうど1cycle
+（上限k=3）で収束します。matchingの中断Intentも同cycleでresumeします。
+その後2cycleでラベル不変・空計画・無mutation・新規Intentなしを確認します。
+初期欠落・外部全削除を除き、各mutation後にlifecycleが残ります。
+
+Forge未知は全task、taskの未知・欠落・重複・不正形は当該taskだけを保留します。
+executionの曖昧な対応もUNKNOWNとして観測します（certainty列挙はKNOWN/UNKNOWN/STALE）。
+MANUAL / INFOが残る空計画は正常の証明ではありません。
+CLOSED / 不在Issue、apply=False、allowlist制限、completion reservation、競合Intentは
+別の保留区間です。外部epoch変更で同targetのIntentでもresumeできなくなる場合
+（transition Intent後の外部全削除でaddが必要になる等）は保留解消まで収束を主張しません。
+無限障害・無限外部変更下の原子性・livenessは保証しません。
+AUXILIARY・通常・未知statusラベルを保持し、forced-serial不整合は他方針に委ねます。
+
+logger `orchestune.dispatch.status_repair` は単一の既知lifecycleから
+既知lifecycleへのtransitionが通常表外の場合、WARNING
+`status.repair-illegal-transition`を出します。issue・command・source・targetを含み、
+取得済みfresh labelでguardより前に判定し、SKIPPEDにも警告します。
+警告自体は拒否理由ではありません。初期化・多重修復・補助操作・正常/自己遷移は対象外です。
+これはstatus repair境界のtripwireであり、全遷移経路を監視する保証ではありません。
+
+再現例:
+`uv --cache-dir .orchestune/uv-cache run pytest -n0 tests/test_status_reconciliation_stateful.py --hypothesis-seed=1218`。
+CI profileは100例・30step・deadline=None・print_blob=Trueです。
+縮小されたRule列を決定的テストとして保存します。表示blobは対応するHypothesisの
+replay wrapperで使い、TestCaseメソッドへ直接付ける方法を再現手順にしません。
+deadline=Noneは総時間上限ではありません。決定的テストはAPI副作用前後の失敗、
+journal境界・mutation後verification前停止・永続状態を保持したrestartを検証します。
+
 ## 状態遷移図
 
 ```mermaid
@@ -300,6 +362,12 @@ stateDiagram-v2
 
 
 ### 11. `status:done` → `status:queued`（仮マージCI失敗によるロールバック）
+
+queued追加→done除去が中断した正確なdone+queued状態は、
+[自動修復のFINAL保護](#status-reconciliation-の安全性と収束性1218)の唯一の例外です。
+queued保持とpromotion hold不在を確認してdoneだけを除去します。
+外部の誤ったqueued付与でもdoneタスクが再投入される代償があり、
+それ以外の保護ラベル競合は人間が解消します。
 - 発生元: `orchestune/integrator/pr.py`の`handle_merge_failure`
 - 条件: Integratorによる仮マージ後のローカルCIが失敗した場合、マージを
   取り消しタスクを差し戻す。
