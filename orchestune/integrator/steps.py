@@ -12,6 +12,7 @@ import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from orchestune.forge import REQUIRED_LABELS
@@ -22,12 +23,21 @@ from orchestune.infra.execution_deadline import (
 from orchestune.infra.git_cli import (
     ConditionalBranchDeletionResult,
     delete_remote_branch_if_matches,
+    read_remote_branch_tip,
     run_git,
 )
 from orchestune.infra.process_utils import default_ci_command, file_lock
 from orchestune.integrator.finalization import (
     ensure_integration_receipt,
     find_integration_receipt,
+)
+from orchestune.integrator.finalization_retry import (
+    BLOCKED_LABEL,
+    BlockedOutcome,
+    DenialVerdict,
+    handle_denied_deletion,
+    latest_blocked_proof,
+    settle_blocked_child,
 )
 from orchestune.integrator.git_ops import IntegrationMerger
 from orchestune.integrator.pr import ensure_integration_pr
@@ -161,6 +171,22 @@ class PrepareTasksStep(IntegrationComponent):
                     )
 
 
+@dataclass
+class _HeldFinalizations:
+    """Children kept out of this cycle because their branch deletion is held (#827)."""
+
+    deferred: list[int] = field(default_factory=list)
+    escalated: list[int] = field(default_factory=list)
+
+    def as_report(self) -> IntegrationReport:
+        report: IntegrationReport = {}
+        if self.deferred:
+            report["finalization_deferred"] = self.deferred
+        if self.escalated:
+            report["finalization_escalated"] = self.escalated
+        return report
+
+
 class RetryChildIssueCloseStep(IntegrationComponent):
     """Retry closing child issues whose integration was already merged."""
 
@@ -170,13 +196,17 @@ class RetryChildIssueCloseStep(IntegrationComponent):
 
         remaining_tasks = []
         retried_closed: list[int] = []
+        held = _HeldFinalizations()
         for task in ctx.active_done_tasks:
             if "integration:included" not in task.status_labels:
-                recovery = self._restore_label_from_receipt(ctx, task)
+                recovery = self._restore_label_from_receipt(ctx, task, held)
                 if recovery is _ReceiptRecovery.UNRECOVERED:
                     remaining_tasks.append(task)
                     continue
-                if recovery is _ReceiptRecovery.RETRY_FINALIZATION:
+                if recovery in {
+                    _ReceiptRecovery.RETRY_FINALIZATION,
+                    _ReceiptRecovery.DEFERRED,
+                }:
                     continue
             try:
                 ctx.forge.close_issue(
@@ -196,19 +226,20 @@ class RetryChildIssueCloseStep(IntegrationComponent):
                 )
 
         ctx.active_done_tasks = remaining_tasks
-        if not ctx.active_done_tasks:
-            return {
-                "status": IntegrationStatus.NO_DONE_TASKS,
-                "retried_closed_issues": retried_closed,
-            }
-        return {
-            "status": IntegrationStatus.SUCCESS,
-            "retried_closed_issues": retried_closed,
-        }
+        report = held.as_report()
+        report["retried_closed_issues"] = retried_closed
+        report["status"] = (
+            IntegrationStatus.SUCCESS
+            if ctx.active_done_tasks
+            else IntegrationStatus.NO_DONE_TASKS
+        )
+        return report
 
     def _restore_label_from_receipt(
-        self, ctx: IntegrationContext, task: Task
+        self, ctx: IntegrationContext, task: Task, held: _HeldFinalizations
     ) -> _ReceiptRecovery:
+        if BLOCKED_LABEL in task.status_labels:
+            return self._settle_blocked(ctx, task, held)
         proof = find_integration_receipt(
             ctx.forge,
             task.issue_number,
@@ -221,11 +252,68 @@ class RetryChildIssueCloseStep(IntegrationComponent):
             deletion = delete_remote_branch_if_matches(
                 ctx.original_root, proof.branch_name, proof.source_sha
             )
+            if deletion is ConditionalBranchDeletionResult.TIP_MISMATCH:
+                return _ReceiptRecovery.UNRECOVERED
             if deletion not in {
                 ConditionalBranchDeletionResult.DELETED,
                 ConditionalBranchDeletionResult.ALREADY_ABSENT,
             }:
-                return _ReceiptRecovery.UNRECOVERED
+                return self._defer_held_deletion(ctx, task, proof, deletion, held)
+        return self._label_recovered(ctx, task)
+
+    @staticmethod
+    def _defer_held_deletion(
+        ctx: IntegrationContext,
+        task: Task,
+        proof: TaskIntegrationProof,
+        deletion: ConditionalBranchDeletionResult,
+        held: _HeldFinalizations,
+    ) -> _ReceiptRecovery:
+        """#827: the proof already reached the parent, so a held deletion must not
+        send the task through worktree, push and PR again; only a deletion the
+        remote refused by policy is counted toward escalation."""
+        held.deferred.append(task.issue_number)
+        if deletion is ConditionalBranchDeletionResult.DENIED:
+            verdict = handle_denied_deletion(
+                ctx.forge,
+                proof,
+                ctx.base_branch,
+                ctx.config.integration_run_id,
+                ctx.config.parent_issue_number,
+            )
+            if verdict is DenialVerdict.ESCALATED:
+                held.escalated.append(task.issue_number)
+        return _ReceiptRecovery.DEFERRED
+
+    def _settle_blocked(
+        self, ctx: IntegrationContext, task: Task, held: _HeldFinalizations
+    ) -> _ReceiptRecovery:
+        """A labeled child is read-only, so an unverifiable proof holds it rather
+        than returning it to merge and finalization, which would retry the
+        refused deletion. The proof comes from the newest finalization record,
+        not the receipt (several receipts exist once a tip was re-integrated)."""
+        proof = latest_blocked_proof(
+            ctx.forge, task.issue_number, task.subtask_id, ctx.base_branch
+        )
+        if proof is None or not self._proof_reaches_parent(ctx, proof):
+            held.deferred.append(task.issue_number)
+            return _ReceiptRecovery.DEFERRED
+        outcome = settle_blocked_child(
+            ctx.forge,
+            proof,
+            ctx.base_branch,
+            ctx.config.parent_issue_number,
+            lambda: read_remote_branch_tip(ctx.original_root, proof.branch_name),
+        )
+        if outcome is BlockedOutcome.REINTEGRATE:
+            return _ReceiptRecovery.UNRECOVERED
+        if outcome is BlockedOutcome.HOLD:
+            held.deferred.append(task.issue_number)
+            return _ReceiptRecovery.DEFERRED
+        return self._label_recovered(ctx, task)
+
+    @staticmethod
+    def _label_recovered(ctx: IntegrationContext, task: Task) -> _ReceiptRecovery:
         try:
             ctx.forge.add_label(task.issue_number, "integration:included")
         except Exception as error:
@@ -257,6 +345,7 @@ class RetryChildIssueCloseStep(IntegrationComponent):
 class _ReceiptRecovery(StrEnum):
     UNRECOVERED = "unrecovered"
     RETRY_FINALIZATION = "retry_finalization"
+    DEFERRED = "deferred"
     READY_TO_CLOSE = "ready_to_close"
 
 
@@ -840,6 +929,14 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 f"#{proof.issue_number}; branch deletion result={result}",
                 file=sys.stderr,
             )
+            if result is ConditionalBranchDeletionResult.DENIED:
+                handle_denied_deletion(
+                    ctx.forge,
+                    proof,
+                    ctx.base_branch,
+                    ctx.config.integration_run_id,
+                    ctx.config.parent_issue_number,
+                )
         return finalized
 
     @staticmethod

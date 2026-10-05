@@ -81,6 +81,9 @@ class IntegrationReport(TypedDict, total=False):
     newly_included: list[str]
     unparsable_done_issues: list[int]
     retried_closed_issues: list[int]
+    # #827: children whose branch deletion is held / escalated this cycle.
+    finalization_deferred: list[int]
+    finalization_escalated: list[int]
     auto_merged: bool
     closed_issues: list[int]
     # #820: structured causes (stage, limits, attempt, stop/rollback/write state,

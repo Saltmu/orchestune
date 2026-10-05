@@ -6,14 +6,25 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.infra.git_cli import (
     ConditionalBranchDeletionResult,
+    RemoteBranchReadError,
     delete_remote_branch_if_matches,
     fetch_remote_branch,
+    read_remote_branch_tip,
 )
 from orchestune.integrator.finalization import (
     find_integration_receipt,
     render_integration_receipt,
+)
+from orchestune.integrator.finalization_retry import (
+    BLOCKED_LABEL,
+    handle_denied_deletion,
+)
+from orchestune.integrator.finalization_retry import (
+    MARKER as DENIAL_MARKER,
 )
 from orchestune.integrator.proofs import TaskIntegrationProof
 from orchestune.integrator.steps import (
@@ -378,3 +389,406 @@ def test_receipt_embedded_in_a_trusted_comment_is_not_accepted(fake_forge):
     )
 
     assert recovered is None
+
+
+def _origin_with_child(tmp_path: Path) -> tuple[Path, Path, str]:
+    """A bare origin holding ``child`` at one commit, plus an integrator clone."""
+    remote = tmp_path / "origin.git"
+    _git(tmp_path, "init", "--bare", str(remote))
+    author = tmp_path / "author"
+    _git(tmp_path, "init", "-b", "main", str(author))
+    _configure_identity(author)
+    _commit(author, "base.txt", "base\n", "base")
+    _git(author, "remote", "add", "origin", str(remote))
+    _git(author, "push", "-u", "origin", "main")
+    _git(remote, "symbolic-ref", "HEAD", "refs/heads/main")
+    _git(author, "checkout", "-b", "child")
+    commit_a = _commit(author, "child.txt", "A\n", "child A")
+    _git(author, "push", "-u", "origin", "child")
+    integrator = tmp_path / "integrator"
+    _git(tmp_path, "clone", str(remote), str(integrator))
+    return remote, integrator, commit_a
+
+
+def test_a_remote_that_forbids_deletions_is_classified_as_denied(tmp_path: Path):
+    remote, integrator, commit_a = _origin_with_child(tmp_path)
+    _git(remote, "config", "receive.denyDeletes", "true")
+
+    result = delete_remote_branch_if_matches(integrator, "child", commit_a)
+
+    assert result is ConditionalBranchDeletionResult.DENIED
+    assert _git(integrator, "ls-remote", "origin", "refs/heads/child") != ""
+
+
+def test_a_declining_pre_receive_hook_is_classified_as_denied(tmp_path: Path):
+    """GitHub rulesets reject through the same `[remote rejected]` path."""
+    remote, integrator, commit_a = _origin_with_child(tmp_path)
+    hook = remote / "hooks" / "pre-receive"
+    hook.write_text(
+        "#!/bin/sh\necho 'GH013: Repository rule violations found' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    hook.chmod(0o755)
+
+    result = delete_remote_branch_if_matches(integrator, "child", commit_a)
+
+    assert result is ConditionalBranchDeletionResult.DENIED
+
+
+def test_an_unreachable_remote_is_failed_not_denied(tmp_path: Path):
+    """No permanent-failure evidence: connection problems stay transient."""
+    _remote, integrator, commit_a = _origin_with_child(tmp_path)
+    _git(integrator, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
+
+    result = delete_remote_branch_if_matches(integrator, "child", commit_a)
+
+    assert result is ConditionalBranchDeletionResult.FAILED
+
+
+def test_a_moved_tip_is_still_a_tip_mismatch_when_deletions_are_forbidden(
+    tmp_path: Path,
+):
+    """The lease check runs before the remote policy can reject the push."""
+    remote, integrator, _commit_a = _origin_with_child(tmp_path)
+    _git(remote, "config", "receive.denyDeletes", "true")
+
+    result = delete_remote_branch_if_matches(integrator, "child", "b" * 40)
+
+    assert result is ConditionalBranchDeletionResult.TIP_MISMATCH
+
+
+def test_read_remote_branch_tip_reports_the_tip_or_absence(tmp_path: Path):
+    _remote, integrator, commit_a = _origin_with_child(tmp_path)
+
+    assert read_remote_branch_tip(integrator, "child") == commit_a
+    assert read_remote_branch_tip(integrator, "no-such-branch") is None
+
+
+def test_read_remote_branch_tip_does_not_mistake_a_failure_for_absence(
+    tmp_path: Path,
+):
+    _remote, integrator, _commit_a = _origin_with_child(tmp_path)
+    _git(integrator, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
+
+    with pytest.raises(RemoteBranchReadError):
+        read_remote_branch_tip(integrator, "child")
+
+
+_RECEIPT_BASE = "parent/issue-100"
+
+
+def _proof() -> TaskIntegrationProof:
+    return TaskIntegrationProof(
+        issue_number=1,
+        subtask_id="task-1",
+        branch_name="claude/issue-1-task-1",
+        source_sha="a" * 40,
+    )
+
+
+def _store_comments(fake_forge) -> dict[int, list[dict[str, str]]]:
+    """Back the Forge double with a comment store that starts with the receipt."""
+    store: dict[int, list[dict[str, str]]] = {
+        1: [
+            {
+                "body": render_integration_receipt(_proof(), _RECEIPT_BASE),
+                "author": "bot",
+            }
+        ]
+    }
+    fake_forge.list_comments.side_effect = lambda n: [dict(c) for c in store.get(n, [])]
+    fake_forge.add_comment.side_effect = lambda n, body: store.setdefault(n, []).append(
+        {"body": body, "author": "bot"}
+    )
+    return store
+
+
+def _retry_ctx(fake_forge, tmp_path: Path, run_id: str, *labels: str):
+    task = make_task(1, subtask_id="task-1", status_labels=("status:done", *labels))
+    config = IntegratorConfig(
+        apply=True,
+        parent_issue_number=100,
+        forge=fake_forge,
+        integration_run_id=run_id,
+    )
+    return IntegrationContext(
+        config=config,
+        repository_root=tmp_path,
+        original_root=tmp_path,
+        base_branch=f"origin/{_RECEIPT_BASE}",
+        temp_branch="integration/temp-parent-issue-100-test",
+        active_done_tasks=[task],
+    )
+
+
+def _retry_with(fake_forge, tmp_path: Path, run_id: str, deletion, *labels: str):
+    ctx = _retry_ctx(fake_forge, tmp_path, run_id, *labels)
+    with patch(
+        "orchestune.integrator.steps.delete_remote_branch_if_matches",
+        autospec=True,
+        return_value=deletion,
+    ) as conditional_delete:
+        result = RetryChildIssueCloseStep().execute(ctx)
+    return ctx, result, conditional_delete
+
+
+def _seed_escalation(fake_forge, proof: TaskIntegrationProof | None = None) -> None:
+    """Leave the child Issue as three refused cycles and an escalation would."""
+    for run in ("run-1", "run-2", "run-3"):
+        handle_denied_deletion(
+            fake_forge, proof or _proof(), f"origin/{_RECEIPT_BASE}", run, 100
+        )
+    fake_forge.add_label.reset_mock()
+    fake_forge.ensure_labels.reset_mock()
+
+
+def _denial_events(store) -> list[str]:
+    return [c["body"] for c in store[1] if DENIAL_MARKER in c["body"]]
+
+
+def test_denied_deletion_is_deferred_and_counted_not_reintegrated(
+    fake_forge, tmp_path: Path
+):
+    store = _store_comments(fake_forge)
+
+    ctx, result, _ = _retry_with(
+        fake_forge, tmp_path, "run-1", ConditionalBranchDeletionResult.DENIED
+    )
+
+    # No worktree / push / PR round trip: the task leaves the cycle entirely.
+    assert result["status"] == "no_done_tasks"
+    assert ctx.active_done_tasks == []
+    assert result["finalization_deferred"] == [1]
+    assert len(_denial_events(store)) == 1
+    fake_forge.close_issue.assert_not_called()
+    fake_forge.add_label.assert_not_called()
+
+
+def test_transient_failure_is_deferred_but_never_counted(fake_forge, tmp_path: Path):
+    store = _store_comments(fake_forge)
+
+    ctx, result, _ = _retry_with(
+        fake_forge, tmp_path, "run-1", ConditionalBranchDeletionResult.FAILED
+    )
+
+    assert ctx.active_done_tasks == []
+    assert result["finalization_deferred"] == [1]
+    assert _denial_events(store) == []
+    fake_forge.close_issue.assert_not_called()
+
+
+def test_moved_tip_still_returns_the_task_to_integration(fake_forge, tmp_path: Path):
+    store = _store_comments(fake_forge)
+
+    ctx, result, _ = _retry_with(
+        fake_forge, tmp_path, "run-1", ConditionalBranchDeletionResult.TIP_MISMATCH
+    )
+
+    assert [task.issue_number for task in ctx.active_done_tasks] == [1]
+    assert result["status"] == "success"
+    assert _denial_events(store) == []
+
+
+def test_the_third_denied_cycle_escalates_without_changing_status_labels(
+    fake_forge, tmp_path: Path
+):
+    store = _store_comments(fake_forge)
+
+    escalated = []
+    for run in ("run-1", "run-2", "run-3"):
+        _ctx, result, _ = _retry_with(
+            fake_forge, tmp_path, run, ConditionalBranchDeletionResult.DENIED
+        )
+        escalated.append(result.get("finalization_escalated", []))
+
+    assert escalated == [[], [], [1]]
+    fake_forge.add_label.assert_called_once_with(1, BLOCKED_LABEL)
+    fake_forge.remove_label.assert_not_called()
+    fake_forge.close_issue.assert_not_called()
+    assert len(_denial_events(store)) == 4  # three denials + the terminal record
+
+
+def test_a_blocked_child_does_not_attempt_deletion_and_holds(
+    fake_forge, tmp_path: Path
+):
+    _store_comments(fake_forge)
+    _seed_escalation(fake_forge)
+    ctx = _retry_ctx(fake_forge, tmp_path, "run-4", BLOCKED_LABEL)
+
+    with (
+        patch(
+            "orchestune.integrator.steps.delete_remote_branch_if_matches",
+            autospec=True,
+        ) as conditional_delete,
+        patch(
+            "orchestune.integrator.steps.read_remote_branch_tip",
+            autospec=True,
+            return_value="a" * 40,
+        ),
+    ):
+        result = RetryChildIssueCloseStep().execute(ctx)
+
+    conditional_delete.assert_not_called()
+    assert ctx.active_done_tasks == []
+    assert result["finalization_deferred"] == [1]
+    fake_forge.close_issue.assert_not_called()
+
+
+def test_a_blocked_child_is_finalized_once_the_branch_was_removed(
+    fake_forge, tmp_path: Path
+):
+    _store_comments(fake_forge)
+    _seed_escalation(fake_forge)
+    ctx = _retry_ctx(fake_forge, tmp_path, "run-4", BLOCKED_LABEL)
+
+    with (
+        patch(
+            "orchestune.integrator.steps.delete_remote_branch_if_matches",
+            autospec=True,
+        ) as conditional_delete,
+        patch(
+            "orchestune.integrator.steps.read_remote_branch_tip",
+            autospec=True,
+            return_value=None,
+        ),
+    ):
+        result = RetryChildIssueCloseStep().execute(ctx)
+
+    conditional_delete.assert_not_called()
+    assert result["retried_closed_issues"] == [1]
+    fake_forge.remove_label.assert_called_once_with(1, BLOCKED_LABEL)
+    fake_forge.add_label.assert_called_once_with(1, "integration:included")
+    fake_forge.close_issue.assert_called_once()
+
+
+def test_a_blocked_child_whose_tip_moved_returns_to_integration(
+    fake_forge, tmp_path: Path
+):
+    _store_comments(fake_forge)
+    _seed_escalation(fake_forge)
+    ctx = _retry_ctx(fake_forge, tmp_path, "run-4", BLOCKED_LABEL)
+
+    with patch(
+        "orchestune.integrator.steps.read_remote_branch_tip",
+        autospec=True,
+        return_value="b" * 40,
+    ):
+        RetryChildIssueCloseStep().execute(ctx)
+
+    assert [task.issue_number for task in ctx.active_done_tasks] == [1]
+    fake_forge.remove_label.assert_called_once_with(1, BLOCKED_LABEL)
+    fake_forge.close_issue.assert_not_called()
+
+
+def test_denied_deletion_in_the_merge_cycle_is_counted_and_not_finalized(
+    fake_forge, tmp_path: Path
+):
+    store = _store_comments(fake_forge)
+    task = make_task(1, subtask_id="task-1", status_labels=("status:done",))
+    config = IntegratorConfig(
+        apply=True,
+        parent_issue_number=100,
+        forge=fake_forge,
+        child_review_gate="off",
+        integration_run_id="run-1",
+    )
+    ctx = IntegrationContext(
+        config=config,
+        repository_root=tmp_path,
+        original_root=tmp_path,
+        base_branch=f"origin/{_RECEIPT_BASE}",
+        temp_branch="integration/temp-parent-issue-100-test",
+        merged_tasks=[task.subtask_id],
+        merged_task_proofs={task.issue_number: _proof()},
+        active_done_tasks=[task],
+        integration_pr_number=123,
+    )
+
+    with (
+        patch("orchestune.integrator.steps.run_git", autospec=True),
+        patch(
+            "orchestune.integrator.steps.delete_remote_branch_if_matches",
+            autospec=True,
+            return_value=ConditionalBranchDeletionResult.DENIED,
+        ),
+    ):
+        result = AutoMergeChildIntegrationStep().execute(ctx)
+
+    assert result["status"] == "success"
+    assert len(_denial_events(store)) == 1
+    fake_forge.add_label.assert_not_called()
+    fake_forge.close_issue.assert_not_called()
+
+
+def _run_blocked(fake_forge, tmp_path: Path, *, tip: str | None):
+    ctx = _retry_ctx(fake_forge, tmp_path, "run-9", BLOCKED_LABEL)
+    with (
+        patch(
+            "orchestune.integrator.steps.delete_remote_branch_if_matches",
+            autospec=True,
+        ) as conditional_delete,
+        patch(
+            "orchestune.integrator.steps.read_remote_branch_tip",
+            autospec=True,
+            return_value=tip,
+        ),
+    ):
+        result = RetryChildIssueCloseStep().execute(ctx)
+    return ctx, result, conditional_delete
+
+
+def test_a_blocked_child_stays_held_when_its_receipt_cannot_be_found(
+    fake_forge, tmp_path: Path
+):
+    """A transient receipt lookup failure must not send a labeled child back
+    through merge and finalization, which would retry the forbidden deletion."""
+    store = _store_comments(fake_forge)
+    _seed_escalation(fake_forge)
+    store[1] = [c for c in store[1] if DENIAL_MARKER in c["body"]]
+
+    ctx, result, conditional_delete = _run_blocked(fake_forge, tmp_path, tip="a" * 40)
+
+    assert ctx.active_done_tasks == []
+    assert result["finalization_deferred"] == [1]
+    conditional_delete.assert_not_called()
+    fake_forge.close_issue.assert_not_called()
+
+
+def test_a_blocked_child_is_settled_from_the_newest_proof_not_the_oldest_receipt(
+    fake_forge, tmp_path: Path
+):
+    """Receipts for A and B exist (A first). The block is on B, whose tip is
+    still on the remote, so the child must keep holding."""
+    store = _store_comments(fake_forge)
+    newer = TaskIntegrationProof(
+        issue_number=1,
+        subtask_id="task-1",
+        branch_name="claude/issue-1-task-1",
+        source_sha="b" * 40,
+    )
+    store[1].append(
+        {"body": render_integration_receipt(newer, _RECEIPT_BASE), "author": "bot"}
+    )
+    _seed_escalation(fake_forge, newer)
+
+    ctx, result, _ = _run_blocked(fake_forge, tmp_path, tip="b" * 40)
+
+    assert ctx.active_done_tasks == []
+    assert result["finalization_deferred"] == [1]
+    fake_forge.remove_label.assert_not_called()
+
+
+def test_a_blocked_child_whose_proof_does_not_reach_the_parent_stays_held(
+    fake_forge, tmp_path: Path
+):
+    _store_comments(fake_forge)
+    _seed_escalation(fake_forge)
+    fake_forge.is_merge_commit_reachable_from.return_value = False
+
+    ctx, result, conditional_delete = _run_blocked(fake_forge, tmp_path, tip=None)
+
+    assert ctx.active_done_tasks == []
+    assert result["finalization_deferred"] == [1]
+    conditional_delete.assert_not_called()
+    fake_forge.close_issue.assert_not_called()
+    fake_forge.remove_label.assert_not_called()

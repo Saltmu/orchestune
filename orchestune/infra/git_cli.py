@@ -72,6 +72,10 @@ class ConditionalBranchDeletionResult(StrEnum):
     DELETED = "deleted"
     ALREADY_ABSENT = "already_absent"
     TIP_MISMATCH = "tip_mismatch"
+    # The remote answered and refused the deletion by policy (ruleset, branch
+    # protection, pre-receive hook, ``receive.denyDeletes``), as opposed to a
+    # connection, authentication or otherwise unknown failure (#827).
+    DENIED = "denied"
     FAILED = "failed"
 
 
@@ -375,6 +379,10 @@ def delete_remote_branch_if_matches(
             return _classify_lease_rejection(repository_root, ref)
         if "remote ref does not exist" in detail:
             return ConditionalBranchDeletionResult.ALREADY_ABSENT
+        # ``[remote rejected]`` does not contain the lease marker ``[rejected]``
+        # above; it is only printed once the remote has accepted the connection.
+        if "[remote rejected]" in detail:
+            return ConditionalBranchDeletionResult.DENIED
         return ConditionalBranchDeletionResult.FAILED
     return ConditionalBranchDeletionResult.DELETED
 
@@ -408,6 +416,37 @@ def _classify_lease_rejection(
     if result.returncode == 0:
         return ConditionalBranchDeletionResult.TIP_MISMATCH
     return ConditionalBranchDeletionResult.FAILED
+
+
+class RemoteBranchReadError(RuntimeError):
+    """The remote branch tip could not be read (distinct from "absent")."""
+
+
+def read_remote_branch_tip(repository_root: str | Path, branch: str) -> str | None:
+    """Return the remote branch tip SHA, or ``None`` when the branch is absent.
+
+    Read-only: used to watch a branch whose deletion the remote keeps denying
+    without attempting another write (#827). A failed lookup raises
+    ``RemoteBranchReadError`` so it is never mistaken for an absent branch.
+    """
+    ref = f"refs/heads/{_validate_ref_name(branch)}"
+    try:
+        result = run_git(
+            ["ls-remote", "--exit-code", "--heads", "origin", ref],
+            cwd=repository_root,
+            check=False,
+        )
+    except OSError as error:
+        raise RemoteBranchReadError(str(error)) from error
+    if result.returncode == 2:
+        return None
+    first_line = result.stdout.split("\n", 1)[0].split()
+    if result.returncode != 0 or not first_line:
+        raise RemoteBranchReadError(f"git ls-remote exited {result.returncode}")
+    sha = first_line[0]
+    if not _COMMIT_SHA_PATTERN.fullmatch(sha):
+        raise RemoteBranchReadError(f"unexpected ls-remote output: {sha!r}")
+    return sha.lower()
 
 
 def normalize_remote_branch_name(branch: str) -> str:

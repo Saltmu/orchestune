@@ -440,6 +440,20 @@ a normally-completed (non-`not-needed`) subtask. The required dispatcher
   label is still set (i.e. two cycles in a row), that's treated as a likely
   configuration/operational anomaly: the affected child Issues are escalated
   to `status:blocked-human-review` and the label is cleared.
+- `integration:finalization-blocked`: auxiliary label the integrator sets on a
+  **child Issue** when the remote keeps refusing to delete its finalized
+  branch by policy (a ruleset, branch protection, a pre-receive hook, and so
+  on; `orchestune/integrator/finalization_retry.py`, #827). Refusals are
+  counted once per integration run and stored in comments on the child Issue,
+  so the count survives a new runner. The third refusal sets this label and
+  comments on the parent and child Issues. `status:*` labels are left
+  unchanged: a second lifecycle label beside `status:done` is reported as a
+  conflict by the consistency kernel, and removing `status:done` would affect
+  dependency resolution. Once set, deletion is no longer retried; the branch is
+  only read. If someone deletes the branch the child is finalized and the
+  label cleared, and if its tip moved the child goes back to integration.
+  After relaxing the ruleset, an operator removes the label to resume deletion
+  attempts (the count restarts at zero).
 - `ci:base-branch-red`: marker label attached when a task encounters a CI failure
   caused by the base branch (`outcome.result=blocked` / `reason=base-branch-red`) (#555).
   Prevents erroneous dependency promotion (livelocks) while holding the task in
