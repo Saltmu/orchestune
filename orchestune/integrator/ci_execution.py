@@ -37,6 +37,8 @@ ENVIRONMENT_STAGE = "environment"
 # #1248: Integrator CI verifies a temporary merge worktree; no Orchestune control or
 # completion-context variable of the parent process is a valid input for it.
 _ORCHESTUNE_ENV_PREFIX = "ORCHESTUNE_"
+# Documented local-CI resource settings, not parent task state, so CI still sees them.
+_CI_RESOURCE_ENV = frozenset({"ORCHESTUNE_TEST_WORKERS"})
 
 
 @dataclass(frozen=True)
@@ -137,7 +139,7 @@ def _prepare_environment_vars(
     env = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith(_ORCHESTUNE_ENV_PREFIX)
+        if not key.startswith(_ORCHESTUNE_ENV_PREFIX) or key in _CI_RESOURCE_ENV
     }
     env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
     return env

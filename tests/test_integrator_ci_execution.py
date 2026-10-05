@@ -64,7 +64,11 @@ def _repository(tmp_path: Path) -> Path:
 
 
 def _orchestune_keys(env: dict[str, str]) -> list[str]:
-    return sorted(key for key in env if key.startswith("ORCHESTUNE_"))
+    return sorted(
+        key
+        for key in env
+        if key.startswith("ORCHESTUNE_") and key != "ORCHESTUNE_TEST_WORKERS"
+    )
 
 
 @pytest.mark.usefixtures("leaked_parent_env")
@@ -105,3 +109,22 @@ def test_dependency_and_ci_stages_run_without_orchestune_variables(tmp_path: Pat
         assert spec.env["KEEP_ME"] == "kept"
     for name, value in LEAKED.items():
         assert os.environ[name] == value
+
+
+@pytest.mark.usefixtures("leaked_parent_env")
+def test_documented_ci_resource_override_still_reaches_ci(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """#1248 review: `local-ci.ps1` reads `ORCHESTUNE_TEST_WORKERS` (CONTRIBUTING)."""
+    monkeypatch.setenv("ORCHESTUNE_TEST_WORKERS", "4")
+    repository = _repository(tmp_path)
+
+    env, _ = prepare_environment(
+        repository,
+        repository,
+        policy=IntegrationExecutionPolicy(),
+        runner=RecordingRunner(),
+    )
+
+    assert env["ORCHESTUNE_TEST_WORKERS"] == "4"
+    assert _orchestune_keys(env) == []
