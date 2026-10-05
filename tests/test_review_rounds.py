@@ -9,6 +9,7 @@ import pytest
 from orchestune.review.markers import build_trigger_body
 from orchestune.review.rounds import (
     ReviewRoundContext,
+    build_restorable_trigger_body,
     parse_trigger,
     plan_next_round,
     previous_round_window,
@@ -388,3 +389,59 @@ def test_list_prefix_cannot_close_a_top_level_fence() -> None:
 def test_blank_lines_do_not_end_a_list_fence() -> None:
     body = f"- ```\n\n  still code\n{INDENTED_MARKERS}\n  ```"
     assert parse_trigger({"id": 9, "body": body, "created_at": at(1)}) is None
+
+
+@pytest.mark.parametrize(
+    "fence_opener",
+    [
+        " ```",
+        "  ```",
+        "   ```",
+        " ~~~",
+        "   ~~~",
+    ],
+)
+def test_unclosed_indented_top_level_fence_is_not_closed_by_column0_markers(
+    fence_opener: str,
+) -> None:
+    body = f"{fence_opener}\n{MARKERS}"
+    item = {"id": 9, "body": body, "created_at": at(1)}
+    assert parse_trigger(item) is None
+    assert 9 not in trigger_comment_ids([item])
+
+
+def test_list_item_ended_by_blank_line_makes_subsequent_indented_fence_top_level() -> (
+    None
+):
+    # Indent 1 is less than content column 2, so the list item ends and the fence is top-level.
+    body = f"- a\n\n ```\n{MARKERS}"
+    item = {"id": 9, "body": body, "created_at": at(1)}
+    assert parse_trigger(item) is None
+    assert 9 not in trigger_comment_ids([item])
+
+
+def test_lazy_continuation_inside_list_item_fence_restores_trigger() -> None:
+    reply = "- a\nb\n  ```\n  code"
+    body = build_trigger_body(reply, "claude", 5, HEAD)
+    parsed = parse_trigger({"id": 9, "body": body, "created_at": at(1)})
+    assert parsed is not None and parsed.round == 5
+
+
+def test_nested_list_item_fence_closes_on_return_to_outer_item() -> None:
+    reply = "- item 1\n  - item 2\n    ```\n    code\n  outer item text\n"
+    body = build_trigger_body(reply, "claude", 5, HEAD)
+    parsed = parse_trigger({"id": 9, "body": body, "created_at": at(1)})
+    assert parsed is not None and parsed.round == 5
+
+
+def test_build_restorable_trigger_body_rejects_unclosed_top_level_fence() -> None:
+    reply = "```\nunclosed code block"
+    with pytest.raises(EvidenceContractError, match="fence"):
+        build_restorable_trigger_body(reply, "claude", 1, HEAD)
+
+
+def test_build_restorable_trigger_body_succeeds_on_valid_reply() -> None:
+    reply = "```\nclosed\n```"
+    body = build_restorable_trigger_body(reply, "claude", 1, HEAD)
+    parsed = parse_trigger({"id": 1, "body": body, "created_at": at(1)})
+    assert parsed is not None and parsed.round == 1

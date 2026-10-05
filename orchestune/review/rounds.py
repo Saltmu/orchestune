@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from itertools import pairwise
 from typing import Any
 
-from orchestune.review.markers import parse_round_marker, parse_trigger_reviewer
+from orchestune.review.markers import (
+    build_trigger_body,
+    parse_round_marker,
+    parse_trigger_reviewer,
+)
 from orchestune.review.snapshot import (
     EvidenceContractError,
     InsufficientEvidenceError,
@@ -23,13 +27,114 @@ from orchestune.review.snapshot import (
     normalize_timestamp,
 )
 
-_FENCE = re.compile(r"^\s{0,3}((?:[-*+]|\d+[.)])\s+)?(`{3,}|~{3,})(.*)$")
+
+@dataclass(frozen=True)
+class _FenceState:
+    char: str
+    length: int
+    container: int
+
+
+_FENCE_OPENER = re.compile(r"^(`{3,}|~{3,})(.*)$")
+_FENCE_CLOSER = re.compile(r"^(`{3,}|~{3,})\s*$")
+_LIST_MARKER = re.compile(r"^([-*+]|\d{1,9}[.)])(\s{1,4}|\s*$)(.*)$")
 _TRIGGER_LINE = re.compile(
     r"<!--\s*orchestune:review-trigger bot=(claude|codex)\s*-->", re.I
 )
 _ROUND_LINE = re.compile(r"<!--\s*orchestune:review-round\s+(\d+)\s*-->", re.I)
 _HEAD_LINE = re.compile(r"<!--\s*orchestune:review-head\s+([0-9a-f]{40})\s*-->", re.I)
 _BARE_MENTIONS = frozenset({"@claude review", "@codex review"})
+
+
+def _match_fence_opener(s: str) -> tuple[str, int] | None:
+    m = _FENCE_OPENER.match(s)
+    if not m:
+        return None
+    token, rest = m.group(1), m.group(2)
+    if token[0] == "`" and "`" in rest:
+        return None
+    return token[0], len(token)
+
+
+def _is_fence_closer(stripped: str, fence: _FenceState) -> bool:
+    m = _FENCE_CLOSER.match(stripped)
+    if not m:
+        return False
+    token = m.group(1)
+    return token[0] == fence.char and len(token) >= fence.length
+
+
+def _is_thematic_break(s: str) -> bool:
+    cleaned = s.replace(" ", "")
+    return (
+        len(cleaned) >= 3
+        and all(c == cleaned[0] for c in cleaned)
+        and cleaned[0] in "-_*"
+    )
+
+
+def _match_list_marker(s: str) -> tuple[int, str] | None:
+    if _is_thematic_break(s):
+        return None
+    m = _LIST_MARKER.match(s)
+    if not m:
+        return None
+    marker, spaces, rest = m.group(1), m.group(2), m.group(3)
+    width = len(marker) + (len(spaces) if spaces else 1)
+    return width, rest
+
+
+def _is_block_start(s: str) -> bool:
+    return (
+        s.startswith(">")
+        or s.startswith("<!--")
+        or _match_fence_opener(s) is not None
+        or _match_list_marker(s) is not None
+    )
+
+
+def _step_line(
+    expanded: str,
+    stripped: str,
+    i: int,
+    items: list[int],
+    paragraph: bool,
+    lines: list[str],
+) -> tuple[_FenceState | None, bool]:
+    s = expanded[i:]
+    if paragraph and not _is_block_start(s):
+        pass  # lazy continuation: preserve open items
+    else:
+        while items and items[-1] > i:
+            items.pop()
+
+    P = items[-1] if items else 0
+    rel_i = i - P
+
+    if 0 <= rel_i <= 3:
+        lm = _match_list_marker(s)
+        if lm is not None:
+            width, rest = lm
+            content_col = i + width
+            items.append(content_col)
+            rest_s = rest.lstrip(" ")
+            if len(rest) - len(rest_s) <= 3:
+                opener = _match_fence_opener(rest_s)
+                if opener is not None:
+                    return _FenceState(opener[0], opener[1], content_col), False
+            return None, bool(rest.strip())
+
+        opener = _match_fence_opener(s)
+        if opener is not None:
+            return _FenceState(opener[0], opener[1], P), False
+    elif rel_i >= 4:
+        return None, False
+
+    if i == 0 and not stripped.startswith(">"):
+        lines.append(stripped)
+
+    is_para = not (stripped.startswith(">") or stripped.startswith("<!--"))
+    return None, is_para
 
 
 @dataclass(frozen=True)
@@ -67,40 +172,38 @@ class PreviousRoundWindow:
 def effective_lines(body: str | None) -> list[str]:
     """Column-0 lines outside fenced code (also inside list items) and block quotes.
 
-    A fence closes only on the same character, at least as long as the opener and
-    without a list prefix or info string (CommonMark); anything else inside it
-    stays content. A backtick opener whose info string has a backtick is not a
-    fence at all. A fence opened inside a list item (a list prefix or indentation)
-    ends at the next non-blank column-0 line, where the item ends.
+    Tracks list item indentation to determine when nested fences close.
+    Remaining CommonMark approximations (out of scope): fences inside
+    blockquotes in lists, lists inside blockquotes, marker-like lines inside
+    raw HTML blocks, and strict column arithmetic with mixed tabs. Any
+    omissions by builder output are detected prior to posting via round-trip
+    verification in build_restorable_trigger_body.
     """
     lines: list[str] = []
-    fence: str | None = None
-    in_container = False
+    items: list[int] = []
+    fence: _FenceState | None = None
+    paragraph = False
+
     for raw in (body or "").splitlines():
-        if in_container and raw.strip() and not raw[:1].isspace():
-            fence, in_container = None, False
-        opening = _FENCE.match(raw)
-        if opening:
-            prefix, token, rest = opening[1], opening[2], opening[3]
-            if fence is None:
-                if token[0] != "`" or "`" not in rest:  # a backtick info string
-                    fence = token  # makes the line plain text, not a fence opener
-                    in_container = bool(prefix) or raw[:1].isspace()
-                    continue
-            elif (
-                not prefix
-                and token[0] == fence[0]
-                and len(token) >= len(fence)
-                and not rest.strip()
-            ):
-                fence, in_container = None, False
+        expanded = raw.expandtabs(4)
+        stripped = expanded.strip()
+        i = len(expanded) - len(expanded.lstrip(" "))
+
+        if fence is not None:
+            if fence.container > 0 and stripped and i < fence.container:
+                fence = None
+            else:
+                rel_i = i - fence.container
+                if 0 <= rel_i <= 3 and _is_fence_closer(stripped, fence):
+                    fence = None
                 continue
-        stripped = raw.strip()
-        # Real markers start at column 0; indentation means a list item, an indented
-        # code block or a nested example.
-        if fence or stripped.startswith(">") or raw[:1].isspace():
+
+        if not stripped:
+            paragraph = False
             continue
-        lines.append(stripped)
+
+        fence, paragraph = _step_line(expanded, stripped, i, items, paragraph, lines)
+
     return lines
 
 
@@ -148,6 +251,34 @@ def parse_trigger(item: dict[str, Any]) -> ReviewTrigger | None:
         requested_head_sha=heads[0].lower() if heads else None,
         body=body,
     )
+
+
+def build_restorable_trigger_body(
+    reply_body: str, bot_name: str, round_num: int, head_sha: str
+) -> str:
+    """Build a combined trigger comment body and verify parse_trigger can restore it.
+
+    Raises EvidenceContractError if parse_trigger fails to recover the exact bot,
+    round, and head sha (e.g. when reply_body leaves a code fence unclosed).
+    """
+    candidate = build_trigger_body(reply_body, bot_name, round_num, head_sha)
+    probe_item = {
+        "id": "probe",
+        "body": candidate,
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    trigger = parse_trigger(probe_item)
+    if (
+        trigger is None
+        or trigger.reviewer != bot_name.lower()
+        or trigger.round != round_num
+        or trigger.requested_head_sha != head_sha.lower()
+    ):
+        raise EvidenceContractError(
+            "trigger markers could not be restored by parse_trigger from candidate body; "
+            "ensure all code fences in reply are properly closed"
+        )
+    return candidate
 
 
 def trigger_comment_ids(comments: Iterable[dict[str, Any]]) -> set[Any]:

@@ -60,7 +60,6 @@ from orchestune.review.acquisition import (
 )
 from orchestune.review.judgment import validate_previous_round_reply
 from orchestune.review.markers import (
-    build_trigger_body,
     derive_review_target,
     ensure_review_trigger_mention,
     has_review_trigger_mention,
@@ -77,7 +76,10 @@ from orchestune.review.markers import (
     review_trigger_marker as _review_trigger_marker,
 )
 from orchestune.review.offline import resolve_legacy_completeness
-from orchestune.review.rounds import previous_round_window
+from orchestune.review.rounds import (
+    build_restorable_trigger_body,
+    previous_round_window,
+)
 from scripts.jev_context import JevReviewContext, collect_review_context
 from scripts.jev_filter import evaluate_review_findings
 from scripts.review_cli import (
@@ -287,7 +289,9 @@ def post_review_trigger(
     head_sha = head_sha or _fetch_pr_head_sha(pr_number)
     if head_sha is None:
         raise ValueError("cannot record trigger without PR head SHA")
-    comment_body = build_trigger_body(raw_body, bot_name, round_num, head_sha)
+    comment_body = build_restorable_trigger_body(
+        raw_body, bot_name, round_num, head_sha
+    )
 
     stdout = _run_gh(
         [
