@@ -1013,6 +1013,7 @@ def test_agents_rules_allow_single_mcp_combined_post_only():
     assert "結合" in rule and "一度だけ" in rule
     assert "skills/local-ci-developer/references/review-loop.md" in rule
     assert "別の trigger" in rule and "多重待機" in rule
+    assert "review-reply.md" in rule and "対象外" in rule
     # 絶対ローカルパスを書かない
     assert "file:///" not in rule
 
@@ -1078,5 +1079,113 @@ def test_review_loop_defines_review_reply_marker_contract(skill_name: str):
     )
     assert example, "reply example with the canonical marker is missing"
     assert is_review_reply(example[1])
-    assert "Round 1/5" in example[1]
+    assert "Round 5/5" in example[1]
     assert parse_judgments(example[1])["findings"][0]["judgment"] == "adopt"
+
+
+def _terminal_posting_section(skill_name: str) -> str:
+    loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
+        encoding="utf-8"
+    )
+    heading = "### Terminal judgment posting (round limit / blocked)"
+    assert (
+        heading in loop
+    ), f"{skill_name} review-loop.md lacks the terminal posting section"
+    return loop.split(heading, 1)[1].split("\n### ", 1)[0]
+
+
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_review_loop_defines_terminal_judgment_posting_contract(skill_name: str):
+    """ラウンド上限到達時に最終ラウンド判断表を投稿して blocked へ進む終端手順を検証 (#1215)。"""
+    section = _terminal_posting_section(skill_name)
+    loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
+        encoding="utf-8"
+    )
+
+    # 1. 適用条件・ラウンド維持・順序
+    assert "round limit" in section.lower() or "exit 12" in section.lower()
+    assert "HEAD was changed by adopted fixes" in section
+    assert "Review target round r is preserved" in section
+    assert "Round 5/5" in section and "`round: 5`" in section
+    assert "differing HEAD forbids done" in section
+    assert (
+        "orchestune complete --issue <N> --result blocked --reason review-round-limit"
+        in section
+    )
+
+    # 2. CLI と MCP の同一手順内での規定
+    assert (
+        "gh pr comment <PR_NUMBER> --body-file <session-dir>/review-reply.md" in section
+    )
+    assert "GitHub MCP backend" in section and "`issue_comments`" in section
+
+    # 6. 投稿前確認・再利用・ID保存・応答不明時再取得・complete失敗時再投稿禁止
+    assert "across all pages" in section
+    assert "reuse it and do not repost" in section
+    assert "save the returned comment id and URL" in section
+    assert "re-fetch and check before any action" in section
+    assert "never resend without verification" in section
+    assert "If `complete` fails, do not repost" in section
+
+    # 7. Bounded Exit 12, No re-review, MCP posting からの誘導
+    heading = "Terminal judgment posting"
+    assert heading in loop
+    bounded = loop.split("### Bounded review loop", 1)[1].split("### MCP posting", 1)[0]
+    assert 'Exit 12: see "Terminal judgment posting"' in bounded
+    no_rereview = next(
+        line for line in loop.splitlines() if line.startswith("No re-review")
+    )
+    assert 'see "Terminal judgment posting"' in no_rereview
+    mcp_section = _mcp_posting_section(skill_name)
+    assert 'Exit 12 beyond: see "Terminal judgment posting"' in mcp_section
+    # 即時 escalate の旧記述を残さない
+    assert "Exit 12 escalates" not in loop
+    assert "Exit 2 or 12: record and escalate" not in loop
+
+
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_review_loop_terminal_reply_example_contract(skill_name: str):
+    """終端返信例の marker / schema / coverage / trigger-exclusion 検証 (#1215)。"""
+    from orchestune.review.judgment import parse_judgments, validate_coverage
+    from orchestune.review.markers import is_review_reply
+
+    loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
+        encoding="utf-8"
+    )
+    example_match = re.search(
+        r"````markdown\n(<!-- orchestune:review-reply -->\n.*?)````", loop, re.S
+    )
+    assert example_match, "reply example with canonical marker is missing"
+    example = example_match[1]
+
+    # 先頭 reply marker
+    assert is_review_reply(example)
+    assert "Round 5/5" in example
+
+    # 再レビュー誘発要素の排除
+    assert "@" not in example
+    assert "review-trigger" not in example
+    assert "review-round" not in example
+    assert "review-head" not in example
+    assert "review-selection" not in example
+
+    # 判断表パースと Round 5 検証
+    judgments = parse_judgments(example)
+    assert judgments["round"] == 5
+    assert judgments["findings"][0]["judgment"] == "adopt"
+    assert judgments["findings"][0]["status"] == "resolved"
+
+    # 人工 review 結果との coverage 照合
+    artificial_result = {
+        "round": 5,
+        "review_items": [],
+        "inline_comments": [
+            {
+                "id": 123,
+                "kind": "inline_comment",
+                "provenance": "current",
+                "body": "Fix regression in interface contract",
+            }
+        ],
+    }
+    validate_coverage(judgments, artificial_result)
