@@ -45,10 +45,20 @@ def _dispatch_command(cmd: str) -> None:
         from orchestune.recovery.cli import main as recover_main
 
         sys.exit(recover_main())
-    elif cmd == "gc":
+    elif not _dispatch_tool_command(cmd):
+        print(f"Unknown command: {cmd}")
+        sys.exit(1)
+
+
+def _dispatch_tool_command(cmd: str) -> bool:
+    if cmd == "gc":
         from orchestune.dispatch.gc_cli import main as gc_main
 
         sys.exit(gc_main())
+    elif cmd == "doctor":
+        from orchestune.dispatch.doctor_cli import main as doctor_main
+
+        sys.exit(doctor_main())
     elif cmd == "config":
         from orchestune.config_wizard.cli import main as config_main
 
@@ -62,8 +72,8 @@ def _dispatch_command(cmd: str) -> None:
 
         sys.exit(scratch_main())
     else:
-        print(f"Unknown command: {cmd}")
-        sys.exit(1)
+        return False
+    return True
 
 
 def main() -> None:
@@ -82,6 +92,9 @@ def main() -> None:
         print("  recover   Inspect or recover one stopped claim (preview by default)")
         print(
             "  gc        Release handoff-ready task reservations (--no-apply to preview)"
+        )
+        print(
+            "  doctor    Diagnose dispatch single-executor setup (offline, read-only)"
         )
         print("  config    Create or edit orchestune.toml interactively")
         print("  skills    Install and manage Orchestune skills for AI assistants")
