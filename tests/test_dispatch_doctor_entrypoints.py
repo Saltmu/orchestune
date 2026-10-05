@@ -110,6 +110,27 @@ def test_background(run):
     assert _scan(run).dispatch[0].background is True
 
 
+@pytest.mark.parametrize(
+    "run",
+    [
+        "orchestune dispatch -p 1 >result.log 2>&1",
+        "orchestune dispatch -p 1 > out.log 2>&1 | tee x",
+        "orchestune dispatch -p 1 &>out.log",
+    ],
+)
+def test_redirections_are_ignored(run):
+    entry = _scan(run).dispatch[0]
+    assert entry.args_error is None
+    assert entry.background is False
+
+
+def test_redirection_chars_inside_quotes_are_kept():
+    assert (
+        _scan('orchestune dispatch --dispatch-target "a>b"').dispatch[0].dispatch_target
+        == "a>b"
+    )
+
+
 def test_foreground_is_not_background():
     assert _scan("orchestune dispatch -p 1").dispatch[0].background is False
 

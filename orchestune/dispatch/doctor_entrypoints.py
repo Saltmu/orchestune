@@ -31,6 +31,10 @@ UndetectableKind = Literal[
 GHA_EXPR_PLACEHOLDER = "__ORCHESTUNE_GHA_EXPR__"
 _EVIDENCE_LIMIT = 200
 _GHA_EXPR_RE = re.compile(r"\$\{\{.*?\}\}")
+_QUOTED = r"\"[^\"]*\"|'[^']*'"
+_REDIRECT_RE = re.compile(
+    rf"({_QUOTED})|(?<![\w$])\d*(?:&>>?|>>?&?|<<?<?|<&?)\s*(?:\d+-?|{_QUOTED}|[^\s;&|()<>\"']+)"
+)
 _PYTHON_RE = re.compile(r"^python(3(\.\d+)?)?(\.exe)?$")
 _DISPATCH_MODULE = "orchestune.dispatch.dispatcher"
 _SEPARATORS = frozenset({";", "&", "&&", "||", "|", "|&", ";;", "(", ")"})
@@ -175,6 +179,8 @@ def _split_punct(token: str) -> list[str]:
 
 def _tokenize(line: str) -> list[str]:
     replaced = _GHA_EXPR_RE.sub(GHA_EXPR_PLACEHOLDER, line)
+    # Drop redirections (``>log``, ``2>&1``) outside quotes so they are not read as arguments.
+    replaced = _REDIRECT_RE.sub(lambda m: m.group(1) or "", replaced)
     lex = shlex.shlex(replaced, posix=True, punctuation_chars=";&|()")
     lex.whitespace_split = True
     tokens: list[str] = []
