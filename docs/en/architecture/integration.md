@@ -61,7 +61,11 @@ sequenceDiagram
 
 > **Design assumption (#377)**: writes to the integrator's temporary integration branch (including `git push --force`) are serialized only by a same-machine file lock (`file_lock` in `orchestune/infra/process_utils.py`). That lock is a process-level lock and provides no protection across multiple CI runners/machines. The integrator assumes it always runs serially on a single runner; running it concurrently against the same `temp_branch` from multiple runners (e.g. a parallel build matrix) is not supported.
 >
-> The recommended mitigation for this constraint is a `concurrency` group when running `orchestune dispatch` on a GitHub Actions schedule (see [Setup Guide §6](../setup.md#6-scheduled-runs-on-github-actions-and-cross-runner-serialization) for an example). A `concurrency` group is a preventive measure that requires no code changes; independently of it, per-run temp branch names and a compare-and-swap on the parent branch update (#435) ensure that, even under this constraint, a collision is never a silent data race — it is always surfaced as a push failure (defense in depth).
+> The requirement of the standard supported configuration for this constraint is, when running `orchestune dispatch` on a GitHub Actions schedule, to serialize the control executor to one with a repository-wide concurrency group (`orchestune-control-${{ github.repository }}`) (see [Setup Guide §6](../setup.md#6-scheduled-runs-on-github-actions-and-cross-runner-serialization) for details). This serialization is an operational preventive measure that requires no code changes.
+>
+> The run-state lock covers only the cycle (`execute_cycle` in `dispatch/cycle_execution.py`). The post-processing of `_run_dispatcher` in `dispatch/dispatcher.py` (not-needed review, Integrator, parent Issue completion, reporting) runs after the lock is released. The Integrator has a per-parent execution lock, per-run temp-branch isolation, and conflict detection when updating the parent ref, but these are not mechanisms that make selection and launch reservations unique across runners. Serialization of the whole CLI including post-processing must therefore be guaranteed operationally, by a single owner or an Actions group.
+>
+> Independently of this, per-run temp branch names and a compare-and-swap on the parent branch update (#435) ensure that, even under this constraint, a collision is never a silent data race — it is always surfaced as a push failure (defense in depth).
 
 ---
 

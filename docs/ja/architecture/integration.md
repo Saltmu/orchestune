@@ -69,7 +69,9 @@ sequenceDiagram
 
 > **設計前提（#377）**: Integratorが一時統合ブランチへ書き込む処理（`git push --force`を含む）は、同一マシン上のファイルロック（`orchestune/infra/process_utils.py`の`file_lock`）でのみ排他制御されています。このロックはプロセス間ロックであり、複数のCIランナー/マシンをまたいだ同時実行には効きません。Integratorは常に単一ランナー上でシリアル実行される前提であり、マトリクス並列化等で同一の`temp_branch`に対して複数ランナーから同時実行する構成には対応していません。
 >
-> この制約に対する緩和策として、`orchestune dispatch`をGitHub Actions上で定期実行する場合は`concurrency`グループの設定を強く推奨します（設定例は[セットアップガイド §6](../setup.md#6-github-actions上での定期実行とcross-runner直列化)を参照）。`concurrency`グループはコード変更を伴わない予防策です。
+> この制約に対する標準サポート構成の要件は、`orchestune dispatch`をGitHub Actions上で定期実行する場合に、リポジトリ単位のconcurrency group（`orchestune-control-${{ github.repository }}`）で制御実行者を1つに直列化することです（詳細は[セットアップガイド §6](../setup.md#6-github-actions上での定期実行とcross-runner直列化)を参照）。この直列化はコード変更を伴わない運用上の予防策です。
+>
+> run-stateロックが覆うのはサイクル（`dispatch/cycle_execution.py:execute_cycle`）だけです。`dispatch/dispatcher.py:_run_dispatcher`の後処理（not-needed review、Integrator、親Issue完了、報告）はロック解放後に動きます。Integratorには親単位の実行ロック、一時ブランチのラン別分離、親ref更新時の競合検出がありますが、これらは選出・起動予約をランナー間で一意にする仕組みではありません。そのため、後処理を含むCLI全体の直列化は、単一所有者またはActionsのgroupによる運用で担保する必要があります。
 >
 > さらにこれとは独立に、一時ブランチのラン別分離と親ブランチ更新のcompare-and-swap化（#435）が施されています。そのため、万一この制約下で衝突が発生しても、無言のデータレースにはならず必ずpush失敗として検出できる多層防御構造になっています。
 
