@@ -975,3 +975,20 @@ def _run_raw(offline, state_name, extra, out) -> int:
     code = exc.value.code
     assert isinstance(code, int)
     return code
+
+
+def test_validate_request_rejects_unclosed_fence_before_posting(offline):
+    out = offline.tmp / "request.json"
+    reply = write_text(
+        offline.tmp,
+        "reply.md",
+        table(["issue_comment:30"]) + "\n```\nunclosed",
+    )
+    state = first_round(comment(30, 15))
+    code = offline(
+        state, "--validate-request", "--body-file", reply, "--output-file", str(out)
+    )
+    assert code == 2
+    receipt = read_json(out)
+    assert receipt["validation_status"] == "rejected"
+    assert "trigger_body" not in receipt

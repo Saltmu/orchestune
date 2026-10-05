@@ -28,10 +28,11 @@ from orchestune.review.judgment import (
     parse_judgments,
     validate_previous_round_reply,
 )
-from orchestune.review.markers import build_trigger_body, derive_review_target
+from orchestune.review.markers import derive_review_target
 from orchestune.review.rounds import (
     ReviewRoundContext,
     ReviewTrigger,
+    build_restorable_trigger_body,
     plan_next_round,
     previous_round_window,
     restore_triggers,
@@ -412,7 +413,7 @@ def _validate_request(
         explicit_round=explicit_round,
     )
     reply = _reply_for_next_round(evidence, next_round, body_text)
-    candidate = build_trigger_body(
+    candidate = build_restorable_trigger_body(
         body_text or "", bot_name, next_round, evidence.head_sha
     )
     receipt = _receipt(

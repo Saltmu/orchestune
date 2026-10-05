@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+from orchestune.review.snapshot import EvidenceContractError
 from scripts.wait_for_review import (
     _ensure_review_trigger_mention,
     _find_existing_trigger_comment,
@@ -317,3 +318,16 @@ def test_post_review_trigger_failure():
 
         with pytest.raises(RuntimeError, match="gh command failed: Not authorized"):
             post_review_trigger(pr_number=540, bot_name="claude")
+
+
+def test_post_review_trigger_rejects_unclosed_fence_without_calling_gh():
+    with patch("scripts.wait_for_review.subprocess.run") as mock_run:
+        with pytest.raises(EvidenceContractError):
+            post_review_trigger(
+                pr_number=540,
+                bot_name="claude",
+                body="```\nunclosed code",
+                round_num=1,
+                head_sha="c" * 40,
+            )
+        mock_run.assert_not_called()

@@ -384,9 +384,15 @@ class TestNormalOutcomesAreUnchanged:
 
 
 class TestBounds:
+    @pytest.mark.parametrize("started_at", [1000.0, 412.007])
     def test_the_stage_limit_is_capped_by_the_remaining_cycle_time(
-        self, one_task: IntegratorEnv, tmp_path: Path
+        self,
+        one_task: IntegratorEnv,
+        tmp_path: Path,
+        clock: list[float],
+        started_at: float,
     ) -> None:
+        clock[0] = started_at
         runner = ScriptedRunner()
 
         _integrator(
