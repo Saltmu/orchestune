@@ -427,6 +427,18 @@ Orchestuneが実際にIssueをクローズする2箇所を説明する。いず�
   既に本ラベルが付いた状態でさらに陳腐化を検知した場合（＝2サイクル連続）は、
   設定または運用構成の異常の可能性が高いとみなし、対象の子Issueを
   `status:blocked-human-review`へエスカレーションしたうえで本ラベルを除去する。
+- `integration:finalization-blocked`:
+  子ブランチの削除がリモートのポリシー（ルールセット・ブランチ保護・
+  pre-receive hookなど）に拒否され続けたとき、Integratorが**子Issue**へ付与する
+  補助ラベル（`orchestune/integrator/finalization_retry.py`、#827）。拒否は
+  統合サイクルごとに1回だけ数え、子Issueのコメントに保存する（ランナーが
+  替わっても復元できる）。3回目の拒否でこのラベルを付け、親Issueと子Issueへ
+  コメントする。`status:*`は変更しない（`status:done`に別のlifecycleラベルを
+  併記するとconsistencyが競合として報告し、`status:done`を外すと依存解決に
+  影響するため）。付与後は削除を再試行せず、子ブランチの状態を読み取るだけで
+  見守る。ブランチが手動で削除されれば自動で確定してラベルを外し、tipが
+  動いていれば再統合へ戻す。ルールセットを緩和した場合は、運用者がこのラベルを
+  外すと次サイクルから削除を再試行する（回数は0から数え直す）。
 - `ci:base-branch-red`:
   ベースブランチ由来のCI失敗（`outcome.result=blocked` / `reason=base-branch-red`）を検知した際に付与されるマーカーラベル（#555）。通常の依存関係解決による誤昇格（livelock）を防ぎ、ベースブランチのコミット（`base_sha`）が前進した時点でマーカーが解除され`status:queued`へ自動再キューされる。3回連続で失敗した場合は`status:blocked-human-review`へエスカレーションされる。
 - `priority:high` / `priority:medium` / `priority:low`:

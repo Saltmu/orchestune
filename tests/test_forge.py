@@ -289,6 +289,7 @@ class TestRequiredLabels:
         "not-needed-review:passed",
         "not-needed-review:failed",
         "integration:included",
+        "integration:finalization-blocked",
         "integration:parent-branch-stale",
         "ci:base-branch-red",
     }

@@ -229,6 +229,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator.ci_execution",
             "integrator.execution",
             "integrator.finalization",
+            "integrator.finalization_retry",
             "integrator.final_pr_body",
             "integrator.git_ops",
             "integrator.pr",

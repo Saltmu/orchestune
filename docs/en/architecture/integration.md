@@ -111,3 +111,25 @@ Every wait in the integrator is bounded and every timeout ends in a state a huma
 **Budget.** `reserved` is written and read back before dependency preparation starts, `finished` records the result and the confirmations, and `terminal` marks the last allowed timeout. A reservation without a result blocks automatic re-runs, because it cannot prove the processes stopped. Only the authenticated executing identity's events count (a reset may also come from a user with write access); the parent, generation and attempt must agree, and any unreadable, conflicting or invalid history starts nothing. See [state-recovery.md](state-recovery.md#2-github-as-the-source-of-truth) and the operator procedure in [Usage §4.6](../usage.md#46-bounded-integration-execution-and-timeout-recovery).
 
 **What is not guaranteed.** The operating system's process-creation API and uninterruptible kernel I/O can still block, so a strict wall-clock limit is not promised. Auxiliary `git`/`gh` calls run with the direct child's timeout rather than process-group ownership, so descendants of a `git` hook or SSH helper are not stopped. A POSIX process that leaves the managed session/process group (for example with `setsid`) is outside the guarantee; CI commands must keep their descendants inside it, and a cgroup/sandbox is out of scope. On Windows a command that cannot be assigned to the Job Object is not run. Concurrent applies against one parent from different hosts are unsupported because GitHub comments have no atomic compare-and-swap. The worker's `task-timeout-seconds` and reclaim policy are separate and do not make the integrator bounded; and a stop that the OS refuses, or a write whose result cannot be reconciled, is held as undetermined rather than declared stopped.
+
+
+## 6. Bounded retries of child-branch finalization (#827)
+
+Deleting a child branch is a compare-and-swap on the SHA stored in the integration receipt (#819). When a repository ruleset or similar permanently refuses the deletion, the safe behaviour is to keep the branch and leave the child Issue open, but repeating that attempt silently every cycle never reaches a state a human can act on. Refusals are therefore counted and moved to a terminal state at a limit.
+
+| Deletion result | Meaning | Behaviour |
+| --- | --- | --- |
+| `DELETED` / `ALREADY_ABSENT` | Success | Label `integration:included` and close, as before |
+| `TIP_MISMATCH` | The child branch tip moved | Return to integration and re-integrate the new tip, as before (not counted as a refusal) |
+| `DENIED` | `git push` printed `[remote rejected]` (the connection and authentication worked; the remote refused by policy) | Record the refusal and defer |
+| `FAILED` | Anything else (connection, authentication, unknown) | Defer without counting; never evidence of a permanent failure |
+
+**What deferring means.** The receipt already proves the commit reached the parent, so `RetryChildIssueCloseStep` removes a deferred child from `active_done_tasks` and does not send it through this cycle's worktree, temporary-branch push or integration-PR steps. A stuck child costs one CAS deletion per cycle (one `ls-remote` after the terminal state).
+
+**Counting.** Each refusal is a comment on the child Issue (marker `<!-- orchestune:child-branch-finalization:v1 -->`) with a JSON payload; the local `run_state` is not used, because GitHub Actions starts a new runner for each run. The count is the number of distinct `integration_run_id` values among events matching the child branch, proven SHA and parent branch that come after the latest `terminal` event. Retries within one run count once, and a moved tip that is re-integrated under a different SHA starts at zero. Only canonical comments from the authenticated user are accepted. A failed read or write never advances the count, so an escalation can be late but never early.
+
+**Terminal classification.** When the count reaches the limit (`CHILD_BRANCH_DELETION_DENIAL_LIMIT`, 3), the integrator (1) labels the child Issue `integration:finalization-blocked`, (2) posts one marked comment on the parent Issue (not repeated for the same child, SHA and generation), and (3) finally records a `terminal` event on the child. Because `terminal` is written last, its presence shows every earlier step completed; a failure part-way is resumed by the next cycle. `status:*` labels are not changed.
+
+**Watching and recovery.** A labeled child is never given another write; the integrator only reads the branch with `ls-remote`. If the branch is gone the child is finalized, closed and unlabeled; if the tip differs from the receipt SHA the child goes back to integration; otherwise (including a failed read) it keeps holding. After relaxing the ruleset, an operator removes `integration:finalization-blocked` and deletion attempts resume from the next cycle with the count restarted at zero.
+
+**What is not guaranteed.** Concurrent applies against one parent from different hosts are unsupported because GitHub comments have no atomic compare-and-swap. If comments cannot be read, nothing advances.
