@@ -21,10 +21,10 @@ This skill acts as a router orchestrating the standard development workflow: des
 ## Execution Modes
 | Item | Interactive Mode | Non-Interactive Mode (Auto-Dispatch / Existing Issue) |
 | :--- | :--- | :--- |
-| **Plan Approval (Step 1)** | Present plan to user and wait for approval; reviewer selection occurs only after PR creation | When invoked with an existing Issue or Auto-Dispatch, bypass user approval after writing `<session-dir>/implementation-plan.md` and proceed directly to implementation; resolve reviewer bot from prompt/dispatch or select cross-model distinct from author |
+| **Plan Approval (Step 1)** | Present plan to user and wait for approval; right after the start request (plan approval, or the user's instruction to start an existing Issue) and before claim, require explicit `claude` / `codex` / `skip` selection unless the request names one, and record it in the plan | When invoked with an existing Issue or Auto-Dispatch, bypass user approval after writing `<session-dir>/implementation-plan.md` and proceed directly to implementation; resolve reviewer bot from prompt/dispatch or select cross-model distinct from author |
 | **Issue Creation (Step 2)** | Create via selected backend (`gh` CLI or GitHub MCP/Web UI) if needed | Use issue number provided in prompt (skip creation) |
 | **Worktree (Step 2.5)** | Check the initial footprint, then claim the task and use its worktree | Check the initial footprint before claim; use the existing task worktree if dispatcher-provisioned or already claimed |
-| **Review Execution (Step 11)** | After Step 10 creates the PR, require explicit `claude` / `codex` / `skip` selection; no inference/default or review, merge, or completion before selection | Use reviewer bot resolved in Step 1; if unresolved, explicitly use `--bot-name skip` and stop for human review at the integration gate |
+| **Review Execution (Step 11)** | Use the selection recorded at the start request without re-asking; if none is recorded, require explicit `claude` / `codex` / `skip` selection first; no inference/default or review, merge, or completion before selection | Use reviewer bot resolved in Step 1; if unresolved, explicitly use `--bot-name skip` and stop for human review at the integration gate |
 | **Escalation** | Prompt user for decision | Run `orchestune complete --issue <N> --result blocked --reason <REASON>` and terminate safely |
 
 ## Fast-Path for Minor Changes (Typo / Docs)
@@ -49,7 +49,7 @@ In Step 1, list expected changed files; in Step 2, declare them as Footprint YAM
 | Step | Item | Summary / Command | Reference |
 | :--- | :--- | :--- | :--- |
 | **0** | **Preflight & Requirement Check** | Verify environment and tools via `<PREFLIGHT_CHECK_COMMAND>`, `gh auth status`, and GitHub MCP; fix backend. If requirements are already met before claim, run `orchestune complete --issue <N> --result not-needed` from the current checkout and exit without creating a worktree. | - |
-| **1** | **Design & Implementation Plan** | Write `<session-dir>/implementation-plan.md` (preflight, backend, reviewer bot, design, initial footprint above). Ask user for plan approval; defer reviewer selection until after PR creation (bypass approval for existing Issue / Auto-Dispatch). | - |
+| **1** | **Design & Implementation Plan** | Write `<session-dir>/implementation-plan.md` (preflight, backend, reviewer bot, design, initial footprint above). Ask user for plan approval, then obtain explicit reviewer selection right after the start request, before claim (bypass approval for existing Issue / Auto-Dispatch). | - |
 | **2** | **GitHub Issue Creation** | For an existing Issue, verify/correct its footprint before claim. For a new Issue, include the Footprint YAML from the linked procedure and file via the selected backend (`gh issue create --title "..." --body "..."` or GitHub MCP/Web UI). | - |
 | **2.5** | **Worktree Preparation** | Verify the initial footprint above, then run `orchestune claim <issue_number>` unless already inside the task worktree; perform all remaining work there. | [references/worktree.md](references/worktree.md) |
 | **3–9** | **TDD & Local CI** | Reproducer test, baseline recording, test-driven implementation, local CI (`<CI_ENTRYPOINT>`). | [references/tdd.md](references/tdd.md) |
