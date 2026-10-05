@@ -189,7 +189,10 @@ def test_run_doctor_is_read_only_and_offline(
     workflows = (".github/workflows/w.yml",) if mode == "actions" else ()
     report = run_doctor(DoctorRequest(mode, tmp_path, workflows))  # type: ignore[arg-type]
     assert _snapshot(tmp_path) == before
-    assert not report.has_error
+    errors = {d.code for d in report.diagnostics if d.status == "error"}
+    # The bare workflow has no concurrency, so only the actions group/cancel checks fail.
+    expected = {"dispatch.actions.group", "dispatch.actions.cancel"}
+    assert errors == (expected if mode == "actions" else set())
     assert str(tmp_path) not in json.dumps(report.to_json())
 
 

@@ -42,7 +42,21 @@ def test_exit_1_still_prints_everything(
 
 
 def test_json_output(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    _workflow(repo)
+    _workflow(
+        repo,
+        "on: push\n"
+        "concurrency:\n"
+        "  group: orchestune-control-${{ github.repository }}\n"
+        "  cancel-in-progress: false\n"
+        "jobs:\n"
+        "  ctl:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: orchestune dispatch --dispatch-target cloud-routine\n"
+        "        env:\n"
+        "          ORCHESTUNE_ROUTINE_ID: id\n"
+        "          ORCHESTUNE_ROUTINE_TOKEN: token\n",
+    )
     argv = ["--execution-mode", "actions", "--workflow", ".github/workflows/w.yml"]
     assert doctor_cli.main([*argv, "--json"]) == 0
     data = json.loads(capsys.readouterr().out)
