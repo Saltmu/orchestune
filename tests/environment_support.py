@@ -1,5 +1,6 @@
 """Isolate process environment settings inherited by the test suite."""
 
+import os
 import shutil
 import uuid
 from collections.abc import Iterator
@@ -36,7 +37,13 @@ def _isolate_git_env(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture(autouse=True)
 def _isolate_github_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep ambient GitHub credentials and host overrides out of each test."""
+    """Keep ambient GitHub credentials, host overrides and Orchestune state out.
+
+    #1248: a shell launched by a dispatcher or completion exports ``ORCHESTUNE_*``
+    (report path, CI evidence, base resolution); tests set what they need.
+    """
+    for name in [key for key in os.environ if key.startswith("ORCHESTUNE_")]:
+        monkeypatch.delenv(name, raising=False)
     for name in (
         "GH_TOKEN",
         "GITHUB_TOKEN",
