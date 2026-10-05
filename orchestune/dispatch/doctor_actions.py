@@ -269,7 +269,7 @@ def _required_env(target: str, config: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def _visible_env(wf: _Workflow, entry: DispatchEntrypoint) -> set[str] | None:
-    """Env names set at workflow/job/step level; ``None`` if any layer is an expression."""
+    """Effective env names (workflow < job < step); ``None`` if any layer is an expression."""
     layers = (
         wf.document,
         wf.job_document(entry.location.job),
@@ -282,7 +282,12 @@ def _visible_env(wf: _Workflow, entry: DispatchEntrypoint) -> set[str] | None:
             continue
         if not isinstance(env, Mapping):
             return None
-        names.update(str(k) for k, v in env.items() if v is not None and v != "")
+        for key, value in env.items():
+            # The most specific scope wins, so an empty value hides a broader one.
+            if value is None or value == "":
+                names.discard(str(key))
+            else:
+                names.add(str(key))
     return names
 
 

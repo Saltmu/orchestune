@@ -280,3 +280,10 @@ def test_run_doctor_includes_actions_checks_only_in_actions_mode(
     )
     local = run_doctor(DoctorRequest("local", tmp_path))
     assert not any(d.code.startswith("dispatch.actions.") for d in local.diagnostics)
+
+
+def test_credentials_empty_lower_scope_overrides_higher_scope() -> None:
+    top = "env:\n  ORCHESTUNE_ROUTINE_ID: a\n  ORCHESTUNE_ROUTINE_TOKEN: b\n"
+    text = make_workflow(top_env=top, step_env="          ORCHESTUNE_ROUTINE_TOKEN: ''")
+    assert status(text, "credentials") == "error"
+    assert status(make_workflow(top_env=top, step_env=""), "credentials") == "ok"
