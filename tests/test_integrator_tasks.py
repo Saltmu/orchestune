@@ -323,3 +323,40 @@ def test_unknown_dependency_is_ignored_without_losing_topological_order(
         "Warning: Ignoring unknown dependencies while ordering integration: "
         "task-b -> missing-task"
     ]
+
+
+def test_retired_replan_generation_does_not_duplicate_its_replacement(
+    capsys: pytest.CaptureFixture[str],
+):
+    """#1251 review: replan retires an old generation as not-needed, removes its
+    native parent link but keeps the body's `parent_issue_number`, and the
+    replacement reuses the `subtask_id`. Only the current generation is a node.
+    """
+    retired = IssueRecord(
+        number=1,
+        title="Issue 1",
+        body=(
+            "```yaml\nsubtask_id: task-a\nfootprint: []\n"
+            f"parent_issue_number: {PARENT}\n```\n"
+        ),
+        labels=("status:not-needed",),
+        created_at="2026-07-13T00:00:00Z",
+    )
+    # Duplicate node IDs with different `depends_on` make `build_dag` raise.
+    replacement = _labeled_issue(5, "task-a", "status:done", ("zzz-task-c",))
+    late = _labeled_issue(2, "aaa-task-d", "status:done", ("zzz-task-c",))
+    early = _labeled_issue(3, "zzz-task-c", "status:done")
+    fake_forge = _forge_listing(
+        {
+            ("status:not-needed", "all"): [retired],
+            ("status:done", "all"): [late, replacement, early],
+        }
+    )
+
+    sorted_done, _ = get_sorted_done_tasks(PARENT, forge=fake_forge)
+
+    order = [task.subtask_id for task in sorted_done]
+    assert sorted(order) == ["aaa-task-d", "task-a", "zzz-task-c"]
+    assert order.index("zzz-task-c") < order.index("aaa-task-d")
+    assert order.index("zzz-task-c") < order.index("task-a")
+    assert "Failed to build DAG" not in capsys.readouterr().err

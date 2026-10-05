@@ -117,8 +117,37 @@ def _load_integration_issues(
     issues.extend(done)
     return (
         [issue for issue in done if effective_parent_number(issue) == parent_number],
-        [issue for issue in issues if effective_parent_number(issue) == parent_number],
+        _without_superseded_generations(
+            [
+                issue
+                for issue in issues
+                if effective_parent_number(issue) == parent_number
+            ]
+        ),
     )
+
+
+def _without_superseded_generations(issues: list[IssueRecord]) -> list[IssueRecord]:
+    """Keep one node per `subtask_id` when a not-needed generation was replaced.
+
+    Replan retires the old generation as not-needed and keeps its body (and so
+    its `parent_issue_number`) while the replacement reuses the `subtask_id`.
+    A not-needed Issue is dropped when a live Issue or a newer Issue shares it.
+    """
+    identifiers = build_issue_to_subtask_id_map(issues)
+    current: dict[str, tuple[bool, int]] = {}
+    for issue in issues:
+        subtask_id = identifiers.get(issue.number)
+        if subtask_id is not None:
+            rank = (StatusLabel.NOT_NEEDED not in issue.labels, issue.number)
+            current[subtask_id] = max(current.get(subtask_id, rank), rank)
+    return [
+        issue
+        for issue in issues
+        if StatusLabel.NOT_NEEDED not in issue.labels
+        or (subtask_id := identifiers.get(issue.number)) is None
+        or current[subtask_id] == (False, issue.number)
+    ]
 
 
 def _unique_issues(issues: list[IssueRecord]) -> list[IssueRecord]:
