@@ -32,6 +32,7 @@ from typing import Any
 
 from orchestune.forge import REQUIRED_LABELS, Forge
 from orchestune.integrator.proofs import TaskIntegrationProof
+from orchestune.task_branch_resolution import is_commit_oid
 
 MARKER = "<!-- orchestune:child-branch-finalization:v1 -->"
 PARENT_MARKER = "<!-- orchestune:child-branch-finalization-escalation:v1"
@@ -153,6 +154,51 @@ def _read_history(
             history.denied_runs.add(str(payload.get("run_id")))
             history.terminal_is_latest = False
     return history
+
+
+def latest_blocked_proof(
+    forge: Forge, issue_number: int, subtask_id: str, base_branch: str
+) -> TaskIntegrationProof | None:
+    """Identify the child tip a blocked child is held on, from the newest event.
+
+    The integration receipt cannot do this: a child whose tip moved and was
+    re-integrated has several receipts, the lookup returns the oldest, and a
+    transient lookup failure returns nothing. The newest ``denied`` or
+    ``terminal`` event always names the branch and SHA the count is bound to.
+    ``None`` when there is no event or it cannot be read.
+    """
+    try:
+        trusted_author = forge.get_authenticated_user()
+        comments = forge.list_comments(issue_number)
+    except Exception as error:
+        print(
+            "Warning: Failed to read child-branch finalization history for "
+            f"#{issue_number}: {error}",
+            file=sys.stderr,
+        )
+        return None
+    base = base_branch.removeprefix("origin/")
+    latest: dict[str, Any] | None = None
+    for comment in comments:
+        payload = _parse(comment, trusted_author)
+        if (
+            payload is not None
+            and payload.get("issue_number") == issue_number
+            and payload.get("subtask_id") == subtask_id
+            and payload.get("base_branch") == base
+        ):
+            latest = payload
+    if latest is None:
+        return None
+    branch, sha = latest.get("branch_name"), latest.get("source_sha")
+    if not isinstance(branch, str) or not branch or not is_commit_oid(sha):
+        return None
+    return TaskIntegrationProof(
+        issue_number=issue_number,
+        subtask_id=subtask_id,
+        branch_name=branch,
+        source_sha=sha,
+    )
 
 
 def record_denial(

@@ -21,6 +21,7 @@ from orchestune.integrator.finalization import (
 )
 from orchestune.integrator.finalization_retry import (
     BLOCKED_LABEL,
+    handle_denied_deletion,
 )
 from orchestune.integrator.finalization_retry import (
     MARKER as DENIAL_MARKER,
@@ -531,6 +532,16 @@ def _retry_with(fake_forge, tmp_path: Path, run_id: str, deletion, *labels: str)
     return ctx, result, conditional_delete
 
 
+def _seed_escalation(fake_forge, proof: TaskIntegrationProof | None = None) -> None:
+    """Leave the child Issue as three refused cycles and an escalation would."""
+    for run in ("run-1", "run-2", "run-3"):
+        handle_denied_deletion(
+            fake_forge, proof or _proof(), f"origin/{_RECEIPT_BASE}", run, 100
+        )
+    fake_forge.add_label.reset_mock()
+    fake_forge.ensure_labels.reset_mock()
+
+
 def _denial_events(store) -> list[str]:
     return [c["body"] for c in store[1] if DENIAL_MARKER in c["body"]]
 
@@ -601,6 +612,7 @@ def test_a_blocked_child_does_not_attempt_deletion_and_holds(
     fake_forge, tmp_path: Path
 ):
     _store_comments(fake_forge)
+    _seed_escalation(fake_forge)
     ctx = _retry_ctx(fake_forge, tmp_path, "run-4", BLOCKED_LABEL)
 
     with (
@@ -626,6 +638,7 @@ def test_a_blocked_child_is_finalized_once_the_branch_was_removed(
     fake_forge, tmp_path: Path
 ):
     _store_comments(fake_forge)
+    _seed_escalation(fake_forge)
     ctx = _retry_ctx(fake_forge, tmp_path, "run-4", BLOCKED_LABEL)
 
     with (
@@ -652,6 +665,7 @@ def test_a_blocked_child_whose_tip_moved_returns_to_integration(
     fake_forge, tmp_path: Path
 ):
     _store_comments(fake_forge)
+    _seed_escalation(fake_forge)
     ctx = _retry_ctx(fake_forge, tmp_path, "run-4", BLOCKED_LABEL)
 
     with patch(
@@ -704,3 +718,77 @@ def test_denied_deletion_in_the_merge_cycle_is_counted_and_not_finalized(
     assert len(_denial_events(store)) == 1
     fake_forge.add_label.assert_not_called()
     fake_forge.close_issue.assert_not_called()
+
+
+def _run_blocked(fake_forge, tmp_path: Path, *, tip: str | None):
+    ctx = _retry_ctx(fake_forge, tmp_path, "run-9", BLOCKED_LABEL)
+    with (
+        patch(
+            "orchestune.integrator.steps.delete_remote_branch_if_matches",
+            autospec=True,
+        ) as conditional_delete,
+        patch(
+            "orchestune.integrator.steps.read_remote_branch_tip",
+            autospec=True,
+            return_value=tip,
+        ),
+    ):
+        result = RetryChildIssueCloseStep().execute(ctx)
+    return ctx, result, conditional_delete
+
+
+def test_a_blocked_child_stays_held_when_its_receipt_cannot_be_found(
+    fake_forge, tmp_path: Path
+):
+    """A transient receipt lookup failure must not send a labeled child back
+    through merge and finalization, which would retry the forbidden deletion."""
+    store = _store_comments(fake_forge)
+    _seed_escalation(fake_forge)
+    store[1] = [c for c in store[1] if DENIAL_MARKER in c["body"]]
+
+    ctx, result, conditional_delete = _run_blocked(fake_forge, tmp_path, tip="a" * 40)
+
+    assert ctx.active_done_tasks == []
+    assert result["finalization_deferred"] == [1]
+    conditional_delete.assert_not_called()
+    fake_forge.close_issue.assert_not_called()
+
+
+def test_a_blocked_child_is_settled_from_the_newest_proof_not_the_oldest_receipt(
+    fake_forge, tmp_path: Path
+):
+    """Receipts for A and B exist (A first). The block is on B, whose tip is
+    still on the remote, so the child must keep holding."""
+    store = _store_comments(fake_forge)
+    newer = TaskIntegrationProof(
+        issue_number=1,
+        subtask_id="task-1",
+        branch_name="claude/issue-1-task-1",
+        source_sha="b" * 40,
+    )
+    store[1].append(
+        {"body": render_integration_receipt(newer, _RECEIPT_BASE), "author": "bot"}
+    )
+    _seed_escalation(fake_forge, newer)
+
+    ctx, result, _ = _run_blocked(fake_forge, tmp_path, tip="b" * 40)
+
+    assert ctx.active_done_tasks == []
+    assert result["finalization_deferred"] == [1]
+    fake_forge.remove_label.assert_not_called()
+
+
+def test_a_blocked_child_whose_proof_does_not_reach_the_parent_stays_held(
+    fake_forge, tmp_path: Path
+):
+    _store_comments(fake_forge)
+    _seed_escalation(fake_forge)
+    fake_forge.is_merge_commit_reachable_from.return_value = False
+
+    ctx, result, conditional_delete = _run_blocked(fake_forge, tmp_path, tip=None)
+
+    assert ctx.active_done_tasks == []
+    assert result["finalization_deferred"] == [1]
+    conditional_delete.assert_not_called()
+    fake_forge.close_issue.assert_not_called()
+    fake_forge.remove_label.assert_not_called()

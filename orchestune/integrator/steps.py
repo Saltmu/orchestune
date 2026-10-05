@@ -36,6 +36,7 @@ from orchestune.integrator.finalization_retry import (
     BlockedOutcome,
     DenialVerdict,
     handle_denied_deletion,
+    latest_blocked_proof,
     settle_blocked_child,
 )
 from orchestune.integrator.git_ops import IntegrationMerger
@@ -237,6 +238,8 @@ class RetryChildIssueCloseStep(IntegrationComponent):
     def _restore_label_from_receipt(
         self, ctx: IntegrationContext, task: Task, held: _HeldFinalizations
     ) -> _ReceiptRecovery:
+        if BLOCKED_LABEL in task.status_labels:
+            return self._settle_blocked(ctx, task, held)
         proof = find_integration_receipt(
             ctx.forge,
             task.issue_number,
@@ -245,8 +248,6 @@ class RetryChildIssueCloseStep(IntegrationComponent):
         )
         if proof is None or not self._proof_reaches_parent(ctx, proof):
             return _ReceiptRecovery.UNRECOVERED
-        if BLOCKED_LABEL in task.status_labels:
-            return self._settle_blocked(ctx, task, proof, held)
         if proof.merge_receipt.allows(BranchCapability.DELETE):
             deletion = delete_remote_branch_if_matches(
                 ctx.original_root, proof.branch_name, proof.source_sha
@@ -285,12 +286,18 @@ class RetryChildIssueCloseStep(IntegrationComponent):
         return _ReceiptRecovery.DEFERRED
 
     def _settle_blocked(
-        self,
-        ctx: IntegrationContext,
-        task: Task,
-        proof: TaskIntegrationProof,
-        held: _HeldFinalizations,
+        self, ctx: IntegrationContext, task: Task, held: _HeldFinalizations
     ) -> _ReceiptRecovery:
+        """A labeled child is read-only, so an unverifiable proof holds it rather
+        than returning it to merge and finalization, which would retry the
+        refused deletion. The proof comes from the newest finalization record,
+        not the receipt (several receipts exist once a tip was re-integrated)."""
+        proof = latest_blocked_proof(
+            ctx.forge, task.issue_number, task.subtask_id, ctx.base_branch
+        )
+        if proof is None or not self._proof_reaches_parent(ctx, proof):
+            held.deferred.append(task.issue_number)
+            return _ReceiptRecovery.DEFERRED
         outcome = settle_blocked_child(
             ctx.forge,
             proof,

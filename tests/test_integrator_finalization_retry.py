@@ -15,6 +15,7 @@ from orchestune.integrator.finalization_retry import (
     DenialVerdict,
     escalate_terminal,
     handle_denied_deletion,
+    latest_blocked_proof,
     record_denial,
     settle_blocked_child,
 )
@@ -446,3 +447,62 @@ def test_ordinary_comments_on_the_issue_are_ignored():
     ]
 
     assert record(forge, "run-1") is DenialVerdict.RECORDED
+
+
+def test_the_blocked_proof_comes_from_the_newest_event_not_the_oldest():
+    """A tip that moved and was re-integrated must not resurrect the old one."""
+    forge = MemoryForge()
+    old, new = make_proof(sha="a" * 40), make_proof(sha="b" * 40)
+    record(forge, "run-1", old)
+    for run in ("run-2", "run-3", "run-4"):
+        record(forge, run, new)
+
+    proof = latest_blocked_proof(cast(Forge, forge), CHILD, "task-1", BASE)
+
+    assert proof == new
+
+
+def test_the_blocked_proof_is_none_without_events_or_when_unreadable():
+    forge = MemoryForge()
+    assert latest_blocked_proof(cast(Forge, forge), CHILD, "task-1", BASE) is None
+
+    record(forge, "run-1")
+    forge.failing = {"list_comments"}
+    assert latest_blocked_proof(cast(Forge, forge), CHILD, "task-1", BASE) is None
+
+
+def test_the_blocked_proof_ignores_other_children_bases_and_authors():
+    forge = MemoryForge()
+    record(forge, "run-1")
+    forge.comments[CHILD].append({**forge.comments[CHILD][0], "author": "other"})
+
+    assert latest_blocked_proof(cast(Forge, forge), CHILD, "other-task", BASE) is None
+    assert (
+        latest_blocked_proof(
+            cast(Forge, forge), CHILD, "task-1", "origin/parent/issue-9"
+        )
+        is None
+    )
+    assert latest_blocked_proof(cast(Forge, forge), CHILD, "task-1", BASE) == (
+        make_proof()
+    )
+
+
+def test_the_blocked_proof_rejects_an_event_naming_an_invalid_sha():
+    from orchestune.integrator import finalization_retry as module
+
+    forge = MemoryForge()
+    payload = {
+        "event": "terminal",
+        "attempts": 3,
+        "issue_number": CHILD,
+        "subtask_id": "task-1",
+        "branch_name": "claude/issue-1-task-1",
+        "source_sha": "not-a-sha",
+        "base_branch": "parent/issue-100",
+    }
+    forge.comments[CHILD] = [
+        {"body": module._render(payload), "author": "bot", "created_at": ""}
+    ]
+
+    assert latest_blocked_proof(cast(Forge, forge), CHILD, "task-1", BASE) is None
