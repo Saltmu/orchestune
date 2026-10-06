@@ -252,6 +252,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "ledger.external_stop_receipts",
             "ledger.escalation",
             "ledger.run_state",
+            "ledger.status_events",
             "ledger.status_labels",
             "ledger.status_machine",
             "pr_link_notice",
@@ -680,6 +681,20 @@ def test_status_machine_is_pure_and_independent_of_forge_and_process_code() -> N
     assert (
         _module_layer()["ledger.status_machine"]
         == _module_layer()["ledger.status_labels"]
+    )
+
+
+def test_status_events_is_pure_and_stays_beside_the_status_machine() -> None:
+    """#1264: the Event model depends only on the status machine and L0."""
+    assert _pure_contract_violations({"ledger.status_events"}) == []
+    assert _import_graph()["ledger.status_events"] == {
+        "bounded_limit",
+        "labels",
+        "ledger.status_machine",
+    }
+    assert (
+        _module_layer()["ledger.status_events"]
+        == _module_layer()["ledger.status_machine"]
     )
 
 

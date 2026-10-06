@@ -6,6 +6,11 @@
 判定する。本番の判定を`apply_event`へ置き換えるものではなく、本番関数との対応は
 `tests/test_status_events.py`の適合テストで機械的に結びつける。
 
+backoff付きretry（early death / review timeout）の上限・予約の再利用・backoffの
+意味は`orchestune.dispatch.retry_policy`だけが所有する。ledgerはdispatchへ依存
+できないため、その判定は`BudgetLimits.plan_backoff`として呼び出し側が注入する
+（テストでは`plan_retry`から作った本番アダプターを渡す）。
+
 モデルの`pending_operation`・`confirmed_operations`はテスト上の区切りであり、
 本番に存在する永続journalではない（`restart`で失われる）。永続されるのは
 ラベル・retry予約（`run_state.json`）・永続予算（Issue本文・outcome）だけである。
@@ -13,24 +18,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import MappingProxyType
 
 from orchestune.bounded_limit import exceeds_limit
-from orchestune.dispatch.retry_policy import (
-    DEFAULT_EARLY_DEATH_BACKOFF_SECONDS,
-    DEFAULT_EARLY_DEATH_MAX_RETRIES,
-    DEFAULT_REVIEW_TIMEOUT_BACKOFF_SECONDS,
-    DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS,
-    RetryDisposition,
-    RetryPolicy,
-    RetryState,
-    early_death_policy,
-    plan_retry,
-    review_timeout_policy,
-)
 from orchestune.labels import StatusLabel
 from orchestune.ledger.status_machine import (
     ALLOWED_TRANSITIONS,
@@ -127,12 +120,21 @@ class ReclaimState:
 
 
 @dataclass(frozen=True)
+class BackoffState:
+    """backoff付きretryの予約（本番の`retry_policy.RetryState`と同じ形）。"""
+
+    count: int = 0
+    retry_at: float = 0.0
+    pending: bool = False
+
+
+@dataclass(frozen=True)
 class RetryStates:
     """`run_state.json`の`task_reclaim_counts`に永続するローカル予算。"""
 
     reclaim: ReclaimState = ReclaimState()
-    early_death: RetryState = RetryState()
-    review_timeout: RetryState = RetryState()
+    early_death: BackoffState = BackoffState()
+    review_timeout: BackoffState = BackoffState()
 
 
 @dataclass(frozen=True)
@@ -143,17 +145,18 @@ class BudgetCounts:
     base_branch_red: int = 0
 
 
+#: backoff付きretryの判定。次の予約状態（再開ならそのまま）か、上限到達ならNone。
+BackoffPlanner = Callable[["Kind", BackoffState, float], BackoffState | None]
+
+
 @dataclass(frozen=True)
 class BudgetLimits:
-    """各予算の上限。既定値は`DispatcherConfig`と本番の固定値に合わせる。"""
+    """各予算の上限。既定値は持たず、呼び出し側が本番の設定から作る。"""
 
-    max_task_reclaims: int = 3
-    max_early_death_retries: int = DEFAULT_EARLY_DEATH_MAX_RETRIES
-    early_death_backoff_seconds: float = DEFAULT_EARLY_DEATH_BACKOFF_SECONDS
-    max_review_timeout_attempts: int = DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS
-    review_timeout_backoff_seconds: float = DEFAULT_REVIEW_TIMEOUT_BACKOFF_SECONDS
-    max_recompute_retries: int = 2
-    base_branch_red_attempts: int = 3
+    max_task_reclaims: int
+    max_recompute_retries: int
+    base_branch_red_attempts: int
+    plan_backoff: BackoffPlanner
 
 
 @dataclass(frozen=True)
@@ -509,29 +512,19 @@ def _decide_base_branch_red(
     return _Decision(spec, counted)
 
 
-def _backoff_policy(kind: Kind, limits: BudgetLimits) -> RetryPolicy:
-    if kind is Kind.EARLY_DEATH:
-        return early_death_policy(
-            limits.max_early_death_retries, limits.early_death_backoff_seconds
-        )
-    return review_timeout_policy(
-        limits.max_review_timeout_attempts, limits.review_timeout_backoff_seconds
-    )
-
-
 def _decide_backoff(
     state: TaskModel, event: EventInput, spec: EventSpec, limits: BudgetLimits
 ) -> _Decision:
     early_death = event.kind is Kind.EARLY_DEATH
     retries = state.retries
     current = retries.early_death if early_death else retries.review_timeout
-    plan = plan_retry(_backoff_policy(event.kind, limits), current, now=event.now)
-    if plan.disposition is RetryDisposition.EXHAUSTED:
+    planned = limits.plan_backoff(event.kind, current, event.now)
+    if planned is None:
         return _Decision(_escalation(spec), state, escalated=True)
     if early_death:
-        retries = replace(retries, early_death=plan.state)
+        retries = replace(retries, early_death=planned)
     else:
-        retries = replace(retries, review_timeout=plan.state)
+        retries = replace(retries, review_timeout=planned)
     return _Decision(spec, replace(state, retries=retries))
 
 
@@ -678,6 +671,8 @@ __all__ = [
     "BASE_BRANCH_RED_LABEL",
     "EVENT_SPECS",
     "Applied",
+    "BackoffPlanner",
+    "BackoffState",
     "BudgetCounts",
     "BudgetLimits",
     "Event",

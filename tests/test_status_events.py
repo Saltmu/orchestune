@@ -10,12 +10,12 @@ from dataclasses import replace
 
 import pytest
 
-from orchestune.dispatch.retry_policy import RetryState
 from orchestune.labels import StatusLabel
 from orchestune.ledger.status_events import (
     ALLOWED_TRANSITIONS,
     EVENT_SPECS,
     Applied,
+    BackoffState,
     BudgetCounts,
     BudgetLimits,
     Event,
@@ -32,6 +32,7 @@ from orchestune.ledger.status_events import (
     apply_event,
     restart,
 )
+from tests.status_event_test_support import production_limits
 
 Q = StatusLabel.QUEUED
 B = StatusLabel.BLOCKED
@@ -44,7 +45,7 @@ RC = StatusLabel.BLOCKED_RECOMPUTE
 FS = StatusLabel.FORCE_SERIAL
 EL = StatusLabel.EXTERNAL_LOCK
 CI_RED = "ci:base-branch-red"
-LIMITS = BudgetLimits()
+LIMITS = production_limits()
 A = ExecutionIdentity("launch-a")
 A2 = ExecutionIdentity("launch-b")
 
@@ -301,7 +302,7 @@ class TestBudgets:
             P, retries=RetryStates(reclaim=ReclaimState(count=3, pending=True))
         )
         result = _applied(
-            _apply(state, Event.RECLAIM, limits=BudgetLimits(max_task_reclaims=2))
+            _apply(state, Event.RECLAIM, limits=production_limits(max_task_reclaims=2))
         )
         assert result.escalated and result.state.retries.reclaim.count == 3
 
@@ -322,9 +323,9 @@ class TestBudgets:
     ) -> None:
         field = "early_death" if kind is Kind.EARLY_DEATH else "review_timeout"
         retries = (
-            RetryStates(early_death=RetryState(count=count))
+            RetryStates(early_death=BackoffState(count=count))
             if kind is Kind.EARLY_DEATH
-            else RetryStates(review_timeout=RetryState(count=count))
+            else RetryStates(review_timeout=BackoffState(count=count))
         )
         result = _applied(
             _apply(_model(P, retries=retries), Event.REQUEUE, kind, now=100.0)
@@ -333,14 +334,16 @@ class TestBudgets:
         retry = getattr(result.state.retries, field)
         if escalated:
             assert result.state.lifecycle == {H}
-            assert retry == RetryState(count=count)
+            assert retry == BackoffState(count=count)
         else:
             assert result.state.lifecycle == {Q}
             # backoff 60s doubles per previous retry; the requeue is settled.
-            assert retry == RetryState(count=count + 1, retry_at=100.0 + 60 * 2**count)
+            assert retry == BackoffState(
+                count=count + 1, retry_at=100.0 + 60 * 2**count
+            )
 
     def test_pending_backoff_retry_resumes_without_new_consumption(self) -> None:
-        reserved = RetryState(count=2, retry_at=500.0, pending=True)
+        reserved = BackoffState(count=2, retry_at=500.0, pending=True)
         state = _model(P, retries=RetryStates(early_death=reserved))
         # Even a lowered limit resumes the reservation and keeps retry_at.
         result = _applied(
@@ -349,23 +352,23 @@ class TestBudgets:
                 Event.REQUEUE,
                 Kind.EARLY_DEATH,
                 now=900.0,
-                limits=BudgetLimits(max_early_death_retries=0),
+                limits=production_limits(max_early_death_retries=0),
             )
         )
         assert not result.escalated
-        assert result.state.retries.early_death == RetryState(count=2, retry_at=500.0)
+        assert result.state.retries.early_death == BackoffState(count=2, retry_at=500.0)
 
     def test_launch_confirms_reclaim_and_early_death_reservations(self) -> None:
         retries = RetryStates(
             reclaim=ReclaimState(count=1, pending=True),
-            early_death=RetryState(count=1, retry_at=5.0, pending=True),
-            review_timeout=RetryState(count=1, retry_at=5.0, pending=True),
+            early_death=BackoffState(count=1, retry_at=5.0, pending=True),
+            review_timeout=BackoffState(count=1, retry_at=5.0, pending=True),
         )
         result = _applied(_apply(_model(Q, retries=retries), Event.LAUNCH, execution=A))
         assert result.state.retries == RetryStates(
             reclaim=ReclaimState(count=1),
-            early_death=RetryState(count=1, retry_at=5.0),
-            review_timeout=RetryState(count=1, retry_at=5.0, pending=True),
+            early_death=BackoffState(count=1, retry_at=5.0),
+            review_timeout=BackoffState(count=1, retry_at=5.0, pending=True),
         )
 
     def test_recompute_budget_falls_back_to_force_serial(self) -> None:
@@ -442,8 +445,8 @@ class TestOperationsAndRestart:
             counts=BudgetCounts(recompute=1, base_branch_red=2),
             retries=RetryStates(
                 reclaim=ReclaimState(count=2),
-                early_death=RetryState(count=1, retry_at=9.0),
-                review_timeout=RetryState(count=1, pending=True),
+                early_death=BackoffState(count=1, retry_at=9.0),
+                review_timeout=BackoffState(count=1, pending=True),
             ),
         )
         lost = restart(state, ledger_loss=True)
