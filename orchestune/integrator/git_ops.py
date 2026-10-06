@@ -34,6 +34,7 @@ from orchestune.integrator.execution import (
 )
 from orchestune.integrator.pr import handle_merge_failure
 from orchestune.integrator.proofs import TaskIntegrationProof
+from orchestune.integrator.tasks import DependencyIntegrationStates
 from orchestune.integrator.timeout_policy import (
     SIDE_EFFECT_UNKNOWN,
     STATUS_EXECUTION_INDETERMINATE,
@@ -222,16 +223,15 @@ class IntegrationMerger:
         """
         return self.run_ci_stages().legacy()
 
-    def _check_task_blocking(self, task: Task, unavailable_ids: set[str]) -> str | None:
-        # #437レビュー対応: status:blocked-human-review（親branchの
-        # 連続陳腐化等でエスカレーション済み）のタスクはここでマージ
-        # せずblocked扱いにする。`PrepareTasksStep`側で完全に除外して
-        # しまうと、このタスクに依存する後続タスク（特にスタッキングで
-        # 既にこのタスクの未マージコミットを含んだブランチを持つ後続
-        # タスク）が、下のブロック伝播（`unavailable_ids`）の対象から
-        # 漏れてそのまま独立にマージされてしまい、エスカレーションで
-        # 意図した人間の確認をブロックされたタスクの内容そのものが
-        # 迂回してparent branchへ入ってしまう。
+    def _check_task_blocking(
+        self,
+        task: Task,
+        unavailable_ids: set[str],
+        dependency_states: DependencyIntegrationStates | None = None,
+        merged_ids: set[str] | None = None,
+    ) -> str | None:
+        # Keep the direct guard for legacy Issues that still carry both done and
+        # escalation labels. Current lifecycle transitions keep those labels apart.
         escalated_labels = sorted(
             label for label in TERMINAL_ESCALATION_LABELS if label in task.status_labels
         )
@@ -246,6 +246,23 @@ class IntegrationMerger:
             return (
                 "依存タスク "
                 f"{', '.join(blocking_deps)} が失敗または依存失敗のため、"
+                "統合を実行せずスキップしました。"
+            )
+        if dependency_states is None:
+            return None
+
+        merged = merged_ids or set()
+        for dependency in sorted(task.depends_on):
+            if dependency in merged or dependency in dependency_states.integrated:
+                continue
+            if dependency in dependency_states.not_integrated:
+                label = dependency_states.not_integrated[dependency]
+                return (
+                    f"依存タスク {dependency} が未統合（{label}）のため、"
+                    "統合を実行せずスキップしました。"
+                )
+            return (
+                f"依存タスク {dependency} の統合状態を確認できないため、"
                 "統合を実行せずスキップしました。"
             )
         return None
@@ -592,7 +609,12 @@ class IntegrationMerger:
             )
 
     def merge_and_test_tasks(
-        self, sorted_done_tasks: list[Task], base_branch: str, apply: bool
+        self,
+        sorted_done_tasks: list[Task],
+        base_branch: str,
+        apply: bool,
+        *,
+        dependency_states: DependencyIntegrationStates | None = None,
     ) -> tuple[list[str], list[str], list[str], dict[str, str], dict[str, str]]:
         self.merged_task_proofs = {}
         merged_tasks: list[str] = []
@@ -614,6 +636,7 @@ class IntegrationMerger:
             failed_reasons,
             blocked_reasons,
             unavailable_ids,
+            dependency_states,
         )
         return (
             merged_tasks,
@@ -634,6 +657,7 @@ class IntegrationMerger:
         failed_reasons: dict[str, str],
         blocked_reasons: dict[str, str],
         unavailable: set[str],
+        dependency_states: DependencyIntegrationStates | None = None,
     ) -> None:
         for task in tasks:
             self._merge_one_task(
@@ -646,6 +670,7 @@ class IntegrationMerger:
                 failed_reasons,
                 blocked_reasons,
                 unavailable,
+                dependency_states,
             )
 
     def _merge_one_task(
@@ -659,11 +684,17 @@ class IntegrationMerger:
         failed_reasons: dict[str, str],
         blocked_reasons: dict[str, str],
         unavailable: set[str],
+        dependency_states: DependencyIntegrationStates | None = None,
     ) -> None:
         pre_merge_sha: str | None = None
         self._pre_merge_sha = None
         try:
-            blocked_reason = self._check_task_blocking(task, unavailable)
+            blocked_reason = self._check_task_blocking(
+                task,
+                unavailable,
+                dependency_states,
+                merged_ids=set(merged),
+            )
             if blocked_reason:
                 print(
                     f"[Integrator] Skipping {task.subtask_id}: {blocked_reason}",

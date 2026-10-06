@@ -8,7 +8,7 @@ from __future__ import annotations
 import subprocess
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from orchestune.infra.process_utils import default_ci_command
 from orchestune.integrator import Integrator, IntegratorConfig
@@ -30,6 +30,53 @@ def _ok(args: list[str], stdout: str = "") -> subprocess.CompletedProcess:
 
 def _merge_index(env: IntegratorEnv) -> int:
     return env.call_index(env.calls_with("merge", "--no-ff")[0])
+
+
+def test_prepare_dependency_states_are_passed_to_merger(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from orchestune.integrator import steps, types
+    from orchestune.models import Task
+
+    task = Task(
+        issue_number=1,
+        subtask_id="task-1",
+        footprint=(),
+        symbols=(),
+        risk=False,
+        priority="medium",
+        progress_partial=False,
+        status_labels=("status:done",),
+        created_at="2026-01-01T00:00:00Z",
+    )
+    states = SimpleNamespace(integrated=frozenset({"upstream"}), not_integrated={})
+    monkeypatch.setattr(
+        steps,
+        "load_integration_tasks",
+        lambda *args, **kwargs: ([task], [], states),
+    )
+    ctx = types.IntegrationContext(
+        config=types.IntegratorConfig(parent_issue_number=100, forge=MagicMock()),
+        repository_root=tmp_path,
+        original_root=tmp_path,
+        base_branch="main",
+        temp_branch="integration-temp",
+    )
+    steps.PrepareTasksStep().execute(ctx)
+    merger = MagicMock()
+    merger.create_temp_branch.return_value = True
+    merger.merge_and_test_tasks.return_value = ([], [], [], {}, {})
+    monkeypatch.setattr(
+        steps.MergeAndTestStep,
+        "_new_merger",
+        staticmethod(lambda context: merger),
+    )
+
+    steps.MergeAndTestStep().execute(ctx)
+
+    merger.merge_and_test_tasks.assert_called_once_with(
+        [task], "main", False, dependency_states=states
+    )
 
 
 class TestMergeFailure:

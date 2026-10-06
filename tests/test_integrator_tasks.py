@@ -67,6 +67,59 @@ def test_returns_empty_when_no_done_issues_using_injected_fake_forge():
     fake_forge.list_issues_by_label.assert_called_once_with("status:done", state="all")
 
 
+def test_load_integration_tasks_classifies_dependency_states():
+    from dataclasses import replace
+
+    from orchestune.integrator.tasks import load_integration_tasks
+
+    candidate = _done_issue(1, "candidate", parent={"number": PARENT})
+    included = replace(
+        _done_issue(2, "included", parent={"number": PARENT}),
+        labels=("status:done", "integration:included"),
+    )
+    closed_done = replace(
+        _done_issue(3, "closed", parent={"number": PARENT}), state="CLOSED"
+    )
+    not_needed = replace(
+        _labeled_issue(4, "unneeded", "status:not-needed"), state="CLOSED"
+    )
+    queued = _labeled_issue(5, "queued", "status:queued")
+    in_progress = _labeled_issue(6, "in-progress", "status:in-progress")
+    blocked = _labeled_issue(7, "blocked", "status:blocked")
+    human_review = _labeled_issue(8, "human-review", "status:blocked-human-review")
+    manual_merge = _labeled_issue(9, "manual-merge", "status:manual-merge-required")
+    fake_forge = _forge_listing(
+        {
+            ("status:done", "all"): [candidate, included, closed_done],
+            ("status:queued", "open"): [queued],
+            ("status:in-progress", "open"): [in_progress],
+            ("status:blocked", "open"): [blocked],
+            ("status:blocked-human-review", "open"): [human_review],
+            ("status:manual-merge-required", "open"): [manual_merge],
+            ("status:not-needed", "all"): [not_needed],
+        }
+    )
+
+    sorted_done, unparsable, states = load_integration_tasks(PARENT, forge=fake_forge)
+
+    assert unparsable == []
+    assert {task.subtask_id for task in sorted_done} == {
+        "candidate",
+        "included",
+        "closed",
+    }
+    assert states.integrated == frozenset({"included", "closed", "unneeded"})
+    assert states.not_integrated == {
+        "queued": "status:queued",
+        "in-progress": "status:in-progress",
+        "blocked": "status:blocked",
+        "human-review": "status:blocked-human-review",
+        "manual-merge": "status:manual-merge-required",
+    }
+    assert "candidate" not in states.integrated
+    assert "candidate" not in states.not_integrated
+
+
 def test_sorts_done_tasks_using_injected_fake_forge():
     done_issue = _done_issue(1, "task-1")
     fake_forge = MagicMock()

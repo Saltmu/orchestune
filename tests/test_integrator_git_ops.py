@@ -27,6 +27,7 @@ from orchestune.infra.managed_process import ManagedProcessRunner
 from orchestune.integrator import Integrator, IntegratorConfig
 from orchestune.integrator.ci_execution import CiStageResult
 from orchestune.integrator.git_ops import IntegrationMerger
+from orchestune.integrator.tasks import DependencyIntegrationStates
 from orchestune.models import PrRecord, Task
 from orchestune.task_branch_resolution import (
     CanonicalBranchState,
@@ -373,6 +374,87 @@ class TestCheckTaskBlocking:
         )
         reason = merger._check_task_blocking(task, unavailable_ids={"other"})
         assert reason is None
+
+    @pytest.mark.parametrize("label", ["status:queued", "status:blocked-human-review"])
+    def test_blocks_dependency_known_not_integrated(self, tmp_path: Path, label: str):
+        merger = self._merger(tmp_path)
+        task = _task(issue_number=2, subtask_id="t2", depends_on=("t1",))
+        states = DependencyIntegrationStates(
+            integrated=frozenset(), not_integrated={"t1": label}
+        )
+
+        reason = merger._check_task_blocking(
+            task, unavailable_ids=set(), dependency_states=states
+        )
+
+        assert reason is not None
+        assert "t1" in reason
+        assert label in reason
+
+    def test_allows_already_integrated_dependency(self, tmp_path: Path):
+        merger = self._merger(tmp_path)
+        task = _task(issue_number=2, subtask_id="t2", depends_on=("t1",))
+        states = DependencyIntegrationStates(
+            integrated=frozenset({"t1"}), not_integrated={}
+        )
+
+        reason = merger._check_task_blocking(
+            task, unavailable_ids=set(), dependency_states=states
+        )
+
+        assert reason is None
+
+    def test_fails_closed_for_unknown_dependency(self, tmp_path: Path):
+        merger = self._merger(tmp_path)
+        task = _task(issue_number=2, subtask_id="t2", depends_on=("missing",))
+        states = DependencyIntegrationStates(integrated=frozenset(), not_integrated={})
+
+        reason = merger._check_task_blocking(
+            task, unavailable_ids=set(), dependency_states=states
+        )
+
+        assert reason is not None
+        assert "missing" in reason
+        assert "状態を確認できない" in reason
+
+    def test_allows_dependency_merged_earlier_in_same_run(self, tmp_path: Path):
+        merger = self._merger(tmp_path)
+        task = _task(issue_number=2, subtask_id="t2", depends_on=("t1",))
+        states = DependencyIntegrationStates(integrated=frozenset(), not_integrated={})
+
+        reason = merger._check_task_blocking(
+            task,
+            unavailable_ids=set(),
+            dependency_states=states,
+            merged_ids={"t1"},
+        )
+
+        assert reason is None
+
+    def test_merge_loop_allows_dependent_after_successful_dependency(
+        self, tmp_path: Path
+    ):
+        merger = self._merger(tmp_path)
+        upstream = _task(issue_number=1, subtask_id="t1")
+        downstream = _task(issue_number=2, subtask_id="t2", depends_on=("t1",))
+        states = DependencyIntegrationStates(
+            integrated=frozenset(), not_integrated={"t1": "status:queued"}
+        )
+
+        def merge_task(task, _base, _apply, merged, _failed, _reasons, _unavailable):
+            merged.append(task.subtask_id)
+
+        with patch.object(merger, "_merge_task_if_needed", side_effect=merge_task):
+            merged, failed, blocked, _, _ = merger.merge_and_test_tasks(
+                [upstream, downstream],
+                "main",
+                apply=False,
+                dependency_states=states,
+            )
+
+        assert merged == ["t1", "t2"]
+        assert failed == []
+        assert blocked == []
 
 
 class TestFetchTaskBranch:

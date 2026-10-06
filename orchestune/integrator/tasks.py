@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import re
 import sys
-from collections.abc import Iterable
-from dataclasses import replace
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
 
 from orchestune.dag.graph import build_dag
 from orchestune.dag.models import SubTask
@@ -31,6 +31,14 @@ _OPEN_INTEGRATION_LABELS = (
     *TERMINAL_ESCALATION_LABELS,
     StatusLabel.EXTERNAL_LOCK,
 )
+
+
+@dataclass(frozen=True)
+class DependencyIntegrationStates:
+    """Parent-scoped dependency states needed by the merge blocking check."""
+
+    integrated: frozenset[str]
+    not_integrated: Mapping[str, str]
 
 
 def build_issue_to_subtask_id_map(issues: list[IssueRecord]) -> dict[int, str]:
@@ -84,10 +92,26 @@ def get_sorted_done_tasks(
     `build_dag`へ渡す。統合順序（`topological_order`）自体は明示的な
     `depends_on`だけで決まり、類似度設定には左右されない。
     """
+    sorted_done, unparsable, _ = load_integration_tasks(
+        parent_issue_number,
+        forge=forge,
+        ignore_patterns=ignore_patterns,
+        threshold=threshold,
+    )
+    return sorted_done, unparsable
+
+
+def load_integration_tasks(
+    parent_issue_number: int,
+    forge: Forge | None = None,
+    ignore_patterns: Iterable[re.Pattern[str]] = (),
+    threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+) -> tuple[list[Task], list[Task], DependencyIntegrationStates]:
+    """Load ordered done tasks and classify the parent's dependency states."""
     forge = forge or GitHubForge()
     done_issues = forge.list_issues_by_label(StatusLabel.DONE, state="all")
     if not done_issues:
-        return [], []
+        return [], [], DependencyIntegrationStates(frozenset(), {})
     done_issues, all_issues = _load_integration_issues(
         forge, done_issues, parent_issue_number
     )
@@ -101,7 +125,45 @@ def get_sorted_done_tasks(
         for issue in _unique_issues(all_issues)
     ]
     order = _topological_order(tasks, threshold, ignore_patterns)
-    return _order_done_tasks(done_issues, issue_to_subtask_id, order)
+    sorted_done, unparsable = _order_done_tasks(done_issues, issue_to_subtask_id, order)
+    states = _dependency_integration_states(all_issues, issue_to_subtask_id)
+    return sorted_done, unparsable, states
+
+
+def _dependency_integration_states(
+    issues: list[IssueRecord], issue_to_subtask_id: dict[int, str]
+) -> DependencyIntegrationStates:
+    integrated: set[str] = set()
+    not_integrated: dict[str, str] = {}
+    lifecycle_labels = (*PRIMARY_STATUS_LABELS, *TERMINAL_ESCALATION_LABELS)
+
+    for issue in issues:
+        subtask_id = issue_to_subtask_id.get(issue.number)
+        if subtask_id is None:
+            continue
+
+        labels = set(issue.labels)
+        if StatusLabel.NOT_NEEDED in labels or (
+            StatusLabel.DONE in labels
+            and (issue.state == "CLOSED" or "integration:included" in labels)
+        ):
+            integrated.add(subtask_id)
+            continue
+
+        # Open done tasks are candidates in this merge run. Their final state
+        # is decided by `merged` or `unavailable_ids` inside the merger.
+        if StatusLabel.DONE in labels and issue.state != "CLOSED":
+            continue
+
+        lifecycle_label = next(
+            (str(label) for label in lifecycle_labels if label in labels),
+            "unknown lifecycle state",
+        )
+        not_integrated[subtask_id] = lifecycle_label
+
+    return DependencyIntegrationStates(
+        integrated=frozenset(integrated), not_integrated=not_integrated
+    )
 
 
 def _load_integration_issues(

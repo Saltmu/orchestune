@@ -54,18 +54,12 @@ class TestDoneTaskSelection:
 
 
 class TestBlockedHumanReviewExclusion:
-    """#437: 親branch陳腐化の連続によりstatus:blocked-human-reviewへ
-    エスカレーション済みのタスクは、人間の確認が入るまで統合（マージ）
-    対象から外れる。#437レビュー対応: ただし`PrepareTasksStep`の時点で
-    `active_done_tasks`から完全に除外してはいけない。除外すると、この
-    タスクに依存する後続タスク（特にスタッキングにより既にこのタスクの
-    未マージコミットを含んだブランチを持つ後続タスク）を検知してブロック
-    する既存の推移的依存判定（`IntegrationMerger.merge_and_test_tasks`）が
-    このタスクの存在自体を認識できず素通りしてしまい、エスカレーションで
-    意図した人間の確認をブロックされた変更が後続タスク経由でparent branchへ
-    迂回して入ってしまう。そのため、実際にマージをスキップする判定は
-    `merge_and_test_tasks`側で行う（`TestDependencyFailureBlocking`と同じ
-    箇所）。"""
+    """#437 compatibility for legacy Issues with coexisting done/escalation labels.
+
+    Current lifecycle transitions keep those labels separate. These tests retain
+    the direct legacy guard; cross-cycle dependencies on a separately escalated
+    Issue are covered by `TestSeparateEscalationDependencyState`.
+    """
 
     def test_excludes_task_labeled_blocked_human_review(
         self, integrator_env: IntegratorEnv
@@ -107,8 +101,8 @@ class TestBlockedHumanReviewExclusion:
     def test_stacked_dependent_of_blocked_task_is_also_blocked(
         self, integrator_env: IntegratorEnv
     ):
-        # #437レビュー対応（Codexの指摘の回帰テスト）: task-1がescalation
-        # 済みでも、task-1に依存するtask-2（スタッキングによりtask-1の
+        # Legacy #437 behavior: task-1 has both done and escalation labels,
+        # and task-2 depends on it (its stacked branch may contain task-1's
         # 未マージコミットを既に含んだブランチを持ちうる）が独立にマージ
         # されてしまうと、ブロックしたはずのtask-1の変更が実質的に
         # parent branchへ入ってしまう。task-2も推移的にブロックされ、
@@ -132,6 +126,42 @@ class TestBlockedHumanReviewExclusion:
             if any("claude/issue-2-task-2" in a for a in call.args[0])
             and "merge" in call.args[0]
         ]
+
+
+class TestSeparateEscalationDependencyState:
+    def test_done_dependent_is_blocked_by_separately_escalated_issue(
+        self, integrator_env: IntegratorEnv
+    ):
+        from tests.conftest import make_issue
+
+        upstream = make_issue(
+            number=1,
+            subtask_id="task-1",
+            labels=("status:blocked-human-review",),
+            footprint=("src/task-1.py",),
+        )
+        dependent = make_done_issue(2, subtask_id="task-2", depends_on=("task-1",))
+        integrator_env.list_issues_by_label.side_effect = (
+            lambda label, *args, **kwargs: (
+                [dependent]
+                if label == "status:done"
+                else [upstream]
+                if label == "status:blocked-human-review"
+                else []
+            )
+        )
+
+        result = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
+
+        assert result["status"] == "failure"
+        assert result["merged"] == []
+        assert result["blocked"] == ["task-2"]
+        assert "status:blocked-human-review" in result["blocked_reasons"]["task-2"]
+        assert [
+            call
+            for call in integrator_env.run.call_args_list
+            if any("claude/issue-2-task-2" in arg for arg in call.args[0])
+        ] == []
 
 
 class TestUnparsableDoneTask:
