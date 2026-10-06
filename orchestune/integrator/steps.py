@@ -52,7 +52,7 @@ from orchestune.integrator.review_gate import (
     format_child_review_gate_escalation_comment,
     has_matching_review_gate_comment,
 )
-from orchestune.integrator.tasks import get_sorted_done_tasks
+from orchestune.integrator.tasks import load_integration_tasks
 from orchestune.integrator.types import (
     IntegrationComponent,
     IntegrationContext,
@@ -108,7 +108,11 @@ def _retry_file_lock(lock_path, attempts: int = 3) -> Iterator[None]:
 
 class PrepareTasksStep(IntegrationComponent):
     def execute(self, ctx: IntegrationContext) -> IntegrationReport:
-        sorted_done_tasks, ctx.unparsable_done_tasks = get_sorted_done_tasks(
+        (
+            sorted_done_tasks,
+            ctx.unparsable_done_tasks,
+            ctx.dependency_states,
+        ) = load_integration_tasks(
             ctx.config.parent_issue_number,
             forge=ctx.config.forge,
             ignore_patterns=ctx.config.dag_ignore_patterns,
@@ -116,15 +120,8 @@ class PrepareTasksStep(IntegrationComponent):
         )
         self._warn_and_flag_unparsable_done_tasks(ctx)
 
-        # #437レビュー対応: status:blocked-human-reviewエスカレーション済みの
-        # タスクは、ここで`active_done_tasks`から完全に除外してはいけない。
-        # 除外すると、そのタスクに依存する後続タスク（特にスタッキングにより
-        # 既にその未マージのコミットを含んだブランチを持つ後続タスク）を
-        # ブロックする既存の推移的依存判定（`IntegrationMerger.merge_and_test_tasks`
-        # の`unavailable_ids`）が、除外されたタスクの存在自体を認識できず
-        # 素通りしてしまう。人間の確認待ちのタスクをマージ対象から外す処理
-        # 自体は、この依存判定と同じ場所（`merge_and_test_tasks`）で行い、
-        # 依存元・依存先を通して一貫してブロックされるようにする。
+        # Dependency states for escalated and other non-done children are kept
+        # separately, so only open done tasks remain merge candidates here.
         ctx.active_done_tasks = [
             task
             for task in sorted_done_tasks
@@ -419,7 +416,10 @@ class MergeAndTestStep(IntegrationComponent):
                 }
 
             results = merger.merge_and_test_tasks(
-                ctx.active_done_tasks, ctx.base_branch, ctx.config.apply
+                ctx.active_done_tasks,
+                ctx.base_branch,
+                ctx.config.apply,
+                dependency_states=ctx.dependency_states,
             )
             return self._record_merge_results(ctx, results, merger.merged_task_proofs)
         except Exception as error:

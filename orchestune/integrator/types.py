@@ -17,6 +17,7 @@ from orchestune.infra.managed_process import ProcessRunner
 from orchestune.integrator.coordinator import IntegrationCoordinator
 from orchestune.integrator.execution import ExecutionState
 from orchestune.integrator.proofs import TaskIntegrationProof
+from orchestune.integrator.tasks import DependencyIntegrationStates
 from orchestune.integrator.timeout_policy import (
     DEFAULT_INTEGRATION_CI_TIMEOUT_SECONDS,
     DEFAULT_INTEGRATION_CLEANUP_TIMEOUT_SECONDS,
@@ -180,6 +181,7 @@ class IntegrationContext:
     blocked_reasons: dict[str, str] = field(default_factory=dict)
     unparsable_done_tasks: list[Task] = field(default_factory=list)
     active_done_tasks: list[Task] = field(default_factory=list)
+    dependency_states: DependencyIntegrationStates | None = None
     integration_pr_number: int | None = None
     semantic_review_dispatched: bool = False
     newly_included: list[str] = field(default_factory=list)
