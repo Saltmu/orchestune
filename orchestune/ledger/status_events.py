@@ -691,8 +691,10 @@ def _with_execution(state: TaskModel, event: EventInput, spec: EventSpec) -> Tas
     # active entryの解放）。通常のエスカレーションは起動継続中の状態を表す。
     base_spec = EVENT_SPECS.get((event.event, event.kind))
     base_target = base_spec.target if base_spec is not None else spec.target
-    ends_execution = event.event in _EXECUTION_ENDING or (
-        base_target is not None and base_target not in _ESCALATION | {_P}
+    ends_execution = (
+        event.event in _EXECUTION_ENDING
+        or base_target is StatusLabel.MANUAL_MERGE_REQUIRED
+        or (base_target is not None and base_target not in _ESCALATION | {_P})
     )
     if not ends_execution or state.execution_identity is None:
         return state
@@ -715,6 +717,7 @@ def restart(state: TaskModel, *, ledger_loss: bool) -> TaskModel:
         state,
         pending_operation=None,
         confirmed_operations=frozenset(),
+        retired_execution_identities=frozenset(),
         completion_confirmed=state.completion_confirmed and state.persistent_completion,
     )
     if not ledger_loss:

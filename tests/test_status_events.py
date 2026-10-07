@@ -326,6 +326,13 @@ class TestExecutionIdentity:
         result = _applied(_apply(_model(P, execution_identity=A), Event.ESCALATE))
         assert result.state.execution_identity == A
 
+    def test_manual_merge_escalation_retires_the_execution(self) -> None:
+        result = _applied(
+            _apply(_model(P, execution_identity=A), Event.ESCALATE, Kind.MANUAL_MERGE)
+        )
+        assert result.state.execution_identity is None
+        assert A in result.state.retired_execution_identities
+
 
 class TestBudgets:
     def test_reclaim_counts_and_settles_within_budget(self) -> None:
@@ -736,6 +743,11 @@ class TestOperationsAndRestart:
         assert lost.ledger_epoch == state.ledger_epoch + 1
         assert lost.execution_identity is None
         assert lost.labels == state.labels
+
+    def test_restart_clears_retired_execution_identities(self) -> None:
+        state = _model(Q, retired_execution_identities=frozenset({A}))
+        restarted = restart(state, ledger_loss=False)
+        assert restarted.retired_execution_identities == frozenset()
 
     def test_restart_clears_cycle_only_completion_but_preserves_persistent_completion(
         self,
