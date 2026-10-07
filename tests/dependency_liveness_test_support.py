@@ -170,7 +170,13 @@ class OracleView:
     base_red: bool
     reserved: frozenset[int]
 
-    def promotable(self, dependencies: tuple[int, ...] | None, *, apply: bool) -> bool:
+    def promotable(
+        self,
+        dependencies: tuple[int, ...] | None,
+        *,
+        apply: bool,
+        subject: int | None = DEPENDENT,
+    ) -> bool:
         if dependencies is None:
             return False
         evidence = self.valid if apply else self.preview_visible
@@ -178,6 +184,7 @@ class OracleView:
             set(dependencies) <= evidence
             and not self.base_red
             and not (set(dependencies) & self.reserved)
+            and (subject is None or subject not in self.reserved)
         )
 
 

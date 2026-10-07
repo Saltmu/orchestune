@@ -26,6 +26,7 @@ from tests.dependency_liveness_test_support import (
     RECOMPUTE_RELEASE_ISSUE,
     CompletionPath,
     CycleObservation,
+    DEPENDENT,
     FaultPlan,
     LivenessCase,
     LivenessTopology,
@@ -191,7 +192,7 @@ def assert_safe(
         return
     if not observation.apply:
         reserved_conflict = (
-            bool(set(dependencies) & view.reserved)
+            bool((set(dependencies) | {DEPENDENT}) & view.reserved)
             if dependencies is not None
             else False
         )
@@ -229,9 +230,7 @@ def assert_intermediate_safety(
             if not observation.apply or observation.listing_lag:
                 deps_satisfied = _satisfied(observation.at_start)
             else:
-                deps_satisfied = _satisfied(observation.at_start) or _satisfied(
-                    observation.at_promotion
-                )
+                deps_satisfied = _satisfied(observation.at_promotion)
         if not deps_satisfied:
             assert (
                 number not in observation.promotion_issue_numbers
@@ -474,15 +473,15 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
     def fail_next(self, op, mode):
         self.world.faults.forge_operation = (op, mode)
 
-    @rule(kind=st.sampled_from(("base_red", "recompute", "reservation")))
-    def toggle_hold(self, kind):
+    @rule(
+        kind=st.sampled_from(("base_red", "recompute", "reservation")),
+        data=st.data(),
+    )
+    def toggle_hold(self, kind, data):
         if kind == "reservation":
-            present = bool(self.world.oracle().reserved)
-            target = (
-                self.world.required[0]
-                if self.world.required
-                else self.world.all_dep_issues[0]
-            )
+            candidates = (DEPENDENT, *self.world.all_dep_issues)
+            target = data.draw(st.sampled_from(candidates))
+            present = target in self.world.oracle().reserved
             self.world.set_reservation(target, not present)
         else:
             label = BASE_RED if kind == "base_red" else RECOMPUTE
