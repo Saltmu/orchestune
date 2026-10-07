@@ -27,6 +27,7 @@ from tests.dependency_liveness_test_support import (
     CycleObservation,
     FaultPlan,
     LivenessCase,
+    LivenessTopology,
     LivenessWorld,
     assert_case,
     run_case,
@@ -149,17 +150,21 @@ def test_stale_snapshot_revoked_dependency_is_not_promoted(tmp_path):
 
 
 def _known_recompute_release_bypass(
-    observation: CycleObservation, dependencies: tuple[int, ...]
+    observation: CycleObservation, dependencies: tuple[int, ...] | None
 ) -> bool:
     """RECOMPUTE_RELEASE_ISSUE (#1268): the recompute release promotes from the context
     snapshot, ignoring a base-red hold and evidence revoked after the snapshot."""
+    if dependencies is None:
+        return False
     snapshot = replace(observation.at_start, base_red=False)
     return RECOMPUTE in observation.t_before and snapshot.promotable(
         dependencies, apply=observation.apply
     )
 
 
-def assert_safe(observation: CycleObservation, dependencies: tuple[int, ...]) -> None:
+def assert_safe(
+    observation: CycleObservation, dependencies: tuple[int, ...] | None
+) -> None:
     """No new promotion (or dry-run preview) without fixture-valid evidence.
 
     Apply re-reads Forge before mutating, so it is judged at the promotion
@@ -182,14 +187,114 @@ def assert_safe(observation: CycleObservation, dependencies: tuple[int, ...]) ->
     if view.promotable(dependencies, apply=observation.apply):
         return
     if not observation.apply:
-        known_bug = bool(
-            set(dependencies) & view.reserved
-        ) or _known_recompute_release_bypass(observation, dependencies)
+        reserved_conflict = (
+            bool(set(dependencies) & view.reserved)
+            if dependencies is not None
+            else False
+        )
+        known_bug = reserved_conflict or _known_recompute_release_bypass(
+            observation, dependencies
+        )
         assert known_bug or not observation.previewed, f"unsafe preview: {observation}"
     else:
         assert not observation.promoted or _known_recompute_release_bypass(
             observation, dependencies
         ), f"unsafe promotion: {observation}"
+
+
+@st.composite
+def dependency_topologies(draw: st.DrawFn) -> LivenessTopology:
+    kind = draw(
+        st.sampled_from(
+            (
+                "simple_one",
+                "simple_two",
+                "fan_in_three",
+                "fan_in_four",
+                "transitive_chain",
+                "branching_diamond",
+                "intermediate_cycle",
+                "dependent_cycle",
+                "unresolved_direct",
+                "unresolved_transitive",
+            )
+        )
+    )
+    if kind == "simple_one":
+        return LivenessTopology(
+            dep_issues=(11,),
+            t_depends_on=("dep-a",),
+            issue_depends_on={},
+            required_to_promote=(11,),
+        )
+    if kind == "simple_two":
+        return LivenessTopology(
+            dep_issues=(11, 12),
+            t_depends_on=("dep-a", "dep-b"),
+            issue_depends_on={},
+            required_to_promote=(11, 12),
+        )
+    if kind == "fan_in_three":
+        return LivenessTopology(
+            dep_issues=(11, 12, 13),
+            t_depends_on=("dep-a", "dep-b", "dep-c"),
+            issue_depends_on={},
+            required_to_promote=(11, 12, 13),
+        )
+    if kind == "fan_in_four":
+        return LivenessTopology(
+            dep_issues=(11, 12, 13, 14),
+            t_depends_on=("dep-a", "dep-b", "dep-c", "dep-d"),
+            issue_depends_on={},
+            required_to_promote=(11, 12, 13, 14),
+        )
+    if kind == "transitive_chain":
+        # T -> 11 -> 12 -> 13
+        return LivenessTopology(
+            dep_issues=(11, 12, 13),
+            t_depends_on=("dep-a",),
+            issue_depends_on={11: ("dep-b",), 12: ("dep-c",)},
+            required_to_promote=(11,),
+        )
+    if kind == "branching_diamond":
+        # T -> (11, 12); 11 -> 13; 12 -> 13
+        return LivenessTopology(
+            dep_issues=(11, 12, 13),
+            t_depends_on=("dep-a", "dep-b"),
+            issue_depends_on={11: ("dep-c",), 12: ("dep-c",)},
+            required_to_promote=(11, 12),
+        )
+    if kind == "intermediate_cycle":
+        # 11 -> 12, 12 -> 11; T -> 11
+        return LivenessTopology(
+            dep_issues=(11, 12),
+            t_depends_on=("dep-a",),
+            issue_depends_on={11: ("dep-b",), 12: ("dep-a",)},
+            required_to_promote=(11,),
+        )
+    if kind == "dependent_cycle":
+        # T -> 11, 11 -> dependent
+        return LivenessTopology(
+            dep_issues=(11,),
+            t_depends_on=("dep-a",),
+            issue_depends_on={11: ("dependent",)},
+            required_to_promote=(11,),
+        )
+    if kind == "unresolved_direct":
+        # T -> ("dep-a", "unresolved-missing")
+        return LivenessTopology(
+            dep_issues=(11,),
+            t_depends_on=("dep-a", "unresolved-missing"),
+            issue_depends_on={},
+            required_to_promote=None,
+        )
+    # unresolved_transitive: T -> 11, 11 -> "unresolved-missing"
+    return LivenessTopology(
+        dep_issues=(11,),
+        t_depends_on=("dep-a",),
+        issue_depends_on={11: ("unresolved-missing",)},
+        required_to_promote=(11,),
+    )
 
 
 class DependencyLivenessMachine(RuleBasedStateMachine):
@@ -204,15 +309,15 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
         self.disturbed = False
         self.stale: str | None = None
 
-    @initialize(two=st.booleans(), recompute=st.booleans())
-    def start(self, two, recompute):
+    @initialize(topology=dependency_topologies(), recompute=st.booleans())
+    def start(self, topology: LivenessTopology, recompute: bool):
         labels = ("status:blocked", RECOMPUTE) if recompute else ("status:blocked",)
         self.world = LivenessWorld(
-            Path(self.directory.name), (11, 12) if two else (11,), labels
+            Path(self.directory.name), t_labels=labels, topology=topology
         )
 
     def _pending(self) -> list[int]:
-        return [n for n in self.world.dependencies if n not in self.world.evidence]
+        return [n for n in self.world.all_dep_issues if n not in self.world.evidence]
 
     @rule(
         data=st.data(),
@@ -242,9 +347,9 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
         observation = self.world.cycle(
             apply=apply, before_promotion=_STALE_CHANGES.get(stale)
         )
-        assert_safe(observation, self.world.dependencies)
+        assert_safe(observation, self.world.required)
         fair = not (self.disturbed or stale or observation.error) and all(
-            view.promotable(self.world.dependencies, apply=apply)
+            view.promotable(self.world.required, apply=apply)
             for view in (observation.at_start, observation.at_promotion)
         )
         if observation.error:
@@ -252,7 +357,7 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
         elif apply:
             self.disturbed = False
         self.fair_streak = self.fair_streak + 1 if fair else 0
-        if self.fair_streak >= LIVENESS_BOUND + 1:
+        if self.fair_streak >= LIVENESS_BOUND:
             assert "status:queued" in observation.t_after or observation.previewed
 
     @rule(ledger_loss=st.booleans())
@@ -272,7 +377,12 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
     def toggle_hold(self, kind):
         if kind == "reservation":
             present = bool(self.world.oracle().reserved)
-            self.world.set_reservation(self.world.dependencies[0], not present)
+            target = (
+                self.world.required[0]
+                if self.world.required
+                else self.world.all_dep_issues[0]
+            )
+            self.world.set_reservation(target, not present)
         else:
             label = BASE_RED if kind == "base_red" else RECOMPUTE
             self.world.set_t_label(label, label not in self.world.labels())
@@ -287,7 +397,7 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
 
 
 def _stale_complete(world: LivenessWorld) -> None:
-    pending = [n for n in world.dependencies if n not in world.evidence]
+    pending = [n for n in world.all_dep_issues if n not in world.evidence]
     if pending:
         world.complete(pending[0], CompletionPath.LABEL)
 

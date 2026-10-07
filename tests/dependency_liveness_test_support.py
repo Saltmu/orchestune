@@ -46,7 +46,13 @@ from tests.status_reconciliation_test_support import FaultBoundary
 
 PARENT = 100
 DEPENDENT = 20
-SUBTASK_BY_ISSUE = {11: "dep-a", 12: "dep-b", DEPENDENT: "dependent"}
+SUBTASK_BY_ISSUE = {
+    11: "dep-a",
+    12: "dep-b",
+    13: "dep-c",
+    14: "dep-d",
+    DEPENDENT: "dependent",
+}
 PARENT_BRANCH = f"parent/issue-{PARENT}"
 BASE_RED = "ci:base-branch-red"
 RECOMPUTE = StatusLabel.BLOCKED_RECOMPUTE.value
@@ -59,6 +65,16 @@ LIVENESS_BOUND = 1
 OUTCOME_NOT_NEEDED_ISSUE = "#1269"
 DRY_RUN_RESERVATION_ISSUE = "#1267"
 RECOMPUTE_RELEASE_ISSUE = "#1268"
+
+
+@dataclass(frozen=True, slots=True)
+class LivenessTopology:
+    """Dependency graph for stateful exploration (#1265)."""
+
+    dep_issues: tuple[int, ...] = (11,)
+    t_depends_on: tuple[str, ...] = ("dep-a",)
+    issue_depends_on: dict[int, tuple[str, ...]] = field(default_factory=dict)
+    required_to_promote: tuple[int, ...] | None = (11,)
 
 
 class CompletionPath(StrEnum):
@@ -153,7 +169,9 @@ class OracleView:
     base_red: bool
     reserved: frozenset[int]
 
-    def promotable(self, dependencies: tuple[int, ...], *, apply: bool) -> bool:
+    def promotable(self, dependencies: tuple[int, ...] | None, *, apply: bool) -> bool:
+        if dependencies is None:
+            return False
         evidence = self.valid if apply else self.preview_visible
         return (
             set(dependencies) <= evidence
@@ -273,16 +291,31 @@ class LivenessWorld:
     evidence_cycle: dict[int, int] = field(default_factory=dict)
     cycle_index: int = 0
     observations: list[CycleObservation] = field(default_factory=list)
+    topology: LivenessTopology | None = None
+    required: tuple[int, ...] | None = field(init=False)
+    all_dep_issues: tuple[int, ...] = field(init=False)
     boundary: _LivenessForge = field(init=False)
 
     def __post_init__(self) -> None:
         self.boundary = _LivenessForge(self.forge)
         self.forge.seed_issue(make_issue(PARENT, labels=(), parent=None))
         self.forge.branches.add(PARENT_BRANCH)
-        for number in self.dependencies:
-            self.forge.seed_issue(_issue(number, (StatusLabel.QUEUED.value,)))
-        depends_on = tuple(SUBTASK_BY_ISSUE[n] for n in self.dependencies)
-        self.forge.seed_issue(_issue(DEPENDENT, self.t_labels, depends_on))
+        if self.topology is not None:
+            self.all_dep_issues = self.topology.dep_issues
+            self.required = self.topology.required_to_promote
+            t_depends_on = self.topology.t_depends_on
+            for number in self.all_dep_issues:
+                issue_deps = self.topology.issue_depends_on.get(number, ())
+                self.forge.seed_issue(
+                    _issue(number, (StatusLabel.QUEUED.value,), depends_on=issue_deps)
+                )
+        else:
+            self.all_dep_issues = self.dependencies
+            self.required = self.dependencies
+            t_depends_on = tuple(SUBTASK_BY_ISSUE[n] for n in self.dependencies)
+            for number in self.dependencies:
+                self.forge.seed_issue(_issue(number, (StatusLabel.QUEUED.value,)))
+        self.forge.seed_issue(_issue(DEPENDENT, self.t_labels, t_depends_on))
         save_locked_run_state(RunState(), self.run_state_path)
 
     @property
