@@ -194,6 +194,8 @@ class CycleObservation:
     error: BaseException | None = None
     fault_injected: bool = False
     listing_lag: bool = False
+    labels_before: dict[int, frozenset[str]] = field(default_factory=dict)
+    labels_after: dict[int, frozenset[str]] = field(default_factory=dict)
 
     @property
     def promoted(self) -> bool:
@@ -501,6 +503,7 @@ class LivenessWorld:
     ) -> CycleObservation:
         self.boundary.fault_injected = False
         t_before = self.labels()
+        labels_before = {n: self.labels(n) for n in self.all_dep_issues}
         at_start = self.oracle()
         probe = _PromotionProbe(self, before_promotion)
         error: BaseException | None = None
@@ -522,6 +525,8 @@ class LivenessWorld:
             error=error,
             fault_injected=self.boundary.fault_injected,
             listing_lag=self.faults.listing_lag,
+            labels_before=labels_before,
+            labels_after={n: self.labels(n) for n in self.all_dep_issues},
         )
         self.observations.append(observation)
         self.cycle_index += 1

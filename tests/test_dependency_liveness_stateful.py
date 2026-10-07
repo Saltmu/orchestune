@@ -209,26 +209,38 @@ def assert_intermediate_safety(
 ) -> None:
     if world.topology is None:
         return
-    view = (
-        observation.at_start
-        if not observation.apply or observation.listing_lag
-        else observation.at_promotion
-    )
-    evidence = view.valid if observation.apply else view.preview_visible
-
     for number, deps in world.topology.issue_depends_on.items():
         if not deps:
             continue
-        deps_satisfied = True
-        for d in deps:
-            dep_num = ISSUE_BY_SUBTASK.get(d)
-            if dep_num is None or dep_num not in evidence:
-                deps_satisfied = False
-                break
+        required = tuple(ISSUE_BY_SUBTASK[d] for d in deps if d in ISSUE_BY_SUBTASK)
+        if len(required) < len(deps):
+            deps_satisfied = False
+        else:
+            req_set = set(required)
+            if observation.apply:
+                deps_satisfied = (
+                    req_set <= observation.at_start.valid
+                    or req_set <= observation.at_promotion.valid
+                )
+            else:
+                deps_satisfied = (
+                    req_set <= observation.at_start.preview_visible
+                    or req_set <= observation.at_promotion.preview_visible
+                )
         if not deps_satisfied:
             assert (
                 number not in observation.promotion_issue_numbers
-            ), f"unsafe intermediate promotion of {number}: {observation}"
+            ), f"unsafe intermediate promotion event for {number}: {observation}"
+            if observation.apply:
+                before = observation.labels_before.get(number, frozenset())
+                after = observation.labels_after.get(number, frozenset())
+                if (
+                    StatusLabel.BLOCKED.value in before
+                    and StatusLabel.QUEUED.value not in before
+                ):
+                    assert (
+                        StatusLabel.QUEUED.value not in after
+                    ), f"unsafe live transition of intermediate {number} to queued: {observation}"
 
 
 @st.composite
@@ -335,6 +347,7 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
         root.mkdir(parents=True, exist_ok=True)
         self.directory = TemporaryDirectory(prefix="liveness-1265-", dir=root)
         self.fair_streak = 0
+        self.intermediate_fair_streaks: dict[int, int] = {}
         self.stale: str | None = None
 
     @initialize(topology=dependency_topologies(), recompute=st.booleans())
@@ -343,6 +356,9 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
         self.world = LivenessWorld(
             Path(self.directory.name), t_labels=labels, topology=topology
         )
+        self.intermediate_fair_streaks = {
+            n: 0 for n in topology.issue_depends_on if topology.issue_depends_on[n]
+        }
 
     def _completable(self) -> list[int]:
         return [
@@ -395,6 +411,53 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
         self.fair_streak = self.fair_streak + 1 if fair else 0
         if self.fair_streak >= LIVENESS_BOUND:
             assert "status:queued" in observation.t_after or observation.previewed
+
+        if self.world.topology is not None:
+            for number, deps in self.world.topology.issue_depends_on.items():
+                if not deps:
+                    continue
+                before_labels = observation.labels_before.get(number, frozenset())
+                if (
+                    StatusLabel.BLOCKED.value not in before_labels
+                    or StatusLabel.QUEUED.value in before_labels
+                ):
+                    self.intermediate_fair_streaks[number] = 0
+                    continue
+                required_for_number = tuple(
+                    ISSUE_BY_SUBTASK[d] for d in deps if d in ISSUE_BY_SUBTASK
+                )
+                if len(required_for_number) < len(deps):
+                    self.intermediate_fair_streaks[number] = 0
+                    continue
+                fair_for_number = (
+                    not stale
+                    and observation.error is None
+                    and not observation.fault_injected
+                    and self.world.faults.forge_operation is None
+                    and all(
+                        set(required_for_number)
+                        <= (view.valid if apply else view.preview_visible)
+                        and not (set(required_for_number) & view.reserved)
+                        and number not in view.reserved
+                        for view in (observation.at_start, observation.at_promotion)
+                    )
+                )
+                self.intermediate_fair_streaks[number] = (
+                    self.intermediate_fair_streaks.get(number, 0) + 1
+                    if fair_for_number
+                    else 0
+                )
+                if self.intermediate_fair_streaks[number] >= LIVENESS_BOUND:
+                    if apply:
+                        after_labels = observation.labels_after.get(number, frozenset())
+                        assert (
+                            StatusLabel.QUEUED.value in after_labels
+                            or number in observation.promotion_issue_numbers
+                        ), f"intermediate {number} not promoted despite fair streak: {observation}"
+                    else:
+                        assert (
+                            number in observation.promotion_issue_numbers
+                        ), f"intermediate {number} not previewed despite fair streak: {observation}"
 
     @rule(ledger_loss=st.booleans())
     def restart(self, ledger_loss):
