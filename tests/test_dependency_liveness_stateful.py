@@ -168,11 +168,17 @@ def assert_safe(observation: CycleObservation, dependencies: tuple[int, ...]) ->
     listing lag, the executor's fresh reads of dependencies return the initial
     context snapshot, so it is judged at cycle start.
     """
-    view = (
-        observation.at_promotion
-        if observation.apply and not observation.listing_lag
-        else observation.at_start
-    )
+    if observation.apply:
+        view = (
+            replace(
+                observation.at_start,
+                base_red=observation.at_promotion.base_red,
+            )
+            if observation.listing_lag
+            else observation.at_promotion
+        )
+    else:
+        view = observation.at_start
     if view.promotable(dependencies, apply=observation.apply):
         return
     if not observation.apply:
