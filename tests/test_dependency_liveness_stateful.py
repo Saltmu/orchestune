@@ -217,16 +217,12 @@ def assert_intermediate_safety(
             deps_satisfied = False
         else:
             req_set = set(required)
-            if observation.apply:
-                deps_satisfied = (
-                    req_set <= observation.at_start.valid
-                    or req_set <= observation.at_promotion.valid
-                )
-            else:
-                deps_satisfied = (
-                    req_set <= observation.at_start.preview_visible
-                    or req_set <= observation.at_promotion.preview_visible
-                )
+            deps_satisfied = any(
+                req_set <= (view.valid if observation.apply else view.preview_visible)
+                and not (req_set & view.reserved)
+                and number not in view.reserved
+                for view in (observation.at_start, observation.at_promotion)
+            )
         if not deps_satisfied:
             assert (
                 number not in observation.promotion_issue_numbers
@@ -452,8 +448,7 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
                         after_labels = observation.labels_after.get(number, frozenset())
                         assert (
                             StatusLabel.QUEUED.value in after_labels
-                            or number in observation.promotion_issue_numbers
-                        ), f"intermediate {number} not promoted despite fair streak: {observation}"
+                        ), f"intermediate {number} not promoted to queued despite fair streak: {observation}"
                     else:
                         assert (
                             number in observation.promotion_issue_numbers
