@@ -101,6 +101,9 @@ def _direct_operation_cases() -> list[EventCase]:
     timeout = _cases(policy, review_timeout_policy_effect)
     red = _cases(policy, base_branch_red_policy_effect)
     verdict = _cases(policy, not_needed_review_verdict)
+    passed = _cases(
+        "dispatch/gc/policy_review.py::reconcile_review", not_needed_review_verdict
+    )
     replan = _cases("replan/operations.py::_transition_to_not_needed", replan_retire)
     revert = _cases("integrator/pr.py::handle_merge_failure", merge_failure)
     retry_op = {"operation": "op"}
@@ -147,6 +150,8 @@ def _direct_operation_cases() -> list[EventCase]:
         # A cloud not-needed completion awaits its review without any status label.
         verdict("cloud-review-rejected", (), params={"verdict": "failed"}),
         verdict("cloud-review-timeout", ()),
+        passed("cloud-review-passed", (), params={"verdict": "passed"}),
+        passed("review-passed", (N,), params={"verdict": "passed"}),
         replan("queued", (Q,)),
         replan("blocked-with-recompute", (B, RC)),
         replan("in-progress-force-serial", (P, FS)),

@@ -149,6 +149,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 呼び出し箇所（`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / ラベル不変の完了確定経路 / ラベル不変の予算経路）と対応付けられます。
 `COMPLETION`は`orchestune complete`の完了ラベル調停で、primaryラベル・遷移先・`status:force-serial`以外の`status:*`（補助・未知のラベル）を保持していれば変更前に拒否します。
 `AWAIT_REVIEW`はクラウド実行のnot-needed判定を独立検証レビューへ回す経路で、実行は終えますが、レビューの判定までは完了として扱いません。
+`REVIEW_PASSED`は独立レビューの通過で、Issueをクローズし`not-needed-review`ポリシーをappliedにします（ラベルは変えません）。この時点で初めて依存側から完了として扱われます。
 
 ### Event対応表
 
@@ -175,6 +176,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `BLOCK` (`BASE_BRANCH_RED`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/policy_effects.py::reconcile_labels` |
 | `REVIEW_REJECT` (`PLAIN`) | `status:not-needed` | `status:queued` | `dispatch/gc/policy_effects.py::reconcile_labels` |
 | `ESCALATE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:not-needed`, `status:queued` | `status:blocked-human-review` | `dispatch/gc/policy_effects.py::reconcile_labels` |
+| `COMPLETE_WITHOUT_LABEL` (`REVIEW_PASSED`) | `status:not-needed` | - | `dispatch/gc/policy_review.py::reconcile_review` |
 | `RECLAIM` (`PLAIN`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/zombies.py::_notify_requeued_reclaim` |
 | `ESCALATE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:not-needed`, `status:queued` | `status:blocked-human-review` | `dispatch/launch.py::_apply_invalid_footprint_blocking` |
 | `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/launch.py::_apply_yaml_error_blocking` |

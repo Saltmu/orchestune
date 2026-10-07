@@ -86,6 +86,9 @@ class Kind(StrEnum):
     PRIOR_MERGE = "prior_merge"
     #: outcome recordだけによるnot-needed。in-progressを外し、ラベルは付けない。
     NOT_NEEDED_OUTCOME = "not_needed_outcome"
+    #: not-neededの独立レビュー通過（Issueのクローズと`not-needed-review`ポリシーの
+    #: applied）。ラベルは変えない。実行中（in-progress）からは起こらない。
+    REVIEW_PASSED = "review_passed"
     #: `orchestune complete`の完了ラベル調停。primary・target・force-serial以外の
     #: `status:*`（補助・未知のラベル）を保持していれば変更前に拒否する。
     COMPLETION = "completion"
@@ -353,6 +356,9 @@ EVENT_SPECS: Mapping[tuple[Event, Kind], EventSpec] = MappingProxyType(
         (_E.COMPLETE_WITHOUT_LABEL, _K.PRIOR_MERGE): _spec(None, _ALL),
         (_E.COMPLETE_WITHOUT_LABEL, _K.NOT_NEEDED_OUTCOME): _spec(
             None, frozenset({_P}), remove=frozenset({_P})
+        ),
+        (_E.COMPLETE_WITHOUT_LABEL, _K.REVIEW_PASSED): _spec(
+            None, frozenset({StatusLabel.NOT_NEEDED})
         ),
         (_E.AWAIT_REVIEW, _K.PLAIN): _spec(
             None, frozenset({_P}), remove=frozenset({_P})
@@ -709,7 +715,11 @@ def _with_execution(state: TaskModel, event: EventInput, spec: EventSpec) -> Tas
     if event.event in _COMPLETION_WITHDRAWALS:
         state = replace(state, completion_confirmed=False, persistent_completion=False)
     if event.event is Event.COMPLETE_WITHOUT_LABEL:
-        persistent = event.kind in (Kind.PRIOR_MERGE, Kind.NOT_NEEDED_OUTCOME)
+        persistent = event.kind in (
+            Kind.PRIOR_MERGE,
+            Kind.NOT_NEEDED_OUTCOME,
+            Kind.REVIEW_PASSED,
+        )
         state = replace(
             state, completion_confirmed=True, persistent_completion=persistent
         )

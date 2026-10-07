@@ -256,6 +256,21 @@ class TestCompletionEvidence:
         assert result.remove_labels == (P,)
         assert result.state.completion_confirmed
 
+    def test_review_pass_completes_an_awaiting_cloud_outcome(self) -> None:
+        awaiting = _applied(_apply(_model(P, execution_identity=A), Event.AWAIT_REVIEW))
+        assert not awaiting.state.completion_done
+        result = _applied(
+            _apply(awaiting.state, Event.COMPLETE_WITHOUT_LABEL, Kind.REVIEW_PASSED)
+        )
+        assert result.plan is None and result.state.labels == frozenset()
+        assert result.state.completion_confirmed
+        assert result.state.persistent_completion
+
+    def test_review_pass_never_completes_a_running_execution(self) -> None:
+        state = _model(P, execution_identity=A)
+        result = _apply(state, Event.COMPLETE_WITHOUT_LABEL, Kind.REVIEW_PASSED)
+        assert result == Rejected("invalid-source")
+
     @pytest.mark.parametrize("event", [Event.QUEUE, Event.BLOCK])
     def test_confirmed_completion_cannot_be_reactivated(self, event: Event) -> None:
         state = _model(B, completion_confirmed=True)
@@ -898,17 +913,27 @@ class TestEventModelConformance:
                 assert obs.counts == applied_state.counts
 
 
+_LABELS_SOURCE = "dispatch/gc/policy_effects.py::reconcile_labels"
+_REVIEW_SOURCE = "dispatch/gc/policy_review.py::reconcile_review"
+
+
 class TestCloudNotNeededReviewSequence:
-    """A cloud not-needed outcome is no completion until its review decides."""
+    """A cloud not-needed outcome completes only once its review passes."""
 
     @pytest.mark.parametrize(
-        ("verdict", "condition"),
-        [(None, "cloud-review-timeout"), ("failed", "cloud-review-rejected")],
+        ("verdict", "source", "condition", "lifecycle"),
+        [
+            (None, _LABELS_SOURCE, "cloud-review-timeout", {H}),
+            ("failed", _LABELS_SOURCE, "cloud-review-rejected", {Q}),
+            ("passed", _REVIEW_SOURCE, "cloud-review-passed", set()),
+        ],
     )
-    def test_pending_review_never_counts_as_completion(
+    def test_only_a_passed_review_completes(
         self,
         verdict: str | None,
+        source: str,
         condition: str,
+        lifecycle: set[StatusLabel],
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
@@ -918,7 +943,7 @@ class TestCloudNotNeededReviewSequence:
         env = CaseEnv(forge, config, monkeypatch, tmp_path, (P,), {"cloud": True})
         steps = [
             ("dispatch/gc/__init__.py::_rule_not_needed", "cloud-review-dispatched"),
-            ("dispatch/gc/policy_effects.py::reconcile_labels", condition),
+            (source, condition),
         ]
         observed = rule_not_needed_outcome(env)
         env.params = {"verdict": verdict} if verdict else {}
@@ -929,10 +954,11 @@ class TestCloudNotNeededReviewSequence:
             route = route_for(source, case)
             state = _applied(_apply(state, route.event, route.kind)).state
             assert obs.labels == state.labels
-            assert obs.completion is False
-            assert not state.completion_done
+            assert obs.completion == state.completion_done
+        assert observed[0].completion is False
+        assert observed[-1].completion is (verdict == "passed")
         assert not state.execution_active
-        assert state.lifecycle == ({H} if verdict is None else {Q})
+        assert state.lifecycle == lifecycle
 
 
 class TestCallSitesApplyEventConformance:

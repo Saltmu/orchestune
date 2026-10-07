@@ -163,6 +163,12 @@ LABEL_INVARIANT_COMPLETIONS: tuple[tuple[str, str, str], ...] = (
         "_rule_not_needed",
         "not-needed Outcome record without the not-needed label",
     ),
+    (
+        "dispatch/gc/policy_review.py",
+        "reconcile_review",
+        "passed independent review closes the issue; `_apply_policy` then marks "
+        "the `not-needed-review` policy applied",
+    ),
 )
 
 #: Budget paths that persist a count without any label change.
@@ -340,6 +346,14 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
         _r(_E.BLOCK, _K.BASE_BRANCH_RED, "base-red-hold", "base-red-escalate"),
         _r(_E.REVIEW_REJECT, _K.PLAIN, "review-rejected", "cloud-review-rejected"),
         _r(_E.ESCALATE, _K.PLAIN, "review-launch-timeout", "cloud-review-timeout"),
+    ),
+    "dispatch/gc/policy_review.py::reconcile_review": (
+        _r(
+            _E.COMPLETE_WITHOUT_LABEL,
+            _K.REVIEW_PASSED,
+            "cloud-review-passed",
+            "review-passed",
+        ),
     ),
     "dispatch/gc/__init__.py::_rule_not_needed": (
         _r(_E.COMPLETE_WITHOUT_LABEL, _K.NOT_NEEDED_OUTCOME, "outcome-only"),
@@ -617,7 +631,8 @@ def not_needed_review_verdict(env: CaseEnv) -> tuple[Observation, ...]:
         )
     else:
         metadata |= {"launch_requested_at": 0.0, "review_timeout_seconds": 10}
-    policy_review.reconcile_review(
+    # `_apply_policy` marks the policy applied (the dependency gate) iff it is True.
+    applied = policy_review.reconcile_review(
         env.forge,
         ISSUE,
         _policy("not-needed-review", **metadata),
@@ -625,8 +640,7 @@ def not_needed_review_verdict(env: CaseEnv) -> tuple[Observation, ...]:
         saved.update,
         100.0,
     )
-    completion = not saved.get("review_rejected") and not saved.get("review_timed_out")
-    return (Observation(_labels(env), completion=completion),)
+    return (Observation(_labels(env), completion=applied),)
 
 
 def replan_retire(env: CaseEnv) -> tuple[Observation, ...]:
