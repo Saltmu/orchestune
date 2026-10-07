@@ -700,7 +700,7 @@ def gc_escalated_base_branch_red(env: CaseEnv) -> tuple[Observation, ...]:
     )
     ctx = _fake(active=_active(), config=env.config, active_task=_task_of(env))
     completion._apply_escalated_base_branch_red(ctx, _fake(outcome=None))
-    return (Observation(_labels(env)),)
+    return (Observation(_labels(env), execution_active=False),)
 
 
 def prior_parent_normalize(env: CaseEnv) -> tuple[Observation, ...]:

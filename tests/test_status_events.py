@@ -54,6 +54,10 @@ from tests.test_status_transition_callsites import (
     CALL_SITES,
     CASES,
     OUT_OF_SCOPE_PATHS,
+    Case,
+)
+from tests.test_status_transition_callsites import (
+    _run as _run_callsite_case,
 )
 
 Q = StatusLabel.QUEUED
@@ -478,6 +482,27 @@ class TestOperationsAndRestart:
         assert lost.execution_identity is None
         assert lost.labels == state.labels
 
+    def test_restart_clears_cycle_only_completion_but_preserves_persistent_completion(
+        self,
+    ) -> None:
+        cycle_done = _applied(
+            _apply(_model(P), Event.COMPLETE_WITHOUT_LABEL, Kind.CYCLE)
+        ).state
+        assert cycle_done.completion_confirmed
+        restarted_cycle = restart(cycle_done, ledger_loss=False)
+        assert not restarted_cycle.completion_confirmed
+        resumed = apply_event(
+            restarted_cycle, EventInput(Event.REQUEUE, Kind.RECOVERY), LIMITS
+        )
+        assert isinstance(resumed, Applied)
+
+        prior_done = _applied(
+            _apply(_model(P), Event.COMPLETE_WITHOUT_LABEL, Kind.PRIOR_MERGE)
+        ).state
+        assert prior_done.completion_confirmed
+        restarted_prior = restart(prior_done, ledger_loss=False)
+        assert restarted_prior.completion_confirmed
+
     def test_apply_event_is_pure(self) -> None:
         state = _model(P, execution_identity=A)
         snapshot = replace(state)
@@ -597,3 +622,22 @@ class TestEventModelConformance:
                 assert obs.retries == applied_state.retries
             if obs.counts is not None:
                 assert obs.counts == applied_state.counts
+
+
+class TestCallSitesApplyEventConformance:
+    """Every registered call-site case matches apply_event semantics."""
+
+    @pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+    def test_call_site_case_matches_apply_event(
+        self, case: Case, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        calls, forge = _run_callsite_case(case, monkeypatch, tmp_path)
+        route = route_for(case.site, case.condition)
+        execution = (
+            ExecutionIdentity("launch-test") if route.event is Event.LAUNCH else None
+        )
+        inp = EventInput(route.event, route.kind, execution=execution)
+        initial = TaskModel.from_labels(case.held)
+        res = apply_event(initial, inp, LIMITS)
+        assert isinstance(res, Applied)
+        assert set(res.state.labels) == set(forge.get_issue_labels(ISSUE))

@@ -176,6 +176,7 @@ class TaskModel:
     lifecycle: frozenset[StatusLabel]
     auxiliary: frozenset[str] = frozenset()
     completion_confirmed: bool = False
+    persistent_completion: bool = False
     execution_identity: Execution | None = None
     retired_execution_identities: frozenset[Execution] = frozenset()
     counts: BudgetCounts = BudgetCounts()
@@ -630,13 +631,18 @@ def _with_execution(state: TaskModel, event: EventInput, spec: EventSpec) -> Tas
     if event.event is Event.LAUNCH:
         return replace(state, execution_identity=event.execution)
     if event.event in _COMPLETION_WITHDRAWALS:
-        state = replace(state, completion_confirmed=False)
+        state = replace(state, completion_confirmed=False, persistent_completion=False)
     if event.event is Event.COMPLETE_WITHOUT_LABEL:
-        state = replace(state, completion_confirmed=True)
+        persistent = event.kind in (Kind.PRIOR_MERGE, Kind.NOT_NEEDED_OUTCOME)
+        state = replace(
+            state, completion_confirmed=True, persistent_completion=persistent
+        )
     # 回収・再投入はエスカレーションへ切り替わっても実行を終える（プロセス停止・
     # active entryの解放）。通常のエスカレーションは起動継続中の状態を表す。
+    base_spec = EVENT_SPECS.get((event.event, event.kind))
+    base_target = base_spec.target if base_spec is not None else spec.target
     ends_execution = event.event in _EXECUTION_ENDING or (
-        spec.target is not None and spec.target not in _ESCALATION | {_P}
+        base_target is not None and base_target not in _ESCALATION | {_P}
     )
     if not ends_execution or state.execution_identity is None:
         return state
@@ -655,7 +661,12 @@ def restart(state: TaskModel, *, ledger_loss: bool) -> TaskModel:
     実行identity（active worktreeの記録）を失い、台帳の世代を進める。ラベルと
     永続予算（recompute / base-branch-red）は保持する。
     """
-    restarted = replace(state, pending_operation=None, confirmed_operations=frozenset())
+    restarted = replace(
+        state,
+        pending_operation=None,
+        confirmed_operations=frozenset(),
+        completion_confirmed=state.completion_confirmed and state.persistent_completion,
+    )
     if not ledger_loss:
         return restarted
     return replace(

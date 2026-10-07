@@ -217,7 +217,7 @@ def _dispatch_direct_cases() -> list[EventCase]:
             "third-attempt",
             (P, RED),
             gc_escalated_base_branch_red,
-            model=_THIRD_RED,
+            model=dict(_THIRD_RED, execution_identity=CURRENT),
         ),
         EventCase(
             "dispatch/prior_parent_merge.py::_normalize_closed_issue_label",
