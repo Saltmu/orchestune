@@ -224,6 +224,94 @@ mapped to their production call sites (`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / lab
 | `REQUEUE` (`EARLY_DEATH`) | `status:blocked`, `status:in-progress` | `status:queued` | `ledger/escalation.py::apply_human_review_escalation` |
 | `NOT_NEEDED` (`REPLAN`) | `status:blocked`, `status:blocked-human-review`, `status:in-progress`, `status:manual-merge-required`, `status:queued` | `status:not-needed` | `replan/operations.py::_transition_to_not_needed` |
 
+## Termination of budgeted loops (#1266)
+
+<!-- budget-termination -->
+
+`tests/test_status_events_stateful.py` checks that budgeted loops terminate on the Event model, and `tests/test_status_event_retry_resume.py` stops and resumes the production retry paths (design #1219 §3). Expectations come from tables written from the #1219 budget table and the production docstrings, never from the return values of `plan_retry` / `exceeds_limit` / `_resolve_reclaim_count`.
+
+### Invariants
+
+`BudgetTerminationMachine` (a Hypothesis `RuleBasedStateMachine`) generates every (Event, Kind), re-delivery of the last event, events of a retired launch or of no launch (ABA sequences), stops at `Stage.RESERVED` / `Stage.LABEL_ADDED` and their resume, `restart(ledger_loss)`, time advancing across backoffs, and external relabelling. After an external relabel the reference points of invariants 4 and 5 restart from the new labels, as in Phase 1.
+
+1. **Loop measure**: an application that goes from in-progress, done or not-needed back to queued (or in-progress), or out of a `status:blocked` entered from in-progress, consumes one slot of its budget (resuming or re-delivering a reserved operation consumes none), or is listed with a reason below.
+2. **Bounded within a ledger epoch**: within one ledger epoch, new logical retries never exceed the bounds below. `restart(ledger_loss=True)` resets only the local budgets (reclaim, early death, review timeout) and keeps the persistent ones (recompute, base-branch-red). A test keeps the reset set equal to the `task_reclaim_counts` row of "Local state lost on the runner" in [Setup](setup.md).
+3. **One active launch**: a launch is not applied while another launch is active, and a re-delivered launch is not applied again.
+4. **No relaunch after completion**: a completed task is not launched unless a completion withdrawal (`MERGE_REVERT` / `REVIEW_REJECT`) or an external relabel intervened.
+5. **ESCALATION is irreversible**: no automatic event adds an ACTIVE label to an escalated task. Humans act through external relabelling.
+
+| Budget | New retries per ledger epoch (defaults) | Beyond the bound |
+|---|---|---|
+| GC reclaim | 3 (the 4th escalates) | `status:blocked-human-review` |
+| Early death | 2 | `status:blocked-human-review` |
+| AI review timeout | 1 (`max_review_timeout_retries` counts attempts: 2 attempts = 1 requeue) | `status:blocked-human-review` |
+| Base-branch-red | 2 holds (the 3rd attempt escalates) | `status:blocked-human-review` |
+| Footprint-deviation recompute | 2 | `status:force-serial` |
+
+### Unbudgeted loops (`UNBUDGETED_LOOPS`)
+
+Among the production routes (`EVENT_BY_SOURCE`), those that go from an executed label back to queued / in-progress, or from in-progress into `status:blocked` (the first step of a two-step loop: once every dependency is complete the next cycle promotes the task again), and consume no budget are limited to this table. A route missing from it fails the tests. The design fixed `MERGE_REVERT` and `REQUEUE` (`RECOVERY`); #1266 found the others.
+
+| Event / Kind | Why no budget | Follow-up |
+|---|---|---|
+| `MERGE_REVERT` / `PLAIN` | Integrator rollback after a failed trial-merge CI (done -> queued); the count is not recorded | budget it (#1219 out-of-scope candidate) |
+| `REQUEUE` / `RECOVERY` | requeue of an execution lost by a restart; bounded by the number of restarts, not by a budget | none |
+| `REVIEW_REJECT` / `PLAIN` | an independent review rejected a not-needed completion (not-needed -> queued, added by #1264); every round needs one more independent review | consider a budget |
+| `BLOCK` / `PLAIN` | launch failure or a blocked outcome hold (in-progress -> blocked); with every dependency complete the next cycle promotes it again | consider budgeting repeated launch failures |
+| `BLOCK` / `COMPLETION` | `orchestune complete --result blocked` (in-progress -> blocked); promoted again like any blocked task | same as above |
+| `BLOCK` / `RECOMPUTE` | blocked by another task's footprint deviation; bounded by that task's recompute budget, which the single-task model cannot see (its reset on relaunch is #1280) | #1280 |
+
+### Stopping and resuming the production retry paths
+
+`tests/status_event_retry_harness.py` stops a run keeping only `run_state.json` (on disk) and the Forge, and resumes by rebuilding everything else (the in-memory `RunState`, the reclaim or completion context). The stop is a `BaseException`, so production `except Exception` handlers cannot swallow it. Stop points: before/after the reservation save, before/after adding the target label (after = before the settle callback), before/after the settle save, and before/after removing the old label.
+
+- **GC reclaim** (`_refresh_reclaim` -> `_reclaim_external_or_local`; reserved by `_record_reclaim`, settled by `_settle_reclaim`): from every stop point the count grows exactly once and `pending` is cleared; an over-budget reclaim escalates exactly once. When the stop comes after `status:blocked-human-review` was added, the resumed GC sees the task as already escalated and only settles; the remaining `status:in-progress` is left to status repair (#1218), as the model's `restart` predicts.
+- **Early death and review timeout** (GC completion `_publish_requeue`, settled by `_settle_completion_requeue`): after the reservation reached disk, a resumed run consumes no new slot and keeps the first `retry_at`; a stop before that save loses the reservation and the resumed run plans again at its own clock. After the settle save the ledger no longer holds the execution, so a remaining `status:in-progress` is left to status repair.
+- **Review-timeout completion policy** (`_prepare` -> `_apply_policy`): the per-operation reservation is reused and the requeue comment is posted once.
+- **Footprint-deviation recompute**: the count and `forced_serial` persist in the Issue body's Footprint fence and are restored from it when `run_state.json` is lost; a stop after the body write consumes nothing twice.
+- **Base-branch-red**: attempts are counted from the Outcome Records in Issue comments, a resend of the same `(claim_id, head_sha)` reuses its attempt, and the 3rd attempt escalates.
+
+Production defects found by the harness are split out, with their counterexamples pinned as strict xfails (expectations are not weakened):
+
+- #1279: GC reclaim, abandoned-cloud reclaim and dirty holds rebuild `TaskReclaimRecord` and reset the early-death and review-timeout counts to 0
+- #1280: a normal launch starts `recompute_count` at 0 and overwrites the Issue-body count and `forced_serial`
+
+### Run time and reproduction
+
+Standalone runs of `uv run pytest -q -n0 --no-cov <file> --hypothesis-profile ci` (2026-10-07, Linux) take about 1.0 s for `tests/test_status_events_stateful.py` and about 0.7 s for `tests/test_status_event_retry_resume.py`. Random sequences under the ci profile (100 examples, 30 steps) find a lowered budget bound or a missing allowlist entry only probabilistically (70-80 % per mutation in trials), so each budget bound is also checked by deterministic tests (`TestBudgetBounds`) and the allowlist by a static comparison with the correspondence table (`TestLoopRegistry`). Reproduce with the seed (`--hypothesis-seed`) and pin useful counterexamples as deterministic tests.
+
+## Bounded liveness of dependency resolution (#1265)
+
+<!-- dependency-liveness -->
+
+A `status:blocked` task T whose dependencies are all complete must be promoted to queued (in a dry run: appear in a `PromotionEvent`) within a bounded number of cycles. This is checked on production code, not on the model (design #1219 §4, `tests/dependency_liveness_test_support.py` and `tests/test_dependency_liveness_stateful.py`). One cycle builds the production `CycleContext` with `_build_cycle_context`, completes a dependency D through the case's path, calls the production `_run_pre_scheduling_reconciliation` and observes T's labels and `PromotionEvent`s. Only git, worktree and process effects and the post-promotion scheduling are stubbed; the planner, executor and `CycleContext` are real. The expected completion and promotion start are computed from the fixture's completion evidence (kind, subject, validity, entry time, revocation), never from `is_effectively_done` / `is_completion_blocked` / planner results.
+
+**Fairness assumptions** (liveness is required only while they hold):
+
+- T declares at least one dependency, every D has fixture-valid completion evidence, and the completion reservation is released
+- T has no promotion hold (`ci:base-branch-red` / `status:blocked-recompute`), T is OPEN, and the Forge and task observations are KNOWN
+- the above holds both at cycle start and at the promotion decision, with no error or injected fault (a stale-snapshot callback that changes nothing does not reset the interval)
+
+The guaranteed bound is N=1 cycle. What is checked is not the bound but agreement with the per-case expectation below (cycle 0 is the cycle in which the valid evidence first becomes available to the production path).
+
+| Case | How D completes | Expected (cycles) | Notes |
+|---|---|---|---|
+| `label` | `status:done` on D between cycles | 0 |  |
+| `record_completion` | an active worktree's completion confirmed by `record_completion` in the same cycle | 0 |  |
+| `dry_run` | label completion with `apply=False` | 0 (T in `PromotionEvent`, labels unchanged) |  |
+| `dry_run_record_completion` | same-cycle `record_completion` with `apply=False` | - (never previewed) | #882: a same-cycle completion is confirmed only after `save_run_state` succeeds, which a dry run never does; #873 removed the unsaved overlay |
+| `outcome_not_needed` | an Outcome record only, no label | 0 (expected; strict xfail for production defect #1269) |  |
+| `prior_merge` | a verified prior parent merge (`prior_parent_merge_completed_issue_numbers`) only | 0 |  |
+| `status_repair` | `record_completion` while the executor's reads still return D as in progress | 0 | `execute_repair` uses the same `CycleContext` (#902 Round 5) |
+| `recompute_release` | T holds `status:blocked-recompute` | 0 | `reconcile_recovery` promotes from the bound context (#902 Round 4) |
+| `multiple_dependencies` | D1 by label and D2 by `record_completion`, in different cycles | 0 (from the later cycle) |  |
+
+Random sequences (`complete_dependency`, `cycle`, `restart`, `fail_next`, `toggle_hold`, `stale_snapshot`, `duplicate_completion`) check liveness (T is promoted once the fairness assumptions persist) and safety (no new promotion in a cycle without valid evidence or with a hold or reservation). Test-only faults equivalent to the #902 Round 4/5 miswiring (an empty completion set, a throwaway context) must make the assertions fail.
+
+Production defects split out are pinned as strict xfails: #1267 (the dry-run preview ignores unreleased reservations), #1268 (the recompute release ignores a base-branch-red hold and revoked evidence), #1269 (an outcome-derived not-needed never reaches promotion). Two rare latent counterexamples found by the random sequences are tracked in #1281.
+
+Standalone runs took about 8.4 s in PR #1273 and 2.7-6.3 s in the #1266 environment (fresh example database, `-n0 --no-cov`, ci profile).
+
 ## Status reconciliation safety and convergence (#1218)
 
 The status machine owns roles, normal-transition permission and pure one-operation
