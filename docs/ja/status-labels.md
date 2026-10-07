@@ -142,6 +142,71 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
   `TestCase`や`runTest`に付けてもblobは再生されず新たな探索になるため、再現手順はseedを正とします。
 - `.hypothesis/`は例データベースでGit管理外です。以前の失敗例が次回の実行で再生されます。
 
+## Eventモデル（#1264）
+
+`orchestune/ledger/status_events.py` は、タスク状態遷移を副作用のない純粋関数 `apply_event` として表現するEventモデルです（設計 #1219 §1）。
+すべてのForgeラベル変更、完了確定、GC回収、retry予約、エスカレーションはEventとして抽象化され、
+呼び出し箇所（`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / ラベル不変の完了確定経路）と対応付けられます。
+
+### Event対応表
+
+| Event | 遷移元 | 遷移先 | 発生元 |
+|---|---|---|---|
+| `LAUNCH` (`CLAIM`) | `status:blocked`, `status:queued` | `status:in-progress` | `claim/service.py::_apply_status_label` |
+| `COMPLETE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `complete/status_labels.py::_completion_mutate` |
+| `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
+| `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `complete/status_labels.py::_completion_mutate` |
+| `COMPLETE_WITHOUT_LABEL` (`CYCLE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/cycle_context_state.py::_CycleState.record_completion` |
+| `COMPLETE_WITHOUT_LABEL` (`NOT_NEEDED_OUTCOME`) | `status:in-progress` | - | `dispatch/gc/__init__.py::_rule_not_needed` |
+| `RECLAIM` (`PLAIN`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim` |
+| `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_blocked_hold` |
+| `BLOCK` (`RECOMPUTE`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_blocked_hold` |
+| `COMPLETE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `dispatch/gc/completion.py::_apply_done_worktree_cleanup` |
+| `BLOCK` (`BASE_BRANCH_RED`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_escalated_base_branch_red` |
+| `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
+| `COMPLETE_WITHOUT_LABEL` (`NOT_NEEDED_OUTCOME`) | `status:in-progress` | - | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
+| `REQUEUE` (`EARLY_DEATH`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
+| `REQUEUE` (`REVIEW_TIMEOUT`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
+| `REQUEUE` (`REVIEW_TIMEOUT`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/policy_effects.py::reconcile_labels` |
+| `BLOCK` (`BASE_BRANCH_RED`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/policy_effects.py::reconcile_labels` |
+| `REVIEW_REJECT` (`PLAIN`) | `status:not-needed` | `status:queued` | `dispatch/gc/policy_effects.py::reconcile_labels` |
+| `ESCALATE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:not-needed`, `status:queued` | `status:blocked-human-review` | `dispatch/gc/policy_effects.py::reconcile_labels` |
+| `RECLAIM` (`PLAIN`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/zombies.py::_notify_requeued_reclaim` |
+| `ESCALATE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:not-needed`, `status:queued` | `status:blocked-human-review` | `dispatch/launch.py::_apply_invalid_footprint_blocking` |
+| `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/launch.py::_apply_yaml_error_blocking` |
+| `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/launch.py::_handle_launch_failure` |
+| `ESCALATE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:not-needed`, `status:queued` | `status:blocked-human-review` | `dispatch/launch.py::_handle_launch_failure` |
+| `LAUNCH` (`PLAIN`) | `status:blocked`, `status:queued` | `status:in-progress` | `dispatch/launch.py::_record_successful_launch` |
+| `LAUNCH` (`RECOVERY`) | `status:blocked`, `status:queued` | `status:in-progress` | `dispatch/launch_attempts.py::reconcile_attempt` |
+| `HOLD` (`EXTERNAL_LOCK`) | `status:blocked`, `status:in-progress`, `status:queued` | - | `dispatch/phase_rebase.py::_apply_external_lock_sync` |
+| `QUEUE` (`EXTERNAL_LOCK`) | - | `status:queued` | `dispatch/phase_rebase.py::_apply_external_lock_sync` |
+| `RELEASE_HOLD` (`EXTERNAL_LOCK`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/phase_rebase.py::_apply_external_lock_sync` |
+| `COMPLETE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `dispatch/prior_parent_merge.py::_apply_verified_repair` |
+| `COMPLETE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `dispatch/prior_parent_merge.py::_normalize_closed_issue_label` |
+| `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/prior_parent_merge.py::_normalize_closed_issue_label` |
+| `COMPLETE_WITHOUT_LABEL` (`PRIOR_MERGE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/prior_parent_merge.py::reconcile_prior_parent_merges` |
+| `RECOMPUTE` (`PLAIN`) | `status:in-progress` | - | `dispatch/rebase.py::_apply_forced_serial_event` |
+| `ESCALATE` (`MANUAL_MERGE`) | `status:in-progress` | `status:manual-merge-required` | `dispatch/rebase.py::_handle_rebase_failure` |
+| `ESCALATE` (`MANUAL_MERGE`) | `status:in-progress` | `status:manual-merge-required` | `dispatch/rebase.py::_prepare_wip_backup_for_rebase` |
+| `BLOCK` (`RECOMPUTE`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/rebase.py::notify_recompute` |
+| `BLOCK` (`BASE_BRANCH_RED`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/reconciliation.py::_apply_base_branch_red_escalate` |
+| `QUEUE` (`BASE_BRANCH_RED`) | `status:blocked` | `status:queued` | `dispatch/reconciliation.py::_apply_base_branch_red_requeue` |
+| `RELEASE_HOLD` (`BASE_BRANCH_RED`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/reconciliation.py::_apply_base_branch_red_unmark` |
+| `QUEUE` (`RECOMPUTE`) | `status:blocked` | `status:queued` | `dispatch/reconciliation.py::_resolve_one_blocked_recompute_issue` |
+| `RELEASE_HOLD` (`RECOMPUTE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/reconciliation.py::_resolve_one_blocked_recompute_issue` |
+| `REQUEUE` (`RECOVERY`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/recovery.py::execute_recovery_requeue_command` |
+| `QUEUE` (`PLAIN`) | `status:blocked` | `status:queued` | `dispatch/status_repair.py::_apply_command` |
+| `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/status_repair.py::_apply_command` |
+| `MERGE_REVERT` (`PLAIN`) | `status:done` | `status:queued` | `dispatch/status_repair.py::_apply_command` |
+| `COMPLETE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `dispatch/status_repair.py::_apply_command` |
+| `REQUEUE` (`RECOVERY`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/status_repair.py::_apply_command` |
+| `MERGE_REVERT` (`PLAIN`) | `status:done` | `status:queued` | `integrator/pr.py::handle_merge_failure` |
+| `ESCALATE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:not-needed`, `status:queued` | `status:blocked-human-review` | `integrator/steps.py::AutoMergeChildIntegrationStep._restore_blocked_label` |
+| `ESCALATE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:not-needed`, `status:queued` | `status:blocked-human-review` | `ledger/escalation.py::apply_human_review_escalation` |
+| `RECLAIM` (`PLAIN`) | `status:blocked`, `status:in-progress` | `status:queued` | `ledger/escalation.py::apply_human_review_escalation` |
+| `REQUEUE` (`EARLY_DEATH`) | `status:blocked`, `status:in-progress` | `status:queued` | `ledger/escalation.py::apply_human_review_escalation` |
+| `NOT_NEEDED` (`REPLAN`) | `status:blocked`, `status:blocked-human-review`, `status:in-progress`, `status:manual-merge-required`, `status:queued` | `status:not-needed` | `replan/operations.py::_transition_to_not_needed` |
+
 ## status reconciliation の安全性と収束性（#1218）
 
 status_machine は役割・通常遷移の許可判定・1操作の純粋計画を担当します。

@@ -6,7 +6,9 @@ production docstrings), not from `apply_event` or the retry helpers it calls.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -32,7 +34,27 @@ from orchestune.ledger.status_events import (
     apply_event,
     restart,
 )
-from tests.status_event_test_support import production_limits
+from tests.conftest import make_issue
+from tests.dispatch_test_support import make_test_dispatcher_config
+from tests.status_event_cases import (
+    EVENT_CASES,
+    FAIL_BEFORE,
+    EventCase,
+)
+from tests.status_event_test_support import (
+    EVENT_BY_SOURCE,
+    LABEL_INVARIANT_COMPLETIONS,
+    CaseEnv,
+    FaultyForge,
+    production_limits,
+    route_for,
+)
+from tests.status_transition_callsite_drivers import ISSUE
+from tests.test_status_transition_callsites import (
+    CALL_SITES,
+    CASES,
+    OUT_OF_SCOPE_PATHS,
+)
 
 Q = StatusLabel.QUEUED
 B = StatusLabel.BLOCKED
@@ -462,3 +484,116 @@ class TestOperationsAndRestart:
         first = apply_event(state, EventInput(Event.RECLAIM), LIMITS)
         second = apply_event(state, EventInput(Event.RECLAIM), LIMITS)
         assert state == snapshot and first == second
+
+
+class TestEventRegistry:
+    def test_event_by_source_covers_call_sites_and_out_of_scope_and_invariant(
+        self,
+    ) -> None:
+        call_sites = set(CALL_SITES.keys())
+        out_of_scope = {f"{f}::{fn}" for f, fn, _ in OUT_OF_SCOPE_PATHS}
+        invariant = {f"{f}::{fn}" for f, fn, _ in LABEL_INVARIANT_COMPLETIONS}
+        expected = call_sites | out_of_scope | invariant
+        assert set(EVENT_BY_SOURCE.keys()) == expected
+
+    def test_every_route_condition_is_executed_by_cases(self) -> None:
+        all_route_conditions = {
+            (source, c)
+            for source, routes in EVENT_BY_SOURCE.items()
+            for r in routes
+            for c in r.cases
+        }
+        covered_conditions = {(c.site, c.condition) for c in CASES} | {
+            (c.source, c.condition) for c in EVENT_CASES
+        }
+        assert all_route_conditions == covered_conditions
+
+
+_DOCS_ROOT = Path(__file__).resolve().parent.parent / "docs"
+_EVENT_TABLE_ROW = re.compile(
+    r"^\|\s*`([A-Z_]+)`\s*\(`([A-Z_]+)`\)\s*\|([^|]*)\|([^|]*)\|\s*`([^`]+)`\s*\|",
+    re.M,
+)
+
+
+@pytest.mark.parametrize("lang", ["ja", "en"])
+class TestStatusLabelsDocumentMatchesEventTable:
+    def test_document_lists_every_event_route(self, lang: str) -> None:
+        doc = (_DOCS_ROOT / lang / "status-labels.md").read_text(encoding="utf-8")
+        rows = _EVENT_TABLE_ROW.findall(doc)
+        assert len(rows) == sum(len(routes) for routes in EVENT_BY_SOURCE.values())
+
+        expected_rows = set()
+        for source, routes in EVENT_BY_SOURCE.items():
+            for r in routes:
+                expected_rows.add((r.event.name, r.kind.name, source))
+
+        documented_rows = {(ev, kind, src.strip()) for ev, kind, _, _, src in rows}
+        assert documented_rows == expected_rows
+
+    def test_document_event_targets_and_sources_match_specs(self, lang: str) -> None:
+        doc = (_DOCS_ROOT / lang / "status-labels.md").read_text(encoding="utf-8")
+        for ev, kind, src_cell, tgt_cell, src in _EVENT_TABLE_ROW.findall(doc):
+            event = Event[ev]
+            k = Kind[kind]
+            spec = EVENT_SPECS[(event, k)]
+            expected_sources = {s.value for s in spec.sources}
+            doc_sources = {m.group(0) for m in re.finditer(r"status:[a-z-]+", src_cell)}
+            assert doc_sources == expected_sources, (ev, kind, src)
+
+            if spec.target is not None:
+                assert spec.target.value in tgt_cell, (ev, kind, src)
+            else:
+                assert "-" in tgt_cell or "なし" in tgt_cell or "none" in tgt_cell, (
+                    ev,
+                    kind,
+                    src,
+                )
+
+
+class TestEventModelConformance:
+    @pytest.mark.parametrize("case", EVENT_CASES, ids=lambda c: c.id)
+    def test_production_driver_matches_apply_event(
+        self, case: EventCase, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        route = route_for(case.source, case.condition)
+        forge = FaultyForge()
+        forge.issues[ISSUE] = make_issue(ISSUE, labels=case.held)
+        config = make_test_dispatcher_config(tmp_path, forge=forge, apply=True)
+        env = CaseEnv(forge, config, monkeypatch, tmp_path, case.held, case.params)
+        observations = case.driver(env)
+        assert len(observations) == len(case.steps)
+
+        state = case.initial()
+        for step, obs in zip(case.steps, observations, strict=False):
+            if step == FAIL_BEFORE:
+                applied_state = state
+                res_tag = None
+            else:
+                stop_after = step if isinstance(step, Stage) else None
+                inp = EventInput(
+                    route.event, route.kind, stop_after=stop_after, **case.inputs
+                )
+                res = apply_event(state, inp, LIMITS)
+                if isinstance(res, Applied):
+                    applied_state = res.state
+                    res_tag = "applied"
+                elif isinstance(res, NoOp):
+                    applied_state = state
+                    res_tag = "noop"
+                else:
+                    applied_state = state
+                    res_tag = "rejected"
+                state = applied_state
+
+            assert obs.labels == applied_state.labels
+            if obs.result is not None:
+                assert obs.result == res_tag
+            if obs.completion is not None:
+                assert obs.completion == applied_state.completion_done
+            if obs.execution_active is not None:
+                assert obs.execution_active == applied_state.execution_active
+            if obs.retries is not None:
+                assert obs.retries == applied_state.retries
+            if obs.counts is not None:
+                assert obs.counts == applied_state.counts
