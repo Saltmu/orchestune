@@ -1,8 +1,8 @@
 """Production adapters, the Event correspondence table and execution drivers (#1264).
 
 `EVENT_BY_SOURCE` maps every production label path - each `CALL_SITES` key, each
-`OUT_OF_SCOPE_PATHS` entry and the three label-invariant completion paths - to
-the Event routes it can produce. A route names the executed cases that cover
+`OUT_OF_SCOPE_PATHS` entry, the three label-invariant completion paths and the
+label-invariant budget path - to the Event routes it can produce. A route names the executed cases that cover
 it, so a source or branch without an executed case fails the build.
 
 The drivers below run the real production functions against an in-memory forge.
@@ -29,6 +29,7 @@ from orchestune.consistency.repairs.status import (
     COMMAND_REMOVE_LABEL,
     plan_status_repairs,
 )
+from orchestune.dependencies.resolution import build_legacy_dag_inputs
 from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch import (
     launch,
@@ -64,6 +65,7 @@ from orchestune.ledger.status_events import (
 from orchestune.lock_contracts import ExternalLockScanResult
 from orchestune.outcome_record import RESULT_NOT_NEEDED, OutcomeLookupState
 from orchestune.replan import operations as replan_operations
+from orchestune.targets.cloud_routine import ClaudeCodeCloudRoutineDispatchTarget
 from tests.conftest import FakeForge, make_issue
 from tests.consistency_status_test_support import (
     _desired,
@@ -163,6 +165,15 @@ LABEL_INVARIANT_COMPLETIONS: tuple[tuple[str, str, str], ...] = (
     ),
 )
 
+#: Budget paths that persist a count without any label change.
+LABEL_INVARIANT_BUDGETS: tuple[tuple[str, str, str], ...] = (
+    (
+        "dispatch/rebase.py",
+        "_apply_recomputed_event",
+        "within-budget recompute; persists `recompute_count`, labels stay as observed",
+    ),
+)
+
 _E, _K = Event, Kind
 
 
@@ -246,6 +257,9 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
     "dispatch/rebase.py::_apply_forced_serial_event": (
         _r(_E.RECOMPUTE, _K.PLAIN, "over-budget"),
     ),
+    "dispatch/rebase.py::_apply_recomputed_event": (
+        _r(_E.RECOMPUTE, _K.PLAIN, "within-budget", "last-within-budget"),
+    ),
     "dispatch/rebase.py::_prepare_wip_backup_for_rebase": (
         _r(_E.ESCALATE, _K.MANUAL_MERGE, "in-progress", "replay"),
     ),
@@ -311,6 +325,7 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
     "dispatch/gc/completion.py::_finalize_not_needed_worktree": (
         _r(_E.NOT_NEEDED, _K.PLAIN, "labelled"),
         _r(_E.COMPLETE_WITHOUT_LABEL, _K.NOT_NEEDED_OUTCOME, "outcome-only"),
+        _r(_E.AWAIT_REVIEW, _K.PLAIN, "cloud-review-dispatched"),
     ),
     "dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim": (
         _r(_E.RECLAIM, _K.PLAIN, "in-progress", "blocked"),
@@ -323,11 +338,12 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
             "review-timeout-exhausted",
         ),
         _r(_E.BLOCK, _K.BASE_BRANCH_RED, "base-red-hold", "base-red-escalate"),
-        _r(_E.REVIEW_REJECT, _K.PLAIN, "review-rejected"),
-        _r(_E.ESCALATE, _K.PLAIN, "review-launch-timeout"),
+        _r(_E.REVIEW_REJECT, _K.PLAIN, "review-rejected", "cloud-review-rejected"),
+        _r(_E.ESCALATE, _K.PLAIN, "review-launch-timeout", "cloud-review-timeout"),
     ),
     "dispatch/gc/__init__.py::_rule_not_needed": (
         _r(_E.COMPLETE_WITHOUT_LABEL, _K.NOT_NEEDED_OUTCOME, "outcome-only"),
+        _r(_E.AWAIT_REVIEW, _K.PLAIN, "cloud-review-dispatched"),
     ),
     "dispatch/status_repair.py::_apply_command": (
         _r(
@@ -363,17 +379,23 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
     "complete/status_labels.py::_completion_mutate": (
         _r(
             _E.COMPLETE,
-            _K.PLAIN,
+            _K.COMPLETION,
             "done-from-in-progress",
             "done-keeps-force-serial",
             "done-repair",
             "done-replay",
             "done-escalated-conflict",
+            "done-auxiliary-conflict",
             "done-stale-generation",
             "done-remove-fails-then-retried",
         ),
-        _r(_E.NOT_NEEDED, _K.PLAIN, "not-needed-from-in-progress"),
-        _r(_E.BLOCK, _K.PLAIN, "blocked-from-in-progress"),
+        _r(
+            _E.NOT_NEEDED,
+            _K.COMPLETION,
+            "not-needed-from-in-progress",
+            "not-needed-unknown-status-conflict",
+        ),
+        _r(_E.BLOCK, _K.COMPLETION, "blocked-from-in-progress"),
     ),
     "replan/operations.py::_transition_to_not_needed": (
         _r(
@@ -643,12 +665,20 @@ def status_repair_add_remove(env: CaseEnv) -> tuple[Observation, ...]:
     return (Observation(_labels(env)),)
 
 
-def forced_serial(env: CaseEnv) -> tuple[Observation, ...]:
-    decision = rebase.FootprintDeviationDecision(
-        action="forced_serial", subtask_id="task-a", recompute_count=env.params["count"]
+def footprint_deviation(env: CaseEnv) -> tuple[Observation, ...]:
+    """`_decide_footprint_deviation_outcome` picks the branch that is then applied."""
+    active = make_test_active_worktree(
+        ISSUE, pid=None, recompute_count=env.params["count"]
     )
-    count = rebase._apply_forced_serial_event(_active(), decision, env.config)
-    return (Observation(_labels(env), counts=BudgetCounts(recompute=count)),)
+    task, deviated = _task_of(env), ["src/deviated.py"]
+    decision = rebase._decide_footprint_deviation_outcome(
+        active, deviated, {ISSUE: task}, env.config, build_legacy_dag_inputs((task,))
+    )
+    rebase._apply_footprint_deviation_outcome(
+        active, deviated, decision, {}, env.config
+    )
+    counts = BudgetCounts(recompute=active.launch.recompute_count)
+    return (Observation(_labels(env), counts=counts),)
 
 
 def external_lock_sync(env: CaseEnv) -> tuple[Observation, ...]:
@@ -713,15 +743,26 @@ def _completion_evidence(env: CaseEnv) -> bool:
     return closed or StatusLabel.NOT_NEEDED in _labels(env)
 
 
+def _not_needed_review_dispatcher(env: CaseEnv) -> Callable[..., None] | None:
+    """A cloud target defers the not-needed completion to an independent review."""
+    if not env.params.get("cloud"):
+        return None
+    target = ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok")
+    env.monkeypatch.setattr(env.config, "dispatch_target", target)
+    return _NOOP
+
+
 def finalize_not_needed(env: CaseEnv) -> tuple[Observation, ...]:
     _stub_completion(_ctx_env(env))
     env.monkeypatch.setattr(
         completion, "worktree_has_uncommitted_changes", lambda *a: False
     )
+    review = _not_needed_review_dispatcher(env)
     event = completion._finalize_not_needed_worktree(
-        _active(), _task_of(env), env.config
+        _active(), _task_of(env), env.config, review
     )
-    assert event.action == "not_needed", event
+    expected = "not_needed_review_dispatched" if review else "not_needed"
+    assert event.action == expected, event
     return (Observation(_labels(env), completion=_completion_evidence(env)),)
 
 
@@ -784,7 +825,12 @@ def rule_not_needed_outcome(env: CaseEnv) -> tuple[Observation, ...]:
     env.monkeypatch.setattr(dispatch_gc, "fresh_external_hold", lambda *a, **k: None)
     key, active = str(ISSUE), _active()
     state = RunState(active_worktrees={key: active})
-    ctx = _RuleExecutionContext(run_state=state, queries=_fake(), config=env.config)
+    ctx = _RuleExecutionContext(
+        run_state=state,
+        queries=_fake(),
+        config=env.config,
+        not_needed_review_dispatcher=_not_needed_review_dispatcher(env),
+    )
     outcome = dispatch_gc._rule_not_needed(ctx, key, active, _task_of(env))
     assert outcome is not None and outcome.terminal
     return (

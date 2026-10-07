@@ -37,17 +37,21 @@ from orchestune.ledger.status_events import (
 from tests.conftest import make_issue
 from tests.dispatch_test_support import make_test_dispatcher_config
 from tests.status_event_cases import (
+    CURRENT,
     EVENT_CASES,
     FAIL_BEFORE,
     EventCase,
 )
 from tests.status_event_test_support import (
     EVENT_BY_SOURCE,
+    LABEL_INVARIANT_BUDGETS,
     LABEL_INVARIANT_COMPLETIONS,
     CaseEnv,
     FaultyForge,
+    not_needed_review_verdict,
     production_limits,
     route_for,
+    rule_not_needed_outcome,
 )
 from tests.status_transition_callsite_drivers import ISSUE
 from tests.test_status_transition_callsites import (
@@ -784,7 +788,10 @@ class TestEventRegistry:
     ) -> None:
         call_sites = set(CALL_SITES.keys())
         out_of_scope = {f"{f}::{fn}" for f, fn, _ in OUT_OF_SCOPE_PATHS}
-        invariant = {f"{f}::{fn}" for f, fn, _ in LABEL_INVARIANT_COMPLETIONS}
+        invariant = {
+            f"{f}::{fn}"
+            for f, fn, _ in (*LABEL_INVARIANT_COMPLETIONS, *LABEL_INVARIANT_BUDGETS)
+        }
         expected = call_sites | out_of_scope | invariant
         assert set(EVENT_BY_SOURCE.keys()) == expected
 
@@ -889,6 +896,43 @@ class TestEventModelConformance:
                 assert obs.retries == applied_state.retries
             if obs.counts is not None:
                 assert obs.counts == applied_state.counts
+
+
+class TestCloudNotNeededReviewSequence:
+    """A cloud not-needed outcome is no completion until its review decides."""
+
+    @pytest.mark.parametrize(
+        ("verdict", "condition"),
+        [(None, "cloud-review-timeout"), ("failed", "cloud-review-rejected")],
+    )
+    def test_pending_review_never_counts_as_completion(
+        self,
+        verdict: str | None,
+        condition: str,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        forge = FaultyForge()
+        forge.issues[ISSUE] = make_issue(ISSUE, labels=(P,))
+        config = make_test_dispatcher_config(tmp_path, forge=forge, apply=True)
+        env = CaseEnv(forge, config, monkeypatch, tmp_path, (P,), {"cloud": True})
+        steps = [
+            ("dispatch/gc/__init__.py::_rule_not_needed", "cloud-review-dispatched"),
+            ("dispatch/gc/policy_effects.py::reconcile_labels", condition),
+        ]
+        observed = rule_not_needed_outcome(env)
+        env.params = {"verdict": verdict} if verdict else {}
+        observed += not_needed_review_verdict(env)
+
+        state = _model(P, execution_identity=CURRENT)
+        for (source, case), obs in zip(steps, observed, strict=True):
+            route = route_for(source, case)
+            state = _applied(_apply(state, route.event, route.kind)).state
+            assert obs.labels == state.labels
+            assert obs.completion is False
+            assert not state.completion_done
+        assert not state.execution_active
+        assert state.lifecycle == ({H} if verdict is None else {Q})
 
 
 class TestCallSitesApplyEventConformance:

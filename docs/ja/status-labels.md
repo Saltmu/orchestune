@@ -146,18 +146,21 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 
 `orchestune/ledger/status_events.py` は、タスク状態遷移を副作用のない純粋関数 `apply_event` として表現するEventモデルです（設計 #1219 §1）。
 すべてのForgeラベル変更、完了確定、GC回収、retry予約、エスカレーションはEventとして抽象化され、
-呼び出し箇所（`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / ラベル不変の完了確定経路）と対応付けられます。
+呼び出し箇所（`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / ラベル不変の完了確定経路 / ラベル不変の予算経路）と対応付けられます。
+`COMPLETION`は`orchestune complete`の完了ラベル調停で、primaryラベル・遷移先・`status:force-serial`以外の`status:*`（補助・未知のラベル）を保持していれば変更前に拒否します。
+`AWAIT_REVIEW`はクラウド実行のnot-needed判定を独立検証レビューへ回す経路で、実行は終えますが、レビューの判定までは完了として扱いません。
 
 ### Event対応表
 
 | Event | 遷移元 | 遷移先 | 発生元 |
 |---|---|---|---|
 | `LAUNCH` (`CLAIM`) | `status:blocked`, `status:queued` | `status:in-progress` | `claim/service.py::_apply_status_label` |
-| `COMPLETE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `complete/status_labels.py::_completion_mutate` |
-| `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
-| `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `complete/status_labels.py::_completion_mutate` |
+| `COMPLETE` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `complete/status_labels.py::_completion_mutate` |
+| `NOT_NEEDED` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
+| `BLOCK` (`COMPLETION`) | `status:in-progress`, `status:queued` | `status:blocked` | `complete/status_labels.py::_completion_mutate` |
 | `COMPLETE_WITHOUT_LABEL` (`CYCLE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/cycle_context_state.py::_CycleState.record_completion` |
 | `COMPLETE_WITHOUT_LABEL` (`NOT_NEEDED_OUTCOME`) | `status:in-progress` | - | `dispatch/gc/__init__.py::_rule_not_needed` |
+| `AWAIT_REVIEW` (`PLAIN`) | `status:in-progress` | - | `dispatch/gc/__init__.py::_rule_not_needed` |
 | `RECLAIM` (`PLAIN`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim` |
 | `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_blocked_hold` |
 | `BLOCK` (`RECOMPUTE`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_blocked_hold` |
@@ -165,6 +168,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `BLOCK` (`BASE_BRANCH_RED`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_escalated_base_branch_red` |
 | `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
 | `COMPLETE_WITHOUT_LABEL` (`NOT_NEEDED_OUTCOME`) | `status:in-progress` | - | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
+| `AWAIT_REVIEW` (`PLAIN`) | `status:in-progress` | - | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
 | `REQUEUE` (`EARLY_DEATH`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
 | `REQUEUE` (`REVIEW_TIMEOUT`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
 | `REQUEUE` (`REVIEW_TIMEOUT`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/policy_effects.py::reconcile_labels` |
@@ -186,6 +190,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/prior_parent_merge.py::_normalize_closed_issue_label` |
 | `COMPLETE_WITHOUT_LABEL` (`PRIOR_MERGE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/prior_parent_merge.py::reconcile_prior_parent_merges` |
 | `RECOMPUTE` (`PLAIN`) | `status:in-progress` | - | `dispatch/rebase.py::_apply_forced_serial_event` |
+| `RECOMPUTE` (`PLAIN`) | `status:in-progress` | - | `dispatch/rebase.py::_apply_recomputed_event` |
 | `ESCALATE` (`MANUAL_MERGE`) | `status:in-progress` | `status:manual-merge-required` | `dispatch/rebase.py::_handle_rebase_failure` |
 | `ESCALATE` (`MANUAL_MERGE`) | `status:in-progress` | `status:manual-merge-required` | `dispatch/rebase.py::_prepare_wip_backup_for_rebase` |
 | `BLOCK` (`RECOMPUTE`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/rebase.py::notify_recompute` |

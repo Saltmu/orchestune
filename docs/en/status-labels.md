@@ -156,18 +156,21 @@ the compatibility tests).
 
 `orchestune/ledger/status_events.py` is the pure, side-effect-free Event model representing task state transitions via `apply_event` (design #1219 §1).
 All production Forge label mutations, completion determinations, GC reclaims, retry reservations, and escalations are abstracted as Events,
-mapped to their production call sites (`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / label-invariant completion paths).
+mapped to their production call sites (`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / label-invariant completion paths / label-invariant budget paths).
+`COMPLETION` is the `orchestune complete` label reconciliation: it rejects, before any mutation, a state holding a `status:*` label (auxiliary or unknown) other than the primary labels, the target and `status:force-serial`.
+`AWAIT_REVIEW` hands a cloud not-needed decision to the independent review: it ends the execution, but is not a completion until the review decides.
 
 ### Event correspondence table
 
 | Event | Sources | Target | Source |
 |---|---|---|---|
 | `LAUNCH` (`CLAIM`) | `status:blocked`, `status:queued` | `status:in-progress` | `claim/service.py::_apply_status_label` |
-| `COMPLETE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `complete/status_labels.py::_completion_mutate` |
-| `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
-| `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `complete/status_labels.py::_completion_mutate` |
+| `COMPLETE` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `complete/status_labels.py::_completion_mutate` |
+| `NOT_NEEDED` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
+| `BLOCK` (`COMPLETION`) | `status:in-progress`, `status:queued` | `status:blocked` | `complete/status_labels.py::_completion_mutate` |
 | `COMPLETE_WITHOUT_LABEL` (`CYCLE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/cycle_context_state.py::_CycleState.record_completion` |
 | `COMPLETE_WITHOUT_LABEL` (`NOT_NEEDED_OUTCOME`) | `status:in-progress` | - | `dispatch/gc/__init__.py::_rule_not_needed` |
+| `AWAIT_REVIEW` (`PLAIN`) | `status:in-progress` | - | `dispatch/gc/__init__.py::_rule_not_needed` |
 | `RECLAIM` (`PLAIN`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim` |
 | `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_blocked_hold` |
 | `BLOCK` (`RECOMPUTE`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_blocked_hold` |
@@ -175,6 +178,7 @@ mapped to their production call sites (`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / lab
 | `BLOCK` (`BASE_BRANCH_RED`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_escalated_base_branch_red` |
 | `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
 | `COMPLETE_WITHOUT_LABEL` (`NOT_NEEDED_OUTCOME`) | `status:in-progress` | - | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
+| `AWAIT_REVIEW` (`PLAIN`) | `status:in-progress` | - | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
 | `REQUEUE` (`EARLY_DEATH`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
 | `REQUEUE` (`REVIEW_TIMEOUT`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
 | `REQUEUE` (`REVIEW_TIMEOUT`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/policy_effects.py::reconcile_labels` |
@@ -196,6 +200,7 @@ mapped to their production call sites (`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / lab
 | `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/prior_parent_merge.py::_normalize_closed_issue_label` |
 | `COMPLETE_WITHOUT_LABEL` (`PRIOR_MERGE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/prior_parent_merge.py::reconcile_prior_parent_merges` |
 | `RECOMPUTE` (`PLAIN`) | `status:in-progress` | - | `dispatch/rebase.py::_apply_forced_serial_event` |
+| `RECOMPUTE` (`PLAIN`) | `status:in-progress` | - | `dispatch/rebase.py::_apply_recomputed_event` |
 | `ESCALATE` (`MANUAL_MERGE`) | `status:in-progress` | `status:manual-merge-required` | `dispatch/rebase.py::_handle_rebase_failure` |
 | `ESCALATE` (`MANUAL_MERGE`) | `status:in-progress` | `status:manual-merge-required` | `dispatch/rebase.py::_prepare_wip_backup_for_rebase` |
 | `BLOCK` (`RECOMPUTE`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/rebase.py::notify_recompute` |

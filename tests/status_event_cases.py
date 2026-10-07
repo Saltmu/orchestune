@@ -31,7 +31,7 @@ from tests.status_event_test_support import (
     cycle_record_completion,
     external_lock_sync,
     finalize_not_needed,
-    forced_serial,
+    footprint_deviation,
     gc_backoff_retry,
     gc_escalated_base_branch_red,
     gc_reclaim,
@@ -90,6 +90,7 @@ RC, FS, EL = (
 RED = BASE_BRANCH_RED_LABEL
 _ACTIVE_RUN = {"execution_identity": CURRENT}
 _THIRD_RED = {"counts": BudgetCounts(base_branch_red=2)}
+_CLOUD = {"cloud": True}
 
 
 def _direct_operation_cases() -> list[EventCase]:
@@ -109,6 +110,7 @@ def _direct_operation_cases() -> list[EventCase]:
         adapter("done-repair", (Q, B), params={"target": D}),
         adapter("done-replay", (D,), params={"target": D}),
         adapter("done-escalated-conflict", (H,), params={"target": D}),
+        adapter("done-auxiliary-conflict", (P, RC), params={"target": D}),
         adapter(
             "done-stale-generation",
             (P,),
@@ -124,6 +126,11 @@ def _direct_operation_cases() -> list[EventCase]:
             steps=(Stage.LABEL_ADDED, None),
         ),
         adapter("not-needed-from-in-progress", (P,), params={"target": N}),
+        adapter(
+            "not-needed-unknown-status-conflict",
+            (P, "status:legacy"),
+            params={"target": N},
+        ),
         adapter("blocked-from-in-progress", (P,), params={"target": B}),
         timeout("review-timeout-requeue", (P,), inputs={"now": NOW}),
         timeout(
@@ -137,6 +144,9 @@ def _direct_operation_cases() -> list[EventCase]:
         red("base-red-escalate", (B, RED), params={"attempt": 3}, model=_THIRD_RED),
         verdict("review-rejected", (N,), params={"verdict": "failed"}),
         verdict("review-launch-timeout", (N,)),
+        # A cloud not-needed completion awaits its review without any status label.
+        verdict("cloud-review-rejected", (), params={"verdict": "failed"}),
+        verdict("cloud-review-timeout", ()),
         replan("queued", (Q,)),
         replan("blocked-with-recompute", (B, RC)),
         replan("in-progress-force-serial", (P, FS)),
@@ -172,6 +182,9 @@ def _dispatch_direct_cases() -> list[EventCase]:
     finalize = _cases(
         "dispatch/gc/completion.py::_finalize_not_needed_worktree", finalize_not_needed
     )
+    deviation = _cases(
+        "dispatch/rebase.py::_apply_recomputed_event", footprint_deviation
+    )
     open_task: dict[str, Any] = {}
     done = {"lifecycle": TaskLifecycle.DONE}
     return [
@@ -181,11 +194,18 @@ def _dispatch_direct_cases() -> list[EventCase]:
         repair("interrupted-rollback", (D, Q), params={"desired": open_task}),
         repair("remove-stale-queued-from-done", (D, Q), params={"desired": done}),
         repair("remove-stale-in-progress", (P, Q), params={"desired": open_task}),
+        deviation("within-budget", (P,), params={"count": 0}),
+        deviation(
+            "last-within-budget",
+            (P,),
+            params={"count": 1},
+            model={"counts": BudgetCounts(recompute=1)},
+        ),
         EventCase(
             "dispatch/rebase.py::_apply_forced_serial_event",
             "over-budget",
             (P,),
-            forced_serial,
+            footprint_deviation,
             params={"count": 2},
             model={"counts": BudgetCounts(recompute=2)},
         ),
@@ -233,6 +253,7 @@ def _dispatch_direct_cases() -> list[EventCase]:
         ),
         finalize("labelled", (P, N)),
         finalize("outcome-only", (P,), model=_ACTIVE_RUN),
+        finalize("cloud-review-dispatched", (P,), params=_CLOUD, model=_ACTIVE_RUN),
     ]
 
 
@@ -274,6 +295,14 @@ def _completion_and_retry_cases() -> list[EventCase]:
             "outcome-only",
             (P,),
             rule_not_needed_outcome,
+            model=_ACTIVE_RUN,
+        ),
+        EventCase(
+            "dispatch/gc/__init__.py::_rule_not_needed",
+            "cloud-review-dispatched",
+            (P,),
+            rule_not_needed_outcome,
+            params=_CLOUD,
             model=_ACTIVE_RUN,
         ),
         reclaim("first-reclaim", (P,), model=_ACTIVE_RUN),

@@ -59,6 +59,9 @@ class Event(StrEnum):
     #: lifecycleを変えない補助ラベル・保留マーカーの解除。
     RELEASE_HOLD = "release_hold"
     COMPLETE_WITHOUT_LABEL = "complete_without_label"
+    #: in-progress → (なし)。cloud実行のnot-needed判定を独立レビューへ回す。
+    #: 実行を終えるが、レビューの判定までは完了証拠にならない。
+    AWAIT_REVIEW = "await_review"
 
 
 class Kind(StrEnum):
@@ -83,6 +86,9 @@ class Kind(StrEnum):
     PRIOR_MERGE = "prior_merge"
     #: outcome recordだけによるnot-needed。in-progressを外し、ラベルは付けない。
     NOT_NEEDED_OUTCOME = "not_needed_outcome"
+    #: `orchestune complete`の完了ラベル調停。primary・target・force-serial以外の
+    #: `status:*`（補助・未知のラベル）を保持していれば変更前に拒否する。
+    COMPLETION = "completion"
 
 
 class Stage(StrEnum):
@@ -259,7 +265,8 @@ class EventSpec:
 
     `target`がNoneのeventはlifecycleを変えない。`sources`は保持していてよい
     lifecycle（`target`自身は常に許可）、`initial`はlifecycleを1つも持たない
-    状態から適用できるか。
+    状態から適用できるか。`allowed_auxiliary`がNoneでなければ、それ以外の
+    補助`status:*`ラベルを保持する状態を拒否する。
     """
 
     target: StatusLabel | None
@@ -268,6 +275,7 @@ class EventSpec:
     add: frozenset[str] = frozenset()
     remove: frozenset[str] = frozenset()
     strip: bool = False
+    allowed_auxiliary: frozenset[str] | None = None
 
 
 _ACTIVE = frozenset({StatusLabel.QUEUED, StatusLabel.BLOCKED, StatusLabel.IN_PROGRESS})
@@ -280,6 +288,7 @@ _RUNNING = frozenset({StatusLabel.IN_PROGRESS, StatusLabel.BLOCKED})
 _RC = frozenset({StatusLabel.BLOCKED_RECOMPUTE})
 _RED = frozenset({BASE_BRANCH_RED_LABEL})
 _EL = frozenset({StatusLabel.EXTERNAL_LOCK})
+_FS = frozenset({StatusLabel.FORCE_SERIAL})
 
 
 def _spec(
@@ -306,11 +315,20 @@ EVENT_SPECS: Mapping[tuple[Event, Kind], EventSpec] = MappingProxyType(
         (_E.BLOCK, _K.PLAIN): _spec(_B, frozenset({_Q, _P})),
         (_E.BLOCK, _K.RECOMPUTE): _spec(_B, frozenset({_Q, _P}), add=_RC),
         (_E.BLOCK, _K.BASE_BRANCH_RED): _spec(_B, _ACTIVE, add=_RED),
+        (_E.BLOCK, _K.COMPLETION): _spec(
+            _B, frozenset({_Q, _P}), allowed_auxiliary=_FS
+        ),
         (_E.LAUNCH, _K.PLAIN): _spec(_P, frozenset({_Q, _B})),
         (_E.LAUNCH, _K.CLAIM): _spec(_P, frozenset({_Q, _B}), strip=True),
         (_E.LAUNCH, _K.RECOVERY): _spec(_P, frozenset({_Q, _B})),
         (_E.COMPLETE, _K.PLAIN): _spec(StatusLabel.DONE, _ACTIVE),
+        (_E.COMPLETE, _K.COMPLETION): _spec(
+            StatusLabel.DONE, _ACTIVE, allowed_auxiliary=_FS
+        ),
         (_E.NOT_NEEDED, _K.PLAIN): _spec(StatusLabel.NOT_NEEDED, _ACTIVE),
+        (_E.NOT_NEEDED, _K.COMPLETION): _spec(
+            StatusLabel.NOT_NEEDED, _ACTIVE, allowed_auxiliary=_FS
+        ),
         (_E.NOT_NEEDED, _K.REPLAN): _spec(
             StatusLabel.NOT_NEEDED, _ACTIVE | _ESCALATION, strip=True
         ),
@@ -336,6 +354,9 @@ EVENT_SPECS: Mapping[tuple[Event, Kind], EventSpec] = MappingProxyType(
         (_E.COMPLETE_WITHOUT_LABEL, _K.NOT_NEEDED_OUTCOME): _spec(
             None, frozenset({_P}), remove=frozenset({_P})
         ),
+        (_E.AWAIT_REVIEW, _K.PLAIN): _spec(
+            None, frozenset({_P}), remove=frozenset({_P})
+        ),
     }
 )
 
@@ -343,7 +364,7 @@ EVENT_SPECS: Mapping[tuple[Event, Kind], EventSpec] = MappingProxyType(
 _COMPLETION_WITHDRAWALS = frozenset({Event.MERGE_REVERT, Event.REVIEW_REJECT})
 #: lifecycleの遷移先にかかわらず実行を終えるevent。
 _EXECUTION_ENDING = frozenset(
-    {Event.RECLAIM, Event.REQUEUE, Event.COMPLETE_WITHOUT_LABEL}
+    {Event.RECLAIM, Event.REQUEUE, Event.COMPLETE_WITHOUT_LABEL, Event.AWAIT_REVIEW}
 )
 #: 予算超過でエスカレーションへ切り替わる(Event, Kind)。
 _BUDGETED = frozenset(
@@ -442,6 +463,11 @@ def _refuse_source(
         and event.event not in _COMPLETION_WITHDRAWALS
     ):
         return Rejected("completion-confirmed")
+    if spec.allowed_auxiliary is not None and any(
+        label.startswith(_STATUS_PREFIX) and label not in spec.allowed_auxiliary
+        for label in state.auxiliary
+    ):
+        return Rejected("auxiliary-conflict")
     held = state.lifecycle
     if not held:
         return None if spec.initial else Rejected("no-lifecycle")
