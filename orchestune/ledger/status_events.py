@@ -463,7 +463,7 @@ def _decide_budget(
     if key not in _BUDGETED:
         return _Decision(spec, state)
     if event.event is Event.RECLAIM:
-        return _decide_reclaim(state, spec, limits)
+        return _decide_reclaim(state, event, spec, limits)
     if event.event is Event.RECOMPUTE:
         return _decide_recompute(state, event, spec, limits)
     if event.event is Event.BLOCK:
@@ -487,13 +487,20 @@ def _escalation(spec: EventSpec, remove: frozenset[str] = frozenset()) -> EventS
 
 
 def _decide_reclaim(
-    state: TaskModel, spec: EventSpec, limits: BudgetLimits
+    state: TaskModel, event: EventInput, spec: EventSpec, limits: BudgetLimits
 ) -> _Decision:
     """`_resolve_reclaim_count`と`_refresh_reclaim`の規則。
 
     予約中（pending）なら同じ回数を再利用し、そうでなければ1つ進める。
     上限の判定は予約を再利用する場合も行う。超過時も回数は記録する。
     """
+    if _is_resumed(state, event):
+        pending = state.pending_operation
+        assert pending is not None
+        if pending.stage is Stage.LABEL_ADDED:
+            if pending.escalated:
+                return _Decision(_escalation(spec), state, escalated=True)
+            return _Decision(spec, state)
     reclaim = state.retries.reclaim
     count = reclaim.count if reclaim.pending else reclaim.count + 1
     retries = replace(state.retries, reclaim=ReclaimState(count=count, pending=True))
@@ -507,8 +514,6 @@ def _decide_recompute(
     state: TaskModel, event: EventInput, spec: EventSpec, limits: BudgetLimits
 ) -> _Decision | NoOp:
     """`_decide_footprint_deviation_outcome`の予算規則。"""
-    if StatusLabel.FORCE_SERIAL in state.auxiliary:
-        return NoOp("already-forced-serial")
     if _is_resumed(state, event):
         pending = state.pending_operation
         assert pending is not None
@@ -516,6 +521,8 @@ def _decide_recompute(
             forced = replace(spec, add=frozenset({StatusLabel.FORCE_SERIAL}))
             return _Decision(forced, state, escalated=True)
         return _Decision(spec, state)
+    if StatusLabel.FORCE_SERIAL in state.auxiliary:
+        return NoOp("already-forced-serial")
     count = state.counts.recompute + 1
     if exceeds_limit(count, limits.max_recompute_retries):
         forced = replace(spec, add=frozenset({StatusLabel.FORCE_SERIAL}))

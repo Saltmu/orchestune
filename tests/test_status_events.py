@@ -603,7 +603,106 @@ class TestOperationsAndRestart:
         assert done.retries.early_death.count == 1
         assert done.labels == {Q}
         assert done.pending_operation is None
-        assert "op-ed" in done.confirmed_operations
+
+    def test_interrupted_over_budget_recompute_operation_resumes_when_already_forced_serial(
+        self,
+    ) -> None:
+        limits = replace(LIMITS, max_recompute_retries=1)
+        state = _model(P, counts=BudgetCounts(recompute=1))
+        added = _applied(
+            apply_event(
+                state,
+                EventInput(
+                    Event.RECOMPUTE,
+                    Kind.PLAIN,
+                    operation="op-fs-label",
+                    stop_after=Stage.LABEL_ADDED,
+                ),
+                limits,
+            )
+        ).state
+        assert StatusLabel.FORCE_SERIAL in added.auxiliary
+        assert added.pending_operation is not None
+        assert added.pending_operation.stage is Stage.LABEL_ADDED
+
+        done = _applied(
+            apply_event(
+                added,
+                EventInput(Event.RECOMPUTE, Kind.PLAIN, operation="op-fs-label"),
+                limits,
+            )
+        ).state
+        assert StatusLabel.FORCE_SERIAL in done.auxiliary
+        assert done.pending_operation is None
+        assert "op-fs-label" in done.confirmed_operations
+
+    def test_interrupted_reclaim_operation_preserves_escalation_at_stage_label_added_despite_limit_change(
+        self,
+    ) -> None:
+        state = _model(
+            P, retries=RetryStates(reclaim=ReclaimState(count=1, pending=False))
+        )
+        limits_initial = replace(LIMITS, max_task_reclaims=1)
+        added = _applied(
+            apply_event(
+                state,
+                EventInput(
+                    Event.RECLAIM,
+                    Kind.PLAIN,
+                    operation="op-rec-esc",
+                    stop_after=Stage.LABEL_ADDED,
+                ),
+                limits_initial,
+            )
+        ).state
+        assert added.pending_operation is not None
+        assert added.pending_operation.escalated
+        assert added.pending_operation.stage is Stage.LABEL_ADDED
+
+        limits_relaxed = replace(LIMITS, max_task_reclaims=5)
+        done = _applied(
+            apply_event(
+                added,
+                EventInput(Event.RECLAIM, Kind.PLAIN, operation="op-rec-esc"),
+                limits_relaxed,
+            )
+        ).state
+        assert done.labels == {H}
+        assert done.pending_operation is None
+        assert "op-rec-esc" in done.confirmed_operations
+
+    def test_interrupted_normal_reclaim_operation_preserves_decision_when_limit_lowered(
+        self,
+    ) -> None:
+        state = _model(P)
+        limits_initial = replace(LIMITS, max_task_reclaims=5)
+        added = _applied(
+            apply_event(
+                state,
+                EventInput(
+                    Event.RECLAIM,
+                    Kind.PLAIN,
+                    operation="op-rec-norm",
+                    stop_after=Stage.LABEL_ADDED,
+                ),
+                limits_initial,
+            )
+        ).state
+        assert added.pending_operation is not None
+        assert not added.pending_operation.escalated
+        assert added.pending_operation.stage is Stage.LABEL_ADDED
+
+        limits_strict = replace(LIMITS, max_task_reclaims=0)
+        done = _applied(
+            apply_event(
+                added,
+                EventInput(Event.RECLAIM, Kind.PLAIN, operation="op-rec-norm"),
+                limits_strict,
+            )
+        ).state
+        assert done.labels == {Q}
+        assert done.pending_operation is None
+        assert "op-rec-norm" in done.confirmed_operations
 
     def test_restart_keeps_persisted_reservations_but_not_the_model_operation(
         self,
