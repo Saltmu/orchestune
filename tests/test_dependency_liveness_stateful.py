@@ -19,6 +19,7 @@ from tests.dependency_liveness_test_support import (
     ACTIVE_PATHS,
     BASE_RED,
     CASE_TABLE,
+    DEPENDENT,
     DRY_RUN_RESERVATION_ISSUE,
     ISSUE_BY_SUBTASK,
     LIVENESS_BOUND,
@@ -26,7 +27,6 @@ from tests.dependency_liveness_test_support import (
     RECOMPUTE_RELEASE_ISSUE,
     CompletionPath,
     CycleObservation,
-    DEPENDENT,
     FaultPlan,
     LivenessCase,
     LivenessTopology,
@@ -219,7 +219,10 @@ def assert_intermediate_safety(
             deps_satisfied = False
         else:
             req_set = set(required)
-            def _satisfied(view: OracleView) -> bool:
+
+            def _satisfied(
+                view: OracleView, req_set: set[int] = req_set, number: int = number
+            ) -> bool:
                 evidence = view.valid if observation.apply else view.preview_visible
                 return (
                     req_set <= evidence
@@ -402,9 +405,10 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
         )
         assert_safe(observation, self.world.required)
         assert_intermediate_safety(self.world, observation)
+        # Eligibility at both boundaries determines fairness. A stale callback
+        # that changes nothing (or only unrelated state) cannot reset liveness.
         fair = (
-            not stale
-            and observation.error is None
+            observation.error is None
             and not observation.fault_injected
             and self.world.faults.forge_operation is None
             and all(
@@ -434,8 +438,7 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
                     self.intermediate_fair_streaks[number] = 0
                     continue
                 fair_for_number = (
-                    not stale
-                    and observation.error is None
+                    observation.error is None
                     and not observation.fault_injected
                     and self.world.faults.forge_operation is None
                     and all(
@@ -506,9 +509,10 @@ def _stale_complete(world: LivenessWorld) -> None:
 
 
 def _stale_revoke(world: LivenessWorld) -> None:
-    # Exclude collected and confirmed evidence (e.g. RECORD_COMPLETION) from
-    # stale revocation, because the cycle context legitimately retains the receipt.
-    revocable = [n for n, path in world.evidence.items() if path not in ACTIVE_PATHS]
+    # Active completions and verified prior merges are collected before this
+    # callback; the bound context legitimately retains their confirmed receipt.
+    collected_paths = ACTIVE_PATHS | {CompletionPath.PRIOR_MERGE}
+    revocable = [n for n, path in world.evidence.items() if path not in collected_paths]
     if revocable:
         world.revoke(revocable[0])
 
@@ -523,9 +527,85 @@ _STALE_CHANGES = {
 TestDependencyLivenessMachine = DependencyLivenessMachine.TestCase
 
 
+@pytest.mark.parametrize("intermediate", [False, True])
+@pytest.mark.parametrize("kind", ["complete", "revoke"])
+@pytest.mark.parametrize("apply", [False, True])
+@pytest.mark.parametrize("lag", [False, True])
+@pytest.mark.parametrize("suppress_promotion", [False, True])
+def test_noop_stale_callback_counts_toward_liveness(
+    monkeypatch, intermediate, kind, apply, lag, suppress_promotion
+):
+    from tests.dependency_liveness_test_support import cycle_module
+
+    topology = LivenessTopology(
+        dep_issues=(11, 12) if intermediate else (11,),
+        t_depends_on=("dep-a",),
+        issue_depends_on={11: ("dep-b",)} if intermediate else {},
+        required_to_promote=(11,),
+    )
+    machine = DependencyLivenessMachine()
+    try:
+        machine.start(topology=topology, recompute=False)
+        dependency = 12 if intermediate else 11
+        subject = 11 if intermediate else DEPENDENT
+        # Collect a receipt first: evidence is visible to dry-run and cannot be
+        # revoked by the stale callback, while complete also has no eligible D.
+        machine.world.complete(dependency, CompletionPath.RECORD_COMPLETION)
+        machine.world.cycle()
+        machine.world.relabel(subject, (StatusLabel.BLOCKED.value,))
+        if suppress_promotion:
+            real_boundary = cycle_module._run_status_repair_boundary
+
+            def skip_promotion(boundary, finding_code, **kwargs):
+                if boundary == "status-blocked-promotion":
+                    return []
+                return real_boundary(boundary, finding_code, **kwargs)
+
+            monkeypatch.setattr(
+                cycle_module, "_run_status_repair_boundary", skip_promotion
+            )
+        machine.stale_snapshot(kind)
+        if suppress_promotion:
+            with pytest.raises(AssertionError):
+                machine.cycle(apply=apply, lag=lag)
+        else:
+            machine.cycle(apply=apply, lag=lag)
+            streak = (
+                machine.intermediate_fair_streaks[subject]
+                if intermediate
+                else machine.fair_streak
+            )
+            assert streak >= LIVENESS_BOUND
+    finally:
+        machine.teardown()
+
+
 def test_configured_profile_applies_to_liveness_machine():
     applied: Any = TestDependencyLivenessMachine.settings
     profile = os.environ.get("HYPOTHESIS_PROFILE", "ci")
     assert settings.get_current_profile_name() == profile
     if profile == "ci":
         assert applied.deadline is None and applied.print_blob
+
+
+@pytest.mark.parametrize("intermediate", [False, True])
+def test_stale_revoke_preserves_collected_prior_merge_receipt(intermediate):
+    machine = DependencyLivenessMachine()
+    topology = LivenessTopology(
+        dep_issues=(11, 12, 13) if intermediate else (11,),
+        t_depends_on=("dep-a",),
+        issue_depends_on={11: ("dep-b",), 12: ("dep-c",)} if intermediate else {},
+        required_to_promote=(11,),
+    )
+    try:
+        machine.start(topology=topology, recompute=False)
+        dependency = 13 if intermediate else 11
+        machine.stale_snapshot("revoke")
+        machine.world.complete(dependency, CompletionPath.PRIOR_MERGE)
+        machine.cycle(apply=True, lag=False)
+        observation = machine.world.observations[-1]
+        subject = 12 if intermediate else DEPENDENT
+        assert subject in observation.promotion_issue_numbers
+        assert dependency in observation.at_promotion.valid
+    finally:
+        machine.teardown()
