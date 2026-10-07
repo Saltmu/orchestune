@@ -15,6 +15,7 @@ from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, initialize, rule
 
 from tests.dependency_liveness_test_support import (
+    ACTIVE_PATHS,
     BASE_RED,
     CASE_TABLE,
     DRY_RUN_RESERVATION_ISSUE,
@@ -284,9 +285,17 @@ def _stale_complete(world: LivenessWorld) -> None:
         world.complete(pending[0], CompletionPath.LABEL)
 
 
+def _stale_revoke(world: LivenessWorld) -> None:
+    # Exclude collected and confirmed evidence (e.g. RECORD_COMPLETION) from
+    # stale revocation, because the cycle context legitimately retains the receipt.
+    revocable = [n for n, path in world.evidence.items() if path not in ACTIVE_PATHS]
+    if revocable:
+        world.revoke(revocable[0])
+
+
 _STALE_CHANGES = {
     "add_hold": lambda world: world.set_t_label(BASE_RED, True),
-    "revoke": lambda world: [world.revoke(n) for n in list(world.evidence)[:1]],
+    "revoke": _stale_revoke,
     "complete": _stale_complete,
 }
 
