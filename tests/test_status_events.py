@@ -102,6 +102,26 @@ class TestModelShape:
         assert state.auxiliary == {FS, CI_RED}
         assert state.labels == {Q, FS, CI_RED}
 
+    def test_from_labels_preserves_unknown_status_labels_for_strip(self) -> None:
+        state = TaskModel.from_labels((Q, "status:legacy", "component:core"))
+        assert state.lifecycle == {Q}
+        assert state.auxiliary == {"status:legacy"}
+        assert state.labels == {Q, "status:legacy"}
+
+        applied = _applied(
+            apply_event(
+                state,
+                EventInput(
+                    Event.LAUNCH,
+                    Kind.CLAIM,
+                    execution=ExecutionIdentity("c1"),
+                ),
+                LIMITS,
+            )
+        )
+        assert applied.state.labels == {P}
+        assert "status:legacy" in applied.remove_labels
+
     def test_execution_active_is_derived_from_the_identity(self) -> None:
         assert not _model(P).execution_active
         assert _model(P, execution_identity=A).execution_active

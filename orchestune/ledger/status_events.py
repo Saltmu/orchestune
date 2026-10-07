@@ -193,6 +193,7 @@ class TaskModel:
             for label in labels
             if label == BASE_BRANCH_RED_LABEL
             or LABEL_ROLES.get(label) is LabelRole.AUXILIARY  # type: ignore[call-overload]
+            or (label.startswith(_STATUS_PREFIX) and label not in LABEL_ROLES)
         )
         return cls(lifecycle=lifecycle_labels(labels), auxiliary=auxiliary)
 
