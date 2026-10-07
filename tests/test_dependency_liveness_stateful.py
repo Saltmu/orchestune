@@ -20,6 +20,7 @@ from tests.dependency_liveness_test_support import (
     BASE_RED,
     CASE_TABLE,
     DRY_RUN_RESERVATION_ISSUE,
+    ISSUE_BY_SUBTASK,
     LIVENESS_BOUND,
     RECOMPUTE,
     RECOMPUTE_RELEASE_ISSUE,
@@ -29,6 +30,7 @@ from tests.dependency_liveness_test_support import (
     LivenessCase,
     LivenessTopology,
     LivenessWorld,
+    StatusLabel,
     assert_case,
     run_case,
 )
@@ -202,6 +204,33 @@ def assert_safe(
         ), f"unsafe promotion: {observation}"
 
 
+def assert_intermediate_safety(
+    world: LivenessWorld, observation: CycleObservation
+) -> None:
+    if world.topology is None:
+        return
+    view = (
+        observation.at_start
+        if not observation.apply or observation.listing_lag
+        else observation.at_promotion
+    )
+    evidence = view.valid if observation.apply else view.preview_visible
+
+    for number, deps in world.topology.issue_depends_on.items():
+        if not deps:
+            continue
+        deps_satisfied = True
+        for d in deps:
+            dep_num = ISSUE_BY_SUBTASK.get(d)
+            if dep_num is None or dep_num not in evidence:
+                deps_satisfied = False
+                break
+        if not deps_satisfied:
+            assert (
+                number not in observation.promotion_issue_numbers
+            ), f"unsafe intermediate promotion of {number}: {observation}"
+
+
 @st.composite
 def dependency_topologies(draw: st.DrawFn) -> LivenessTopology:
     kind = draw(
@@ -306,7 +335,6 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
         root.mkdir(parents=True, exist_ok=True)
         self.directory = TemporaryDirectory(prefix="liveness-1265-", dir=root)
         self.fair_streak = 0
-        self.disturbed = False
         self.stale: str | None = None
 
     @initialize(topology=dependency_topologies(), recompute=st.booleans())
@@ -316,8 +344,13 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
             Path(self.directory.name), t_labels=labels, topology=topology
         )
 
-    def _pending(self) -> list[int]:
-        return [n for n in self.world.all_dep_issues if n not in self.world.evidence]
+    def _completable(self) -> list[int]:
+        return [
+            n
+            for n in self.world.all_dep_issues
+            if n not in self.world.evidence
+            and StatusLabel.QUEUED.value in self.world.labels(n)
+        ]
 
     @rule(
         data=st.data(),
@@ -330,9 +363,9 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
         ),
     )
     def complete_dependency(self, data, path):
-        pending = self._pending()
-        if pending:
-            self.world.complete(data.draw(st.sampled_from(pending)), path)
+        completable = self._completable()
+        if completable:
+            self.world.complete(data.draw(st.sampled_from(completable)), path)
 
     @rule(data=st.data())
     def duplicate_completion(self, data):
@@ -348,14 +381,17 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
             apply=apply, before_promotion=_STALE_CHANGES.get(stale)
         )
         assert_safe(observation, self.world.required)
-        fair = not (self.disturbed or stale or observation.error) and all(
-            view.promotable(self.world.required, apply=apply)
-            for view in (observation.at_start, observation.at_promotion)
+        assert_intermediate_safety(self.world, observation)
+        fair = (
+            not stale
+            and observation.error is None
+            and not observation.fault_injected
+            and self.world.faults.forge_operation is None
+            and all(
+                view.promotable(self.world.required, apply=apply)
+                for view in (observation.at_start, observation.at_promotion)
+            )
         )
-        if observation.error:
-            self.disturbed = True
-        elif apply:
-            self.disturbed = False
         self.fair_streak = self.fair_streak + 1 if fair else 0
         if self.fair_streak >= LIVENESS_BOUND:
             assert "status:queued" in observation.t_after or observation.previewed
@@ -364,14 +400,12 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
     def restart(self, ledger_loss):
         if ledger_loss:
             self.world.lose_ledger()
-            self.disturbed = True
 
     @rule(
         op=st.sampled_from(("add", "remove")), mode=st.sampled_from(("before", "after"))
     )
     def fail_next(self, op, mode):
         self.world.faults.forge_operation = (op, mode)
-        self.disturbed = True
 
     @rule(kind=st.sampled_from(("base_red", "recompute", "reservation")))
     def toggle_hold(self, kind):
@@ -386,7 +420,6 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
         else:
             label = BASE_RED if kind == "base_red" else RECOMPUTE
             self.world.set_t_label(label, label not in self.world.labels())
-        self.disturbed = True
 
     @rule(kind=st.sampled_from(("add_hold", "revoke", "complete")))
     def stale_snapshot(self, kind):
@@ -397,9 +430,13 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
 
 
 def _stale_complete(world: LivenessWorld) -> None:
-    pending = [n for n in world.all_dep_issues if n not in world.evidence]
-    if pending:
-        world.complete(pending[0], CompletionPath.LABEL)
+    completable = [
+        n
+        for n in world.all_dep_issues
+        if n not in world.evidence and StatusLabel.QUEUED.value in world.labels(n)
+    ]
+    if completable:
+        world.complete(completable[0], CompletionPath.LABEL)
 
 
 def _stale_revoke(world: LivenessWorld) -> None:

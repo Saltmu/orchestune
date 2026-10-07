@@ -53,6 +53,7 @@ SUBTASK_BY_ISSUE = {
     14: "dep-d",
     DEPENDENT: "dependent",
 }
+ISSUE_BY_SUBTASK = {v: k for k, v in SUBTASK_BY_ISSUE.items()}
 PARENT_BRANCH = f"parent/issue-{PARENT}"
 BASE_RED = "ci:base-branch-red"
 RECOMPUTE = StatusLabel.BLOCKED_RECOMPUTE.value
@@ -191,6 +192,7 @@ class CycleObservation:
     at_start: OracleView
     at_promotion: OracleView
     error: BaseException | None = None
+    fault_injected: bool = False
     listing_lag: bool = False
 
     @property
@@ -228,6 +230,7 @@ class _LivenessForge(FaultBoundary):
     def __init__(self, forge: FakeForge) -> None:
         super().__init__(forge)
         self.frozen: dict[int, IssueRecord] | None = None
+        self.fault_injected: bool = False
 
     def mutate(self, op: str, number: int | str, label: str) -> None:
         # Completion paths may remove the last lifecycle label (outcome-only
@@ -238,10 +241,12 @@ class _LivenessForge(FaultBoundary):
             _, mode = self.armed
             self.armed = None
         if mode == "before":
+            self.fault_injected = True
             raise OSError("injected before mutation")
         getattr(self.forge, op + "_label")(number, label)
         self.history.append((op, int(number), label))
         if mode == "after":
+            self.fault_injected = True
             raise OSError("injected lost response")
 
     def _lagging(self, number: int | str) -> IssueRecord | None:
@@ -306,8 +311,13 @@ class LivenessWorld:
             t_depends_on = self.topology.t_depends_on
             for number in self.all_dep_issues:
                 issue_deps = self.topology.issue_depends_on.get(number, ())
+                initial_labels = (
+                    (StatusLabel.BLOCKED.value,)
+                    if issue_deps
+                    else (StatusLabel.QUEUED.value,)
+                )
                 self.forge.seed_issue(
-                    _issue(number, (StatusLabel.QUEUED.value,), depends_on=issue_deps)
+                    _issue(number, initial_labels, depends_on=issue_deps)
                 )
         else:
             self.all_dep_issues = self.dependencies
@@ -489,6 +499,7 @@ class LivenessWorld:
         apply: bool = True,
         before_promotion: Callable[[LivenessWorld], None] | None = None,
     ) -> CycleObservation:
+        self.boundary.fault_injected = False
         t_before = self.labels()
         at_start = self.oracle()
         probe = _PromotionProbe(self, before_promotion)
@@ -509,6 +520,7 @@ class LivenessWorld:
             at_start=at_start,
             at_promotion=probe.at_promotion or at_start,
             error=error,
+            fault_injected=self.boundary.fault_injected,
             listing_lag=self.faults.listing_lag,
         )
         self.observations.append(observation)
