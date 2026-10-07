@@ -309,6 +309,13 @@ class TestExecutionIdentity:
         assert late == Rejected("stale-execution")
         assert _apply(state, Event.LAUNCH, execution=A) == Rejected("launch-mismatch")
 
+    def test_launch_with_retired_identity_while_queued_is_rejected(self) -> None:
+        state = _applied(_apply(_model(Q), Event.LAUNCH, execution=A)).state
+        queued = _applied(_apply(state, Event.RECLAIM, execution=A)).state
+        assert queued.execution_identity is None
+        assert A in queued.retired_execution_identities
+        assert _apply(queued, Event.LAUNCH, execution=A) == Rejected("stale-execution")
+
     def test_events_without_identity_are_not_guarded(self) -> None:
         state = _model(
             P, execution_identity=A2, retired_execution_identities=frozenset({A})
@@ -498,6 +505,34 @@ class TestOperationsAndRestart:
         assert resumed.state.counts.recompute == 1
         assert StatusLabel.FORCE_SERIAL not in resumed.state.auxiliary
         assert not resumed.escalated
+
+    def test_interrupted_escalated_operation_resumes_and_cleans_up(self) -> None:
+        limits = replace(LIMITS, max_task_reclaims=0)
+        added = _applied(
+            apply_event(
+                _model(P),
+                EventInput(
+                    Event.RECLAIM,
+                    operation="op-esc",
+                    stop_after=Stage.LABEL_ADDED,
+                ),
+                limits,
+            )
+        ).state
+        assert added.labels == {P, H}
+        assert added.pending_operation is not None
+        assert added.pending_operation.stage is Stage.LABEL_ADDED
+
+        done = _applied(
+            apply_event(
+                added,
+                EventInput(Event.RECLAIM, operation="op-esc"),
+                limits,
+            )
+        ).state
+        assert done.labels == {H}
+        assert done.pending_operation is None
+        assert "op-esc" in done.confirmed_operations
 
     def test_restart_keeps_persisted_reservations_but_not_the_model_operation(
         self,

@@ -304,7 +304,7 @@ EVENT_SPECS: Mapping[tuple[Event, Kind], EventSpec] = MappingProxyType(
         (_E.QUEUE, _K.EXTERNAL_LOCK): _spec(_Q, frozenset(), remove=_EL),
         (_E.BLOCK, _K.PLAIN): _spec(_B, frozenset({_Q, _P})),
         (_E.BLOCK, _K.RECOMPUTE): _spec(_B, frozenset({_Q, _P}), add=_RC),
-        (_E.BLOCK, _K.BASE_BRANCH_RED): _spec(_B, frozenset({_Q, _P}), add=_RED),
+        (_E.BLOCK, _K.BASE_BRANCH_RED): _spec(_B, _ACTIVE, add=_RED),
         (_E.LAUNCH, _K.PLAIN): _spec(_P, frozenset({_Q, _B})),
         (_E.LAUNCH, _K.CLAIM): _spec(_P, frozenset({_Q, _B}), strip=True),
         (_E.LAUNCH, _K.RECOVERY): _spec(_P, frozenset({_Q, _B})),
@@ -378,12 +378,12 @@ def apply_event(state: TaskModel, event: EventInput, limits: BudgetLimits) -> Re
     noop = _noop(state, event)
     if noop is not None:
         return noop
-    refused = _refuse_source(state, event, spec)
-    if refused is not None:
-        return refused
     decision = _decide_budget(state, event, spec, limits)
     if isinstance(decision, NoOp):
         return decision
+    refused = _refuse_source(state, event, decision.spec)
+    if refused is not None:
+        return refused
     return _apply(decision, event)
 
 
@@ -417,6 +417,8 @@ def _refuse_launch(state: TaskModel, execution: Execution | None) -> Rejected | 
         return Rejected("launch-mismatch")
     if current is not None and current != execution:
         return Rejected("launch-mismatch")
+    if execution in state.retired_execution_identities:
+        return Rejected("stale-execution")
     return None
 
 
