@@ -534,6 +534,77 @@ class TestOperationsAndRestart:
         assert done.pending_operation is None
         assert "op-esc" in done.confirmed_operations
 
+    def test_interrupted_over_budget_recompute_operation_resumes_forced_serial(
+        self,
+    ) -> None:
+        limits = replace(LIMITS, max_recompute_retries=1)
+        # First delivery reaches retry limit and stops at Stage.RESERVED
+        state = _model(P, counts=BudgetCounts(recompute=1))
+        reserved = _applied(
+            apply_event(
+                state,
+                EventInput(
+                    Event.RECOMPUTE,
+                    Kind.PLAIN,
+                    operation="op-fs",
+                    stop_after=Stage.RESERVED,
+                ),
+                limits,
+            )
+        ).state
+        assert reserved.counts.recompute == 1
+        assert StatusLabel.FORCE_SERIAL not in reserved.auxiliary
+        assert reserved.pending_operation is not None
+
+        # Resume the same operation: it must still take the forced-serial branch
+        resumed = _applied(
+            apply_event(
+                reserved,
+                EventInput(Event.RECOMPUTE, Kind.PLAIN, operation="op-fs"),
+                limits,
+            )
+        )
+        assert StatusLabel.FORCE_SERIAL in resumed.state.auxiliary
+        assert resumed.escalated
+
+    def test_interrupted_backoff_operation_resumes_without_reconsuming_retry(
+        self,
+    ) -> None:
+        limits = replace(LIMITS)
+        # First delivery plans backoff, adds label, and stops at Stage.LABEL_ADDED
+        added = _applied(
+            apply_event(
+                _model(P),
+                EventInput(
+                    Event.REQUEUE,
+                    Kind.EARLY_DEATH,
+                    operation="op-ed",
+                    now=10.0,
+                    stop_after=Stage.LABEL_ADDED,
+                ),
+                limits,
+            )
+        ).state
+        assert added.retries.early_death.count == 1
+        assert not added.retries.early_death.pending
+        assert added.pending_operation is not None
+        assert added.pending_operation.stage is Stage.LABEL_ADDED
+
+        # Resume the same operation: it must reuse the settled decision without consuming a second attempt
+        done = _applied(
+            apply_event(
+                added,
+                EventInput(
+                    Event.REQUEUE, Kind.EARLY_DEATH, operation="op-ed", now=10.0
+                ),
+                limits,
+            )
+        ).state
+        assert done.retries.early_death.count == 1
+        assert done.labels == {Q}
+        assert done.pending_operation is None
+        assert "op-ed" in done.confirmed_operations
+
     def test_restart_keeps_persisted_reservations_but_not_the_model_operation(
         self,
     ) -> None:

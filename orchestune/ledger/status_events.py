@@ -167,6 +167,7 @@ class PendingOperation:
     event: Event
     kind: Kind
     stage: Stage
+    escalated: bool = False
 
 
 @dataclass(frozen=True)
@@ -509,8 +510,9 @@ def _decide_recompute(
     if StatusLabel.FORCE_SERIAL in state.auxiliary:
         return NoOp("already-forced-serial")
     if _is_resumed(state, event):
-        count = state.counts.recompute
-        if exceeds_limit(count, limits.max_recompute_retries):
+        pending = state.pending_operation
+        assert pending is not None
+        if pending.escalated:
             forced = replace(spec, add=frozenset({StatusLabel.FORCE_SERIAL}))
             return _Decision(forced, state, escalated=True)
         return _Decision(spec, state)
@@ -527,11 +529,13 @@ def _decide_base_branch_red(
 ) -> _Decision:
     """attempt（今回を含む連続回数）が上限に達したらエスカレーションする。"""
     if _is_resumed(state, event):
-        attempt = state.counts.base_branch_red
-        counted = state
-    else:
-        attempt = state.counts.base_branch_red + 1
-        counted = replace(state, counts=replace(state.counts, base_branch_red=attempt))
+        pending = state.pending_operation
+        assert pending is not None
+        if pending.escalated:
+            return _Decision(_escalation(spec, _RED), state, escalated=True)
+        return _Decision(spec, state)
+    attempt = state.counts.base_branch_red + 1
+    counted = replace(state, counts=replace(state.counts, base_branch_red=attempt))
     if attempt >= limits.base_branch_red_attempts:
         return _Decision(_escalation(spec, _RED), counted, escalated=True)
     return _Decision(spec, counted)
@@ -543,6 +547,12 @@ def _decide_backoff(
     early_death = event.kind is Kind.EARLY_DEATH
     retries = state.retries
     current = retries.early_death if early_death else retries.review_timeout
+    if _is_resumed(state, event):
+        pending = state.pending_operation
+        assert pending is not None
+        if pending.escalated:
+            return _Decision(_escalation(spec), state, escalated=True)
+        return _Decision(spec, state)
     planned = limits.plan_backoff(event.kind, current, event.now)
     if planned is None:
         return _Decision(_escalation(spec), state, escalated=True)
@@ -565,11 +575,16 @@ def _apply(decision: _Decision, event: EventInput) -> Applied:
     )
     removed = _removed_labels(state, spec)
     if event.stop_after is Stage.RESERVED:
-        stopped = _stopped(state, event, Stage.RESERVED)
+        stopped = _stopped(state, event, Stage.RESERVED, escalated=decision.escalated)
         return Applied(stopped, plan, escalated=decision.escalated)
     added = _with_target(state, spec)
     if event.stop_after is Stage.LABEL_ADDED:
-        stopped = _stopped(_settle_on_label(added, event), event, Stage.LABEL_ADDED)
+        stopped = _stopped(
+            _settle_on_label(added, event),
+            event,
+            Stage.LABEL_ADDED,
+            escalated=decision.escalated,
+        )
         return Applied(stopped, plan, tuple(sorted(spec.add)), (), decision.escalated)
     final = _finish(_settle_on_label(added, event), event, spec, removed)
     return Applied(
@@ -596,9 +611,13 @@ def _with_target(state: TaskModel, spec: EventSpec) -> TaskModel:
     return replace(state, lifecycle=lifecycle, auxiliary=state.auxiliary | spec.add)
 
 
-def _stopped(state: TaskModel, event: EventInput, stage: Stage) -> TaskModel:
+def _stopped(
+    state: TaskModel, event: EventInput, stage: Stage, *, escalated: bool = False
+) -> TaskModel:
     assert event.operation is not None
-    pending = PendingOperation(event.operation, event.event, event.kind, stage)
+    pending = PendingOperation(
+        event.operation, event.event, event.kind, stage, escalated=escalated
+    )
     return replace(state, pending_operation=pending)
 
 
