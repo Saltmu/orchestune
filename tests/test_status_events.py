@@ -469,6 +469,36 @@ class TestOperationsAndRestart:
         assert done.retries.reclaim == ReclaimState(count=1, pending=False)
         assert done.pending_operation is None
 
+    def test_interrupted_recompute_operation_resumes_without_extra_budget(
+        self,
+    ) -> None:
+        limits = replace(LIMITS, max_recompute_retries=1)
+        reserved = _applied(
+            apply_event(
+                _model(P),
+                EventInput(
+                    Event.RECOMPUTE,
+                    Kind.PLAIN,
+                    operation="op-rc",
+                    stop_after=Stage.RESERVED,
+                ),
+                limits,
+            )
+        ).state
+        assert reserved.counts.recompute == 1
+        assert StatusLabel.FORCE_SERIAL not in reserved.auxiliary
+
+        resumed = _applied(
+            apply_event(
+                reserved,
+                EventInput(Event.RECOMPUTE, Kind.PLAIN, operation="op-rc"),
+                limits,
+            )
+        )
+        assert resumed.state.counts.recompute == 1
+        assert StatusLabel.FORCE_SERIAL not in resumed.state.auxiliary
+        assert not resumed.escalated
+
     def test_restart_keeps_persisted_reservations_but_not_the_model_operation(
         self,
     ) -> None:

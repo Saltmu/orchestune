@@ -462,10 +462,21 @@ def _decide_budget(
     if event.event is Event.RECLAIM:
         return _decide_reclaim(state, spec, limits)
     if event.event is Event.RECOMPUTE:
-        return _decide_recompute(state, spec, limits)
+        return _decide_recompute(state, event, spec, limits)
     if event.event is Event.BLOCK:
-        return _decide_base_branch_red(state, spec, limits)
+        return _decide_base_branch_red(state, event, spec, limits)
     return _decide_backoff(state, event, spec, limits)
+
+
+def _is_resumed(state: TaskModel, event: EventInput) -> bool:
+    pending = state.pending_operation
+    return (
+        pending is not None
+        and event.operation is not None
+        and pending.operation == event.operation
+        and pending.event == event.event
+        and pending.kind == event.kind
+    )
 
 
 def _escalation(spec: EventSpec, remove: frozenset[str] = frozenset()) -> EventSpec:
@@ -490,25 +501,35 @@ def _decide_reclaim(
 
 
 def _decide_recompute(
-    state: TaskModel, spec: EventSpec, limits: BudgetLimits
+    state: TaskModel, event: EventInput, spec: EventSpec, limits: BudgetLimits
 ) -> _Decision | NoOp:
     """`_decide_footprint_deviation_outcome`の予算規則。"""
     if StatusLabel.FORCE_SERIAL in state.auxiliary:
         return NoOp("already-forced-serial")
-    count = state.counts.recompute
-    if exceeds_limit(count + 1, limits.max_recompute_retries):
+    if _is_resumed(state, event):
+        count = state.counts.recompute
+        if exceeds_limit(count, limits.max_recompute_retries):
+            forced = replace(spec, add=frozenset({StatusLabel.FORCE_SERIAL}))
+            return _Decision(forced, state, escalated=True)
+        return _Decision(spec, state)
+    count = state.counts.recompute + 1
+    if exceeds_limit(count, limits.max_recompute_retries):
         forced = replace(spec, add=frozenset({StatusLabel.FORCE_SERIAL}))
         return _Decision(forced, state, escalated=True)
-    counts = replace(state.counts, recompute=count + 1)
+    counts = replace(state.counts, recompute=count)
     return _Decision(spec, replace(state, counts=counts))
 
 
 def _decide_base_branch_red(
-    state: TaskModel, spec: EventSpec, limits: BudgetLimits
+    state: TaskModel, event: EventInput, spec: EventSpec, limits: BudgetLimits
 ) -> _Decision:
     """attempt（今回を含む連続回数）が上限に達したらエスカレーションする。"""
-    attempt = state.counts.base_branch_red + 1
-    counted = replace(state, counts=replace(state.counts, base_branch_red=attempt))
+    if _is_resumed(state, event):
+        attempt = state.counts.base_branch_red
+        counted = state
+    else:
+        attempt = state.counts.base_branch_red + 1
+        counted = replace(state, counts=replace(state.counts, base_branch_red=attempt))
     if attempt >= limits.base_branch_red_attempts:
         return _Decision(_escalation(spec, _RED), counted, escalated=True)
     return _Decision(spec, counted)
