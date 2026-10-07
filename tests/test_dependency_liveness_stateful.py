@@ -30,6 +30,7 @@ from tests.dependency_liveness_test_support import (
     LivenessCase,
     LivenessTopology,
     LivenessWorld,
+    OracleView,
     StatusLabel,
     assert_case,
     run_case,
@@ -217,12 +218,20 @@ def assert_intermediate_safety(
             deps_satisfied = False
         else:
             req_set = set(required)
-            deps_satisfied = any(
-                req_set <= (view.valid if observation.apply else view.preview_visible)
-                and not (req_set & view.reserved)
-                and number not in view.reserved
-                for view in (observation.at_start, observation.at_promotion)
-            )
+            def _satisfied(view: OracleView) -> bool:
+                evidence = view.valid if observation.apply else view.preview_visible
+                return (
+                    req_set <= evidence
+                    and not (req_set & view.reserved)
+                    and number not in view.reserved
+                )
+
+            if not observation.apply or observation.listing_lag:
+                deps_satisfied = _satisfied(observation.at_start)
+            else:
+                deps_satisfied = _satisfied(observation.at_start) or _satisfied(
+                    observation.at_promotion
+                )
         if not deps_satisfied:
             assert (
                 number not in observation.promotion_issue_numbers
