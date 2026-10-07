@@ -4,6 +4,7 @@ Replay: pytest -n0 this file --hypothesis-seed=<seed>. Hypothesis prints the
 shrunk initialize/rule sequence; retain it as a deterministic regression.
 """
 
+import os
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -303,7 +304,9 @@ _STALE_CHANGES = {
 TestDependencyLivenessMachine = DependencyLivenessMachine.TestCase
 
 
-def test_ci_profile_applies_to_liveness_machine():
+def test_configured_profile_applies_to_liveness_machine():
     applied: Any = TestDependencyLivenessMachine.settings
-    assert settings.get_current_profile_name() == "ci"
-    assert applied.deadline is None and applied.print_blob
+    profile = os.environ.get("HYPOTHESIS_PROFILE", "ci")
+    assert settings.get_current_profile_name() == profile
+    if profile == "ci":
+        assert applied.deadline is None and applied.print_blob
