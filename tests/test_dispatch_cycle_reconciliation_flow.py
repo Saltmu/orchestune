@@ -750,6 +750,126 @@ class TestRunDispatchCycleBlockedPromotion:
             mock_add_label.assert_any_call(1, "status:blocked")
             mock_add_comment.assert_called_once_with(1, ANY)
 
+    @staticmethod
+    def _reserve_completion(config, issue_number):
+        """`orchestune complete`の途中: 完了予約が未解放のままラベルだけ`done`。"""
+        state = RunState()
+        state.completion_reservations[f"repo::{issue_number}"] = {
+            "schema_version": 1,
+            "repository_id": "repo",
+            "issue_number": issue_number,
+            "generation_id": f"generation-{issue_number}",
+            "completion_id": f"completion-{issue_number}",
+            "stage": "reserved",
+        }
+        save_run_state(state, config.run_state_path)
+
+    @staticmethod
+    def _assert_no_promotion_finding_or_candidate(report):
+        """初回scanがfindingも修復候補も出さなければ、境界reportは記録されない。"""
+        assert report.promotion_events == []
+        assert report.consistency.repair_passes == ()
+        for scan in report.consistency.scans:
+            assert scan.boundary != "status-blocked-promotion"
+            assert BLOCKED_WITH_RESOLVED_DEPENDENCIES not in [
+                finding.code for finding in scan.report.findings
+            ]
+            assert COMMAND_TRANSITION_LABEL not in [
+                command.code for command in scan.repair_candidates
+            ]
+
+    @pytest.mark.parametrize("apply", (False, True))
+    def test_unreleased_dependency_reservation_holds_promotion_in_scan_and_preview(
+        self, tmp_path, fake_forge, apply
+    ):
+        """#1267: 依存先がstatus:doneでも完了予約が未解放なら昇格しない。
+
+        dry runでもapplyと同じく、プレビュー・finding・修復候補のいずれも
+        出さず、依存先自身のdesired statusも巻き戻さない。
+        """
+        labels = _install_mutable_issue_snapshot(
+            fake_forge,
+            (
+                (1, "task-a", ("status:done",), ()),
+                (2, "task-b", ("status:blocked",), ("task-a",)),
+            ),
+        )
+        config = self._config(
+            tmp_path,
+            apply=apply,
+            max_concurrent=0,
+            consistency_mode=ConsistencyMode.REPAIR,
+        )
+        self._reserve_completion(config, 1)
+        with patch(
+            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            autospec=True,
+            return_value=[],
+        ):
+            report = run_dispatch_cycle(config)
+            second = run_dispatch_cycle(config)
+
+        for cycle_report in (report, second):
+            self._assert_no_promotion_finding_or_candidate(cycle_report)
+        assert labels == {1: ["status:done"], 2: ["status:blocked"]}
+
+    def test_promotes_once_dependency_reservation_is_released(
+        self, tmp_path, fake_forge
+    ):
+        """#1267: 予約解放後は、通常どおり次サイクルで一度だけ昇格する。"""
+        labels = _install_mutable_issue_snapshot(
+            fake_forge,
+            (
+                (1, "task-a", ("status:done",), ()),
+                (2, "task-b", ("status:blocked",), ("task-a",)),
+            ),
+        )
+        preview = self._config(tmp_path, apply=False, max_concurrent=0)
+        applied = self._config(tmp_path, apply=True, max_concurrent=0)
+        self._reserve_completion(preview, 1)
+        with patch(
+            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            autospec=True,
+            return_value=[],
+        ):
+            assert run_dispatch_cycle(preview).promotion_events == []
+            save_run_state(RunState(), preview.run_state_path)
+            released_preview = run_dispatch_cycle(preview)
+            released_apply = run_dispatch_cycle(applied)
+
+        expected = [{"issue_number": 2, "subtask_id": "task-b"}]
+        assert [e.to_dict() for e in released_preview.promotion_events] == expected
+        assert [e.to_dict() for e in released_apply.promotion_events] == expected
+        assert labels[2] == ["status:queued"]
+
+    def test_any_incomplete_dependency_keeps_dependent_blocked(
+        self, tmp_path, fake_forge
+    ):
+        """#1267: 複数依存のうち一つでも保留中なら昇格しない。"""
+        labels = _install_mutable_issue_snapshot(
+            fake_forge,
+            (
+                (1, "task-a", ("status:done",), ()),
+                (2, "task-b", ("status:done",), ()),
+                (3, "task-c", ("status:blocked",), ("task-a", "task-b")),
+            ),
+        )
+        config = self._config(tmp_path, apply=False, max_concurrent=0)
+        self._reserve_completion(config, 2)
+        with patch(
+            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            autospec=True,
+            return_value=[],
+        ):
+            assert run_dispatch_cycle(config).promotion_events == []
+            save_run_state(RunState(), config.run_state_path)
+            report = run_dispatch_cycle(config)
+
+        assert [e.to_dict() for e in report.promotion_events] == [
+            {"issue_number": 3, "subtask_id": "task-c"}
+        ]
+        assert labels[3] == ["status:blocked"]
+
 
 class TestBaseBranchRedCycleReconciliation:
     def test_base_branch_red_requeued_when_base_sha_advances(
