@@ -25,16 +25,26 @@ def dependencies_completed(assessment: DependencyAssessment | None) -> bool:
 def desired_dependency_ids(
     issue_number: int, assessment: DependencyAssessment | None
 ) -> tuple[str, ...]:
-    """Translate an assessment without losing unavailable/unresolved dependencies."""
+    """Translate an assessment without losing unavailable/unresolved dependencies.
+
+    A resolved dependency that is not ``COMPLETED`` (e.g. a ``status:done`` label whose
+    completion reservation is still unreleased) also gets a synthetic
+    ``pending-dependency:`` ID.  The desired-state layer adds every terminal task's own
+    ID to the completed set, which would otherwise resolve the numeric ID again.
+    """
     if assessment is None:
         return (f"unresolved-dependency:{issue_number}:assessment-unavailable",)
     resolved = tuple(str(dependency.issue_number) for dependency in assessment.resolved)
-    if dependencies_completed(assessment):
-        return resolved
-    return resolved + tuple(
+    pending = tuple(
+        f"pending-dependency:{issue_number}:{dependency.issue_number}"
+        for dependency in assessment.resolved
+        if dependency.state is not DependencyState.COMPLETED
+    )
+    unresolved = tuple(
         f"unresolved-dependency:{issue_number}:{index}"
         for index in range(len(assessment.unresolved))
     )
+    return resolved + pending + unresolved
 
 
 def completed_dependency_ids(

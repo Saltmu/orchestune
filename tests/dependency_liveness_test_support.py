@@ -64,7 +64,7 @@ FINAL_LABELS = frozenset({StatusLabel.DONE.value, StatusLabel.NOT_NEEDED.value})
 LIVENESS_BOUND = 1
 #: Counterexamples split out to their own production Issues (footprint stays test).
 OUTCOME_NOT_NEEDED_ISSUE = "#1269"
-DRY_RUN_RESERVATION_ISSUE = "#1267"
+SELF_RESERVATION_PREVIEW_ISSUE = "#1283"
 RECOMPUTE_RELEASE_ISSUE = "#1268"
 
 
