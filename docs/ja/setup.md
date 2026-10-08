@@ -295,7 +295,7 @@ concurrency:
 
 | ローカル状態（既定パス） | 失われたときの影響 |
 | --- | --- |
-| `run_state.json`（`run_state_path`）の `task_reclaim_counts` | 回収回数がrunごとに0へ戻り、`--max-task-reclaims` がrunをまたいで効かない（上限超過で `status:blocked-human-review` になったタスクはラベルが残るので再投入されない） |
+| `run_state.json`（`run_state_path`）の `task_reclaim_counts` | 回収回数（`count`／`pending`）、早期終了の再投入回数（`early_death_retry_*`）、AIレビュー待機タイムアウトの再投入回数（`review_timeout_retry_*`）がrunごとに0へ戻り、`--max-task-reclaims` と早期終了・review timeoutの再投入上限がrunをまたいで効かない。backoffの次回起動時刻と未確定の予約も失われる（上限超過で `status:blocked-human-review` になったタスクはラベルが残るので再投入されない。recompute・base-branch-redの回数はIssue側に残る） |
 | 同 `active_worktrees`／`completed_worktrees`／`launch_history` | 毎回GitHubのラベル・PR・ブランチ・親Issue本文から再構成する。起動枠の予約履歴は親Issue本文側にも保存される |
 | 同 `pending_lock_release_notices` | 未送信の外部ロック解除通知の再送が失われる |
 | 同 `completion_journal`／`completion_reservations`／`completion_replay_receipts`／`recovery_receipts` | 進行中のcompleteの再開用journalと、GCが照合する予約・replay・復旧のreceiptが失われる。正規のOutcome RecordはIssueコメントに残るが、journalやreceiptからの冪等な再開・再発行は保証されないため、異常終了後は `orchestune recover` と[状態復旧](architecture/state-recovery.md)の手順で確認する（個別の復元可否は確認できていない） |

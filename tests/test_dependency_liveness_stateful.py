@@ -206,6 +206,26 @@ def assert_safe(
         ), f"unsafe promotion: {observation}"
 
 
+def _known_intermediate_dry_run_reservation(
+    observation: CycleObservation,
+    required: tuple[int, ...],
+    deps: tuple[str, ...],
+    number: int,
+) -> bool:
+    """DRY_RUN_RESERVATION_ISSUE (#1267) for an intermediate node, as for T.
+
+    Excused only when an unreleased reservation is the sole reason: every
+    dependency has preview-visible evidence at cycle start (#1281).
+    """
+    view = observation.at_start
+    return (
+        not observation.apply
+        and len(required) == len(deps)
+        and set(required) <= view.preview_visible
+        and bool((set(required) | {number}) & view.reserved)
+    )
+
+
 def assert_intermediate_safety(
     world: LivenessWorld, observation: CycleObservation
 ) -> None:
@@ -237,6 +257,9 @@ def assert_intermediate_safety(
         if not deps_satisfied:
             assert (
                 number not in observation.promotion_issue_numbers
+                or _known_intermediate_dry_run_reservation(
+                    observation, required, deps, number
+                )
             ), f"unsafe intermediate promotion event for {number}: {observation}"
             if observation.apply:
                 before = observation.labels_before.get(number, frozenset())
