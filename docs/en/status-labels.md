@@ -308,7 +308,7 @@ The guaranteed bound is N=1 cycle. What is checked is not the bound but agreemen
 
 Random sequences (`complete_dependency`, `cycle`, `restart`, `fail_next`, `toggle_hold`, `stale_snapshot`, `duplicate_completion`) check liveness (T is promoted once the fairness assumptions persist) and safety (no new promotion in a cycle without valid evidence or with a hold or reservation). Test-only faults equivalent to the #902 Round 4/5 miswiring (an empty completion set, a throwaway context) must make the assertions fail.
 
-Production defects split out are pinned as strict xfails: #1267 (the dry-run preview ignores unreleased reservations), #1268 (the recompute release ignores a base-branch-red hold and revoked evidence), #1269 (an outcome-derived not-needed never reaches promotion). Two rare latent counterexamples found by the random sequences are tracked in #1281.
+Production defects split out are pinned as strict xfails: #1267 (the dry-run preview ignores unreleased reservations), #1268 (the recompute release ignores a base-branch-red hold and revoked evidence), #1269 (an outcome-derived not-needed never reaches promotion). A dry-run preview of an intermediate node is excused as #1267 too when an unreleased reservation is the only reason. Another rare counterexample of the random sequences (after apply cycles with faults, T depending on prior-merge evidence is not previewed in a dry run) is tracked in #1281.
 
 Standalone runs took about 8.4 s in PR #1273 and 2.7-6.3 s in the #1266 environment (fresh example database, `-n0 --no-cov`, ci profile).
 
