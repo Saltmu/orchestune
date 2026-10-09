@@ -27,8 +27,11 @@ from orchestune.dispatch.progress import NoopProgress, ProgressSink
 from orchestune.dispatch.retry_policy import (
     DEFAULT_EARLY_DEATH_BACKOFF_SECONDS,
     DEFAULT_EARLY_DEATH_MAX_RETRIES,
+    DEFAULT_MAX_USAGE_LIMIT_RETRIES,
     DEFAULT_REVIEW_TIMEOUT_BACKOFF_SECONDS,
     DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS,
+    DEFAULT_USAGE_LIMIT_BACKOFF_SECONDS,
+    DEFAULT_USAGE_LIMIT_RESET_GRACE_SECONDS,
 )
 from orchestune.dispatch.targets import DispatchTarget, LocalProcessDispatchTarget
 from orchestune.forge import Forge, GitHubForge
@@ -91,6 +94,17 @@ class DispatcherConfig:
     # 指数バックオフ秒数。2回に達したタスクはstatus:blocked-human-reviewへエスカレーションされる。
     max_review_timeout_retries: int = DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS
     review_timeout_backoff_seconds: int = DEFAULT_REVIEW_TIMEOUT_BACKOFF_SECONDS
+    # #1270: claude-cliのセッション上限（usage limit）で終了した実行の専用再投入枠。
+    # 通常の回収・early-death・review-timeoutの回数とは混ぜない。
+    # `max_usage_limit_retries`は追加起動の最大回数（0は自動再投入なし）。
+    # リセット時刻が確定しない場合は`usage_limit_backoff_seconds`の有限指数バックオフ、
+    # 確定した場合はリセット+`usage_limit_reset_grace_seconds`まで待つ。
+    # `usage_limit_timezone`は`resets 1pm`のような壁時計表記を解釈するIANA名で、
+    # 未指定ならUTCとは解釈せずリセット不明として扱う。
+    max_usage_limit_retries: int = DEFAULT_MAX_USAGE_LIMIT_RETRIES
+    usage_limit_backoff_seconds: int = DEFAULT_USAGE_LIMIT_BACKOFF_SECONDS
+    usage_limit_reset_grace_seconds: int = DEFAULT_USAGE_LIMIT_RESET_GRACE_SECONDS
+    usage_limit_timezone: str | None = None
 
     # #438: ウィンドウ内の総トークン消費上限およびサブタスクごとの消費上限
     max_tokens_per_window: int | None = None

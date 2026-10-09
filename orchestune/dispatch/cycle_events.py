@@ -280,6 +280,51 @@ class ReviewTimeoutRequeuedCompletion(_SerializedCompletion):
     _OMIT_NONE: ClassVar[frozenset[str]] = frozenset({"usage", "subtask_id"})
 
 
+type UsageLimitAction = Literal[
+    "usage_limit_requeued",
+    "usage_limit_escalated",
+    "usage_limit_held",
+]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UsageLimitCompletion(_SerializedCompletion):
+    """#1270: a claude-cli run ended on its session usage limit.
+
+    ``reset_known`` says whether the message gave a reset time that could be resolved
+    (``reset_at`` is then UTC epoch seconds and ``timezone`` the zone it was read in);
+    otherwise ``retry_at`` comes from the finite backoff. ``retries_remaining`` counts
+    the additional launches still allowed after this one. ``usage_limit_held`` means
+    nothing was changed and the exit is reconsidered on the next cycle.
+    """
+
+    issue_number: int
+    action: UsageLimitAction
+    target: str
+    reset_known: bool
+    retries_remaining: int
+    subtask_id: str | None = None
+    reset_at: float | None = None
+    timezone: str | None = None
+    retry_at: float | None = None
+    reason: str | None = None
+    _SERIALIZE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "issue_number",
+        "subtask_id",
+        "action",
+        "target",
+        "reset_known",
+        "reset_at",
+        "timezone",
+        "retry_at",
+        "retries_remaining",
+        "reason",
+    )
+    _OMIT_NONE: ClassVar[frozenset[str]] = frozenset(
+        {"subtask_id", "reset_at", "timezone", "retry_at", "reason"}
+    )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class WorktreeCompletionHold(_SerializedCompletion):
     issue_number: int
@@ -696,6 +741,7 @@ type CompletionEvent = (
     WorktreeCompletion
     | EarlyDeathRequeuedCompletion
     | ReviewTimeoutRequeuedCompletion
+    | UsageLimitCompletion
     | WorktreeCompletionHold
     | TaskWorktreeCompletion
     | DirtyWorktreeEscalatedCompletion

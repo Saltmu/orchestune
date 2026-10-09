@@ -92,6 +92,10 @@ class LaunchResult:
     # への計上も`_handle_launch_failure`によるエスカレーションも行わない
     # ——providerを一度も呼んでいない以上、quotaは消費していないため。
     held: bool = False
+    # #1270: 起動attributionをhandleからledgerのLaunchInfoへ運ぶ。
+    target_name: str | None = None
+    log_path: str | None = None
+    log_offset: int | None = None
 
 
 def _branch_exists(branch_name: str, cwd: str | Path | None = None) -> bool:
@@ -294,6 +298,9 @@ def _launch_on_prepared_worktree(
             dispatch_started_at=dispatch_started_at,
             launch_attempt_id=handle.launch_attempt_id,
             execution_selection=execution_selection,
+            target_name=handle.target_name,
+            log_path=handle.log_path,
+            log_offset=handle.log_offset,
         )
     except (subprocess.CalledProcessError, OSError, BranchReachabilityError) as e:
         return _handle_launch_error(

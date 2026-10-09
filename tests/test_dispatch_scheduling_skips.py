@@ -391,3 +391,73 @@ class TestInProgressTasksAreNotSkipCandidates:
         assert len(candidates_after) == 1
         assert candidates_after[0].issue_number == 5
         assert skips_after == []
+
+
+class TestUsageLimitGate:
+    """#1270: session-limit waits keep claude-cli tasks out of selection."""
+
+    @staticmethod
+    def _config(fake_forge, target_name):
+        from orchestune.dispatch.targets import LocalProcessDispatchTarget
+
+        fake_forge.get_label_actor.return_value = "authorized-user"
+        fake_forge.get_actor_permission.return_value = "write"
+        return DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
+            dispatch_target=LocalProcessDispatchTarget(target_name=target_name),
+        )
+
+    @staticmethod
+    def _select(run_state, config, now):
+        task = _task(issue_number=5, status_labels=("status:queued",))
+        ctx = _ctx(tasks_by_issue={5: task}, run_state=run_state, config=config)
+        adapter = CycleActionAdapter(run_state, config, now=now)
+        adapter.bind_context(ctx)
+        return adapter.select_tasks((CycleTask.from_task(task),))
+
+    def test_task_retry_wait_is_a_usage_limit_backoff(self, fake_forge):
+        from orchestune.dispatch.summary import REASON_USAGE_LIMIT_BACKOFF
+
+        run_state = RunState(
+            task_reclaim_counts={
+                5: TaskReclaimRecord(
+                    usage_limit_retry_count=1, usage_limit_retry_at=100.0
+                )
+            }
+        )
+        config = self._config(fake_forge, "claude-cli")
+
+        waiting = self._select(run_state, config, now=50.0)
+        assert waiting.selected == []
+        assert [d.reason for d in waiting.decisions] == [REASON_USAGE_LIMIT_BACKOFF]
+
+        assert self._select(run_state, config, now=150.0).selected != []
+
+    def test_target_cooldown_excludes_every_task_of_that_target(self, fake_forge):
+        from orchestune.dispatch.summary import REASON_USAGE_LIMIT_COOLDOWN
+
+        run_state = RunState(usage_limit_cooldowns={"claude-cli": 100.0})
+
+        blocked = self._select(run_state, self._config(fake_forge, "claude-cli"), 50.0)
+        assert blocked.selected == []
+        assert [d.reason for d in blocked.decisions] == [REASON_USAGE_LIMIT_COOLDOWN]
+
+    def test_other_targets_and_expired_cooldowns_are_not_affected(self, fake_forge):
+        run_state = RunState(usage_limit_cooldowns={"claude-cli": 100.0})
+
+        assert self._select(
+            run_state, self._config(fake_forge, "codex-cli"), 50.0
+        ).selected
+        assert self._select(
+            run_state, self._config(fake_forge, "claude-cli"), 150.0
+        ).selected
+
+    def test_no_dispatch_target_name_is_never_in_cooldown(self, fake_forge):
+        run_state = RunState(usage_limit_cooldowns={"claude-cli": 100.0})
+        config = self._config(fake_forge, None)
+
+        assert self._select(run_state, config, 50.0).selected

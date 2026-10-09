@@ -10,6 +10,7 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from orchestune.claim.workspace import (
     _resolve_primary_root,
@@ -221,6 +222,8 @@ _NON_NEGATIVE_INT_KEYS = frozenset(
         "early_death_window_seconds",
         "max_early_death_retries",
         "early_death_backoff_seconds",
+        "max_usage_limit_retries",
+        "usage_limit_reset_grace_seconds",
         "not_needed_review_timeout_seconds",
         "max_tokens_per_window",
         "max_tokens_per_task",
@@ -239,6 +242,8 @@ _POSITIVE_INT_KEYS = frozenset(
         "integration_cleanup_timeout_seconds",
         "integration_command_timeout_seconds",
         "integration_timeout_backoff_seconds",
+        # #1270: zero would retry a session-limit exit immediately.
+        "usage_limit_backoff_seconds",
     }
 )
 
@@ -369,7 +374,22 @@ def _validate_compound_entry(normalized_key: str, raw_key: str, value: Any) -> A
     raise ConfigError(f"unknown key {raw_key!r}")
 
 
+def _validate_timezone_entry(raw_key: str, value: Any) -> str:
+    """#1270: an IANA name only; an invalid name must not silently become UTC."""
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"{raw_key!r} must be a non-empty IANA timezone name")
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError, OSError) as error:
+        raise ConfigError(
+            f"{raw_key!r} is not a known IANA timezone: {value!r}"
+        ) from error
+    return value
+
+
 def _validate_single_entry(normalized_key: str, raw_key: str, value: Any) -> Any:
+    if normalized_key == "usage_limit_timezone":
+        return _validate_timezone_entry(raw_key, value)
     if (
         normalized_key in _BOOLEAN_CONFIG_KEYS
         or normalized_key in _PATH_CONFIG_KEYS

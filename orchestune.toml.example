@@ -27,6 +27,13 @@ max-task-reclaims = 3
 early-death-window-seconds = 120
 max-early-death-retries = 2
 early-death-backoff-seconds = 60
+# claude-cli session usage limit ("You've hit your session limit"): extra launches
+# after the limit lifts, and the delay used when the reset time is unknown.
+max-usage-limit-retries = 2
+usage-limit-backoff-seconds = 900
+usage-limit-reset-grace-seconds = 30
+# IANA timezone for wall-clock resets such as "resets 1pm" (unset = reset unknown).
+# usage-limit-timezone = "Asia/Tokyo"
 zombie-gc = true
 
 # Parent Issue cannot be set in configuration files.

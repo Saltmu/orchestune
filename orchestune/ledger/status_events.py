@@ -6,7 +6,7 @@
 判定する。本番の判定を`apply_event`へ置き換えるものではなく、本番関数との対応は
 `tests/test_status_events.py`の適合テストで機械的に結びつける。
 
-backoff付きretry（early death / review timeout）の上限・予約の再利用・backoffの
+backoff付きretry（early death / review timeout / usage limit）の上限・予約の再利用・backoffの
 意味は`orchestune.dispatch.retry_policy`だけが所有する。ledgerはdispatchへ依存
 できないため、その判定は`BudgetLimits.plan_backoff`として呼び出し側が注入する
 （テストでは`plan_retry`から作った本番アダプターを渡す）。
@@ -77,6 +77,8 @@ class Kind(StrEnum):
     EXTERNAL_LOCK = "external_lock"
     EARLY_DEATH = "early_death"
     REVIEW_TIMEOUT = "review_timeout"
+    #: claude-cliのセッション上限（usage limit）終了。専用枠のbackoff付きretry（#1270）。
+    USAGE_LIMIT = "usage_limit"
     MANUAL_MERGE = "manual_merge"
     #: replanの世代置換。target以外の`status:*`をすべて除去する。
     REPLAN = "replan"
@@ -144,6 +146,7 @@ class RetryStates:
     reclaim: ReclaimState = ReclaimState()
     early_death: BackoffState = BackoffState()
     review_timeout: BackoffState = BackoffState()
+    usage_limit: BackoffState = BackoffState()
 
 
 @dataclass(frozen=True)
@@ -337,6 +340,7 @@ EVENT_SPECS: Mapping[tuple[Event, Kind], EventSpec] = MappingProxyType(
         ),
         (_E.REQUEUE, _K.EARLY_DEATH): _spec(_Q, _RUNNING, initial=False),
         (_E.REQUEUE, _K.REVIEW_TIMEOUT): _spec(_Q, _RUNNING, initial=False),
+        (_E.REQUEUE, _K.USAGE_LIMIT): _spec(_Q, _RUNNING, initial=False),
         (_E.REQUEUE, _K.RECOVERY): _spec(_Q, _RUNNING, initial=False),
         (_E.RECLAIM, _K.PLAIN): _spec(_Q, _RUNNING, initial=False),
         (_E.RECOMPUTE, _K.PLAIN): _spec(None, frozenset({_P})),
@@ -378,6 +382,7 @@ _BUDGETED = frozenset(
         (Event.RECLAIM, Kind.PLAIN),
         (Event.REQUEUE, Kind.EARLY_DEATH),
         (Event.REQUEUE, Kind.REVIEW_TIMEOUT),
+        (Event.REQUEUE, Kind.USAGE_LIMIT),
         (Event.BLOCK, Kind.BASE_BRANCH_RED),
         (Event.RECOMPUTE, Kind.PLAIN),
     }
@@ -583,9 +588,8 @@ def _decide_base_branch_red(
 def _decide_backoff(
     state: TaskModel, event: EventInput, spec: EventSpec, limits: BudgetLimits
 ) -> _Decision:
-    early_death = event.kind is Kind.EARLY_DEATH
     retries = state.retries
-    current = retries.early_death if early_death else retries.review_timeout
+    current = _backoff_state(retries, event.kind)
     if _is_resumed(state, event):
         pending = state.pending_operation
         assert pending is not None
@@ -595,11 +599,32 @@ def _decide_backoff(
     planned = limits.plan_backoff(event.kind, current, event.now)
     if planned is None:
         return _Decision(_escalation(spec), state, escalated=True)
-    if early_death:
-        retries = replace(retries, early_death=planned)
-    else:
-        retries = replace(retries, review_timeout=planned)
+    retries = _with_backoff_state(retries, event.kind, planned)
     return _Decision(spec, replace(state, retries=retries))
+
+
+_BACKOFF_FIELDS: Mapping[Kind, str] = MappingProxyType(
+    {
+        Kind.EARLY_DEATH: "early_death",
+        Kind.REVIEW_TIMEOUT: "review_timeout",
+        Kind.USAGE_LIMIT: "usage_limit",
+    }
+)
+
+
+def _backoff_state(retries: RetryStates, kind: Kind) -> BackoffState:
+    state: BackoffState = getattr(retries, _BACKOFF_FIELDS[kind])
+    return state
+
+
+def _with_backoff_state(
+    retries: RetryStates, kind: Kind, state: BackoffState
+) -> RetryStates:
+    if kind is Kind.EARLY_DEATH:
+        return replace(retries, early_death=state)
+    if kind is Kind.USAGE_LIMIT:
+        return replace(retries, usage_limit=state)
+    return replace(retries, review_timeout=state)
 
 
 def _apply(decision: _Decision, event: EventInput) -> Applied:
@@ -663,13 +688,11 @@ def _stopped(
 def _settle_on_label(state: TaskModel, event: EventInput) -> TaskModel:
     """台帳確定コールバック（targetの付与直後）で確定する予約を解除する。"""
     retries = state.retries
-    if event.event is Event.REQUEUE and event.kind is Kind.EARLY_DEATH:
-        retries = replace(
-            retries, early_death=replace(retries.early_death, pending=False)
-        )
-    if event.event is Event.REQUEUE and event.kind is Kind.REVIEW_TIMEOUT:
-        retries = replace(
-            retries, review_timeout=replace(retries.review_timeout, pending=False)
+    if event.event is Event.REQUEUE and event.kind in _BACKOFF_FIELDS:
+        retries = _with_backoff_state(
+            retries,
+            event.kind,
+            replace(_backoff_state(retries, event.kind), pending=False),
         )
     if event.event is Event.LAUNCH and event.kind is Kind.PLAIN:
         # `_record_successful_launch`は回収とearly deathの予約を確定する。
@@ -677,6 +700,7 @@ def _settle_on_label(state: TaskModel, event: EventInput) -> TaskModel:
             retries,
             reclaim=replace(retries.reclaim, pending=False),
             early_death=replace(retries.early_death, pending=False),
+            usage_limit=replace(retries.usage_limit, pending=False),
         )
     return replace(state, retries=retries)
 

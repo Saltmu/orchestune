@@ -50,6 +50,7 @@ from orchestune.dispatch.execution_repair import (
 )
 from orchestune.dispatch.gc import _apply_stale_active_entry_discard
 from orchestune.dispatch.gc.completion import is_completion_hold_event
+from orchestune.dispatch.gc.usage_limit import handle_usage_limit_reclaim
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _preview_reclaim_event,
@@ -341,6 +342,18 @@ def build_gc_reclaim_handler(
         )
         if interactive_result is not None:
             return interactive_result
+        usage_limit_result = handle_usage_limit_reclaim(
+            command,
+            run_state,
+            tasks_by_issue,
+            config,
+            events,
+            prs,
+            held_paths,
+            observed_now,
+        )
+        if usage_limit_result is not None:
+            return usage_limit_result
         planned = _planned_reclaims(
             (command,), run_state, tasks_by_issue, config, observed_now
         )

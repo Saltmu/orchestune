@@ -133,6 +133,36 @@ class TestLocalProcessDispatchTarget:
             target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
         assert (log_dir / "claude-issue-1-task-a.log").exists()
 
+    def test_launch_records_target_log_path_and_start_offset(self, tmp_path):
+        log_dir = tmp_path / "logs"
+        target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder,
+            log_dir=log_dir,
+            target_name="claude-cli",
+        )
+        log_dir.mkdir()
+        log_path = log_dir / "claude-issue-1-task-a.log"
+        log_path.write_bytes(b"previous run error\n")
+        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 7
+            handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
+
+        assert handle.target_name == "claude-cli"
+        assert handle.log_path == str(log_path)
+        # The appended log keeps earlier runs: the new run starts after them.
+        assert handle.log_offset == len(b"previous run error\n")
+
+    def test_launch_of_a_fresh_log_starts_at_offset_zero(self, tmp_path):
+        target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        )
+        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
+            mock_popen.return_value.pid = 7
+            handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
+
+        assert handle.log_offset == 0
+        assert handle.target_name is None
+
     def test_is_complete_true_when_pid_not_alive(self):
         target = LocalProcessDispatchTarget()
         with patch(

@@ -35,6 +35,7 @@ from tests.status_event_test_support import (
     gc_backoff_retry,
     gc_escalated_base_branch_red,
     gc_reclaim,
+    gc_usage_limit_retry,
     launch_confirms_reservations,
     merge_failure,
     not_needed_review_verdict,
@@ -270,13 +271,16 @@ def _completion_and_retry_cases() -> list[EventCase]:
     reclaim = _cases("dispatch/gc/zombies.py::_notify_requeued_reclaim", gc_reclaim)
     escalation = "ledger/escalation.py::apply_human_review_escalation"
     requeue = _cases("dispatch/gc/completion.py::_publish_requeue", gc_backoff_retry)
+    usage_limit = _cases("dispatch/gc/usage_limit.py::_requeue", gc_usage_limit_retry)
     pending = RetryStates(reclaim=ReclaimState(count=2, pending=True))
     over = RetryStates(reclaim=ReclaimState(count=3))
     spent = RetryStates(early_death=BackoffState(count=2, retry_at=5.0))
+    spent_usage_limit = RetryStates(usage_limit=BackoffState(count=2, retry_at=5.0))
     reserved = RetryStates(
         reclaim=ReclaimState(count=1, pending=True),
         early_death=BackoffState(count=1, retry_at=5.0, pending=True),
         review_timeout=BackoffState(count=1, retry_at=5.0, pending=True),
+        usage_limit=BackoffState(count=1, retry_at=5.0, pending=True),
     )
     at_now = {"now": NOW}
     return [
@@ -337,6 +341,21 @@ def _completion_and_retry_cases() -> list[EventCase]:
             (P,),
             params={"kind": "review_timeout"},
             model=_ACTIVE_RUN,
+            inputs=at_now,
+        ),
+        usage_limit(
+            "usage-limit-retry",
+            (P,),
+            model=_ACTIVE_RUN,
+            inputs=at_now,
+        ),
+        EventCase(
+            escalation,
+            "usage-limit-exhausted",
+            (P,),
+            gc_usage_limit_retry,
+            params={"retries": spent_usage_limit},
+            model={**_ACTIVE_RUN, "retries": spent_usage_limit},
             inputs=at_now,
         ),
         EventCase(

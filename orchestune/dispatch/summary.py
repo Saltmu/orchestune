@@ -41,6 +41,8 @@ REASON_FORCED_SERIAL = "forced-serial"
 REASON_ACTOR_UNVERIFIED = "actor-unverified"
 REASON_EARLY_DEATH_BACKOFF = "early-death-backoff"
 REASON_REVIEW_TIMEOUT_BACKOFF = "review-timeout-backoff"
+REASON_USAGE_LIMIT_BACKOFF = "usage-limit-backoff"
+REASON_USAGE_LIMIT_COOLDOWN = "usage-limit-cooldown"
 REASON_DEVIATION_BLOCKED = "deviation-blocked"
 
 SUMMARY_PREFIX = "[orchestune:summary]"
@@ -59,6 +61,8 @@ _REASON_LABELS = {
     REASON_ACTOR_UNVERIFIED: "ラベル付与者の権限が未確認",
     REASON_EARLY_DEATH_BACKOFF: "早期終了からの再投入待ち",
     REASON_REVIEW_TIMEOUT_BACKOFF: "レビュータイムアウト再試行の待機中",
+    REASON_USAGE_LIMIT_BACKOFF: "セッション使用上限からの再投入待ち",
+    REASON_USAGE_LIMIT_COOLDOWN: "セッション使用上限の解除待ち（targetのcooldown中）",
     REASON_DEVIATION_BLOCKED: "footprint逸脱によりブロック",
     REASON_QUOTA_EXHAUSTED: "クオータ枯渇",
     REASON_TOKEN_BUDGET: "トークン予算超過",

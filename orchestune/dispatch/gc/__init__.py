@@ -72,6 +72,7 @@ from orchestune.dispatch.gc.outcome_decision import _is_handoff_ready
 from orchestune.dispatch.gc.records import (
     _completed_worktree_record as _completed_worktree_record,
 )
+from orchestune.dispatch.gc.usage_limit import handle_usage_limit_exit
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
@@ -712,6 +713,22 @@ def _resolve_local_completion(
                 failed_operations(failures) or "list_prs",
                 failure_descriptions(failures),
             )
+        )
+    if status == "pending" and (
+        usage_limit := handle_usage_limit_exit(
+            ctx.run_state,
+            key,
+            active,
+            active_task,
+            ctx.config,
+            now=time.time(),
+            open_prs=ctx.prs,
+        )
+    ):
+        # #1270: a claude-cli session-limit exit is classified before the early-death,
+        # dirty-worktree and no-outcome branches so it never spends the reclaim budget.
+        return CompletionResolution.resolved(
+            ActiveWorktreeRuleOutcome(completion_event=usage_limit, terminal=True)
         )
     return CompletionResolution.ready(active)
 

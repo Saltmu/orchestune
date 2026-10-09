@@ -139,6 +139,9 @@ def ledger_record(retries: RetryStates) -> TaskReclaimRecord:
         review_timeout_retry_count=retries.review_timeout.count,
         review_timeout_retry_at=retries.review_timeout.retry_at,
         review_timeout_retry_pending=retries.review_timeout.pending,
+        usage_limit_retry_count=retries.usage_limit.count,
+        usage_limit_retry_at=retries.usage_limit.retry_at,
+        usage_limit_retry_pending=retries.usage_limit.pending,
     )
 
 

@@ -321,6 +321,10 @@ Non-routine options (storage paths, rate limits, timeouts, reviewer selection, c
 | `early-death-window-seconds` | `120` | Treat a no-commit local process exit within this many seconds of launch as a transient startup failure. |
 | `max-early-death-retries` | `2` | Maximum automatic requeues for transient startup failures. The next no-commit exit escalates to `status:blocked-human-review`. |
 | `early-death-backoff-seconds` | `60` | Base delay for an early-death requeue. Each retry doubles the previous delay. |
+| `max-usage-limit-retries` | `2` | Maximum additional launches after a `claude-cli` run ended on its session usage limit (`You've hit your session limit` / `usage_limit_reached`). Counted separately from reclaims, early-death and review-timeout requeues. `0` disables automatic relaunch; once exhausted the task escalates to `status:blocked-human-review` as a usage-limit stop. |
+| `usage-limit-backoff-seconds` | `900` | Base delay (doubled per retry) used when the reset time cannot be determined. Must be 1 or more. |
+| `usage-limit-reset-grace-seconds` | `30` | Extra seconds added to a determined reset time before the task is relaunched. |
+| `usage-limit-timezone` | `None` | IANA timezone (e.g. `Asia/Tokyo`) used to read wall-clock resets such as `resets 1pm`. Unset means such resets are treated as *unknown* (never as UTC) and the backoff applies. A timestamp with an offset is always preferred. While a limit is active, no `claude-cli` task from the same ledger is launched; other targets are unaffected. |
 | `zombie-gc` | `true` | Enable zombie process detection and reclamation. |
 | `max-tokens-per-window` | `None` | Quota limit: maximum total tokens consumed across completed tasks within `window-seconds`. Pauses new launches when reached. |
 | `max-tokens-per-task` | `None` | Per-task limit: maximum token consumption allowed for a single subtask before escalating to `status:blocked-human-review`. |

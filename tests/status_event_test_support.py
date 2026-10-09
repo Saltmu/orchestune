@@ -40,7 +40,13 @@ from orchestune.dispatch import (
     status_repair,
 )
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.gc import completion, policies, policy_review, zombies
+from orchestune.dispatch.gc import (
+    completion,
+    policies,
+    policy_review,
+    zombies,
+)
+from orchestune.dispatch.gc import usage_limit as usage_limit_gc
 from orchestune.dispatch.gc.policy_effects import apply_effects
 from orchestune.dispatch.retry_policy import (
     RetryDisposition,
@@ -48,6 +54,7 @@ from orchestune.dispatch.retry_policy import (
     early_death_policy,
     plan_retry,
     review_timeout_policy,
+    usage_limit_policy,
 )
 from orchestune.dispatch.rules import _RuleExecutionContext
 from orchestune.integrator import pr as integrator_pr
@@ -101,16 +108,18 @@ def production_backoff_planner(config: DispatcherConfig) -> Any:
     """The model's backoff decision, delegated to `retry_policy.plan_retry`."""
 
     def plan(kind: Kind, state: BackoffState, now: float) -> BackoffState | None:
-        policy = (
-            early_death_policy(
+        policy = {
+            Kind.EARLY_DEATH: lambda: early_death_policy(
                 config.max_early_death_retries, config.early_death_backoff_seconds
-            )
-            if kind is Kind.EARLY_DEATH
-            else review_timeout_policy(
+            ),
+            Kind.REVIEW_TIMEOUT: lambda: review_timeout_policy(
                 config.max_review_timeout_retries,
                 config.review_timeout_backoff_seconds,
-            )
-        )
+            ),
+            Kind.USAGE_LIMIT: lambda: usage_limit_policy(
+                config.max_usage_limit_retries, config.usage_limit_backoff_seconds
+            ),
+        }[kind]()
         current = RetryState(state.count, state.retry_at, state.pending)
         planned = plan_retry(policy, current, now=now)
         if planned.disposition is RetryDisposition.EXHAUSTED:
@@ -322,6 +331,16 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
         ),
         _r(_E.REQUEUE, _K.REVIEW_TIMEOUT, "review-timeout-retry"),
     ),
+    "dispatch/gc/usage_limit.py::_requeue": (
+        _r(
+            _E.REQUEUE,
+            _K.USAGE_LIMIT,
+            "in-progress",
+            "blocked",
+            "replay",
+            "usage-limit-retry",
+        ),
+    ),
     "dispatch/gc/completion.py::_apply_done_worktree_cleanup": (
         _r(_E.COMPLETE, _K.PLAIN, "in-progress", "both"),
     ),
@@ -446,6 +465,7 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
         ),
         _r(_E.RECLAIM, _K.PLAIN, "reclaim-over-budget"),
         _r(_E.REQUEUE, _K.EARLY_DEATH, "early-death-exhausted"),
+        _r(_E.REQUEUE, _K.USAGE_LIMIT, "usage-limit-exhausted"),
     ),
     "integrator/steps.py::AutoMergeChildIntegrationStep._restore_blocked_label": (
         _r(_E.ESCALATE, _K.PLAIN, "in-progress", "queued-and-blocked"),
@@ -874,6 +894,11 @@ def _reclaim_state(record: TaskReclaimRecord | None) -> RetryStates:
             record.review_timeout_retry_at,
             record.review_timeout_retry_pending,
         ),
+        usage_limit=BackoffState(
+            record.usage_limit_retry_count,
+            record.usage_limit_retry_at,
+            record.usage_limit_retry_pending,
+        ),
     )
 
 
@@ -887,6 +912,9 @@ def _ledger_record(retries: RetryStates) -> TaskReclaimRecord:
         review_timeout_retry_count=retries.review_timeout.count,
         review_timeout_retry_at=retries.review_timeout.retry_at,
         review_timeout_retry_pending=retries.review_timeout.pending,
+        usage_limit_retry_count=retries.usage_limit.count,
+        usage_limit_retry_at=retries.usage_limit.retry_at,
+        usage_limit_retry_pending=retries.usage_limit.pending,
     )
 
 
@@ -971,6 +999,48 @@ def gc_backoff_retry(env: CaseEnv) -> tuple[Observation, ...]:
             _labels(env),
             retries=_reclaim_state(state.task_reclaim_counts.get(ISSUE)),
             execution_active=(key in state.active_worktrees) if retried else None,
+        ),
+    )
+
+
+def gc_usage_limit_retry(env: CaseEnv) -> tuple[Observation, ...]:
+    """`handle_usage_limit_exit`: reserve, then requeue (or escalate when spent).
+
+    The reset time is unknown here (the message names none), so the retry time is the
+    finite backoff the model also plans; a known reset only moves `retry_at` later.
+    """
+    patch = env.monkeypatch.setattr
+    patch(usage_limit_gc, "is_process_alive", lambda pid: False)
+    patch(usage_limit_gc, "fresh_external_hold", lambda *a, **k: None)
+    for name in ("save_run_state", "backup_wip_commit", "remove_worktree"):
+        patch(usage_limit_gc, name, _NOOP)
+    log = env.tmp_path / "run.log"
+    log.write_text("You've hit your session limit\n", encoding="utf-8")
+    key = str(ISSUE)
+    active = make_test_active_worktree(
+        ISSUE,
+        started_at=NOW - 10,
+        claim_id="claim-1",
+        worktree_path=str(env.tmp_path / "missing"),
+        launch_target="claude-cli",
+        launch_log_path=str(log),
+        launch_log_offset=0,
+    )
+    retries = env.params.get("retries", RetryStates())
+    state = RunState(
+        active_worktrees={key: active},
+        task_reclaim_counts={ISSUE: _ledger_record(retries)},
+    )
+    event = usage_limit_gc.handle_usage_limit_exit(
+        state, key, active, _task_of(env), env.config, now=NOW
+    )
+    assert event is not None
+    requeued = event.action == "usage_limit_requeued"
+    return (
+        Observation(
+            _labels(env),
+            retries=_reclaim_state(state.task_reclaim_counts.get(ISSUE)),
+            execution_active=(key in state.active_worktrees) if requeued else None,
         ),
     )
 

@@ -394,3 +394,38 @@ model = "gpt-5.6"
                 forge=fake_forge,
                 build_target_fn=lambda _target_cfg: mock_target,
             )
+
+
+class TestUsageLimitSettingsValidation:
+    """#1270: validation of the session-limit settings."""
+
+    def test_valid_values_are_accepted_including_hyphenated_keys(self):
+        validated = validate_toml_config(
+            {
+                "max-usage-limit-retries": 0,
+                "usage_limit_backoff_seconds": 900,
+                "usage_limit_reset_grace_seconds": 0,
+                "usage_limit_timezone": "America/New_York",
+            }
+        )
+        assert validated["max_usage_limit_retries"] == 0
+        assert validated["usage_limit_backoff_seconds"] == 900
+        assert validated["usage_limit_reset_grace_seconds"] == 0
+        assert validated["usage_limit_timezone"] == "America/New_York"
+
+    @pytest.mark.parametrize(
+        "data",
+        [
+            {"max_usage_limit_retries": -1},
+            {"max_usage_limit_retries": True},
+            {"usage_limit_backoff_seconds": 0},
+            {"usage_limit_reset_grace_seconds": -1},
+            {"usage_limit_timezone": 9},
+            {"usage_limit_timezone": ""},
+            {"usage_limit_timezone": "Mars/Olympus"},
+            {"usage_limit_timezone": "../../etc/passwd"},
+        ],
+    )
+    def test_invalid_values_are_rejected(self, data):
+        with pytest.raises(ConfigError):
+            validate_toml_config(data)

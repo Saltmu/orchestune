@@ -72,11 +72,13 @@ def validate_launch(record: Any) -> None:
             "reasoning_effort",
             "selection_reason",
             "launch_attempt_id",
+            "launch_target",
+            "launch_log_path",
         ),
     )
     _choice("launch_phase", record.launch_phase, LAUNCH_PHASES)
     _finite("started_at", record.started_at)
-    for name in ("pid", "recompute_count", "estimated_tokens"):
+    for name in ("pid", "recompute_count", "estimated_tokens", "launch_log_offset"):
         value = getattr(record, name)
         if value is not None and (
             isinstance(value, bool) or not isinstance(value, int)
@@ -194,6 +196,11 @@ class LaunchInfo:
     selection_reason: str | None = None
     launch_attempt_id: str | None = None
     launch_phase: str | None = None
+    # #1270: the target that actually ran and the append-log range of this run.
+    # Legacy ledgers have none of them; such a run is "attribution unknown".
+    launch_target: str | None = None
+    launch_log_path: str | None = None
+    launch_log_offset: int | None = None
     _legacy: InitVar[bool] = False
 
     def __post_init__(self, _legacy: bool) -> None:

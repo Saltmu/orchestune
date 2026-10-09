@@ -91,7 +91,7 @@ def _decide_action_from_outcome(
     return "blocked_unknown_reason"
 
 
-RetryKind = Literal["early_death", "review_timeout"]
+RetryKind = Literal["early_death", "review_timeout", "usage_limit"]
 
 # JSON-facing field names of the ledger record per retry kind. This table is the only
 # connection information; limits and the backoff formula live in `retry_policy`.
@@ -105,6 +105,11 @@ _RETRY_FIELDS: dict[RetryKind, tuple[str, str, str]] = {
         "review_timeout_retry_count",
         "review_timeout_retry_at",
         "review_timeout_retry_pending",
+    ),
+    "usage_limit": (
+        "usage_limit_retry_count",
+        "usage_limit_retry_at",
+        "usage_limit_retry_pending",
     ),
 }
 

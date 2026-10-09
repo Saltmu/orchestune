@@ -182,7 +182,11 @@ def test_release_receipt_keeps_the_flat_active_snapshot_shape(local_claim):
 
     snapshot = _legacy_active_snapshot(active)
 
-    assert tuple(snapshot) == _ACTIVE_FIELD_NAMES
+    # #1270: launch attribution is omitted while null, like before its introduction.
+    attribution = {"launch_target", "launch_log_path", "launch_log_offset"}
+    assert tuple(snapshot) == tuple(
+        name for name in _ACTIVE_FIELD_NAMES if name not in attribution
+    )
     assert snapshot["completion_policy_config"] is None
     assert snapshot["claim_id"] == active.claim.claim_id
     assert snapshot["declared_footprint"] == list(active.core.declared_footprint)

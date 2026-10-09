@@ -75,6 +75,12 @@ class TestRetryDefaultsHaveOneOwner:
             ),
             ("max_early_death_retries", "DEFAULT_EARLY_DEATH_MAX_RETRIES"),
             ("early_death_backoff_seconds", "DEFAULT_EARLY_DEATH_BACKOFF_SECONDS"),
+            ("max_usage_limit_retries", "DEFAULT_MAX_USAGE_LIMIT_RETRIES"),
+            ("usage_limit_backoff_seconds", "DEFAULT_USAGE_LIMIT_BACKOFF_SECONDS"),
+            (
+                "usage_limit_reset_grace_seconds",
+                "DEFAULT_USAGE_LIMIT_RESET_GRACE_SECONDS",
+            ),
         ],
     )
     def test_config_field_default_is_the_retry_policy_constant(self, field, constant):
@@ -85,6 +91,12 @@ class TestRetryDefaultsHaveOneOwner:
         assert retry_policy.DEFAULT_REVIEW_TIMEOUT_BACKOFF_SECONDS == 60
         assert retry_policy.DEFAULT_EARLY_DEATH_MAX_RETRIES == 2
         assert retry_policy.DEFAULT_EARLY_DEATH_BACKOFF_SECONDS == 60
+
+    def test_usage_limit_defaults_follow_the_issue(self):
+        assert retry_policy.DEFAULT_MAX_USAGE_LIMIT_RETRIES == 2
+        assert retry_policy.DEFAULT_USAGE_LIMIT_BACKOFF_SECONDS == 900
+        assert retry_policy.DEFAULT_USAGE_LIMIT_RESET_GRACE_SECONDS == 30
+        assert _field_default("usage_limit_timezone") is None
 
 
 def _paths(tmp_path: Path) -> dict[str, Path]:
@@ -133,6 +145,21 @@ class TestDispatcherEntry:
         assert config.max_early_death_retries == 5
         assert config.early_death_backoff_seconds == 7
         assert config.not_needed_review_timeout_seconds == 99
+
+    def test_usage_limit_settings_are_forwarded_from_the_config_file(self, tmp_path):
+        config = _assemble(
+            tmp_path,
+            {
+                "max_usage_limit_retries": 0,
+                "usage_limit_backoff_seconds": 60,
+                "usage_limit_reset_grace_seconds": 5,
+                "usage_limit_timezone": "Asia/Tokyo",
+            },
+        )
+        assert config.max_usage_limit_retries == 0
+        assert config.usage_limit_backoff_seconds == 60
+        assert config.usage_limit_reset_grace_seconds == 5
+        assert config.usage_limit_timezone == "Asia/Tokyo"
 
     def test_cli_max_concurrent_beats_the_config_file(self, tmp_path):
         assert (

@@ -950,3 +950,37 @@ class TestCleanupFailedWorktree:
             ]
             assert mock_run_git.call_args_list[1].args[0] == ["worktree", "prune"]
             assert not worktree_path.exists()
+
+
+class TestLaunchAttributionPlumbing:
+    """#1270: the handle's target/log range reaches LaunchResult and LaunchInfo."""
+
+    def test_launch_result_carries_the_handle_attribution(self, tmp_path):
+        from orchestune.dispatch.worktree import _launch_on_prepared_worktree
+
+        target = MagicMock()
+        target.launch.return_value = DispatchHandle(
+            pid=5,
+            target_name="claude-cli",
+            log_path=str(tmp_path / "x.log"),
+            log_offset=10,
+        )
+        result = _launch_on_prepared_worktree(
+            _task(1), "feature/1", tmp_path / "wt", target, None
+        )
+        assert (result.target_name, result.log_path, result.log_offset) == (
+            "claude-cli",
+            str(tmp_path / "x.log"),
+            10,
+        )
+
+    def test_malformed_attribution_degrades_to_unknown_instead_of_raising(self):
+        from types import SimpleNamespace
+
+        from orchestune.dispatch.launch import _launch_attribution
+
+        bogus = SimpleNamespace(target_name=MagicMock(), log_path=3, log_offset=-1)
+        assert _launch_attribution(bogus) == (None, None, None)
+        assert _launch_attribution(SimpleNamespace()) == (None, None, None)
+        ok = SimpleNamespace(target_name="claude-cli", log_path="a.log", log_offset=0)
+        assert _launch_attribution(ok) == ("claude-cli", "a.log", 0)

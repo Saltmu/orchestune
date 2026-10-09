@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from orchestune.dag.models import canonicalize_footprint
 from orchestune.infra.json_state import read_json_with_recovery, write_json_atomic
@@ -86,6 +86,14 @@ class TaskReclaimRecord:
     review_timeout_retry_count: int = 0
     review_timeout_retry_at: float = 0.0
     review_timeout_retry_pending: bool = False
+    # #1270: claude-cliのセッション上限（usage limit）終了による再投入。通常の回収・
+    # early-death・review-timeoutの枠とは混ぜない専用枠。`_run`は予約を作った実行
+    # （claim / launch attempt）の識別子で、同じ実行の再処理では予約を再利用し、
+    # 別の実行が上限で失敗したときは新しい失敗として数え直すために使う。
+    usage_limit_retry_count: int = 0
+    usage_limit_retry_at: float = 0.0
+    usage_limit_retry_pending: bool = False
+    usage_limit_retry_run: str | None = None
 
 
 @dataclass
@@ -112,6 +120,9 @@ class RunState:
     completion_reservations: dict[str, dict[str, Any]] = field(default_factory=dict)
     completion_replay_receipts: dict[str, dict[str, Any]] = field(default_factory=dict)
     recovery_receipts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # #1270: dispatch target名 -> セッション上限の解除まで起動しない時刻（UTC epoch）。
+    # accountの識別が無いため、同じ台帳を使うtargetを1つの制限scopeとして扱う。
+    usage_limit_cooldowns: dict[str, float] = field(default_factory=dict)
 
 
 def _parse_non_negative_int(value: object, default: int = 0) -> int:
@@ -191,8 +202,46 @@ def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
             review_timeout_retry_pending=(
                 value.get("review_timeout_retry_pending") is True
             ),
+            usage_limit_retry_count=_parse_non_negative_int(
+                value.get("usage_limit_retry_count")
+            ),
+            usage_limit_retry_at=_parse_finite_float(value.get("usage_limit_retry_at")),
+            usage_limit_retry_pending=value.get("usage_limit_retry_pending") is True,
+            usage_limit_retry_run=_parse_optional_string(
+                value.get("usage_limit_retry_run")
+            ),
         )
     return records
+
+
+_USAGE_LIMIT_RECORD_FIELDS = (
+    "usage_limit_retry_count",
+    "usage_limit_retry_at",
+    "usage_limit_retry_pending",
+    "usage_limit_retry_run",
+)
+
+
+def _task_reclaim_record_data(record: TaskReclaimRecord) -> dict[str, Any]:
+    """#1270: 専用枠が既定値のあいだはキーを出さず、旧台帳の保存形を変えない。"""
+    data = dataclasses.asdict(record)
+    defaults = dataclasses.asdict(TaskReclaimRecord())
+    if all(data[name] == defaults[name] for name in _USAGE_LIMIT_RECORD_FIELDS):
+        for name in _USAGE_LIMIT_RECORD_FIELDS:
+            del data[name]
+    return data
+
+
+def _parse_usage_limit_cooldowns(raw: object) -> dict[str, float]:
+    """#1270: 壊れたエントリは捨てる（cooldownなし＝起動可。保存された待機は失わない）。"""
+    if not isinstance(raw, dict):
+        return {}
+    cooldowns: dict[str, float] = {}
+    for target, until in raw.items():
+        parsed = _parse_optional_finite_float(until)
+        if isinstance(target, str) and target and parsed is not None:
+            cooldowns[target] = parsed
+    return cooldowns
 
 
 def _parse_lookup_cursor(value: object) -> int:
@@ -347,6 +396,14 @@ def _parse_completion_journal_fields(
     }
 
 
+def _launch_attribution_fields(value: dict[str, Any]) -> dict[str, Any]:
+    """#1270: absent in records written before launch attribution existed."""
+    return {
+        name: value.get(name)
+        for name in ("launch_target", "launch_log_path", "launch_log_offset")
+    }
+
+
 def _build_active_worktree(
     value: dict[str, Any],
     *,
@@ -384,6 +441,7 @@ def _build_active_worktree(
         "selection_reason": value.get("selection_reason"),
         "launch_attempt_id": value.get("launch_attempt_id"),
         "launch_phase": value.get("launch_phase"),
+        **_launch_attribution_fields(value),
         "owner_kind": owner_kind,
         "claim_id": _required_active_string(value, "claim_id", key),
         "claim_stage": claim_stage,
@@ -561,6 +619,9 @@ def _run_state_from_data(data: dict[str, Any]) -> RunState:
             data, "completion_replay_receipts"
         ),
         recovery_receipts=_parse_completion_records(data, "recovery_receipts"),
+        usage_limit_cooldowns=_parse_usage_limit_cooldowns(
+            data.get("usage_limit_cooldowns")
+        ),
     )
 
 
@@ -687,6 +748,7 @@ def prune_run_state(
         completion_reservations=state.completion_reservations,
         completion_replay_receipts=state.completion_replay_receipts,
         recovery_receipts=state.recovery_receipts,
+        usage_limit_cooldowns=dict(state.usage_limit_cooldowns),
     )
 
 
@@ -720,7 +782,7 @@ def save_run_state(
     )
     for active in state.active_worktrees.values():
         _materialize_active_worktree_for_persistence(active)
-    data = {
+    data: dict[str, Any] = {
         "active_worktrees": {
             key: _active_worktree_data(value)
             for key, value in state.active_worktrees.items()
@@ -733,7 +795,7 @@ def save_run_state(
         # JSONのオブジェクトキーは文字列のみのため、Issue番号は明示的に
         # str()で書き出す（読み戻し時に_parse_task_reclaim_countsがintへ戻す）。
         "task_reclaim_counts": {
-            str(issue_number): dataclasses.asdict(record)
+            str(issue_number): _task_reclaim_record_data(record)
             for issue_number, record in state.task_reclaim_counts.items()
         },
         "task_reclaim_lookup_cursor": state.task_reclaim_lookup_cursor,
@@ -741,17 +803,43 @@ def save_run_state(
             -MAX_PENDING_LOCK_RELEASE_NOTICES:
         ],
     }
-    # Keep the established serialization of pre-#1108 state unchanged. New
-    # completion maps appear only once populated and are never retention-pruned.
-    if state.completion_journal:
-        data["completion_journal"] = state.completion_journal
-    if state.completion_reservations:
-        data["completion_reservations"] = state.completion_reservations
-    if state.completion_replay_receipts:
-        data["completion_replay_receipts"] = state.completion_replay_receipts
-    if state.recovery_receipts:
-        data["recovery_receipts"] = state.recovery_receipts
+    data.update(_populated_optional_maps(state))
     write_json_atomic(path, data)
+
+
+def _populated_optional_maps(state: RunState) -> dict[str, Any]:
+    """Keep the established serialization of older state unchanged.
+
+    The #1108 completion maps and the #1270 cooldowns appear only once populated;
+    none of them is retention-pruned.
+    """
+    candidates: dict[str, Any] = {
+        "completion_journal": state.completion_journal,
+        "completion_reservations": state.completion_reservations,
+        "completion_replay_receipts": state.completion_replay_receipts,
+        "recovery_receipts": state.recovery_receipts,
+        "usage_limit_cooldowns": dict(state.usage_limit_cooldowns),
+    }
+    return {name: value for name, value in candidates.items() if value}
+
+
+def usage_limit_wait(
+    state: RunState, issue_number: int, target_name: str | None, now: float
+) -> Literal["backoff", "cooldown"] | None:
+    """#1270: whether a session limit keeps this task from launching on ``target_name``.
+
+    ``backoff`` is the task's own retry time; ``cooldown`` is the target-wide wait
+    shared by every task of a ledger. A target without a name is never in cooldown.
+    """
+    record = state.task_reclaim_counts.get(issue_number)
+    if record is not None and record.usage_limit_retry_at > now:
+        return "backoff"
+    if (
+        target_name is not None
+        and state.usage_limit_cooldowns.get(target_name, 0.0) > now
+    ):
+        return "cooldown"
+    return None
 
 
 def claim_was_released(

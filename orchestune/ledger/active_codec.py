@@ -53,6 +53,21 @@ _ACTIVE_FIELD_NAMES = (
     "completion_comment_url",
     "completion_handoff_ready",
     "completion_policy_config",
+    # #1270: appended after the frozen schema; omitted from the JSON while null so
+    # records written before launch attribution keep their exact encoding.
+    "launch_target",
+    "launch_log_path",
+    "launch_log_offset",
+)
+
+#: Keys omitted from the encoded record while their value is null.
+_OMIT_WHEN_NULL = frozenset(
+    {
+        "completion_policy_config",
+        "launch_target",
+        "launch_log_path",
+        "launch_log_offset",
+    }
 )
 
 
@@ -106,7 +121,7 @@ def encode_active_worktree(active: ActiveWorktree) -> dict[str, Any]:
     encoded: dict[str, Any] = {}
     for name in _ACTIVE_FIELD_NAMES:
         value = flat[name]
-        if name == "completion_policy_config" and value is None:
+        if name in _OMIT_WHEN_NULL and value is None:
             continue
         if name == "declared_footprint":
             encoded[name] = list(value)

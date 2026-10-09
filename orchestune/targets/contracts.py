@@ -36,6 +36,11 @@ class DispatchHandle:
     issue_number: int | None = None
     started_at: float | None = None
     launch_attempt_id: str | None = None
+    # #1270: 実際に起動したtarget名と、その実行が書き込む追記ログの範囲。ログは
+    # 前回実行の末尾が残るため、開始offset以降だけを当該実行の出力として読む。
+    target_name: str | None = None
+    log_path: str | None = None
+    log_offset: int | None = None
 
 
 @dataclass(frozen=True)
