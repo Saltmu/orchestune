@@ -219,7 +219,7 @@ def _dispatch_direct_cases() -> list[EventCase]:
         lock("unlock-restores-queued", (EL,), params={"lock": False, "snapshot": (Q,)}),
         lock("unlock-blocked", (B, EL), params={"lock": False}),
         EventCase(
-            reconcile + "_resolve_one_blocked_recompute_issue",
+            reconcile + "_release_recompute_for_promotion",
             "pending-dependencies",
             (B, RC),
             blocked_recompute_with_pending_dependencies,

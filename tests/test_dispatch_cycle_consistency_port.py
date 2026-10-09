@@ -14,7 +14,7 @@ mypy catch a wrong binding instead of a runtime check.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.models import ConsistencyScope, RepairCommand
@@ -22,7 +22,7 @@ from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_events import PromotionEvent
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import RunState
-from tests.conftest import make_issue, make_task
+from tests.conftest import FakeForge, make_issue, make_task
 from tests.dispatch_gc_test_support import _ctx, _task
 from tests.test_consistency_status_repair import _config, _plan
 
@@ -207,9 +207,10 @@ class TestReconcileRecovery:
             dependency_resolution={1: TaskDependencies()},
         )
         ctx.config.apply = True
-        fake_forge = MagicMock()
-        fake_forge.get_issue_state.return_value = "OPEN"
-        fake_forge.get_issue_labels.return_value = (StatusLabel.QUEUED,)
+        fake_forge = FakeForge()
+        fake_forge.seed_issue(
+            make_issue(1, labels=(StatusLabel.BLOCKED, StatusLabel.BLOCKED_RECOMPUTE))
+        )
         ctx.config.forge = fake_forge
         adapter = CycleActionAdapter(run_state, ctx.config, now=0.0)
         adapter.bind_context(ctx)
@@ -218,7 +219,11 @@ class TestReconcileRecovery:
             patch.object(
                 ctx,
                 "issue_records",
-                return_value=(make_issue(1, labels=(StatusLabel.BLOCKED_RECOMPUTE,)),),
+                return_value=(
+                    make_issue(
+                        1, labels=(StatusLabel.BLOCKED, StatusLabel.BLOCKED_RECOMPUTE)
+                    ),
+                ),
             ),
             patch(
                 "orchestune.dispatch.reconciliation.check_footprint_deviation",

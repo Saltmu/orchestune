@@ -200,7 +200,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `QUEUE` (`BASE_BRANCH_RED`) | `status:blocked` | `status:queued` | `dispatch/reconciliation.py::_apply_base_branch_red_requeue` |
 | `RELEASE_HOLD` (`BASE_BRANCH_RED`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/reconciliation.py::_apply_base_branch_red_unmark` |
 | `QUEUE` (`RECOMPUTE`) | `status:blocked` | `status:queued` | `dispatch/reconciliation.py::_resolve_one_blocked_recompute_issue` |
-| `RELEASE_HOLD` (`RECOMPUTE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/reconciliation.py::_resolve_one_blocked_recompute_issue` |
+| `RELEASE_HOLD` (`RECOMPUTE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/reconciliation.py::_release_recompute_for_promotion` |
 | `REQUEUE` (`RECOVERY`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/recovery.py::execute_recovery_requeue_command` |
 | `QUEUE` (`PLAIN`) | `status:blocked` | `status:queued` | `dispatch/status_repair.py::_apply_command` |
 | `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/status_repair.py::_apply_command` |

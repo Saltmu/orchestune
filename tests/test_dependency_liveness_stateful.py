@@ -23,7 +23,6 @@ from tests.dependency_liveness_test_support import (
     ISSUE_BY_SUBTASK,
     LIVENESS_BOUND,
     RECOMPUTE,
-    RECOMPUTE_RELEASE_ISSUE,
     CompletionPath,
     CycleObservation,
     FaultPlan,
@@ -123,14 +122,12 @@ def test_dry_run_preview_respects_unreleased_completion_reservation(tmp_path):
     assert not world.cycle(apply=False).previewed
 
 
-@pytest.mark.xfail(reason=f"production bug {RECOMPUTE_RELEASE_ISSUE}", strict=True)
 def test_recompute_release_respects_base_branch_red_hold(tmp_path):
     world = LivenessWorld(tmp_path, t_labels=("status:blocked", RECOMPUTE, BASE_RED))
     world.complete(11, CompletionPath.LABEL)
     assert not world.cycle().promoted
 
 
-@pytest.mark.xfail(reason=f"production bug {RECOMPUTE_RELEASE_ISSUE}", strict=True)
 def test_recompute_release_revalidates_dependency_evidence(tmp_path):
     world = LivenessWorld(tmp_path, t_labels=("status:blocked", RECOMPUTE))
     world.complete(11, CompletionPath.LABEL)
@@ -149,19 +146,6 @@ def test_stale_snapshot_revoked_dependency_is_not_promoted(tmp_path):
     world.complete(11, CompletionPath.LABEL)
     observation = world.cycle(before_promotion=lambda w: w.revoke(11))
     assert not observation.promoted
-
-
-def _known_recompute_release_bypass(
-    observation: CycleObservation, dependencies: tuple[int, ...] | None
-) -> bool:
-    """RECOMPUTE_RELEASE_ISSUE (#1268): the recompute release promotes from the context
-    snapshot, ignoring a base-red hold and evidence revoked after the snapshot."""
-    if dependencies is None:
-        return False
-    snapshot = replace(observation.at_start, base_red=False)
-    return RECOMPUTE in observation.t_before and snapshot.promotable(
-        dependencies, apply=observation.apply
-    )
 
 
 def assert_safe(
@@ -194,14 +178,11 @@ def assert_safe(
             if dependencies is not None
             else False
         )
-        known_bug = reserved_conflict or _known_recompute_release_bypass(
-            observation, dependencies
-        )
-        assert known_bug or not observation.previewed, f"unsafe preview: {observation}"
+        assert (
+            reserved_conflict or not observation.previewed
+        ), f"unsafe preview: {observation}"
     else:
-        assert not observation.promoted or _known_recompute_release_bypass(
-            observation, dependencies
-        ), f"unsafe promotion: {observation}"
+        assert not observation.promoted, f"unsafe promotion: {observation}"
 
 
 def _known_intermediate_dry_run_reservation(

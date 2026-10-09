@@ -245,7 +245,9 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
         ),
     ),
     "dispatch/reconciliation.py::_resolve_one_blocked_recompute_issue": (
-        _r(_E.QUEUE, _K.RECOMPUTE, "blocked", "aux-recompute-removed", "replay"),
+        _r(_E.QUEUE, _K.RECOMPUTE, "aux-recompute-removed"),
+    ),
+    "dispatch/reconciliation.py::_release_recompute_for_promotion": (
         _r(_E.RELEASE_HOLD, _K.RECOMPUTE, "pending-dependencies"),
     ),
     "dispatch/reconciliation.py::_apply_base_branch_red_requeue": (
@@ -710,10 +712,8 @@ def blocked_recompute_with_pending_dependencies(
     env: CaseEnv,
 ) -> tuple[Observation, ...]:
     task, ctx, state = _reconciliation_ctx(_ctx_env(env))
-    env.monkeypatch.setattr(
-        reconciliation, "_has_pending_dependencies", lambda *a: True
-    )
-    issue = make_issue(ISSUE, labels=env.held)
+    issue = make_issue(ISSUE, labels=env.held, depends_on=("unresolved-dependency",))
+    env.forge.issues[ISSUE] = issue
     result = reconciliation._resolve_one_blocked_recompute_issue(
         issue, task, set(), ctx, state, env.config
     )

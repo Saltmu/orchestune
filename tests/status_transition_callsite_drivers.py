@@ -136,7 +136,6 @@ def attempt_reconcile(env: Env) -> None:
 
 def _reconciliation_ctx(env: Env) -> tuple[Any, Any, Any]:
     task = _task(env)
-    env.monkeypatch.setattr(reconciliation, "_confirm_queued_recovery", _NOOP)
     env.monkeypatch.setattr(
         reconciliation, "completion_mutation_blocked_fresh", lambda *a: False
     )
