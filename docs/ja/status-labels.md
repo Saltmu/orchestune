@@ -142,6 +142,166 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
   `TestCase`や`runTest`に付けてもblobは再生されず新たな探索になるため、再現手順はseedを正とします。
 - `.hypothesis/`は例データベースでGit管理外です。以前の失敗例が次回の実行で再生されます。
 
+## Eventモデル（#1264）
+
+`orchestune/ledger/status_events.py` は、タスク状態遷移を副作用のない純粋関数 `apply_event` として表現するEventモデルです（設計 #1219 §1）。
+すべてのForgeラベル変更、完了確定、GC回収、retry予約、エスカレーションはEventとして抽象化され、
+呼び出し箇所（`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / ラベル不変の完了確定経路 / ラベル不変の予算経路）と対応付けられます。
+`COMPLETION`は`orchestune complete`の完了ラベル調停で、primaryラベル・遷移先・`status:force-serial`以外の`status:*`（補助・未知のラベル）を保持していれば変更前に拒否します。
+`AWAIT_REVIEW`はクラウド実行のnot-needed判定を独立検証レビューへ回す経路で、実行は終えますが、レビューの判定までは完了として扱いません。
+`REVIEW_PASSED`は独立レビューの通過で、Issueをクローズし`not-needed-review`ポリシーをappliedにします（ラベルは変えません）。この時点で初めて依存側から完了として扱われます。
+
+### Event対応表
+
+| Event | 遷移元 | 遷移先 | 発生元 |
+|---|---|---|---|
+| `LAUNCH` (`CLAIM`) | `status:blocked`, `status:queued` | `status:in-progress` | `claim/service.py::_apply_status_label` |
+| `COMPLETE` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `complete/status_labels.py::_completion_mutate` |
+| `NOT_NEEDED` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
+| `BLOCK` (`COMPLETION`) | `status:in-progress`, `status:queued` | `status:blocked` | `complete/status_labels.py::_completion_mutate` |
+| `COMPLETE_WITHOUT_LABEL` (`CYCLE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/cycle_context_state.py::_CycleState.record_completion` |
+| `COMPLETE_WITHOUT_LABEL` (`NOT_NEEDED_OUTCOME`) | `status:in-progress` | - | `dispatch/gc/__init__.py::_rule_not_needed` |
+| `AWAIT_REVIEW` (`PLAIN`) | `status:in-progress` | - | `dispatch/gc/__init__.py::_rule_not_needed` |
+| `RECLAIM` (`PLAIN`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim` |
+| `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_blocked_hold` |
+| `BLOCK` (`RECOMPUTE`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_blocked_hold` |
+| `COMPLETE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `dispatch/gc/completion.py::_apply_done_worktree_cleanup` |
+| `BLOCK` (`BASE_BRANCH_RED`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_escalated_base_branch_red` |
+| `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
+| `COMPLETE_WITHOUT_LABEL` (`NOT_NEEDED_OUTCOME`) | `status:in-progress` | - | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
+| `AWAIT_REVIEW` (`PLAIN`) | `status:in-progress` | - | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
+| `REQUEUE` (`EARLY_DEATH`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
+| `REQUEUE` (`REVIEW_TIMEOUT`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
+| `REQUEUE` (`REVIEW_TIMEOUT`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/policy_effects.py::reconcile_labels` |
+| `BLOCK` (`BASE_BRANCH_RED`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/policy_effects.py::reconcile_labels` |
+| `REVIEW_REJECT` (`PLAIN`) | `status:not-needed` | `status:queued` | `dispatch/gc/policy_effects.py::reconcile_labels` |
+| `ESCALATE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:not-needed`, `status:queued` | `status:blocked-human-review` | `dispatch/gc/policy_effects.py::reconcile_labels` |
+| `COMPLETE_WITHOUT_LABEL` (`REVIEW_PASSED`) | `status:not-needed` | - | `dispatch/gc/policy_review.py::reconcile_review` |
+| `RECLAIM` (`PLAIN`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/zombies.py::_notify_requeued_reclaim` |
+| `ESCALATE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:not-needed`, `status:queued` | `status:blocked-human-review` | `dispatch/launch.py::_apply_invalid_footprint_blocking` |
+| `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/launch.py::_apply_yaml_error_blocking` |
+| `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/launch.py::_handle_launch_failure` |
+| `ESCALATE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:not-needed`, `status:queued` | `status:blocked-human-review` | `dispatch/launch.py::_handle_launch_failure` |
+| `LAUNCH` (`PLAIN`) | `status:blocked`, `status:queued` | `status:in-progress` | `dispatch/launch.py::_record_successful_launch` |
+| `LAUNCH` (`RECOVERY`) | `status:blocked`, `status:queued` | `status:in-progress` | `dispatch/launch_attempts.py::reconcile_attempt` |
+| `HOLD` (`EXTERNAL_LOCK`) | `status:blocked`, `status:in-progress`, `status:queued` | - | `dispatch/phase_rebase.py::_apply_external_lock_sync` |
+| `QUEUE` (`EXTERNAL_LOCK`) | - | `status:queued` | `dispatch/phase_rebase.py::_apply_external_lock_sync` |
+| `RELEASE_HOLD` (`EXTERNAL_LOCK`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/phase_rebase.py::_apply_external_lock_sync` |
+| `COMPLETE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `dispatch/prior_parent_merge.py::_apply_verified_repair` |
+| `COMPLETE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `dispatch/prior_parent_merge.py::_normalize_closed_issue_label` |
+| `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/prior_parent_merge.py::_normalize_closed_issue_label` |
+| `COMPLETE_WITHOUT_LABEL` (`PRIOR_MERGE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/prior_parent_merge.py::reconcile_prior_parent_merges` |
+| `RECOMPUTE` (`PLAIN`) | `status:in-progress` | - | `dispatch/rebase.py::_apply_forced_serial_event` |
+| `RECOMPUTE` (`PLAIN`) | `status:in-progress` | - | `dispatch/rebase.py::_apply_recomputed_event` |
+| `ESCALATE` (`MANUAL_MERGE`) | `status:in-progress` | `status:manual-merge-required` | `dispatch/rebase.py::_handle_rebase_failure` |
+| `ESCALATE` (`MANUAL_MERGE`) | `status:in-progress` | `status:manual-merge-required` | `dispatch/rebase.py::_prepare_wip_backup_for_rebase` |
+| `BLOCK` (`RECOMPUTE`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/rebase.py::notify_recompute` |
+| `BLOCK` (`BASE_BRANCH_RED`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/reconciliation.py::_apply_base_branch_red_escalate` |
+| `QUEUE` (`BASE_BRANCH_RED`) | `status:blocked` | `status:queued` | `dispatch/reconciliation.py::_apply_base_branch_red_requeue` |
+| `RELEASE_HOLD` (`BASE_BRANCH_RED`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/reconciliation.py::_apply_base_branch_red_unmark` |
+| `QUEUE` (`RECOMPUTE`) | `status:blocked` | `status:queued` | `dispatch/reconciliation.py::_resolve_one_blocked_recompute_issue` |
+| `RELEASE_HOLD` (`RECOMPUTE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/reconciliation.py::_resolve_one_blocked_recompute_issue` |
+| `REQUEUE` (`RECOVERY`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/recovery.py::execute_recovery_requeue_command` |
+| `QUEUE` (`PLAIN`) | `status:blocked` | `status:queued` | `dispatch/status_repair.py::_apply_command` |
+| `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/status_repair.py::_apply_command` |
+| `MERGE_REVERT` (`PLAIN`) | `status:done` | `status:queued` | `dispatch/status_repair.py::_apply_command` |
+| `COMPLETE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `dispatch/status_repair.py::_apply_command` |
+| `REQUEUE` (`RECOVERY`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/status_repair.py::_apply_command` |
+| `MERGE_REVERT` (`PLAIN`) | `status:done` | `status:queued` | `integrator/pr.py::handle_merge_failure` |
+| `ESCALATE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:not-needed`, `status:queued` | `status:blocked-human-review` | `integrator/steps.py::AutoMergeChildIntegrationStep._restore_blocked_label` |
+| `ESCALATE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:not-needed`, `status:queued` | `status:blocked-human-review` | `ledger/escalation.py::apply_human_review_escalation` |
+| `RECLAIM` (`PLAIN`) | `status:blocked`, `status:in-progress` | `status:queued` | `ledger/escalation.py::apply_human_review_escalation` |
+| `REQUEUE` (`EARLY_DEATH`) | `status:blocked`, `status:in-progress` | `status:queued` | `ledger/escalation.py::apply_human_review_escalation` |
+| `NOT_NEEDED` (`REPLAN`) | `status:blocked`, `status:blocked-human-review`, `status:in-progress`, `status:manual-merge-required`, `status:queued` | `status:not-needed` | `replan/operations.py::_transition_to_not_needed` |
+
+## 予算付きループの終端性（#1266）
+
+<!-- budget-termination -->
+
+`tests/test_status_events_stateful.py` はEventモデル上で予算付きループの終端性を、`tests/test_status_event_retry_resume.py` は本番のretry経路の停止・再開を検証します（設計 #1219 §3）。期待値は #1219 の予算表と本番のdocstringから書いた表であり、`plan_retry`／`exceeds_limit`／`_resolve_reclaim_count` の戻り値からは作りません。
+
+### 不変条件
+
+`BudgetTerminationMachine`（Hypothesisの `RuleBasedStateMachine`）は、全(Event, Kind)、直前eventの再送、引退した起動・起動なしのevent（ABA系列）、`Stage.RESERVED`／`Stage.LABEL_ADDED` での停止と再開、`restart(ledger_loss)`、backoffをまたぐ時刻の進行、外部のラベル変更をランダムに生成します。外部のラベル変更の後は、Phase 1と同じく不変条件4・5の基準点を新しいラベルから取り直します。
+
+1. **ループ測度**: in-progress・done・not-needed から queued（または in-progress）へ戻る適用、および in-progress から入った `status:blocked` からの戻りは、対応する予算を1つ消費するか（予約済みoperationの再開・再送は消費しない）、下記の許可リストに理由付きで載っています。
+2. **台帳世代内の有界性**: 同じ台帳世代では、新規の論理retryの回数が下表の上限を超えません。`restart(ledger_loss=True)` はローカル予算（回収・早期終了・review timeout）だけを0へ戻し、永続予算（recompute・base-branch-red）は保持します。リセット対象は [セットアップ](setup.md) の「runner上で失われるローカル状態」の `task_reclaim_counts` 行とテストで一致させています。
+3. **実行中の起動は1つ**: 別の起動が実行中のときの起動は適用されず、同じ起動の再送も再適用されません。
+4. **完了済みは再起動しない**: 完了の取り消し（`MERGE_REVERT`／`REVIEW_REJECT`）か外部のラベル変更を経ない限り、完了したタスクは起動しません。
+5. **ESCALATIONは不可逆**: 自動eventはESCALATIONのタスクへACTIVEラベルを付けません。人間の操作は外部のラベル変更として扱います。
+
+| 予算 | 1台帳世代での新規retryの上限（既定値） | 上限を超えると |
+|---|---|---|
+| GC回収 | 3回（4回目でエスカレーション） | `status:blocked-human-review` |
+| 早期終了 | 2回 | `status:blocked-human-review` |
+| AIレビュー待機タイムアウト | 1回（`max_review_timeout_retries` は試行回数。2試行で再投入1回） | `status:blocked-human-review` |
+| base-branch-red | 保留2回（3回目でエスカレーション） | `status:blocked-human-review` |
+| footprint逸脱の再計算 | 2回 | `status:force-serial` |
+
+### 予算なしループの許可リスト（`UNBUDGETED_LOOPS`）
+
+本番の経路（`EVENT_BY_SOURCE`）のうち、実行済みのラベルから queued／in-progress へ戻るもの、または in-progress から `status:blocked` へ入るもの（依存が揃えば次cycleで再び昇格する2段ループの1段目）で、予算を消費しないものはこの表に限ります。表にない経路が対応表に現れるとテストが失敗します。設計時点で決めていたのは `MERGE_REVERT` と `REQUEUE`(`RECOVERY`) の2件で、残りは #1266 で見つかりました。
+
+| Event / Kind | 予算を持たない理由 | 後続 |
+|---|---|---|
+| `MERGE_REVERT` / `PLAIN` | Integratorの仮マージCI失敗による done → queued の差し戻し。回数を記録しない | 予算化（#1219 の対象外候補） |
+| `REQUEUE` / `RECOVERY` | 再起動で失われた実行の再投入。予算ではなく再起動の回数で抑えられる | なし |
+| `REVIEW_REJECT` / `PLAIN` | 対応不要の独立レビュー却下による not-needed → queued（#1264 で追加）。1周ごとに独立レビューが1回必要 | 予算化の検討 |
+| `BLOCK` / `PLAIN` | 起動失敗・blocked outcome の保留（in-progress → blocked）。依存がすべて完了していれば次cycleで再び昇格する | 起動失敗の繰り返しの予算化の検討 |
+| `BLOCK` / `COMPLETION` | `orchestune complete --result blocked`（in-progress → blocked）。他のblockedと同じく再び昇格する | 同上 |
+| `BLOCK` / `RECOMPUTE` | 他タスクのfootprint逸脱によるblocked。逸脱した側のrecompute予算で抑えられるが、単一タスクのモデルからは見えない（再起動で0に戻る問題は #1280） | #1280 |
+
+### 本番retry経路の停止・再開
+
+`tests/status_event_retry_harness.py` は、`run_state.json`（ディスク）とForgeだけを残して停止し、それ以外（メモリ上の `RunState`、回収・完了の文脈）を再構築して再開します。停止は `BaseException` で起こすので、本番の `except Exception` に握りつぶされません。停止点は予約の保存前後、遷移先ラベルの付与前後（付与後は確定コールバックの前）、確定の保存前後、旧ラベルの除去前後です。
+
+- **GC回収**（`_refresh_reclaim` → `_reclaim_external_or_local`。`_record_reclaim` で予約、`_settle_reclaim` で確定）: どの停止点から再開しても回数は1回だけ増え、`pending` は解除されます。上限超過のエスカレーションはちょうど1回です。`status:blocked-human-review` の付与後に止まった場合、再開したGCはエスカレーション済みとして数えずに確定するだけで、残った `status:in-progress` はstatus repair（#1218）に委ねられます（モデルの `restart` も同じ結果を予測します）。
+- **早期終了・review timeout**（GC完了の `_publish_requeue`、確定は `_settle_completion_requeue`）: 予約がディスクに届いた後の停止では、再開しても回数を再消費せず `retry_at` も最初の値のままです。保存前の停止では予約が失われ、再開時の時刻で計画し直します。確定の保存後に止まると台帳から実行が外れるため、残った `status:in-progress` はstatus repairに委ねられます。
+- **review timeoutのcompletion policy**（`_prepare` → `_apply_policy`）: operation単位の予約を再利用し、再投入コメントは1回だけです。
+- **footprint逸脱の再計算**: 回数と `forced_serial` はIssue本文のFootprintフェンスに永続し、`run_state.json` を失っても本文から復元されます。本文の書き込み後に止まっても二重に消費しません。
+- **base-branch-red**: attemptはIssueコメントのOutcome Recordから数え、同じ `(claim_id, head_sha)` の再送は同じattemptを使います。3回目でエスカレーションします。
+
+このharnessが見つけた本番の欠陥は別Issueへ切り出し、反例をstrict xfailで固定しています（期待値は弱めていません）。
+
+- #1279: GC回収・cloud放棄回収・dirty保留が `TaskReclaimRecord` を作り直し、早期終了とreview timeoutの回数を0へ戻す
+- #1280: 通常の起動が `recompute_count` を0から始め、Issue本文の回数と `forced_serial` を上書きする
+
+### 実行時間と再現
+
+`uv run pytest -q -n0 --no-cov <file> --hypothesis-profile ci` の単独実測（2026-10-07、Linux）は、`tests/test_status_events_stateful.py` が約1.0秒、`tests/test_status_event_retry_resume.py` が約0.7秒です。ci profile（100例・30step）のランダム系列は、予算上限や許可リストの欠落を確率的にしか見つけません（変異を入れた試行では各7〜8割）。そのため、予算ごとの上限は決定的テスト（`TestBudgetBounds`）で、許可リストの過不足は対応表との静的照合（`TestLoopRegistry`）で検出します。再現はseedを正とし（`--hypothesis-seed`）、有用な反例は決定的テストとして固定します。
+
+## 依存解決の bounded liveness（#1265）
+
+<!-- dependency-liveness -->
+
+依存がすべて完了した `status:blocked` のタスク T が、有限cycle内で queued へ昇格すること（dry runでは `PromotionEvent` に現れること）を、モデルではなく本番コードで検証します（設計 #1219 §4、`tests/dependency_liveness_test_support.py`・`tests/test_dependency_liveness_stateful.py`）。1 cycle は本番の `_build_cycle_context` で `CycleContext` を作り、ケースの経路で依存先 D を完了させ、本番の `_run_pre_scheduling_reconciliation` を呼んで T のラベルと `PromotionEvent` を観測します。git・worktree・プロセスの副作用と昇格後のschedulingだけをスタブし、planner・executor・`CycleContext` は本物です。期待する完了と昇格の起点はfixtureの完了証拠（種別・対象・有効性・投入時点・取り消し）から独立に計算し、`is_effectively_done`／`is_completion_blocked`／plannerの戻り値は使いません。
+
+**公平性の前提**（この区間でだけlivenessを要求します）:
+
+- T は宣言依存を1件以上持ち、各 D にfixture上で有効な完了証拠があり、completion reservationが解放済みである
+- T にpromotion hold（`ci:base-branch-red`／`status:blocked-recompute`）がなく、T はOPENで、Forge・taskの観測がKNOWNである
+- cycleの開始時と昇格判定時の両方で上記が成り立ち、エラー・障害注入がない（何も変えない古いsnapshotのコールバックは区間をリセットしない）
+
+保証上限は N=1 cycle です。検証の主眼は上限ではなく、次のケースごとの期待値（有効な完了証拠が本番の経路へ入力可能になったcycleを0とする）との一致です。
+
+| ケース | D の完了の与え方 | 期待（cycle） | 備考 |
+|---|---|---|---|
+| `label` | cycle間に D へ `status:done` | 0 |  |
+| `record_completion` | active worktreeの完了を同じcycleの `record_completion` で確定 | 0 |  |
+| `dry_run` | ラベル完了を `apply=False` で実行 | 0（`PromotionEvent` に T、ラベルは不変） |  |
+| `dry_run_record_completion` | 同じcycleの `record_completion` を `apply=False` で実行 | -（プレビューに現れない） | #882: 同じcycleの完了は `save_run_state` の成功後にだけ確定し、dry runは保存しない。#873 で未保存の上書きを廃止した |
+| `outcome_not_needed` | outcome recordのみ（ラベルなし） | 0（期待値。本番の欠陥 #1269 のためstrict xfail） |  |
+| `prior_merge` | 検証済み先行マージ（`prior_parent_merge_completed_issue_numbers`）のみ | 0 |  |
+| `status_repair` | `record_completion` に加え、executorの読み取りが D を実行中のまま返す | 0 | `execute_repair` が同じ `CycleContext` を使う（#902 Round 5） |
+| `recompute_release` | T が `status:blocked-recompute` を持つ | 0 | `reconcile_recovery` が束縛されたcontextから昇格する（#902 Round 4） |
+| `multiple_dependencies` | D1 をラベル、D2 を `record_completion` で別cycleに完了 | 0（遅い方のcycleから） |  |
+
+ランダム系列（`complete_dependency`・`cycle`・`restart`・`fail_next`・`toggle_hold`・`stale_snapshot`・`duplicate_completion`）では、公平性の前提が続いたら T が昇格すること（liveness）と、有効な証拠が揃っていないかhold・reservationがあるcycleでは新たに昇格させないこと（安全性）を検証します。#902 Round 4/5 相当の誤配線（完了集合を空にする、使い捨てのcontextへ渡す）をテスト内のfaultとして入れ、assertが失敗することも確認しています。
+
+本番の欠陥として切り出したものはstrict xfailで固定しています: #1267（dry runのプレビューが未解放のreservationを無視する）、#1268（recompute解除がbase-branch-redのholdと取り消された証拠を無視する）、#1269（outcome由来のnot-neededが昇格に届かない）。中間ノードのdry runプレビューでも、未解放のreservationだけが理由なら #1267 として除外します。ランダム系列がまれに見つけるもう1件の反例（障害つきのapply cycleの後、先行マージ証拠だけの依存を持つ T がdry runでプレビューされない）は #1281 で扱います。
+
+単独実行の実測は、PR #1273 で約8.4秒、#1266 の作業環境（新しいexample database、`-n0 --no-cov`、ci profile）で2.7〜6.3秒でした。
+
 ## status reconciliation の安全性と収束性（#1218）
 
 status_machine は役割・通常遷移の許可判定・1操作の純粋計画を担当します。
