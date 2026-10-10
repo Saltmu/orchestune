@@ -58,6 +58,27 @@ def expect_violation(contract_id: str) -> Iterator[None]:
     raise AssertionError(f"the injected fault did not violate {contract_id}")
 
 
+@contextmanager
+def pinned_defect(contract_id: str) -> Iterator[None]:
+    """Body of a strict-xfail test that pins a known production defect.
+
+    The marked test must pass once the defect is fixed (then XPASS fails the
+    run and the pin is removed).  While the defect exists it fails with
+    ``ContractViolation`` of exactly ``contract_id``, which the mark's
+    ``raises=ContractViolation`` accepts; a violation of another contract is a
+    different problem and fails the test for real.
+    """
+    try:
+        yield
+    except ContractViolation as violation:
+        if violation.contract_id != contract_id:
+            raise AssertionError(
+                f"the pinned counterexample violated {violation.contract_id}, "
+                f"not {contract_id}"
+            ) from violation
+        raise
+
+
 # ---- collection plugin ----------------------------------------------------------
 
 

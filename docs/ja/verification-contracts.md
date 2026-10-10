@@ -36,6 +36,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3C-INTERMEDIATE-SAFETY` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-DRYRUN-RESERVATION` | 3c | known_defect | - | #1281, #1283 |
+| `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | 3c | known_defect | - | #1281 |
 
 ### 詳細
 
@@ -68,6 +69,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3C-INTERMEDIATE-SAFETY` | 中間ノードを、自身の依存が有効かつ予約なしになる前に昇格させない | apply は昇格判定時点で判定 | 全cycle | 起きない |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | dry run の T または中間ノードの preview が、そのノードの依存の未解放 completion reservation を尊重する | preview は context snapshot 上で定義される（この側は #1267 で修正済み） | dry run の cycle。決定的なシナリオで検査（machine は T の dry run の予約 preview を除外している） | 依存の予約が未解放の間 preview しない |
 | `P3C-DRYRUN-RESERVATION` | dry run の T または中間ノードの preview が、そのノード自身の未解放 reservation を尊重する | preview は context snapshot 上で定義される | dry run の cycle | T 自身・中間ノードの予約下で preview しない |
+| `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | Forge 障害つきの apply cycle の後でも、先行マージ証拠だけの依存を持つ T が dry run で preview される | 公平なcycle（両境界で昇格可能・障害注入なし） | 障害つき apply cycle 2回のあとの dry run cycle | T が preview に現れる（N = 1） |
 
 ### `verified` ではない行
 
@@ -78,7 +80,8 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 - `P3A-DOCUMENT-TABLE` (unverified): 対照なし: 文書のずれを注入していない
 - `P3B-LAUNCH-AND-ESCALATION` (unverified): 契約idのないassertで、誤動作を注入していない
 - `P3B-PERSISTENT-BUDGET-PRESERVED` (known_defect): strict xfail が反例を固定している。修正でマークを外す
-- `P3C-DRYRUN-RESERVATION` (known_defect): 本番修正が入るまで assert_safe と中間ノードの検査がこれらの preview を除外している（依存側は別の verified 契約）
+- `P3C-DRYRUN-RESERVATION` (known_defect): strict xfail の反例で固定している（T は #1283、中間ノードは #1281 の反例1）。本番修正が入るまで assert_safe と中間ノードの検査がこれらの preview を除外している（依存側は別の verified 契約）
+- `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` (known_defect): #1281 の反例2を strict xfail で固定している。本番が先行マージの完了集合を落とすのか、公平性判定の問題なのかはまだ切り分けていない
 
 <a id="cycle-definitions"></a>
 <!-- cycle-definitions -->

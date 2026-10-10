@@ -137,6 +137,9 @@ def test_status_rules() -> None:
             assert contract.reason, f"{contract.id}: unverified needs a reason"
             assert not contract.controls, f"{contract.id}: a control makes it verified"
         elif contract.status == "known_defect":
+            # A pinned counterexample (strict xfail) is what turns the fix into an
+            # XPASS failure that forces this row to be revisited.
+            assert contract.tests, f"{contract.id}: known defect without a pinned test"
             assert contract.issues and contract.reason, contract.id
         else:
             assert contract.status == "out_of_scope"

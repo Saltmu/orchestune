@@ -25,6 +25,7 @@ from tests.dependency_liveness_test_support import (
     ISSUE_BY_SUBTASK,
     LIVENESS_BOUND,
     RECOMPUTE,
+    SELF_RESERVATION_PREVIEW_ISSUE,
     CompletionPath,
     CycleObservation,
     FaultPlan,
@@ -35,7 +36,12 @@ from tests.dependency_liveness_test_support import (
     assert_case,
     run_case,
 )
-from tests.verification_contract_test_support import expect_violation, require
+from tests.verification_contract_test_support import (
+    ContractViolation,
+    expect_violation,
+    pinned_defect,
+    require,
+)
 
 CASES = {case.name: case for case in CASE_TABLE}
 
@@ -902,3 +908,63 @@ def test_control_dry_run_dependency_reservation_bypass_is_detected(
     monkeypatch.setattr(CycleContext, "is_completion_blocked", lambda s, n: False)
     with expect_violation("P3C-DRYRUN-DEPENDENCY-RESERVATION"):
         scenario_dry_run_respects_dependency_reservation(intermediate=intermediate)
+
+
+# ---- pinned production defects (strict xfail; the fix removes the marks) ---------
+
+
+def _dry_run_preview_of(topology, dependency, reserved, subject) -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as root:
+        world = LivenessWorld(Path(root), topology=topology)
+        world.complete(dependency, CompletionPath.LABEL)
+        world.set_reservation(reserved, True)
+        observation = world.cycle(apply=False)
+    require(
+        "P3C-DRYRUN-RESERVATION",
+        subject not in observation.promotion_issue_numbers,
+        f"previewed {subject} under its own unreleased reservation: {observation}",
+    )
+
+
+@pytest.mark.xfail(
+    reason=f"production bug {SELF_RESERVATION_PREVIEW_ISSUE}",
+    strict=True,
+    raises=ContractViolation,
+)
+def test_known_defect_dry_run_previews_t_under_its_own_reservation():
+    with pinned_defect("P3C-DRYRUN-RESERVATION"):
+        _dry_run_preview_of(None, 11, DEPENDENT, DEPENDENT)
+
+
+@pytest.mark.xfail(
+    reason="production bug #1281 (counterexample 1)",
+    strict=True,
+    raises=ContractViolation,
+)
+def test_known_defect_dry_run_previews_an_intermediate_under_its_own_reservation():
+    with pinned_defect("P3C-DRYRUN-RESERVATION"):
+        _dry_run_preview_of(_INTERMEDIATE, 12, 11, 11)
+
+
+@pytest.mark.xfail(
+    reason="production bug #1281 (counterexample 2)",
+    strict=True,
+    raises=ContractViolation,
+)
+def test_known_defect_prior_merge_is_not_previewed_after_faulted_apply_cycles():
+    topology = LivenessTopology((11, 12), ("dep-a", "dep-b"), {}, (11, 12))
+    machine = DependencyLivenessMachine()
+    try:
+        with pinned_defect("P3C-LIVENESS-BOUND"):
+            machine.start(topology=topology, recompute=False)
+            machine.world.complete(11, CompletionPath.LABEL)
+            machine.world.complete(12, CompletionPath.PRIOR_MERGE)
+            machine.fail_next(mode="after", op="add")
+            machine.cycle(apply=True, lag=False)
+            machine.fail_next(mode="after", op="remove")
+            machine.cycle(apply=True, lag=True)
+            machine.cycle(apply=False, lag=False)
+    finally:
+        machine.teardown()
