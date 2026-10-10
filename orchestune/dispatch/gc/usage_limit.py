@@ -590,11 +590,14 @@ def handle_usage_limit_reclaim(
     open_prs: Sequence[PrRecord] | None,
     held_worktree_paths: frozenset[str],
     now: float,
+    prior_events: Sequence[CompletionEvent] = (),
 ) -> RepairResult | None:
     """Divert a typed ``LOCAL_PROCESS_DEAD`` reclaim that is really a session limit.
 
     The normal reclaim would spend ``max_task_reclaims`` on an exit that is not a
     crash. ``None`` means "not a session limit": the caller runs its normal reclaim.
+    ``prior_events`` are the earlier phases' events: a hold among them (or in
+    ``events``) is not retried within the cycle.
     """
     if (
         command.code != COMMAND_RECLAIM
@@ -606,7 +609,7 @@ def handle_usage_limit_reclaim(
     if found is None:
         return None
     key, active = found
-    if _held_this_cycle(events, active.core.issue_number):
+    if _held_this_cycle([*prior_events, *events], active.core.issue_number):
         return _skipped(command, "held earlier in this cycle")
     if (
         active.core.worktree_path in held_worktree_paths

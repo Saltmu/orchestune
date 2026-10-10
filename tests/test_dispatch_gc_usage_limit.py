@@ -695,6 +695,43 @@ class TestTypedReclaimDiversion:
         assert "status:in-progress" in _labels(world)
         assert world.state.task_reclaim_counts == {}
 
+    def test_a_hold_from_the_active_phase_is_not_retried_by_the_reclaim_handler(
+        self, world, effects
+    ):
+        from orchestune.consistency.models import RepairStatus
+        from orchestune.dispatch.cycle_events import UsageLimitCompletion
+        from orchestune.dispatch.phase_gc import build_gc_reclaim_handler
+
+        _write_run(world, f"{LIMIT_LINE}\n")
+        held = UsageLimitCompletion(
+            issue_number=1,
+            action="usage_limit_held",
+            target="claude-cli",
+            reset_known=True,
+            retries_remaining=2,
+            reason="worktree_removal_failed",
+        )
+        fresh: list = []
+
+        with _lock(world.config):
+            handler = build_gc_reclaim_handler(
+                world.state,
+                {1: world.task},
+                world.config,
+                [held],
+                (),
+                event_sink=fresh,
+                now=NOW,
+            )
+            result = handler(self._command())
+
+        assert result.status is RepairStatus.SKIPPED
+        assert fresh == []
+        effects.backup.assert_not_called()
+        effects.remove.assert_not_called()
+        assert "status:in-progress" in _labels(world)
+        assert world.state.task_reclaim_counts == {}
+
 
 class TestThroughTheDispatchCycle:
     """The whole cycle: classification happens before dirty / no-outcome handling."""
