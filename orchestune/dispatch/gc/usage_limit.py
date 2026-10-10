@@ -563,6 +563,14 @@ def _active_for_subject(
     )
 
 
+def _skipped(command: RepairCommand, detail: str) -> RepairResult:
+    return RepairResult(
+        command=command,
+        status=RepairStatus.SKIPPED,
+        diagnostics=(f"session usage limit: {detail}",),
+    )
+
+
 def _held_this_cycle(events: Sequence[CompletionEvent], issue: int) -> bool:
     """A hold already reported for this issue must not be retried within the cycle."""
     return any(
@@ -599,11 +607,7 @@ def handle_usage_limit_reclaim(
         return None
     key, active = found
     if _held_this_cycle(events, active.core.issue_number):
-        return RepairResult(
-            command=command,
-            status=RepairStatus.SKIPPED,
-            diagnostics=("session usage limit: held earlier in this cycle",),
-        )
+        return _skipped(command, "held earlier in this cycle")
     if (
         active.core.worktree_path in held_worktree_paths
         or has_completion_reservation(active)
@@ -623,9 +627,11 @@ def handle_usage_limit_reclaim(
     if event is None:
         return None
     events.append(event)
-    applied = config.apply and getattr(event, "action", "") != "usage_limit_held"
+    action = getattr(event, "action", "")
+    if not config.apply or action == "usage_limit_held":
+        return _skipped(command, action)
     return RepairResult(
         command=command,
-        status=RepairStatus.APPLIED if applied else RepairStatus.SKIPPED,
-        diagnostics=(f"session usage limit: {getattr(event, 'action', '')}",),
+        status=RepairStatus.APPLIED,
+        diagnostics=(f"session usage limit: {action}",),
     )
