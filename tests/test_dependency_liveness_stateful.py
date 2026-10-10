@@ -131,24 +131,33 @@ def test_unreleased_completion_reservation_prevents_promotion(tmp_path):
     assert world.cycle().promoted
 
 
-def scenario_dry_run_respects_dependency_reservation() -> None:
-    """P3C-DRYRUN-DEPENDENCY-RESERVATION: D's unreleased reservation blocks the preview."""
+def scenario_dry_run_respects_dependency_reservation(*, intermediate: bool) -> None:
+    """P3C-DRYRUN-DEPENDENCY-RESERVATION: the preview of T (or of an intermediate
+    node) is blocked by the unreleased reservation of its dependency."""
     import tempfile
 
+    topology = (
+        LivenessTopology((11, 12), ("dep-a",), {11: ("dep-b",)}, (11,))
+        if intermediate
+        else None
+    )
+    dependency, subject = (12, 11) if intermediate else (11, DEPENDENT)
     with tempfile.TemporaryDirectory() as root:
-        world = LivenessWorld(Path(root))
-        world.complete(11, CompletionPath.LABEL)
-        world.set_reservation(11, True)
+        world = LivenessWorld(Path(root), topology=topology)
+        world.complete(dependency, CompletionPath.LABEL)
+        world.set_reservation(dependency, True)
         observation = world.cycle(apply=False)
     require(
         "P3C-DRYRUN-DEPENDENCY-RESERVATION",
-        not observation.previewed,
-        f"previewed T under D's unreleased reservation: {observation}",
+        subject not in observation.promotion_issue_numbers,
+        f"previewed {subject} under its dependency's unreleased reservation: "
+        f"{observation}",
     )
 
 
-def test_dry_run_preview_respects_unreleased_completion_reservation():
-    scenario_dry_run_respects_dependency_reservation()
+@pytest.mark.parametrize("intermediate", [False, True], ids=["target", "intermediate"])
+def test_dry_run_preview_respects_unreleased_completion_reservation(intermediate):
+    scenario_dry_run_respects_dependency_reservation(intermediate=intermediate)
 
 
 def test_recompute_release_respects_base_branch_red_hold(tmp_path):
@@ -226,17 +235,21 @@ def _known_intermediate_dry_run_reservation(
     deps: tuple[str, ...],
     number: int,
 ) -> bool:
-    """DRY_RUN_RESERVATION_ISSUE (#1267) for an intermediate node, as for T.
+    """The own-reservation dry-run preview of an intermediate node (#1281).
 
-    Excused only when an unreleased reservation is the sole reason: every
-    dependency has preview-visible evidence at cycle start (#1281).
+    Excused only when the node's own unreleased reservation is the sole reason:
+    every dependency has preview-visible evidence at cycle start and none of
+    them is reserved.
     """
     view = observation.at_start
     return (
         not observation.apply
         and len(required) == len(deps)
         and set(required) <= view.preview_visible
-        and bool((set(required) | {number}) & view.reserved)
+        # Only the node's own reservation (the #1283 analogue); a reserved
+        # dependency is the fixed #1267 behaviour and stays checked.
+        and number in view.reserved
+        and not set(required) & view.reserved
     )
 
 
@@ -879,10 +892,13 @@ def test_control_intermediate_reservation_guard_bypass_is_detected(monkeypatch):
         scenario_completion(CompletionPath.LABEL, **kwargs)
 
 
-def test_control_dry_run_dependency_reservation_bypass_is_detected(monkeypatch):
+@pytest.mark.parametrize("intermediate", [False, True], ids=["target", "intermediate"])
+def test_control_dry_run_dependency_reservation_bypass_is_detected(
+    monkeypatch, intermediate
+):
     """The dependency side is fixed (#1267), so a dry run is checked here
-    deterministically; the random machine excuses dry-run reservation previews."""
-    scenario_dry_run_respects_dependency_reservation()
+    deterministically; the random machine excuses T's dry-run reservation previews."""
+    scenario_dry_run_respects_dependency_reservation(intermediate=intermediate)
     monkeypatch.setattr(CycleContext, "is_completion_blocked", lambda s, n: False)
     with expect_violation("P3C-DRYRUN-DEPENDENCY-RESERVATION"):
-        scenario_dry_run_respects_dependency_reservation()
+        scenario_dry_run_respects_dependency_reservation(intermediate=intermediate)
