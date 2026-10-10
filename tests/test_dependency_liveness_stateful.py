@@ -957,14 +957,23 @@ def test_known_defect_prior_merge_is_not_previewed_after_faulted_apply_cycles():
     topology = LivenessTopology((11, 12), ("dep-a", "dep-b"), {}, (11, 12))
     machine = DependencyLivenessMachine()
     try:
-        with pinned_defect("P3C-LIVENESS-BOUND"):
-            machine.start(topology=topology, recompute=False)
-            machine.world.complete(11, CompletionPath.LABEL)
-            machine.world.complete(12, CompletionPath.PRIOR_MERGE)
-            machine.fail_next(mode="after", op="add")
-            machine.cycle(apply=True, lag=False)
-            machine.fail_next(mode="after", op="remove")
-            machine.cycle(apply=True, lag=True)
-            machine.cycle(apply=False, lag=False)
+        machine.start(topology=topology, recompute=False)
+        machine.world.complete(11, CompletionPath.LABEL)
+        machine.world.complete(12, CompletionPath.PRIOR_MERGE)
+        machine.fail_next(mode="after", op="add")
+        machine.cycle(apply=True, lag=False)
+        machine.fail_next(mode="after", op="remove")
+        machine.cycle(apply=True, lag=True)
+        # Only the final dry run is the counterexample; a violation of the
+        # earlier cycles is a general failure and is not pinned.
+        with pinned_defect("P3C-LIVENESS-PRIOR-MERGE-DRYRUN"):
+            try:
+                machine.cycle(apply=False, lag=False)
+            except ContractViolation as violation:
+                if violation.contract_id != "P3C-LIVENESS-BOUND":
+                    raise
+                raise ContractViolation(
+                    "P3C-LIVENESS-PRIOR-MERGE-DRYRUN", violation.detail
+                ) from violation
     finally:
         machine.teardown()

@@ -127,6 +127,17 @@ def test_every_referenced_node_exists_and_is_not_skipped(
                 assert not marks["xfail"], f"{contract.id}: {name} is xfailed"
 
 
+def test_known_defects_pin_their_own_contract_id() -> None:
+    """A strict xfail may only be backed by a violation of its own row's id."""
+    for contract in CONTRACTS:
+        if contract.status != "known_defect":
+            continue
+        for node in contract.tests:
+            assert contract.id in _named_ids(
+                node, "pinned_defect"
+            ), f"{node} does not pin {contract.id} with pinned_defect(...)"
+
+
 def test_status_rules() -> None:
     for contract in CONTRACTS:
         if contract.status == "verified":
@@ -169,13 +180,13 @@ def test_contract_ids_match_the_assertions_in_the_tests() -> None:
             assert contract.id in raised, f"{contract.id} is never asserted"
         for nodes in contract.controls.values():
             for node in nodes:
-                assert contract.id in _expected_ids(
-                    node
+                assert contract.id in _named_ids(
+                    node, "expect_violation"
                 ), f"{node} never expects {contract.id} in expect_violation(...)"
 
 
-def _expected_ids(node: str) -> set[str]:
-    """String constants inside ``expect_violation(...)`` calls of the control function."""
+def _named_ids(node: str, call_name: str) -> set[str]:
+    """String constants inside ``call_name(...)`` calls of the referenced function."""
     path, *_, name = node.split("::")
     tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
     functions = [
@@ -190,7 +201,7 @@ def _expected_ids(node: str) -> set[str]:
             if (
                 isinstance(call, ast.Call)
                 and isinstance(call.func, ast.Name)
-                and call.func.id == "expect_violation"
+                and call.func.id == call_name
             ):
                 found.update(
                     const.value
