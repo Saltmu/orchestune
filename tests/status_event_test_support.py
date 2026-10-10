@@ -332,7 +332,7 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
     ),
     "dispatch/gc/completion.py::_finalize_not_needed_worktree": (
         _r(_E.NOT_NEEDED, _K.PLAIN, "labelled"),
-        _r(_E.COMPLETE_WITHOUT_LABEL, _K.NOT_NEEDED_OUTCOME, "outcome-only"),
+        _r(_E.NOT_NEEDED, _K.PLAIN, "outcome-only", "in-progress"),
         _r(_E.AWAIT_REVIEW, _K.PLAIN, "cloud-review-dispatched"),
     ),
     "dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim": (
@@ -358,7 +358,7 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
         ),
     ),
     "dispatch/gc/__init__.py::_rule_not_needed": (
-        _r(_E.COMPLETE_WITHOUT_LABEL, _K.NOT_NEEDED_OUTCOME, "outcome-only"),
+        _r(_E.NOT_NEEDED, _K.PLAIN, "outcome-only"),
         _r(_E.AWAIT_REVIEW, _K.PLAIN, "cloud-review-dispatched"),
     ),
     "dispatch/status_repair.py::_apply_command": (
@@ -841,7 +841,7 @@ def rule_not_needed_outcome(env: CaseEnv) -> tuple[Observation, ...]:
     state = RunState(active_worktrees={key: active})
     ctx = _RuleExecutionContext(
         run_state=state,
-        queries=_fake(),
+        queries=_fake(record_completion=lambda _issue: None),
         config=env.config,
         not_needed_review_dispatcher=_not_needed_review_dispatcher(env),
     )

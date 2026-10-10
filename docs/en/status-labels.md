@@ -170,7 +170,7 @@ mapped to their production call sites (`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / lab
 | `NOT_NEEDED` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
 | `BLOCK` (`COMPLETION`) | `status:in-progress`, `status:queued` | `status:blocked` | `complete/status_labels.py::_completion_mutate` |
 | `COMPLETE_WITHOUT_LABEL` (`CYCLE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/cycle_context_state.py::_CycleState.record_completion` |
-| `COMPLETE_WITHOUT_LABEL` (`NOT_NEEDED_OUTCOME`) | `status:in-progress` | - | `dispatch/gc/__init__.py::_rule_not_needed` |
+| `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/__init__.py::_rule_not_needed` |
 | `AWAIT_REVIEW` (`PLAIN`) | `status:in-progress` | - | `dispatch/gc/__init__.py::_rule_not_needed` |
 | `RECLAIM` (`PLAIN`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim` |
 | `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_blocked_hold` |
@@ -178,7 +178,7 @@ mapped to their production call sites (`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / lab
 | `COMPLETE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `dispatch/gc/completion.py::_apply_done_worktree_cleanup` |
 | `BLOCK` (`BASE_BRANCH_RED`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_escalated_base_branch_red` |
 | `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
-| `COMPLETE_WITHOUT_LABEL` (`NOT_NEEDED_OUTCOME`) | `status:in-progress` | - | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
+| `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
 | `AWAIT_REVIEW` (`PLAIN`) | `status:in-progress` | - | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
 | `REQUEUE` (`EARLY_DEATH`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
 | `REQUEUE` (`REVIEW_TIMEOUT`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
@@ -300,7 +300,7 @@ The guaranteed bound is N=1 cycle. What is checked is not the bound but agreemen
 | `record_completion` | an active worktree's completion confirmed by `record_completion` in the same cycle | 0 |  |
 | `dry_run` | label completion with `apply=False` | 0 (T in `PromotionEvent`, labels unchanged) |  |
 | `dry_run_record_completion` | same-cycle `record_completion` with `apply=False` | - (never previewed) | #882: a same-cycle completion is confirmed only after `save_run_state` succeeds, which a dry run never does; #873 removed the unsaved overlay |
-| `outcome_not_needed` | an Outcome record only, no label | 0 (expected; strict xfail for production defect #1269) |  |
+| `outcome_not_needed` | an Outcome record only, no label | 0 | Local confirmation adds `status:not-needed` and reaches same-cycle dependency evaluation after the run-state save (#1269) |
 | `prior_merge` | a verified prior parent merge (`prior_parent_merge_completed_issue_numbers`) only | 0 |  |
 | `status_repair` | `record_completion` while the executor's reads still return D as in progress | 0 | `execute_repair` uses the same `CycleContext` (#902 Round 5) |
 | `recompute_release` | T holds `status:blocked-recompute` | 0 | `reconcile_recovery` promotes from the bound context (#902 Round 4) |
@@ -308,7 +308,7 @@ The guaranteed bound is N=1 cycle. What is checked is not the bound but agreemen
 
 Random sequences (`complete_dependency`, `cycle`, `restart`, `fail_next`, `toggle_hold`, `stale_snapshot`, `duplicate_completion`) check liveness (T is promoted once the fairness assumptions persist) and safety (no new promotion in a cycle without valid evidence or with a hold or reservation). Test-only faults equivalent to the #902 Round 4/5 miswiring (an empty completion set, a throwaway context) must make the assertions fail.
 
-Production defects split out are pinned as strict xfails: #1267 (the dry-run preview ignores unreleased reservations), #1268 (the recompute release ignores a base-branch-red hold and revoked evidence), #1269 (an outcome-derived not-needed never reaches promotion). A dry-run preview of an intermediate node is excused as #1267 too when an unreleased reservation is the only reason. Another rare counterexample of the random sequences (after apply cycles with faults, T depending on prior-merge evidence is not previewed in a dry run) is tracked in #1281.
+Production defects split out are pinned as strict xfails: #1267 (the dry-run preview ignores unreleased reservations) and #1268 (the recompute release ignores a base-branch-red hold and revoked evidence). A dry-run preview of an intermediate node is excused as #1267 too when an unreleased reservation is the only reason. Another rare counterexample of the random sequences (after apply cycles with faults, T depending on prior-merge evidence is not previewed in a dry run) is tracked in #1281.
 
 Standalone runs took about 8.4 s in PR #1273 and 2.7-6.3 s in the #1266 environment (fresh example database, `-n0 --no-cov`, ci profile).
 

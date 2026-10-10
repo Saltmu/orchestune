@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.gc import _rule_completed
+from orchestune.dispatch.gc import _rule_completed, _rule_not_needed
 from orchestune.dispatch.gc.completion import (
     _fetch_outcome_for_active,
     _local_pr_completion_status,
 )
-from orchestune.models import PrRecord
+from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeLookupState, OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _rule_ctx, _task
 from tests.dispatch_test_support import flat_active_worktree
@@ -117,3 +119,53 @@ def test_issue_comment_lookup_failure_holds_before_closed_pr_reclaim(
     assert outcome.completion_event.to_dict()["operation"] == "list_comments"
     fake_forge.list_prs.assert_not_called()
     fake_forge.add_label.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["worktree", "close", "verification"])
+def test_not_needed_finalization_failure_keeps_active_entry_for_retry(
+    tmp_path, fake_forge, failure
+):
+    active = _active(pid=None)
+    task = _task(status_labels=("status:in-progress",))
+    ctx = _rule_ctx(
+        forge=fake_forge,
+        tasks_by_issue={active.core.issue_number: task},
+    )
+    ctx.config.apply = True
+    ctx.run_state.active_worktrees["280"] = active
+    fake_forge.get_issue.return_value = IssueRecord(
+        number=280,
+        title="task",
+        body="",
+        labels=("status:in-progress",),
+        created_at="",
+        state="OPEN",
+    )
+    if failure == "close":
+        fake_forge.close_issue.side_effect = RuntimeError("close response lost")
+    if failure == "worktree":
+        remove_worktree = patch(
+            "orchestune.dispatch.gc.completion.remove_worktree",
+            side_effect=RuntimeError("worktree removal failed"),
+        )
+    else:
+        remove_worktree = patch("orchestune.dispatch.gc.completion.remove_worktree")
+
+    with (
+        patch("orchestune.dispatch.gc._has_not_needed_outcome", return_value=True),
+        patch(
+            "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+            return_value=False,
+        ),
+        remove_worktree,
+        pytest.raises(RuntimeError),
+    ):
+        _rule_not_needed(ctx, "280", active, task)
+
+    assert ctx.run_state.active_worktrees["280"] is active
+    assert ctx.run_state.completed_worktrees == []
+    assert ctx.is_completion_confirmed(280) is False
+    if failure == "worktree":
+        fake_forge.close_issue.assert_not_called()
+    else:
+        fake_forge.close_issue.assert_called_once()

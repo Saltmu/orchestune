@@ -884,16 +884,31 @@ def _finalize_not_needed_worktree(
         if hold := fresh_external_hold(active, config, "completion"):
             return hold.event()
         remove_worktree(active.core.worktree_path)
-    config.resolved_forge.remove_label(
-        active.core.issue_number, StatusLabel.IN_PROGRESS
-    )
     if not isinstance(config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget):
+        transition_status_label(
+            config.resolved_forge,
+            active.core.issue_number,
+            StatusLabel.NOT_NEEDED,
+            PRIMARY_STATUS_LABELS,
+        )
         config.resolved_forge.close_issue(
             active.core.issue_number,
             "not planned",
             comment="対応不要（status:not-needed）と判定されたため、Orchestuneが自動的にクローズしました。",
         )
+        issue = config.resolved_forge.get_issue(active.core.issue_number)
+        if (
+            issue is None
+            or issue.state.upper() != "CLOSED"
+            or StatusLabel.NOT_NEEDED.value not in issue.labels
+        ):
+            raise RuntimeError(
+                f"Could not confirm not-needed close for #{active.core.issue_number}; retrying"
+            )
         return _task_completion_event(active, subtask_id, "not_needed")
+    config.resolved_forge.remove_label(
+        active.core.issue_number, StatusLabel.IN_PROGRESS
+    )
     if dispatch_not_needed_review is None:
         raise RuntimeError("not-needed review dispatcher is not configured")
     dispatch_not_needed_review(active.core.issue_number, subtask_id, config)
