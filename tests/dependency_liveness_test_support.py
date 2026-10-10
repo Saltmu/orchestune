@@ -43,6 +43,7 @@ from tests.dispatch_test_support import (
     save_locked_run_state,
 )
 from tests.status_reconciliation_test_support import FaultBoundary
+from tests.verification_contract_test_support import require
 
 PARENT = 100
 DEPENDENT = 20
@@ -691,11 +692,26 @@ def assert_case(world: LivenessWorld, case: LivenessCase) -> None:
     for observation in world.observations:
         shown = observation.previewed if not case.apply else observation.promoted
         if expected is None or observation.index < expected:
-            assert not shown, f"cycle {observation.index}: T promoted early"
+            require(
+                "P3C-CASE-DELAY",
+                not shown,
+                f"{case.name} cycle {observation.index}: T promoted early",
+            )
             continue
         if observation.index == expected:
-            assert observation.propagated() == set(
-                world.dependencies
-            ), f"cycle {observation.index}: evidence did not reach the decision"
-            assert shown, f"cycle {observation.index}: T was not promoted"
-            assert case.apply or observation.t_after == observation.t_before
+            require(
+                "P3C-CASE-DELAY",
+                observation.propagated() == set(world.dependencies),
+                f"{case.name} cycle {observation.index}: evidence did not reach "
+                "the decision",
+            )
+            require(
+                "P3C-CASE-DELAY",
+                shown,
+                f"{case.name} cycle {observation.index}: T was not promoted",
+            )
+            require(
+                "P3C-CASE-DELAY",
+                case.apply or observation.t_after == observation.t_before,
+                f"{case.name} cycle {observation.index}: dry run changed labels",
+            )

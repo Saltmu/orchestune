@@ -51,6 +51,7 @@ from tests.consistency_status_test_support import (
     _status_intent,
     _task_scope,
 )
+from tests.verification_contract_test_support import expect_violation, require
 
 
 def _plan(
@@ -347,15 +348,32 @@ def test_plan_survives_a_report_rebuilt_from_plain_strings() -> None:
     assert "no-promotion-hold" in command.preconditions
 
 
-def test_plan_refuses_to_strip_a_human_gate_even_when_told_to() -> None:
-    """A report may claim anything; removing a human gate stays out of reach."""
+def scenario_plan_keeps_the_human_gate() -> None:
+    """P2-PLAN-HUMAN-GATE: a report may claim anything; the gate stays out of reach."""
     report = _automatic_finding(
         PRIMARY_STATUS_CONFLICT,
         expected="status:done",
         observed=("status:blocked-human-review", "status:done"),
     )
+    plan = plan_status_repairs(report)
+    require("P2-PLAN-HUMAN-GATE", plan == (), f"planned {[c.code for c in plan]}")
 
-    assert plan_status_repairs(report) == ()
+
+def test_plan_refuses_to_strip_a_human_gate_even_when_told_to() -> None:
+    scenario_plan_keeps_the_human_gate()
+
+
+def test_control_planner_gate_bypass_is_detected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both layers of the planner's gate (protection table and escalation set)."""
+    from orchestune.consistency.repairs import status as repairs
+
+    scenario_plan_keeps_the_human_gate()
+    monkeypatch.setattr(repairs, "status_repair_preserves_protection", lambda *a: True)
+    monkeypatch.setattr(repairs, "TERMINAL_ESCALATION_LABELS", ())
+    with expect_violation("P2-PLAN-HUMAN-GATE"):
+        scenario_plan_keeps_the_human_gate()
 
 
 _UNTRUSTWORTHY_FORGE_SCOPES: dict[str, tuple[ScopedObservations, ...]] = {
