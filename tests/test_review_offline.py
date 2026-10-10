@@ -267,6 +267,106 @@ def test_in_progress_tracker_in_this_round_is_exit_11() -> None:
     assert outcome.payload["acquisition_status"] == "in_progress"
 
 
+CODEX_TRACKER = (
+    "<!-- codex-pull-request-review-summary -->\n"
+    "| Review | Status | Commit | Review trigger |\n"
+    "| --- | --- | --- | --- |\n"
+    "| 📝 **Code Review** | 🔄 **{status}** since "
+    '<relative-time datetime="2026-10-04T03:15:00Z">'
+    "2026-10-04T03:15:00Z</relative-time> | `abc1234` | Manual request |\n"
+    "<details><summary>About Codex</summary>Reviews are running.</details>"
+)
+
+
+def test_codex_running_tracker_in_this_round_is_exit_11() -> None:
+    value = snap(
+        [
+            trig(1, 1, 10, bot="codex"),
+            comment(
+                30,
+                15,
+                CODEX_TRACKER.format(status="Running"),
+                login="chatgpt-codex-connector[bot]",
+            ),
+        ]
+    )
+    outcome = evaluate(value, bot="codex")
+    assert outcome.exit_code == 11
+    assert outcome.payload["acquisition_status"] == "in_progress"
+    assert outcome.payload["review_items"] == []
+
+
+def test_codex_completed_tracker_only_is_exit_30() -> None:
+    value = snap(
+        [
+            trig(1, 1, 10, bot="codex"),
+            comment(
+                30,
+                15,
+                CODEX_TRACKER.format(status="Completed"),
+                login="chatgpt-codex-connector[bot]",
+            ),
+        ]
+    )
+    outcome = evaluate(value, bot="codex")
+    assert outcome.exit_code == 30
+    assert outcome.payload["review_body"] == ""
+    assert outcome.payload["review_items"] == []
+
+
+def test_codex_completed_tracker_with_real_review_is_acquired() -> None:
+    value = snap(
+        [
+            trig(1, 1, 10, bot="codex"),
+            comment(
+                30,
+                15,
+                CODEX_TRACKER.format(status="Completed"),
+                login="chatgpt-codex-connector[bot]",
+            ),
+        ],
+        reviews=[
+            review(
+                40,
+                16,
+                body="Actual review result.",
+                login="chatgpt-codex-connector[bot]",
+            )
+        ],
+    )
+    outcome = evaluate(value, bot="codex")
+    assert outcome.exit_code == 0
+    assert outcome.payload["review_body"] == "Actual review result."
+    assert all(item["id"] != 30 for item in outcome.payload["review_items"])
+
+
+def test_codex_completed_tracker_with_inline_review_is_acquired() -> None:
+    value = snap(
+        [
+            trig(1, 1, 10, bot="codex"),
+            comment(
+                30,
+                15,
+                CODEX_TRACKER.format(status="Completed"),
+                login="chatgpt-codex-connector[bot]",
+            ),
+        ],
+        reviews=[
+            review(
+                40,
+                15,
+                body="",
+                login="chatgpt-codex-connector[bot]",
+            )
+        ],
+        inlines=[inline(50, 40, 16, login="chatgpt-codex-connector[bot]")],
+    )
+    outcome = evaluate(value, bot="codex")
+    assert outcome.exit_code == 0
+    assert "see 1 inline comment(s)" in outcome.payload["review_body"]
+    assert [item["id"] for item in outcome.payload["inline_comments"]] == [50]
+
+
 def test_trigger_id_does_not_hide_a_review_with_the_same_number() -> None:
     outcome = evaluate(first_round(reviews=[review(1, 15)]))
     assert outcome.exit_code == 0

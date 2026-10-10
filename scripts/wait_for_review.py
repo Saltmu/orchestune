@@ -535,7 +535,12 @@ def _check_immediate_review_result(
     repository: str | None = None,
     exclude_ids: set[int | str] | None = None,
 ) -> dict[str, Any] | None:
-    latest_bot_activity = _latest_bot_activity_item(initial_data, bot_name, exclude_ids)
+    latest_bot_activity = _latest_bot_activity_item(
+        initial_data,
+        bot_name,
+        exclude_ids,
+        round_started_at=latest_trigger_time,
+    )
     latest_bot_item = _latest_bot_summary_item(initial_data, bot_name, exclude_ids)
     if (
         latest_bot_item is not None
@@ -830,7 +835,10 @@ def wait_for_review(
                 # StalledReviewError once the signature has been unchanged for
                 # longer than stall_grace_seconds.
                 current_bot_activity = _latest_bot_activity_item(
-                    current_data, bot_name, exclude_ids=excluded_ids
+                    current_data,
+                    bot_name,
+                    exclude_ids=excluded_ids,
+                    round_started_at=latest_trigger_time,
                 )
                 last_in_progress_signature, in_progress_since = _track_stall(
                     current_bot_activity,

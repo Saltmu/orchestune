@@ -53,6 +53,9 @@ def launch_env(tmp_path):
     )
     with (
         patch.object(target, "completion_status", return_value="pending"),
+        # Recovery observes runtime status as well as completion. Keep the fake
+        # provider unknown without launching the real Codex Cloud CLI.
+        patch.object(target, "_fetch_task_status", return_value=None),
         patch("orchestune.worktree_ops.preparation._create_worktree", autospec=True),
         patch(
             "orchestune.dispatch.worktree._cleanup_existing_worktree",
@@ -327,7 +330,16 @@ def test_startup_recovery_without_pr_never_requeues_a_possible_launch(
     forge.remove_label(1, "status:queued")
     forge.add_label(1, status)
     fresh = RunState()
-    _run_recovery_bookkeeping_boundary(fresh, config, now=110.0)
+    with patch(
+        "orchestune.dispatch.targets._fetch_codex_cloud_page",
+        side_effect=lambda *_: pytest.fail(
+            "Unit test attempted a live Codex Cloud status lookup. "
+            "Mock the provider's _fetch_task_status in launch_env; "
+            "startup recovery also probes execution_status."
+        ),
+    ) as provider_fetch:
+        _run_recovery_bookkeeping_boundary(fresh, config, now=110.0)
+    provider_fetch.assert_not_called()
     assert "status:queued" not in forge.get_issue_labels(1)
     assert launch.call_count == 1
     if known:
