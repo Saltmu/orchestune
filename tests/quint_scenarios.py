@@ -8,6 +8,7 @@ the fixture readers and the command that regenerates the saved traces.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -33,6 +34,7 @@ from tests.quint_replay import (
     normalized,
     pinned_quint_version,
     run_model,
+    witness_counts,
 )
 
 # ---- scenarios, fixtures and the CI exploration ---------------------------------
@@ -200,6 +202,11 @@ def _cycle_routes(state: Mapping[str, Any], held: set[int]) -> set[str]:
 
 
 REPLAY_DIR_ENV = "ORCHESTUNE_QUINT_REPLAY_DIR"
+#: The session directory the local CI created for this run.  Read when the module
+#: is imported at collection: the suite scrubs every ``ORCHESTUNE_*`` variable from
+#: each test's environment (tests/environment_support.py, #1248), so a test could
+#: not read it at run time.
+REPLAY_DIR = os.environ.get(REPLAY_DIR_ENV)
 
 
 @lru_cache(maxsize=1)
@@ -244,6 +251,7 @@ def write_summary(
         "explore_seconds": round(run.seconds, 1),
         "traces": len(run.traces),
         "replay_seconds": round(replay_seconds, 1),
+        "witnessed_runs": witness_counts(run.stdout),
         "replayed_transitions": replayed.transitions,
         "replayed_cycles": replayed.cycles,
         "checked_obligations": replayed.obligations,

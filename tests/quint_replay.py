@@ -183,6 +183,14 @@ def command_line(
     return command
 
 
+def witness_counts(stdout: str) -> dict[str, int]:
+    """How many sampled runs reached each witness (``--witnesses`` report)."""
+    return {
+        name: int(count)
+        for name, count in re.findall(r"(\w+) was witnessed in (\d+) trace", stdout)
+    }
+
+
 def run_model(
     bounds: Exploration,
     *,

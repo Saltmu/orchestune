@@ -58,7 +58,7 @@ from tests.quint_replay import (
 from tests.quint_scenarios import (
     EXPLORATION,
     FAULTS_FIXTURE,
-    REPLAY_DIR_ENV,
+    REPLAY_DIR,
     REQUIRED_ROUTES,
     STORED_SCENARIOS,
     SUMMARY_NAME,
@@ -198,10 +198,9 @@ EXPECTED_TOPOLOGIES = {
 @pytest.fixture
 def replay_dir(request: pytest.FixtureRequest, tmp_path: Path) -> Path:
     """The session directory the local CI created, else a pytest temp directory."""
-    configured = os.environ.get(REPLAY_DIR_ENV)
-    if not configured:
+    if not REPLAY_DIR:
         return tmp_path
-    target = Path(configured) / str(request.node.name)
+    target = Path(REPLAY_DIR) / str(request.node.name)
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -229,7 +228,9 @@ def test_bounded_exploration_replays_on_production(replay_dir: Path) -> None:
         trace = parse_trace(json.loads(path.read_text(encoding="utf-8")))
         first = trace.steps[0].state
         seen[first["topo"]] = _shape_key(build_topology(first["shape"]))
-        report = replay_trace(trace, replay_dir / f"world-{index}")
+        world = replay_dir / f"world-{index}"
+        report = replay_trace(trace, world)
+        shutil.rmtree(world, ignore_errors=True)
         assert report.transitions == trace.transitions > 0, path.name
         totals.transitions += report.transitions
         totals.cycles += report.cycles
