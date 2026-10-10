@@ -30,10 +30,12 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P3B-LAUNCH-AND-ESCALATION` | 3b | unverified | - | - |
 | `P3B-PERSISTENT-BUDGET-PRESERVED` | 3b | known_defect | - | #1279, #1280 |
 | `P3C-CASE-DELAY` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `empty-completion-set`, `throwaway-context` | - |
-| `P3C-LIVENESS-BOUND` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `event-only` | - |
+| `P3C-LIVENESS-BOUND` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `event-only`, `empty-completion-set`, `throwaway-context` | - |
 | `P3C-INTERMEDIATE-LIVENESS` | 3c | verified | `intermediate-ignored`, `promotion-suppressed` | - |
-| `P3C-SAFETY` | 3c | verified | `hold-guard-bypass`, `reservation-guard-bypass`, `stale-evidence` | - |
+| `P3C-SAFETY` | 3c | verified | `hold-guard-bypass`, `reservation-guard-bypass`, `stale-evidence`, `action-mapping-dropped` | - |
 | `P3C-INTERMEDIATE-SAFETY` | 3c | verified | `reservation-guard-bypass` | - |
+| `P3C-QUINT-MODEL` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `stale-evidence`, `intermediate-ignored`, `reservation-guard-bypass`, `hold-guard-bypass`, `event-only` | - |
+| `P3C-QUINT-OBSERVATION` | 3c | verified | `action-mapping-swapped` | - |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-DRYRUN-RESERVATION` | 3c | known_defect | - | #1281, #1283 |
 | `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | 3c | known_defect | - | #1281 |
@@ -67,6 +69,8 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P3C-INTERMEDIATE-LIVENESS` | an intermediate node is promoted (apply) or previewed (dry run) after N = 1 fair cycle | its own dependencies are valid and unreserved at both boundaries | end of the first fair cycle for that node | N = 1 |
 | `P3C-SAFETY` | no promotion (or dry-run preview) without valid evidence, or under a hold or reservation | apply is judged at the promotion point, a dry run at cycle start | every cycle | never |
 | `P3C-INTERMEDIATE-SAFETY` | an intermediate node is not promoted before its own dependencies are valid and unreserved | apply is judged at the promotion point | every cycle | never |
+| `P3C-QUINT-MODEL` | the Quint model keeps safety, bounded liveness (N = 1), event = real label (apply) and a read-only dry run | finite topologies (up to four dependency Issues), the model's fairness, sampled search with the recorded seed and bounds | model state after each action | no invariant violation; each model fault violates exactly its invariants |
+| `P3C-QUINT-OBSERVATION` | at every replayed step the production state agrees with the model before the action runs | the action table of `tests/quint_replay.py` | each transition of a replayed ITF trace | every precondition holds on the real harness |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | a dry-run preview of T or an intermediate node respects an unreleased completion reservation of the node's dependency | the preview is defined over the context snapshot (#1267 fixed this side) | dry-run cycle, checked by a deterministic scenario (the machine excuses T's dry-run reservation previews) | no preview while D's reservation is unreleased |
 | `P3C-DRYRUN-RESERVATION` | a dry-run preview of T or an intermediate node respects the node's own unreleased reservation | the preview is defined over the context snapshot | dry-run cycle | no preview under T's own or an intermediate node's own reservation |
 | `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | after Forge-faulted apply cycles a dry run still previews T whose dependency has only prior-merge evidence | fair cycle (promotable at both boundaries, no injected failure) | the dry-run cycle after two faulted apply cycles | T appears in the preview (N = 1) |
@@ -125,6 +129,55 @@ The Issue's reading was that a one-cycle promotion delay on a path whose evidenc
 
 Known gaps, recorded and not weakened: the random machine's `assert_safe` excuses every dry-run preview under an unreleased reservation, so it detects `reservation-guard-bypass` only in apply cycles (the intermediate check excuses only a node's own reservation). The dependency side of a dry run (fixed in #1267), for T and for an intermediate node, is therefore checked by its own deterministic scenario (`P3C-DRYRUN-DEPENDENCY-RESERVATION`); the previews under T's own reservation and an intermediate node's own reservation stay a known defect until #1281 and #1283 are fixed (`P3C-DRYRUN-RESERVATION`). Two guards (`fresh-guard-bypass` with `status_repair_preserves_protection` alone, and a premature intermediate assessment) are re-validated by a second layer and cannot be bypassed with one fault; the controls inject the whole guard.
 
+<a id="quint-model"></a>
+<!-- quint-model -->
+## Quint model and production replay
+
+`specs/quint/dependency_liveness.qnt` models the bounded liveness of dependency resolution (#1276). It is **a sampled exploration by the Quint simulator (`quint run`), not a proof**: nothing is claimed about arbitrary graphs, unbounded disturbance sequences or states the sampled sequences did not reach. `quint verify` (Apalache, JVM) is neither required nor used.
+
+**Three layers; none replaces another.**
+
+1. *Model*: the fixed-seed exploration and every saved scenario must keep the model's own invariants (`P3C-QUINT-MODEL`): `safety` (nothing is promoted against an obligation), `liveness` (every fair cycle ends with the promotion, N = 1; apply needs the real label, a dry run this cycle's preview), `eventMatchesLabel` (an apply cycle's events are its real label changes) and `dryRunReadOnly`.
+2. *Replay*: every transition of the generated and of the saved ITF traces is executed on the production harness (`LivenessWorld`: the real `_prepare_cycle_context` and `execute_pipeline`). After each cycle the production observation (labels, `PromotionEvent` previews) is compared with the model's obligations; before each action the production state is compared with the model's (`P3C-QUINT-OBSERVATION`). Expectations come from the model state only; production is never asked whether a dependency is complete.
+3. *Controls*: one model fault each (the fault scenarios run on the correct model and must pass, and on the faulty model must violate exactly the expected invariants at the planned step) and one production fault each (the same trace replayed with the fault must violate the expected contract). A parse, type or runtime error and a timeout are tool errors, never a detection.
+
+**Toolchain.** Node.js (the major version in `package.json` `engines`; the CI uses `actions/setup-node`) is a required dependency of the local CI. `scripts/quint-check.sh` / `scripts/quint-check.ps1` run `npm ci` and verify the pinned `@informalsystems/quint` (exact version in `package.json` and `package-lock.json`); a missing Node.js stops the local CI with exit 2 and the install steps, never a skip. The simulator runs with `--backend=typescript` (it ships inside the pinned package; the default `rust` backend downloads an unpinned binary at first use).
+
+**Exploration and its record.** Every local CI run explores with the same seed and bounds (`EXPLORATION` in `tests/quint_replay.py`: seed `0x2f9c`, at most 1500 samples of at most 30 steps, 100 traces written with `--mbt --out-itf --n-traces`) into `.orchestune/tmp/quint-replay-1276-…/` (created by `scripts/create-session-dir.*`, reused in the same run), replays all traces and requires a positive number of traces, transitions, cycles and checked obligations. `exploration-summary.json` in that directory records the tool versions, seed, bounds, duration and counts, and the local CI prints it. An empty or truncated output, a broken ITF, an unsupported action or value, or a trace with only an initial state fails the run.
+
+**What the model states.** A cycle's state records `mustNot` (nodes that must not be promoted) and `mustQueue` (nodes that must be queued or previewed). Evidence is three-valued (`yes` / `no` / `maybe`): where the model cannot know the outcome (an injected Forge failure can abort a cycle at any mutation; ledger evidence collected under listing lag, a reservation or a failure; evidence after a ledger loss) it states **no obligation** instead of guessing. Not modeled, hence not claimed: an apply cycle with an armed failure *and* a pending stale change (the failure can abort the cycle before the change); holds on intermediate nodes (the harness has no such path); more than four dependency Issues or a chain deeper than two. A fault armed for an apply cycle makes that cycle unfair in the model even if no mutation hit it, which is weaker than the Hypothesis machine, not stronger.
+
+**Action table** (the `ACTIONS` table in `tests/quint_replay.py`; an action or choice outside it fails the replay):
+
+| Model action | Choices (`mbt::nondetPicks`) | Harness operation | Boundary |
+|---|---|---|---|
+| `init` / `init_<scenario>` | topology and `recompute` (read from the state) | `LivenessWorld(topology=…)` built from the state's `shape`; not run again as an action | initial labels of every Issue are compared |
+| `complete_dependency` | `path` (`label`, `record_completion`, `outcome_not_needed`, `prior_merge`), `dep` (11-14) | `LivenessWorld.complete(dep, path)` | precondition: `dep` is queued and has no evidence |
+| `duplicate_completion` | `dep` | `LivenessWorld.duplicate(dep)` | precondition: `dep` has evidence |
+| `cycle` | `apply`, `lag` | one real cycle with `listing_lag = lag`; the pending stale change runs as `before_promotion` | `mustNot` / `mustQueue` against labels and `PromotionEvent` |
+| `restart` | `ledgerLoss` | `lose_ledger()` when true (run-state and intent journal: reservations and uncollected ledger evidence) | - |
+| `fail_next` | `op` (`add`, `remove`), `mode` (`before`, `after`) | `FaultPlan.forge_operation` | consumed by the next cycle |
+| `toggle_hold` | `kind` (`base_red`, `recompute`, `reservation`), `target` | label on T, or `set_reservation(target)` on T, a dependency or an intermediate node; the new value comes from the next model state | - |
+| `stale_snapshot` | `kind` (`add_hold`, `revoke`, `complete`), `target` | the change between context build and promotion of the next cycle | run only if the model says it applied it (`staleApplied`) |
+
+**Saved scenarios.** The scripted scenarios of the model (`init_<id>`; one fixed choice per step, so the ITF has the same shape as a random trace) cover final and intermediate nodes, apply and dry run, live and lagged observation, no-op and real changes, dependency-side and target-side holds, failures, restarts, duplicates and stale changes. `tests/fixtures/quint/dependency_liveness_traces.json` stores the ITF with its seed, bounds, Quint version and generation command; a test regenerates each and fails when the model changed without `uv run python -m tests.quint_replay regenerate`. `tests/fixtures/quint/dependency_liveness_fault_scenarios.json` stores the model-fault scenarios with the expected invariants and planned step.
+
+**Known production counterexamples (#1281, #1283).** The model states their obligations; production violates them. The exploration runs with the model's `guard` set so that random traces never assert them (the Hypothesis machine excuses the same cases). The three saved `defect_*` scenarios run with the guard off and are replayed by strict xfail tests that register the Issue, the contract, the step and the node: only that mismatch is the defect; any other mismatch, in the same trace or elsewhere, fails.
+
+| Fault | Model: violated invariant (scenario) | Replay: violated contract (stored scenario) |
+|---|---|---|
+| `promotion-suppressed` | `liveness` (`final_apply`) | `P3C-LIVENESS-BOUND` (`final_apply`) |
+| `promotion-delayed` | `liveness` (`final_apply`) | `P3C-LIVENESS-BOUND` (`final_apply`) |
+| `stale-evidence` | `safety` (`stale_revoke`) | `P3C-SAFETY` (`stale_revoke`) |
+| `intermediate-ignored` | `liveness` (`chain_apply`) | `P3C-INTERMEDIATE-LIVENESS` (`chain_apply`) |
+| `reservation-guard-bypass` | `safety` (`dependency_reservation_apply`) | `P3C-SAFETY` (`dependency_reservation_apply`) |
+| `hold-guard-bypass` | `safety` (`base_red_apply`) | `P3C-SAFETY` (`base_red_apply`) |
+| `event-only` | `eventMatchesLabel`, `liveness` (`final_apply`) | `P3C-LIVENESS-BOUND` (`final_apply`) |
+| `empty-completion-set` | - | `P3C-LIVENESS-BOUND` (`recompute_release`) |
+| `throwaway-context` | - | `P3C-LIVENESS-BOUND` (`lagged_apply`) |
+| `action-mapping-swapped` | - | `P3C-QUINT-OBSERVATION` (`duplicate_completion`) |
+| `action-mapping-dropped` | - | `P3C-SAFETY` (`restart_loses_ledger`) |
+
 ## Guarantee and limits
 
 Verified means the tests above fail for the injected faults listed, in the deterministic scenarios described. It does not mean that no other fault exists, that arbitrary graphs or unbounded disturbance sequences are covered, or that the random exploration reaches every state. Production defects found while auditing are split into their own Issues with a counterexample and pinned with a strict xfail; expectations, fairness and bounds are not weakened to make an audit pass.
@@ -136,3 +189,13 @@ uv run pytest tests/test_verification_contracts.py tests/test_status_machine_sta
 ```
 
 Replay a random failure with `--hypothesis-seed=<seed>`; the control scenarios need no seed.
+
+The Quint model and its replay (Node.js is required; `scripts/quint-check.sh` installs the pinned tools):
+
+```bash
+./scripts/quint-check.sh                       # Windows: .\scripts\quint-check.ps1
+uv run pytest tests/test_quint_dependency_replay.py -n0
+uv run python -m tests.quint_replay regenerate   # after changing the model
+```
+
+To rerun one scenario by hand, use the command stored beside its trace in `tests/fixtures/quint/dependency_liveness_traces.json` (`node_modules/.bin/quint run specs/quint/dependency_liveness.qnt --backend=typescript --init=init_<id> …`); the exploration command, seed and bounds are in `exploration-summary.json`.

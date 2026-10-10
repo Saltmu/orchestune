@@ -6,7 +6,7 @@
 
 ## セットアップ
 
-Python 3.12以上、uv、GitHub CLI（`gh auth status`）がインストールされていることを確認し、依存関係をインストールします。
+Python 3.12以上、uv、Node.js（[Node.js と Quint](#nodejs-と-quint) を参照）、GitHub CLI（`gh auth status`）がインストールされていることを確認し、依存関係をインストールします。
 
 ```bash
 uv sync
@@ -24,6 +24,26 @@ uv sync
   ```
 
 `setup-git-hooks`は、[gitleaks](https://github.com/gitleaks/gitleaks#installing)がまだ`PATH`上に無ければ`~/.local/bin`へ自動インストールします（`scripts/install-gitleaks.sh` / `.ps1`を参照）。`local-ci.sh` / `.ps1`側でも同様の自動リトライを行うため、新規環境で`gitleaks`が未インストールであることがローカルCI実行の妨げにはなりません。自動インストールに失敗した場合（ネットワーク未接続、未対応のOS/アーキテクチャ等）は、上記リンクから手動でインストールしてください。
+
+## Node.js と Quint
+
+Node.js は **local CI の必須依存**です。依存解決の Quint チェック（モデルのサンプリング探索と、生成したトレースの本番ハーネスでの再生。[verification-contracts.md](docs/ja/verification-contracts.md#quint-model) を参照）を実行するためです。Node.js がないと `./scripts/local-ci.sh` / `.\scripts\local-ci.ps1` は Exit 2 で止まり、この手順を表示します。チェックを skip することはありません。
+
+[`package.json`](package.json) の `engines` に書かれた **Node.js の major 版**（現在は LTS の 24）を、npm とともに導入してください。
+
+* **Linux**: パッケージマネージャーまたは公式ビルドを使い、リリースの `SHASUMS256.txt`（https://nodejs.org/dist/）に載っている SHA-256 を確認します。たとえばアーカイブを `~/.local` に展開し、`node`・`npm`・`npx` を `PATH` の通ったディレクトリへリンクします。
+* **macOS**: `brew install node@24`、または https://nodejs.org/ のインストーラー。
+* **Windows**: `winget install OpenJS.NodeJS.LTS`、または https://nodejs.org/ のインストーラー。導入後に PowerShell を開き直してください。
+* **WSL**: WSL の中に導入します。`/mnt/c/...` 経由で見える Windows の Node.js は Linux の Node.js ではなく、当てにしないでください。
+* **Claude Code on the web**: 操作は不要です。[`.claude/hooks/session-start.sh`](.claude/hooks/session-start.sh) が、Node.js がない、または major 版が違うときに、固定した版を公式配布物から導入し（SHA-256 はその `SHASUMS256.txt` と照合）、続けて下のチェックを実行します。hook は nodejs.org と npm registry に到達できる必要があります。Web 環境のネットワーク設定が両方を許可しているかは、ここでは確認していません。許可されていない場合、hook は非0の終了コードで目に見える形で失敗し、ホストを許可するまで local CI は上のメッセージで止まります。
+
+そのあと、ロックしたツールを導入して確認します。
+
+```bash
+./scripts/quint-check.sh        # Windows: .\scripts\quint-check.ps1
+```
+
+`npm ci` を実行し（Quint は `package.json` と `package-lock.json` で exact に固定してあり、グローバルの Quint は使いません）、導入された版が固定した版であることを確認します。`local-ci` が自動で実行します。Exit 2 は Node.js がない、または major 版が違うこと、Exit 1 は導入または版の確認に失敗したことを表します。
 
 ## コード解析ツール（Serena MCP）
 
@@ -106,5 +126,6 @@ with patch("orchestune.dispatch.worktree._branch_exists", autospec=True) as mock
 このスクリプトは以下のチェックを実行します。
 1. **Ruff フォーマット & Lint チェック**: `ruff format` と `ruff check`
 2. **Mypy 型チェック**: 型注釈の検証
-3. **Pytest カバレッジチェック**: テストが通過し、カバレッジが90%以上であることを保証
-4. **シークレット・ローカルパススキャン**（`gitleaks`）: シークレットや `file:///home/<user>/...` のような絶対ローカルパスの漏洩を含むコミット・プッシュをブロックします。設定は[`.gitleaks.toml`](.gitleaks.toml)を参照してください。`local-ci.sh` / `.ps1`はgitleaksが未インストールの場合、自動インストールを試みます（`scripts/install-gitleaks.sh` / `.ps1`）。それでもインストールできない場合はスキップせずエラーで停止するため、push前に必ずこのチェックが実行されます。リモートCIでも念のため再検証されます。
+3. **Quint ツール**: `scripts/quint-check.sh` / `.ps1` が `npm ci` を実行し、固定した Quint を確認します（[Node.js と Quint](#nodejs-と-quint) を参照）
+4. **Pytest カバレッジチェック**: テストが通過し、カバレッジが90%以上であることを保証します。モデルの有界探索と、そのトレースの本番ハーネスでの再生も含み、seed・境界・ツールの版・件数をスクリプトが表示します
+5. **シークレット・ローカルパススキャン**（`gitleaks`）: シークレットや `file:///home/<user>/...` のような絶対ローカルパスの漏洩を含むコミット・プッシュをブロックします。設定は[`.gitleaks.toml`](.gitleaks.toml)を参照してください。`local-ci.sh` / `.ps1`はgitleaksが未インストールの場合、自動インストールを試みます（`scripts/install-gitleaks.sh` / `.ps1`）。それでもインストールできない場合はスキップせずエラーで停止するため、push前に必ずこのチェックが実行されます。リモートCIでも念のため再検証されます。

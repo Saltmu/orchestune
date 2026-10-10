@@ -25,6 +25,7 @@ P3A = "tests/test_status_events.py"
 P3B = "tests/test_status_events_stateful.py"
 P3BR = "tests/test_status_event_retry_resume.py"
 P3C = "tests/test_dependency_liveness_stateful.py"
+P3Q = "tests/test_quint_dependency_replay.py"
 
 
 @dataclass(frozen=True)
@@ -370,15 +371,29 @@ CONTRACTS: tuple[Contract, ...] = (
         boundary="end of the first fair cycle; apply checks the real label, dry run this cycle's preview",
         expectation="N = 1",
         status="verified",
-        tests=(f"{P3C}::TestDependencyLivenessMachine::runTest",),
+        tests=(
+            f"{P3C}::TestDependencyLivenessMachine::runTest",
+            f"{P3Q}::test_stored_trace_replays_on_production",
+        ),
         controls={
             "promotion-suppressed": (
                 f"{P3C}::test_control_machine_detects_missing_or_late_promotion",
+                f"{P3Q}::test_control_replay_detects_suppressed_promotion",
             ),
             "promotion-delayed": (
                 f"{P3C}::test_control_machine_detects_missing_or_late_promotion",
+                f"{P3Q}::test_control_replay_detects_delayed_promotion",
             ),
-            "event-only": (f"{P3C}::test_control_event_only_promotion_is_detected",),
+            "event-only": (
+                f"{P3C}::test_control_event_only_promotion_is_detected",
+                f"{P3Q}::test_control_replay_detects_an_event_without_the_label",
+            ),
+            "empty-completion-set": (
+                f"{P3Q}::test_control_replay_detects_an_empty_completion_set",
+            ),
+            "throwaway-context": (
+                f"{P3Q}::test_control_replay_detects_a_throwaway_repair_context",
+            ),
         },
     ),
     Contract(
@@ -389,10 +404,14 @@ CONTRACTS: tuple[Contract, ...] = (
         boundary="end of the first fair cycle for that node",
         expectation="N = 1",
         status="verified",
-        tests=(f"{P3C}::TestDependencyLivenessMachine::runTest",),
+        tests=(
+            f"{P3C}::TestDependencyLivenessMachine::runTest",
+            f"{P3Q}::test_stored_trace_replays_on_production",
+        ),
         controls={
             "intermediate-ignored": (
                 f"{P3C}::test_control_intermediate_ignored_is_detected",
+                f"{P3Q}::test_control_replay_detects_ignored_intermediate",
             ),
             "promotion-suppressed": (
                 f"{P3C}::test_noop_stale_callback_counts_toward_liveness",
@@ -411,15 +430,24 @@ CONTRACTS: tuple[Contract, ...] = (
             f"{P3C}::TestDependencyLivenessMachine::runTest",
             f"{P3C}::test_base_branch_red_hold_prevents_promotion",
             f"{P3C}::test_unreleased_completion_reservation_prevents_promotion",
+            f"{P3Q}::test_stored_trace_replays_on_production",
         ),
         controls={
             "hold-guard-bypass": (
                 f"{P3C}::test_control_hold_guard_bypass_is_detected",
+                f"{P3Q}::test_control_replay_detects_a_hold_guard_bypass",
             ),
             "reservation-guard-bypass": (
                 f"{P3C}::test_control_reservation_guard_bypass_is_detected",
+                f"{P3Q}::test_control_replay_detects_a_reservation_guard_bypass",
             ),
-            "stale-evidence": (f"{P3C}::test_control_stale_evidence_is_detected",),
+            "stale-evidence": (
+                f"{P3C}::test_control_stale_evidence_is_detected",
+                f"{P3Q}::test_control_replay_detects_stale_evidence",
+            ),
+            "action-mapping-dropped": (
+                f"{P3Q}::test_control_a_dropped_restart_mapping_fails_the_replay",
+            ),
         },
     ),
     Contract(
@@ -434,6 +462,49 @@ CONTRACTS: tuple[Contract, ...] = (
         controls={
             "reservation-guard-bypass": (
                 f"{P3C}::test_control_intermediate_reservation_guard_bypass_is_detected",
+            )
+        },
+    ),
+    Contract(
+        id="P3C-QUINT-MODEL",
+        phase="3c",
+        guarantee="in the Quint model of dependency resolution, no promotion happens against an obligation, every fair cycle ends with the promotion (N = 1), an apply cycle's events are its real label changes and a dry run changes no label",
+        premise="topologies up to four dependency Issues and a two-step chain, the model's fairness, sampled search with the recorded seed and bounds (a simulator, never a proof)",
+        boundary="model states after each action; the obligations of the last cycle",
+        expectation="no invariant violation in the fixed-seed exploration and in every saved scenario; each model fault violates exactly its invariants",
+        status="verified",
+        tests=(
+            f"{P3Q}::test_bounded_exploration_replays_on_production",
+            f"{P3Q}::test_each_scenario_runs_on_the_model_and_replays",
+        ),
+        controls={
+            fault: (f"{P3Q}::test_control_model_fault_is_detected_by_its_invariant[{fault}]",)
+            for fault in (
+                "promotion-suppressed",
+                "promotion-delayed",
+                "stale-evidence",
+                "intermediate-ignored",
+                "reservation-guard-bypass",
+                "hold-guard-bypass",
+                "event-only",
+            )
+        },
+    ),
+    Contract(
+        id="P3C-QUINT-OBSERVATION",
+        phase="3c",
+        guarantee="at every replayed step the production state agrees with the model before the action runs (initial labels, a queued Issue without evidence for a completion, evidence for a duplicate, the cycle mode)",
+        premise="the action table of tests/quint_replay.py maps each model action to one harness operation",
+        boundary="each transition of a replayed ITF trace",
+        expectation="every precondition of the model holds on the real harness",
+        status="verified",
+        tests=(
+            f"{P3Q}::test_stored_trace_replays_on_production",
+            f"{P3Q}::test_each_scenario_runs_on_the_model_and_replays",
+        ),
+        controls={
+            "action-mapping-swapped": (
+                f"{P3Q}::test_control_a_swapped_action_mapping_fails_the_replay",
             )
         },
     ),
@@ -465,6 +536,8 @@ CONTRACTS: tuple[Contract, ...] = (
         tests=(
             f"{P3C}::test_known_defect_dry_run_previews_t_under_its_own_reservation",
             f"{P3C}::test_known_defect_dry_run_previews_an_intermediate_under_its_own_reservation",
+            f"{P3Q}::test_known_defect_stored_trace_target_own_reservation",
+            f"{P3Q}::test_known_defect_stored_trace_intermediate_own_reservation",
         ),
         reason="strict xfail counterexamples (#1283 for T, #1281 counterexample 1 for an intermediate node); assert_safe and the intermediate check excuse these previews until the production fixes land; the dependency side is a separate verified contract",
         issues=(1281, 1283),
@@ -479,6 +552,7 @@ CONTRACTS: tuple[Contract, ...] = (
         status="known_defect",
         tests=(
             f"{P3C}::test_known_defect_prior_merge_is_not_previewed_after_faulted_apply_cycles",
+            f"{P3Q}::test_known_defect_stored_trace_prior_merge_after_faults",
         ),
         reason="#1281 counterexample 2: a strict xfail pins it; whether production drops the prior-merge completion set or the fairness judgement is wrong is not yet separated",
         issues=(1281,),

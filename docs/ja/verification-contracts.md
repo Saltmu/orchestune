@@ -30,10 +30,12 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3B-LAUNCH-AND-ESCALATION` | 3b | unverified | - | - |
 | `P3B-PERSISTENT-BUDGET-PRESERVED` | 3b | known_defect | - | #1279, #1280 |
 | `P3C-CASE-DELAY` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `empty-completion-set`, `throwaway-context` | - |
-| `P3C-LIVENESS-BOUND` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `event-only` | - |
+| `P3C-LIVENESS-BOUND` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `event-only`, `empty-completion-set`, `throwaway-context` | - |
 | `P3C-INTERMEDIATE-LIVENESS` | 3c | verified | `intermediate-ignored`, `promotion-suppressed` | - |
-| `P3C-SAFETY` | 3c | verified | `hold-guard-bypass`, `reservation-guard-bypass`, `stale-evidence` | - |
+| `P3C-SAFETY` | 3c | verified | `hold-guard-bypass`, `reservation-guard-bypass`, `stale-evidence`, `action-mapping-dropped` | - |
 | `P3C-INTERMEDIATE-SAFETY` | 3c | verified | `reservation-guard-bypass` | - |
+| `P3C-QUINT-MODEL` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `stale-evidence`, `intermediate-ignored`, `reservation-guard-bypass`, `hold-guard-bypass`, `event-only` | - |
+| `P3C-QUINT-OBSERVATION` | 3c | verified | `action-mapping-swapped` | - |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-DRYRUN-RESERVATION` | 3c | known_defect | - | #1281, #1283 |
 | `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | 3c | known_defect | - | #1281 |
@@ -67,6 +69,8 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3C-INTERMEDIATE-LIVENESS` | 中間ノードが公平な N = 1 cycle で昇格（dry run は preview）される | そのノード自身の依存が両境界で有効かつ予約なし | そのノードの最初の公平なcycleの終わり | N = 1 |
 | `P3C-SAFETY` | 有効な証拠がない、または hold・予約があるときに昇格（preview）しない | apply は昇格判定時点、dry run は cycle 開始時点で判定 | 全cycle | 起きない |
 | `P3C-INTERMEDIATE-SAFETY` | 中間ノードを、自身の依存が有効かつ予約なしになる前に昇格させない | apply は昇格判定時点で判定 | 全cycle | 起きない |
+| `P3C-QUINT-MODEL` | Quintモデルが safety・bounded liveness（N = 1）・イベント = 実ラベル（apply）・読み取り専用の dry run を守る | 有限のトポロジー（依存 Issue は最大4つ）、モデルの公平性、記録した seed と境界でのサンプリング探索 | 各 action 後のモデルの状態 | 不変条件の違反なし。モデルの各誤動作は期待した不変条件だけに違反する |
+| `P3C-QUINT-OBSERVATION` | 再生の各 step で、action を実行する前の本番の状態がモデルと一致する | `tests/quint_replay.py` の action 対応表 | 再生するITFトレースの各遷移 | 全ての前提が実ハーネスで成り立つ |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | dry run の T または中間ノードの preview が、そのノードの依存の未解放 completion reservation を尊重する | preview は context snapshot 上で定義される（この側は #1267 で修正済み） | dry run の cycle。決定的なシナリオで検査（machine は T の dry run の予約 preview を除外している） | 依存の予約が未解放の間 preview しない |
 | `P3C-DRYRUN-RESERVATION` | dry run の T または中間ノードの preview が、そのノード自身の未解放 reservation を尊重する | preview は context snapshot 上で定義される | dry run の cycle | T 自身・中間ノードの予約下で preview しない |
 | `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | Forge 障害つきの apply cycle の後でも、先行マージ証拠だけの依存を持つ T が dry run で preview される | 公平なcycle（両境界で昇格可能・障害注入なし） | 障害つき apply cycle 2回のあとの dry run cycle | T が preview に現れる（N = 1） |
@@ -125,6 +129,55 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 
 既知の穴は、弱めずに記録します。乱択の machine の `assert_safe` は未解放の予約下の dry run の preview をすべて除外するため、`reservation-guard-bypass` を apply のcycleでしか検出しません。そのため dry run の依存側（#1267 で修正済み）は、T と中間ノードのどちらも専用の決定的なシナリオで検査します（`P3C-DRYRUN-DEPENDENCY-RESERVATION`。中間ノードの検査が除外するのはそのノード自身の予約だけです）。T 自身の予約と中間ノード自身の予約下の preview は、#1281・#1283 が直るまで既知の欠陥です（`P3C-DRYRUN-RESERVATION`）。2つの guard（`status_repair_preserves_protection` だけの迂回、中間ノードの早すぎる評価）は第2の層が再検証するため、誤動作1つでは迂回できません。対照は guard 全体を差し替えます。
 
+<a id="quint-model"></a>
+<!-- quint-model -->
+## Quintモデルと本番再生
+
+`specs/quint/dependency_liveness.qnt` は依存解決の bounded liveness を表すモデルです（#1276）。Quint のシミュレータ（`quint run`）による**サンプリング探索であり、証明ではありません**。任意のグラフ、無限の外乱列、サンプルが届かなかった状態については何も主張しません。`quint verify`（Apalache。JVM が必要）は必須にも任意の手順にもしていません。
+
+**3つの層（どれも別の層の代わりにしません）。**
+
+1. *モデル*: 固定 seed の探索と保存した全シナリオで、モデル自身の不変条件（`P3C-QUINT-MODEL`）を守ります。`safety`（義務に反する昇格をしない）、`liveness`（公平な cycle は昇格で終わる。N = 1。apply は実ラベル、dry run は当該 cycle の preview）、`eventMatchesLabel`（apply cycle のイベントは実際のラベル変更と一致する）、`dryRunReadOnly` です。
+2. *再生*: 生成したITFトレースと保存したITFトレースの全遷移を、本番ハーネス（`LivenessWorld`。本物の `_prepare_cycle_context` と `execute_pipeline`）で実行します。cycle ごとに本番の観測（ラベル、`PromotionEvent` のプレビュー）をモデルの義務と照合し、action ごとに実行前の本番の状態をモデルの状態と照合します（`P3C-QUINT-OBSERVATION`）。期待値はモデルの状態だけから作り、本番に依存の完了を問い合わせません。
+3. *対照*: モデルの誤動作を1つずつ入れたもの（正常なモデルでは成功し、誤動作版では予定の step で期待した不変条件だけに違反する）と、本番の誤動作を1つずつ入れたもの（同じトレースを再生し、期待した契約の違反になる）です。parse・型・実行のエラーと timeout はツールのエラーであり、検出には数えません。
+
+**ツール。** Node.js（`package.json` の `engines` の major。CI は `actions/setup-node`）は local CI の必須依存です。`scripts/quint-check.sh` / `scripts/quint-check.ps1` が `npm ci` を実行し、固定した `@informalsystems/quint`（`package.json` と `package-lock.json` の exact な版）を確認します。Node.js がなければ local CI は skip せず、導入手順を表示して Exit 2 で止まります。シミュレータは `--backend=typescript` で動かします（固定したパッケージに同梱されています。既定の `rust` バックエンドは初回に固定されていないバイナリをダウンロードします）。
+
+**探索と記録。** local CI は毎回、同じ seed と境界で探索します（`tests/quint_replay.py` の `EXPLORATION`: seed `0x2f9c`、最大1500サンプル、各最大30 step、`--mbt --out-itf --n-traces` で100トレース）。出力先は `scripts/create-session-dir.*` で作る `.orchestune/tmp/quint-replay-1276-…/` で、同じ実行内で再利用します。全トレースを再生し、トレース数・遷移数・cycle 数・照合した義務の数がいずれも正であることを要求します。そのディレクトリの `exploration-summary.json` にツールの版・seed・境界・実行時間・件数を記録し、local CI がそれを表示します。出力の空・欠け、壊れたITF、未対応の action や値、初期状態しかないトレースは失敗です。
+
+**モデルが述べること。** cycle の状態に `mustNot`（昇格してはならないノード）と `mustQueue`（queued または preview されていなければならないノード）を記録します。証拠は3値（`yes` / `no` / `maybe`）です。結果が分からない場合（注入した Forge 障害は変更のどこでも cycle を中断しうる。listing lag・予約・障害の下での台帳証拠の回収。台帳を失った後の証拠）は、推測せず**義務を述べません**。モデルにないもの、つまり主張しないものは次のとおりです。障害を仕込んだ apply cycle に未消化の stale 変更が重なる場合（障害が変更の前に cycle を中断しうる）、中間ノードへの hold（ハーネスにその経路がありません）、依存 Issue が4つを超える場合や深さ2を超える連鎖。apply cycle に仕込んだ障害は、実際には変更に当たらなくてもモデルではその cycle を公平でないものとして扱います。Hypothesis の machine より弱く、強くはありません。
+
+**action 対応表**（`tests/quint_replay.py` の `ACTIONS`。表にない action や選択値は再生が失敗します）:
+
+| モデルの action | 選択値（`mbt::nondetPicks`） | ハーネスの操作 | 境界 |
+|---|---|---|---|
+| `init` / `init_<シナリオ>` | トポロジーと `recompute`（状態から読む） | 状態の `shape` から `LivenessWorld(topology=…)` を作る。通常の action として再実行しない | 全 Issue の初期ラベルを照合 |
+| `complete_dependency` | `path`（`label`・`record_completion`・`outcome_not_needed`・`prior_merge`）、`dep`（11〜14） | `LivenessWorld.complete(dep, path)` | 前提: `dep` が queued で証拠なし |
+| `duplicate_completion` | `dep` | `LivenessWorld.duplicate(dep)` | 前提: `dep` に証拠あり |
+| `cycle` | `apply`、`lag` | `listing_lag = lag` で本物の cycle を1回実行。保留中の stale 変更は `before_promotion` で実行 | `mustNot` / `mustQueue` をラベルと `PromotionEvent` と照合 |
+| `restart` | `ledgerLoss` | true なら `lose_ledger()`（run-state と intent journal。予約と未回収の台帳証拠が消える） | - |
+| `fail_next` | `op`（`add`・`remove`）、`mode`（`before`・`after`） | `FaultPlan.forge_operation` | 次の cycle が消費 |
+| `toggle_hold` | `kind`（`base_red`・`recompute`・`reservation`）、`target` | T のラベル、または T・依存・中間ノードの `set_reservation(target)`。新しい値は次のモデル状態から取る | - |
+| `stale_snapshot` | `kind`（`add_hold`・`revoke`・`complete`）、`target` | 次の cycle で context 構築から昇格までの間に入る変更 | モデルが適用したと述べた場合（`staleApplied`）だけ実行 |
+
+**保存シナリオ。** モデルの台本付きシナリオ（`init_<id>`。各 step の選択値を固定するので、ITFの形は乱択トレースと同じ）が、final / 中間ノード、apply / dry run、live / lagged、no-op / 実変更、依存側 / 対象側の hold、障害、restart、重複、stale 変更を網羅します。`tests/fixtures/quint/dependency_liveness_traces.json` にITFを seed・境界・Quint の版・生成コマンドとともに保存します。テストが各トレースを生成し直して比較し、モデルを変えて `uv run python -m tests.quint_replay regenerate` を実行していなければ失敗します。`tests/fixtures/quint/dependency_liveness_fault_scenarios.json` には、モデルの誤動作シナリオを期待する不変条件と予定の step とともに保存します。
+
+**既知の本番の反例（#1281・#1283）。** モデルは義務を述べ、本番がそれに違反します。探索ではモデルの `guard` を有効にして、乱択トレースがそれらを検査しないようにします（Hypothesis の machine も同じ場合を除外しています）。保存した3つの `defect_*` シナリオは guard なしで実行し、Issue・契約・step・ノードを登録した strict xfail のテストで再生します。その不一致だけが欠陥で、同じトレースの別の不一致や別のトレースの不一致は失敗です。
+
+| 誤動作 | モデル: 違反する不変条件（シナリオ） | 再生: 違反する契約（保存シナリオ） |
+|---|---|---|
+| `promotion-suppressed` | `liveness`（`final_apply`） | `P3C-LIVENESS-BOUND`（`final_apply`） |
+| `promotion-delayed` | `liveness`（`final_apply`） | `P3C-LIVENESS-BOUND`（`final_apply`） |
+| `stale-evidence` | `safety`（`stale_revoke`） | `P3C-SAFETY`（`stale_revoke`） |
+| `intermediate-ignored` | `liveness`（`chain_apply`） | `P3C-INTERMEDIATE-LIVENESS`（`chain_apply`） |
+| `reservation-guard-bypass` | `safety`（`dependency_reservation_apply`） | `P3C-SAFETY`（`dependency_reservation_apply`） |
+| `hold-guard-bypass` | `safety`（`base_red_apply`） | `P3C-SAFETY`（`base_red_apply`） |
+| `event-only` | `eventMatchesLabel`、`liveness`（`final_apply`） | `P3C-LIVENESS-BOUND`（`final_apply`） |
+| `empty-completion-set` | - | `P3C-LIVENESS-BOUND`（`recompute_release`） |
+| `throwaway-context` | - | `P3C-LIVENESS-BOUND`（`lagged_apply`） |
+| `action-mapping-swapped` | - | `P3C-QUINT-OBSERVATION`（`duplicate_completion`） |
+| `action-mapping-dropped` | - | `P3C-SAFETY`（`restart_loses_ledger`） |
+
 ## 保証の範囲と限界
 
 verified は、上の表の誤動作を、記述した決定的なシナリオで検出できることを意味します。ほかの誤動作がないこと、任意のグラフや無限の外乱列を網羅していること、ランダム探索が全状態に届くことは意味しません。監査で見つかった本番の欠陥は、反例付きの別Issueへ切り出し、strict xfail で固定します。監査を通すために期待値・公平性・上限を弱めることはしません。
@@ -136,3 +189,13 @@ uv run pytest tests/test_verification_contracts.py tests/test_status_machine_sta
 ```
 
 ランダムな失敗の再生は `--hypothesis-seed=<seed>` を使います。対照のシナリオにseedは不要です。
+
+Quintモデルと再生（Node.js が必要です。`scripts/quint-check.sh` が固定したツールを導入します）:
+
+```bash
+./scripts/quint-check.sh                       # Windows: .\scripts\quint-check.ps1
+uv run pytest tests/test_quint_dependency_replay.py -n0
+uv run python -m tests.quint_replay regenerate   # モデルを変えたあと
+```
+
+1つのシナリオを手元で再実行するには、`tests/fixtures/quint/dependency_liveness_traces.json` のトレースの隣に保存した生成コマンド（`node_modules/.bin/quint run specs/quint/dependency_liveness.qnt --backend=typescript --init=init_<id> …`）を使います。探索のコマンド・seed・境界は `exploration-summary.json` にあります。
