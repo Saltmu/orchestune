@@ -294,7 +294,7 @@ A `status:blocked` task T whose dependencies are all complete must be promoted t
 - T has no promotion hold (`ci:base-branch-red` / `status:blocked-recompute`), T is OPEN, and the Forge and task observations are KNOWN
 - the above holds both at cycle start and at the promotion decision, with no error or injected fault (a stale-snapshot callback that changes nothing does not reset the interval)
 
-The guaranteed bound is N=1 cycle. What is checked is not the bound but agreement with the per-case expectation below (cycle 0 is the cycle in which the valid evidence first becomes available to the production path).
+The guaranteed bound is N=1 fair cycle, and each case below has an expected delay d counted from cycle 0 (the cycle in which the valid evidence first becomes available to the promotion decision). The two are different contracts (`P3C-LIVENESS-BOUND`, `P3C-CASE-DELAY`); their exact definitions, the earlier "N+1 cycles" wording of design #1219 §4 and which test detects what are in [verification-contracts.md](verification-contracts.md#cycle-definitions).
 
 | Case | How D completes | Expected (cycles) | Notes |
 |---|---|---|---|
@@ -308,7 +308,7 @@ The guaranteed bound is N=1 cycle. What is checked is not the bound but agreemen
 | `recompute_release` | T holds `status:blocked-recompute` | 0 | `reconcile_recovery` promotes from the bound context (#902 Round 4) |
 | `multiple_dependencies` | D1 by label and D2 by `record_completion`, in different cycles | 0 (from the later cycle) |  |
 
-Random sequences (`complete_dependency`, `cycle`, `restart`, `fail_next`, `toggle_hold`, `stale_snapshot`, `duplicate_completion`) check liveness (T is promoted once the fairness assumptions persist) and safety (no new promotion in a cycle without valid evidence or with a hold or reservation). Test-only faults equivalent to the #902 Round 4/5 miswiring (an empty completion set, a throwaway context) must make the assertions fail.
+Random sequences (`complete_dependency`, `cycle`, `restart`, `fail_next`, `toggle_hold`, `stale_snapshot`, `duplicate_completion`) check liveness (T is promoted once the fairness assumptions persist) and safety (no new promotion in a cycle without valid evidence or with a hold or reservation). Test-only faults equivalent to the #902 Round 4/5 miswiring (an empty completion set, a throwaway context) must violate `P3C-CASE-DELAY`; every other injected fault and the contract it must violate are listed in [verification-contracts.md](verification-contracts.md).
 
 Production defects split out are pinned as strict xfails: #1267 (the dry-run preview ignores unreleased reservations) and #1268 (the recompute release ignores a base-branch-red hold and revoked evidence). A dry-run preview of an intermediate node is excused as #1267 too when an unreleased reservation is the only reason. Another rare counterexample of the random sequences (after apply cycles with faults, T depending on prior-merge evidence is not previewed in a dry run) is tracked in #1281.
 
@@ -349,8 +349,9 @@ same idempotency key is never retried in that repair call. FAILED/SKIPPED needs 
 fresh next cycle. With complete KNOWN facts, observable OPEN tasks, stable
 dependency/completion/execution evidence, enabled apply and all three commands
 allowed, no holds/reservations/conflicting Intents/manual execution findings, and
-successful journal/API/verification, repairable cases converge in exactly one
-recovery cycle (upper bound k=3). Matching interrupted Intents resume that cycle.
+successful journal/API/verification, repairable cases are expected to converge in exactly one
+recovery cycle (expectation: 1; the upper bound k=3 is a separate bound that is not yet
+verified, see [verification-contracts.md](verification-contracts.md)). Matching interrupted Intents resume that cycle.
 Two further cycles preserve labels, empty plans, mutation history and Intent set.
 Except initially missing or externally deleted labels, every system mutation
 leaves at least one lifecycle label.

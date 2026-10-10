@@ -16,6 +16,7 @@ from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, initialize, rule
 
+from orchestune.dispatch.rules import CycleContext
 from tests.dependency_liveness_test_support import (
     ACTIVE_PATHS,
     BASE_RED,
@@ -24,6 +25,7 @@ from tests.dependency_liveness_test_support import (
     ISSUE_BY_SUBTASK,
     LIVENESS_BOUND,
     RECOMPUTE,
+    SELF_RESERVATION_PREVIEW_ISSUE,
     CompletionPath,
     CycleObservation,
     FaultPlan,
@@ -33,6 +35,12 @@ from tests.dependency_liveness_test_support import (
     StatusLabel,
     assert_case,
     run_case,
+)
+from tests.verification_contract_test_support import (
+    ContractViolation,
+    expect_violation,
+    pinned_defect,
+    require,
 )
 
 CASES = {case.name: case for case in CASE_TABLE}
@@ -97,7 +105,7 @@ def test_not_needed_save_failure_holds_cycle_and_retries(tmp_path):
 def test_injected_miswiring_is_detected(tmp_path, case_name, faults):
     """#902 Round 4/5: an empty completion set or a throwaway context must fail."""
     case = CASES[case_name]
-    with pytest.raises(AssertionError):
+    with expect_violation("P3C-CASE-DELAY"):
         assert_case(run_case(tmp_path, case, faults), case)
 
 
@@ -129,11 +137,33 @@ def test_unreleased_completion_reservation_prevents_promotion(tmp_path):
     assert world.cycle().promoted
 
 
-def test_dry_run_preview_respects_unreleased_completion_reservation(tmp_path):
-    world = LivenessWorld(tmp_path)
-    world.complete(11, CompletionPath.LABEL)
-    world.set_reservation(11, True)
-    assert not world.cycle(apply=False).previewed
+def scenario_dry_run_respects_dependency_reservation(*, intermediate: bool) -> None:
+    """P3C-DRYRUN-DEPENDENCY-RESERVATION: the preview of T (or of an intermediate
+    node) is blocked by the unreleased reservation of its dependency."""
+    import tempfile
+
+    topology = (
+        LivenessTopology((11, 12), ("dep-a",), {11: ("dep-b",)}, (11,))
+        if intermediate
+        else None
+    )
+    dependency, subject = (12, 11) if intermediate else (11, DEPENDENT)
+    with tempfile.TemporaryDirectory() as root:
+        world = LivenessWorld(Path(root), topology=topology)
+        world.complete(dependency, CompletionPath.LABEL)
+        world.set_reservation(dependency, True)
+        observation = world.cycle(apply=False)
+    require(
+        "P3C-DRYRUN-DEPENDENCY-RESERVATION",
+        subject not in observation.promotion_issue_numbers,
+        f"previewed {subject} under its dependency's unreleased reservation: "
+        f"{observation}",
+    )
+
+
+@pytest.mark.parametrize("intermediate", [False, True], ids=["target", "intermediate"])
+def test_dry_run_preview_respects_unreleased_completion_reservation(intermediate):
+    scenario_dry_run_respects_dependency_reservation(intermediate=intermediate)
 
 
 def test_recompute_release_respects_base_branch_red_hold(tmp_path):
@@ -192,11 +222,17 @@ def assert_safe(
             if dependencies is not None
             else False
         )
-        assert (
-            reserved_conflict or not observation.previewed
-        ), f"unsafe preview: {observation}"
+        require(
+            "P3C-SAFETY",
+            reserved_conflict or not observation.previewed,
+            f"unsafe preview: {observation}",
+        )
     else:
-        assert not observation.promoted, f"unsafe promotion: {observation}"
+        require(
+            "P3C-SAFETY",
+            not observation.promoted,
+            f"unsafe promotion: {observation}",
+        )
 
 
 def _known_intermediate_dry_run_reservation(
@@ -205,17 +241,21 @@ def _known_intermediate_dry_run_reservation(
     deps: tuple[str, ...],
     number: int,
 ) -> bool:
-    """DRY_RUN_RESERVATION_ISSUE (#1267) for an intermediate node, as for T.
+    """The own-reservation dry-run preview of an intermediate node (#1281).
 
-    Excused only when an unreleased reservation is the sole reason: every
-    dependency has preview-visible evidence at cycle start (#1281).
+    Excused only when the node's own unreleased reservation is the sole reason:
+    every dependency has preview-visible evidence at cycle start and none of
+    them is reserved.
     """
     view = observation.at_start
     return (
         not observation.apply
         and len(required) == len(deps)
         and set(required) <= view.preview_visible
-        and bool((set(required) | {number}) & view.reserved)
+        # Only the node's own reservation (the #1283 analogue); a reserved
+        # dependency is the fixed #1267 behaviour and stays checked.
+        and number in view.reserved
+        and not set(required) & view.reserved
     )
 
 
@@ -259,12 +299,14 @@ def assert_intermediate_safety(
                 view, own_reservation=False
             )
         if not deps_satisfied and not known_self_reservation:
-            assert (
+            require(
+                "P3C-INTERMEDIATE-SAFETY",
                 number not in observation.promotion_issue_numbers
                 or _known_intermediate_dry_run_reservation(
                     observation, required, deps, number
-                )
-            ), f"unsafe intermediate promotion event for {number}: {observation}"
+                ),
+                f"unsafe intermediate promotion event for {number}: {observation}",
+            )
             if observation.apply:
                 before = observation.labels_before.get(number, frozenset())
                 after = observation.labels_after.get(number, frozenset())
@@ -272,9 +314,12 @@ def assert_intermediate_safety(
                     StatusLabel.BLOCKED.value in before
                     and StatusLabel.QUEUED.value not in before
                 ):
-                    assert (
-                        StatusLabel.QUEUED.value not in after
-                    ), f"unsafe live transition of intermediate {number} to queued: {observation}"
+                    require(
+                        "P3C-INTERMEDIATE-SAFETY",
+                        StatusLabel.QUEUED.value not in after,
+                        f"unsafe live transition of intermediate {number} to queued: "
+                        f"{observation}",
+                    )
 
 
 @st.composite
@@ -445,7 +490,16 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
         )
         self.fair_streak = self.fair_streak + 1 if fair else 0
         if self.fair_streak >= LIVENESS_BOUND:
-            assert "status:queued" in observation.t_after or observation.previewed
+            # An apply cycle is judged on the real label.  A dry run never
+            # changes labels: T is either already queued or shows this cycle's
+            # own preview.
+            queued = StatusLabel.QUEUED.value in observation.t_after
+            shown = queued if apply else queued or observation.previewed
+            require(
+                "P3C-LIVENESS-BOUND",
+                shown,
+                f"T not promoted after {self.fair_streak} fair cycle(s): {observation}",
+            )
 
         if self.world.topology is not None:
             for number, deps in self.world.topology.issue_depends_on.items():
@@ -484,13 +538,19 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
                 if self.intermediate_fair_streaks[number] >= LIVENESS_BOUND:
                     if apply:
                         after_labels = observation.labels_after.get(number, frozenset())
-                        assert (
-                            StatusLabel.QUEUED.value in after_labels
-                        ), f"intermediate {number} not promoted to queued despite fair streak: {observation}"
+                        require(
+                            "P3C-INTERMEDIATE-LIVENESS",
+                            StatusLabel.QUEUED.value in after_labels,
+                            f"intermediate {number} not promoted to queued despite "
+                            f"fair streak: {observation}",
+                        )
                     else:
-                        assert (
-                            number in observation.promotion_issue_numbers
-                        ), f"intermediate {number} not previewed despite fair streak: {observation}"
+                        require(
+                            "P3C-INTERMEDIATE-LIVENESS",
+                            number in observation.promotion_issue_numbers,
+                            f"intermediate {number} not previewed despite fair "
+                            f"streak: {observation}",
+                        )
 
     @rule(ledger_loss=st.booleans())
     def restart(self, ledger_loss):
@@ -593,7 +653,9 @@ def test_noop_stale_callback_counts_toward_liveness(
             )
         machine.stale_snapshot(kind)
         if suppress_promotion:
-            with pytest.raises(AssertionError):
+            with expect_violation(
+                "P3C-INTERMEDIATE-LIVENESS" if intermediate else "P3C-LIVENESS-BOUND"
+            ):
                 machine.cycle(apply=apply, lag=lag)
         else:
             machine.cycle(apply=apply, lag=lag)
@@ -634,5 +696,284 @@ def test_stale_revoke_preserves_collected_prior_merge_receipt(intermediate):
         subject = 12 if intermediate else DEPENDENT
         assert subject in observation.promotion_issue_numbers
         assert dependency in observation.at_promotion.valid
+    finally:
+        machine.teardown()
+
+
+# ---- controls: one injected production fault each (#1275) -----------------------
+#
+# Every control runs the same deterministic scenario twice: unfaulted (it must
+# pass) and with exactly one fault installed by ``monkeypatch`` (it must violate
+# the expected contract id).  The faults live in this test only.
+
+_SIMPLE = LivenessTopology((11,), ("dep-a",), {}, (11,))
+_INTERMEDIATE = LivenessTopology((11, 12), ("dep-a",), {11: ("dep-b",)}, (11,))
+
+
+def scenario_completion(
+    path: CompletionPath,
+    *,
+    apply: bool = True,
+    topology: LivenessTopology = _SIMPLE,
+    dependency: int = 11,
+    before: Any = None,
+    cycles: int = LIVENESS_BOUND + 1,
+) -> None:
+    """Evidence arrives, then ``cycles`` machine cycles run (fair, no faults)."""
+    machine = DependencyLivenessMachine()
+    try:
+        machine.start(topology=topology, recompute=False)
+        if before is not None:
+            before(machine.world)
+        machine.world.complete(dependency, path)
+        for _ in range(cycles):
+            machine.cycle(apply=apply, lag=False)
+    finally:
+        machine.teardown()
+
+
+def scenario_revoked_evidence_is_not_adopted(apply: bool) -> None:
+    machine = DependencyLivenessMachine()
+    try:
+        machine.start(topology=_SIMPLE, recompute=False)
+        machine.world.complete(11, CompletionPath.LABEL)
+        machine.world.revoke(11)
+        machine.cycle(apply=apply, lag=False)
+    finally:
+        machine.teardown()
+
+
+def _skip_promotion_calls(monkeypatch, calls: frozenset[int] | None) -> None:
+    """Skip the promotion boundary in the n-th cycle of the run (None = always)."""
+    from tests.dependency_liveness_test_support import cycle_module
+
+    real = cycle_module._run_status_repair_boundary
+    seen = {"n": -1}
+
+    def boundary(name, finding_code, **kwargs):
+        if name == "status-blocked-promotion":
+            seen["n"] += 1
+            if calls is None or seen["n"] in calls:
+                return []
+        return real(name, finding_code, **kwargs)
+
+    monkeypatch.setattr(cycle_module, "_run_status_repair_boundary", boundary)
+
+
+_PROMOTING_PATHS = [
+    (CompletionPath.LABEL, True),
+    (CompletionPath.LABEL, False),
+    (CompletionPath.RECORD_COMPLETION, True),
+    (CompletionPath.PRIOR_MERGE, True),
+    (CompletionPath.PRIOR_MERGE, False),
+]
+
+
+@pytest.mark.parametrize(("path", "apply"), _PROMOTING_PATHS)
+@pytest.mark.parametrize("fault", ["promotion-suppressed", "promotion-delayed"])
+def test_control_machine_detects_missing_or_late_promotion(
+    monkeypatch, path, apply, fault
+):
+    scenario_completion(path, apply=apply)
+    _skip_promotion_calls(monkeypatch, None if fault == "promotion-suppressed" else {0})
+    with expect_violation("P3C-LIVENESS-BOUND"):
+        scenario_completion(path, apply=apply)
+
+
+@pytest.mark.parametrize(
+    "case", [c for c in CASE_TABLE if c.expected_delay == 0], ids=lambda c: c.name
+)
+@pytest.mark.parametrize("fault", ["promotion-suppressed", "promotion-delayed"])
+def test_control_case_table_detects_missing_or_late_promotion(
+    tmp_path, monkeypatch, case, fault
+):
+    """The case table pins d = 0 exactly: a one-cycle delay is a violation too."""
+    assert_case(run_case(tmp_path / "normal", case), case)
+    last_evidence_cycle = len(case.paths)
+    _skip_promotion_calls(
+        monkeypatch, None if fault == "promotion-suppressed" else {last_evidence_cycle}
+    )
+    with expect_violation("P3C-CASE-DELAY"):
+        assert_case(run_case(tmp_path / "fault", case), case)
+
+
+def test_control_dry_run_record_completion_has_nothing_to_detect(monkeypatch):
+    """No observable exists for it (#882), so neither side can see a delay."""
+    scenario_completion(CompletionPath.RECORD_COMPLETION, apply=False)
+    _skip_promotion_calls(monkeypatch, {0})
+    scenario_completion(CompletionPath.RECORD_COMPLETION, apply=False)
+
+
+@pytest.mark.parametrize("apply", [True, False], ids=["apply", "dry-run"])
+def test_control_intermediate_ignored_is_detected(monkeypatch, apply):
+    kwargs: dict[str, Any] = {
+        "topology": _INTERMEDIATE,
+        "dependency": 12,
+        "apply": apply,
+    }
+    scenario_completion(CompletionPath.LABEL, **kwargs)
+    real = CycleContext.assess_dependencies
+
+    def only_the_target(self, number):
+        return real(self, number) if number == DEPENDENT else None
+
+    monkeypatch.setattr(CycleContext, "assess_dependencies", only_the_target)
+    with expect_violation("P3C-INTERMEDIATE-LIVENESS"):
+        scenario_completion(CompletionPath.LABEL, **kwargs)
+
+
+@pytest.mark.parametrize("apply", [True, False], ids=["apply", "dry-run"])
+def test_control_hold_guard_bypass_is_detected(monkeypatch, apply):
+    from orchestune.consistency.invariants import status as invariants
+    from orchestune.dispatch import reconciliation, status_repair
+
+    def hold(world):
+        world.set_t_label(BASE_RED, True)
+
+    scenario_completion(CompletionPath.LABEL, apply=apply, before=hold)
+    for module in (status_repair, invariants, reconciliation):
+        monkeypatch.setattr(module, "PROMOTION_HOLD_LABELS", ())
+    with expect_violation("P3C-SAFETY"):
+        scenario_completion(CompletionPath.LABEL, apply=apply, before=hold)
+
+
+@pytest.mark.parametrize("side", ["dependency", "target"])
+def test_control_reservation_guard_bypass_is_detected(monkeypatch, side):
+    """Apply cycles only: a dry-run preview under a reservation is a known gap
+    (#1267, #1283) that ``assert_safe`` excuses on purpose."""
+    from orchestune.dispatch import status_repair
+
+    reserved = 11 if side == "dependency" else DEPENDENT
+
+    def reserve(world):
+        world.set_reservation(reserved, True)
+
+    scenario_completion(CompletionPath.LABEL, before=reserve)
+    if side == "dependency":
+        monkeypatch.setattr(CycleContext, "is_completion_blocked", lambda s, n: False)
+    else:
+        monkeypatch.setattr(
+            status_repair, "completion_mutation_blocked_fresh", lambda *a, **k: False
+        )
+    with expect_violation("P3C-SAFETY"):
+        scenario_completion(CompletionPath.LABEL, before=reserve)
+
+
+@pytest.mark.parametrize("apply", [True, False], ids=["apply", "dry-run"])
+def test_control_stale_evidence_is_detected(monkeypatch, apply):
+    scenario_revoked_evidence_is_not_adopted(apply)
+    monkeypatch.setattr(CycleContext, "is_effectively_done", lambda s, n: True)
+    monkeypatch.setattr(CycleContext, "is_completion_confirmed", lambda s, n: True)
+    with expect_violation("P3C-SAFETY"):
+        scenario_revoked_evidence_is_not_adopted(apply)
+
+
+def test_control_event_only_promotion_is_detected(monkeypatch):
+    """An event without the label change must not satisfy an apply cycle."""
+    from orchestune.dispatch import status_repair
+
+    scenario_completion(CompletionPath.LABEL)
+    monkeypatch.setattr(status_repair, "_apply_command", lambda *a, **k: None)
+    monkeypatch.setattr(
+        status_repair, "_verified_status_labels", lambda number, label, config: (label,)
+    )
+    with expect_violation("P3C-LIVENESS-BOUND"):
+        scenario_completion(CompletionPath.LABEL)
+
+
+def test_control_intermediate_reservation_guard_bypass_is_detected(monkeypatch):
+    """Apply cycles only (a dry-run preview under a reservation is the known gap)."""
+
+    def reserve(world):
+        world.set_reservation(12, True)
+
+    kwargs: dict[str, Any] = {
+        "topology": _INTERMEDIATE,
+        "dependency": 12,
+        "before": reserve,
+    }
+    scenario_completion(CompletionPath.LABEL, **kwargs)
+    monkeypatch.setattr(CycleContext, "is_completion_blocked", lambda s, n: False)
+    with expect_violation("P3C-INTERMEDIATE-SAFETY"):
+        scenario_completion(CompletionPath.LABEL, **kwargs)
+
+
+@pytest.mark.parametrize("intermediate", [False, True], ids=["target", "intermediate"])
+def test_control_dry_run_dependency_reservation_bypass_is_detected(
+    monkeypatch, intermediate
+):
+    """The dependency side is fixed (#1267), so a dry run is checked here
+    deterministically; the random machine excuses T's dry-run reservation previews."""
+    scenario_dry_run_respects_dependency_reservation(intermediate=intermediate)
+    monkeypatch.setattr(CycleContext, "is_completion_blocked", lambda s, n: False)
+    with expect_violation("P3C-DRYRUN-DEPENDENCY-RESERVATION"):
+        scenario_dry_run_respects_dependency_reservation(intermediate=intermediate)
+
+
+# ---- pinned production defects (strict xfail; the fix removes the marks) ---------
+
+
+def _dry_run_preview_of(topology, dependency, reserved, subject) -> None:
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as root:
+        world = LivenessWorld(Path(root), topology=topology)
+        world.complete(dependency, CompletionPath.LABEL)
+        world.set_reservation(reserved, True)
+        observation = world.cycle(apply=False)
+    require(
+        "P3C-DRYRUN-RESERVATION",
+        subject not in observation.promotion_issue_numbers,
+        f"previewed {subject} under its own unreleased reservation: {observation}",
+    )
+
+
+@pytest.mark.xfail(
+    reason=f"production bug {SELF_RESERVATION_PREVIEW_ISSUE}",
+    strict=True,
+    raises=ContractViolation,
+)
+def test_known_defect_dry_run_previews_t_under_its_own_reservation():
+    with pinned_defect("P3C-DRYRUN-RESERVATION"):
+        _dry_run_preview_of(None, 11, DEPENDENT, DEPENDENT)
+
+
+@pytest.mark.xfail(
+    reason="production bug #1281 (counterexample 1)",
+    strict=True,
+    raises=ContractViolation,
+)
+def test_known_defect_dry_run_previews_an_intermediate_under_its_own_reservation():
+    with pinned_defect("P3C-DRYRUN-RESERVATION"):
+        _dry_run_preview_of(_INTERMEDIATE, 12, 11, 11)
+
+
+@pytest.mark.xfail(
+    reason="production bug #1281 (counterexample 2)",
+    strict=True,
+    raises=ContractViolation,
+)
+def test_known_defect_prior_merge_is_not_previewed_after_faulted_apply_cycles():
+    topology = LivenessTopology((11, 12), ("dep-a", "dep-b"), {}, (11, 12))
+    machine = DependencyLivenessMachine()
+    try:
+        machine.start(topology=topology, recompute=False)
+        machine.world.complete(11, CompletionPath.LABEL)
+        machine.world.complete(12, CompletionPath.PRIOR_MERGE)
+        machine.fail_next(mode="after", op="add")
+        machine.cycle(apply=True, lag=False)
+        machine.fail_next(mode="after", op="remove")
+        machine.cycle(apply=True, lag=True)
+        # Only the final dry run is the counterexample; a violation of the
+        # earlier cycles is a general failure and is not pinned.
+        with pinned_defect("P3C-LIVENESS-PRIOR-MERGE-DRYRUN"):
+            try:
+                machine.cycle(apply=False, lag=False)
+            except ContractViolation as violation:
+                if violation.contract_id != "P3C-LIVENESS-BOUND":
+                    raise
+                raise ContractViolation(
+                    "P3C-LIVENESS-PRIOR-MERGE-DRYRUN", violation.detail
+                ) from violation
     finally:
         machine.teardown()

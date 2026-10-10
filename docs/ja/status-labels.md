@@ -284,7 +284,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 - T にpromotion hold（`ci:base-branch-red`／`status:blocked-recompute`）がなく、T はOPENで、Forge・taskの観測がKNOWNである
 - cycleの開始時と昇格判定時の両方で上記が成り立ち、エラー・障害注入がない（何も変えない古いsnapshotのコールバックは区間をリセットしない）
 
-保証上限は N=1 cycle です。検証の主眼は上限ではなく、次のケースごとの期待値（有効な完了証拠が本番の経路へ入力可能になったcycleを0とする）との一致です。
+保証上限は公平な N=1 cycle で、次のケースごとに、cycle 0（有効な完了証拠が昇格判定の入力として初めて利用可能になったcycle）から数えた期待遅延 d があります。両者は別の契約（`P3C-LIVENESS-BOUND`、`P3C-CASE-DELAY`）です。正確な定義、#1219 設計 §4 の「N+1 cycle」との関係、どのテストが何を検出するかは [verification-contracts.md](verification-contracts.md#cycle-definitions) を参照してください。
 
 | ケース | D の完了の与え方 | 期待（cycle） | 備考 |
 |---|---|---|---|
@@ -298,7 +298,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `recompute_release` | T が `status:blocked-recompute` を持つ | 0 | `reconcile_recovery` が束縛されたcontextから昇格する（#902 Round 4） |
 | `multiple_dependencies` | D1 をラベル、D2 を `record_completion` で別cycleに完了 | 0（遅い方のcycleから） |  |
 
-ランダム系列（`complete_dependency`・`cycle`・`restart`・`fail_next`・`toggle_hold`・`stale_snapshot`・`duplicate_completion`）では、公平性の前提が続いたら T が昇格すること（liveness）と、有効な証拠が揃っていないかhold・reservationがあるcycleでは新たに昇格させないこと（安全性）を検証します。#902 Round 4/5 相当の誤配線（完了集合を空にする、使い捨てのcontextへ渡す）をテスト内のfaultとして入れ、assertが失敗することも確認しています。
+ランダム系列（`complete_dependency`・`cycle`・`restart`・`fail_next`・`toggle_hold`・`stale_snapshot`・`duplicate_completion`）では、公平性の前提が続いたら T が昇格すること（liveness）と、有効な証拠が揃っていないかhold・reservationがあるcycleでは新たに昇格させないこと（安全性）を検証します。#902 Round 4/5 相当の誤配線（完了集合を空にする、使い捨てのcontextへ渡す）をテスト内のfaultとして入れ、`P3C-CASE-DELAY` の違反になることも確認しています。ほかの誤動作と違反すべき契約は [verification-contracts.md](verification-contracts.md) に一覧があります。
 
 本番の欠陥として切り出したものはstrict xfailで固定しています: #1267（dry runのプレビューが未解放のreservationを無視する）と #1268（recompute解除がbase-branch-redのholdと取り消された証拠を無視する）。中間ノードのdry runプレビューでも、未解放のreservationだけが理由なら #1267 として除外します。ランダム系列がまれに見つけるもう1件の反例（障害つきのapply cycleの後、先行マージ証拠だけの依存を持つ T がdry runでプレビューされない）は #1281 で扱います。
 
@@ -338,7 +338,8 @@ FAILED / SKIPPEDの再試行は次cycleのfresh scanから行います。
 完全・KNOWNなfact、OPENで観測可能なtask、安定した依存・completion・execution証拠、
 apply有効、3command許可、hold・reservation・競合Intent・manual execution findingなし、
 journal/API/verification成功の前提で、自動修復可能なケースは回復後ちょうど1cycle
-（上限k=3）で収束します。matchingの中断Intentも同cycleでresumeします。
+で収束することを期待します（期待値は1cycle。上限k=3は別の上限で、まだ検証していません。
+[verification-contracts.md](verification-contracts.md) を参照）。matchingの中断Intentも同cycleでresumeします。
 その後2cycleでラベル不変・空計画・無mutation・新規Intentなしを確認します。
 初期欠落・外部全削除を除き、各mutation後にlifecycleが残ります。
 

@@ -47,14 +47,17 @@ from hypothesis.stateful import (
 
 from orchestune.forge import Forge
 from orchestune.labels import StatusLabel
-from orchestune.ledger.status_labels import transition_status_label
+from orchestune.ledger import status_labels
 from orchestune.ledger.status_machine import (
     LABEL_ROLES,
     LIFECYCLE_ROLES,
     LabelRole,
+    TransitionPlan,
     is_allowed,
     lifecycle_labels,
+    plan_transition,
 )
+from tests.verification_contract_test_support import expect_violation, require
 
 ISSUE = 1
 LIFECYCLE = tuple(
@@ -129,8 +132,47 @@ class FaultyForge:
             raise Injected("remove")
 
 
+class ObservingForge(FaultyForge):
+    """Checks the lifecycle right after every add/remove that took effect (#1275).
+
+    The check runs at each Forge operation boundary, not only when the adapter
+    returns, so an operation order that empties the lifecycle in between is
+    caught even when the final labels are correct.  It lives in the test Forge:
+    the production adapter is never bypassed.
+    """
+
+    def __init__(self, labels: set[str] | None = None) -> None:
+        super().__init__(labels)
+        self.enforce = True
+
+    def _observe(self) -> None:
+        if self.enforce:
+            require(
+                "P1-LIFECYCLE-NONEMPTY",
+                lifecycle_labels(self.labels),
+                f"no lifecycle label after an operation: {sorted(self.labels)}",
+            )
+
+    def add_label(self, issue_number: int | str, label: str) -> None:
+        try:
+            super().add_label(issue_number, label)
+        finally:
+            self._observe()
+
+    def remove_label(self, issue_number: int | str, label: str) -> None:
+        try:
+            super().remove_label(issue_number, label)
+        finally:
+            self._observe()
+
+
 def _forge(fake: FaultyForge) -> Forge:
     return cast("Forge", fake)
+
+
+def transition_status_label(*args: Any, **kwargs: Any) -> None:
+    """The production adapter, resolved per call so a control can swap it."""
+    status_labels.transition_status_label(*args, **kwargs)
 
 
 @dataclass
@@ -146,7 +188,7 @@ class Pending:
 class StatusLabelMachine(RuleBasedStateMachine):
     def __init__(self) -> None:
         super().__init__()
-        self.forge = FaultyForge()
+        self.forge = ObservingForge()
         self.epoch = 0
         self.pending: Pending | None = None
         self.constrained = True
@@ -170,6 +212,7 @@ class StatusLabelMachine(RuleBasedStateMachine):
     def _apply(self, pending: Pending) -> bool:
         """Run the adapter once; True when it returned without raising."""
         self.forge.begin_application()
+        self.forge.enforce = self.constrained
         try:
             transition_status_label(
                 _forge(self.forge), ISSUE, pending.target, pending.old, self._callback
@@ -223,7 +266,11 @@ class StatusLabelMachine(RuleBasedStateMachine):
             self.forge.arm(*failure)
         if self._apply(pending):
             pending.done = True
-            assert self._lifecycle() == {target}
+            require(
+                "P1-SUCCESS-TARGET-ONLY",
+                self._lifecycle() == {target},
+                self.forge.labels,
+            )
 
     @precondition(lambda self: self.forge.armed is None and not self.callback_armed)
     @rule(
@@ -246,7 +293,11 @@ class StatusLabelMachine(RuleBasedStateMachine):
         assert pending is not None
         if self._apply(pending):
             pending.done = True
-            assert self._lifecycle() == {pending.target}
+            require(
+                "P1-RETRY-CONVERGES",
+                self._lifecycle() == {pending.target},
+                self.forge.labels,
+            )
 
     @precondition(lambda self: self._replayable())
     @rule()
@@ -257,10 +308,18 @@ class StatusLabelMachine(RuleBasedStateMachine):
         self.callback_armed = False
         assert self._apply(pending)
         pending.done = True
-        assert self._lifecycle() == {pending.target}
+        require(
+            "P1-RETRY-CONVERGES",
+            self._lifecycle() == {pending.target},
+            self.forge.labels,
+        )
         converged = frozenset(self.forge.labels)
         assert self._apply(pending)
-        assert frozenset(self.forge.labels) == converged
+        require(
+            "P1-RETRY-CONVERGES",
+            frozenset(self.forge.labels) == converged,
+            "replay changed the labels",
+        )
 
     # -- rule (B) --------------------------------------------------------
     @rule(
@@ -286,7 +345,7 @@ class StatusLabelMachine(RuleBasedStateMachine):
     @invariant()
     def lifecycle_is_never_empty_without_external_change(self) -> None:
         if self.constrained:
-            assert self._lifecycle()
+            require("P1-LIFECYCLE-NONEMPTY", self._lifecycle(), self.forge.labels)
 
     @invariant()
     def auxiliary_labels_are_never_touched_by_the_adapter(self) -> None:
@@ -330,8 +389,8 @@ _POSITIONS = (
 )
 
 
-def _interrupted_forge(position: _Position) -> tuple[FaultyForge, list[str], Any]:
-    fake = FaultyForge({*_START})
+def _interrupted_forge(position: _Position) -> tuple[ObservingForge, list[str], Any]:
+    fake = ObservingForge({*_START})
     calls: list[str] = []
 
     def callback() -> None:
@@ -344,10 +403,28 @@ def _interrupted_forge(position: _Position) -> tuple[FaultyForge, list[str], Any
     return fake, calls, callback
 
 
-@pytest.mark.parametrize("position", _POSITIONS, ids=lambda p: p.name)
-def test_one_complete_retry_converges_after_each_failure_position(
-    position: _Position,
-) -> None:
+def scenario_success_leaves_only_the_target() -> None:
+    """A complete removal list leaves the target alone (P1-SUCCESS-TARGET-ONLY)."""
+    fake = ObservingForge({_Q, _B, _FS})
+    transition_status_label(_forge(fake), ISSUE, _P, _OLD)
+    require(
+        "P1-SUCCESS-TARGET-ONLY",
+        lifecycle_labels(fake.labels) == {_P} and _FS in fake.labels,
+        sorted(fake.labels),
+    )
+
+
+def scenario_single_lifecycle_label_is_never_dropped() -> None:
+    """One lifecycle label held: it is never the only one removed (P1-LIFECYCLE-NONEMPTY)."""
+    fake = ObservingForge({_Q, _FS})
+    transition_status_label(_forge(fake), ISSUE, _P, (_Q,))
+    require(
+        "P1-SUCCESS-TARGET-ONLY", lifecycle_labels(fake.labels) == {_P}, fake.labels
+    )
+
+
+def scenario_one_retry_converges(position: _Position) -> None:
+    """Interrupt at ``position``, retry once completely (P1-RETRY-CONVERGES)."""
     fake, calls, callback = _interrupted_forge(position)
 
     with pytest.raises(Injected):
@@ -355,19 +432,96 @@ def test_one_complete_retry_converges_after_each_failure_position(
 
     # The interrupted attempt always leaves a discoverable lifecycle label.
     assert set(fake.labels) == position.expected
-    assert lifecycle_labels(fake.labels)
+    require("P1-LIFECYCLE-NONEMPTY", lifecycle_labels(fake.labels), fake.labels)
 
     fake.disarm()
     transition_status_label(_forge(fake), ISSUE, _P, _OLD, callback)
 
-    assert fake.labels == {_P, _FS}
-    assert lifecycle_labels(fake.labels) == {_P}
+    require(
+        "P1-RETRY-CONVERGES",
+        fake.labels == {_P, _FS} and lifecycle_labels(fake.labels) == {_P},
+        sorted(fake.labels),
+    )
 
     # Replaying the same operation never changes the label set again; the
     # callback may run again (label idempotency is not exactly-once callbacks).
     transition_status_label(_forge(fake), ISSUE, _P, _OLD, callback)
-    assert fake.labels == {_P, _FS}
+    require("P1-RETRY-CONVERGES", fake.labels == {_P, _FS}, sorted(fake.labels))
     assert len(calls) >= 2
+
+
+@pytest.mark.parametrize("position", _POSITIONS, ids=lambda p: p.name)
+def test_one_complete_retry_converges_after_each_failure_position(
+    position: _Position,
+) -> None:
+    scenario_one_retry_converges(position)
+
+
+def test_complete_removal_list_leaves_only_the_target() -> None:
+    scenario_success_leaves_only_the_target()
+    scenario_single_lifecycle_label_is_never_dropped()
+
+
+# -- controls: one injected adapter fault each (#1275) -------------------------
+
+
+def _drop_first_remove(new_label: str, old_labels: tuple[str, ...]) -> TransitionPlan:
+    plan = plan_transition(new_label, old_labels)
+    return TransitionPlan(add=plan.add, remove=plan.remove[1:])
+
+
+def _remove_before_add(
+    forge: Forge,
+    issue_number: int | str,
+    new_label: str,
+    old_labels: Any,
+    on_label_added: Any = None,
+) -> None:
+    for old_label in old_labels:
+        for label in plan_transition(new_label, (old_label,)).remove:
+            forge.remove_label(issue_number, label)
+    forge.add_label(issue_number, plan_transition(new_label, ()).add)
+    if on_label_added is not None:
+        on_label_added()
+
+
+def test_control_remove_missing_is_detected(monkeypatch: pytest.MonkeyPatch) -> None:
+    scenario_success_leaves_only_the_target()  # the same scenario passes unfaulted
+    monkeypatch.setattr(status_labels, "plan_transition", _drop_first_remove)
+    with expect_violation("P1-SUCCESS-TARGET-ONLY"):
+        scenario_success_leaves_only_the_target()
+
+
+def test_control_remove_before_add_is_detected_mid_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The final labels are correct; only the intermediate boundary is empty.
+    fake = ObservingForge({_Q, _FS})
+    fake.enforce = False
+    _remove_before_add(_forge(fake), ISSUE, _P, (_Q,))
+    assert lifecycle_labels(fake.labels) == {_P}
+
+    scenario_single_lifecycle_label_is_never_dropped()
+    monkeypatch.setattr(status_labels, "transition_status_label", _remove_before_add)
+    with expect_violation("P1-LIFECYCLE-NONEMPTY"):
+        scenario_single_lifecycle_label_is_never_dropped()
+
+
+def test_control_retry_noop_is_detected(monkeypatch: pytest.MonkeyPatch) -> None:
+    position = next(p for p in _POSITIONS if p.name == "add-response-lost")
+    scenario_one_retry_converges(position)
+    real = status_labels.transition_status_label
+
+    def retry_noop(
+        forge: Any, issue_number: Any, new_label: str, old: Any, callback: Any = None
+    ) -> None:
+        if new_label in forge.labels:  # "already applied": the removals are skipped
+            return
+        real(forge, issue_number, new_label, old, callback)
+
+    monkeypatch.setattr(status_labels, "transition_status_label", retry_noop)
+    with expect_violation("P1-RETRY-CONVERGES"):
+        scenario_one_retry_converges(position)
 
 
 def test_failure_in_the_lazy_old_label_source_is_recoverable_by_one_retry() -> None:

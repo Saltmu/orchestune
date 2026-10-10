@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,7 @@ from orchestune.ledger.run_state import TaskReclaimRecord
 from orchestune.ledger.status_events import (
     EVENT_SPECS,
     Applied,
+    BudgetCounts,
     BudgetLimits,
     Event,
     EventInput,
@@ -66,6 +68,7 @@ from orchestune.ledger.status_events import (
 )
 from tests.dependency_liveness_test_support import CASE_TABLE, LIVENESS_BOUND
 from tests.status_event_test_support import EVENT_BY_SOURCE, production_limits
+from tests.verification_contract_test_support import expect_violation, require
 
 Q = StatusLabel.QUEUED
 B = StatusLabel.BLOCKED
@@ -374,12 +377,17 @@ class BudgetTerminationMachine(RuleBasedStateMachine):
             pending is not None and pending.operation == event.operation
         )
         if resumed:
-            assert new.count == old.count, (name, old, new)
-            assert getattr(new, "retry_at", None) == getattr(old, "retry_at", None)
+            require("P3B-BUDGET-CONSUMED", new.count == old.count, (name, old, new))
+            require(
+                "P3B-BUDGET-CONSUMED",
+                getattr(new, "retry_at", None) == getattr(old, "retry_at", None),
+                (name, old, new),
+            )
         elif result.escalated and name != "reclaim":
-            assert new.count == old.count, (name, old, new)  # exhausted: no slot
+            # exhausted: no slot
+            require("P3B-BUDGET-CONSUMED", new.count == old.count, (name, old, new))
         else:
-            assert new.count == old.count + 1, (name, old, new)
+            require("P3B-BUDGET-CONSUMED", new.count == old.count + 1, (name, old, new))
 
     def _account(self, before: TaskModel, event: EventInput, result: Applied) -> None:
         key, after = (event.event, event.kind), result.state
@@ -411,9 +419,10 @@ class BudgetTerminationMachine(RuleBasedStateMachine):
     def _count(self, budget: str) -> None:
         self.retries_in_epoch[budget] += 1
         # Invariant 2: bounded within the ledger epoch.
-        assert self.retries_in_epoch[budget] <= RETRY_BOUNDS[budget], (
-            budget,
-            self.retries_in_epoch,
+        require(
+            "P3B-RETRY-BOUND",
+            self.retries_in_epoch[budget] <= RETRY_BOUNDS[budget],
+            (budget, self.retries_in_epoch),
         )
 
     # -- setup -------------------------------------------------------------------
@@ -509,7 +518,15 @@ class BudgetTerminationMachine(RuleBasedStateMachine):
 
     @rule(ledger_loss=st.booleans())
     def restart(self, ledger_loss: bool) -> None:
+        persistent = self.state.counts
         self.state = restart(self.state, ledger_loss=ledger_loss)
+        # Only the local budgets are lost with the ledger; the budgets kept on
+        # the Forge (recompute, base-branch-red) survive every restart.
+        require(
+            "P3B-LEDGER-LOSS-KEEPS-PERSISTENT",
+            self.state.counts == persistent,
+            (persistent, self.state.counts),
+        )
         if not self.state.completion_done:
             self.completed = False
         if ledger_loss:
@@ -584,6 +601,72 @@ class TestBudgetBounds:
         machine._deliver(EventInput(_E.RECLAIM, _K.PLAIN, None, "op-r2", 0.0))
         assert machine.state.retries.reclaim.count == 2
         assert machine.retries_in_epoch["reclaim"] == 2
+
+
+def scenario_every_retry_consumes_a_slot() -> None:
+    """P3B-BUDGET-CONSUMED: each new logical retry consumes one slot."""
+    BudgetTerminationMachine().retry_round((_E.RECLAIM, _K.PLAIN), 2)
+
+
+def scenario_ledger_loss_keeps_persistent_budgets() -> None:
+    """P3B-LEDGER-LOSS-KEEPS-PERSISTENT: recompute / base-branch-red survive."""
+    machine = BudgetTerminationMachine()
+    machine.retry_round((_E.BLOCK, _K.BASE_BRANCH_RED), 1)
+    machine.retry_round((_E.RECOMPUTE, _K.PLAIN), 1)
+    assert machine.state.counts.base_branch_red == 1
+    machine.restart(ledger_loss=True)
+    assert machine.state.counts.base_branch_red == 1
+    assert machine.state.counts.recompute == 1
+
+
+def scenario_a_loop_stops_at_its_bound() -> None:
+    """P3B-RETRY-BOUND: the retries of a budget never exceed the table bound."""
+    machine = BudgetTerminationMachine()
+    machine.retry_round((_E.RECLAIM, _K.PLAIN), RETRY_BOUNDS["reclaim"] + 2)
+    assert machine.state.lifecycle == {H}
+
+
+def test_each_retry_consumes_one_slot_and_persistent_budgets_survive_ledger_loss():
+    scenario_every_retry_consumes_a_slot()
+    scenario_ledger_loss_keeps_persistent_budgets()
+    scenario_a_loop_stops_at_its_bound()
+
+
+def test_control_budget_not_consumed_is_detected(monkeypatch):
+    scenario_every_retry_consumes_a_slot()
+    real = apply_event
+
+    def forgetful(state, event, limits):
+        result = real(state, event, limits)
+        if isinstance(result, Applied):
+            return replace(result, state=replace(result.state, retries=state.retries))
+        return result
+
+    monkeypatch.setattr(sys.modules[__name__], "apply_event", forgetful)
+    with expect_violation("P3B-BUDGET-CONSUMED"):
+        scenario_every_retry_consumes_a_slot()
+
+
+def test_control_budget_bound_exceeded_is_detected(monkeypatch):
+    """Raising a limit past the table bound makes the loop outrun P3B-RETRY-BOUND."""
+    scenario_a_loop_stops_at_its_bound()
+    monkeypatch.setattr(
+        sys.modules[__name__], "LIMITS", replace(LIMITS, max_task_reclaims=99)
+    )
+    with expect_violation("P3B-RETRY-BOUND"):
+        scenario_a_loop_stops_at_its_bound()
+
+
+def test_control_persistent_budget_reset_is_detected(monkeypatch):
+    scenario_ledger_loss_keeps_persistent_budgets()
+    real = restart
+
+    def resetting(state, *, ledger_loss):
+        return replace(real(state, ledger_loss=ledger_loss), counts=BudgetCounts())
+
+    monkeypatch.setattr(sys.modules[__name__], "restart", resetting)
+    with expect_violation("P3B-LEDGER-LOSS-KEEPS-PERSISTENT"):
+        scenario_ledger_loss_keeps_persistent_budgets()
 
 
 def test_configured_profile_applies_to_budget_machine() -> None:

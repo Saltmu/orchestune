@@ -54,6 +54,11 @@ from tests.status_event_retry_harness import (
 from tests.status_event_test_support import NOW
 from tests.status_transition_callsite_drivers import ISSUE, _fake
 from tests.test_dispatch_gc_policies import policy_case
+from tests.verification_contract_test_support import (
+    ContractViolation,
+    pinned_defect,
+    require,
+)
 
 P = StatusLabel.IN_PROGRESS
 Q = StatusLabel.QUEUED
@@ -65,6 +70,7 @@ BACKOFF = 60
 RESUMED = NOW + 5
 #: Production defects found by this harness, split out with their counterexamples.
 RECLAIM_RECORD_ISSUE = "#1279"
+_PRESERVED = "P3B-PERSISTENT-BUDGET-PRESERVED"
 RECOMPUTE_RELAUNCH_ISSUE = "#1280"
 
 
@@ -302,7 +308,11 @@ class TestRecomputeBudget:
         assert _deviate(make_test_active_worktree(ISSUE, pid=None), config, task)
         assert _body_counters(forge) == (1, False)
 
-    @pytest.mark.xfail(reason=f"production bug {RECOMPUTE_RELAUNCH_ISSUE}", strict=True)
+    @pytest.mark.xfail(
+        reason=f"production bug {RECOMPUTE_RELAUNCH_ISSUE}",
+        strict=True,
+        raises=ContractViolation,
+    )
     def test_relaunch_keeps_the_persisted_recompute_budget(
         self, tmp_path: Path
     ) -> None:
@@ -312,8 +322,10 @@ class TestRecomputeBudget:
             _deviate(active, config, task)
         assert _body_counters(forge) == (2, True)
         relaunched = _fresh_launch(forge, config)
-        assert _deviate(relaunched, config, task) == "already_forced_serial"
-        assert _body_counters(forge) == (2, True)
+        with pinned_defect("P3B-PERSISTENT-BUDGET-PRESERVED"):
+            result = _deviate(relaunched, config, task)
+            require(_PRESERVED, result == "already_forced_serial", result)
+            require(_PRESERVED, _body_counters(forge) == (2, True), result)
 
 
 def _fresh_launch(forge: FakeForge, config: Any) -> Any:
@@ -392,7 +404,11 @@ class TestBaseBranchRedBudget:
 # ---- defects pinned for their own Issues --------------------------------------
 
 
-@pytest.mark.xfail(reason=f"production bug {RECLAIM_RECORD_ISSUE}", strict=True)
+@pytest.mark.xfail(
+    reason=f"production bug {RECLAIM_RECORD_ISSUE}",
+    strict=True,
+    raises=ContractViolation,
+)
 def test_reclaim_keeps_backoff_budgets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -403,8 +419,15 @@ def test_reclaim_keeps_backoff_budgets(
     )
     world = reclaim_world(tmp_path, monkeypatch, retries=backoff)
     assert _reclaim(world)
-    assert world.retries() == RetryStates(
-        reclaim=ReclaimState(count=1),
-        early_death=backoff.early_death,
-        review_timeout=backoff.review_timeout,
-    )
+    with pinned_defect("P3B-PERSISTENT-BUDGET-PRESERVED"):
+        retries = world.retries()
+        require(
+            _PRESERVED,
+            retries
+            == RetryStates(
+                reclaim=ReclaimState(count=1),
+                early_death=backoff.early_death,
+                review_timeout=backoff.review_timeout,
+            ),
+            retries,
+        )

@@ -34,18 +34,20 @@ from orchestune.ledger.status_events import (
     apply_event,
     restart,
 )
+from tests import status_event_conformance as conformance_module
 from tests.conftest import make_issue
 from tests.dispatch_test_support import make_test_dispatcher_config
 from tests.status_event_cases import (
     CURRENT,
     EVENT_CASES,
-    FAIL_BEFORE,
     EventCase,
+)
+from tests.status_event_conformance import (
+    check_event_conformance,
+    check_route_coverage,
 )
 from tests.status_event_test_support import (
     EVENT_BY_SOURCE,
-    LABEL_INVARIANT_BUDGETS,
-    LABEL_INVARIANT_COMPLETIONS,
     CaseEnv,
     FaultyForge,
     not_needed_review_verdict,
@@ -55,14 +57,13 @@ from tests.status_event_test_support import (
 )
 from tests.status_transition_callsite_drivers import ISSUE
 from tests.test_status_transition_callsites import (
-    CALL_SITES,
     CASES,
-    OUT_OF_SCOPE_PATHS,
     Case,
 )
 from tests.test_status_transition_callsites import (
     _run as _run_callsite_case,
 )
+from tests.verification_contract_test_support import expect_violation
 
 Q = StatusLabel.QUEUED
 B = StatusLabel.BLOCKED
@@ -798,29 +799,10 @@ class TestOperationsAndRestart:
 
 
 class TestEventRegistry:
-    def test_event_by_source_covers_call_sites_and_out_of_scope_and_invariant(
+    def test_route_table_covers_every_source_and_executes_every_condition(
         self,
     ) -> None:
-        call_sites = set(CALL_SITES.keys())
-        out_of_scope = {f"{f}::{fn}" for f, fn, _ in OUT_OF_SCOPE_PATHS}
-        invariant = {
-            f"{f}::{fn}"
-            for f, fn, _ in (*LABEL_INVARIANT_COMPLETIONS, *LABEL_INVARIANT_BUDGETS)
-        }
-        expected = call_sites | out_of_scope | invariant
-        assert set(EVENT_BY_SOURCE.keys()) == expected
-
-    def test_every_route_condition_is_executed_by_cases(self) -> None:
-        all_route_conditions = {
-            (source, c)
-            for source, routes in EVENT_BY_SOURCE.items()
-            for r in routes
-            for c in r.cases
-        }
-        covered_conditions = {(c.site, c.condition) for c in CASES} | {
-            (c.source, c.condition) for c in EVENT_CASES
-        }
-        assert all_route_conditions == covered_conditions
+        check_route_coverage()
 
 
 _DOCS_ROOT = Path(__file__).resolve().parent.parent / "docs"
@@ -870,47 +852,63 @@ class TestEventModelConformance:
     def test_production_driver_matches_apply_event(
         self, case: EventCase, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        route = route_for(case.source, case.condition)
-        forge = FaultyForge()
-        forge.issues[ISSUE] = make_issue(ISSUE, labels=case.held)
-        config = make_test_dispatcher_config(tmp_path, forge=forge, apply=True)
-        env = CaseEnv(forge, config, monkeypatch, tmp_path, case.held, case.params)
-        observations = case.driver(env)
-        assert len(observations) == len(case.steps)
+        check_event_conformance(case, monkeypatch, tmp_path)
 
-        state = case.initial()
-        for step, obs in zip(case.steps, observations, strict=False):
-            if step == FAIL_BEFORE:
-                applied_state = state
-                res_tag = None
-            else:
-                stop_after = step if isinstance(step, Stage) else None
-                inp = EventInput(
-                    route.event, route.kind, stop_after=stop_after, **case.inputs
-                )
-                res = apply_event(state, inp, LIMITS)
-                if isinstance(res, Applied):
-                    applied_state = res.state
-                    res_tag = "applied"
-                elif isinstance(res, NoOp):
-                    applied_state = state
-                    res_tag = "noop"
-                else:
-                    applied_state = state
-                    res_tag = "rejected"
-                state = applied_state
 
-            assert obs.labels == applied_state.labels
-            if obs.result is not None:
-                assert obs.result == res_tag
-            if obs.completion is not None:
-                assert obs.completion == applied_state.completion_done
-            if obs.execution_active is not None:
-                assert obs.execution_active == applied_state.execution_active
-            if obs.retries is not None:
-                assert obs.retries == applied_state.retries
-            if obs.counts is not None:
-                assert obs.counts == applied_state.counts
+class TestConformanceControls:
+    """Injected faults must violate the expected contract and nothing else (#1275)."""
+
+    _CASE = next(
+        c for c in EVENT_CASES if c.id == "completion_mutate-done-from-in-progress"
+    )
+
+    def test_control_misrouted_event_is_detected(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        check_event_conformance(self._CASE, monkeypatch, tmp_path / "normal")
+        real = conformance_module.route_for
+
+        def misrouted(source: str, condition: str):
+            return replace(real(source, condition), event=Event.QUEUE, kind=Kind.PLAIN)
+
+        monkeypatch.setattr(conformance_module, "route_for", misrouted)
+        with expect_violation("P3A-DYNAMIC-CONFORMANCE"):
+            check_event_conformance(self._CASE, monkeypatch, tmp_path / "fault")
+
+    def test_control_wrong_model_target_is_detected(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        check_event_conformance(self._CASE, monkeypatch, tmp_path / "normal")
+        real = conformance_module.apply_event
+
+        def wrong_target(state: TaskModel, event: EventInput, limits: BudgetLimits):
+            result = real(state, event, limits)
+            if isinstance(result, Applied):
+                bad = replace(result.state, lifecycle=frozenset({H}))
+                return replace(result, state=bad)
+            return result
+
+        monkeypatch.setattr(conformance_module, "apply_event", wrong_target)
+        with expect_violation("P3A-DYNAMIC-CONFORMANCE"):
+            check_event_conformance(self._CASE, monkeypatch, tmp_path / "fault")
+
+    def test_control_unrouted_source_is_detected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        check_route_coverage()
+        source = next(iter(EVENT_BY_SOURCE))
+        monkeypatch.delitem(EVENT_BY_SOURCE, source)
+        with expect_violation("P3A-ROUTE-COVERAGE"):
+            check_route_coverage()
+
+    def test_control_unexecuted_route_condition_is_detected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source, routes = next((s, r) for s, r in EVENT_BY_SOURCE.items() if r[0].cases)
+        extra = replace(routes[0], cases=(*routes[0].cases, "never-executed"))
+        monkeypatch.setitem(EVENT_BY_SOURCE, source, (extra, *routes[1:]))
+        with expect_violation("P3A-ROUTE-COVERAGE"):
+            check_route_coverage()
 
 
 _LABELS_SOURCE = "dispatch/gc/policy_effects.py::reconcile_labels"
