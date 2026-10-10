@@ -44,7 +44,7 @@ Loop (up to 5 rounds):
   2. Evaluate the exit code (acquisition/control only, never a verdict):
      - Exit 0: content acquired -- apply the per-finding decision procedure above. Exit 11: reviewer still in progress (single-snapshot check; online polling keeps waiting).
      - Exit 20: timeout (default 1800s); retry once with --no-post --timeout 1800, else `orchestune complete --issue <N> --result blocked --reason review-timeout`. Exit 21: stalled tracker past grace window (default 600s); re-run for next round.
-     - Exit 30: single snapshot had no target-round result, or was partial/stale/legacy (insufficient data, not "ambiguous"); MCP re-fetches and re-evaluates, never re-triggers. Exit 2: record and escalate; Exit 12: see "Terminal judgment posting".
+     - Exit 30: single snapshot had no target-round result, or was partial/stale/legacy (insufficient data, not "ambiguous"); MCP re-fetches and re-evaluates, never re-triggers. Online Exit 30: a Codex tracker reported Completed but no review content arrived within the 30s grace (the tracker table is telemetry, never a pass); re-run `--no-post`, do not judge. Exit 2: record and escalate; Exit 12: see "Terminal judgment posting".
      - Required finding unresolved or completion condition unmet -> fix/gather info, write `<session-dir>/review-reply.md` (Round X/5), return to step 1.
      - All completion conditions met (reply posted if any finding was judged) -> Step 12 with --reviewer <bot> --review-reply <session-dir>/review-reply.md; review_head_mismatch returns to Step 11 for re-review.
 ```

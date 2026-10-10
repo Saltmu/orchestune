@@ -22,6 +22,7 @@ from orchestune.review.judgment import (
 from orchestune.review.markers import derive_review_target, parse_selection_marker
 from orchestune.review.rounds import (
     ReviewTrigger,
+    precise_created_at,
     restore_triggers,
     trigger_comment_ids,
 )
@@ -92,11 +93,15 @@ def _acquire(state: dict[str, Any], reviewer: str, head: str | None) -> dict[str
     # cannot certify which head was requested in this round.
     if requested is None or requested != head:
         raise _head_mismatch()
+    # The latest trigger is open-ended. A reused Codex tracker updated since the
+    # trigger holds completion unless its commit explicitly names another head.
     result = collect_review_state(
         state,
         reviewer,
         exclude_issue_comment_ids=trigger_comment_ids(state["issue_comments"]),
         round_started_at=trigger.created_at,
+        requested_head_sha=requested,
+        activity_started_at=precise_created_at(state["issue_comments"], trigger),
     )
     if result["acquisition_status"] != "acquired" or any(
         status != "complete" for status in state["completeness"].values()

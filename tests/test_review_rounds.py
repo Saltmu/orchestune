@@ -445,3 +445,34 @@ def test_build_restorable_trigger_body_succeeds_on_valid_reply() -> None:
     body = build_restorable_trigger_body(reply, "claude", 1, HEAD)
     parsed = parse_trigger({"id": 1, "body": body, "created_at": at(1)})
     assert parsed is not None and parsed.round == 1
+
+
+# --- #1274: exact round bounds for tracker activity -------------------------------
+
+
+def test_activity_bounds_use_the_exact_trigger_times():
+    from orchestune.review.rounds import activity_bounds
+
+    first = trigger(1, 1, "2026-10-04T03:10:00Z")
+    second = trigger(2, 2, "2026-10-04T03:20:00Z")
+    first["created_at_precise"] = "2026-10-04T03:10:00.250000Z"
+    second["created_at_precise"] = "2026-10-04T03:20:00.900000Z"
+    comments = [first, second]
+    triggers = restore_triggers(comments)
+    assert activity_bounds(comments, triggers, triggers[0]) == (
+        "2026-10-04T03:10:00.250000Z",
+        "2026-10-04T03:20:00.900000Z",
+    )
+    assert activity_bounds(comments, triggers, triggers[1]) == (
+        "2026-10-04T03:20:00.900000Z",
+        "",
+    )
+
+
+def test_activity_bounds_fall_back_to_the_raw_then_rounded_creation_time():
+    from orchestune.review.rounds import precise_created_at
+
+    raw = trigger(1, 1, "2026-10-04T03:10:00.5Z")
+    parsed = restore_triggers([raw])[0]
+    assert precise_created_at([raw], parsed) == "2026-10-04T03:10:00.5Z"
+    assert precise_created_at([], parsed) == parsed.created_at

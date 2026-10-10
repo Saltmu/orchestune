@@ -45,18 +45,19 @@ from orchestune.review.acquisition import (
     _filter_bot_items as _filter_bot_items,
 )
 from orchestune.review.acquisition import (
-    _get_item_created_timestamp,
-    _is_explicitly_in_progress,
-    _latest_bot_activity_item,
-    _latest_bot_summary_item,
-    extract_review_result,
-    normalize_review_state,
-)
-from orchestune.review.acquisition import (
     _get_item_timestamp as _get_item_timestamp,
 )
 from orchestune.review.acquisition import (
     _is_bot_user as _is_bot_user,
+)
+from orchestune.review.acquisition import (
+    _is_explicitly_in_progress,
+    _latest_bot_activity_item,
+    extract_review_result,
+    normalize_review_state,
+)
+from orchestune.review.acquisition import (
+    _latest_bot_summary_item as _latest_bot_summary_item,
 )
 from orchestune.review.judgment import validate_previous_round_reply
 from orchestune.review.markers import (
@@ -80,6 +81,10 @@ from orchestune.review.rounds import (
     build_restorable_trigger_body,
     previous_round_window,
 )
+from orchestune.review.tracker_activity import (
+    DEFAULT_COMPLETED_GRACE_SECONDS,
+    CompletedGrace,
+)
 from scripts.jev_context import JevReviewContext, collect_review_context
 from scripts.jev_filter import evaluate_review_findings
 from scripts.review_cli import (
@@ -98,6 +103,16 @@ from scripts.review_cli import (
 from scripts.review_cli import (
     write_output_file as _write_output_file,
 )
+from scripts.review_poll import (
+    COMPLETENESS_SECTIONS,
+    PollState,
+    StalledReviewError,
+    WaitRound,
+    poll_step,
+    summary_gate_open,
+    track_stall,
+    unavailable_result,
+)
 
 # Historical private names; tests and callers patch and import them from here.
 _ensure_review_trigger_mention = ensure_review_trigger_mention
@@ -105,13 +120,20 @@ _has_review_trigger_mention = has_review_trigger_mention
 _mark_review_trigger = mark_review_trigger
 _resolve_offline_completeness = resolve_legacy_completeness
 _review_round_marker = review_round_marker
+_track_stall = track_stall
 
 EXIT_TIMEOUT = 20  # Timeout waiting for review activity
 EXIT_STALLED = 21  # In-progress tracker comment stopped changing; job likely ended
 
 GH_COMMAND_TIMEOUT_SECONDS = 30
 
-_COMPLETENESS_SECTIONS = ("issue_comments", "reviews", "inline_comments")
+
+def _monotonic() -> float:
+    """Clock for the Completed grace deadline; tests replace it."""
+    return time.monotonic()
+
+
+_COMPLETENESS_SECTIONS = COMPLETENESS_SECTIONS
 
 # How long a bot's own "in progress" tracker comment may report the same
 # unchanged content before it is treated as stalled rather than merely slow.
@@ -126,17 +148,6 @@ DEFAULT_STALL_GRACE_SECONDS = 600
 
 class MaxRoundsExceededError(RuntimeError):
     """Raised when the maximum number of review rounds is exceeded."""
-
-
-class StalledReviewError(RuntimeError):
-    """Raised when a bot's in-progress tracker comment stops changing.
-
-    This is distinct from a plain timeout: it means the review polling loop
-    positively observed the same "in progress" tracker signature for longer
-    than the stall grace window, which is strong evidence the workflow run
-    that owns the comment already ended (success or failure) without ever
-    posting a final result, rather than merely being slow.
-    """
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -535,37 +546,41 @@ def _check_immediate_review_result(
     repository: str | None = None,
     exclude_ids: set[int | str] | None = None,
 ) -> dict[str, Any] | None:
+    """Acquire an already-posted round, unless its tracker is still running.
+
+    A current Running tracker is judged first, so a partial review or inline
+    comment cannot end the wait. Otherwise the content's own creation /
+    submission time decides (Codex needs no summary comment).
+    """
+    if not latest_trigger_time or not summary_gate_open(
+        initial_data, bot_name, exclude_ids, latest_trigger_time
+    ):
+        return None
     latest_bot_activity = _latest_bot_activity_item(
         initial_data,
         bot_name,
         exclude_ids,
         round_started_at=latest_trigger_time,
+        requested_head_sha=requested_head_sha,
     )
-    latest_bot_item = _latest_bot_summary_item(initial_data, bot_name, exclude_ids)
-    if (
-        latest_bot_item is not None
-        and latest_trigger_time
-        and _get_item_created_timestamp(latest_bot_item) >= latest_trigger_time
-        and not (
-            latest_bot_activity is not None
-            and _is_explicitly_in_progress(latest_bot_activity)
-        )
+    if latest_bot_activity is not None and _is_explicitly_in_progress(
+        latest_bot_activity
     ):
-        return _extract_review_result(
-            initial_data,
-            bot_name,
-            exclude_ids=exclude_ids,
-            latest_trigger_time=latest_trigger_time,
-            jev_threshold=jev_threshold,
-            pr_number=pr_number,
-            context_cache=context_cache,
-            round_num=current_round,
-            trigger_id=trigger_id,
-            triggered_at=latest_trigger_time,
-            requested_head_sha=requested_head_sha,
-            repository=repository,
-        )
-    return None
+        return None
+    return _extract_review_result(
+        initial_data,
+        bot_name,
+        exclude_ids=exclude_ids,
+        latest_trigger_time=latest_trigger_time,
+        jev_threshold=jev_threshold,
+        pr_number=pr_number,
+        context_cache=context_cache,
+        round_num=current_round,
+        trigger_id=trigger_id,
+        triggered_at=latest_trigger_time,
+        requested_head_sha=requested_head_sha,
+        repository=repository,
+    )
 
 
 def _resolve_current_round(
@@ -580,55 +595,6 @@ def _resolve_current_round(
     if not post_trigger:
         return max(1, latest_existing_round)
     return latest_existing_round + 1
-
-
-def _track_stall(
-    current_bot_activity: dict[str, Any] | None,
-    last_signature: str | None,
-    since: float | None,
-    *,
-    stall_grace_seconds: int,
-    bot_name: str,
-    pr_number: int,
-    latest_trigger_time: str = "",
-) -> tuple[str | None, float | None]:
-    """Update in-progress tracker staleness state for one poll iteration.
-
-    Returns the (signature, since) state to carry into the next iteration.
-    Raises StalledReviewError once the same signature has persisted for at
-    least stall_grace_seconds while still reporting in-progress.
-
-    A tracker comment created before latest_trigger_time belongs to an
-    earlier round (e.g. the current round's trigger hasn't drawn any bot
-    response yet); it must not be attributed to the current round's stall
-    tracking, or a still-unanswered new trigger would be misdiagnosed as a
-    stall of a round that never actually started (should stay Exit 20 /
-    the no-activity recovery path instead).
-    """
-    if (
-        current_bot_activity is None
-        or not _is_explicitly_in_progress(current_bot_activity)
-        or (
-            latest_trigger_time
-            and _get_item_created_timestamp(current_bot_activity) < latest_trigger_time
-        )
-    ):
-        return None, None
-
-    signature = (
-        f"{_get_item_timestamp(current_bot_activity)}:"
-        f"{len(str(current_bot_activity.get('body') or ''))}"
-    )
-    if signature != last_signature:
-        return signature, time.time()
-    if since is not None and time.time() - since >= stall_grace_seconds:
-        raise StalledReviewError(
-            f"@{bot_name}'s in-progress tracker comment on PR #{pr_number} has "
-            f"not changed in over {stall_grace_seconds}s while still reporting "
-            "in-progress; the workflow run that owns it most likely already "
-            "ended without posting a final result (see review-loop.md)."
-        )
-    return last_signature, since
 
 
 def _validate_review_selection(
@@ -736,6 +702,7 @@ def wait_for_review(
     stall_grace_seconds: int = DEFAULT_STALL_GRACE_SECONDS,
     jev_threshold: float | None = None,
     switch_reviewer: bool = False,
+    completed_grace_seconds: float = DEFAULT_COMPLETED_GRACE_SECONDS,
 ) -> dict[str, Any]:
     context_cache: dict[int, JevReviewContext] = {}
     repository = _fetch_repository_slug()
@@ -816,88 +783,39 @@ def wait_for_review(
         print(
             f"Waiting for @{bot_name} activity on PR #{pr_number} (timeout: {timeout}s, interval: {interval}s)..."
         )
+        round_ = WaitRound(
+            pr_number=pr_number,
+            bot_name=bot_name,
+            round_num=current_round,
+            trigger_id=trigger_id,
+            trigger_time=latest_trigger_time,
+            requested_head_sha=requested_head_sha,
+            repository=repository,
+            excluded_ids=excluded_ids,
+            jev_threshold=jev_threshold,
+            context_cache=context_cache,
+            extract_review=_extract_review_result,
+            fetch_head_sha=_fetch_pr_head_sha,
+        )
+        state = PollState(initial_snapshot, CompletedGrace(completed_grace_seconds))
         start_time = time.time()
         consecutive_errors = 0
-        last_in_progress_signature: str | None = None
-        in_progress_since: float | None = None
 
         while True:
             try:
                 current_data = _get_pr_data(pr_number, executor=executor)
                 consecutive_errors = 0
-
-                # Track staleness of the current "in progress" tracker comment
-                # independent of `has_changes` below: a comment that keeps
-                # reporting in-progress with an *unchanged* signature across
-                # polls never trips the snapshot-diff gate (nothing about it
-                # looks "new"), so a genuinely dead tracker would otherwise be
-                # invisible until the full timeout elapses. Raises
-                # StalledReviewError once the signature has been unchanged for
-                # longer than stall_grace_seconds.
-                current_bot_activity = _latest_bot_activity_item(
+                result = poll_step(
+                    round_,
+                    state,
                     current_data,
-                    bot_name,
-                    exclude_ids=excluded_ids,
-                    round_started_at=latest_trigger_time,
-                )
-                last_in_progress_signature, in_progress_since = _track_stall(
-                    current_bot_activity,
-                    last_in_progress_signature,
-                    in_progress_since,
                     stall_grace_seconds=stall_grace_seconds,
-                    bot_name=bot_name,
-                    pr_number=pr_number,
-                    latest_trigger_time=latest_trigger_time,
+                    grace_seconds=completed_grace_seconds,
+                    timeout_remaining=timeout - (time.time() - start_time),
+                    clock=_monotonic,
                 )
-
-                current_snapshot = _build_snapshot(
-                    current_data, bot_name, exclude_ids=excluded_ids
-                )
-
-                has_changes = any(
-                    k not in initial_snapshot or initial_snapshot[k] != v
-                    for k, v in current_snapshot.items()
-                )
-
-                if has_changes:
-                    if current_bot_activity is not None and _is_explicitly_in_progress(
-                        current_bot_activity
-                    ):
-                        initial_snapshot = current_snapshot
-                        print(f"@{bot_name} is still working; continuing to wait...")
-                    else:
-                        latest_bot_item = _latest_bot_summary_item(
-                            current_data, bot_name, exclude_ids=excluded_ids
-                        )
-                        if latest_bot_item is not None and (
-                            not latest_trigger_time
-                            or _get_item_created_timestamp(latest_bot_item)
-                            >= latest_trigger_time
-                        ):
-                            result = _extract_review_result(
-                                current_data,
-                                bot_name,
-                                exclude_ids=excluded_ids,
-                                latest_trigger_time=latest_trigger_time,
-                                jev_threshold=jev_threshold,
-                                pr_number=pr_number,
-                                context_cache=context_cache,
-                                round_num=current_round,
-                                trigger_id=trigger_id,
-                                triggered_at=latest_trigger_time,
-                                requested_head_sha=requested_head_sha,
-                                repository=repository,
-                            )
-                            if result is not None:
-                                return result
-                            initial_snapshot = current_snapshot
-                        else:
-                            initial_snapshot = current_snapshot
-                            print(
-                                f"@{bot_name} activity predates the latest trigger; "
-                                "continuing to wait..."
-                            )
-
+                if result is not None:
+                    return result
             except StalledReviewError:
                 raise
             except Exception as e:
@@ -908,10 +826,17 @@ def wait_for_review(
                         f"Exceeded maximum retries ({max_retries}) during review polling: {e}"
                     ) from e
 
-            if time.time() - start_time >= timeout:
+            remaining = timeout - (time.time() - start_time)
+            if remaining <= 0:
                 break
-            time.sleep(interval)
+            pause = min(interval, remaining)
+            grace_left = state.grace.remaining(_monotonic())
+            time.sleep(pause if grace_left is None else min(pause, grace_left))
 
+    if state.grace.active:
+        # A Completed tracker was confirmed by a normal fetch, and no review
+        # content arrived before the overall timeout.
+        return unavailable_result(round_, state, completed_grace_seconds)
     raise TimeoutError(
         f"Timed out waiting for @{bot_name} activity on PR #{pr_number} after {timeout}s."
     )
@@ -936,6 +861,13 @@ def _run_online(args: Any) -> None:
     result = wait_for_review(args.pr, **wait_kwargs)
     if args.output_file:
         _write_output_file(result, args.output_file)
+    # An explicit skip keeps its historical exit 0; a real reviewer whose
+    # content could not be acquired must not look like a successful acquisition.
+    if (
+        result.get("acquisition_status") == ACQUISITION_UNAVAILABLE
+        and result.get("reviewer") != "skip"
+    ):
+        sys.exit(EXIT_NO_RESULT)
     sys.exit(EXIT_ACQUIRED)
 
 

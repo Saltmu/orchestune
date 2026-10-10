@@ -338,6 +338,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "review.rounds",
             "review.snapshot",
             "review.progress_tracker",
+            "review.tracker_activity",
             "ownership_contracts",
             "plan_identity",
             "plan_writer",

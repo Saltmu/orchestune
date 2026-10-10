@@ -613,3 +613,66 @@ def test_the_pr_wide_latest_trigger_decides_the_reviewer(evidence):
     _, forge, _, _ = evidence
     forge.comments.append(_trigger(9, 2, "2026-10-03T00:10:00Z", bot="codex"))
     assert "differs from --reviewer" in _rejects(evidence)
+
+
+# --- #1274: a Codex tracker reused across rounds ---------------------------------
+
+
+def _codex_with_reused_tracker(evidence, *, status, commit):
+    """Round-1 review for HEAD plus the PR's single tracker, edited after the trigger."""
+    request, forge, pr, table = evidence
+    request = replace(request, payload=replace(request.payload, reviewer="codex"))
+    forge.comments = forge.comments[:1]
+    forge.comments[0]["body"] = forge.comments[0]["body"].replace("claude", "codex")
+    forge.comments.append(
+        dict(
+            id=3,
+            body=(
+                "<!-- codex-pull-request-review-summary -->\n"
+                "| Review | Status | Commit | Review trigger |\n"
+                "| --- | --- | --- | --- |\n"
+                f"| 📝 **Code Review** | 🔄 **{status}** since "
+                '<relative-time datetime="2026-10-03T00:01:30.5Z">x</relative-time>'
+                f" | `{commit}` | Manual request |\n"
+            ),
+            created_at="2026-10-02T00:00:00Z",
+            updated_at="2026-10-03T00:01:30Z",
+            user={"login": "chatgpt-codex-connector[bot]"},
+        )
+    )
+    forge.reviews = [
+        dict(
+            id=5,
+            body="Reviewed",
+            commit_id=HEAD,
+            submitted_at="2026-10-03T00:01:00Z",
+            user={"login": "chatgpt-codex-connector[bot]"},
+        )
+    ]
+    table["findings"][0]["source"] = "review:5"
+    rewrite(evidence)
+    return request, forge, pr
+
+
+@pytest.mark.parametrize("commit", ["aaaaaaa", HEAD])
+def test_done_is_rejected_while_a_matching_reused_tracker_is_running(evidence, commit):
+    request, forge, pr = _codex_with_reused_tracker(
+        evidence, status="Running", commit=commit
+    )
+    with pytest.raises(CompletionJournalError) as exc:
+        verify_review_evidence(request, forge, pr, HEAD)
+    assert exc.value.reason == CompleteFailureReason.REVIEW_EVIDENCE_INVALID
+
+
+def test_done_ignores_a_reused_tracker_that_names_another_commit(evidence):
+    request, forge, pr = _codex_with_reused_tracker(
+        evidence, status="Running", commit="bbbbbbb"
+    )
+    assert verify_review_evidence(request, forge, pr, HEAD).bot == "codex"
+
+
+def test_done_accepts_a_completed_reused_tracker_with_a_real_review(evidence):
+    request, forge, pr = _codex_with_reused_tracker(
+        evidence, status="Completed", commit="aaaaaaa"
+    )
+    assert verify_review_evidence(request, forge, pr, HEAD).bot == "codex"

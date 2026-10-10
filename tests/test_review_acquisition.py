@@ -513,18 +513,127 @@ def test_codex_completed_tracker_only_is_not_review_content():
     assert result["review_items"] == []
 
 
-def test_old_codex_tracker_edited_later_does_not_block_the_current_round():
+CODEX_BOT = "chatgpt-codex-connector[bot]"
+SHA_A = "abc1234" + "0" * 33
+SHA_B = "def5678" + "0" * 33
+
+
+def _reused_tracker(status="Running", updated="2026-10-04T03:15:00Z", **kwargs):
+    """Round 1's tracker (created long before) edited by a later round (#1274)."""
     tracker = _comment(
-        1,
-        CODEX_TRACKER.format(status="Running"),
-        "chatgpt-codex-connector[bot]",
-        "2026-10-04T03:00:00Z",
+        1, CODEX_TRACKER.format(status=status), CODEX_BOT, "2026-10-04T03:00:00Z"
     )
-    tracker["updated_at"] = "2026-10-04T03:15:00Z"
+    if updated is not None:
+        tracker["updated_at"] = updated
+    tracker.update(kwargs)
+    return tracker
+
+
+def test_codex_tracker_updated_at_or_after_the_round_end_does_not_block_it():
+    """(a) #1210: a later edit belongs to a later round, not this closed one."""
+    tracker = _reused_tracker(updated=ROUND_END)
     review = _review(9, "2026-10-04T03:14:00Z", "Current round review.")
     result = _bounded({"issue_comments": [tracker], "reviews": [review]})
     assert result["acquisition_status"] == "acquired"
     assert result["review_body"] == "Current round review."
+
+
+def test_codex_tracker_for_another_commit_does_not_block_the_round():
+    """(b) An explicitly different commit is not this request's activity."""
+    tracker = _reused_tracker()  # `abc1234`
+    review = _review(9, "2026-10-04T03:14:00Z", "Current round review.")
+    result = _bounded(
+        {"issue_comments": [tracker], "reviews": [review]}, requested_head_sha=SHA_B
+    )
+    assert result["acquisition_status"] == "acquired"
+
+
+@pytest.mark.parametrize("requested", [SHA_A, None])
+def test_codex_tracker_updated_inside_the_round_is_current_progress(requested):
+    """(c) Running, commit matching or unknown: still in progress."""
+    tracker = _reused_tracker()
+    review = _review(9, "2026-10-04T03:14:00Z", "Partial review.")
+    result = _bounded(
+        {"issue_comments": [tracker], "reviews": [review]}, requested_head_sha=requested
+    )
+    assert result["acquisition_status"] == "in_progress"
+    assert [item["id"] for item in result["review_items"]] == [9]
+
+
+def test_reused_running_tracker_in_the_open_round_is_in_progress():
+    tracker = _reused_tracker(updated="2026-10-04T03:12:00Z")
+    result = acquisition.collect_review_state(
+        {"issue_comments": [tracker]}, "codex", round_started_at=ROUND_START
+    )
+    assert result["acquisition_status"] == "in_progress"
+
+
+def test_untouched_reused_tracker_is_not_progress_of_the_open_round():
+    tracker = _reused_tracker(updated="2026-10-04T03:05:00Z")
+    result = acquisition.collect_review_state(
+        {"issue_comments": [tracker]}, "codex", round_started_at=ROUND_START
+    )
+    assert result["acquisition_status"] == "unavailable"
+
+
+def test_reused_completed_tracker_with_a_current_review_is_acquired():
+    tracker = _reused_tracker("Completed", updated="2026-10-04T03:16:00Z")
+    review = _review(9, "2026-10-04T03:15:30Z", "Real findings.")
+    result = acquisition.collect_review_state(
+        {"issue_comments": [tracker], "reviews": [review]},
+        "codex",
+        round_started_at=ROUND_START,
+    )
+    assert result["acquisition_status"] == "acquired"
+    assert result["review_body"] == "Real findings."
+
+
+def test_reused_completed_tracker_alone_is_unavailable_not_review_content():
+    tracker = _reused_tracker("Completed", updated="2026-10-04T03:16:00Z")
+    result = acquisition.collect_review_state(
+        {"issue_comments": [tracker]}, "codex", round_started_at=ROUND_START
+    )
+    assert result["acquisition_status"] == "unavailable"
+    assert result["review_items"] == [] and result["review_body"] == ""
+
+
+def test_later_edit_of_an_old_review_is_still_not_current_evidence():
+    """The updated_at exception covers the tracker only (#1210)."""
+    old = _review(9, "2026-10-04T03:00:00Z", "Old review.")
+    old["updated_at"] = "2026-10-04T03:16:00Z"
+    result = acquisition.collect_review_state(
+        {"issue_comments": [], "reviews": [old]}, "codex", round_started_at=ROUND_START
+    )
+    assert result["acquisition_status"] == "unavailable"
+
+
+@pytest.mark.parametrize("with_parent", [False, True])
+def test_current_inline_after_a_completed_reused_tracker_is_acquired(with_parent):
+    tracker = _reused_tracker("Completed", updated="2026-10-04T03:16:00Z")
+    state = {"issue_comments": [tracker]}
+    if with_parent:
+        parent = _review(2, "2026-10-04T03:15:00Z", "")
+        state["reviews"] = [parent]
+    state["inline_comments"] = [
+        _inline(7, 2 if with_parent else None, "2026-10-04T03:15:00Z")
+    ]
+    result = acquisition.collect_review_state(
+        state, "codex", round_started_at=ROUND_START
+    )
+    assert result["acquisition_status"] == "acquired"
+    assert [item["provenance"] for item in result["inline_comments"]] == ["current"]
+
+
+def test_snapshot_detects_a_same_length_tracker_edit_without_exposing_the_body():
+    running = _reused_tracker("Running")
+    pending = _reused_tracker("Pending")
+    assert len(running["body"]) == len(pending["body"])
+    state = {"issue_comments": [running], "reviews": [], "inline_comments": []}
+    other = {"issue_comments": [pending], "reviews": [], "inline_comments": []}
+    before = acquisition._build_snapshot(state, "codex")
+    after = acquisition._build_snapshot(other, "codex")
+    assert before != after
+    assert all("Running" not in value for value in before.values())
 
 
 def test_newer_completed_codex_tracker_replaces_older_running_tracker():

@@ -9,6 +9,8 @@ from enum import StrEnum
 _CODEX_TRACKER_MARKER = "<!-- codex-pull-request-review-summary -->"
 _TAG_RE = re.compile(r"<[^>]*>")
 _STATUS_RE = re.compile(r"^(?:running|queued|pending|in[ -]+progress)\b")
+_COMMIT_RE = re.compile(r"[0-9a-fA-F]{7,40}")
+_COMMIT_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 
 
 class CodexTrackerStatus(StrEnum):
@@ -69,3 +71,31 @@ def parse_codex_tracker_status(body: str) -> CodexTrackerStatus | None:
     if len(rows) != 1 or len(rows[0]) < 2:
         return CodexTrackerStatus.UNKNOWN
     return _status_from_cell(rows[0][1])
+
+
+def parse_codex_tracker_commit(body: str) -> str | None:
+    """Return the Code Review row's lowercase commit prefix, else ``None``.
+
+    The value is a 7-40 digit hexadecimal prefix read from the table's
+    ``Commit`` column. A non-tracker body, a missing or duplicated column, or
+    an invalid cell is ``None``: the commit is an activity-correlation hint,
+    never proof of which commit was reviewed.
+    """
+    if _CODEX_TRACKER_MARKER not in body:
+        return None
+
+    tables = [
+        cells for line in body.splitlines() if (cells := _table_cells(line)) is not None
+    ]
+    headers = [
+        cells for cells in tables if any(_row_key(cell) == "commit" for cell in cells)
+    ]
+    rows = [cells for cells in tables if cells and _row_key(cells[0]) == "codereview"]
+    if len(headers) != 1 or len(rows) != 1:
+        return None
+    columns = [i for i, cell in enumerate(headers[0]) if _row_key(cell) == "commit"]
+    if len(columns) != 1 or columns[0] >= len(rows[0]):
+        return None
+    cell = _COMMIT_LINK_RE.sub(r"\1", rows[0][columns[0]])
+    text = _plain_cell_text(cell)
+    return text.lower() if _COMMIT_RE.fullmatch(text) else None
