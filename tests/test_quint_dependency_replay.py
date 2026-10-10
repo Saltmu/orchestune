@@ -98,7 +98,9 @@ def assert_model_run_ok(run: ModelRun, label: str) -> None:
     require(
         "P3C-QUINT-MODEL",
         run.outcome == "ok",
-        f"{label} violated {', '.join(run.violated)}",
+        f"{label} violated {', '.join(run.violated)}. Reproduce: "
+        f"{' '.join(run.command)} -- counterexample ITF: "
+        f"{', '.join(str(path) for path in run.traces) or 'not written'}",
     )
 
 
@@ -404,6 +406,24 @@ def test_control_model_fault_is_detected_by_its_invariant(
     bad_trace = json.loads(bad.traces[0].read_text(encoding="utf-8"))
     assert bad_trace["#meta"]["status"] == "violation"
     assert len(bad_trace["states"]) == entry["violation_states"]
+
+
+def test_a_model_violation_reports_a_reproducible_counterexample(
+    tmp_path: Path,
+) -> None:
+    """The failure names the invariant, the exact command and the saved trace."""
+    run = run_scenario("fault_suppress", tmp_path)
+    with pytest.raises(ContractViolation) as caught:
+        assert_model_run_ok(run, "fault_suppress")
+    detail = caught.value.detail
+    assert "liveness" in detail
+    assert "--seed=0x1" in detail and "--backend=typescript" in detail
+    assert "--init=init_fault_suppress" in detail
+    (trace,) = run.traces
+    assert str(trace) in detail and trace.is_file()
+    assert (
+        json.loads(trace.read_text(encoding="utf-8"))["#meta"]["status"] == "violation"
+    )
 
 
 def test_every_model_fault_scenario_has_a_control() -> None:

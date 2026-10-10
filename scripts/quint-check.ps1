@@ -22,11 +22,12 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command 
 }
 
 $package = Get-Content -Raw package.json | ConvertFrom-Json
-if ($package.engines.node -notmatch '^>=(\d+) <(\d+)$') {
+if ($package.engines.node -match '^>=(\d+) <(\d+)$') {
+    $lower = [int]$Matches[1]
+    $upper = [int]$Matches[2]
+} else {
     throw 'package.json engines.node must look like ">=24 <25"'
 }
-$lower = [int]$Matches[1]
-$upper = [int]$Matches[2]
 $nodeMajor = [int]((& node -p 'process.versions.node.split(".")[0]').Trim())
 if ($nodeMajor -lt $lower -or $nodeMajor -ge $upper) {
     [Console]::Error.WriteLine("ERROR: Node.js $nodeMajor is installed; package.json requires >=$lower <$upper.")
