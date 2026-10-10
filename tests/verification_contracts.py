@@ -478,7 +478,9 @@ CONTRACTS: tuple[Contract, ...] = (
             f"{P3Q}::test_each_scenario_runs_on_the_model_and_replays",
         ),
         controls={
-            fault: (f"{P3Q}::test_control_model_fault_is_detected_by_its_invariant[{fault}]",)
+            fault: (
+                f"{P3Q}::test_control_model_fault_is_detected_by_its_invariant[{fault}]",
+            )
             for fault in (
                 "promotion-suppressed",
                 "promotion-delayed",

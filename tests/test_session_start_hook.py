@@ -88,9 +88,13 @@ class Setup:
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         if corrupt:
             digest = "0" * 64
-        (release / "SHASUMS256.txt").write_text(f"{digest}  {ARCHIVE}\n", encoding="utf-8")
+        (release / "SHASUMS256.txt").write_text(
+            f"{digest}  {ARCHIVE}\n", encoding="utf-8"
+        )
 
-    def run(self, *, remote: bool = True, **extra: str) -> subprocess.CompletedProcess[str]:
+    def run(
+        self, *, remote: bool = True, **extra: str
+    ) -> subprocess.CompletedProcess[str]:
         env = {
             "PATH": f"{self.bin}:/usr/bin:/bin",
             "HOME": str(self.root),
@@ -128,7 +132,9 @@ def test_outside_the_web_environment_nothing_runs(setup: Setup) -> None:
     assert not setup.link.exists()
 
 
-def test_a_matching_node_is_kept_and_the_locked_tools_are_installed(setup: Setup) -> None:
+def test_a_matching_node_is_kept_and_the_locked_tools_are_installed(
+    setup: Setup,
+) -> None:
     setup.node_installed("v24.1.0")  # no distribution exists: a download would fail
     done = setup.run()
     assert done.returncode == 0, done.stderr
@@ -193,7 +199,7 @@ def test_a_malformed_engines_range_is_an_error(setup: Setup) -> None:
 
 def test_the_pinned_release_satisfies_the_engines_of_package_json() -> None:
     text = HOOK.read_text(encoding="utf-8")
-    pinned = re.search(r'ORCHESTUNE_NODE_VERSION:-v(\d+)\.\d+\.\d+', text)
+    pinned = re.search(r"ORCHESTUNE_NODE_VERSION:-v(\d+)\.\d+\.\d+", text)
     assert pinned, "the hook must pin a Node.js release"
     engines = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["engines"]
     lower, upper = map(int, re.fullmatch(r">=(\d+) <(\d+)", engines["node"]).groups())  # type: ignore[union-attr]

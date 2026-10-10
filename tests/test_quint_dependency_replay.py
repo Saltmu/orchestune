@@ -26,7 +26,6 @@ from typing import Any
 
 import pytest
 from hypothesis import given, settings
-from hypothesis import strategies as st
 
 from orchestune.consistency.invariants import status as invariants
 from orchestune.dispatch import reconciliation, status_repair
@@ -39,15 +38,8 @@ from tests.dependency_liveness_test_support import (
 )
 from tests.quint_replay import (
     ACTIONS,
-    EXPLORATION,
-    FAULTS_FIXTURE,
     MODEL,
-    REPLAY_DIR_ENV,
-    REQUIRED_ROUTES,
     ROOT,
-    STORED_SCENARIOS,
-    SUMMARY_NAME,
-    TRACES_FIXTURE,
     WITNESSES,
     Exploration,
     ModelRun,
@@ -56,17 +48,26 @@ from tests.quint_replay import (
     ReplayReport,
     ToolError,
     build_topology,
-    generation_command,
-    known_defect,
-    load_fixture,
     normalized,
     parse_trace,
     pinned_quint_version,
     quint_executable,
     replay_trace,
+    run_model,
+)
+from tests.quint_scenarios import (
+    EXPLORATION,
+    FAULTS_FIXTURE,
+    REPLAY_DIR_ENV,
+    REQUIRED_ROUTES,
+    STORED_SCENARIOS,
+    SUMMARY_NAME,
+    TRACES_FIXTURE,
+    generation_command,
+    known_defect,
+    load_fixture,
     require_traces,
     routes_of,
-    run_model,
     run_scenario,
     scenario_ids,
     write_summary,
@@ -91,7 +92,9 @@ def assert_model_run_ok(run: ModelRun, label: str) -> None:
     ``P3C-QUINT-MODEL`` violation; parse / type / runtime errors and timeouts are
     tool errors and can never count as a detection."""
     if run.outcome == "error":
-        raise ToolError(f"{label}: quint failed ({run.returncode}): {run.stdout[-400:]}")
+        raise ToolError(
+            f"{label}: quint failed ({run.returncode}): {run.stdout[-400:]}"
+        )
     require(
         "P3C-QUINT-MODEL",
         run.outcome == "ok",
@@ -99,9 +102,7 @@ def assert_model_run_ok(run: ModelRun, label: str) -> None:
     )
 
 
-def replay_stored(
-    scenario: str, root: Path, wiring: FaultPlan | None = None
-) -> None:
+def replay_stored(scenario: str, root: Path, wiring: FaultPlan | None = None) -> None:
     entry = STORED[scenario]
     replay_trace(
         parse_trace(entry["itf"]), root, known_defect(entry["known_defect"]), wiring
@@ -184,9 +185,7 @@ EXPECTED_TOPOLOGIES = {
     "intermediate_cycle": LivenessTopology(
         (11, 12), ("dep-a",), {11: ("dep-b",), 12: ("dep-a",)}, (11,)
     ),
-    "dependent_cycle": LivenessTopology(
-        (11,), ("dep-a",), {11: ("dependent",)}, (11,)
-    ),
+    "dependent_cycle": LivenessTopology((11,), ("dep-a",), {11: ("dependent",)}, (11,)),
     "unresolved_direct": LivenessTopology(
         (11,), ("dep-a", "unresolved-missing"), {}, None
     ),
@@ -202,7 +201,7 @@ def replay_dir(request: pytest.FixtureRequest, tmp_path: Path) -> Path:
     configured = os.environ.get(REPLAY_DIR_ENV)
     if not configured:
         return tmp_path
-    target = Path(configured) / request.node.name
+    target = Path(configured) / str(request.node.name)
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -274,9 +273,9 @@ def test_each_scenario_runs_on_the_model_and_replays(
     raw = json.loads(path.read_text(encoding="utf-8"))
     if scenario in STORED:
         entry = STORED[scenario]
-        assert entry["itf"] == normalized(raw), (
-            "run: uv run python -m tests.quint_replay regenerate"
-        )
+        assert entry["itf"] == normalized(
+            raw
+        ), "run: uv run python -m tests.quint_scenarios regenerate"
         assert entry["command"] == generation_command(scenario)
         assert entry["seed"] == "0x1" and entry["bounds"]["max_samples"] == 1
     if scenario.startswith("defect_"):
@@ -444,7 +443,9 @@ def test_a_violation_with_the_wrong_invariant_does_not_match_the_fault() -> None
 # ---- replay controls: one fault in production each --------------------------------------------
 
 
-def _skip_promotion(monkeypatch: pytest.MonkeyPatch, calls: frozenset[int] | None) -> None:
+def _skip_promotion(
+    monkeypatch: pytest.MonkeyPatch, calls: frozenset[int] | None
+) -> None:
     """Skip the promotion boundary in the n-th cycle (``None``: in every cycle)."""
     real = cycle_module._run_status_repair_boundary
     seen = {"n": -1}
@@ -588,7 +589,10 @@ def _pick(itf: dict[str, Any], index: int, key: str, value: Any) -> None:
 
 
 def _drop_pick(itf: dict[str, Any], index: int, key: str) -> None:
-    itf["states"][index]["mbt::nondetPicks"][key] = {"tag": "None", "value": {"#tup": []}}
+    itf["states"][index]["mbt::nondetPicks"][key] = {
+        "tag": "None",
+        "value": {"#tup": []},
+    }
 
 
 MALFORMED = {
