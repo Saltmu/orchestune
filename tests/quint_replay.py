@@ -588,13 +588,14 @@ class Replayer:
 
     def _stale_change(
         self, step: Step
-    ) -> tuple[Callable[[LivenessWorld], None] | None, frozenset[int]]:
+    ) -> tuple[Callable[[LivenessWorld], None] | None, dict[int, set[str]]]:
         """The change the model applied in this cycle (a no-op one is skipped) and
-        the Issue the fixture changes with it."""
+        the lifecycle labels the fixture itself leaves on an Issue with it.  A hold
+        label changes no lifecycle label, so ``add_hold`` has no such effect."""
         applied, pending = step.state["staleApplied"], self._pending
         self._pending = None
         if applied == "none":
-            return None, frozenset()
+            return None, {}
         if pending is None or pending[0] != applied:
             raise ReplayFormatError(
                 f"state {step.index}: the model applied stale change {applied!r} "
@@ -606,7 +607,11 @@ class Replayer:
             "revoke": lambda world: world.revoke(target),
             "complete": lambda world: world.complete(target, CompletionPath.LABEL),
         }
-        return changes[applied], frozenset({target})
+        effects = {
+            "revoke": {target: {StatusLabel.QUEUED.value}},
+            "complete": {target: {StatusLabel.DONE.value}},
+        }
+        return changes[applied], effects.get(applied, {})
 
     def _do_cycle(self, step: Step, previous: Step) -> None:
         apply, lag = step.picks["apply"], step.picks["lag"]
@@ -615,19 +620,19 @@ class Replayer:
             f"state {step.index}: model cycle mode disagrees with its own pick",
         )
         self.world.faults.listing_lag = lag
-        change, fixture_touched = self._stale_change(step)
+        change, fixture_effects = self._stale_change(step)
         observation = self.world.cycle(apply=apply, before_promotion=change)
         self.report.cycles += 1
-        self._compare(step, observation, fixture_touched)
+        self._compare(step, observation, fixture_effects)
 
     def _compare(
         self,
         step: Step,
         observation: CycleObservation,
-        fixture_touched: frozenset[int] = frozenset(),
+        fixture_effects: Mapping[int, set[str]] | None = None,
     ) -> None:
         if not observation.apply:
-            _require_read_only(step, observation, fixture_touched)
+            _require_read_only(step, observation, fixture_effects or {})
         for node in sorted(step.state["mustNot"]):
             self.report.obligations += 1
             self._expect(
@@ -716,18 +721,21 @@ def _status_labels(
 
 
 def _require_read_only(
-    step: Step, observation: CycleObservation, fixture_touched: frozenset[int]
+    step: Step,
+    observation: CycleObservation,
+    fixture_effects: Mapping[int, set[str]],
 ) -> None:
     """A dry run changes no lifecycle label (the model's ``dryRunReadOnly``).
 
-    Hold labels and the Issue the fixture's own stale change touches are the
-    test's doing, not the cycle's, and are left out.
+    The only change allowed is the one the fixture's own stale change makes, and
+    only exactly: an Issue it touched must end with the lifecycle labels it left
+    there.  Hold labels are not lifecycle labels.
     """
     changed = sorted(
         node
-        for node in {DEPENDENT, *observation.labels_before} - fixture_touched
-        if _status_labels(observation, node, after=False)
-        != _status_labels(observation, node, after=True)
+        for node in {DEPENDENT, *observation.labels_before}
+        if _status_labels(observation, node, after=True)
+        != fixture_effects.get(node, _status_labels(observation, node, after=False))
     )
     require(
         "P3C-DRYRUN-READONLY",

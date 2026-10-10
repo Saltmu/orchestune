@@ -511,6 +511,7 @@ CONTRACTS: tuple[Contract, ...] = (
         controls={
             "dry-run-writes": (
                 f"{P3Q}::test_control_replay_detects_a_dry_run_that_writes",
+                f"{P3Q}::test_control_replay_detects_a_dry_run_write_beside_a_hold_only_stale_change",
             )
         },
     ),

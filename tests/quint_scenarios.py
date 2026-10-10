@@ -75,6 +75,7 @@ STORED_SCENARIOS = (
     "restart_loses_ledger",
     "duplicate_completion",
     "stale_revoke",
+    "stale_add_hold_dry",
     "stale_complete",
     "defect_target_own_reservation_dry",
     "defect_intermediate_own_reservation_dry",

@@ -165,6 +165,8 @@ module dependency_liveness {
     "stale_revoke" -> STALE_REVOKE,
     "stale_add_hold" -> ok("simple_one", [
       doneWith("label", 11), staleBy("add_hold", 20), cycleOf(true, false), cycleOf(true, false)]),
+    "stale_add_hold_dry" -> ok("simple_one", [
+      doneWith("label", 11), staleBy("add_hold", 20), cycleOf(false, false), cycleOf(false, false)]),
     "stale_complete" -> ok("simple_one", [
       staleBy("complete", 11), cycleOf(true, false), cycleOf(true, false)]),
     "stale_revoke_lagged" -> ok("simple_one", [
@@ -642,6 +644,7 @@ module dependency_liveness {
   action init_duplicate_completion: bool = initScenario("duplicate_completion")
   action init_stale_revoke: bool = initScenario("stale_revoke")
   action init_stale_add_hold: bool = initScenario("stale_add_hold")
+  action init_stale_add_hold_dry: bool = initScenario("stale_add_hold_dry")
   action init_stale_complete: bool = initScenario("stale_complete")
   action init_stale_revoke_lagged: bool = initScenario("stale_revoke_lagged")
   action init_unresolved_direct: bool = initScenario("unresolved_direct")

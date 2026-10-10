@@ -584,6 +584,21 @@ def test_control_replay_detects_a_dry_run_that_writes(
         replay_stored("final_dry", tmp_path / "fault")
 
 
+def test_control_replay_detects_a_dry_run_write_beside_a_hold_only_stale_change(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``add_hold`` changes only a hold label, so T's lifecycle labels stay checked."""
+    replay_stored("stale_add_hold_dry", tmp_path / "normal")
+    real = LivenessWorld.config
+    monkeypatch.setattr(
+        LivenessWorld, "config", lambda self, *, apply: real(self, apply=True)
+    )
+    for module in (status_repair, invariants, reconciliation):
+        monkeypatch.setattr(module, "PROMOTION_HOLD_LABELS", ())
+    with expect_violation("P3C-DRYRUN-READONLY"):
+        replay_stored("stale_add_hold_dry", tmp_path / "fault")
+
+
 def test_control_replay_detects_an_empty_completion_set(tmp_path: Path) -> None:
     replay_stored("recompute_release", tmp_path / "normal")
     with expect_violation("P3C-LIVENESS-BOUND"):
