@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
+import platform
 import re
 import stat
 import subprocess
@@ -26,7 +26,7 @@ pytestmark = pytest.mark.skipif(
 ROOT = Path(__file__).resolve().parent.parent
 HOOK = ROOT / ".claude" / "hooks" / "session-start.sh"
 VERSION = "v24.21.0"
-ARCH = "arm64" if os.uname().machine in {"aarch64", "arm64"} else "x64"
+ARCH = "arm64" if platform.machine().lower() in {"aarch64", "arm64"} else "x64"
 ARCHIVE = f"node-{VERSION}-linux-{ARCH}.tar.gz"
 
 
