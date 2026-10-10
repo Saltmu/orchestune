@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from hypothesis import settings
@@ -26,7 +27,6 @@ from tests.dependency_liveness_test_support import (
     CompletionPath,
     CycleObservation,
     FaultPlan,
-    LivenessCase,
     LivenessTopology,
     LivenessWorld,
     OracleView,
@@ -38,16 +38,7 @@ from tests.dependency_liveness_test_support import (
 CASES = {case.name: case for case in CASE_TABLE}
 
 
-def _case_param(case: LivenessCase) -> Any:
-    marks = (
-        [pytest.mark.xfail(reason=f"production bug {case.known_bug}", strict=True)]
-        if case.known_bug
-        else []
-    )
-    return pytest.param(case, id=case.name, marks=marks)
-
-
-@pytest.mark.parametrize("case", [_case_param(case) for case in CASE_TABLE])
+@pytest.mark.parametrize("case", CASE_TABLE, ids=lambda case: case.name)
 def test_each_completion_path_promotes_at_the_case_table_cycle(tmp_path, case):
     assert_case(run_case(tmp_path, case), case)
 
@@ -68,6 +59,29 @@ def test_case_table_matches_the_design_and_explains_every_deviation():
     for case in CASE_TABLE:
         assert case.expected_delay in (0, None)
         assert case.expected_delay is not None or case.reason
+
+
+def test_not_needed_save_failure_holds_cycle_and_retries(tmp_path):
+    world = LivenessWorld(tmp_path)
+    world.cycle()
+    world.complete(11, CompletionPath.OUTCOME_NOT_NEEDED)
+
+    with patch(
+        "orchestune.dispatch.gc.save_run_state",
+        side_effect=OSError("disk full"),
+    ):
+        failed = world.cycle()
+
+    assert isinstance(failed.error, OSError)
+    assert not failed.promoted
+    assert StatusLabel.NOT_NEEDED.value in world.labels(11)
+    assert "11" in world._ledger().active_worktrees
+    assert world._ledger().completed_worktrees == []
+
+    retried = world.cycle()
+    assert retried.promoted
+    assert retried.propagated() == {11}
+    assert "11" not in world._ledger().active_worktrees
 
 
 @pytest.mark.parametrize(

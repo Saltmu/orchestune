@@ -18,9 +18,12 @@ import pytest
 from orchestune.dependencies.assessment import DependencyState
 from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.cycle_context_state import RecordStatus
-from orchestune.dispatch.cycle_events import WorktreeCompletion
+from orchestune.dispatch.cycle_events import TaskWorktreeCompletion, WorktreeCompletion
 from orchestune.dispatch.cycle_records import CompletionReceipt
-from orchestune.dispatch.gc import _record_completed_worktree
+from orchestune.dispatch.gc import (
+    _handle_completed_event_outcome,
+    _record_completed_worktree,
+)
 from tests.dispatch_gc_test_support import _active, _task
 from tests.dispatch_gc_test_support import _rule_ctx as _ctx
 
@@ -99,6 +102,87 @@ class TestRecordCompletedWorktreeSuccessBoundary:
             )
 
         assert ctx.is_completion_confirmed(active.core.issue_number) is True
+
+    def test_local_not_needed_action_records_only_after_successful_save(self):
+        ctx, task = self._ctx_with_task()
+        active = _active()
+        ctx.run_state.active_worktrees["1"] = active
+        calls: list[str] = []
+
+        def save(*_args, **_kwargs):
+            calls.append("save")
+            assert ctx.is_completion_confirmed(active.core.issue_number) is False
+
+        with patch(
+            "orchestune.dispatch.gc.save_run_state", side_effect=save
+        ) as mock_save:
+            _record_completed_worktree(
+                ctx,
+                "1",
+                active,
+                task,
+                TaskWorktreeCompletion(
+                    issue_number=280,
+                    subtask_id=task.subtask_id,
+                    worktree_path=active.core.worktree_path,
+                    action="not_needed",
+                ),
+            )
+
+        mock_save.assert_called_once()
+        assert calls == ["save"]
+        assert ctx.is_completion_confirmed(280) is True
+        assert "1" not in ctx.run_state.active_worktrees
+        assert len(ctx.run_state.completed_worktrees) == 1
+
+    def test_special_completed_action_uses_the_same_not_needed_receipt_path(self):
+        ctx, task = self._ctx_with_task()
+        active = _active()
+        ctx.run_state.active_worktrees["1"] = active
+        event = TaskWorktreeCompletion(
+            issue_number=280,
+            subtask_id=task.subtask_id,
+            worktree_path=active.core.worktree_path,
+            action="not_needed",
+        )
+
+        with patch("orchestune.dispatch.gc.save_run_state", autospec=True) as save:
+            outcome = _handle_completed_event_outcome(ctx, "1", active, task, event)
+
+        save.assert_called_once()
+        assert outcome is not None
+        assert outcome.completion_event is event
+        assert ctx.is_completion_confirmed(280) is True
+        assert "1" not in ctx.run_state.active_worktrees
+
+    def test_not_needed_save_failure_restores_active_entry_and_aborts(self):
+        ctx, task = self._ctx_with_task()
+        active = _active()
+        ctx.run_state.active_worktrees["1"] = active
+
+        with (
+            patch(
+                "orchestune.dispatch.gc.save_run_state",
+                side_effect=OSError("disk full"),
+            ),
+            pytest.raises(OSError, match="persist not-needed"),
+        ):
+            _record_completed_worktree(
+                ctx,
+                "1",
+                active,
+                task,
+                TaskWorktreeCompletion(
+                    issue_number=280,
+                    subtask_id=task.subtask_id,
+                    worktree_path=active.core.worktree_path,
+                    action="not_needed",
+                ),
+            )
+
+        assert ctx.run_state.active_worktrees["1"] is active
+        assert ctx.run_state.completed_worktrees == []
+        assert ctx.is_completion_confirmed(280) is False
 
     def test_escalated_token_limit_exceeded_does_not_record_completion(self):
         ctx, task = self._ctx_with_task()

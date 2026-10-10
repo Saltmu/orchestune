@@ -160,7 +160,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `NOT_NEEDED` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
 | `BLOCK` (`COMPLETION`) | `status:in-progress`, `status:queued` | `status:blocked` | `complete/status_labels.py::_completion_mutate` |
 | `COMPLETE_WITHOUT_LABEL` (`CYCLE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/cycle_context_state.py::_CycleState.record_completion` |
-| `COMPLETE_WITHOUT_LABEL` (`NOT_NEEDED_OUTCOME`) | `status:in-progress` | - | `dispatch/gc/__init__.py::_rule_not_needed` |
+| `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/__init__.py::_rule_not_needed` |
 | `AWAIT_REVIEW` (`PLAIN`) | `status:in-progress` | - | `dispatch/gc/__init__.py::_rule_not_needed` |
 | `RECLAIM` (`PLAIN`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim` |
 | `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_blocked_hold` |
@@ -168,7 +168,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `COMPLETE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `dispatch/gc/completion.py::_apply_done_worktree_cleanup` |
 | `BLOCK` (`BASE_BRANCH_RED`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_escalated_base_branch_red` |
 | `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
-| `COMPLETE_WITHOUT_LABEL` (`NOT_NEEDED_OUTCOME`) | `status:in-progress` | - | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
+| `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
 | `AWAIT_REVIEW` (`PLAIN`) | `status:in-progress` | - | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
 | `REQUEUE` (`EARLY_DEATH`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
 | `REQUEUE` (`REVIEW_TIMEOUT`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
@@ -290,7 +290,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `record_completion` | active worktreeの完了を同じcycleの `record_completion` で確定 | 0 |  |
 | `dry_run` | ラベル完了を `apply=False` で実行 | 0（`PromotionEvent` に T、ラベルは不変） |  |
 | `dry_run_record_completion` | 同じcycleの `record_completion` を `apply=False` で実行 | -（プレビューに現れない） | #882: 同じcycleの完了は `save_run_state` の成功後にだけ確定し、dry runは保存しない。#873 で未保存の上書きを廃止した |
-| `outcome_not_needed` | outcome recordのみ（ラベルなし） | 0（期待値。本番の欠陥 #1269 のためstrict xfail） |  |
+| `outcome_not_needed` | outcome recordのみ（ラベルなし） | 0 | ローカル確定時に `status:not-needed` を付与し、保存後に同じcycleの依存判定へ伝搬する（#1269） |
 | `prior_merge` | 検証済み先行マージ（`prior_parent_merge_completed_issue_numbers`）のみ | 0 |  |
 | `status_repair` | `record_completion` に加え、executorの読み取りが D を実行中のまま返す | 0 | `execute_repair` が同じ `CycleContext` を使う（#902 Round 5） |
 | `recompute_release` | T が `status:blocked-recompute` を持つ | 0 | `reconcile_recovery` が束縛されたcontextから昇格する（#902 Round 4） |
@@ -298,7 +298,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 
 ランダム系列（`complete_dependency`・`cycle`・`restart`・`fail_next`・`toggle_hold`・`stale_snapshot`・`duplicate_completion`）では、公平性の前提が続いたら T が昇格すること（liveness）と、有効な証拠が揃っていないかhold・reservationがあるcycleでは新たに昇格させないこと（安全性）を検証します。#902 Round 4/5 相当の誤配線（完了集合を空にする、使い捨てのcontextへ渡す）をテスト内のfaultとして入れ、assertが失敗することも確認しています。
 
-本番の欠陥として切り出したものはstrict xfailで固定しています: #1267（dry runのプレビューが未解放のreservationを無視する）、#1268（recompute解除がbase-branch-redのholdと取り消された証拠を無視する）、#1269（outcome由来のnot-neededが昇格に届かない）。中間ノードのdry runプレビューでも、未解放のreservationだけが理由なら #1267 として除外します。ランダム系列がまれに見つけるもう1件の反例（障害つきのapply cycleの後、先行マージ証拠だけの依存を持つ T がdry runでプレビューされない）は #1281 で扱います。
+本番の欠陥として切り出したものはstrict xfailで固定しています: #1267（dry runのプレビューが未解放のreservationを無視する）と #1268（recompute解除がbase-branch-redのholdと取り消された証拠を無視する）。中間ノードのdry runプレビューでも、未解放のreservationだけが理由なら #1267 として除外します。ランダム系列がまれに見つけるもう1件の反例（障害つきのapply cycleの後、先行マージ証拠だけの依存を持つ T がdry runでプレビューされない）は #1281 で扱います。
 
 単独実行の実測は、PR #1273 で約8.4秒、#1266 の作業環境（新しいexample database、`-n0 --no-cov`、ci profile）で2.7〜6.3秒でした。
 

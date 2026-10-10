@@ -11,6 +11,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc.cloud_completion import _cloud_worktree_completion_status
 from orchestune.dispatch.gc.completion import (
@@ -190,6 +192,14 @@ class TestFinalizeCompletedWorktree:
         """outcome(not-needed)の場合はnot-needed経路（クローズまたは検証レビュー）へ流す。"""
         active = _active(base_branch="origin/main")
         task = _task(status_labels=("status:in-progress",))
+        fake_forge.get_issue.return_value = IssueRecord(
+            number=280,
+            title="task",
+            body="",
+            labels=("status:not-needed",),
+            created_at="",
+            state="CLOSED",
+        )
         config = DispatcherConfig(
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
@@ -223,7 +233,8 @@ class TestFinalizeCompletedWorktree:
 
         assert event.to_dict()["action"] == "not_needed"
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
-        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:not-needed")
+        fake_forge.remove_label.assert_any_call(280, "status:in-progress")
         fake_forge.close_issue.assert_called_once()
         assert fake_forge.close_issue.call_args.args[0] == 280
 
@@ -349,6 +360,14 @@ class TestFinalizeNotNeededWorktree:
     def test_apply_removes_worktree_and_closes_issue(self, tmp_path, fake_forge):
         active = _active()
         task = _task()
+        fake_forge.get_issue.return_value = IssueRecord(
+            number=280,
+            title="task",
+            body="",
+            labels=("status:not-needed",),
+            created_at="",
+            state="CLOSED",
+        )
         config = DispatcherConfig(
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
@@ -368,8 +387,14 @@ class TestFinalizeNotNeededWorktree:
             event = _finalize_not_needed_worktree(active, task, config)
 
         mock_remove_worktree.assert_called_once_with("worktrees/w1")
-        fake_forge.remove_label.assert_called_once_with(280, "status:in-progress")
+        fake_forge.add_label.assert_called_once_with(280, "status:not-needed")
+        fake_forge.remove_label.assert_any_call(280, "status:in-progress")
         fake_forge.close_issue.assert_called_once()
+        fake_forge.get_issue.assert_called_once_with(280)
+        calls = [call[0] for call in fake_forge.mock_calls]
+        assert calls.index("add_label") < calls.index("remove_label")
+        assert calls.index("remove_label") < calls.index("close_issue")
+        assert calls.index("close_issue") < calls.index("get_issue")
         close_args = fake_forge.close_issue.call_args.args
         assert close_args[0] == 280
         assert close_args[1] == "not planned"
@@ -379,6 +404,33 @@ class TestFinalizeNotNeededWorktree:
             "action": "not_needed",
             "subtask_id": "task-a",
         }
+
+    def test_label_add_failure_keeps_old_status_and_does_not_close(
+        self, tmp_path, fake_forge
+    ):
+        active = _active()
+        task = _task()
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            forge=fake_forge,
+        )
+        fake_forge.add_label.side_effect = RuntimeError("forge unavailable")
+        with (
+            patch(
+                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                return_value=False,
+            ),
+            patch(
+                "orchestune.dispatch.gc.completion.remove_worktree",
+            ),
+            pytest.raises(RuntimeError, match="forge unavailable"),
+        ):
+            _finalize_not_needed_worktree(active, task, config)
+
+        fake_forge.remove_label.assert_not_called()
+        fake_forge.close_issue.assert_not_called()
 
     def test_dirty_worktree_is_not_closed(self, tmp_path, fake_forge):
         """未コミットの作業が残っている場合は、安全側に倒しクローズを見送る。"""
@@ -435,6 +487,14 @@ class TestFinalizeNotNeededWorktree:
 
     def test_none_task_defaults_subtask_id_to_empty_string(self, tmp_path, fake_forge):
         active = _active()
+        fake_forge.get_issue.return_value = IssueRecord(
+            number=280,
+            title="task",
+            body="",
+            labels=("status:not-needed",),
+            created_at="",
+            state="CLOSED",
+        )
         config = DispatcherConfig(
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",

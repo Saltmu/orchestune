@@ -21,7 +21,7 @@ from orchestune.dispatch.gc.zombies import (
     execute_reclaim_repair_command,
 )
 from orchestune.ledger.run_state import RunState
-from orchestune.models import Task
+from orchestune.models import IssueRecord, Task
 from tests.dispatch_test_support import flat_active_worktree
 
 
@@ -190,6 +190,14 @@ class TestCompleteGcHandoff:
     def test_not_needed_outcome_retains_dirty_worktree(self, tmp_path):
         """not-needed 報告は worktree が dirty でも受理され、worktree は削除されず保持される。"""
         config = _make_config(tmp_path)
+        config.forge.get_issue.return_value = IssueRecord(
+            number=1004,
+            title="task",
+            body="",
+            labels=("status:not-needed",),
+            created_at="",
+            state="CLOSED",
+        )
         run_state = RunState()
 
         wt_path = tmp_path / "worktrees" / "wt-dirty-not-needed"

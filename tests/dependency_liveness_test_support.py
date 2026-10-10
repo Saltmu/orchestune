@@ -63,7 +63,6 @@ FINAL_LABELS = frozenset({StatusLabel.DONE.value, StatusLabel.NOT_NEEDED.value})
 #: Guaranteed bound N: T is promoted within N cycles of fair evidence (#1219 §4).
 LIVENESS_BOUND = 1
 #: Counterexamples split out to their own production Issues (footprint stays test).
-OUTCOME_NOT_NEEDED_ISSUE = "#1269"
 SELF_RESERVATION_PREVIEW_ISSUE = "#1283"
 
 
@@ -128,7 +127,6 @@ CASE_TABLE: tuple[LivenessCase, ...] = (
     LivenessCase(
         "outcome_not_needed",
         (CompletionPath.OUTCOME_NOT_NEEDED,),
-        known_bug=OUTCOME_NOT_NEEDED_ISSUE,
     ),
     LivenessCase("prior_merge", (CompletionPath.PRIOR_MERGE,)),
     LivenessCase(
@@ -485,12 +483,9 @@ class LivenessWorld:
             elif path is CompletionPath.PRIOR_MERGE:
                 valid.add(number)
                 visible.add(number)
-            elif path in ACTIVE_PATHS and (
-                str(number) in ledger.active_worktrees
-                or path is CompletionPath.OUTCOME_NOT_NEEDED
-            ):
-                # The Outcome record stays authoritative after the not-needed
-                # collection closes D without a terminal label.
+            elif path in ACTIVE_PATHS and str(number) in ledger.active_worktrees:
+                # Outcome data can trigger collection, but only a persisted
+                # active entry or terminal label is completion evidence.
                 valid.add(number)
         return OracleView(
             valid=frozenset(valid),

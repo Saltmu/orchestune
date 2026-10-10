@@ -258,6 +258,15 @@ def completion_done_cleanup(env: Env) -> None:
     completion._apply_done_worktree_cleanup(ctx)
 
 
+def completion_not_needed(env: Env) -> None:
+    _stub_completion(env)
+    env.forge.issues[ISSUE] = make_issue(ISSUE, labels=env.held)
+    env.monkeypatch.setattr(
+        completion, "worktree_has_uncommitted_changes", lambda *a: False
+    )
+    completion._finalize_not_needed_worktree(_active(), _task(env), env.config)
+
+
 def completion_abandoned_reclaim(env: Env) -> None:
     _stub_completion(env)
     outcome = cloud_completion._handle_abandoned_cloud_reclaim(
@@ -372,6 +381,7 @@ DRIVERS: dict[str, Driver] = {
     "completion_blocked_hold": completion_blocked_hold,
     "completion_requeue": completion_requeue,
     "completion_done_cleanup": completion_done_cleanup,
+    "completion_not_needed": completion_not_needed,
     "completion_abandoned_reclaim": completion_abandoned_reclaim,
     "status_repair_command": status_repair_command,
     "recovery_requeue": recovery_requeue,

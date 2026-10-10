@@ -158,17 +158,23 @@ def _rule_not_needed(
     completion_event = _finalize_not_needed_worktree(
         active, active_task, ctx.config, ctx.not_needed_review_dispatcher
     )
-    if isinstance(
-        completion_event, TaskWorktreeCompletion
-    ) and completion_event.action in ("not_needed", "not_needed_review_dispatched"):
-        if ctx.config.apply:
-            if hold := fresh_external_hold(
-                active, ctx.config, "completion", ctx.run_state
-            ):
-                return ActiveWorktreeRuleOutcome(
-                    completion_event=hold.event(), terminal=True
-                )
-            del ctx.run_state.active_worktrees[key]
+    if (
+        isinstance(completion_event, TaskWorktreeCompletion)
+        and completion_event.action == "not_needed"
+    ):
+        return _record_completed_worktree(
+            ctx, key, active, active_task, completion_event
+        )
+    if (
+        isinstance(completion_event, TaskWorktreeCompletion)
+        and completion_event.action == "not_needed_review_dispatched"
+        and ctx.config.apply
+    ):
+        if hold := fresh_external_hold(active, ctx.config, "completion", ctx.run_state):
+            return ActiveWorktreeRuleOutcome(
+                completion_event=hold.event(), terminal=True
+            )
+        del ctx.run_state.active_worktrees[key]
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
         terminal=True,
@@ -301,7 +307,7 @@ def _apply_dirty_worktree_hold(
 # (`completed_no_commits`, `completed_without_outcome`) without being a
 # genuine confirmed completion, and `escalated_token_limit_exceeded` is still
 # recorded to history below but must never confirm completion.
-_CONFIRMED_COMPLETION_ACTIONS = frozenset({"completed", "already_merged"})
+_CONFIRMED_COMPLETION_ACTIONS = frozenset({"completed", "already_merged", "not_needed"})
 
 
 def _persist_and_confirm_completion(
@@ -362,6 +368,11 @@ def _record_completed_worktree(
         if hold := fresh_external_hold(
             completion_active, ctx.config, "completion", ctx.run_state
         ):
+            if action == "not_needed":
+                raise OSError(
+                    "External execution changed after not-needed confirmation for "
+                    f"issue #{completion_active.core.issue_number}; retrying next cycle"
+                )
             return ActiveWorktreeRuleOutcome(
                 completion_event=hold.event(), terminal=True
             )
@@ -369,7 +380,14 @@ def _record_completed_worktree(
             _completed_worktree_record(completion_active, active_task, completion_event)
         )
         del ctx.run_state.active_worktrees[key]
-        _persist_and_confirm_completion(ctx, completion_active, receipt)
+        persisted = _persist_and_confirm_completion(ctx, completion_active, receipt)
+        if not persisted and action == "not_needed":
+            ctx.run_state.completed_worktrees.pop()
+            ctx.run_state.active_worktrees[key] = completion_active
+            raise OSError(
+                "Failed to persist not-needed completion for issue "
+                f"#{completion_active.core.issue_number}; retrying next cycle"
+            )
 
     return ActiveWorktreeRuleOutcome(
         completion_event=completion_event,
@@ -742,6 +760,25 @@ def _resolve_completion(
     return _resolve_local_completion(ctx, key, active, active_task)
 
 
+def _retire_completed_without_receipt(
+    ctx: _RuleExecutionContext,
+    run_state: RunState,
+    key: str,
+    completion_active: ActiveWorktree,
+    completion_event: CompletionEvent,
+) -> ActiveWorktreeRuleOutcome:
+    if not ctx.config.apply:
+        return ActiveWorktreeRuleOutcome(
+            completion_event=completion_event, terminal=True
+        )
+    if hold := fresh_external_hold(
+        completion_active, ctx.config, "completion", run_state
+    ):
+        return ActiveWorktreeRuleOutcome(completion_event=hold.event(), terminal=True)
+    run_state.active_worktrees.pop(key, None)
+    return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)
+
+
 def _handle_completed_event_outcome(
     ctx: _RuleExecutionContext,
     key: str,
@@ -758,7 +795,12 @@ def _handle_completed_event_outcome(
         return ActiveWorktreeRuleOutcome(
             completion_event=completion_event, terminal=True
         )
-    if action in ("completed", "already_merged", "escalated_token_limit_exceeded"):
+    if action in (
+        "completed",
+        "already_merged",
+        "escalated_token_limit_exceeded",
+        "not_needed",
+    ):
         return _record_completed_worktree(
             ctx, key, completion_active, active_task, completion_event
         )
@@ -766,7 +808,6 @@ def _handle_completed_event_outcome(
         "completed_no_commits",
         "early_death_requeued",
         "completed_without_outcome",
-        "not_needed",
         "not_needed_review_dispatched",
         "blocked_base_branch_red",
         "escalated_base_branch_red",
@@ -774,15 +815,10 @@ def _handle_completed_event_outcome(
         "escalated_review_timeout",
         "blocked_unknown_reason",
     ):
-        if ctx.config.apply:
-            if hold := fresh_external_hold(
-                completion_active, ctx.config, "completion", ctx.run_state
-            ):
-                return ActiveWorktreeRuleOutcome(
-                    completion_event=hold.event(), terminal=True
-                )
-            ctx.run_state.active_worktrees.pop(key, None)
-    elif action == "completion_skipped_dirty_worktree" and isinstance(
+        return _retire_completed_without_receipt(
+            ctx, ctx.run_state, key, completion_active, completion_event
+        )
+    if action == "completion_skipped_dirty_worktree" and isinstance(
         completion_event, WorktreeCompletionHold
     ):
         new_action = _apply_dirty_worktree_hold(

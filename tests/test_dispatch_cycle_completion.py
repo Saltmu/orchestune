@@ -8,6 +8,7 @@
 import json
 import subprocess
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
@@ -835,6 +836,7 @@ class TestRunDispatchCycleNotNeeded:
         not_needed_issue = _full_issue(
             1, labels=("status:not-needed",), subtask_id="task-a"
         )
+        fake_forge.get_issue.return_value = replace(not_needed_issue, state="CLOSED")
         fake_forge.list_issues_by_label.reset_mock(side_effect=True)
         mock_list = fake_forge.list_issues_by_label
         fake_forge.list_open_prs.reset_mock(side_effect=True)
@@ -866,6 +868,7 @@ class TestRunDispatchCycleNotNeeded:
             report = run_dispatch_cycle(config)
 
         mock_remove_worktree.assert_called_once_with(str(tmp_path / "w1"))
+        fake_forge.add_label.assert_any_call(1, "status:not-needed")
         mock_remove_label.assert_any_call(1, "status:in-progress")
         mock_close_issue.assert_called_once()
         assert mock_close_issue.call_args.args[0] == 1
