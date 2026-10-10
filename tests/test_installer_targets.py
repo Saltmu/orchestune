@@ -187,7 +187,7 @@ def test_skills_dir_override_rejected_for_multiple_targets(tmp_path: Path):
         )
 
 
-def test_find_project_root(tmp_path: Path):
+def test_find_project_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # Git root simulation
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -201,4 +201,9 @@ def test_find_project_root(tmp_path: Path):
     # Non-git directory falls back to cwd
     non_git = tmp_path / "non_git"
     non_git.mkdir()
-    assert find_project_root(non_git) == non_git.resolve()
+    # Model absent Git markers explicitly: the host's temporary directory may
+    # itself belong to a repository, independently of this test's fixtures.
+    with monkeypatch.context() as isolated:
+        isolated.setattr(Path, "is_dir", lambda _: False)
+        isolated.setattr(Path, "is_file", lambda _: False)
+        assert find_project_root(non_git) == non_git.resolve()
