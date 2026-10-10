@@ -49,6 +49,12 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     exit 2
 }
 
+if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command npm -ErrorAction SilentlyContinue)) {
+    Write-Host "ERROR: Node.js and npm are required for local CI (the Quint dependency-liveness check)." -ForegroundColor Red
+    Write-Host 'Install the Node.js major version listed under "engines" in package.json; see CONTRIBUTING.md (Node.js and Quint).' -ForegroundColor Red
+    exit 2
+}
+
 $CiStartTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
 $CiStartHead = (git rev-parse HEAD 2>$null)
 if ($LASTEXITCODE -ne 0 -or -not $CiStartHead) {
@@ -88,19 +94,28 @@ if ($LASTEXITCODE -ne 0) {
     }
 }
 
-Write-Host "[1/6] Checking code format (ruff format)..."
+Write-Host "[1/7] Checking code format (ruff format)..."
 uv run ruff format --check
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "[2/6] Running lint (ruff check)..."
+Write-Host "[2/7] Running lint (ruff check)..."
 uv run ruff check
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "[3/6] Checking types (mypy)..."
+Write-Host "[3/7] Checking types (mypy)..."
 uv run mypy orchestune tests
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "[4/6] Running tests with coverage (pytest)..."
+Write-Host "[4/7] Installing and verifying the pinned Quint toolchain (Node.js)..."
+& (Join-Path $PSScriptRoot "quint-check.ps1")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+# One session directory per run: the bounded exploration writes its traces and
+# summary here and the replay reads them back (see tests/quint_replay.py).
+$QuintReplayDir = (& (Join-Path $PSScriptRoot "create-session-dir.ps1") "quint-replay" "1276")
+if ($LASTEXITCODE -ne 0 -or -not $QuintReplayDir) { exit 1 }
+$env:ORCHESTUNE_QUINT_REPLAY_DIR = "$QuintReplayDir"
+
+Write-Host "[5/7] Running tests with coverage (pytest)..."
 # Note: On Windows, pyproject.toml defaults to -n 2. Historically, -n auto caused ConPTY pipe leak crashes (#273).
 # We allow configuring workers via ORCHESTUNE_TEST_WORKERS or PYTEST_ADDOPTS, defaulting to -n 2.
 $PytestWorkerArgs = @()
@@ -132,11 +147,19 @@ try {
 }
 if ($PytestExitCode -ne 0) { exit $PytestExitCode }
 
-Write-Host "[5/6] Detecting new or worsened code and skill bloat..."
+$QuintSummary = Join-Path $QuintReplayDir "test_bounded_exploration_replays_on_production/exploration-summary.json"
+if (-not (Test-Path $QuintSummary) -or (Get-Item $QuintSummary).Length -eq 0) {
+    Write-Host "ERROR: the Quint exploration did not run (no $QuintSummary)." -ForegroundColor Red
+    exit 1
+}
+Write-Host "Quint exploration (seed, bounds, tool versions, replayed counts):"
+Get-Content -Raw $QuintSummary
+
+Write-Host "[6/7] Detecting new or worsened code and skill bloat..."
 uv run python scripts/detect_bloat.py --baseline .orchestune/bloat-baseline.json
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "[6/6] Scanning for secrets and local paths (gitleaks)..."
+Write-Host "[7/7] Scanning for secrets and local paths (gitleaks)..."
 $GitleaksInstallDir = if ($env:GITLEAKS_INSTALL_DIR) { $env:GITLEAKS_INSTALL_DIR } else { Join-Path $HOME ".local\bin" }
 $env:PATH = "$GitleaksInstallDir;$env:PATH"
 
