@@ -468,6 +468,133 @@ def test_telemetry_only_round_is_not_acquired():
     assert result["acquisition_status"] == "unavailable"
 
 
+CODEX_TRACKER = (
+    "<!-- codex-pull-request-review-summary -->\n"
+    "| Review | Status | Commit | Review trigger |\n"
+    "| --- | --- | --- | --- |\n"
+    "| 📝 **Code Review** | 🔄 **{status}** since "
+    '<relative-time datetime="2026-10-04T03:12:00Z">'
+    "2026-10-04T03:12:00Z</relative-time> | `abc1234` | Manual request |\n"
+    "<details><summary>About Codex</summary>Reviews are running.</details>"
+)
+
+
+def test_codex_running_tracker_holds_acquisition_open_with_partial_inline():
+    tracker = _comment(
+        1,
+        CODEX_TRACKER.format(status="Running"),
+        "chatgpt-codex-connector[bot]",
+        "2026-10-04T03:12:00Z",
+    )
+    partial_inline = _inline(7, 2, "2026-10-04T03:13:00Z")
+    partial_review = _review(8, "2026-10-04T03:13:30Z", "Partial review body.")
+    result = _bounded(
+        {
+            "issue_comments": [tracker],
+            "reviews": [partial_review],
+            "inline_comments": [partial_inline],
+        }
+    )
+    assert result["acquisition_status"] == "in_progress"
+    assert [item["id"] for item in result["review_items"]] == [8]
+    assert [item["id"] for item in result["inline_comments"]] == [7]
+
+
+def test_codex_completed_tracker_only_is_not_review_content():
+    tracker = _comment(
+        1,
+        CODEX_TRACKER.format(status="Completed"),
+        "chatgpt-codex-connector[bot]",
+        "2026-10-04T03:12:00Z",
+    )
+    result = _bounded({"issue_comments": [tracker]})
+    assert result["acquisition_status"] == "unavailable"
+    assert result["review_body"] == ""
+    assert result["review_items"] == []
+
+
+def test_old_codex_tracker_edited_later_does_not_block_the_current_round():
+    tracker = _comment(
+        1,
+        CODEX_TRACKER.format(status="Running"),
+        "chatgpt-codex-connector[bot]",
+        "2026-10-04T03:00:00Z",
+    )
+    tracker["updated_at"] = "2026-10-04T03:15:00Z"
+    review = _review(9, "2026-10-04T03:14:00Z", "Current round review.")
+    result = _bounded({"issue_comments": [tracker], "reviews": [review]})
+    assert result["acquisition_status"] == "acquired"
+    assert result["review_body"] == "Current round review."
+
+
+def test_newer_completed_codex_tracker_replaces_older_running_tracker():
+    running = _comment(
+        1,
+        CODEX_TRACKER.format(status="Running"),
+        "chatgpt-codex-connector[bot]",
+        "2026-10-04T03:12:00Z",
+    )
+    completed = _comment(
+        2,
+        CODEX_TRACKER.format(status="Completed"),
+        "chatgpt-codex-connector[bot]",
+        "2026-10-04T03:13:00Z",
+    )
+    result = _bounded({"issue_comments": [running, completed]})
+    assert result["acquisition_status"] == "unavailable"
+    assert result["review_items"] == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        CODEX_TRACKER.format(status="Retrying"),
+        "<!-- codex-pull-request-review-summary -->",
+    ],
+)
+def test_unknown_codex_tracker_is_not_review_content(body):
+    tracker = _comment(1, body, "chatgpt-codex-connector[bot]", "2026-10-04T03:12:00Z")
+    result = _bounded({"issue_comments": [tracker]})
+    assert result["acquisition_status"] == "unavailable"
+    assert result["review_body"] == ""
+    assert result["review_items"] == []
+
+
+def test_codex_completed_tracker_does_not_hide_real_review_content():
+    tracker = _comment(
+        1,
+        CODEX_TRACKER.format(status="Completed"),
+        "chatgpt-codex-connector[bot]",
+        "2026-10-04T03:13:00Z",
+    )
+    real_review = _review(9, "2026-10-04T03:14:00Z", "Actual review findings.")
+    result = _bounded({"issue_comments": [tracker], "reviews": [real_review]})
+    assert result["acquisition_status"] == "acquired"
+    assert result["review_body"] == "Actual review findings."
+    assert all(item["id"] != 1 for item in result["review_items"])
+
+
+def test_codex_completed_tracker_with_real_inline_review_is_acquired():
+    tracker = _comment(
+        1,
+        CODEX_TRACKER.format(status="Completed"),
+        "chatgpt-codex-connector[bot]",
+        "2026-10-04T03:13:00Z",
+    )
+    review = _review(9, "2026-10-04T03:14:00Z", "")
+    inline = _inline(10, 9, "2026-10-04T03:14:30Z")
+    result = _bounded(
+        {
+            "issue_comments": [tracker],
+            "reviews": [review],
+            "inline_comments": [inline],
+        }
+    )
+    assert result["acquisition_status"] == "acquired"
+    assert "see 1 inline comment(s)" in result["review_body"]
+    assert [item["id"] for item in result["inline_comments"]] == [10]
+
+
 def test_unbounded_collection_is_unchanged_by_the_new_parameters():
     state = _reviewed_state([_comment(3, "Judgments for round 1 (no marker)")])
     plain = acquisition.collect_review_state(state, "claude", exclude_ids={1})

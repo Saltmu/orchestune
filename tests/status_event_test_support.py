@@ -254,7 +254,9 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
         ),
     ),
     "dispatch/reconciliation.py::_resolve_one_blocked_recompute_issue": (
-        _r(_E.QUEUE, _K.RECOMPUTE, "blocked", "aux-recompute-removed", "replay"),
+        _r(_E.QUEUE, _K.RECOMPUTE, "aux-recompute-removed"),
+    ),
+    "dispatch/reconciliation.py::_release_recompute_for_promotion": (
         _r(_E.RELEASE_HOLD, _K.RECOMPUTE, "pending-dependencies"),
     ),
     "dispatch/reconciliation.py::_apply_base_branch_red_requeue": (
@@ -349,7 +351,7 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
     ),
     "dispatch/gc/completion.py::_finalize_not_needed_worktree": (
         _r(_E.NOT_NEEDED, _K.PLAIN, "labelled"),
-        _r(_E.COMPLETE_WITHOUT_LABEL, _K.NOT_NEEDED_OUTCOME, "outcome-only"),
+        _r(_E.NOT_NEEDED, _K.PLAIN, "outcome-only", "in-progress"),
         _r(_E.AWAIT_REVIEW, _K.PLAIN, "cloud-review-dispatched"),
     ),
     "dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim": (
@@ -375,7 +377,7 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
         ),
     ),
     "dispatch/gc/__init__.py::_rule_not_needed": (
-        _r(_E.COMPLETE_WITHOUT_LABEL, _K.NOT_NEEDED_OUTCOME, "outcome-only"),
+        _r(_E.NOT_NEEDED, _K.PLAIN, "outcome-only"),
         _r(_E.AWAIT_REVIEW, _K.PLAIN, "cloud-review-dispatched"),
     ),
     "dispatch/status_repair.py::_apply_command": (
@@ -730,10 +732,8 @@ def blocked_recompute_with_pending_dependencies(
     env: CaseEnv,
 ) -> tuple[Observation, ...]:
     task, ctx, state = _reconciliation_ctx(_ctx_env(env))
-    env.monkeypatch.setattr(
-        reconciliation, "_has_pending_dependencies", lambda *a: True
-    )
-    issue = make_issue(ISSUE, labels=env.held)
+    issue = make_issue(ISSUE, labels=env.held, depends_on=("unresolved-dependency",))
+    env.forge.issues[ISSUE] = issue
     result = reconciliation._resolve_one_blocked_recompute_issue(
         issue, task, set(), ctx, state, env.config
     )
@@ -861,7 +861,7 @@ def rule_not_needed_outcome(env: CaseEnv) -> tuple[Observation, ...]:
     state = RunState(active_worktrees={key: active})
     ctx = _RuleExecutionContext(
         run_state=state,
-        queries=_fake(),
+        queries=_fake(record_completion=lambda _issue: None),
         config=env.config,
         not_needed_review_dispatcher=_not_needed_review_dispatcher(env),
     )

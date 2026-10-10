@@ -35,7 +35,7 @@ from orchestune.ledger.active_records import (
     LaunchInfo,
 )
 from orchestune.ledger.run_state import ActiveWorktree, RunState
-from tests.conftest import make_issue
+from tests.conftest import FakeForge, make_issue
 from tests.dispatch_test_support import make_plain_issue as _issue
 from tests.dispatch_test_support import make_test_active_worktree as _active
 from tests.dispatch_test_support import make_test_cycle_context
@@ -364,6 +364,38 @@ class TestCollectActiveConflictSubtaskIds:
 
 
 class TestHandleBlockedRecomputeRecovery:
+    def _live_recovery(self, tmp_path, *, completed=True):
+        subject = make_issue(
+            1,
+            subtask_id="task-a",
+            depends_on=("task-x",),
+            labels=("status:blocked", "status:blocked-recompute"),
+        )
+        dependency = make_issue(2, subtask_id="task-x", labels=("status:queued",))
+        forge = FakeForge()
+        forge.seed_issue(subject)
+        forge.seed_issue(dependency)
+        run_state = RunState()
+        ctx = _ctx(
+            tasks_by_issue={
+                1: _task(status_labels=subject.labels, depends_on=("task-x",)),
+                2: _dependency_task(),
+            },
+            run_state=run_state,
+            prior_parent_merge_completed_issue_numbers=frozenset(
+                {2} if completed else ()
+            ),
+        )
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            apply=True,
+            forge=forge,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        return forge, run_state, ctx, config, _IssuesStub([subject, dependency])
+
     def test_returns_empty_when_no_blocked_recompute_issues(self, tmp_path):
         run_state = RunState(active_worktrees={})
         ctx = _ctx()
@@ -479,47 +511,18 @@ class TestHandleBlockedRecomputeRecovery:
         ]
 
     def test_apply_promotes_when_dependencies_are_resolved(self, tmp_path):
-        task = _task(
-            issue_number=1,
-            subtask_id="task-a",
-            depends_on=("task-x",),
-            status_labels=(),
-        )
-        dep = _dependency_task()
-        run_state = RunState(active_worktrees={})
-        ctx = _ctx(
-            tasks_by_issue={1: task, 2: dep},
-            prior_parent_merge_completed_issue_numbers=frozenset({dep.issue_number}),
-        )
-        config = DispatcherConfig(
-            parent_issue_number=100,
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=True,
-        )
-
-        with (
-            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
-            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
-        ):
-            result = _handle_blocked_recompute_recovery(
-                _IssuesStub(
-                    [_issue(1, labels=("status:blocked-recompute", "status:blocked"))]
-                ),
-                run_state,
-                ctx,
-                config,
-            )
-
-        assert mock_remove.call_args_list == [
+        forge, state, ctx, config, issues = self._live_recovery(tmp_path)
+        with patch.object(forge, "remove_label", wraps=forge.remove_label) as remove:
+            result = _handle_blocked_recompute_recovery(issues, state, ctx, config)
+        assert remove.call_args_list == [
             ((1, "status:blocked-recompute"),),
             ((1, "status:blocked"),),
         ]
-        mock_add.assert_called_once_with(1, "status:queued")
         assert [event.to_dict() for event in result] == [
             {"issue_number": 1, "subtask_id": "task-a"}
         ]
+        assert forge.get_issue_labels(1) == ("status:queued",)
+        assert ctx.task(1).status_labels == ("status:queued",)
 
     def _normal_promotion_dependency_result(
         self, tmp_path, *, dependency_labels, confirmed=()
@@ -595,170 +598,62 @@ class TestHandleBlockedRecomputeRecovery:
         )
 
     def test_adds_queued_before_removing_blocked(self, tmp_path):
-        # #381: status:blocked-recompute除去後もstatus:blockedが併存する間は
-        # 安全だが、最終的にstatus:queuedへ遷移する際は、途中でクラッシュ
-        # してもIssueが必ずいずれかのstatus:*ラベルを持ち続けるよう、
-        # addがremove(status:blocked)より先に呼ばれなければならない。
-        task = _task(
-            issue_number=1,
-            subtask_id="task-a",
-            depends_on=("task-x",),
-            status_labels=(),
-        )
-        dep = _dependency_task()
-        run_state = RunState(active_worktrees={})
-        ctx = _ctx(
-            tasks_by_issue={1: task, 2: dep},
-            prior_parent_merge_completed_issue_numbers=frozenset({dep.issue_number}),
-        )
-        config = DispatcherConfig(
-            parent_issue_number=100,
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=True,
-        )
-        call_order: list[tuple[str, str]] = []
+        forge, state, ctx, config, issues = self._live_recovery(tmp_path)
+        calls = []
+        original_add, original_remove = forge.add_label, forge.remove_label
+
+        def add(number, label):
+            calls.append(("add", label))
+            original_add(number, label)
+
+        def remove(number, label):
+            calls.append(("remove", label))
+            original_remove(number, label)
 
         with (
-            patch(
-                "fake_forge_proxy.active_fake_forge.remove_label",
-                side_effect=lambda issue, label: call_order.append(("remove", label)),
-            ),
-            patch(
-                "fake_forge_proxy.active_fake_forge.add_label",
-                side_effect=lambda issue, label: call_order.append(("add", label)),
-            ),
+            patch.object(forge, "add_label", side_effect=add),
+            patch.object(forge, "remove_label", side_effect=remove),
         ):
-            _handle_blocked_recompute_recovery(
-                _IssuesStub(
-                    [_issue(1, labels=("status:blocked-recompute", "status:blocked"))]
-                ),
-                run_state,
-                ctx,
-                config,
-            )
-
-        assert call_order == [
+            _handle_blocked_recompute_recovery(issues, state, ctx, config)
+        assert calls == [
             ("remove", "status:blocked-recompute"),
             ("add", "status:queued"),
             ("remove", "status:blocked"),
         ]
 
     def test_stays_blocked_when_dependency_still_pending(self, tmp_path):
-        task = _task(
-            issue_number=1,
-            subtask_id="task-a",
-            depends_on=("task-x",),
-            status_labels=(),
+        forge, state, ctx, config, issues = self._live_recovery(
+            tmp_path, completed=False
         )
-        run_state = RunState(active_worktrees={})
-        ctx = _ctx(tasks_by_issue={1: task})
-        config = DispatcherConfig(
-            parent_issue_number=100,
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=True,
+        assert not _handle_blocked_recompute_recovery(issues, state, ctx, config)
+        assert forge.get_issue_labels(1) == ("status:blocked",)
+        assert ctx.task(1).status_labels == (
+            "status:blocked",
+            "status:blocked-recompute",
         )
-
-        with (
-            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
-            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
-        ):
-            result = _handle_blocked_recompute_recovery(
-                _IssuesStub(
-                    [_issue(1, labels=("status:blocked-recompute", "status:blocked"))]
-                ),
-                run_state,
-                ctx,
-                config,
-            )
-
-        mock_remove.assert_called_once_with(1, "status:blocked-recompute")
-        mock_add.assert_not_called()
-        assert result == []
 
     def test_dependency_resolved_via_confirmed_context_fact(self, tmp_path):
-        task = _task(
-            issue_number=1,
-            subtask_id="task-a",
-            depends_on=("task-x",),
-            status_labels=(),
+        forge, state, ctx, config, issues = self._live_recovery(
+            tmp_path, completed=False
         )
-        dep = _dependency_task()
-        run_state = RunState(active_worktrees={})
-        ctx = _ctx(
-            tasks_by_issue={1: task, 2: dep},
-            prior_parent_merge_completed_issue_numbers=frozenset({dep.issue_number}),
-        )
-        config = DispatcherConfig(
-            parent_issue_number=100,
-            events_log_path=tmp_path / "events.jsonl",
-            run_state_path=tmp_path / "run_state.json",
-            worktree_root=tmp_path / "worktrees",
-            apply=True,
-        )
+        ctx.record_completion(2)
+        events = _handle_blocked_recompute_recovery(issues, state, ctx, config)
+        assert len(events) == 1
+        assert forge.get_issue_labels(2) == ("status:queued",)
+        assert ctx.task(1).status_labels == ("status:queued",)
 
-        with (
-            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
-            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add,
+    def test_transient_forge_read_failure_does_not_abort_the_recovery(self, tmp_path):
+        forge, state, ctx, config, issues = self._live_recovery(tmp_path)
+        with patch.object(
+            forge, "get_issue_state", side_effect=RuntimeError("transient API error")
         ):
-            result = _handle_blocked_recompute_recovery(
-                _IssuesStub(
-                    [_issue(1, labels=("status:blocked-recompute", "status:blocked"))]
-                ),
-                run_state,
-                ctx,
-                config,
-            )
-
-        assert mock_remove.call_args_list == [
-            ((1, "status:blocked-recompute"),),
-            ((1, "status:blocked"),),
-        ]
-        mock_add.assert_called_once_with(1, "status:queued")
-        assert [event.to_dict() for event in result] == [
-            {"issue_number": 1, "subtask_id": "task-a"}
-        ]
-
-    def test_transient_forge_read_failure_does_not_abort_the_recovery(self):
-        """Codex #899 review: a live-verify read failure must fail closed
-        (no receipt) rather than propagate and abort the whole recovery/cycle.
-
-        #922: `test_dispatch_cycle_transition_receipts.py`から、
-        `_handle_blocked_recompute_recovery`の責務を所有する本suiteへ移設。
-        """
-        fake_forge = MagicMock()
-        fake_forge.get_issue_state.side_effect = RuntimeError("transient API error")
-        run_state = RunState(active_worktrees={})
-        ctx = _ctx(
-            tasks_by_issue={
-                1: _task(
-                    issue_number=1,
-                    status_labels=(StatusLabel.BLOCKED,),
-                    depends_on=(),
-                )
-            },
-            dependency_resolution={1: TaskDependencies()},
-            run_state=run_state,
+            events = _handle_blocked_recompute_recovery(issues, state, ctx, config)
+        assert not events
+        assert forge.get_issue_labels(1) == ("status:queued",)
+        assert ctx.task(1).status_labels == (
+            "status:blocked",
+            "status:blocked-recompute",
         )
-        ctx.config.apply = True
-        ctx.config.forge = fake_forge
-
-        events = _handle_blocked_recompute_recovery(
-            _IssuesStub([make_issue(1, labels=(StatusLabel.BLOCKED_RECOMPUTE,))]),
-            run_state,
-            ctx,
-            ctx.config,
-        )
-
-        # The label mutation and promotion event still happen; only the
-        # ctx-side confirmation is withheld.
-        assert [event.to_dict() for event in events] == [
-            {"issue_number": 1, "subtask_id": "task-a"}
-        ]
-        assert ctx.task(1).status_labels == (StatusLabel.BLOCKED,)
 
     def test_active_worktree_entry_holds_instead_of_reclaiming(self):
         """Codex #899 review (round 4): the recovery must not hard-code
@@ -773,6 +668,10 @@ class TestHandleBlockedRecomputeRecovery:
         fake_forge = MagicMock()
         fake_forge.get_issue_state.return_value = "OPEN"
         fake_forge.get_issue_labels.return_value = (StatusLabel.QUEUED,)
+        fake_forge.get_issue.side_effect = [
+            make_issue(1, labels=(StatusLabel.BLOCKED, StatusLabel.BLOCKED_RECOMPUTE)),
+            make_issue(1, labels=(StatusLabel.BLOCKED,)),
+        ]
         active = ActiveWorktree.from_records(
             core=ActiveWorktreeCore(
                 issue_number=1,
@@ -817,10 +716,7 @@ class TestHandleBlockedRecomputeRecovery:
                 ctx.config,
             )
 
-        # The label mutation and promotion event still happen; only the
-        # ctx-side confirmation is withheld, preserving the launch fact.
-        assert [event.to_dict() for event in events] == [
-            {"issue_number": 1, "subtask_id": "task-a"}
-        ]
+        # A held confirmation is not a successful promotion event.
+        assert not events
         assert ctx.task(1).status_labels == (StatusLabel.BLOCKED,)
         assert ctx.launch_fact(1) is not None

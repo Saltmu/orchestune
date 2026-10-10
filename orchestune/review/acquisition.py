@@ -14,6 +14,10 @@ from collections.abc import Mapping
 from typing import Any
 
 from orchestune.review.markers import is_review_reply
+from orchestune.review.progress_tracker import (
+    CodexTrackerStatus,
+    parse_codex_tracker_status,
+)
 
 SCHEMA_VERSION = 1
 
@@ -122,11 +126,19 @@ def _bot_candidate_items(
 
 
 def _is_finished_progress_tracker(item: dict[str, Any], bot_name: str) -> bool:
+    """Keep progress telemetry out of review content.
+
+    The legacy name is retained because `scripts.review_verdict` re-exports it;
+    Codex tracker comments are telemetry regardless of their current status.
+    """
     body = str(item.get("body") or "").lower()
     return (
         body.startswith(f"**{bot_name.lower()} finished")
         and "view job" in body
         and "\n---" not in body
+    ) or (
+        bot_name.lower() == "codex"
+        and parse_codex_tracker_status(str(item.get("body") or "")) is not None
     )
 
 
@@ -163,6 +175,19 @@ def _latest_bot_activity_item(
             for item in candidates
             if _in_round(item, round_started_at, round_ended_at)
         ]
+    if bot_name.lower() == "codex":
+        tracker_items = [
+            item
+            for item in candidates
+            if parse_codex_tracker_status(str(item.get("body") or "")) is not None
+        ]
+        if tracker_items:
+            latest_tracker = sorted(tracker_items, key=_get_item_timestamp)[-1]
+            if (
+                parse_codex_tracker_status(str(latest_tracker.get("body") or ""))
+                is CodexTrackerStatus.IN_PROGRESS
+            ):
+                return latest_tracker
     return sorted(candidates, key=_get_item_timestamp)[-1] if candidates else None
 
 
@@ -173,6 +198,15 @@ def _latest_bot_summary_item(
     summaries = [
         item for item in candidates if not _is_finished_progress_tracker(item, bot_name)
     ]
+    if (
+        not summaries
+        and bot_name.lower() == "codex"
+        and any(
+            parse_codex_tracker_status(str(item.get("body") or "")) is not None
+            for item in candidates
+        )
+    ):
+        return None
     return (
         sorted(summaries or candidates, key=_get_item_timestamp)[-1]
         if candidates
@@ -182,6 +216,8 @@ def _latest_bot_summary_item(
 
 def _is_explicitly_in_progress(item: dict[str, Any]) -> bool:
     body = str(item.get("body") or "")
+    if parse_codex_tracker_status(body) is CodexTrackerStatus.IN_PROGRESS:
+        return True
     status_lines = [
         line.lstrip("#").strip().lower().split("<", maxsplit=1)[0].strip()
         for line in body.splitlines()

@@ -99,6 +99,7 @@ CALL_SITES: dict[str, int] = {
     "dispatch/gc/completion.py::_publish_requeue": 1,
     "dispatch/gc/usage_limit.py::_requeue": 1,
     "dispatch/gc/completion.py::_apply_done_worktree_cleanup": 1,
+    "dispatch/gc/completion.py::_finalize_not_needed_worktree": 1,
     "dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim": 1,
     "dispatch/status_repair.py::_apply_command": 1,
     "dispatch/recovery.py::execute_recovery_requeue_command": 1,
@@ -147,7 +148,7 @@ OUT_OF_SCOPE_PATHS: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "dispatch/reconciliation.py",
-        "_resolve_one_blocked_recompute_issue",
+        "_release_recompute_for_promotion",
         "removes blocked-recompute directly",
     ),
     (
@@ -169,11 +170,6 @@ OUT_OF_SCOPE_PATHS: tuple[tuple[str, str, str], ...] = (
         "dispatch/gc/completion.py",
         "_apply_escalated_base_branch_red",
         "removes ci:base-branch-red",
-    ),
-    (
-        "dispatch/gc/completion.py",
-        "_finalize_not_needed_worktree",
-        "direct label removal",
     ),
 )
 
@@ -329,11 +325,9 @@ def _attempt_and_reconciliation() -> list[Case]:
         attempt("queued-and-blocked", (Q, B), P, (Q, B), REP, {P}),
         attempt("no-lifecycle", (), P, (), INI, {P}),
         attempt("aux-force-serial-kept", (Q, FS), P, (Q,), AUX, {P, FS}),
-        blocked("blocked", (B,), Q, (B,), NRM, {Q}),
         blocked(
             "aux-recompute-removed", (B, RC), Q, (B,), AUX, {Q}, direct_removed={RC}
         ),
-        blocked("replay", (Q,), Q, (B,), SLF, {Q}),
         red("blocked", (B, CI_RED), Q, (B,), NRM, {Q}, direct_removed={CI_RED}),
         red("replay", (Q,), Q, (B,), SLF, {Q}),
     ]
@@ -381,6 +375,10 @@ def _prior_parent_and_completion() -> list[Case]:
         "dispatch/gc/completion.py::_apply_done_worktree_cleanup",
         "completion_done_cleanup",
     )
+    not_needed = _for(
+        "dispatch/gc/completion.py::_finalize_not_needed_worktree",
+        "completion_not_needed",
+    )
     abandoned = _for(
         "dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim",
         "completion_abandoned_reclaim",
@@ -403,6 +401,7 @@ def _prior_parent_and_completion() -> list[Case]:
         usage_limit("blocked", (B,), Q, (B,), NRM, {Q}, True, snapshot=(B,)),
         usage_limit("replay", (Q,), Q, (P,), SLF, {Q}, True),
         done("in-progress", (P,), D, (P,), NRM, {D}),
+        not_needed("in-progress", (P,), N, (P, Q, B), NRM, {N}),
         done("both", (Q, B), D, (Q, B), REP, {D}, snapshot=(Q, B)),
         abandoned("in-progress", (P,), Q, (P,), NRM, {Q}, True),
         abandoned("blocked", (B,), Q, (B,), NRM, {Q}, True),
