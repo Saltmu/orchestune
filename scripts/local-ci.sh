@@ -34,6 +34,12 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 2
 fi
 
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+  echo "ERROR: Node.js and npm are required for local CI (the Quint dependency-liveness check)." >&2
+  echo "Install the Node.js major version listed under \"engines\" in package.json; see CONTRIBUTING.md (Node.js and Quint)." >&2
+  exit 2
+fi
+
 CI_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 if ! CI_START_HEAD=$(git rev-parse HEAD 2>/dev/null) || [ -z "${CI_START_HEAD}" ]; then
   echo "ERROR: Failed to resolve initial HEAD before starting CI." >&2
@@ -69,16 +75,23 @@ if ! uv run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" >/dev
   uv sync
 fi
 
-echo "[1/6] Checking code format (ruff format)..."
+echo "[1/7] Checking code format (ruff format)..."
 uv run ruff format --check
 
-echo "[2/6] Running lint (ruff check)..."
+echo "[2/7] Running lint (ruff check)..."
 uv run ruff check
 
-echo "[3/6] Checking types (mypy)..."
+echo "[3/7] Checking types (mypy)..."
 uv run mypy orchestune tests
 
-echo "[4/6] Running tests with coverage (pytest)..."
+echo "[4/7] Installing and verifying the pinned Quint toolchain (Node.js)..."
+./scripts/quint-check.sh
+# One session directory per run: the bounded exploration writes its traces and
+# summary here and the replay reads them back (see tests/quint_replay.py).
+QUINT_REPLAY_DIR="$(./scripts/create-session-dir.sh quint-replay 1276)"
+export ORCHESTUNE_QUINT_REPLAY_DIR="${QUINT_REPLAY_DIR}"
+
+echo "[5/7] Running tests with coverage (pytest)..."
 (
   # Tests create independent Git repositories; completion's CI context belongs only
   # to this worktree and must not become those repositories' evidence defaults.
@@ -88,10 +101,18 @@ echo "[4/6] Running tests with coverage (pytest)..."
   uv run pytest --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
 )
 
-echo "[5/6] Detecting new or worsened code and skill bloat..."
+QUINT_SUMMARY="${QUINT_REPLAY_DIR}/test_bounded_exploration_replays_on_production/exploration-summary.json"
+if [ ! -s "${QUINT_SUMMARY}" ]; then
+  echo "ERROR: the Quint exploration did not run (no ${QUINT_SUMMARY})." >&2
+  exit 1
+fi
+echo "Quint exploration (seed, bounds, tool versions, replayed counts):"
+cat "${QUINT_SUMMARY}"
+
+echo "[6/7] Detecting new or worsened code and skill bloat..."
 uv run python scripts/detect_bloat.py --baseline .orchestune/bloat-baseline.json
 
-echo "[6/6] Scanning for secrets and local paths (gitleaks)..."
+echo "[7/7] Scanning for secrets and local paths (gitleaks)..."
 GITLEAKS_INSTALL_DIR="${GITLEAKS_INSTALL_DIR:-$HOME/.local/bin}"
 export PATH="${GITLEAKS_INSTALL_DIR}:${PATH}"
 

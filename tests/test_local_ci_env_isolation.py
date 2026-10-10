@@ -27,6 +27,16 @@ def _prepare_repo(tmp_path: Path, script_name: str) -> Path:
     scripts = repo / "scripts"
     scripts.mkdir(parents=True)
     shutil.copy2(Path("scripts") / script_name, scripts / script_name)
+    # The Quint step (#1276) runs scripts/quint-check.* and creates its replay
+    # session directory; this test is about the pytest environment, so the check
+    # itself is a stub (the real one is tested in test_quint_dependency_replay.py).
+    suffix = Path(script_name).suffix
+    shutil.copy2(Path("scripts") / f"create-session-dir{suffix}", scripts)
+    (scripts / f"quint-check{suffix}").write_text(
+        "exit 0\n" if suffix == ".ps1" else "#!/usr/bin/env bash\nexit 0\n",
+        encoding="utf-8",
+    )
+    (scripts / f"quint-check{suffix}").chmod(0o755)
     subprocess.run(
         ["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True
     )
@@ -60,6 +70,10 @@ def _prepare_mock_tools(tmp_path: Path) -> tuple[Path, Path]:
         "args = sys.argv[1:]\n"
         "if args[:2] == ['run', 'pytest']:\n"
         "    key = 'CI_PYTEST_ENV'\n"
+        "    summary = Path(os.environ['ORCHESTUNE_QUINT_REPLAY_DIR']) / "
+        "'test_bounded_exploration_replays_on_production'\n"
+        "    summary.mkdir(parents=True, exist_ok=True)\n"
+        "    (summary / 'exploration-summary.json').write_text('{}')\n"
         "elif args[:5] == ['run', 'python', '-m', 'orchestune.complete.ci_evidence', 'record']:\n"
         "    key = 'CI_RECORD_ENV'\n"
         "    Path(os.environ['CI_RECORD_ARGS']).write_text(json.dumps(args))\n"
@@ -73,10 +87,14 @@ def _prepare_mock_tools(tmp_path: Path) -> tuple[Path, Path]:
             encoding="utf-8",
         )
         (mock_bin / "gitleaks.cmd").write_text("@exit /b 0\n", encoding="utf-8")
+        for name in ("node", "npm"):
+            (mock_bin / f"{name}.cmd").write_text("@exit /b 0\n", encoding="utf-8")
     else:
         for name, body in (
             ("uv", 'exec "$CI_MOCK_PYTHON" "$CI_MOCK_TOOL" "$@"\n'),
             ("gitleaks", "exit 0\n"),
+            ("node", "exit 0\n"),
+            ("npm", "exit 0\n"),
         ):
             tool = mock_bin / name
             tool.write_text("#!/bin/sh\n" + body, encoding="utf-8")

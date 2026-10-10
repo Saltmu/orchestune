@@ -118,7 +118,8 @@ module dependency_liveness {
       doneWith("record_completion", 11), cycleOf(false, false), cycleOf(true, false), cycleOf(false, false)]),
     "not_needed_apply" -> ok("simple_one", [doneWith("outcome_not_needed", 11), cycleOf(true, false)]),
     "prior_merge_dry" -> ok("simple_one", [doneWith("prior_merge", 11), cycleOf(false, false), cycleOf(true, false)]),
-    "lagged_apply" -> ok("simple_one", [doneWith("record_completion", 11), cycleOf(true, true)]),
+    "lagged_apply" -> ok("simple_one", [
+      cycleOf(true, true), doneWith("record_completion", 11), cycleOf(true, true)]),
     "lagged_dry" -> ok("simple_one", [doneWith("label", 11), cycleOf(false, true), cycleOf(true, true)]),
     "no_op_cycles" -> ok("simple_one", [
       cycleOf(true, false), cycleOf(false, false), cycleOf(true, true), doneWith("label", 11), cycleOf(true, false)]),
@@ -148,7 +149,8 @@ module dependency_liveness {
     "base_red_dry" -> ok("simple_one", [
       doneWith("label", 11), hold("base_red", 20), cycleOf(false, false),
       hold("base_red", 20), cycleOf(false, false)]),
-    "recompute_release" -> reconciling(ok("simple_one", [doneWith("record_completion", 11), cycleOf(true, false)])),
+    "recompute_release" -> reconciling(ok("simple_one", [
+      cycleOf(true, false), doneWith("record_completion", 11), cycleOf(true, false)])),
     "failure_after_add" -> ok("simple_one", [
       doneWith("label", 11), failing("add", "after"), cycleOf(true, false), cycleOf(true, false)]),
     "failure_before_remove" -> ok("simple_one", [
@@ -253,6 +255,7 @@ module dependency_liveness {
   var guard: bool              // exclude the production counterexamples #1281 / #1283
   var sid: str                 // scripted scenario id ("": random exploration)
   var pc: int                  // next script position
+  var planned: int             // script length (0: random exploration); a scripted run must end at pc == planned
   // Observation of the last step; cleared by every non-cycle step so a past
   // preview can never satisfy a later cycle.
   var wasCycle: bool
@@ -289,7 +292,7 @@ module dependency_liveness {
 
   action settled: bool = all {
     topo' = topo, shape' = shape, fault' = fault, guard' = guard, sid' = sid,
-    lastMode' = lastMode, streak' = streak, staleApplied' = "none"
+    lastMode' = lastMode, streak' = streak, staleApplied' = "none", planned' = planned
   }
 
   // ---- init ---------------------------------------------------------------------
@@ -314,6 +317,7 @@ module dependency_liveness {
       guard' = g,
       sid' = id,
       pc' = 0,
+      planned' = if (scripted(id)) length(SCENARIOS.get(id).script) else 0,
       wasCycle' = false, applied' = false, events' = Set(), newlyQueued' = Set(),
       mustNot' = Set(), mustQueue' = Set()
     }
@@ -566,6 +570,7 @@ module dependency_liveness {
       stale' = { kind: "none", target: 0 },
       topo' = topo, shape' = shape, fault' = fault, guard' = guard, sid' = sid,
       staleApplied' = if (staleEffective) stale.kind else "none",
+      planned' = planned,
       advance
     }
   }
