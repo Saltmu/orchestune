@@ -27,6 +27,7 @@ from orchestune.review.offline import (
     legacy_refusal,
     validate_request,
 )
+from orchestune.review.rounds import MAX_REVIEW_ROUNDS
 from orchestune.review.snapshot import (
     DEFAULT_MAX_SNAPSHOT_AGE_SECONDS,
     EvidenceContractError,
@@ -40,8 +41,9 @@ EXIT_MAX_ROUNDS = 12  # Maximum review rounds exceeded
 DEFAULT_TIMEOUT_SECONDS = 1800
 DEFAULT_INTERVAL_SECONDS = 5
 DEFAULT_MAX_RETRIES = 1
-DEFAULT_MAX_ROUNDS = 5
-OFFLINE_MAX_ROUNDS = 5
+# The fixed limit lives in orchestune.review.rounds; `--max-rounds` can only lower it.
+DEFAULT_MAX_ROUNDS = MAX_REVIEW_ROUNDS
+OFFLINE_MAX_ROUNDS = MAX_REVIEW_ROUNDS
 
 EvaluateFindings = Callable[..., dict[str, Any]]
 

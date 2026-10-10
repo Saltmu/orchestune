@@ -30,6 +30,7 @@ from orchestune.review.judgment import (
 )
 from orchestune.review.markers import derive_review_target
 from orchestune.review.rounds import (
+    MAX_REVIEW_ROUNDS,
     ReviewRoundContext,
     ReviewTrigger,
     activity_bounds,
@@ -271,7 +272,7 @@ def evaluate_snapshot(
     pr_number: int | None,
     now: datetime,
     requested_round: int | None = None,
-    max_rounds: int = 5,
+    max_rounds: int = MAX_REVIEW_ROUNDS,
     max_age_seconds: float = DEFAULT_MAX_SNAPSHOT_AGE_SECONDS,
     body_text: str | None = None,
 ) -> OfflineOutcome:
@@ -444,7 +445,7 @@ def validate_request(
     pr_number: int | None,
     now: datetime,
     switch_reviewer: bool = False,
-    max_rounds: int = 5,
+    max_rounds: int = MAX_REVIEW_ROUNDS,
     explicit_round: int | None = None,
     body_text: str | None = None,
     max_age_seconds: float = DEFAULT_MAX_SNAPSHOT_AGE_SECONDS,

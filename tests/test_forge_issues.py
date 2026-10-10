@@ -826,6 +826,86 @@ class TestGetIssue:
         gh_run.assert_not_called()
 
 
+class TestGetIssueReference:
+    def test_reads_the_issues_api_not_issue_view(self, forge: GitHubForge, gh_run):
+        gh_run.stdout('{"number": 7, "state": "open"}')
+
+        reference = forge.get_issue_reference(7)
+
+        assert reference is not None
+        assert (reference.number, reference.state, reference.is_pull_request) == (
+            7,
+            "open",
+            False,
+        )
+        assert gh_run.call_args.args[0] == [
+            "gh",
+            "api",
+            "repos/{owner}/{repo}/issues/7",
+        ]
+
+    def test_pull_request_is_flagged(self, forge: GitHubForge, gh_run):
+        """`gh issue view` also succeeds for a PR number, so only the REST payload's
+        `pull_request` key tells the two apart."""
+        gh_run.stdout('{"number": 7, "state": "open", "pull_request": {"url": "u"}}')
+
+        reference = forge.get_issue_reference(7)
+
+        assert reference is not None
+        assert reference.is_pull_request is True
+
+    def test_returns_none_only_on_404(self, forge: GitHubForge, gh_run):
+        gh_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "api"], stderr="gh: Not Found (HTTP 404)"
+        )
+        assert forge.get_issue_reference(999) is None
+
+    @pytest.mark.parametrize(
+        "stderr", ["gh: rate limit exceeded", "gh: Resource not accessible (HTTP 403)"]
+    )
+    def test_other_failures_propagate(self, forge: GitHubForge, gh_run, stderr):
+        gh_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "api"], stderr=stderr
+        )
+        with pytest.raises(subprocess.CalledProcessError):
+            forge.get_issue_reference(999)
+
+    @pytest.mark.parametrize(
+        "payload",
+        ['{"state": "open"}', '{"number": 7}', '{"number": 8, "state": "open"}', "[]"],
+    )
+    def test_incomplete_or_foreign_payload_is_an_error(
+        self, forge: GitHubForge, gh_run, payload
+    ):
+        gh_run.stdout(payload)
+        with pytest.raises(ValueError):
+            forge.get_issue_reference(7)
+
+    def test_rejects_invalid_issue_number(self, forge: GitHubForge, gh_run):
+        with pytest.raises(ValueError):
+            forge.get_issue_reference("7; evil")
+        gh_run.assert_not_called()
+
+
+class TestGetRepositorySlug:
+    def test_returns_name_with_owner(self, forge: GitHubForge, gh_run):
+        gh_run.stdout('{"nameWithOwner": "Saltmu/orchestune"}')
+
+        assert forge.get_repository_slug() == "Saltmu/orchestune"
+        assert gh_run.call_args.args[0] == [
+            "gh",
+            "repo",
+            "view",
+            "--json",
+            "nameWithOwner",
+        ]
+
+    def test_empty_slug_is_an_error(self, forge: GitHubForge, gh_run):
+        gh_run.stdout('{"nameWithOwner": ""}')
+        with pytest.raises(ValueError):
+            forge.get_repository_slug()
+
+
 class TestListComments:
     def test_lists_every_native_issue_comment_page_with_api_evidence(
         self, forge: GitHubForge, gh_run

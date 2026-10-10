@@ -235,6 +235,27 @@ def test_next_round_over_the_limit_cannot_be_relaxed_by_max_rounds() -> None:
         plan_next_round(triggers, bot="claude", max_rounds=5)
 
 
+def test_every_default_round_limit_is_the_single_constant() -> None:
+    import inspect
+
+    from orchestune.review import offline, rounds
+    from scripts import review_cli, wait_for_review
+
+    assert rounds.MAX_REVIEW_ROUNDS == 5
+    functions = (
+        rounds.select_round,
+        rounds.plan_next_round,
+        offline.evaluate_snapshot,
+        offline.validate_request,
+        wait_for_review.wait_for_review,
+    )
+    for function in functions:
+        default = inspect.signature(function).parameters["max_rounds"].default
+        assert default == rounds.MAX_REVIEW_ROUNDS, function.__qualname__
+    assert review_cli.DEFAULT_MAX_ROUNDS == rounds.MAX_REVIEW_ROUNDS
+    assert review_cli.OFFLINE_MAX_ROUNDS == rounds.MAX_REVIEW_ROUNDS
+
+
 def test_reviewer_is_inherited_unless_switch_is_explicit() -> None:
     triggers = restore_triggers([trigger(1, 1, at(1))])
     assert plan_next_round(triggers, bot="claude") == 2
