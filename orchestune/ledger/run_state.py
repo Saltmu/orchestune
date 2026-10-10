@@ -399,11 +399,25 @@ def _parse_completion_journal_fields(
     }
 
 
-def _launch_attribution_fields(value: dict[str, Any]) -> dict[str, Any]:
-    """#1270: absent in records written before launch attribution existed."""
+def _launch_attribution_fields(value: dict[str, Any], key: object) -> dict[str, Any]:
+    """#1270: absent in records written before launch attribution existed.
+
+    Rejected here, like every other persisted field, so a malformed value cannot
+    reach the log reader as a wrong type.
+    """
+    offset = value.get("launch_log_offset")
+    if offset is not None and (
+        isinstance(offset, bool) or not isinstance(offset, int) or offset < 0
+    ):
+        raise _active_worktree_schema_error(
+            key, "launch_log_offset must be a non-negative integer or null"
+        )
     return {
-        name: value.get(name)
-        for name in ("launch_target", "launch_log_path", "launch_log_offset")
+        "launch_target": _parse_optional_completion_str(value, "launch_target", key),
+        "launch_log_path": _parse_optional_completion_str(
+            value, "launch_log_path", key
+        ),
+        "launch_log_offset": offset,
     }
 
 
@@ -444,7 +458,7 @@ def _build_active_worktree(
         "selection_reason": value.get("selection_reason"),
         "launch_attempt_id": value.get("launch_attempt_id"),
         "launch_phase": value.get("launch_phase"),
-        **_launch_attribution_fields(value),
+        **_launch_attribution_fields(value, key),
         "owner_kind": owner_kind,
         "claim_id": _required_active_string(value, "claim_id", key),
         "claim_stage": claim_stage,
