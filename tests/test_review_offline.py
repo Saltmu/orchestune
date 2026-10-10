@@ -285,7 +285,8 @@ def test_codex_running_tracker_in_this_round_is_exit_11() -> None:
             comment(
                 30,
                 15,
-                CODEX_TRACKER.format(status="Running"),
+                # The Commit cell must not contradict the trigger's head (#1274).
+                CODEX_TRACKER.format(status="Running").replace("abc1234", "aaaaaaa"),
                 login="chatgpt-codex-connector[bot]",
             ),
         ]

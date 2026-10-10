@@ -18,6 +18,11 @@ from orchestune.review.progress_tracker import (
     CodexTrackerStatus,
     parse_codex_tracker_status,
 )
+from orchestune.review.tracker_activity import (
+    is_codex_tracker,
+    tracker_digest,
+    tracker_is_current,
+)
 
 SCHEMA_VERSION = 1
 
@@ -111,6 +116,16 @@ def _get_item_created_timestamp(item: dict[str, Any]) -> str:
     return str(item.get("submitted_at") or item.get("created_at") or "")
 
 
+def _activity_signature(item: dict[str, Any], bot_name: str) -> str:
+    """Change fingerprint of one comment / review: time, length, and for a Codex
+    tracker a body digest, so a same-length Running -> Pending edit still shows.
+    The body itself is never part of the signature."""
+    signature = f"{_get_item_timestamp(item)}:{len(str(item.get('body') or ''))}"
+    if bot_name.lower() == "codex" and is_codex_tracker(item):
+        signature += f":{tracker_digest(item)}"
+    return signature
+
+
 def _bot_candidate_items(
     data: ReviewState,
     bot_name: str,
@@ -152,6 +167,30 @@ def _in_round(item: dict[str, Any], round_started_at: str, round_ended_at: str) 
     )
 
 
+def _in_activity_round(
+    item: dict[str, Any],
+    bot_name: str,
+    round_started_at: str,
+    round_ended_at: str,
+    requested_head_sha: str | None,
+) -> bool:
+    """Whether bot activity belongs to the round.
+
+    A Codex tracker comment is reused and edited by every round, so only it is
+    placed by its last activity time (`updated_at`) and its commit; every other
+    item keeps the creation-time rule (#1210). `round_started_at` /
+    `round_ended_at` are the activity bounds here (#1274).
+    """
+    if bot_name.lower() == "codex" and is_codex_tracker(item):
+        return tracker_is_current(
+            item,
+            started_at=round_started_at,
+            ended_at=round_ended_at,
+            requested_head_sha=requested_head_sha,
+        )
+    return _in_round(item, round_started_at, round_ended_at)
+
+
 def _latest_bot_activity_item(
     data: ReviewState,
     bot_name: str,
@@ -160,11 +199,17 @@ def _latest_bot_activity_item(
     exclude_issue_comment_ids: set[int | str] | None = None,
     round_started_at: str = "",
     round_ended_at: str = "",
+    requested_head_sha: str | None = None,
+    activity_started_at: str = "",
+    activity_ended_at: str = "",
 ) -> dict[str, Any] | None:
     """Latest bot activity; with round bounds only that round's own activity.
 
     A past tracker edited later (newer `updated_at`) belongs to its own round and
-    must not make the evaluated round look still in progress (#1210).
+    must not make the evaluated round look still in progress (#1210). A reused
+    Codex tracker updated inside the round is the round's own activity even
+    though it was created earlier (#1274); `activity_*` carry the sub-second
+    bounds for that comparison and default to the round bounds.
     """
     candidates = _bot_candidate_items(
         data, bot_name, exclude_ids, exclude_issue_comment_ids
@@ -173,7 +218,13 @@ def _latest_bot_activity_item(
         candidates = [
             item
             for item in candidates
-            if _in_round(item, round_started_at, round_ended_at)
+            if _in_activity_round(
+                item,
+                bot_name,
+                activity_started_at or round_started_at,
+                activity_ended_at or round_ended_at,
+                requested_head_sha,
+            )
         ]
     if bot_name.lower() == "codex":
         tracker_items = [
@@ -189,6 +240,39 @@ def _latest_bot_activity_item(
             ):
                 return latest_tracker
     return sorted(candidates, key=_get_item_timestamp)[-1] if candidates else None
+
+
+def _latest_current_tracker(
+    data: ReviewState,
+    bot_name: str,
+    exclude_ids: set[int | str] | None = None,
+    *,
+    exclude_issue_comment_ids: set[int | str] | None = None,
+    round_started_at: str = "",
+    round_ended_at: str = "",
+    requested_head_sha: str | None = None,
+) -> dict[str, Any] | None:
+    """The Codex tracker that is current activity of the round, or None.
+
+    Its status (Running / Completed / unknown) is telemetry about the round, not
+    review content; callers must not treat it as an acquired review.
+    """
+    if bot_name.lower() != "codex":
+        return None
+    trackers = [
+        item
+        for item in _bot_candidate_items(
+            data, bot_name, exclude_ids, exclude_issue_comment_ids
+        )
+        if is_codex_tracker(item)
+        and tracker_is_current(
+            item,
+            started_at=round_started_at,
+            ended_at=round_ended_at,
+            requested_head_sha=requested_head_sha,
+        )
+    ]
+    return sorted(trackers, key=_get_item_timestamp)[-1] if trackers else None
 
 
 def _latest_bot_summary_item(
@@ -278,9 +362,13 @@ def _build_snapshot(
         ("review", _filter_bot_items(data["reviews"], bot_name, exclude_ids)),
     ):
         for item in items:
-            snapshot[f"{prefix}_{item.get('id')}"] = (
+            signature = (
                 f"{_get_item_timestamp(item)}:{len(str(item.get('body') or ''))}"
             )
+            if bot_name.lower() == "codex" and is_codex_tracker(item):
+                # Same-length edits (Running -> Pending) must still register.
+                signature += f":{tracker_digest(item)}"
+            snapshot[f"{prefix}_{item.get('id')}"] = signature
     for item in _filter_bot_items(data["inline_comments"], bot_name, exclude_ids):
         snapshot[f"inline_{item.get('id')}"] = _get_item_timestamp(item)
     return snapshot
@@ -570,6 +658,9 @@ def collect_review_state(
     round_started_at: str = "",
     round_ended_at: str = "",
     exclude_issue_comment_ids: set[int | str] | None = None,
+    requested_head_sha: str | None = None,
+    activity_started_at: str = "",
+    activity_ended_at: str = "",
 ) -> dict[str, Any]:
     """Assemble an acquisition-state result from an externally acquired snapshot.
 
@@ -577,7 +668,10 @@ def collect_review_state(
     adapters (`scripts/wait_for_review.py`) build the equivalent result while
     additionally tracking round/trigger/SHA identifiers this transport-neutral
     entry point does not have. With round bounds, both the content and the
-    still-in-progress check are limited to that round's own interval.
+    still-in-progress check are limited to that round's own interval. The
+    in-progress check also treats a reused Codex tracker last updated inside the
+    interval as that round's activity unless its commit explicitly differs from
+    `requested_head_sha`; `activity_*` give its sub-second bounds (#1274).
     """
     data = normalize_review_state(value)
     result = extract_review_result(
@@ -599,6 +693,9 @@ def collect_review_state(
         exclude_issue_comment_ids=exclude_issue_comment_ids,
         round_started_at=round_started_at,
         round_ended_at=round_ended_at,
+        requested_head_sha=requested_head_sha,
+        activity_started_at=activity_started_at,
+        activity_ended_at=activity_ended_at,
     )
     if latest_activity is not None and _is_explicitly_in_progress(latest_activity):
         return _status_result(

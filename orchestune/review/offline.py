@@ -32,8 +32,10 @@ from orchestune.review.markers import derive_review_target
 from orchestune.review.rounds import (
     ReviewRoundContext,
     ReviewTrigger,
+    activity_bounds,
     build_restorable_trigger_body,
     plan_next_round,
+    precise_created_at,
     previous_round_window,
     restore_triggers,
     select_round,
@@ -246,12 +248,17 @@ def _evaluate(
             "snapshot was observed before the trigger was posted"
         )
     reply = _verify_posted_reply(evidence.state, triggers, context, body_text)
+    current_trigger = next(t for t in triggers if t.round == context.round)
+    activity_start, activity_end = activity_bounds(comments, triggers, current_trigger)
     result = collect_review_state(
         evidence.state,
         bot_name,
         exclude_issue_comment_ids=trigger_comment_ids(comments),
         round_started_at=context.started_at,
         round_ended_at=context.ended_at or "",
+        requested_head_sha=context.requested_head_sha,
+        activity_started_at=activity_start,
+        activity_ended_at=activity_end,
     )
     result = _identify(result, evidence, context, reply)
     return OfflineOutcome(_EXIT_BY_STATUS[result["acquisition_status"]], result)
@@ -300,11 +307,14 @@ def _judged_round(body_text: str) -> int | None:
 
 def _outstanding(evidence: SnapshotEvidence, latest: ReviewTrigger) -> bool:
     """True when the latest posted round has no acquired result yet."""
+    comments = evidence.state["issue_comments"]
     result = collect_review_state(
         evidence.state,
         latest.reviewer,
-        exclude_issue_comment_ids=trigger_comment_ids(evidence.state["issue_comments"]),
+        exclude_issue_comment_ids=trigger_comment_ids(comments),
         round_started_at=latest.created_at,
+        requested_head_sha=latest.requested_head_sha,
+        activity_started_at=precise_created_at(comments, latest),
     )
     return bool(result["acquisition_status"] != ACQUISITION_ACQUIRED)
 

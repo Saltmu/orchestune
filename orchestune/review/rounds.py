@@ -281,6 +281,34 @@ def build_restorable_trigger_body(
     return candidate
 
 
+def precise_created_at(comments: list[dict[str, Any]], trigger: ReviewTrigger) -> str:
+    """The trigger's creation time with fractional seconds, when the snapshot has them."""
+    for item in comments:
+        if str(item.get("id")) == str(trigger.id):
+            return str(
+                item.get("created_at_precise")
+                or item.get("created_at")
+                or trigger.created_at
+            )
+    return trigger.created_at
+
+
+def activity_bounds(
+    comments: list[dict[str, Any]],
+    triggers: list[ReviewTrigger],
+    current: ReviewTrigger,
+) -> tuple[str, str]:
+    """Exact [start, end) of the round for tracker activity comparisons.
+
+    `ReviewTrigger.created_at` is rounded down to the second for string ordering,
+    which would move a boundary by up to a second; the end is the next
+    round's trigger, empty for the latest round.
+    """
+    later = [t for t in triggers if t.round > current.round]
+    end = precise_created_at(comments, later[0]) if later else ""
+    return precise_created_at(comments, current), end
+
+
 def trigger_comment_ids(comments: Iterable[dict[str, Any]]) -> set[Any]:
     """Ids of normal comments that request a review; never review evidence.
 

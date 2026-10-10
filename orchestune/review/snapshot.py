@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from orchestune.review.markers import normalize_sha
+from orchestune.review.tracker_activity import PRECISE_SUFFIX, format_precise_utc
 
 SNAPSHOT_VERSION = 1
 DEFAULT_MAX_SNAPSHOT_AGE_SECONDS = 300
@@ -118,6 +119,8 @@ def _normalize_records(
         record = dict(item)
         _check_record_identity(record, section, *identity)
         for field in _TIME_FIELDS:
+            # Never trust a caller-supplied sub-second twin; it is derived below.
+            record.pop(f"{field}{PRECISE_SUFFIX}", None)
             if record.get(field) in (None, ""):
                 continue
             moment = parse_utc(record[field], f"{section}.{field}")
@@ -126,6 +129,10 @@ def _normalize_records(
                     f"{section} record {record.get('id')!r} {field} is after observed_at"
                 )
             record[field] = _format_utc(moment)
+            if moment.microsecond:
+                # `_format_utc` rounds down to the second for string ordering;
+                # keep the exact instant for tracker activity comparisons.
+                record[f"{field}{PRECISE_SUFFIX}"] = format_precise_utc(moment)
         records.append(record)
     return records
 
