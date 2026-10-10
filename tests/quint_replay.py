@@ -336,13 +336,15 @@ def parse_trace(raw: object) -> Trace:
 
 
 def normalized(raw: dict[str, Any]) -> dict[str, Any]:
-    """Drop what changes between runs (timestamp, description, absolute source)."""
+    """Drop what changes between runs: the timestamp, the description, the absolute
+    source path, and the order of ``vars`` (it follows hash order, so any edit of the
+    model shuffles it without changing a state)."""
     meta = {
         key: value
         for key, value in raw["#meta"].items()
         if key not in {"description", "timestamp", "source"}
     }
-    return {**raw, "#meta": meta}
+    return {**raw, "#meta": meta, "vars": sorted(set(raw["vars"]))}
 
 
 # ---- action table -------------------------------------------------------------------
@@ -584,12 +586,15 @@ class Replayer:
 
     # ---- the cycle ---------------------------------------------------------------
 
-    def _stale_change(self, step: Step) -> Callable[[LivenessWorld], None] | None:
-        """The change the model applied in this cycle (a no-op one is skipped)."""
+    def _stale_change(
+        self, step: Step
+    ) -> tuple[Callable[[LivenessWorld], None] | None, frozenset[int]]:
+        """The change the model applied in this cycle (a no-op one is skipped) and
+        the Issue the fixture changes with it."""
         applied, pending = step.state["staleApplied"], self._pending
         self._pending = None
         if applied == "none":
-            return None
+            return None, frozenset()
         if pending is None or pending[0] != applied:
             raise ReplayFormatError(
                 f"state {step.index}: the model applied stale change {applied!r} "
@@ -601,7 +606,7 @@ class Replayer:
             "revoke": lambda world: world.revoke(target),
             "complete": lambda world: world.complete(target, CompletionPath.LABEL),
         }
-        return changes[applied]
+        return changes[applied], frozenset({target})
 
     def _do_cycle(self, step: Step, previous: Step) -> None:
         apply, lag = step.picks["apply"], step.picks["lag"]
@@ -610,13 +615,19 @@ class Replayer:
             f"state {step.index}: model cycle mode disagrees with its own pick",
         )
         self.world.faults.listing_lag = lag
-        observation = self.world.cycle(
-            apply=apply, before_promotion=self._stale_change(step)
-        )
+        change, fixture_touched = self._stale_change(step)
+        observation = self.world.cycle(apply=apply, before_promotion=change)
         self.report.cycles += 1
-        self._compare(step, observation)
+        self._compare(step, observation, fixture_touched)
 
-    def _compare(self, step: Step, observation: CycleObservation) -> None:
+    def _compare(
+        self,
+        step: Step,
+        observation: CycleObservation,
+        fixture_touched: frozenset[int] = frozenset(),
+    ) -> None:
+        if not observation.apply:
+            _require_read_only(step, observation, fixture_touched)
         for node in sorted(step.state["mustNot"]):
             self.report.obligations += 1
             self._expect(
@@ -627,6 +638,8 @@ class Replayer:
             self._expect(
                 step, node, "liveness", _queued(observation, node), observation
             )
+        if observation.apply:
+            _require_events_are_label_changes(step, observation)
 
     def _expect(
         self, step: Step, node: int, kind: str, holds: bool, observation: object
@@ -653,32 +666,93 @@ class Replayer:
         )
 
 
-def _promoted(observation: CycleObservation, node: int) -> bool:
-    """A real promotion (apply) or a preview event (dry run) of ``node``."""
+def _labels(observation: CycleObservation, node: int, *, after: bool) -> frozenset[str]:
+    """Labels of T or of a dependency Issue at the start / end of the cycle."""
     if node == DEPENDENT:
-        return observation.promoted if observation.apply else observation.previewed
-    before = observation.labels_before.get(node, frozenset())
-    after = observation.labels_after.get(node, frozenset())
-    live = (
-        observation.apply
-        and StatusLabel.BLOCKED.value in before
+        return observation.t_after if after else observation.t_before
+    found = observation.labels_after if after else observation.labels_before
+    return found.get(node, frozenset())
+
+
+def _became_queued(observation: CycleObservation, node: int) -> bool:
+    before = _labels(observation, node, after=False)
+    return (
+        StatusLabel.BLOCKED.value in before
         and StatusLabel.QUEUED.value not in before
-        and StatusLabel.QUEUED.value in after
+        and StatusLabel.QUEUED.value in _labels(observation, node, after=True)
     )
-    return node in observation.promotion_issue_numbers or live
+
+
+def _promoted(observation: CycleObservation, node: int) -> bool:
+    """A promotion event or, in an apply cycle, a real blocked -> queued change.
+
+    The model counts both (``events`` and ``newlyQueued``), so an event without
+    the label is a promotion too.
+    """
+    if node in observation.promotion_issue_numbers:
+        return True
+    return observation.apply and _became_queued(observation, node)
 
 
 def _queued(observation: CycleObservation, node: int) -> bool:
-    """Apply: the real label.  Dry run: queued already or this cycle's preview."""
-    labels = (
-        observation.t_after
-        if node == DEPENDENT
-        else observation.labels_after.get(node, frozenset())
-    )
-    queued = StatusLabel.QUEUED.value in labels
+    """Apply: the real label after the cycle.  Dry run: queued when the cycle
+    started, or this cycle's own preview -- never a label the dry run wrote."""
     if observation.apply:
-        return queued
-    return queued or node in observation.promotion_issue_numbers
+        return StatusLabel.QUEUED.value in _labels(observation, node, after=True)
+    return (
+        StatusLabel.QUEUED.value in _labels(observation, node, after=False)
+        or node in observation.promotion_issue_numbers
+    )
+
+
+def _status_labels(
+    observation: CycleObservation, node: int, *, after: bool
+) -> set[str]:
+    return {
+        label
+        for label in _labels(observation, node, after=after)
+        if label.startswith("status:")
+    }
+
+
+def _require_read_only(
+    step: Step, observation: CycleObservation, fixture_touched: frozenset[int]
+) -> None:
+    """A dry run changes no lifecycle label (the model's ``dryRunReadOnly``).
+
+    Hold labels and the Issue the fixture's own stale change touches are the
+    test's doing, not the cycle's, and are left out.
+    """
+    changed = sorted(
+        node
+        for node in {DEPENDENT, *observation.labels_before} - fixture_touched
+        if _status_labels(observation, node, after=False)
+        != _status_labels(observation, node, after=True)
+    )
+    require(
+        "P3C-DRYRUN-READONLY",
+        not changed,
+        f"state {step.index}: a dry run changed the labels of {changed}: {observation}",
+    )
+
+
+def _require_events_are_label_changes(
+    step: Step, observation: CycleObservation
+) -> None:
+    """An undisturbed apply cycle's promotion event is a real label change (the
+    model's ``eventMatchesLabel``); a cycle with an injected failure is not judged."""
+    if observation.error is not None or observation.fault_injected:
+        return
+    fake = sorted(
+        node
+        for node in observation.promotion_issue_numbers
+        if not _became_queued(observation, node)
+    )
+    require(
+        "P3C-LIVENESS-BOUND",
+        not fake,
+        f"state {step.index}: promotion events of {fake} changed no label: {observation}",
+    )
 
 
 def replay_trace(

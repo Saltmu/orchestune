@@ -34,6 +34,7 @@ from tests.dependency_liveness_test_support import (
     DEPENDENT,
     FaultPlan,
     LivenessTopology,
+    LivenessWorld,
     cycle_module,
 )
 from tests.quint_replay import (
@@ -437,6 +438,7 @@ def test_every_model_fault_scenario_has_a_control() -> None:
         "reservation-guard-bypass",
         "hold-guard-bypass",
         "event-only",
+        "dry-run-writes",
     }
 
 
@@ -552,6 +554,34 @@ def test_control_replay_detects_an_event_without_the_label(
     )
     with expect_violation("P3C-LIVENESS-BOUND"):
         replay_stored("final_apply", tmp_path / "fault")
+
+
+def test_control_replay_detects_an_apply_event_without_the_label_against_an_obligation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A held-back T whose promotion event appears although no label changed (#1295)."""
+    replay_stored("base_red_apply", tmp_path / "normal")
+    for module in (status_repair, invariants, reconciliation):
+        monkeypatch.setattr(module, "PROMOTION_HOLD_LABELS", ())
+    monkeypatch.setattr(status_repair, "_apply_command", lambda *a, **k: None)
+    monkeypatch.setattr(
+        status_repair, "_verified_status_labels", lambda number, label, config: (label,)
+    )
+    with expect_violation("P3C-SAFETY"):
+        replay_stored("base_red_apply", tmp_path / "fault")
+
+
+def test_control_replay_detects_a_dry_run_that_writes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A "dry run" that really promotes: the label is queued, the preview is shown."""
+    replay_stored("final_dry", tmp_path / "normal")
+    real = LivenessWorld.config
+    monkeypatch.setattr(
+        LivenessWorld, "config", lambda self, *, apply: real(self, apply=True)
+    )
+    with expect_violation("P3C-DRYRUN-READONLY"):
+        replay_stored("final_dry", tmp_path / "fault")
 
 
 def test_control_replay_detects_an_empty_completion_set(tmp_path: Path) -> None:

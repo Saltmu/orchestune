@@ -32,9 +32,10 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P3C-CASE-DELAY` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `empty-completion-set`, `throwaway-context` | - |
 | `P3C-LIVENESS-BOUND` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `event-only`, `empty-completion-set`, `throwaway-context` | - |
 | `P3C-INTERMEDIATE-LIVENESS` | 3c | verified | `intermediate-ignored`, `promotion-suppressed` | - |
-| `P3C-SAFETY` | 3c | verified | `hold-guard-bypass`, `reservation-guard-bypass`, `stale-evidence`, `action-mapping-dropped` | - |
+| `P3C-SAFETY` | 3c | verified | `hold-guard-bypass`, `reservation-guard-bypass`, `stale-evidence`, `action-mapping-dropped`, `event-only` | - |
 | `P3C-INTERMEDIATE-SAFETY` | 3c | verified | `reservation-guard-bypass` | - |
-| `P3C-QUINT-MODEL` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `stale-evidence`, `intermediate-ignored`, `reservation-guard-bypass`, `hold-guard-bypass`, `event-only` | - |
+| `P3C-QUINT-MODEL` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `stale-evidence`, `intermediate-ignored`, `reservation-guard-bypass`, `hold-guard-bypass`, `event-only`, `dry-run-writes` | - |
+| `P3C-DRYRUN-READONLY` | 3c | verified | `dry-run-writes` | - |
 | `P3C-QUINT-OBSERVATION` | 3c | verified | `action-mapping-swapped` | - |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-DRYRUN-RESERVATION` | 3c | known_defect | - | #1281, #1283 |
@@ -70,6 +71,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P3C-SAFETY` | no promotion (or dry-run preview) without valid evidence, or under a hold or reservation | apply is judged at the promotion point, a dry run at cycle start | every cycle | never |
 | `P3C-INTERMEDIATE-SAFETY` | an intermediate node is not promoted before its own dependencies are valid and unreserved | apply is judged at the promotion point | every cycle | never |
 | `P3C-QUINT-MODEL` | the Quint model keeps safety, bounded liveness (N = 1), event = real label (apply) and a read-only dry run | finite topologies (up to four dependency Issues), the model's fairness, sampled search with the recorded seed and bounds | model state after each action | no invariant violation; each model fault violates exactly its invariants |
+| `P3C-DRYRUN-READONLY` | a dry-run cycle changes no lifecycle label of T, an intermediate node or a dependency Issue | a dry run never mutates the Forge; hold labels and the fixture's own stale change are not the cycle's | every dry-run cycle of a replayed trace | labels unchanged |
 | `P3C-QUINT-OBSERVATION` | at every replayed step the production state agrees with the model before the action runs | the action table of `tests/quint_replay.py` | each transition of a replayed ITF trace | every precondition holds on the real harness |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | a dry-run preview of T or an intermediate node respects an unreleased completion reservation of the node's dependency | the preview is defined over the context snapshot (#1267 fixed this side) | dry-run cycle, checked by a deterministic scenario (the machine excuses T's dry-run reservation previews) | no preview while D's reservation is unreleased |
 | `P3C-DRYRUN-RESERVATION` | a dry-run preview of T or an intermediate node respects the node's own unreleased reservation | the preview is defined over the context snapshot | dry-run cycle | no preview under T's own or an intermediate node's own reservation |
@@ -138,7 +140,7 @@ Known gaps, recorded and not weakened: the random machine's `assert_safe` excuse
 **Three layers; none replaces another.**
 
 1. *Model*: the fixed-seed exploration and every saved scenario must keep the model's own invariants (`P3C-QUINT-MODEL`): `safety` (nothing is promoted against an obligation), `liveness` (every fair cycle ends with the promotion, N = 1; apply needs the real label, a dry run this cycle's preview), `eventMatchesLabel` (an apply cycle's events are its real label changes) and `dryRunReadOnly`.
-2. *Replay*: every transition of the generated and of the saved ITF traces is executed on the production harness (`LivenessWorld`: the real `_prepare_cycle_context` and `execute_pipeline`). After each cycle the production observation (labels, `PromotionEvent` previews) is compared with the model's obligations; before each action the production state is compared with the model's (`P3C-QUINT-OBSERVATION`). Expectations come from the model state only; production is never asked whether a dependency is complete.
+2. *Replay*: every transition of the generated and of the saved ITF traces is executed on the production harness (`LivenessWorld`: the real `_prepare_cycle_context` and `execute_pipeline`). After each cycle the production observation (labels, `PromotionEvent` previews) is compared with the model's obligations (a promotion event counts as a promotion even when no label changed; an undisturbed apply cycle's events must be real label changes; a dry run changes no lifecycle label, apart from the fixture's own stale change); before each action the production state is compared with the model's (`P3C-QUINT-OBSERVATION`). Expectations come from the model state only; production is never asked whether a dependency is complete.
 3. *Controls*: one model fault each (the fault scenarios run on the correct model and must pass, and on the faulty model must violate exactly the expected invariants at the planned step) and one production fault each (the same trace replayed with the fault must violate the expected contract). A parse, type or runtime error and a timeout are tool errors, never a detection.
 
 **Toolchain.** Node.js (the major version in `package.json` `engines`; the CI uses `actions/setup-node`) is a required dependency of the local CI. `scripts/quint-check.sh` / `scripts/quint-check.ps1` run `npm ci` and verify the pinned `@informalsystems/quint` (exact version in `package.json` and `package-lock.json`); a missing Node.js stops the local CI with exit 2 and the install steps, never a skip. The simulator runs with `--backend=typescript` (it ships inside the pinned package; the default `rust` backend downloads an unpinned binary at first use).
@@ -172,7 +174,8 @@ Known gaps, recorded and not weakened: the random machine's `assert_safe` excuse
 | `intermediate-ignored` | `liveness` (`chain_apply`) | `P3C-INTERMEDIATE-LIVENESS` (`chain_apply`) |
 | `reservation-guard-bypass` | `safety` (`dependency_reservation_apply`) | `P3C-SAFETY` (`dependency_reservation_apply`) |
 | `hold-guard-bypass` | `safety` (`base_red_apply`) | `P3C-SAFETY` (`base_red_apply`) |
-| `event-only` | `eventMatchesLabel`, `liveness` (`final_apply`) | `P3C-LIVENESS-BOUND` (`final_apply`) |
+| `event-only` | `eventMatchesLabel`, `liveness` (`final_apply`) | `P3C-LIVENESS-BOUND` (`final_apply`); `P3C-SAFETY` when the event appears against an obligation (`base_red_apply`) |
+| `dry-run-writes` | `dryRunReadOnly` (`final_dry`) | `P3C-DRYRUN-READONLY` (`final_dry`) |
 | `empty-completion-set` | - | `P3C-LIVENESS-BOUND` (`recompute_release`) |
 | `throwaway-context` | - | `P3C-LIVENESS-BOUND` (`lagged_apply`) |
 | `action-mapping-swapped` | - | `P3C-QUINT-OBSERVATION` (`duplicate_completion`) |

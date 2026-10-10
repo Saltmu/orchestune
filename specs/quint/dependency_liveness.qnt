@@ -107,13 +107,14 @@ module dependency_liveness {
   pure val BASE_RED_APPLY = ok("simple_one", [
     doneWith("label", 11), hold("base_red", 20), cycleOf(true, false),
     hold("base_red", 20), cycleOf(true, false)])
+  pure val FINAL_DRY = ok("simple_one", [doneWith("label", 11), cycleOf(false, false), cycleOf(false, false)])
   pure val STALE_REVOKE = ok("simple_one", [
     doneWith("label", 11), staleBy("revoke", 11), cycleOf(true, false), cycleOf(true, false)])
 
   pure val SCENARIOS: str -> Scenario = Map(
     // ---- representative routes (safe and live on the correct model) ----
     "final_apply" -> FINAL_APPLY,
-    "final_dry" -> ok("simple_one", [doneWith("label", 11), cycleOf(false, false), cycleOf(false, false)]),
+    "final_dry" -> FINAL_DRY,
     "record_dry_then_apply" -> ok("simple_one", [
       doneWith("record_completion", 11), cycleOf(false, false), cycleOf(true, false), cycleOf(false, false)]),
     "not_needed_apply" -> ok("simple_one", [doneWith("outcome_not_needed", 11), cycleOf(true, false)]),
@@ -181,6 +182,7 @@ module dependency_liveness {
     "fault_bypass_reservation" -> faulty("bypass_reservation", DEPENDENCY_RESERVATION_APPLY),
     "fault_bypass_hold" -> faulty("bypass_hold", BASE_RED_APPLY),
     "fault_event_only" -> faulty("event_only", FINAL_APPLY),
+    "fault_dry_run_writes" -> faulty("dry_run_writes", FINAL_DRY),
 
     // ---- production counterexamples (guard off: the model states the obligation
     //      that production violates; the replay pins each to its Issue) ----
@@ -530,6 +532,7 @@ module dependency_liveness {
       val stale1 = view1.ev
       if (every.contains(n)) {
         if (apply and fault != "event_only" and promoted.contains(n)) "queued"
+        else if (not(apply) and fault == "dry_run_writes" and promoted.contains(n)) "queued"
         else if (apply and (armedHit(apply)) and l != "final") "unknown"
         else if (apply and l == "blocked" and not(mustNotOf(n, apply, lag))
                  and streakOf(n, apply) < N) "unknown"
@@ -555,7 +558,8 @@ module dependency_liveness {
       wasCycle' = true,
       applied' = apply,
       events' = promoted,
-      newlyQueued' = if (apply and fault != "event_only") promoted else Set(),
+      newlyQueued' = if ((apply and fault != "event_only")
+                         or (not(apply) and fault == "dry_run_writes")) promoted else Set(),
       mustNot' = every.filter(n => mustNotOf(n, apply, lag)),
       mustQueue' = every.filter(n => streakOf(n, apply) >= N),
       streak' = every.union(streak.keys()).mapBy(n =>
@@ -651,6 +655,7 @@ module dependency_liveness {
   action init_fault_bypass_reservation: bool = initScenario("fault_bypass_reservation")
   action init_fault_bypass_hold: bool = initScenario("fault_bypass_hold")
   action init_fault_event_only: bool = initScenario("fault_event_only")
+  action init_fault_dry_run_writes: bool = initScenario("fault_dry_run_writes")
   action init_defect_target_own_reservation_dry: bool = initScenario("defect_target_own_reservation_dry")
   action init_defect_intermediate_own_reservation_dry: bool = initScenario("defect_intermediate_own_reservation_dry")
   action init_defect_prior_merge_after_faults: bool = initScenario("defect_prior_merge_after_faults")

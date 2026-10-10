@@ -448,6 +448,9 @@ CONTRACTS: tuple[Contract, ...] = (
             "action-mapping-dropped": (
                 f"{P3Q}::test_control_a_dropped_restart_mapping_fails_the_replay",
             ),
+            "event-only": (
+                f"{P3Q}::test_control_replay_detects_an_apply_event_without_the_label_against_an_obligation",
+            ),
         },
     ),
     Contract(
@@ -489,6 +492,25 @@ CONTRACTS: tuple[Contract, ...] = (
                 "reservation-guard-bypass",
                 "hold-guard-bypass",
                 "event-only",
+                "dry-run-writes",
+            )
+        },
+    ),
+    Contract(
+        id="P3C-DRYRUN-READONLY",
+        phase="3c",
+        guarantee="a dry-run cycle changes no lifecycle label of T, an intermediate node or a dependency Issue",
+        premise="a dry run never mutates the Forge; a hold label or a change made by the fixture itself is not the cycle's",
+        boundary="every dry-run cycle of a replayed trace: status labels before and after",
+        expectation="unchanged",
+        status="verified",
+        tests=(
+            f"{P3Q}::test_stored_trace_replays_on_production",
+            f"{P3Q}::test_each_scenario_runs_on_the_model_and_replays",
+        ),
+        controls={
+            "dry-run-writes": (
+                f"{P3Q}::test_control_replay_detects_a_dry_run_that_writes",
             )
         },
     ),

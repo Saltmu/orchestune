@@ -96,6 +96,19 @@
    "seed": "0x1",
    "max_samples": 1,
    "max_steps": 40
+  },
+  {
+   "fault": "dry-run-writes",
+   "ok_scenario": "final_dry",
+   "fault_scenario": "fault_dry_run_writes",
+   "expect_violated": [
+    "dryRunReadOnly"
+   ],
+   "ok_states": 4,
+   "violation_states": 3,
+   "seed": "0x1",
+   "max_samples": 1,
+   "max_steps": 40
   }
  ]
 }
