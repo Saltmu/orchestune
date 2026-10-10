@@ -141,6 +141,7 @@ def _acquire(state: dict[str, Any], reviewer: str, head: str | None) -> dict[str
 
 
 _URL = re.compile(r"https?://[^\s<>()\[\]\"'`,;]+")
+_PROSE_TAIL = ".:!?*_~'\""
 _SHORT = re.compile(r"(?<![\w/&#])#([1-9][0-9]*)(?!\w)")
 _ISSUE_PATH = re.compile(r"/([^/]+)/([^/]+)/issues/([1-9][0-9]*)/?")
 
@@ -154,7 +155,8 @@ def _reference_candidates(evidence: str, slug: str | None) -> set[int]:
     numbers: set[int] = set()
     for url in _URL.findall(evidence):
         try:
-            parts = urlsplit(url)
+            # Sentence punctuation and Markdown emphasis end the prose, not the URL.
+            parts = urlsplit(url.rstrip(_PROSE_TAIL))
             port, host = parts.port, parts.hostname
         except ValueError:
             continue

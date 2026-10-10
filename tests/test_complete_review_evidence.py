@@ -736,9 +736,24 @@ def test_required_deferred_count_round_trips_through_the_outcome_record(evidence
     assert parsed.review.judgment_counts["required_deferred"] == 1
 
 
-def test_followup_url_is_accepted_and_zero_case_has_no_required_deferred(evidence):
+def test_zero_case_has_no_required_deferred(evidence):
     assert "required_deferred" not in verify(evidence).judgment_counts
-    final_round(evidence, f"https://github.com/{SLUG}/issues/2000#issuecomment-1")
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "{url}",
+        "{url}#issuecomment-1",
+        "Tracked in {url}.",
+        "**{url}**",
+        "see ({url}).",
+        "{url}, then merge",
+        "`{url}`",
+    ],
+)
+def test_followup_url_survives_prose_punctuation(evidence, template):
+    final_round(evidence, template.format(url=f"https://github.com/{SLUG}/issues/2000"))
     evidence[1].issues[2000] = open_issue()
     assert verify(evidence).judgment_counts["required_deferred"] == 1
 
