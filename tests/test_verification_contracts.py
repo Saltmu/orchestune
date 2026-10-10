@@ -251,6 +251,9 @@ def test_documents_state_the_scope_of_the_guarantee(lang: str) -> None:
         "<!-- contract-table -->",
         "<!-- cycle-definitions -->",
         "<!-- detection-matrix -->",
+        "<!-- quint-model -->",
     ):
         assert marker in text, marker
     assert "unverified" in text and "known_defect" in text
+    # The Quint exploration is a sampled search; the document must never read as a proof.
+    assert ("not a proof" in text) or ("証明ではありません" in text)

@@ -6,7 +6,7 @@ This document covers how to set up a local development environment for Orchestun
 
 ## Setup
 
-Ensure you have Python 3.12+, uv, and the GitHub CLI (`gh auth status`) installed, then install dependencies:
+Ensure you have Python 3.12+, uv, Node.js (see [Node.js and Quint](#nodejs-and-quint)), and the GitHub CLI (`gh auth status`) installed, then install dependencies:
 
 ```bash
 uv sync
@@ -24,6 +24,26 @@ Then install the local Git pre-commit hook to prevent force-added `.gitignore` f
   ```
 
 `setup-git-hooks` also installs [gitleaks](https://github.com/gitleaks/gitleaks#installing) to `~/.local/bin` if it isn't already on your `PATH` (see `scripts/install-gitleaks.sh` / `.ps1`). `local-ci.sh` / `.ps1` retry this automatically too, so a missing `gitleaks` binary shouldn't block local CI execution in a fresh environment. If automatic installation fails (e.g. no network access, unsupported OS/architecture), install it manually from the link above.
+
+## Node.js and Quint
+
+Node.js is a **required dependency of the local CI**: it runs the Quint check of dependency resolution (a sampled exploration of the model, whose traces are replayed on the production harness; see [verification-contracts.md](docs/en/verification-contracts.md#quint-model)). Without Node.js, `./scripts/local-ci.sh` / `.\scripts\local-ci.ps1` stop with exit 2 and these steps; the check is never skipped.
+
+Install the Node.js **major version listed under `engines` in [`package.json`](package.json)** (currently 24, an LTS line), together with npm:
+
+* **Linux**: use your package manager or an official build, verifying the SHA-256 listed in `SHASUMS256.txt` of the release (https://nodejs.org/dist/). For example, unpack the archive under `~/.local` and link `node`, `npm` and `npx` into a directory on your `PATH`.
+* **macOS**: `brew install node@24`, or the installer from https://nodejs.org/.
+* **Windows**: `winget install OpenJS.NodeJS.LTS`, or the installer from https://nodejs.org/. Open a new PowerShell afterwards.
+* **WSL**: install it inside WSL. A Windows Node.js reached through `/mnt/c/...` is not a Linux Node.js and must not be relied on.
+* **Claude Code on the web**: nothing to do. [`.claude/hooks/session-start.sh`](.claude/hooks/session-start.sh) installs the pinned release from the official distribution (the SHA-256 is checked against its `SHASUMS256.txt`) when Node.js is missing or has another major version, then runs the check below. The hook needs to reach nodejs.org and the npm registry; whether the web environment's network setting allows both has not been verified here. If it does not, the hook fails visibly (non-zero exit) and the local CI stops with the message above until the hosts are allowed.
+
+Then install and verify the locked tools:
+
+```bash
+./scripts/quint-check.sh        # Windows: .\scripts\quint-check.ps1
+```
+
+It runs `npm ci` (Quint is pinned to an exact version in `package.json` and `package-lock.json`; a global Quint is never used) and checks that the installed version is the pinned one. `local-ci` runs it for you. Exit 2 means Node.js is missing or has the wrong major version; exit 1 means the install or the version check failed.
 
 ## Code Analysis Tool (Serena MCP)
 
@@ -124,5 +144,6 @@ Before committing or pushing your changes, run the local CI script to verify for
 This runs:
 1. **Ruff Format & Lint Check**: `ruff format` and `ruff check`
 2. **Mypy Type Check**: Type hint validation
-3. **Pytest Coverage Check**: Ensures coverage does not drop below 90%
-4. **Secret & Local Path Scan** (`gitleaks`): Blocks commits/pushes that leak secrets or absolute local paths (e.g. `file:///home/<user>/...`). Config lives in [`.gitleaks.toml`](.gitleaks.toml). `local-ci.sh` / `.ps1` auto-install gitleaks if it's missing (see `scripts/install-gitleaks.sh` / `.ps1`); if that installation fails, the script fails (rather than skipping) so this check is always enforced before you can push. It's also re-checked in CI as a backstop.
+3. **Quint Toolchain**: `scripts/quint-check.sh` / `.ps1` run `npm ci` and verify the pinned Quint (see [Node.js and Quint](#nodejs-and-quint))
+4. **Pytest Coverage Check**: Ensures coverage does not drop below 90%; this includes the bounded Quint exploration and the replay of its traces on the production harness, whose seed, bounds, tool versions and counts the script prints
+5. **Secret & Local Path Scan** (`gitleaks`): Blocks commits/pushes that leak secrets or absolute local paths (e.g. `file:///home/<user>/...`). Config lives in [`.gitleaks.toml`](.gitleaks.toml). `local-ci.sh` / `.ps1` auto-install gitleaks if it's missing (see `scripts/install-gitleaks.sh` / `.ps1`); if that installation fails, the script fails (rather than skipping) so this check is always enforced before you can push. It's also re-checked in CI as a backstop.

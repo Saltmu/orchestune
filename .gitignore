@@ -52,3 +52,5 @@ decomposition_plan.md
 orchestune.toml
 walkthrough.md
 implementation_plan.md
+
+node_modules/

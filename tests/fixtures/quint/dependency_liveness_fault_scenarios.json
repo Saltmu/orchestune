@@ -1,0 +1,114 @@
+{
+ "format": 1,
+ "quint": "0.33.0",
+ "backend": "typescript",
+ "model": "specs/quint/dependency_liveness.qnt",
+ "note": "each fault runs the same saved scenario on the correct model (must pass and reach its planned end) and on the faulty model (must violate exactly these invariants at violation_states)",
+ "faults": [
+  {
+   "fault": "promotion-suppressed",
+   "ok_scenario": "final_apply",
+   "fault_scenario": "fault_suppress",
+   "expect_violated": [
+    "liveness"
+   ],
+   "ok_states": 4,
+   "violation_states": 3,
+   "seed": "0x1",
+   "max_samples": 1,
+   "max_steps": 40
+  },
+  {
+   "fault": "promotion-delayed",
+   "ok_scenario": "final_apply",
+   "fault_scenario": "fault_delay",
+   "expect_violated": [
+    "liveness"
+   ],
+   "ok_states": 4,
+   "violation_states": 3,
+   "seed": "0x1",
+   "max_samples": 1,
+   "max_steps": 40
+  },
+  {
+   "fault": "stale-evidence",
+   "ok_scenario": "stale_revoke",
+   "fault_scenario": "fault_stale_evidence",
+   "expect_violated": [
+    "safety"
+   ],
+   "ok_states": 5,
+   "violation_states": 4,
+   "seed": "0x1",
+   "max_samples": 1,
+   "max_steps": 40
+  },
+  {
+   "fault": "intermediate-ignored",
+   "ok_scenario": "chain_apply",
+   "fault_scenario": "fault_ignore_intermediate",
+   "expect_violated": [
+    "liveness"
+   ],
+   "ok_states": 7,
+   "violation_states": 3,
+   "seed": "0x1",
+   "max_samples": 1,
+   "max_steps": 40
+  },
+  {
+   "fault": "reservation-guard-bypass",
+   "ok_scenario": "dependency_reservation_apply",
+   "fault_scenario": "fault_bypass_reservation",
+   "expect_violated": [
+    "safety"
+   ],
+   "ok_states": 6,
+   "violation_states": 4,
+   "seed": "0x1",
+   "max_samples": 1,
+   "max_steps": 40
+  },
+  {
+   "fault": "hold-guard-bypass",
+   "ok_scenario": "base_red_apply",
+   "fault_scenario": "fault_bypass_hold",
+   "expect_violated": [
+    "safety"
+   ],
+   "ok_states": 6,
+   "violation_states": 4,
+   "seed": "0x1",
+   "max_samples": 1,
+   "max_steps": 40
+  },
+  {
+   "fault": "event-only",
+   "ok_scenario": "final_apply",
+   "fault_scenario": "fault_event_only",
+   "expect_violated": [
+    "eventsAreLabelChanges",
+    "liveness"
+   ],
+   "ok_states": 4,
+   "violation_states": 3,
+   "seed": "0x1",
+   "max_samples": 1,
+   "max_steps": 40
+  },
+  {
+   "fault": "dry-run-writes",
+   "ok_scenario": "final_dry",
+   "fault_scenario": "fault_dry_run_writes",
+   "expect_violated": [
+    "dryRunReadOnly"
+   ],
+   "ok_states": 4,
+   "violation_states": 3,
+   "seed": "0x1",
+   "max_samples": 1,
+   "max_steps": 40
+  }
+ ]
+}

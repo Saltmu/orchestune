@@ -298,7 +298,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `recompute_release` | T が `status:blocked-recompute` を持つ | 0 | `reconcile_recovery` が束縛されたcontextから昇格する（#902 Round 4） |
 | `multiple_dependencies` | D1 をラベル、D2 を `record_completion` で別cycleに完了 | 0（遅い方のcycleから） |  |
 
-ランダム系列（`complete_dependency`・`cycle`・`restart`・`fail_next`・`toggle_hold`・`stale_snapshot`・`duplicate_completion`）では、公平性の前提が続いたら T が昇格すること（liveness）と、有効な証拠が揃っていないかhold・reservationがあるcycleでは新たに昇格させないこと（安全性）を検証します。#902 Round 4/5 相当の誤配線（完了集合を空にする、使い捨てのcontextへ渡す）をテスト内のfaultとして入れ、`P3C-CASE-DELAY` の違反になることも確認しています。ほかの誤動作と違反すべき契約は [verification-contracts.md](verification-contracts.md) に一覧があります。
+ランダム系列（`complete_dependency`・`cycle`・`restart`・`fail_next`・`toggle_hold`・`stale_snapshot`・`duplicate_completion`）では、公平性の前提が続いたら T が昇格すること（liveness）と、有効な証拠が揃っていないかhold・reservationがあるcycleでは新たに昇格させないこと（安全性）を検証します。#902 Round 4/5 相当の誤配線（完了集合を空にする、使い捨てのcontextへ渡す）をテスト内のfaultとして入れ、`P3C-CASE-DELAY` の違反になることも確認しています。ほかの誤動作と違反すべき契約は [verification-contracts.md](verification-contracts.md) に一覧があります。同じ依存解決の Quint モデルを local CI のたびに固定 seed で探索し、生成したトレースをこの本番ハーネスで再生します（サンプリング探索であり、証明ではありません）。詳細は [Quint の節](verification-contracts.md#quint-model) を参照してください。
 
 本番の欠陥として切り出したものはstrict xfailで固定しています: #1267（dry runのプレビューが未解放のreservationを無視する）と #1268（recompute解除がbase-branch-redのholdと取り消された証拠を無視する）。中間ノードのdry runプレビューでも、未解放のreservationだけが理由なら #1267 として除外します。ランダム系列がまれに見つけるもう1件の反例（障害つきのapply cycleの後、先行マージ証拠だけの依存を持つ T がdry runでプレビューされない）は #1281 で扱います。
 

@@ -42,6 +42,13 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Set up Node.js (Quint)
+        uses: actions/setup-node@v4
+        with:
+          # Keep in step with "engines" in package.json.
+          node-version: '24'
+          cache: npm
+
       - name: Install dependencies
         run: |
           uv sync --frozen
