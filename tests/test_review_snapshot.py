@@ -333,3 +333,54 @@ def test_parse_and_normalize_helpers() -> None:
     assert normalize_timestamp("nope") is None
     assert normalize_timestamp(None) is None
     assert normalize_timestamp("2026-10-04T03:00:00") is None
+
+
+# --- #1274: sub-second precision kept beside the rounded timestamps ---------------
+
+
+def _comment_with(**times: str) -> dict[str, Any]:
+    return {"id": 1, "body": "x", "user": {"login": "u"}, **times}
+
+
+@pytest.mark.parametrize(
+    ("raw", "rounded", "precise"),
+    [
+        (
+            "2026-10-04T03:00:10.250Z",
+            "2026-10-04T03:00:10Z",
+            "2026-10-04T03:00:10.250000Z",
+        ),
+        (
+            "2026-10-04T12:00:10.5+09:00",
+            "2026-10-04T03:00:10Z",
+            "2026-10-04T03:00:10.500000Z",
+        ),
+    ],
+)
+def test_fractional_seconds_are_kept_beside_the_rounded_value(raw, rounded, precise):
+    record = validate(snapshot(issue_comments=[_comment_with(updated_at=raw)])).state[
+        "issue_comments"
+    ][0]
+    assert record["updated_at"] == rounded
+    assert record["updated_at_precise"] == precise
+
+
+def test_whole_second_timestamps_carry_no_precise_twin():
+    record = validate(
+        snapshot(issue_comments=[_comment_with(updated_at="2026-10-04T03:00:10Z")])
+    ).state["issue_comments"][0]
+    assert "updated_at_precise" not in record
+
+
+def test_a_caller_supplied_precise_twin_is_never_trusted():
+    item = _comment_with(
+        updated_at="2026-10-04T03:00:10Z", updated_at_precise="2030-01-01T00:00:00Z"
+    )
+    record = validate(snapshot(issue_comments=[item])).state["issue_comments"][0]
+    assert "updated_at_precise" not in record
+
+
+def test_a_fraction_past_observed_at_is_still_rejected():
+    late = _comment_with(updated_at="2026-10-04T03:00:51.000001Z")
+    with pytest.raises(EvidenceContractError, match="after observed_at"):
+        validate(snapshot(issue_comments=[late]))

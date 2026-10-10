@@ -650,6 +650,30 @@ def _status_result(
     }
 
 
+def _in_progress_result(
+    data: ReviewState,
+    bot_name: str,
+    result: dict[str, Any] | None,
+    exclude_ids: set[int | str] | None,
+    **bounds: Any,
+) -> dict[str, Any] | None:
+    """An in-progress status when the round's latest bot activity says so.
+
+    A single snapshot (no polling loop available to its callers) whose latest
+    activity explicitly reports still-in-progress must not be treated as a final
+    acquired-or-unavailable result (issue #1099 Exit 11).
+    """
+    latest = _latest_bot_activity_item(data, bot_name, exclude_ids, **bounds)
+    if latest is None or not _is_explicitly_in_progress(latest):
+        return None
+    return _status_result(
+        ACQUISITION_IN_PROGRESS,
+        f"@{bot_name} activity is explicitly still in progress",
+        result,
+        result["timestamp"] if result else _get_item_timestamp(latest),
+    )
+
+
 def collect_review_state(
     value: object,
     bot_name: str = "claude",
@@ -668,10 +692,8 @@ def collect_review_state(
     adapters (`scripts/wait_for_review.py`) build the equivalent result while
     additionally tracking round/trigger/SHA identifiers this transport-neutral
     entry point does not have. With round bounds, both the content and the
-    still-in-progress check are limited to that round's own interval. The
-    in-progress check also treats a reused Codex tracker last updated inside the
-    interval as that round's activity unless its commit explicitly differs from
-    `requested_head_sha`; `activity_*` give its sub-second bounds (#1274).
+    in-progress check are limited to that round's interval; a reused Codex
+    tracker counts when updated inside it (#1274, see `_in_activity_round`).
     """
     data = normalize_review_state(value)
     result = extract_review_result(
@@ -683,12 +705,10 @@ def collect_review_state(
         exclude_issue_comment_ids=exclude_issue_comment_ids,
     )
 
-    # A single snapshot (no polling loop available to this entry point) whose
-    # latest bot activity explicitly reports still-in-progress must not be
-    # treated as a final acquired-or-unavailable result (issue #1099 Exit 11).
-    latest_activity = _latest_bot_activity_item(
+    in_progress = _in_progress_result(
         data,
         bot_name,
+        result,
         exclude_ids,
         exclude_issue_comment_ids=exclude_issue_comment_ids,
         round_started_at=round_started_at,
@@ -697,13 +717,8 @@ def collect_review_state(
         activity_started_at=activity_started_at,
         activity_ended_at=activity_ended_at,
     )
-    if latest_activity is not None and _is_explicitly_in_progress(latest_activity):
-        return _status_result(
-            ACQUISITION_IN_PROGRESS,
-            f"@{bot_name} activity is explicitly still in progress",
-            result,
-            result["timestamp"] if result else _get_item_timestamp(latest_activity),
-        )
+    if in_progress is not None:
+        return in_progress
     if result is None:
         return _status_result(
             ACQUISITION_UNAVAILABLE,
