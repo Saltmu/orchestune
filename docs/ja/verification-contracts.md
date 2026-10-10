@@ -34,6 +34,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3C-INTERMEDIATE-LIVENESS` | 3c | verified | `intermediate-ignored`, `promotion-suppressed` | - |
 | `P3C-SAFETY` | 3c | verified | `hold-guard-bypass`, `reservation-guard-bypass`, `stale-evidence` | - |
 | `P3C-INTERMEDIATE-SAFETY` | 3c | verified | `reservation-guard-bypass` | - |
+| `P3C-DRYRUN-DEPENDENCY-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-DRYRUN-RESERVATION` | 3c | known_defect | - | #1281, #1283 |
 
 ### 詳細
@@ -65,7 +66,8 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3C-INTERMEDIATE-LIVENESS` | 中間ノードが公平な N = 1 cycle で昇格（dry run は preview）される | そのノード自身の依存が両境界で有効かつ予約なし | そのノードの最初の公平なcycleの終わり | N = 1 |
 | `P3C-SAFETY` | 有効な証拠がない、または hold・予約があるときに昇格（preview）しない | apply は昇格判定時点、dry run は cycle 開始時点で判定 | 全cycle | 起きない |
 | `P3C-INTERMEDIATE-SAFETY` | 中間ノードを、自身の依存が有効かつ予約なしになる前に昇格させない | apply は昇格判定時点で判定 | 全cycle | 起きない |
-| `P3C-DRYRUN-RESERVATION` | dry run の preview が未解放の completion reservation を尊重する | preview は context snapshot 上で定義される | dry run の cycle | D・T・中間ノードの予約下で preview しない |
+| `P3C-DRYRUN-DEPENDENCY-RESERVATION` | dry run の T の preview が、依存 D の未解放 completion reservation を尊重する | preview は context snapshot 上で定義される（この側は #1267 で修正済み） | dry run の cycle。決定的なシナリオで検査（machine は dry run の予約 preview を除外している） | D の予約が未解放の間 preview しない |
+| `P3C-DRYRUN-RESERVATION` | dry run の T または中間ノードの preview が、そのノード自身の未解放 reservation を尊重する | preview は context snapshot 上で定義される | dry run の cycle | T 自身・中間ノードの予約下で preview しない |
 
 ### `verified` ではない行
 
@@ -76,7 +78,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 - `P3A-DOCUMENT-TABLE` (unverified): 対照なし: 文書のずれを注入していない
 - `P3B-LAUNCH-AND-ESCALATION` (unverified): 契約idのないassertで、誤動作を注入していない
 - `P3B-PERSISTENT-BUDGET-PRESERVED` (known_defect): strict xfail が反例を固定している。修正でマークを外す
-- `P3C-DRYRUN-RESERVATION` (known_defect): 本番修正が入るまで assert_safe と中間ノードの検査がこれらの preview を除外している
+- `P3C-DRYRUN-RESERVATION` (known_defect): 本番修正が入るまで assert_safe と中間ノードの検査がこれらの preview を除外している（依存側は別の verified 契約）
 
 <a id="cycle-definitions"></a>
 <!-- cycle-definitions -->
@@ -115,10 +117,10 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 | `empty-completion-set` / `throwaway-context` | #902 Round 4/5 の誤配線 | `P3C-CASE-DELAY` | ケース表 |
 | `intermediate-ignored` | 中間ノードの判定を落とす | `P3C-INTERMEDIATE-LIVENESS` | 中間ノードのトポロジー |
 | `hold-guard-bypass`（3c） | 全ての `PROMOTION_HOLD_LABELS` を空にする | `P3C-SAFETY` | cycle 前の `ci:base-branch-red` |
-| `reservation-guard-bypass` | 依存側・対象側・中間ノードの依存の予約判定が常に通る | `P3C-SAFETY`、`P3C-INTERMEDIATE-SAFETY` | apply cycle のみ |
+| `reservation-guard-bypass` | 依存側・対象側・中間ノードの依存の予約判定が常に通る | `P3C-SAFETY`、`P3C-INTERMEDIATE-SAFETY`（machine の apply cycle）、`P3C-DRYRUN-DEPENDENCY-RESERVATION`（決定的な dry run） | machine は apply cycle。dry run の依存側は決定的なシナリオ |
 | `stale-evidence` | 再オープンされた依存を完了とみなす | `P3C-SAFETY` | 取り消されたlabel証拠 |
 
-既知の穴は、弱めずに記録します。未解放の予約下の dry run の preview は、#1281・#1283 が直るまで `assert_safe` と中間ノードの検査が除外しているため（`P3C-DRYRUN-RESERVATION`）、`reservation-guard-bypass` は apply のcycleでのみ検出されます。2つの guard（`status_repair_preserves_protection` だけの迂回、中間ノードの早すぎる評価）は第2の層が再検証するため、誤動作1つでは迂回できません。対照は guard 全体を差し替えます。
+既知の穴は、弱めずに記録します。乱択の machine の `assert_safe` は未解放の予約下の dry run の preview をすべて除外するため、`reservation-guard-bypass` を apply のcycleでしか検出しません。そのため dry run の依存側（#1267 で修正済み）は専用の決定的なシナリオで検査します（`P3C-DRYRUN-DEPENDENCY-RESERVATION`）。T 自身の予約と中間ノードの予約下の preview は、#1281・#1283 が直るまで既知の欠陥です（`P3C-DRYRUN-RESERVATION`）。2つの guard（`status_repair_preserves_protection` だけの迂回、中間ノードの早すぎる評価）は第2の層が再検証するため、誤動作1つでは迂回できません。対照は guard 全体を差し替えます。
 
 ## 保証の範囲と限界
 

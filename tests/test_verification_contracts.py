@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -165,8 +166,36 @@ def test_contract_ids_match_the_assertions_in_the_tests() -> None:
             assert contract.id in raised, f"{contract.id} is never asserted"
         for nodes in contract.controls.values():
             for node in nodes:
-                source = (ROOT / node.split("::")[0]).read_text(encoding="utf-8")
-                assert f'"{contract.id}"' in source, f"{node} never names {contract.id}"
+                assert contract.id in _expected_ids(
+                    node
+                ), f"{node} never expects {contract.id} in expect_violation(...)"
+
+
+def _expected_ids(node: str) -> set[str]:
+    """String constants inside ``expect_violation(...)`` calls of the control function."""
+    path, *_, name = node.split("::")
+    tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
+    functions = [
+        item
+        for item in ast.walk(tree)
+        if isinstance(item, ast.FunctionDef) and item.name == name.split("[")[0]
+    ]
+    assert functions, f"{node}: no function {name}"
+    found: set[str] = set()
+    for function in functions:
+        for call in ast.walk(function):
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "expect_violation"
+            ):
+                found.update(
+                    const.value
+                    for arg in call.args
+                    for const in ast.walk(arg)
+                    if isinstance(const, ast.Constant) and isinstance(const.value, str)
+                )
+    return found
 
 
 _ROW = re.compile(

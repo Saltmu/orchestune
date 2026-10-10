@@ -131,11 +131,24 @@ def test_unreleased_completion_reservation_prevents_promotion(tmp_path):
     assert world.cycle().promoted
 
 
-def test_dry_run_preview_respects_unreleased_completion_reservation(tmp_path):
-    world = LivenessWorld(tmp_path)
-    world.complete(11, CompletionPath.LABEL)
-    world.set_reservation(11, True)
-    assert not world.cycle(apply=False).previewed
+def scenario_dry_run_respects_dependency_reservation() -> None:
+    """P3C-DRYRUN-DEPENDENCY-RESERVATION: D's unreleased reservation blocks the preview."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as root:
+        world = LivenessWorld(Path(root))
+        world.complete(11, CompletionPath.LABEL)
+        world.set_reservation(11, True)
+        observation = world.cycle(apply=False)
+    require(
+        "P3C-DRYRUN-DEPENDENCY-RESERVATION",
+        not observation.previewed,
+        f"previewed T under D's unreleased reservation: {observation}",
+    )
+
+
+def test_dry_run_preview_respects_unreleased_completion_reservation():
+    scenario_dry_run_respects_dependency_reservation()
 
 
 def test_recompute_release_respects_base_branch_red_hold(tmp_path):
@@ -864,3 +877,12 @@ def test_control_intermediate_reservation_guard_bypass_is_detected(monkeypatch):
     monkeypatch.setattr(CycleContext, "is_completion_blocked", lambda s, n: False)
     with expect_violation("P3C-INTERMEDIATE-SAFETY"):
         scenario_completion(CompletionPath.LABEL, **kwargs)
+
+
+def test_control_dry_run_dependency_reservation_bypass_is_detected(monkeypatch):
+    """The dependency side is fixed (#1267), so a dry run is checked here
+    deterministically; the random machine excuses dry-run reservation previews."""
+    scenario_dry_run_respects_dependency_reservation()
+    monkeypatch.setattr(CycleContext, "is_completion_blocked", lambda s, n: False)
+    with expect_violation("P3C-DRYRUN-DEPENDENCY-RESERVATION"):
+        scenario_dry_run_respects_dependency_reservation()

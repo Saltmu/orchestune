@@ -438,14 +438,31 @@ CONTRACTS: tuple[Contract, ...] = (
         },
     ),
     Contract(
+        id="P3C-DRYRUN-DEPENDENCY-RESERVATION",
+        phase="3c",
+        guarantee="a dry-run preview of T respects an unreleased completion reservation of a dependency",
+        premise="the preview is defined over the context snapshot (#1267 fixed this side)",
+        boundary="dry-run cycle, checked by a deterministic scenario (the machine excuses dry-run reservation previews)",
+        expectation="no preview while D's reservation is unreleased",
+        status="verified",
+        tests=(
+            f"{P3C}::test_dry_run_preview_respects_unreleased_completion_reservation",
+        ),
+        controls={
+            "reservation-guard-bypass": (
+                f"{P3C}::test_control_dry_run_dependency_reservation_bypass_is_detected",
+            )
+        },
+    ),
+    Contract(
         id="P3C-DRYRUN-RESERVATION",
         phase="3c",
-        guarantee="a dry-run preview respects unreleased completion reservations",
+        guarantee="a dry-run preview of T or an intermediate node respects the node's own unreleased reservation",
         premise="the preview is defined over the context snapshot",
         boundary="dry-run cycle",
-        expectation="no preview under a reservation of D, T or an intermediate node",
+        expectation="no preview under T's own or an intermediate node's reservation",
         status="known_defect",
-        reason="assert_safe and the intermediate checks excuse these previews until the production fix lands",
+        reason="assert_safe and the intermediate checks excuse these previews until the production fixes land; the dependency side is a separate verified contract",
         issues=(1281, 1283),
     ),
 )

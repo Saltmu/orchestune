@@ -34,6 +34,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P3C-INTERMEDIATE-LIVENESS` | 3c | verified | `intermediate-ignored`, `promotion-suppressed` | - |
 | `P3C-SAFETY` | 3c | verified | `hold-guard-bypass`, `reservation-guard-bypass`, `stale-evidence` | - |
 | `P3C-INTERMEDIATE-SAFETY` | 3c | verified | `reservation-guard-bypass` | - |
+| `P3C-DRYRUN-DEPENDENCY-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-DRYRUN-RESERVATION` | 3c | known_defect | - | #1281, #1283 |
 
 ### Details
@@ -65,7 +66,8 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P3C-INTERMEDIATE-LIVENESS` | an intermediate node is promoted (apply) or previewed (dry run) after N = 1 fair cycle | its own dependencies are valid and unreserved at both boundaries | end of the first fair cycle for that node | N = 1 |
 | `P3C-SAFETY` | no promotion (or dry-run preview) without valid evidence, or under a hold or reservation | apply is judged at the promotion point, a dry run at cycle start | every cycle | never |
 | `P3C-INTERMEDIATE-SAFETY` | an intermediate node is not promoted before its own dependencies are valid and unreserved | apply is judged at the promotion point | every cycle | never |
-| `P3C-DRYRUN-RESERVATION` | a dry-run preview respects unreleased completion reservations | the preview is defined over the context snapshot | dry-run cycle | no preview under a reservation of D, T or an intermediate node |
+| `P3C-DRYRUN-DEPENDENCY-RESERVATION` | a dry-run preview of T respects an unreleased completion reservation of a dependency | the preview is defined over the context snapshot (#1267 fixed this side) | dry-run cycle, checked by a deterministic scenario (the machine excuses dry-run reservation previews) | no preview while D's reservation is unreleased |
+| `P3C-DRYRUN-RESERVATION` | a dry-run preview of T or an intermediate node respects the node's own unreleased reservation | the preview is defined over the context snapshot | dry-run cycle | no preview under T's own or an intermediate node's reservation |
 
 ### Rows that are not `verified`
 
@@ -76,7 +78,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 - `P3A-DOCUMENT-TABLE` (unverified): no control: a document drift has not been injected
 - `P3B-LAUNCH-AND-ESCALATION` (unverified): plain assertions without contract ids; no control was injected
 - `P3B-PERSISTENT-BUDGET-PRESERVED` (known_defect): strict xfail pins the counterexamples; the fix removes the marks
-- `P3C-DRYRUN-RESERVATION` (known_defect): assert_safe and the intermediate checks excuse these previews until the production fix lands
+- `P3C-DRYRUN-RESERVATION` (known_defect): assert_safe and the intermediate checks excuse these previews until the production fixes land; the dependency side is a separate verified contract
 
 <a id="cycle-definitions"></a>
 <!-- cycle-definitions -->
@@ -115,10 +117,10 @@ The Issue's reading was that a one-cycle promotion delay on a path whose evidenc
 | `empty-completion-set` / `throwaway-context` | the #902 Round 4/5 miswiring | `P3C-CASE-DELAY` | case table |
 | `intermediate-ignored` | the intermediate node's assessment is dropped | `P3C-INTERMEDIATE-LIVENESS` | intermediate topology |
 | `hold-guard-bypass` (3c) | every `PROMOTION_HOLD_LABELS` is empty | `P3C-SAFETY` | `ci:base-branch-red` before the cycle |
-| `reservation-guard-bypass` | the reservation checks of the dependency side, the target side or the intermediate's dependency always pass | `P3C-SAFETY`, `P3C-INTERMEDIATE-SAFETY` | apply cycles only |
+| `reservation-guard-bypass` | the reservation checks of the dependency side, the target side or the intermediate's dependency always pass | `P3C-SAFETY`, `P3C-INTERMEDIATE-SAFETY` (machine, apply cycles), `P3C-DRYRUN-DEPENDENCY-RESERVATION` (deterministic dry run) | apply cycles in the machine; the dependency side of a dry run in a deterministic scenario |
 | `stale-evidence` | a reopened dependency is still treated as completed | `P3C-SAFETY` | revoked label evidence |
 
-Known gaps, recorded and not weakened: dry-run previews under an unreleased reservation are excused in `assert_safe` and the intermediate checks until #1281 and #1283 are fixed (`P3C-DRYRUN-RESERVATION`), so `reservation-guard-bypass` is only detected in apply cycles. Two guards (`fresh-guard-bypass` with `status_repair_preserves_protection` alone, and a premature intermediate assessment) are re-validated by a second layer and cannot be bypassed with one fault; the controls inject the whole guard.
+Known gaps, recorded and not weakened: the random machine's `assert_safe` excuses every dry-run preview under an unreleased reservation, so it detects `reservation-guard-bypass` only in apply cycles. The dependency side of a dry run (fixed in #1267) is therefore checked by its own deterministic scenario (`P3C-DRYRUN-DEPENDENCY-RESERVATION`); the previews under T's own reservation and an intermediate node's reservation stay a known defect until #1281 and #1283 are fixed (`P3C-DRYRUN-RESERVATION`). Two guards (`fresh-guard-bypass` with `status_repair_preserves_protection` alone, and a premature intermediate assessment) are re-validated by a second layer and cannot be bypassed with one fault; the controls inject the whole guard.
 
 ## Guarantee and limits
 
