@@ -849,6 +849,10 @@ def test_worker_skills_require_posting_review_reply_as_pr_comment(skill_name: st
     assert "only when the PR head is unchanged" in loop
     assert "adopted fixes always need another `wait_for_review.py` round" in loop
 
+    step4 = next(line for line in lines if line.startswith("4. Ambiguous findings"))
+    assert "final round" in step4 and "Terminal judgment posting" in step4
+    assert "never required findings, except in the final round" in step5
+
     skill = (SKILLS_ROOT / skill_name / "SKILL.md").read_text(encoding="utf-8")
     review_step = next(
         line for line in skill.splitlines() if "**Automated LLM PR Review**" in line
@@ -1153,7 +1157,7 @@ def _terminal_posting_section(skill_name: str) -> str:
     loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
         encoding="utf-8"
     )
-    heading = "### Terminal judgment posting (round limit / blocked)"
+    heading = "### Terminal judgment posting (round limit)"
     assert (
         heading in loop
     ), f"{skill_name} review-loop.md lacks the terminal posting section"
@@ -1162,7 +1166,7 @@ def _terminal_posting_section(skill_name: str) -> str:
 
 @pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
 def test_review_loop_defines_terminal_judgment_posting_contract(skill_name: str):
-    """ラウンド上限到達時に最終ラウンド判断表を投稿して blocked へ進む終端手順を検証 (#1215)。"""
+    """上限到達時は PR を凍結し、残件をフォローアップIssueへ移して done へ進む (#1215, #1277)。"""
     section = _terminal_posting_section(skill_name)
     loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
         encoding="utf-8"
@@ -1170,10 +1174,36 @@ def test_review_loop_defines_terminal_judgment_posting_contract(skill_name: str)
 
     # 1. 適用条件・ラウンド維持・順序
     assert "round limit" in section.lower() or "exit 12" in section.lower()
-    assert "HEAD was changed by adopted fixes" in section
     assert "Review target round r is preserved" in section
     assert "Round 5/5" in section and "`round: 5`" in section
-    assert "differing HEAD forbids done" in section
+
+    # 1. 最終巡の判定は固定上限 (#1277)。PR は凍結し、修正を push しない
+    assert "`MAX_REVIEW_ROUNDS`" in section and "final round" in section
+    assert "freeze the PR at the reviewed HEAD" in section
+    assert "do not commit or push" in section and "do not fix adopted" in section
+
+    # 2. フォローアップIssue: 対象行・依存宣言・参照の形式
+    assert "follow-up Issue" in section
+    assert "`judgment: adopt`" in section and "`needs_information`" in section
+    assert "`status: unresolved`" in section
+    assert "`depends_on: [<source subtask_id>]`" in section
+    assert "`blocked-by #<source Issue>`" in section
+
+    # 3. 判断表: deferred + 有効な参照。最終巡に限る。unresolved は残さない
+    assert "`status: deferred`" in section and "`evidence`" in section
+    assert "only in the final round" in section
+    assert "no `status: unresolved` row may remain" in section
+    assert "open Issue" in section and "never a PR" in section
+
+    # 4. done が主経路、blocked は HEAD 変化と下げた上限のフォールバック
+    assert (
+        "orchestune complete --issue <N> --pr <PR> --result done --reviewer <bot> "
+        "--review-reply <session-dir>/review-reply.md" in section
+    )
+    assert "Fallback (blocked)" in section
+    assert "HEAD already differs from the reviewed HEAD" in section
+    assert "lowered with `--max-rounds`" in section
+    assert "head mismatch" in section
     assert (
         "orchestune complete --issue <N> --result blocked --reason review-round-limit"
         in section

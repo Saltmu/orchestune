@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from orchestune.complete.contracts import (
     CompleteFailureReason,
@@ -21,6 +23,7 @@ from orchestune.review.judgment import (
 )
 from orchestune.review.markers import derive_review_target, parse_selection_marker
 from orchestune.review.rounds import (
+    MAX_REVIEW_ROUNDS,
     ReviewTrigger,
     precise_created_at,
     restore_triggers,
@@ -28,8 +31,22 @@ from orchestune.review.rounds import (
 )
 
 
+class IssueReference(Protocol):
+    """What a follow-up reference must reveal: its state and whether it is a PR."""
+
+    @property
+    def state(self) -> str: ...
+    @property
+    def is_pull_request(self) -> bool: ...
+
+
 class ReviewEvidenceForge(Protocol):
-    """Only review acquisition methods; the shared Forge protocol stays stable."""
+    """Only review acquisition and follow-up lookups; the shared Forge protocol stays stable."""
+
+    def get_repository_slug(self) -> str: ...
+    def get_issue_reference(self, number: int) -> IssueReference | None:
+        """The Issue-or-PR `number`, or None once the forge confirms it is absent."""
+        ...
 
     def list_all_issue_comments(
         self, issue_number: int | str
@@ -46,6 +63,10 @@ def _invalid(message: str) -> CompletionJournalError:
     return CompletionJournalError(
         CompleteFailureReason.REVIEW_EVIDENCE_INVALID, message
     )
+
+
+def _missing(message: str) -> CompletionJournalError:
+    return CompletionJournalError(CompleteFailureReason.EVIDENCE_MISSING, message)
 
 
 def _head_mismatch() -> CompletionJournalError:
@@ -119,9 +140,88 @@ def _acquire(state: dict[str, Any], reviewer: str, head: str | None) -> dict[str
     }
 
 
+_URL = re.compile(r"https?://[^\s<>()\[\]\"'`,;]+")
+_SHORT = re.compile(r"(?<![\w/&#])#([1-9][0-9]*)(?!\w)")
+_ISSUE_PATH = re.compile(r"/([^/]+)/([^/]+)/issues/([1-9][0-9]*)/?")
+
+
+def _reference_candidates(evidence: str, slug: str | None) -> set[int]:
+    """Issue numbers `evidence` names in this repository.
+
+    A URL is parsed as a structure: its fragment never becomes a `#N` shorthand,
+    and only an https://github.com/<this repository>/issues/<N> URL counts.
+    """
+    numbers: set[int] = set()
+    for url in _URL.findall(evidence):
+        try:
+            parts = urlsplit(url)
+            port, host = parts.port, parts.hostname
+        except ValueError:
+            continue
+        match = _ISSUE_PATH.fullmatch(parts.path)
+        if (
+            slug is not None
+            and parts.scheme == "https"
+            and host == "github.com"
+            and port is None
+            and parts.username is None
+            and match
+            and f"{match[1]}/{match[2]}".lower() == slug.lower()
+        ):
+            numbers.add(int(match[3]))
+    numbers.update(int(n) for n in _SHORT.findall(_URL.sub(" ", evidence)))
+    return numbers
+
+
+@dataclass
+class _FollowUps:
+    """Verifies final-round follow-up references, sharing each lookup in one completion."""
+
+    forge: ReviewEvidenceForge
+    own_numbers: frozenset[int]
+    cache: dict[int, IssueReference | None | Exception] = field(default_factory=dict)
+    slug: str | None = None
+
+    def _lookup(self, number: int) -> IssueReference | None | Exception:
+        if number not in self.cache:
+            try:
+                self.cache[number] = self.forge.get_issue_reference(number)
+            except Exception as error:
+                self.cache[number] = error
+        return self.cache[number]
+
+    def _repository(self, evidence: str) -> str | None:
+        if self.slug is None and _URL.search(evidence):
+            try:
+                self.slug = self.forge.get_repository_slug()
+            except Exception as error:
+                raise _missing("Repository identity is unavailable") from error
+        return self.slug
+
+    def verify(self, evidence: str) -> None:
+        """Pass when one candidate is an OPEN Issue; otherwise reject or hold."""
+        candidates = _reference_candidates(evidence, self._repository(evidence))
+        unknown = False
+        for number in sorted(candidates - self.own_numbers):
+            found = self._lookup(number)
+            if isinstance(found, Exception):
+                unknown = True
+            elif (
+                found is not None
+                and not found.is_pull_request
+                and found.state.upper() == "OPEN"
+            ):
+                return
+        if unknown:
+            raise _missing("Follow-up Issue lookup failed")
+        raise _invalid("Required deferred finding lacks a valid open follow-up Issue")
+
+
 def _judgments(
-    payload: DonePayload, result: dict[str, Any]
+    request: CompleteRequest, forge: ReviewEvidenceForge, result: dict[str, Any]
 ) -> tuple[str, dict[str, int]]:
+    payload = request.payload
+    assert isinstance(payload, DonePayload)
     if payload.review_reply is None:
         raise _invalid("--review-reply is required for claude/codex")
     try:
@@ -130,16 +230,26 @@ def _judgments(
     except (OSError, UnicodeError, ValueError) as error:
         raise _invalid(f"Review judgments are invalid: {error}") from error
     rows = table["findings"]
-    if any(
-        row["status"] == "unresolved"
-        or row["judgment"] == "needs_information"
-        or (row["status"] == "deferred" and row["judgment"] == "adopt")
-        for row in rows
-    ):
-        raise _invalid(
-            "Review judgments contain unresolved or required deferred findings"
-        )
-    return judgment_digest(table)
+    final = result["round"] >= MAX_REVIEW_ROUNDS
+    followups = _FollowUps(forge, frozenset({request.issue_number, payload.pr}))
+    required_deferred = 0
+    for row in rows:
+        required = row["judgment"] in {"adopt", "needs_information"}
+        if row["status"] == "unresolved" or (
+            row["judgment"] == "needs_information" and row["status"] != "deferred"
+        ):
+            raise _invalid("Review judgments contain unresolved findings")
+        if row["status"] == "deferred" and required:
+            if not final:
+                raise _invalid(
+                    "Required findings can be deferred only in the final round"
+                )
+            followups.verify(row["evidence"])
+            required_deferred += 1
+    digest, counts = judgment_digest(table)
+    if required_deferred:
+        counts = {**counts, "required_deferred": required_deferred}
+    return digest, counts
 
 
 def _review_binding(result: dict[str, Any]) -> dict[str, Any]:
@@ -192,7 +302,7 @@ def verify_review_evidence(
         binding = {"selection": ("skip", head_sha)}
     else:
         result = _acquire(state, reviewer, pr.head_sha)
-        digest, counts = _judgments(payload, result)
+        digest, counts = _judgments(request, forge, result)
         summary = ReviewSummary(
             bot=reviewer,
             rounds=result["round"],

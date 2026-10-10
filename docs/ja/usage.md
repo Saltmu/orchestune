@@ -522,7 +522,7 @@ Integratorが`parent/issue-{N}`を更新する（4.2の自動マージ）直前�
 | 担当 | 責務 |
 | :--- | :--- |
 | 開発スキル（レビューループ・Step 11） | 対話モードでは着手依頼の直後（claim前）に明示的なレビュアー選択（`claude` / `codex` / `skip`）を求めて記録し、PR作成後は再質問せずその選択で子PR上のレビューを実行し、指摘ごとにLLMの判断（`adopt` / `decline` / `already_addressed` / `needs_information` / `duplicate`）を判断表へ記録する。 |
-| `orchestune complete --issue <N> --pr <PR> --result done --reviewer <bot> --review-reply <file>` | PRのレビュー状態を取得し直し、判断表が現在の全指摘を網羅していること、`unresolved`・`needs_information`・必須の`deferred`が残っていないこと、レビュー対象SHAがPRのheadおよびローカルHEADと一致することを確認する。`verdict`・`reviewed_head_sha`・判断表のdigestをdone Outcome Recordへ保存する。不一致の場合はcompleteを拒否し（`review_evidence_invalid`・`review_head_mismatch`・`evidence_missing`）、何も投稿しない。`skip`は`verdict=skipped`として記録され、合格にはならない。 |
+| `orchestune complete --issue <N> --pr <PR> --result done --reviewer <bot> --review-reply <file>` | PRのレビュー状態を取得し直し、判断表が現在の全指摘を網羅していること、`unresolved`が残っていないこと、`needs_information`と必須指摘（`adopt`）の`deferred`は最終巡（`MAX_REVIEW_ROUNDS`＝5巡以上）に限り、`evidence`がこのリポジトリのOPENなフォローアップIssue（PR・CLOSED・別リポジトリ・タスク自身は不可）を指す場合だけ許可されること（`required_deferred`として件数を記録。参照の取得に失敗した場合は`evidence_missing`）、レビュー対象SHAがPRのheadおよびローカルHEADと一致することを確認する。`verdict`・`reviewed_head_sha`・判断表のdigestをdone Outcome Recordへ保存する。不一致の場合はcompleteを拒否し（`review_evidence_invalid`・`review_head_mismatch`・`evidence_missing`）、何も投稿しない。`skip`は`verdict=skipped`として記録され、合格にはならない。 |
 | Integrator | 保存済みの証跡を検証するだけで、レビュー自体は実行しない。 |
 
 **合格条件（子ごと）**: 子Issueの最新のOutcome Recordが`result=done`かつ`verdict=pass`で、`head_sha`と`reviewed_head_sha`の両方がマージ対象のコミットSHAと一致すること。レビュー後にリベースやpushを行うとSHAが変わるため、再レビューが必要です。

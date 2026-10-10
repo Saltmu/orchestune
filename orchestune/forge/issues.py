@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from orchestune.models import IssueRecord, normalize_newlines
@@ -62,6 +63,15 @@ def _is_relationship_unavailable_error(exc: subprocess.CalledProcessError) -> bo
             "unknown field",
         )
     )
+
+
+@dataclass(frozen=True)
+class IssueReference:
+    """An Issue-or-PR number as the REST issues endpoint reports it."""
+
+    number: int
+    state: str
+    is_pull_request: bool
 
 
 class _Runner(Protocol):
@@ -537,3 +547,42 @@ class GitHubIssueMixin:
                 node["number"] for node in raw.get("blockedBy", {}).get("nodes", [])
             ),
         )
+
+    def get_issue_reference(self, issue_number: int | str) -> IssueReference | None:
+        """The Issue-or-PR `issue_number`, or None when the forge confirms it is absent.
+
+        `gh issue view` also resolves a PR number, so this reads the REST issues
+        endpoint, whose payload carries a `pull_request` key only for PRs. Any
+        failure other than a 404 (auth, rate limit, network) or a payload that
+        lacks the identifying attributes raises: it never proves absence.
+        """
+        number = validate_issue_number(issue_number)
+        try:
+            stdout = self._run(
+                ["gh", "api", f"repos/{{owner}}/{{repo}}/issues/{number}"]
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = _error_detail(exc)
+            if "404" in detail or "not found" in detail:
+                return None
+            raise
+        raw = json.loads(stdout)
+        if (
+            not isinstance(raw, dict)
+            or raw.get("number") != number
+            or not isinstance(raw.get("state"), str)
+        ):
+            raise ValueError(f"Issue #{number} lookup returned an unusable payload")
+        return IssueReference(
+            number=number,
+            state=raw["state"],
+            is_pull_request="pull_request" in raw,
+        )
+
+    def get_repository_slug(self) -> str:
+        """`owner/repo` of the repository the Forge commands run against."""
+        raw = json.loads(self._run(["gh", "repo", "view", "--json", "nameWithOwner"]))
+        slug = raw.get("nameWithOwner") if isinstance(raw, dict) else None
+        if not isinstance(slug, str) or slug.count("/") != 1 or not slug.strip("/"):
+            raise ValueError("GitHub returned an unusable repository identity")
+        return slug
