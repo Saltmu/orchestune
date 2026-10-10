@@ -545,6 +545,9 @@ module dependency_liveness {
     val promoted = promotedBy(apply, lag)
     all {
       turn("cycle"),
+      // Not modeled: an injected fault can abort an apply cycle before the stale
+      // change happens, so the model cannot say whether it was applied.
+      not(apply and armed.op != "none" and stale.kind != "none"),
       wasCycle' = true,
       applied' = apply,
       events' = promoted,
