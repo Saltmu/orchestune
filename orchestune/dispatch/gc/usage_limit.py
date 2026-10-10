@@ -59,7 +59,12 @@ from orchestune.labels import StatusLabel
 from orchestune.ledger.active_lifecycle import has_completion_reservation
 from orchestune.ledger.active_records import ActiveWorktree
 from orchestune.ledger.escalation import apply_human_review_escalation
-from orchestune.ledger.run_state import RunState, TaskReclaimRecord, save_run_state
+from orchestune.ledger.run_state import (
+    USAGE_LIMIT_TARGET,
+    RunState,
+    TaskReclaimRecord,
+    save_run_state,
+)
 from orchestune.ledger.status_labels import (
     PRIMARY_STATUS_LABELS,
     transition_status_label,
@@ -67,8 +72,7 @@ from orchestune.ledger.status_labels import (
 from orchestune.models import PrRecord
 from orchestune.task_metadata import TaskMetadata
 
-#: The only target whose termination is classified. Other targets keep their handling.
-CLAUDE_CLI_TARGET = "claude-cli"
+CLAUDE_CLI_TARGET = USAGE_LIMIT_TARGET
 _BACKUP_MESSAGE = "WIP: backup by Orchestune GC (claude-cli session usage limit)"
 
 
@@ -398,14 +402,16 @@ def _settle(
     _persist(run_state, config, now, open_prs)
 
 
-def _retire_worktree(active: ActiveWorktree) -> bool:
+def _retire_worktree(active: ActiveWorktree) -> str | None:
     """Back the work up as a WIP commit, then remove the worktree directory.
 
-    ``False`` keeps everything in place (the backup could not be made).
+    Returns the reason the worktree had to stay in place, or ``None`` once it is
+    gone: ``remove_worktree`` reports a refused or failed removal as a result, not
+    an exception, so a directory that is still there keeps the task held.
     """
     path = active.core.worktree_path
     if not os.path.exists(path):
-        return True
+        return None
     backup_error = backup_wip_commit(path, _BACKUP_MESSAGE)
     if backup_error is not None:
         print(
@@ -413,9 +419,16 @@ def _retire_worktree(active: ActiveWorktree) -> bool:
             f"failed: {backup_error}",
             file=sys.stderr,
         )
-        return False
-    remove_worktree(path)
-    return True
+        return "wip_backup_failed"
+    removal = remove_worktree(path)
+    if not removal.success and os.path.exists(path):
+        print(
+            f"Warning: kept issue #{active.core.issue_number}'s worktree: removal "
+            f"failed: {removal.rejection_reason or removal.error}",
+            file=sys.stderr,
+        )
+        return "worktree_removal_failed"
+    return None
 
 
 def _requeue(
@@ -437,8 +450,8 @@ def _requeue(
         settled = True
 
     try:
-        if not _retire_worktree(active):
-            return replace(event, action="usage_limit_held", reason="wip_backup_failed")
+        if (kept := _retire_worktree(active)) is not None:
+            return replace(event, action="usage_limit_held", reason=kept)
         transition_status_label(
             config.resolved_forge,
             issue,

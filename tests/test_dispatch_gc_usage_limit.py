@@ -473,6 +473,21 @@ class TestPersistenceAndRecovery:
         assert world.state.task_reclaim_counts[1].usage_limit_retry_pending is True
         assert world.worktree.exists()
 
+    def test_refused_worktree_removal_holds_instead_of_requeueing(self, world, effects):
+        effects.remove.return_value = SimpleNamespace(
+            success=False, removed=False, rejection_reason="dirty", error=None
+        )
+        _write_run(world, f"{LIMIT_LINE}\n")
+
+        event = _handle(world)
+
+        assert event.action == "usage_limit_held"
+        assert event.reason == "worktree_removal_failed"
+        assert "status:in-progress" in _labels(world)
+        assert "1" in world.state.active_worktrees
+        assert world.state.task_reclaim_counts[1].usage_limit_retry_pending is True
+        assert world.worktree.exists()
+
     def test_missing_worktree_directory_still_requeues(self, world, effects):
         world.worktree.rmdir()
         _write_run(world, f"{LIMIT_LINE}\n")

@@ -437,6 +437,19 @@ class TestUsageLimitGate:
 
         assert self._select(run_state, config, now=150.0).selected != []
 
+    def test_task_backoff_does_not_hold_the_task_on_another_target(self, fake_forge):
+        run_state = RunState(
+            task_reclaim_counts={
+                5: TaskReclaimRecord(
+                    usage_limit_retry_count=1, usage_limit_retry_at=100.0
+                )
+            }
+        )
+
+        assert self._select(
+            run_state, self._config(fake_forge, "codex-cli"), now=50.0
+        ).selected
+
     def test_target_cooldown_excludes_every_task_of_that_target(self, fake_forge):
         from orchestune.dispatch.summary import REASON_USAGE_LIMIT_COOLDOWN
 

@@ -755,6 +755,7 @@ def test_pyproject_uses_pep621_metadata_and_hatchling() -> None:
         "dependencies": [
             "pyyaml>=6.0.3,<7.0.0",
             "tomlkit>=0.13.0,<1.0.0",
+            "tzdata>=2024.1; sys_platform == 'win32'",
         ],
         "scripts": {
             "orchestune": "orchestune.cli:main",

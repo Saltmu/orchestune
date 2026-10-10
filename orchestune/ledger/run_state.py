@@ -257,6 +257,9 @@ def _parse_lookup_cursor(value: object) -> int:
 
 #: 解除通知の再試行キューの上限。Issueがクローズされる等で永久に投稿できない
 #: 記録が残り続けても、`run_state.json`が無制限に膨らまないようにする。
+#: #1270: the one target whose session limit is classified, waited out per task and
+#: put on a target-wide cooldown. Other targets keep their own handling.
+USAGE_LIMIT_TARGET = "claude-cli"
 MAX_PENDING_LOCK_RELEASE_NOTICES = 100
 
 
@@ -829,10 +832,15 @@ def usage_limit_wait(
     """#1270: whether a session limit keeps this task from launching on ``target_name``.
 
     ``backoff`` is the task's own retry time; ``cooldown`` is the target-wide wait
-    shared by every task of a ledger. A target without a name is never in cooldown.
+    shared by every task of a ledger. Only a ``claude-cli`` run produces either, so
+    a task switched to another target is not held by the old target's limit.
     """
     record = state.task_reclaim_counts.get(issue_number)
-    if record is not None and record.usage_limit_retry_at > now:
+    if (
+        target_name == USAGE_LIMIT_TARGET
+        and record is not None
+        and record.usage_limit_retry_at > now
+    ):
         return "backoff"
     if (
         target_name is not None
