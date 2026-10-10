@@ -394,12 +394,24 @@ def _settle(
     config: DispatcherConfig,
     now: float,
     open_prs: Sequence[PrRecord] | None,
-) -> None:
+) -> bool:
+    """Release the reservation and the active entry; undo both if they cannot be saved.
+
+    ``False`` means the durable ledger still holds the dead entry and its pending
+    reservation, so the next cycle resumes the same run instead of trusting memory.
+    """
     record = run_state.task_reclaim_counts.get(issue)
+    was_pending = record.usage_limit_retry_pending if record is not None else False
+    active = run_state.active_worktrees.pop(key, None)
     if record is not None:
         record.usage_limit_retry_pending = False
-    run_state.active_worktrees.pop(key, None)
-    _persist(run_state, config, now, open_prs)
+    if _persist(run_state, config, now, open_prs):
+        return True
+    if active is not None:
+        run_state.active_worktrees[key] = active
+    if record is not None:
+        record.usage_limit_retry_pending = was_pending
+    return False
 
 
 def _retire_worktree(active: ActiveWorktree) -> str | None:
@@ -443,11 +455,12 @@ def _requeue(
 ) -> CompletionEvent:
     issue = active.core.issue_number
     settled = False
+    saved = False
 
     def on_label_added() -> None:
-        nonlocal settled
-        _settle(run_state, key, issue, config, now, open_prs)
+        nonlocal settled, saved
         settled = True
+        saved = _settle(run_state, key, issue, config, now, open_prs)
 
     try:
         if (kept := _retire_worktree(active)) is not None:
@@ -471,6 +484,8 @@ def _requeue(
             f"Warning: requeued issue #{issue} but a later step failed: {error}",
             file=sys.stderr,
         )
+    if settled and not saved:
+        return replace(event, action="usage_limit_held", reason="ledger_save_failed")
     _post_comment(config, issue, _requeue_comment(event))
     return event
 
@@ -487,11 +502,12 @@ def _escalate(
 ) -> CompletionEvent:
     issue = active.core.issue_number
     settled = False
+    saved = False
 
     def on_label_applied() -> None:
-        nonlocal settled
-        _settle(run_state, key, issue, config, now, open_prs)
+        nonlocal settled, saved
         settled = True
+        saved = _settle(run_state, key, issue, config, now, open_prs)
 
     path = active.core.worktree_path
     if os.path.exists(path):
@@ -518,6 +534,8 @@ def _escalate(
                 file=sys.stderr,
             )
             return replace(event, action="usage_limit_held", reason="escalation_failed")
+    if settled and not saved:
+        return replace(event, action="usage_limit_held", reason="ledger_save_failed")
     return event
 
 
@@ -542,6 +560,16 @@ def _active_for_subject(
             if str(active.core.issue_number) == subject_id
         ),
         None,
+    )
+
+
+def _held_this_cycle(events: Sequence[CompletionEvent], issue: int) -> bool:
+    """A hold already reported for this issue must not be retried within the cycle."""
+    return any(
+        isinstance(event, UsageLimitCompletion)
+        and event.action == "usage_limit_held"
+        and event.issue_number == issue
+        for event in events
     )
 
 
@@ -570,6 +598,12 @@ def handle_usage_limit_reclaim(
     if found is None:
         return None
     key, active = found
+    if _held_this_cycle(events, active.core.issue_number):
+        return RepairResult(
+            command=command,
+            status=RepairStatus.SKIPPED,
+            diagnostics=("session usage limit: held earlier in this cycle",),
+        )
     if (
         active.core.worktree_path in held_worktree_paths
         or has_completion_reservation(active)

@@ -403,6 +403,30 @@ class TestPersistenceAndRecovery:
         effects.remove.assert_not_called()
         assert "1" in world.state.active_worktrees
 
+    def test_a_failed_settlement_save_is_held_and_not_reported_as_requeued(
+        self, world, effects
+    ):
+        from orchestune.dispatch.gc import usage_limit as module
+
+        _write_run(world, f"{LIMIT_LINE}\n")
+        real_save = module.save_run_state
+        calls = []
+
+        def save_then_fail(*args, **kwargs):
+            calls.append(1)
+            if len(calls) > 1:
+                raise OSError("disk full")
+            return real_save(*args, **kwargs)
+
+        with patch(f"{MODULE}.save_run_state", side_effect=save_then_fail):
+            event = _handle(world)
+
+        assert event.action == "usage_limit_held"
+        assert event.reason == "ledger_save_failed"
+        assert "1" in world.state.active_worktrees
+        assert world.state.task_reclaim_counts[1].usage_limit_retry_pending is True
+        assert world.forge.comments[1] == []
+
     def test_label_failure_keeps_the_reservation_and_resume_does_not_double_count(
         self, world, effects
     ):
@@ -634,6 +658,41 @@ class TestTypedReclaimDiversion:
                 NOW,
             )
         assert result is None
+        assert world.state.task_reclaim_counts == {}
+
+    def test_a_hold_reported_earlier_in_the_cycle_is_not_retried(self, world, effects):
+        from orchestune.consistency.models import RepairStatus
+        from orchestune.dispatch.cycle_events import UsageLimitCompletion
+        from orchestune.dispatch.gc.usage_limit import handle_usage_limit_reclaim
+
+        _write_run(world, f"{LIMIT_LINE}\n")
+        held = UsageLimitCompletion(
+            issue_number=1,
+            action="usage_limit_held",
+            target="claude-cli",
+            reset_known=True,
+            retries_remaining=2,
+            reason="worktree_removal_failed",
+        )
+        events: list = [held]
+
+        with _lock(world.config):
+            result = handle_usage_limit_reclaim(
+                self._command(),
+                world.state,
+                {1: world.task},
+                world.config,
+                events,
+                (),
+                frozenset(),
+                NOW,
+            )
+
+        assert result.status is RepairStatus.SKIPPED
+        assert events == [held]
+        effects.backup.assert_not_called()
+        effects.remove.assert_not_called()
+        assert "status:in-progress" in _labels(world)
         assert world.state.task_reclaim_counts == {}
 
 
