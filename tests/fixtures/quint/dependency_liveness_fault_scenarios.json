@@ -88,7 +88,7 @@
    "ok_scenario": "final_apply",
    "fault_scenario": "fault_event_only",
    "expect_violated": [
-    "eventMatchesLabel",
+    "eventsAreLabelChanges",
     "liveness"
    ],
    "ok_states": 4,

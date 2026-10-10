@@ -601,13 +601,15 @@ module dependency_liveness {
   val liveness: bool = mustQueue.forall(n =>
     lab.get(n) == "queued" or (not(applied) and events.contains(n)))
 
-  // An apply cycle's events are the real label changes (no event-only success).
-  val eventMatchesLabel: bool = not(applied) or events == newlyQueued
+  // Every event of an apply cycle is a real label change (no event-only success).
+  // The converse is deliberately not claimed: production can promote an
+  // intermediate node without a PromotionEvent under listing lag (#1296).
+  val eventsAreLabelChanges: bool = not(applied) or events.subseteq(newlyQueued)
 
   // A dry run never changes a label to queued by itself.
   val dryRunReadOnly: bool = applied or newlyQueued.size() == 0
 
-  val allProperties: bool = safety and liveness and eventMatchesLabel and dryRunReadOnly
+  val allProperties: bool = safety and liveness and eventsAreLabelChanges and dryRunReadOnly
 
   // Witnesses: the exploration is only meaningful if these are reached.
   val reachedApplyPromotion: bool = applied and newlyQueued.contains(T)

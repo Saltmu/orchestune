@@ -49,7 +49,7 @@ MODEL = ROOT / "specs" / "quint" / "dependency_liveness.qnt"
 #: The TypeScript simulator ships inside the pinned npm package.  The default
 #: ``rust`` backend downloads a binary at first use, which no lockfile pins.
 BACKEND = "typescript"
-INVARIANTS = ("safety", "liveness", "eventMatchesLabel", "dryRunReadOnly")
+INVARIANTS = ("safety", "liveness", "eventsAreLabelChanges", "dryRunReadOnly")
 WITNESSES = (
     "reachedApplyPromotion",
     "reachedDryRunPreview",
@@ -748,7 +748,10 @@ def _require_events_are_label_changes(
     step: Step, observation: CycleObservation
 ) -> None:
     """An undisturbed apply cycle's promotion event is a real label change (the
-    model's ``eventMatchesLabel``); a cycle with an injected failure is not judged."""
+    model's ``eventsAreLabelChanges``); a cycle with an injected failure is not judged.
+
+    Only this direction is checked: under listing lag production promotes an
+    intermediate node without an event (#1296), which is not a #1276 contract."""
     if observation.error is not None or observation.fault_injected:
         return
     fake = sorted(

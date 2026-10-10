@@ -32,9 +32,11 @@ from orchestune.dispatch import reconciliation, status_repair
 from orchestune.dispatch.rules import CycleContext
 from tests.dependency_liveness_test_support import (
     DEPENDENT,
+    CompletionPath,
     FaultPlan,
     LivenessTopology,
     LivenessWorld,
+    StatusLabel,
     cycle_module,
 )
 from tests.quint_replay import (
@@ -597,6 +599,30 @@ def test_control_replay_detects_a_dry_run_write_beside_a_hold_only_stale_change(
         monkeypatch.setattr(module, "PROMOTION_HOLD_LABELS", ())
     with expect_violation("P3C-DRYRUN-READONLY"):
         replay_stored("stale_add_hold_dry", tmp_path / "fault")
+
+
+def test_the_converse_of_events_are_label_changes_is_not_a_contract_yet(
+    tmp_path: Path,
+) -> None:
+    """Under listing lag production promotes an intermediate node without an event.
+
+    This records #1296: the model claims "every apply event is a label change" and
+    the replay checks exactly that.  The converse (every promotion has an event) is
+    not claimed because production does not provide it.  When #1296 is fixed this
+    test fails: make ``_require_events_are_label_changes`` bidirectional (and the
+    model's ``eventsAreLabelChanges`` an equality) instead of deleting it.
+    """
+    topology = EXPECTED_TOPOLOGIES["transitive_chain"]
+    for lag, expected_events in ((False, (12,)), (True, ())):
+        world = LivenessWorld(tmp_path / f"lag-{lag}", topology=topology)
+        world.complete(13, CompletionPath.LABEL)
+        world.faults.listing_lag = lag
+        observation = world.cycle(apply=True)
+        assert StatusLabel.QUEUED.value not in observation.labels_before[12]
+        assert StatusLabel.QUEUED.value in observation.labels_after[12]
+        assert (
+            observation.promotion_issue_numbers == expected_events
+        ), "#1296 changed: see the docstring"
 
 
 def test_control_replay_detects_an_empty_completion_set(tmp_path: Path) -> None:

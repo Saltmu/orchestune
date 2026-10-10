@@ -471,7 +471,7 @@ CONTRACTS: tuple[Contract, ...] = (
     Contract(
         id="P3C-QUINT-MODEL",
         phase="3c",
-        guarantee="in the Quint model of dependency resolution, no promotion happens against an obligation, every fair cycle ends with the promotion (N = 1), an apply cycle's events are its real label changes and a dry run changes no label",
+        guarantee="in the Quint model of dependency resolution, no promotion happens against an obligation, every fair cycle ends with the promotion (N = 1), every event of an apply cycle is a real label change and a dry run changes no label",
         premise="topologies up to four dependency Issues and a two-step chain, the model's fairness, sampled search with the recorded seed and bounds (a simulator, never a proof)",
         boundary="model states after each action; the obligations of the last cycle",
         expectation="no invariant violation in the fixed-seed exploration and in every saved scenario; each model fault violates exactly its invariants",

@@ -70,7 +70,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3C-INTERMEDIATE-LIVENESS` | 中間ノードが公平な N = 1 cycle で昇格（dry run は preview）される | そのノード自身の依存が両境界で有効かつ予約なし | そのノードの最初の公平なcycleの終わり | N = 1 |
 | `P3C-SAFETY` | 有効な証拠がない、または hold・予約があるときに昇格（preview）しない | apply は昇格判定時点、dry run は cycle 開始時点で判定 | 全cycle | 起きない |
 | `P3C-INTERMEDIATE-SAFETY` | 中間ノードを、自身の依存が有効かつ予約なしになる前に昇格させない | apply は昇格判定時点で判定 | 全cycle | 起きない |
-| `P3C-QUINT-MODEL` | Quintモデルが safety・bounded liveness（N = 1）・イベント = 実ラベル（apply）・読み取り専用の dry run を守る | 有限のトポロジー（依存 Issue は最大4つ）、モデルの公平性、記録した seed と境界でのサンプリング探索 | 各 action 後のモデルの状態 | 不変条件の違反なし。モデルの各誤動作は期待した不変条件だけに違反する |
+| `P3C-QUINT-MODEL` | Quintモデルが safety・bounded liveness（N = 1）・apply のイベントは実ラベルの変更であること・読み取り専用の dry run を守る | 有限のトポロジー（依存 Issue は最大4つ）、モデルの公平性、記録した seed と境界でのサンプリング探索 | 各 action 後のモデルの状態 | 不変条件の違反なし。モデルの各誤動作は期待した不変条件だけに違反する |
 | `P3C-DRYRUN-READONLY` | dry run の cycle は T・中間ノード・依存 Issue の lifecycle ラベルを変えない | dry run は Forge を変更しない。hold ラベルと fixture 自身の stale 変更は cycle のものではない | 再生するトレースの各 dry run cycle | ラベルは不変 |
 | `P3C-QUINT-OBSERVATION` | 再生の各 step で、action を実行する前の本番の状態がモデルと一致する | `tests/quint_replay.py` の action 対応表 | 再生するITFトレースの各遷移 | 全ての前提が実ハーネスで成り立つ |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | dry run の T または中間ノードの preview が、そのノードの依存の未解放 completion reservation を尊重する | preview は context snapshot 上で定義される（この側は #1267 で修正済み） | dry run の cycle。決定的なシナリオで検査（machine は T の dry run の予約 preview を除外している） | 依存の予約が未解放の間 preview しない |
@@ -139,7 +139,7 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 
 **3つの層（どれも別の層の代わりにしません）。**
 
-1. *モデル*: 固定 seed の探索と保存した全シナリオで、モデル自身の不変条件（`P3C-QUINT-MODEL`）を守ります。`safety`（義務に反する昇格をしない）、`liveness`（公平な cycle は昇格で終わる。N = 1。apply は実ラベル、dry run は当該 cycle の preview）、`eventMatchesLabel`（apply cycle のイベントは実際のラベル変更と一致する）、`dryRunReadOnly` です。
+1. *モデル*: 固定 seed の探索と保存した全シナリオで、モデル自身の不変条件（`P3C-QUINT-MODEL`）を守ります。`safety`（義務に反する昇格をしない）、`liveness`（公平な cycle は昇格で終わる。N = 1。apply は実ラベル、dry run は当該 cycle の preview）、`eventsAreLabelChanges`（apply cycle のイベントはすべて実際のラベル変更である。逆向きは**主張しません**。listing lag の下で本番は中間ノードを `PromotionEvent` なしで昇格させるためで、#1296 で扱います）、`dryRunReadOnly` です。
 2. *再生*: 生成したITFトレースと保存したITFトレースの全遷移を、本番ハーネス（`LivenessWorld`。本物の `_prepare_cycle_context` と `execute_pipeline`）で実行します。cycle ごとに本番の観測（ラベル、`PromotionEvent` のプレビュー）をモデルの義務と照合し（ラベルが変わらなくても昇格イベントは昇格として数える。乱れのない apply cycle のイベントは実際のラベル変更でなければならない。dry run は fixture 自身の stale 変更を除き lifecycle ラベルを変えない）、action ごとに実行前の本番の状態をモデルの状態と照合します（`P3C-QUINT-OBSERVATION`）。期待値はモデルの状態だけから作り、本番に依存の完了を問い合わせません。
 3. *対照*: モデルの誤動作を1つずつ入れたもの（正常なモデルでは成功し、誤動作版では予定の step で期待した不変条件だけに違反する）と、本番の誤動作を1つずつ入れたもの（同じトレースを再生し、期待した契約の違反になる）です。parse・型・実行のエラーと timeout はツールのエラーであり、検出には数えません。
 
@@ -174,7 +174,7 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 | `intermediate-ignored` | `liveness`（`chain_apply`） | `P3C-INTERMEDIATE-LIVENESS`（`chain_apply`） |
 | `reservation-guard-bypass` | `safety`（`dependency_reservation_apply`） | `P3C-SAFETY`（`dependency_reservation_apply`） |
 | `hold-guard-bypass` | `safety`（`base_red_apply`） | `P3C-SAFETY`（`base_red_apply`） |
-| `event-only` | `eventMatchesLabel`、`liveness`（`final_apply`） | `P3C-LIVENESS-BOUND`（`final_apply`）。義務に反してイベントだけが出る場合は `P3C-SAFETY`（`base_red_apply`） |
+| `event-only` | `eventsAreLabelChanges`、`liveness`（`final_apply`） | `P3C-LIVENESS-BOUND`（`final_apply`）。義務に反してイベントだけが出る場合は `P3C-SAFETY`（`base_red_apply`） |
 | `dry-run-writes` | `dryRunReadOnly`（`final_dry`） | `P3C-DRYRUN-READONLY`（`final_dry`） |
 | `empty-completion-set` | - | `P3C-LIVENESS-BOUND`（`recompute_release`） |
 | `throwaway-context` | - | `P3C-LIVENESS-BOUND`（`lagged_apply`） |
