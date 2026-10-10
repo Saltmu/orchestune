@@ -19,6 +19,7 @@ from orchestune.review.markers import (
 
 HEAD = "a" * 40
 LATER = "b" * 40
+SLUG = "Saltmu/orchestune"
 
 
 class ReviewForge:
@@ -45,6 +46,21 @@ class ReviewForge:
         ]
         self.reviews = []
         self.inlines = []
+        self.issues = {}
+        self.issue_errors = set()
+        self.slug_error = False
+        self.fetched = []
+
+    def get_repository_slug(self):
+        if self.slug_error:
+            raise OSError("gh unavailable")
+        return SLUG
+
+    def get_issue_reference(self, number):
+        self.fetched.append(number)
+        if number in self.issue_errors:
+            raise OSError("forge unavailable")
+        return self.issues.get(number)
 
     def list_all_issue_comments(self, pr):
         return self.comments
@@ -676,3 +692,174 @@ def test_done_accepts_a_completed_reused_tracker_with_a_real_review(evidence):
         evidence, status="Completed", commit="aaaaaaa"
     )
     assert verify_review_evidence(request, forge, pr, HEAD).bot == "codex"
+
+
+def open_issue():
+    return SimpleNamespace(state="OPEN", is_pull_request=False)
+
+
+def final_round(evidence, reference, *, round_=5, judgment="adopt", status="deferred"):
+    """Judge `round_` with one required row pointing at `reference`."""
+    _, forge, _, table = evidence
+    forge.comments[0]["body"] = forge.comments[0]["body"].replace(
+        review_round_marker(1), review_round_marker(round_)
+    )
+    table["round"] = round_
+    table["findings"][0].update(judgment=judgment, status=status, evidence=reference)
+    rewrite(evidence)
+
+
+@pytest.mark.parametrize("judgment", ["adopt", "needs_information"])
+@pytest.mark.parametrize("round_", [5, 7])
+def test_final_round_allows_required_deferred_with_open_followup(
+    evidence, judgment, round_
+):
+    final_round(evidence, "Follow-up #2000", judgment=judgment, round_=round_)
+    evidence[1].issues[2000] = open_issue()
+    summary = verify(evidence)
+    assert summary.verdict == "pass"
+    assert summary.judgment_counts == {
+        judgment: 1,
+        "deferred": 1,
+        "required_deferred": 1,
+    }
+
+
+def test_required_deferred_count_round_trips_through_the_outcome_record(evidence):
+    from orchestune.outcome_record import OutcomeRecord, parse_from_comments
+
+    final_round(evidence, "#2000")
+    evidence[1].issues[2000] = open_issue()
+    record = OutcomeRecord(result="done", issue=1029, pr=42, review=verify(evidence))
+    parsed = parse_from_comments([{"body": record.render()}])
+    assert parsed == record
+    assert parsed.review.judgment_counts["required_deferred"] == 1
+
+
+def test_zero_case_has_no_required_deferred(evidence):
+    assert "required_deferred" not in verify(evidence).judgment_counts
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "{url}",
+        "{url}#issuecomment-1",
+        "Tracked in {url}.",
+        "**{url}**",
+        "see ({url}).",
+        "{url}, then merge",
+        "`{url}`",
+    ],
+)
+def test_followup_url_survives_prose_punctuation(evidence, template):
+    final_round(evidence, template.format(url=f"https://github.com/{SLUG}/issues/2000"))
+    evidence[1].issues[2000] = open_issue()
+    assert verify(evidence).judgment_counts["required_deferred"] == 1
+
+
+def _closed(issues):
+    issues[2000] = SimpleNamespace(state="CLOSED", is_pull_request=False)
+
+
+def _pull_request(issues):
+    issues[2000] = SimpleNamespace(state="OPEN", is_pull_request=True)
+
+
+def _missing(issues):
+    issues.pop(2000)
+
+
+INVALID_REQUIRED_DEFERRED = {
+    "below_limit": ("#2000", dict(round_=4), None),
+    "no_reference": ("Commit abc123", {}, None),
+    "missing_issue": ("#2000", {}, _missing),
+    "closed_issue": ("#2000", {}, _closed),
+    "pull_request": ("#2000", {}, _pull_request),
+    "self_issue": ("#1029", {}, None),
+    "self_pr": ("#42", {}, None),
+    "other_repository": ("https://github.com/other/repo/issues/2000", {}, None),
+    "pull_url": (f"https://github.com/{SLUG}/pull/2000", {}, None),
+    "host_spoof": (f"https://github.com.evil.example/{SLUG}/issues/2000", {}, None),
+    "malformed_port": (f"https://github.com:bad/{SLUG}/issues/2000", {}, None),
+    "fragment_of_pull_url": (f"https://github.com/{SLUG}/pull/9#2001", {}, None),
+    "fragment_of_other_repository": (
+        "https://github.com/other/repo/issues/9#2001",
+        {},
+        None,
+    ),
+    "cross_repository_shorthand": ("other/repo#2000", {}, None),
+    "needs_information_resolved": (
+        "#2000",
+        dict(judgment="needs_information", status="resolved"),
+        None,
+    ),
+    "unresolved": ("#2000", dict(status="unresolved"), None),
+}
+
+
+@pytest.mark.parametrize("case", INVALID_REQUIRED_DEFERRED)
+def test_invalid_required_deferred_is_rejected(evidence, case):
+    forge = evidence[1]
+    forge.issues.update({2000: open_issue(), 2001: open_issue(), 1029: open_issue()})
+    reference, kwargs, mutate = INVALID_REQUIRED_DEFERRED[case]
+    if mutate:
+        mutate(forge.issues)
+    final_round(evidence, reference, **kwargs)
+    snapshot = {}
+    with pytest.raises(CompletionJournalError) as exc:
+        verify_review_evidence(evidence[0], forge, evidence[2], HEAD, snapshot=snapshot)
+    assert exc.value.reason == CompleteFailureReason.REVIEW_EVIDENCE_INVALID
+    assert not snapshot
+    assert 42 not in forge.fetched and 1029 not in forge.fetched
+
+
+@pytest.mark.parametrize("failure", ["issue", "slug"])
+def test_followup_lookup_failure_is_evidence_missing(evidence, failure):
+    forge = evidence[1]
+    reference = "#2000"
+    if failure == "issue":
+        forge.issue_errors.add(2000)
+    else:
+        forge.slug_error = True
+        reference = f"https://github.com/{SLUG}/issues/2000"
+    forge.issues[2000] = open_issue()
+    final_round(evidence, reference)
+    snapshot = {}
+    with pytest.raises(CompletionJournalError) as exc:
+        verify_review_evidence(evidence[0], forge, evidence[2], HEAD, snapshot=snapshot)
+    assert exc.value.reason == CompleteFailureReason.EVIDENCE_MISSING
+    assert not snapshot
+
+
+def test_one_valid_candidate_satisfies_a_row_and_unknown_one_does_not(evidence):
+    forge = evidence[1]
+    forge.issues[2000] = SimpleNamespace(state="CLOSED", is_pull_request=False)
+    forge.issues[2001] = open_issue()
+    final_round(evidence, "Superseded #2000, tracked in #2001")
+    assert verify(evidence).judgment_counts["required_deferred"] == 1
+    forge.issue_errors.add(2001)
+    with pytest.raises(CompletionJournalError) as exc:
+        verify(evidence)
+    assert exc.value.reason == CompleteFailureReason.EVIDENCE_MISSING
+
+
+def test_rows_sharing_a_followup_fetch_it_once_and_count_each_row(evidence):
+    forge = evidence[1]
+    forge.issues[2000] = open_issue()
+    final_round(evidence, "#2000")
+    table = evidence[3]
+    forge.reviews = [
+        dict(
+            id=3,
+            body="Review",
+            submitted_at="2026-10-03T00:02:00Z",
+            commit_id=HEAD,
+            user={"login": "claude[bot]"},
+        )
+    ]
+    table["findings"].append({**table["findings"][0], "source": "review:3"})
+    rewrite(evidence)
+    summary = verify(evidence)
+    assert forge.fetched == [2000]
+    assert summary.judgment_counts["required_deferred"] == 2

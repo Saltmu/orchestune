@@ -78,6 +78,7 @@ from orchestune.review.markers import (
 )
 from orchestune.review.offline import resolve_legacy_completeness
 from orchestune.review.rounds import (
+    MAX_REVIEW_ROUNDS,
     build_restorable_trigger_body,
     previous_round_window,
 )
@@ -696,7 +697,7 @@ def wait_for_review(
     post_trigger: bool = True,
     body: str | None = None,
     body_file: str | None = None,
-    max_rounds: int = 5,
+    max_rounds: int = MAX_REVIEW_ROUNDS,
     max_retries: int = 1,
     round_num: int | None = None,
     stall_grace_seconds: int = DEFAULT_STALL_GRACE_SECONDS,

@@ -27,6 +27,9 @@ from orchestune.review.snapshot import (
     normalize_timestamp,
 )
 
+#: The fixed review-round limit; `--max-rounds` may only lower it.
+MAX_REVIEW_ROUNDS = 5
+
 
 @dataclass(frozen=True)
 class _FenceState:
@@ -364,7 +367,7 @@ def select_round(
     repository: str,
     pr_number: int,
     requested_round: int | None = None,
-    max_rounds: int = 5,
+    max_rounds: int = MAX_REVIEW_ROUNDS,
 ) -> ReviewRoundContext:
     """The posted round to evaluate: the PR-wide latest unless one is requested."""
     if not triggers:
@@ -408,7 +411,7 @@ def plan_next_round(
     *,
     bot: str,
     switch_reviewer: bool = False,
-    max_rounds: int = 5,
+    max_rounds: int = MAX_REVIEW_ROUNDS,
     explicit_round: int | None = None,
 ) -> int:
     """The round a new request would open; the limit counts the whole PR."""
