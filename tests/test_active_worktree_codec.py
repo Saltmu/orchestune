@@ -35,7 +35,7 @@ def test_codec_field_order_covers_every_subrecord_field_exactly_once() -> None:
         for item in fields(record_type)
     ]
 
-    assert len(_ACTIVE_FIELD_NAMES) == len(set(_ACTIVE_FIELD_NAMES)) == 36
+    assert len(_ACTIVE_FIELD_NAMES) == len(set(_ACTIVE_FIELD_NAMES)) == 39
     assert sorted(_ACTIVE_FIELD_NAMES) == sorted(record_names)
     assert _ACTIVE_FIELD_NAMES[:6] == (
         "issue_number",
@@ -108,3 +108,32 @@ def _with_payload(active: ActiveWorktree, payload: dict) -> ActiveWorktree:
     return replace(
         active, completion=replace(active.completion, completion_payload=payload)
     )
+
+
+def test_launch_attribution_fields_round_trip_and_are_omitted_when_absent() -> None:
+    base = decode_active_worktree(
+        {
+            "issue_number": 7,
+            "branch": "task/7",
+            "worktree_path": "w",
+            "declared_footprint": ["a.py"],
+        }
+    )
+    encoded = encode_active_worktree(base)
+    for name in ("launch_target", "launch_log_path", "launch_log_offset"):
+        assert name not in encoded
+
+    attributed = replace(
+        base,
+        launch=replace(
+            base.launch,
+            launch_target="claude-cli",
+            launch_log_path="logs/task-7.log",
+            launch_log_offset=12,
+        ),
+    )
+    encoded = encode_active_worktree(attributed)
+    assert encoded["launch_target"] == "claude-cli"
+    assert encoded["launch_log_path"] == "logs/task-7.log"
+    assert encoded["launch_log_offset"] == 12
+    assert decode_active_worktree(encoded) == attributed

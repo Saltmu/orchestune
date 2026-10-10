@@ -50,6 +50,7 @@ from orchestune.dispatch.execution_repair import (
 )
 from orchestune.dispatch.gc import _apply_stale_active_entry_discard
 from orchestune.dispatch.gc.completion import is_completion_hold_event
+from orchestune.dispatch.gc.usage_limit import handle_usage_limit_reclaim
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _preview_reclaim_event,
@@ -314,6 +315,19 @@ def _check_interactive_exclusion(
     return None
 
 
+def _excluded_before_reclaim(
+    command: RepairCommand,
+    run_state: RunState,
+    tasks_by_issue: Mapping[int, TaskMetadata],
+    config: DispatcherConfig,
+    events: list[CompletionEvent],
+) -> RepairResult | None:
+    """A stale or interactively owned subject never reaches the reclaim policy."""
+    return _execute_stale_reclaim(
+        command, run_state, tasks_by_issue, config, events
+    ) or _check_interactive_exclusion(command, run_state, tasks_by_issue, events)
+
+
 def build_gc_reclaim_handler(
     run_state: RunState,
     tasks_by_issue: Mapping[int, TaskMetadata],
@@ -331,16 +345,24 @@ def build_gc_reclaim_handler(
     events = completion_events if event_sink is None else event_sink
 
     def execute(command: RepairCommand) -> RepairResult:
-        stale_result = _execute_stale_reclaim(
+        excluded = _excluded_before_reclaim(
             command, run_state, tasks_by_issue, config, events
         )
-        if stale_result is not None:
-            return stale_result
-        interactive_result = _check_interactive_exclusion(
-            command, run_state, tasks_by_issue, events
+        if excluded is not None:
+            return excluded
+        usage_limit_result = handle_usage_limit_reclaim(
+            command,
+            run_state,
+            tasks_by_issue,
+            config,
+            events,
+            prs,
+            held_paths,
+            observed_now,
+            prior_events=completion_events,
         )
-        if interactive_result is not None:
-            return interactive_result
+        if usage_limit_result is not None:
+            return usage_limit_result
         planned = _planned_reclaims(
             (command,), run_state, tasks_by_issue, config, observed_now
         )

@@ -97,6 +97,7 @@ CALL_SITES: dict[str, int] = {
     "dispatch/prior_parent_merge.py::_normalize_closed_issue_label": 1,
     "dispatch/gc/completion.py::_apply_blocked_hold": 1,
     "dispatch/gc/completion.py::_publish_requeue": 1,
+    "dispatch/gc/usage_limit.py::_requeue": 1,
     "dispatch/gc/completion.py::_apply_done_worktree_cleanup": 1,
     "dispatch/gc/completion.py::_finalize_not_needed_worktree": 1,
     "dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim": 1,
@@ -369,6 +370,7 @@ def _prior_parent_and_completion() -> list[Case]:
         "dispatch/gc/completion.py::_apply_blocked_hold", "completion_blocked_hold"
     )
     requeue = _for("dispatch/gc/completion.py::_publish_requeue", "completion_requeue")
+    usage_limit = _for("dispatch/gc/usage_limit.py::_requeue", "usage_limit_requeue")
     done = _for(
         "dispatch/gc/completion.py::_apply_done_worktree_cleanup",
         "completion_done_cleanup",
@@ -395,6 +397,9 @@ def _prior_parent_and_completion() -> list[Case]:
         requeue("in-progress", (P,), Q, (P,), NRM, {Q}, True),
         requeue("blocked", (B,), Q, (B,), NRM, {Q}, True, snapshot=(B,)),
         requeue("replay", (Q,), Q, (P,), SLF, {Q}, True),
+        usage_limit("in-progress", (P,), Q, (P,), NRM, {Q}, True),
+        usage_limit("blocked", (B,), Q, (B,), NRM, {Q}, True, snapshot=(B,)),
+        usage_limit("replay", (Q,), Q, (P,), SLF, {Q}, True),
         done("in-progress", (P,), D, (P,), NRM, {D}),
         not_needed("in-progress", (P,), N, (P, Q, B), NRM, {N}),
         done("both", (Q, B), D, (Q, B), REP, {D}, snapshot=(Q, B)),

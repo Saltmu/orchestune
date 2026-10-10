@@ -59,6 +59,7 @@ from orchestune.ledger.run_state import (
     RunState,
     load_run_state,
     save_run_state,
+    usage_limit_wait,
 )
 from orchestune.ledger.status_labels import transition_status_label
 from orchestune.models import PrRecord
@@ -429,6 +430,24 @@ def _completion_policy_snapshot(config: DispatcherConfig) -> ActiveCompletionJou
     )
 
 
+def _launch_attribution(launch) -> tuple[str | None, str | None, int | None]:
+    """#1270: target-supplied attribution, normalized so it can never fail the record.
+
+    The process is already running when this is recorded; a malformed value from a
+    custom target must degrade to "attribution unknown" rather than raise.
+    """
+    target = getattr(launch, "target_name", None)
+    log_path = getattr(launch, "log_path", None)
+    offset = getattr(launch, "log_offset", None)
+    return (
+        target if isinstance(target, str) else None,
+        log_path if isinstance(log_path, str) else None,
+        offset
+        if isinstance(offset, int) and not isinstance(offset, bool) and offset >= 0
+        else None,
+    )
+
+
 def _build_active_worktree_from_launch(
     task: TaskMetadata,
     plan: TaskLaunchPlan,
@@ -443,6 +462,7 @@ def _build_active_worktree_from_launch(
             f"Cannot record launch for issue #{task.issue_number} without its claim reservation"
         )
 
+    launch_target, launch_log_path, launch_log_offset = _launch_attribution(launch)
     launch_info = LaunchInfo(
         pid=launch.pid,
         started_at=launch.dispatch_started_at or now,
@@ -450,6 +470,9 @@ def _build_active_worktree_from_launch(
         external_url=launch.external_url,
         launch_attempt_id=launch.launch_attempt_id,
         launch_phase="launched",
+        launch_target=launch_target,
+        launch_log_path=launch_log_path,
+        launch_log_offset=launch_log_offset,
     )
     launch_info = launch_info_with_selection(
         launch_info,
@@ -496,6 +519,8 @@ def _record_successful_launch(
         reclaim_record.pending = False
     if reclaim_record is not None and reclaim_record.early_death_retry_pending:
         reclaim_record.early_death_retry_pending = False
+    if reclaim_record is not None and reclaim_record.usage_limit_retry_pending:
+        reclaim_record.usage_limit_retry_pending = False
     save_run_state(
         run_state,
         config.run_state_path,
@@ -734,6 +759,21 @@ def _record_failed_launch_phase(
         )
 
 
+def _waits_for_usage_limit(
+    plan: TaskLaunchPlan[TTask],
+    run_state: RunState,
+    now: float,
+    config: DispatcherConfig,
+) -> bool:
+    """#1270: the target actually chosen is re-checked right before launching, so a
+    cooldown recorded after candidate selection cannot be bypassed."""
+    target_name = getattr(config.dispatch_target, "target_name", None)
+    return (
+        usage_limit_wait(run_state, plan.task.issue_number, target_name, now)
+        is not None
+    )
+
+
 def _apply_single_task_launch(
     plan: TaskLaunchPlan[TTask],
     run_state: RunState,
@@ -748,6 +788,9 @@ def _apply_single_task_launch(
         config.progress.emit, "task_launch", task_issue=plan.task.issue_number
     )
     emit("started")
+    if _waits_for_usage_limit(plan, run_state, now, config):
+        emit("held", reason="session usage limit wait")
+        return None
     with _launch_reservation(
         now, config, issue_number=plan.task.issue_number
     ) as commit:

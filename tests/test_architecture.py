@@ -199,6 +199,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.gc.outcome_decision",
             "dispatch.gc.prior_merge",
             "dispatch.gc.zombies",
+            "dispatch.gc.usage_limit",
             "dispatch.gc.unclaimed",
             "dispatch.gc.confirmed",
             "dispatch.gc.collection",
@@ -318,6 +319,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.result",
             "dispatch.cycle_events",
             "dispatch.retry_policy",
+            "dispatch.usage_limit",
             "infra",
             "infra.command_metrics",
             "infra.execution_deadline",
@@ -395,6 +397,12 @@ BOUNDED_RECOVERY_TERMINALS = {
         "apply_human_review_escalation",
     ),
     "max_review_timeout_retries": (
+        "dispatch/gc/completion.py",
+        "apply_human_review_escalation",
+    ),
+    # #1270: an exhausted session-limit budget escalates through the shared
+    # completion escalation, not through the generic reclaim budget.
+    "max_usage_limit_retries": (
         "dispatch/gc/completion.py",
         "apply_human_review_escalation",
     ),
@@ -748,6 +756,7 @@ def test_pyproject_uses_pep621_metadata_and_hatchling() -> None:
         "dependencies": [
             "pyyaml>=6.0.3,<7.0.0",
             "tomlkit>=0.13.0,<1.0.0",
+            "tzdata>=2024.1; sys_platform == 'win32'",
         ],
         "scripts": {
             "orchestune": "orchestune.cli:main",

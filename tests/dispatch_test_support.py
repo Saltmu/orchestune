@@ -48,6 +48,7 @@ GC_PROCESS_ALIVE_TARGETS = (
     "orchestune.dispatch.gc.is_process_alive",
     "orchestune.dispatch.gc.completion.is_process_alive",
     "orchestune.dispatch.gc.zombies.is_process_alive",
+    "orchestune.dispatch.gc.usage_limit.is_process_alive",
 )
 
 
@@ -253,6 +254,9 @@ def _active_worktree_from_flat(
         selection_reason=values.get("selection_reason"),
         launch_attempt_id=values.get("launch_attempt_id"),
         launch_phase=values.get("launch_phase"),
+        launch_target=values.get("launch_target"),
+        launch_log_path=values.get("launch_log_path"),
+        launch_log_offset=values.get("launch_log_offset"),
         _legacy=True,
     )
     claim = ClaimInfo(

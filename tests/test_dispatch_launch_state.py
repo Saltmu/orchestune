@@ -19,6 +19,7 @@ from orchestune.ledger.active_records import (
     ClaimInfo,
     LaunchInfo,
 )
+from orchestune.ledger.run_state import RunState, TaskReclaimRecord
 from orchestune.targets.contracts import ExecutionSelection
 from tests.dispatch_test_support import make_test_active_worktree
 
@@ -151,3 +152,59 @@ def test_token_estimate_is_recorded_even_when_unknown(tokens) -> None:
     assert launch.estimated_tokens == tokens
     assert launch.token_estimate_recorded is True
     assert launch.pid == 3
+
+
+class TestUsageLimitLaunchGate:
+    """#1270: the chosen target is re-checked right before launch."""
+
+    @staticmethod
+    def _plan_and_config(tmp_path, target_name):
+        from orchestune.dispatch.config import DispatcherConfig
+        from orchestune.dispatch.launch import TaskLaunchPlan
+        from orchestune.dispatch.targets import LocalProcessDispatchTarget
+        from tests.conftest import FakeForge, make_task
+
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            forge=FakeForge(),
+            dispatch_target=LocalProcessDispatchTarget(target_name=target_name),
+            apply=True,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        plan = TaskLaunchPlan(
+            make_task(1, parent_number=100), "claude/issue-1-task-1", None, "main"
+        )
+        return plan, config
+
+    @pytest.mark.parametrize(
+        "state_kwargs",
+        [
+            {"usage_limit_cooldowns": {"claude-cli": 200.0}},
+            {
+                "task_reclaim_counts": {
+                    1: TaskReclaimRecord(
+                        usage_limit_retry_count=1, usage_limit_retry_at=200.0
+                    )
+                }
+            },
+        ],
+    )
+    def test_waiting_task_is_not_claimed_or_launched(self, tmp_path, state_kwargs):
+        from unittest.mock import MagicMock
+
+        from orchestune.dispatch.launch import _apply_task_launches
+
+        plan, config = self._plan_and_config(tmp_path, "claude-cli")
+        claim_fn = MagicMock()
+        run_state = RunState(**state_kwargs)
+
+        launched = _apply_task_launches(
+            [plan], run_state, 100.0, config, claim_fn=claim_fn
+        )
+
+        assert launched == []
+        claim_fn.assert_not_called()
+        assert run_state.active_worktrees == {}
+        assert run_state.launch_history == []

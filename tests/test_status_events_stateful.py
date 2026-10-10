@@ -91,6 +91,7 @@ BUDGET_OF: dict[tuple[Event, Kind], str] = {
     (_E.RECLAIM, _K.PLAIN): "reclaim",
     (_E.REQUEUE, _K.EARLY_DEATH): "early_death",
     (_E.REQUEUE, _K.REVIEW_TIMEOUT): "review_timeout",
+    (_E.REQUEUE, _K.USAGE_LIMIT): "usage_limit",
 }
 #: Entries into `status:blocked` from in-progress that consume a persistent budget.
 BUDGETED_BLOCKS: dict[tuple[Event, Kind], str] = {
@@ -106,12 +107,13 @@ RETRY_BOUNDS: dict[str, int] = {
     "reclaim": 3,
     "early_death": 2,
     "review_timeout": 1,
+    "usage_limit": 2,
     "base_branch_red": 2,
     "recompute": 2,
 }
 
 #: Budgets kept only in the local `run_state.json` and lost with it.
-LOCAL_BUDGETS = frozenset({"reclaim", "early_death", "review_timeout"})
+LOCAL_BUDGETS = frozenset({"reclaim", "early_death", "review_timeout", "usage_limit"})
 #: The `TaskReclaimRecord` fields that hold each local budget.
 LOCAL_BUDGET_FIELDS: dict[str, frozenset[str]] = {
     "reclaim": frozenset({"count", "pending"}),
@@ -123,6 +125,14 @@ LOCAL_BUDGET_FIELDS: dict[str, frozenset[str]] = {
             "review_timeout_retry_count",
             "review_timeout_retry_at",
             "review_timeout_retry_pending",
+        }
+    ),
+    "usage_limit": frozenset(
+        {
+            "usage_limit_retry_count",
+            "usage_limit_retry_at",
+            "usage_limit_retry_pending",
+            "usage_limit_retry_run",
         }
     ),
 }
@@ -220,6 +230,7 @@ class TestLoopRegistry:
                 reclaim=replace(state.retries.reclaim, count=2, pending=True),
                 early_death=replace(state.retries.early_death, count=1, retry_at=9.0),
                 review_timeout=replace(state.retries.review_timeout, count=1),
+                usage_limit=replace(state.retries.usage_limit, count=1),
             ),
             counts=replace(state.counts, recompute=2, base_branch_red=1),
         )
@@ -529,6 +540,7 @@ _BOUNDED_LOOPS = [
     ((_E.RECLAIM, _K.PLAIN), "reclaim", {H}),
     ((_E.REQUEUE, _K.EARLY_DEATH), "early_death", {H}),
     ((_E.REQUEUE, _K.REVIEW_TIMEOUT), "review_timeout", {H}),
+    ((_E.REQUEUE, _K.USAGE_LIMIT), "usage_limit", {H}),
     ((_E.BLOCK, _K.BASE_BRANCH_RED), "base_branch_red", {H}),
     ((_E.RECOMPUTE, _K.PLAIN), "recompute", {P}),
 ]
@@ -613,6 +625,7 @@ class TestDocuments:
             "reclaim": "count",
             "early_death": "early_death_retry",
             "review_timeout": "review_timeout_retry",
+            "usage_limit": "usage_limit_retry",
         }
         assert {b for b, p in prefixes.items() if p in fields_named} == LOCAL_BUDGETS
 

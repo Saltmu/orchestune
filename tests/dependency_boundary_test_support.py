@@ -194,6 +194,9 @@ PRODUCTION_EXCEPTIONS = frozenset(
                 ("_handle_completed_event_outcome", "run_state"),
                 ("_rule_completed", "run_state"),
                 ("_rule_completed", "prs"),
+                # #1270: classifies a dead claude-cli run before the shared path.
+                ("_resolve_local_completion", "run_state"),
+                ("_resolve_local_completion", "prs"),
             }
         },
     }

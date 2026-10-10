@@ -42,6 +42,7 @@ from orchestune.dispatch.cycle_events import (
     ReviewTimeoutRequeuedCompletion,
     StaleEntryDiscardedCompletion,
     TaskWorktreeCompletion,
+    UsageLimitCompletion,
     WorktreeCompletion,
 )
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
@@ -278,7 +279,8 @@ def _completion_item_fields(
         | CompletingExcludedCompletion
         | ReclaimedCompletion
         | StaleEntryDiscardedCompletion
-        | AbandonmentPersistenceFailureCompletion,
+        | AbandonmentPersistenceFailureCompletion
+        | UsageLimitCompletion,
     ):
         return event.issue_number, event.subtask_id, event.action, None
     if isinstance(event, ChangesRequestedEscalationCompletion):

@@ -27,6 +27,11 @@ from orchestune.ledger.active_records import (
         {"token_estimate_recorded": "yes"},
         {"launch_phase": "invalid"},
         {"external_id": 12},
+        {"launch_target": 3},
+        {"launch_log_path": 3},
+        {"launch_log_offset": -1},
+        {"launch_log_offset": True},
+        {"launch_log_offset": "5"},
     ],
 )
 def test_launch_rejects_invalid_canonical_values(values: dict) -> None:

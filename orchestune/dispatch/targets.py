@@ -250,6 +250,37 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
         self._reviewer_bot = reviewer_bot
         self.target_name = target_name
 
+    def _resolve_command(
+        self,
+        task: TaskMetadata,
+        branch_name: str,
+        worktree_path: Path,
+        execution_selection: ExecutionSelection | None,
+        base_branch: str | None,
+    ) -> list[str]:
+        if not self._local_cmd:
+            return self._command_builder(task, worktree_path)
+        model = execution_selection.model if execution_selection else None
+        reasoning_effort = (
+            execution_selection.reasoning_effort if execution_selection else None
+        )
+        profile_name = (
+            execution_selection.profile
+            if execution_selection
+            else (task.execution_profile or "")
+        )
+        return _format_local_cmd(
+            self._local_cmd,
+            task,
+            branch_name,
+            worktree_path,
+            model,
+            reasoning_effort,
+            profile_name,
+            self._reviewer_bot,
+            base_branch=base_branch,
+        )
+
     def launch(
         self,
         task: TaskMetadata,
@@ -261,34 +292,14 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
         base_branch: str | None = None,
     ) -> DispatchHandle:
         self._log_dir.mkdir(parents=True, exist_ok=True)
-        model = execution_selection.model if execution_selection else None
-        reasoning_effort = (
-            execution_selection.reasoning_effort if execution_selection else None
+        cmd = self._resolve_command(
+            task, branch_name, worktree_path, execution_selection, base_branch
         )
-        profile_name = (
-            execution_selection.profile
-            if execution_selection
-            else (task.execution_profile or "")
-        )
-
-        if self._local_cmd:
-            cmd = _format_local_cmd(
-                self._local_cmd,
-                task,
-                branch_name,
-                worktree_path,
-                model,
-                reasoning_effort,
-                profile_name,
-                self._reviewer_bot,
-                base_branch=base_branch,
-            )
-        else:
-            cmd = self._command_builder(task, worktree_path)
-
         slug = branch_name.replace("/", "-")
         log_path = self._log_dir / f"{slug}.log"
         with open(log_path, "ab") as log_fh:
+            # Append mode: this run owns the bytes written after the current end.
+            log_offset = log_fh.tell()
             process = subprocess.Popen(
                 cmd,
                 cwd=str(worktree_path),
@@ -296,7 +307,13 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-        return DispatchHandle(pid=process.pid, branch_name=branch_name)
+        return DispatchHandle(
+            pid=process.pid,
+            branch_name=branch_name,
+            target_name=self.target_name,
+            log_path=str(log_path),
+            log_offset=log_offset,
+        )
 
     def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
         return not _is_pid_alive(handle.pid)

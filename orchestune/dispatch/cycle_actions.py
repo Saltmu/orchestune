@@ -100,6 +100,8 @@ from orchestune.dispatch.summary import (
     REASON_EARLY_DEATH_BACKOFF,
     REASON_FORCED_SERIAL,
     REASON_REVIEW_TIMEOUT_BACKOFF,
+    REASON_USAGE_LIMIT_BACKOFF,
+    REASON_USAGE_LIMIT_COOLDOWN,
 )
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_lifecycle import has_completion_reservation
@@ -107,7 +109,12 @@ from orchestune.ledger.completion_reservations import (
     completion_handoff_matches_active,
     completion_mutation_blocked_fresh,
 )
-from orchestune.ledger.run_state import ActiveWorktree, RunState, save_run_state
+from orchestune.ledger.run_state import (
+    ActiveWorktree,
+    RunState,
+    save_run_state,
+    usage_limit_wait,
+)
 from orchestune.models import IssueRecord
 from orchestune.task_metadata import TaskMetadata
 
@@ -194,17 +201,29 @@ def _run_active_worktree_rules(
     )
 
 
+_USAGE_LIMIT_REASONS = {
+    "backoff": REASON_USAGE_LIMIT_BACKOFF,
+    "cooldown": REASON_USAGE_LIMIT_COOLDOWN,
+}
+
+
 def _filter_retry_backoffs(
-    candidates: tuple[TaskMetadata, ...], run_state: RunState, now: float
+    candidates: tuple[TaskMetadata, ...],
+    run_state: RunState,
+    now: float,
+    target_name: str | None = None,
 ) -> tuple[list[TaskMetadata], list[tuple[TaskMetadata, str]]]:
     eligible: list[TaskMetadata] = []
     excluded: list[tuple[TaskMetadata, str]] = []
     for task in candidates:
         record = run_state.task_reclaim_counts.get(task.issue_number)
+        usage_limit = usage_limit_wait(run_state, task.issue_number, target_name, now)
         if record is not None and record.early_death_retry_at > now:
             excluded.append((task, REASON_EARLY_DEATH_BACKOFF))
         elif record is not None and record.review_timeout_retry_at > now:
             excluded.append((task, REASON_REVIEW_TIMEOUT_BACKOFF))
+        elif usage_limit is not None:
+            excluded.append((task, _USAGE_LIMIT_REASONS[usage_limit]))
         else:
             eligible.append(task)
     return eligible, excluded
@@ -438,7 +457,10 @@ class CycleActionAdapter:
         """
         view = self._bound_view()
         eligible, excluded = _filter_retry_backoffs(
-            candidates, self._run_state, self._now
+            candidates,
+            self._run_state,
+            self._now,
+            getattr(self._config.dispatch_target, "target_name", None),
         )
         authorized, actor_excluded = _filter_actor_permissions(eligible, self._config)
         excluded.extend(actor_excluded)

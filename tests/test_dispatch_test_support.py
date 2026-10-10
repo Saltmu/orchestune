@@ -226,17 +226,18 @@ class TestPatchGcProcessAlive:
             "orchestune.dispatch.gc.is_process_alive",
             "orchestune.dispatch.gc.completion.is_process_alive",
             "orchestune.dispatch.gc.zombies.is_process_alive",
+            "orchestune.dispatch.gc.usage_limit.is_process_alive",
         )
 
     def test_the_patched_value_is_visible_from_each_module(self):
         from orchestune.dispatch import execution_repair, gc
-        from orchestune.dispatch.gc import completion, zombies
+        from orchestune.dispatch.gc import completion, usage_limit, zombies
 
-        modules = (execution_repair, gc, completion, zombies)
+        modules = (execution_repair, gc, completion, zombies, usage_limit)
         with patch_gc_process_alive(return_value=False):
-            assert [module.is_process_alive(1) for module in modules] == [False] * 4
+            assert [module.is_process_alive(1) for module in modules] == [False] * 5
         with patch_gc_process_alive(return_value=True):
-            assert [module.is_process_alive(1) for module in modules] == [True] * 4
+            assert [module.is_process_alive(1) for module in modules] == [True] * 5
 
 
 class TestForgeStubs:

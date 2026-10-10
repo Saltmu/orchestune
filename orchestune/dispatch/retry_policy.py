@@ -19,6 +19,9 @@ DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS = 2
 DEFAULT_REVIEW_TIMEOUT_BACKOFF_SECONDS = 60
 DEFAULT_EARLY_DEATH_MAX_RETRIES = 2
 DEFAULT_EARLY_DEATH_BACKOFF_SECONDS = 60
+DEFAULT_MAX_USAGE_LIMIT_RETRIES = 2
+DEFAULT_USAGE_LIMIT_BACKOFF_SECONDS = 900
+DEFAULT_USAGE_LIMIT_RESET_GRACE_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,18 @@ def early_death_policy(
     backoff_seconds: float = DEFAULT_EARLY_DEATH_BACKOFF_SECONDS,
 ) -> RetryPolicy:
     """The configured number N counts retries: N allows exactly N requeues."""
+    return RetryPolicy(max_requeues=max_retries, backoff_seconds=backoff_seconds)
+
+
+def usage_limit_policy(
+    max_retries: int,
+    backoff_seconds: float = DEFAULT_USAGE_LIMIT_BACKOFF_SECONDS,
+) -> RetryPolicy:
+    """#1270: N counts additional launches after session-limit exits: N allows N requeues.
+
+    The backoff only applies while the reset time is unknown; a known reset
+    overrides ``retry_at`` in ``usage_limit.plan_usage_limit_retry``.
+    """
     return RetryPolicy(max_requeues=max_retries, backoff_seconds=backoff_seconds)
 
 

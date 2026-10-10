@@ -172,6 +172,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `AWAIT_REVIEW` (`PLAIN`) | `status:in-progress` | - | `dispatch/gc/completion.py::_finalize_not_needed_worktree` |
 | `REQUEUE` (`EARLY_DEATH`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
 | `REQUEUE` (`REVIEW_TIMEOUT`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/completion.py::_publish_requeue` |
+| `REQUEUE` (`USAGE_LIMIT`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/usage_limit.py::_requeue` |
 | `REQUEUE` (`REVIEW_TIMEOUT`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/policy_effects.py::reconcile_labels` |
 | `BLOCK` (`BASE_BRANCH_RED`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/policy_effects.py::reconcile_labels` |
 | `REVIEW_REJECT` (`PLAIN`) | `status:not-needed` | `status:queued` | `dispatch/gc/policy_effects.py::reconcile_labels` |
@@ -212,6 +213,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `ESCALATE` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:not-needed`, `status:queued` | `status:blocked-human-review` | `ledger/escalation.py::apply_human_review_escalation` |
 | `RECLAIM` (`PLAIN`) | `status:blocked`, `status:in-progress` | `status:queued` | `ledger/escalation.py::apply_human_review_escalation` |
 | `REQUEUE` (`EARLY_DEATH`) | `status:blocked`, `status:in-progress` | `status:queued` | `ledger/escalation.py::apply_human_review_escalation` |
+| `REQUEUE` (`USAGE_LIMIT`) | `status:blocked`, `status:in-progress` | `status:queued` | `ledger/escalation.py::apply_human_review_escalation` |
 | `NOT_NEEDED` (`REPLAN`) | `status:blocked`, `status:blocked-human-review`, `status:in-progress`, `status:manual-merge-required`, `status:queued` | `status:not-needed` | `replan/operations.py::_transition_to_not_needed` |
 
 ## 予算付きループの終端性（#1266）

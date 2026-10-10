@@ -252,6 +252,32 @@ def completion_requeue(env: Env) -> None:
     )
 
 
+def usage_limit_requeue(env: Env) -> None:
+    from orchestune.dispatch.cycle_events import UsageLimitCompletion
+    from orchestune.dispatch.gc import usage_limit
+
+    for name in ("remove_worktree", "backup_wip_commit", "save_run_state"):
+        env.monkeypatch.setattr(usage_limit, name, _NOOP)
+    event = UsageLimitCompletion(
+        issue_number=ISSUE,
+        action="usage_limit_requeued",
+        target="claude-cli",
+        reset_known=False,
+        retries_remaining=1,
+        retry_at=1.0,
+    )
+    usage_limit._requeue(
+        RunState(active_worktrees={}),
+        str(ISSUE),
+        _active(),
+        _completion_task(env),
+        env.config,
+        1.0,
+        None,
+        event,
+    )
+
+
 def completion_done_cleanup(env: Env) -> None:
     _stub_completion(env)
     ctx = _fake(active=_active(), config=env.config, active_task=_completion_task(env))
@@ -376,6 +402,7 @@ DRIVERS: dict[str, Driver] = {
     "rebase_wip_backup_failure": rebase_wip_backup_failure,
     "rebase_failure": rebase_failure,
     "zombie_requeue": zombie_requeue,
+    "usage_limit_requeue": usage_limit_requeue,
     "prior_parent_repair": prior_parent_repair,
     "prior_parent_normalize_closed": prior_parent_normalize_closed,
     "completion_blocked_hold": completion_blocked_hold,

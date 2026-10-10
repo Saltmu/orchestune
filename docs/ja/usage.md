@@ -314,6 +314,10 @@ else { Write-Warning 'report not created' }
 | `early-death-window-seconds` | `120` | 起動からこの秒数以内にローカルプロセスがコミットなしで終了した場合、一時的な起動障害として扱います。 |
 | `max-early-death-retries` | `2` | 一時的な起動障害を自動で再キューイングする上限。次のコミットなし終了は`status:blocked-human-review`へエスカレーションします。 |
 | `early-death-backoff-seconds` | `60` | 起動直後の異常終了を再キューイングする際の基準待機秒数。再試行ごとに待機時間を2倍にします。 |
+| `max-usage-limit-retries` | `2` | `claude-cli` がセッション上限（`You've hit your session limit` / `usage_limit_reached`）で終了した後に、追加で起動する最大回数。通常の回収・early-death・review-timeoutの回数とは別枠です。`0` は自動再投入なし。使い切ると使用上限による停止として`status:blocked-human-review`へエスカレーションします。 |
+| `usage-limit-backoff-seconds` | `900` | リセット時刻が確定できない場合の基準待機秒数（再試行ごとに2倍）。1以上。 |
+| `usage-limit-reset-grace-seconds` | `30` | 確定したリセット時刻に加える猶予秒数。この後にタスクを再投入します。 |
+| `usage-limit-timezone` | `None` | `resets 1pm` のような壁時計表記を解釈するIANAタイムゾーン（例: `Asia/Tokyo`）。未指定の場合、この表記はUTCとは解釈せず「リセット不明」としてバックオフを適用します。オフセット付き時刻があれば常にそれを優先します。上限が有効な間は、同じ台帳の `claude-cli` タスクを新規に起動せず、他のtargetには影響しません。 |
 | `zombie-gc` | `true` | ゾンビプロセスの検出・回収を有効にするフラグ。 |
 | `max-tokens-per-window` | `None` | 指定した時間窓内で消費できるトークン数の総上限。累計消費量が上限に達した場合、新規タスクの起動を一時停止します。 |
 | `max-tokens-per-task` | `None` | 単一サブタスクが消費できるトークン数の上限。完了時にこの上限を超過していた場合、自動完了を見送りエスカレーションします。 |

@@ -315,6 +315,45 @@ class TestRunState:
         assert completed.reasoning_effort == "medium"
         assert completed.selection_reason == "default profile 'balanced' applied"
 
+    def test_launch_attribution_round_trips_and_legacy_records_load_as_unknown(
+        self, tmp_path
+    ):
+        path = tmp_path / "run_state.json"
+        state = RunState(
+            active_worktrees={
+                "10": _current_active_worktree(
+                    launch_target="claude-cli",
+                    launch_log_path="logs/claude-issue-10-x.log",
+                    launch_log_offset=2048,
+                ),
+                "11": _current_active_worktree(
+                    issue_number=11, branch="claude/issue-11-y"
+                ),
+            }
+        )
+        save_run_state(state, path, now=1700000000.0)
+        raw = json.loads(path.read_text(encoding="utf-8"))["active_worktrees"]
+        assert raw["10"]["launch_log_offset"] == 2048
+        # Absent attribution stays absent in the JSON (legacy-identical encoding).
+        assert "launch_target" not in raw["11"]
+
+        loaded = load_run_state(path)
+        attributed = loaded.active_worktrees["10"].launch
+        assert (attributed.launch_target, attributed.launch_log_offset) == (
+            "claude-cli",
+            2048,
+        )
+        legacy = loaded.active_worktrees["11"].launch
+        assert (
+            legacy.launch_target,
+            legacy.launch_log_path,
+            legacy.launch_log_offset,
+        ) == (
+            None,
+            None,
+            None,
+        )
+
     def test_old_data_without_execution_profile_fields_loads_as_none(self, tmp_path):
         path = tmp_path / "run_state.json"
         path.write_text(
@@ -1018,3 +1057,106 @@ class TestPendingLockReleaseNotices:
         restored = load_run_state(path).pending_lock_release_notices
         assert len(restored) == MAX_PENDING_LOCK_RELEASE_NOTICES
         assert restored[-1] == oversized[-1]
+
+
+class TestUsageLimitLedger:
+    """#1270: dedicated session-limit retry budget and per-target cooldown."""
+
+    def test_usage_limit_retry_fields_round_trip(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        now = 1700000000.0
+        record = TaskReclaimRecord(
+            count=1,
+            last_reclaimed_at=now,
+            usage_limit_retry_count=2,
+            usage_limit_retry_at=now + 900.0,
+            usage_limit_retry_pending=True,
+            usage_limit_retry_run="claim-10:attempt-3",
+        )
+        save_run_state(RunState(task_reclaim_counts={280: record}), path, now=now)
+
+        assert load_run_state(path).task_reclaim_counts == {280: record}
+
+    def test_records_without_usage_limit_fields_load_with_defaults(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        path.write_text(
+            json.dumps({"task_reclaim_counts": {"280": {"count": 1}}}), encoding="utf-8"
+        )
+
+        loaded = load_run_state(path).task_reclaim_counts[280]
+
+        assert loaded.usage_limit_retry_count == 0
+        assert loaded.usage_limit_retry_at == 0.0
+        assert loaded.usage_limit_retry_pending is False
+        assert loaded.usage_limit_retry_run is None
+
+    def test_corrupted_usage_limit_fields_fall_back_without_dropping_the_record(
+        self, tmp_path
+    ):
+        path = tmp_path / "run_state.json"
+        payload = {
+            "task_reclaim_counts": {
+                "280": {
+                    "count": 2,
+                    "usage_limit_retry_count": "bad",
+                    "usage_limit_retry_at": float("inf"),
+                    "usage_limit_retry_pending": "yes",
+                    "usage_limit_retry_run": 7,
+                }
+            }
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        loaded = load_run_state(path).task_reclaim_counts[280]
+
+        assert loaded.count == 2
+        assert loaded.usage_limit_retry_count == 0
+        assert loaded.usage_limit_retry_at == 0.0
+        assert loaded.usage_limit_retry_pending is False
+        assert loaded.usage_limit_retry_run is None
+
+    def test_cooldowns_round_trip_and_survive_pruning(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        now = 1700000000.0
+        state = RunState(usage_limit_cooldowns={"claude-cli": now + 3600.0})
+
+        save_run_state(state, path, now=now)
+
+        assert load_run_state(path).usage_limit_cooldowns == {
+            "claude-cli": now + 3600.0
+        }
+        assert prune_run_state(state, now=now).usage_limit_cooldowns == {
+            "claude-cli": now + 3600.0
+        }
+
+    def test_empty_cooldowns_are_not_written_so_old_ledgers_stay_identical(
+        self, tmp_path
+    ):
+        path = tmp_path / "run_state.json"
+        save_run_state(RunState(), path, now=1700000000.0)
+
+        assert "usage_limit_cooldowns" not in json.loads(path.read_text("utf-8"))
+        assert load_run_state(path).usage_limit_cooldowns == {}
+
+    def test_broken_cooldown_entries_are_ignored(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        payload = {
+            "usage_limit_cooldowns": {
+                "claude-cli": 1700003600.0,
+                "": 5.0,
+                "codex-cli": "soon",
+                "agy-cli": float("nan"),
+                "local": True,
+            }
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        assert load_run_state(path).usage_limit_cooldowns == {
+            "claude-cli": 1700003600.0
+        }
+
+    def test_non_object_cooldowns_load_as_empty(self, tmp_path):
+        path = tmp_path / "run_state.json"
+        path.write_text(json.dumps({"usage_limit_cooldowns": [1, 2]}), encoding="utf-8")
+
+        assert load_run_state(path).usage_limit_cooldowns == {}
