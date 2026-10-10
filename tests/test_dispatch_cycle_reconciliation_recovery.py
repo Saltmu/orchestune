@@ -21,6 +21,7 @@ from orchestune.ledger.run_state import (
     RunState,
 )
 from orchestune.models import IssueRecord
+from tests.conftest import FakeForge
 from tests.dispatch_test_support import (
     flat_active_worktree,
     stub_label_actor_permission,
@@ -204,6 +205,12 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         mock_remove_label = fake_forge.remove_label
         fake_forge.add_label.reset_mock(side_effect=True)
         mock_add_label = fake_forge.add_label
+        live_forge = FakeForge()
+        live_forge.seed_issue(blocked_issue)
+        fake_forge.get_issue.side_effect = live_forge.get_issue
+        fake_forge.get_issue_labels.side_effect = live_forge.get_issue_labels
+        mock_remove_label.side_effect = live_forge.remove_label
+        mock_add_label.side_effect = live_forge.add_label
         fake_forge.list_open_prs.reset_mock(side_effect=True)
         fake_forge.list_open_prs.return_value = []
         fake_forge.list_issues_by_label.reset_mock(side_effect=True)

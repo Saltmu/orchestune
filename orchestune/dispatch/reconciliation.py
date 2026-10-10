@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from orchestune.consistency.invariants.status import primary_status_labels
+from orchestune.consistency.invariants.status import (
+    PROMOTION_HOLD_LABELS,
+    primary_status_labels,
+)
 from orchestune.dag.graph import recompute_dag_for_footprint_change
 from orchestune.dependencies.policy import (
     DependencyPolicyView,
@@ -13,6 +16,7 @@ from orchestune.dependencies.policy import (
     has_pending_dependencies,
 )
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_context_state import RecordStatus
 from orchestune.dispatch.cycle_events import PromotionEvent
 from orchestune.dispatch.cycle_records import (
     _authoritative_execution_active,
@@ -21,14 +25,21 @@ from orchestune.dispatch.cycle_records import (
 from orchestune.dispatch.locks import check_footprint_deviation
 from orchestune.dispatch.rebase import SubTask, _build_subtasks_for_recompute
 from orchestune.dispatch.rules import CycleContext
+from orchestune.dispatch.status_dependency_policy import dependencies_completed
 from orchestune.dispatch.status_repair import VerifiedStatusTransition
+from orchestune.dispatch.status_repair_dependencies import (
+    FreshDependencyEvaluation,
+    evaluate_fresh_dependencies,
+)
 from orchestune.forge import Forge
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
+from orchestune.issue_parsing import parse_task_from_issue
 from orchestune.labels import StatusLabel
 from orchestune.ledger.completion_reservations import completion_mutation_blocked_fresh
 from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import RunState
 from orchestune.ledger.status_labels import transition_status_label
+from orchestune.ledger.status_machine import status_repair_preserves_protection
 from orchestune.models import IssueRecord
 from orchestune.outcome_record import (
     OutcomeLookupResult,
@@ -130,7 +141,7 @@ def _confirm_queued_recovery(
     *,
     issue_number: int,
     before_labels: tuple[str, ...],
-) -> None:
+) -> bool:
     """#883: apply成功後にlive検証した`VerifiedStatusTransition`を`ctx`へ反映する。
 
     `QUEUED`は`_EXECUTION_ACTIVE_TARGETS`(cycle_records.py)に含まれないため
@@ -146,7 +157,7 @@ def _confirm_queued_recovery(
         config, issue_number=issue_number, before_labels=before_labels
     )
     if receipt is not None:
-        apply_verified_transition(
+        result = apply_verified_transition(
             ctx,
             receipt,
             execution_active=_authoritative_execution_active(
@@ -158,6 +169,11 @@ def _confirm_queued_recovery(
                 ),
             ),
         )
+        return result is not None and result.status in (
+            RecordStatus.APPLIED,
+            RecordStatus.NOOP,
+        )
+    return False
 
 
 def _handle_blocked_recompute_recovery(
@@ -188,7 +204,13 @@ def _handle_blocked_recompute_recovery(
         if not task or not task.subtask_id:
             continue
         event = _resolve_one_blocked_recompute_issue(
-            issue, task, active_conflict_subtask_ids, ctx, run_state, config
+            issue,
+            task,
+            active_conflict_subtask_ids,
+            ctx,
+            run_state,
+            config,
+            issue_records=tuple(issues.all()),
         )
         if event is not None:
             recompute_resolved_promoted_events.append(event)
@@ -203,6 +225,8 @@ def _resolve_one_blocked_recompute_issue(
     ctx: CycleContext,
     run_state: RunState,
     config: DispatcherConfig,
+    *,
+    issue_records: tuple[IssueRecord, ...] | None = None,
 ) -> PromotionEvent | None:
     if completion_mutation_blocked_fresh(
         run_state, issue.number, config.run_state_path
@@ -210,30 +234,91 @@ def _resolve_one_blocked_recompute_issue(
         return None
     if task.subtask_id in active_conflict_subtask_ids:
         return None
-    if config.apply:
-        config.resolved_forge.remove_label(issue.number, StatusLabel.BLOCKED_RECOMPUTE)
-    if _has_pending_dependencies(task, ctx):
-        return None
-    if config.apply:
-        before_labels = tuple(
-            current.status_labels
-            if (current := ctx.task(issue.number)) is not None
-            else task.status_labels
+    if not config.apply:
+        # Preview is defined over the snapshot; only our own marker is discounted.
+        labels = tuple(
+            label for label in issue.labels if label != StatusLabel.BLOCKED_RECOMPUTE
         )
+        if not _recompute_subject_can_promote(
+            issue.state, labels
+        ) or not dependencies_completed(ctx.assess_dependencies(issue.number)):
+            return None
+    else:
+        evaluation = _release_recompute_for_promotion(
+            issue.number, ctx, run_state, config, issue_records
+        )
+        if evaluation is None:
+            return None
         transition_status_label(
             config.resolved_forge,
             issue.number,
             StatusLabel.QUEUED,
             (StatusLabel.BLOCKED,),
         )
-        _confirm_queued_recovery(
+        if not _confirm_queued_recovery(
             ctx,
             run_state,
             config,
             issue_number=issue.number,
-            before_labels=before_labels,
-        )
+            before_labels=tuple(task.status_labels),
+        ):
+            return None
     return PromotionEvent(issue_number=issue.number, subtask_id=task.subtask_id)
+
+
+def _recompute_subject_can_promote(state: str, labels: tuple[str, ...]) -> bool:
+    return (
+        state.upper() == "OPEN"
+        and primary_status_labels(labels) == (StatusLabel.BLOCKED,)
+        and status_repair_preserves_protection(labels, StatusLabel.QUEUED)
+        and not any(label in labels for label in PROMOTION_HOLD_LABELS)
+    )
+
+
+def _release_recompute_for_promotion(
+    issue_number: int,
+    ctx: CycleContext,
+    run_state: RunState,
+    config: DispatcherConfig,
+    issue_records: tuple[IssueRecord, ...] | None,
+) -> FreshDependencyEvaluation | None:
+    """Release the conflict marker, then revalidate promotion against live evidence."""
+    forge = config.resolved_forge
+    try:
+        issue = forge.get_issue(issue_number)
+        if (
+            issue is None
+            or issue.state.upper() != "OPEN"
+            or primary_status_labels(issue.labels) != (StatusLabel.BLOCKED,)
+            or StatusLabel.BLOCKED_RECOMPUTE not in issue.labels
+            or not status_repair_preserves_protection(issue.labels, StatusLabel.QUEUED)
+        ):
+            return None
+        forge.remove_label(issue_number, StatusLabel.BLOCKED_RECOMPUTE)
+        records = ctx.issue_records() if issue_records is None else issue_records
+        tasks_by_issue = {
+            record.number: parse_task_from_issue(record) for record in records
+        }
+        evaluation = evaluate_fresh_dependencies(
+            parse_task_from_issue(issue),
+            tasks_by_issue,
+            completion_evidence=ctx,
+            forge=forge,
+        )
+        if (
+            evaluation is None
+            or not _recompute_subject_can_promote(
+                evaluation.task.issue_state, evaluation.task.status_labels
+            )
+            or not dependencies_completed(evaluation.assessment)
+            or completion_mutation_blocked_fresh(
+                run_state, issue_number, config.run_state_path
+            )
+        ):
+            return None
+        return evaluation
+    except Exception:  # fail closed on marker mutation or fresh-read failure
+        return None
 
 
 @dataclass(frozen=True)

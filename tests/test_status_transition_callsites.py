@@ -146,7 +146,7 @@ OUT_OF_SCOPE_PATHS: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "dispatch/reconciliation.py",
-        "_resolve_one_blocked_recompute_issue",
+        "_release_recompute_for_promotion",
         "removes blocked-recompute directly",
     ),
     (
@@ -328,11 +328,9 @@ def _attempt_and_reconciliation() -> list[Case]:
         attempt("queued-and-blocked", (Q, B), P, (Q, B), REP, {P}),
         attempt("no-lifecycle", (), P, (), INI, {P}),
         attempt("aux-force-serial-kept", (Q, FS), P, (Q,), AUX, {P, FS}),
-        blocked("blocked", (B,), Q, (B,), NRM, {Q}),
         blocked(
             "aux-recompute-removed", (B, RC), Q, (B,), AUX, {Q}, direct_removed={RC}
         ),
-        blocked("replay", (Q,), Q, (B,), SLF, {Q}),
         red("blocked", (B, CI_RED), Q, (B,), NRM, {Q}, direct_removed={CI_RED}),
         red("replay", (Q,), Q, (B,), SLF, {Q}),
     ]

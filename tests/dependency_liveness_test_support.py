@@ -65,7 +65,6 @@ LIVENESS_BOUND = 1
 #: Counterexamples split out to their own production Issues (footprint stays test).
 OUTCOME_NOT_NEEDED_ISSUE = "#1269"
 SELF_RESERVATION_PREVIEW_ISSUE = "#1283"
-RECOMPUTE_RELEASE_ISSUE = "#1268"
 
 
 @dataclass(frozen=True, slots=True)
