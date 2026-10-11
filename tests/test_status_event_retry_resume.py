@@ -21,7 +21,8 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.claim.contracts import ClaimOutcome
+from orchestune.claim.contracts import ClaimOutcome, OwnerKind, ReservationKind
+from orchestune.claim.issue_metadata import publish_claim_ownership_to_issue
 from orchestune.dependencies.resolution import build_legacy_dag_inputs
 from orchestune.dispatch import launch, rebase, recovery
 from orchestune.dispatch.gc import policies, zombies
@@ -289,6 +290,41 @@ class TestRecomputeBudget:
             ISSUE, pid=None, recompute_count=count, forced_serial=serial
         )
         assert _deviate(restored, config, task) == "forced_serial"
+
+    @pytest.mark.parametrize(
+        ("carry", "expected"),
+        [(True, "already_forced_serial"), (False, "recomputed")],
+        ids=["claim-carries-the-label", "control-pre-1304-claim-drops-it"],
+    )
+    def test_ledger_loss_keeps_a_label_only_force_serial_through_claim(
+        self, tmp_path: Path, carry: bool, expected: str
+    ) -> None:
+        """#1304: the label is stripped by claim; the body must still say serial."""
+        forge, config, task = _recompute_world(tmp_path)
+        labelled = make_issue(ISSUE, labels=(Q, StatusLabel.FORCE_SERIAL))
+        forge.issues[ISSUE] = labelled
+        publish = labelled
+        if not carry:  # the pre-#1304 claim published ownership without the flag
+            publish = replace(labelled, labels=(Q,))
+        assert (
+            publish_claim_ownership_to_issue(
+                forge,
+                publish,
+                OwnerKind.INTERACTIVE,
+                "claim-1",
+                ReservationKind.FOOTPRINT,
+            )
+            is None
+        )
+        stripped = forge.issues[ISSUE]
+        forge.issues[ISSUE] = replace(stripped, labels=(P,))  # (LAUNCH, CLAIM) strip
+        issue = forge.get_issue(ISSUE)
+        assert issue is not None
+        count, serial = recovery._recovery_counters_for_issue(issue)
+        restored = make_test_active_worktree(
+            ISSUE, pid=None, recompute_count=count, forced_serial=serial
+        )
+        assert _deviate(restored, config, task) == expected
 
     def test_stop_after_the_body_write_does_not_consume_twice(
         self, tmp_path: Path

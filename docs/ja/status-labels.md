@@ -289,7 +289,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 - **GC回収**（`_refresh_reclaim` → `_reclaim_external_or_local`。`_record_reclaim` で予約、`_settle_reclaim` で確定）: どの停止点から再開しても回数は1回だけ増え、`pending` は解除されます。上限超過のエスカレーションはちょうど1回です。`status:blocked-human-review` の付与後に止まった場合、再開したGCはエスカレーション済みとして数えずに確定するだけで、残った `status:in-progress` はstatus repair（#1218）に委ねられます（モデルの `restart` も同じ結果を予測します）。予約・保留は既存の `TaskReclaimRecord` を更新するので、早期終了・review timeout・usage-limit の予算は回収で0に戻りません（#1279、`P3B-RECLAIM-BUDGET-PRESERVED`）。
 - **早期終了・review timeout**（GC完了の `_publish_requeue`、確定は `_settle_completion_requeue`）: 予約がディスクに届いた後の停止では、再開しても回数を再消費せず `retry_at` も最初の値のままです。保存前の停止では予約が失われ、再開時の時刻で計画し直します。確定の保存後に止まると台帳から実行が外れるため、残った `status:in-progress` はstatus repairに委ねられます。
 - **review timeoutのcompletion policy**（`_prepare` → `_apply_policy`）: operation単位の予約を再利用し、再投入コメントは1回だけです。
-- **footprint逸脱の再計算**: 回数と `forced_serial` はIssue本文のFootprintフェンスに永続し、`run_state.json` を失っても本文から復元されます。通常の起動も、providerを呼ぶ前に現在のIssue本文・ラベルを読んでclaim予約へ引き継ぎ（`max` / OR、取得・保存できなければ起動を保留）、再投入後も予算は0に戻りません（#1280、`P3B-RECOMPUTE-BUDGET-PRESERVED`）。本文の書き込み後に止まっても二重に消費しません。
+- **footprint逸脱の再計算**: 回数と `forced_serial` はIssue本文のFootprintフェンスに永続し、`run_state.json` を失っても本文から復元されます。通常の起動も、providerを呼ぶ前に現在のIssue本文・ラベルを読んでclaim予約へ引き継ぎ（`max` / OR、取得・保存できなければ起動を保留）、再投入後も予算は0に戻りません（#1280、`P3B-RECOMPUTE-BUDGET-PRESERVED`）。本文の書き込み後に止まっても二重に消費しません。ラベルだけの`status:force-serial`（本文に`forced_serial`が無い移行期のIssue）は、claimが`status:*`ラベルを除去する前に、所有者メタデータを書く既存の本文更新1回へ`forced_serial: true`として同乗させます（追加のforge呼び出しなし、下げない、#1304）。
 - **base-branch-red**: attemptはIssueコメントのOutcome Recordから数え、同じ `(claim_id, head_sha)` の再送は同じattemptを使います。3回目でエスカレーションします。
 
 ### 実行時間と再現
