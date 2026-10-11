@@ -329,12 +329,13 @@ class TestExecutionIdentity:
         assert late == Rejected("stale-execution")
         assert _apply(state, Event.LAUNCH, execution=A) == Rejected("launch-mismatch")
 
-    def test_launch_with_retired_identity_while_queued_is_rejected(self) -> None:
+    def test_launch_with_retired_identity_after_recovery_is_allowed(self) -> None:
         state = _applied(_apply(_model(Q), Event.LAUNCH, execution=A)).state
         queued = _applied(_apply(state, Event.RECLAIM, execution=A)).state
         assert queued.execution_identity is None
         assert A in queued.retired_execution_identities
-        assert _apply(queued, Event.LAUNCH, execution=A) == Rejected("stale-execution")
+        relaunched = _applied(_apply(queued, Event.LAUNCH, execution=A)).state
+        assert relaunched.execution_identity == A
 
     def test_events_without_identity_are_not_guarded(self) -> None:
         state = _model(

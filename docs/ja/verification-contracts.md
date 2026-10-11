@@ -23,6 +23,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P2-CONVERGENCE-UPPER-BOUND` | 2 | unverified | - | - |
 | `P3A-ROUTE-COVERAGE` | 3a | verified | `unrouted-source`, `unexecuted-route-condition` | - |
 | `P3A-DYNAMIC-CONFORMANCE` | 3a | verified | `misrouted-event`, `wrong-model-target` | - |
+| `P3A-LAUNCH-IDENTITY-CONFORMANCE` | 3a | verified | `active-fact-guard-bypass` | #1286 |
 | `P3A-DOCUMENT-TABLE` | 3a | unverified | - | - |
 | `P3B-BUDGET-CONSUMED` | 3b | verified | `budget-not-consumed` | - |
 | `P3B-RETRY-BOUND` | 3b | verified | `budget-bound-exceeded` | - |
@@ -60,6 +61,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P2-CONVERGENCE-UPPER-BOUND` | 上限 k=3 cycle 以内に収束する | P2-RECOVERY-ONE-CYCLE と同じ | k回目のcycle | k=3 |
 | `P3A-ROUTE-COVERAGE` | 全ての本番ソースに経路があり、全ての経路条件がケースで実行される | 本番ソースの構文上の呼び出し走査 → CALL_SITES の数と集合 → EVENT_BY_SOURCE の経路と実行ケース | 呼び出し元登録簿と経路表 | 網羅されている |
 | `P3A-DYNAMIC-CONFORMANCE` | 本番ドライバーが Event モデルの予測したラベルと状態に到達する | 実行されるケース表。静的網羅は別契約 | 各ステップ（labels・result・completion・execution・retries・counts） | apply_event と一致 |
+| `P3A-LAUNCH-IDENTITY-CONFORMANCE` | `CycleContext.record_launch` と Event モデルが起動 identity の結果・状態を一致させ、全source/conditionの保護範囲を記録する | 独立した期待値ケース表と全 `EVENT_BY_SOURCE` 条件の保護表 | RecordStatus/reason、effective labels、execution_active、fact、拒否時の不変性 | 同一active factはNOOP、active競合はCONFLICT、確認済みinactive後は再起動を許可 |
 | `P3A-DOCUMENT-TABLE` | status-labels.md が全経路の source / target を載せる | 文書が読者の仕様になる | 文書の表 | 経路表と一致 |
 | `P3B-BUDGET-CONSUMED` | 新しい論理リトライごとに予算を1つ消費し、resume は消費しない | 別々のoperationを持つ予算付きEvent | 各 delivery | count + 1（resume・枯渇は不変） |
 | `P3B-RETRY-BOUND` | 台帳のepoch内で予算ごとの新規リトライが仕様表の上限を超えない | 既定のlimits。ローカル予算は台帳消失でのみ戻る | カウントされる各リトライ | RETRY_BOUNDS |
@@ -120,6 +122,7 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 | `event-only` | commandは何も変えないが検証が成功を主張する | `P2-LIVE-VERIFICATION`（Phase 2）、`P3C-LIVENESS-BOUND`（3c） | result の status と実ラベル、apply cycle のラベル |
 | `unrouted-source` / `unexecuted-route-condition` | ソースを消す／実行されない条件を足す | `P3A-ROUTE-COVERAGE` | 静的検査 |
 | `misrouted-event` / `wrong-model-target` | 経路が別の Event を指す／モデルが別の遷移先を返す | `P3A-DYNAMIC-CONFORMANCE` | 本番ドライバーとモデルの比較 |
+| `active-fact-guard-bypass` | `_refuse_launch` が実行中の別factを通す | `P3A-LAUNCH-IDENTITY-CONFORMANCE` | active fact が異なる決定的な record_launch 比較 |
 | `budget-not-consumed` | `apply_event` が以前の retries を保つ | `P3B-BUDGET-CONSUMED` | reclaim ループ |
 | `budget-bound-exceeded` | reclaim の上限を表より大きくする | `P3B-RETRY-BOUND` | reclaim ループ |
 | `persistent-budget-reset` | `restart` が永続カウントも0にする | `P3B-LEDGER-LOSS-KEEPS-PERSISTENT` | 台帳消失のシナリオ |
