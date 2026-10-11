@@ -257,3 +257,24 @@ def test_documents_state_the_scope_of_the_guarantee(lang: str) -> None:
     assert "unverified" in text and "known_defect" in text
     # The Quint exploration is a sampled search; the document must never read as a proof.
     assert ("not a proof" in text) or ("証明ではありません" in text)
+
+
+def test_p3a_route_coverage_includes_callsite_scan_test() -> None:
+    """P3A-ROUTE-COVERAGE must explicitly pin the call-site scan test node (#1293)."""
+    p3a = next(c for c in CONTRACTS if c.id == "P3A-ROUTE-COVERAGE")
+    expected_node = (
+        "tests/test_status_transition_callsites.py"
+        "::TestRegistryMatchesTheSource::test_every_call_site_is_registered_with_its_call_count"
+    )
+    assert (
+        expected_node in p3a.tests
+    ), f"{expected_node} must be in P3A-ROUTE-COVERAGE.tests"
+
+
+@pytest.mark.parametrize("lang", ["ja", "en"])
+def test_reproduction_commands_include_callsite_scan_test(lang: str) -> None:
+    """The ja/en reproduction command must include the call-site scan test (#1293)."""
+    text = (_DOCS / lang / "verification-contracts.md").read_text(encoding="utf-8")
+    heading = "## Reproduction" if lang == "en" else "## 再現"
+    reproduction_block = text.split(heading)[1].split("```bash")[1].split("```")[0]
+    assert "tests/test_status_transition_callsites.py" in reproduction_block

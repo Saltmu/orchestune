@@ -22,6 +22,7 @@ P1 = "tests/test_status_machine_stateful.py"
 P2 = "tests/test_status_reconciliation_stateful.py"
 P2P = "tests/test_consistency_status_repairs.py"
 P3A = "tests/test_status_events.py"
+P3A_SCAN = "tests/test_status_transition_callsites.py"
 P3B = "tests/test_status_events_stateful.py"
 P3BR = "tests/test_status_event_retry_resume.py"
 P3L = "tests/test_dispatch_gc_reclaim_lifecycle.py"
@@ -215,11 +216,12 @@ CONTRACTS: tuple[Contract, ...] = (
         id="P3A-ROUTE-COVERAGE",
         phase="3a",
         guarantee="every production source has its routes and every route condition is executed",
-        premise="static table of call sites, out-of-scope paths and invariant paths",
-        boundary="route table",
+        premise="syntax scan of production call sites -> CALL_SITES counts and set -> EVENT_BY_SOURCE routes and executed cases",
+        boundary="call site registry and route table",
         expectation="complete",
         status="verified",
         tests=(
+            f"{P3A_SCAN}::TestRegistryMatchesTheSource::test_every_call_site_is_registered_with_its_call_count",
             f"{P3A}::TestEventRegistry::test_route_table_covers_every_source_and_executes_every_condition",
         ),
         controls={

@@ -58,7 +58,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P2-RECOVERY-STABLE` | two further cycles keep labels, plans, history and the Intent set | after P2-RECOVERY-ONE-CYCLE | cycles 2 and 3 | no change |
 | `P2-LIVE-VERIFICATION` | an applied repair is backed by the live labels | the Forge accepted the command | repair result status | APPLIED only when the live primary status is the target |
 | `P2-CONVERGENCE-UPPER-BOUND` | convergence within the upper bound k=3 | as P2-RECOVERY-ONE-CYCLE | cycle k | k=3 |
-| `P3A-ROUTE-COVERAGE` | every production source has its routes and every route condition is executed | static table of call sites, out-of-scope paths and invariant paths | route table | complete |
+| `P3A-ROUTE-COVERAGE` | every production source has its routes and every route condition is executed | syntax scan of production call sites -> CALL_SITES counts and set -> EVENT_BY_SOURCE routes and executed cases | call site registry and route table | complete |
 | `P3A-DYNAMIC-CONFORMANCE` | the production driver reaches the labels and state the Event model predicts | executed case table; static coverage is a separate contract | each step: labels, result, completion, execution, retries, counts | equal to apply_event |
 | `P3A-DOCUMENT-TABLE` | status-labels.md lists every route with its sources and targets | the document is the specification readers use | document table | equal to the route table |
 | `P3B-BUDGET-CONSUMED` | each new logical retry consumes one budget slot; a resume consumes none | budgeted events with distinct operations | each delivery | count + 1 (resume or exhausted: unchanged) |
@@ -134,6 +134,22 @@ The Issue's reading was that a one-cycle promotion delay on a path whose evidenc
 
 Known gaps, recorded and not weakened: the random machine's `assert_safe` excuses every dry-run preview under an unreleased reservation, so it detects `reservation-guard-bypass` only in apply cycles (the intermediate check excuses only a node's own reservation). The dependency side of a dry run (fixed in #1267), for T and for an intermediate node, is therefore checked by its own deterministic scenario (`P3C-DRYRUN-DEPENDENCY-RESERVATION`); the previews under T's own reservation and an intermediate node's own reservation stay a known defect until #1281 and #1283 are fixed (`P3C-DRYRUN-RESERVATION`). Two guards (`fresh-guard-bypass` with `status_repair_preserves_protection` alone, and a premature intermediate assessment) are re-validated by a second layer and cannot be bypassed with one fault; the controls inject the whole guard.
 
+<a id="static-coverage"></a>
+<!-- static-coverage -->
+## Static coverage evidence
+
+Static coverage for `P3A-ROUTE-COVERAGE` is established through a chain of two verifications:
+
+1. **Production call-site scan matches the registry**: Agreement between call sites discovered by production AST scanning and the manually maintained `CALL_SITES` count and set (`tests/test_status_transition_callsites.py::TestRegistryMatchesTheSource::test_every_call_site_is_registered_with_its_call_count`).
+2. **Registry matches route table and executed cases**: Agreement between `CALL_SITES` and the `EVENT_BY_SOURCE` route table, and between route conditions and executed cases in `CASES` (`tests/test_status_events.py::TestEventRegistry::test_route_table_covers_every_source_and_executes_every_condition`).
+
+**Premise and observation boundary.** The premise is "syntax scan of production call sites -> `CALL_SITES` counts and set -> `EVENT_BY_SOURCE` routes and executed cases", and the observation boundary is "call site registry and route table".
+
+**AST visitor detection scope and limitations.**
+- The AST visitor detects calls where the function name is `transition_status_label` (either as an AST `Name` or as an `Attribute` with that name). Module attribute accesses (e.g. `module.transition_status_label(...)`) match as long as the name matches.
+- Aliased calls via renamed imports, indirect calls via variable assignments, and `getattr` or dynamic loading are not tracked. Different functions or methods sharing the same name may result in false positives. This scan makes no claim to be a complete code analysis that resolves symbol bindings.
+- The target scope is adapter calls under `orchestune/**/*.py` subject to registration. Direct label manipulations and label-invariant completion paths remain covered by the existing `OUT_OF_SCOPE_PATHS` and invariant-path tables; adding documentation references does not expand the scan scope itself.
+
 <a id="quint-model"></a>
 <!-- quint-model -->
 ## Quint model and production replay
@@ -191,7 +207,7 @@ Verified means the tests above fail for the injected faults listed, in the deter
 ## Reproduction
 
 ```bash
-uv run pytest tests/test_verification_contracts.py tests/test_status_machine_stateful.py tests/test_status_reconciliation_stateful.py tests/test_consistency_status_repairs.py tests/test_status_events.py tests/test_status_events_stateful.py tests/test_status_event_retry_resume.py tests/test_dependency_liveness_stateful.py -n0 --hypothesis-profile ci
+uv run pytest tests/test_verification_contracts.py tests/test_status_machine_stateful.py tests/test_status_reconciliation_stateful.py tests/test_consistency_status_repairs.py tests/test_status_events.py tests/test_status_events_stateful.py tests/test_status_event_retry_resume.py tests/test_dependency_liveness_stateful.py tests/test_status_transition_callsites.py -n0 --hypothesis-profile ci
 ```
 
 Replay a random failure with `--hypothesis-seed=<seed>`; the control scenarios need no seed.
