@@ -58,7 +58,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P2-RECOVERY-STABLE` | その後2cycleはラベル・計画・履歴・Intent集合が不変 | P2-RECOVERY-ONE-CYCLE のあと | 2・3回目のcycle | 変化なし |
 | `P2-LIVE-VERIFICATION` | 適用済みの修復は実ラベルで裏付けられる | ForgeがcommandをAPIで受理した | repair result の status | 実際の primary status が target のときだけ APPLIED |
 | `P2-CONVERGENCE-UPPER-BOUND` | 上限 k=3 cycle 以内に収束する | P2-RECOVERY-ONE-CYCLE と同じ | k回目のcycle | k=3 |
-| `P3A-ROUTE-COVERAGE` | 全ての本番ソースに経路があり、全ての経路条件がケースで実行される | 呼び出し元・対象外経路・不変条件経路の静的表 | 経路表 | 網羅されている |
+| `P3A-ROUTE-COVERAGE` | 全ての本番ソースに経路があり、全ての経路条件がケースで実行される | 本番ソースの構文上の呼び出し走査 → CALL_SITES の数と集合 → EVENT_BY_SOURCE の経路と実行ケース | 呼び出し元登録簿と経路表 | 網羅されている |
 | `P3A-DYNAMIC-CONFORMANCE` | 本番ドライバーが Event モデルの予測したラベルと状態に到達する | 実行されるケース表。静的網羅は別契約 | 各ステップ（labels・result・completion・execution・retries・counts） | apply_event と一致 |
 | `P3A-DOCUMENT-TABLE` | status-labels.md が全経路の source / target を載せる | 文書が読者の仕様になる | 文書の表 | 経路表と一致 |
 | `P3B-BUDGET-CONSUMED` | 新しい論理リトライごとに予算を1つ消費し、resume は消費しない | 別々のoperationを持つ予算付きEvent | 各 delivery | count + 1（resume・枯渇は不変） |
@@ -134,6 +134,22 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 
 既知の穴は、弱めずに記録します。乱択の machine の `assert_safe` は未解放の予約下の dry run の preview をすべて除外するため、`reservation-guard-bypass` を apply のcycleでしか検出しません。そのため dry run の依存側（#1267 で修正済み）は、T と中間ノードのどちらも専用の決定的なシナリオで検査します（`P3C-DRYRUN-DEPENDENCY-RESERVATION`。中間ノードの検査が除外するのはそのノード自身の予約だけです）。T 自身の予約と中間ノード自身の予約下の preview は、#1281・#1283 が直るまで既知の欠陥です（`P3C-DRYRUN-RESERVATION`）。2つの guard（`status_repair_preserves_protection` だけの迂回、中間ノードの早すぎる評価）は第2の層が再検証するため、誤動作1つでは迂回できません。対照は guard 全体を差し替えます。
 
+<a id="static-coverage"></a>
+<!-- static-coverage -->
+## 静的網羅の根拠
+
+`P3A-ROUTE-COVERAGE` の静的網羅（static coverage）は、次の2つの検査の連鎖によって成り立ちます。
+
+1. **本番呼び出し走査と登録簿の一致**: 本番ソースの構文走査（AST visitor）で発見した呼び出し箇所と、手動保守の登録簿 `CALL_SITES` の件数・集合の一致（`tests/test_status_transition_callsites.py::TestRegistryMatchesTheSource::test_every_call_site_is_registered_with_its_call_count`）。
+2. **登録簿と経路表・実行ケースの一致**: 登録簿 `CALL_SITES` と経路表 `EVENT_BY_SOURCE` の対応、および各条件と実行ケース `CASES` の一致（`tests/test_status_events.py::TestEventRegistry::test_route_table_covers_every_source_and_executes_every_condition`）。
+
+**前提と観測境界。** 前提は「本番ソースの構文上の呼び出し走査 → `CALL_SITES` の数と集合 → `EVENT_BY_SOURCE` の経路と実行ケース」であり、観測境界は「呼び出し元登録簿と経路表」です。
+
+**AST visitor の検出範囲と限界。**
+- AST visitor は、`Name` の `transition_status_label` および同名 `Attribute` の呼び出しを検出します。モジュール属性アクセス（例: `module.transition_status_label(...)`）は名前が一致すれば対象になります。
+- 別名 import による alias 呼び出し、関数を変数へ代入した間接呼び出し、`getattr` や動的ロードは追跡しません。また、名前が一致する別の関数・メソッドが存在する場合は誤検出しえます。本走査は symbol binding を解決する完全なコード解析とは主張しません。
+- 対象は `orchestune/**/*.py` の登録対象アダプター呼び出しです。直接の label 操作や label invariant の完了経路は、既存の `OUT_OF_SCOPE_PATHS` および invariant-path 表が担当します。ドキュメントへの引用を追加しても、その走査範囲自体は広げません。
+
 <a id="quint-model"></a>
 <!-- quint-model -->
 ## Quintモデルと本番再生
@@ -191,7 +207,7 @@ verified は、上の表の誤動作を、記述した決定的なシナリオ�
 ## 再現
 
 ```bash
-uv run pytest tests/test_verification_contracts.py tests/test_status_machine_stateful.py tests/test_status_reconciliation_stateful.py tests/test_consistency_status_repairs.py tests/test_status_events.py tests/test_status_events_stateful.py tests/test_status_event_retry_resume.py tests/test_dependency_liveness_stateful.py -n0 --hypothesis-profile ci
+uv run pytest tests/test_verification_contracts.py tests/test_status_machine_stateful.py tests/test_status_reconciliation_stateful.py tests/test_consistency_status_repairs.py tests/test_status_events.py tests/test_status_events_stateful.py tests/test_status_event_retry_resume.py tests/test_dependency_liveness_stateful.py tests/test_status_transition_callsites.py -n0 --hypothesis-profile ci
 ```
 
 ランダムな失敗の再生は `--hypothesis-seed=<seed>` を使います。対照のシナリオにseedは不要です。
