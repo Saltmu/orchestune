@@ -144,6 +144,7 @@ from orchestune.dispatch.status_repair_dependencies import (
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.infra.process_utils import run_state_lock as run_state_lock
 from orchestune.labels import StatusLabel
+from orchestune.ledger.completion_reservations import completion_mutation_blocked
 from orchestune.ledger.run_state import load_run_state as load_run_state
 from orchestune.pr_link_notice import (
     notice_expected_bases,
@@ -465,19 +466,36 @@ def _attempted_repair_codes(report: ConsistencyCycleReport) -> set[str]:
     }
 
 
+def _command_issue_number(command: RepairCommand) -> int | None:
+    if command.subject_id is None:
+        return None
+    try:
+        return int(command.subject_id)
+    except (ValueError, TypeError):
+        return None
+
+
 def _status_repair_commands(
     boundary_report: ConsistencyCycleReport,
     initial_scan: ConsistencyScanResult,
     finding_code: str,
     *,
     applied: bool,
+    run_state: RunState,
 ) -> tuple[RepairCommand, ...]:
     if not applied:
-        return tuple(
-            command
-            for command in initial_scan.repair_candidates
-            if _command_finding_code(command) == finding_code
-        )
+        commands: list[RepairCommand] = []
+        for command in initial_scan.repair_candidates:
+            if _command_finding_code(command) != finding_code:
+                continue
+            issue_number = _command_issue_number(command)
+            if issue_number is None:
+                continue
+            # Dry-run checks the in-memory snapshot rather than reading fresh from disk.
+            if completion_mutation_blocked(run_state, issue_number):
+                continue
+            commands.append(command)
+        return tuple(commands)
     return tuple(
         result.command
         for repair_pass in boundary_report.repair_passes
@@ -492,12 +510,10 @@ def _promotion_events(
 ) -> list[PromotionEvent]:
     events: list[PromotionEvent] = []
     for command in commands:
-        if command.subject_id is None:
+        issue_number = _command_issue_number(command)
+        if issue_number is None:
             continue
-        try:
-            task = adapter.tasks_by_issue.get(int(command.subject_id))
-        except ValueError:
-            task = None
+        task = adapter.tasks_by_issue.get(issue_number)
         if task is not None:
             events.append(
                 PromotionEvent(
@@ -585,6 +601,7 @@ def _run_status_repair_boundary(
         initial_scan,
         finding_code,
         applied=config.apply,
+        run_state=run_state,
     )
     return _promotion_events(commands, fresh_adapter)
 

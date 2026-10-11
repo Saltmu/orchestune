@@ -363,27 +363,6 @@ def test_known_defect_registry_names_known_defect_rows() -> None:
 
 
 @pytest.mark.xfail(
-    reason="production bug #1283: a dry run previews T under its own reservation",
-    strict=True,
-    raises=ContractViolation,
-)
-def test_known_defect_stored_trace_target_own_reservation(tmp_path: Path) -> None:
-    with pinned_defect("P3C-DRYRUN-RESERVATION"):
-        replay_stored("defect_target_own_reservation_dry", tmp_path)
-
-
-@pytest.mark.xfail(
-    reason="production bug #1281: a dry run previews an intermediate under its own "
-    "reservation",
-    strict=True,
-    raises=ContractViolation,
-)
-def test_known_defect_stored_trace_intermediate_own_reservation(tmp_path: Path) -> None:
-    with pinned_defect("P3C-DRYRUN-RESERVATION"):
-        replay_stored("defect_intermediate_own_reservation_dry", tmp_path)
-
-
-@pytest.mark.xfail(
     reason="production bug #1281: no preview of a prior merge after faulted apply "
     "cycles",
     strict=True,
@@ -396,13 +375,13 @@ def test_known_defect_stored_trace_prior_merge_after_faults(tmp_path: Path) -> N
 
 def test_a_mismatch_beside_a_known_defect_is_not_excused(tmp_path: Path) -> None:
     """The registered step / node / contract are exact: any other mismatch fails."""
-    entry = copy.deepcopy(STORED["defect_target_own_reservation_dry"])
+    entry = copy.deepcopy(STORED["defect_prior_merge_after_faults"])
     entry["known_defect"]["step"] += 1  # the defect is no longer where it is pinned
     with pytest.raises(ContractViolation) as caught:
         replay_trace(
             parse_trace(entry["itf"]), tmp_path, known_defect(entry["known_defect"])
         )
-    assert caught.value.contract_id == "P3C-SAFETY"
+    assert caught.value.contract_id == "P3C-LIVENESS-BOUND"
 
 
 # ---- model controls: one fault in the model each --------------------------------------------

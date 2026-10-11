@@ -25,7 +25,6 @@ from tests.dependency_liveness_test_support import (
     ISSUE_BY_SUBTASK,
     LIVENESS_BOUND,
     RECOMPUTE,
-    SELF_RESERVATION_PREVIEW_ISSUE,
     CompletionPath,
     CycleObservation,
     FaultPlan,
@@ -217,14 +216,9 @@ def assert_safe(
     if view.promotable(dependencies, apply=observation.apply):
         return
     if not observation.apply:
-        reserved_conflict = (
-            bool((set(dependencies) | {DEPENDENT}) & view.reserved)
-            if dependencies is not None
-            else False
-        )
         require(
             "P3C-SAFETY",
-            reserved_conflict or not observation.previewed,
+            not observation.previewed,
             f"unsafe preview: {observation}",
         )
     else:
@@ -233,30 +227,6 @@ def assert_safe(
             not observation.promoted,
             f"unsafe promotion: {observation}",
         )
-
-
-def _known_intermediate_dry_run_reservation(
-    observation: CycleObservation,
-    required: tuple[int, ...],
-    deps: tuple[str, ...],
-    number: int,
-) -> bool:
-    """The own-reservation dry-run preview of an intermediate node (#1281).
-
-    Excused only when the node's own unreleased reservation is the sole reason:
-    every dependency has preview-visible evidence at cycle start and none of
-    them is reserved.
-    """
-    view = observation.at_start
-    return (
-        not observation.apply
-        and len(required) == len(deps)
-        and set(required) <= view.preview_visible
-        # Only the node's own reservation (the #1283 analogue); a reserved
-        # dependency is the fixed #1267 behaviour and stays checked.
-        and number in view.reserved
-        and not set(required) & view.reserved
-    )
 
 
 def assert_intermediate_safety(
@@ -268,7 +238,6 @@ def assert_intermediate_safety(
         if not deps:
             continue
         required = tuple(ISSUE_BY_SUBTASK[d] for d in deps if d in ISSUE_BY_SUBTASK)
-        known_self_reservation = False
         if len(required) < len(deps):
             deps_satisfied = False
         else:
@@ -278,13 +247,12 @@ def assert_intermediate_safety(
                 view: OracleView,
                 req_set: set[int] = req_set,
                 number: int = number,
-                own_reservation: bool = True,
             ) -> bool:
                 evidence = view.valid if observation.apply else view.preview_visible
                 return (
                     req_set <= evidence
                     and not (req_set & view.reserved)
-                    and not (own_reservation and number in view.reserved)
+                    and number not in view.reserved
                 )
 
             view = (
@@ -293,18 +261,10 @@ def assert_intermediate_safety(
                 else observation.at_promotion
             )
             deps_satisfied = _satisfied(view)
-            # SELF_RESERVATION_PREVIEW_ISSUE (#1283): a dry run previews an issue whose
-            # own reservation is unreleased although its dependencies are satisfied.
-            known_self_reservation = not observation.apply and _satisfied(
-                view, own_reservation=False
-            )
-        if not deps_satisfied and not known_self_reservation:
+        if not deps_satisfied:
             require(
                 "P3C-INTERMEDIATE-SAFETY",
-                number not in observation.promotion_issue_numbers
-                or _known_intermediate_dry_run_reservation(
-                    observation, required, deps, number
-                ),
+                number not in observation.promotion_issue_numbers,
                 f"unsafe intermediate promotion event for {number}: {observation}",
             )
             if observation.apply:
@@ -839,8 +799,7 @@ def test_control_hold_guard_bypass_is_detected(monkeypatch, apply):
 
 @pytest.mark.parametrize("side", ["dependency", "target"])
 def test_control_reservation_guard_bypass_is_detected(monkeypatch, side):
-    """Apply cycles only: a dry-run preview under a reservation is a known gap
-    (#1267, #1283) that ``assert_safe`` excuses on purpose."""
+    """Apply cycles only: bypassing the mutation guard causes an unsafe promotion."""
     from orchestune.dispatch import status_repair
 
     reserved = 11 if side == "dependency" else DEPENDENT
@@ -882,7 +841,7 @@ def test_control_event_only_promotion_is_detected(monkeypatch):
 
 
 def test_control_intermediate_reservation_guard_bypass_is_detected(monkeypatch):
-    """Apply cycles only (a dry-run preview under a reservation is the known gap)."""
+    """Apply cycles only: bypassing the intermediate reservation guard causes an unsafe promotion."""
 
     def reserve(world):
         world.set_reservation(12, True)
@@ -910,9 +869,6 @@ def test_control_dry_run_dependency_reservation_bypass_is_detected(
         scenario_dry_run_respects_dependency_reservation(intermediate=intermediate)
 
 
-# ---- pinned production defects (strict xfail; the fix removes the marks) ---------
-
-
 def _dry_run_preview_of(topology, dependency, reserved, subject) -> None:
     import tempfile
 
@@ -928,24 +884,29 @@ def _dry_run_preview_of(topology, dependency, reserved, subject) -> None:
     )
 
 
-@pytest.mark.xfail(
-    reason=f"production bug {SELF_RESERVATION_PREVIEW_ISSUE}",
-    strict=True,
-    raises=ContractViolation,
-)
-def test_known_defect_dry_run_previews_t_under_its_own_reservation():
-    with pinned_defect("P3C-DRYRUN-RESERVATION"):
-        _dry_run_preview_of(None, 11, DEPENDENT, DEPENDENT)
+@pytest.mark.parametrize("intermediate", [False, True], ids=["target", "intermediate"])
+def test_control_dry_run_own_reservation_bypass_is_detected(monkeypatch, intermediate):
+    from orchestune.dispatch import cycle as cycle_module
+
+    topology = _INTERMEDIATE if intermediate else None
+    dependency = 12 if intermediate else 11
+    reserved = 11 if intermediate else DEPENDENT
+    subject = 11 if intermediate else DEPENDENT
+
+    _dry_run_preview_of(topology, dependency, reserved, subject)
+    monkeypatch.setattr(
+        cycle_module, "completion_mutation_blocked", lambda *a, **k: False
+    )
+    with expect_violation("P3C-DRYRUN-RESERVATION"):
+        _dry_run_preview_of(topology, dependency, reserved, subject)
 
 
-@pytest.mark.xfail(
-    reason="production bug #1281 (counterexample 1)",
-    strict=True,
-    raises=ContractViolation,
-)
-def test_known_defect_dry_run_previews_an_intermediate_under_its_own_reservation():
-    with pinned_defect("P3C-DRYRUN-RESERVATION"):
-        _dry_run_preview_of(_INTERMEDIATE, 12, 11, 11)
+def test_dry_run_respects_target_own_reservation():
+    _dry_run_preview_of(None, 11, DEPENDENT, DEPENDENT)
+
+
+def test_dry_run_respects_intermediate_own_reservation():
+    _dry_run_preview_of(_INTERMEDIATE, 12, 11, 11)
 
 
 @pytest.mark.xfail(

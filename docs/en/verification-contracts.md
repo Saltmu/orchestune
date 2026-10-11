@@ -40,7 +40,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P3C-DRYRUN-READONLY` | 3c | verified | `dry-run-writes` | - |
 | `P3C-QUINT-OBSERVATION` | 3c | verified | `action-mapping-swapped` | - |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
-| `P3C-DRYRUN-RESERVATION` | 3c | known_defect | - | #1281, #1283 |
+| `P3C-DRYRUN-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | 3c | known_defect | - | #1281 |
 
 ### Details
@@ -89,7 +89,6 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 - `P2-CONVERGENCE-UPPER-BOUND` (unverified): no test drives more than one pass; only the expectation (1 cycle) is checked
 - `P3A-DOCUMENT-TABLE` (unverified): no control: a document drift has not been injected
 - `P3B-LAUNCH-AND-ESCALATION` (unverified): plain assertions without contract ids; no control was injected
-- `P3C-DRYRUN-RESERVATION` (known_defect): strict xfail counterexamples (#1283 for T, #1281 counterexample 1 for an intermediate node); assert_safe and the intermediate check excuse these previews until the production fixes land; the dependency side is a separate verified contract
 - `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` (known_defect): #1281 counterexample 2: a strict xfail pins it; whether production drops the prior-merge completion set or the fairness judgement is wrong is not yet separated
 
 <a id="cycle-definitions"></a>
@@ -132,10 +131,10 @@ The Issue's reading was that a one-cycle promotion delay on a path whose evidenc
 | `empty-completion-set` / `throwaway-context` | the #902 Round 4/5 miswiring | `P3C-CASE-DELAY` | case table |
 | `intermediate-ignored` | the intermediate node's assessment is dropped | `P3C-INTERMEDIATE-LIVENESS` | intermediate topology |
 | `hold-guard-bypass` (3c) | every `PROMOTION_HOLD_LABELS` is empty | `P3C-SAFETY` | `ci:base-branch-red` before the cycle |
-| `reservation-guard-bypass` | the reservation checks of the dependency side, the target side or the intermediate's dependency always pass | `P3C-SAFETY`, `P3C-INTERMEDIATE-SAFETY` (machine, apply cycles), `P3C-DRYRUN-DEPENDENCY-RESERVATION` (deterministic dry run) | apply cycles in the machine; the dependency side of a dry run in a deterministic scenario |
+| `reservation-guard-bypass` | the reservation checks of the dependency side, the target side or the intermediate's dependency always pass | `P3C-SAFETY`, `P3C-INTERMEDIATE-SAFETY` (machine, apply cycles), `P3C-DRYRUN-DEPENDENCY-RESERVATION` (deterministic dry run), `P3C-DRYRUN-RESERVATION` (target/intermediate own dry run) | apply cycles in the machine; the dependency side of a dry run in a deterministic scenario; target and intermediate self-reservations in dry run |
 | `stale-evidence` | a reopened dependency is still treated as completed | `P3C-SAFETY` | revoked label evidence |
 
-Known gaps, recorded and not weakened: the random machine's `assert_safe` excuses every dry-run preview under an unreleased reservation, so it detects `reservation-guard-bypass` only in apply cycles (the intermediate check excuses only a node's own reservation). The dependency side of a dry run (fixed in #1267), for T and for an intermediate node, is therefore checked by its own deterministic scenario (`P3C-DRYRUN-DEPENDENCY-RESERVATION`); the previews under T's own reservation and an intermediate node's own reservation stay a known defect until #1281 and #1283 are fixed (`P3C-DRYRUN-RESERVATION`). Two guards (`fresh-guard-bypass` with `status_repair_preserves_protection` alone, and a premature intermediate assessment) are re-validated by a second layer and cannot be bypassed with one fault; the controls inject the whole guard.
+Known gaps, recorded and not weakened: the dependency side of a dry run (fixed in #1267), for T and for an intermediate node, is checked by its own deterministic scenario (`P3C-DRYRUN-DEPENDENCY-RESERVATION`). The previews under T's own reservation and an intermediate node's own reservation are verified by dedicated deterministic scenarios and controls (`P3C-DRYRUN-RESERVATION`, #1283). Two guards (`fresh-guard-bypass` with `status_repair_preserves_protection` alone, and a premature intermediate assessment) are re-validated by a second layer and cannot be bypassed with one fault; the controls inject the whole guard.
 
 <a id="static-coverage"></a>
 <!-- static-coverage -->
@@ -186,7 +185,7 @@ Static coverage for `P3A-ROUTE-COVERAGE` is established through a chain of two v
 
 **Saved scenarios.** The scripted scenarios of the model (`init_<id>`; one fixed choice per step, so the ITF has the same shape as a random trace) cover final and intermediate nodes, apply and dry run, live and lagged observation, no-op and real changes, dependency-side and target-side holds, failures, restarts, duplicates and stale changes. `tests/fixtures/quint/dependency_liveness_traces.json` stores the ITF with its seed, bounds, Quint version and generation command; a test regenerates each and fails when the model changed without `uv run python -m tests.quint_scenarios regenerate`. `tests/fixtures/quint/dependency_liveness_fault_scenarios.json` stores the model-fault scenarios with the expected invariants and planned step.
 
-**Known production counterexamples (#1281, #1283).** The model states their obligations; production violates them. The exploration runs with the model's `guard` set so that random traces never assert them (the Hypothesis machine excuses the same cases). The three saved `defect_*` scenarios run with the guard off and are replayed by strict xfail tests that register the Issue, the contract, the step and the node: only that mismatch is the defect; any other mismatch, in the same trace or elsewhere, fails.
+**Known production counterexample (#1281).** The model states their obligations; production violates them. The exploration runs with the model's `guard` set so that random traces never assert them (the Hypothesis machine excuses the same cases). The saved `defect_*` scenario (`defect_prior_merge_after_faults`, pinning counterexample 2 of #1281) runs with the guard off and is replayed by a strict xfail test that registers the Issue, the contract, the step and the node: only that mismatch is the defect; any other mismatch, in the same trace or elsewhere, fails.
 
 | Fault | Model: violated invariant (scenario) | Replay: violated contract (stored scenario) |
 |---|---|---|

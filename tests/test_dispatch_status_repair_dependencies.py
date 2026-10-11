@@ -7,13 +7,30 @@ from unittest.mock import patch
 
 import pytest
 
+from orchestune.consistency.invariants.status import (
+    BLOCKED_WITH_RESOLVED_DEPENDENCIES,
+)
+from orchestune.consistency.models import (
+    ConsistencyReport,
+    ConsistencyScope,
+    RepairCommand,
+)
+from orchestune.consistency.repairs.status import COMMAND_TRANSITION_LABEL
+from orchestune.consistency.supervisor import (
+    ConsistencyCycleReport,
+    ConsistencyMode,
+    ConsistencyScanResult,
+    ScanKind,
+)
 from orchestune.dependencies.assessment import DependencyState
 from orchestune.dependencies.resolution import REASON_MISSING
+from orchestune.dispatch.cycle import _status_repair_commands
 from orchestune.dispatch.status_dependency_policy import dependencies_completed
 from orchestune.dispatch.status_repair_dependencies import (
     evaluate_fresh_dependencies,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import RunState
 from tests.conftest import make_issue, make_task
 
 
@@ -240,3 +257,73 @@ def test_no_declared_dependencies_is_distinguishable_from_unresolved(in_memory_f
     assert result is not None
     assert result.dependencies.is_empty
     assert dependencies_completed(result.assessment)
+
+
+def test_dry_run_promotion_preview_suppressed_for_self_reserved_target():
+    """Issue #1283: dry run promotion preview suppresses candidate when target has unreleased reservation."""
+    cmd = RepairCommand(
+        code=COMMAND_TRANSITION_LABEL,
+        scope=ConsistencyScope.TASK,
+        idempotency_key="test-key",
+        subject_id="10",
+        parameters=(("finding_code", BLOCKED_WITH_RESOLVED_DEPENDENCIES),),
+    )
+    scan = ConsistencyScanResult(
+        boundary="status:blocked_with_resolved_dependencies",
+        kind=ScanKind.FULL,
+        report=ConsistencyReport(repository_id="test-repo"),
+        repair_candidates=(cmd,),
+    )
+    report = ConsistencyCycleReport(mode=ConsistencyMode.REPAIR)
+
+    # With pending/reserved stage: suppressed
+    reserved_state = RunState(
+        completion_reservations={"repo::10": {"issue_number": 10, "stage": "reserved"}}
+    )
+    assert (
+        _status_repair_commands(
+            report,
+            scan,
+            BLOCKED_WITH_RESOLVED_DEPENDENCIES,
+            applied=False,
+            run_state=reserved_state,
+        )
+        == ()
+    )
+
+    # With invalid stage: also suppressed
+    invalid_state = RunState(
+        completion_reservations={"repo::10": {"issue_number": 10, "stage": "invalid"}}
+    )
+    assert (
+        _status_repair_commands(
+            report,
+            scan,
+            BLOCKED_WITH_RESOLVED_DEPENDENCIES,
+            applied=False,
+            run_state=invalid_state,
+        )
+        == ()
+    )
+
+    # With reservation for an unrelated issue (e.g. 99): not suppressed
+    unrelated_state = RunState(
+        completion_reservations={"repo::99": {"issue_number": 99, "stage": "reserved"}}
+    )
+    assert _status_repair_commands(
+        report,
+        scan,
+        BLOCKED_WITH_RESOLVED_DEPENDENCIES,
+        applied=False,
+        run_state=unrelated_state,
+    ) == (cmd,)
+
+    # Without reservation: not suppressed
+    empty_state = RunState()
+    assert _status_repair_commands(
+        report,
+        scan,
+        BLOCKED_WITH_RESOLVED_DEPENDENCIES,
+        applied=False,
+        run_state=empty_state,
+    ) == (cmd,)
