@@ -94,6 +94,9 @@ class Kind(StrEnum):
     #: `orchestune complete`の完了ラベル調停。primary・target・force-serial以外の
     #: `status:*`（補助・未知のラベル）を保持していれば変更前に拒否する。
     COMPLETION = "completion"
+    #: `COMPLETION`のうち、本番が独立レビュー（`not-needed-review`ポリシー）を保留する
+    #: not-needed。レビューがpassするまで完了にならない（#1278）。
+    COMPLETION_REVIEW = "completion_review"
 
 
 class Stage(StrEnum):
@@ -197,6 +200,9 @@ class TaskModel:
     pending_operation: PendingOperation | None = None
     confirmed_operations: frozenset[str] = frozenset()
     ledger_epoch: int = 0
+    #: `status:not-needed`が独立レビューの判定待ちであること。本番は台帳の
+    #: `not-needed-review`ポリシーで判定しており、ラベルからは判別できない。
+    review_pending: bool = False
 
     @classmethod
     def from_labels(cls, labels: tuple[str, ...] | frozenset[str]) -> TaskModel:
@@ -220,8 +226,14 @@ class TaskModel:
 
     @property
     def completion_done(self) -> bool:
-        """完了証拠（FINALラベル、またはラベル不変の完了確定）があるか。"""
-        return self.completion_confirmed or bool(self.lifecycle & _FINAL)
+        """完了証拠（FINALラベル、またはラベル不変の完了確定）があるか。
+
+        独立レビューの判定待ち（`review_pending`）の間は、FINALラベルがあっても完了
+        ではない（本番は依存側を保留する）。
+        """
+        return not self.review_pending and (
+            self.completion_confirmed or bool(self.lifecycle & _FINAL)
+        )
 
 
 @dataclass(frozen=True)
@@ -335,6 +347,9 @@ EVENT_SPECS: Mapping[tuple[Event, Kind], EventSpec] = MappingProxyType(
         (_E.NOT_NEEDED, _K.COMPLETION): _spec(
             StatusLabel.NOT_NEEDED, _ACTIVE, allowed_auxiliary=_FS
         ),
+        (_E.NOT_NEEDED, _K.COMPLETION_REVIEW): _spec(
+            StatusLabel.NOT_NEEDED, _ACTIVE, allowed_auxiliary=_FS
+        ),
         (_E.NOT_NEEDED, _K.REPLAN): _spec(
             StatusLabel.NOT_NEEDED, _ACTIVE | _ESCALATION, strip=True
         ),
@@ -367,6 +382,43 @@ EVENT_SPECS: Mapping[tuple[Event, Kind], EventSpec] = MappingProxyType(
         (_E.AWAIT_REVIEW, _K.PLAIN): _spec(
             None, frozenset({_P}), remove=frozenset({_P})
         ),
+    }
+)
+
+
+class PendingEffect(StrEnum):
+    """`status:not-needed`を保持しうるeventがレビュー待ち（`review_pending`）へ与える効果。"""
+
+    #: レビュー待ちを始める。以前の完了証拠は消す。
+    START = "start"
+    #: レビューのpassでだけ待ちを解き、完了を確定する。
+    RESOLVE = "resolve"
+    #: 却下・タイムアウトで待ちと完了証拠を消す。
+    WITHDRAW = "withdraw"
+    #: 待ちは続く。待ちの間は完了証拠を新たに確定しない。
+    KEEP_UNCONFIRMED = "keep_unconfirmed"
+    #: 待ちを変えない。
+    KEEP = "keep"
+
+
+#: `status:not-needed`を遷移元・遷移先に持つ全(Event, Kind)の効果。ここにない
+#: specがnot-neededを保持しうるとテストが失敗する（黙って既定値を使わない）。
+REVIEW_PENDING_EFFECTS: Mapping[tuple[Event, Kind], PendingEffect] = MappingProxyType(
+    {
+        (_E.NOT_NEEDED, _K.COMPLETION_REVIEW): PendingEffect.START,
+        (_E.COMPLETE_WITHOUT_LABEL, _K.REVIEW_PASSED): PendingEffect.RESOLVE,
+        (_E.REVIEW_REJECT, _K.PLAIN): PendingEffect.WITHDRAW,
+        (_E.ESCALATE, _K.PLAIN): PendingEffect.WITHDRAW,
+        (_E.COMPLETE_WITHOUT_LABEL, _K.CYCLE): PendingEffect.KEEP_UNCONFIRMED,
+        (_E.COMPLETE_WITHOUT_LABEL, _K.PRIOR_MERGE): PendingEffect.KEEP_UNCONFIRMED,
+        # replan世代置換はレビュー待ちの有無を問わずnot-neededへ寄せるだけで、台帳の
+        # ポリシーを解かない。
+        (_E.NOT_NEEDED, _K.REPLAN): PendingEffect.KEEP,
+        (_E.NOT_NEEDED, _K.PLAIN): PendingEffect.KEEP,
+        (_E.NOT_NEEDED, _K.COMPLETION): PendingEffect.KEEP,
+        (_E.RELEASE_HOLD, _K.RECOMPUTE): PendingEffect.KEEP,
+        (_E.RELEASE_HOLD, _K.BASE_BRANCH_RED): PendingEffect.KEEP,
+        (_E.RELEASE_HOLD, _K.EXTERNAL_LOCK): PendingEffect.KEEP,
     }
 )
 
@@ -443,7 +495,8 @@ def _refuse_launch(state: TaskModel, execution: Execution | None) -> Rejected | 
     """`CycleContext.record_launch`と同じ順序で起動を検証する。"""
     if not isinstance(execution, ExecutionIdentity):
         return Rejected("invalid-launch")
-    if state.completion_done or state.lifecycle & _ESCALATION:
+    # レビュー待ちの間もFINALラベルは終端として扱う（`completion_done`はFalseでも）。
+    if state.completion_done or state.lifecycle & (_ESCALATION | _FINAL):
         return Rejected("terminal-state")
     current = state.execution_identity
     if isinstance(current, IndeterminateExecution):
@@ -702,6 +755,10 @@ def _settle_on_label(state: TaskModel, event: EventInput) -> TaskModel:
             early_death=replace(retries.early_death, pending=False),
             usage_limit=replace(retries.usage_limit, pending=False),
         )
+    if REVIEW_PENDING_EFFECTS.get((event.event, event.kind)) is PendingEffect.START:
+        # 本番はラベルの公開前にreviewポリシーを予約するので、ラベル付与後に止まっても
+        # 依存側は保留のまま（再開で同じ状態へ収束する）。
+        state = _with_completion_evidence(state, event)
     return replace(state, retries=retries)
 
 
@@ -736,17 +793,7 @@ def _with_execution(state: TaskModel, event: EventInput, spec: EventSpec) -> Tas
     """実行identityと完了証拠を更新する。"""
     if event.event is Event.LAUNCH:
         return replace(state, execution_identity=event.execution)
-    if event.event in _COMPLETION_WITHDRAWALS:
-        state = replace(state, completion_confirmed=False, persistent_completion=False)
-    if event.event is Event.COMPLETE_WITHOUT_LABEL:
-        persistent = event.kind in (
-            Kind.PRIOR_MERGE,
-            Kind.NOT_NEEDED_OUTCOME,
-            Kind.REVIEW_PASSED,
-        )
-        state = replace(
-            state, completion_confirmed=True, persistent_completion=persistent
-        )
+    state = _with_completion_evidence(state, event)
     # 回収・再投入はエスカレーションへ切り替わっても実行を終える（プロセス停止・
     # active entryの解放）。通常のエスカレーションは起動継続中の状態を表す。
     base_spec = EVENT_SPECS.get((event.event, event.kind))
@@ -766,6 +813,43 @@ def _with_execution(state: TaskModel, event: EventInput, spec: EventSpec) -> Tas
     )
 
 
+def _with_completion_evidence(state: TaskModel, event: EventInput) -> TaskModel:
+    """完了証拠とレビュー待ちを更新する。`REVIEW_PENDING_EFFECTS`が規則の表。"""
+    effect = REVIEW_PENDING_EFFECTS.get((event.event, event.kind))
+    if effect is PendingEffect.START:
+        return replace(
+            state,
+            review_pending=True,
+            completion_confirmed=False,
+            persistent_completion=False,
+        )
+    waiting = state.review_pending
+    if event.event in _COMPLETION_WITHDRAWALS or (
+        effect is PendingEffect.WITHDRAW and waiting
+    ):
+        return replace(
+            state,
+            review_pending=False,
+            completion_confirmed=False,
+            persistent_completion=False,
+        )
+    if event.event is not Event.COMPLETE_WITHOUT_LABEL:
+        return state
+    if waiting and effect is PendingEffect.KEEP_UNCONFIRMED:
+        return state
+    persistent = event.kind in (
+        Kind.PRIOR_MERGE,
+        Kind.NOT_NEEDED_OUTCOME,
+        Kind.REVIEW_PASSED,
+    )
+    return replace(
+        state,
+        review_pending=False,
+        completion_confirmed=True,
+        persistent_completion=persistent,
+    )
+
+
 def restart(state: TaskModel, *, ledger_loss: bool) -> TaskModel:
     """プロセスの再起動。モデルのoperationは永続しないので失われる。
 
@@ -782,8 +866,11 @@ def restart(state: TaskModel, *, ledger_loss: bool) -> TaskModel:
     )
     if not ledger_loss:
         return restarted
+    # 台帳の消失はレビューの保留（`not-needed-review`ポリシー）も失う。完了は残る
+    # ラベルと永続した完了証拠から決まる（未保護経路。docs/*/status-labels.md）。
     return replace(
         restarted,
+        review_pending=False,
         retries=RetryStates(),
         execution_identity=None,
         ledger_epoch=state.ledger_epoch + 1,
@@ -794,6 +881,7 @@ __all__ = [
     "ALLOWED_TRANSITIONS",
     "BASE_BRANCH_RED_LABEL",
     "EVENT_SPECS",
+    "REVIEW_PENDING_EFFECTS",
     "Applied",
     "BackoffPlanner",
     "BackoffState",
@@ -807,6 +895,7 @@ __all__ = [
     "IndeterminateExecution",
     "Kind",
     "NoOp",
+    "PendingEffect",
     "PendingOperation",
     "ReclaimState",
     "Rejected",

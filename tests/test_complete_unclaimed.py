@@ -5,14 +5,13 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from complete_lifecycle_test_support import PublicationForge
+from complete_lifecycle_test_support import unclaimed_environment
 
-from orchestune.complete.contracts import CompleteFailureReason, CompleteRequest
+from orchestune.complete.contracts import CompleteFailureReason
 from orchestune.complete.journal import completion_journal_lock
 from orchestune.complete.service import complete_task
 from orchestune.ledger.completion_reservations import dependency_completion_blocked
 from orchestune.ledger.run_state import (
-    RunState,
     load_run_state_readonly,
     save_run_state,
 )
@@ -20,17 +19,7 @@ from orchestune.ledger.run_state import (
 
 @pytest.fixture
 def unclaimed(tmp_path, monkeypatch):
-    path = tmp_path / "run_state.json"
-    workspace = SimpleNamespace(run_state_path=path, repository_identity="repo")
-    monkeypatch.setattr(
-        "orchestune.complete.service.resolve_claim_workspace", lambda **_: workspace
-    )
-    with completion_journal_lock(path):
-        save_run_state(RunState(), path)
-    forge = PublicationForge()
-    forge.labels = {"status:queued", "priority:high"}
-    request = CompleteRequest.not_needed(1111, state_path=path, worktree_root=tmp_path)
-    return request, forge
+    return unclaimed_environment(tmp_path, monkeypatch)
 
 
 def test_unclaimed_publication_has_independent_reservation_and_pending_review(

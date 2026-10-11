@@ -158,6 +158,7 @@ the compatibility tests).
 All production Forge label mutations, completion determinations, GC reclaims, retry reservations, and escalations are abstracted as Events,
 mapped to their production call sites (`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / label-invariant completion paths / label-invariant budget paths).
 `COMPLETION` is the `orchestune complete` label reconciliation: it rejects, before any mutation, a state holding a `status:*` label (auxiliary or unknown) other than the primary labels, the target and `status:force-serial`.
+`COMPLETION_REVIEW` is the `orchestune complete --result not-needed` label reconciliation for which production creates a `not-needed-review` policy (a cloud execution, i.e. with an `external_id`, or no worktree). It makes the same transition as `COMPLETION` (`status:not-needed`), but afterwards `TaskModel.review_pending` is true and `completion_done` stays false until the review passes (dependents are held). A local execution (no `external_id`) keeps using `COMPLETION` and completes immediately. `review_pending` cannot be told from the labels (production decides it from the ledger, not the labels).
 `AWAIT_REVIEW` hands a cloud not-needed decision to the independent review: it ends the execution, but is not a completion until the review decides.
 `REVIEW_PASSED` is the passed independent review: it closes the issue and marks the `not-needed-review` policy applied without changing labels, and only then do dependents treat the task as complete.
 
@@ -168,6 +169,7 @@ mapped to their production call sites (`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / lab
 | `LAUNCH` (`CLAIM`) | `status:blocked`, `status:queued` | `status:in-progress` | `claim/service.py::_apply_status_label` |
 | `COMPLETE` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `complete/status_labels.py::_completion_mutate` |
 | `NOT_NEEDED` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
+| `NOT_NEEDED` (`COMPLETION_REVIEW`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
 | `BLOCK` (`COMPLETION`) | `status:in-progress`, `status:queued` | `status:blocked` | `complete/status_labels.py::_completion_mutate` |
 | `COMPLETE_WITHOUT_LABEL` (`CYCLE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/cycle_context_state.py::_CycleState.record_completion` |
 | `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/__init__.py::_rule_not_needed` |
@@ -225,6 +227,27 @@ mapped to their production call sites (`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / lab
 | `REQUEUE` (`EARLY_DEATH`) | `status:blocked`, `status:in-progress` | `status:queued` | `ledger/escalation.py::apply_human_review_escalation` |
 | `REQUEUE` (`USAGE_LIMIT`) | `status:blocked`, `status:in-progress` | `status:queued` | `ledger/escalation.py::apply_human_review_escalation` |
 | `NOT_NEEDED` (`REPLAN`) | `status:blocked`, `status:blocked-human-review`, `status:in-progress`, `status:manual-merge-required`, `status:queued` | `status:not-needed` | `replan/operations.py::_transition_to_not_needed` |
+
+### Effects on the review-pending interval (#1278)
+
+`REVIEW_PENDING_EFFECTS` classifies what every spec holding `status:not-needed` (as a source or the target) does to the wait (`review_pending`); a spec missing from it that can hold not-needed fails the tests.
+
+| Event / Kind | `review_pending` | Completion |
+|---|---|---|
+| `NOT_NEEDED` / `COMPLETION_REVIEW` | becomes true | false; earlier `completion_confirmed` / `persistent_completion` are cleared |
+| `COMPLETE_WITHOUT_LABEL` / `REVIEW_PASSED` | becomes false | true (both values confirmed); applied, not a NoOp, during the wait |
+| `REVIEW_REJECT` / `PLAIN` | becomes false | false (queued); both values cleared |
+| `ESCALATE` / `PLAIN` | becomes false if waiting | false (blocked-human-review); both values cleared if waiting |
+| `COMPLETE_WITHOUT_LABEL` / `CYCLE`, `PRIOR_MERGE` | unchanged | during the wait neither value is newly confirmed; only a review pass ends the wait |
+| `NOT_NEEDED` / `REPLAN`, `PLAIN`, `COMPLETION`; `RELEASE_HOLD` | unchanged | unchanged (replan does not resolve the review's ledger policy) |
+| `restart(ledger_loss=False)` | kept | kept |
+| `restart(ledger_loss=True)` | becomes false | recomputed from the remaining labels and persistent completion evidence |
+
+During the wait `status:not-needed` is still terminal: `LAUNCH` is rejected as `terminal-state`.
+
+### Unprotected path on ledger loss (#1278)
+
+Losing `run_state.json` drops the completion record, including the `not-needed-review` policy, so `dependency_completion_blocked` becomes false. If the `status:not-needed` label remains, dependents proceed without the review (the model also treats it as complete and claims no stronger protection than production). After a rejection (queued) or a timeout (blocked-human-review) the task stays incomplete even when only the guard is gone. Whether this needs protection is a separate follow-up candidate.
 
 ## Termination of budgeted loops (#1266)
 

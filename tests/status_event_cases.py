@@ -21,6 +21,10 @@ from orchestune.ledger.status_events import (
     Stage,
     TaskModel,
 )
+from tests.status_event_review_support import (
+    COMPLETION_SOURCE,
+    completion_not_needed,
+)
 from tests.status_event_test_support import (
     CaseDriver,
     base_branch_red_escalate,
@@ -92,12 +96,13 @@ RED = BASE_BRANCH_RED_LABEL
 _ACTIVE_RUN = {"execution_identity": CURRENT}
 _THIRD_RED = {"counts": BudgetCounts(base_branch_red=2)}
 _CLOUD = {"cloud": True}
+#: A not-needed completion that production holds for an independent review.
+_REVIEW_PENDING = {"review_pending": True}
 
 
 def _direct_operation_cases() -> list[EventCase]:
-    adapter = _cases(
-        "complete/status_labels.py::_completion_mutate", completion_adapter
-    )
+    adapter = _cases(COMPLETION_SOURCE, completion_adapter)
+    review = _cases(COMPLETION_SOURCE, completion_not_needed)
     policy = "dispatch/gc/policy_effects.py::reconcile_labels"
     timeout = _cases(policy, review_timeout_policy_effect)
     red = _cases(policy, base_branch_red_policy_effect)
@@ -136,6 +141,10 @@ def _direct_operation_cases() -> list[EventCase]:
             params={"target": N},
         ),
         adapter("blocked-from-in-progress", (P,), params={"target": B}),
+        # The expected Kind of each input is fixed here; production decides the policy.
+        review("not-needed-local-active", (P,), params={"active": "local"}),
+        review("not-needed-review-unclaimed", (Q,), params={"active": None}),
+        review("not-needed-review-cloud", (P,), params={"active": "cloud"}),
         timeout("review-timeout-requeue", (P,), inputs={"now": NOW}),
         timeout(
             "review-timeout-exhausted",
@@ -146,13 +155,23 @@ def _direct_operation_cases() -> list[EventCase]:
         ),
         red("base-red-hold", (P,), params={"attempt": 1}),
         red("base-red-escalate", (B, RED), params={"attempt": 3}, model=_THIRD_RED),
-        verdict("review-rejected", (N,), params={"verdict": "failed"}),
-        verdict("review-launch-timeout", (N,)),
+        verdict(
+            "review-rejected",
+            (N,),
+            params={"verdict": "failed"},
+            model=_REVIEW_PENDING,
+        ),
+        verdict("review-launch-timeout", (N,), model=_REVIEW_PENDING),
         # A cloud not-needed completion awaits its review without any status label.
         verdict("cloud-review-rejected", (), params={"verdict": "failed"}),
         verdict("cloud-review-timeout", ()),
         passed("cloud-review-passed", (), params={"verdict": "passed"}),
-        passed("review-passed", (N,), params={"verdict": "passed"}),
+        passed(
+            "review-passed",
+            (N,),
+            params={"verdict": "passed"},
+            model=_REVIEW_PENDING,
+        ),
         replan("queued", (Q,)),
         replan("blocked-with-recompute", (B, RC)),
         replan("in-progress-force-serial", (P, FS)),
