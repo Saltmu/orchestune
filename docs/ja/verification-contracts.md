@@ -28,7 +28,8 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3B-RETRY-BOUND` | 3b | verified | `budget-bound-exceeded` | - |
 | `P3B-LEDGER-LOSS-KEEPS-PERSISTENT` | 3b | verified | `persistent-budget-reset` | - |
 | `P3B-LAUNCH-AND-ESCALATION` | 3b | unverified | - | - |
-| `P3B-PERSISTENT-BUDGET-PRESERVED` | 3b | known_defect | - | #1279, #1280 |
+| `P3B-RECLAIM-BUDGET-PRESERVED` | 3b | verified | `reclaim-record-replaced` | - |
+| `P3B-RECOMPUTE-BUDGET-PRESERVED` | 3b | known_defect | - | #1280 |
 | `P3C-CASE-DELAY` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `empty-completion-set`, `throwaway-context` | - |
 | `P3C-LIVENESS-BOUND` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `event-only`, `empty-completion-set`, `throwaway-context` | - |
 | `P3C-INTERMEDIATE-LIVENESS` | 3c | verified | `intermediate-ignored`, `promotion-suppressed` | - |
@@ -64,7 +65,8 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3B-RETRY-BOUND` | 台帳のepoch内で予算ごとの新規リトライが仕様表の上限を超えない | 既定のlimits。ローカル予算は台帳消失でのみ戻る | カウントされる各リトライ | RETRY_BOUNDS |
 | `P3B-LEDGER-LOSS-KEEPS-PERSISTENT` | 台帳消失でリセットされるのはローカル予算だけ | recompute / base-branch-red は Forge に保持される | restart(ledger_loss=True) | 永続カウントが不変 |
 | `P3B-LAUNCH-AND-ESCALATION` | 二重の active execution なし・完了後の再launchなし・エスカレーションは不可逆 | ランダム系列で Event モデルを駆動 | 各 delivery | 不変条件 3〜5 |
-| `P3B-PERSISTENT-BUDGET-PRESERVED` | GC回収は backoff 予算を、再launchは recompute 予算を保つ | TaskReclaimRecord と Issue 本文カウンターの永続化 | 永続化されたレコード | 予算が残る |
+| `P3B-RECLAIM-BUDGET-PRESERVED` | GC回収の予約・dirty 保留は early-death・review-timeout・usage-limit の予算を保つ | ゾンビ・cloud・dirty 保留の各 writer による TaskReclaimRecord の永続化 | 永続化されたレコード | 予算が残る |
+| `P3B-RECOMPUTE-BUDGET-PRESERVED` | 再launchは recompute 予算を保つ | Issue 本文カウンターの永続化 | 永続化されたレコード | 予算が残る |
 | `P3C-CASE-DELAY` | 完了経路ごとに T がケース表のcycle（d = 0）ちょうどで昇格する | 証拠が cycle 0 の昇格判定に利用可能 | 証拠投入のcycle。早くも遅くもない | ケース表の d |
 | `P3C-LIVENESS-BOUND` | 公平な N = 1 cycle で T が queued（dry run は preview）になる | 公平なcycle: cycle 開始時と昇格判定時に前提が成り立ち、エラー・障害注入がない | 最初の公平なcycleの終わり。apply は実ラベル、dry run は当該cycleの preview | N = 1 |
 | `P3C-INTERMEDIATE-LIVENESS` | 中間ノードが公平な N = 1 cycle で昇格（dry run は preview）される | そのノード自身の依存が両境界で有効かつ予約なし | そのノードの最初の公平なcycleの終わり | N = 1 |
@@ -85,7 +87,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 - `P2-CONVERGENCE-UPPER-BOUND` (unverified): 1パスを超えて駆動するテストがなく、期待値（1cycle）だけを検査している
 - `P3A-DOCUMENT-TABLE` (unverified): 対照なし: 文書のずれを注入していない
 - `P3B-LAUNCH-AND-ESCALATION` (unverified): 契約idのないassertで、誤動作を注入していない
-- `P3B-PERSISTENT-BUDGET-PRESERVED` (known_defect): strict xfail が反例を固定している。修正でマークを外す
+- `P3B-RECOMPUTE-BUDGET-PRESERVED` (known_defect): strict xfail が反例を固定している（#1280）。修正でマークを外す
 - `P3C-DRYRUN-RESERVATION` (known_defect): strict xfail の反例で固定している（T は #1283、中間ノードは #1281 の反例1）。本番修正が入るまで assert_safe と中間ノードの検査がこれらの preview を除外している（依存側は別の verified 契約）
 - `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` (known_defect): #1281 の反例2を strict xfail で固定している。本番が先行マージの完了集合を落とすのか、公平性判定の問題なのかはまだ切り分けていない
 
@@ -122,6 +124,7 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 | `budget-not-consumed` | `apply_event` が以前の retries を保つ | `P3B-BUDGET-CONSUMED` | reclaim ループ |
 | `budget-bound-exceeded` | reclaim の上限を表より大きくする | `P3B-RETRY-BOUND` | reclaim ループ |
 | `persistent-budget-reset` | `restart` が永続カウントも0にする | `P3B-LEDGER-LOSS-KEEPS-PERSISTENT` | 台帳消失のシナリオ |
+| `reclaim-record-replaced` | 回収の予約・cloud の予約・dirty 保留が、永続化済みの `TaskReclaimRecord` を更新せず新しいレコードで置き換える（#1279 以前の書き込み） | `P3B-RECLAIM-BUDGET-PRESERVED` | ゾンビ回収（予算と usage-limit の run）・cloud 予約・dirty 保留の後の永続レコード |
 | `promotion-suppressed` / `promotion-delayed` | 昇格境界を常に／証拠投入のcycleだけ飛ばす | `P3C-CASE-DELAY`（ケース表）、`P3C-LIVENESS-BOUND`、`P3C-INTERMEDIATE-LIVENESS` | label、`record_completion`（apply）、prior merge（apply・dry run） |
 | `empty-completion-set` / `throwaway-context` | #902 Round 4/5 の誤配線 | `P3C-CASE-DELAY` | ケース表 |
 | `intermediate-ignored` | 中間ノードの判定を落とす | `P3C-INTERMEDIATE-LIVENESS` | 中間ノードのトポロジー |

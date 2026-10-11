@@ -6,6 +6,7 @@
 へ遷移して停止することを検証する。
 """
 
+from dataclasses import replace
 from unittest.mock import patch
 
 from orchestune.dispatch.config import DispatcherConfig
@@ -321,7 +322,18 @@ class TestReclaimRetryBound:
     def test_failed_persist_restores_a_previous_reclaim_count(self, tmp_path):
         """永続化に失敗しても、既存の回数をインクリメント後の値で汚さない。"""
         active = _active(worktree_path=str(tmp_path / "missing-280"))
-        previous = TaskReclaimRecord(count=1, last_reclaimed_at=1.0)
+        # #1279: 回収とは別枠の予算も含め、元のレコード全体へ戻る。
+        previous = TaskReclaimRecord(
+            count=1,
+            last_reclaimed_at=1.0,
+            early_death_retry_count=2,
+            early_death_retry_at=5.0,
+            review_timeout_retry_count=1,
+            review_timeout_retry_pending=True,
+            usage_limit_retry_count=1,
+            usage_limit_retry_run="claim-1",
+        )
+        snapshot = replace(previous)
         run_state = RunState(
             active_worktrees={"280": active},
             task_reclaim_counts={280: previous},
@@ -341,7 +353,8 @@ class TestReclaimRetryBound:
         ):
             _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
 
-        assert run_state.task_reclaim_counts == {280: previous}
+        assert run_state.task_reclaim_counts == {280: snapshot}
+        assert previous == snapshot
 
     def _reclaim_with_failing_backup(self, tmp_path, run_state, config):
         worktree = tmp_path / "wt-280"

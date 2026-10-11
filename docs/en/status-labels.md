@@ -290,7 +290,7 @@ Among the production routes (`EVENT_BY_SOURCE`), those that go from an executed 
 
 `tests/status_event_retry_harness.py` stops a run keeping only `run_state.json` (on disk) and the Forge, and resumes by rebuilding everything else (the in-memory `RunState`, the reclaim or completion context). The stop is a `BaseException`, so production `except Exception` handlers cannot swallow it. Stop points: before/after the reservation save, before/after adding the target label (after = before the settle callback), before/after the settle save, and before/after removing the old label.
 
-- **GC reclaim** (`_refresh_reclaim` -> `_reclaim_external_or_local`; reserved by `_record_reclaim`, settled by `_settle_reclaim`): from every stop point the count grows exactly once and `pending` is cleared; an over-budget reclaim escalates exactly once. When the stop comes after `status:blocked-human-review` was added, the resumed GC sees the task as already escalated and only settles; the remaining `status:in-progress` is left to status repair (#1218), as the model's `restart` predicts.
+- **GC reclaim** (`_refresh_reclaim` -> `_reclaim_external_or_local`; reserved by `_record_reclaim`, settled by `_settle_reclaim`): from every stop point the count grows exactly once and `pending` is cleared; an over-budget reclaim escalates exactly once. When the stop comes after `status:blocked-human-review` was added, the resumed GC sees the task as already escalated and only settles; the remaining `status:in-progress` is left to status repair (#1218), as the model's `restart` predicts. A reservation or hold updates the existing `TaskReclaimRecord`, so the early-death, review-timeout and usage-limit budgets are not reset by a reclaim (#1279, `P3B-RECLAIM-BUDGET-PRESERVED`).
 - **Early death and review timeout** (GC completion `_publish_requeue`, settled by `_settle_completion_requeue`): after the reservation reached disk, a resumed run consumes no new slot and keeps the first `retry_at`; a stop before that save loses the reservation and the resumed run plans again at its own clock. After the settle save the ledger no longer holds the execution, so a remaining `status:in-progress` is left to status repair.
 - **Review-timeout completion policy** (`_prepare` -> `_apply_policy`): the per-operation reservation is reused and the requeue comment is posted once.
 - **Footprint-deviation recompute**: the count and `forced_serial` persist in the Issue body's Footprint fence and are restored from it when `run_state.json` is lost; a stop after the body write consumes nothing twice.
@@ -298,7 +298,6 @@ Among the production routes (`EVENT_BY_SOURCE`), those that go from an executed 
 
 Production defects found by the harness are split out, with their counterexamples pinned as strict xfails (expectations are not weakened):
 
-- #1279: GC reclaim, abandoned-cloud reclaim and dirty holds rebuild `TaskReclaimRecord` and reset the early-death and review-timeout counts to 0
 - #1280: a normal launch starts `recompute_count` at 0 and overwrites the Issue-body count and `forced_serial`
 
 ### Run time and reproduction

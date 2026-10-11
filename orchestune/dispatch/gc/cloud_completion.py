@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Literal, cast
 
 from orchestune.bounded_limit import exceeds_limit
@@ -82,8 +83,12 @@ def _reserve_cloud_reclaim_record(
         if previous is None
         else (previous.count if previous.pending else previous.count + 1)
     )
-    run_state.task_reclaim_counts[issue_number] = TaskReclaimRecord(
-        count=count, last_reclaimed_at=time.time(), pending=True
+    # #1279: 回収とは別枠の予算（early-death等）を保つため、置き換えず更新する。
+    run_state.task_reclaim_counts[issue_number] = replace(
+        previous or TaskReclaimRecord(),
+        count=count,
+        last_reclaimed_at=time.time(),
+        pending=True,
     )
     if on_reclaim_reserved is not None:
         try:

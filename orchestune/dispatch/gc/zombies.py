@@ -260,8 +260,13 @@ def _record_reclaim(
     判定に必要な完了履歴の保護が外れる）。
     """
     previous = run_state.task_reclaim_counts.get(reclaim.active.core.issue_number)
-    run_state.task_reclaim_counts[reclaim.active.core.issue_number] = TaskReclaimRecord(
-        count=reclaim.reclaim_count, last_reclaimed_at=reclaim.now, pending=True
+    # #1279: early-death・review-timeout・usage-limitの予算は回収とは別枠なので、
+    # 既存エントリを更新し、置き換えて0へ戻さない（previousは復元用に無傷で残る）。
+    run_state.task_reclaim_counts[reclaim.active.core.issue_number] = replace(
+        previous or TaskReclaimRecord(),
+        count=reclaim.reclaim_count,
+        last_reclaimed_at=reclaim.now,
+        pending=True,
     )
     try:
         save_run_state(
