@@ -32,7 +32,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3B-RECLAIM-BUDGET-PRESERVED` | 3b | verified | `reclaim-record-replaced` | - |
 | `P3B-RECOMPUTE-BUDGET-PRESERVED` | 3b | verified | `relaunch-counter-reset` | - |
 | `P3C-CASE-DELAY` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `empty-completion-set`, `throwaway-context` | - |
-| `P3C-LIVENESS-BOUND` | 3c | verified | `ledger-premise-removed`, `promotion-suppressed`, `promotion-delayed`, `event-only`, `empty-completion-set`, `throwaway-context` | - |
+| `P3C-LIVENESS-BOUND` | 3c | verified | `ledger-premise-removed`, `prior-merge-repair-exclusion-removed`, `promotion-suppressed`, `promotion-delayed`, `event-only`, `empty-completion-set`, `throwaway-context` | - |
 | `P3C-INTERMEDIATE-LIVENESS` | 3c | verified | `intermediate-ignored`, `promotion-suppressed` | - |
 | `P3C-SAFETY` | 3c | verified | `hold-guard-bypass`, `reservation-guard-bypass`, `stale-evidence`, `action-mapping-dropped`, `event-only` | - |
 | `P3C-INTERMEDIATE-SAFETY` | 3c | verified | `reservation-guard-bypass` | - |
@@ -41,7 +41,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3C-QUINT-OBSERVATION` | 3c | verified | `action-mapping-swapped` | - |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-DRYRUN-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
-| `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | 3c | known_defect | - | #1300 |
+| `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | 3c | verified | `prior-merge-repair-exclusion-removed` | - |
 
 ### 詳細
 
@@ -79,7 +79,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3C-QUINT-OBSERVATION` | 再生の各 step で、action を実行する前の本番の状態がモデルと一致する | `tests/quint_replay.py` の action 対応表 | 再生するITFトレースの各遷移 | 全ての前提が実ハーネスで成り立つ |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | dry run の T または中間ノードの preview が、そのノードの依存の未解放 completion reservation を尊重する | preview は context snapshot 上で定義される（この側は #1267 で修正済み） | dry run の cycle。決定的なシナリオで検査（machine は T の dry run の予約 preview を除外している） | 依存の予約が未解放の間 preview しない |
 | `P3C-DRYRUN-RESERVATION` | dry run の T または中間ノードの preview が、そのノード自身の未解放 reservation を尊重する | preview は context snapshot 上で定義される | dry run の cycle | T 自身・中間ノードの予約下で preview しない |
-| `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | Forge 障害つきの apply cycle の後でも、先行マージ証拠だけの依存を持つ T が dry run で preview される | 公平なcycle（両境界で昇格可能・障害注入なし） | 障害つき apply cycle 2回のあとの dry run cycle | T が preview に現れる（N = 1） |
+| `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | lag 下で Forge 障害つきの apply cycle を経ても、先行マージ修復が書いた依存は lifecycle ラベルを保ち、dry run で T が preview され、次の apply cycle で queued になる | 公平なcycle（両境界で昇格可能・障害注入なし）。書き込み直後の単一 Issue 読み取りが古い値を返しうる（#902 Round 5） | lag cycle 後の依存のラベル、障害つき apply cycle 2回のあとの dry run cycle、その次の apply cycle | 依存が lifecycle ラベルを持つ。T が preview に現れ（N = 1）、次の apply cycle で queued になる |
 
 ### `verified` ではない行
 
@@ -89,7 +89,6 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 - `P2-CONVERGENCE-UPPER-BOUND` (unverified): 1パスを超えて駆動するテストがなく、期待値（1cycle）だけを検査している
 - `P3A-DOCUMENT-TABLE` (unverified): 対照なし: 文書のずれを注入していない
 - `P3B-LAUNCH-AND-ESCALATION` (unverified): 契約idのないassertで、誤動作を注入していない
-- `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` (known_defect): #1281 の反例2（原因A）を strict xfail で固定している。lag 下の primary-status-conflict 修復が、先行マージ修復の書いた依存の最後の lifecycle ラベルを外すのが原因で、本番の修正は #1300 が担当する。xfail は c2 の後にラベルが消えていること（原因の境界）と、最後の dry run で T が preview されないことの両方を観測する
 
 <a id="cycle-definitions"></a>
 <!-- cycle-definitions -->
@@ -129,6 +128,7 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 | `relaunch-counter-reset` | 通常の起動が `recompute_count` / `forced_serial` を0・Falseから始める（#1280 以前の起動） | `P3B-RECOMPUTE-BUDGET-PRESERVED` | 通常の起動入口（claim 予約・provider 前の counter 保存・起動記録）の後、再び逸脱した active |
 | `promotion-suppressed` / `promotion-delayed` | 昇格境界を常に／証拠投入のcycleだけ飛ばす | `P3C-CASE-DELAY`（ケース表）、`P3C-LIVENESS-BOUND`、`P3C-INTERMEDIATE-LIVENESS` | label、`record_completion`（apply）、prior merge（apply・dry run） |
 | `empty-completion-set` / `throwaway-context` | #902 Round 4/5 の誤配線 | `P3C-CASE-DELAY` | ケース表 |
+| `prior-merge-repair-exclusion-removed` | `CycleContext.is_prior_merge_repair_attempted` が常に false を返す（status repair が先行マージの書き込み前の listing で動く） | `P3C-LIVENESS-PRIOR-MERGE-DRYRUN`（決定的シナリオ）、`P3C-LIVENESS-BOUND`（`prior_merge_after_faults` の再生） | lag cycle 後の依存のラベル、T の preview |
 | `ledger-premise-removed` | 公平性判定から「recompute 対象は active 台帳エントリがない」前提（#1281 反例2b）を外す | `P3C-LIVENESS-BOUND` | 障害つき apply cycle の後、台帳に完了済み依存が残る blocked-recompute の T（決定的シナリオ） |
 | `intermediate-ignored` | 中間ノードの判定を落とす | `P3C-INTERMEDIATE-LIVENESS` | 中間ノードのトポロジー |
 | `hold-guard-bypass`（3c） | 全ての `PROMOTION_HOLD_LABELS` を空にする | `P3C-SAFETY` | cycle 前の `ci:base-branch-red` |
@@ -186,7 +186,7 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 
 **保存シナリオ。** モデルの台本付きシナリオ（`init_<id>`。各 step の選択値を固定するので、ITFの形は乱択トレースと同じ）が、final / 中間ノード、apply / dry run、live / lagged、no-op / 実変更、依存側 / 対象側の hold、障害、restart、重複、stale 変更を網羅します。`tests/fixtures/quint/dependency_liveness_traces.json` にITFを seed・境界・Quint の版・生成コマンドとともに保存します。テストが各トレースを生成し直して比較し、モデルを変えて `uv run python -m tests.quint_scenarios regenerate` を実行していなければ失敗します。`tests/fixtures/quint/dependency_liveness_fault_scenarios.json` には、モデルの誤動作シナリオを期待する不変条件と予定の step とともに保存します。
 
-**既知の本番の反例（#1281 で発見、本番の修正は #1300）。** モデルは義務を述べ、本番がそれに違反します。探索ではモデルの `guard` を有効にして、乱択トレースがそれらを検査しないようにします（Hypothesis の machine も同じ場合を除外しています）。保存した `defect_*` シナリオ（#1281 の反例2に対応する `defect_prior_merge_after_faults`）は guard なしで実行し、Issue・契約・step・ノードを登録した strict xfail のテストで再生します。その不一致だけが欠陥で、同じトレースの別の不一致や別のトレースの不一致は失敗です。
+**本番の反例。** 現在、固定している本番の欠陥はありません。#1281 の反例（先行マージ修復が書いた依存が、lag 下で同じ cycle の status repair に最後の lifecycle ラベルを外される）は #1300 で修正され、通常の保存シナリオ `prior_merge_after_faults` になっています。将来の欠陥を固定する仕組みは再生側に残しています。fixture の項目に Issue・契約・step・ノードを登録し、その不一致だけを付け替え、他の不一致は失敗です（`test_a_known_defect_pin_is_exact`）。
 
 | 誤動作 | モデル: 違反する不変条件（シナリオ） | 再生: 違反する契約（保存シナリオ） |
 |---|---|---|
@@ -200,6 +200,7 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 | `dry-run-writes` | `dryRunReadOnly`（`final_dry`） | `P3C-DRYRUN-READONLY`（`final_dry`） |
 | `empty-completion-set` | - | `P3C-LIVENESS-BOUND`（`recompute_release`） |
 | `throwaway-context` | - | `P3C-LIVENESS-BOUND`（`lagged_apply`） |
+| `prior-merge-repair-exclusion-removed` | - | `P3C-LIVENESS-BOUND`（`prior_merge_after_faults`） |
 | `action-mapping-swapped` | - | `P3C-QUINT-OBSERVATION`（`duplicate_completion`） |
 | `action-mapping-dropped` | - | `P3C-SAFETY`（`restart_loses_ledger`） |
 

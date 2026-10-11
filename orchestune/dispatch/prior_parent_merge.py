@@ -62,6 +62,11 @@ class PriorParentMergeReconciliation:
     # に構築されうるため、subtask_id文字列は別EPICの同名タスクと衝突しうる。
     completed_issue_numbers: frozenset[int]
     events: tuple[PriorMergeEvidenceCompletion, ...]
+    # #1300: apply で書き込み（成功・失敗とも）に入ったIssue。cycle開始時の
+    # listing はこの書き込みより前の値なので、同じ cycle の status repair は
+    # これらを対象にしない。dry run・changed_before_repair・INDETERMINATE・
+    # NOT_FOUND は書き込まないため入らない。
+    repair_attempted_issue_numbers: frozenset[int] = frozenset()
 
 
 def _validated_candidate(
@@ -327,31 +332,43 @@ def _evidence_event(
 
 def _reverify_and_apply_repair(
     forge, issue_number: int, task: TaskMetadata
-) -> tuple[PriorMergeEvidenceCompletion, bool]:
-    """Freshly verify a successful scan, then apply its idempotent repair."""
+) -> tuple[PriorMergeEvidenceCompletion, bool, bool]:
+    """Freshly verify a successful scan, then apply its idempotent repair.
+
+    Returns ``(event, completed, attempted)``; ``attempted`` is true once a
+    write was started, whether or not it succeeded (#1300).
+    """
     fresh, fresh_issue = inspect_prior_parent_merge(forge, issue_number, task)
     event = _evidence_event(issue_number, fresh)
     if fresh.status is not PriorParentMergeStatus.ALREADY_MERGED or fresh_issue is None:
-        return replace(event, action="prior_merge_changed_before_repair"), False
+        return replace(event, action="prior_merge_changed_before_repair"), False, False
     if fresh_issue.state.upper() != "OPEN":
         try:
             _normalize_closed_issue_label(forge, fresh_issue)
         except Exception as error:  # noqa: BLE001 - retry idempotently next cycle
-            return replace(
-                event,
-                action="already_merged_repair_pending",
-                reason=f"repair failed: {type(error).__name__}",
-            ), False
-        return event, True
+            return (
+                replace(
+                    event,
+                    action="already_merged_repair_pending",
+                    reason=f"repair failed: {type(error).__name__}",
+                ),
+                False,
+                True,
+            )
+        return event, True, True
     try:
         _apply_verified_repair(forge, fresh_issue, fresh)
     except Exception as error:  # noqa: BLE001 - retry idempotently next cycle
-        return replace(
-            event,
-            action="already_merged_repair_pending",
-            reason=f"repair failed: {type(error).__name__}",
-        ), False
-    return event, True
+        return (
+            replace(
+                event,
+                action="already_merged_repair_pending",
+                reason=f"repair failed: {type(error).__name__}",
+            ),
+            False,
+            True,
+        )
+    return event, True, True
 
 
 def _reconcile_prior_parent_merge(
@@ -363,7 +380,7 @@ def _reconcile_prior_parent_merge(
     issue: IssueRecord | None,
     merged_prs_by_base: dict[str, list[PrRecord] | Exception],
     merge_reachability_by_key: dict[tuple[str, str], bool | None],
-) -> tuple[PriorParentMergeEvidence, PriorMergeEvidenceCompletion, bool]:
+) -> tuple[PriorParentMergeEvidence, PriorMergeEvidenceCompletion, bool, bool]:
     evidence, _ = inspect_prior_parent_merge(
         forge,
         issue_number,
@@ -373,16 +390,18 @@ def _reconcile_prior_parent_merge(
         merge_reachability_by_key,
     )
     if evidence.status is PriorParentMergeStatus.NOT_FOUND:
-        return evidence, _evidence_event(issue_number, evidence), False
+        return evidence, _evidence_event(issue_number, evidence), False, False
     event = _evidence_event(issue_number, evidence)
     if evidence.status is PriorParentMergeStatus.INDETERMINATE:
-        return evidence, event, False
+        return evidence, event, False, False
     if apply:
-        event, completed = _reverify_and_apply_repair(forge, issue_number, task)
+        event, completed, attempted = _reverify_and_apply_repair(
+            forge, issue_number, task
+        )
     else:
         event = replace(event, action="already_merged_dry_run")
-        completed = True
-    return evidence, event, completed
+        completed, attempted = True, False
+    return evidence, event, completed, attempted
 
 
 def reconcile_prior_parent_merges(
@@ -403,6 +422,7 @@ def reconcile_prior_parent_merges(
     evidence_by_issue: dict[int, PriorParentMergeEvidence] = {}
     held: set[int] = set()
     completed: set[int] = set()
+    attempted: set[int] = set()
     events: list[PriorMergeEvidenceCompletion] = []
     merged_prs_by_base: dict[str, list[PrRecord] | Exception] = {}
     merge_reachability_by_key: dict[tuple[str, str], bool | None] = {}
@@ -414,16 +434,20 @@ def reconcile_prior_parent_merges(
         # still has unsaved work; GC re-evaluates the same evidence afterward.
         if issue_number in active_issue_numbers:
             continue
-        evidence, event, repair_completed = _reconcile_prior_parent_merge(
-            forge,
-            issue_number,
-            task,
-            apply=apply,
-            issue=(issues_by_number or {}).get(issue_number),
-            merged_prs_by_base=merged_prs_by_base,
-            merge_reachability_by_key=merge_reachability_by_key,
+        evidence, event, repair_completed, repair_attempted = (
+            _reconcile_prior_parent_merge(
+                forge,
+                issue_number,
+                task,
+                apply=apply,
+                issue=(issues_by_number or {}).get(issue_number),
+                merged_prs_by_base=merged_prs_by_base,
+                merge_reachability_by_key=merge_reachability_by_key,
+            )
         )
         evidence_by_issue[issue_number] = evidence
+        if repair_attempted:
+            attempted.add(issue_number)
         if evidence.status is PriorParentMergeStatus.NOT_FOUND:
             continue
         held.add(issue_number)
@@ -435,6 +459,7 @@ def reconcile_prior_parent_merges(
         held_issue_numbers=frozenset(held),
         completed_issue_numbers=frozenset(completed),
         events=tuple(events),
+        repair_attempted_issue_numbers=frozenset(attempted),
     )
 
 

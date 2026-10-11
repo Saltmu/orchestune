@@ -18,6 +18,7 @@ REMOVED_CONTEXT_ATTRIBUTES = frozenset(
         "pr_by_branch",
         "prior_parent_merge_completed_issue_numbers",
         "prior_parent_merge_hold_issue_numbers",
+        "prior_parent_merge_repair_attempted_issue_numbers",
         "prs",
         "run_state",
         "tasks_by_issue",

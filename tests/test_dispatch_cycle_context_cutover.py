@@ -97,5 +97,6 @@ def test_context_no_longer_exposes_legacy_raw_state_windows(tmp_path: Path) -> N
         "issue_records_by_number",
         "prior_parent_merge_hold_issue_numbers",
         "prior_parent_merge_completed_issue_numbers",
+        "prior_parent_merge_repair_attempted_issue_numbers",
     ):
         assert not hasattr(ctx, name), name

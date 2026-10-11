@@ -83,6 +83,49 @@ class TestExecuteRepair:
         # context the rest of the cycle observes -- not a throwaway fresh one.
         assert ctx.task(1).status_labels == (StatusLabel.QUEUED,)
 
+    def test_status_command_for_an_issue_the_prior_merge_repair_wrote_is_skipped(
+        self, tmp_path, in_memory_forge
+    ):
+        """#1300: the cycle's listing predates that write, so a stale plan must not run."""
+        before = (StatusLabel.DONE, StatusLabel.QUEUED)
+        parent_issue_number = 100
+        task = make_task(1, status_labels=before, parent_number=parent_issue_number)
+        in_memory_forge.seed_issue(
+            make_issue(
+                1,
+                labels=before,
+                parent={"number": parent_issue_number},
+                body=(
+                    "```yaml\nsubtask_id: task-1\n"
+                    f"parent_issue_number: {parent_issue_number}\n```\n"
+                ),
+            )
+        )
+        run_state = RunState(active_worktrees={})
+        config = _config(
+            tmp_path, in_memory_forge, parent_issue_number=parent_issue_number
+        )
+        ctx = _ctx(
+            tasks_by_issue={1: task},
+            run_state=run_state,
+            config=config,
+            prior_parent_merge_repair_attempted_issue_numbers=frozenset({1}),
+        )
+        adapter = CycleActionAdapter(run_state, config, now=0.0)
+        adapter.bind_context(ctx)
+        command = _plan({1: task})[1][0]
+
+        with patch(
+            "orchestune.dispatch.cycle_actions.execute_status_repair_command"
+        ) as execute:
+            result = adapter.execute_repair(command)
+
+        execute.assert_not_called()
+        assert result.status.value == "skipped"
+        assert "prior parent merge repair" in " ".join(result.diagnostics)
+        assert in_memory_forge.get_issue_labels(1) == before
+        assert ctx.task(1).status_labels == before
+
     def test_unconfirmed_rule_outcome_does_not_override_stale_forge_labels(
         self, tmp_path, in_memory_forge
     ):

@@ -16,6 +16,7 @@ Quint and Node are required: a missing tool is an error, never a skip.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import os
 import shutil
@@ -45,6 +46,7 @@ from tests.quint_replay import (
     ROOT,
     WITNESSES,
     Exploration,
+    KnownDefect,
     ModelRun,
     Replayer,
     ReplayFormatError,
@@ -79,7 +81,6 @@ from tests.test_dependency_liveness_stateful import dependency_topologies
 from tests.verification_contract_test_support import (
     ContractViolation,
     expect_violation,
-    pinned_defect,
     require,
 )
 
@@ -298,8 +299,6 @@ def test_each_scenario_runs_on_the_model_and_replays(
         ), "run: uv run python -m tests.quint_scenarios regenerate"
         assert entry["command"] == generation_command(scenario)
         assert entry["seed"] == "0x1" and entry["bounds"]["max_samples"] == 1
-    if scenario.startswith("defect_"):
-        return
     trace = parse_trace(raw)
     report = replay_trace(trace, tmp_path / "world")
     assert report.transitions == trace.transitions > 0
@@ -333,9 +332,7 @@ def test_stored_traces_exercise_every_mapped_action() -> None:
     assert used == set(ACTIONS)
 
 
-@pytest.mark.parametrize(
-    "scenario", [s for s in STORED_SCENARIOS if not s.startswith("defect_")]
-)
+@pytest.mark.parametrize("scenario", STORED_SCENARIOS)
 def test_stored_trace_replays_on_production(scenario: str, tmp_path: Path) -> None:
     entry = STORED[scenario]
     assert entry["known_defect"] is None
@@ -345,43 +342,42 @@ def test_stored_trace_replays_on_production(scenario: str, tmp_path: Path) -> No
     assert report.cycles > 0
 
 
-def test_known_defect_registry_names_known_defect_rows() -> None:
-    from tests.verification_contracts import CONTRACTS
-
-    rows = {c.id: c for c in CONTRACTS if c.status == "known_defect"}
-    registered = {
-        s: known_defect(STORED[s]["known_defect"])
-        for s in STORED_SCENARIOS
-        if s.startswith("defect_")
-    }
-    assert all(registered.values())
-    for scenario, defect in registered.items():
-        assert defect is not None
-        assert defect.contract in rows, scenario
-        assert defect.issue in rows[defect.contract].issues, scenario
-    assert {s for s, e in STORED.items() if e["known_defect"]} == set(registered)
+def test_no_production_defect_is_pinned_in_the_saved_traces() -> None:
+    """A saved trace is a normal regression; a pin needs its own Issue and row."""
+    assert {s for s, e in STORED.items() if e["known_defect"]} == set()
 
 
-@pytest.mark.xfail(
-    reason="production bug #1300: no preview of a prior merge after faulted apply "
-    "cycles (a lagged status repair strips the dependency's last lifecycle label)",
-    strict=True,
-    raises=ContractViolation,
-)
-def test_known_defect_stored_trace_prior_merge_after_faults(tmp_path: Path) -> None:
-    with pinned_defect("P3C-LIVENESS-PRIOR-MERGE-DRYRUN"):
-        replay_stored("defect_prior_merge_after_faults", tmp_path)
+def test_a_known_defect_pin_is_exact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The replay re-labels a mismatch only at the registered step, node and contract.
 
+    No production defect is pinned any more (#1300), so the mechanism is
+    exercised with a production fault: every promotion is skipped.
+    """
+    trace = parse_trace(STORED["final_apply"]["itf"])
+    step = next(s.index for s in trace.steps if s.state["mustQueue"])
+    pin = KnownDefect(
+        issue=1,
+        contract="P3C-EXAMPLE-PIN",
+        step=step,
+        node=DEPENDENT,
+        violates="P3C-LIVENESS-BOUND",
+    )
+    _skip_promotion(monkeypatch, None)
 
-def test_a_mismatch_beside_a_known_defect_is_not_excused(tmp_path: Path) -> None:
-    """The registered step / node / contract are exact: any other mismatch fails."""
-    entry = copy.deepcopy(STORED["defect_prior_merge_after_faults"])
-    entry["known_defect"]["step"] += 1  # the defect is no longer where it is pinned
-    with pytest.raises(ContractViolation) as caught:
-        replay_trace(
-            parse_trace(entry["itf"]), tmp_path, known_defect(entry["known_defect"])
-        )
-    assert caught.value.contract_id == "P3C-LIVENESS-BOUND"
+    def failed_with(known: KnownDefect, name: str) -> str:
+        with pytest.raises(ContractViolation) as caught:
+            replay_trace(trace, tmp_path / name, known)
+        return caught.value.contract_id
+
+    assert failed_with(pin, "exact") == "P3C-EXAMPLE-PIN"
+    for name, moved in {
+        "step": dataclasses.replace(pin, step=step + 1),
+        "node": dataclasses.replace(pin, node=11),
+        "contract": dataclasses.replace(pin, violates="P3C-SAFETY"),
+    }.items():
+        assert failed_with(moved, name) == "P3C-LIVENESS-BOUND"
 
 
 # ---- model controls: one fault in the model each --------------------------------------------
@@ -485,6 +481,17 @@ def test_control_replay_detects_suppressed_promotion(
     _skip_promotion(monkeypatch, None)
     with expect_violation("P3C-LIVENESS-BOUND"):
         replay_stored("final_apply", tmp_path / "fault")
+
+
+def test_control_replay_detects_a_status_repair_that_overrides_the_prior_merge_repair(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    replay_stored("prior_merge_after_faults", tmp_path / "normal")
+    monkeypatch.setattr(
+        CycleContext, "is_prior_merge_repair_attempted", lambda self, number: False
+    )
+    with expect_violation("P3C-LIVENESS-BOUND"):
+        replay_stored("prior_merge_after_faults", tmp_path / "fault")
 
 
 def test_control_replay_detects_delayed_promotion(

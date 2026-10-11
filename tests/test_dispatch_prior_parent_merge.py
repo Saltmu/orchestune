@@ -727,3 +727,103 @@ def test_repair_refetches_reopen_timestamp_on_pre_mutation_revalidation():
     assert result.completed_issue_numbers == {101}
     # First call during initial scan, second call during _apply_or_preview_verified_repair re-verification
     assert forge.get_issue_last_reopened_at.call_count == 2
+
+
+# ---- #1300: the Issues whose repair writes were attempted this cycle ---------------
+
+
+def _attempted(forge, *, apply=True, issue=None, **overrides):
+    issue = issue or _issue()
+    return reconcile_prior_parent_merges(
+        forge,
+        {101: _task()},
+        apply=apply,
+        issues_by_number={101: issue},
+        **overrides,
+    )
+
+
+def test_a_repair_that_wrote_records_the_issue_as_attempted():
+    result = _attempted(_forge_for_reconciliation(_issue()))
+
+    assert result.completed_issue_numbers == {101}
+    assert result.repair_attempted_issue_numbers == {101}
+
+
+@pytest.mark.parametrize("failing", ["add_label", "remove_label", "close_issue"])
+def test_a_repair_whose_write_failed_is_still_attempted(failing):
+    forge = _forge_for_reconciliation(_issue())
+    getattr(forge, failing).side_effect = RuntimeError("lost response")
+
+    result = _attempted(forge)
+
+    assert result.completed_issue_numbers == set()
+    assert result.events[0].to_dict()["action"] == "already_merged_repair_pending"
+    assert result.repair_attempted_issue_numbers == {101}
+
+
+def test_a_closed_issue_label_normalization_is_attempted():
+    issue = dataclasses.replace(_issue(), state="CLOSED")
+
+    result = _attempted(_forge_for_reconciliation(issue), issue=issue)
+
+    assert result.repair_attempted_issue_numbers == {101}
+
+
+def test_a_failed_closed_issue_label_normalization_is_attempted():
+    issue = dataclasses.replace(_issue(), state="CLOSED")
+    forge = _forge_for_reconciliation(issue)
+    forge.add_label.side_effect = RuntimeError("lost response")
+
+    result = _attempted(forge, issue=issue)
+
+    assert result.completed_issue_numbers == set()
+    assert result.repair_attempted_issue_numbers == {101}
+
+
+def test_a_dry_run_never_attempts_a_write():
+    forge = _forge_for_reconciliation(_issue())
+
+    result = _attempted(forge, apply=False)
+
+    assert result.completed_issue_numbers == {101}
+    assert result.repair_attempted_issue_numbers == frozenset()
+
+
+def test_an_issue_without_prior_merge_evidence_is_not_attempted():
+    forge = _forge_for_reconciliation(_issue())
+    forge.list_merged_prs_for_base.return_value = []
+
+    result = _attempted(forge)
+
+    assert result.held_issue_numbers == set()
+    assert result.repair_attempted_issue_numbers == frozenset()
+
+
+def test_indeterminate_evidence_is_not_attempted():
+    forge = _forge_for_reconciliation(_issue())
+    forge.list_merged_prs_for_base.side_effect = RuntimeError("temporary API failure")
+
+    result = _attempted(forge)
+
+    assert result.held_issue_numbers == {101}
+    assert result.repair_attempted_issue_numbers == frozenset()
+
+
+def test_evidence_that_changed_before_the_repair_is_not_attempted():
+    forge = _forge_for_reconciliation(_issue())
+    forge.list_merged_prs_for_base.side_effect = [[_merged_pr()], []]
+
+    result = _attempted(forge)
+
+    assert result.events[0].to_dict()["action"] == "prior_merge_changed_before_repair"
+    forge.add_label.assert_not_called()
+    assert result.repair_attempted_issue_numbers == frozenset()
+
+
+def test_an_actively_executing_issue_is_not_attempted():
+    forge = _forge_for_reconciliation(_issue())
+
+    result = _attempted(forge, active_issue_numbers=frozenset({101}))
+
+    assert result.repair_attempted_issue_numbers == frozenset()

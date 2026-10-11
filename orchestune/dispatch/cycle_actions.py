@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from orchestune.claim.contracts import ClaimOutcome, ClaimRequest
 from orchestune.claim.preflight import ClaimBaseResolutionView
 from orchestune.claim.service import claim_task
-from orchestune.consistency.models import RepairCommand, RepairResult
+from orchestune.consistency.models import RepairCommand, RepairResult, RepairStatus
 from orchestune.consistency.repairs.execution import (
     COMMAND_BOOKKEEPING,
     COMMAND_RECLAIM,
@@ -359,6 +359,28 @@ def _bind_dispatch_claim_fn(
     return _claim_fn
 
 
+def _skip_after_prior_merge_repair(
+    ctx: CycleContext, command: RepairCommand
+) -> RepairResult | None:
+    """先行マージ修復が同じcycleで書き込んだIssueへのstatus commandをSKIPPEDにする（#1300）。
+
+    cycle開始時のlistingはその書き込みより前の値で、書き込み直後の再取得も
+    古い値を返しうる。逆向きの上書き（最後のstatusラベルの除去等）を避けるため、
+    Intentの計画やjournal書き込みより前に除外し、次cycleの新しいlistingで判断する。
+    """
+    subject = str(command.subject_id or "")
+    if not (subject.isdigit() and ctx.is_prior_merge_repair_attempted(int(subject))):
+        return None
+    return RepairResult(
+        command=command,
+        status=RepairStatus.SKIPPED,
+        diagnostics=(
+            "prior parent merge repair wrote this Issue earlier in the cycle; "
+            "status repair waits for the next cycle's listing",
+        ),
+    )
+
+
 class CycleActionAdapter:
     """L3 `CycleActions`の全port実装。
 
@@ -607,6 +629,10 @@ class CycleActionAdapter:
             )
         if not command.code.startswith("status."):
             return DispatchRepairExecutorAdapter({}).execute(command)
+
+        skipped = _skip_after_prior_merge_repair(ctx, command)
+        if skipped is not None:
+            return skipped
 
         fresh_issues = _fetch_issues(self._config)
         tasks_by_issue, _, _ = _build_task_mappings(fresh_issues.all())

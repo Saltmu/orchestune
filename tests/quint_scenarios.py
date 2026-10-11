@@ -79,7 +79,7 @@ STORED_SCENARIOS = (
     "stale_complete",
     "target_own_reservation_dry",
     "intermediate_own_reservation_dry",
-    "defect_prior_merge_after_faults",
+    "prior_merge_after_faults",
 )
 #: Routes the saved traces must cover (#1276: final / intermediate, apply / dry
 #: run, live / lagged, no-op / real change, dependency-side / target-side holds).

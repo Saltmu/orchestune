@@ -488,3 +488,20 @@ def _active_worktree(issue_number):
         started_at=1_700_000_000.0,
         declared_footprint=(),
     )
+
+
+class TestPriorMergeRepairAttemptedQuery:
+    """`is_prior_merge_repair_attempted()`——先行マージ修復が書き込みを試みた集合への所属（#1300）。"""
+
+    def test_attempted_issue_is_reported(self):
+        ctx = _ctx(
+            tasks_by_issue={1: _task(1), 2: _task(2)},
+            prior_parent_merge_repair_attempted_issue_numbers=frozenset({2}),
+        )
+        assert ctx.is_prior_merge_repair_attempted(2) is True
+        assert ctx.is_prior_merge_repair_attempted(1) is False
+
+    def test_default_is_empty_and_independent_of_the_hold_set(self):
+        ctx = _ctx(prior_parent_merge_hold_issue_numbers=frozenset({7}))
+        assert ctx.is_prior_merge_repair_attempted(7) is False
+        assert ctx.is_prior_merge_held(7) is True

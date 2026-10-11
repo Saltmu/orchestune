@@ -436,6 +436,9 @@ CONTRACTS: tuple[Contract, ...] = (
                 f"{P3C}::test_control_machine_detects_missing_or_late_promotion",
                 f"{P3Q}::test_control_replay_detects_delayed_promotion",
             ),
+            "prior-merge-repair-exclusion-removed": (
+                f"{P3Q}::test_control_replay_detects_a_status_repair_that_overrides_the_prior_merge_repair",
+            ),
             "event-only": (
                 f"{P3C}::test_control_event_only_promotion_is_detected",
                 f"{P3Q}::test_control_replay_detects_an_event_without_the_label",
@@ -624,16 +627,19 @@ CONTRACTS: tuple[Contract, ...] = (
     Contract(
         id="P3C-LIVENESS-PRIOR-MERGE-DRYRUN",
         phase="3c",
-        guarantee="after Forge-faulted apply cycles a dry run still previews T whose dependency has only prior-merge evidence",
-        premise="fair cycle (promotable at both boundaries, no injected failure)",
-        boundary="the dry-run cycle after two faulted apply cycles",
-        expectation="T appears in the preview (N = 1)",
-        status="known_defect",
+        guarantee="after Forge-faulted apply cycles under lag a dependency written by the prior-merge repair keeps a lifecycle label, a dry run previews T, and the next apply cycle queues it",
+        premise="fair cycle (promotable at both boundaries, no injected failure); a single-Issue read right after a write may return the old value (#902 Round 5)",
+        boundary="the label of the dependency after the lagged cycle; the dry-run cycle after two faulted apply cycles; the apply cycle after it",
+        expectation="the dependency holds a lifecycle label; T appears in the preview (N = 1) and is queued by the next apply cycle",
+        status="verified",
         tests=(
-            f"{P3C}::test_known_defect_prior_merge_is_not_previewed_after_faulted_apply_cycles",
-            f"{P3Q}::test_known_defect_stored_trace_prior_merge_after_faults",
+            f"{P3C}::test_prior_merge_dependency_keeps_its_label_after_faulted_apply_cycles",
+            f"{P3Q}::test_stored_trace_replays_on_production",
         ),
-        reason="#1281 counterexample 2 (cause A): under lag the primary-status-conflict repair strips the last lifecycle label of a dependency the prior-merge repair wrote in the same cycle, so the dry run cannot resolve it; a strict xfail pins the label loss and the missing preview, production fix in #1300",
-        issues=(1300,),
+        controls={
+            "prior-merge-repair-exclusion-removed": (
+                f"{P3C}::test_control_prior_merge_repair_exclusion_removal_is_detected",
+            )
+        },
     ),
 )
