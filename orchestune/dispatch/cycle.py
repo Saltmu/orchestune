@@ -144,6 +144,7 @@ from orchestune.dispatch.status_repair_dependencies import (
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.infra.process_utils import run_state_lock as run_state_lock
 from orchestune.labels import StatusLabel
+from orchestune.ledger.completion_reservations import completion_mutation_blocked
 from orchestune.ledger.run_state import load_run_state as load_run_state
 from orchestune.pr_link_notice import (
     notice_expected_bases,
@@ -471,13 +472,25 @@ def _status_repair_commands(
     finding_code: str,
     *,
     applied: bool,
+    run_state: RunState | None = None,
 ) -> tuple[RepairCommand, ...]:
     if not applied:
-        return tuple(
-            command
-            for command in initial_scan.repair_candidates
-            if _command_finding_code(command) == finding_code
-        )
+        commands: list[RepairCommand] = []
+        for command in initial_scan.repair_candidates:
+            if _command_finding_code(command) != finding_code:
+                continue
+            if command.subject_id is None:
+                continue
+            try:
+                issue_number = int(command.subject_id)
+            except (ValueError, TypeError):
+                continue
+            if run_state is not None and completion_mutation_blocked(
+                run_state, issue_number
+            ):
+                continue
+            commands.append(command)
+        return tuple(commands)
     return tuple(
         result.command
         for repair_pass in boundary_report.repair_passes
@@ -585,6 +598,7 @@ def _run_status_repair_boundary(
         initial_scan,
         finding_code,
         applied=config.apply,
+        run_state=run_state,
     )
     return _promotion_events(commands, fresh_adapter)
 

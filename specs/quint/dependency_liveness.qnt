@@ -188,10 +188,10 @@ module dependency_liveness {
 
     // ---- production counterexamples (guard off: the model states the obligation
     //      that production violates; the replay pins each to its Issue) ----
-    "defect_target_own_reservation_dry" -> unguarded(ok("simple_one", [
-      doneWith("label", 11), hold("reservation", 20), cycleOf(false, false)])),
-    "defect_intermediate_own_reservation_dry" -> unguarded(ok("transitive_chain", [
-      hold("reservation", 12), doneWith("label", 13), cycleOf(false, false)])),
+    "target_own_reservation_dry" -> ok("simple_one", [
+      doneWith("label", 11), hold("reservation", 20), cycleOf(false, false)]),
+    "intermediate_own_reservation_dry" -> ok("transitive_chain", [
+      hold("reservation", 12), doneWith("label", 13), cycleOf(false, false)]),
     "defect_prior_merge_after_faults" -> unguarded(ok("simple_two", [
       doneWith("label", 11), doneWith("prior_merge", 12),
       failing("add", "after"), cycleOf(true, false),
@@ -256,7 +256,7 @@ module dependency_liveness {
   var streak: int -> int       // fair cycles in a row (per subject)
   var lastMode: str            // "apply" | "dry" | "none"
   var fault: str               // injected model fault ("none": the correct model)
-  var guard: bool              // exclude the production counterexamples #1281 / #1283
+  var guard: bool              // exclude the production counterexample #1281
   var sid: str                 // scripted scenario id ("": random exploration)
   var pc: int                  // next script position
   var planned: int             // script length (0: random exploration); a scripted run must end at pc == planned
@@ -462,15 +462,8 @@ module dependency_liveness {
   // no liveness obligation and forgets what the fault might have touched.
   def armedHit(apply: bool): bool = apply and armed.op != "none"
 
-  // Known production counterexamples (#1283 / #1281): while `guard` is set the
-  // model states no obligation for them.
-  def selfReservationExcused(n: int, apply: bool, lag: bool): bool =
-    guard and not(apply) and view0.res.contains(n)
-      and decide(TOPOLOGIES.get(topo), judged(n, apply, lag), apply, n, false) != "no"
-
   def mustNotOf(n: int, apply: bool, lag: bool): bool =
     decide(TOPOLOGIES.get(topo), judged(n, apply, lag), apply, n, true) == "no"
-      and not(selfReservationExcused(n, apply, lag))
 
   def fairOf(n: int, apply: bool): bool =
     not(armedHit(apply))
@@ -661,7 +654,7 @@ module dependency_liveness {
   action init_fault_bypass_hold: bool = initScenario("fault_bypass_hold")
   action init_fault_event_only: bool = initScenario("fault_event_only")
   action init_fault_dry_run_writes: bool = initScenario("fault_dry_run_writes")
-  action init_defect_target_own_reservation_dry: bool = initScenario("defect_target_own_reservation_dry")
-  action init_defect_intermediate_own_reservation_dry: bool = initScenario("defect_intermediate_own_reservation_dry")
+  action init_target_own_reservation_dry: bool = initScenario("target_own_reservation_dry")
+  action init_intermediate_own_reservation_dry: bool = initScenario("intermediate_own_reservation_dry")
   action init_defect_prior_merge_after_faults: bool = initScenario("defect_prior_merge_after_faults")
 }

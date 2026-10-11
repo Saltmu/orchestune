@@ -605,15 +605,17 @@ CONTRACTS: tuple[Contract, ...] = (
         premise="the preview is defined over the context snapshot",
         boundary="dry-run cycle",
         expectation="no preview under T's own or an intermediate node's own reservation",
-        status="known_defect",
+        status="verified",
         tests=(
-            f"{P3C}::test_known_defect_dry_run_previews_t_under_its_own_reservation",
-            f"{P3C}::test_known_defect_dry_run_previews_an_intermediate_under_its_own_reservation",
-            f"{P3Q}::test_known_defect_stored_trace_target_own_reservation",
-            f"{P3Q}::test_known_defect_stored_trace_intermediate_own_reservation",
+            f"{P3C}::test_dry_run_respects_target_own_reservation",
+            f"{P3C}::test_dry_run_respects_intermediate_own_reservation",
+            f"{P3Q}::test_stored_trace_replays_on_production",
         ),
-        reason="strict xfail counterexamples (#1283 for T, #1281 counterexample 1 for an intermediate node); assert_safe and the intermediate check excuse these previews until the production fixes land; the dependency side is a separate verified contract",
-        issues=(1281, 1283),
+        controls={
+            "reservation-guard-bypass": (
+                f"{P3C}::test_control_dry_run_own_reservation_bypass_is_detected",
+            )
+        },
     ),
     Contract(
         id="P3C-LIVENESS-PRIOR-MERGE-DRYRUN",

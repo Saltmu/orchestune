@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -240,3 +240,58 @@ def test_no_declared_dependencies_is_distinguishable_from_unresolved(in_memory_f
     assert result is not None
     assert result.dependencies.is_empty
     assert dependencies_completed(result.assessment)
+
+
+def test_dry_run_promotion_preview_suppressed_for_self_reserved_target():
+    """Issue #1283: dry run promotion preview suppresses candidate when target has unreleased reservation."""
+    from orchestune.consistency.invariants.status import (
+        BLOCKED_WITH_RESOLVED_DEPENDENCIES,
+    )
+    from orchestune.consistency.models import (
+        ConsistencyReport,
+        ConsistencyScope,
+        RepairCommand,
+    )
+    from orchestune.consistency.repairs.status import COMMAND_TRANSITION_LABEL
+    from orchestune.consistency.supervisor import ConsistencyScanResult, ScanKind
+    from orchestune.dispatch.cycle import _status_repair_commands
+    from orchestune.ledger.run_state import RunState
+
+    cmd = RepairCommand(
+        code=COMMAND_TRANSITION_LABEL,
+        scope=ConsistencyScope.TASK,
+        idempotency_key="test-key",
+        subject_id="10",
+        parameters=(("finding_code", BLOCKED_WITH_RESOLVED_DEPENDENCIES),),
+    )
+    scan = ConsistencyScanResult(
+        boundary="status:blocked_with_resolved_dependencies",
+        kind=ScanKind.FULL,
+        report=ConsistencyReport(repository_id="test-repo"),
+        repair_candidates=(cmd,),
+    )
+    report = Mock()
+
+    # With pending reservation: suppressed
+    run_state = RunState(
+        completion_reservations={"repo::10": {"issue_number": 10, "stage": "reserved"}}
+    )
+    commands = _status_repair_commands(
+        report,
+        scan,
+        BLOCKED_WITH_RESOLVED_DEPENDENCIES,
+        applied=False,
+        run_state=run_state,
+    )
+    assert commands == ()
+
+    # Without reservation: not suppressed
+    empty_state = RunState()
+    commands = _status_repair_commands(
+        report,
+        scan,
+        BLOCKED_WITH_RESOLVED_DEPENDENCIES,
+        applied=False,
+        run_state=empty_state,
+    )
+    assert commands == (cmd,)

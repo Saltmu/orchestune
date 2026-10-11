@@ -40,7 +40,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3C-DRYRUN-READONLY` | 3c | verified | `dry-run-writes` | - |
 | `P3C-QUINT-OBSERVATION` | 3c | verified | `action-mapping-swapped` | - |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
-| `P3C-DRYRUN-RESERVATION` | 3c | known_defect | - | #1281, #1283 |
+| `P3C-DRYRUN-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | 3c | known_defect | - | #1281 |
 
 ### 詳細
@@ -89,7 +89,6 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 - `P2-CONVERGENCE-UPPER-BOUND` (unverified): 1パスを超えて駆動するテストがなく、期待値（1cycle）だけを検査している
 - `P3A-DOCUMENT-TABLE` (unverified): 対照なし: 文書のずれを注入していない
 - `P3B-LAUNCH-AND-ESCALATION` (unverified): 契約idのないassertで、誤動作を注入していない
-- `P3C-DRYRUN-RESERVATION` (known_defect): strict xfail の反例で固定している（T は #1283、中間ノードは #1281 の反例1）。本番修正が入るまで assert_safe と中間ノードの検査がこれらの preview を除外している（依存側は別の verified 契約）
 - `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` (known_defect): #1281 の反例2を strict xfail で固定している。本番が先行マージの完了集合を落とすのか、公平性判定の問題なのかはまだ切り分けていない
 
 <a id="cycle-definitions"></a>
@@ -132,10 +131,10 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 | `empty-completion-set` / `throwaway-context` | #902 Round 4/5 の誤配線 | `P3C-CASE-DELAY` | ケース表 |
 | `intermediate-ignored` | 中間ノードの判定を落とす | `P3C-INTERMEDIATE-LIVENESS` | 中間ノードのトポロジー |
 | `hold-guard-bypass`（3c） | 全ての `PROMOTION_HOLD_LABELS` を空にする | `P3C-SAFETY` | cycle 前の `ci:base-branch-red` |
-| `reservation-guard-bypass` | 依存側・対象側・中間ノードの依存の予約判定が常に通る | `P3C-SAFETY`、`P3C-INTERMEDIATE-SAFETY`（machine の apply cycle）、`P3C-DRYRUN-DEPENDENCY-RESERVATION`（決定的な dry run） | machine は apply cycle。dry run の依存側は決定的なシナリオ |
+| `reservation-guard-bypass` | 依存側・対象側・中間ノードの依存の予約判定が常に通る | `P3C-SAFETY`、`P3C-INTERMEDIATE-SAFETY`（machine の apply cycle）、`P3C-DRYRUN-DEPENDENCY-RESERVATION`（決定的な dry run）、`P3C-DRYRUN-RESERVATION`（対象側・中間ノード自身の dry run） | machine は apply cycle。dry run の依存側は決定的なシナリオ、対象側・中間ノード自身の dry run は専用の決定的なシナリオ |
 | `stale-evidence` | 再オープンされた依存を完了とみなす | `P3C-SAFETY` | 取り消されたlabel証拠 |
 
-既知の穴は、弱めずに記録します。乱択の machine の `assert_safe` は未解放の予約下の dry run の preview をすべて除外するため、`reservation-guard-bypass` を apply のcycleでしか検出しません。そのため dry run の依存側（#1267 で修正済み）は、T と中間ノードのどちらも専用の決定的なシナリオで検査します（`P3C-DRYRUN-DEPENDENCY-RESERVATION`。中間ノードの検査が除外するのはそのノード自身の予約だけです）。T 自身の予約と中間ノード自身の予約下の preview は、#1281・#1283 が直るまで既知の欠陥です（`P3C-DRYRUN-RESERVATION`）。2つの guard（`status_repair_preserves_protection` だけの迂回、中間ノードの早すぎる評価）は第2の層が再検証するため、誤動作1つでは迂回できません。対照は guard 全体を差し替えます。
+既知の穴は、弱めずに記録します。dry run の依存側（#1267 で修正済み）は、T と中間ノードのどちらも専用の決定的なシナリオで検査します（`P3C-DRYRUN-DEPENDENCY-RESERVATION`）。T 自身の予約と中間ノード自身の予約下の preview も、#1283 で修正され専用の決定的なシナリオと対照テストで検証されています（`P3C-DRYRUN-RESERVATION`）。2つの guard（`status_repair_preserves_protection` だけの迂回、中間ノードの早すぎる評価）は第2の層が再検証するため、誤動作1つでは迂回できません。対照は guard 全体を差し替えます。
 
 <a id="static-coverage"></a>
 <!-- static-coverage -->
@@ -186,7 +185,7 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 
 **保存シナリオ。** モデルの台本付きシナリオ（`init_<id>`。各 step の選択値を固定するので、ITFの形は乱択トレースと同じ）が、final / 中間ノード、apply / dry run、live / lagged、no-op / 実変更、依存側 / 対象側の hold、障害、restart、重複、stale 変更を網羅します。`tests/fixtures/quint/dependency_liveness_traces.json` にITFを seed・境界・Quint の版・生成コマンドとともに保存します。テストが各トレースを生成し直して比較し、モデルを変えて `uv run python -m tests.quint_scenarios regenerate` を実行していなければ失敗します。`tests/fixtures/quint/dependency_liveness_fault_scenarios.json` には、モデルの誤動作シナリオを期待する不変条件と予定の step とともに保存します。
 
-**既知の本番の反例（#1281・#1283）。** モデルは義務を述べ、本番がそれに違反します。探索ではモデルの `guard` を有効にして、乱択トレースがそれらを検査しないようにします（Hypothesis の machine も同じ場合を除外しています）。保存した3つの `defect_*` シナリオは guard なしで実行し、Issue・契約・step・ノードを登録した strict xfail のテストで再生します。その不一致だけが欠陥で、同じトレースの別の不一致や別のトレースの不一致は失敗です。
+**既知の本番の反例（#1281）。** モデルは義務を述べ、本番がそれに違反します。探索ではモデルの `guard` を有効にして、乱択トレースがそれらを検査しないようにします（Hypothesis の machine も同じ場合を除外しています）。保存した `defect_*` シナリオ（#1281 の反例2に対応する `defect_prior_merge_after_faults`）は guard なしで実行し、Issue・契約・step・ノードを登録した strict xfail のテストで再生します。その不一致だけが欠陥で、同じトレースの別の不一致や別のトレースの不一致は失敗です。
 
 | 誤動作 | モデル: 違反する不変条件（シナリオ） | 再生: 違反する契約（保存シナリオ） |
 |---|---|---|

@@ -77,8 +77,8 @@ STORED_SCENARIOS = (
     "stale_revoke",
     "stale_add_hold_dry",
     "stale_complete",
-    "defect_target_own_reservation_dry",
-    "defect_intermediate_own_reservation_dry",
+    "target_own_reservation_dry",
+    "intermediate_own_reservation_dry",
     "defect_prior_merge_after_faults",
 )
 #: Routes the saved traces must cover (#1276: final / intermediate, apply / dry
