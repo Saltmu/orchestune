@@ -29,15 +29,13 @@ import pytest
 from hypothesis import given, settings
 
 from orchestune.consistency.invariants import status as invariants
-from orchestune.dispatch import reconciliation, status_repair
+from orchestune.dispatch import cycle_execution, reconciliation, status_repair
 from orchestune.dispatch.rules import CycleContext
 from tests.dependency_liveness_test_support import (
     DEPENDENT,
-    CompletionPath,
     FaultPlan,
     LivenessTopology,
     LivenessWorld,
-    StatusLabel,
     cycle_module,
 )
 from tests.quint_replay import (
@@ -601,28 +599,63 @@ def test_control_replay_detects_a_dry_run_write_beside_a_hold_only_stale_change(
         replay_stored("stale_add_hold_dry", tmp_path / "fault")
 
 
-def test_the_converse_of_events_are_label_changes_is_not_a_contract_yet(
-    tmp_path: Path,
+def test_control_replay_detects_a_dropped_promotion_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Under listing lag production promotes an intermediate node without an event.
+    """The verified promotion is never recorded, so no later cycle reports it (#1296)."""
+    from orchestune.dispatch.promotion_reporting import PromotionReportJournal
 
-    This records #1296: the model claims "every apply event is a label change" and
-    the replay checks exactly that.  The converse (every promotion has an event) is
-    not claimed because production does not provide it.  When #1296 is fixed this
-    test fails: make ``_require_events_are_label_changes`` bidirectional (and the
-    model's ``eventsAreLabelChanges`` an equality) instead of deleting it.
-    """
-    topology = EXPECTED_TOPOLOGIES["transitive_chain"]
-    for lag, expected_events in ((False, (12,)), (True, ())):
-        world = LivenessWorld(tmp_path / f"lag-{lag}", topology=topology)
-        world.complete(13, CompletionPath.LABEL)
-        world.faults.listing_lag = lag
-        observation = world.cycle(apply=True)
-        assert StatusLabel.QUEUED.value not in observation.labels_before[12]
-        assert StatusLabel.QUEUED.value in observation.labels_after[12]
-        assert (
-            observation.promotion_issue_numbers == expected_events
-        ), "#1296 changed: see the docstring"
+    replay_stored("lagged_chain_reported_later", tmp_path / "normal")
+    monkeypatch.setattr(PromotionReportJournal, "register", lambda self, record: record)
+    with expect_violation("P3C-PROMOTION-REPORTED"):
+        replay_stored("lagged_chain_reported_later", tmp_path / "fault")
+
+
+def test_control_replay_detects_a_promotion_reported_twice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A record that is never settled is delivered by every later apply cycle."""
+    from orchestune.dispatch import promotion_reporting
+
+    replay_stored("lagged_chain_reported_later", tmp_path / "normal")
+    monkeypatch.setattr(
+        promotion_reporting, "confirmed_promotion_intent_ids", lambda path: frozenset()
+    )
+    monkeypatch.setattr(
+        cycle_execution, "confirm_promotion_reports", lambda config, events: None
+    )
+    with expect_violation("P3C-PROMOTION-REPORTED"):
+        replay_stored("lagged_chain_reported_later", tmp_path / "fault")
+
+
+def test_a_late_report_is_not_a_promotion_of_the_cycle(tmp_path: Path) -> None:
+    """The report of an earlier promotion must not count against a later hold."""
+    for scenario in (
+        "lagged_chain_reservation_then_apply",
+        "lagged_chain_dry_then_apply",
+    ):
+        replay_stored(scenario, tmp_path / scenario)
+    trace = parse_trace(STORED["lagged_chain_reservation_then_apply"]["itf"])
+    assert any(step.state["recoveredEvents"] for step in trace.steps)
+
+
+def test_counting_a_late_report_as_a_promotion_would_fail_the_hold_scenario(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The distinction is what keeps the safety check from rejecting a late report."""
+    from tests import quint_replay
+
+    real = quint_replay._promoted
+
+    def counting_reports(observation: Any, node: int) -> bool:
+        return real(observation, node) or any(
+            e.issue_number == node for e in observation.reported_events
+        )
+
+    monkeypatch.setattr(quint_replay, "_promoted", counting_reports)
+    with pytest.raises(ContractViolation) as caught:
+        replay_stored("lagged_chain_reservation_then_apply", tmp_path)
+    assert caught.value.contract_id == "P3C-INTERMEDIATE-SAFETY"
 
 
 def test_control_replay_detects_an_empty_completion_set(tmp_path: Path) -> None:

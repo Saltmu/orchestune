@@ -15,6 +15,7 @@ the case table below.
 
 from __future__ import annotations
 
+import json
 import types
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
@@ -483,6 +484,18 @@ class LivenessWorld:
         else:
             state.completion_reservations.pop(key, None)
         self._save_ledger(state)
+
+    def logged_promotion_intents(self) -> list[str]:
+        """Intent ids of every promotion event in the confirmed log, in order."""
+        path = self.config(apply=True).events_log_path
+        if not path.exists():
+            return []
+        return [
+            str(event["intent_id"])
+            for line in path.read_text(encoding="utf-8").splitlines()
+            for event in json.loads(line)["promotion_events"]
+            if "intent_id" in event
+        ]
 
     def lose_ledger(self) -> None:
         """Runner restart that loses the local run-state and intent journal."""

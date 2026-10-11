@@ -49,11 +49,19 @@ MODEL = ROOT / "specs" / "quint" / "dependency_liveness.qnt"
 #: The TypeScript simulator ships inside the pinned npm package.  The default
 #: ``rust`` backend downloads a binary at first use, which no lockfile pins.
 BACKEND = "typescript"
-INVARIANTS = ("safety", "liveness", "eventsAreLabelChanges", "dryRunReadOnly")
+INVARIANTS = (
+    "safety",
+    "liveness",
+    "eventsAreLabelChanges",
+    "dryRunReadOnly",
+    "labelChangesReported",
+    "reportsAreEarlierChanges",
+)
 WITNESSES = (
     "reachedApplyPromotion",
     "reachedDryRunPreview",
     "reachedIntermediatePromotion",
+    "reachedLateReport",
     "reachedLiveness",
 )
 #: Variables every ITF state must carry (checked against the trace's ``vars``).
@@ -71,6 +79,11 @@ REQUIRED_VARS = frozenset(
         "pc",
         "applied",
         "events",
+        "currentEvents",
+        "recoveredEvents",
+        "mayReport",
+        "pending",
+        "pendingMaybe",
         "newlyQueued",
         "mustNot",
         "mustQueue",
@@ -500,6 +513,7 @@ class Replayer:
         self.world: LivenessWorld
         self.report = ReplayReport()
         self._pending: tuple[str, int] | None = None
+        self._reported_intents: list[str] = []
 
     def replay(self, trace: Trace) -> ReplayReport:
         first, *rest = trace.steps
@@ -645,6 +659,55 @@ class Replayer:
             )
         if observation.apply:
             _require_events_are_label_changes(step, observation)
+            self._compare_reports(step, observation)
+
+    def _compare_reports(self, step: Step, observation: CycleObservation) -> None:
+        """Late reports (#1296): what the model permits, requires and counts once."""
+        late = {e.issue_number for e in observation.reported_events if e.recovered}
+        require(
+            "P3C-PROMOTION-REPORTED",
+            late <= step.state["mayReport"],
+            f"state {step.index}: late reports of {sorted(late)} are not outstanding "
+            f"in the model ({sorted(step.state['mayReport'])}): {observation}",
+        )
+        for event in observation.reported_events:
+            if event.intent_id is None:
+                continue
+            require(
+                "P3C-PROMOTION-REPORTED",
+                event.intent_id not in self._reported_intents,
+                f"state {step.index}: {event.intent_id} was reported twice",
+            )
+            self._reported_intents.append(event.intent_id)
+        logged = self.world.logged_promotion_intents()
+        require(
+            "P3C-PROMOTION-REPORTED",
+            len(logged) == len(set(logged)),
+            f"state {step.index}: the confirmed log holds a duplicate report: {logged}",
+        )
+        if observation.error is not None or observation.fault_injected:
+            return
+        missing = step.state["recoveredEvents"] - late
+        require(
+            "P3C-PROMOTION-REPORTED",
+            not missing,
+            f"state {step.index}: the model requires the late report of "
+            f"{sorted(missing)}: {observation}",
+        )
+        outstanding = step.state["pending"] | step.state["pendingMaybe"]
+        unreported = sorted(
+            node
+            for node in observation.labels_after
+            if _became_queued(observation, node)
+            and node not in observation.promotion_issue_numbers
+            and node not in outstanding
+        )
+        require(
+            "P3C-PROMOTION-REPORTED",
+            not unreported,
+            f"state {step.index}: the promotion of {unreported} is neither reported "
+            f"nor outstanding: {observation}",
+        )
 
     def _expect(
         self, step: Step, node: int, kind: str, holds: bool, observation: object
@@ -750,8 +813,8 @@ def _require_events_are_label_changes(
     """An undisturbed apply cycle's promotion event is a real label change (the
     model's ``eventsAreLabelChanges``); a cycle with an injected failure is not judged.
 
-    Only this direction is checked: under listing lag production promotes an
-    intermediate node without an event (#1296), which is not a #1276 contract."""
+    The converse (a promotion is reported now or outstanding) is
+    ``Replayer._compare_reports`` (#1296)."""
     if observation.error is not None or observation.fault_injected:
         return
     fake = sorted(

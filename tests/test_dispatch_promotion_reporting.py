@@ -539,18 +539,6 @@ def _chain_world(tmp_path):
     return world
 
 
-def _logged_intents(world) -> list[str]:
-    path = world.config(apply=True).events_log_path
-    if not path.exists():
-        return []
-    return [
-        event["intent_id"]
-        for line in path.read_text(encoding="utf-8").splitlines()
-        for event in json.loads(line)["promotion_events"]
-        if "intent_id" in event
-    ]
-
-
 def test_a_promotion_verified_late_under_listing_lag_is_reported_once(tmp_path):
     world = _chain_world(tmp_path)
     world.faults.listing_lag = True
@@ -568,12 +556,12 @@ def test_a_promotion_verified_late_under_listing_lag_is_reported_once(tmp_path):
     assert event.recovered is True
     assert event.intent_id is not None
     assert 12 not in later.promotion_issue_numbers
-    assert _logged_intents(world) == [event.intent_id]
+    assert world.logged_promotion_intents() == [event.intent_id]
 
     for _ in range(2):
         again = world.cycle(apply=True)
         assert all(e.issue_number != 12 for e in again.reported_events)
-    assert _logged_intents(world) == [event.intent_id]
+    assert world.logged_promotion_intents() == [event.intent_id]
     assert (
         PromotionReportJournal(
             world.run_state_path.with_suffix(".promotion-reports.json")
@@ -590,7 +578,7 @@ def test_a_promotion_verified_in_its_own_cycle_is_reported_in_that_cycle(tmp_pat
     (event,) = (e for e in first.reported_events if e.issue_number == 12)
     assert event.recovered is False and event.intent_id is not None
     assert 12 in first.promotion_issue_numbers
-    assert _logged_intents(world) == [event.intent_id]
+    assert world.logged_promotion_intents() == [event.intent_id]
 
 
 def test_a_cycle_interrupted_before_the_log_append_reports_again(tmp_path):
@@ -609,7 +597,7 @@ def test_a_cycle_interrupted_before_the_log_append_reports_again(tmp_path):
     assert [
         e.issue_number for e in retried.reported_events if e.issue_number == 12
     ] == [12]
-    assert len(_logged_intents(world)) == 1
+    assert len(world.logged_promotion_intents()) == 1
 
 
 def test_a_cycle_interrupted_after_the_log_append_does_not_report_twice(tmp_path):
@@ -621,7 +609,7 @@ def test_a_cycle_interrupted_after_the_log_append_does_not_report_twice(tmp_path
     ):
         interrupted = world.cycle(apply=True)
     assert isinstance(interrupted.error, OSError)
-    (intent_id,) = _logged_intents(world)
+    (intent_id,) = world.logged_promotion_intents()
     journal = PromotionReportJournal(
         world.run_state_path.with_suffix(".promotion-reports.json")
     )
@@ -630,7 +618,7 @@ def test_a_cycle_interrupted_after_the_log_append_does_not_report_twice(tmp_path
     resumed = world.cycle(apply=True)
 
     assert all(e.issue_number != 12 for e in resumed.reported_events)
-    assert _logged_intents(world) == [intent_id]
+    assert world.logged_promotion_intents() == [intent_id]
     assert journal.load() == ()
 
 
@@ -647,6 +635,74 @@ def test_a_dry_run_between_the_cycles_changes_nothing_about_the_report(tmp_path)
     assert intents.read_text(encoding="utf-8") == before
     assert not world.run_state_path.with_suffix(".promotion-reports.json").exists()
     assert all(e.recovered is False for e in preview.reported_events)
-    assert _logged_intents(world) == []
+    assert world.logged_promotion_intents() == []
     later = world.cycle(apply=True)
     assert [e.issue_number for e in later.reported_events if e.recovered] == [12]
+
+
+def test_a_late_report_is_projected_like_any_other_promotion_event(tmp_path):
+    """#1296: the projection is a re-observation notice, not proof of a change now."""
+    from orchestune.dispatch.cycle_report import CycleReport
+    from orchestune.dispatch.cycle_state_changes import _pipeline_state_changes
+
+    report = CycleReport(
+        selected=[],
+        quota_slots_available=0,
+        lock_changes={"to_lock": [], "to_unlock": []},
+        deviation_events=[],
+        completion_events=[],
+        promotion_events=[
+            PromotionEvent(
+                issue_number=12, subtask_id="t", recovered=True, intent_id="i-1"
+            )
+        ],
+        applied=True,
+    )
+
+    (change,) = _pipeline_state_changes(report, 1_700_000_000.0)
+
+    assert (change.subject_id, change.source) == ("12", "dispatch.promotion")
+
+
+def test_the_event_log_line_carries_the_report_fields(tmp_path):
+    from orchestune.dispatch.cycle_report import CycleReport, build_event_log_entry
+
+    event = PromotionEvent(
+        issue_number=12, subtask_id="t", recovered=True, intent_id="i-1"
+    )
+    report = CycleReport(
+        selected=[],
+        quota_slots_available=0,
+        lock_changes={"to_lock": [], "to_unlock": []},
+        deviation_events=[],
+        completion_events=[],
+        promotion_events=[event, PromotionEvent(issue_number=3, subtask_id="u")],
+        applied=True,
+    )
+
+    entry = build_event_log_entry(report, 1.0)
+
+    assert entry["promotion_events"] == [
+        {"issue_number": 12, "subtask_id": "t", "recovered": True, "intent_id": "i-1"},
+        {"issue_number": 3, "subtask_id": "u"},
+    ]
+    assert (
+        json.loads(json.dumps(entry))["promotion_events"] == entry["promotion_events"]
+    )
+
+
+def test_a_damaged_log_withholds_the_report_until_it_is_readable(tmp_path):
+    world = _chain_world(tmp_path)
+    log = world.config(apply=True).events_log_path
+    log.write_text("{broken\n", encoding="utf-8")
+
+    withheld = world.cycle(apply=True)
+
+    assert withheld.reported_events == ()
+    assert withheld.labels_after[12] == {StatusLabel.QUEUED}
+    assert world.run_state_path.with_suffix(".promotion-reports.json").exists()
+
+    log.write_text("", encoding="utf-8")
+    delivered = world.cycle(apply=True)
+
+    assert [e.issue_number for e in delivered.reported_events] == [12]

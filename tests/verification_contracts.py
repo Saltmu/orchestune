@@ -28,6 +28,7 @@ P3BR = "tests/test_status_event_retry_resume.py"
 P3L = "tests/test_dispatch_gc_reclaim_lifecycle.py"
 P3C = "tests/test_dependency_liveness_stateful.py"
 P3Q = "tests/test_quint_dependency_replay.py"
+PR = "tests/test_dispatch_promotion_reporting.py"
 
 
 @dataclass(frozen=True)
@@ -640,6 +641,30 @@ CONTRACTS: tuple[Contract, ...] = (
             "prior-merge-repair-exclusion-removed": (
                 f"{P3C}::test_control_prior_merge_repair_exclusion_removal_is_detected",
             )
+        },
+    ),
+    Contract(
+        id="P3C-PROMOTION-REPORTED",
+        phase="3c",
+        guarantee="a status-repair promotion that production applied is reported exactly once in the confirmed event log: at once when its live verification holds, otherwise by the next undisturbed apply cycle",
+        premise="the status repair path (blocked -> queued for resolved dependencies) with a persisted unreported record, a readable event log and a task that resolves; a ledger loss drops the Intent and with it the report",
+        boundary="the apply cycle that verifies the promotion; every later cycle and the confirmed log (intent ids)",
+        expectation="the late report appears in the cycle the model requires, never against a hold (it is not a promotion of that cycle), and no intent id is logged twice",
+        status="verified",
+        tests=(
+            f"{PR}::test_a_promotion_verified_late_under_listing_lag_is_reported_once",
+            f"{PR}::test_a_cycle_interrupted_before_the_log_append_reports_again",
+            f"{PR}::test_a_cycle_interrupted_after_the_log_append_does_not_report_twice",
+            f"{P3Q}::test_stored_trace_replays_on_production",
+            f"{P3Q}::test_bounded_exploration_replays_on_production",
+        ),
+        controls={
+            "report-record-dropped": (
+                f"{P3Q}::test_control_replay_detects_a_dropped_promotion_report",
+            ),
+            "report-delivered-twice": (
+                f"{P3Q}::test_control_replay_detects_a_promotion_reported_twice",
+            ),
         },
     ),
 )

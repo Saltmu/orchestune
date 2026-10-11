@@ -42,6 +42,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-DRYRUN-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | 3c | verified | `prior-merge-repair-exclusion-removed` | - |
+| `P3C-PROMOTION-REPORTED` | 3c | verified | `report-record-dropped`, `report-delivered-twice` | - |
 
 ### Details
 
@@ -79,6 +80,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P3C-QUINT-OBSERVATION` | at every replayed step the production state agrees with the model before the action runs | the action table of `tests/quint_replay.py` | each transition of a replayed ITF trace | every precondition holds on the real harness |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | a dry-run preview of T or an intermediate node respects an unreleased completion reservation of the node's dependency | the preview is defined over the context snapshot (#1267 fixed this side) | dry-run cycle, checked by a deterministic scenario (the machine excuses T's dry-run reservation previews) | no preview while D's reservation is unreleased |
 | `P3C-DRYRUN-RESERVATION` | a dry-run preview of T or an intermediate node respects the node's own unreleased reservation | the preview is defined over the context snapshot | dry-run cycle | no preview under T's own or an intermediate node's own reservation |
+| `P3C-PROMOTION-REPORTED` | a status-repair promotion that production applied is reported exactly once in the confirmed event log: at once when its live verification holds, otherwise by the next undisturbed apply cycle | the status repair path (blocked -> queued for resolved dependencies) with a persisted unreported record, a readable event log and a task that resolves; a ledger loss drops the Intent and with it the report | the apply cycle that verifies the promotion; every later cycle and the confirmed log (intent ids) | the late report appears in the cycle the model requires, never against a hold (it is not a promotion of that cycle), and no intent id is logged twice |
 | `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | after Forge-faulted apply cycles under lag a dependency written by the prior-merge repair keeps a lifecycle label, a dry run previews T, and the next apply cycle queues it | fair cycle (promotable at both boundaries, no injected failure); a single-Issue read right after a write may return the old value (#902 Round 5) | the label of the dependency after the lagged cycle; the dry-run cycle after two faulted apply cycles; the apply cycle after it | the dependency holds a lifecycle label; T appears in the preview (N = 1) and is queued by the next apply cycle |
 
 ### Rows that are not `verified`
@@ -129,6 +131,8 @@ The Issue's reading was that a one-cycle promotion delay on a path whose evidenc
 | `promotion-suppressed` / `promotion-delayed` | the promotion boundary is skipped always / in the evidence cycle | `P3C-CASE-DELAY` (case table), `P3C-LIVENESS-BOUND`, `P3C-INTERMEDIATE-LIVENESS` | label, `record_completion` (apply), prior merge (apply and dry run) |
 | `empty-completion-set` / `throwaway-context` | the #902 Round 4/5 miswiring | `P3C-CASE-DELAY` | case table |
 | `prior-merge-repair-exclusion-removed` | `CycleContext.is_prior_merge_repair_attempted` always returns false (the status repair acts on the listing taken before the prior-merge write) | `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` (deterministic scenario), `P3C-LIVENESS-BOUND` (replay of `prior_merge_after_faults`) | the dependency's label after the lagged cycle; the preview of T |
+| `report-record-dropped` | the verified promotion is not persisted as an unreported record | `P3C-PROMOTION-REPORTED` (replay of `lagged_chain_reported_later`) | the late report the model requires in the next apply cycle |
+| `report-delivered-twice` | the record is neither checked against the confirmed log nor consumed after the append | `P3C-PROMOTION-REPORTED` (replay of `lagged_chain_reported_later`) | an intent id twice in the reported events and the confirmed log |
 | `ledger-premise-removed` | the fairness judgement drops the premise that a recompute target has no active ledger entry (#1281 counterexample 2b) | `P3C-LIVENESS-BOUND` | blocked-recompute T whose completed dependency stays in the ledger after a faulted apply cycle (deterministic scenario) |
 | `intermediate-ignored` | the intermediate node's assessment is dropped | `P3C-INTERMEDIATE-LIVENESS` | intermediate topology |
 | `hold-guard-bypass` (3c) | every `PROMOTION_HOLD_LABELS` is empty | `P3C-SAFETY` | `ci:base-branch-red` before the cycle |
@@ -161,7 +165,7 @@ Static coverage for `P3A-ROUTE-COVERAGE` is established through a chain of two v
 
 **Three layers; none replaces another.**
 
-1. *Model*: the fixed-seed exploration and every saved scenario must keep the model's own invariants (`P3C-QUINT-MODEL`): `safety` (nothing is promoted against an obligation), `liveness` (every fair cycle ends with the promotion, N = 1; apply needs the real label, a dry run this cycle's preview), `eventsAreLabelChanges` (every event of an apply cycle is a real label change; the converse is **not** claimed, because under listing lag production promotes an intermediate node without a `PromotionEvent`, tracked in #1296) and `dryRunReadOnly`.
+1. *Model*: the fixed-seed exploration and every saved scenario must keep the model's own invariants (`P3C-QUINT-MODEL`): `safety` (nothing is promoted against an obligation), `liveness` (every fair cycle ends with the promotion, N = 1; apply needs the real label, a dry run this cycle's preview), `eventsAreLabelChanges` (every current event of an apply cycle is a real label change), `labelChangesReported` (a node an apply cycle promoted is reported now or its promotion is outstanding, the converse of the previous one, #1296), `reportsAreEarlierChanges` (a late report concerns an already queued node the model permits and never appears in a dry run) and `dryRunReadOnly`. A late report is not a promotion of its own cycle: `safety` counts the current events only.
 2. *Replay*: every transition of the generated and of the saved ITF traces is executed on the production harness (`LivenessWorld`: the real `_prepare_cycle_context` and `execute_pipeline`). After each cycle the production observation (labels, `PromotionEvent` previews) is compared with the model's obligations (a promotion event counts as a promotion even when no label changed; an undisturbed apply cycle's events must be real label changes; a dry run changes no lifecycle label, apart from the fixture's own stale change); before each action the production state is compared with the model's (`P3C-QUINT-OBSERVATION`). Expectations come from the model state only; production is never asked whether a dependency is complete.
 3. *Controls*: one model fault each (the fault scenarios run on the correct model and must pass, and on the faulty model must violate exactly the expected invariants at the planned step) and one production fault each (the same trace replayed with the fault must violate the expected contract). A parse, type or runtime error and a timeout are tool errors, never a detection.
 
@@ -200,6 +204,8 @@ Static coverage for `P3A-ROUTE-COVERAGE` is established through a chain of two v
 | `dry-run-writes` | `dryRunReadOnly` (`final_dry`) | `P3C-DRYRUN-READONLY` (`final_dry`) |
 | `empty-completion-set` | - | `P3C-LIVENESS-BOUND` (`recompute_release`) |
 | `throwaway-context` | - | `P3C-LIVENESS-BOUND` (`lagged_apply`) |
+| `report-record-dropped` | - | `P3C-PROMOTION-REPORTED` (`lagged_chain_reported_later`) |
+| `report-delivered-twice` | - | `P3C-PROMOTION-REPORTED` (`lagged_chain_reported_later`) |
 | `prior-merge-repair-exclusion-removed` | - | `P3C-LIVENESS-BOUND` (`prior_merge_after_faults`) |
 | `action-mapping-swapped` | - | `P3C-QUINT-OBSERVATION` (`duplicate_completion`) |
 | `action-mapping-dropped` | - | `P3C-SAFETY` (`restart_loses_ledger`) |
