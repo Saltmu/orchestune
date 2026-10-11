@@ -42,6 +42,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-DRYRUN-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | 3c | verified | `prior-merge-repair-exclusion-removed` | - |
+| `P3C-PROMOTION-REPORTED` | 3c | verified | `report-record-dropped`, `report-delivered-twice` | - |
 
 ### 詳細
 
@@ -79,6 +80,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3C-QUINT-OBSERVATION` | 再生の各 step で、action を実行する前の本番の状態がモデルと一致する | `tests/quint_replay.py` の action 対応表 | 再生するITFトレースの各遷移 | 全ての前提が実ハーネスで成り立つ |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | dry run の T または中間ノードの preview が、そのノードの依存の未解放 completion reservation を尊重する | preview は context snapshot 上で定義される（この側は #1267 で修正済み） | dry run の cycle。決定的なシナリオで検査（machine は T の dry run の予約 preview を除外している） | 依存の予約が未解放の間 preview しない |
 | `P3C-DRYRUN-RESERVATION` | dry run の T または中間ノードの preview が、そのノード自身の未解放 reservation を尊重する | preview は context snapshot 上で定義される | dry run の cycle | T 自身・中間ノードの予約下で preview しない |
+| `P3C-PROMOTION-REPORTED` | production が適用した status repair の昇格は、確定したイベントログへちょうど1回報告される。live 検証が成立すればその cycle、そうでなければ次の妨げのない apply cycle | status repair 経路（依存が解決した blocked -> queued）、永続化した未報告記録、読み取れるイベントログ、解決できる task。ledger loss は Intent と共に報告も失う | 昇格を検証する apply cycle、以降の全 cycle、確定ログ（intent id） | モデルが要求する cycle で遅延報告が出る。hold に反する昇格としては数えない（その cycle の昇格ではない）。intent id は二重にログされない |
 | `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | lag 下で Forge 障害つきの apply cycle を経ても、先行マージ修復が書いた依存は lifecycle ラベルを保ち、dry run で T が preview され、次の apply cycle で queued になる | 公平なcycle（両境界で昇格可能・障害注入なし）。書き込み直後の単一 Issue 読み取りが古い値を返しうる（#902 Round 5） | lag cycle 後の依存のラベル、障害つき apply cycle 2回のあとの dry run cycle、その次の apply cycle | 依存が lifecycle ラベルを持つ。T が preview に現れ（N = 1）、次の apply cycle で queued になる |
 
 ### `verified` ではない行
@@ -129,6 +131,8 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 | `promotion-suppressed` / `promotion-delayed` | 昇格境界を常に／証拠投入のcycleだけ飛ばす | `P3C-CASE-DELAY`（ケース表）、`P3C-LIVENESS-BOUND`、`P3C-INTERMEDIATE-LIVENESS` | label、`record_completion`（apply）、prior merge（apply・dry run） |
 | `empty-completion-set` / `throwaway-context` | #902 Round 4/5 の誤配線 | `P3C-CASE-DELAY` | ケース表 |
 | `prior-merge-repair-exclusion-removed` | `CycleContext.is_prior_merge_repair_attempted` が常に false を返す（status repair が先行マージの書き込み前の listing で動く） | `P3C-LIVENESS-PRIOR-MERGE-DRYRUN`（決定的シナリオ）、`P3C-LIVENESS-BOUND`（`prior_merge_after_faults` の再生） | lag cycle 後の依存のラベル、T の preview |
+| `report-record-dropped` | 検証した昇格を未報告記録として永続化しない | `P3C-PROMOTION-REPORTED`（`lagged_chain_reported_later` の再生） | 次の apply cycle でモデルが要求する遅延報告 |
+| `report-delivered-twice` | 記録を確定ログと照合せず、追記後にも消費しない | `P3C-PROMOTION-REPORTED`（`lagged_chain_reported_later` の再生） | 報告イベントと確定ログの intent id の重複 |
 | `ledger-premise-removed` | 公平性判定から「recompute 対象は active 台帳エントリがない」前提（#1281 反例2b）を外す | `P3C-LIVENESS-BOUND` | 障害つき apply cycle の後、台帳に完了済み依存が残る blocked-recompute の T（決定的シナリオ） |
 | `intermediate-ignored` | 中間ノードの判定を落とす | `P3C-INTERMEDIATE-LIVENESS` | 中間ノードのトポロジー |
 | `hold-guard-bypass`（3c） | 全ての `PROMOTION_HOLD_LABELS` を空にする | `P3C-SAFETY` | cycle 前の `ci:base-branch-red` |
@@ -161,7 +165,7 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 
 **3つの層（どれも別の層の代わりにしません）。**
 
-1. *モデル*: 固定 seed の探索と保存した全シナリオで、モデル自身の不変条件（`P3C-QUINT-MODEL`）を守ります。`safety`（義務に反する昇格をしない）、`liveness`（公平な cycle は昇格で終わる。N = 1。apply は実ラベル、dry run は当該 cycle の preview）、`eventsAreLabelChanges`（apply cycle のイベントはすべて実際のラベル変更である。逆向きは**主張しません**。listing lag の下で本番は中間ノードを `PromotionEvent` なしで昇格させるためで、#1296 で扱います）、`dryRunReadOnly` です。
+1. *モデル*: 固定 seed の探索と保存した全シナリオで、モデル自身の不変条件（`P3C-QUINT-MODEL`）を守ります。`safety`（義務に反する昇格をしない）、`liveness`（公平な cycle は昇格で終わる。N = 1。apply は実ラベル、dry run は当該 cycle の preview）、`eventsAreLabelChanges`（apply cycle の今回のイベントはすべて実際のラベル変更である）、`labelChangesReported`（apply cycle が昇格させたノードは今回報告されるか、昇格が未報告として残り後の apply cycle が報告する。前者の逆向き、#1296）、`reportsAreEarlierChanges`（遅延報告は、モデルが許す、すでに queued のノードについてだけで、dry run には出ない）、`dryRunReadOnly` です。遅延報告はその cycle の昇格ではなく、`safety` は今回のイベントだけを数えます。
 2. *再生*: 生成したITFトレースと保存したITFトレースの全遷移を、本番ハーネス（`LivenessWorld`。本物の `_prepare_cycle_context` と `execute_pipeline`）で実行します。cycle ごとに本番の観測（ラベル、`PromotionEvent` のプレビュー）をモデルの義務と照合し（ラベルが変わらなくても昇格イベントは昇格として数える。乱れのない apply cycle のイベントは実際のラベル変更でなければならない。dry run は fixture 自身の stale 変更を除き lifecycle ラベルを変えない）、action ごとに実行前の本番の状態をモデルの状態と照合します（`P3C-QUINT-OBSERVATION`）。期待値はモデルの状態だけから作り、本番に依存の完了を問い合わせません。
 3. *対照*: モデルの誤動作を1つずつ入れたもの（正常なモデルでは成功し、誤動作版では予定の step で期待した不変条件だけに違反する）と、本番の誤動作を1つずつ入れたもの（同じトレースを再生し、期待した契約の違反になる）です。parse・型・実行のエラーと timeout はツールのエラーであり、検出には数えません。
 
@@ -200,6 +204,8 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 | `dry-run-writes` | `dryRunReadOnly`（`final_dry`） | `P3C-DRYRUN-READONLY`（`final_dry`） |
 | `empty-completion-set` | - | `P3C-LIVENESS-BOUND`（`recompute_release`） |
 | `throwaway-context` | - | `P3C-LIVENESS-BOUND`（`lagged_apply`） |
+| `report-record-dropped` | - | `P3C-PROMOTION-REPORTED`（`lagged_chain_reported_later`） |
+| `report-delivered-twice` | - | `P3C-PROMOTION-REPORTED`（`lagged_chain_reported_later`） |
 | `prior-merge-repair-exclusion-removed` | - | `P3C-LIVENESS-BOUND`（`prior_merge_after_faults`） |
 | `action-mapping-swapped` | - | `P3C-QUINT-OBSERVATION`（`duplicate_completion`） |
 | `action-mapping-dropped` | - | `P3C-SAFETY`（`restart_loses_ledger`） |

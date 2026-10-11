@@ -10,7 +10,7 @@ import subprocess
 import time
 from dataclasses import replace
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -981,5 +981,5 @@ class TestRunDispatchCycleNotNeeded:
         mock_remove_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:queued")
         assert [event.to_dict() for event in report.promotion_events] == [
-            {"issue_number": 2, "subtask_id": "task-b"}
+            {"issue_number": 2, "subtask_id": "task-b", "intent_id": ANY}
         ]

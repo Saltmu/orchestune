@@ -79,6 +79,9 @@ STORED_SCENARIOS = (
     "stale_complete",
     "target_own_reservation_dry",
     "intermediate_own_reservation_dry",
+    "lagged_chain_reported_later",
+    "lagged_chain_dry_then_apply",
+    "lagged_chain_reservation_then_apply",
     "prior_merge_after_faults",
 )
 #: Routes the saved traces must cover (#1276: final / intermediate, apply / dry
@@ -105,6 +108,7 @@ REQUIRED_ROUTES = frozenset(
         "stale:revoke",
         "stale:complete",
         "duplicate",
+        "late-report",
     }
 )
 
@@ -193,6 +197,8 @@ def _cycle_routes(state: Mapping[str, Any], held: set[int]) -> set[str]:
         routes.add("no-op")
     if state["newlyQueued"]:
         routes.add("real-change")
+    if state["recoveredEvents"]:
+        routes.add("late-report")
     if held - {DEPENDENT} and state["mustNot"]:
         routes.add("dependency-reservation")
     if DEPENDENT in held and (state["mustNot"] or obliged):

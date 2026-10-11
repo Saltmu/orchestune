@@ -15,6 +15,7 @@ the case table below.
 
 from __future__ import annotations
 
+import json
 import types
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
@@ -27,8 +28,10 @@ from unittest.mock import patch
 from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.dependencies.assessment import DependencyAssessment, DependencyState
 from orchestune.dispatch import cycle as cycle_module
+from orchestune.dispatch import cycle_execution
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
+from orchestune.dispatch.cycle_events import PromotionEvent
 from orchestune.dispatch.phase_scheduling import SchedulingPhaseResult
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.status_repair import status_intent_journal_path
@@ -210,6 +213,7 @@ class CycleObservation:
     apply: bool
     t_before: frozenset[str]
     t_after: frozenset[str]
+    #: Promotions of this cycle (a late report of an earlier one is not here).
     promotion_issue_numbers: tuple[int, ...]
     assessment: DependencyAssessment | None
     at_start: OracleView
@@ -219,6 +223,8 @@ class CycleObservation:
     listing_lag: bool = False
     labels_before: dict[int, frozenset[str]] = field(default_factory=dict)
     labels_after: dict[int, frozenset[str]] = field(default_factory=dict)
+    #: Every promotion event of the cycle, including late reports (#1296).
+    reported_events: tuple[PromotionEvent, ...] = ()
 
     @property
     def promoted(self) -> bool:
@@ -479,6 +485,18 @@ class LivenessWorld:
             state.completion_reservations.pop(key, None)
         self._save_ledger(state)
 
+    def logged_promotion_intents(self) -> list[str]:
+        """Intent ids of every promotion event in the confirmed log, in order."""
+        path = self.config(apply=True).events_log_path
+        if not path.exists():
+            return []
+        return [
+            str(event["intent_id"])
+            for line in path.read_text(encoding="utf-8").splitlines()
+            for event in json.loads(line)["promotion_events"]
+            if "intent_id" in event
+        ]
+
     def lose_ledger(self) -> None:
         """Runner restart that loses the local run-state and intent journal."""
         status_intent_journal_path(self.config(apply=True)).unlink(missing_ok=True)
@@ -539,7 +557,10 @@ class LivenessWorld:
             apply=apply,
             t_before=t_before,
             t_after=self.labels(),
-            promotion_issue_numbers=tuple(e.issue_number for e in events),
+            promotion_issue_numbers=tuple(
+                e.issue_number for e in events if not e.recovered
+            ),
+            reported_events=tuple(events),
             assessment=probe.assessment,
             at_start=at_start,
             at_promotion=probe.at_promotion or at_start,
@@ -645,6 +666,8 @@ def run_one_cycle(world: LivenessWorld, *, apply: bool, probe: _PromotionProbe):
             )
         finally:
             world.boundary.frozen = None
+        # The confirmed log is what makes a late report final (#1296).
+        cycle_execution.record_cycle_events(cycle_module, report, now, config)
     return list(report.promotion_events)
 
 

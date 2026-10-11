@@ -191,6 +191,12 @@ module dependency_liveness {
       doneWith("label", 11), hold("reservation", 20), cycleOf(false, false)]),
     "intermediate_own_reservation_dry" -> ok("transitive_chain", [
       hold("reservation", 12), doneWith("label", 13), cycleOf(false, false)]),
+    "lagged_chain_reported_later" -> ok("transitive_chain", [
+      doneWith("label", 13), cycleOf(true, true), cycleOf(true, false), cycleOf(true, false)]),
+    "lagged_chain_dry_then_apply" -> ok("transitive_chain", [
+      doneWith("label", 13), cycleOf(true, true), cycleOf(false, false), cycleOf(true, false)]),
+    "lagged_chain_reservation_then_apply" -> ok("transitive_chain", [
+      doneWith("label", 13), cycleOf(true, true), hold("reservation", 13), cycleOf(true, false)]),
     "prior_merge_after_faults" -> ok("simple_two", [
       doneWith("label", 11), doneWith("prior_merge", 12),
       failing("add", "after"), cycleOf(true, false),
@@ -262,10 +268,20 @@ module dependency_liveness {
   // preview can never satisfy a later cycle.
   var wasCycle: bool
   var applied: bool
-  var events: Set[int]         // promotion events (apply: real; dry run: preview)
+  var events: Set[int]         // every promotion event of the cycle: currentEvents + recoveredEvents
+  var currentEvents: Set[int]  // this cycle's promotions (apply: real; dry run: preview)
+  var recoveredEvents: Set[int]  // late reports of earlier promotions that must appear (#1296)
+  var mayReport: Set[int]      // late reports production may emit (the certain ones and the uncertain ones)
   var newlyQueued: Set[int]    // nodes whose label really became queued
   var mustNot: Set[int]        // nodes that must not be promoted in the last cycle
   var mustQueue: Set[int]      // nodes that must be queued / previewed
+  // Reporting of promotions whose live verification failed under listing lag
+  // (#1296).  `pending`: applied by an apply cycle under lag, so the status
+  // Intent stays APPLIED and the next undisturbed apply cycle reports it once.
+  // `pendingMaybe`: the same, but a fault made the model unsure whether the
+  // report was already delivered.  A ledger loss drops the Intent: no report.
+  var pending: Set[int]
+  var pendingMaybe: Set[int]
 
   // ---- scripts ------------------------------------------------------------------
 
@@ -289,8 +305,12 @@ module dependency_liveness {
   // Observation cleared by every step that is not a cycle.
   action quiet: bool = all {
     wasCycle' = false, applied' = false, events' = Set(), newlyQueued' = Set(),
+    currentEvents' = Set(), recoveredEvents' = Set(), mayReport' = Set(),
     mustNot' = Set(), mustQueue' = Set()
   }
+
+  // Reports survive every step but a cycle and a ledger loss.
+  action keepReports: bool = all { pending' = pending, pendingMaybe' = pendingMaybe }
 
   action settled: bool = all {
     topo' = topo, shape' = shape, fault' = fault, sid' = sid,
@@ -320,6 +340,8 @@ module dependency_liveness {
       pc' = 0,
       planned' = if (scripted(id)) length(SCENARIOS.get(id).script) else 0,
       wasCycle' = false, applied' = false, events' = Set(), newlyQueued' = Set(),
+      currentEvents' = Set(), recoveredEvents' = Set(), mayReport' = Set(),
+      pending' = Set(), pendingMaybe' = Set(),
       mustNot' = Set(), mustQueue' = Set()
     }
   }
@@ -353,7 +375,7 @@ module dependency_liveness {
                           else if (path == "prior_merge") lab.get(dep)
                           else "inprogress"),
       base' = base, recompute' = recompute, res' = res, armed' = armed, stale' = stale,
-      settled, quiet, advance
+      settled, quiet, keepReports, advance
     }
   }
 
@@ -363,7 +385,7 @@ module dependency_liveness {
     all {
       turn("duplicate_completion"),
       ev' = ev, lab' = lab, base' = base, recompute' = recompute, res' = res,
-      armed' = armed, stale' = stale, settled, quiet, advance
+      armed' = armed, stale' = stale, settled, quiet, keepReports, advance
     }
   }
 
@@ -378,6 +400,8 @@ module dependency_liveness {
           else if (ev.get(n) == "pending_maybe") "uncertain"
           else ev.get(n))
         else ev,
+      pending' = if (ledgerLoss) Set() else pending,
+      pendingMaybe' = if (ledgerLoss) Set() else pendingMaybe,
       lab' = lab, base' = base, recompute' = recompute, armed' = armed, stale' = stale,
       settled, quiet, advance
     }
@@ -390,7 +414,7 @@ module dependency_liveness {
       turn("fail_next"),
       armed' = { op: op, mode: mode },
       ev' = ev, lab' = lab, base' = base, recompute' = recompute, res' = res,
-      stale' = stale, settled, quiet, advance
+      stale' = stale, settled, quiet, keepReports, advance
     }
   }
 
@@ -406,7 +430,7 @@ module dependency_liveness {
       recompute' = if (kind == "recompute") not(recompute) else recompute,
       res' = if (kind != "reservation") res
              else if (res.contains(target)) res.exclude(Set(target)) else res.union(Set(target)),
-      ev' = ev, lab' = lab, armed' = armed, stale' = stale, settled, quiet, advance
+      ev' = ev, lab' = lab, armed' = armed, stale' = stale, settled, quiet, keepReports, advance
     }
   }
 
@@ -429,7 +453,7 @@ module dependency_liveness {
       turn("stale_snapshot"),
       stale' = { kind: kind, target: target },
       ev' = ev, lab' = lab, base' = base, recompute' = recompute, res' = res,
-      armed' = armed, settled, quiet, advance
+      armed' = armed, settled, quiet, keepReports, advance
     }
   }
 
@@ -534,6 +558,48 @@ module dependency_liveness {
     })
   }
 
+  // ---- reporting of lagged promotions (#1296) ------------------------------------
+
+  // Under listing lag an intermediate node's live verification reads the old
+  // label, so its promotion is applied but not reported in this cycle.  T is
+  // always read live and reports at once.
+  def lagUnverified(apply: bool, lag: bool): Set[int] =
+    if (apply and lag and fault != "event_only") promotedBy(apply, lag).filter(n => n != T)
+    else Set()
+
+  // Nodes the model leaves "unknown" (it states no obligation) may still be
+  // promoted by production: under lag, or after an armed fault, without a report.
+  def uncertainPromotions(apply: bool, lag: bool): Set[int] =
+    if (not(apply)) Set()
+    else subjects(TOPOLOGIES.get(topo)).filter(n =>
+      n != T and (lab.get(n) == "blocked" or lab.get(n) == "unknown")
+      and not(promotedBy(apply, lag).contains(n))
+      and (armedHit(apply)
+           or (lag and not(mustNotOf(n, apply, lag)) and streakOf(n, apply) < N)))
+
+  // An undisturbed apply cycle verifies and reports every outstanding promotion
+  // whose node is still queued and not under a completion reservation.
+  def lateMust(apply: bool): Set[int] =
+    if (apply and not(armedHit(apply)))
+      pending.filter(n => lab.get(n) == "queued" and not(res.contains(n)))
+    else Set()
+
+  def lateMay(apply: bool): Set[int] =
+    if (apply) pending.union(pendingMaybe) else Set()
+
+  def pendingAfter(apply: bool, lag: bool): Set[int] =
+    if (not(apply)) pending
+    else if (armedHit(apply)) Set()
+    else pending.exclude(lateMust(apply)).union(lagUnverified(apply, lag))
+
+  def pendingMaybeAfter(apply: bool, lag: bool): Set[int] =
+    if (not(apply)) pendingMaybe
+    else if (armedHit(apply))
+      pending.union(pendingMaybe).union(lagUnverified(apply, lag))
+        .union(uncertainPromotions(apply, lag))
+    else pendingMaybe.filter(n => res.contains(n) or lab.get(n) != "queued")
+      .union(uncertainPromotions(apply, lag))
+
   action cycle: bool = {
     nondet apply = pick(Set(true, false), scripted(sid), call.b).oneOf()
     nondet lag = pick(Set(true, false), scripted(sid), call.c).oneOf()
@@ -547,7 +613,12 @@ module dependency_liveness {
       not(apply and armed.op != "none" and stale.kind != "none"),
       wasCycle' = true,
       applied' = apply,
-      events' = promoted,
+      currentEvents' = promoted.exclude(lagUnverified(apply, lag)),
+      recoveredEvents' = lateMust(apply),
+      mayReport' = lateMay(apply),
+      events' = promoted.exclude(lagUnverified(apply, lag)).union(lateMust(apply)),
+      pending' = pendingAfter(apply, lag),
+      pendingMaybe' = pendingMaybeAfter(apply, lag),
       newlyQueued' = if ((apply and fault != "event_only")
                          or (not(apply) and fault == "dry_run_writes")) promoted else Set(),
       mustNot' = every.filter(n => mustNotOf(n, apply, lag)),
@@ -582,27 +653,43 @@ module dependency_liveness {
   // ---- properties ---------------------------------------------------------------
 
   // Safety: nothing is promoted (event or real label) against an obligation.
-  val safety: bool = events.union(newlyQueued).intersect(mustNot).size() == 0
+  // A late report of an earlier promotion is not a promotion of this cycle.
+  val safety: bool = currentEvents.union(newlyQueued).intersect(mustNot).size() == 0
 
   // Bounded liveness: every node whose fair-cycle streak reached N is queued
   // (apply: the real label) or shows this cycle's preview (dry run).
   val liveness: bool = mustQueue.forall(n =>
-    lab.get(n) == "queued" or (not(applied) and events.contains(n)))
+    lab.get(n) == "queued" or (not(applied) and currentEvents.contains(n)))
 
-  // Every event of an apply cycle is a real label change (no event-only success).
-  // The converse is deliberately not claimed: production can promote an
-  // intermediate node without a PromotionEvent under listing lag (#1296).
-  val eventsAreLabelChanges: bool = not(applied) or events.subseteq(newlyQueued)
+  // Every current event of an apply cycle is a real label change (no
+  // event-only success).
+  val eventsAreLabelChanges: bool = not(applied) or currentEvents.subseteq(newlyQueued)
+
+  // The converse (#1296): a node the cycle really promoted is reported now, or
+  // its promotion is outstanding and a later apply cycle reports it.
+  val labelChangesReported: bool =
+    not(applied) or newlyQueued.subseteq(currentEvents.union(pending).union(pendingMaybe))
+
+  // A late report concerns a node that was already queued before this cycle, is
+  // permitted by the outstanding promotions, and never appears in a dry run.
+  val reportsAreEarlierChanges: bool =
+    recoveredEvents.intersect(newlyQueued).size() == 0
+    and recoveredEvents.subseteq(mayReport)
+    and recoveredEvents.forall(n => lab.get(n) == "queued")
+    and (applied or recoveredEvents.size() == 0)
 
   // A dry run never changes a label to queued by itself.
   val dryRunReadOnly: bool = applied or newlyQueued.size() == 0
 
-  val allProperties: bool = safety and liveness and eventsAreLabelChanges and dryRunReadOnly
+  val allProperties: bool =
+    safety and liveness and eventsAreLabelChanges and dryRunReadOnly
+    and labelChangesReported and reportsAreEarlierChanges
 
   // Witnesses: the exploration is only meaningful if these are reached.
   val reachedApplyPromotion: bool = applied and newlyQueued.contains(T)
   val reachedDryRunPreview: bool = wasCycle and not(applied) and events.contains(T)
   val reachedIntermediatePromotion: bool = events.exists(n => n != T)
+  val reachedLateReport: bool = recoveredEvents.size() > 0
   val reachedForbiddenPromotion: bool = mustNot.size() > 0
   val reachedLiveness: bool = mustQueue.size() > 0
   val reachedHoldCycle: bool = wasCycle and (base or res.size() > 0)
@@ -652,4 +739,7 @@ module dependency_liveness {
   action init_target_own_reservation_dry: bool = initScenario("target_own_reservation_dry")
   action init_intermediate_own_reservation_dry: bool = initScenario("intermediate_own_reservation_dry")
   action init_prior_merge_after_faults: bool = initScenario("prior_merge_after_faults")
+  action init_lagged_chain_reported_later: bool = initScenario("lagged_chain_reported_later")
+  action init_lagged_chain_dry_then_apply: bool = initScenario("lagged_chain_dry_then_apply")
+  action init_lagged_chain_reservation_then_apply: bool = initScenario("lagged_chain_reservation_then_apply")
 }

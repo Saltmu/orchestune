@@ -118,9 +118,22 @@ type DeviationEvent = (
 class PromotionEvent:
     issue_number: int
     subtask_id: str
+    # #1296: a promotion this cycle only reports because its live verification
+    # succeeded after the cycle that applied it.  ``intent_id`` identifies the
+    # status Intent the report was recorded for (the dedupe key of the log).
+    recovered: bool = False
+    intent_id: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return {"issue_number": self.issue_number, "subtask_id": self.subtask_id}
+        data: dict[str, object] = {
+            "issue_number": self.issue_number,
+            "subtask_id": self.subtask_id,
+        }
+        if self.recovered:
+            data["recovered"] = True
+        if self.intent_id is not None:
+            data["intent_id"] = self.intent_id
+        return data
 
 
 type FrozenJsonScalar = None | bool | int | float | str

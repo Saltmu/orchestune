@@ -17,6 +17,7 @@ from typing import cast
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.progress import progress_phase
+from orchestune.dispatch.promotion_reporting import confirm_promotion_reports
 from orchestune.dispatch.timings import (
     CycleTimingCollector,
     TimingProgress,
@@ -83,14 +84,31 @@ def execute_locked_cycle(
     )
     with progress_phase(sink, "consistency_postprocessing"):
         api._finish_consistency_runtime(runtime, report, ctx, now, config, repair_cycle)
-    if config.apply:
-        with progress_phase(sink, "events_record"):
-            entry = api.build_event_log_entry(report, now)
-            entry["timings"] = timing_snapshot(collector)
-            api.append_event_log(entry, config.events_log_path)
-    else:
-        sink.emit("events_record", "skipped", reason="dry_run")
+    record_cycle_events(api, report, now, config, collector)
     return cast(CycleReport, report)
+
+
+def record_cycle_events(
+    api: ModuleType,
+    report: CycleReport,
+    now: float,
+    config: DispatcherConfig,
+    collector: CycleTimingCollector | None = None,
+) -> None:
+    """Append the cycle to the confirmed event log, then settle promotion reports.
+
+    The unreported promotion records are consumed only after the append
+    succeeded; an interrupted cycle is re-delivered (#1296).
+    """
+    sink = config.progress
+    if not config.apply:
+        sink.emit("events_record", "skipped", reason="dry_run")
+        return
+    with progress_phase(sink, "events_record"):
+        entry = api.build_event_log_entry(report, now)
+        entry["timings"] = timing_snapshot(collector)
+        api.append_event_log(entry, config.events_log_path)
+        confirm_promotion_reports(config, report.promotion_events)
 
 
 def execute_cycle(api: ModuleType, config: DispatcherConfig) -> CycleReport:

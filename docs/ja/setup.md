@@ -301,7 +301,9 @@ concurrency:
 | 同 `completion_journal`／`completion_reservations`／`completion_replay_receipts`／`recovery_receipts` | 進行中のcompleteの再開用journalと、GCが照合する予約・replay・復旧のreceiptが失われる。正規のOutcome RecordはIssueコメントに残るが、journalやreceiptからの冪等な再開・再発行は保証されないため、異常終了後は `orchestune recover` と[状態復旧](architecture/state-recovery.md)の手順で確認する（個別の復元可否は確認できていない） |
 | `run_state.status-intents.json`（`run_state_path` と同じ場所） | 実行途中のstatus repairのintent journalが失われ、PLANNED／APPLIEDのintentを次サイクルで照合できない。ラベルの実状態はGitHubが真実なので再観測で再計画されるが、途中状態の突合せ記録は確認できていない |
 | `not_needed_review_state.json`（`not_needed_review_state_path`） | 検証依頼済みのnot-needed reviewのpending一覧が失われ、`not-needed-review:passed`／`failed` ラベルのポーリングによるクローズが行われなくなる。依頼済みレビューの追跡が切れるため、該当Issueは人手で確認する |
-| `events.jsonl`（`events_log_path`）・`logs/`（`log_dir`）・`.orchestune/reports/dispatch`（`report_dir`） | ログ・報告の履歴だけが失われる |
+| `run_state.promotion-reports.json`（`run_state_path` と同じ場所） | status repair の昇格のうち、検証済みで `events.jsonl` にまだ載っていない未報告分が失われ、後の cycle が検証した昇格が報告されなくなる。ラベルには影響しない。破損したファイルは空として読まず、報告を保留してファイルを残す |
+| `events.jsonl`（`events_log_path`） | dispatch cycle の履歴。報告済みの昇格（`promotion_events` の `intent_id`）の確定記録でもある。これらの行を残さずに切り詰め・ローテーション・移行をすると、未報告の昇格が二重に報告されうる。JSON として不正な行があると、直すまで未報告の昇格を全て保留する |
+| `logs/`（`log_dir`）・`.orchestune/reports/dispatch`（`report_dir`） | ログ・報告の履歴だけが失われる |
 | `worktrees/`（`worktree_root`）と `worktrees/.holds/` | ローカルtargetのworktreeとhold記録が失われる（外部targetに限定する理由） |
 
 #### 6.3.1 導入用workflow例

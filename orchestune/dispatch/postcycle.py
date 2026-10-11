@@ -38,6 +38,7 @@ from orchestune.dispatch.cycle_events import (
     EarlyDeathRequeuedCompletion,
     ExternalExecutionHeldCompletion,
     InteractiveExcludedCompletion,
+    PromotionEvent,
     ReclaimedCompletion,
     ReviewTimeoutRequeuedCompletion,
     StaleEntryDiscardedCompletion,
@@ -288,6 +289,12 @@ def _completion_item_fields(
     return event.issue_number, None, event.action, None
 
 
+def _format_promotion_item(event: PromotionEvent) -> str:
+    """#1296: a late report is not a promotion of this cycle; say so."""
+    note = "（以前のcycleの昇格を検証）" if event.recovered else ""
+    return f"`{event.to_dict()}`{note}"
+
+
 def _format_completion_item(event: CompletionEvent) -> str:
     issue_num, subtask_id, action, usage = _completion_item_fields(event)
 
@@ -331,7 +338,7 @@ def _format_event_log_comment(
         ),
         (
             "⬆️ 昇格イベント（Promotion）",
-            [f"`{event.to_dict()}`" for event in report.promotion_events],
+            [_format_promotion_item(event) for event in report.promotion_events],
         ),
     ]
     for header, items in sections:

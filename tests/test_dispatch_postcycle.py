@@ -786,6 +786,44 @@ class TestPostEventLogComment:
         assert "task-c" in posted_body
         assert "task-p" in posted_body
 
+    def test_marks_a_late_report_as_the_verification_of_an_earlier_promotion(
+        self, tmp_path
+    ):
+        """#1296: the comment must not present a late report as this cycle's change."""
+        config = DispatcherConfig(
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            parent_issue_number=100,
+            apply=True,
+            forge=MagicMock(),
+        )
+        report = CycleReport(
+            selected=[],
+            quota_slots_available=1,
+            lock_changes={"to_lock": [], "to_unlock": []},
+            deviation_events=[],
+            completion_events=[],
+            promotion_events=[
+                PromotionEvent(issue_number=8, subtask_id="task-p", intent_id="i-8"),
+                PromotionEvent(
+                    issue_number=9,
+                    subtask_id="task-q",
+                    recovered=True,
+                    intent_id="i-9",
+                ),
+            ],
+            applied=True,
+        )
+
+        _post_event_log_comment(config, report)
+
+        lines = config.forge.add_comment.call_args.args[1].splitlines()
+        fresh = next(line for line in lines if "task-p" in line)
+        late = next(line for line in lines if "task-q" in line)
+        assert "以前のcycleの昇格を検証" not in fresh
+        assert "以前のcycleの昇格を検証" in late
+
     def test_skips_comment_when_only_steady_state_deviation_events(self, tmp_path):
         """#402レビュー指摘（最重要）: `already_forced_serial`のような
         「状態が変わらず定常的に再生成され続ける」逸脱イベントだけの
