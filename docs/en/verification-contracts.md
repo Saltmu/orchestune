@@ -23,6 +23,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P2-CONVERGENCE-UPPER-BOUND` | 2 | unverified | - | - |
 | `P3A-ROUTE-COVERAGE` | 3a | verified | `unrouted-source`, `unexecuted-route-condition` | - |
 | `P3A-DYNAMIC-CONFORMANCE` | 3a | verified | `misrouted-event`, `wrong-model-target` | - |
+| `P3A-LAUNCH-IDENTITY-CONFORMANCE` | 3a | verified | `active-fact-guard-bypass` | #1286 |
 | `P3A-DOCUMENT-TABLE` | 3a | unverified | - | - |
 | `P3B-BUDGET-CONSUMED` | 3b | verified | `budget-not-consumed` | - |
 | `P3B-RETRY-BOUND` | 3b | verified | `budget-bound-exceeded` | - |
@@ -60,6 +61,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P2-CONVERGENCE-UPPER-BOUND` | convergence within the upper bound k=3 | as P2-RECOVERY-ONE-CYCLE | cycle k | k=3 |
 | `P3A-ROUTE-COVERAGE` | every production source has its routes and every route condition is executed | static table of call sites, out-of-scope paths and invariant paths | route table | complete |
 | `P3A-DYNAMIC-CONFORMANCE` | the production driver reaches the labels and state the Event model predicts | executed case table; static coverage is a separate contract | each step: labels, result, completion, execution, retries, counts | equal to apply_event |
+| `P3A-LAUNCH-IDENTITY-CONFORMANCE` | `CycleContext.record_launch` and the Event model agree on launch identity outcomes, and every source/condition protection scope is recorded | independent expected cases and a protection row for each `EVENT_BY_SOURCE` condition | RecordStatus/reason, effective labels, execution activity, fact, and no mutation on rejection | same active fact is NOOP, conflicting active fact is CONFLICT, confirmed inactive fact can launch again |
 | `P3A-DOCUMENT-TABLE` | status-labels.md lists every route with its sources and targets | the document is the specification readers use | document table | equal to the route table |
 | `P3B-BUDGET-CONSUMED` | each new logical retry consumes one budget slot; a resume consumes none | budgeted events with distinct operations | each delivery | count + 1 (resume or exhausted: unchanged) |
 | `P3B-RETRY-BOUND` | new retries per budget never exceed the specification table within a ledger epoch | default limits; local budgets reset only on ledger loss | each counted retry | RETRY_BOUNDS |
@@ -121,6 +123,7 @@ The Issue's reading was that a one-cycle promotion delay on a path whose evidenc
 | `event-only` | the command changes nothing, verification claims success | `P2-LIVE-VERIFICATION` (Phase 2), `P3C-LIVENESS-BOUND` (3c) | result status vs live labels; apply cycle label |
 | `unrouted-source` / `unexecuted-route-condition` | a source is removed / a condition is never executed | `P3A-ROUTE-COVERAGE` | static check |
 | `misrouted-event` / `wrong-model-target` | the route names another Event / the model returns another target | `P3A-DYNAMIC-CONFORMANCE` | production driver vs model |
+| `active-fact-guard-bypass` | `_refuse_launch` accepts a different fact while an execution is active | `P3A-LAUNCH-IDENTITY-CONFORMANCE` | deterministic comparison with a different active fact |
 | `budget-not-consumed` | `apply_event` keeps the previous retries | `P3B-BUDGET-CONSUMED` | reclaim loop |
 | `budget-bound-exceeded` | the reclaim limit is raised above the table | `P3B-RETRY-BOUND` | reclaim loop |
 | `persistent-budget-reset` | `restart` also zeroes the persistent counts | `P3B-LEDGER-LOSS-KEEPS-PERSISTENT` | ledger-loss scenario |

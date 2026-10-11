@@ -503,8 +503,9 @@ def _refuse_launch(state: TaskModel, execution: Execution | None) -> Rejected | 
         return Rejected("launch-mismatch")
     if current is not None and current != execution:
         return Rejected("launch-mismatch")
-    if execution in state.retired_execution_identities:
-        return Rejected("stale-execution")
+    # Production record_launch does not retain retired facts after a confirmed
+    # inactive transition.  Retired identities guard late non-LAUNCH events,
+    # not a subsequent launch while the task is inactive.
     return None
 
 

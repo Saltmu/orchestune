@@ -252,6 +252,29 @@ CONTRACTS: tuple[Contract, ...] = (
         },
     ),
     Contract(
+        id="P3A-LAUNCH-IDENTITY-CONFORMANCE",
+        phase="3a",
+        guarantee="record_launch identity outcomes match the independent Event contract and every source/condition has a protection classification",
+        premise="explicit expected RecordStatus/reason cases and the complete EVENT_BY_SOURCE inventory",
+        boundary="record_launch result, effective labels, execution activity, fact, and no-mutation on conflict",
+        expectation="same active fact is NOOP; conflicting active fact is CONFLICT; confirmed inactive fact can launch again",
+        status="verified",
+        tests=(
+            "tests/test_status_event_identity_conformance.py::test_relaunch_of_same_fact_after_confirmed_recovery_matches_production",
+            "tests/test_status_event_identity_conformance.py::test_record_launch_identity_matrix",
+            "tests/test_status_event_identity_conformance.py::test_each_launch_fact_field_contributes_to_execution_identity",
+            "tests/test_status_event_identity_conformance.py::test_invalid_fact_fields_are_normalized_independently",
+            "tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete",
+            "tests/test_status_event_identity_conformance.py::test_status_label_docs_match_protection_inventory",
+        ),
+        issues=(1286,),
+        controls={
+            "active-fact-guard-bypass": (
+                "tests/test_status_event_identity_conformance.py::test_control_record_launch_identity_guard_bypass_is_detected",
+            ),
+        },
+    ),
+    Contract(
         id="P3A-DOCUMENT-TABLE",
         phase="3a",
         guarantee="status-labels.md lists every route with its sources and targets",
