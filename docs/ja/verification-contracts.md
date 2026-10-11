@@ -32,7 +32,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3B-RECLAIM-BUDGET-PRESERVED` | 3b | verified | `reclaim-record-replaced` | - |
 | `P3B-RECOMPUTE-BUDGET-PRESERVED` | 3b | verified | `relaunch-counter-reset` | - |
 | `P3C-CASE-DELAY` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `empty-completion-set`, `throwaway-context` | - |
-| `P3C-LIVENESS-BOUND` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `event-only`, `empty-completion-set`, `throwaway-context` | - |
+| `P3C-LIVENESS-BOUND` | 3c | verified | `ledger-premise-removed`, `promotion-suppressed`, `promotion-delayed`, `event-only`, `empty-completion-set`, `throwaway-context` | - |
 | `P3C-INTERMEDIATE-LIVENESS` | 3c | verified | `intermediate-ignored`, `promotion-suppressed` | - |
 | `P3C-SAFETY` | 3c | verified | `hold-guard-bypass`, `reservation-guard-bypass`, `stale-evidence`, `action-mapping-dropped`, `event-only` | - |
 | `P3C-INTERMEDIATE-SAFETY` | 3c | verified | `reservation-guard-bypass` | - |
@@ -41,7 +41,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3C-QUINT-OBSERVATION` | 3c | verified | `action-mapping-swapped` | - |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-DRYRUN-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
-| `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | 3c | known_defect | - | #1281 |
+| `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | 3c | known_defect | - | #1300 |
 
 ### 詳細
 
@@ -70,7 +70,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3B-RECLAIM-BUDGET-PRESERVED` | GC回収の予約・dirty 保留は early-death・review-timeout・usage-limit の予算を保つ | ゾンビ・cloud・dirty 保留の各 writer による TaskReclaimRecord の永続化 | 永続化されたレコード | 予算が残る |
 | `P3B-RECOMPUTE-BUDGET-PRESERVED` | 再launchは recompute 予算を保つ | Issue 本文カウンターの永続化 | 永続化されたレコード | 予算が残る |
 | `P3C-CASE-DELAY` | 完了経路ごとに T がケース表のcycle（d = 0）ちょうどで昇格する | 証拠が cycle 0 の昇格判定に利用可能 | 証拠投入のcycle。早くも遅くもない | ケース表の d |
-| `P3C-LIVENESS-BOUND` | 公平な N = 1 cycle で T が queued（dry run は preview）になる | 公平なcycle: cycle 開始時と昇格判定時に前提が成り立ち、エラー・障害注入がない | 最初の公平なcycleの終わり。apply は実ラベル、dry run は当該cycleの preview | N = 1 |
+| `P3C-LIVENESS-BOUND` | 公平な N = 1 cycle で T が queued（dry run は preview）になる | 公平なcycle: cycle 開始時と昇格判定時に前提が成り立ち、エラー・障害注入がない。blocked-recompute の T はさらに、昇格判定時に active 台帳エントリが空であること（#1281: 本番は footprint 逸脱を評価できないエントリがあると fail-closed で保留する） | 最初の公平なcycleの終わり。apply は実ラベル、dry run は当該cycleの preview | N = 1 |
 | `P3C-INTERMEDIATE-LIVENESS` | 中間ノードが公平な N = 1 cycle で昇格（dry run は preview）される | そのノード自身の依存が両境界で有効かつ予約なし | そのノードの最初の公平なcycleの終わり | N = 1 |
 | `P3C-SAFETY` | 有効な証拠がない、または hold・予約があるときに昇格（preview）しない | apply は昇格判定時点、dry run は cycle 開始時点で判定 | 全cycle | 起きない |
 | `P3C-INTERMEDIATE-SAFETY` | 中間ノードを、自身の依存が有効かつ予約なしになる前に昇格させない | apply は昇格判定時点で判定 | 全cycle | 起きない |
@@ -89,7 +89,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 - `P2-CONVERGENCE-UPPER-BOUND` (unverified): 1パスを超えて駆動するテストがなく、期待値（1cycle）だけを検査している
 - `P3A-DOCUMENT-TABLE` (unverified): 対照なし: 文書のずれを注入していない
 - `P3B-LAUNCH-AND-ESCALATION` (unverified): 契約idのないassertで、誤動作を注入していない
-- `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` (known_defect): #1281 の反例2を strict xfail で固定している。本番が先行マージの完了集合を落とすのか、公平性判定の問題なのかはまだ切り分けていない
+- `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` (known_defect): #1281 の反例2（原因A）を strict xfail で固定している。lag 下の primary-status-conflict 修復が、先行マージ修復の書いた依存の最後の lifecycle ラベルを外すのが原因で、本番の修正は #1300 が担当する。xfail は c2 の後にラベルが消えていること（原因の境界）と、最後の dry run で T が preview されないことの両方を観測する
 
 <a id="cycle-definitions"></a>
 <!-- cycle-definitions -->
@@ -129,6 +129,7 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 | `relaunch-counter-reset` | 通常の起動が `recompute_count` / `forced_serial` を0・Falseから始める（#1280 以前の起動） | `P3B-RECOMPUTE-BUDGET-PRESERVED` | 通常の起動入口（claim 予約・provider 前の counter 保存・起動記録）の後、再び逸脱した active |
 | `promotion-suppressed` / `promotion-delayed` | 昇格境界を常に／証拠投入のcycleだけ飛ばす | `P3C-CASE-DELAY`（ケース表）、`P3C-LIVENESS-BOUND`、`P3C-INTERMEDIATE-LIVENESS` | label、`record_completion`（apply）、prior merge（apply・dry run） |
 | `empty-completion-set` / `throwaway-context` | #902 Round 4/5 の誤配線 | `P3C-CASE-DELAY` | ケース表 |
+| `ledger-premise-removed` | 公平性判定から「recompute 対象は active 台帳エントリがない」前提（#1281 反例2b）を外す | `P3C-LIVENESS-BOUND` | 障害つき apply cycle の後、台帳に完了済み依存が残る blocked-recompute の T（決定的シナリオ） |
 | `intermediate-ignored` | 中間ノードの判定を落とす | `P3C-INTERMEDIATE-LIVENESS` | 中間ノードのトポロジー |
 | `hold-guard-bypass`（3c） | 全ての `PROMOTION_HOLD_LABELS` を空にする | `P3C-SAFETY` | cycle 前の `ci:base-branch-red` |
 | `reservation-guard-bypass` | 依存側・対象側・中間ノードの依存の予約判定が常に通る | `P3C-SAFETY`、`P3C-INTERMEDIATE-SAFETY`（machine の apply cycle）、`P3C-DRYRUN-DEPENDENCY-RESERVATION`（決定的な dry run）、`P3C-DRYRUN-RESERVATION`（対象側・中間ノード自身の dry run） | machine は apply cycle。dry run の依存側は決定的なシナリオ、対象側・中間ノード自身の dry run は専用の決定的なシナリオ |
@@ -185,7 +186,7 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 
 **保存シナリオ。** モデルの台本付きシナリオ（`init_<id>`。各 step の選択値を固定するので、ITFの形は乱択トレースと同じ）が、final / 中間ノード、apply / dry run、live / lagged、no-op / 実変更、依存側 / 対象側の hold、障害、restart、重複、stale 変更を網羅します。`tests/fixtures/quint/dependency_liveness_traces.json` にITFを seed・境界・Quint の版・生成コマンドとともに保存します。テストが各トレースを生成し直して比較し、モデルを変えて `uv run python -m tests.quint_scenarios regenerate` を実行していなければ失敗します。`tests/fixtures/quint/dependency_liveness_fault_scenarios.json` には、モデルの誤動作シナリオを期待する不変条件と予定の step とともに保存します。
 
-**既知の本番の反例（#1281）。** モデルは義務を述べ、本番がそれに違反します。探索ではモデルの `guard` を有効にして、乱択トレースがそれらを検査しないようにします（Hypothesis の machine も同じ場合を除外しています）。保存した `defect_*` シナリオ（#1281 の反例2に対応する `defect_prior_merge_after_faults`）は guard なしで実行し、Issue・契約・step・ノードを登録した strict xfail のテストで再生します。その不一致だけが欠陥で、同じトレースの別の不一致や別のトレースの不一致は失敗です。
+**既知の本番の反例（#1281 で発見、本番の修正は #1300）。** モデルは義務を述べ、本番がそれに違反します。探索ではモデルの `guard` を有効にして、乱択トレースがそれらを検査しないようにします（Hypothesis の machine も同じ場合を除外しています）。保存した `defect_*` シナリオ（#1281 の反例2に対応する `defect_prior_merge_after_faults`）は guard なしで実行し、Issue・契約・step・ノードを登録した strict xfail のテストで再生します。その不一致だけが欠陥で、同じトレースの別の不一致や別のトレースの不一致は失敗です。
 
 | 誤動作 | モデル: 違反する不変条件（シナリオ） | 再生: 違反する契約（保存シナリオ） |
 |---|---|---|

@@ -5,6 +5,7 @@ shrunk initialize/rule sequence; retain it as a deterministic regression.
 """
 
 import os
+import sys
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -33,6 +34,7 @@ from tests.dependency_liveness_test_support import (
     OracleView,
     StatusLabel,
     assert_case,
+    recompute_ledger_hold,
     run_case,
 )
 from tests.verification_contract_test_support import (
@@ -443,6 +445,7 @@ class DependencyLivenessMachine(RuleBasedStateMachine):
             observation.error is None
             and not observation.fault_injected
             and self.world.faults.forge_operation is None
+            and not recompute_ledger_hold(observation)
             and all(
                 view.promotable(self.world.required, apply=apply)
                 for view in (observation.at_start, observation.at_promotion)
@@ -909,8 +912,82 @@ def test_dry_run_respects_intermediate_own_reservation():
     _dry_run_preview_of(_INTERMEDIATE, 12, 11, 11)
 
 
+def scenario_recompute_target_waits_for_the_ledger_entry_of_a_completed_dependency():
+    """#1281 counterexample 2b: a faulted apply cycle leaves 13 in the ledger.
+
+    The fixture never creates a worktree, so the deviation of that entry cannot
+    be evaluated and production holds the blocked-recompute T fail-closed.  The
+    cycle with the entry is not fair; the next apply cycle collects it and T is
+    queued within N = 1.
+    """
+    topology = LivenessTopology(
+        (11, 12, 13), ("dep-a", "dep-b", "dep-c"), {}, (11, 12, 13)
+    )
+    machine = DependencyLivenessMachine()
+    try:
+        machine.start(topology=topology, recompute=True)
+        machine.world.complete(11, CompletionPath.LABEL)
+        machine.world.complete(12, CompletionPath.LABEL)
+        machine.world.complete(13, CompletionPath.RECORD_COMPLETION)
+        machine.fail_next(mode="before", op="remove")
+        machine.cycle(apply=True, lag=False)
+        require(
+            "P3C-LIVENESS-BOUND",
+            machine.world.oracle().active_entries == {13},
+            "the faulted apply cycle must leave 13 in the ledger",
+        )
+        machine.cycle(apply=False, lag=False)
+        held = machine.world.observations[-1]
+        require(
+            "P3C-LIVENESS-BOUND",
+            not held.previewed and machine.fair_streak == 0,
+            f"T is held while 13 stays in the ledger: {held}",
+        )
+        machine.cycle(apply=True, lag=False)
+        promoted = machine.world.observations[-1]
+        require(
+            "P3C-LIVENESS-BOUND",
+            promoted.promoted
+            and machine.fair_streak == LIVENESS_BOUND
+            and not machine.world.oracle().active_entries,
+            f"the next apply cycle collects 13 and promotes T: {promoted}",
+        )
+    finally:
+        machine.teardown()
+
+
+def test_recompute_target_waits_for_the_ledger_entry_of_a_completed_dependency():
+    scenario_recompute_target_waits_for_the_ledger_entry_of_a_completed_dependency()
+
+
+def test_control_recompute_ledger_premise_removal_is_detected(monkeypatch):
+    """Without the premise the held dry run is judged fair and must have promoted T."""
+    monkeypatch.setattr(
+        sys.modules[__name__], "recompute_ledger_hold", lambda observation: False
+    )
+    with expect_violation("P3C-LIVENESS-BOUND"):
+        scenario_recompute_target_waits_for_the_ledger_entry_of_a_completed_dependency()
+
+
+def test_recompute_ledger_premise_does_not_excuse_a_target_without_the_label():
+    """The premise is scoped to blocked-recompute T (status repair has no such hold)."""
+    topology = LivenessTopology((11,), ("dep-a",), {}, (11,))
+    machine = DependencyLivenessMachine()
+    try:
+        machine.start(topology=topology, recompute=False)
+        machine.world.complete(11, CompletionPath.RECORD_COMPLETION)
+        machine.world.cycle(apply=True)
+        machine.world.relabel(DEPENDENT, ("status:blocked",))
+        machine.cycle(apply=True, lag=False)
+        assert not recompute_ledger_hold(machine.world.observations[-1])
+        assert machine.fair_streak >= LIVENESS_BOUND
+    finally:
+        machine.teardown()
+
+
 @pytest.mark.xfail(
-    reason="production bug #1281 (counterexample 2)",
+    reason="production bug #1300 (counterexample 2): a status repair under lag "
+    "strips the last lifecycle label of a dependency the prior-merge repair wrote",
     strict=True,
     raises=ContractViolation,
 )
@@ -925,9 +1002,15 @@ def test_known_defect_prior_merge_is_not_previewed_after_faulted_apply_cycles():
         machine.cycle(apply=True, lag=False)
         machine.fail_next(mode="after", op="remove")
         machine.cycle(apply=True, lag=True)
-        # Only the final dry run is the counterexample; a violation of the
-        # earlier cycles is a general failure and is not pinned.
+        # Only the cause and the final dry run are the counterexample; a violation
+        # of the earlier cycles is a general failure and is not pinned.
         with pinned_defect("P3C-LIVENESS-PRIOR-MERGE-DRYRUN"):
+            require(
+                "P3C-LIVENESS-PRIOR-MERGE-DRYRUN",
+                machine.world.labels(12),
+                "#1300: the status repair of the lagged cycle left 12 without a "
+                "lifecycle label",
+            )
             try:
                 machine.cycle(apply=False, lag=False)
             except ContractViolation as violation:

@@ -32,7 +32,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P3B-RECLAIM-BUDGET-PRESERVED` | 3b | verified | `reclaim-record-replaced` | - |
 | `P3B-RECOMPUTE-BUDGET-PRESERVED` | 3b | verified | `relaunch-counter-reset` | - |
 | `P3C-CASE-DELAY` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `empty-completion-set`, `throwaway-context` | - |
-| `P3C-LIVENESS-BOUND` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `event-only`, `empty-completion-set`, `throwaway-context` | - |
+| `P3C-LIVENESS-BOUND` | 3c | verified | `ledger-premise-removed`, `promotion-suppressed`, `promotion-delayed`, `event-only`, `empty-completion-set`, `throwaway-context` | - |
 | `P3C-INTERMEDIATE-LIVENESS` | 3c | verified | `intermediate-ignored`, `promotion-suppressed` | - |
 | `P3C-SAFETY` | 3c | verified | `hold-guard-bypass`, `reservation-guard-bypass`, `stale-evidence`, `action-mapping-dropped`, `event-only` | - |
 | `P3C-INTERMEDIATE-SAFETY` | 3c | verified | `reservation-guard-bypass` | - |
@@ -41,7 +41,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P3C-QUINT-OBSERVATION` | 3c | verified | `action-mapping-swapped` | - |
 | `P3C-DRYRUN-DEPENDENCY-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
 | `P3C-DRYRUN-RESERVATION` | 3c | verified | `reservation-guard-bypass` | - |
-| `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | 3c | known_defect | - | #1281 |
+| `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` | 3c | known_defect | - | #1300 |
 
 ### Details
 
@@ -70,7 +70,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P3B-RECLAIM-BUDGET-PRESERVED` | a GC reclaim reservation or dirty hold keeps the early-death, review-timeout and usage-limit budgets | production persistence of TaskReclaimRecord by the zombie, cloud and dirty-hold writers | persisted records | budgets survive |
 | `P3B-RECOMPUTE-BUDGET-PRESERVED` | a relaunch keeps the recompute budget | production persistence of the Issue-body counters | persisted records | budgets survive |
 | `P3C-CASE-DELAY` | per completion path, T is promoted exactly at its case-table cycle (d = 0) | evidence usable for the promotion decision in cycle 0 | cycle of the evidence; never earlier, never later | d from the case table |
-| `P3C-LIVENESS-BOUND` | T is queued (apply) or previewed (dry run) after N = 1 fair cycle | fair cycle: eligible at cycle start and at the promotion point, no error or injected failure | end of the first fair cycle; apply checks the real label, dry run this cycle's preview | N = 1 |
+| `P3C-LIVENESS-BOUND` | T is queued (apply) or previewed (dry run) after N = 1 fair cycle | fair cycle: eligible at cycle start and at the promotion point, no error or injected failure; a blocked-recompute T additionally needs an empty active ledger at the promotion point (#1281: production fails closed on an entry whose footprint deviation cannot be evaluated) | end of the first fair cycle; apply checks the real label, dry run this cycle's preview | N = 1 |
 | `P3C-INTERMEDIATE-LIVENESS` | an intermediate node is promoted (apply) or previewed (dry run) after N = 1 fair cycle | its own dependencies are valid and unreserved at both boundaries | end of the first fair cycle for that node | N = 1 |
 | `P3C-SAFETY` | no promotion (or dry-run preview) without valid evidence, or under a hold or reservation | apply is judged at the promotion point, a dry run at cycle start | every cycle | never |
 | `P3C-INTERMEDIATE-SAFETY` | an intermediate node is not promoted before its own dependencies are valid and unreserved | apply is judged at the promotion point | every cycle | never |
@@ -89,7 +89,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 - `P2-CONVERGENCE-UPPER-BOUND` (unverified): no test drives more than one pass; only the expectation (1 cycle) is checked
 - `P3A-DOCUMENT-TABLE` (unverified): no control: a document drift has not been injected
 - `P3B-LAUNCH-AND-ESCALATION` (unverified): plain assertions without contract ids; no control was injected
-- `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` (known_defect): #1281 counterexample 2: a strict xfail pins it; whether production drops the prior-merge completion set or the fairness judgement is wrong is not yet separated
+- `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` (known_defect): #1281 counterexample 2 (cause A): a strict xfail pins it. Under lag the primary-status-conflict repair strips the last lifecycle label of a dependency the prior-merge repair wrote in the same cycle; the production fix is #1300. The xfail observes both the label loss after c2 (the cause boundary) and the missing preview in the final dry run
 
 <a id="cycle-definitions"></a>
 <!-- cycle-definitions -->
@@ -129,6 +129,7 @@ The Issue's reading was that a one-cycle promotion delay on a path whose evidenc
 | `relaunch-counter-reset` | a normal launch starts `recompute_count` / `forced_serial` from 0 / False (the pre-#1280 launch) | `P3B-RECOMPUTE-BUDGET-PRESERVED` | the active after the normal launch entry (claim reservation, counters saved before the provider, launch record) that deviates again |
 | `promotion-suppressed` / `promotion-delayed` | the promotion boundary is skipped always / in the evidence cycle | `P3C-CASE-DELAY` (case table), `P3C-LIVENESS-BOUND`, `P3C-INTERMEDIATE-LIVENESS` | label, `record_completion` (apply), prior merge (apply and dry run) |
 | `empty-completion-set` / `throwaway-context` | the #902 Round 4/5 miswiring | `P3C-CASE-DELAY` | case table |
+| `ledger-premise-removed` | the fairness judgement drops the premise that a recompute target has no active ledger entry (#1281 counterexample 2b) | `P3C-LIVENESS-BOUND` | blocked-recompute T whose completed dependency stays in the ledger after a faulted apply cycle (deterministic scenario) |
 | `intermediate-ignored` | the intermediate node's assessment is dropped | `P3C-INTERMEDIATE-LIVENESS` | intermediate topology |
 | `hold-guard-bypass` (3c) | every `PROMOTION_HOLD_LABELS` is empty | `P3C-SAFETY` | `ci:base-branch-red` before the cycle |
 | `reservation-guard-bypass` | the reservation checks of the dependency side, the target side or the intermediate's dependency always pass | `P3C-SAFETY`, `P3C-INTERMEDIATE-SAFETY` (machine, apply cycles), `P3C-DRYRUN-DEPENDENCY-RESERVATION` (deterministic dry run), `P3C-DRYRUN-RESERVATION` (target/intermediate own dry run) | apply cycles in the machine; the dependency side of a dry run in a deterministic scenario; target and intermediate self-reservations in dry run |
@@ -185,7 +186,7 @@ Static coverage for `P3A-ROUTE-COVERAGE` is established through a chain of two v
 
 **Saved scenarios.** The scripted scenarios of the model (`init_<id>`; one fixed choice per step, so the ITF has the same shape as a random trace) cover final and intermediate nodes, apply and dry run, live and lagged observation, no-op and real changes, dependency-side and target-side holds, failures, restarts, duplicates and stale changes. `tests/fixtures/quint/dependency_liveness_traces.json` stores the ITF with its seed, bounds, Quint version and generation command; a test regenerates each and fails when the model changed without `uv run python -m tests.quint_scenarios regenerate`. `tests/fixtures/quint/dependency_liveness_fault_scenarios.json` stores the model-fault scenarios with the expected invariants and planned step.
 
-**Known production counterexample (#1281).** The model states their obligations; production violates them. The exploration runs with the model's `guard` set so that random traces never assert them (the Hypothesis machine excuses the same cases). The saved `defect_*` scenario (`defect_prior_merge_after_faults`, pinning counterexample 2 of #1281) runs with the guard off and is replayed by a strict xfail test that registers the Issue, the contract, the step and the node: only that mismatch is the defect; any other mismatch, in the same trace or elsewhere, fails.
+**Known production counterexample (found in #1281, production fix in #1300).** The model states their obligations; production violates them. The exploration runs with the model's `guard` set so that random traces never assert them (the Hypothesis machine excuses the same cases). The saved `defect_*` scenario (`defect_prior_merge_after_faults`, pinning counterexample 2 of #1281) runs with the guard off and is replayed by a strict xfail test that registers the Issue, the contract, the step and the node: only that mismatch is the defect; any other mismatch, in the same trace or elsewhere, fails.
 
 | Fault | Model: violated invariant (scenario) | Replay: violated contract (stored scenario) |
 |---|---|---|

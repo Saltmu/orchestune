@@ -363,8 +363,8 @@ def test_known_defect_registry_names_known_defect_rows() -> None:
 
 
 @pytest.mark.xfail(
-    reason="production bug #1281: no preview of a prior merge after faulted apply "
-    "cycles",
+    reason="production bug #1300: no preview of a prior merge after faulted apply "
+    "cycles (a lagged status repair strips the dependency's last lifecycle label)",
     strict=True,
     raises=ContractViolation,
 )
