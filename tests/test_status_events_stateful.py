@@ -281,6 +281,15 @@ _LOOP_KEYS = sorted(
 )
 
 
+_REVIEW_WAIT_EVENTS = [
+    (_E.COMPLETE_WITHOUT_LABEL, _K.REVIEW_PASSED),
+    (_E.REVIEW_REJECT, _K.PLAIN),
+    (_E.ESCALATE, _K.PLAIN),
+    (_E.COMPLETE_WITHOUT_LABEL, _K.CYCLE),
+    (_E.COMPLETE_WITHOUT_LABEL, _K.PRIOR_MERGE),
+]
+
+
 class BudgetTerminationMachine(RuleBasedStateMachine):
     def __init__(self) -> None:
         super().__init__()
@@ -337,6 +346,11 @@ class BudgetTerminationMachine(RuleBasedStateMachine):
         if isinstance(result, Applied):
             self._account(before, event, result)
             self.state = result.state
+            # #1278: the wait for a not-needed review exists only on that label,
+            # and never counts as a completion.
+            if self.state.review_pending:
+                assert N in self.state.lifecycle, (event, self.state)
+                assert not self.state.completion_done, (event, self.state)
 
     # -- invariants checked on every delivery ------------------------------------
     def _check_delivery(
@@ -489,6 +503,27 @@ class BudgetTerminationMachine(RuleBasedStateMachine):
             EventInput(*key, execution, self._operation(data), self.now, stop)
         )
 
+    @precondition(lambda self: bool(self.state.lifecycle & ACTIVE))
+    @rule(data=st.data())
+    def review_completion(self, data: st.DataObject) -> None:
+        """#1278: a not-needed completion held for an independent review."""
+        execution = self._identity(data, launch=False)
+        self._deliver(
+            EventInput(
+                _E.NOT_NEEDED,
+                _K.COMPLETION_REVIEW,
+                execution,
+                self._operation(data),
+                self.now,
+            )
+        )
+
+    @precondition(lambda self: self.state.review_pending)
+    @rule(key=st.sampled_from(_REVIEW_WAIT_EVENTS))
+    def review_wait_event(self, key: tuple[Event, Kind]) -> None:
+        """Verdicts and other completion evidence arriving during the wait."""
+        self._deliver(EventInput(*key, operation=self._new_operation()))
+
     @precondition(lambda self: self.state.pending_operation is not None)
     @rule(stop=st.sampled_from([None, None, Stage.LABEL_ADDED]))
     def resume(self, stop: Stage | None) -> None:
@@ -539,11 +574,13 @@ class BudgetTerminationMachine(RuleBasedStateMachine):
     )
     def external_relabel(self, lifecycle: set[str], auxiliary: set[str]) -> None:
         relabelled = TaskModel.from_labels((*lifecycle, *auxiliary))
+        # An operator relabel is not a review verdict: the wait ends with the label.
         self.state = replace(
             self.state,
             lifecycle=relabelled.lifecycle,
             auxiliary=relabelled.auxiliary,
             pending_operation=None,
+            review_pending=self.state.review_pending and N in relabelled.lifecycle,
         )
         self.completed = self.state.completion_done
         self.blocked_by = None

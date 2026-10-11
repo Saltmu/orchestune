@@ -24,6 +24,7 @@ class PublicationForge:
         self.labels = {"status:in-progress", "status:queued", "status:blocked"}
         self.comments = []
         self.operations = []
+        self.state = "OPEN"
         self.inject = lambda operation, after: None
         self.pr = PrRecord(
             42,
@@ -47,7 +48,11 @@ class PublicationForge:
         return result
 
     def get_issue_state(self, issue):
-        return "OPEN"
+        return self.state
+
+    def close_issue(self, issue, reason, comment=None):
+        self.state = "CLOSED"
+        self.operations.append("close")
 
     def get_pull_request(self, issue):
         return self.pr
@@ -64,6 +69,16 @@ class PublicationForge:
         self.inject("post", True)
         return comment
 
+    def add_comment(self, issue, body):
+        """Downstream policy comments (review verdicts and markers)."""
+        self.comments.append(
+            {
+                "id": len(self.comments) + 1,
+                "html_url": f"https://example.test/comments/{len(self.comments)+1}",
+                "body": body,
+            }
+        )
+
     def add_label(self, issue, label):
         self.inject("add", False)
         self.labels.add(label)
@@ -75,6 +90,21 @@ class PublicationForge:
         self.labels.discard(label)
         self.operations.append("remove:" + label)
         self.inject("remove:" + label, True)
+
+
+def unclaimed_environment(tmp_path: Path, monkeypatch, issue: int = 1111):
+    """A worktree-free ledger and a queued Issue awaiting a not-needed completion."""
+    path = tmp_path / "run_state.json"
+    workspace = SimpleNamespace(run_state_path=path, repository_identity="repo")
+    monkeypatch.setattr(
+        "orchestune.complete.service.resolve_claim_workspace", lambda **_: workspace
+    )
+    with completion_journal_lock(path):
+        save_run_state(RunState(), path)
+    forge = PublicationForge()
+    forge.labels = {"status:queued", "priority:high"}
+    request = CompleteRequest.not_needed(issue, state_path=path, worktree_root=tmp_path)
+    return request, forge
 
 
 def lifecycle_environment(tmp_path: Path, monkeypatch, result="not-needed"):

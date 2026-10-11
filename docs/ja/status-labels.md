@@ -148,6 +148,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 すべてのForgeラベル変更、完了確定、GC回収、retry予約、エスカレーションはEventとして抽象化され、
 呼び出し箇所（`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / ラベル不変の完了確定経路 / ラベル不変の予算経路）と対応付けられます。
 `COMPLETION`は`orchestune complete`の完了ラベル調停で、primaryラベル・遷移先・`status:force-serial`以外の`status:*`（補助・未知のラベル）を保持していれば変更前に拒否します。
+`COMPLETION_REVIEW`は、本番が`not-needed-review`ポリシーを作る`orchestune complete --result not-needed`（cloud実行＝`external_id`あり、またはworktreeなし）の完了ラベル調停です。`COMPLETION`と同じ遷移（`status:not-needed`）ですが、適用後は`TaskModel.review_pending`が真になり、レビューがpassするまで`completion_done`は偽です（依存側は保留される）。ローカル実行（`external_id`なし）のnot-neededは従来どおり`COMPLETION`で、直ちに完了です。`review_pending`はラベルからは判別できません（本番もラベルではなく台帳で判定します）。
 `AWAIT_REVIEW`はクラウド実行のnot-needed判定を独立検証レビューへ回す経路で、実行は終えますが、レビューの判定までは完了として扱いません。
 `REVIEW_PASSED`は独立レビューの通過で、Issueをクローズし`not-needed-review`ポリシーをappliedにします（ラベルは変えません）。この時点で初めて依存側から完了として扱われます。
 
@@ -158,6 +159,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `LAUNCH` (`CLAIM`) | `status:blocked`, `status:queued` | `status:in-progress` | `claim/service.py::_apply_status_label` |
 | `COMPLETE` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `complete/status_labels.py::_completion_mutate` |
 | `NOT_NEEDED` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
+| `NOT_NEEDED` (`COMPLETION_REVIEW`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
 | `BLOCK` (`COMPLETION`) | `status:in-progress`, `status:queued` | `status:blocked` | `complete/status_labels.py::_completion_mutate` |
 | `COMPLETE_WITHOUT_LABEL` (`CYCLE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/cycle_context_state.py::_CycleState.record_completion` |
 | `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/__init__.py::_rule_not_needed` |
@@ -215,6 +217,27 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `REQUEUE` (`EARLY_DEATH`) | `status:blocked`, `status:in-progress` | `status:queued` | `ledger/escalation.py::apply_human_review_escalation` |
 | `REQUEUE` (`USAGE_LIMIT`) | `status:blocked`, `status:in-progress` | `status:queued` | `ledger/escalation.py::apply_human_review_escalation` |
 | `NOT_NEEDED` (`REPLAN`) | `status:blocked`, `status:blocked-human-review`, `status:in-progress`, `status:manual-merge-required`, `status:queued` | `status:not-needed` | `replan/operations.py::_transition_to_not_needed` |
+
+### レビュー待ち区間の効果表（#1278）
+
+`status:not-needed`を遷移元・遷移先に持つ全specがレビュー待ち（`review_pending`）へ与える効果を `REVIEW_PENDING_EFFECTS` が定め、表にないspecがnot-neededを保持しうるとテストが失敗します。
+
+| Event / Kind | `review_pending` | 完了判定 |
+|---|---|---|
+| `NOT_NEEDED` / `COMPLETION_REVIEW` | 真にする | 偽。以前の`completion_confirmed`・`persistent_completion`は消す |
+| `COMPLETE_WITHOUT_LABEL` / `REVIEW_PASSED` | 偽にする | 真（両値を確定）。待ちの間もNoOpにせず適用する |
+| `REVIEW_REJECT` / `PLAIN` | 偽にする | 偽（queued）。両値を消す |
+| `ESCALATE` / `PLAIN` | 待ち中なら偽にする | 偽（blocked-human-review）。待ち中なら両値を消す |
+| `COMPLETE_WITHOUT_LABEL` / `CYCLE`・`PRIOR_MERGE` | 変えない | 待ち中は両値を新たに確定しない。レビューのpass以外では待ちを解かない |
+| `NOT_NEEDED` / `REPLAN`・`PLAIN`・`COMPLETION`、`RELEASE_HOLD` | 変えない | 変えない（replanはレビューの台帳ポリシーを解かない） |
+| `restart(ledger_loss=False)` | 保持する | 保持 |
+| `restart(ledger_loss=True)` | 偽にする | 残るラベルと永続した完了証拠から再計算する |
+
+待ちの間も`status:not-needed`は終端として扱い、`LAUNCH`は`terminal-state`で拒否されます。
+
+### 台帳消失時の未保護経路（#1278）
+
+`run_state.json`を失うと完了記録（`not-needed-review`ポリシー）ごとレビューの保留が消え、`dependency_completion_blocked`は偽になります。`status:not-needed`ラベルが残っていれば、レビューを経ずに依存側が進みます（モデルも完了として扱い、本番より強い保護を主張しません）。レビュー却下後のqueued、タイムアウト後のblocked-human-reviewでは、ガードだけが外れても未完了のままです。この保護が必要かどうかは別Issue候補です。
 
 ## 予算付きループの終端性（#1266）
 

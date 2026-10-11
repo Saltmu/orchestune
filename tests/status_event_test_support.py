@@ -429,6 +429,14 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
             _K.COMPLETION,
             "not-needed-from-in-progress",
             "not-needed-unknown-status-conflict",
+            "not-needed-local-active",
+        ),
+        # Production holds the completion for an independent review (#1278).
+        _r(
+            _E.NOT_NEEDED,
+            _K.COMPLETION_REVIEW,
+            "not-needed-review-unclaimed",
+            "not-needed-review-cloud",
         ),
         _r(_E.BLOCK, _K.COMPLETION, "blocked-from-in-progress"),
     ),
