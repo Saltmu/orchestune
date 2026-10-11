@@ -656,12 +656,14 @@ def _persist_launching_phase(
     config: DispatcherConfig,
     now: float | None = None,
     open_prs: Sequence[PrRecord] | None = None,
+    task_forced_serial: bool = False,
 ) -> LaunchResult | None:
     """#964: provider呼出直前にlaunch_phase="launching"を永続化する。
 
     #1280: 同じ保存でIssue本文の回復counter（recompute_count/forced_serial）も
     予約へ引き継ぐ。counterはproviderの前にだけ読み、取得・保存のどちらが
-    失敗してもproviderを呼ばず起動を保留する。
+    失敗してもproviderを呼ばず起動を保留する。claimは`status:*`ラベルを剥がす
+    ため、claim前のtask snapshotのforce-serialは`task_forced_serial`で渡す。
     """
     active_entry = run_state.active_worktrees.get(str(issue_number))
     if active_entry is None:
@@ -681,7 +683,10 @@ def _persist_launching_phase(
         return replace(held, error_message=reason)
     run_state.active_worktrees[key] = with_launch_phase(
         with_launch(
-            active_entry, launch_with_recovery_counters(active_entry.launch, issue)
+            active_entry,
+            launch_with_recovery_counters(
+                active_entry.launch, issue, task_forced_serial=task_forced_serial
+            ),
         ),
         "launching",
     )
@@ -701,6 +706,15 @@ def _persist_launching_phase(
             file=sys.stderr,
         )
         return replace(held, error_message=f"failed to persist launching phase: {exc}")
+
+
+def _with_claim_identity(launch: LaunchResult, outcome: ClaimOutcome) -> LaunchResult:
+    launch.base_ref = outcome.base_ref
+    launch.claim_id = outcome.claim_id
+    launch.reservation_kind = (
+        outcome.reservation_kind.value if outcome.reservation_kind else None
+    )
+    return launch
 
 
 def _try_planned_launch(
@@ -731,7 +745,13 @@ def _try_planned_launch(
     assert outcome.branch is not None
 
     hold = _persist_launching_phase(
-        task.issue_number, outcome, run_state, config, now=now, open_prs=open_prs
+        task.issue_number,
+        outcome,
+        run_state,
+        config,
+        now=now,
+        open_prs=open_prs,
+        task_forced_serial=StatusLabel.FORCE_SERIAL in task.status_labels,
     )
     if hold is not None:
         return hold
@@ -752,12 +772,7 @@ def _try_planned_launch(
         )
         return None
 
-    launch.base_ref = outcome.base_ref
-    launch.claim_id = outcome.claim_id
-    launch.reservation_kind = (
-        outcome.reservation_kind.value if outcome.reservation_kind else None
-    )
-    return launch
+    return _with_claim_identity(launch, outcome)
 
 
 def _record_failed_launch_phase(

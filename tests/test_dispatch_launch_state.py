@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -326,7 +326,26 @@ def _reservation(count: int = 0, serial: bool = False):
     )
 
 
-def _drive_launch(tmp_path, issue, *, reservation=None, forge_error=None):
+def _claim_stripping_status_labels(forge, outcome):
+    """Like `claim.service._apply_status_label`: every old status label goes."""
+
+    def claim(*_args):
+        issue = forge.issues.get(ISSUE)
+        if issue is not None:
+            kept = tuple(
+                label for label in issue.labels if not label.startswith("status:")
+            )
+            forge.issues[ISSUE] = replace(
+                issue, labels=(*kept, StatusLabel.IN_PROGRESS)
+            )
+        return outcome
+
+    return claim
+
+
+def _drive_launch(
+    tmp_path, issue, *, reservation=None, forge_error=None, task_labels=None
+):
     """The normal launch entry: claim, persist the launching phase, provider."""
     forge = FakeForge()
     if issue is not None:
@@ -341,7 +360,7 @@ def _drive_launch(tmp_path, issue, *, reservation=None, forge_error=None):
     run_state = RunState(
         active_worktrees={str(ISSUE): reservation or _reservation()},
     )
-    task = make_test_task(ISSUE, status_labels=(StatusLabel.QUEUED,))
+    task = make_test_task(ISSUE, status_labels=task_labels or (StatusLabel.QUEUED,))
     plan = TaskLaunchPlan(task, BRANCH, "main", "main")
     outcome = ClaimOutcome(
         success=True,
@@ -357,7 +376,7 @@ def _drive_launch(tmp_path, issue, *, reservation=None, forge_error=None):
             cast(Any, object()),
             config,
             run_state,
-            lambda *_: outcome,
+            _claim_stripping_status_labels(forge, outcome),
             now=NOW,
         )
     return result, provider, run_state, config, plan, task
@@ -384,7 +403,9 @@ def test_normal_launch_keeps_the_issue_body_counters(
     tmp_path, body, labels, expected
 ) -> None:
     issue = _issue(*body, *labels)
-    result, provider, run_state, config, plan, task = _drive_launch(tmp_path, issue)
+    result, provider, run_state, config, plan, task = _drive_launch(
+        tmp_path, issue, task_labels=(StatusLabel.QUEUED, *labels)
+    )
 
     assert provider.calls == 1
     saved = load_run_state(config.run_state_path).active_worktrees[str(ISSUE)]
@@ -435,3 +456,21 @@ def test_the_provider_is_not_called_when_the_counters_cannot_be_saved(
     entry = run_state.active_worktrees[str(ISSUE)]
     assert (entry.launch.recompute_count, entry.launch.forced_serial) == (0, False)
     assert entry.launch.launch_phase is None
+
+
+def test_the_pre_claim_force_serial_snapshot_survives_the_claim_label_strip(
+    tmp_path,
+) -> None:
+    """The claim removes `status:force-serial`; the task snapshot read before it
+    still marks an escalated task whose body has no forced_serial yet."""
+    issue = _issue(1, False, FORCE_SERIAL)
+    result, _, run_state, config, plan, task = _drive_launch(
+        tmp_path,
+        issue,
+        task_labels=(StatusLabel.QUEUED, FORCE_SERIAL),
+    )
+
+    saved = load_run_state(config.run_state_path).active_worktrees[str(ISSUE)]
+    assert (saved.launch.recompute_count, saved.launch.forced_serial) == (1, True)
+    active = _relaunched(result, run_state, config, plan, task)
+    assert (active.launch.recompute_count, active.launch.forced_serial) == (1, True)
