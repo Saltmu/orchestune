@@ -21,6 +21,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P2-RECOVERY-STABLE` | 2 | unverified | - | - |
 | `P2-LIVE-VERIFICATION` | 2 | verified | `event-only` | - |
 | `P2-CONVERGENCE-UPPER-BOUND` | 2 | unverified | - | - |
+| `P3A-NOT-NEEDED-LEDGER-LOSS-GUARD` | 3a | verified | `pending-publication-suppressed`, `pending-reader-disabled` | — |
 | `P3A-ROUTE-COVERAGE` | 3a | verified | `unrouted-source`, `unexecuted-route-condition` | - |
 | `P3A-DYNAMIC-CONFORMANCE` | 3a | verified | `misrouted-event`, `wrong-model-target` | - |
 | `P3A-LAUNCH-IDENTITY-CONFORMANCE` | 3a | verified | `active-fact-guard-bypass` | #1286 |
@@ -60,6 +61,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P2-RECOVERY-STABLE` | その後2cycleはラベル・計画・履歴・Intent集合が不変 | P2-RECOVERY-ONE-CYCLE のあと | 2・3回目のcycle | 変化なし |
 | `P2-LIVE-VERIFICATION` | 適用済みの修復は実ラベルで裏付けられる | ForgeがcommandをAPIで受理した | repair result の status | 実際の primary status が target のときだけ APPLIED |
 | `P2-CONVERGENCE-UPPER-BOUND` | 上限 k=3 cycle 以内に収束する | P2-RECOVERY-ONE-CYCLE と同じ | k回目のcycle | k=3 |
+| `P3A-NOT-NEEDED-LEDGER-LOSS-GUARD` | 台帳消失後も remote pending がレビュー必須の依存を保留 | 新規・補填済み世代、全 reader 更新、観測ラベル | 公開・空台帳の依存判定・世代付き解除 | pending 中は未完了。pass とローカル免除は完了 |
 | `P3A-ROUTE-COVERAGE` | 全ての本番ソースに経路があり、全ての経路条件がケースで実行される | 本番ソースの構文上の呼び出し走査 → CALL_SITES の数と集合 → EVENT_BY_SOURCE の経路と実行ケース | 呼び出し元登録簿と経路表 | 網羅されている |
 | `P3A-DYNAMIC-CONFORMANCE` | 本番ドライバーが Event モデルの予測したラベルと状態に到達する | 実行されるケース表。静的網羅は別契約 | 各ステップ（labels・result・completion・execution・retries・counts） | apply_event と一致 |
 | `P3A-LAUNCH-IDENTITY-CONFORMANCE` | `CycleContext.record_launch` と Event モデルが起動 identity の結果・状態を一致させ、全source/conditionの保護範囲を記録する | 独立した期待値ケース表と全 `EVENT_BY_SOURCE` 条件の保護表 | RecordStatus/reason、effective labels、execution_active、fact、拒否時の不変性 | 同一active factはNOOP、active競合はCONFLICT、確認済みinactive後は再起動を許可 |
@@ -112,6 +114,7 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 
 | 誤動作 | テスト内での入れ方 | 違反すべき契約 | 検出するシナリオ |
 |---|---|---|---|
+| `pending-publication-suppressed` / `pending-reader-disabled` | pending publication suppressed / reader ignores pending | `P3A-NOT-NEEDED-LEDGER-LOSS-GUARD` | empty-ledger integration with completion override |
 | `remove-missing` | `plan_transition` が最初の除去を落とす | `P1-SUCCESS-TARGET-ONLY` | アダプターのシナリオ |
 | `remove-before-add` | アダプターが add より先に remove する | `P1-LIFECYCLE-NONEMPTY` | 操作ごとの観測器（最終ラベルは正しい） |
 | `retry-noop` | 対象ラベルが既にあると除去を飛ばす | `P1-RETRY-CONVERGES` | `add-response-lost` の位置 |

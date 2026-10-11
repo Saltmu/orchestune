@@ -104,12 +104,16 @@ class CycleContext(_CycleState):
     # ---- action API ---------------------------------------------------------
 
     def is_completion_blocked(self, issue_number: int) -> bool:
+        observed = self._labels(issue_number)
         if self.config is None:
             return dependency_completion_blocked(
-                self._completion_reservation_state, issue_number
+                self._completion_reservation_state, issue_number, observed
             )
         return dependency_completion_blocked_fresh(
-            self._completion_reservation_state, issue_number, self.config.run_state_path
+            self._completion_reservation_state,
+            issue_number,
+            self.config.run_state_path,
+            observed,
         )
 
     def is_effectively_done(self, issue_number: int) -> bool:

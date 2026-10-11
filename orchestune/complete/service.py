@@ -33,6 +33,7 @@ from orchestune.complete.journal import (
     reserve_completion_locked,
 )
 from orchestune.complete.not_needed_policy import not_needed_policies
+from orchestune.complete.not_needed_review_guard import review_requirement
 from orchestune.complete.policy import evaluate_publication_policy
 from orchestune.complete.policy_actions import escalate_token_limit_locked
 from orchestune.complete.posting import (
@@ -247,6 +248,8 @@ def _new_record(
         "not-needed": StatusLabel.NOT_NEEDED,
     }[request.result]
     policies = _downstream_policies(request, active, repository, completion_id, policy)
+    if request.result == "not-needed":
+        outcome = replace(outcome, not_needed_review=review_requirement(policies))
     return CompletionJournalRecord(
         repository,
         request.issue_number,

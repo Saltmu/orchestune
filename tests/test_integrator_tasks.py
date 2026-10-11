@@ -120,6 +120,23 @@ def test_load_integration_tasks_classifies_dependency_states():
     assert "candidate" not in states.not_integrated
 
 
+def test_pending_done_subject_is_not_an_integration_candidate():
+    from dataclasses import replace
+
+    from orchestune.integrator.tasks import load_integration_tasks
+
+    pending = replace(
+        _done_issue(11, "pending", parent={"number": PARENT}),
+        labels=("status:done", "not-needed-review:pending"),
+    )
+    dependent = _labeled_issue(12, "dependent", "status:done", depends_on=("pending",))
+    forge = _forge_listing({("status:done", "all"): [pending, dependent]})
+    candidates, unparsable, states = load_integration_tasks(PARENT, forge=forge)
+    assert [task.subtask_id for task in candidates] == ["dependent"]
+    assert not unparsable
+    assert states.not_integrated["pending"] == "not-needed-review:pending"
+
+
 def test_sorts_done_tasks_using_injected_fake_forge():
     done_issue = _done_issue(1, "task-1")
     fake_forge = MagicMock()

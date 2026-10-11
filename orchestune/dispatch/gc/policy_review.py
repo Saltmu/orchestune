@@ -6,6 +6,11 @@ from dataclasses import asdict
 from typing import Any
 
 from orchestune.complete.contracts import DownstreamPolicyRecord
+from orchestune.complete.not_needed_review_guard import (
+    confirm_review_generation,
+    ensure_review_pending,
+    release_review_pending,
+)
 from orchestune.dispatch.gc.policy_effects import (
     reconcile_close,
     reconcile_comment,
@@ -36,6 +41,9 @@ def reconcile_review(
     operation = meta["operation_id"]
     if meta.get("review_rejected") or meta.get("review_timed_out"):
         return False
+    # Backfill old pending journal generations before any review side effects.
+    confirm_review_generation(forge, issue, policy)
+    ensure_review_pending(forge, issue)
     verdict = (
         review_verdict(forge, issue, operation)
         if meta.get("launch_state") in {"launching", "launched"}
@@ -49,6 +57,7 @@ def reconcile_review(
             "独立レビューでも対応不要と確認されたためクローズします。",
         )
         reconcile_close(forge, issue)
+        release_review_pending(forge, issue, policy, verdict="passed")
         meta["verdict"] = verdict
         return True
     if verdict == "failed":
@@ -57,6 +66,7 @@ def reconcile_review(
         )
         meta["verdict"] = verdict
         # A rejected completion must never satisfy the dependency gate.
+        release_review_pending(forge, issue, policy, verdict="failed")
         save({"review_rejected": True})
         return False
     if meta.get("launch_state") == "launched":
@@ -157,4 +167,5 @@ def _check_timeout(
             if meta.get("launch_state") == "launching"
             else "対応不要の独立レビューがタイムアウトしました。人間による確認が必要です。",
         )
+        release_review_pending(forge, issue, policy, verdict="timeout")
         save({"review_timed_out": True})

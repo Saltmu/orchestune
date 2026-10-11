@@ -148,9 +148,9 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 すべてのForgeラベル変更、完了確定、GC回収、retry予約、エスカレーションはEventとして抽象化され、
 呼び出し箇所（`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / ラベル不変の完了確定経路 / ラベル不変の予算経路）と対応付けられます。
 `COMPLETION`は`orchestune complete`の完了ラベル調停で、primaryラベル・遷移先・`status:force-serial`以外の`status:*`（補助・未知のラベル）を保持していれば変更前に拒否します。
-`COMPLETION_REVIEW`は、本番が`not-needed-review`ポリシーを作る`orchestune complete --result not-needed`（cloud実行＝`external_id`あり、またはworktreeなし）の完了ラベル調停です。`COMPLETION`と同じ遷移（`status:not-needed`）ですが、適用後は`TaskModel.review_pending`が真になり、レビューがpassするまで`completion_done`は偽です（依存側は保留される）。ローカル実行（`external_id`なし）のnot-neededは従来どおり`COMPLETION`で、直ちに完了です。`review_pending`はラベルからは判別できません（本番もラベルではなく台帳で判定します）。
+`COMPLETION_REVIEW`は、本番が`not-needed-review`ポリシーを作る`orchestune complete --result not-needed`（cloud実行＝`external_id`あり、またはworktreeなし）の完了ラベル調停です。`COMPLETION`と同じ遷移（`status:not-needed`）ですが、適用後は`TaskModel.review_pending`が真になり、レビューがpassするまで`completion_done`は偽です（依存側は保留される）。ローカル実行（`external_id`なし）のnot-neededは従来どおり`COMPLETION`で、直ちに完了です。`not-needed-review:pending` は独立レビューの永続保留を示す補助ラベルです。公開前に追加・確認し、本番は台帳の保留と OR で依存を止めます。closed・done・完了 override でも迂回できません。
 `AWAIT_REVIEW`はクラウド実行のnot-needed判定を独立検証レビューへ回す経路で、実行は終えますが、レビューの判定までは完了として扱いません。
-`REVIEW_PASSED`は独立レビューの通過で、Issueをクローズし`not-needed-review`ポリシーをappliedにします（ラベルは変えません）。この時点で初めて依存側から完了として扱われます。
+`REVIEW_PASSED`は独立レビューの通過で、Issueをクローズし`not-needed-review`ポリシーをappliedにします（現行世代の pass と close を確認してから pending 補助ラベルを除去します）。この時点で初めて依存側から完了として扱われます。
 
 ### Event対応表
 
@@ -231,13 +231,19 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `COMPLETE_WITHOUT_LABEL` / `CYCLE`・`PRIOR_MERGE` | 変えない | 待ち中は両値を新たに確定しない。レビューのpass以外では待ちを解かない |
 | `NOT_NEEDED` / `REPLAN`・`PLAIN`・`COMPLETION`、`RELEASE_HOLD` | 変えない | 変えない（replanはレビューの台帳ポリシーを解かない） |
 | `restart(ledger_loss=False)` | 保持する | 保持 |
-| `restart(ledger_loss=True)` | 偽にする | 残るラベルと永続した完了証拠から再計算する |
+| `restart(ledger_loss=True)` | ローカル review_pending は偽にする。永続 pending ラベルは保持 | pending がある間は未完了。ラベルのない旧保留は消失 |
 
 待ちの間も`status:not-needed`は終端として扱い、`LAUNCH`は`terminal-state`で拒否されます。
 
-### 台帳消失時の未保護経路（#1278）
+### 台帳消失時の永続保留と復旧（#1299）
 
-`run_state.json`を失うと完了記録（`not-needed-review`ポリシー）ごとレビューの保留が消え、`dependency_completion_blocked`は偽になります。`status:not-needed`ラベルが残っていれば、レビューを経ずに依存側が進みます（モデルも完了として扱い、本番より強い保護を主張しません）。レビュー却下後のqueued、タイムアウト後のblocked-human-reviewでは、ガードだけが外れても未完了のままです。この保護が必要かどうかは別Issue候補です。
+`run_state.json` の消失後も `not-needed-review:pending` が残る新規完了・補填済み世代は依存を進めません。純粋な state-only のガードには GitHub 情報がないため、観測ラベルを渡す統合境界で保証します。ラベル取得失敗は fresh repair を保留します。pass 後とローカル免除は完了、fail 後の queued と timeout 後の blocked-human-review は未完了です。移行前に区別を残さず台帳を失った旧履歴は自動判別できず、棚卸しが必要です。
+
+移行は pending ラベル定義と全 reader（Dispatcher・fresh repair・Integrator）を先に更新し、既存の未 applied review journal を GC で補填・確認してから依存処理を再開し、新規 writer を有効化します。旧 reader との混在運用は保証対象外です。旧 Outcome 本文は変更しません。
+
+新規 not-needed Outcome の `not_needed_review` は schema_version=1、requirement=`required` と世代付き operation_id、または `exempt-local` と null を予約時に固定します。旧フィールド省略は不明であり免除ではありません。台帳全体・所有権・レビュー起動を自動復元しません。バックアップがあれば同じ世代の台帳で GC を再開します。なければ独立レビューの既存結果または人間の明示判断で、現行 Outcome と operation ID を全ページ確認し、pass は close、fail は queued、結果不明は blocked-human-review（fail・結果不明では not-needed 除去を確認）へ移してから保留を解除します。ラベル削除や close だけでの復旧は禁止です。
+
+モデルの `EventInput.review_release=True` は、現行世代を確認して保留を解除した review の fail/timeout だけを表します。通常の escalation・旧 coordinator のラベル変更はこの証拠を持たず、永続 pending を保持します。
 
 ## 予算付きループの終端性（#1266）
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orchestune.labels import NOT_NEEDED_REVIEW_PENDING
 from orchestune.ledger.run_state import load_run_state_readonly
 
 _IDENTITY = (
@@ -110,7 +111,11 @@ def completion_mutation_blocked_fresh(
         return True
 
 
-def dependency_completion_blocked(state: Any, issue_number: int) -> bool:
+def dependency_completion_blocked(
+    state: Any, issue_number: int, observed_labels: tuple[str, ...] = ()
+) -> bool:
+    if NOT_NEEDED_REVIEW_PENDING in observed_labels:
+        return True
     if completion_mutation_blocked(state, issue_number):
         return True
     try:
@@ -162,13 +167,16 @@ def completion_subject_mutation_blocked(
 
 
 def dependency_completion_blocked_fresh(
-    state: Any, issue_number: int, state_path: Path | str
+    state: Any,
+    issue_number: int,
+    state_path: Path | str,
+    observed_labels: tuple[str, ...] = (),
 ) -> bool:
-    if dependency_completion_blocked(state, issue_number):
+    if dependency_completion_blocked(state, issue_number, observed_labels):
         return True
     try:
         return dependency_completion_blocked(
-            load_run_state_readonly(state_path), issue_number
+            load_run_state_readonly(state_path), issue_number, observed_labels
         )
     except (OSError, ValueError, TypeError):
         return True

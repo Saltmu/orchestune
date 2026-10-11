@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import time
 from contextlib import nullcontext
@@ -45,6 +44,7 @@ from orchestune.ledger.run_state import (
     TaskReclaimRecord,
     load_run_state_readonly,
 )
+from orchestune.not_needed_review_contract import review_operation_id
 from orchestune.targets.cloud_routine import (
     ROUTINE_ID_ENV_VAR,
     ROUTINE_TOKEN_ENV_VAR,
@@ -124,7 +124,7 @@ def _prepare(
     if policy.status == "applied" or "operation_id" in policy.metadata:
         return record
     metadata: dict[str, Any] = {
-        "operation_id": hashlib.sha256(policy.policy_key.encode()).hexdigest(),
+        "operation_id": review_operation_id(policy.policy_key),
         "reserved_at": now,
     }
     if kind == "review-timeout":

@@ -125,7 +125,12 @@ def load_integration_tasks(
         for issue in _unique_issues(all_issues)
     ]
     order = _topological_order(tasks, threshold, ignore_patterns)
-    sorted_done, unparsable = _order_done_tasks(done_issues, issue_to_subtask_id, order)
+    candidates = [
+        issue
+        for issue in done_issues
+        if "not-needed-review:pending" not in issue.labels
+    ]
+    sorted_done, unparsable = _order_done_tasks(candidates, issue_to_subtask_id, order)
     states = _dependency_integration_states(all_issues, issue_to_subtask_id)
     return sorted_done, unparsable, states
 
@@ -143,6 +148,9 @@ def _dependency_integration_states(
             continue
 
         labels = set(issue.labels)
+        if "not-needed-review:pending" in labels:
+            not_integrated[subtask_id] = "not-needed-review:pending"
+            continue
         if StatusLabel.NOT_NEEDED in labels or (
             StatusLabel.DONE in labels
             and (issue.state == "CLOSED" or "integration:included" in labels)

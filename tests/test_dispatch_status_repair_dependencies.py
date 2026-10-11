@@ -194,7 +194,7 @@ def test_live_lifecycle_truth_table(in_memory_forge):
         assert dependencies_completed(result.assessment) is expected
 
 
-def test_confirmed_completion_overrides_live_labels_without_query(in_memory_forge):
+def test_confirmed_completion_still_checks_live_labels(in_memory_forge):
     stale = make_task(1, subtask_id="subject")
     dependency = make_task(2, subtask_id="dep")
     in_memory_forge.seed_issue(
@@ -220,7 +220,39 @@ def test_confirmed_completion_overrides_live_labels_without_query(in_memory_forg
 
     assert result is not None
     assert result.assessment.resolved[0].state is DependencyState.COMPLETED
-    get_labels.assert_not_called()
+    get_labels.assert_called_once_with(2)
+
+
+def test_late_remote_pending_blocks_confirmed_snapshot(in_memory_forge):
+    stale = make_task(1, subtask_id="subject")
+    dependency = make_task(2, subtask_id="dep", status_labels=(StatusLabel.DONE,))
+    in_memory_forge.seed_issue(
+        make_issue(
+            1, subtask_id="subject", depends_on=("dep",), labels=(StatusLabel.BLOCKED,)
+        )
+    )
+    in_memory_forge.seed_issue(
+        make_issue(2, labels=(StatusLabel.DONE, "not-needed-review:pending"))
+    )
+    result = _evaluate(stale, {1: stale, 2: dependency}, in_memory_forge, confirmed={2})
+    assert result.assessment.resolved[0].state is DependencyState.WAITING
+
+
+def test_confirmed_dependency_label_failure_is_not_absence(in_memory_forge):
+    stale = make_task(1, subtask_id="subject")
+    dependency = make_task(2, subtask_id="dep")
+    in_memory_forge.seed_issue(
+        make_issue(
+            1, subtask_id="subject", depends_on=("dep",), labels=(StatusLabel.BLOCKED,)
+        )
+    )
+    with (
+        patch.object(
+            in_memory_forge, "get_issue_labels", side_effect=OSError("unavailable")
+        ),
+        pytest.raises(OSError),
+    ):
+        _evaluate(stale, {1: stale, 2: dependency}, in_memory_forge, confirmed={2})
 
 
 def test_forge_label_error_is_not_converted_to_unresolved(in_memory_forge):

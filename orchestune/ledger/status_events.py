@@ -200,8 +200,7 @@ class TaskModel:
     pending_operation: PendingOperation | None = None
     confirmed_operations: frozenset[str] = frozenset()
     ledger_epoch: int = 0
-    #: `status:not-needed`が独立レビューの判定待ちであること。本番は台帳の
-    #: `not-needed-review`ポリシーで判定しており、ラベルからは判別できない。
+    #: 独立レビューのローカル保留。永続 pending 補助ラベルも完了を保留する。
     review_pending: bool = False
 
     @classmethod
@@ -210,7 +209,7 @@ class TaskModel:
         auxiliary = frozenset(
             label
             for label in labels
-            if label == BASE_BRANCH_RED_LABEL
+            if label in (BASE_BRANCH_RED_LABEL, "not-needed-review:pending")
             or LABEL_ROLES.get(label) is LabelRole.AUXILIARY  # type: ignore[call-overload]
             or (label.startswith(_STATUS_PREFIX) and label not in LABEL_ROLES)
         )
@@ -231,8 +230,10 @@ class TaskModel:
         独立レビューの判定待ち（`review_pending`）の間は、FINALラベルがあっても完了
         ではない（本番は依存側を保留する）。
         """
-        return not self.review_pending and (
-            self.completion_confirmed or bool(self.lifecycle & _FINAL)
+        return (
+            not self.review_pending
+            and "not-needed-review:pending" not in self.auxiliary
+            and (self.completion_confirmed or bool(self.lifecycle & _FINAL))
         )
 
 
@@ -251,6 +252,9 @@ class EventInput:
     operation: str | None = None
     now: float = 0.0
     stop_after: Stage | None = None
+    # True only for a generation-confirmed review withdrawal, not a generic
+    # escalation or the legacy review coordinator's label reconciliation.
+    review_release: bool = False
 
 
 @dataclass(frozen=True)
@@ -821,10 +825,15 @@ def _with_completion_evidence(state: TaskModel, event: EventInput) -> TaskModel:
         return replace(
             state,
             review_pending=True,
+            auxiliary=state.auxiliary | {"not-needed-review:pending"},
             completion_confirmed=False,
             persistent_completion=False,
         )
     waiting = state.review_pending
+    if event.review_release or event.kind is Kind.REVIEW_PASSED:
+        state = replace(
+            state, auxiliary=state.auxiliary - {"not-needed-review:pending"}
+        )
     if event.event in _COMPLETION_WITHDRAWALS or (
         effect is PendingEffect.WITHDRAW and waiting
     ):
@@ -867,8 +876,7 @@ def restart(state: TaskModel, *, ledger_loss: bool) -> TaskModel:
     )
     if not ledger_loss:
         return restarted
-    # 台帳の消失はレビューの保留（`not-needed-review`ポリシー）も失う。完了は残る
-    # ラベルと永続した完了証拠から決まる（未保護経路。docs/*/status-labels.md）。
+    # ローカル保留は消えるが、新規完了の永続補助ラベルは保持する。
     return replace(
         restarted,
         review_pending=False,

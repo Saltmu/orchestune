@@ -157,7 +157,9 @@ def test_cli_resumes_after_label_or_posting_evidence_save_failure(
     monkeypatch.setattr(journal, "save_run_state", save)
     forge.inject = (
         lambda op, after: (_ for _ in ()).throw(OSError("offline"))
-        if op == boundary and not after
+        if op == boundary
+        and not after
+        and (boundary != "add" or "not-needed-review:pending" in forge.labels)
         else None
     )
     assert cli.main(["--issue", "1111", "--result", "not-needed"]) != 0
@@ -186,4 +188,8 @@ def test_cli_resumes_after_label_or_posting_evidence_save_failure(
         == 0
     )
     assert len(forge.comments) == 1 and forge.comments[0]["body"] == fixed_body
-    assert forge.labels == {"status:not-needed", "priority:high"}
+    assert forge.labels == {
+        "status:not-needed",
+        "priority:high",
+        "not-needed-review:pending",
+    }

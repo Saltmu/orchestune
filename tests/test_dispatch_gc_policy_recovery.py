@@ -53,7 +53,7 @@ def test_unknown_review_launch_escalates_once_after_timeout(
     config.not_needed_review_timeout_seconds = 10
     process_completion_policies(state, config, now=100)
     process_completion_policies(state, config, now=109)
-    assert labels == ["status:not-needed"]
+    assert labels == ["status:not-needed", "not-needed-review:pending"]
     real_save = policies.save_run_state
 
     if effect == "label":

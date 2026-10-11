@@ -5,6 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 
 STATUS_LABEL_PREFIX = "status:"
+NOT_NEEDED_REVIEW_PENDING = "not-needed-review:pending"
 
 
 class StatusLabel(StrEnum):

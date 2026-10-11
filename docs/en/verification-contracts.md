@@ -21,6 +21,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P2-RECOVERY-STABLE` | 2 | unverified | - | - |
 | `P2-LIVE-VERIFICATION` | 2 | verified | `event-only` | - |
 | `P2-CONVERGENCE-UPPER-BOUND` | 2 | unverified | - | - |
+| `P3A-NOT-NEEDED-LEDGER-LOSS-GUARD` | 3a | verified | `pending-publication-suppressed`, `pending-reader-disabled` | — |
 | `P3A-ROUTE-COVERAGE` | 3a | verified | `unrouted-source`, `unexecuted-route-condition` | - |
 | `P3A-DYNAMIC-CONFORMANCE` | 3a | verified | `misrouted-event`, `wrong-model-target` | - |
 | `P3A-LAUNCH-IDENTITY-CONFORMANCE` | 3a | verified | `active-fact-guard-bypass` | #1286 |
@@ -60,6 +61,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P2-RECOVERY-STABLE` | two further cycles keep labels, plans, history and the Intent set | after P2-RECOVERY-ONE-CYCLE | cycles 2 and 3 | no change |
 | `P2-LIVE-VERIFICATION` | an applied repair is backed by the live labels | the Forge accepted the command | repair result status | APPLIED only when the live primary status is the target |
 | `P2-CONVERGENCE-UPPER-BOUND` | convergence within the upper bound k=3 | as P2-RECOVERY-ONE-CYCLE | cycle k | k=3 |
+| `P3A-NOT-NEEDED-LEDGER-LOSS-GUARD` | remote pending preserves required review holds across ledger loss | new/backfilled generations, all readers updated, observed labels | publication, empty-ledger dependency readers, generation-specific release | incomplete while pending; passed/local-exempt completions remain complete |
 | `P3A-ROUTE-COVERAGE` | every production source has its routes and every route condition is executed | syntax scan of production call sites -> CALL_SITES counts and set -> EVENT_BY_SOURCE routes and executed cases | call site registry and route table | complete |
 | `P3A-DYNAMIC-CONFORMANCE` | the production driver reaches the labels and state the Event model predicts | executed case table; static coverage is a separate contract | each step: labels, result, completion, execution, retries, counts | equal to apply_event |
 | `P3A-LAUNCH-IDENTITY-CONFORMANCE` | `CycleContext.record_launch` and the Event model agree on launch identity outcomes, and every source/condition protection scope is recorded | independent expected cases and a protection row for each `EVENT_BY_SOURCE` condition | RecordStatus/reason, effective labels, execution activity, fact, and no mutation on rejection | same active fact is NOOP, conflicting active fact is CONFLICT, confirmed inactive fact can launch again |
@@ -112,6 +114,7 @@ The Issue's reading was that a one-cycle promotion delay on a path whose evidenc
 
 | Fault | Injected in the test by | Violates | Detected by |
 |---|---|---|---|
+| `pending-publication-suppressed` / `pending-reader-disabled` | pending publication suppressed / reader ignores pending | `P3A-NOT-NEEDED-LEDGER-LOSS-GUARD` | empty-ledger integration with completion override |
 | `remove-missing` | `plan_transition` drops the first removal | `P1-SUCCESS-TARGET-ONLY` | adapter scenario |
 | `remove-before-add` | the adapter removes before it adds | `P1-LIFECYCLE-NONEMPTY` | per-operation observer (the final labels are correct) |
 | `retry-noop` | the adapter skips the removals when the target is already present | `P1-RETRY-CONVERGES` | `add-response-lost` position |

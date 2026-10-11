@@ -287,6 +287,7 @@ class TestRequiredLabels:
         "risk:flagged",
         "progress:partial",
         "not-needed-review:passed",
+        "not-needed-review:pending",
         "not-needed-review:failed",
         "integration:included",
         "integration:finalization-blocked",

@@ -358,3 +358,5 @@ orchestune doctor --execution-mode local
 直接dispatch入口として検出するのは、`orchestune dispatch`、`orchestune-dispatch`、`python -m orchestune.dispatch.dispatcher` です（`--no-apply` の入口は制御実行者に数えません）。コマンド名の変数展開、分割できない行、`uses:` のactionやreusable workflowの内部、呼び出し先のscriptは検出できないため、`not_checked` になります。その場合は実行入口と後処理までの保護区間を手動で確認してください。
 
 なお、本リポジトリ自身は現時点でOrchestuneのdispatchをGitHub Actionsのスケジュール実行では回しておらず（Cloud RoutineまたはローカルCLIへのディスパッチが前提）、上記は導入先リポジトリ向けの設定です。本リポジトリで実際にcron定期実行を有効化する際は、上記のconcurrency設定を含むworkflowファイルを別途`.github/workflows/`へ追加してください。
+
+not-needed の新規完了・旧 journal から補填した世代は `not-needed-review:pending` と固定 Outcome により台帳消失後も依存を保留します。所有権復元やレビュー再起動は行いません。移行前に区別を残さず台帳を失った旧履歴は棚卸しが必要です。[移行・復旧手順](status-labels.md)を参照してください。

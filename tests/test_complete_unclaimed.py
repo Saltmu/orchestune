@@ -32,7 +32,11 @@ def test_unclaimed_publication_has_independent_reservation_and_pending_review(
     state = load_run_state_readonly(request.state_path)
     assert not state.active_worktrees
     assert state.completion_reservations and state.completion_replay_receipts
-    assert forge.labels == {"status:not-needed", "priority:high"}
+    assert forge.labels == {
+        "status:not-needed",
+        "priority:high",
+        "not-needed-review:pending",
+    }
     record = next(iter(state.completion_journal.values()))
     assert record["outcome_payload"]["body"] == forge.comments[0]["body"]
     assert record["generation_id"].startswith("unclaimed-")
@@ -101,7 +105,11 @@ def test_remote_failure_windows_recover_without_duplicate(unclaimed, operation, 
     )
     assert resumed.success, resumed.failure
     assert len(forge.comments) == 1
-    assert forge.labels == {"status:not-needed", "priority:high"}
+    assert forge.labels == {
+        "status:not-needed",
+        "priority:high",
+        "not-needed-review:pending",
+    }
 
 
 def test_explicit_receipt_is_readonly_without_owner_or_forge(unclaimed):

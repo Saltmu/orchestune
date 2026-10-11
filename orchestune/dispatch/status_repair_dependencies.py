@@ -19,7 +19,7 @@ from orchestune.dependencies.resolution import (
 )
 from orchestune.forge import IssueForge
 from orchestune.issue_parsing import parse_task_from_issue
-from orchestune.labels import StatusLabel
+from orchestune.labels import NOT_NEEDED_REVIEW_PENDING, StatusLabel
 from orchestune.models import Task
 
 _TERMINAL_LIFECYCLES = (TaskLifecycle.DONE, TaskLifecycle.NOT_NEEDED)
@@ -89,6 +89,8 @@ def task_lifecycle(
     status_labels: tuple[str, ...], *, completed: bool = False
 ) -> TaskLifecycle:
     """Resolve lifecycle with an explicit confirmed-completion override."""
+    if NOT_NEEDED_REVIEW_PENDING in status_labels:
+        return TaskLifecycle.OPEN
     if completed:
         return TaskLifecycle.DONE
     if StatusLabel.DONE in status_labels and StatusLabel.QUEUED in status_labels:
@@ -116,6 +118,8 @@ class _FreshDependencyStateView:
     labels_by_issue: Mapping[int, tuple[str, ...]]
 
     def is_effectively_done(self, issue_number: int) -> bool:
+        if NOT_NEEDED_REVIEW_PENDING in self.labels_by_issue.get(issue_number, ()):
+            return False
         blocked = getattr(self.completion_evidence, "is_completion_blocked", None)
         if callable(blocked) and blocked(issue_number):
             return False
@@ -152,7 +156,6 @@ def evaluate_fresh_dependencies(
     labels_by_issue = {
         issue_number: tuple(forge.get_issue_labels(issue_number))
         for issue_number in dependencies.resolved
-        if not completion_evidence.is_completion_confirmed(issue_number)
     }
     assessment = assess_dependencies(
         dependencies,
