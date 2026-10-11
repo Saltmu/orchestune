@@ -970,16 +970,28 @@ def test_control_recompute_ledger_premise_removal_is_detected(monkeypatch):
 
 
 def test_recompute_ledger_premise_does_not_excuse_a_target_without_the_label():
-    """The premise is scoped to blocked-recompute T (status repair has no such hold)."""
-    topology = LivenessTopology((11,), ("dep-a",), {}, (11,))
+    """The premise is scoped to blocked-recompute T (status repair has no such hold).
+
+    Same series as the recompute scenario, but T has no recompute label: the
+    entry of 13 stays in the ledger at the promotion point, the preview still
+    shows T and the cycle counts toward the fair streak.
+    """
+    topology = LivenessTopology(
+        (11, 12, 13), ("dep-a", "dep-b", "dep-c"), {}, (11, 12, 13)
+    )
     machine = DependencyLivenessMachine()
     try:
         machine.start(topology=topology, recompute=False)
-        machine.world.complete(11, CompletionPath.RECORD_COMPLETION)
-        machine.world.cycle(apply=True)
-        machine.world.relabel(DEPENDENT, ("status:blocked",))
+        machine.world.complete(11, CompletionPath.LABEL)
+        machine.world.complete(12, CompletionPath.LABEL)
+        machine.world.complete(13, CompletionPath.RECORD_COMPLETION)
+        machine.fail_next(mode="before", op="remove")
         machine.cycle(apply=True, lag=False)
-        assert not recompute_ledger_hold(machine.world.observations[-1])
+        machine.cycle(apply=False, lag=False)
+        observation = machine.world.observations[-1]
+        assert observation.at_promotion.active_entries == {13}
+        assert not recompute_ledger_hold(observation)
+        assert observation.previewed
         assert machine.fair_streak >= LIVENESS_BOUND
     finally:
         machine.teardown()
