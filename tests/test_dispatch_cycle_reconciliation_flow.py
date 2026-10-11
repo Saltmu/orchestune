@@ -191,7 +191,7 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_remove_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:queued")
         assert [event.to_dict() for event in report.promotion_events] == [
-            {"issue_number": 2, "subtask_id": "task-b"}
+            {"issue_number": 2, "subtask_id": "task-b", "intent_id": ANY}
         ]
 
     def test_resolves_depends_on_from_blocked_by(self, tmp_path, fake_forge):
@@ -237,7 +237,7 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_remove_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:queued")
         assert [event.to_dict() for event in report.promotion_events] == [
-            {"issue_number": 2, "subtask_id": "task-b"}
+            {"issue_number": 2, "subtask_id": "task-b", "intent_id": ANY}
         ]
 
     def test_promotes_blocked_task_when_dependency_done_and_closed(
@@ -285,7 +285,7 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_remove_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:queued")
         assert [event.to_dict() for event in report.promotion_events] == [
-            {"issue_number": 2, "subtask_id": "task-b"}
+            {"issue_number": 2, "subtask_id": "task-b", "intent_id": ANY}
         ]
 
     def test_does_not_promote_when_dependency_unresolved(self, tmp_path, fake_forge):
@@ -399,7 +399,7 @@ class TestRunDispatchCycleBlockedPromotion:
 
         mock_remove_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:queued")
-        assert {"issue_number": 2, "subtask_id": "task-b"} in [
+        assert {"issue_number": 2, "subtask_id": "task-b", "intent_id": ANY} in [
             event.to_dict() for event in report.promotion_events
         ]
 
@@ -475,7 +475,7 @@ class TestRunDispatchCycleBlockedPromotion:
         # #859: その完了が同一サイクル内の依存判定へ届き、依存元が昇格する。
         mock_remove_label.assert_any_call(2, "status:blocked")
         mock_add_label.assert_any_call(2, "status:queued")
-        assert {"issue_number": 2, "subtask_id": "task-b"} in [
+        assert {"issue_number": 2, "subtask_id": "task-b", "intent_id": ANY} in [
             event.to_dict() for event in report.promotion_events
         ]
 
@@ -652,7 +652,7 @@ class TestRunDispatchCycleBlockedPromotion:
         assert labels[2] == ["status:queued"]
         assert labels[3] == ["status:queued"]
         assert [event.to_dict() for event in report.promotion_events] == [
-            {"issue_number": 2, "subtask_id": "task-b"}
+            {"issue_number": 2, "subtask_id": "task-b", "intent_id": ANY}
         ]
 
     def test_yaml_error_transitions_to_blocked(self, tmp_path, fake_forge):
@@ -839,7 +839,9 @@ class TestRunDispatchCycleBlockedPromotion:
 
         expected = [{"issue_number": 2, "subtask_id": "task-b"}]
         assert [e.to_dict() for e in released_preview.promotion_events] == expected
-        assert [e.to_dict() for e in released_apply.promotion_events] == expected
+        assert [e.to_dict() for e in released_apply.promotion_events] == [
+            {**expected[0], "intent_id": ANY}
+        ]
         assert labels[2] == ["status:queued"]
 
     def test_any_incomplete_dependency_keeps_dependent_blocked(

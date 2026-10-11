@@ -30,6 +30,12 @@ from orchestune.consistency.repairs.status import (
 )
 from orchestune.consistency.vocabulary import DESIRED_STATUS_LABEL
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.promotion_reporting import (
+    PromotionReportJournal,
+    PromotionReportRecord,
+    is_reportable_promotion,
+    promotion_report_journal_path,
+)
 from orchestune.dispatch.scoring import Task
 from orchestune.dispatch.status_dependency_policy import dependencies_completed
 from orchestune.dispatch.status_repair_dependencies import (
@@ -100,6 +106,19 @@ class VerifiedStatusTransition:
     intent_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class StatusRepairVerification:
+    """An intent a later cycle verified, with the status it had before that.
+
+    ``previous_status`` is read before the journal moves the intent on, so a
+    ``PLANNED`` intent (applied by someone else) is not mistaken for ours.
+    """
+
+    intent: TransitionIntent
+    previous_status: IntentStatus
+    verified_labels: tuple[str, ...]
+
+
 def status_intent_journal_path(config: DispatcherConfig) -> Path:
     """Keep transition intents beside the run-state file under a stable name."""
     return Path(config.run_state_path).with_suffix(".status-intents.json")
@@ -135,6 +154,14 @@ def _expected_label(command: RepairCommand) -> str | None:
     else:
         value = _retained_label(command)
     return value if isinstance(value, str) else None
+
+
+def is_reportable_promotion_command(command: RepairCommand) -> bool:
+    """Whether executing ``command`` records a promotion report (#1296)."""
+    return is_reportable_promotion(
+        f"{_STATUS_REPAIR_OPERATION}:{command.code}:{_finding_code(command) or 'unknown'}",
+        _expected_label(command),
+    )
 
 
 def _new_intent(command: RepairCommand, now: datetime) -> TransitionIntent:
@@ -274,16 +301,58 @@ def _verified_status_labels(
     return labels if primary_status_labels(labels) == (expected_label,) else None
 
 
-def _status_is_verified(
-    issue_number: int, expected_label: str, config: DispatcherConfig
-) -> bool:
-    return _verified_status_labels(issue_number, expected_label, config) is not None
+def _register_promotion_report(
+    config: DispatcherConfig,
+    intent: TransitionIntent,
+    verified_labels: tuple[str, ...],
+    *,
+    subtask_id: str | None,
+    recovered: bool,
+    observed_at: datetime,
+) -> None:
+    """Persist the unreported promotion; raises so the intent stays unverified."""
+    PromotionReportJournal(promotion_report_journal_path(config)).register(
+        PromotionReportRecord(
+            intent_id=intent.intent_id,
+            issue_number=int(intent.subject_id or ""),
+            subtask_id=subtask_id,
+            verified_labels=verified_labels,
+            verified_at=observed_at.isoformat(),
+            recovered=recovered,
+        )
+    )
+
+
+def _register_if_ours(
+    config: DispatcherConfig,
+    intent: TransitionIntent,
+    expected: str | None,
+    labels: tuple[str, ...],
+    observed_at: datetime,
+) -> None:
+    """Record a promotion this process applied (``APPLIED``); ``PLANNED`` is not ours."""
+    if intent.status is IntentStatus.APPLIED and is_reportable_promotion(
+        intent.operation, expected
+    ):
+        _register_promotion_report(
+            config,
+            intent,
+            labels,
+            subtask_id=None,
+            recovered=True,
+            observed_at=observed_at,
+        )
 
 
 def reconcile_status_repair_intents(
     config: DispatcherConfig, *, now: datetime | None = None
-) -> tuple[TransitionIntent, ...]:
-    """Settle pending status Intents whose expected live state already exists."""
+) -> tuple[StatusRepairVerification, ...]:
+    """Settle pending status Intents whose expected live state already exists.
+
+    A promotion that this process applied (``APPLIED``) is recorded as an
+    unreported promotion before the intent becomes ``VERIFIED``, so the cycle
+    that verifies it late still reports it (#1296).
+    """
     if not config.apply:
         return ()
     observed_at = datetime.now(UTC) if now is None else now
@@ -293,7 +362,7 @@ def reconcile_status_repair_intents(
     except Exception:  # noqa: BLE001 - leave unreadable journal for a later cycle
         return ()
 
-    verified: list[TransitionIntent] = []
+    verified: list[StatusRepairVerification] = []
     for intent in pending:
         expected = _intent_expected_label(intent)
         try:
@@ -302,13 +371,24 @@ def reconcile_status_repair_intents(
                 RunState(), issue_number, config.run_state_path
             ):
                 continue
-            if expected is None or not _status_is_verified(
-                issue_number, expected, config
-            ):
+            labels = (
+                None
+                if expected is None
+                else _verified_status_labels(issue_number, expected, config)
+            )
+            if labels is None:
                 continue
-            if intent.status is IntentStatus.PLANNED:
+            previous = intent.status
+            _register_if_ours(config, intent, expected, labels, observed_at)
+            if previous is IntentStatus.PLANNED:
                 journal.mark_applied(intent.intent_id)
-            verified.append(journal.mark_verified(intent.intent_id))
+            verified.append(
+                StatusRepairVerification(
+                    intent=journal.mark_verified(intent.intent_id),
+                    previous_status=previous,
+                    verified_labels=labels,
+                )
+            )
         except Exception:  # noqa: BLE001 - retry live verification next cycle
             continue
     return tuple(verified)
@@ -340,6 +420,15 @@ def _execute(
     if verified_labels is None:
         return None
     journal.mark_applied(current.intent_id)
+    if is_reportable_promotion(current.operation, expected):
+        _register_promotion_report(
+            config,
+            current,
+            verified_labels,
+            subtask_id=fresh.task.subtask_id or None,
+            recovered=False,
+            observed_at=now,
+        )
     journal.mark_verified(current.intent_id)
     return VerifiedStatusTransition(
         issue_number=fresh.task.issue_number,
@@ -499,8 +588,10 @@ def execute_status_repair_command(
 
 
 __all__ = [
+    "StatusRepairVerification",
     "VerifiedStatusTransition",
     "execute_status_repair_command",
+    "is_reportable_promotion_command",
     "reconcile_status_repair_intents",
     "status_intent_journal_path",
     "task_lifecycle",

@@ -116,6 +116,7 @@ from orchestune.dispatch.phase_scheduling import (
 )
 from orchestune.dispatch.prior_parent_merge import reconcile_prior_parent_merges
 from orchestune.dispatch.progress import progress_phase
+from orchestune.dispatch.promotion_reporting import deliver_cycle_promotion_reports
 from orchestune.dispatch.recovery import (
     LAUNCH_ATTEMPT_PENDING,
     LAUNCH_HISTORY_STALE,
@@ -133,6 +134,7 @@ from orchestune.dispatch.status_dependency_policy import (
 from orchestune.dispatch.status_repair import (
     VerifiedStatusTransition,
     execute_status_repair_command,
+    is_reportable_promotion_command,
     reconcile_status_repair_intents,
     status_intent_journal_path,
     task_lifecycle,
@@ -502,6 +504,8 @@ def _status_repair_commands(
         for result in repair_pass.results
         if result.status is RepairStatus.APPLIED
         and _command_finding_code(result.command) == finding_code
+        # #1296: a verified promotion is reported from its persisted record.
+        and not is_reportable_promotion_command(result.command)
     )
 
 
@@ -847,7 +851,7 @@ def _run_pre_scheduling_reconciliation(
     config: DispatcherConfig,
     repair_cycle: _RepairCycleState,
 ) -> tuple[list[PromotionEvent], ExternalLockScanResult]:
-    promotion_events = _run_status_repair_boundary(
+    boundary_events = _run_status_repair_boundary(
         "status-blocked-promotion",
         BLOCKED_WITH_RESOLVED_DEPENDENCIES,
         issues=issues,
@@ -855,6 +859,11 @@ def _run_pre_scheduling_reconciliation(
         ctx=ctx,
         config=config,
         cycle_state=repair_cycle,
+    )
+    promotion_events = deliver_cycle_promotion_reports(ctx, config)
+    reported = {event.issue_number for event in promotion_events}
+    promotion_events.extend(
+        e for e in boundary_events if e.issue_number not in reported
     )
     promotion_events.extend(ctx.reconcile_recovery())
     lock_result = ctx.scan_external_locks()

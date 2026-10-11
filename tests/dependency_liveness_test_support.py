@@ -27,8 +27,10 @@ from unittest.mock import patch
 from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.dependencies.assessment import DependencyAssessment, DependencyState
 from orchestune.dispatch import cycle as cycle_module
+from orchestune.dispatch import cycle_execution
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
+from orchestune.dispatch.cycle_events import PromotionEvent
 from orchestune.dispatch.phase_scheduling import SchedulingPhaseResult
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.status_repair import status_intent_journal_path
@@ -210,6 +212,7 @@ class CycleObservation:
     apply: bool
     t_before: frozenset[str]
     t_after: frozenset[str]
+    #: Promotions of this cycle (a late report of an earlier one is not here).
     promotion_issue_numbers: tuple[int, ...]
     assessment: DependencyAssessment | None
     at_start: OracleView
@@ -219,6 +222,8 @@ class CycleObservation:
     listing_lag: bool = False
     labels_before: dict[int, frozenset[str]] = field(default_factory=dict)
     labels_after: dict[int, frozenset[str]] = field(default_factory=dict)
+    #: Every promotion event of the cycle, including late reports (#1296).
+    reported_events: tuple[PromotionEvent, ...] = ()
 
     @property
     def promoted(self) -> bool:
@@ -539,7 +544,10 @@ class LivenessWorld:
             apply=apply,
             t_before=t_before,
             t_after=self.labels(),
-            promotion_issue_numbers=tuple(e.issue_number for e in events),
+            promotion_issue_numbers=tuple(
+                e.issue_number for e in events if not e.recovered
+            ),
+            reported_events=tuple(events),
             assessment=probe.assessment,
             at_start=at_start,
             at_promotion=probe.at_promotion or at_start,
@@ -645,6 +653,8 @@ def run_one_cycle(world: LivenessWorld, *, apply: bool, probe: _PromotionProbe):
             )
         finally:
             world.boundary.frozen = None
+        # The confirmed log is what makes a late report final (#1296).
+        cycle_execution.record_cycle_events(cycle_module, report, now, config)
     return list(report.promotion_events)
 
 
