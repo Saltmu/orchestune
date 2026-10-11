@@ -179,9 +179,9 @@ UNBUDGETED_LOOPS: dict[tuple[Event, Kind], UnbudgetedLoop] = {
     ),
     (_E.BLOCK, _K.RECOMPUTE): UnbudgetedLoop(
         "blocked by another task's footprint deviation; bounded by that task's "
-        "recompute budget, which the single-task model cannot see (and which "
-        "restarts on relaunch, #1280)",
-        "#1280",
+        "recompute budget, which the single-task model cannot see (the budget "
+        "persists in the Issue body and survives a relaunch, #1280)",
+        "none",
     ),
 }
 

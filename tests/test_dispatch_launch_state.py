@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
+from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 
+from orchestune.claim.contracts import ClaimOutcome
+from orchestune.dispatch.launch import (
+    TaskLaunchPlan,
+    _build_active_worktree_from_launch,
+    _try_planned_launch,
+)
 from orchestune.dispatch.launch_state import (
     build_launch_record,
     launch_info_with_selection,
@@ -13,15 +21,29 @@ from orchestune.dispatch.launch_state import (
     with_launch,
     with_launch_phase,
 )
+from orchestune.dispatch.recovery_counters import (
+    launch_with_recovery_counters,
+    merged_recovery_counters,
+)
+from orchestune.dispatch.worktree import LaunchResult
+from orchestune.issue_parsing import backfill_recovery_counters
+from orchestune.labels import StatusLabel
 from orchestune.ledger.active_records import (
     ActiveCompletionJournal,
     ActiveWorktreeCore,
     ClaimInfo,
     LaunchInfo,
 )
-from orchestune.ledger.run_state import RunState, TaskReclaimRecord
+from orchestune.ledger.run_state import RunState, TaskReclaimRecord, load_run_state
+from orchestune.models import IssueRecord
 from orchestune.targets.contracts import ExecutionSelection
-from tests.dispatch_test_support import make_test_active_worktree
+from tests.conftest import FakeForge, make_issue
+from tests.dispatch_test_support import (
+    make_test_active_worktree,
+    make_test_dispatcher_config,
+    make_test_task,
+)
+from tests.status_event_test_support import NOW
 
 
 def _core() -> ActiveWorktreeCore:
@@ -208,3 +230,247 @@ class TestUsageLimitLaunchGate:
         claim_fn.assert_not_called()
         assert run_state.active_worktrees == {}
         assert run_state.launch_history == []
+
+
+# ---- #1280: the persisted recovery counters reach a normal launch ------------
+
+ISSUE = 41
+BRANCH = f"claude/issue-{ISSUE}-task-a"
+FORCE_SERIAL = StatusLabel.FORCE_SERIAL
+
+
+def _issue(count: int, serial: bool, *labels: str) -> IssueRecord:
+    base = make_issue(ISSUE, labels=labels)
+    body = backfill_recovery_counters(base.body, count, serial) or base.body
+    return make_issue(ISSUE, labels=labels, body=body)
+
+
+@pytest.mark.parametrize(
+    ("body", "labels", "launch", "task_serial", "expected"),
+    [
+        ((0, False), (), (0, False), False, (0, False)),
+        ((1, False), (), (0, False), False, (1, False)),
+        ((2, False), (), (0, False), False, (2, False)),
+        ((2, True), (), (0, False), False, (2, True)),
+        ((0, False), (FORCE_SERIAL,), (0, False), False, (0, True)),
+        ((1, True), (), (0, False), False, (1, True)),
+        ((0, False), (), (2, False), False, (2, False)),
+        ((1, False), (), (0, True), False, (1, True)),
+        ((0, False), (), (0, False), True, (0, True)),
+    ],
+    ids=[
+        "empty",
+        "body-count",
+        "body-at-limit",
+        "body-forced",
+        "label-only",
+        "body-forced-without-label",
+        "active-count-larger",
+        "active-forced-kept",
+        "task-snapshot-forced",
+    ],
+)
+def test_recovery_counters_merge_by_max_and_or(
+    body, labels, launch, task_serial, expected
+) -> None:
+    issue = _issue(*body, *labels)
+    current = LaunchInfo(recompute_count=launch[0], forced_serial=launch[1])
+
+    assert (
+        merged_recovery_counters(issue, current, task_forced_serial=task_serial)
+        == expected
+    )
+    merged = launch_with_recovery_counters(
+        current, issue, task_forced_serial=task_serial
+    )
+    assert (merged.recompute_count, merged.forced_serial) == expected
+
+
+def test_recovery_counters_without_an_active_launch_use_the_issue_only() -> None:
+    assert merged_recovery_counters(_issue(2, True)) == (2, True)
+    broken = make_issue(ISSUE, body="## Footprint\n```yaml\nrecompute_count: -3\n```\n")
+    assert merged_recovery_counters(broken) == (0, False)
+
+
+class _Launched:
+    """What `_try_planned_launch` returned: the provider ran once."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, *_args, **_kwargs) -> LaunchResult:
+        self.calls += 1
+        return LaunchResult(
+            issue_number=ISSUE,
+            branch=BRANCH,
+            worktree_path="worktrees/w2",
+            pid=2,
+            launched=True,
+            dispatch_started_at=NOW,
+        )
+
+
+def _reservation(count: int = 0, serial: bool = False):
+    return make_test_active_worktree(
+        ISSUE,
+        branch=BRANCH,
+        pid=None,
+        started_at=None,
+        recompute_count=count,
+        forced_serial=serial,
+        owner_kind="dispatch",
+        claim_id="claim-41",
+        claim_stage="completed",
+        reservation_kind="repository",
+        owner_token_digest="digest-41",
+    )
+
+
+def _claim_stripping_status_labels(forge, outcome):
+    """Like `claim.service._apply_status_label`: every old status label goes."""
+
+    def claim(*_args):
+        issue = forge.issues.get(ISSUE)
+        if issue is not None:
+            kept = tuple(
+                label for label in issue.labels if not label.startswith("status:")
+            )
+            forge.issues[ISSUE] = replace(
+                issue, labels=(*kept, StatusLabel.IN_PROGRESS)
+            )
+        return outcome
+
+    return claim
+
+
+def _drive_launch(
+    tmp_path, issue, *, reservation=None, forge_error=None, task_labels=None
+):
+    """The normal launch entry: claim, persist the launching phase, provider."""
+    forge = FakeForge()
+    if issue is not None:
+        forge.issues[ISSUE] = issue
+    if forge_error is not None:
+
+        def failing(_number):
+            raise forge_error
+
+        forge.get_issue = failing  # type: ignore[method-assign]
+    config = make_test_dispatcher_config(tmp_path, forge=forge, apply=True)
+    run_state = RunState(
+        active_worktrees={str(ISSUE): reservation or _reservation()},
+    )
+    task = make_test_task(ISSUE, status_labels=task_labels or (StatusLabel.QUEUED,))
+    plan = TaskLaunchPlan(task, BRANCH, "main", "main")
+    outcome = ClaimOutcome(
+        success=True,
+        issue_number=ISSUE,
+        branch=BRANCH,
+        worktree_path=tmp_path / "w2",
+        base_ref="main",
+    )
+    provider = _Launched()
+    with patch("orchestune.dispatch.launch._launch_on_prepared_worktree", provider):
+        result = _try_planned_launch(
+            plan,
+            cast(Any, object()),
+            config,
+            run_state,
+            _claim_stripping_status_labels(forge, outcome),
+            now=NOW,
+        )
+    return result, provider, run_state, config, plan, task
+
+
+def _relaunched(result, run_state, config, plan, task):
+    return _build_active_worktree_from_launch(
+        task, plan, result, run_state, NOW, config
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "labels", "expected"),
+    [
+        ((0, False), (), (0, False)),
+        ((1, False), (), (1, False)),
+        ((2, False), (), (2, False)),
+        ((2, True), (FORCE_SERIAL,), (2, True)),
+        ((0, False), (FORCE_SERIAL,), (0, True)),
+        ((1, True), (), (1, True)),
+    ],
+)
+def test_normal_launch_keeps_the_issue_body_counters(
+    tmp_path, body, labels, expected
+) -> None:
+    issue = _issue(*body, *labels)
+    result, provider, run_state, config, plan, task = _drive_launch(
+        tmp_path, issue, task_labels=(StatusLabel.QUEUED, *labels)
+    )
+
+    assert provider.calls == 1
+    saved = load_run_state(config.run_state_path).active_worktrees[str(ISSUE)]
+    assert (saved.launch.recompute_count, saved.launch.forced_serial) == expected
+    assert saved.launch.launch_phase == "launching"
+    active = _relaunched(result, run_state, config, plan, task)
+    assert (active.launch.recompute_count, active.launch.forced_serial) == expected
+    assert active.claim.claim_id == "claim-41"
+    assert active.launch.launch_phase == "launched"
+
+
+def test_normal_launch_does_not_lower_a_larger_reservation_counter(tmp_path) -> None:
+    result, _, run_state, config, plan, task = _drive_launch(
+        tmp_path, _issue(1, False), reservation=_reservation(2, True)
+    )
+
+    active = _relaunched(result, run_state, config, plan, task)
+    assert (active.launch.recompute_count, active.launch.forced_serial) == (2, True)
+
+
+def test_the_provider_is_not_called_when_the_issue_cannot_be_read(tmp_path) -> None:
+    for kwargs in (
+        {"issue": None},
+        {"issue": _issue(1, False), "forge_error": OSError("down")},
+    ):
+        result, provider, run_state, config, *_ = _drive_launch(tmp_path, **kwargs)
+
+        assert provider.calls == 0
+        assert result is not None
+        assert result.held is True
+        assert result.launched is False
+        assert "recovery counters" in (result.error_message or "")
+        entry = run_state.active_worktrees[str(ISSUE)]
+        assert entry.launch.launch_phase is None
+        assert entry.claim.claim_id == "claim-41"
+
+
+def test_the_provider_is_not_called_when_the_counters_cannot_be_saved(
+    tmp_path,
+) -> None:
+    with patch(
+        "orchestune.dispatch.launch.save_run_state", side_effect=OSError("disk")
+    ):
+        result, provider, run_state, *_ = _drive_launch(tmp_path, _issue(2, True))
+
+    assert provider.calls == 0
+    assert result is not None and result.held is True
+    entry = run_state.active_worktrees[str(ISSUE)]
+    assert (entry.launch.recompute_count, entry.launch.forced_serial) == (0, False)
+    assert entry.launch.launch_phase is None
+
+
+def test_the_pre_claim_force_serial_snapshot_survives_the_claim_label_strip(
+    tmp_path,
+) -> None:
+    """The claim removes `status:force-serial`; the task snapshot read before it
+    still marks an escalated task whose body has no forced_serial yet."""
+    issue = _issue(1, False, FORCE_SERIAL)
+    result, _, run_state, config, plan, task = _drive_launch(
+        tmp_path,
+        issue,
+        task_labels=(StatusLabel.QUEUED, FORCE_SERIAL),
+    )
+
+    saved = load_run_state(config.run_state_path).active_worktrees[str(ISSUE)]
+    assert (saved.launch.recompute_count, saved.launch.forced_serial) == (1, True)
+    active = _relaunched(result, run_state, config, plan, task)
+    assert (active.launch.recompute_count, active.launch.forced_serial) == (1, True)

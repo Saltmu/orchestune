@@ -16,13 +16,17 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 
+from orchestune.claim.contracts import ClaimOutcome
 from orchestune.dependencies.resolution import build_legacy_dag_inputs
 from orchestune.dispatch import launch, rebase, recovery
 from orchestune.dispatch.gc import policies, zombies
+from orchestune.dispatch.launch_state import with_launch
+from orchestune.dispatch.worktree import LaunchResult
 from orchestune.issue_parsing import recovery_counters_from_body
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import RunState, TaskReclaimRecord, save_run_state
@@ -53,12 +57,10 @@ from tests.status_event_retry_harness import (
     reclaim_world,
 )
 from tests.status_event_test_support import NOW
-from tests.status_transition_callsite_drivers import ISSUE, _fake
+from tests.status_transition_callsite_drivers import ISSUE
 from tests.test_dispatch_gc_policies import policy_case
 from tests.verification_contract_test_support import (
-    ContractViolation,
     expect_violation,
-    pinned_defect,
     require,
 )
 
@@ -70,8 +72,6 @@ MAX_RECLAIMS = 3
 #: Default early-death / review-timeout backoff base (`retry_policy`).
 BACKOFF = 60
 RESUMED = NOW + 5
-#: Production defects found by this harness, split out with their counterexamples.
-RECOMPUTE_RELAUNCH_ISSUE = "#1280"
 
 
 def _reclaim(world, stop=None, now=NOW):
@@ -308,53 +308,86 @@ class TestRecomputeBudget:
         assert _deviate(make_test_active_worktree(ISSUE, pid=None), config, task)
         assert _body_counters(forge) == (1, False)
 
-    @pytest.mark.xfail(
-        reason=f"production bug {RECOMPUTE_RELAUNCH_ISSUE}",
-        strict=True,
-        raises=ContractViolation,
-    )
     def test_relaunch_keeps_the_persisted_recompute_budget(
         self, tmp_path: Path
     ) -> None:
-        forge, config, task = _recompute_world(tmp_path)
-        active = make_test_active_worktree(ISSUE, pid=None)
-        for _ in range(3):
-            _deviate(active, config, task)
-        assert _body_counters(forge) == (2, True)
-        relaunched = _fresh_launch(forge, config)
-        with pinned_defect("P3B-RECOMPUTE-BUDGET-PRESERVED"):
-            result = _deviate(relaunched, config, task)
-            require(
-                "P3B-RECOMPUTE-BUDGET-PRESERVED",
-                result == "already_forced_serial",
-                result,
-            )
-            require(
-                "P3B-RECOMPUTE-BUDGET-PRESERVED",
-                _body_counters(forge) == (2, True),
-                result,
-            )
+        _relaunch_scenario(tmp_path)
+
+    def test_control_relaunch_counter_reset_is_detected(self, tmp_path: Path) -> None:
+        """The pre-#1280 launch: the counters restart from zero."""
+        with expect_violation("P3B-RECOMPUTE-BUDGET-PRESERVED"):
+            _relaunch_scenario(tmp_path, reset_counters=True)
 
 
-def _fresh_launch(forge: FakeForge, config: Any) -> Any:
-    """The active record a normal launch builds after a requeue."""
-    task = make_test_task(ISSUE, status_labels=tuple(forge.get_issue_labels(ISSUE)))
-    reservation = RunState(
-        active_worktrees={str(ISSUE): make_test_active_worktree(ISSUE)}
+def _relaunch_scenario(tmp_path: Path, *, reset_counters: bool = False) -> None:
+    forge, config, task = _recompute_world(tmp_path)
+    active = make_test_active_worktree(ISSUE, pid=None)
+    for _ in range(3):
+        _deviate(active, config, task)
+    assert _body_counters(forge) == (2, True)
+    relaunched = _fresh_launch(forge, config, reset_counters=reset_counters)
+    result = _deviate(relaunched, config, task)
+    require("P3B-RECOMPUTE-BUDGET-PRESERVED", result == "already_forced_serial", result)
+    require(
+        "P3B-RECOMPUTE-BUDGET-PRESERVED",
+        _body_counters(forge) == (2, True)
+        and StatusLabel.FORCE_SERIAL in forge.get_issue_labels(ISSUE),
+        result,
     )
-    launched = _fake(
-        pid=2,
-        dispatch_started_at=NOW,
-        external_id=None,
-        external_url=None,
-        launch_attempt_id="attempt-2",
-        branch=f"claude/issue-{ISSUE}-task-a",
-        worktree_path="worktrees/w2",
+
+
+def _fresh_launch(
+    forge: FakeForge, config: Any, *, reset_counters: bool = False
+) -> Any:
+    """The active record the normal launch entry builds after a requeue.
+
+    Runs the production order: claim reservation, the counters saved before the
+    provider (`_persist_launching_phase`), the provider, then the record.
+    `reset_counters` injects the pre-#1280 behaviour (a launch that starts its
+    counters from zero) to prove the contract notices it.
+    """
+    task = make_test_task(ISSUE, status_labels=tuple(forge.get_issue_labels(ISSUE)))
+    branch = f"claude/issue-{ISSUE}-task-a"
+    reservation = make_test_active_worktree(
+        ISSUE,
+        branch=branch,
+        pid=None,
+        started_at=None,
+        owner_kind="dispatch",
+        claim_id="claim-2",
+        claim_stage="completed",
+        reservation_kind="repository",
+        owner_token_digest="digest-2",
+    )
+    state = RunState(active_worktrees={str(ISSUE): reservation})
+    plan = launch.TaskLaunchPlan(task, branch, "main", "main")
+    outcome = ClaimOutcome(
+        success=True,
+        issue_number=ISSUE,
+        branch=branch,
+        worktree_path=config.worktree_root / "w2",
         base_ref="main",
     )
-    plan = _fake(execution_selection=None, base_branch_for_state="main")
+    started = LaunchResult(
+        issue_number=ISSUE,
+        branch=branch,
+        worktree_path="worktrees/w2",
+        pid=2,
+        launched=True,
+        dispatch_started_at=NOW,
+    )
+    with patch.object(launch, "_launch_on_prepared_worktree", lambda *a, **k: started):
+        result = launch._try_planned_launch(
+            plan, cast(Any, object()), config, state, lambda *_: outcome, now=NOW
+        )
+    assert result is started
+    if reset_counters:
+        entry = state.active_worktrees[str(ISSUE)]
+        state.active_worktrees[str(ISSUE)] = with_launch(
+            entry, replace(entry.launch, recompute_count=0, forced_serial=False)
+        )
     return launch._build_active_worktree_from_launch(
-        task, plan, launched, reservation, NOW, config
+        task, plan, started, state, NOW, config
     )
 
 

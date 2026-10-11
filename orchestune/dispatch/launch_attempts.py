@@ -22,8 +22,8 @@ from orchestune.dispatch.launch_state import (
     build_launch_record,
     launch_info_with_selection,
 )
+from orchestune.dispatch.recovery_counters import launch_with_recovery_counters
 from orchestune.dispatch.targets import DispatchHandle, DispatchTarget
-from orchestune.issue_parsing import recovery_counters_from_body
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_records import (
     ActiveWorktreeCore,
@@ -76,19 +76,23 @@ def active_from_attempt(
     attempt: LaunchAttempt, task: TaskMetadata, config: DispatcherConfig
 ) -> ActiveWorktree:
     issue = config.resolved_forge.get_issue(task.issue_number)
-    count, serial = recovery_counters_from_body(issue.body) if issue else (0, False)
+    task_serial = StatusLabel.FORCE_SERIAL in task.status_labels
+    launch = LaunchInfo(
+        pid=None,
+        started_at=attempt.started_at,
+        forced_serial=task_serial,
+        external_id=attempt.external_id,
+        external_url=attempt.external_url,
+        launch_attempt_id=attempt.attempt_id,
+        launch_phase=attempt.phase,
+    )
+    if issue is not None:
+        # #1280: the same max / OR rule as a normal launch and a run-state recovery.
+        launch = launch_with_recovery_counters(
+            launch, issue, task_forced_serial=task_serial
+        )
     launch = launch_info_with_selection(
-        LaunchInfo(
-            pid=None,
-            started_at=attempt.started_at,
-            recompute_count=count,
-            forced_serial=serial or StatusLabel.FORCE_SERIAL in task.status_labels,
-            external_id=attempt.external_id,
-            external_url=attempt.external_url,
-            launch_attempt_id=attempt.attempt_id,
-            launch_phase=attempt.phase,
-        ),
-        resolve_task_execution_selection(task, config),
+        launch, resolve_task_execution_selection(task, config)
     )
     return build_launch_record(
         core=ActiveWorktreeCore(

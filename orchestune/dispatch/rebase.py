@@ -31,6 +31,7 @@ from orchestune.dispatch.cycle_events import (
 from orchestune.dispatch.execution_profiles import ExecutionSelection
 from orchestune.dispatch.launch_state import update_launch, with_launch
 from orchestune.dispatch.locks import check_footprint_deviation
+from orchestune.dispatch.recovery_counters import merged_recovery_counters
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.dispatch.worktree import _provision_and_launch
 from orchestune.forge import Forge, GitHubForge
@@ -156,12 +157,16 @@ def _persist_recovery_counters(
     毎ディスパッチサイクルではなく、頻度としては`notify_recompute`/
     `notify_force_serial`のコメント投稿と同程度——追加のAPI呼び出しは
     このイベントに比例する。
+
+    #1280: 取得済みの現在本文のcounterと実行側のcounterをmax / ORで合わせて
+    書き戻し、既知の永続値を小さくしない（古い実行側の値で上書きしない）。
     """
     issue = config.resolved_forge.get_issue(active.core.issue_number)
     if issue is None:
         return
+    recompute_count, forced_serial = merged_recovery_counters(issue, active.launch)
     patched_body = backfill_recovery_counters(
-        issue.body, active.launch.recompute_count, active.launch.forced_serial
+        issue.body, recompute_count, forced_serial
     )
     if patched_body is not None:
         config.resolved_forge.update_issue_body(active.core.issue_number, patched_body)

@@ -632,6 +632,55 @@ class TestApplyFootprintDeviationOutcomePersistsRecoveryCounters:
 
         forge.update_issue_body.assert_not_called()
 
+    def test_stale_active_counters_never_lower_the_persisted_body(self, tmp_path):
+        """#1280: an execution that does not know the persisted budget (count 0)
+        recomputes once more, but the body keeps the larger count and the
+        forced_serial it already holds."""
+        active = _active(recompute_count=0)
+        decision = FootprintDeviationDecision(
+            action="recomputed", subtask_id="task-a", conflicts=[]
+        )
+        body = "```yaml\nsubtask_id: task-a\nrecompute_count: 2\nforced_serial: true\n```\n"
+        forge = self._forge_with_body(body)
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            forge=forge,
+        )
+
+        _apply_footprint_deviation_outcome(
+            active, ["src/bar.py"], decision, {"task-a": 1}, config
+        )
+
+        forge.update_issue_body.assert_not_called()
+
+    def test_write_back_merges_the_body_and_the_execution_counters(self, tmp_path):
+        active = _active(recompute_count=1, forced_serial=True)
+        decision = FootprintDeviationDecision(
+            action="recomputed", subtask_id="task-a", conflicts=[]
+        )
+        body = "```yaml\nsubtask_id: task-a\nrecompute_count: 2\n```\n"
+        forge = self._forge_with_body(body)
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            apply=True,
+            forge=forge,
+        )
+
+        _apply_footprint_deviation_outcome(
+            active, ["src/bar.py"], decision, {"task-a": 1}, config
+        )
+
+        written_body = forge.update_issue_body.call_args[0][1]
+        assert "recompute_count: 2" in written_body
+        assert "forced_serial: true" in written_body
+
     def test_persists_body_before_publishing_the_durable_label(self, tmp_path):
         """#516レビュー指摘: `add_label`成功後、`_persist_recovery_counters`が
         落ちる（プロセス停止・API失敗）と、GitHub上には永続的な

@@ -29,7 +29,7 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 | `P3B-LEDGER-LOSS-KEEPS-PERSISTENT` | 3b | verified | `persistent-budget-reset` | - |
 | `P3B-LAUNCH-AND-ESCALATION` | 3b | unverified | - | - |
 | `P3B-RECLAIM-BUDGET-PRESERVED` | 3b | verified | `reclaim-record-replaced` | - |
-| `P3B-RECOMPUTE-BUDGET-PRESERVED` | 3b | known_defect | - | #1280 |
+| `P3B-RECOMPUTE-BUDGET-PRESERVED` | 3b | verified | `relaunch-counter-reset` | - |
 | `P3C-CASE-DELAY` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `empty-completion-set`, `throwaway-context` | - |
 | `P3C-LIVENESS-BOUND` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `event-only`, `empty-completion-set`, `throwaway-context` | - |
 | `P3C-INTERMEDIATE-LIVENESS` | 3c | verified | `intermediate-ignored`, `promotion-suppressed` | - |
@@ -87,7 +87,6 @@ Phase 1〜3の保証は、`tests/verification_contracts.py` の1行が1つに対
 - `P2-CONVERGENCE-UPPER-BOUND` (unverified): 1パスを超えて駆動するテストがなく、期待値（1cycle）だけを検査している
 - `P3A-DOCUMENT-TABLE` (unverified): 対照なし: 文書のずれを注入していない
 - `P3B-LAUNCH-AND-ESCALATION` (unverified): 契約idのないassertで、誤動作を注入していない
-- `P3B-RECOMPUTE-BUDGET-PRESERVED` (known_defect): strict xfail が反例を固定している（#1280）。修正でマークを外す
 - `P3C-DRYRUN-RESERVATION` (known_defect): strict xfail の反例で固定している（T は #1283、中間ノードは #1281 の反例1）。本番修正が入るまで assert_safe と中間ノードの検査がこれらの preview を除外している（依存側は別の verified 契約）
 - `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` (known_defect): #1281 の反例2を strict xfail で固定している。本番が先行マージの完了集合を落とすのか、公平性判定の問題なのかはまだ切り分けていない
 
@@ -125,6 +124,7 @@ Issue の当初の読みは、同じcycleの中で証拠が入る経路（`recor
 | `budget-bound-exceeded` | reclaim の上限を表より大きくする | `P3B-RETRY-BOUND` | reclaim ループ |
 | `persistent-budget-reset` | `restart` が永続カウントも0にする | `P3B-LEDGER-LOSS-KEEPS-PERSISTENT` | 台帳消失のシナリオ |
 | `reclaim-record-replaced` | 回収の予約・cloud の予約・dirty 保留が、永続化済みの `TaskReclaimRecord` を更新せず新しいレコードで置き換える（#1279 以前の書き込み） | `P3B-RECLAIM-BUDGET-PRESERVED` | ゾンビ回収（予算と usage-limit の run）・cloud 予約・dirty 保留の後の永続レコード |
+| `relaunch-counter-reset` | 通常の起動が `recompute_count` / `forced_serial` を0・Falseから始める（#1280 以前の起動） | `P3B-RECOMPUTE-BUDGET-PRESERVED` | 通常の起動入口（claim 予約・provider 前の counter 保存・起動記録）の後、再び逸脱した active |
 | `promotion-suppressed` / `promotion-delayed` | 昇格境界を常に／証拠投入のcycleだけ飛ばす | `P3C-CASE-DELAY`（ケース表）、`P3C-LIVENESS-BOUND`、`P3C-INTERMEDIATE-LIVENESS` | label、`record_completion`（apply）、prior merge（apply・dry run） |
 | `empty-completion-set` / `throwaway-context` | #902 Round 4/5 の誤配線 | `P3C-CASE-DELAY` | ケース表 |
 | `intermediate-ignored` | 中間ノードの判定を落とす | `P3C-INTERMEDIATE-LIVENESS` | 中間ノードのトポロジー |

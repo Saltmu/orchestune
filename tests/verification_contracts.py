@@ -357,12 +357,15 @@ CONTRACTS: tuple[Contract, ...] = (
         premise="production persistence of the Issue-body counters",
         boundary="persisted records",
         expectation="budgets survive",
-        status="known_defect",
+        status="verified",
         tests=(
             f"{P3BR}::TestRecomputeBudget::test_relaunch_keeps_the_persisted_recompute_budget",
         ),
-        reason="strict xfail pins the counterexample; the fix removes the mark",
-        issues=(1280,),
+        controls={
+            "relaunch-counter-reset": (
+                f"{P3BR}::TestRecomputeBudget::test_control_relaunch_counter_reset_is_detected",
+            )
+        },
     ),
     # ---- Phase 3c: dependency resolution ----------------------------------------------
     Contract(
