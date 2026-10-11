@@ -43,7 +43,7 @@ Node.js は **local CI の必須依存**です。依存解決の Quint チェッ
 ./scripts/quint-check.sh        # Windows: .\scripts\quint-check.ps1
 ```
 
-`npm ci` を実行し（Quint は `package.json` と `package-lock.json` で exact に固定してあり、グローバルの Quint は使いません）、導入された版が固定した版であることを確認します。`local-ci` が自動で実行します。Exit 2 は Node.js がない、または major 版が違うこと、Exit 1 は導入または版の確認に失敗したことを表します。
+`npm ci` を実行し（Quint は `package.json` と `package-lock.json` で exact に固定してあり、グローバルの Quint は使いません）、導入された版が固定した版であることを確認します。間接依存の `adm-zip` は `package.json` の `overrides` で固定しています。Quint 自身の `^0.5.16` では修正版の 0.6.x に上がらないためです（Dependabot アラート）。Quint が修正版を要求するようになったら override を外してください。`local-ci` が自動で実行します。Exit 2 は Node.js がない、または major 版が違うこと、Exit 1 は導入または版の確認に失敗したことを表します。
 
 ## コード解析ツール（Serena MCP）
 

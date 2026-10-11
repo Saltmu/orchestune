@@ -43,7 +43,7 @@ Then install and verify the locked tools:
 ./scripts/quint-check.sh        # Windows: .\scripts\quint-check.ps1
 ```
 
-It runs `npm ci` (Quint is pinned to an exact version in `package.json` and `package-lock.json`; a global Quint is never used) and checks that the installed version is the pinned one. `local-ci` runs it for you. Exit 2 means Node.js is missing or has the wrong major version; exit 1 means the install or the version check failed.
+It runs `npm ci` (Quint is pinned to an exact version in `package.json` and `package-lock.json`; a global Quint is never used) and checks that the installed version is the pinned one. The transitive `adm-zip` is pinned through `overrides` in `package.json`, because Quint's own `^0.5.16` range cannot reach the patched 0.6.x line (Dependabot alerts); drop the override once Quint requires a patched release. `local-ci` runs it for you. Exit 2 means Node.js is missing or has the wrong major version; exit 1 means the install or the version check failed.
 
 ## Code Analysis Tool (Serena MCP)
 

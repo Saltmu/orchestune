@@ -128,6 +128,20 @@ def test_quint_is_pinned_exactly_and_locked() -> None:
     assert quint_executable().exists()  # a missing / wrong tool raises, never skips
 
 
+def test_transitive_adm_zip_is_overridden_to_a_patched_release() -> None:
+    """Quint asks for ``adm-zip ^0.5.16``, which can never reach the fixed 0.6.x line.
+
+    Dependabot alerts on 0.5.x are cleared only by the ``overrides`` pin, so both the
+    declaration and the locked release are checked (0.6.1 is the first patched one).
+    """
+    package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
+    pinned = package["overrides"]["adm-zip"]
+    locked = lock["packages"]["node_modules/adm-zip"]["version"]
+    assert pinned == locked
+    assert tuple(int(part) for part in locked.split(".")) >= (0, 6, 1)
+
+
 def test_ci_and_scripts_install_the_pinned_node() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "actions/setup-node" in workflow and "node-version: '24'" in workflow
