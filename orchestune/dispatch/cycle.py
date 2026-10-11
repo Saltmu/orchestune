@@ -466,28 +466,33 @@ def _attempted_repair_codes(report: ConsistencyCycleReport) -> set[str]:
     }
 
 
+def _command_issue_number(command: RepairCommand) -> int | None:
+    if command.subject_id is None:
+        return None
+    try:
+        return int(command.subject_id)
+    except (ValueError, TypeError):
+        return None
+
+
 def _status_repair_commands(
     boundary_report: ConsistencyCycleReport,
     initial_scan: ConsistencyScanResult,
     finding_code: str,
     *,
     applied: bool,
-    run_state: RunState | None = None,
+    run_state: RunState,
 ) -> tuple[RepairCommand, ...]:
     if not applied:
         commands: list[RepairCommand] = []
         for command in initial_scan.repair_candidates:
             if _command_finding_code(command) != finding_code:
                 continue
-            if command.subject_id is None:
+            issue_number = _command_issue_number(command)
+            if issue_number is None:
                 continue
-            try:
-                issue_number = int(command.subject_id)
-            except (ValueError, TypeError):
-                continue
-            if run_state is not None and completion_mutation_blocked(
-                run_state, issue_number
-            ):
+            # Dry-run checks the in-memory snapshot rather than reading fresh from disk.
+            if completion_mutation_blocked(run_state, issue_number):
                 continue
             commands.append(command)
         return tuple(commands)
@@ -505,12 +510,10 @@ def _promotion_events(
 ) -> list[PromotionEvent]:
     events: list[PromotionEvent] = []
     for command in commands:
-        if command.subject_id is None:
+        issue_number = _command_issue_number(command)
+        if issue_number is None:
             continue
-        try:
-            task = adapter.tasks_by_issue.get(int(command.subject_id))
-        except ValueError:
-            task = None
+        task = adapter.tasks_by_issue.get(issue_number)
         if task is not None:
             events.append(
                 PromotionEvent(
