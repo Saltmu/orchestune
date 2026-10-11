@@ -415,15 +415,19 @@ CONTRACTS: tuple[Contract, ...] = (
         id="P3C-LIVENESS-BOUND",
         phase="3c",
         guarantee="T is queued (apply) or previewed (dry run) after N = 1 fair cycle",
-        premise="fair cycle: eligible at cycle start and at the promotion point, no error or injected failure",
+        premise="fair cycle: eligible at cycle start and at the promotion point, no error or injected failure; a blocked-recompute T additionally needs an empty active ledger at the promotion point (#1281: production fails closed on an entry whose footprint deviation cannot be evaluated)",
         boundary="end of the first fair cycle; apply checks the real label, dry run this cycle's preview",
         expectation="N = 1",
         status="verified",
         tests=(
             f"{P3C}::TestDependencyLivenessMachine::runTest",
+            f"{P3C}::test_recompute_target_waits_for_the_ledger_entry_of_a_completed_dependency",
             f"{P3Q}::test_stored_trace_replays_on_production",
         ),
         controls={
+            "ledger-premise-removed": (
+                f"{P3C}::test_control_recompute_ledger_premise_removal_is_detected",
+            ),
             "promotion-suppressed": (
                 f"{P3C}::test_control_machine_detects_missing_or_late_promotion",
                 f"{P3Q}::test_control_replay_detects_suppressed_promotion",
@@ -629,7 +633,7 @@ CONTRACTS: tuple[Contract, ...] = (
             f"{P3C}::test_known_defect_prior_merge_is_not_previewed_after_faulted_apply_cycles",
             f"{P3Q}::test_known_defect_stored_trace_prior_merge_after_faults",
         ),
-        reason="#1281 counterexample 2: a strict xfail pins it; whether production drops the prior-merge completion set or the fairness judgement is wrong is not yet separated",
-        issues=(1281,),
+        reason="#1281 counterexample 2 (cause A): under lag the primary-status-conflict repair strips the last lifecycle label of a dependency the prior-merge repair wrote in the same cycle, so the dry run cannot resolve it; a strict xfail pins the label loss and the missing preview, production fix in #1300",
+        issues=(1300,),
     ),
 )

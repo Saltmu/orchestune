@@ -167,6 +167,9 @@ class OracleView:
     preview_visible: frozenset[int]
     base_red: bool
     reserved: frozenset[int]
+    #: Issues with an active ledger entry.  The fixture creates no worktree, so
+    #: the footprint deviation of such an entry cannot be evaluated (#1281).
+    active_entries: frozenset[int] = frozenset()
 
     def promotable(
         self,
@@ -184,6 +187,21 @@ class OracleView:
             and not (set(dependencies) & self.reserved)
             and (subject is None or subject not in self.reserved)
         )
+
+
+def recompute_ledger_hold(observation: CycleObservation) -> bool:
+    """Production holds a blocked-recompute T while an active entry remains (#1281).
+
+    The recompute handler checks the footprint deviation of every active ledger
+    entry and fails closed when it cannot (the fixture has no worktrees).  It
+    runs right after the collection phase, where ``at_promotion`` is taken, so
+    only that view counts: ``at_start`` still holds entries that this cycle
+    collects before the handler (the delay-0 ``recompute_release`` case).
+    Status repair has no such hold, hence the label check.
+    """
+    return RECOMPUTE in observation.t_before and bool(
+        observation.at_promotion.active_entries
+    )
 
 
 @dataclass(slots=True)
@@ -493,6 +511,7 @@ class LivenessWorld:
             preview_visible=frozenset(visible),
             base_red=BASE_RED in self.labels(),
             reserved=reserved,
+            active_entries=frozenset(int(key) for key in ledger.active_worktrees),
         )
 
     # ---- one cycle -------------------------------------------------------------
