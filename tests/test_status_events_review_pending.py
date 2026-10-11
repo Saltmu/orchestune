@@ -23,6 +23,7 @@ from orchestune.ledger.status_events import (
     NoOp,
     PendingEffect,
     Rejected,
+    Stage,
     TaskModel,
     apply_event,
     restart,
@@ -75,6 +76,27 @@ class TestReviewPendingInterval:
         passed = _applied(state, PASS)
         assert passed.completion_done and not passed.review_pending
         assert passed.completion_confirmed and passed.persistent_completion
+
+    def test_an_interruption_after_the_label_keeps_the_wait(self) -> None:
+        # Production reserves the review policy before it publishes the label.
+        running = _model(P, execution_identity=RUN)
+        stopped = apply_event(
+            running,
+            EventInput(
+                *REVIEW_COMPLETION, operation="op", stop_after=Stage.LABEL_ADDED
+            ),
+            LIMITS,
+        )
+        assert isinstance(stopped, Applied)
+        assert N in stopped.state.lifecycle
+        assert stopped.state.review_pending and not stopped.state.completion_done
+        restarted = restart(stopped.state, ledger_loss=False)
+        assert restarted.review_pending and not restarted.completion_done
+        resumed = apply_event(
+            stopped.state, EventInput(*REVIEW_COMPLETION, operation="op"), LIMITS
+        )
+        assert isinstance(resumed, Applied)
+        assert resumed.state.review_pending and not resumed.state.completion_done
 
     def test_local_completion_stays_immediately_done(self) -> None:
         state = _applied(

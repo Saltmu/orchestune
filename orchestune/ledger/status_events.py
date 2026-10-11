@@ -755,6 +755,10 @@ def _settle_on_label(state: TaskModel, event: EventInput) -> TaskModel:
             early_death=replace(retries.early_death, pending=False),
             usage_limit=replace(retries.usage_limit, pending=False),
         )
+    if REVIEW_PENDING_EFFECTS.get((event.event, event.kind)) is PendingEffect.START:
+        # 本番はラベルの公開前にreviewポリシーを予約するので、ラベル付与後に止まっても
+        # 依存側は保留のまま（再開で同じ状態へ収束する）。
+        state = _with_completion_evidence(state, event)
     return replace(state, retries=retries)
 
 
