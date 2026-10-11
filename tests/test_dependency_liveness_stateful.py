@@ -1017,19 +1017,21 @@ def test_known_defect_prior_merge_is_not_previewed_after_faulted_apply_cycles():
         # Only the cause and the final dry run are the counterexample; a violation
         # of the earlier cycles is a general failure and is not pinned.
         with pinned_defect("P3C-LIVENESS-PRIOR-MERGE-DRYRUN"):
-            require(
-                "P3C-LIVENESS-PRIOR-MERGE-DRYRUN",
-                machine.world.labels(12),
-                "#1300: the status repair of the lagged cycle left 12 without a "
-                "lifecycle label",
-            )
+            # Observe both boundaries before raising, so neither hides the other.
+            findings = []
+            if not machine.world.labels(12):
+                findings.append(
+                    "#1300: the status repair of the lagged cycle left 12 without a "
+                    "lifecycle label"
+                )
             try:
                 machine.cycle(apply=False, lag=False)
             except ContractViolation as violation:
                 if violation.contract_id != "P3C-LIVENESS-BOUND":
                     raise
-                raise ContractViolation(
-                    "P3C-LIVENESS-PRIOR-MERGE-DRYRUN", violation.detail
-                ) from violation
+                findings.append(violation.detail)
+            require(
+                "P3C-LIVENESS-PRIOR-MERGE-DRYRUN", not findings, "; ".join(findings)
+            )
     finally:
         machine.teardown()
