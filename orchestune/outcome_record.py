@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, cast
 
+from orchestune.not_needed_review_contract import NotNeededReview
+
 OUTCOME_MARKER = "<!-- orchestune:outcome -->"
 
 RESULT_DONE = "done"
@@ -94,6 +96,11 @@ class OutcomeRecord:
     claim_id: str | None = None
     head_sha: str | None = None
     completion_id: str | None = None
+    not_needed_review: NotNeededReview | None = None
+
+    def __post_init__(self) -> None:
+        if self.not_needed_review is not None and self.result != "not-needed":
+            raise ValueError("review requirement is only valid for not-needed")
 
     def render(self) -> str:
         """`parse_from_comments`で往復変換できるコメント本文を生成する。"""
@@ -111,6 +118,8 @@ class OutcomeRecord:
             "head_sha": self.head_sha,
             "completion_id": self.completion_id,
         }
+        if self.not_needed_review is not None:
+            payload["not_needed_review"] = self.not_needed_review.to_dict()
         body = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=False)
         return f"{OUTCOME_MARKER}\n```json\n{body}\n```\n"
 
@@ -253,9 +262,26 @@ def _identity_fields_from_dict(
     )
 
 
+def _not_needed_review_from_dict(
+    data: Mapping[str, Any],
+) -> NotNeededReview | None | object:
+    if data.get("result") not in VALID_RESULTS:
+        return _INVALID
+    requirement = None
+    if "not_needed_review" in data:
+        try:
+            requirement = NotNeededReview.from_dict(data["not_needed_review"])
+        except (ValueError, TypeError):
+            return _INVALID
+        if data.get("result") != "not-needed":
+            return _INVALID
+    return requirement
+
+
 def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
-    result = data.get("result")
-    if result not in VALID_RESULTS:
+    result = cast(str, data.get("result"))
+    requirement = _not_needed_review_from_dict(data)
+    if requirement is _INVALID:
         return None
 
     issue = _normalize_int(data.get("issue"))
@@ -310,6 +336,7 @@ def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
         claim_id=claim_id,
         head_sha=head_sha,
         completion_id=completion_id,
+        not_needed_review=cast(NotNeededReview | None, requirement),
     )
 
 

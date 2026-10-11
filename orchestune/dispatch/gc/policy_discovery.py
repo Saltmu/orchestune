@@ -18,6 +18,7 @@ from orchestune.ledger.completion_reservations import (
     completion_reservation_status,
 )
 from orchestune.ledger.run_state import RunState
+from orchestune.not_needed_review_contract import NotNeededReview, review_operation_id
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
 
 
@@ -65,11 +66,31 @@ def journal_outcome(record: CompletionJournalRecord) -> OutcomeRecord | None:
         record.result,
     ):
         return None
+    requirement = outcome.not_needed_review
+    if requirement is not None:
+        policies = [
+            p
+            for p in record.downstream_policy_records
+            if p.policy_kind == "not-needed-review"
+        ]
+        if requirement.requirement == "required":
+            if len(policies) != 1 or requirement != NotNeededReview(
+                "required", review_operation_id(policies[0].policy_key)
+            ):
+                return None
+        elif policies:
+            return None
     return outcome
 
 
 def policy_kind(record: CompletionJournalRecord, outcome: OutcomeRecord) -> str | None:
     if record.result == "not-needed":
+        if outcome.not_needed_review is not None:
+            return (
+                "not-needed-review"
+                if outcome.not_needed_review.requirement == "required"
+                else "not-needed-close"
+            )
         context = (record.prepublication_policy_evidence or {}).get("context", {})
         active = context.get("active")
         # Missing context is never an independent review exemption.

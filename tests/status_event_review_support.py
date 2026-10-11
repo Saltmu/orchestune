@@ -19,6 +19,7 @@ import pytest
 
 from orchestune.complete.contracts import CompleteRequest, CompletionLabelStatus
 from orchestune.complete.not_needed_policy import not_needed_policies
+from orchestune.complete.not_needed_review_guard import ensure_review_pending
 from orchestune.complete.service import complete_task
 from orchestune.complete.status_labels import transition_completion_status_label
 from orchestune.dispatch.gc.policies import process_completion_policies
@@ -90,6 +91,8 @@ def completion_not_needed(env: CaseEnv) -> tuple[Observation, ...]:
         ISSUE, state_path=env.tmp_path / "run_state.json", worktree_root=env.tmp_path
     )
     policies = not_needed_policies(request, active, "repo", "generation", "cid", {})
+    if policies:
+        ensure_review_pending(env.forge, ISSUE)
     result = transition_completion_status_label(
         env.forge, ISSUE, _N, generation_matches=lambda: True
     )
@@ -161,11 +164,15 @@ class LabeledReviewWorld:
         policies = {} if record is None else record["downstream_policy_records"]
         statuses = {p["status"] for p in policies.values()}
         # The dependency guard and the cycle's completion are observed separately.
-        assert dependency_completion_blocked(state, ISSUE) == ctx.is_completion_blocked(
-            ISSUE
-        )
+        assert dependency_completion_blocked(
+            state, ISSUE, labels
+        ) == ctx.is_completion_blocked(ISSUE)
         return Stage(
-            _status_labels(labels),
+            frozenset(
+                label
+                for label in labels
+                if label.startswith("status:") or label == "not-needed-review:pending"
+            ),
             ctx.is_effectively_done(ISSUE),
             ctx.is_completion_blocked(ISSUE),
             ", ".join(sorted(statuses)) or None,
@@ -174,7 +181,15 @@ class LabeledReviewWorld:
 
 def _model_step(state: TaskModel, source: str, condition: str) -> TaskModel:
     route = route_for(source, condition)
-    result = apply_event(state, EventInput(route.event, route.kind), LIMITS)
+    result = apply_event(
+        state,
+        EventInput(
+            route.event,
+            route.kind,
+            review_release=condition in {"review-rejected", "review-launch-timeout"},
+        ),
+        LIMITS,
+    )
     assert isinstance(result, Applied), result
     return result.state
 
@@ -225,7 +240,7 @@ def check_labeled_review_sequence(
     if loss_at == "pending":
         world.lose_ledger()
         model = restart(model, ledger_loss=True)
-        _agree("ledger lost while pending", world.observe(), model, False, None)
+        _agree("ledger lost while pending", world.observe(), model, True, None)
         return
 
     source, condition, _left, blocked, policy = _VERDICTS[verdict]

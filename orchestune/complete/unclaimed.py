@@ -22,6 +22,7 @@ from orchestune.complete.journal import (
     reserve_completion_locked,
 )
 from orchestune.complete.not_needed_policy import not_needed_policies
+from orchestune.complete.not_needed_review_guard import review_requirement
 from orchestune.complete.publication import (
     PublicationContext,
     publish_reserved_completion_locked,
@@ -176,6 +177,10 @@ def _new_record(
     generation = f"unclaimed-{completion_id.removeprefix('completion-')}"
     outcome = replace(request.to_outcome_record(), completion_id=completion_id)
     context = {"unclaimed": True, "repository_id": repository}
+    policies = not_needed_policies(
+        request, None, repository, generation, completion_id, context
+    )
+    outcome = replace(outcome, not_needed_review=review_requirement(policies))
     return CompletionJournalRecord(
         repository,
         request.issue_number,
@@ -197,9 +202,7 @@ def _new_record(
             "initial_issue": evidence,
             "context": context,
         },
-        downstream_policy_records=not_needed_policies(
-            request, None, repository, generation, completion_id, context
-        ),
+        downstream_policy_records=policies,
     )
 
 

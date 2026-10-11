@@ -652,20 +652,39 @@ def base_branch_red_policy_effect(env: CaseEnv) -> tuple[Observation, ...]:
 
 
 def not_needed_review_verdict(env: CaseEnv) -> tuple[Observation, ...]:
+    from orchestune.not_needed_review_contract import (
+        NotNeededReview,
+        review_operation_id,
+    )
+    from orchestune.outcome_record import OutcomeRecord
+
     saved: dict[str, Any] = {}
     metadata: dict[str, Any] = {"launch_state": "launched"}
+    policy = _policy("not-needed-review", **metadata)
+    operation = review_operation_id(policy.policy_key)
+    policy.metadata["operation_id"] = operation
+    env.forge.add_comment(
+        ISSUE,
+        OutcomeRecord(
+            "not-needed",
+            ISSUE,
+            claim_id="g",
+            completion_id="c",
+            not_needed_review=NotNeededReview("required", operation),
+        ).render(),
+    )
     if env.params.get("verdict"):
         env.forge.add_comment(
             ISSUE,
-            f"<!-- orchestune:policy-review op verdict={env.params['verdict']} -->",
+            f"<!-- orchestune:policy-review {operation} verdict={env.params['verdict']} -->",
         )
     else:
-        metadata |= {"launch_requested_at": 0.0, "review_timeout_seconds": 10}
+        policy.metadata.update(launch_requested_at=0.0, review_timeout_seconds=10)
     # `_apply_policy` marks the policy applied (the dependency gate) iff it is True.
     applied = policy_review.reconcile_review(
         env.forge,
         ISSUE,
-        _policy("not-needed-review", **metadata),
+        policy,
         None,
         saved.update,
         100.0,

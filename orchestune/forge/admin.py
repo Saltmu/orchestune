@@ -184,6 +184,11 @@ REQUIRED_LABELS: tuple[LabelSpec, ...] = (
         StatusLabel.MANUAL_MERGE_REQUIRED, "FBCA04", "Needs a human to manually merge"
     ),
     LabelSpec(StatusLabel.NOT_NEEDED, "CCCCCC", "Subtask determined to be unnecessary"),
+    LabelSpec(
+        "not-needed-review:pending",
+        "FBCA04",
+        "Independent not-needed review is pending",
+    ),
     LabelSpec("priority:high", "D93F0B", "High priority subtask"),
     LabelSpec("priority:medium", "FBCA04", "Medium priority subtask"),
     LabelSpec("priority:low", "C2E0C6", "Low priority subtask"),

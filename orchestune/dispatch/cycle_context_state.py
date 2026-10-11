@@ -408,7 +408,12 @@ class _CycleState:
         if issue_number in self._effective_labels:
             return self._effective_labels[issue_number]
         task = self._tasks.get(issue_number)
-        return () if task is None else tuple(task.status_labels)
+        if task is not None:
+            return tuple(task.status_labels)
+        record = next(
+            (r for r in self._issue_records if r.number == issue_number), None
+        )
+        return () if record is None else tuple(record.labels)
 
     def _effective_task(self, issue_number: int) -> Task | None:
         base = self._tasks.get(issue_number)

@@ -158,9 +158,9 @@ the compatibility tests).
 All production Forge label mutations, completion determinations, GC reclaims, retry reservations, and escalations are abstracted as Events,
 mapped to their production call sites (`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / label-invariant completion paths / label-invariant budget paths).
 `COMPLETION` is the `orchestune complete` label reconciliation: it rejects, before any mutation, a state holding a `status:*` label (auxiliary or unknown) other than the primary labels, the target and `status:force-serial`.
-`COMPLETION_REVIEW` is the `orchestune complete --result not-needed` label reconciliation for which production creates a `not-needed-review` policy (a cloud execution, i.e. with an `external_id`, or no worktree). It makes the same transition as `COMPLETION` (`status:not-needed`), but afterwards `TaskModel.review_pending` is true and `completion_done` stays false until the review passes (dependents are held). A local execution (no `external_id`) keeps using `COMPLETION` and completes immediately. `review_pending` cannot be told from the labels (production decides it from the ledger, not the labels).
+`COMPLETION_REVIEW` is the `orchestune complete --result not-needed` label reconciliation for which production creates a `not-needed-review` policy (a cloud execution, i.e. with an `external_id`, or no worktree). It makes the same transition as `COMPLETION` (`status:not-needed`), but afterwards `TaskModel.review_pending` is true and `completion_done` stays false until the review passes (dependents are held). A local execution (no `external_id`) keeps using `COMPLETION` and completes immediately. The auxiliary `not-needed-review:pending` label is added and confirmed before publication. Readers OR it with the ledger hold, ahead of closed/done and completion overrides.
 `AWAIT_REVIEW` hands a cloud not-needed decision to the independent review: it ends the execution, but is not a completion until the review decides.
-`REVIEW_PASSED` is the passed independent review: it closes the issue and marks the `not-needed-review` policy applied without changing labels, and only then do dependents treat the task as complete.
+`REVIEW_PASSED` is the passed independent review: it closes the issue and removes the pending auxiliary label after the current generation pass and close are confirmed, then marks the `not-needed-review` policy applied, and only then do dependents treat the task as complete.
 
 ### Event correspondence table
 
@@ -241,13 +241,23 @@ mapped to their production call sites (`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / lab
 | `COMPLETE_WITHOUT_LABEL` / `CYCLE`, `PRIOR_MERGE` | unchanged | during the wait neither value is newly confirmed; only a review pass ends the wait |
 | `NOT_NEEDED` / `REPLAN`, `PLAIN`, `COMPLETION`; `RELEASE_HOLD` | unchanged | unchanged (replan does not resolve the review's ledger policy) |
 | `restart(ledger_loss=False)` | kept | kept |
-| `restart(ledger_loss=True)` | becomes false | recomputed from the remaining labels and persistent completion evidence |
+| `restart(ledger_loss=True)` | local review_pending becomes false; durable pending label remains | incomplete while pending remains; legacy local-only holds are lost |
 
 During the wait `status:not-needed` is still terminal: `LAUNCH` is rejected as `terminal-state`.
 
-### Unprotected path on ledger loss (#1278)
+### Durable hold on ledger loss (#1299)
 
-Losing `run_state.json` drops the completion record, including the `not-needed-review` policy, so `dependency_completion_blocked` becomes false. If the `status:not-needed` label remains, dependents proceed without the review (the model also treats it as complete and claims no stronger protection than production). After a rejection (queued) or a timeout (blocked-human-review) the task stays incomplete even when only the guard is gone. Whether this needs protection is a separate follow-up candidate.
+New completions and backfilled journal generations retain `not-needed-review:pending` across ledger loss. The state-only guard cannot observe GitHub: the integrated label-observation boundary supplies the durable evidence. Fresh label lookup failure prevents repair. Passed reviews and local exemptions complete; rejected/timeout states remain incomplete. Legacy histories that lost their ledger before recording durable evidence require a manual audit.
+
+### Durable not-needed review migration and recovery (#1299)
+
+Register the pending auxiliary label and update every reader (Dispatcher, fresh repair, Integrator) first. Backfill unapplied review journals through GC and confirm the holds before resuming dependency processing; then enable new writers. Mixed old readers are outside the guarantee. Do not edit fixed legacy Outcomes.
+
+New not-needed Outcomes fix `not_needed_review` with schema_version=1, requirement=`required` and the generation-specific operation_id, or `exempt-local` and null. Missing legacy fields mean unknown, never exemption. Pass requires the current generation result and confirmed close before removing pending. Fail/timeout require queued/blocked-human-review and removal of not-needed first. Incomplete comments, malformed latest Outcomes and stale generations never release the hold.
+
+Do not reconstruct ownership or automatically relaunch reviews after ledger loss. Restore the same generation ledger from backup to resume GC. Otherwise use existing independent review evidence or explicit human judgment: fetch all comments and match the current Outcome and operation ID, confirm close for pass, queued for fail, or blocked-human-review for unknown results (confirm not-needed removal for withdrawals), then clear pending. Removing a label or closing alone is insufficient. Histories lost before migration cannot always be classified automatically and require an audit.
+
+The model uses `EventInput.review_release=True` only for a generation-confirmed review fail/timeout that released the hold. Generic escalations and legacy coordinator label changes retain durable pending without this evidence.
 
 ## Termination of budgeted loops (#1266)
 

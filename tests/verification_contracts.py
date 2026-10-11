@@ -47,6 +47,27 @@ class Contract:
 
 
 CONTRACTS: tuple[Contract, ...] = (
+    Contract(
+        id="P3A-NOT-NEEDED-LEDGER-LOSS-GUARD",
+        phase="3a",
+        guarantee="remote pending holds required not-needed dependencies across ledger loss",
+        premise="new or backfilled generation; observed remote labels; all readers updated",
+        boundary="publication, empty-ledger dependency readers, generation-specific release",
+        expectation="no completion while pending; safe pass/local exemption remains complete",
+        status="verified",
+        tests=(
+            "tests/test_not_needed_ledger_loss_guard.py::test_unclaimed_completion_keeps_dependency_waiting_after_ledger_loss",
+            "tests/test_not_needed_review_guard.py::test_review_resolution_removes_pending_only_after_safe_transition",
+        ),
+        controls={
+            "pending-publication-suppressed": (
+                "tests/test_not_needed_ledger_loss_guard.py::test_control_missing_hold_is_detected[publication]",
+            ),
+            "pending-reader-disabled": (
+                "tests/test_not_needed_ledger_loss_guard.py::test_control_missing_hold_is_detected[reader]",
+            ),
+        },
+    ),
     # ---- Phase 1: shared adapter -------------------------------------------------
     Contract(
         id="P1-LIFECYCLE-NONEMPTY",

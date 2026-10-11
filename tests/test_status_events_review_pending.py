@@ -53,7 +53,9 @@ def _model(*labels: str, **overrides: object) -> TaskModel:
 
 
 def _send(state: TaskModel, key: tuple[Event, Kind]) -> Applied | NoOp | Rejected:
-    return apply_event(state, EventInput(*key), LIMITS)
+    return apply_event(
+        state, EventInput(*key, review_release=key in {REJECT, ESCALATE}), LIMITS
+    )
 
 
 def _applied(state: TaskModel, key: tuple[Event, Kind]) -> TaskModel:
@@ -158,10 +160,27 @@ class TestReviewPendingRestart:
         restarted = restart(_pending(), ledger_loss=False)
         assert restarted.review_pending and not restarted.completion_done
 
-    def test_ledger_loss_while_waiting_falls_back_to_the_label(self) -> None:
-        # The unprotected path: the held review is gone and the label completes.
+    def test_ledger_loss_while_waiting_preserves_remote_hold(self) -> None:
         lost = restart(_pending(), ledger_loss=True)
+        assert (
+            "not-needed-review:pending" in lost.auxiliary and not lost.completion_done
+        )
+
+    def test_legacy_local_only_hold_is_not_preserved_without_remote_evidence(
+        self,
+    ) -> None:
+        legacy = _model(N, review_pending=True)
+        lost = restart(legacy, ledger_loss=True)
         assert not lost.review_pending and lost.completion_done
+
+    @pytest.mark.parametrize("key", [REJECT, ESCALATE])
+    def test_unconfirmed_legacy_or_generic_withdrawal_keeps_durable_hold(
+        self, key
+    ) -> None:
+        result = apply_event(_pending(), EventInput(*key), LIMITS)
+        assert isinstance(result, Applied)
+        assert "not-needed-review:pending" in result.state.auxiliary
+        assert not restart(result.state, ledger_loss=True).completion_done
 
     @pytest.mark.parametrize("key", [REJECT, ESCALATE], ids=["reject", "timeout"])
     def test_ledger_loss_after_a_withdrawal_stays_incomplete(

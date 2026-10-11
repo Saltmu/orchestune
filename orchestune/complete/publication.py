@@ -20,6 +20,10 @@ from orchestune.complete.journal import (
     _save_or_raise,
     apply_completion_record,
 )
+from orchestune.complete.not_needed_review_guard import (
+    ensure_review_pending,
+    review_requirement,
+)
 from orchestune.complete.posting import PostingRequest, post_issue_outcome
 from orchestune.complete.replay import result_from_record
 from orchestune.complete.status_labels import transition_completion_status_label
@@ -122,6 +126,32 @@ def _publication_labels(context: PublicationContext, issue: int) -> tuple[str, .
         ) from error
 
 
+def _ensure_review_hold(
+    context: PublicationContext, record: CompletionJournalRecord, outcome: Any
+) -> None:
+    if record.result == "not-needed":
+        requirement = review_requirement(record.downstream_policy_records)
+        if (
+            outcome.not_needed_review is not None
+            and outcome.not_needed_review != requirement
+        ):
+            raise CompletionJournalError(
+                CompleteFailureReason.INVALID_COMPLETION_STATE,
+                "Fixed review requirement does not match reserved policy",
+            )
+        if (
+            requirement.requirement == "required"
+            and record.stage is not CompleteStage.HANDED_OFF
+        ):
+            try:
+                ensure_review_pending(context.forge, record.issue_number)
+            except Exception as error:
+                raise CompletionJournalError(
+                    CompleteFailureReason.LABEL_STATE_UNKNOWN,
+                    "Review hold is unavailable before publication",
+                ) from error
+
+
 def publish_reserved_completion_locked(
     context: PublicationContext, record: CompletionJournalRecord
 ) -> CompleteResult:
@@ -137,6 +167,7 @@ def publish_reserved_completion_locked(
         raise CompletionJournalError(
             CompleteFailureReason.INVALID_COMPLETION_STATE, "Fixed outcome is malformed"
         )
+    _ensure_review_hold(context, record, outcome)
     if record.stage is CompleteStage.RESERVED:
         labels = _publication_labels(context, record.issue_number)
         allowed = {
