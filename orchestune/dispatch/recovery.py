@@ -79,6 +79,7 @@ from orchestune.dispatch.launch_attempts import (
     restored_active_record,
 )
 from orchestune.dispatch.launch_state import with_launch
+from orchestune.dispatch.recovery_counters import merged_recovery_counters
 from orchestune.dispatch.scoring import Task
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
@@ -86,7 +87,6 @@ from orchestune.issue_parsing import (
     launch_history_from_body,
     launch_history_in_window,
     parse_task_from_issue,
-    recovery_counters_from_body,
 )
 from orchestune.labels import StatusLabel
 from orchestune.ledger.completion_reservations import (
@@ -119,7 +119,6 @@ from orchestune.task_metadata import TaskMetadata
 if TYPE_CHECKING:
     from orchestune.dispatch.config import DispatcherConfig
 
-_FORCE_SERIAL_LABEL = StatusLabel.FORCE_SERIAL
 
 FACT_RECOVERY_COUNTERS = "dispatch.recovery-counters"
 FACT_LAUNCH_HISTORY = "dispatch.launch-history"
@@ -418,10 +417,7 @@ def _recovery_counters_for_issue(issue: IssueRecord) -> tuple[int, bool]:
         `true`で確定していればそちらが優先される）。ラベルは`recompute_count`
         を持たないためforced_serial側のみのフォールバックとする。
     """
-    recompute_count, forced_serial = recovery_counters_from_body(issue.body)
-    if _FORCE_SERIAL_LABEL in issue.labels:
-        forced_serial = True
-    return (recompute_count, forced_serial)
+    return merged_recovery_counters(issue)
 
 
 def _tasks_from_issues(issues: Sequence[IssueRecord]) -> dict[int, Task]:
@@ -438,12 +434,10 @@ def _counter_targets(
     return tuple(
         (
             key,
-            max(active.launch.recompute_count, persisted[0]),
-            active.launch.forced_serial or persisted[1],
+            *merged_recovery_counters(issue, active.launch),
         )
         for key, active in sorted(run_state.active_worktrees.items())
         if (issue := issues_by_number.get(active.core.issue_number)) is not None
-        and (persisted := _recovery_counters_for_issue(issue))
     )
 
 

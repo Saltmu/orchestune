@@ -274,7 +274,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `REVIEW_REJECT` / `PLAIN` | 対応不要の独立レビュー却下による not-needed → queued（#1264 で追加）。1周ごとに独立レビューが1回必要 | 予算化の検討 |
 | `BLOCK` / `PLAIN` | 起動失敗・blocked outcome の保留（in-progress → blocked）。依存がすべて完了していれば次cycleで再び昇格する | 起動失敗の繰り返しの予算化の検討 |
 | `BLOCK` / `COMPLETION` | `orchestune complete --result blocked`（in-progress → blocked）。他のblockedと同じく再び昇格する | 同上 |
-| `BLOCK` / `RECOMPUTE` | 他タスクのfootprint逸脱によるblocked。逸脱した側のrecompute予算で抑えられるが、単一タスクのモデルからは見えない（再起動で0に戻る問題は #1280） | #1280 |
+| `BLOCK` / `RECOMPUTE` | 他タスクのfootprint逸脱によるblocked。逸脱した側のrecompute予算で抑えられるが、単一タスクのモデルからは見えない（予算は #1280 以降Issue本文に永続し、再起動でも0に戻らない） | なし |
 
 ### 本番retry経路の停止・再開
 
@@ -283,12 +283,8 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 - **GC回収**（`_refresh_reclaim` → `_reclaim_external_or_local`。`_record_reclaim` で予約、`_settle_reclaim` で確定）: どの停止点から再開しても回数は1回だけ増え、`pending` は解除されます。上限超過のエスカレーションはちょうど1回です。`status:blocked-human-review` の付与後に止まった場合、再開したGCはエスカレーション済みとして数えずに確定するだけで、残った `status:in-progress` はstatus repair（#1218）に委ねられます（モデルの `restart` も同じ結果を予測します）。予約・保留は既存の `TaskReclaimRecord` を更新するので、早期終了・review timeout・usage-limit の予算は回収で0に戻りません（#1279、`P3B-RECLAIM-BUDGET-PRESERVED`）。
 - **早期終了・review timeout**（GC完了の `_publish_requeue`、確定は `_settle_completion_requeue`）: 予約がディスクに届いた後の停止では、再開しても回数を再消費せず `retry_at` も最初の値のままです。保存前の停止では予約が失われ、再開時の時刻で計画し直します。確定の保存後に止まると台帳から実行が外れるため、残った `status:in-progress` はstatus repairに委ねられます。
 - **review timeoutのcompletion policy**（`_prepare` → `_apply_policy`）: operation単位の予約を再利用し、再投入コメントは1回だけです。
-- **footprint逸脱の再計算**: 回数と `forced_serial` はIssue本文のFootprintフェンスに永続し、`run_state.json` を失っても本文から復元されます。本文の書き込み後に止まっても二重に消費しません。
+- **footprint逸脱の再計算**: 回数と `forced_serial` はIssue本文のFootprintフェンスに永続し、`run_state.json` を失っても本文から復元されます。通常の起動も、providerを呼ぶ前に現在のIssue本文・ラベルを読んでclaim予約へ引き継ぎ（`max` / OR、取得・保存できなければ起動を保留）、再投入後も予算は0に戻りません（#1280、`P3B-RECOMPUTE-BUDGET-PRESERVED`）。本文の書き込み後に止まっても二重に消費しません。
 - **base-branch-red**: attemptはIssueコメントのOutcome Recordから数え、同じ `(claim_id, head_sha)` の再送は同じattemptを使います。3回目でエスカレーションします。
-
-このharnessが見つけた本番の欠陥は別Issueへ切り出し、反例をstrict xfailで固定しています（期待値は弱めていません）。
-
-- #1280: 通常の起動が `recompute_count` を0から始め、Issue本文の回数と `forced_serial` を上書きする
 
 ### 実行時間と再現
 

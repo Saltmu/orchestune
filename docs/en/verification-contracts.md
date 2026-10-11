@@ -29,7 +29,7 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 | `P3B-LEDGER-LOSS-KEEPS-PERSISTENT` | 3b | verified | `persistent-budget-reset` | - |
 | `P3B-LAUNCH-AND-ESCALATION` | 3b | unverified | - | - |
 | `P3B-RECLAIM-BUDGET-PRESERVED` | 3b | verified | `reclaim-record-replaced` | - |
-| `P3B-RECOMPUTE-BUDGET-PRESERVED` | 3b | known_defect | - | #1280 |
+| `P3B-RECOMPUTE-BUDGET-PRESERVED` | 3b | verified | `relaunch-counter-reset` | - |
 | `P3C-CASE-DELAY` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `empty-completion-set`, `throwaway-context` | - |
 | `P3C-LIVENESS-BOUND` | 3c | verified | `promotion-suppressed`, `promotion-delayed`, `event-only`, `empty-completion-set`, `throwaway-context` | - |
 | `P3C-INTERMEDIATE-LIVENESS` | 3c | verified | `intermediate-ignored`, `promotion-suppressed` | - |
@@ -87,7 +87,6 @@ Statuses: `verified` = a normal test and at least one control; `unverified` = a 
 - `P2-CONVERGENCE-UPPER-BOUND` (unverified): no test drives more than one pass; only the expectation (1 cycle) is checked
 - `P3A-DOCUMENT-TABLE` (unverified): no control: a document drift has not been injected
 - `P3B-LAUNCH-AND-ESCALATION` (unverified): plain assertions without contract ids; no control was injected
-- `P3B-RECOMPUTE-BUDGET-PRESERVED` (known_defect): strict xfail pins the counterexample (#1280); the fix removes the mark
 - `P3C-DRYRUN-RESERVATION` (known_defect): strict xfail counterexamples (#1283 for T, #1281 counterexample 1 for an intermediate node); assert_safe and the intermediate check excuse these previews until the production fixes land; the dependency side is a separate verified contract
 - `P3C-LIVENESS-PRIOR-MERGE-DRYRUN` (known_defect): #1281 counterexample 2: a strict xfail pins it; whether production drops the prior-merge completion set or the fairness judgement is wrong is not yet separated
 
@@ -125,6 +124,7 @@ The Issue's reading was that a one-cycle promotion delay on a path whose evidenc
 | `budget-bound-exceeded` | the reclaim limit is raised above the table | `P3B-RETRY-BOUND` | reclaim loop |
 | `persistent-budget-reset` | `restart` also zeroes the persistent counts | `P3B-LEDGER-LOSS-KEEPS-PERSISTENT` | ledger-loss scenario |
 | `reclaim-record-replaced` | a reclaim reservation, cloud reservation or dirty hold writes a fresh `TaskReclaimRecord` instead of updating the persisted one (the pre-#1279 write) | `P3B-RECLAIM-BUDGET-PRESERVED` | persisted record after the zombie reclaim (budgets and usage-limit run), the cloud reservation and the dirty hold |
+| `relaunch-counter-reset` | a normal launch starts `recompute_count` / `forced_serial` from 0 / False (the pre-#1280 launch) | `P3B-RECOMPUTE-BUDGET-PRESERVED` | the active after the normal launch entry (claim reservation, counters saved before the provider, launch record) that deviates again |
 | `promotion-suppressed` / `promotion-delayed` | the promotion boundary is skipped always / in the evidence cycle | `P3C-CASE-DELAY` (case table), `P3C-LIVENESS-BOUND`, `P3C-INTERMEDIATE-LIVENESS` | label, `record_completion` (apply), prior merge (apply and dry run) |
 | `empty-completion-set` / `throwaway-context` | the #902 Round 4/5 miswiring | `P3C-CASE-DELAY` | case table |
 | `intermediate-ignored` | the intermediate node's assessment is dropped | `P3C-INTERMEDIATE-LIVENESS` | intermediate topology |

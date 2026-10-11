@@ -693,3 +693,42 @@ def test_released_attempt_is_not_recovered_or_relaunched(launch_env):
     assert reconcile_attempt(attempt, plan.task, state, config)
     assert not state.active_worktrees
     launch.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("body", "labels", "task_labels", "expected"),
+    [
+        ((0, False), (), (), (0, False)),
+        ((1, False), (), (), (1, False)),
+        ((2, True), (), (), (2, True)),
+        ((0, False), ("status:force-serial",), (), (0, True)),
+        ((1, False), (), ("status:force-serial",), (1, True)),
+    ],
+)
+def test_attempt_recovery_uses_the_shared_counter_rule(
+    launch_env, body, labels, task_labels, expected
+):
+    """#1280: the same max / OR rule as a normal launch and a run-state recovery."""
+    from dataclasses import replace
+
+    from orchestune.dispatch.attempt_record import LaunchAttempt
+    from orchestune.dispatch.launch_attempts import active_from_attempt
+    from orchestune.issue_parsing import backfill_recovery_counters
+
+    forge, config, plan, _launch = launch_env
+    issue = forge.issues[1]
+    patched = backfill_recovery_counters(issue.body, *body) or issue.body
+    forge.issues[1] = replace(issue, body=patched, labels=(*issue.labels, *labels))
+    task = replace(plan.task, status_labels=(*plan.task.status_labels, *task_labels))
+    attempt = LaunchAttempt(
+        "attempt-counters",
+        "launched",
+        config.dispatch_target.target_name,
+        plan.branch_name,
+        plan.base_branch_for_state,
+        100.0,
+    )
+
+    active = active_from_attempt(attempt, task, config)
+
+    assert (active.launch.recompute_count, active.launch.forced_serial) == expected

@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Generic, TypeVar
@@ -37,8 +37,10 @@ from orchestune.dispatch.launch_state import (
     build_launch_record,
     launch_info_with_selection,
     launch_info_with_token_estimate,
+    with_launch,
     with_launch_phase,
 )
+from orchestune.dispatch.recovery_counters import launch_with_recovery_counters
 from orchestune.dispatch.worktree import LaunchResult, _launch_on_prepared_worktree
 from orchestune.infra.git_cli import run_git
 from orchestune.issue_parsing import (
@@ -62,7 +64,7 @@ from orchestune.ledger.run_state import (
     usage_limit_wait,
 )
 from orchestune.ledger.status_labels import transition_status_label
-from orchestune.models import PrRecord
+from orchestune.models import IssueRecord, PrRecord
 from orchestune.task_branch_resolution import BranchCapability
 from orchestune.task_metadata import TaskMetadata
 
@@ -466,6 +468,10 @@ def _build_active_worktree_from_launch(
     launch_info = LaunchInfo(
         pid=launch.pid,
         started_at=launch.dispatch_started_at or now,
+        # #1280: the Issue-body counters were saved on the reservation before the
+        # provider ran; a relaunch continues the persistent budget.
+        recompute_count=reservation.launch.recompute_count,
+        forced_serial=reservation.launch.forced_serial,
         external_id=launch.external_id,
         external_url=launch.external_url,
         launch_attempt_id=launch.launch_attempt_id,
@@ -630,6 +636,19 @@ def _sync_claim_reservation_into_run_state(
         run_state.active_worktrees[key] = reservation
 
 
+def _read_issue_for_counters(
+    issue_number: int, config: DispatcherConfig
+) -> tuple[IssueRecord | None, str]:
+    """#1280: the current Issue (never the cycle listing, which can lag) or why not."""
+    try:
+        issue = config.resolved_forge.get_issue(issue_number)
+    except Exception as exc:
+        return None, f"failed to read recovery counters: {exc}"
+    if issue is None:
+        return None, "failed to read recovery counters: issue not found"
+    return issue, ""
+
+
 def _persist_launching_phase(
     issue_number: int,
     outcome: ClaimOutcome,
@@ -640,13 +659,32 @@ def _persist_launching_phase(
 ) -> LaunchResult | None:
     """#964: provider呼出直前にlaunch_phase="launching"を永続化する。
 
-    保存失敗時はproviderを呼ばず起動を保留する。
+    #1280: 同じ保存でIssue本文の回復counter（recompute_count/forced_serial）も
+    予約へ引き継ぐ。counterはproviderの前にだけ読み、取得・保存のどちらが
+    失敗してもproviderを呼ばず起動を保留する。
     """
     active_entry = run_state.active_worktrees.get(str(issue_number))
     if active_entry is None:
         return None
     key = str(issue_number)
-    run_state.active_worktrees[key] = with_launch_phase(active_entry, "launching")
+    held = LaunchResult(
+        issue_number=issue_number,
+        branch=outcome.branch or "",
+        worktree_path=str(outcome.worktree_path or ""),
+        pid=None,
+        launched=False,
+        held=True,
+    )
+    issue, reason = _read_issue_for_counters(issue_number, config)
+    if issue is None:
+        print(f"Holding launch of issue #{issue_number}: {reason}", file=sys.stderr)
+        return replace(held, error_message=reason)
+    run_state.active_worktrees[key] = with_launch_phase(
+        with_launch(
+            active_entry, launch_with_recovery_counters(active_entry.launch, issue)
+        ),
+        "launching",
+    )
     try:
         save_run_state(
             run_state,
@@ -662,15 +700,7 @@ def _persist_launching_phase(
             f"Holding launch of issue #{issue_number}: failed to persist launching phase: {exc}",
             file=sys.stderr,
         )
-        return LaunchResult(
-            issue_number=issue_number,
-            branch=outcome.branch or "",
-            worktree_path=str(outcome.worktree_path or ""),
-            pid=None,
-            launched=False,
-            held=True,
-            error_message=f"failed to persist launching phase: {exc}",
-        )
+        return replace(held, error_message=f"failed to persist launching phase: {exc}")
 
 
 def _try_planned_launch(

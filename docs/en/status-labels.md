@@ -284,7 +284,7 @@ Among the production routes (`EVENT_BY_SOURCE`), those that go from an executed 
 | `REVIEW_REJECT` / `PLAIN` | an independent review rejected a not-needed completion (not-needed -> queued, added by #1264); every round needs one more independent review | consider a budget |
 | `BLOCK` / `PLAIN` | launch failure or a blocked outcome hold (in-progress -> blocked); with every dependency complete the next cycle promotes it again | consider budgeting repeated launch failures |
 | `BLOCK` / `COMPLETION` | `orchestune complete --result blocked` (in-progress -> blocked); promoted again like any blocked task | same as above |
-| `BLOCK` / `RECOMPUTE` | blocked by another task's footprint deviation; bounded by that task's recompute budget, which the single-task model cannot see (its reset on relaunch is #1280) | #1280 |
+| `BLOCK` / `RECOMPUTE` | blocked by another task's footprint deviation; bounded by that task's recompute budget, which the single-task model cannot see (the budget persists in the Issue body since #1280 and no longer resets on relaunch) | none |
 
 ### Stopping and resuming the production retry paths
 
@@ -293,12 +293,8 @@ Among the production routes (`EVENT_BY_SOURCE`), those that go from an executed 
 - **GC reclaim** (`_refresh_reclaim` -> `_reclaim_external_or_local`; reserved by `_record_reclaim`, settled by `_settle_reclaim`): from every stop point the count grows exactly once and `pending` is cleared; an over-budget reclaim escalates exactly once. When the stop comes after `status:blocked-human-review` was added, the resumed GC sees the task as already escalated and only settles; the remaining `status:in-progress` is left to status repair (#1218), as the model's `restart` predicts. A reservation or hold updates the existing `TaskReclaimRecord`, so the early-death, review-timeout and usage-limit budgets are not reset by a reclaim (#1279, `P3B-RECLAIM-BUDGET-PRESERVED`).
 - **Early death and review timeout** (GC completion `_publish_requeue`, settled by `_settle_completion_requeue`): after the reservation reached disk, a resumed run consumes no new slot and keeps the first `retry_at`; a stop before that save loses the reservation and the resumed run plans again at its own clock. After the settle save the ledger no longer holds the execution, so a remaining `status:in-progress` is left to status repair.
 - **Review-timeout completion policy** (`_prepare` -> `_apply_policy`): the per-operation reservation is reused and the requeue comment is posted once.
-- **Footprint-deviation recompute**: the count and `forced_serial` persist in the Issue body's Footprint fence and are restored from it when `run_state.json` is lost; a stop after the body write consumes nothing twice.
+- **Footprint-deviation recompute**: the count and `forced_serial` persist in the Issue body's Footprint fence and are restored from it when `run_state.json` is lost; a normal launch also reads the current Issue body and labels before calling the provider and carries them into the claim reservation (`max` / OR; the launch is held if they cannot be read or saved), so a requeue does not reset the budget (#1280, `P3B-RECOMPUTE-BUDGET-PRESERVED`); a stop after the body write consumes nothing twice.
 - **Base-branch-red**: attempts are counted from the Outcome Records in Issue comments, a resend of the same `(claim_id, head_sha)` reuses its attempt, and the 3rd attempt escalates.
-
-Production defects found by the harness are split out, with their counterexamples pinned as strict xfails (expectations are not weakened):
-
-- #1280: a normal launch starts `recompute_count` at 0 and overwrites the Issue-body count and `forced_serial`
 
 ### Run time and reproduction
 
