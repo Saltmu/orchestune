@@ -24,6 +24,7 @@ P2P = "tests/test_consistency_status_repairs.py"
 P3A = "tests/test_status_events.py"
 P3B = "tests/test_status_events_stateful.py"
 P3BR = "tests/test_status_event_retry_resume.py"
+P3L = "tests/test_dispatch_gc_reclaim_lifecycle.py"
 P3C = "tests/test_dependency_liveness_stateful.py"
 P3Q = "tests/test_quint_dependency_replay.py"
 
@@ -328,19 +329,38 @@ CONTRACTS: tuple[Contract, ...] = (
         reason="plain assertions without contract ids; no control was injected",
     ),
     Contract(
-        id="P3B-PERSISTENT-BUDGET-PRESERVED",
+        id="P3B-RECLAIM-BUDGET-PRESERVED",
         phase="3b",
-        guarantee="a GC reclaim keeps the backoff budgets; a relaunch keeps the recompute budget",
-        premise="production persistence of TaskReclaimRecord and Issue-body counters",
+        guarantee="a GC reclaim reservation or dirty hold keeps the early-death, review-timeout and usage-limit budgets",
+        premise="production persistence of TaskReclaimRecord by the zombie, cloud and dirty-hold writers",
+        boundary="persisted records",
+        expectation="budgets survive",
+        status="verified",
+        tests=(
+            f"{P3BR}::test_reclaim_keeps_backoff_budgets",
+            f"{P3L}::TestReclaimKeepsIndependentBudgets",
+        ),
+        controls={
+            "reclaim-record-replaced": (
+                f"{P3BR}::test_control_reclaim_record_replaced_is_detected",
+                f"{P3L}::TestReclaimRecordReplacementIsDetected::test_control_cloud_reservation_replacement_is_detected",
+                f"{P3L}::TestReclaimRecordReplacementIsDetected::test_control_dirty_hold_replacement_is_detected",
+            )
+        },
+    ),
+    Contract(
+        id="P3B-RECOMPUTE-BUDGET-PRESERVED",
+        phase="3b",
+        guarantee="a relaunch keeps the recompute budget",
+        premise="production persistence of the Issue-body counters",
         boundary="persisted records",
         expectation="budgets survive",
         status="known_defect",
         tests=(
             f"{P3BR}::TestRecomputeBudget::test_relaunch_keeps_the_persisted_recompute_budget",
-            f"{P3BR}::test_reclaim_keeps_backoff_budgets",
         ),
-        reason="strict xfail pins the counterexamples; the fix removes the marks",
-        issues=(1279, 1280),
+        reason="strict xfail pins the counterexample; the fix removes the mark",
+        issues=(1280,),
     ),
     # ---- Phase 3c: dependency resolution ----------------------------------------------
     Contract(

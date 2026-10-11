@@ -6,7 +6,11 @@
 へ遷移して停止することを検証する。
 """
 
+from dataclasses import fields, replace
+from typing import Any
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_context import (
@@ -19,6 +23,7 @@ from orchestune.dispatch.cycle_events import (
     WorktreeCompletionHold,
 )
 from orchestune.dispatch.gc import _rule_completed, _rule_not_needed
+from orchestune.dispatch.gc.cloud_completion import _reserve_cloud_reclaim_record
 from orchestune.ledger.run_state import (
     RunState,
     TaskReclaimRecord,
@@ -31,6 +36,7 @@ from tests.dispatch_gc_test_support import _rule_ctx as _ctx
 from tests.dispatch_gc_test_support import (
     run_gc_reclaims as _collect_zombies_and_timeouts,
 )
+from tests.verification_contract_test_support import expect_violation, require
 
 _NOW = 2_000.0
 
@@ -577,3 +583,290 @@ class TestDiscardReclaimCountsForClosedIssues:
         assert removed == []
         config.forge.get_issue_state.assert_not_called()
         config.forge.list_issues_by_label.assert_not_called()
+
+
+_RECLAIM_FIELDS = frozenset({"count", "last_reclaimed_at", "pending"})
+
+
+def _budgeted(**overrides) -> TaskReclaimRecord:
+    """#1279: 回収以外の独立予算（early-death・review-timeout・usage-limit）を
+    すべて使用済みにした台帳エントリ。
+
+    新しい予算フィールドが追加されたら、ここで非既定値にしないとテストが
+    失敗する（置き換えによる取りこぼしを検知し続けるため）。
+    """
+    values: dict[str, Any] = dict(
+        count=1,
+        last_reclaimed_at=100.0,
+        pending=False,
+        early_death_retry_count=2,
+        early_death_retry_at=5.0,
+        early_death_retry_pending=True,
+        review_timeout_retry_count=1,
+        review_timeout_retry_at=7.0,
+        review_timeout_retry_pending=True,
+        usage_limit_retry_count=1,
+        usage_limit_retry_at=9.0,
+        usage_limit_retry_pending=True,
+        usage_limit_retry_run="claim-1",
+    )
+    values.update(overrides)
+    record = TaskReclaimRecord(**values)
+    default = TaskReclaimRecord()
+    for field in fields(record):
+        if field.name not in _RECLAIM_FIELDS:
+            assert getattr(record, field.name) != getattr(
+                default, field.name
+            ), f"_budgeted must set {field.name} to a non-default value"
+    return record
+
+
+def _independent(record: TaskReclaimRecord) -> dict[str, object]:
+    return {
+        field.name: getattr(record, field.name)
+        for field in fields(record)
+        if field.name not in _RECLAIM_FIELDS
+    }
+
+
+class TestReclaimKeepsIndependentBudgets:
+    """#1279: 回収の予約・保留は、early-death / review-timeout / usage-limit の
+    予算を巻き込まない（既存エントリを更新し、置き換えない）。"""
+
+    @pytest.mark.parametrize(
+        ("pending", "expected_count"), [(False, 2), (True, 1)], ids=["new", "reused"]
+    )
+    def test_zombie_reclaim_keeps_the_independent_budgets(
+        self, tmp_path, fake_forge, pending, expected_count
+    ):
+        previous = _budgeted(pending=pending)
+        run_state = RunState(task_reclaim_counts={280: previous})
+        config = _config(tmp_path, max_task_reclaims=5, forge=fake_forge)
+
+        _run_timeout_cycles(run_state, config, cycles=1, tmp_path=tmp_path)
+
+        saved = load_run_state(config.run_state_path).task_reclaim_counts[280]
+        for record in (run_state.task_reclaim_counts[280], saved):
+            assert _independent(record) == _independent(previous)
+            assert record.count == expected_count
+            assert record.pending is False
+        assert _independent(previous) == _independent(_budgeted(pending=pending))
+
+    def test_zombie_reclaim_reservation_keeps_the_budgets_on_disk(
+        self, tmp_path, fake_forge
+    ):
+        """予約（pending=True）の時点で、すでに読み戻せる形で保持されている。"""
+        previous = _budgeted()
+        run_state = RunState(task_reclaim_counts={280: previous})
+        config = _config(tmp_path, max_task_reclaims=5, forge=fake_forge)
+        run_state.active_worktrees["280"] = _active(
+            worktree_path=str(tmp_path / "missing-280")
+        )
+        persisted: list[TaskReclaimRecord] = []
+
+        def _record_persisted(issue_number, label):
+            persisted.append(
+                load_run_state(config.run_state_path).task_reclaim_counts[280]
+            )
+
+        with (
+            patch("orchestune.dispatch.phase_gc.time.time", return_value=_NOW),
+            patch.object(
+                config.resolved_forge, "add_label", side_effect=_record_persisted
+            ),
+        ):
+            _collect_zombies_and_timeouts(run_state, {280: _task()}, config)
+
+        assert persisted
+        assert persisted[0].pending is True
+        assert _independent(persisted[0]) == _independent(previous)
+
+    @pytest.mark.parametrize(
+        ("pending", "expected_count"), [(False, 2), (True, 1)], ids=["new", "reused"]
+    )
+    def test_cloud_reservation_keeps_the_independent_budgets(
+        self, pending, expected_count
+    ):
+        previous = _budgeted(pending=pending)
+        run_state = RunState(task_reclaim_counts={280: previous})
+        seen: list[TaskReclaimRecord] = []
+
+        count = _reserve_cloud_reclaim_record(
+            280, run_state, lambda: seen.append(run_state.task_reclaim_counts[280])
+        )
+
+        reserved = run_state.task_reclaim_counts[280]
+        assert count == expected_count == reserved.count
+        assert reserved.pending is True
+        assert _independent(reserved) == _independent(previous)
+        assert seen == [reserved]
+        assert reserved is not previous
+
+    def test_cloud_reservation_without_a_record_starts_from_the_defaults(self):
+        run_state = RunState()
+
+        count = _reserve_cloud_reclaim_record(280, run_state)
+
+        reserved = run_state.task_reclaim_counts[280]
+        assert count == reserved.count == 1
+        assert reserved.pending is True
+        assert _independent(reserved) == _independent(TaskReclaimRecord())
+
+    def test_cloud_reservation_failure_restores_the_whole_record(self):
+        previous = _budgeted()
+        run_state = RunState(task_reclaim_counts={280: previous})
+
+        def fail():
+            raise RuntimeError("persist failed")
+
+        with pytest.raises(RuntimeError, match="persist failed"):
+            _reserve_cloud_reclaim_record(280, run_state, fail)
+
+        assert run_state.task_reclaim_counts[280] is previous
+        assert previous == _budgeted()
+
+    def test_cloud_reservation_failure_forgets_a_record_that_did_not_exist(self):
+        run_state = RunState()
+
+        def fail():
+            raise RuntimeError("persist failed")
+
+        with pytest.raises(RuntimeError):
+            _reserve_cloud_reclaim_record(280, run_state, fail)
+
+        assert run_state.task_reclaim_counts == {}
+
+    @pytest.mark.parametrize("pending", [False, True], ids=["idle", "reserved"])
+    def test_dirty_hold_keeps_the_pending_flag_and_budgets(
+        self, tmp_path, fake_forge, pending
+    ):
+        """保留は回収予約を新設も解除もしない（pending は既存の担当箇所が解除する）。"""
+        ctx = _ctx(forge=fake_forge)
+        ctx.config.apply = True
+        ctx.config.run_state_path = tmp_path / "run_state.json"
+        ctx.config.max_task_reclaims = 5
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+        previous = _budgeted(pending=pending)
+        ctx.run_state.task_reclaim_counts[280] = previous
+
+        TestDirtyWorktreeHoldLimit()._hold_cycle(
+            ctx, active, _task(status_labels=("status:in-progress",))
+        )
+
+        saved = load_run_state(ctx.config.run_state_path).task_reclaim_counts[280]
+        for record in (ctx.run_state.task_reclaim_counts[280], saved):
+            assert record.count == 2
+            assert record.pending is pending
+            assert _independent(record) == _independent(previous)
+        assert previous == _budgeted(pending=pending)
+
+    def test_dirty_hold_without_a_record_counts_from_zero(self, tmp_path, fake_forge):
+        ctx = _ctx(forge=fake_forge)
+        ctx.config.apply = True
+        ctx.config.run_state_path = tmp_path / "run_state.json"
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+
+        TestDirtyWorktreeHoldLimit()._hold_cycle(
+            ctx, active, _task(status_labels=("status:in-progress",))
+        )
+
+        record = ctx.run_state.task_reclaim_counts[280]
+        assert record.count == 1
+        assert record.pending is False
+        assert _independent(record) == _independent(TaskReclaimRecord())
+
+    def test_dirty_hold_persist_failure_keeps_the_in_memory_update(
+        self, tmp_path, fake_forge, capsys
+    ):
+        """保留の保存は best-effort のまま（今回 fail-closed にしない）。"""
+        ctx = _ctx(forge=fake_forge)
+        ctx.config.apply = True
+        ctx.config.run_state_path = tmp_path / "run_state.json"
+        ctx.config.max_task_reclaims = 5
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+        previous = _budgeted()
+        ctx.run_state.task_reclaim_counts[280] = previous
+
+        with patch(
+            "orchestune.dispatch.gc.save_run_state",
+            autospec=True,
+            side_effect=OSError("disk full"),
+        ):
+            TestDirtyWorktreeHoldLimit()._hold_cycle(
+                ctx, active, _task(status_labels=("status:in-progress",))
+            )
+
+        record = ctx.run_state.task_reclaim_counts[280]
+        assert record.count == 2
+        assert _independent(record) == _independent(previous)
+        assert "disk full" in capsys.readouterr().err
+
+
+def _scenario_cloud_reservation(*_unused) -> None:
+    previous = _budgeted()
+    run_state = RunState(task_reclaim_counts={280: previous})
+    _reserve_cloud_reclaim_record(280, run_state)
+    reserved = run_state.task_reclaim_counts[280]
+    require(
+        "P3B-RECLAIM-BUDGET-PRESERVED",
+        _independent(reserved) == _independent(previous),
+        reserved,
+    )
+
+
+def _scenario_dirty_hold(tmp_path, fake_forge) -> None:
+    ctx = _ctx(forge=fake_forge)
+    ctx.config.apply = True
+    ctx.config.run_state_path = tmp_path / "run_state.json"
+    ctx.config.max_task_reclaims = 5
+    active = ctx.run_state.active_worktrees.setdefault(
+        "1", _active(issue_number=280, worktree_path="worktrees/w1")
+    )
+    previous = _budgeted(pending=True)
+    ctx.run_state.task_reclaim_counts[280] = previous
+    TestDirtyWorktreeHoldLimit()._hold_cycle(
+        ctx, active, _task(status_labels=("status:in-progress",))
+    )
+    saved = load_run_state(ctx.config.run_state_path).task_reclaim_counts[280]
+    require(
+        "P3B-RECLAIM-BUDGET-PRESERVED",
+        _independent(saved) == _independent(previous),
+        saved,
+    )
+    require("P3B-RECLAIM-BUDGET-PRESERVED", saved.pending is True, saved)
+
+
+class TestReclaimRecordReplacementIsDetected:
+    """#1279: 旧式（新しいレコードで置き換える書き込み）を注入すると、cloud 予約と
+    dirty 保留の経路でも `P3B-RECLAIM-BUDGET-PRESERVED` の違反になる。"""
+
+    @staticmethod
+    def _replacing(real):
+        def replacing(obj, **changes):
+            if isinstance(obj, TaskReclaimRecord):
+                return TaskReclaimRecord(**changes)
+            return real(obj, **changes)
+
+        return replacing
+
+    def test_control_cloud_reservation_replacement_is_detected(self, monkeypatch):
+        _scenario_cloud_reservation()
+        monkeypatch.setattr(
+            "orchestune.dispatch.gc.cloud_completion.replace", self._replacing(replace)
+        )
+        with expect_violation("P3B-RECLAIM-BUDGET-PRESERVED"):
+            _scenario_cloud_reservation()
+
+    def test_control_dirty_hold_replacement_is_detected(
+        self, monkeypatch, tmp_path, fake_forge
+    ):
+        _scenario_dirty_hold(tmp_path / "clean", fake_forge)
+        monkeypatch.setattr("orchestune.dispatch.gc.replace", self._replacing(replace))
+        with expect_violation("P3B-RECLAIM-BUDGET-PRESERVED"):
+            _scenario_dirty_hold(tmp_path / "faulty", fake_forge)

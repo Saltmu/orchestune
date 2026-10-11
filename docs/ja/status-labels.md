@@ -257,7 +257,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 
 `tests/status_event_retry_harness.py` は、`run_state.json`（ディスク）とForgeだけを残して停止し、それ以外（メモリ上の `RunState`、回収・完了の文脈）を再構築して再開します。停止は `BaseException` で起こすので、本番の `except Exception` に握りつぶされません。停止点は予約の保存前後、遷移先ラベルの付与前後（付与後は確定コールバックの前）、確定の保存前後、旧ラベルの除去前後です。
 
-- **GC回収**（`_refresh_reclaim` → `_reclaim_external_or_local`。`_record_reclaim` で予約、`_settle_reclaim` で確定）: どの停止点から再開しても回数は1回だけ増え、`pending` は解除されます。上限超過のエスカレーションはちょうど1回です。`status:blocked-human-review` の付与後に止まった場合、再開したGCはエスカレーション済みとして数えずに確定するだけで、残った `status:in-progress` はstatus repair（#1218）に委ねられます（モデルの `restart` も同じ結果を予測します）。
+- **GC回収**（`_refresh_reclaim` → `_reclaim_external_or_local`。`_record_reclaim` で予約、`_settle_reclaim` で確定）: どの停止点から再開しても回数は1回だけ増え、`pending` は解除されます。上限超過のエスカレーションはちょうど1回です。`status:blocked-human-review` の付与後に止まった場合、再開したGCはエスカレーション済みとして数えずに確定するだけで、残った `status:in-progress` はstatus repair（#1218）に委ねられます（モデルの `restart` も同じ結果を予測します）。予約・保留は既存の `TaskReclaimRecord` を更新するので、早期終了・review timeout・usage-limit の予算は回収で0に戻りません（#1279、`P3B-RECLAIM-BUDGET-PRESERVED`）。
 - **早期終了・review timeout**（GC完了の `_publish_requeue`、確定は `_settle_completion_requeue`）: 予約がディスクに届いた後の停止では、再開しても回数を再消費せず `retry_at` も最初の値のままです。保存前の停止では予約が失われ、再開時の時刻で計画し直します。確定の保存後に止まると台帳から実行が外れるため、残った `status:in-progress` はstatus repairに委ねられます。
 - **review timeoutのcompletion policy**（`_prepare` → `_apply_policy`）: operation単位の予約を再利用し、再投入コメントは1回だけです。
 - **footprint逸脱の再計算**: 回数と `forced_serial` はIssue本文のFootprintフェンスに永続し、`run_state.json` を失っても本文から復元されます。本文の書き込み後に止まっても二重に消費しません。
@@ -265,7 +265,6 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 
 このharnessが見つけた本番の欠陥は別Issueへ切り出し、反例をstrict xfailで固定しています（期待値は弱めていません）。
 
-- #1279: GC回収・cloud放棄回収・dirty保留が `TaskReclaimRecord` を作り直し、早期終了とreview timeoutの回数を0へ戻す
 - #1280: 通常の起動が `recompute_count` を0から始め、Issue本文の回数と `forced_serial` を上書きする
 
 ### 実行時間と再現

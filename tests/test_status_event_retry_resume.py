@@ -14,6 +14,7 @@ docstrings), not computed by `plan_retry`, `exceeds_limit` or
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -21,10 +22,10 @@ import pytest
 
 from orchestune.dependencies.resolution import build_legacy_dag_inputs
 from orchestune.dispatch import launch, rebase, recovery
-from orchestune.dispatch.gc import policies
+from orchestune.dispatch.gc import policies, zombies
 from orchestune.issue_parsing import recovery_counters_from_body
 from orchestune.labels import StatusLabel
-from orchestune.ledger.run_state import RunState
+from orchestune.ledger.run_state import RunState, TaskReclaimRecord, save_run_state
 from orchestune.ledger.status_events import (
     BackoffState,
     ReclaimState,
@@ -56,6 +57,7 @@ from tests.status_transition_callsite_drivers import ISSUE, _fake
 from tests.test_dispatch_gc_policies import policy_case
 from tests.verification_contract_test_support import (
     ContractViolation,
+    expect_violation,
     pinned_defect,
     require,
 )
@@ -69,8 +71,6 @@ MAX_RECLAIMS = 3
 BACKOFF = 60
 RESUMED = NOW + 5
 #: Production defects found by this harness, split out with their counterexamples.
-RECLAIM_RECORD_ISSUE = "#1279"
-_PRESERVED = "P3B-PERSISTENT-BUDGET-PRESERVED"
 RECOMPUTE_RELAUNCH_ISSUE = "#1280"
 
 
@@ -322,10 +322,18 @@ class TestRecomputeBudget:
             _deviate(active, config, task)
         assert _body_counters(forge) == (2, True)
         relaunched = _fresh_launch(forge, config)
-        with pinned_defect("P3B-PERSISTENT-BUDGET-PRESERVED"):
+        with pinned_defect("P3B-RECOMPUTE-BUDGET-PRESERVED"):
             result = _deviate(relaunched, config, task)
-            require(_PRESERVED, result == "already_forced_serial", result)
-            require(_PRESERVED, _body_counters(forge) == (2, True), result)
+            require(
+                "P3B-RECOMPUTE-BUDGET-PRESERVED",
+                result == "already_forced_serial",
+                result,
+            )
+            require(
+                "P3B-RECOMPUTE-BUDGET-PRESERVED",
+                _body_counters(forge) == (2, True),
+                result,
+            )
 
 
 def _fresh_launch(forge: FakeForge, config: Any) -> Any:
@@ -401,33 +409,86 @@ class TestBaseBranchRedBudget:
         assert set(observed) == labels
 
 
-# ---- defects pinned for their own Issues --------------------------------------
+# ---- a GC reclaim keeps the independent budgets (#1279) -------------------------
 
 
-@pytest.mark.xfail(
-    reason=f"production bug {RECLAIM_RECORD_ISSUE}",
-    strict=True,
-    raises=ContractViolation,
-)
-def test_reclaim_keeps_backoff_budgets(
+def _scenario_reclaim_keeps_backoff_budgets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The reclaim budget is a separate slot from early death / review timeout."""
     backoff = RetryStates(
         early_death=BackoffState(count=2, retry_at=5.0),
         review_timeout=BackoffState(count=1, retry_at=7.0),
+        usage_limit=BackoffState(count=1, retry_at=9.0, pending=True),
     )
     world = reclaim_world(tmp_path, monkeypatch, retries=backoff)
     assert _reclaim(world)
-    with pinned_defect("P3B-PERSISTENT-BUDGET-PRESERVED"):
-        retries = world.retries()
-        require(
-            _PRESERVED,
-            retries
-            == RetryStates(
-                reclaim=ReclaimState(count=1),
-                early_death=backoff.early_death,
-                review_timeout=backoff.review_timeout,
-            ),
-            retries,
+    retries = world.retries()
+    require(
+        "P3B-RECLAIM-BUDGET-PRESERVED",
+        retries
+        == RetryStates(
+            reclaim=ReclaimState(count=1),
+            early_death=backoff.early_death,
+            review_timeout=backoff.review_timeout,
+            usage_limit=backoff.usage_limit,
+        ),
+        retries,
+    )
+
+
+def _scenario_reclaim_keeps_the_usage_limit_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run that made the usage-limit reservation is not a reclaim field."""
+    world = reclaim_world(
+        tmp_path,
+        monkeypatch,
+        retries=RetryStates(usage_limit=BackoffState(count=1, retry_at=9.0)),
+    )
+    with world.locked():
+        state = world.ledger()
+        state.task_reclaim_counts[ISSUE] = replace(
+            state.task_reclaim_counts[ISSUE], usage_limit_retry_run="claim-1"
         )
+        save_run_state(state, world.config.run_state_path)
+    assert _reclaim(world)
+    record = world.ledger().task_reclaim_counts[ISSUE]
+    require(
+        "P3B-RECLAIM-BUDGET-PRESERVED",
+        record.usage_limit_retry_run == "claim-1",
+        record,
+    )
+    require("P3B-RECLAIM-BUDGET-PRESERVED", record.usage_limit_retry_count == 1, record)
+
+
+_SCENARIOS = (
+    _scenario_reclaim_keeps_backoff_budgets,
+    _scenario_reclaim_keeps_the_usage_limit_run,
+)
+
+
+@pytest.mark.parametrize("scenario", _SCENARIOS, ids=lambda f: f.__name__[10:])
+def test_reclaim_keeps_backoff_budgets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: Any
+) -> None:
+    scenario(tmp_path, monkeypatch)
+
+
+def test_control_reclaim_record_replaced_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pre-#1279 write: a fresh record replaces the persisted one."""
+    for number, scenario in enumerate(_SCENARIOS):
+        scenario(tmp_path / f"clean-{number}", monkeypatch)
+    real = replace
+
+    def replacing(obj: Any, **changes: Any) -> Any:
+        if isinstance(obj, TaskReclaimRecord):
+            return TaskReclaimRecord(**changes)
+        return real(obj, **changes)
+
+    monkeypatch.setattr(zombies, "replace", replacing)
+    for number, scenario in enumerate(_SCENARIOS):
+        with expect_violation("P3B-RECLAIM-BUDGET-PRESERVED"):
+            scenario(tmp_path / f"faulty-{number}", monkeypatch)

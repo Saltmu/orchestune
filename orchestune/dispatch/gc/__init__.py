@@ -231,8 +231,12 @@ def _update_hold_record(ctx: _RuleExecutionContext, active: ActiveWorktree) -> i
     """dirty worktreeの保留回数を記録・永続化して返す。"""
     previous = ctx.run_state.task_reclaim_counts.get(active.core.issue_number)
     hold_count = (previous.count if previous else 0) + 1
-    ctx.run_state.task_reclaim_counts[active.core.issue_number] = TaskReclaimRecord(
-        count=hold_count, last_reclaimed_at=time.time()
+    # #1279: 保留は回収予約（pending）も別枠の予算も新設・解除しない。保留回数だけを
+    # 回収回数と通算し、それ以外は既存エントリのまま残す。
+    ctx.run_state.task_reclaim_counts[active.core.issue_number] = replace(
+        previous or TaskReclaimRecord(),
+        count=hold_count,
+        last_reclaimed_at=time.time(),
     )
     _persist_run_state_best_effort(
         ctx, f"the dirty-worktree hold count for issue #{active.core.issue_number}"
