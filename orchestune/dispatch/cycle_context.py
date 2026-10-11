@@ -332,6 +332,7 @@ def _build_cycle_context(
     *,
     prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset(),
     prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset(),
+    prior_parent_merge_repair_attempted_issue_numbers: frozenset[int] = frozenset(),
     actions: CycleActions | None = None,
 ) -> CycleContext:
     all_issues = issues.all()
@@ -365,6 +366,9 @@ def _build_cycle_context(
         prior_parent_merge_hold_issue_numbers=prior_parent_merge_hold_issue_numbers,
         prior_parent_merge_completed_issue_numbers=(
             prior_parent_merge_completed_issue_numbers
+        ),
+        prior_parent_merge_repair_attempted_issue_numbers=(
+            prior_parent_merge_repair_attempted_issue_numbers
         ),
         actions=actions,
     )

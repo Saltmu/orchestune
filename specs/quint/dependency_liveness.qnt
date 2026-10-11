@@ -24,7 +24,7 @@ module dependency_liveness {
   type Call = { act: str, a: str, d: str, n: int, b: bool, c: bool }
 
   type Scenario = {
-    topo: str, recompute: bool, fault: str, guard: bool, script: List[Call]
+    topo: str, recompute: bool, fault: str, script: List[Call]
   }
 
   type Topology = {
@@ -85,15 +85,14 @@ module dependency_liveness {
   pure def hold(kind: str, target: int): Call = { act: "toggle_hold", a: kind, d: "", n: target, b: false, c: false }
   pure def staleBy(kind: str, target: int): Call = { act: "stale_snapshot", a: kind, d: "", n: target, b: false, c: false }
 
-  pure def scenario(topo: str, fault: str, guard: bool, script: List[Call]): Scenario =
-    { topo: topo, recompute: false, fault: fault, guard: guard, script: script }
+  pure def scenario(topo: str, fault: str, script: List[Call]): Scenario =
+    { topo: topo, recompute: false, fault: fault, script: script }
 
   // Saved deterministic scenarios (tests/fixtures/quint/dependency_liveness_*.json
-  // refer to them by id).  A scenario fixes the topology, the model fault, the
-  // known-defect guard and every action with its choices.
-  pure def ok(topo: str, script: List[Call]): Scenario = scenario(topo, "none", true, script)
+  // refer to them by id).  A scenario fixes the topology, the model fault and
+  // every action with its choices.
+  pure def ok(topo: str, script: List[Call]): Scenario = scenario(topo, "none", script)
   pure def faulty(f: str, base: Scenario): Scenario = { ...base, fault: f }
-  pure def unguarded(base: Scenario): Scenario = { ...base, guard: false }
   pure def reconciling(base: Scenario): Scenario = { ...base, recompute: true }
 
   pure val FINAL_APPLY = ok("simple_one", [doneWith("label", 11), cycleOf(true, false), cycleOf(true, false)])
@@ -186,17 +185,17 @@ module dependency_liveness {
     "fault_event_only" -> faulty("event_only", FINAL_APPLY),
     "fault_dry_run_writes" -> faulty("dry_run_writes", FINAL_DRY),
 
-    // ---- production counterexamples (guard off: the model states the obligation
-    //      that production violates; the replay pins each to its Issue) ----
+    // ---- dry-run previews under an own reservation (#1283) and after faulted
+    //      apply cycles (#1281, #1300) ----
     "target_own_reservation_dry" -> ok("simple_one", [
       doneWith("label", 11), hold("reservation", 20), cycleOf(false, false)]),
     "intermediate_own_reservation_dry" -> ok("transitive_chain", [
       hold("reservation", 12), doneWith("label", 13), cycleOf(false, false)]),
-    "defect_prior_merge_after_faults" -> unguarded(ok("simple_two", [
+    "prior_merge_after_faults" -> ok("simple_two", [
       doneWith("label", 11), doneWith("prior_merge", 12),
       failing("add", "after"), cycleOf(true, false),
       failing("remove", "after"), cycleOf(true, true),
-      cycleOf(false, false)]))
+      cycleOf(false, false)])
   )
 
 
@@ -205,18 +204,18 @@ module dependency_liveness {
   pure def and3(a: str, b: str): str =
     if (a == "no" or b == "no") "no" else if (a == "maybe" or b == "maybe") "maybe" else "yes"
 
-  // Evidence states: none | label | prior | prior_tainted | pending |
-  // pending_maybe | collected | lost | uncertain.
+  // Evidence states: none | label | prior | pending | pending_maybe |
+  // collected | lost | uncertain.
   // valid: usable by an apply cycle.  visible: usable by a dry run (the dry run
   // never collects ledger evidence, #882).
   pure def validOf(e: str): str =
-    if (Set("label", "prior", "prior_tainted", "pending", "collected").contains(e)) "yes"
+    if (Set("label", "prior", "pending", "collected").contains(e)) "yes"
     else if (Set("pending_maybe", "uncertain").contains(e)) "maybe"
     else "no"
 
   pure def visibleOf(e: str): str =
     if (Set("label", "prior", "collected").contains(e)) "yes"
-    else if (Set("prior_tainted", "pending_maybe", "uncertain").contains(e)) "maybe"
+    else if (Set("pending_maybe", "uncertain").contains(e)) "maybe"
     else "no"
 
   pure def evidenceOf(ev: int -> str, n: int): str =
@@ -256,7 +255,6 @@ module dependency_liveness {
   var streak: int -> int       // fair cycles in a row (per subject)
   var lastMode: str            // "apply" | "dry" | "none"
   var fault: str               // injected model fault ("none": the correct model)
-  var guard: bool              // exclude the production counterexample #1281
   var sid: str                 // scripted scenario id ("": random exploration)
   var pc: int                  // next script position
   var planned: int             // script length (0: random exploration); a scripted run must end at pc == planned
@@ -295,13 +293,13 @@ module dependency_liveness {
   }
 
   action settled: bool = all {
-    topo' = topo, shape' = shape, fault' = fault, guard' = guard, sid' = sid,
+    topo' = topo, shape' = shape, fault' = fault, sid' = sid,
     lastMode' = lastMode, streak' = streak, staleApplied' = "none", planned' = planned
   }
 
   // ---- init ---------------------------------------------------------------------
 
-  action start(kind: str, withRecompute: bool, f: str, g: bool, id: str): bool = {
+  action start(kind: str, withRecompute: bool, f: str, id: str): bool = {
     val tp0 = TOPOLOGIES.get(kind)
     all {
       topo' = kind,
@@ -318,7 +316,6 @@ module dependency_liveness {
       streak' = tp0.deps.union(Set(T)).mapBy(n => 0),
       lastMode' = "none",
       fault' = f,
-      guard' = g,
       sid' = id,
       pc' = 0,
       planned' = if (scripted(id)) length(SCENARIOS.get(id).script) else 0,
@@ -330,12 +327,12 @@ module dependency_liveness {
   action init: bool = {
     nondet kind = TOPOLOGIES.keys().oneOf()
     nondet withRecompute = Set(true, false).oneOf()
-    start(kind, withRecompute, "none", true, "")
+    start(kind, withRecompute, "none", "")
   }
 
   action initScenario(id: str): bool = {
     val s = SCENARIOS.get(id)
-    start(s.topo, s.recompute, s.fault, s.guard, id)
+    start(s.topo, s.recompute, s.fault, id)
   }
 
   // ---- the eight actions (one per production harness rule) ----------------------
@@ -512,9 +509,7 @@ module dependency_liveness {
     stale1.keys().mapBy(n => {
       val e = collected(n, apply, lag)
       // Evidence in view1 differs from ev only by the stale change.
-      val e1 = if (stale1.get(n) != ev.get(n)) stale1.get(n) else e
-      // A prior-merge preview after a faulted apply cycle is the #1281 counterexample.
-      if (guard and apply and armed.op != "none" and e1 == "prior") "prior_tainted" else e1
+      if (stale1.get(n) != ev.get(n)) stale1.get(n) else e
     })
   }
 
@@ -567,7 +562,7 @@ module dependency_liveness {
       res' = res,
       armed' = { op: "none", mode: "none" },
       stale' = { kind: "none", target: 0 },
-      topo' = topo, shape' = shape, fault' = fault, guard' = guard, sid' = sid,
+      topo' = topo, shape' = shape, fault' = fault, sid' = sid,
       staleApplied' = if (staleEffective) stale.kind else "none",
       planned' = planned,
       advance
@@ -656,5 +651,5 @@ module dependency_liveness {
   action init_fault_dry_run_writes: bool = initScenario("fault_dry_run_writes")
   action init_target_own_reservation_dry: bool = initScenario("target_own_reservation_dry")
   action init_intermediate_own_reservation_dry: bool = initScenario("intermediate_own_reservation_dry")
-  action init_defect_prior_merge_after_faults: bool = initScenario("defect_prior_merge_after_faults")
+  action init_prior_merge_after_faults: bool = initScenario("prior_merge_after_faults")
 }

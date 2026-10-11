@@ -971,6 +971,9 @@ def _prepare_cycle_context(
             config,
             prior_parent_merge_hold_issue_numbers=prior_merges.held_issue_numbers,
             prior_parent_merge_completed_issue_numbers=prior_merges.completed_issue_numbers,
+            prior_parent_merge_repair_attempted_issue_numbers=(
+                prior_merges.repair_attempted_issue_numbers
+            ),
             actions=actions,
         )
         actions.bind_context(ctx)

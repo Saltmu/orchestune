@@ -40,7 +40,6 @@ from tests.dependency_liveness_test_support import (
 from tests.verification_contract_test_support import (
     ContractViolation,
     expect_violation,
-    pinned_defect,
     require,
 )
 
@@ -997,13 +996,13 @@ def test_recompute_ledger_premise_does_not_excuse_a_target_without_the_label():
         machine.teardown()
 
 
-@pytest.mark.xfail(
-    reason="production bug #1300 (counterexample 2): a status repair under lag "
-    "strips the last lifecycle label of a dependency the prior-merge repair wrote",
-    strict=True,
-    raises=ContractViolation,
-)
-def test_known_defect_prior_merge_is_not_previewed_after_faulted_apply_cycles():
+def scenario_prior_merge_dependency_keeps_its_label_after_faulted_apply_cycles():
+    """#1281 counterexample 2 (fixed in #1300): lag must not strip 12's last label.
+
+    The prior-merge repair writes 12 in both faulted cycles.  The same cycle's
+    status repair used to act on the listing taken before that write and removed
+    ``status:done`` under lag, so 12 left the listing and T never resolved.
+    """
     topology = LivenessTopology((11, 12), ("dep-a", "dep-b"), {}, (11, 12))
     machine = DependencyLivenessMachine()
     try:
@@ -1014,24 +1013,39 @@ def test_known_defect_prior_merge_is_not_previewed_after_faulted_apply_cycles():
         machine.cycle(apply=True, lag=False)
         machine.fail_next(mode="after", op="remove")
         machine.cycle(apply=True, lag=True)
-        # Only the cause and the final dry run are the counterexample; a violation
-        # of the earlier cycles is a general failure and is not pinned.
-        with pinned_defect("P3C-LIVENESS-PRIOR-MERGE-DRYRUN"):
-            # Observe both boundaries before raising, so neither hides the other.
-            findings = []
-            if not machine.world.labels(12):
-                findings.append(
-                    "#1300: the status repair of the lagged cycle left 12 without a "
-                    "lifecycle label"
-                )
-            try:
-                machine.cycle(apply=False, lag=False)
-            except ContractViolation as violation:
-                if violation.contract_id != "P3C-LIVENESS-BOUND":
-                    raise
-                findings.append(violation.detail)
-            require(
-                "P3C-LIVENESS-PRIOR-MERGE-DRYRUN", not findings, "; ".join(findings)
-            )
+        # Violations of the cycles above are general failures.  From here on
+        # the contract is judged: the cause boundary, then the dry run.
+        require(
+            "P3C-LIVENESS-PRIOR-MERGE-DRYRUN",
+            machine.world.labels(12),
+            "the status repair of the lagged cycle left 12 without a lifecycle label",
+        )
+        try:
+            machine.cycle(apply=False, lag=False)
+        except ContractViolation as violation:
+            if violation.contract_id != "P3C-LIVENESS-BOUND":
+                raise
+            raise ContractViolation(
+                "P3C-LIVENESS-PRIOR-MERGE-DRYRUN", violation.detail
+            ) from violation
+        machine.cycle(apply=True, lag=False)
+        require(
+            "P3C-LIVENESS-PRIOR-MERGE-DRYRUN",
+            StatusLabel.QUEUED.value in machine.world.labels(),
+            "the apply cycle after the preview promotes T",
+        )
     finally:
         machine.teardown()
+
+
+def test_prior_merge_dependency_keeps_its_label_after_faulted_apply_cycles():
+    scenario_prior_merge_dependency_keeps_its_label_after_faulted_apply_cycles()
+
+
+def test_control_prior_merge_repair_exclusion_removal_is_detected(monkeypatch):
+    """The old behavior (no exclusion) strips 12's last label and T is not previewed."""
+    monkeypatch.setattr(
+        CycleContext, "is_prior_merge_repair_attempted", lambda self, number: False
+    )
+    with expect_violation("P3C-LIVENESS-PRIOR-MERGE-DRYRUN"):
+        scenario_prior_merge_dependency_keeps_its_label_after_faulted_apply_cycles()

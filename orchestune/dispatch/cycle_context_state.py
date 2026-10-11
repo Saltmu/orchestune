@@ -362,6 +362,7 @@ class _CycleState:
         active_worktrees: Mapping[str, ActiveWorktree],
         prior_parent_merge_completed_issue_numbers: frozenset[int],
         prior_parent_merge_hold_issue_numbers: frozenset[int],
+        prior_parent_merge_repair_attempted_issue_numbers: frozenset[int],
         issue_records_by_number: Mapping[int, IssueRecord],
         prs: Iterable[PrRecord],
         branch_resolutions_by_issue: Mapping[int, TaskBranchResolution],
@@ -379,6 +380,9 @@ class _CycleState:
         self._branch_resolutions = dict(branch_resolutions_by_issue)
         self._prior_completed = frozenset(prior_parent_merge_completed_issue_numbers)
         self._prior_held = frozenset(prior_parent_merge_hold_issue_numbers)
+        self._prior_repair_attempted = frozenset(
+            prior_parent_merge_repair_attempted_issue_numbers
+        )
         self._issue_records = tuple(
             sorted(
                 (
@@ -535,6 +539,14 @@ class _CycleState:
         Issueの保留も保留として扱う（判定条件を増やさない）。
         """
         return issue_number in self._prior_held
+
+    def is_prior_merge_repair_attempted(self, issue_number: int) -> bool:
+        """先行マージ修復がこのcycleで書き込みを試みた（成功・失敗とも）Issueかを返す。
+
+        cycle開始時のlistingはその書き込みより前の値なので、これらのIssueは
+        同じcycleのstatus repairで古い観測に基づいて変更してはならない（#1300）。
+        """
+        return issue_number in self._prior_repair_attempted
 
     def dag_inputs(self, issue_numbers: tuple[int, ...]) -> tuple[SubTask, ...]:
         """指定順のIssue番号を実効`Task`へ解決し、派生`SubTask`入力を返す。

@@ -77,6 +77,7 @@ class CycleContext(_CycleState):
         issue_records_by_number: dict[int, IssueRecord] | None = None,
         prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset(),
         prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset(),
+        prior_parent_merge_repair_attempted_issue_numbers: frozenset[int] = frozenset(),
         actions: CycleActions | None = None,
     ) -> None:
         super().__init__(
@@ -88,6 +89,9 @@ class CycleContext(_CycleState):
             active_worktrees=run_state.active_worktrees,
             prior_parent_merge_completed_issue_numbers=prior_parent_merge_completed_issue_numbers,
             prior_parent_merge_hold_issue_numbers=prior_parent_merge_hold_issue_numbers,
+            prior_parent_merge_repair_attempted_issue_numbers=(
+                prior_parent_merge_repair_attempted_issue_numbers
+            ),
             issue_records_by_number=issue_records_by_number or {},
             prs=prs,
             branch_resolutions_by_issue=branch_resolutions_by_issue or {},
