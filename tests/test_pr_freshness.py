@@ -1,6 +1,7 @@
 """#1306: PR freshness is decided by one L0 rule shared by targets and GC."""
 
 import math
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -35,9 +36,11 @@ class TestParseGithubTimestamp:
     def test_unusable_values_are_none(self, value):
         assert parse_github_timestamp(value) is None
 
+    @pytest.mark.skipif(
+        not hasattr(time, "tzset"),
+        reason="time.tzset is Unix-only",
+    )
     def test_timezone_less_value_never_depends_on_the_host_timezone(self, monkeypatch):
-        import time
-
         monkeypatch.setenv("TZ", "Asia/Tokyo")
         time.tzset()
         try:
