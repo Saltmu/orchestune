@@ -11,7 +11,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal
 
-from orchestune.dag.models import canonicalize_footprint
+from orchestune.footprint_paths import canonicalize_footprint
 from orchestune.infra.json_state import read_json_with_recovery, write_json_atomic
 from orchestune.infra.process_utils import assert_run_state_lock_held
 from orchestune.ledger.active_codec import (

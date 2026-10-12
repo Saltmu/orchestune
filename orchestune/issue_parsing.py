@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from orchestune.dag.models import FootprintValidationError, parse_footprint_value
+from orchestune.footprint_paths import FootprintValidationError, parse_footprint_value
 from orchestune.forge import MetadataSearchUnavailableError
 from orchestune.models import IssueRecord, Task, normalize_newlines
 

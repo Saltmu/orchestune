@@ -255,6 +255,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "consistency.vocabulary",
             "dag",
             "dag.models",
+            "footprint_paths",
             "dispatch",
             "dispatch.doctor_models",
             "dispatch.progress",

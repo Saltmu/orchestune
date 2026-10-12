@@ -23,8 +23,8 @@ from orchestune.dag.models import (
     ConflictEdge,
     SubTask,
     is_ignored_footprint,
-    normalize_footprint_path,
 )
+from orchestune.footprint_paths import normalize_footprint_path
 
 SHARED_DOCUMENT_REASON = "shared-document"
 _DOCUMENT_ROOT = "docs/"

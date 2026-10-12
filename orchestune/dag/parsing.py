@@ -10,9 +10,9 @@ from typing import Any
 
 import yaml
 
-from orchestune.dag.models import (
+from orchestune.dag.models import SubTask
+from orchestune.footprint_paths import (
     FootprintValidationError,
-    SubTask,
     normalize_footprint_path,
     parse_footprint_value,
 )
