@@ -346,6 +346,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "ownership_contracts",
             "plan_identity",
             "plan_writer",
+            "pr_freshness",
             "provisioning",
             "replan",
             "replan.models",

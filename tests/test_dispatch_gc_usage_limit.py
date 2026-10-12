@@ -612,6 +612,31 @@ class TestTypedReclaimDiversion:
         assert world.state.task_reclaim_counts[1].count == 0
         assert "status:queued" in _labels(world)
 
+    def test_an_old_pr_closed_during_the_run_does_not_hide_the_limit(
+        self, world, effects
+    ):
+        """#1306: a PR created before this launch is not this run's evidence, so
+        closing it mid-run must not read as abandonment and block the requeue."""
+        from orchestune.consistency.models import RepairStatus
+        from orchestune.models import PrRecord
+
+        world.forge.prs[7] = PrRecord(
+            number=7,
+            head_ref=world.active.core.branch,
+            changed_files=(),
+            closes_issue_numbers=(1,),
+            state="CLOSED",
+            created_at="2026-01-01T00:00:00Z",
+            closed_at="2026-10-10T08:30:00+09:00",
+        )
+        world.forge.pr_states[7] = "closed"
+        _write_run(world, f"{LIMIT_LINE}\n")
+
+        result, events = self._run(world)
+
+        assert result.status is RepairStatus.APPLIED
+        assert [e.action for e in events] == ["usage_limit_requeued"]
+
     def test_a_crash_without_a_limit_message_falls_through(self, world, effects):
         _write_run(world, "Segmentation fault\n")
 

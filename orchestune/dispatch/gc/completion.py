@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import contextlib
-import math
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import cast
 
@@ -109,6 +107,10 @@ from orchestune.outcome_record import (
     OutcomeRecord,
     parse_from_comments,
 )
+from orchestune.pr_freshness import (  # noqa: F401 - gc package re-exports the old name
+    parse_github_timestamp as _parse_github_timestamp,
+)
+from orchestune.pr_freshness import should_exclude_pr
 from orchestune.pr_link_notice import pr_matches_issue
 from orchestune.targets.completion_policy import token_limit_decision
 from orchestune.task_metadata import TaskMetadata
@@ -926,21 +928,13 @@ def _active_dispatch_handle(active: ActiveWorktree) -> DispatchHandle:
     )
 
 
-def _parse_github_timestamp(value: str) -> float | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
-
-
 def _is_stale_pr_for_active(pr: PrRecord, active: ActiveWorktree) -> bool:
-    if active.launch.started_at is None:
-        return False
-    ts_str = pr.closed_at if pr.state == "CLOSED" else pr.created_at
-    ts = _parse_github_timestamp(ts_str) if ts_str else None
-    return ts is not None and ts < math.floor(active.launch.started_at)
+    """#1306: 起動前に作成された、または`created_at`を確認できないPRは現在の実行の
+    証拠にしない。targets側と同じ`pr_freshness`の規則で、CLOSEDも`created_at`で
+    判定する（起動前から存在したPRが起動後に閉じられても放棄の根拠にしない）。"""
+    return should_exclude_pr(
+        created_at=pr.created_at, started_at=active.launch.started_at
+    )
 
 
 def _local_pr_completion_status(
