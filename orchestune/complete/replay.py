@@ -52,6 +52,9 @@ def find_replay(
             if explicit
             else raw.get("repository_id") == repository_id
             and raw.get("issue_number") == request.issue_number
+            and (
+                request.claim_id is None or raw.get("generation_id") == request.claim_id
+            )
         )
     ]
     if not matches:

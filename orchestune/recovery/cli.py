@@ -12,7 +12,7 @@ from orchestune.recovery.contracts import RecoveryRequest
 from orchestune.recovery.service import recover_claim
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Inspect or recover one stopped local claim"
     )
@@ -23,6 +23,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--launch-attempt-id")
     parser.add_argument("--confirm-external-stopped", action="store_true")
     parser.add_argument(
+        "--restart-blocked",
+        action="store_true",
+        help="restart a handed-off blocked local claim with a new generation",
+    )
+    parser.add_argument(
         "--apply", action="store_true", help="apply the previewed recovery"
     )
     parser.add_argument(
@@ -32,6 +37,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--state", type=Path)
     parser.add_argument("--timeout", type=float, default=0)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _parser()
     args = parser.parse_args(argv)
     request = RecoveryRequest(
         args.issue,
@@ -44,9 +54,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         external_id=args.external_id,
         launch_attempt_id=args.launch_attempt_id,
         confirm_external_stopped=args.confirm_external_stopped,
+        restart_blocked=args.restart_blocked,
     )
     if (
         args.confirm_external_stopped
+        or args.restart_blocked
         or args.external_id is not None
         or args.launch_attempt_id is not None
     ):

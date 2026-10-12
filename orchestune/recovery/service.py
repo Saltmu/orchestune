@@ -18,6 +18,7 @@ from orchestune.ledger.run_state import (
     RunState,
     load_run_state_readonly,
 )
+from orchestune.recovery.blocked_restart import restart_blocked
 from orchestune.recovery.contracts import RecoveryRequest, RecoveryResult
 from orchestune.recovery.external_service import recover_external
 from orchestune.recovery.inspection import inspect_claim
@@ -25,8 +26,10 @@ from orchestune.worktree_ops.claim_marker import claim_lock_path, write_claim_ma
 
 
 def _recover(
-    request: RecoveryRequest, workspace: ClaimWorkspace, cwd: Path
+    request: RecoveryRequest, workspace: ClaimWorkspace, cwd: Path, forge: Any = None
 ) -> RecoveryResult:
+    if request.restart_blocked:
+        return restart_blocked(request, workspace, cwd, forge)
     if request.confirm_external_stopped:
         return recover_external(request, workspace, cwd)
     state = load_run_state_readonly(workspace.run_state_path)
@@ -145,15 +148,15 @@ def _save_recovery(
 
 
 def recover_claim(
-    request: RecoveryRequest, *, cwd: str | Path | None = None
+    request: RecoveryRequest, *, cwd: str | Path | None = None, forge: Any = None
 ) -> RecoveryResult:
     try:
         request.validate()
         workspace = resolve_claim_workspace(cwd, explicit_state_path=request.state_path)
         current = Path(cwd or Path.cwd()).resolve()
         if not request.apply:
-            return _recover(request, workspace, current)
+            return _recover(request, workspace, current, forge)
         with run_state_lock(workspace.lock_path, timeout=request.timeout_seconds):
-            return _recover(request, workspace, current)
+            return _recover(request, workspace, current, forge)
     except (OSError, ValueError, RuntimeError) as error:
         return RecoveryResult(False, request.issue_number, "held", str(error))
