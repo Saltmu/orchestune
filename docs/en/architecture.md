@@ -2,6 +2,17 @@
 
 This document explains how Orchestune builds conflict-free parallel tasks, drives agents autonomously, and integrates their changes safely.
 
+## How to read this document
+
+| If you want to know | Read |
+| --- | --- |
+| The overall flow | [1. System Overview](#1-system-overview) |
+| Why the design is the way it is | [2. Core Design Principles](#2-core-design-principles) |
+| How each subsystem works | [3. Major Subsystems Overview](#3-major-subsystems-overview) and the detail documents it links to |
+| Where a module belongs and what it may import | [4. Module Layers & Package Boundary](#4-module-layers--package-boundary) |
+| `ledger`, ownership contracts, and shared package boundaries | [Shared Execution Ledger & Package Boundaries (ledger.md)](architecture/ledger.md) |
+| The cycle report on the parent Issue and cycle timings | [Dispatch Cycle Reports & Timings (dispatch-cycle.md)](architecture/dispatch-cycle.md) |
+
 ---
 
 ## 1. System Overview
@@ -52,37 +63,45 @@ graph TD
     HU2 -->|review and merge| MB
 ```
 
-Every read and write between the engine and GitHub goes through the L1 adapters (`forge` / `git_cli`); that containment is enforced mechanically by CI, as described in [§4.2](#42-invariants-enforced-by-ci). Note also that the Integrator is triggered by a child Issue's `status:done` label rather than by a child PR, and that its pre-merge CI runs in a temporary worktree of its own, separate from the agents' isolated worktrees — the engine never writes into an agent's workspace.
+Every read and write between the engine and GitHub goes through the L1 adapters (`forge` / `git_cli`); that containment is enforced mechanically by CI, as described in [§4.2](#42-invariants-enforced-by-ci).
+
+The Integrator is triggered by a child Issue's `status:done` label rather than by a child PR. Its pre-merge CI runs in a temporary worktree of its own, separate from the agents' isolated worktrees; the engine never writes into an agent's workspace.
 
 ---
 
 ## 2. Core Design Principles
 
-### 0. Design Goal: Quota Efficiency
+### 2.1 Design Goal: Quota Efficiency
 
-Orchestune is an orchestrator for individual developers and small teams. The AI usage quota (a subscription's session/weekly allowance) is fixed, and so are the hours a human can be at the desk. Every design decision below follows from a single optimization target — **maximize the finished, mergeable work produced per unit of quota consumed** — and not from minimizing wall-clock time on any individual task. For a small task, prompting one agent directly is both faster and cheaper than decomposition, provisioning, and dispatch.
+Orchestune is an orchestrator for individual developers and small teams. The AI usage quota (a subscription's session/weekly allowance) is fixed, and so are the hours a human can be at the desk.
+
+Every design decision below follows from a single optimization target: **maximize the finished, mergeable work produced per unit of quota consumed**. Minimizing wall-clock time on any individual task is **not** the goal. For a small task, prompting one agent directly is both faster and cheaper than decomposition, provisioning, and dispatch.
 
 Three consequences run through the rest of this document:
 
 * **Rework is the main waste.** A merge conflict, a wrongly scoped subtask, or a duplicated implementation costs quota twice. The conflict-prevention analysis and the shared-contract gate trade a small up-front planning cost for avoided rework, and pre-merge CI catches mechanical breakage before it propagates downstream.
 * **Parallelism is the mechanism, not the goal.** Independent subtasks let several agents burn quota at once instead of one agent burning it in sequence, so DAG construction exists to find as much *safe* parallelism as the task allows.
-* **Unattended operation is what converts parallelism into quota efficiency.** The gains only materialize if runs can proceed while the human is away — overnight, or in a stateless CI runner. That is why state is self-healing from GitHub, why child-level integration merges without a human, and why human judgment is confined to two gates. A design that required a click per subtask would stall the pipeline on human availability.
+* **Unattended operation is what converts parallelism into quota efficiency.** The gains only materialize if runs can proceed while the human is away (overnight, or in a stateless CI runner). That is why state is self-healing from GitHub, why child-level integration merges without a human, and why human judgment is confined to two gates. A design that required a click per subtask would stall the pipeline on human availability.
 
-### 0.1 Determinism: the LLM judges, Python owns the automated shared-state transitions
+<a id="determinism"></a>
 
-An LLM call is a scarce operation that consumes quota. Orchestune therefore **spends LLM calls only where judgment cannot be replaced — decomposition, implementation, semantic review of an integration diff, and the `status:not-needed` assessment — and handles everything else in deterministic Python**. Polling labels, recomputing the DAG, rebuilding local state, garbage collection, and escalation could all be delegated to an agent, but each delegation is paid for in quota.
+### 2.2 Determinism: the LLM judges, Python owns the automated shared-state transitions
 
-This pays twice: every deterministic step is quota not spent directly, and it also removes the rework that non-deterministic behaviour produces — the main waste named above.
+An LLM call is a scarce operation that consumes quota. Orchestune therefore **spends LLM calls only where judgment cannot be replaced (decomposition, implementation, semantic review of an integration diff, and the `status:not-needed` assessment) and handles everything else in deterministic Python**. Polling labels, recomputing the DAG, rebuilding local state, garbage collection, and escalation could all be delegated to an agent, but each delegation is paid for in quota.
+
+This pays twice: every deterministic step is quota not spent directly, and it also removes the rework that non-deterministic behaviour produces (the main waste named in §2.1).
 
 The dividing line is not "what the LLM does not do" but **scope**: whose territory is being written to.
 
 | | Writes to |
 |---|---|
 | **LLM** | The isolation it was given (its worktree and its own branch), plus the statement of its judgement (Outcome Records, comments, a PR; or verifier verdict labels in the independent not-needed review routine) |
-| **Python** | **The shared state that advances automatically** — integration merges from a child PR into the parent branch, whether an Issue lives or dies, routine label transitions, dependency resolution, the quota ledger |
-| **Human** | **The acceptance merge** — the final PR from the parent branch into `main`; the "one human click" |
+| **Python** | **The shared state that advances automatically** (integration merges from a child PR into the parent branch, whether an Issue lives or dies, routine label transitions, dependency resolution, the quota ledger) |
+| **Human** | **The acceptance merge** (the final PR from the parent branch into `main`; the "one human click") |
 
-Worker implementation agents never mutate shared GitHub labels directly. When an implementation agent finds a requirement already satisfied, it records an Outcome Record (`<!-- orchestune:outcome -->` with `result: not-needed`) as a comment rather than modifying labels, and it commits, pushes, and opens PRs only within its assigned branch (the only exception is the dedicated independent verification reviewer session in Cloud Routine, which attaches verdict labels as instructed by `integration_coordinator`). **What the agent never decides is whether that work enters shared state.**
+Worker implementation agents never mutate shared GitHub labels directly. When an implementation agent finds a requirement already satisfied, it records an Outcome Record (`<!-- orchestune:outcome -->` with `result: not-needed`) as a comment rather than modifying labels. It commits, pushes, and opens PRs only within its assigned branch.
+
+The only exception is the dedicated independent verification reviewer session in Cloud Routine, which attaches verdict labels as instructed by `integration_coordinator`. **What the agent never decides is whether that work enters shared state.**
 
 #### Premise: both the LLM and the infrastructure will be wrong
 
@@ -96,38 +115,58 @@ Determinism alone is not enough. Because both LLM output and infrastructure can 
 | Infrastructure failure (local state lost) | — | [Rebuild from GitHub as the source of truth (state-recovery.md)](architecture/state-recovery.md#2-github-as-the-source-of-truth) |
 | The agent's own report (`result: not-needed`) | Re-verification by an independent session that carries no memory of it (Cloud Routine target only) | Deterministic close from Python, driven by the outcome record and status label |
 
-And **loops are bounded, with a terminal state** — though not on every path today. Runtime Conflict Graph recomputation retries, concurrent executions (`max-concurrent`), and requeues from a zombie/timeout reclaim (`--max-task-reclaims`, 3 by default) are bounded by default, and task timeouts are **on by default** (`task-timeout-seconds = 7200`, with external executions held until their stop is confirmed). The Integrator's own waits are bounded too: dependency preparation, CI and each parent Issue's cycle have deadlines, a confirmed timeout is retried at most `max-integration-timeout-retries` times from a GitHub-held count, and an unconfirmed stop, rollback or write is held for a human ([Integration §5](architecture/integration.md#bounded-execution)). The time-based launch cap (`max-launches-per-window`) and token caps are **off by default** and must be set explicitly if you need them (see the [Usage & Command Reference](usage.md)). When automation cannot converge, the Issue moves to `status:blocked-human-review` and stops. `tests/test_architecture.py` mechanically checks the finite retry/reclaim/review-timeout settings against their declared terminal behaviour. The check deliberately uses an explicit registry: it rejects new settings that match this recovery-loop naming contract without a terminal mapping, while leaving unrelated bounded controls to their feature-specific tests.
+And **loops are bounded, with a terminal state**, though not on every path today.
+
+- Bounded by default: runtime Conflict Graph recomputation retries, concurrent executions (`max-concurrent`), and requeues from a zombie/timeout reclaim (`--max-task-reclaims`, 3 by default).
+- Task timeouts: **on by default** (`task-timeout-seconds = 7200`, with external executions held until their stop is confirmed).
+- The Integrator's own waits: dependency preparation, CI and each parent Issue's cycle have deadlines. A confirmed timeout is retried at most `max-integration-timeout-retries` times from a GitHub-held count, and an unconfirmed stop, rollback or write is held for a human ([Integration §5](architecture/integration.md#bounded-execution)).
+- The time-based launch cap (`max-launches-per-window`) and token caps: **off by default**, and must be set explicitly if you need them (see the [Usage & Command Reference](usage.md)).
+
+When automation cannot converge, the Issue moves to `status:blocked-human-review` and stops.
+
+`tests/test_architecture.py` mechanically checks the finite retry/reclaim/review-timeout settings against their declared terminal behaviour. The check deliberately uses an explicit registry: it rejects new settings that match this recovery-loop naming contract without a terminal mapping, while leaving unrelated bounded controls to their feature-specific tests.
 
 > **Known gaps**: one path currently never reaches a terminal state.
-> - **Token usage is not observable.** `max_tokens_per_window` never fires on the cloud dispatch targets (`ClaudeCodeCloudRoutineDispatchTarget`, `CodexCloudDispatchTarget`): the default `collect_usage` returns `None` and neither target overrides it, because no polling API is published for a cloud session's consumption — even `is_complete` falls back to PR creation as a proxy signal. So **the token cap is inert on the primary unattended path**. This is upstream of persistence (the data is never produced in the first place) and is revisited when such an API becomes available. `recompute_count`/`forced_serial` (child Issue body) and `launch_history` (parent Issue body) are persisted and outside this gap.
+> - **Token usage is not observable.** `max_tokens_per_window` never fires on the cloud dispatch targets (`ClaudeCodeCloudRoutineDispatchTarget`, `CodexCloudDispatchTarget`): the default `collect_usage` returns `None` and neither target overrides it. No polling API is published for a cloud session's consumption, and even `is_complete` falls back to PR creation as a proxy signal. So **the token cap is inert on the primary unattended path**.
+>
+>   This is upstream of persistence (the data is never produced in the first place) and is revisited when such an API becomes available. `recompute_count`/`forced_serial` (child Issue body) and `launch_history` (parent Issue body) are persisted and outside this gap.
 
 What Orchestune **aims for** is not that everything resolves automatically, but that **it either converges or halts in a state a human can act on**. As above, that is a design goal rather than a property every path already satisfies.
 
-### 0.2 Human Approval Points
+<a id="human-approval-points"></a>
 
-Orchestune is designed so a human makes a decision at exactly two points in the lifecycle — everything between them runs autonomously.
+### 2.3 Human Approval Points
+
+Orchestune is designed so a human makes a decision at exactly two points in the lifecycle; everything between them runs autonomously.
 
 1. **Decomposition Gate**: Before dispatch begins, a human reviews and approves `decomposition_plan.md` (subtask boundaries, footprints, dependencies).
-2. **Acceptance Gate**: The final PR from `parent/issue-{N}` into `main` is the one merge a human must perform. Once it's merged, Orchestune closes the parent Issue automatically — no separate manual close step is needed.
+2. **Acceptance Gate**: The final PR from `parent/issue-{N}` into `main` is the one merge a human must perform. Once it's merged, Orchestune closes the parent Issue automatically. No separate manual close step is needed.
 
-Between these two gates, child-level integration PRs, CI verification, and the resulting Issue closes all proceed without per-task human approval. The one automated stop is the child review-evidence gate described below: it halts the parent-branch update and hands the decision to a human only when a child lacks passing review evidence. `risk:flagged` labels surface sensitive subtasks for visibility, but are informational only — they do not add a third blocking gate.
+Between these two gates, child-level integration PRs, CI verification, and the resulting Issue closes all proceed without per-task human approval. The one automated stop is the child review-evidence gate described below: it halts the parent-branch update and hands the decision to a human only when a child lacks passing review evidence. `risk:flagged` labels surface sensitive subtasks for visibility, but are informational only; they do not add a third blocking gate.
 
-**Why two gates are enough**: every subtask's history (Issue, PR, commits, CI logs) is preserved on GitHub, so human review effort doesn't need to happen inline with every child merge — it can be scoped up front (decomposition) and reconciled at the very end (the single acceptance merge) without losing traceability.
+#### Why two gates are enough
 
-**CI as the de facto quality gate**: the pre-merge CI verification described in the integration pipeline substitutes for per-task human review — every child integration PR must pass CI before the integrator merges it into `parent/issue-{N}`, so mechanical correctness is enforced automatically even though no human looks at each individual diff.
+Every subtask's history (Issue, PR, commits, CI logs) is preserved on GitHub, so human review effort doesn't need to happen inline with every child merge. It can be scoped up front (decomposition) and reconciled at the very end (the single acceptance merge) without losing traceability.
 
-**Child review-evidence gate (CI is not the only automated gate)**: the review of each child PR is a separate, required check, and responsibility is split three ways. The development skill (layer 1) runs the review loop on the child PR, and the LLM records a judgment for every finding. `orchestune complete --result done` verifies that judgment table together with the PR's freshly acquired review state and reviewed SHA, and saves the outcome as review evidence in the done Outcome Record (it rejects the completion and posts nothing when verification fails). The Integrator only verifies that saved evidence before updating `parent/issue-{N}`; it never runs a review itself. Under the default `required` setting, a child without passing evidence for the exact commit being merged stops the integration (fail-closed) and the parent Issue moves to `status:blocked-human-review`. The separate Semantic Review of the integration diff (layer 2) stays advisory; making it required is the follow-up Epic #1033. Details: [integration.md](architecture/integration.md); operation, resume and migration: [Usage §4.5](usage.md#45-child-review-evidence-gate).
+#### CI as the de facto quality gate
 
-**Traceability backstop: dispatch cycle reports on the parent Issue**:
-`orchestune-dispatch`'s per-run event log (`events.jsonl`) is `.gitignore`d and does not survive between CI runs, so it cannot serve as durable history on its own. To keep dispatch-cycle decisions traceable without depending on that ephemeral log, each *applied* dispatch cycle posts a `## 🤖 Orchestune Dispatch Cycle Report` comment to the configured parent Issue (`--parent-issue`, #396). `--no-apply` skips this along with the rest of the post-cycle block.
+The pre-merge CI verification described in the integration pipeline substitutes for per-task human review. Every child integration PR must pass CI before the integrator merges it into `parent/issue-{N}`, so mechanical correctness is enforced automatically even though no human looks at each individual diff.
 
-Applied cycle records also contain `timings` (version 1): `elapsed_seconds`, `phases` (each with inclusive `seconds` and interval `count`), and `gh` (`calls` and aggregate `seconds`). The scope `cycle_before_events_record` spans the existing `cycle: started` notification through `events_record: started`; it excludes event writing, lock release, post-cycle work, and result-file saving. Existing progress notifications supply the boundaries. Repeated task launches are aggregated; their duration is already included in scheduling, so phase durations must not be summed as a cycle total. `gh.calls` counts attempts through `GitHubForge._run`, including stdin, failures, and timeouts, rather than HTTP requests or commands in child agents. Measurement failures produce `collection_status: partial` or `unavailable` and null for unknown scalar values, without changing dispatch results or exit codes. Old records can lack `timings`; result JSON and `CycleReport` remain unchanged. Dry runs and interrupted cycles retain the existing event-writing policy.
+#### Child review-evidence gate
 
-The comment summarizes that cycle's selected tasks, noteworthy `footprint`-deviation events, completions, and promotions. Deviation events that merely re-report an unchanged steady state (a worktree that is already force-serialized, say) are excluded from both the skip check and the comment body, so the parent Issue is not flooded with an identical comment every cycle. A cycle with nothing to report, or with no parent Issue configured, posts nothing.
+CI is not the only automated gate. The review of each child PR is a separate, required check, and responsibility is split three ways:
 
-Failure handling matches the other post-cycle phases: posting does not raise, and the cycle itself always runs to completion. A failure does still surface as a nonzero `orchestune-dispatch` exit status, failing a typical CI step — an ordinary posting exception (a transient network error, say) is logged as a warning and maps to exit code 2, while a GitHub authentication failure is logged as an error and maps to exit code 1.
+- The development skill (layer 1): runs the review loop on the child PR, and the LLM records a judgment for every finding.
+- `orchestune complete --result done`: verifies that judgment table together with the PR's freshly acquired review state and reviewed SHA, and saves the outcome as review evidence in the done Outcome Record. It rejects the completion and posts nothing when verification fails.
+- The Integrator: only verifies that saved evidence before updating `parent/issue-{N}`; it never runs a review itself.
 
-This keeps human review effort concentrated where judgment matters most (scoping and the final acceptance merge), while everything mechanical in between — including Issue closing at both tiers — is fully automated.
+Under the default `required` setting, a child without passing evidence for the exact commit being merged stops the integration (fail-closed) and the parent Issue moves to `status:blocked-human-review`. The separate Semantic Review of the integration diff (layer 2) stays advisory; making it required is the follow-up Epic #1033. Details: [integration.md](architecture/integration.md); operation, resume and migration: [Usage §4.5](usage.md#45-child-review-evidence-gate).
+
+#### Traceability backstop
+
+`orchestune-dispatch`'s event log (`events.jsonl`) does not survive between CI runs, so it cannot serve as durable history on its own. Each applied dispatch cycle therefore posts a cycle report as a comment to the parent Issue when it ends. When it posts, what it contains, how failures are handled, and the `timings` in cycle records are described in [Dispatch Cycle Reports & Timings (dispatch-cycle.md)](architecture/dispatch-cycle.md).
+
+This keeps human review effort concentrated where judgment matters most (scoping and the final acceptance merge), while everything mechanical in between, including Issue closing at both tiers, is fully automated.
 
 ---
 
@@ -141,7 +180,7 @@ Details: [DAG Construction, Scheduling & Conflict Prevention (dag-and-scheduling
 * **Dual-Graph Model**: Decouples causal dependencies (`depends_on`) in the **Precedence DAG** from symmetric mutual exclusions (`footprint`/`symbols`/`shared_contract` overlaps) in the **Conflict Graph**.
 * **Similarity & Conflict Analysis**: IDF-weighted Otsuka-Ochiai similarity metric for overlap calculation (adapted from the Co-Coder paper).
 * **Scheduling Algorithm (#660)**: Multi-factor greedy scoring based on Precedence DAG critical path (bottom level), successor release count, historical cost and rework risk estimates, token window budgets, and aging for starvation freedom.
-* **Execution Profiles & Model Resolution (#670)**: Abstract execution profiles (`deep-reasoning`, `fast-code`, etc.) mapped deterministically to target-specific LLM models and reasoning tiers (`resolve_execution_profile` / `ExecutionSelection`). Clear responsibility boundary between the #660 scheduler ("WHEN and WHICH tasks to launch") and Execution Profiles ("HOW selected tasks execute").
+* **Execution Profiles & Model Resolution (#670)**: Abstract execution profiles (`deep-reasoning`, `fast-code`, etc.) mapped deterministically to target-specific LLM models and reasoning tiers (`resolve_execution_profile` / `ExecutionSelection`). The #660 scheduler decides "WHEN and WHICH tasks to launch" and Execution Profiles decide "HOW selected tasks execute", keeping the two responsibilities clearly separate.
 * **Shared-Contract Gates & AST Symbol Verification**: Proactive hotspot detection for unestablished shared extension points and non-blocking staleness detection between plans and codebases.
 
 ### 3.2 Stateless CI & Self-Healing State Recovery
@@ -155,11 +194,11 @@ Details: [Stateless CI & Self-Healing State Recovery (state-recovery.md)](archit
 Details: [Integration Pipeline, Two-Tier Branch Model & Auto-Rebase (integration.md)](architecture/integration.md)
 
 * **Two-Tier Branch Model**: Long-lived `parent/issue-{N}` branches isolate child merges; child PRs are verified with pre-merge CI and merged/closed automatically.
-* **Auto-Rebase (stacking)**: the dispatcher rebases a downstream in-flight branch only when the [shared stack-target policy](architecture/integration.md#dependency-target-fallback) returns **the branch of a single dependency that has passed CI but is not yet effectively complete**. With no target it skips the rebase and launch falls back to `parent/issue-{N}` (or `origin/main` without a parent Issue); when a target does exist, the launch base is that dependency branch instead, so whether work already merged into `parent/issue-{N}` comes along depends on that branch.
+* **Auto-Rebase (stacking)**: the dispatcher rebases a downstream in-flight branch only when the [shared stack-target policy](architecture/integration.md#dependency-target-fallback) returns **the branch of a single dependency that has passed CI but is not yet effectively complete**.
+  * With no target it skips the rebase and launch falls back to `parent/issue-{N}` (or `origin/main` without a parent Issue).
+  * When a target does exist, the launch base is that dependency branch instead, so whether work already merged into `parent/issue-{N}` comes along depends on that branch.
 * **Acceptance Gate**: Final PR from `parent/issue-{N}` to `main` reviewed and merged by a human (the only human click).
 * **Concurrency Control**: Same-machine file lock assumptions (#377), recommended `concurrency` group configurations for GitHub Actions, and CAS defense-in-depth (#435).
-
----
 
 <a id="dependency-cycle-context"></a>
 
@@ -185,11 +224,19 @@ Callers re-query after `record_*` to observe a change. The dispatcher introduces
 neither a public `DispatchSnapshot` nor a cycle freeze point, distributed
 transaction, or automatic rollback.
 
-The canonical dependency contracts are split across these detail documents:
+The dependency contracts are defined in these detail documents:
 
 - [Identity / Lifecycle / Policy and the stack contract](architecture/dag-and-scheduling.md#dependency-three-layers)
 - [Successful postconditions for record APIs](architecture/state-recovery.md#dependency-record-postconditions)
 - [Shared target policy and fallback](architecture/integration.md#dependency-target-fallback)
+
+### 3.5 Dispatch Cycle Reports & Timings
+Details: [Dispatch Cycle Reports & Timings (dispatch-cycle.md)](architecture/dispatch-cycle.md)
+
+* **Cycle report**: at the end of each applied dispatch cycle, a summary of selected tasks, deviations, completions, and promotions is posted as a comment to the parent Issue (#396).
+* **Timings**: cycle records carry per-phase durations and the number of `gh` attempts.
+
+---
 
 ## 4. Module Layers & Package Boundary
 
@@ -210,7 +257,6 @@ from its own layer or from any layer below it, never from a layer above.
 | **L1** | **Adapters**<br/>the modules that run external developer tools | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli`, `infra.managed_process`, `infra.managed_process_posix`, `infra.managed_process_windows`, `infra.private_tokens`, `infra.python_env`, `infra.repository_config` |
 | **L0** | **Infra**<br/>pure DTOs and dependency-free helpers | `bounded_limit`, `branch_naming`, `claim`, `claim.contracts`, `complete`, `complete.contracts`, `consistency.contracts`, `consistency.models`, `consistency.vocabulary`, `dag`, `dag.models`, `dispatch`, `dispatch.doctor_models`, `dispatch.progress`, `dispatch.timings`, `dispatch.result`, `dispatch.cycle_events`, `dispatch.retry_policy`, `dispatch.usage_limit`, `exit_codes`, `infra`, `infra.command_metrics`, `infra.execution_deadline`, `infra.json_state`, `infra.process_utils`, `installer`, `installer.contracts`, `integrator.timeout_policy`, `labels`, `lock_contracts`, `merge_evidence`, `models`, `outcome_record`, `not_needed_review_contract`, `review`, `review.acquisition`, `review.judgment`, `review.offline`, `review.rounds`, `review.snapshot`, `review.markers`, `review.progress_tracker`, `review.tracker_activity`, `ownership_contracts`, `plan_identity`, `plan_writer`, `pr_freshness`, `provisioning`, `recovery.contracts`, `replan`, `replan.models`, `scratch`, `setup_skills`, `task_metadata`, `validation`, `version` |
 
-
 Pure data-transfer modules (`models`, `dag.models`, `dispatch.result`) sit at
 **L0**, below the adapters, because `GitHubForge` returns `IssueRecord` and
 `PrRecord`. Putting the DTOs above the adapter that produces them would make
@@ -222,97 +268,19 @@ the other five; the guard encodes that as `ALLOWED_L4_DEPENDENTS`.
 
 New code belongs in the layer that owns the behaviour, and this section and `tests/test_architecture.py` keep enforcing it mechanically.
 
-#### Shared execution ledger and ownership contracts
+#### Shared execution ledger
 
 `ledger` is L2 shared infrastructure for `claim`, `complete`, `dispatch`,
-`integrator`, and status reporting. It owns three responsibilities:
+`integrator`, and status reporting. Its dependency rule is stricter than the
+general layer rule: ledger may import its own modules, but its other dependencies
+inside `orchestune` must be L0/L1 (rule 6 in §4.2). Ledger does not depend on
+claim or dispatch.
 
-- `ledger.completion_reservations`: shared conservative guards that keep claim, GC, repair, and dependency readers from mutating or releasing an Issue while its completion proof is pending.
-- `ledger.run_state`: execution-state models, loading, validation, normalization,
-  persistence, and retention helpers. Moving it out of dispatch preserves the
-  JSON format and the requirement to hold the existing state lock when saving.
-- `ledger.active_records`: the only in-memory source of truth (`core` plus three frozen subrecords: `launch`, `claim`, `completion`) in `ActiveWorktree` and its immutable structure. Historical flat attribute properties have been eliminated, and `slots=True` rejects stale writes or accesses. `from_records()` is the typed nested construction path, while `with_core()` is the shared-field update boundary; records are not stored twice. Owner fields are replaced only through their owner APIs: claim fields through `claim.ownership` (`build_claim_info()`, `with_claim()`), launch fields through `dispatch.launch_state` (`build_launch_record()`, `with_launch()`, `with_launch_phase()`), and completion fields through `complete.journal` (`active_completion_from_record()`, `with_completion()`). For detailed specifications and lifecycle priority rules, see [Stateless CI & Self-Healing State Recovery (state-recovery.md)](architecture/state-recovery.md#active-worktree-lifecycle).
-- `ledger.active_codec`: explicit decoding and encoding of the established flat
-  ActiveWorktree JSON shape. It preserves the field order and omission of a null
-  `completion_policy_config` while keeping codec details out of state validation.
-- `ledger.active_lifecycle`: `lifecycle(active)` maps persisted fields to
-  a candidate phase in completion, launch, recovery sentinel, claim, reservation
-  order. `HANDOFF_READY` is only a candidate; existing code still verifies
-  completion receipts and remote evidence. `ledger.run_state` re-exports the
-  lifecycle enum and helper.
-
-  | Candidate phase | Condition, checked in order |
-  | --- | --- |
-  | `HANDOFF_READY` | Handoff-ready flag or a handoff completion stage is present. |
-  | `COMPLETING` | Completion ID is present. |
-  | `RUNNING` | PID, external handle, or launched phase is present. |
-  | `LAUNCHING` | Start time, launch attempt ID, or another launch phase is present. |
-  | `RECOVERY_REQUIRED` | Recovered claim ID or unverifiable-owner digest sentinel is present. |
-  | `CLAIMED` | Interactive owner with a non-null claim stage other than `reserved`. |
-  | `RESERVED` | Fallback, including an initial `reserved` claim or an in-memory record with no claim stage. Persisted records require this field. |
-- `ledger.status_labels`: shared status-label constants and the application of
-  a plan: add, the ledger-commit callback, then sequential removal of old labels.
-- `ledger.status_machine`: a pure, Forge-independent module holding the
-  `status:*` role table, the normal lifecycle transition table, and the plan
-  derived from a label snapshot. It reads or writes no labels, runs no
-  callbacks, and rejects no transition in production.
-- `ledger.status_events`: the `status:*` Event model (#1219 Phase 3). A pure
-  module that decides events, execution identity, retry reservations and
-  budgets without side effects; it depends only on `status_machine`, `labels`
-  and `bounded_limit`. It replaces no production decision; conformance tests
-  tie it to the production functions. The backoff retry decision is owned by
-  `dispatch.retry_policy`, so callers inject it as `BudgetLimits.plan_backoff`
-  instead of ledger importing dispatch.
-- `ledger.escalation`: the shared escalation operation. It adds the terminal
-  label, invokes the caller's state-commit callback, removes the specified old
-  labels, then posts the reason. A failed add or callback stops later steps;
-  later cleanup/comment failure does not roll back a committed state update.
-  Dispatch-specific rule evaluation, process stopping, and ledger updates stay
-  with the dispatch workflow and its callbacks.
-
-`ownership_contracts` is an independent L0 module defining `OwnerKind`,
-`ClaimStage`, and `ReservationKind`. Ledger imports it directly; `claim.contracts`
-may re-export those same enums and retains claim-specific requests/outcomes.
-The shared enums have no dependency on claim, ledger, or dispatch implementations.
-
-The dedicated ledger boundary is stricter than the general layer rule: ledger
-may import its own modules, but its other dependencies inside `orchestune` must
-be L0/L1. Standard-library and third-party imports are outside this layer check.
-Ledger does not depend on claim or dispatch. `complete` no longer imports dispatch;
-the former `dispatch.state` and `dispatch.labels` modules have been removed.
-Integrator imports shared escalation from ledger and `file_lock` directly from
-`infra.process_utils`.
-
-
-The coordinator uses shared routine constants and implementation from `targets.cloud_routine`, and execution contracts from `targets.contracts`. Shared launch instructions, branch verification, and completion evidence live in `targets.support`. Dispatch re-exports the same objects for compatibility; the shared targets package does not import dispatch or integrator.
-
-The workflow dependencies deliberately excluded from the initial ledger extraction
-were resolved in follow-up issues:
-- `claim.preflight`'s shared lock dependency on `dispatch.locks` was resolved in
-  [#1071](https://github.com/Saltmu/orchestune/issues/1071) by moving
-  `KIND_BRANCH`/`KIND_PR`/`ExternalLockConflict`/`ExternalLockScanResult` into
-  the L0 `lock_contracts` module.
-- `claim.preflight` and `integrator.tasks` dependencies on `dispatch` dependency
-  evaluation were resolved in [#1073](https://github.com/Saltmu/orchestune/issues/1073)
-  by moving dependency resolution, assessment, and policy into the shared L2
-  `dependencies` package (`dependencies.resolution`, `dependencies.assessment`,
-  `dependencies.policy`). This eliminated the reverse dependencies from `claim`
-  and `integrator` to `dispatch`, breaking all `claim ↔ dispatch`,
-  `complete ↔ claim`, and `dispatch ↔ integrator` package cycles.
-- The unrelated `dag ↔ symbol_verification` cycle was resolved in
-  [#1075](https://github.com/Saltmu/orchestune/issues/1075) by moving symbol
-  verification into the `dag` package (`dag.symbol_verification`).
-- The `provisioning ↔ replan` cycle was resolved in
-  [#1076](https://github.com/Saltmu/orchestune/issues/1076) by moving plan
-  identity into the L0 `plan_identity` module.
-
-Repository TOML discovery lives in the L1 `infra.repository_config` adapter. The
-L2 `targets.completion_policy` interprets effective token limits and resolves
-usage through the shared `targets.usage` provider. `dispatch.config_loader`
-re-exports the shared repository loader for compatibility; completion policy
-does not import dispatch configuration or workflow modules.
-
-The consistency status kernel derives lifecycle vocabulary from the status-machine role table, while preserving its seven-label tuple and the ledger's three ACTIVE labels. Its invariant/planner/fresh executor protect FINAL and ESCALATION labels, retain the exact done+queued rollback exception, and honor promotion holds for initialization and conflict repair. The executor persists and verifies Intents; its transition-table warning is observational only. Supervisor pass/cycle distinction and bounded convergence assumptions are documented in [status labels](status-labels.md#status-reconciliation-safety-and-convergence-1218). Policy choices in RuleChain, GC, rebase and Integrator remain separate.
+The responsibilities of each ledger module, the ownership contracts, and the
+boundaries of `targets`, repository configuration, and the consistency status
+kernel are described in [Shared Execution Ledger & Package Boundaries (ledger.md)](architecture/ledger.md).
+For detailed `ActiveWorktree` specifications and lifecycle priority rules, see
+[Stateless CI & Self-Healing State Recovery (state-recovery.md)](architecture/state-recovery.md#active-worktree-lifecycle).
 
 ### 4.2 Invariants enforced by CI
 
@@ -323,7 +291,7 @@ table above cannot silently drift from the code:
    higher layer. In particular nothing imports an L4 entrypoint except `cli`,
    which composes them.
 2. **`git` and `gh` are confined to L1.** `subprocess` invocations naming
-   either command are partitioned exactly as follows — no other module may
+   either command are partitioned exactly as follows; no other module may
    grow one.
 
    | Command | Module allowed to run it |
@@ -337,25 +305,27 @@ table above cannot silently drift from the code:
    dependency synchronization and repository-local `.venv` virtualenv operations
    are encapsulated by the L1 `infra.python_env` adapter.
 
-   **Scope of the check**:
-   The guard reads the command out of the source, so it sees a literal list — passed inline, or through a variable that some assignment in scope binds to one. It models Python's scoping rules well enough to be trusted on ordinary code: it follows branches and loops, keeps class bodies out of their methods, honours `global`/`nonlocal`, and reads the `args=` keyword as well as the first positional argument.
+   Scope of the check: the guard reads the command out of the source, so it sees a literal list, passed inline or through a variable that some assignment in scope binds to one. It models Python's scoping rules well enough to be trusted on ordinary code: it follows branches and loops, keeps class bodies out of their methods, honours `global`/`nonlocal`, and reads the `args=` keyword as well as the first positional argument.
 
    It does not evaluate anything, however. A command assembled at runtime, read from configuration, or handed in by another module escapes it entirely.
 
-   That boundary is deliberate. This invariant exists to catch the accident — someone reaching for `subprocess` in an L2 module instead of `run_git` — not to prevent a determined bypass. Anyone who wants to run `git` outside `git_cli` can do so, and no static check in a test file will stop them; the thing standing in their way is code review. So write `git`/`gh` argv as a literal, and treat a failure here as "this belongs in L1", not as a puzzle to route around.
+   That boundary is deliberate. This invariant exists to catch the accident (someone reaching for `subprocess` in an L2 module instead of `run_git`), not to prevent a determined bypass. Anyone who wants to run `git` outside `git_cli` can do so, and no static check in a test file will stop them; the thing standing in their way is code review. So write `git`/`gh` argv as a literal, and treat a failure here as "this belongs in L1", not as a puzzle to route around.
 
 3. **No import cycles**, and no internal import hidden inside a function body
    (which would evade the cycle check). `cli` is exempt from the second rule
    because it defers entrypoint imports to keep startup fast.
 4. **The table is exhaustive.** Every `.py` file under `orchestune/` appears in
-   exactly one layer, in both the English and Japanese documents — with one
+   exactly one layer, in both the English and Japanese documents, with one
    deliberate exception: `orchestune/__init__.py` itself. The package root
    *declares* the boundary rather than living inside it, so it has no layer and
    is not subject to rule 1. What it may import is checked separately: a
    dedicated test asserts it pulls in no L4 entrypoint, which is the property
    that would otherwise be lost.
 5. **No cross-package import cycles (with allowlist ratchet)**:
-   In addition to module-level cycle prohibition (Rule 3), circular imports between top-level packages (`orchestune.<pkg>`, or the module name for standalone modules) are forbidden. Cross-package cycles are not allowed even within the same layer or in downward-pointing directions. Pre-existing cycles are explicitly tracked in `KNOWN_PACKAGE_CYCLE_EDGES` with stated reasons and planned resolution issues, and verified via strongly connected components (SCC) over the reduced package graph. Introducing new unauthorized cycles fails CI, and resolved cycle edges must be removed from the allowlist (ratchet). The package root (`orchestune/__init__.py`), which declares public re-exports (Rule 4), is exempt from cross-package cycle tracking.
+   In addition to module-level cycle prohibition (Rule 3), circular imports between top-level packages (`orchestune.<pkg>`, or the module name for standalone modules) are forbidden. Cross-package cycles are not allowed even within the same layer or in downward-pointing directions.
+   - Pre-existing cycles are explicitly tracked in `KNOWN_PACKAGE_CYCLE_EDGES` with stated reasons and planned resolution issues, and verified via strongly connected components (SCC) over the reduced package graph.
+   - Introducing new unauthorized cycles fails CI, and resolved cycle edges must be removed from the allowlist (ratchet).
+   - The package root (`orchestune/__init__.py`), which declares public re-exports (Rule 4), is exempt from cross-package cycle tracking.
 6. **Ledger imports only its own modules and L0/L1 dependencies.** The dedicated
    test rejects dependencies on other L2 modules as well as L3/L4 modules, which
    the general downward-layer rule alone cannot ensure. Synthetic graphs in
@@ -370,9 +340,9 @@ The L1 boundary is expressed as three `Protocol` classes rather than one
 concrete client, so callers depend only on the slice of GitHub they actually
 use:
 
-- `IssueForge` — reading and labelling issues
-- `PullRequestForge` — listing, creating and merging pull requests
-- `RepoAdminForge` — auth checks and label bootstrapping
+- `IssueForge`: reading and labelling issues
+- `PullRequestForge`: listing, creating and merging pull requests
+- `RepoAdminForge`: auth checks and label bootstrapping
 
 `Forge` is their union, and `GitHubForge` is the single `gh`-backed
 implementation. A caller that only needs to bootstrap labels (`run_bootstrap`)
