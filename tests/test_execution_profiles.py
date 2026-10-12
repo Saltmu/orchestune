@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestune.dag.models import ConfigError
+from orchestune.config_contracts import ConfigError
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.execution_profiles import (
     DEFAULT_EXECUTION_PROFILE,

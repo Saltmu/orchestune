@@ -6,6 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from orchestune.config_contracts import ConfigError
 from orchestune.config_wizard.storage import (
     ConfigConflictError,
     ConfigStorageError,
@@ -14,7 +15,6 @@ from orchestune.config_wizard.wizard import (
     PromptPort,
     run_config_wizard,
 )
-from orchestune.dag.models import ConfigError
 
 
 def resolve_project_dir(

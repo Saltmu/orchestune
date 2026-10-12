@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import re
-import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
+import orchestune.config_contracts as config_contracts
 import orchestune.footprint_paths as footprint_paths
 
 _IGNORED_FOOTPRINT_PATTERNS = (
@@ -50,18 +49,6 @@ DAG_TOOL_CONFIG_KEYS = frozenset(
 )
 
 
-class ConfigError(ValueError):
-    """Raised for invalid `orchestune.toml` / `pyproject.toml` config values.
-
-    A `ValueError` subclass so existing `except ValueError` call sites keep
-    working unchanged, but distinct from other `ValueError`s (e.g.
-    `DagCycleError`, footprint validation) so callers can catch config
-    problems specifically and map them to a dedicated exit code (#428:
-    orchestune-dag / orchestune-provision / orchestune-dispatch all exit 2
-    for config errors, distinct from exit 1 for other failures).
-    """
-
-
 def compile_extra_ignore_patterns(
     patterns: Iterable[str],
 ) -> tuple[re.Pattern[str], ...]:
@@ -79,7 +66,9 @@ def compile_extra_ignore_patterns(
     try:
         return tuple(re.compile(pattern) for pattern in patterns)
     except Exception as e:
-        raise ConfigError(f"invalid 'dag_ignore_patterns' regex: {e}") from e
+        raise config_contracts.ConfigError(
+            f"invalid 'dag_ignore_patterns' regex: {e}"
+        ) from e
 
 
 def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
@@ -103,7 +92,7 @@ def extract_dag_ignore_patterns(config: dict[str, Any]) -> list[str]:
     if not isinstance(patterns, list) or not all(
         isinstance(p, str) and p for p in patterns
     ):
-        raise ConfigError(
+        raise config_contracts.ConfigError(
             "'dag_ignore_patterns' (or 'dag-ignore-patterns') must be a list of "
             "non-empty strings"
         )
@@ -138,7 +127,7 @@ def extract_dag_similarity_threshold(config: dict[str, Any]) -> float | None:
     # True/False silently pass through as 1.0/0.0 (#404's dag_ignore_patterns
     # review raised the same concern for its own type check).
     if isinstance(value, bool) or not isinstance(value, int | float):
-        raise ConfigError(
+        raise config_contracts.ConfigError(
             "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be a number"
         )
     try:
@@ -147,84 +136,16 @@ def extract_dag_similarity_threshold(config: dict[str, Any]) -> float | None:
         # A TOML integer too large for `float` (e.g. a 500-digit integer,
         # which tomllib accepts as-is) raises OverflowError here rather
         # than reaching the range check below (Codex review, #441).
-        raise ConfigError(
+        raise config_contracts.ConfigError(
             "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be "
             f"within [0, 1] (a similarity score): {e}"
         ) from e
     if not (0 <= threshold <= 1):
-        raise ConfigError(
+        raise config_contracts.ConfigError(
             "'dag_similarity_threshold' (or 'dag-similarity-threshold') must be "
             f"within [0, 1] (a similarity score), got {threshold}"
         )
     return threshold
-
-
-def resolve_repo_root(plan_path: str | Path) -> Path:
-    """Locate the Git repository root a plan file lives under.
-
-    Walks upward from `plan_path`'s parent directory looking for a `.git`
-    marker (a directory in a normal checkout, or a file pointing at the
-    real gitdir in a linked worktree). Outside a Git repository, falls back
-    to the plan's own parent directory to preserve pre-#410 behavior.
-
-    Shared by orchestune-dag (dag_cli.py) and orchestune-provision
-    (provisioning.py) so that both tools agree on which directory's
-    orchestune.toml / pyproject.toml `[tool.orchestune]` table to read when
-    `--plan` points to a file nested below the repository root (#410, #418).
-    """
-    plan_parent = Path(plan_path).resolve().parent
-    for candidate in (plan_parent, *plan_parent.parents):
-        git_marker = candidate / ".git"
-        if git_marker.is_file() or (git_marker / "HEAD").is_file():
-            return candidate
-    return plan_parent
-
-
-def load_orchestune_config(repo_root: str | Path) -> dict[str, Any]:
-    """Load the orchestune.toml / pyproject.toml `[tool.orchestune]` config table.
-
-    Checks `<repo_root>/orchestune.toml` first (its entire top level is the
-    config table); falls back to `<repo_root>/pyproject.toml`'s
-    `[tool.orchestune]` table. Missing files return an empty dict.
-
-    Shared by orchestune-dag (dag_cli.py), orchestune-dispatch
-    (dispatcher.py), and orchestune-provision (provisioning.py) so all three
-    agree on the same discovery order and error semantics (#404 review).
-    """
-    repo_root = Path(repo_root)
-
-    # Beyond `OSError`/`tomllib.TOMLDecodeError`, a pathological file can
-    # make `open()`/`tomllib.load()` fail in other ways too — invalid UTF-8
-    # raises `UnicodeDecodeError`, ~500+ levels of nested arrays/tables
-    # raise `RecursionError` (Codex review, #441). `tomllib.load` is the
-    # only risky operation in each block below, so any failure loading
-    # user-supplied config data is a config problem, not an internal bug —
-    # catch broadly rather than chase the parser's exception types one by
-    # one (same reasoning as `compile_extra_ignore_patterns` above).
-    orchestune_toml = repo_root / "orchestune.toml"
-    if orchestune_toml.exists():
-        try:
-            with open(orchestune_toml, "rb") as f:
-                return cast(dict[str, Any], tomllib.load(f))
-        except Exception as e:
-            raise ConfigError(f"failed to load {orchestune_toml}: {e}") from e
-
-    pyproject_toml = repo_root / "pyproject.toml"
-    if pyproject_toml.exists():
-        try:
-            with open(pyproject_toml, "rb") as f:
-                data = tomllib.load(f)
-        except Exception as e:
-            raise ConfigError(f"failed to load {pyproject_toml}: {e}") from e
-        tool = data.get("tool", {})
-        if not isinstance(tool, dict):
-            raise ConfigError(f"{pyproject_toml}: [tool] must be a table")
-        config = tool.get("orchestune", {})
-        if not isinstance(config, dict):
-            raise ConfigError(f"{pyproject_toml}: [tool.orchestune] must be a table")
-        return cast(dict[str, Any], config)
-
-    return {}
 
 
 def is_ignored_footprint(

@@ -5,12 +5,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from orchestune.config_contracts import ConfigError
 from orchestune.dispatch.config_loader import (
-    ConfigError,
     load_and_resolve_config,
     resolve_parent_issue,
-    validate_toml_config,
 )
+from orchestune.dispatch.config_schema import validate_toml_config
 from orchestune.dispatch.dispatcher import _build_arg_parser
 from orchestune.dispatch.execution_profiles import (
     ExecutionProfileConfig,

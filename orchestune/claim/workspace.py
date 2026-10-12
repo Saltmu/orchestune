@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +21,7 @@ class ClaimWorkspace:
     common_dir: Path
 
 
-def _resolve_relative_to(
+def resolve_relative_to(
     primary_root: Path, explicit_path: str | Path | None, default: str
 ) -> Path:
     if explicit_path is None:
@@ -33,7 +34,7 @@ def _resolve_relative_to(
     )
 
 
-def _resolve_primary_root(toplevel: Path, common_dir: Path) -> Path:
+def resolve_primary_root(toplevel: Path, common_dir: Path) -> Path:
     """Return the primary checkout root for normal and linked worktrees.
 
     ``git-common-dir`` points at the primary checkout's ``.git`` directory for
@@ -69,6 +70,23 @@ def _resolve_primary_root(toplevel: Path, common_dir: Path) -> Path:
             "configure core.worktree or provide absolute shared paths"
         )
     return toplevel
+
+
+def resolve_checkout_roots(target_cwd: Path) -> tuple[Path, Path]:
+    """Return `(primary_root, checkout_root)` for `target_cwd`.
+
+    Falls back to the resolved `target_cwd` for both when Git cannot identify
+    the repository. A `ValueError` that prevents determining the primary
+    checkout is not swallowed.
+    """
+    try:
+        toplevel, common_dir = get_git_repository_paths(target_cwd)
+        primary_root = resolve_primary_root(toplevel, common_dir)
+        checkout_root = toplevel
+    except (subprocess.CalledProcessError, OSError, RuntimeError):
+        primary_root = target_cwd.resolve()
+        checkout_root = target_cwd.resolve()
+    return primary_root, checkout_root
 
 
 def _read_core_worktree(common_dir: Path, toplevel: Path) -> Path | None:
@@ -126,15 +144,15 @@ def resolve_claim_workspace(
     primary_root = (
         toplevel
         if explicit_paths_are_absolute
-        else _resolve_primary_root(toplevel, common_dir)
+        else resolve_primary_root(toplevel, common_dir)
     )
     repository_identity = common_dir.as_posix()
 
-    run_state_path = _resolve_relative_to(
+    run_state_path = resolve_relative_to(
         primary_root, explicit_state_path, "run_state.json"
     )
     lock_path = run_state_path.with_suffix(".lock")
-    worktree_root = _resolve_relative_to(
+    worktree_root = resolve_relative_to(
         primary_root, explicit_worktree_root, "worktrees"
     )
 

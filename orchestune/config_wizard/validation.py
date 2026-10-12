@@ -5,30 +5,30 @@ from __future__ import annotations
 import tomllib
 from typing import Any
 
+from orchestune.config_contracts import ConfigError
 from orchestune.dag.models import (
     DAG_TOOL_CONFIG_KEYS,
-    ConfigError,
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
 )
-from orchestune.dispatch.config_loader import (
-    _BOOLEAN_CONFIG_KEYS,
-    _NON_NEGATIVE_INT_KEYS,
-    _PATH_CONFIG_KEYS,
-    _POSITIVE_INT_KEYS,
-    _PROHIBITED_TOML_KEYS,
-    _STRING_KEYS,
+from orchestune.dispatch.config_schema import (
+    BOOLEAN_CONFIG_KEYS,
+    NON_NEGATIVE_INT_KEYS,
+    PATH_CONFIG_KEYS,
+    POSITIVE_INT_KEYS,
+    PROHIBITED_TOML_KEYS,
+    STRING_KEYS,
     validate_toml_config,
 )
 from orchestune.dispatch.execution_profiles import extract_execution_profile_config
 
 _KNOWN_SCALAR_KEYS = frozenset(
-    _BOOLEAN_CONFIG_KEYS
-    | _PATH_CONFIG_KEYS
-    | _STRING_KEYS
-    | _NON_NEGATIVE_INT_KEYS
-    | _POSITIVE_INT_KEYS
+    BOOLEAN_CONFIG_KEYS
+    | PATH_CONFIG_KEYS
+    | STRING_KEYS
+    | NON_NEGATIVE_INT_KEYS
+    | POSITIVE_INT_KEYS
     | {
         "dispatch_target",
         "reviewer_bot",
@@ -65,7 +65,7 @@ def diagnose_existing_document(doc_data: dict[str, Any]) -> list[str]:
 
     for raw_key in doc_data:
         norm_key = raw_key.replace("-", "_")
-        if raw_key in _PROHIBITED_TOML_KEYS or norm_key in _PROHIBITED_TOML_KEYS:
+        if raw_key in PROHIBITED_TOML_KEYS or norm_key in PROHIBITED_TOML_KEYS:
             msg = f"Prohibited key '{raw_key}' is not allowed in orchestune configuration files."
             diagnostics.append(msg)
             seen.add(raw_key)

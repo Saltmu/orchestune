@@ -8,9 +8,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestune.dag.models import ConfigError
+from orchestune.config_contracts import ConfigError
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_loader import validate_toml_config
+from orchestune.dispatch.config_schema import validate_toml_config
 from orchestune.dispatch.config_values import (
     RUNTIME_TUNING_KEYS,
     runtime_tuning_overrides,

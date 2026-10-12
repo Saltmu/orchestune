@@ -3,7 +3,7 @@
 exit code 2 で一貫して報告することの回帰防止テスト。
 
 3ツールとも `orchestune/dag_models.py` の共有関数
-（`load_orchestune_config`/`extract_dag_ignore_patterns`/
+（`find_and_load_config_file`/`extract_dag_ignore_patterns`/
 `compile_extra_ignore_patterns`）から `ConfigError` を送出させ、それぞれの
 `main()` がこれを exit 2 にマッピングする。構造的エラー（`DagCycleError`等）
 は引き続き exit 1 のままであることも合わせて確認する。
@@ -395,7 +395,7 @@ class TestOversizedThresholdIntegerExitCodeConsistency:
 class TestDeeplyNestedTomlExitCodeConsistency:
     """Codex review (#441): a syntactically valid but deeply nested TOML
     value (`x = ` followed by ~500 nested arrays) makes `tomllib.load()`
-    raise `RecursionError`, which `load_orchestune_config`'s original
+    raise `RecursionError`, which `find_and_load_config_file`'s original
     `except (OSError, tomllib.TOMLDecodeError, UnicodeDecodeError)` didn't
     cover, so `orchestune-dispatch` crashed with an uncaught traceback
     (exit 1) instead of the exit-2 config-error contract this PR

@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from orchestune.dag.models import ConfigError, load_orchestune_config
+from orchestune.config_contracts import ConfigError
+from orchestune.infra.repository_config import find_and_load_config_file
 from orchestune.targets.contracts import ExecutionSelection as ExecutionSelection
 
 logger = logging.getLogger(__name__)
@@ -298,7 +299,7 @@ def load_execution_profile_config(
     """Load and validate execution profiles configuration from a repo root or config dict."""
     if isinstance(repo_root_or_config, dict):
         return extract_execution_profile_config(repo_root_or_config)
-    config_data = load_orchestune_config(repo_root_or_config)
+    config_data = find_and_load_config_file(repo_root_or_config)
     return extract_execution_profile_config(config_data)
 
 

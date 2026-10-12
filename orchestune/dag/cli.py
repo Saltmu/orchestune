@@ -8,16 +8,18 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
+from orchestune.config_contracts import ConfigError
 from orchestune.dag.graph import build_dag_from_plan
 from orchestune.dag.models import (
-    ConfigError,
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
-    load_orchestune_config,
-    resolve_repo_root,
 )
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
+from orchestune.infra.repository_config import (
+    find_and_load_config_file,
+    resolve_repo_root,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -83,7 +85,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         # --planの位置から.gitを上方探索する。Git管理外の場合のみ、
         # 呼び出し元のcwdではなく--planファイル自身の位置を基点にする。
         repo_root = resolve_repo_root(args.plan)
-        config = load_orchestune_config(repo_root)
+        config = find_and_load_config_file(repo_root)
         extra_ignore_patterns = compile_extra_ignore_patterns(
             extract_dag_ignore_patterns(config)
         )

@@ -20,6 +20,7 @@ from architecture_test_support import (
     PACKAGE_NAME,
     PACKAGE_ROOT,
     _assigned_names,
+    _cross_package_private_imports,
     _cycle_members,
     _import_graph,
     _package_cycle_edges,
@@ -863,6 +864,129 @@ def test_package_dependency_cycles_match_allowlist() -> None:
 
     for edge, reason in KNOWN_PACKAGE_CYCLE_EDGES.items():
         assert reason.strip(), f"Empty reason for allowed cycle edge: {edge}"
+
+
+KNOWN_CROSS_PACKAGE_PRIVATE_IMPORTS: dict[tuple[str, str, str], str] = {
+    **{
+        (
+            "complete.merged",
+            "merge_evidence",
+            name,
+        ): "merge_evidence helper shared with dispatch; promote to public API separately"
+        for name in ("_identity_status", "_is_after_reopen")
+    },
+    **{
+        (
+            "dispatch.prior_parent_merge",
+            "merge_evidence",
+            name,
+        ): "merge_evidence helper shared with complete; promote to public API separately"
+        for name in ("_identity_status", "_is_after_reopen")
+    },
+    (
+        "dispatch.gc.collection",
+        "ledger.run_state",
+        "_parse_active_worktrees",
+    ): "ledger parser reused by GC; promote to public API separately",
+    **{
+        (
+            "dispatch.gc.policy_discovery",
+            "infra.private_tokens",
+            name,
+        ): "owner-token record helpers used by GC discovery; promote to public API separately"
+        for name in ("_read_owner_token", "_token_record_path")
+    },
+    **{
+        (
+            "dispatch.targets",
+            "targets.support",
+            name,
+        ): "dispatch.targets facade over shared target support; resolve with the targets split"
+        for name in (
+            "_lookup_issue_outcome",
+            "_noninteractive_instruction",
+            "_push_branch_and_verify",
+            "_resolve_base_branch_val",
+            "_task_pr_completion_status",
+        )
+    },
+    **{
+        (
+            "dispatch.targets",
+            "targets.usage",
+            name,
+        ): "dispatch.targets facade over shared usage parsing; resolve with the targets split"
+        for name in ("_extract_usage_from_dict", "_parse_usage_from_log")
+    },
+    **{
+        (
+            "dispatch.worktree",
+            "worktree_ops.preparation",
+            name,
+        ): "dispatch.worktree facade over worktree_ops.preparation; resolve with the worktree split"
+        for name in (
+            "_branch_exists",
+            "_create_worktree",
+            "_git_common_dir",
+            "_git_toplevel",
+            "_resolve_worktree_head_sha",
+            "_resolve_worktree_path",
+            "_verify_worktree_identity",
+            "_worktree_checked_out_branch",
+        )
+    },
+    (
+        "integrator.steps",
+        "ledger.escalation",
+        "_REMOVABLE_STATUS_LABELS",
+    ): "status label set shared with ledger escalation; promote to public API separately",
+    (
+        "replan.apply",
+        "provisioning.rendering",
+        "_validate_template_identity_marker",
+    ): "template marker validation reused by replan; promote to public API separately",
+    (
+        "replan.snapshot",
+        "issue_parsing",
+        "_parse_footprint_block",
+    ): "footprint block parser reused by replan; promote to public API separately",
+}
+
+
+def test_cross_package_private_imports_match_allowlist() -> None:
+    """New cross-package private imports fail; resolved ones must leave the list (#1321)."""
+    actual = _cross_package_private_imports()
+    allowed = set(KNOWN_CROSS_PACKAGE_PRIVATE_IMPORTS)
+
+    unexpected = actual - allowed
+    assert (
+        unexpected == set()
+    ), f"Unexpected cross-package private imports: {sorted(unexpected)}"
+
+    stale = allowed - actual
+    assert (
+        stale == set()
+    ), f"Stale cross-package private import entries: {sorted(stale)}"
+
+    for entry, reason in KNOWN_CROSS_PACKAGE_PRIVATE_IMPORTS.items():
+        assert reason.strip(), f"Empty reason for allowed private import: {entry}"
+
+
+def test_infra_does_not_import_dag() -> None:
+    """L1 -> L0 is allowed by the layer check, so guard the dag dependency directly (#1321)."""
+    infra_graph = {
+        module: dependencies
+        for module, dependencies in _import_graph().items()
+        if _top_level_package(module) == "infra"
+    }
+    assert infra_graph, "No infra modules found"
+    violations = sorted(
+        f"{module} -> {dependency}"
+        for module, dependencies in infra_graph.items()
+        for dependency in dependencies
+        if _top_level_package(dependency) == "dag"
+    )
+    assert violations == []
 
 
 def test_architecture_docs_mention_package_cycle_guard() -> None:

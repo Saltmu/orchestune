@@ -7,9 +7,9 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
+import orchestune.claim.workspace as claim_workspace
 from orchestune.claim.local_identity import registered_claim_path
 from orchestune.claim.workspace import ClaimWorkspace
-from orchestune.dispatch.config_loader import _resolve_checkout_roots
 from orchestune.infra.json_state import write_json_atomic
 from orchestune.infra.process_utils import FileLock
 from orchestune.ledger.external_stop_receipts import (
@@ -170,7 +170,7 @@ def _inspect(
 def recover_external(
     request: RecoveryRequest, workspace: ClaimWorkspace, cwd: Path
 ) -> RecoveryResult:
-    primary, checkout = _resolve_checkout_roots(cwd)
+    primary, checkout = claim_workspace.resolve_checkout_roots(cwd)
     if primary != checkout:
         raise ValueError("run recovery from the primary checkout")
     state = load_run_state_readonly(workspace.run_state_path)

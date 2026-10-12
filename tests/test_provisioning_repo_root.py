@@ -347,7 +347,7 @@ class TestConflictGraphConfig:
     def test_malformed_orchestune_toml_raises_clear_error(
         self, tmp_path: Path, template_path: Path
     ):
-        # #404レビュー指摘: 新設したload_orchestune_config呼び出しが不正な
+        # #404レビュー指摘: 新設したfind_and_load_config_file呼び出しが不正な
         # 設定ファイルを検出した場合、原因不明のスタックトレースではなく
         # 他のツール（dag_cli.py/dispatcher.py）と同様の明確なエラーになること
         plan_path = tmp_path / "decomposition_plan.md"

@@ -11,7 +11,10 @@ from orchestune.claim.workspace import (
     ClaimWorkspace,
     assert_repository_identity_match,
     check_repository_identity_match,
+    resolve_checkout_roots,
     resolve_claim_workspace,
+    resolve_primary_root,
+    resolve_relative_to,
 )
 from orchestune.infra.git_cli import run_git
 
@@ -274,6 +277,76 @@ class TestResolveClaimWorkspace:
         ws = resolve_claim_workspace(cwd=primary_repo)
         with pytest.raises((AttributeError, TypeError)):
             ws.repository_identity = "modified"  # type: ignore[misc]
+
+
+class TestResolveCheckoutRoots:
+    def test_primary_checkout_returns_same_root_twice(
+        self, git_repo_with_worktree: tuple[Path, Path]
+    ) -> None:
+        primary_repo, _ = git_repo_with_worktree
+        primary, checkout = resolve_checkout_roots(primary_repo)
+        assert (primary, checkout) == (primary_repo.resolve(), primary_repo.resolve())
+
+    def test_linked_worktree_returns_primary_then_checkout(
+        self, git_repo_with_worktree: tuple[Path, Path]
+    ) -> None:
+        primary_repo, linked = git_repo_with_worktree
+        primary, checkout = resolve_checkout_roots(linked)
+        assert (primary, checkout) == (primary_repo.resolve(), linked.resolve())
+
+    def test_external_git_dir_anchors_to_checkout(self, tmp_path: Path) -> None:
+        checkout = tmp_path / "checkout"
+        checkout.mkdir()
+        run_git(
+            [
+                "init",
+                "-b",
+                "main",
+                "--separate-git-dir",
+                str(tmp_path / "gd"),
+                str(checkout),
+            ],
+            cwd=tmp_path,
+        )
+        assert resolve_checkout_roots(checkout) == (
+            checkout.resolve(),
+            checkout.resolve(),
+        )
+
+    def test_directory_outside_git_falls_back_to_itself(self, tmp_path: Path) -> None:
+        plain = tmp_path / "plain"
+        plain.mkdir()
+        assert resolve_checkout_roots(plain) == (plain.resolve(), plain.resolve())
+
+    def test_value_error_is_not_swallowed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "orchestune.claim.workspace.get_git_repository_paths",
+            lambda cwd: (tmp_path, tmp_path / ".git"),
+        )
+
+        def boom(toplevel: Path, common_dir: Path) -> Path:
+            raise ValueError("cannot determine primary checkout")
+
+        monkeypatch.setattr("orchestune.claim.workspace.resolve_primary_root", boom)
+        with pytest.raises(ValueError, match="primary checkout"):
+            resolve_checkout_roots(tmp_path)
+
+
+class TestPublicPathHelpers:
+    def test_resolve_relative_to_uses_default_under_primary_root(
+        self, tmp_path: Path
+    ) -> None:
+        assert resolve_relative_to(tmp_path, None, "run_state.json") == (
+            tmp_path / "run_state.json"
+        )
+
+    def test_resolve_primary_root_of_plain_checkout_is_toplevel(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / ".git").mkdir()
+        assert resolve_primary_root(tmp_path, tmp_path / ".git") == tmp_path
 
 
 class TestRepositoryIdentityValidation:

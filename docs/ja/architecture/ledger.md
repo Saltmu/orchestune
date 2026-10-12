@@ -81,10 +81,10 @@ coordinator は `targets.cloud_routine` の routine 定数・実装と `targets.
 
 ### 4.3 リポジトリ設定
 
-リポジトリの TOML 検出は L1 アダプタ `infra.repository_config` に置きます。
+リポジトリの TOML 検出とリポジトリルート探索は L1 アダプタ `infra.repository_config` に、
+設定エラー `ConfigError` は L0 の `config_contracts` に置きます。
 L2 の `targets.completion_policy` が実効トークン上限を解釈し、共通の
-`targets.usage` provider から利用量を取得します。互換性のため
-`dispatch.config_loader` は共通設定 loader を再公開します。complete policy は
+`targets.usage` provider から利用量を取得します。complete policy は
 dispatch の設定・workflow モジュールを import しません。
 
 ### 4.4 consistency status kernel

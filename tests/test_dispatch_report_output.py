@@ -321,7 +321,7 @@ def test_stdout_failure_does_not_stop_cli_save(tmp_path, monkeypatch):
 def test_cli_closes_owned_progress_stream_even_on_config_error(tmp_path, config_error):
     from io import StringIO
 
-    from orchestune.dispatch.config_loader import ConfigError
+    from orchestune.config_contracts import ConfigError
     from orchestune.dispatch.dispatcher import main
 
     stream = StringIO()

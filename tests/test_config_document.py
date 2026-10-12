@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
+from orchestune.config_contracts import ConfigError
 from orchestune.config_wizard.document import (
     ConfigDocument,
     create_snapshot,
     verify_snapshot_consistency,
 )
-from orchestune.dag.models import ConfigError
 from tests.symlink_support import create_test_symlink
 
 

@@ -10,7 +10,6 @@ from orchestune.dag.cli import main
 from orchestune.dag.models import (
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
-    load_orchestune_config,
 )
 
 
@@ -516,68 +515,6 @@ class TestExtractDagIgnorePatterns:
         # 消える）ため、明示的に拒否する
         with pytest.raises(ValueError, match="non-empty"):
             extract_dag_ignore_patterns({"dag_ignore_patterns": [""]})
-
-
-class TestLoadOrchestuneConfig:
-    def test_missing_files_return_empty_dict(self, tmp_path):
-        assert load_orchestune_config(tmp_path) == {}
-
-    def test_reads_orchestune_toml_top_level(self, tmp_path):
-        (tmp_path / "orchestune.toml").write_text(
-            'dag_ignore_patterns = ["a.json"]\nmax-concurrent = 5\n',
-            encoding="utf-8",
-        )
-        config = load_orchestune_config(tmp_path)
-        assert config == {"dag_ignore_patterns": ["a.json"], "max-concurrent": 5}
-
-    def test_falls_back_to_pyproject_toml_tool_orchestune_table(self, tmp_path):
-        (tmp_path / "pyproject.toml").write_text(
-            "[tool.orchestune]\n" 'dag_ignore_patterns = ["a.json"]\n',
-            encoding="utf-8",
-        )
-        config = load_orchestune_config(tmp_path)
-        assert config == {"dag_ignore_patterns": ["a.json"]}
-
-    def test_orchestune_toml_takes_precedence_over_pyproject_toml(self, tmp_path):
-        (tmp_path / "orchestune.toml").write_text(
-            'dag_ignore_patterns = ["from-orchestune-toml"]\n', encoding="utf-8"
-        )
-        (tmp_path / "pyproject.toml").write_text(
-            "[tool.orchestune]\n" 'dag_ignore_patterns = ["from-pyproject-toml"]\n',
-            encoding="utf-8",
-        )
-        config = load_orchestune_config(tmp_path)
-        assert config == {"dag_ignore_patterns": ["from-orchestune-toml"]}
-
-    def test_invalid_orchestune_toml_raises_value_error(self, tmp_path):
-        (tmp_path / "orchestune.toml").write_text(
-            "not valid toml [[[", encoding="utf-8"
-        )
-        with pytest.raises(ValueError, match="orchestune.toml"):
-            load_orchestune_config(tmp_path)
-
-    def test_non_table_tool_orchestune_section_raises_value_error(self, tmp_path):
-        (tmp_path / "pyproject.toml").write_text(
-            "[tool]\norchestune = 1\n", encoding="utf-8"
-        )
-        with pytest.raises(ValueError, match="tool.orchestune"):
-            load_orchestune_config(tmp_path)
-
-    def test_non_table_tool_section_raises_config_error_not_attribute_error(
-        self, tmp_path
-    ):
-        """Codex review (#441): a syntactically valid `pyproject.toml` whose
-        top-level `tool` key isn't a table (e.g. `tool = "not-a-table"`) must
-        not reach `.get("orchestune", ...)` on a non-dict and blow up with an
-        uncaught `AttributeError` — it should be reported as the same
-        `ConfigError` as any other malformed config, so `orchestune-dag`/
-        `orchestune-provision`/`orchestune-dispatch` all map it to exit 2
-        rather than an uncaught traceback."""
-        (tmp_path / "pyproject.toml").write_text(
-            'tool = "not-a-table"\n', encoding="utf-8"
-        )
-        with pytest.raises(ValueError, match=r"\[tool\]"):
-            load_orchestune_config(tmp_path)
 
 
 def test_cli_reports_shared_document_edges_in_text_and_json(tmp_path, capsys):

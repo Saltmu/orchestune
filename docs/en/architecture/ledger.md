@@ -91,11 +91,12 @@ Types and decisions used by several workflows live in shared modules rather than
 
 ### 4.3 Repository configuration
 
-Repository TOML discovery lives in the L1 `infra.repository_config` adapter. The
-L2 `targets.completion_policy` interprets effective token limits and resolves
-usage through the shared `targets.usage` provider. `dispatch.config_loader`
-re-exports the shared repository loader for compatibility; completion policy
-does not import dispatch configuration or workflow modules.
+Repository TOML discovery and repository-root lookup live in the L1
+`infra.repository_config` adapter, and the `ConfigError` type lives in the L0
+`config_contracts` module. The L2 `targets.completion_policy` interprets
+effective token limits and resolves usage through the shared `targets.usage`
+provider; completion policy does not import dispatch configuration or workflow
+modules.
 
 ### 4.4 Consistency status kernel
 
