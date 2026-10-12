@@ -27,6 +27,7 @@ class TestRuleCompleted:
                 head_ref=active.core.branch,
                 changed_files=(),
                 closes_issue_numbers=(active.core.issue_number,),
+                created_at="2024-01-01T00:00:00Z",
                 state="CLOSED",
             )
         ]
@@ -74,6 +75,7 @@ class TestRuleCompleted:
                 head_ref=active.core.branch,
                 changed_files=(),
                 closes_issue_numbers=(active.core.issue_number,),
+                created_at="2024-01-01T00:00:00Z",
                 state="CLOSED",
             )
         ]
@@ -206,7 +208,13 @@ class TestRuleCompleted:
         assert outcome.completion_event.to_dict()["action"] == "completed_no_commits"
         assert "1" not in ctx.run_state.active_worktrees
 
-    def test_local_existing_pr_closed_after_launch_is_requeued(self, fake_forge):
+    def test_local_pr_created_before_launch_is_not_abandonment_even_if_closed_later(
+        self, fake_forge
+    ):
+        """#1306: #222で固定した「起動前から存在したPRが起動後にCLOSEされたら
+        abandonedで再投入」する契約は廃止した。そのPRは前の世代のものなので、
+        現在の実行の最中に閉じられても現在の実行の放棄を意味しない。回収・回収予算の
+        消費・再投入には進まず、Outcomeの無い通常経路へ進む。"""
         active = _active(pid=123, started_at=1_800_000_000.0)
         task = _task(status_labels=("status:in-progress",))
         ctx = _ctx(forge=fake_forge)
@@ -229,16 +237,26 @@ class TestRuleCompleted:
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
+                "orchestune.dispatch.gc._finalize_completed_worktree",
                 autospec=True,
-                return_value=False,
-            ),
-            patch("orchestune.dispatch.gc.completion.remove_worktree", autospec=True),
+                return_value=WorktreeCompletion(
+                    issue_number=280,
+                    worktree_path=active.core.worktree_path,
+                    action="completed_no_commits",
+                ),
+            ) as mock_finalize,
+            patch(
+                "orchestune.dispatch.gc.cloud_completion.remove_worktree", autospec=True
+            ) as mock_remove,
         ):
             outcome = _rule_completed(ctx, "1", active, task)
 
         assert outcome is not None
-        assert outcome.completion_event.to_dict()["action"] == "abandoned_pr_requeued"
+        assert outcome.completion_event.to_dict()["action"] == "completed_no_commits"
+        mock_finalize.assert_called_once()
+        mock_remove.assert_not_called()
+        fake_forge.add_label.assert_not_called()
+        fake_forge.remove_label.assert_not_called()
 
     def test_all_state_lookup_failure_holds_local_completion_for_retry(
         self, fake_forge

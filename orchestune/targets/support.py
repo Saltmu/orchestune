@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -15,6 +13,7 @@ from orchestune.outcome_record import (
     OutcomeLookupState,
     parse_from_comments,
 )
+from orchestune.pr_freshness import should_exclude_pr
 from orchestune.targets.contracts import DispatchHandle, ReviewerBot
 
 NONINTERACTIVE_DISPATCH_INSTRUCTION = (
@@ -44,36 +43,11 @@ def _resolve_base_branch_val(base_branch: str | None) -> str:
     return (base_branch.removeprefix("origin/") if base_branch else "") or "main"
 
 
-def _parse_github_timestamp(value: str) -> float | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
-
-
 def _is_stale_pr_for_handle(pr: PrRecord, handle: DispatchHandle) -> bool:
-    """#246: session開始（`handle.started_at`）より前に作成されたPRは、状態
-    （OPEN/MERGED/CLOSED）に関係なく現在のsessionの成果物ではない。同名branchの
-    古いMERGED PR等で再キュー後の新sessionが即completed扱いされないよう除外する。
-
-    `created_at`を取得・解釈できないPRも現世代の証拠とはみなさない（fail
-    closed）。`started_at`を持たないhandle（復元経路等）は従来通り除外しない。
-    CLOSED PRの`closed_at < started_at`によるstale判定（#210）は、
-    `closed_at >= created_at`であるため`created_at`判定に包含される。
-
-    #262レビュー対応: GitHubの`created_at`は秒精度で切り捨てられる一方、
-    `handle.started_at`は小数秒を含む（各task起動直前に`time.time()`で
-    取得）。直接比較すると、実際にはsession開始「後」に作成された正規PRでも
-    `created_at < started_at`が真になり誤ってstale扱いされうる
-    （例: created_at=X.000, started_at=X.900）。比較はGitHub側の精度に
-    合わせて`started_at`を秒単位に切り捨ててから行い、同じ秒に作成された
-    PRはstaleとしない。"""
-    if handle.started_at is None:
-        return False
-    created_at = _parse_github_timestamp(pr.created_at)
-    return created_at is None or created_at < math.floor(handle.started_at)
+    """#246/#1306: session開始（`handle.started_at`）より前に作成された、または
+    `created_at`を確認できないPRは、状態（OPEN/MERGED/CLOSED）に関係なく現在の
+    sessionの成果物ではない。規則本体はGC側と共有する`pr_freshness`にある。"""
+    return should_exclude_pr(created_at=pr.created_at, started_at=handle.started_at)
 
 
 def _resolve_issue_number_for_outcome(

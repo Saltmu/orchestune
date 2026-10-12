@@ -480,6 +480,7 @@ class TestLocalPrCompletionStatusWithFakeForge:
                 head_ref="claude/issue-1-task-1",
                 changed_files=(),
                 state="MERGED",
+                created_at="2026-01-01T00:00:00Z",
             )
         ]
         config = DispatcherConfig(
@@ -502,6 +503,37 @@ class TestLocalPrCompletionStatusWithFakeForge:
 
         assert status == "completed"
         fake_forge.list_prs.assert_called_once_with(state="all")
+
+    def test_merged_pr_without_created_at_is_not_completion_evidence(self, tmp_path):
+        """#1306: started_atが既知のとき、created_atを確認できないPRは現世代の
+        完了証拠にしない（targets側と同じ規則）。"""
+        fake_forge = MagicMock()
+        fake_forge.list_prs.return_value = [
+            PrRecord(
+                number=1,
+                head_ref="claude/issue-1-task-1",
+                changed_files=(),
+                state="MERGED",
+            )
+        ]
+        fake_forge.list_comments.return_value = []
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
+        )
+        active = _active(
+            issue_number=1,
+            branch="claude/issue-1-task-1",
+            worktree_path=str(tmp_path / "worktrees/claude-issue-1-task-1"),
+            pid=123,
+            started_at=1700000000.0,
+            declared_footprint=(),
+        )
+
+        assert _local_pr_completion_status(active, config) == "pending"
 
     def test_open_pr_without_outcome_is_pending(self, tmp_path):
         fake_forge = MagicMock()
