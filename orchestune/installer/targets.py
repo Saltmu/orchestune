@@ -3,13 +3,13 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 
-from orchestune.infra.session_dirs import find_project_root
 from orchestune.installer.contracts import (
     PhysicalRoot,
     ScopeType,
     TargetResolutionError,
     TargetType,
 )
+from orchestune.session_dirs import find_project_root
 
 
 def _normalize_targets(targets: list[TargetType]) -> list[TargetType]:

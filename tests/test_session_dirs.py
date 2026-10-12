@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestune.infra.session_dirs import SessionDirError, create_session_dir
+from orchestune.session_dirs import SessionDirError, create_session_dir
 
 
 def test_create_session_dir_success(tmp_path: Path):
@@ -61,7 +61,7 @@ def test_create_session_dir_wildcard_patterns(tmp_path: Path, pattern: str):
 
 
 def test_create_session_dir_git_check_ignore_fallback(tmp_path: Path, monkeypatch):
-    from orchestune.infra import session_dirs
+    from orchestune import session_dirs
 
     project_dir = tmp_path / "git_project"
     project_dir.mkdir()

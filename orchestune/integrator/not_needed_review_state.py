@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .json_state import read_json_with_recovery, write_json_atomic
+from orchestune.infra.json_state import read_json_with_recovery, write_json_atomic
 
 
 @dataclass
