@@ -14,6 +14,7 @@ from active_worktree_architecture_support import (
     production_active_worktree_violations,
     unused_active_worktree_exceptions,
 )
+from architecture_layer_table_support import layer_table_tokens, parse_layer_table
 from architecture_layers_support import EXPECTED_LAYERS
 from architecture_test_support import (
     _SUBPROCESS_CALLS,
@@ -23,6 +24,7 @@ from architecture_test_support import (
     _cross_package_private_imports,
     _cycle_members,
     _import_graph,
+    _layer_table_universe,
     _package_cycle_edges,
     _package_import_graph,
     _package_modules,
@@ -84,7 +86,6 @@ EXPECTED_SUBPROCESS_COMMAND_MODULES = {
     "gh": {"forge.admin"},
     "git": {"infra.git_cli"},
 }
-_LAYER_ROW = re.compile(r"^\s*\|\s*\*\*L(\d)\*\*")
 _COMMAND_ROW = re.compile(r"^\s*\|\s*`(git|gh)`\s*\|")
 # Dotted so a module under a subpackage can be documented as `sub.worker`,
 # matching the name `_module_name()` produces for it.
@@ -248,26 +249,17 @@ def _row_cells(line: str) -> list[str]:
 
 
 def _documented_layers(lang: str) -> dict[int, list[str]]:
-    """The `**L<n>**` rows of the module-layer table, as {layer: modules}.
+    """The module-layer table of `lang`, wildcards expanded, as {layer: modules}.
 
-    Modules are read from the row's *last* cell, so the table may carry any
-    number of leading descriptive columns (layer, role, ...) without this
-    breaking. Should a table ever end with something other than the module
-    list, the extraction goes wrong loudly: the result no longer matches
-    `EXPECTED_LAYERS` and the sync test fails naming the mismatch, rather than
-    silently weakening an architectural check (#515).
-
-    Each row stays a list rather than a set so that a module repeated inside one
-    row survives to be caught by the exact-once assertion.
+    Layers are read from the rows the code spans sit in -- never from
+    `EXPECTED_LAYERS` -- so a wrongly placed `pkg.*` or exception fails the
+    doc-sync test by name (#515, #1322). Malformed tables raise `ValueError`.
     """
-    layers: dict[int, list[str]] = {}
-    for line in _architecture_doc(lang):
-        match = _LAYER_ROW.match(line)
-        if match is None:
-            continue
-        assert int(match.group(1)) not in layers, f"duplicate layer row in {lang}"
-        layers[int(match.group(1))] = _BACKTICKED.findall(_row_cells(line)[-1])
-    return layers
+    modules, packages = _layer_table_universe()
+    documented: dict[int, list[str]] = parse_layer_table(
+        _architecture_doc(lang), modules, packages
+    )
+    return documented
 
 
 def _documented_subprocess_partition(lang: str) -> dict[str, set[str]]:
@@ -349,6 +341,18 @@ def test_documented_layers_match_the_expected_layers() -> None:
         assert {
             layer: set(modules) for layer, modules in documented.items()
         } == expected, f"{lang}: layer table does not match EXPECTED_LAYERS"
+
+
+def test_layer_table_tokens_match_between_languages() -> None:
+    """ja and en must list the same code spans per layer, not just expand alike."""
+    tokens = {
+        lang: {
+            layer: sorted(row)
+            for layer, row in layer_table_tokens(_architecture_doc(lang)).items()
+        }
+        for lang in DOC_LANGUAGES
+    }
+    assert tokens["ja"] == tokens["en"]
 
 
 def test_no_module_imports_a_strictly_higher_layer() -> None:
