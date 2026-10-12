@@ -86,6 +86,18 @@ Execute the full test suite using `pytest`:
 uv run pytest
 ```
 
+The six real symlink tests for config loading and installer payload/migration
+skip only when Windows reports missing creation privilege (`WinError 1314`).
+Other filesystem errors still fail; a Windows OS check alone never skips them.
+To run these security and migration assertions, use a Windows terminal with
+symlink creation privilege (an elevated terminal, or an approved Developer Mode
+configuration; see [Microsoft's symlink guidance](https://blogs.windows.com/windowsdeveloper/2016/12/02/symlinks-windows-10/)),
+then run `uv run pytest tests/test_config_document.py tests/test_installer_migration.py tests/test_installer_payload.py -n 0 -rs`.
+Confirm all six execute without the privilege-related skip reason. On an
+unprivileged terminal, `-rs` reports that reason. The helper's privilege/error
+classification tests still execute on both environments; product security checks
+are unchanged. Tests do not modify Windows privileges or security settings.
+
 ### Test suite markers
 
 Every collected test belongs to exactly one suite:

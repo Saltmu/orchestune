@@ -10,6 +10,7 @@ from orchestune.config_wizard.document import (
     verify_snapshot_consistency,
 )
 from orchestune.dag.models import ConfigError
+from tests.symlink_support import create_test_symlink
 
 
 class TestConfigSnapshot:
@@ -50,7 +51,7 @@ class TestConfigSnapshot:
         real_file = tmp_path / "real.toml"
         real_file.write_text("a = 1\n", encoding="utf-8")
         symlink_file = tmp_path / "link.toml"
-        symlink_file.symlink_to(real_file)
+        create_test_symlink(symlink_file, real_file)
 
         snap = create_snapshot(symlink_file)
         assert snap.is_symlink is True
@@ -136,6 +137,6 @@ class TestConfigDocumentLoading:
         real_file = tmp_path / "real.toml"
         real_file.write_text("a = 1\n", encoding="utf-8")
         target = tmp_path / "orchestune.toml"
-        target.symlink_to(real_file)
+        create_test_symlink(target, real_file)
         with pytest.raises(ConfigError, match="symlink"):
             ConfigDocument.load(tmp_path, mode="edit")

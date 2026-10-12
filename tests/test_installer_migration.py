@@ -10,6 +10,7 @@ from orchestune.installer.contracts import (
 )
 from orchestune.installer.migration import detect_legacy_skills, migrate_legacy_skills
 from orchestune.installer.state import load_manifest
+from tests.symlink_support import create_test_symlink
 
 
 def _setup_skill_source(tmp_path: Path) -> tuple[Path, BundlePayload]:
@@ -52,7 +53,7 @@ def test_migrate_valid_legacy_symlink(tmp_path: Path):
     target_root = tmp_path / "target" / ".agents" / "skills"
     target_root.mkdir(parents=True)
     legacy_link = target_root / "orchestune"
-    legacy_link.symlink_to(src_dir / "orchestune")
+    create_test_symlink(legacy_link, src_dir / "orchestune", target_is_directory=True)
 
     candidates = detect_legacy_skills(target_root, payload)
     assert len(candidates) == 1
@@ -82,7 +83,7 @@ def test_migrate_without_flag_raises_conflict(tmp_path: Path):
     target_root = tmp_path / "target" / ".agents" / "skills"
     target_root.mkdir(parents=True)
     legacy_link = target_root / "orchestune"
-    legacy_link.symlink_to(src_dir / "orchestune")
+    create_test_symlink(legacy_link, src_dir / "orchestune", target_is_directory=True)
 
     with pytest.raises(ConflictError, match="--migrate-legacy"):
         migrate_legacy_skills(
@@ -96,7 +97,9 @@ def test_migrate_broken_or_unrelated_symlink_fails(tmp_path: Path):
     target_root.mkdir(parents=True)
     legacy_link = target_root / "orchestune"
     # Point to nonexistent or unrelated path
-    legacy_link.symlink_to(tmp_path / "unrelated_dir")
+    create_test_symlink(
+        legacy_link, tmp_path / "unrelated_dir", target_is_directory=True
+    )
 
     with pytest.raises(ConflictError, match="Cannot migrate"):
         migrate_legacy_skills(

@@ -9,6 +9,7 @@ from orchestune.installer.payload import (
     resolve_payload,
 )
 from orchestune.version import get_version
+from tests.symlink_support import create_test_symlink
 
 
 def test_calculate_file_sha256(tmp_path: Path):
@@ -153,7 +154,7 @@ def test_resolve_payload_traversal_or_symlink_rejected(tmp_path: Path):
     # Add a symlink inside orchestune
     external = tmp_path / "external.txt"
     external.write_text("outside", encoding="utf-8")
-    (skills_dir / "orchestune" / "link.txt").symlink_to(external)
+    create_test_symlink(skills_dir / "orchestune" / "link.txt", external)
 
     with pytest.raises(
         PayloadError, match="Symlinks are not allowed in payload source"
