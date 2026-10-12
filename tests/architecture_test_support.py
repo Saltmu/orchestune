@@ -467,3 +467,22 @@ def _cross_package_private_imports() -> set[tuple[str, str, str]]:
             is_package=path.name == "__init__.py",
         )
     return found
+
+
+def _layer_table_universe() -> tuple[set[str], set[str]]:
+    """(modules, top-level packages) a documented layer table may refer to.
+
+    Names carry no `orchestune.` prefix and exclude the package root; a package
+    is a top-level name backed by an `__init__.py`.
+    """
+    modules = {
+        module.removeprefix(f"{PACKAGE_NAME}.")
+        for module in _package_modules()
+        if module != PACKAGE_NAME
+    }
+    packages = {
+        module.removeprefix(f"{PACKAGE_NAME}.")
+        for module, path in _package_modules().items()
+        if path.name == "__init__.py" and module != PACKAGE_NAME
+    }
+    return modules, {package for package in packages if "." not in package}
