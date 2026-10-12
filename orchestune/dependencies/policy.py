@@ -1,4 +1,8 @@
-"""Shared fail-closed policy for selecting dependency stack targets."""
+"""Shared fail-closed policy for dependency completion and stack targets.
+
+``dependencies_completed`` is the single definition of "all dependencies are done";
+``has_pending_dependencies`` is derived from it. Unavailable assessments are pending.
+"""
 
 from __future__ import annotations
 
@@ -113,16 +117,27 @@ def decide_stack_target(issue_number: int, view: DependencyPolicyView) -> StackD
     return _decide_grand_target(dependency_issue, assessment, view)
 
 
-def has_pending_dependencies(assessment: DependencyAssessment | None) -> bool:
-    """Return whether dependency completion is unknown or still outstanding."""
+def dependencies_completed(assessment: DependencyAssessment | None) -> bool:
+    """Return whether every declared dependency is resolved and ``COMPLETED``.
+
+    The canonical completion predicate. An unavailable assessment (``None``) and any
+    unresolved reference are not completed, whereas an empty assessment (no declared
+    dependencies) is. ``CI_PASSED_UNMERGED``, ``WAITING`` and ``CHANGES_REQUESTED``
+    count as incomplete. Only the given assessment is inspected.
+    """
     return (
-        assessment is None
-        or bool(assessment.unresolved)
-        or any(
-            dependency.state is not DependencyState.COMPLETED
+        assessment is not None
+        and not assessment.unresolved
+        and all(
+            dependency.state is DependencyState.COMPLETED
             for dependency in assessment.resolved
         )
     )
+
+
+def has_pending_dependencies(assessment: DependencyAssessment | None) -> bool:
+    """Return whether dependency completion is unknown or still outstanding."""
+    return not dependencies_completed(assessment)
 
 
 __all__ = [
@@ -130,5 +145,6 @@ __all__ = [
     "StackDecision",
     "StackTarget",
     "decide_stack_target",
+    "dependencies_completed",
     "has_pending_dependencies",
 ]

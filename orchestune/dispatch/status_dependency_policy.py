@@ -8,18 +8,9 @@ from orchestune.dependencies.assessment import (
     DependencyAssessment,
     DependencyState,
 )
-
-
-def dependencies_completed(assessment: DependencyAssessment | None) -> bool:
-    """Return whether all declared dependencies are resolved and completed."""
-    return (
-        assessment is not None
-        and not assessment.unresolved
-        and all(
-            dependency.state is DependencyState.COMPLETED
-            for dependency in assessment.resolved
-        )
-    )
+from orchestune.dependencies.policy import (
+    dependencies_completed as dependencies_completed,
+)
 
 
 def desired_dependency_ids(

@@ -12,6 +12,7 @@ from orchestune.dependencies.assessment import (
 from orchestune.dependencies.policy import (
     StackTarget,
     decide_stack_target,
+    dependencies_completed,
     has_pending_dependencies,
 )
 from orchestune.dependencies.resolution import (
@@ -196,24 +197,74 @@ def test_decide_stack_target_returns_the_only_safe_dependency(
     assert view.branch_calls == [2]
 
 
-@pytest.mark.parametrize(
-    ("assessment", "expected"),
-    [
-        (None, True),
-        (_assessment(), False),
-        (_assessment((1, DependencyState.COMPLETED)), False),
-        (_assessment((1, DependencyState.CI_PASSED_UNMERGED)), True),
-        (_assessment((1, DependencyState.CHANGES_REQUESTED)), True),
-        (_assessment((1, DependencyState.WAITING)), True),
-        (
-            _assessment(
-                unresolved=(UnresolvedDependency(raw="missing", reason=REASON_MISSING),)
-            ),
-            True,
-        ),
-    ],
-)
-def test_has_pending_dependencies_truth_table(
+_MISSING = UnresolvedDependency(raw="missing", reason=REASON_MISSING)
+
+# (assessment, dependencies_completed); has_pending_dependencies is its negation.
+_COMPLETION_CASES = [
+    pytest.param(None, False, id="assessment-unavailable"),
+    pytest.param(_assessment(), True, id="no-dependencies"),
+    pytest.param(
+        _assessment((1, DependencyState.COMPLETED)), True, id="single-completed"
+    ),
+    pytest.param(
+        _assessment((1, DependencyState.COMPLETED), (2, DependencyState.COMPLETED)),
+        True,
+        id="all-completed",
+    ),
+    pytest.param(
+        _assessment((1, DependencyState.CI_PASSED_UNMERGED)),
+        False,
+        id="ci-passed-unmerged",
+    ),
+    pytest.param(
+        _assessment((1, DependencyState.CHANGES_REQUESTED)),
+        False,
+        id="changes-requested",
+    ),
+    pytest.param(_assessment((1, DependencyState.WAITING)), False, id="waiting"),
+    pytest.param(
+        _assessment((1, DependencyState.COMPLETED), (2, DependencyState.WAITING)),
+        False,
+        id="completed-and-waiting",
+    ),
+    pytest.param(_assessment(unresolved=(_MISSING,)), False, id="unresolved-only"),
+    pytest.param(
+        _assessment((1, DependencyState.COMPLETED), unresolved=(_MISSING,)),
+        False,
+        id="completed-and-unresolved",
+    ),
+]
+
+
+@pytest.mark.parametrize(("assessment", "expected"), _COMPLETION_CASES)
+def test_dependencies_completed_truth_table(
     assessment: DependencyAssessment | None, expected: bool
 ) -> None:
-    assert has_pending_dependencies(assessment) is expected
+    assert dependencies_completed(assessment) is expected
+
+
+@pytest.mark.parametrize(("assessment", "expected"), _COMPLETION_CASES)
+def test_has_pending_dependencies_is_the_negation_of_completion(
+    assessment: DependencyAssessment | None, expected: bool
+) -> None:
+    assert has_pending_dependencies(assessment) is (not expected)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [state for state in DependencyState if state is not DependencyState.COMPLETED],
+)
+def test_any_incomplete_state_keeps_dependencies_pending(
+    state: DependencyState,
+) -> None:
+    assessment = _assessment((1, DependencyState.COMPLETED), (2, state))
+
+    assert dependencies_completed(assessment) is False
+    assert has_pending_dependencies(assessment) is True
+
+
+def test_dependencies_package_exports_the_canonical_predicate() -> None:
+    from orchestune import dependencies
+
+    assert dependencies.dependencies_completed is dependencies_completed
+    assert "dependencies_completed" in dependencies.__all__
