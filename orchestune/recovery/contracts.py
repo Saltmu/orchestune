@@ -19,8 +19,20 @@ class RecoveryRequest:
     external_id: str | None = None
     launch_attempt_id: str | None = None
     confirm_external_stopped: bool = False
+    restart_blocked: bool = False
 
     def validate(self) -> None:
+        if self.restart_blocked and (
+            self.restore_marker
+            or self.confirm_external_stopped
+            or not self.claim_id
+            or not self.claim_id.strip()
+            or not self.reason
+            or not self.reason.strip()
+        ):
+            raise ValueError(
+                "Blocked restart requires --claim-id and --reason; cannot mix recovery modes"
+            )
         if self.issue_number <= 0 or self.timeout_seconds < 0:
             raise ValueError("Issue must be positive and timeout nonnegative")
         if not self.confirm_external_stopped and (

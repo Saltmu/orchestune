@@ -522,6 +522,24 @@ def _request_worktree(request: CompleteRequest, workspace: Any) -> Path:
     ).resolve()
 
 
+def _active_preflight(
+    request: CompleteRequest, state: Any, workspace: Any, worktree: Path, forge: Any
+) -> None:
+    active = state.active_worktrees[str(request.issue_number)]
+    _validate_claim_context(
+        active,
+        workspace.repository_identity,
+        worktree,
+        workspace.run_state_path,
+        request.claim_id,
+    )
+    _check(request, state, worktree, forge)
+    if request.dry_run:
+        _pending(
+            request, state, workspace.repository_identity, active.claim.claim_id or ""
+        )
+
+
 def _complete(
     request: CompleteRequest, forge: Any | None, progress: _Progress
 ) -> CompleteResult:
@@ -549,14 +567,7 @@ def _complete(
         return complete_unclaimed(
             request, workspace.repository_identity, state_path, forge, progress.report
         )
-    _validate_claim_context(
-        state.active_worktrees.get(str(request.issue_number)),
-        workspace.repository_identity,
-        worktree,
-        state_path,
-        request.claim_id,
-    )
-    _check(request, state, worktree, forge)
+    _active_preflight(request, state, workspace, worktree, forge)
     if request.dry_run:
         return _preview(request)
     progress.stage = CompleteStage.EVIDENCE_VERIFYING

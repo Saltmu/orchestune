@@ -48,36 +48,28 @@ If `orchestune claim` fails (non-zero exit code):
 
 ## Worktree completion and retention
 
-For dispatcher-launched (`owner_kind=dispatch`) and claimed interactive
-(`owner_kind=interactive`) worktrees, run `orchestune complete` for the task
-outcome. It posts the fixed Outcome, confirms its result label, saves durable
-handoff/replay evidence, and preserves the worktree. Do not remove
-the worktree as part of completion. The dispatch cycle handles dispatcher
-worktrees. For an interactive task after its PR is merged, run the local GC
-command from the primary checkout:
+### Restart a completed blocked local task
+
+For an interactive local task whose `blocked` Outcome is already handed off,
+a human must first resolve its blocker and set the open Issue to
+the in-progress state. From the primary checkout, preview the explicit restart:
 
 ```bash
-orchestune gc --no-apply
-orchestune gc
+orchestune recover --issue <N> --claim-id <old-claim-id> --reason "blocker resolved" --restart-blocked
 ```
 
-Review the preview before applying it. Standalone GC physically collects interactive
-claims; Dispatcher collects dispatch worktrees through the same guarded collector.
-Both discover label-confirmed journal/receipt generations and pending policies even
-without active entries or in-progress labels. GC can change Issue labels/comments,
-close approved subjects, and launch independent not-needed review. Without Dispatcher,
-rerun GC; cloud review needs routine credentials. Unknown launch results remain pending
-unless the provider can reconcile the saved attempt ID; never launch again blindly. Unresolved launches escalate to human review after the configured review timeout; the policy and dependency remain pending.
-Independent approval uses the exact operation marker, not a generic result label.
+Apply the same request with `--apply` after inspecting the preview. It retains the
+old Outcome, journal and replay receipt, preserves the branch, worktree and held
+footprint, and assigns a new claim generation. Continue inside the reported
+worktree; a separate `claim` is unnecessary. Retry the same old claim ID and
+reason to reconcile interrupted publication without rotating again.
+An explicit old `--completion-id` still replays its immutable result.
+Pending publication, live workers and dispatch/cloud claims cannot use this path.
+Restart does not waive CI or review gates: obtain successful local CI evidence
+for the current clean HEAD before `complete --result done`.
 
-Save pending policy context and replay receipts before active/claim collection.
-`done` requires matching Outcome and merged PR/head/base/owner evidence. Dirty
-blocked/not-needed worktrees remain; unapproved not-needed produces no GC completion
-receipt or dependency completion. Worktree-free reservations never enter removal.
-The same resolved state path shares a reentrant ledger lock across bounded remote
-operations and saves; physical GC also holds the claim lock. Different state paths
-are separate exclusion domains. Legacy `handed_off_to_gc` stays held until verified
-migration; recover publication with the original completion ID and matching claim marker.
+Complete preserves the worktree. Before GC, read and follow the shared
+[operator completion and GC lifecycle](../../../docs/operator-completion-lifecycle.md).
 
 ## Initial Footprint Procedure
 

@@ -29,6 +29,14 @@ For documentation updates or typo fixes that do not alter code logic, **Steps 3â
 
 ## Session Scratch Directory
 
+### Temporary human-input waits
+
+When waiting for user approval, reviewer selection, or an authorized exception, retain the active claim and worktree. Do not publish `complete --result blocked`
+for that temporary wait: completion freezes the Outcome for its claim generation.
+Use terminal `blocked` only when escalating work that cannot continue.
+After a human resolves a completed blocked task, use the explicit local restart
+procedure in [worktree.md](references/worktree.md#restart-a-completed-blocked-local-task), preserving its old Outcome and starting a new claim generation.
+
 Before an Issue/worktree exists, create a repository-local, Git-ignored planning
 directory via `./scripts/create-session-dir.sh planning <task>` (Windows: `.\scripts\create-session-dir.ps1 planning <task>`).
 This generates `.orchestune/tmp/planning-<task>-<UTC timestamp>-<random>/` without inline Python.

@@ -72,3 +72,36 @@ def test_external_argument_errors_are_detected_before_workspace(args):
     with pytest.raises(SystemExit) as error:
         main(["--issue", "7", *args])
     assert error.value.code == 2
+
+
+def test_restart_cli_requires_operator_identity_and_reason(monkeypatch, capsys):
+    from orchestune.recovery import cli
+    from orchestune.recovery.contracts import RecoveryResult
+
+    requests = []
+
+    def capture(request):
+        requests.append(request)
+        return RecoveryResult(
+            True, request.issue_number, "would_restart_blocked", "preview"
+        )
+
+    monkeypatch.setattr(cli, "recover_claim", capture)
+    with pytest.raises(SystemExit):
+        cli.main(["--issue", "7", "--restart-blocked"])
+    capsys.readouterr()
+    assert (
+        cli.main(
+            [
+                "--issue",
+                "7",
+                "--restart-blocked",
+                "--claim-id",
+                "claim-old",
+                "--reason",
+                "resolved",
+            ]
+        )
+        == 0
+    )
+    assert requests[0].restart_blocked and not requests[0].apply
