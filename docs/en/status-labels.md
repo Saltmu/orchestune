@@ -728,7 +728,7 @@ a normally-completed (non-`not-needed`) subtask. The required dispatcher
   ordering, but do not participate in lifecycle transitions.
 - `risk:flagged` / `progress:partial`: visualization-only labels; they do not
   act as additional approval gates (see
-  [Architecture §0.2](./architecture.md#02-human-approval-points)).
+  [Architecture §2.3](./architecture.md#human-approval-points)).
 
 ### Replan generation replacement
 

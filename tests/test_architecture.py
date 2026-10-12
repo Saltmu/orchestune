@@ -516,22 +516,27 @@ def _architecture_doc(lang: str) -> list[str]:
 
 
 def _determinism_section(lang: str) -> list[str]:
-    """`### 0.1`見出しから、次の同位以上の見出しまたは水平線の直前までの行を返す。
+    """`<a id="determinism"></a>`直後の`###`見出しから、次の同位以上の見出しまたは
+    水平線の直前までの行を返す。
 
-    見出し番号だけで探すのは、節タイトルが言語ごとに異なるため。`####`以下の
-    小見出しは節の内容として取り込む（打ち切るのはL1-L3の見出しのみ）。
+    節タイトルは言語ごとに異なり、節番号は再構成で変わりうるため（#1316）、
+    両言語で共通の明示アンカーで探す。`####`以下の小見出しは節の内容として
+    取り込む（打ち切るのはL1-L3の見出しのみ）。
     """
-    collected: list[str] = []
-    in_section = False
-    for line in _architecture_doc(lang):
-        if line.startswith("### 0.1"):
-            in_section = True
-            collected.append(line)
-            continue
-        if in_section:
-            if re.match(r"#{1,3} ", line) or line.startswith("---"):
-                break
-            collected.append(line)
+    lines = _architecture_doc(lang)
+    anchors = [i for i, line in enumerate(lines) if line == '<a id="determinism"></a>']
+    if len(anchors) != 1:
+        return []
+    heading = next(
+        (i for i in range(anchors[0] + 1, len(lines)) if lines[i].strip()), None
+    )
+    if heading is None or not lines[heading].startswith("### "):
+        return []
+    collected = [lines[heading]]
+    for line in lines[heading + 1 :]:
+        if re.match(r"#{1,3} ", line) or line.startswith("---"):
+            break
+        collected.append(line)
     return collected
 
 
@@ -821,7 +826,8 @@ def test_package_root_declares_a_public_api_without_entrypoints() -> None:
 
 def test_architecture_docs_mention_dispatch_cycle_report() -> None:
     """#411: #396のディスパッチサイクルレポート（親Issueへのコメント投稿）
-    機能がarchitecture.mdのトレーサビリティに関する記述に反映されていること。
+    機能がアーキテクチャ文書（#1316以降はarchitecture/dispatch-cycle.md）に
+    反映されていること。
     見出し文字列は実装（`_format_event_log_comment`）のソースから直接抽出し、
     ハードコード複製によるドリフトを防ぐ。"""
     from orchestune.dispatch.postcycle import _format_event_log_comment
@@ -835,8 +841,10 @@ def test_architecture_docs_mention_dispatch_cycle_report() -> None:
     header = match.group(1)
 
     for lang in DOC_LANGUAGES:
-        doc_text = "\n".join(_architecture_doc(lang))
-        assert header in doc_text, f"{lang}のarchitecture.mdに'{header}'がありません"
+        # #1316: サイクルレポートの仕様はarchitecture.mdから詳細文書へ移した。
+        path = DOCS_ROOT / lang / "architecture" / "dispatch-cycle.md"
+        doc_text = path.read_text(encoding="utf-8")
+        assert header in doc_text, f"{lang}のdispatch-cycle.mdに'{header}'がありません"
 
 
 def test_architecture_docs_document_the_determinism_principle() -> None:
@@ -860,10 +868,10 @@ def test_architecture_docs_document_the_determinism_principle() -> None:
         section = _determinism_section(lang)
         assert (
             section
-        ), f"{lang}のarchitecture.mdに'### 0.1'で始まる決定論の節がありません"
+        ), f"{lang}のarchitecture.mdに決定論の節（determinismアンカー）がありません"
         body = "\n".join(section)
         assert escalation_label in body, (
-            f"{lang}のarchitecture.mdの0.1節に、終端状態'{escalation_label}'への"
+            f"{lang}のarchitecture.mdの決定論の節に、終端状態'{escalation_label}'への"
             "言及がありません"
         )
 

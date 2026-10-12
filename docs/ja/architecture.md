@@ -2,6 +2,17 @@
 
 Orchestuneがどのように並列開発タスクを競合なく構築し、エージェントを自律駆動させ、最終的に安全にマージするのか、その内部設計とアーキテクチャについて説明します。
 
+## このドキュメントの読み方
+
+| 知りたいこと | 読む箇所 |
+| --- | --- |
+| 全体の流れ | [1. システム全体像](#1-システム全体像) |
+| なぜこの設計なのか | [2. コア設計思想](#2-コア設計思想) |
+| 各サブシステムの仕様 | [3. 主要サブシステム概要](#3-主要サブシステム概要)と、そこからリンクする詳細文書 |
+| モジュールの置き場所とimport規則 | [4. モジュール層構造とパッケージ境界](#4-モジュール層構造とパッケージ境界) |
+| `ledger`と所有権契約、共有パッケージの境界 | [共有実行台帳とパッケージ境界 (ledger.md)](architecture/ledger.md) |
+| 親Issueへのサイクルレポートと計測値 | [ディスパッチサイクルレポートと計測 (dispatch-cycle.md)](architecture/dispatch-cycle.md) |
+
 ---
 
 ## 1. システム全体像
@@ -52,37 +63,45 @@ graph TD
     HU2 -->|レビューしてマージ| MB
 ```
 
-エンジン側からGitHubへの読み書きは、すべてL1アダプタ（`forge` / `git_cli`）を経由します。この封じ込めは[4.2節](#42-ciで機械的に検証される不変条件)でCIによって機械的に検証されます。また、Integratorのトリガーは子PRではなく子Issueの`status:done`ラベルであり、マージ前CIに使う一時worktreeはエージェントの隔離worktreeとは別に確保されます（エンジンがエージェントの作業領域へ書き込むことはありません）。
+エンジン側からGitHubへの読み書きは、すべてL1アダプタ（`forge` / `git_cli`）を経由します。この封じ込めは[4.2節](#42-ciで機械的に検証される不変条件)のとおりCIによって機械的に検証されます。
+
+Integratorのトリガーは、子PRではなく子Issueの`status:done`ラベルです。マージ前CIに使う一時worktreeは、エージェントの隔離worktreeとは別に確保されます。エンジンがエージェントの作業領域へ書き込むことはありません。
 
 ---
 
 ## 2. コア設計思想
 
-### 0. 設計目標: クオーター効率
+### 2.1 設計目標: クオーター効率
 
-Orchestuneは個人開発者と少人数チームのためのオーケストレーターです。AI利用クオーター（サブスクリプションのセッション/週次の使用枠）は固定で、人間が席にいられる時間も限られています。以下のすべての設計判断は、ただ1つの最適化目標——**消費したクオーター1単位あたりに生み出される「完成した、マージ可能な成果物」を最大化すること**——から導かれており、個々のタスクの実時間を最短化することは目標では**ありません**。小さなタスクであれば、分解・Issue起票・ディスパッチを経るより、エージェントに直接依頼するほうが速く、消費クオーターも少なくて済みます。
+Orchestuneは個人開発者と少人数チームのためのオーケストレーターです。AI利用クオーター（サブスクリプションのセッション/週次の使用枠）は固定で、人間が席にいられる時間も限られています。
 
-この目標は、全体に3つの形で貫かれています。
+以下のすべての設計判断は、ただ1つの最適化目標から導かれています。それは、**消費したクオーター1単位あたりに生み出される「完成した、マージ可能な成果物」を最大化すること**です。個々のタスクの実時間を最短化することは目標では**ありません**。小さなタスクであれば、分解・Issue起票・ディスパッチを経るより、エージェントに直接依頼するほうが速く、消費クオーターも少なくて済みます。
+
+この目標は、設計全体に次の3つの形で表れています。
 
 * **最大の無駄は手戻りである**: マージコンフリクト、粒度を誤ったサブタスク、実装の重複は、いずれもクオーターを二重に消費させます。競合分析と共有コントラクトゲートはわずかな事前計画コストと引き換えに手戻りを回避し、マージ前CIは機械的な破綻が下流へ波及する前に捕捉します。
 * **並列実行は目的ではなく手段である**: 独立したサブタスクがあれば、1つのエージェントが順番に消費するのではなく、複数のエージェントが同時にクオーターを消費できます。DAG構築は、そのタスクが許す限りの**安全な**並列度を見つけ出すために存在します。
-* **並列実行をクオーター効率へ変換するのは「無人運転」である**: この利得は、人間が席を外している間——夜間や、ステートレスなCIランナー上——でも処理が進んで初めて実現します。状態をGitHubから自己修復する設計、子レベルの統合を人間を待たずに自動マージする設計、人間の判断を2点へ限定する設計は、すべてこのためです。サブタスクごとに人間のクリックを要求する設計では、パイプラインが人間の在席状況で停滞します。
+* **並列実行をクオーター効率へ変換するのは「無人運転」である**: この利得は、人間が席を外している間（夜間や、ステートレスなCIランナー上）でも処理が進んで初めて実現します。状態をGitHubから自己修復する設計、子レベルの統合を人間を待たずに自動マージする設計、人間の判断を2点へ限定する設計は、すべてこのためです。サブタスクごとに人間のクリックを要求する設計では、パイプラインが人間の在席状況で停滞します。
 
-### 0.1 決定論: LLMは判断、共有状態の自動遷移はPython
+<a id="determinism"></a>
 
-LLM呼び出しはクオーターを消費する希少な操作です。したがってOrchestuneは、**判断が代替不能な箇所——分解、実装、統合diffの意味的レビュー、`status:not-needed`の判定——にのみLLMを使い、それ以外はすべて決定論的なPythonで処理します**。ラベルのポーリング、DAGの再計算、ローカル状態の再構築、GC、エスカレーションは、いずれも「エージェントに考えさせる」ことも可能ですが、その都度クオーターを支払うことになります。
+### 2.2 決定論: LLMは判断、共有状態の自動遷移はPython
 
-この方針は二重に効きます。決定論的に処理した分だけ直接の消費が減り、加えて非決定的な挙動が生む手戻り——冒頭で述べた最大の無駄——も減ります。
+LLM呼び出しはクオーターを消費する希少な操作です。したがってOrchestuneは、**判断が代替不能な箇所（分解、実装、統合diffの意味的レビュー、`status:not-needed`の判定）にのみLLMを使い、それ以外はすべて決定論的なPythonで処理します**。ラベルのポーリング、DAGの再計算、ローカル状態の再構築、GC、エスカレーションは、いずれも「エージェントに考えさせる」ことも可能ですが、その都度クオーターを支払うことになります。
 
-分割線は「LLMが何をしないか」ではなく、**スコープ**——誰の領域へ書き込むか——で引かれています。
+この方針には2つの効果があります。決定論的に処理した分だけ直接の消費が減り、非決定的な挙動が生む手戻り（2.1節で述べた最大の無駄）も減ります。
+
+LLMとPythonの分担は、「LLMが何をしないか」ではなく、**スコープ**、つまり誰の領域へ書き込むかで線を引いています。
 
 | | 書き込み先 |
 |---|---|
 | **LLM** | 自分に割り当てられた隔離領域（worktreeと自分のブランチ）、および判断の表明（Outcome Record・コメント・PR。Cloud Routineにおける独立検証レビュアーの判定ラベル付与を含む） |
-| **Python** | **共有状態のうち自動で進む部分**——子PRから親ブランチへの統合マージ、Issueの生死、通常サイクルのラベル遷移、依存関係の解決、クオーター台帳の更新 |
-| **人間** | **検収マージ**——親ブランチから`main`への最終PR。「唯一の人間クリック」 |
+| **Python** | **共有状態のうち自動で進む部分**（子PRから親ブランチへの統合マージ、Issueの生死、通常サイクルのラベル遷移、依存関係の解決、クオーター台帳の更新） |
+| **人間** | **検収マージ**（親ブランチから`main`への最終PR。「唯一の人間クリック」） |
 
-通常の実装ワーカーエージェントが共有のGitHubラベルを直接操作することはありません。実装エージェントは要件が既に満たされていると判断した場合、ラベルを直接書き換えるのではなくOutcome Record（`<!-- orchestune:outcome -->`、`result: not-needed`）をコメントとして投稿しますし、commit・push・PR作成も自分のブランチの中だけで完結します（唯一の例外は、Cloud Routineにおける独立検証レビュアーセッションであり、`integration_coordinator`の指示に従って合否判定ラベルを付与します）。**その成果を共有状態へ取り込むかどうかを決めるのは、エージェント自身ではありません。**
+通常の実装ワーカーエージェントが、共有のGitHubラベルを直接操作することはありません。要件が既に満たされていると判断した場合も、ラベルを書き換えるのではなく、Outcome Record（`<!-- orchestune:outcome -->`、`result: not-needed`）をコメントとして投稿します。commit・push・PR作成も、自分のブランチの中だけで完結します。
+
+唯一の例外はCloud Routineにおける独立検証レビュアーセッションで、`integration_coordinator`の指示に従って合否判定ラベルを付与します。**その成果を共有状態へ取り込むかどうかを決めるのは、エージェント自身ではありません。**
 
 #### 前提: LLMもインフラも間違える
 
@@ -96,39 +115,56 @@ LLM呼び出しはクオーターを消費する希少な操作です。した�
 | インフラの失敗（ローカル状態の消失） | — | [GitHubを真実とする再構築 (state-recovery.md)](architecture/state-recovery.md#2-github-as-single-source-of-truth) |
 | エージェントの自己申告（`result: not-needed`） | 記憶を持たない独立セッションによる再検証（Cloud Routineターゲット使用時のみ） | Outcome Recordとラベル遷移経由でPython側が決定論的にクローズ |
 
-そして、**ループには上限があり、終端があります**——ただし現状では全経路ではありません。実行時Conflict Graph再計算の回数、並行実行数（`max-concurrent`）、そしてゾンビ／タイムアウト回収による再投入回数（`--max-task-reclaims`、既定3回）は既定で有界で、タスクのタイムアウトも**既定で有効**です（`task-timeout-seconds = 7200`。外部実行は停止確認まで枠を保持）。Integrator自身の待機も有界で、依存準備・CI・親Issueごとのサイクルに期限があり、確認済みのtimeoutはGitHub上の回数に基づいて最大`max-integration-timeout-retries`回だけ再試行され、停止・rollback・書き込みを確認できない場合は人間確認のために保持されます（[統合 §5](architecture/integration.md#bounded-execution)）。時間単位の起動数上限（`max-launches-per-window`）とトークン消費の上限は**既定では無効**で、必要な場合は明示的な設定が要ります（[使い方とコマンドリファレンス](usage.md)参照）。自動的に収束できない場合、対象Issueは`status:blocked-human-review`へ遷移して停止します。`tests/test_architecture.py`は、有限なリトライ／回収／レビュータイムアウト設定と宣言済み終端動作の対応を機械的に検証します。この検査は意図的に明示的なレジストリ方式です。回収ループの命名規約に一致する新設定に終端対応がなければ失敗させる一方、無関係な有界制御は個別機能のテストに委ねます。
+そして、**ループには上限があり、終端があります**。ただし、現状ではすべての経路がそうなっているわけではありません。
+
+- 既定で有界: 実行時Conflict Graph再計算の回数、並行実行数（`max-concurrent`）、ゾンビ／タイムアウト回収による再投入回数（`--max-task-reclaims`、既定3回）。
+- タスクのタイムアウト: **既定で有効**です（`task-timeout-seconds = 7200`。外部実行は停止確認まで枠を保持）。
+- Integrator自身の待機: 依存準備・CI・親Issueごとのサイクルに期限があります。確認済みのtimeoutはGitHub上の回数に基づいて最大`max-integration-timeout-retries`回だけ再試行され、停止・rollback・書き込みを確認できない場合は人間確認のために保持されます（[統合 §5](architecture/integration.md#bounded-execution)）。
+- 時間単位の起動数上限（`max-launches-per-window`）とトークン消費の上限: **既定では無効**で、必要な場合は明示的な設定が要ります（[使い方とコマンドリファレンス](usage.md)参照）。
+
+自動的に収束できない場合、対象Issueは`status:blocked-human-review`へ遷移して停止します。
+
+`tests/test_architecture.py`は、有限なリトライ／回収／レビュータイムアウト設定と宣言済み終端動作の対応を機械的に検証します。この検査は意図的に明示的なレジストリ方式です。回収ループの命名規約に一致する新設定に終端対応がなければ失敗させる一方、無関係な有界制御は個別機能のテストに委ねます。
 
 > **既知の欠落**: 現時点で、終端へ到達しない経路が1つあります。
-> - **トークン消費の観測不可**。`max_tokens_per_window`は、クラウドのディスパッチターゲット（`ClaudeCodeCloudRoutineDispatchTarget`・`CodexCloudDispatchTarget`）では発火しません。`collect_usage`の既定実装が`None`を返し、両ターゲットとも上書きしていないためです——クラウドセッションの消費量を問い合わせるポーリングAPIが公開されておらず、`is_complete`すらPR作成をプロキシシグナルにしています。したがって**無人運転の主経路ではトークン上限が効きません**。これは永続化以前の問題（そもそも記録すべきデータが生成されない）で、APIが公開され次第の再検討となります。なお`recompute_count`/`forced_serial`（子Issue本文）と`launch_history`（親Issue本文）は永続化済みで、この欠落の対象外です。
+> - **トークン消費の観測不可**。`max_tokens_per_window`は、クラウドのディスパッチターゲット（`ClaudeCodeCloudRoutineDispatchTarget`・`CodexCloudDispatchTarget`）では発火しません。`collect_usage`の既定実装が`None`を返し、両ターゲットとも上書きしていないためです。クラウドセッションの消費量を問い合わせるポーリングAPIは公開されておらず、`is_complete`すらPR作成をプロキシシグナルにしています。したがって**無人運転の主経路ではトークン上限が効きません**。
+>
+>   これは永続化以前の問題で、そもそも記録すべきデータが生成されません。APIが公開され次第の再検討となります。なお`recompute_count`/`forced_serial`（子Issue本文）と`launch_history`（親Issue本文）は永続化済みで、この欠落の対象外です。
 
 Orchestuneが**目指す**のは「常に自動で解決すること」ではなく、**収束するか、人間が対処可能な状態で停止するかのいずれかであること**です。上記の通りこれは設計目標であって、現時点で全経路が満たしているわけではありません。
 
-### 0.2 人間の承認ポイント
+<a id="human-approval-points"></a>
 
-Orchestuneは、人間が**内容を判断・レビューする**地点を「分解点」と「検収（最終受け入れ）」の2点のみに限定する設計思想を採っています。親ブランチによる二層モデルでは、この2点がそのまま「人間がクリックする箇所」とも一致します——子レベルの統合はCI通過と子レビュー証跡の検証（既定）を条件に完全自動で進み、人間が操作するのは親ブランチ→mainの最終PRのマージだけです。
+### 2.3 人間の承認ポイント
+
+Orchestuneは、人間が**内容を判断・レビューする**地点を「分解点」と「検収（最終受け入れ）」の2点のみに限定する設計を採っています。親ブランチによる二層モデルでは、この2点がそのまま「人間がクリックする箇所」とも一致します。子レベルの統合はCI通過と子レビュー証跡の検証（既定）を条件に完全自動で進み、人間が操作するのは親ブランチ→mainの最終PRのマージだけです。
 
 1. **分解ゲート**: ディスパッチ開始前に、人間が `decomposition_plan.md`（サブタスクの粒度、footprint、依存関係）をレビューし承認します。
-2. **検収ゲート（唯一の人間クリック）**: 親Issue配下の全子Issueが自動クローズされた後にIntegratorが作成する、`parent/issue-{N}` → `main`の最終PRを、人間がレビューしてマージします。マージが検知されると、Integratorが親Issueを自動的にクローズします——別途手動でクローズする必要はありません。
+2. **検収ゲート（唯一の人間クリック）**: 親Issue配下の全子Issueが自動クローズされた後にIntegratorが作成する、`parent/issue-{N}` → `main`の最終PRを、人間がレビューしてマージします。マージが検知されると、Integratorが親Issueを自動的にクローズします。別途手動でクローズする必要はありません。
 
 分解ゲートと検収ゲートの間では、子レベルの統合PRマージ・CI検証・リベース・Issueクローズはすべて人間の判断を介さずに進行します。`risk:flagged` ラベルはリスクのあるサブタスクを可視化するためのものであり、追加の承認ゲートとしては機能しません。
 
-**なぜ「判断」が2点だけで十分なのか**:
+#### 判断が2点だけで十分な理由
+
 各サブタスクの履歴（Issue、PR、コミット、CIログ）はすべてGitHub上に保存されます。そのため、人間のレビュー労力を事前（分解）と事後（検収の1マージ）に集約しても、途中の子レベル統合を逐一見ることなくトレーサビリティを維持できます。
 
-**per-task承認の代替としてのCI**:
+#### per-task承認の代替としてのCI
+
 子レベルの統合におけるマージ前CI検証は、実質的にサブタスク単位の人間レビューの代替として機能します。すべての子レベル統合PRは`parent/issue-{N}`にマージされる前にCIをパスする必要があるため、個々の差分を人間が見なくても機械的な正しさは自動的に担保されます。
 
-**子レビュー証跡ゲート（CIだけが自動ゲートではない）**:
-各子PRのレビューはCIとは別の必須チェックで、責務は3者に分かれます。開発スキル（第1層）が子PR上でレビューループを実行し、LLMが指摘ごとに判断を記録します。`orchestune complete --result done`がその判断表を、PRから取得し直したレビュー状態・レビュー対象SHAと突き合わせて検証し、結果をレビュー証跡としてdone Outcome Recordへ保存します（検証に失敗した場合はcompleteを拒否し、何も投稿しません）。Integratorは`parent/issue-{N}`を更新する直前に、保存済みの証跡を検証するだけで、自らレビューは実行しません。既定の`required`では、マージ対象のコミットに対する合格証跡を持たない子が1件でもあれば統合をfail-closedで停止し、親Issueを`status:blocked-human-review`へ遷移させます。統合diffを対象とする別系統のセマンティックレビュー（第2層）はadvisoryのままで、必須化は後続Epic #1033の範囲です。詳細は[integration.md](architecture/integration.md)、運用・再開・移行は[使い方 §4.5](usage.md#45-子レビュー証跡ゲート)を参照してください。
+#### 子レビュー証跡ゲート
 
-**トレーサビリティの補完: ディスパッチサイクルレポートの親Issueコメント投稿**:
-`orchestune-dispatch`のサイクル毎イベントログ（`events.jsonl`）は`.gitignore`対象であり、CI実行のたびに揮発するため、それ単独では恒久的な履歴になりません。このログに頼らずディスパッチサイクルの意思決定を追跡可能にするため、**apply（`--no-apply`ではない）モードの**各ディスパッチサイクル終了時に、設定された親Issue（`--parent-issue`、#396）へ`## 🤖 Orchestune Dispatch Cycle Report`という見出しのコメントを投稿します。なお`--no-apply`はpost-cycleブロック全体をスキップするため、このレポート投稿も実行されません。
+CIだけが自動ゲートではありません。各子PRのレビューはCIとは別の必須チェックで、責務は次の3者に分かれます。
 
-apply時のサイクルレコードには`timings`（version 1）も追加します。`elapsed_seconds`、`phases`（各phaseの子処理を含む`seconds`と区間数`count`）、`gh`（試行数`calls`と合計`seconds`）を記録します。scopeの`cycle_before_events_record`は既存の`cycle: started`から`events_record: started`までで、events書込み、lock解放、post-cycle、結果ファイル保存を含みません。フェーズ境界は既存の進捗通知を再利用します。複数task launchは合算しますが、その時間はschedulingにも含まれるため、phase時間の総和をcycle全体の時間と解釈しないでください。`gh.calls`は`GitHubForge._run`経由の試行数で、stdin・失敗・timeoutも含みます。HTTP request数や子エージェント内のコマンド数ではありません。計測障害は`collection_status: partial`または`unavailable`と不明なscalar値のnullで表し、dispatch結果・終了コードを変更しません。過去レコードには`timings`が無い場合があります。結果JSONと`CycleReport`は維持し、dry-runと途中中断時のevents保存方針も従来どおりです。
+- 開発スキル（第1層）: 子PR上でレビューループを実行し、LLMが指摘ごとに判断を記録します。
+- `orchestune complete --result done`: その判断表を、PRから取得し直したレビュー状態・レビュー対象SHAと突き合わせて検証し、結果をレビュー証跡としてdone Outcome Recordへ保存します。検証に失敗した場合はcompleteを拒否し、何も投稿しません。
+- Integrator: `parent/issue-{N}`を更新する直前に、保存済みの証跡を検証するだけで、自らレビューは実行しません。
 
-コメントの内容は、そのサイクルで選定されたタスク・注目すべき`footprint`逸脱イベント・完了イベント・昇格イベントの要約です。状態が変化しない定常的な逸脱イベント（例: 既に強制直列化済みのworktreeについての再通知）は、スキップ判定・コメント本文の両方から除外されます。そのため、同一内容のコメントが毎サイクル親Issueに積み上がることはありません。また、報告すべき内容が無いサイクル、または親Issueが未設定の場合はコメントを投稿しません。
+既定の`required`では、マージ対象のコミットに対する合格証跡を持たない子が1件でもあれば統合をfail-closedで停止し、親Issueを`status:blocked-human-review`へ遷移させます。統合diffを対象とする別系統のセマンティックレビュー（第2層）はadvisoryのままで、必須化は後続Epic #1033の範囲です。詳細は[integration.md](architecture/integration.md)、運用・再開・移行は[使い方 §4.5](usage.md#45-子レビュー証跡ゲート)を参照してください。
 
-投稿に失敗した場合の扱いは、他のpost-cycleフェーズと同様です。例外は送出せず、サイクル自体は常に最後まで実行されます。ただし失敗は`orchestune-dispatch`の非ゼロ終了ステータスとして表面化し、CIのステップとしては失敗扱いになります。通常の投稿エラー（一時的なネットワークエラー等）は警告ログを出したうえで終了コード2に、GitHub認証エラーはエラーログを出したうえで終了コード1にマップされます。
+#### トレーサビリティの補完
+
+`orchestune-dispatch`のイベントログ（`events.jsonl`）はCI実行のたびに揮発するため、それ単独では恒久的な履歴になりません。そこでapplyモードの各ディスパッチサイクルは、終了時に親Issueへサイクルレポートをコメントとして投稿します。投稿の条件・内容・失敗時の扱いと、サイクルレコードの計測値（`timings`）は[ディスパッチサイクルレポートと計測 (dispatch-cycle.md)](architecture/dispatch-cycle.md)にまとめています。
 
 これにより、人間のレビュー労力を最も判断価値の高い2点（スコーピングと最終受け入れの1マージ）に集中させつつ、その間の機械的な処理（子レベルの自動マージ・自動クローズ、リベース、依存順序制御）は完全自動化されています。
 
@@ -136,7 +172,7 @@ apply時のサイクルレコードには`timings`（version 1）も追加しま
 
 ## 3. 主要サブシステム概要
 
-各サブシステムの詳細な仕様・計算式・制御フローは、以下の個別ドキュメントに分割・記載されています。
+各サブシステムの詳細な仕様・計算式・制御フローは、次の個別ドキュメントに記載しています。
 
 ### 3.1 DAG構築・スケジューリング・競合制御
 詳細: [DAG構築・スケジューリング・競合制御 (dag-and-scheduling.md)](architecture/dag-and-scheduling.md)
@@ -144,7 +180,7 @@ apply時のサイクルレコードには`timings`（version 1）も追加しま
 * **二重グラフモデル**: 因果関係（`depends_on`）を管理する**Precedence DAG**と、排他関係（`footprint`/`symbols`/`shared_contract`の重複）を管理する**Conflict Graph**を分離。
 * **類似度計算と競合分析**: IDF重み付きOtsuka-Ochiai類似度によるメタデータ重複分析（Co-Coder論文適応）。
 * **スケジューリングアルゴリズム (#660)**: クリティカルパス（bottom level）、後続解放数、完了履歴に基づく推定コスト・手戻りリスク、時間窓トークン予算（Token Budget）、飢餓回避agingによる多角的なスコアリング。
-* **Execution Profiles & モデル選定 (#670)**: タスクの抽象プロファイル（`deep-reasoning`, `fast-code`等）を設定ファイルに基づいて具体的なLLMモデル・推論強度へ決定論的に解決（`resolve_execution_profile` / `ExecutionSelection`）。#660 スケジューラ（「いつ・どのタスクを起動するか」）とExecution Profiles（「どのように実行するか」）の明確な責務境界。
+* **Execution Profiles & モデル選定 (#670)**: タスクの抽象プロファイル（`deep-reasoning`, `fast-code`等）を設定ファイルに基づいて具体的なLLMモデル・推論強度へ決定論的に解決（`resolve_execution_profile` / `ExecutionSelection`）。#660 スケジューラは「いつ・どのタスクを起動するか」、Execution Profilesは「どのように実行するか」を受け持ち、責務を明確に分けています。
 * **共有コントラクトゲート & ASTシンボル検証**: 未確立の共有拡張ポイントに対する並列書き込みのhotspot検出、および計画とコードベースのAST突合による陳腐化検知。
 
 ### 3.2 自己修復（ステートリカバリ）機能
@@ -152,17 +188,17 @@ apply時のサイクルレコードには`timings`（version 1）も追加しま
 
 * **ステートレス実行モデル**: GitHub Actions等の揮発性CI環境前提で、ディスク上のローカル状態消失時もGitHub上のIssue/PR状態からシームレスに再構築。
 * **GitHub as Single Source of Truth**: `status:*` ラベルおよびPRブランチからの状態再構築と、ゾンビ／タイムアウト回収（`task_reclaim_counts`、#512）の終端保護。
-* **リポジトリ整合性control loop**: `ConsistencySupervisor`が修復判断、実行順序、有界な再試行、authoritativeな再観測、結果集約を単一所有し、typed ExecutorがForge、Git、process、worktree、`run_state.json`への変更をlive preconditionの背後へ閉じ込めます。off/shadow/repair設定が段階化するのは追加のrepository-wide loopだけであり、既存の安全なstatus、recovery、GC自己修復境界はdefaultで有効なままです。詳細は[ステートレスCIと自己修復](architecture/state-recovery.md#3-リポジトリ整合性control-loop)を参照してください。
+* **リポジトリ整合性control loop**: `ConsistencySupervisor`が修復判断、実行順序、有界な再試行、authoritativeな再観測、結果集約を単一所有します。typed ExecutorはForge、Git、process、worktree、`run_state.json`への変更をlive preconditionの背後へ閉じ込めます。off/shadow/repair設定が段階化するのは追加のrepository-wide loopだけであり、既存の安全なstatus、recovery、GC自己修復境界はdefaultで有効なままです。詳細は[ステートレスCIと自己修復](architecture/state-recovery.md#3-リポジトリ整合性control-loop)を参照してください。
 
 ### 3.3 統合（Integration）と自動リベース
 詳細: [統合パイプライン・二層モデル・自動リベース (integration.md)](architecture/integration.md)
 
 * **親ブランチによる二層モデル**: `parent/issue-{N}` による長命ブランチを活用し、子タスクの統合はCI通過後に完全自動でマージ・クローズ。
-* **自動リベース（stack）**: [共通stack target policy](architecture/integration.md#dependency-target-fallback)が**CI通過済みでまだ実効完了していない単一の依存先タスクのブランチ**をtargetとして返したときにだけ、下流の仕掛かり中ブランチをそのブランチへリベース。targetが無ければ見送り、起動時のbaseは`parent/issue-{N}`（親Issue未設定なら`origin/main`）へfallbackする。targetがある場合の起動baseはその依存先ブランチになるため、`parent/issue-{N}`へマージ済みの成果物を引き継ぐかはそのブランチ次第。
+* **自動リベース（stack）**: [共通stack target policy](architecture/integration.md#dependency-target-fallback)が**CI通過済みでまだ実効完了していない単一の依存先タスクのブランチ**をtargetとして返したときにだけ、下流の仕掛かり中ブランチをそのブランチへリベース。
+  * targetが無ければリベースを見送り、起動時のbaseは`parent/issue-{N}`（親Issue未設定なら`origin/main`）へfallbackする。
+  * targetがある場合の起動baseはその依存先ブランチになるため、`parent/issue-{N}`へマージ済みの成果物を引き継ぐかはそのブランチ次第。
 * **検収ゲート**: 全子タスク完了後にIntegratorが作成する `parent/issue-{N}` → `main` の最終PRを人間がレビュー・マージ（唯一の人間クリック）。
 * **排他制御と設計前提**: 同一マシンファイルロック前提（#377）、GitHub Actionsでの `concurrency` グループ推奨、およびCAS多層防御（#435）。
-
----
 
 <a id="dependency-cycle-context"></a>
 
@@ -185,11 +221,19 @@ record APIは外部I/Oを行わず、呼出側の成功確認済みの事実だ�
 更新後を読む呼出側は`record_*`後に再queryします。Dispatcherは公開`DispatchSnapshot`や
 サイクル凍結点は導入しません。分散transaction、自動rollbackも導入しません。
 
-依存契約の正本は次の詳細文書に分割しています。
+依存関係の契約は、次の詳細文書で定義しています。
 
 - [Identity / Lifecycle / Policyとstack契約](architecture/dag-and-scheduling.md#dependency-three-layers)
 - [record APIの成功postcondition](architecture/state-recovery.md#dependency-record-postconditions)
 - [共通target policyとfallback](architecture/integration.md#dependency-target-fallback)
+
+### 3.5 ディスパッチサイクルレポートと計測
+詳細: [ディスパッチサイクルレポートと計測 (dispatch-cycle.md)](architecture/dispatch-cycle.md)
+
+* **サイクルレポート**: applyモードの各ディスパッチサイクルの終了時に、選定タスク・逸脱・完了・昇格の要約を親Issueへコメントとして投稿（#396）。
+* **計測値（`timings`）**: サイクルレコードに、phaseごとの所要時間と`gh`の試行数を記録。
+
+---
 
 ## 4. モジュール層構造とパッケージ境界
 
@@ -210,7 +254,6 @@ record APIは外部I/Oを行わず、呼出側の成功確認済みの事実だ�
 | **L1** | **アダプタ**<br/>外部開発ツールを実行するモジュール群 | `forge`, `forge.admin`, `forge.issues`, `forge.prs`, `infra.git_cli`, `infra.managed_process`, `infra.managed_process_posix`, `infra.managed_process_windows`, `infra.private_tokens`, `infra.python_env`, `infra.repository_config` |
 | **L0** | **インフラ**<br/>純粋なDTOと依存を持たないヘルパ | `bounded_limit`, `branch_naming`, `claim`, `claim.contracts`, `complete`, `complete.contracts`, `consistency.contracts`, `consistency.models`, `consistency.vocabulary`, `dag`, `dag.models`, `dispatch`, `dispatch.doctor_models`, `dispatch.progress`, `dispatch.timings`, `dispatch.result`, `dispatch.cycle_events`, `dispatch.retry_policy`, `dispatch.usage_limit`, `exit_codes`, `infra`, `infra.command_metrics`, `infra.execution_deadline`, `infra.json_state`, `infra.process_utils`, `installer`, `installer.contracts`, `integrator.timeout_policy`, `labels`, `lock_contracts`, `merge_evidence`, `models`, `outcome_record`, `not_needed_review_contract`, `review`, `review.acquisition`, `review.judgment`, `review.offline`, `review.rounds`, `review.snapshot`, `review.markers`, `review.progress_tracker`, `review.tracker_activity`, `ownership_contracts`, `plan_identity`, `plan_writer`, `pr_freshness`, `provisioning`, `recovery.contracts`, `replan`, `replan.models`, `scratch`, `setup_skills`, `task_metadata`, `validation`, `version` |
 
-
 純粋なデータ転送モジュール（`models`, `dag.models`, `dispatch.result`）を
 アダプタより下の **L0** に置いているのは、`GitHubForge` が `IssueRecord` /
 `PrRecord` を返すためです。DTOを、それを生成するアダプタより上位に置くと、
@@ -220,72 +263,18 @@ L4の定義は「`main()` を持ち、`cli` 以外からはimportされない」
 
 新規のコードは常にその振る舞いを所有する層に配置する必要があり、境界は引き続きこの節と`tests/test_architecture.py`で機械的に検証されます。
 
-#### 共有実行台帳と所有権契約
+#### 共有実行台帳（ledger）
 
 `ledger` は `claim`・`complete`・`dispatch`・`integrator`・状態表示が共有する
-L2 の基盤で、次の3つの責務を持ちます。
+L2 の基盤です。ledger の依存規則は一般のレイヤー規則より厳しく、ledger 内部の参照を
+許可する一方、`orchestune` 内の外部依存は L0/L1 に限定します（4.2節のルール6）。
+ledger は claim・dispatch に依存しません。
 
-- `ledger.completion_reservations`: completion の確定証拠が保存されるまで claim・GC・repair・依存 reader が Issue を変更・解放しないための共通ガード。
-- `ledger.run_state`: 実行状態モデル、読込、検証、正規化、保存、保持方針のヘルパー。
-  dispatch からの分離で JSON 形式や、保存時に既存の状態ロックを保持する条件は変えません。
-- `ledger.active_records`: メモリ上の唯一の正本（`core` と3つの frozen サブレコード: `launch`, `claim`, `completion`）である `ActiveWorktree` とその不変構造を所有します。過去のフラット属性プロパティは全廃されており、`slots=True` により不正なアクセスを拒絶します。`from_records()` は型付きのnested構築経路、`with_core()` は共通fieldの更新境界です。recordを二重に保存しません。所有者fieldは所有者APIだけで置き換えます。claim fieldは `claim.ownership`（`build_claim_info()`・`with_claim()`）、launch fieldは `dispatch.launch_state`（`build_launch_record()`・`with_launch()`・`with_launch_phase()`）、completion fieldは `complete.journal`（`active_completion_from_record()`・`with_completion()`）です。詳細な仕様とライフサイクル優先順位は [ステートレスCIと自己修復 (state-recovery.md)](architecture/state-recovery.md#active-worktree-lifecycle) を参照してください。
-- `ledger.active_codec`: 既存のフラットなActiveWorktree JSON形式を明示的にdecode/encodeします。
-  field順と`completion_policy_config`がnullの場合の省略を維持し、台帳の検証処理からcodec詳細を分離します。
-- `ledger.active_lifecycle`: `lifecycle(active)` は永続フィールドから、completion → launch → recovery sentinel → claim → reservation の順で候補段階を返します。`HANDOFF_READY` は候補だけを示し、completion receipt や remote evidence の検証は既存処理が引き続き担います。enum と helper は `ledger.run_state` からも利用できます。
-
-  | 候補段階 | 上から順に適用する条件 |
-  | --- | --- |
-  | `HANDOFF_READY` | handoff-ready flag、またはhandoff段階のcompletionがある。 |
-  | `COMPLETING` | completion IDがある。 |
-  | `RUNNING` | PID、external handle、またはlaunched phaseがある。 |
-  | `LAUNCHING` | 開始時刻、launch attempt ID、または別のlaunch phaseがある。 |
-  | `RECOVERY_REQUIRED` | recovered claim ID、またはowner不確実を示すdigest sentinelがある。 |
-  | `CLAIMED` | ownerがinteractiveで、`reserved`以外のclaim stageが設定されている。 |
-  | `RESERVED` | 優先条件に一致しない。初期の`reserved` claimと、in-memory recordでclaim stageが未設定の場合も含む。永続recordでは`claim_stage`が必須。 |
-- `ledger.status_labels`: 共通の状態ラベル定数と遷移の適用。`status_machine`の計画を
-  追加 → 台帳確定コールバック → 旧ラベルの逐次除去の順でForgeへ適用します。
-- `ledger.status_machine`: Forgeに依存しない純粋モジュール。`status:*`ラベルの役割表、
-  通常のlifecycle遷移表、スナップショットから導く追加・除去の計画を持ちます。
-  ラベルの読み書きやコールバックは行わず、本番では不正遷移を拒否しません。
-- `ledger.status_events`: `status:*`のEventモデル（#1219 Phase 3）。Event・実行identity・
-  retry予約・予算を副作用なしで判定する純粋モジュールで、依存は`status_machine`・`labels`・
-  `bounded_limit`だけです。本番の判定は置き換えず、本番関数との対応は適合テストで結びます。
-  backoff付きretryの判定は`dispatch.retry_policy`が所有するため、ledger→dispatchの依存を
-  作らないよう呼び出し側が`BudgetLimits.plan_backoff`として注入します。
-- `ledger.escalation`: 共通エスカレーション操作。終端ラベル追加、利用側の台帳確定
-  コールバック、指定された旧ラベル削除、理由コメント投稿の順で実行します。
-  追加またはコールバックの失敗は後続処理を停止し、その後の削除・投稿の失敗では
-  確定済みの台帳更新を巻き戻しません。dispatch 固有のルール評価・プロセス停止・
-  台帳更新は dispatch ワークフローとコールバックに残します。
-
-`ownership_contracts` は `OwnerKind`・`ClaimStage`・`ReservationKind` を定義する
-独立した L0 モジュールです。ledger はここを直接参照します。`claim.contracts` は
-同じ enum の再エクスポートを許可し、claim 固有の Request・Outcome を保持します。
-共有 enum は claim・ledger・dispatch の実装に依存しません。
-
-ledger の専用境界は一般のレイヤー規則より厳しく、ledger 内部参照を許可する一方、
-`orchestune` 内の外部依存は L0/L1 に限定します。標準・外部ライブラリはこの
-レイヤー検査の対象外です。ledger は claim・dispatch に依存しません。
-`complete` から dispatch への依存は解消済みで、旧 `dispatch.state`・
-`dispatch.labels` は削除済みです。integrator は共通エスカレーションを ledger から、
-`file_lock` を `infra.process_utils` から直接参照します。
-
-
-coordinator は `targets.cloud_routine` の routine 定数・実装と `targets.contracts` の実行契約を参照します。共通の起動指示・ブランチ検証・完了証拠判定は `targets.support` に置きます。dispatch は互換性のため同一オブジェクトを再公開し、共有 targets パッケージは dispatch・integrator を import しません。
-
-当初の ledger 分離で対象外として残されていたワークフロー依存は、後続 Issue で順次解消されました。
-- `claim.preflight` の `dispatch.locks` への共通ロック型・定数依存は、[#1071](https://github.com/Saltmu/orchestune/issues/1071) で `KIND_BRANCH`/`KIND_PR`/`ExternalLockConflict`/`ExternalLockScanResult` を L0 の `lock_contracts` モジュールへ移して解消しました。
-- `claim.preflight` および `integrator.tasks` の `dispatch` への依存評価機能依存は、[#1073](https://github.com/Saltmu/orchestune/issues/1073) で依存の判定・方針・legacy 解決を共通パッケージ `dependencies`（`dependencies.resolution`・`dependencies.assessment`・`dependencies.policy`）へ分離して解消しました。これにより `claim` および `integrator` から `dispatch` への逆依存が解消され、`claim ↔ dispatch`・`complete ↔ claim`・`dispatch ↔ integrator` のパッケージ循環がすべて解消しました。
-- 別責務の `dag ↔ symbol_verification` の循環は、[#1075](https://github.com/Saltmu/orchestune/issues/1075) で検証処理を `dag` パッケージ配下（`dag.symbol_verification`）へ集約して解消しました。
-- `provisioning ↔ replan` の循環は、[#1076](https://github.com/Saltmu/orchestune/issues/1076) で計画識別子を L0 の `plan_identity` モジュールへ移して解消しました。
-
-リポジトリの TOML 検出は L1 アダプタ `infra.repository_config` に置きます。
-L2 の `targets.completion_policy` が実効トークン上限を解釈し、共通の
-`targets.usage` provider から利用量を取得します。互換性のため
-`dispatch.config_loader` は共通設定 loader を再公開します。complete policy は
-dispatch の設定・workflow モジュールを import しません。
-
-consistency status kernelはstatus-machineの役割表からlifecycleを導出し、7種tupleとledgerの3種ACTIVEを維持します。invariant・planner・fresh executorはFINAL / ESCALATIONを保護し、正確なdone+queued差し戻し例外を維持し、初期化・競合修復でもpromotion holdを守ります。executorはIntentを永続化・検証し、通常遷移表の警告は観測のみです。Supervisorのpass/cycleの区別と収束の前提は[statusラベル](status-labels.md#status-reconciliation-の安全性と収束性1218)を参照してください。RuleChain・GC・rebase・Integratorの方針選択は別責務です。
+各モジュールの責務、所有権契約、および `targets`・リポジトリ設定・consistency status
+kernel の境界は、[共有実行台帳とパッケージ境界 (ledger.md)](architecture/ledger.md)に
+まとめています。`ActiveWorktree` の詳細な仕様とライフサイクルの優先順位は
+[ステートレスCIと自己修復 (state-recovery.md)](architecture/state-recovery.md#active-worktree-lifecycle)
+を参照してください。
 
 ### 4.2 CIで機械的に検証される不変条件
 
@@ -304,19 +293,21 @@ consistency status kernelはstatus-machineの役割表からlifecycleを導出�
 
    対象はVCS・GitHubクライアントの表面のみです。それ以外の外部プロセス起動は意図的に対象外としており、ガードもしていません。具体的には、`dispatch.targets` はエージェントのCLIを起動し、`dispatch.rebase` はCIスクリプトを実行します。uvによる依存関係の同期やリポジトリローカルな `.venv` の仮想環境操作は、L1アダプタの `infra.python_env` にカプセル化しています。
 
-   **この検査の範囲**:
-   ガードはソースからコマンドを読み取るため、検出できるのはリテラルのリストに限られます（直接渡す場合と、スコープ内のいずれかの代入がリテラルを束縛した変数を渡す場合です）。通常のコードに対して信頼できる程度にはPythonのスコープ規則を模しており、分岐とループを追い、クラス本体をメソッドから切り離し、`global` / `nonlocal` を尊重し、第1位置引数だけでなく `args=` キーワードも読みます。
+   この検査の範囲は次のとおりです。ガードはソースからコマンドを読み取るため、検出できるのはリテラルのリストに限られます（直接渡す場合と、スコープ内のいずれかの代入がリテラルを束縛した変数を渡す場合です）。通常のコードに対して信頼できる程度にはPythonのスコープ規則を模しており、分岐とループを追い、クラス本体をメソッドから切り離し、`global` / `nonlocal` を尊重し、第1位置引数だけでなく `args=` キーワードも読みます。
 
    ただし評価は一切行いません。そのため、実行時に組み立てたコマンド、設定から読み込んだコマンド、他モジュールから渡されたコマンドは、まったく検出できません。
 
-   この線引きは意図的なものです。この不変条件が存在する目的は、L2のモジュールで `run_git` ではなく `subprocess` に手を伸ばしてしまうといった**事故を捕まえること**であって、意図的な回避を防ぐことではありません。`git_cli` の外で `git` を実行したい人はそうできますし、テストファイル内の静的検査でそれを止めることはできません。それを止めるのはコードレビューです。したがって `git` / `gh` のargvはリテラルで書き、ここでの失敗は「これはL1に属する」という合図として扱ってください。回避すべきパズルではありません。
+   この線引きは意図的なものです。この不変条件が存在する目的は、L2のモジュールで `run_git` ではなく `subprocess` を使ってしまうといった**事故を捕まえること**であって、意図的な回避を防ぐことではありません。`git_cli` の外で `git` を実行したい人はそうできますし、テストファイル内の静的検査でそれを止めることはできません。それを止めるのはコードレビューです。したがって `git` / `gh` のargvはリテラルで書き、ここでの失敗は「これはL1に属する」という合図として扱ってください。回避すべきパズルではありません。
 
 3. **循環インポートはゼロ**:
    循環インポートは禁止されています。また、循環検知をすり抜ける関数内import（内部モジュールに対するもの）も禁止です。起動時間短縮のためにエントリポイントのimportを遅延させる `cli` のみが例外となります。
 4. **表は網羅的である**:
    `orchestune/` 配下のすべての `.py` ファイルが、英語版・日本語版の両ドキュメントでちょうど1つの層に現れる必要があります。ただし `orchestune/__init__.py` 自身のみ意図的な例外です。パッケージルートは境界の**中にいる**のではなく境界を**宣言する**側であるため、層を持たずルール1の対象にもなりません。何をimportしてよいかは別途検査しており、L4のエントリポイントを取り込んでいないことを専用のテストが表明します（これが例外化によって失われうる性質であるためです）。
 5. **パッケージ間循環の禁止（許容リスト付き ratchet）**:
-   モジュール単位の循環禁止（ルール3）に加えて、トップレベルパッケージ（`orchestune.<pkg>`、単一モジュールはそのモジュール名）間での循環importも禁止されます。同一レイヤー内または上位→下位レイヤーであっても、パッケージ間の循環は許容されません。既存の循環は `KNOWN_PACKAGE_CYCLE_EDGES` の許容リストに明示的な理由と解消予定Issueを付与して記録されており、元の縮約グラフの強連結成分（SCC）から循環エッジを抽出して検査されます。新たな未許容循環の追加はCIで阻止され、リファクタリングにより解消された循環エッジは許容リストからの削除が機械的に強制されます（ratchet）。なおパッケージルート（`orchestune/__init__.py`）は公開APIを再公開・宣言する側であるため（ルール4参照）、パッケージ間循環の検査対象外となります。
+   モジュール単位の循環禁止（ルール3）に加えて、トップレベルパッケージ（`orchestune.<pkg>`、単一モジュールはそのモジュール名）間での循環importも禁止されます。同一レイヤー内または上位→下位レイヤーであっても、パッケージ間の循環は許容されません。
+   - 既存の循環は `KNOWN_PACKAGE_CYCLE_EDGES` の許容リストに明示的な理由と解消予定Issueを付与して記録されており、元の縮約グラフの強連結成分（SCC）から循環エッジを抽出して検査されます。
+   - 新たな未許容循環の追加はCIで阻止され、リファクタリングにより解消された循環エッジは許容リストからの削除が機械的に強制されます（ratchet）。
+   - パッケージルート（`orchestune/__init__.py`）は公開APIを再公開・宣言する側であるため（ルール4参照）、パッケージ間循環の検査対象外となります。
 6. **ledger の依存は内部参照と L0/L1 のみ**:
    一般の下向きレイヤー規則だけでは禁止できない別の L2 モジュールへの依存も、
    L3/L4 への依存とともに専用テストで拒否します。`tests/test_ledger_architecture.py`
@@ -330,13 +321,13 @@ L1の境界は、単一の具象クライアントではなく3つの `Protocol`
 表現されています。これにより、呼び出し側は実際に使うGitHubの機能だけに
 依存できます。
 
-- `IssueForge` — Issueの読み取りとラベル操作
-- `PullRequestForge` — PRの列挙・作成・マージ
-- `RepoAdminForge` — 認証確認と必須ラベルの初期化
+- `IssueForge`: Issueの読み取りとラベル操作
+- `PullRequestForge`: PRの列挙・作成・マージ
+- `RepoAdminForge`: 認証確認と必須ラベルの初期化
 
 `Forge` はこれらの合成であり、`GitHubForge` が唯一の `gh` 実装です。ラベルの
 初期化しか行わない呼び出し側（`run_bootstrap`）は `RepoAdminForge` を受け取る
-ため、誤ってPR系APIへ手を伸ばすことができず、テストダブルも20個ではなく
+ため、誤ってPR系APIを呼び出すことができず、テストダブルも20個ではなく
 2個のメソッドで済みます。
 
 抽象がプロトコルであるため、テストはモジュール属性をパッチする代わりに

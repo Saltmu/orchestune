@@ -700,7 +700,7 @@ Orchestuneが実際にIssueをクローズする2箇所を説明する。いず�
   起動順序の優先度付けに使われるが、ライフサイクル遷移には関与しない。
 - `risk:flagged` / `progress:partial`:
   可視化目的のラベルであり、追加の承認ゲートとしては機能しない
-  （[アーキテクチャ §0.2](./architecture.md#02-人間の承認ポイント)参照）。
+  （[アーキテクチャ §2.3](./architecture.md#human-approval-points)参照）。
 
 ### replanによる世代置換
 

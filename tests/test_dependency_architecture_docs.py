@@ -26,6 +26,8 @@ DOCUMENTS = {
         "dag": REPO_ROOT / f"docs/{language}/architecture/dag-and-scheduling.md",
         "state": REPO_ROOT / f"docs/{language}/architecture/state-recovery.md",
         "integration": REPO_ROOT / f"docs/{language}/architecture/integration.md",
+        "ledger": REPO_ROOT / f"docs/{language}/architecture/ledger.md",
+        "dispatch_cycle": REPO_ROOT / f"docs/{language}/architecture/dispatch-cycle.md",
     }
     for language in ("en", "ja")
 }
