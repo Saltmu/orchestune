@@ -17,12 +17,8 @@ from orchestune.dag.graph import (
 )
 from orchestune.dag.models import (
     DagCycleError,
-    FootprintValidationError,
     SubTask,
-    canonicalize_footprint,
     compile_extra_ignore_patterns,
-    normalize_footprint_path,
-    parse_footprint_value,
 )
 from orchestune.dag.parsing import parse_decomposition_plan
 from tests.dag_test_support import _subtask, _write_plan
@@ -403,86 +399,6 @@ class TestCycleResolution:
         ]
         with pytest.raises(DagCycleError):
             build_dag(subtasks)
-
-
-class TestNormalizeFootprintPath:
-    def test_normalizes_relative_posix_paths(self):
-        assert normalize_footprint_path("src/core.py") == "src/core.py"
-        assert normalize_footprint_path("./src/core.py") == "src/core.py"
-        assert normalize_footprint_path("./src//core.py") == "src/core.py"
-        assert normalize_footprint_path("src\\core.py") == "src/core.py"
-        assert normalize_footprint_path("src/foo/../core.py") == "src/core.py"
-
-    def test_raises_for_absolute_and_drive_qualified_paths(self):
-        with pytest.raises(ValueError, match="absolute path"):
-            normalize_footprint_path("/src/core.py")
-
-        with pytest.raises(ValueError, match="drive-qualified"):
-            normalize_footprint_path("C:\\src\\core.py")
-
-        with pytest.raises(ValueError, match="drive-qualified"):
-            normalize_footprint_path("C:/src/core.py")
-
-    def test_raises_for_escaping_repository_root(self):
-        with pytest.raises(ValueError, match="escapes repository root"):
-            normalize_footprint_path("../core.py")
-
-        with pytest.raises(ValueError, match="escapes repository root"):
-            normalize_footprint_path("src/../../core.py")
-
-    def test_raises_for_empty_or_root_path(self):
-        with pytest.raises(ValueError, match="resolves to empty or root"):
-            normalize_footprint_path("")
-
-        with pytest.raises(ValueError, match="resolves to empty or root"):
-            normalize_footprint_path(".")
-
-
-class TestParseFootprintValue:
-    def test_parses_none_and_empty_list_as_empty_tuple(self):
-        assert parse_footprint_value(None) == ()
-        assert parse_footprint_value([]) == ()
-        assert parse_footprint_value(()) == ()
-
-    def test_rejects_non_list_types(self):
-        for invalid in ("src/core.py", {"path": "src/core.py"}, 42, True):
-            with pytest.raises(FootprintValidationError, match="must be a list"):
-                parse_footprint_value(invalid)
-
-    def test_normalizes_and_deduplicates_paths(self):
-        raw = ["./src/core.py", "src\\utils.py", "src/core.py", "./src//utils.py"]
-        assert parse_footprint_value(raw) == ("src/core.py", "src/utils.py")
-
-    def test_skips_none_elements_and_stringifies_numbers(self):
-        raw = ["src/a.py", None, 123, 45.6]
-        assert parse_footprint_value(raw) == ("src/a.py", "123", "45.6")
-
-    def test_rejects_bool_and_complex_elements(self):
-        for invalid in [True, False, {"a": 1}, ["nested"]]:
-            with pytest.raises(
-                FootprintValidationError, match="Invalid footprint element"
-            ):
-                parse_footprint_value(["src/a.py", invalid])
-
-    def test_rejects_invalid_paths_with_validation_error(self):
-        for bad_path in ("/abs/path.py", "C:\\win\\path.py", "../escape.py", "", "."):
-            with pytest.raises(FootprintValidationError):
-                parse_footprint_value(["src/ok.py", bad_path])
-
-
-class TestCanonicalizeFootprint:
-    def test_normalizes_valid_paths(self):
-        paths = ["./src/a.py", "src\\b.py", "src/a.py"]
-        assert canonicalize_footprint(paths) == ("src/a.py", "src/b.py")
-
-    def test_retains_invalid_paths_as_raw_strings(self):
-        paths = ["/abs/path.py", "../escape.py", "./src/a.py", ""]
-        assert canonicalize_footprint(paths) == (
-            "/abs/path.py",
-            "../escape.py",
-            "src/a.py",
-            "",
-        )
 
 
 def test_subtask_post_init_normalizes_footprint():

@@ -28,7 +28,7 @@ from orchestune.claim.workspace import (
     check_repository_identity_match,
     resolve_claim_workspace,
 )
-from orchestune.dag.models import canonicalize_footprint
+from orchestune.footprint_paths import canonicalize_footprint
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock

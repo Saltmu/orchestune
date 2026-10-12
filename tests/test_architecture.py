@@ -903,6 +903,27 @@ def test_ledger_dependencies_stay_within_boundary() -> None:
     assert not violations, f"Ledger boundary violations: {sorted(violations)}"
 
 
+def test_ledger_does_not_import_dag() -> None:
+    """`ledger` is a foundation of the domain layer; `dag` sits on top of it.
+
+    The footprint helpers `ledger.run_state` needs live in `footprint_paths` (L0),
+    so no `ledger` module has a reason to depend on the DAG package (#1320).
+    """
+    ledger_graph = {
+        module: dependencies
+        for module, dependencies in _import_graph().items()
+        if _top_level_package(module) == "ledger"
+    }
+    assert ledger_graph, "No ledger modules found"
+    violations = sorted(
+        f"{module} -> {dependency}"
+        for module, dependencies in ledger_graph.items()
+        for dependency in dependencies
+        if _top_level_package(dependency) == "dag"
+    )
+    assert violations == []
+
+
 def test_ledger_run_state_does_not_import_claim() -> None:
     assert not any(
         dependency == "claim" or dependency.startswith("claim.")
