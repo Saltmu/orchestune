@@ -86,6 +86,18 @@ MCPサーバが起動しない、または言語サーバが応答しない場�
 uv run pytest
 ```
 
+設定読込み・インストーラーのpayload/移行で実symlinkを使う6件は、Windowsで
+作成権限不足（`WinError 1314`）が発生した場合だけ理由付きでskipします。
+OS名だけでskipせず、それ以外のファイルシステムエラーは失敗として扱います。
+安全性・移行処理の検証には、symlink作成権限のあるWindows端末
+（管理者として起動した端末、または承認済みの開発者モード設定。
+[Microsoftの説明](https://blogs.windows.com/windowsdeveloper/2016/12/02/symlinks-windows-10/)を参照）で
+`uv run pytest tests/test_config_document.py tests/test_installer_migration.py tests/test_installer_payload.py -n 0 -rs`
+を実行し、この6件が権限不足を理由にskipされていないことを確認してください。
+権限のない端末では`-rs`で理由を表示できます。共通ヘルパーの権限不足・別エラーの
+判定テストは両環境で実行します。製品の安全性チェックは変更せず、テストが
+Windowsの権限やセキュリティ設定を変更することもありません。
+
 ローカルの開発ループを軽くするため、デフォルトの`pytest`実行にはカバレッジ計装を含めていません。カバレッジを確認する場合は、以下のように明示的にオプションを指定してください（`local-ci.sh`もこのオプション付きで実行します）。
 ```bash
 uv run pytest --cov=orchestune --cov-branch --cov-report=term-missing
