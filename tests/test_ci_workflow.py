@@ -130,3 +130,48 @@ def test_local_ci_sh_inherits_pytest_default():
             f"local-ci.sh must not pass -n directly (bypasses the "
             f"two-worker default in pyproject.toml): {line!r}"
         )
+
+
+def test_ci_workflow_disables_defender_only_on_windows_before_checks():
+    """Only disposable Windows runners disable scanning, before CI starts."""
+    workflow_path = os.path.join(
+        os.path.dirname(__file__), "..", ".github", "workflows", "ci.yml"
+    )
+    with open(workflow_path, encoding="utf-8") as f:
+        workflow = yaml.safe_load(f)
+
+    steps = workflow["jobs"]["ci"]["steps"]
+    defender_steps = [
+        step for step in steps if "Set-MpPreference" in step.get("run", "")
+    ]
+    assert len(defender_steps) == 1
+    defender_step = defender_steps[0]
+    assert defender_step["if"] == "runner.os == 'Windows'"
+    assert defender_step["shell"] == "pwsh"
+    assert "Set-MpPreference -DisableRealtimeMonitoring $true" in defender_step["run"]
+    windows_step = next(s for s in steps if s["name"] == "Run CI checks (Windows)")
+    assert steps.index(defender_step) < steps.index(windows_step)
+
+
+def test_ci_workflow_scopes_four_workers_and_durations_to_windows():
+    """Hosted Windows CI uses four workers without changing other jobs."""
+    workflow_path = os.path.join(
+        os.path.dirname(__file__), "..", ".github", "workflows", "ci.yml"
+    )
+    with open(workflow_path, encoding="utf-8") as f:
+        workflow = yaml.safe_load(f)
+
+    assert "ORCHESTUNE_TEST_WORKERS" not in workflow.get("env", {})
+    assert "PYTEST_ADDOPTS" not in workflow.get("env", {})
+    for job in workflow["jobs"].values():
+        assert "ORCHESTUNE_TEST_WORKERS" not in job.get("env", {})
+        assert "PYTEST_ADDOPTS" not in job.get("env", {})
+        for step in job["steps"]:
+            env = step.get("env", {})
+            if step["name"] == "Run CI checks (Windows)":
+                assert step["if"] == "runner.os == 'Windows'"
+                assert env["ORCHESTUNE_TEST_WORKERS"] == "4"
+                assert env["PYTEST_ADDOPTS"] == "--durations=30"
+            else:
+                assert "ORCHESTUNE_TEST_WORKERS" not in env
+                assert "PYTEST_ADDOPTS" not in env

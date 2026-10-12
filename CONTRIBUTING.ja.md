@@ -134,7 +134,7 @@ with patch("orchestune.dispatch.worktree._branch_exists", autospec=True) as mock
   ```powershell
   .\scripts\local-ci.ps1
   ```
-  Windows環境では既定で 2 ワーカーによる並列テスト（`-n 2`）が実行されます。環境変数 `ORCHESTUNE_TEST_WORKERS`（例: `$env:ORCHESTUNE_TEST_WORKERS = "4"` や `"0"`）または `PYTEST_ADDOPTS` を設定することで並列度を調整できます。
+  Windows環境では既定で 2 ワーカーによる並列テスト（`-n 2`）が実行されます。環境変数 `ORCHESTUNE_TEST_WORKERS`（例: `$env:ORCHESTUNE_TEST_WORKERS = "4"` や `"0"`）または `PYTEST_ADDOPTS` を設定することで並列度を調整できます。GitHub Actions の Windows ジョブは 4 ワーカーで実行し、遅いテスト上位 30 件の所要時間を出力します。ローカルの既定値は 2 ワーカーのままです。
 このスクリプトは以下のチェックを実行します。
 1. **Ruff フォーマット & Lint チェック**: `ruff format` と `ruff check`
 2. **Mypy 型チェック**: 型注釈の検証
