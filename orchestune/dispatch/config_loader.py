@@ -5,30 +5,26 @@ from __future__ import annotations
 import argparse
 import os
 import re
-import shlex
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from orchestune.claim.workspace import (
-    _resolve_primary_root,
-    _resolve_relative_to,
-    resolve_claim_workspace,
-)
-from orchestune.consistency.supervisor import MAX_REPAIR_PASSES, ConsistencyMode
+import orchestune.claim.workspace as claim_workspace
+import orchestune.config_contracts as config_contracts
+from orchestune.claim.workspace import resolve_claim_workspace
+from orchestune.consistency.supervisor import ConsistencyMode
 from orchestune.dag.models import (
-    DAG_TOOL_CONFIG_KEYS,
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
 )
-from orchestune.dag.models import (
-    ConfigError as ConfigError,
-)
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config_schema import (
+    parse_ci_command,
+    validate_toml_config,
+)
 from orchestune.dispatch.config_values import runtime_tuning_overrides
 from orchestune.dispatch.execution_profiles import (
     ExecutionProfileConfig,
@@ -44,7 +40,7 @@ from orchestune.dispatch.targets import (
     build_dispatch_target,
     resolve_default_dispatch_target_name,
 )
-from orchestune.infra.git_cli import get_git_repository_paths, run_git
+from orchestune.infra.git_cli import run_git
 from orchestune.infra.repository_config import (
     find_and_load_config_file as find_and_load_config_file,
 )
@@ -149,305 +145,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-_PROHIBITED_TOML_KEYS: dict[str, str] = {
-    "routine_token": (
-        "setting 'routine_token' is prohibited in configuration files; "
-        f"set the {ROUTINE_TOKEN_ENV_VAR} environment variable instead"
-    ),
-    "routine-token": (
-        "setting 'routine-token' is prohibited in configuration files; "
-        f"set the {ROUTINE_TOKEN_ENV_VAR} environment variable instead"
-    ),
-    "allow_unsafe_agent_execution": (
-        "setting 'allow_unsafe_agent_execution' is prohibited in configuration files; "
-        "use the --allow-unsafe-agent-execution CLI flag"
-    ),
-    "allow-unsafe-agent-execution": (
-        "setting 'allow-unsafe-agent-execution' is prohibited in configuration files; "
-        "use the --allow-unsafe-agent-execution CLI flag"
-    ),
-    "parent_issue": (
-        "parent issue cannot be set in configuration files; "
-        "pass -p / --parent-issue on the CLI or infer from a parent/issue-<N> branch"
-    ),
-    "parent-issue": (
-        "parent issue cannot be set in configuration files; "
-        "pass -p / --parent-issue on the CLI or infer from a parent/issue-<N> branch"
-    ),
-    "parent_issue_number": (
-        "parent issue cannot be set in configuration files; "
-        "pass -p / --parent-issue on the CLI or infer from a parent/issue-<N> branch"
-    ),
-    "parent-issue-number": (
-        "parent issue cannot be set in configuration files; "
-        "pass -p / --parent-issue on the CLI or infer from a parent/issue-<N> branch"
-    ),
-    "model": (
-        "top-level 'model' is deprecated and prohibited in configuration files; "
-        "define models inside [execution_profiles.<name>.<target>]"
-    ),
-    "reasoning_effort": (
-        "top-level 'reasoning_effort' is deprecated and prohibited in configuration files; "
-        "define reasoning_effort inside [execution_profiles.<name>.<target>]"
-    ),
-    "reasoning-effort": (
-        "top-level 'reasoning-effort' is deprecated and prohibited in configuration files; "
-        "define reasoning_effort inside [execution_profiles.<name>.<target>]"
-    ),
-    "effort": (
-        "top-level 'effort' is deprecated and prohibited in configuration files; "
-        "define reasoning_effort inside [execution_profiles.<name>.<target>]"
-    ),
-}
-
-_PATH_CONFIG_KEYS = frozenset(
-    {
-        "run_state_path",
-        "worktree_root",
-        "log_dir",
-        "events_log_path",
-        "not_needed_review_state_path",
-        "report_dir",
-    }
-)
-
-_NON_NEGATIVE_INT_KEYS = frozenset(
-    {
-        "max_concurrent",
-        "max_launches_per_window",
-        "deviation_buffer_lines",
-        "max_recompute_retries",
-        "task_timeout_seconds",
-        "max_task_reclaims",
-        "early_death_window_seconds",
-        "max_early_death_retries",
-        "early_death_backoff_seconds",
-        "max_usage_limit_retries",
-        "usage_limit_reset_grace_seconds",
-        "not_needed_review_timeout_seconds",
-        "max_tokens_per_window",
-        "max_tokens_per_task",
-        # #820: zero retries means "the first timeout is terminal".
-        "max_integration_timeout_retries",
-    }
-)
-
-# #820: seconds settings never accept 0, so the Integrator cannot be made unbounded.
-_POSITIVE_INT_KEYS = frozenset(
-    {
-        "window_seconds",
-        "integration_dependency_timeout_seconds",
-        "integration_ci_timeout_seconds",
-        "integration_cycle_timeout_seconds",
-        "integration_cleanup_timeout_seconds",
-        "integration_command_timeout_seconds",
-        "integration_timeout_backoff_seconds",
-        # #1270: zero would retry a session-limit exit immediately.
-        "usage_limit_backoff_seconds",
-    }
-)
-
-_BOOLEAN_CONFIG_KEYS = frozenset({"apply", "zombie_gc"})
-
-_STRING_KEYS = frozenset(
-    {"local_cmd", "routine_id", "codex_cloud_env", "default_execution_profile"}
-)
-
-_TARGET_CHOICES = frozenset(
-    {
-        "local",
-        "cloud-routine",
-        "codex-cloud",
-        "claude-cli",
-        "agy-cli",
-        "codex-cli",
-        "auto",
-    }
-)
-
-_REVIEWER_BOT_CHOICES = frozenset({"auto", "claude", "codex"})
-
-_CONSISTENCY_MODE_CHOICES = frozenset({"off", "shadow", "repair"})
-
-_CHILD_REVIEW_GATE_CHOICES = VALID_CHILD_REVIEW_GATE_MODES
-
-_EXECUTION_PROFILE_TABLE_KEYS = frozenset(
-    {"execution_profiles", "execution-profiles", "model_tiers", "model-tiers"}
-)
-
-
-def _normalize_key(key: str) -> str:
-    return key.replace("-", "_")
-
-
-def _validate_scalar_entry(normalized_key: str, raw_key: str, value: Any) -> Any:
-    if normalized_key in _BOOLEAN_CONFIG_KEYS:
-        if not isinstance(value, bool):
-            raise ConfigError(f"{raw_key!r} must be a boolean")
-        return value
-    if normalized_key in _PATH_CONFIG_KEYS:
-        if not isinstance(value, str | Path):
-            raise ConfigError(f"{raw_key!r} must be a string path")
-        return Path(value)
-    if not isinstance(value, str):
-        raise ConfigError(f"{raw_key!r} must be a string")
-    return value
-
-
-def _validate_numeric_entry(normalized_key: str, raw_key: str, value: Any) -> Any:
-    if normalized_key == "consistency_max_repair_passes":
-        if not isinstance(value, int) or isinstance(value, bool):
-            raise ConfigError(f"{raw_key!r} must be an integer")
-        if not 1 <= value <= MAX_REPAIR_PASSES:
-            raise ConfigError(f"{raw_key!r} must be between 1 and {MAX_REPAIR_PASSES}")
-        return value
-    if normalized_key in _NON_NEGATIVE_INT_KEYS:
-        if value is None:
-            return None
-        if not isinstance(value, int) or isinstance(value, bool):
-            raise ConfigError(f"{raw_key!r} must be an integer")
-        if value < 0:
-            raise ConfigError(f"{raw_key!r} must be greater than or equal to 0")
-        return value
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ConfigError(f"{raw_key!r} must be an integer")
-    if value < 1:
-        raise ConfigError(f"{raw_key!r} must be greater than or equal to 1")
-    return value
-
-
-def _validate_choice_entry(normalized_key: str, raw_key: str, value: Any) -> Any:
-    choice_map = {
-        "dispatch_target": _TARGET_CHOICES,
-        "reviewer_bot": _REVIEWER_BOT_CHOICES,
-        "consistency_mode": _CONSISTENCY_MODE_CHOICES,
-        "child_review_gate": _CHILD_REVIEW_GATE_CHOICES,
-    }
-    allowed = choice_map[normalized_key]
-    if not isinstance(value, str) or value not in allowed:
-        choices = ", ".join(repr(c) for c in sorted(allowed))
-        raise ConfigError(f"{raw_key!r} must be one of: {choices}")
-    return value
-
-
-def parse_ci_command(value: Any) -> list[str]:
-    """Parse and validate CI command as a string or list of non-empty strings."""
-    if isinstance(value, str):
-        if not value.strip():
-            raise ConfigError("ci-command must not be empty")
-        try:
-            parts = shlex.split(value)
-        except ValueError as exc:
-            raise ConfigError(f"invalid ci-command: {exc}") from exc
-        if not parts:
-            raise ConfigError("ci-command must not be empty")
-        return parts
-    if isinstance(value, list):
-        if not value:
-            raise ConfigError("ci-command must not be empty")
-        for elem in value:
-            if not isinstance(elem, str) or not elem.strip():
-                raise ConfigError("ci-command list elements must be non-empty strings")
-        return list(value)
-    raise ConfigError("ci-command must be a string or list of strings")
-
-
-def _validate_compound_entry(normalized_key: str, raw_key: str, value: Any) -> Any:
-    if normalized_key == "consistency_repair_code":
-        if not isinstance(value, list) or not all(
-            isinstance(item, str) and item for item in value
-        ):
-            raise ConfigError(f"{raw_key!r} must be a list of non-empty strings")
-        return value
-    if normalized_key == "ci_command":
-        parse_ci_command(value)
-        return value
-    if raw_key in DAG_TOOL_CONFIG_KEYS:
-        return value
-    if (
-        raw_key in _EXECUTION_PROFILE_TABLE_KEYS
-        or normalized_key in _EXECUTION_PROFILE_TABLE_KEYS
-    ):
-        if not isinstance(value, dict):
-            raise ConfigError(f"{raw_key!r} must be a table")
-        return value
-    raise ConfigError(f"unknown key {raw_key!r}")
-
-
-def _validate_timezone_entry(raw_key: str, value: Any) -> str:
-    """#1270: an IANA name only; an invalid name must not silently become UTC."""
-    if not isinstance(value, str) or not value:
-        raise ConfigError(f"{raw_key!r} must be a non-empty IANA timezone name")
-    try:
-        ZoneInfo(value)
-    except (ZoneInfoNotFoundError, ValueError, OSError) as error:
-        raise ConfigError(
-            f"{raw_key!r} is not a known IANA timezone: {value!r}"
-        ) from error
-    return value
-
-
-def _validate_single_entry(normalized_key: str, raw_key: str, value: Any) -> Any:
-    if normalized_key == "usage_limit_timezone":
-        return _validate_timezone_entry(raw_key, value)
-    if (
-        normalized_key in _BOOLEAN_CONFIG_KEYS
-        or normalized_key in _PATH_CONFIG_KEYS
-        or normalized_key in _STRING_KEYS
-    ):
-        return _validate_scalar_entry(normalized_key, raw_key, value)
-    if (
-        normalized_key in _NON_NEGATIVE_INT_KEYS
-        or normalized_key in _POSITIVE_INT_KEYS
-        or normalized_key == "consistency_max_repair_passes"
-    ):
-        return _validate_numeric_entry(normalized_key, raw_key, value)
-    if normalized_key in {
-        "dispatch_target",
-        "reviewer_bot",
-        "consistency_mode",
-        "child_review_gate",
-    }:
-        return _validate_choice_entry(normalized_key, raw_key, value)
-    return _validate_compound_entry(normalized_key, raw_key, value)
-
-
-def validate_toml_config(config_data: dict[str, Any]) -> dict[str, Any]:
-    """Validate TOML dictionary against the Dispatcher configuration schema."""
-    validated: dict[str, Any] = {}
-    for raw_key, value in config_data.items():
-        if raw_key in _PROHIBITED_TOML_KEYS:
-            raise ConfigError(_PROHIBITED_TOML_KEYS[raw_key])
-        normalized = _normalize_key(raw_key)
-        if normalized in _PROHIBITED_TOML_KEYS:
-            raise ConfigError(_PROHIBITED_TOML_KEYS[normalized])
-
-        val = _validate_single_entry(normalized, raw_key, value)
-        validated[normalized] = val
-        if raw_key != normalized:
-            validated[raw_key] = val
-
-    if (
-        "dag_similarity_threshold" in config_data
-        or "dag-similarity-threshold" in config_data
-    ):
-        extract_dag_similarity_threshold(config_data)
-    if "dag_ignore_patterns" in config_data or "dag-ignore-patterns" in config_data:
-        patterns = extract_dag_ignore_patterns(config_data)
-        compile_extra_ignore_patterns(patterns)
-    if (
-        "execution_profiles" in config_data
-        or "execution-profiles" in config_data
-        or "model_tiers" in config_data
-        or "model-tiers" in config_data
-        or "default_execution_profile" in config_data
-        or "default-execution-profile" in config_data
-    ):
-        extract_execution_profile_config(config_data)
-
-    return validated
-
-
 def _get_current_git_branch(cwd: Path | None = None) -> str:
     try:
         result = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd, check=False)
@@ -462,7 +159,9 @@ def resolve_parent_issue(cli_parent_issue: int | None, cwd: Path | None = None) 
     """Resolve parent issue number: CLI flag -> branch inference -> ConfigError."""
     if cli_parent_issue is not None:
         if cli_parent_issue <= 0:
-            raise ConfigError("parent issue must be a positive integer")
+            raise config_contracts.ConfigError(
+                "parent issue must be a positive integer"
+            )
         return cli_parent_issue
 
     branch = _get_current_git_branch(cwd)
@@ -470,7 +169,7 @@ def resolve_parent_issue(cli_parent_issue: int | None, cwd: Path | None = None) 
     if match:
         return int(match.group(1))
 
-    raise ConfigError(
+    raise config_contracts.ConfigError(
         "the following argument is required: -p / --parent-issue "
         "(or infer from parent/issue-<int> branch)"
     )
@@ -520,7 +219,9 @@ def _resolve_paths(
             target_cwd,
         )
     except (OSError, RuntimeError, subprocess.CalledProcessError) as e:
-        raise ConfigError(f"unable to resolve repository workspace: {e}") from e
+        raise config_contracts.ConfigError(
+            f"unable to resolve repository workspace: {e}"
+        ) from e
 
     paths: dict[str, Path] = {
         "run_state_path": run_state_path,
@@ -534,7 +235,7 @@ def _resolve_paths(
     }
     for key, default_val in defaults.items():
         val = toml_data.get(key)
-        paths[key] = _resolve_relative_to(primary_root, val, default_val)
+        paths[key] = claim_workspace.resolve_relative_to(primary_root, val, default_val)
 
     return paths
 
@@ -548,17 +249,6 @@ def _resolve_cloud_settings(
         "codex_cloud_env"
     )
     return routine_id, routine_token, codex_cloud_env
-
-
-def _resolve_checkout_roots(target_cwd: Path) -> tuple[Path, Path]:
-    try:
-        toplevel, common_dir = get_git_repository_paths(target_cwd)
-        primary_root = _resolve_primary_root(toplevel, common_dir)
-        checkout_root = toplevel
-    except (subprocess.CalledProcessError, OSError, RuntimeError):
-        primary_root = target_cwd.resolve()
-        checkout_root = target_cwd.resolve()
-    return primary_root, checkout_root
 
 
 def _resolve_and_build_target(
@@ -604,9 +294,9 @@ def _resolve_child_review_gate(args: Any, toml_data: dict[str, Any]) -> str:
         raw_env = os.environ["ORCHESTUNE_CHILD_REVIEW_GATE"].strip()
         # Per design specification (#1031 section 160), invalid values across all sources
         # (including env var) are rejected as ConfigError even if shadowed by higher precedence.
-        if raw_env not in _CHILD_REVIEW_GATE_CHOICES:
-            choices = ", ".join(repr(c) for c in sorted(_CHILD_REVIEW_GATE_CHOICES))
-            raise ConfigError(
+        if raw_env not in VALID_CHILD_REVIEW_GATE_MODES:
+            choices = ", ".join(repr(c) for c in sorted(VALID_CHILD_REVIEW_GATE_MODES))
+            raise config_contracts.ConfigError(
                 f"environment variable 'ORCHESTUNE_CHILD_REVIEW_GATE' must be one of: {choices}"
             )
         env_gate = raw_env
@@ -678,7 +368,7 @@ def load_and_resolve_config(
     parser = build_arg_parser()
     args = parser.parse_args(cli_args)
     target_cwd = cwd or Path.cwd()
-    primary_root, checkout_root = _resolve_checkout_roots(target_cwd)
+    primary_root, checkout_root = claim_workspace.resolve_checkout_roots(target_cwd)
 
     if load_config_fn is None:
         load_config_fn = find_and_load_config_file
@@ -719,7 +409,9 @@ def _resolve_report_override(config: DispatcherConfig, target_cwd: Path) -> None
     if "ORCHESTUNE_DISPATCH_REPORT_PATH" in os.environ:
         value = os.environ["ORCHESTUNE_DISPATCH_REPORT_PATH"]
         if not value.strip():
-            raise ConfigError("ORCHESTUNE_DISPATCH_REPORT_PATH must not be empty")
+            raise config_contracts.ConfigError(
+                "ORCHESTUNE_DISPATCH_REPORT_PATH must not be empty"
+            )
         candidate = Path(value)
         config.report_path = (
             candidate if candidate.is_absolute() else target_cwd / candidate
@@ -727,4 +419,4 @@ def _resolve_report_override(config: DispatcherConfig, target_cwd: Path) -> None
         try:
             _check_target(config.report_path, config)
         except ValueError as exc:
-            raise ConfigError(str(exc)) from exc
+            raise config_contracts.ConfigError(str(exc)) from exc

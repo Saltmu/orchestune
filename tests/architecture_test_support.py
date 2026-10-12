@@ -419,3 +419,51 @@ def _subprocess_command_modules() -> dict[str, set[str]]:
         for command in found:
             command_modules[command].add(module.removeprefix(f"{PACKAGE_NAME}."))
     return dict(command_modules)
+
+
+def _is_private_name(name: str) -> bool:
+    return name.startswith("_") and not (name.startswith("__") and name.endswith("__"))
+
+
+def _cross_package_private_imports_in_tree(
+    current_module: str, tree: ast.AST, *, is_package: bool
+) -> set[tuple[str, str, str]]:
+    """Return `(importer, imported module, name)` for private names imported across packages.
+
+    Modules are given without the `orchestune.` prefix. The imported name is the
+    name in the source module, not the alias. Imports inside the same top-level
+    package and from outside `orchestune` are not reported; dunder names are
+    public by convention.
+    """
+    importer = current_module.removeprefix(f"{PACKAGE_NAME}.")
+    found: set[tuple[str, str, str]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        resolved = _relative_import_name(current_module, node, is_package=is_package)
+        if resolved is None:
+            continue
+        if resolved != PACKAGE_NAME and not resolved.startswith(f"{PACKAGE_NAME}."):
+            continue
+        imported = resolved.removeprefix(f"{PACKAGE_NAME}.")
+        if imported == PACKAGE_NAME:
+            continue
+        if _top_level_package(imported) == _top_level_package(importer):
+            continue
+        found.update(
+            (importer, imported, alias.name)
+            for alias in node.names
+            if _is_private_name(alias.name)
+        )
+    return found
+
+
+def _cross_package_private_imports() -> set[tuple[str, str, str]]:
+    found: set[tuple[str, str, str]] = set()
+    for module, path in _package_modules().items():
+        found |= _cross_package_private_imports_in_tree(
+            module,
+            ast.parse(path.read_text(encoding="utf-8")),
+            is_package=path.name == "__init__.py",
+        )
+    return found

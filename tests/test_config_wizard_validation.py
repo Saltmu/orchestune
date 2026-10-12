@@ -2,8 +2,8 @@
 
 import pytest
 
-from orchestune.dag.models import ConfigError
-from orchestune.dispatch.config_loader import (
+from orchestune.config_contracts import ConfigError
+from orchestune.dispatch.config_schema import (
     parse_ci_command,
     validate_toml_config,
 )

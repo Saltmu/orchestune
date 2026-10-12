@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import os
 
+import orchestune.claim.workspace as claim_workspace
 from orchestune.claim.workspace import ClaimWorkspace
-from orchestune.dag.models import ConfigError
+from orchestune.config_contracts import ConfigError
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_loader import (
-    _resolve_checkout_roots,
-    _resolve_cloud_settings,
-    validate_toml_config,
-)
+from orchestune.dispatch.config_loader import _resolve_cloud_settings
+from orchestune.dispatch.config_schema import validate_toml_config
 from orchestune.dispatch.external_execution import (
     RuntimeState,
     _attempt_matches_provider,
@@ -29,7 +27,7 @@ from orchestune.ledger.run_state import ActiveWorktree
 
 def provider_config(workspace: ClaimWorkspace) -> DispatcherConfig | None:
     # Resolve the primary checkout even when invoked from a linked worktree.
-    primary, _ = _resolve_checkout_roots(workspace.repository_root)
+    primary, _ = claim_workspace.resolve_checkout_roots(workspace.repository_root)
     try:
         raw = validate_toml_config(find_and_load_config_file(primary))
     except (ConfigError, ValueError, TypeError, OSError) as error:

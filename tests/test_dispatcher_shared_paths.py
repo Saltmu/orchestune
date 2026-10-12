@@ -51,7 +51,7 @@ def test_report_env_resolves_from_explicit_cwd(tmp_path, monkeypatch, value):
     monkeypatch.setenv("ORCHESTUNE_DISPATCH_REPORT_PATH", str(report_path))
     with (
         patch(
-            "orchestune.dispatch.config_loader._resolve_checkout_roots",
+            "orchestune.claim.workspace.resolve_checkout_roots",
             return_value=(tmp_path / "primary", tmp_path),
         ),
         patch(
@@ -87,12 +87,13 @@ def test_report_env_resolves_from_explicit_cwd(tmp_path, monkeypatch, value):
     "value", ["", " ", ".", "state.json", "state.lock", "events.jsonl"]
 )
 def test_invalid_report_env_is_config_error(tmp_path, monkeypatch, value):
-    from orchestune.dispatch.config_loader import ConfigError, load_and_resolve_config
+    from orchestune.config_contracts import ConfigError
+    from orchestune.dispatch.config_loader import load_and_resolve_config
 
     monkeypatch.setenv("ORCHESTUNE_DISPATCH_REPORT_PATH", value)
     with (
         patch(
-            "orchestune.dispatch.config_loader._resolve_checkout_roots",
+            "orchestune.claim.workspace.resolve_checkout_roots",
             return_value=(tmp_path, tmp_path),
         ),
         patch(

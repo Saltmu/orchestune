@@ -5,7 +5,7 @@ standalone GC) forward only the settings the user actually specified; a missing 
 left to the config's field default instead of being re-stated as a literal.
 
 The key sets are declarative allowlists: they select values, they do not define the
-public TOML surface (``config_loader.validate_toml_config`` keeps that contract) and
+public TOML surface (``config_schema.validate_toml_config`` keeps that contract) and
 they never expose an internal field by schema generation. Callers pass already
 normalized (underscore) keys; this module does no I/O, parsing or validation.
 """

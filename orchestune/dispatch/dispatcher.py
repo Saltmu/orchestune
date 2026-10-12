@@ -9,22 +9,15 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from orchestune.claim.workspace import resolve_claim_workspace
+from orchestune.config_contracts import ConfigError
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_loader import (
-    ConfigError as ConfigError,
-)
 from orchestune.dispatch.config_loader import (
     build_arg_parser as build_arg_parser,
 )
 from orchestune.dispatch.config_loader import (
-    find_and_load_config_file as find_and_load_config_file,
-)
-from orchestune.dispatch.config_loader import (
     load_and_resolve_config as load_and_resolve_config,
 )
-from orchestune.dispatch.config_loader import (
-    validate_toml_config as validate_toml_config,
-)
+from orchestune.dispatch.config_schema import validate_toml_config
 from orchestune.dispatch.cycle import run_dispatch_cycle
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.postcycle import (
@@ -48,6 +41,7 @@ from orchestune.dispatch.targets import (
     build_dispatch_target as build_dispatch_target,  # compatibility patch surface
 )
 from orchestune.forge import ForgeAuthError
+from orchestune.infra.repository_config import find_and_load_config_file
 
 _build_arg_parser = build_arg_parser
 load_config_file = find_and_load_config_file

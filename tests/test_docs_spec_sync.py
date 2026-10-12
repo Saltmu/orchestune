@@ -604,20 +604,20 @@ class TestOrchestuneTomlExample:
 
     def test_every_dispatcher_setting_is_present_or_commented(self):
         raw_toml = (REPO_ROOT / "orchestune.toml.example").read_text(encoding="utf-8")
-        from orchestune.dispatch.config_loader import (
-            _BOOLEAN_CONFIG_KEYS,
-            _NON_NEGATIVE_INT_KEYS,
-            _PATH_CONFIG_KEYS,
-            _POSITIVE_INT_KEYS,
-            _STRING_KEYS,
+        from orchestune.dispatch.config_schema import (
+            BOOLEAN_CONFIG_KEYS,
+            NON_NEGATIVE_INT_KEYS,
+            PATH_CONFIG_KEYS,
+            POSITIVE_INT_KEYS,
+            STRING_KEYS,
         )
 
         all_toml_keys = (
-            _BOOLEAN_CONFIG_KEYS
-            | _NON_NEGATIVE_INT_KEYS
-            | _POSITIVE_INT_KEYS
-            | _PATH_CONFIG_KEYS
-            | _STRING_KEYS
+            BOOLEAN_CONFIG_KEYS
+            | NON_NEGATIVE_INT_KEYS
+            | POSITIVE_INT_KEYS
+            | PATH_CONFIG_KEYS
+            | STRING_KEYS
             | {
                 "dispatch_target",
                 "reviewer_bot",

@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 import tomlkit
 
-from orchestune.dag.models import ConfigError
+from orchestune.config_contracts import ConfigError
 
 PROHIBITED_KEYS = frozenset(
     {

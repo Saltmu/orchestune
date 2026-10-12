@@ -16,10 +16,10 @@ from orchestune.dag.models import (
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
-    load_orchestune_config,
 )
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import GitHubForge, IssueForge, RelationshipUnavailableError
+from orchestune.infra.repository_config import find_and_load_config_file
 from orchestune.models import IssueRecord
 from orchestune.plan_writer import (
     validate_subtask_issue_number_targets,
@@ -67,7 +67,7 @@ class ProvisionResult:
 
 
 def _build_provisioning_dag(subtasks: list[SubTask], repo_root: Path) -> DagResult:
-    config = load_orchestune_config(repo_root)
+    config = find_and_load_config_file(repo_root)
     threshold = extract_dag_similarity_threshold(config)
     return build_dag(
         subtasks,

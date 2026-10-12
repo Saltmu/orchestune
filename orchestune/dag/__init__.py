@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from orchestune.dag.models import (
     DAG_TOOL_CONFIG_KEYS,
-    ConfigError,
     ConflictEdge,
     ConflictGraph,
     DagCycleError,
@@ -21,7 +20,6 @@ __all__ = [
     "ConflictEdge",
     "ConflictGraph",
     "DAG_TOOL_CONFIG_KEYS",
-    "ConfigError",
     "DagCycleError",
     "DagEdge",
     "DagResult",
