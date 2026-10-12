@@ -18,6 +18,7 @@ MODULES = {
     "alpha_extra",
     "beta",
     "beta.contracts",
+    "beta.core",
     "solo",
 }
 PACKAGES = {"alpha", "beta"}
@@ -54,6 +55,7 @@ class TestExpansion:
             "alpha.core",
             "alpha.sub.deep",
             "beta",
+            "beta.core",
             "solo",
         ]
         assert parsed[0] == ["beta.contracts"]
@@ -116,7 +118,25 @@ class TestRejectedTables:
 
     def test_wildcard_with_nothing_left_to_expand(self) -> None:
         self._reject(
-            {2: "`beta.*`", 0: "`beta`, `beta.contracts`"}, "unnecessary|expands to"
+            {2: "`beta.*`", 0: "`beta`, `beta.contracts`, `beta.core`"},
+            "expands to nothing",
+        )
+
+    def test_wildcard_in_a_minority_layer_is_rejected(self) -> None:
+        # alpha: three modules in L2 are listed one by one, one module sits in L4.
+        self._reject(
+            {
+                4: "`alpha.*`",
+                2: "`alpha`, `alpha.core`, `alpha.sub.deep`",
+            },
+            "most of `alpha` is in L2",
+        )
+
+    def test_wildcard_without_a_unique_majority_is_rejected(self) -> None:
+        # beta: one module per layer, so there is no default layer to elide.
+        self._reject(
+            {2: "`beta.*`", 0: "`beta.contracts`", 1: "`beta.core`"},
+            "no unique majority",
         )
 
     def test_only_l0_to_l4_rows_exist_exactly_once(self) -> None:

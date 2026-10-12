@@ -13,6 +13,7 @@ The layer of an expanded module comes from the row its span sits in, never from
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Collection, Iterable
 
 LAYERS = (4, 3, 2, 1, 0)
@@ -147,7 +148,36 @@ def expand_layer_tokens(
                 f"wildcard `{package}.*` expands to nothing: every module is listed"
             )
         expanded[layer].extend(members)
+    _require_majority_wildcards(expanded, wildcard_layer)
     return {layer: sorted(row) for layer, row in expanded.items()}
+
+
+def _require_majority_wildcards(
+    expanded: dict[int, list[str]], wildcard_layer: dict[str, int]
+) -> None:
+    """`pkg.*` belongs to the layer holding most of the package's modules.
+
+    Without a unique majority the package has no default layer, so every module
+    must be listed individually instead.
+    """
+    for package, layer in wildcard_layer.items():
+        counts = Counter(
+            module_layer
+            for module_layer, row in expanded.items()
+            for module in row
+            if _top_level(module) == package
+        )
+        ranked = counts.most_common()
+        if len(ranked) > 1 and ranked[0][1] == ranked[1][1]:
+            raise ValueError(
+                f"`{package}.*` has no unique majority layer: list every module of "
+                f"`{package}` individually"
+            )
+        if ranked[0][0] != layer:
+            raise ValueError(
+                f"`{package}.*` sits in L{layer} but most of `{package}` is in "
+                f"L{ranked[0][0]}"
+            )
 
 
 def parse_layer_table(
