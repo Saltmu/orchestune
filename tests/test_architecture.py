@@ -309,6 +309,29 @@ def test_expected_layers_cover_every_module_exactly_once() -> None:
     assert set(listed) == package_modules, "EXPECTED_LAYERS is out of date"
 
 
+def test_infra_package_holds_only_l0_and_l1_modules() -> None:
+    """`infra` is the domain-free foundation: only L0 helpers and L1 adapters.
+
+    Package name and layer used to disagree (L2 modules lived in `infra`), so
+    the table could not be read by package. A module that has a purpose of its
+    own belongs to the feature that owns it, not to `infra` (#1319).
+    """
+    infra_modules = sorted(
+        module.removeprefix(f"{PACKAGE_NAME}.")
+        for module in _package_modules()
+        if module == f"{PACKAGE_NAME}.infra"
+        or module.startswith(f"{PACKAGE_NAME}.infra.")
+    )
+    assert infra_modules, "no infra modules found: the package scan is broken"
+    layer_of = _module_layer()
+    unlayered = [module for module in infra_modules if module not in layer_of]
+    assert unlayered == [], f"infra modules missing from EXPECTED_LAYERS: {unlayered}"
+    above_l1 = {
+        module: layer_of[module] for module in infra_modules if layer_of[module] > 1
+    }
+    assert above_l1 == {}, f"infra must hold only L0/L1 modules, found: {above_l1}"
+
+
 def test_documented_layers_match_the_expected_layers() -> None:
     """Both documents must reproduce `EXPECTED_LAYERS` — the one doc-sync check.
 

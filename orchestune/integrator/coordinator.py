@@ -32,13 +32,13 @@ from typing import Protocol
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.forge import Forge, GitHubForge
-from orchestune.infra.not_needed_review_state import (
+from orchestune.infra.process_utils import file_lock
+from orchestune.integrator.not_needed_review_state import (
     NotNeededReviewState,
     PendingNotNeededReview,
     load_not_needed_review_state,
     save_not_needed_review_state,
 )
-from orchestune.infra.process_utils import file_lock
 from orchestune.labels import StatusLabel
 from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.targets.cloud_routine import (

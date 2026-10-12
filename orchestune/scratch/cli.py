@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from orchestune.infra.session_dirs import SessionDirError, create_session_dir
+from orchestune.session_dirs import SessionDirError, create_session_dir
 
 
 def build_parser() -> argparse.ArgumentParser:
