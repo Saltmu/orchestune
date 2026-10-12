@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-import pytest
-
 from orchestune.dependencies.assessment import (
     AssessedDependency,
     DependencyAssessment,
     DependencyState,
 )
+from orchestune.dependencies.policy import dependencies_completed
 from orchestune.dependencies.resolution import (
     REASON_MISSING,
     UnresolvedDependency,
 )
+from orchestune.dispatch import status_dependency_policy
 from orchestune.dispatch.status_dependency_policy import (
     completed_dependency_ids,
-    dependencies_completed,
     desired_dependency_ids,
 )
 
@@ -33,38 +32,9 @@ def _assessment(
     )
 
 
-@pytest.mark.parametrize(
-    ("assessment", "expected"),
-    (
-        (None, False),
-        (_assessment(), True),
-        (_assessment(DependencyState.COMPLETED), True),
-        (
-            _assessment(DependencyState.COMPLETED, DependencyState.COMPLETED),
-            True,
-        ),
-        (_assessment(DependencyState.CI_PASSED_UNMERGED), False),
-        (_assessment(DependencyState.CHANGES_REQUESTED), False),
-        (_assessment(DependencyState.WAITING), False),
-        (
-            _assessment(
-                DependencyState.COMPLETED,
-                unresolved=(
-                    UnresolvedDependency(raw="missing", reason=REASON_MISSING),
-                ),
-            ),
-            False,
-        ),
-        (
-            _assessment(DependencyState.COMPLETED, DependencyState.WAITING),
-            False,
-        ),
-    ),
-)
-def test_dependencies_completed_truth_table(
-    assessment: DependencyAssessment | None, expected: bool
-) -> None:
-    assert dependencies_completed(assessment) is expected
+def test_legacy_dispatch_import_is_the_canonical_predicate() -> None:
+    assert status_dependency_policy.dependencies_completed is dependencies_completed
+    assert "dependencies_completed" in status_dependency_policy.__all__
 
 
 def test_completed_ids_come_only_from_fully_completed_assessments() -> None:

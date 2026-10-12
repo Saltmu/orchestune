@@ -14,6 +14,7 @@ from orchestune.dependencies.policy import (
     StackDecision,
     StackTarget,
     decide_stack_target,
+    dependencies_completed,
     has_pending_dependencies,
 )
 from orchestune.dependencies.resolution import (
@@ -50,6 +51,7 @@ __all__ = [
     "assess_dependencies",
     "build_legacy_dag_inputs",
     "decide_stack_target",
+    "dependencies_completed",
     "describe_unresolved_dependency",
     "has_pending_dependencies",
     "legacy_merged_depends_on",
