@@ -774,7 +774,8 @@ def stub_claim_workspace_git_repo(
     `get_git_repository_paths`の`RuntimeError`を招く。さらに実プロセスのcwdから
     解決される`primary_root`は、これらのテストが`config.worktree_root`/
     `config.run_state_path`として使う`tmp_path`とも一致しない。一部のテストは
-    `_branch_exists`のみを個別にモックし、subprocessを汎用的には差し替えて
+    `worktree_ops.preparation.local_or_remote_branch_exists`のみを個別にモックし、
+    subprocessを汎用的には差し替えて
     いないため、claimの`git fetch origin`はreal git（リモートoriginを持たない
     `tmp_path`）に対して実行され失敗する。
     `get_git_repository_paths`をこのモジュール境界でスタブして`tmp_path`を

@@ -150,7 +150,7 @@ class TestPrepareTaskWorktree:
         worktree_root = tmp_path / "worktrees"
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=True,
             ),

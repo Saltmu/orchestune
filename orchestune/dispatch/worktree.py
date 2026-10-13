@@ -29,31 +29,22 @@ from orchestune.worktree_ops.preparation import (
     WorktreePreparation,
 )
 from orchestune.worktree_ops.preparation import (
-    _branch_exists as _common_branch_exists,
+    create_worktree as _common_create_worktree,
 )
 from orchestune.worktree_ops.preparation import (
-    _create_worktree as _common_create_worktree,
-)
-from orchestune.worktree_ops.preparation import (
-    _git_common_dir as _common_git_common_dir,
-)
-from orchestune.worktree_ops.preparation import (
-    _git_toplevel as _common_git_toplevel,
-)
-from orchestune.worktree_ops.preparation import (
-    _resolve_worktree_head_sha as _common_resolve_worktree_head_sha,
-)
-from orchestune.worktree_ops.preparation import (
-    _resolve_worktree_path as _common_resolve_worktree_path,
-)
-from orchestune.worktree_ops.preparation import (
-    _verify_worktree_identity as _common_verify_worktree_identity,
-)
-from orchestune.worktree_ops.preparation import (
-    _worktree_checked_out_branch as _common_worktree_checked_out_branch,
+    local_or_remote_branch_exists as _common_branch_exists,
 )
 from orchestune.worktree_ops.preparation import (
     prepare_task_worktree as _prepare_shared_task_worktree,
+)
+from orchestune.worktree_ops.preparation import (
+    resolve_worktree_head_sha as _common_resolve_worktree_head_sha,
+)
+from orchestune.worktree_ops.preparation import (
+    resolve_worktree_path as _common_resolve_worktree_path,
+)
+from orchestune.worktree_ops.preparation import (
+    verify_worktree_identity as _common_verify_worktree_identity,
 )
 
 if TYPE_CHECKING:
@@ -364,20 +355,6 @@ def _prepare_worktree_forced(
         created=True,
         branch_created=branch_created,
     )
-
-
-def _worktree_checked_out_branch(worktree_path: Path) -> str | None:
-    """worktree_pathが実際にチェックアウトしているブランチ名を返す。
-    gitワークツリーとして無効な場合はNoneを返す。"""
-    return _common_worktree_checked_out_branch(worktree_path, git_runner=run_git)
-
-
-def _git_common_dir(path: Path) -> str | None:
-    return _common_git_common_dir(path, git_runner=run_git)
-
-
-def _git_toplevel(path: Path) -> str | None:
-    return _common_git_toplevel(path, git_runner=run_git)
 
 
 def _verify_worktree_identity(

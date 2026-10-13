@@ -870,25 +870,7 @@ def test_package_dependency_cycles_match_allowlist() -> None:
         assert reason.strip(), f"Empty reason for allowed cycle edge: {edge}"
 
 
-KNOWN_CROSS_PACKAGE_PRIVATE_IMPORTS: dict[tuple[str, str, str], str] = {
-    **{
-        (
-            "dispatch.worktree",
-            "worktree_ops.preparation",
-            name,
-        ): "dispatch.worktree facade over worktree_ops.preparation; resolve with the worktree split"
-        for name in (
-            "_branch_exists",
-            "_create_worktree",
-            "_git_common_dir",
-            "_git_toplevel",
-            "_resolve_worktree_head_sha",
-            "_resolve_worktree_path",
-            "_verify_worktree_identity",
-            "_worktree_checked_out_branch",
-        )
-    },
-}
+KNOWN_CROSS_PACKAGE_PRIVATE_IMPORTS: dict[tuple[str, str, str], str] = {}
 
 
 def test_cross_package_private_imports_match_allowlist() -> None:

@@ -56,7 +56,7 @@ def launch_env(tmp_path):
         # Recovery observes runtime status as well as completion. Keep the fake
         # provider unknown without launching the real Codex Cloud CLI.
         patch.object(target, "_fetch_task_status", return_value=None),
-        patch("orchestune.worktree_ops.preparation._create_worktree", autospec=True),
+        patch("orchestune.worktree_ops.preparation.create_worktree", autospec=True),
         patch(
             "orchestune.dispatch.worktree._cleanup_existing_worktree",
             autospec=True,
@@ -69,7 +69,7 @@ def launch_env(tmp_path):
         # ため実ディレクトリが存在せず、これも併せてモックしないと
         # `FileNotFoundError`になる。
         patch(
-            "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
+            "orchestune.worktree_ops.preparation.resolve_worktree_head_sha",
             autospec=True,
             return_value="0" * 40,
         ),
@@ -403,7 +403,7 @@ def test_hard_stop_before_provider_resumes_same_prepared_attempt(launch_env):
 
     forge, config, plan, launch = launch_env
     with patch(
-        "orchestune.worktree_ops.preparation._create_worktree",
+        "orchestune.worktree_ops.preparation.create_worktree",
         side_effect=SystemExit("stop"),
     ):
         with pytest.raises(SystemExit):

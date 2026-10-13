@@ -736,7 +736,7 @@ class TestRunDispatchCycleCompletion:
         fake_forge.remove_label.reset_mock(side_effect=True)
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),

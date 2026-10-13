@@ -233,7 +233,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -275,7 +275,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -331,7 +331,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -387,7 +387,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -450,7 +450,7 @@ class TestApplyTaskLaunchesPersistsLaunchHistoryToParentIssue:
         )
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -545,7 +545,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         )
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -598,7 +598,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -660,7 +660,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),

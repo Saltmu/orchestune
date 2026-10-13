@@ -424,7 +424,7 @@ class TestLaunchOrderingCrashSafety:
         fake_forge.get_issue.return_value = queued_issue
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -614,7 +614,7 @@ class TestPreventDuplicateSessions:
         return_value=[],
     )
     @patch(
-        "orchestune.worktree_ops.preparation._branch_exists",
+        "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
         autospec=True,
         return_value=False,
     )
