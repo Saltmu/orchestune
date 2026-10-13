@@ -34,6 +34,7 @@ class ClaimFailureReason(str, Enum):
     WORKTREE_CREATION_FAILED = "worktree_creation_failed"
     STATE_SAVE_FAILED = "state_save_failed"
     LABEL_UPDATE_FAILED = "label_update_failed"
+    FORGE_UNAVAILABLE = "forge_unavailable"
 
 
 def failure_reason_to_exit_code(reason: ClaimFailureReason) -> ClaimExitCode:

@@ -43,7 +43,7 @@ from orchestune.claim.workspace import (
     check_repository_identity_match,
     resolve_claim_workspace,
 )
-from orchestune.forge import Forge, GitHubForge
+from orchestune.forge import Forge, ForgeGraphQLUnavailableError, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
 from orchestune.issue_parsing import parse_task_from_issue
@@ -127,6 +127,9 @@ def _evaluate_conflict_step(
     """Evaluate conflict rules, returning a rejection outcome or non-blocking warnings."""
     try:
         assessment = assess_claim_conflicts(reservation, run_state, conflict_view)
+    except ForgeGraphQLUnavailableError:
+        # #1334: the CLI reports this as forge_unavailable, not as a conflict.
+        raise
     except Exception as e:
         return _claim_failure(
             issue_number,

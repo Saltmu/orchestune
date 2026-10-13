@@ -656,6 +656,8 @@ If a claim cannot proceed due to unmet dependencies, conflicts, or environmental
 
 When re-running `orchestune claim <N>` for an issue you already hold, it fails with `existing_claim_unrecovered` and prints the worktree path, the `--resume` command, and the `--amend-footprint` command as next actions.
 
+When GitHub GraphQL is unavailable (for example, Claude Code cloud sessions answer it with HTTP 403, and older `gh` releases reject the `parent`/`blockedBy` fields), claim reads and updates the issue through the REST API (`gh api`) instead: issue body, state, labels, native parent and blocked-by dependencies, and the repository name. Dependencies are accepted only when the REST API reports their total and the listed dependencies match it; otherwise claim stops with `forge_unavailable` (exit code `35`) rather than treating the issue as having no dependencies. Other unexpected errors still report `generic_error` without details, plus the exception class as `error_type=`. `orchestune complete` still needs GraphQL for pull request evidence (#1336).
+
 ### Footprint overlap warnings
 
 An interactive claim succeeds when its only conflict is a `footprint` overlap with another **interactive** reservation. The command then prints a `Warning:` to stderr with the other Issue number, branch, worktree, and the overlapping files (also in the `--no-apply` preview). When you see it, agree on the merge order with the other task; whichever merges later resolves the conflicts when rebasing.

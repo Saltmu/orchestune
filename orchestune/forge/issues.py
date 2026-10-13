@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
 
+import orchestune.forge.issues_rest as issues_rest
 from orchestune.models import IssueRecord, normalize_newlines
 from orchestune.validation import (
     validate_issue_number,
@@ -15,7 +16,10 @@ from orchestune.validation import (
     validate_username,
 )
 
-from .admin import RelationshipUnavailableError
+from .admin import ForgeGraphQLUnavailableError, RelationshipUnavailableError
+
+_T = TypeVar("_T")
+_ISSUE_VIEW_FIELDS = "number,title,body,state,labels,createdAt,parent,blockedBy"
 
 _VALID_ISSUE_STATES = frozenset({"open", "closed", "all"})
 _VALID_CLOSE_REASONS = frozenset({"completed", "not planned"})
@@ -78,10 +82,37 @@ class _Runner(Protocol):
     def __call__(self, args: list[str], input_text: str | None = None) -> str: ...
 
 
+def _is_not_found(exc: subprocess.CalledProcessError) -> bool:
+    detail = _error_detail(exc)
+    return "404" in detail or "not found" in detail
+
+
 class GitHubIssueMixin:
     """Issue-specific implementation mixed into :class:`GitHubForge`."""
 
     _run: _Runner
+    #: #1334: set once a GraphQL-backed `gh` call proved GraphQL unusable here.
+    _graphql_unavailable: bool = False
+
+    def _graphql_or_rest(
+        self,
+        graphql: Callable[[], _T],
+        rest: Callable[[], _T],
+        requested_fields: str = "",
+    ) -> _T:
+        """Run the usual `gh` subcommand, or the REST fallback once GraphQL is unusable."""
+        if not self._graphql_unavailable:
+            try:
+                return graphql()
+            except subprocess.CalledProcessError as exc:
+                detail = _error_detail(exc)
+                if issues_rest.is_graphql_unavailable(detail):
+                    self._graphql_unavailable = True
+                elif not issues_rest.is_unsupported_issue_field(
+                    detail, requested_fields
+                ):
+                    raise
+        return rest()
 
     def list_issues_by_label(
         self, label: str, state: str = "open", limit: int = 1000
@@ -173,12 +204,30 @@ class GitHubIssueMixin:
     def add_label(self, issue_number: int | str, label: str) -> None:
         number = validate_issue_number(issue_number)
         validate_label(label)
-        self._run(["gh", "issue", "edit", str(number), "--add-label", label])
+        self._graphql_or_rest(
+            lambda: self._run(
+                ["gh", "issue", "edit", str(number), "--add-label", label]
+            ),
+            lambda: issues_rest.add_label(self._run, number, label),
+        )
 
     def remove_label(self, issue_number: int | str, label: str) -> None:
         number = validate_issue_number(issue_number)
         validate_label(label)
-        self._run(["gh", "issue", "edit", str(number), "--remove-label", label])
+        self._graphql_or_rest(
+            lambda: self._run(
+                ["gh", "issue", "edit", str(number), "--remove-label", label]
+            ),
+            lambda: self._remove_label_rest(number, label),
+        )
+
+    def _remove_label_rest(self, number: int, label: str) -> None:
+        try:
+            self._run(issues_rest.remove_label_args(number, label))
+        except subprocess.CalledProcessError as exc:
+            # Like `gh issue edit --remove-label`, removing an absent label is a no-op.
+            if not _is_not_found(exc):
+                raise
 
     def close_issue(
         self, issue_number: int | str, reason: str, comment: str | None = None
@@ -275,14 +324,27 @@ class GitHubIssueMixin:
 
     def get_issue_state(self, issue_number: int | str) -> str:
         number = validate_issue_number(issue_number)
-        stdout = self._run(["gh", "issue", "view", str(number), "--json", "state"])
-        return str(json.loads(stdout).get("state", "OPEN"))
+        return self._graphql_or_rest(
+            lambda: str(
+                json.loads(
+                    self._run(["gh", "issue", "view", str(number), "--json", "state"])
+                ).get("state", "OPEN")
+            ),
+            lambda: issues_rest.issue_state(issues_rest.fetch_issue(self._run, number)),
+        )
 
     def get_issue_labels(self, issue_number: int | str) -> tuple[str, ...]:
         number = validate_issue_number(issue_number)
-        stdout = self._run(["gh", "issue", "view", str(number), "--json", "labels"])
-        raw = json.loads(stdout)
-        return tuple(entry["name"] for entry in raw.get("labels", []))
+        return self._graphql_or_rest(
+            lambda: issues_rest.issue_labels(
+                json.loads(
+                    self._run(["gh", "issue", "view", str(number), "--json", "labels"])
+                )
+            ),
+            lambda: issues_rest.issue_labels(
+                issues_rest.fetch_issue(self._run, number)
+            ),
+        )
 
     def get_label_actor(self, issue_number: int | str, label: str) -> str:
         number = validate_issue_number(issue_number)
@@ -357,9 +419,12 @@ class GitHubIssueMixin:
 
     def update_issue_body(self, issue_number: int | str, body: str) -> None:
         number = validate_issue_number(issue_number)
-        self._run(
-            ["gh", "issue", "edit", str(number), "--body-file", "-"],
-            input_text=body,
+        self._graphql_or_rest(
+            lambda: self._run(
+                ["gh", "issue", "edit", str(number), "--body-file", "-"],
+                input_text=body,
+            ),
+            lambda: issues_rest.update_issue_body(self._run, number, body),
         )
 
     def update_issue_title(self, issue_number: int | str, title: str) -> None:
@@ -513,20 +578,19 @@ class GitHubIssueMixin:
 
     def get_issue(self, issue_number: int | str) -> IssueRecord | None:
         number = validate_issue_number(issue_number)
+        return self._graphql_or_rest(
+            lambda: self._get_issue_graphql(number),
+            lambda: self._get_issue_rest(number),
+            _ISSUE_VIEW_FIELDS,
+        )
+
+    def _get_issue_graphql(self, number: int) -> IssueRecord | None:
         try:
             stdout = self._run(
-                [
-                    "gh",
-                    "issue",
-                    "view",
-                    str(number),
-                    "--json",
-                    "number,title,body,state,labels,createdAt,parent,blockedBy",
-                ]
+                ["gh", "issue", "view", str(number), "--json", _ISSUE_VIEW_FIELDS]
             )
         except subprocess.CalledProcessError as exc:
-            detail = _error_detail(exc)
-            if "404" in detail or "not found" in detail:
+            if _is_not_found(exc):
                 return None
             raise
         raw = json.loads(stdout)
@@ -547,6 +611,20 @@ class GitHubIssueMixin:
                 node["number"] for node in raw.get("blockedBy", {}).get("nodes", [])
             ),
         )
+
+    def _get_issue_rest(self, number: int) -> IssueRecord | None:
+        try:
+            raw = issues_rest.fetch_issue(self._run, number)
+        except subprocess.CalledProcessError as exc:
+            if _is_not_found(exc):
+                return None
+            raise
+        try:
+            return issues_rest.issue_record(self._run, number, raw)
+        except subprocess.CalledProcessError as exc:
+            raise ForgeGraphQLUnavailableError(
+                "the REST API could not list the issue's blocked-by dependencies"
+            ) from exc
 
     def get_issue_reference(self, issue_number: int | str) -> IssueReference | None:
         """The Issue-or-PR `issue_number`, or None when the forge confirms it is absent.
@@ -581,8 +659,16 @@ class GitHubIssueMixin:
 
     def get_repository_slug(self) -> str:
         """`owner/repo` of the repository the Forge commands run against."""
-        raw = json.loads(self._run(["gh", "repo", "view", "--json", "nameWithOwner"]))
-        slug = raw.get("nameWithOwner") if isinstance(raw, dict) else None
+        slug: object = self._graphql_or_rest(
+            lambda: _name_with_owner(
+                json.loads(self._run(["gh", "repo", "view", "--json", "nameWithOwner"]))
+            ),
+            lambda: issues_rest.repository_slug(self._run),
+        )
         if not isinstance(slug, str) or slug.count("/") != 1 or not slug.strip("/"):
             raise ValueError("GitHub returned an unusable repository identity")
         return slug
+
+
+def _name_with_owner(raw: object) -> object:
+    return raw.get("nameWithOwner") if isinstance(raw, dict) else None

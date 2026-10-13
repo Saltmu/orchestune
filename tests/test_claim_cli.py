@@ -109,7 +109,40 @@ def test_unexpected_service_error_is_redacted_without_a_traceback(capsys):
 
     stderr = capsys.readouterr().err
     assert "reason=generic_error" in stderr
+    assert "error_type=RuntimeError" in stderr
     assert "owner-token-should-not-be-printed" not in stderr
+
+
+def test_unavailable_github_graphql_is_reported_as_forge_unavailable(capsys):
+    """#1334: GraphQL 403 without a complete REST answer names the cause."""
+    from orchestune.claim.cli import main
+    from orchestune.forge import ForgeGraphQLUnavailableError
+
+    with patch(
+        "orchestune.claim.cli.claim_task",
+        side_effect=ForgeGraphQLUnavailableError("owner-token-should-not-be-printed"),
+    ):
+        assert main(["123"]) == 35
+
+    stderr = capsys.readouterr().err
+    assert "reason=forge_unavailable" in stderr
+    assert "GraphQL" in stderr
+    assert "Next action:" in stderr
+    assert "generic_error" not in stderr
+    assert "owner-token-should-not-be-printed" not in stderr
+
+
+def test_amend_footprint_reports_unavailable_github_graphql(capsys):
+    from orchestune.claim.cli import main
+    from orchestune.forge import ForgeGraphQLUnavailableError
+
+    with patch(
+        "orchestune.claim.cli.amend_claim_footprint",
+        side_effect=ForgeGraphQLUnavailableError("detail"),
+    ):
+        assert main(["123", "--amend-footprint"]) == 35
+
+    assert "reason=forge_unavailable" in capsys.readouterr().err
 
 
 def test_resume_uses_protected_token_record(tmp_path, capsys):

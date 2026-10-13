@@ -721,3 +721,36 @@ class TestAdditionalClaimServiceEdgeCases:
         assert outcome.failure.reason == ClaimFailureReason.UNRESOLVED_DEPENDENCIES
         assert outcome.stage == ClaimStage.ACTIVE_SAVED
         assert len(forge.labels_added) == 0
+
+
+def test_conflict_check_keeps_forge_unavailable_for_the_cli() -> None:
+    """#1334 review: another task's metadata lookup may hit the REST fallback's
+    fail-closed error; it must reach the CLI as forge_unavailable, not as a
+    claim conflict."""
+    from orchestune.claim.service import _evaluate_conflict_step
+    from orchestune.forge import ForgeGraphQLUnavailableError
+
+    with (
+        patch(
+            "orchestune.claim.service.assess_claim_conflicts",
+            side_effect=ForgeGraphQLUnavailableError("dependencies unavailable"),
+        ),
+        pytest.raises(ForgeGraphQLUnavailableError),
+    ):
+        _evaluate_conflict_step(MagicMock(), MagicMock(), MagicMock(), 1)
+
+
+def test_conflict_check_still_maps_other_lookup_failures_to_claim_conflict() -> None:
+    from orchestune.claim.service import _evaluate_conflict_step
+
+    with patch(
+        "orchestune.claim.service.assess_claim_conflicts",
+        side_effect=RuntimeError("lookup failed"),
+    ):
+        outcome, warnings = _evaluate_conflict_step(
+            MagicMock(), MagicMock(), MagicMock(), 1
+        )
+
+    assert outcome is not None and outcome.failure is not None
+    assert outcome.failure.reason is ClaimFailureReason.CLAIM_CONFLICT
+    assert warnings == ()
