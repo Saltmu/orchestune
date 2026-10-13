@@ -10,7 +10,7 @@ from orchestune.claim.ownership import owner_token_digest
 from orchestune.complete.contracts import CompleteStage, DownstreamPolicyRecord
 from orchestune.complete.journal_models import CompletionJournalRecord
 from orchestune.dispatch.cycle_events import TokenHoldCompletion
-from orchestune.infra.private_tokens import _read_owner_token, _token_record_path
+from orchestune.infra.private_tokens import read_owner_token, token_record_path
 from orchestune.infra.process_utils import assert_run_state_lock_held
 from orchestune.ledger.completion_reservations import (
     completion_handoff_matches_active,
@@ -188,11 +188,11 @@ def reclaim_completed_tokens(
         )
         identifier = record.completion_id if unclaimed else record.generation_id
         try:
-            token_path = _token_record_path(directory, identifier)
+            token_path = token_record_path(directory, identifier)
             if not token_path.exists() and not token_path.is_symlink():
                 continue
             token = (
-                _read_owner_token(directory, identifier)
+                read_owner_token(directory, identifier)
                 if not token_path.is_symlink()
                 else None
             )

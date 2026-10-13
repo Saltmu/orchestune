@@ -873,35 +873,6 @@ def test_package_dependency_cycles_match_allowlist() -> None:
 KNOWN_CROSS_PACKAGE_PRIVATE_IMPORTS: dict[tuple[str, str, str], str] = {
     **{
         (
-            "complete.merged",
-            "merge_evidence",
-            name,
-        ): "merge_evidence helper shared with dispatch; promote to public API separately"
-        for name in ("_identity_status", "_is_after_reopen")
-    },
-    **{
-        (
-            "dispatch.prior_parent_merge",
-            "merge_evidence",
-            name,
-        ): "merge_evidence helper shared with complete; promote to public API separately"
-        for name in ("_identity_status", "_is_after_reopen")
-    },
-    (
-        "dispatch.gc.collection",
-        "ledger.run_state",
-        "_parse_active_worktrees",
-    ): "ledger parser reused by GC; promote to public API separately",
-    **{
-        (
-            "dispatch.gc.policy_discovery",
-            "infra.private_tokens",
-            name,
-        ): "owner-token record helpers used by GC discovery; promote to public API separately"
-        for name in ("_read_owner_token", "_token_record_path")
-    },
-    **{
-        (
             "dispatch.targets",
             "targets.support",
             name,
@@ -939,21 +910,6 @@ KNOWN_CROSS_PACKAGE_PRIVATE_IMPORTS: dict[tuple[str, str, str], str] = {
             "_worktree_checked_out_branch",
         )
     },
-    (
-        "integrator.steps",
-        "ledger.escalation",
-        "_REMOVABLE_STATUS_LABELS",
-    ): "status label set shared with ledger escalation; promote to public API separately",
-    (
-        "replan.apply",
-        "provisioning.rendering",
-        "_validate_template_identity_marker",
-    ): "template marker validation reused by replan; promote to public API separately",
-    (
-        "replan.snapshot",
-        "issue_parsing",
-        "_parse_footprint_block",
-    ): "footprint block parser reused by replan; promote to public API separately",
 }
 
 

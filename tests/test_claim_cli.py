@@ -163,14 +163,14 @@ def test_resume_uses_protected_token_record(tmp_path, capsys):
 
 
 def test_read_owner_token_uses_windows_acl_instead_of_posix_mode_bits(tmp_path):
-    from orchestune.infra.private_tokens import _read_owner_token
+    from orchestune.infra.private_tokens import read_owner_token
 
     token_record = tmp_path / "claim-123.token"
     token_record.write_text("stored-owner-token\n", encoding="utf-8")
     token_record.chmod(0o644)
 
     with patch("orchestune.infra.private_tokens.os.name", "nt"):
-        assert _read_owner_token(tmp_path, "claim-123") == "stored-owner-token"
+        assert read_owner_token(tmp_path, "claim-123") == "stored-owner-token"
 
 
 def test_success_renders_parent_base_when_present(tmp_path, capsys):

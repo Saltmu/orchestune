@@ -13,7 +13,7 @@ from orchestune.ledger.status_labels import transition_status_label
 # CHANGES_REQUESTED）はいずれも`status:in-progress`/`queued`/`blocked`の
 # タスクにしか作用しないため、`status:not-needed`が`current_status_labels`に
 # 含まれることはなく、この拡張は既存呼び出し元には影響しない。
-_REMOVABLE_STATUS_LABELS = (
+REMOVABLE_STATUS_LABELS = (
     StatusLabel.IN_PROGRESS,
     StatusLabel.QUEUED,
     StatusLabel.BLOCKED,
@@ -48,7 +48,7 @@ def apply_human_review_escalation(
         forge,
         issue_number,
         StatusLabel.BLOCKED_HUMAN_REVIEW,
-        (label for label in _REMOVABLE_STATUS_LABELS if label in current_status_labels),
+        (label for label in REMOVABLE_STATUS_LABELS if label in current_status_labels),
         # #512/PR#520レビュー16巡目対応(Codex P1): 旧ラベルの除去より前、
         # status:blocked-human-reviewが付いた瞬間に確定させる。
         on_label_added=on_label_applied,

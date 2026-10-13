@@ -32,7 +32,7 @@ def __getattr__(name: str) -> Any:
         "_render_issue_body",
         "_resolve_parent_issue",
         "_subtask_id_from_body",
-        "_validate_template_identity_marker",
+        "validate_template_identity_marker",
     ):
         cli = importlib.import_module("orchestune.provisioning.cli")
         return getattr(cli, name)

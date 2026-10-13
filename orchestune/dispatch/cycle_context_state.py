@@ -204,7 +204,7 @@ def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
 
     branch/worktree_pathが空、またはpidも(空文字列でない)external_idも無い
     (生存確認もプロバイダへの照会もできない)場合は、有効な起動として扱わない。
-    `run_state.json`の`_parse_active_worktrees`は空文字列の`external_id`を
+    `run_state.json`の`parse_active_worktrees`は空文字列の`external_id`を
     そのまま保持する(起動時attemptのパーサは空文字列を既に拒否しているが、
     この構築経路は素通りする)ため、`is not None`だけでは空文字列を有効な
     handleとして誤認する。
@@ -216,7 +216,7 @@ def _has_valid_launch_handle(active: ActiveWorktree) -> bool:
     拒否するのと矛盾する。
 
     branch / worktree_path / external_idはいずれも非空の`str`、pidは正の整数の
-    みを有効と扱う。`_parse_active_worktrees`は`run_state.json`の値を検証せず
+    みを有効と扱う。`parse_active_worktrees`は`run_state.json`の値を検証せず
     そのまま復元するため、`true`や数値・`0`・負数のような使えない値も届き得る
     ——`bool(...)`や`is not None`だけではこれらを有効なhandleとして誤認する。
 

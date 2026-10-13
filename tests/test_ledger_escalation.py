@@ -103,7 +103,7 @@ def test_later_failure_keeps_the_callback_commit(
 
 
 def test_removable_labels_include_not_needed(escalation) -> None:
-    assert escalation._REMOVABLE_STATUS_LABELS == (
+    assert escalation.REMOVABLE_STATUS_LABELS == (
         "status:in-progress",
         "status:queued",
         "status:blocked",

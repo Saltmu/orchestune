@@ -21,7 +21,7 @@ from orchestune.ledger.status_labels import (
     PRIMARY_STATUS_LABELS,
     transition_status_label,
 )
-from orchestune.merge_evidence import _identity_status, _is_after_reopen
+from orchestune.merge_evidence import identity_status, is_after_reopen
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.pr_link_notice import ensure_pr_merged_notice
 from orchestune.task_metadata import TaskMetadata
@@ -81,7 +81,7 @@ def _validated_candidate(
     """Return a verified PR or the reason why a plausible candidate is unsafe."""
     if pr.state != "MERGED" or pr.base_ref != expected_base:
         return None, ""
-    identity = _identity_status(pr, issue_number, subtask_id)
+    identity = identity_status(pr, issue_number, subtask_id)
     if identity == "none":
         return None, ""
     if identity == "conflict":
@@ -94,7 +94,7 @@ def _validated_candidate(
         )
     if not pr.merged_at or not pr.merge_commit_oid:
         return None, "missing merged timestamp or merge commit metadata"
-    after_reopen = _is_after_reopen(pr.merged_at, get_last_reopened_at())
+    after_reopen = is_after_reopen(pr.merged_at, get_last_reopened_at())
     if after_reopen is None:
         return None, "unparseable reopen or merge timestamp"
     if not after_reopen:
