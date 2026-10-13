@@ -23,7 +23,7 @@ NONINTERACTIVE_DISPATCH_INSTRUCTION = (
 )
 
 
-def _noninteractive_instruction(reviewer_bot: ReviewerBot | None) -> str:
+def noninteractive_instruction(reviewer_bot: ReviewerBot | None) -> str:
     if reviewer_bot is None:
         return (
             NONINTERACTIVE_DISPATCH_INSTRUCTION
@@ -38,7 +38,7 @@ def _noninteractive_instruction(reviewer_bot: ReviewerBot | None) -> str:
     )
 
 
-def _resolve_base_branch_val(base_branch: str | None) -> str:
+def resolve_base_branch_val(base_branch: str | None) -> str:
     """PR作成時のベースブランチ名を正規化する（未指定時は'main'）。"""
     return (base_branch.removeprefix("origin/") if base_branch else "") or "main"
 
@@ -106,7 +106,7 @@ def _check_open_prs_outcome(
     return "pending"
 
 
-def _task_pr_completion_status(
+def task_pr_completion_status(
     handle: DispatchHandle,
     forge: Forge | None = None,
 ) -> Literal["pending", "completed", "abandoned", "unknown"]:

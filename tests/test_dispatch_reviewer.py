@@ -27,9 +27,9 @@ def test_auto_reviewer_is_unresolved_for_generic_local_target():
 
 
 def test_unresolved_reviewer_instruction_records_skip_and_human_gate():
-    from orchestune.targets.support import _noninteractive_instruction
+    from orchestune.targets.support import noninteractive_instruction
 
-    text = _noninteractive_instruction(resolve_reviewer_bot("auto", "local"))
+    text = noninteractive_instruction(resolve_reviewer_bot("auto", "local"))
     assert "--bot-name skip" in text
     assert "推測せず" in text
     assert "status:blocked-human-review" in text

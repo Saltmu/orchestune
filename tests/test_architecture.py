@@ -873,28 +873,6 @@ def test_package_dependency_cycles_match_allowlist() -> None:
 KNOWN_CROSS_PACKAGE_PRIVATE_IMPORTS: dict[tuple[str, str, str], str] = {
     **{
         (
-            "dispatch.targets",
-            "targets.support",
-            name,
-        ): "dispatch.targets facade over shared target support; resolve with the targets split"
-        for name in (
-            "_lookup_issue_outcome",
-            "_noninteractive_instruction",
-            "_push_branch_and_verify",
-            "_resolve_base_branch_val",
-            "_task_pr_completion_status",
-        )
-    },
-    **{
-        (
-            "dispatch.targets",
-            "targets.usage",
-            name,
-        ): "dispatch.targets facade over shared usage parsing; resolve with the targets split"
-        for name in ("_extract_usage_from_dict", "_parse_usage_from_log")
-    },
-    **{
-        (
             "dispatch.worktree",
             "worktree_ops.preparation",
             name,

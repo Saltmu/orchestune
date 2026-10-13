@@ -9,10 +9,10 @@ from orchestune.dispatch.targets import (
     BranchReachabilityError,
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,
-    _push_branch_and_verify,
 )
 from orchestune.models import PrRecord, Task
 from orchestune.outcome_record import OutcomeRecord
+from orchestune.targets.support import _push_branch_and_verify
 
 
 def _task(issue_number=1, subtask_id="task-a", footprint=("src/foo.py",)):

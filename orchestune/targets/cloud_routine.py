@@ -19,10 +19,10 @@ from orchestune.targets.contracts import (
     ReviewerBot,
 )
 from orchestune.targets.support import (
-    _noninteractive_instruction,
     _push_branch_and_verify,
-    _resolve_base_branch_val,
-    _task_pr_completion_status,
+    noninteractive_instruction,
+    resolve_base_branch_val,
+    task_pr_completion_status,
 )
 from orchestune.task_metadata import TaskMetadata
 
@@ -66,7 +66,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         self, task: TaskMetadata, branch_name: str, base_branch: str | None = None
     ) -> str:
         footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
-        base_branch_val = _resolve_base_branch_val(base_branch)
+        base_branch_val = resolve_base_branch_val(base_branch)
         return (
             f"GitHub Issue #{task.issue_number}"
             f"（サブタスク: {task.subtask_id or '不明'}）を"
@@ -81,7 +81,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
             "起点に作業してください。\n"
             f"想定footprint: {footprint}\n"
             f"PR作成時は必ずベースブランチに `{base_branch_val}` を指定してください（`gh pr create --base {base_branch_val}`）。\n"
-            f"{_noninteractive_instruction(self._reviewer_bot)}\n"
+            f"{noninteractive_instruction(self._reviewer_bot)}\n"
         )
 
     def _fire(
@@ -186,7 +186,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         self, handle: DispatchHandle, forge: Forge | None = None
     ) -> Literal["pending", "completed", "abandoned"]:
         """#239/#210: ブランチ名またはclosingIssuesReferencesでPR完了を判定する。"""
-        status = _task_pr_completion_status(handle, forge=forge)
+        status = task_pr_completion_status(handle, forge=forge)
         return "pending" if status == "unknown" else status
 
     def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
