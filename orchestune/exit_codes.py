@@ -30,6 +30,7 @@ class TaskExitCode(IntEnum):
     WORKTREE_CREATION_FAILED = 32
     STATE_SAVE_FAILED = 33
     LABEL_UPDATE_FAILED = 34
+    FORGE_UNAVAILABLE = 35
 
     INVALID_REQUEST = 40
     CLAIM_NOT_FOUND = 41
@@ -75,6 +76,7 @@ _CLAIM_FAILURE_EXIT_CODES: dict[str, TaskExitCode] = {
     "worktree_creation_failed": TaskExitCode.WORKTREE_CREATION_FAILED,
     "state_save_failed": TaskExitCode.STATE_SAVE_FAILED,
     "label_update_failed": TaskExitCode.LABEL_UPDATE_FAILED,
+    "forge_unavailable": TaskExitCode.FORGE_UNAVAILABLE,
 }
 
 _COMPLETE_FAILURE_EXIT_CODES: dict[str, TaskExitCode] = {

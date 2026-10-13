@@ -644,6 +644,8 @@ orchestune claim 123
 
 すでに保持している Issue に対して `orchestune claim <N>` を再実行すると `existing_claim_unrecovered` で失敗し、次のアクションとして worktree のパス、`--resume` コマンド、`--amend-footprint` コマンドが表示されます。
 
+GitHub GraphQL が使えない環境（例: Claude Code のクラウドセッションは HTTP 403 を返す。古い `gh` は `parent` / `blockedBy` フィールドを受け付けない）では、claim は REST API（`gh api`）で Issue を読み書きします。対象は Issue の本文・状態・ラベル・ネイティブの親と blocked-by 依存、リポジトリ名です。依存は、REST API が件数を返し、取得した一覧がその件数と一致した場合にだけ受け入れます。確認できない場合は「依存なし」とはみなさず、`forge_unavailable`（終了コード `35`）で止まります。それ以外の想定外のエラーは従来どおり詳細を出さずに `generic_error` と表示し、例外のクラス名だけを `error_type=` として出します。`orchestune complete` の PR 証跡の取得には、まだ GraphQL が必要です（#1336）。
+
 ### footprint 重複の警告
 
 interactive の claim では、他の **interactive** な予約と `footprint` が重なるだけなら claim は成功します。その場合、相手の Issue 番号・ブランチ・worktree・重なったファイルが `Warning:` として標準エラー出力に表示されます（`--no-apply` のプレビューでも表示されます）。警告が出たら、相手のタスクとマージの順序を決め、後からマージする側がリベース時にコンフリクトを解消してください。

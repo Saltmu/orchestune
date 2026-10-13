@@ -211,23 +211,29 @@ def _run_gh_api(endpoint: str, *extra_args: str) -> list[dict[str, Any]]:
 
 
 def _fetch_pr_head_sha(pr_number: int) -> str | None:
-    """Best-effort current PR head SHA. Failure means unknown, never a guess."""
+    """Best-effort current PR head SHA. Failure means unknown, never a guess.
+
+    #1334: REST (`gh api`) rather than `gh pr view`, which needs GraphQL.
+    """
     try:
-        stdout = _run_gh(["pr", "view", str(pr_number), "--json", "headRefOid"])
-        value = json.loads(stdout)["headRefOid"]
-        return cast(str, value) if isinstance(value, str) and value else None
-    except (RuntimeError, json.JSONDecodeError, KeyError, TypeError):
+        value = _run_gh(
+            ["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}", "--jq", ".head.sha"]
+        ).strip()
+    except RuntimeError:
         return None
+    return value or None
 
 
 def _fetch_repository_slug() -> str | None:
-    """Best-effort `owner/repo` for the current checkout. Failure means unknown."""
+    """Best-effort `owner/repo` for the current checkout. Failure means unknown.
+
+    #1334: REST (`gh api`) rather than `gh repo view`, which needs GraphQL.
+    """
     try:
-        stdout = _run_gh(["repo", "view", "--json", "nameWithOwner"])
-        value = json.loads(stdout)["nameWithOwner"]
-        return cast(str, value) if isinstance(value, str) and value else None
-    except (RuntimeError, json.JSONDecodeError, KeyError, TypeError):
+        value = _run_gh(["api", "repos/{owner}/{repo}", "--jq", ".full_name"]).strip()
+    except RuntimeError:
         return None
+    return value or None
 
 
 def _is_trigger_comment(

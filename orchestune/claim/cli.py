@@ -17,6 +17,7 @@ from orchestune.claim.contracts import (
 )
 from orchestune.claim.service import claim_task, resume_claim
 from orchestune.claim.workspace import resolve_claim_workspace
+from orchestune.forge import ForgeGraphQLUnavailableError
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -174,6 +175,23 @@ def _render_outcome(outcome: ClaimOutcome, token_dir: Path, *, preview: bool) ->
     return 0
 
 
+def _report_forge_unavailable() -> int:
+    """#1334: GitHub GraphQL failed and REST could not confirm the issue data."""
+    failure = ClaimFailure(
+        reason=ClaimFailureReason.FORGE_UNAVAILABLE,
+        message=(
+            "GitHub GraphQL is unavailable and the REST API could not confirm "
+            "the issue's relationships."
+        ),
+        next_actions=(
+            "Check the issue's parent and blocked-by dependencies on GitHub.",
+            "Retry where GitHub GraphQL is available (gh api graphql succeeds).",
+        ),
+    )
+    _print_failure(failure)
+    return int(failure.exit_code)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse a claim request, invoke the service, and render safe diagnostics."""
     args = _build_parser().parse_args(argv)
@@ -191,10 +209,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             amended = _run_amend(args, token_dir)
         else:
             outcome = _run_claim(args, token_dir)
-    except Exception:
+    except ForgeGraphQLUnavailableError:
+        return _report_forge_unavailable()
+    except Exception as error:
+        # Only the class name is shown: messages may carry tokens or local paths.
         print(
             "Claim failed: reason=generic_error\n"
-            "Message: claim service invocation failed; inspect protected local records and retry.",
+            "Message: claim service invocation failed; inspect protected local records and retry.\n"
+            f"error_type={type(error).__name__}",
             file=sys.stderr,
         )
         return 1

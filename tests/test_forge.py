@@ -405,6 +405,8 @@ class TestForgeProtocols:
         assert modules_with_gh_commands == {
             "admin.py",
             "issues.py",
+            # #1334: REST fallbacks for issue operations when GraphQL is unavailable.
+            "issues_rest.py",
             "prs.py",
         }
 

@@ -30,6 +30,14 @@ class RelationshipUnavailableError(ForgeError):
     """ネイティブなIssue関係操作をForgeが提供できないことを示す。"""
 
 
+class ForgeGraphQLUnavailableError(ForgeError):
+    """#1334: GraphQLが使えず、REST APIでも値を確定できないことを示す。
+
+    `RelationshipUnavailableError`はprovisioning/replanが「関係を張らずに続行」
+    の合図として捕捉するため、依存関係を確認できない状況には流用しない。
+    """
+
+
 _LABEL_LIST_LIMIT = 1000
 
 
