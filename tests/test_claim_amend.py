@@ -541,3 +541,22 @@ def test_amend_rejection_for_dispatcher_claim_advises_blocked_outcome(amend_env)
     assert "--result blocked --reason footprint-expansion-required" in actions
     assert "--resume" not in actions
     assert "--amend-footprint" not in actions
+
+
+def test_amend_conflict_check_keeps_forge_unavailable_for_the_cli() -> None:
+    """#1334 review: the REST fallback's fail-closed error is not a conflict."""
+    from unittest.mock import MagicMock, patch
+
+    from orchestune.claim.amend import _check_conflicts
+    from orchestune.forge import ForgeGraphQLUnavailableError
+
+    run_state = MagicMock()
+    run_state.active_worktrees = {}
+    with (
+        patch(
+            "orchestune.claim.amend.assess_claim_conflicts",
+            side_effect=ForgeGraphQLUnavailableError("dependencies unavailable"),
+        ),
+        pytest.raises(ForgeGraphQLUnavailableError),
+    ):
+        _check_conflicts("key", MagicMock(), run_state, MagicMock())

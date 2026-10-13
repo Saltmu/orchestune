@@ -98,6 +98,7 @@ def _issue(**overrides: Any) -> dict[str, Any]:
         "labels": [{"name": "status:queued"}],
         "created_at": "2026-01-01T00:00:00Z",
         "issue_dependencies_summary": {"total_blocked_by": 0},
+        "sub_issues_summary": {"total": 0, "completed": 0, "percent_completed": 0},
     }
     payload.update(overrides)
     return payload
@@ -184,8 +185,10 @@ class TestGetIssueFallback:
             _issue(issue_dependencies_summary=None),
             _issue(issue_dependencies_summary={"blocked_by": 0}),
             _issue(parent_issue_url="https://api.github.com/repos/o/r/issues/x"),
+            # Without sub-issue support a missing parent_issue_url proves nothing.
+            _issue(sub_issues_summary=None),
         ],
-        ids=["no-summary", "no-total", "bad-parent-url"],
+        ids=["no-summary", "no-total", "bad-parent-url", "no-sub-issue-support"],
     )
     def test_unverifiable_relationships_fail_closed(
         self, forge: GitHubForge, fake_gh, payload: dict[str, Any]

@@ -29,7 +29,7 @@ from orchestune.claim.workspace import (
     resolve_claim_workspace,
 )
 from orchestune.footprint_paths import canonicalize_footprint
-from orchestune.forge import Forge, GitHubForge
+from orchestune.forge import Forge, ForgeGraphQLUnavailableError, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
@@ -198,6 +198,9 @@ def _check_conflicts(
         assessment = assess_claim_conflicts(
             amended, others, _DefaultConflictView(forge)
         )
+    except ForgeGraphQLUnavailableError:
+        # #1334: the CLI reports this as forge_unavailable, not as a conflict.
+        raise
     except Exception as error:
         raise _reject(
             ClaimFailureReason.CLAIM_CONFLICT,

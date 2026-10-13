@@ -64,6 +64,12 @@ def issue_labels(raw: dict[str, Any]) -> tuple[str, ...]:
 def _parent(raw: dict[str, Any]) -> dict[str, int] | None:
     url = raw.get("parent_issue_url")
     if url is None:
+        # github.com omits `parent_issue_url` for issues without a parent; the
+        # omission proves "no parent" only where sub-issues are supported.
+        if not isinstance(raw.get("sub_issues_summary"), dict):
+            raise ForgeGraphQLUnavailableError(
+                "the REST API did not report whether the issue has a parent"
+            )
         return None
     tail = url.rstrip("/").rsplit("/", 1)[-1] if isinstance(url, str) else ""
     if not tail.isdigit():
