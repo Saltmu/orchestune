@@ -101,5 +101,6 @@ class PrRecord:
     body: str = ""
     head_sha: str = ""
     #: #1336: False when the record came from the REST API, which cannot report
-    #: closing-issue references; `closes_issue_numbers` is then not evidence.
+    #: closing-issue references. `closes_issue_numbers` then lists only the
+    #: Issues that REST proved this merge closed (#1341), never the full list.
     closing_references_known: bool = True

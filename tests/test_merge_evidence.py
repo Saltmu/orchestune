@@ -26,19 +26,35 @@ def test_known_closing_references_keep_the_existing_verdicts():
     assert identity_status(_pr(closes_issue_numbers=(7,)), 42, "task") == "conflict"
 
 
-def test_unknown_closing_references_are_never_a_match():
-    """#1336: REST cannot report closing references, so identity is unknown
-    even for a canonical head."""
-    assert identity_status(_pr(closing_references_known=False), 42, "task") == "unknown"
+def test_unknown_closing_references_without_the_issue_stay_unknown():
+    """#1336/#1341: without the full list, an Issue missing from the verified
+    subset proves neither a match nor its absence."""
+    unknown = {"closing_references_known": False, "closes_issue_numbers": ()}
+    assert identity_status(_pr(**unknown), 42, "task") == "unknown"
+    assert identity_status(_pr(head_ref="fix/x", **unknown), 42, "task") == "unknown"
     assert (
         identity_status(
-            _pr(
-                head_ref="fix/x",
-                closes_issue_numbers=(),
-                closing_references_known=False,
-            ),
+            _pr(closing_references_known=False, closes_issue_numbers=(7,)), 42, "task"
+        )
+        == "unknown"
+    )
+
+
+def test_verified_closing_reference_decides_without_the_full_list():
+    """#1341: REST proved that the merge closed the Issue, so the branch name
+    alone decides between match and conflict."""
+    assert identity_status(_pr(closing_references_known=False), 42, "task") == "match"
+    assert (
+        identity_status(
+            _pr(head_ref="fix/x", closing_references_known=False), 42, "task"
+        )
+        == "match"
+    )
+    assert (
+        identity_status(
+            _pr(head_ref="claude/issue-7-other", closing_references_known=False),
             42,
             "task",
         )
-        == "unknown"
+        == "conflict"
     )

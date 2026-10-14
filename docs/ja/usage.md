@@ -644,7 +644,7 @@ orchestune claim 123
 
 すでに保持している Issue に対して `orchestune claim <N>` を再実行すると `existing_claim_unrecovered` で失敗し、次のアクションとして worktree のパス、`--resume` コマンド、`--amend-footprint` コマンドが表示されます。
 
-GitHub GraphQL が使えない環境（例: Claude Code のクラウドセッションは HTTP 403 を返す。古い `gh` は `parent` / `blockedBy` フィールドを受け付けない）では、claim は REST API（`gh api`）で Issue を読み書きします。対象は Issue の本文・状態・ラベル・ネイティブの親と blocked-by 依存、リポジトリ名です。依存は、REST API が件数を返し、取得した一覧がその件数と一致した場合にだけ受け入れます。確認できない場合は「依存なし」とはみなさず、`forge_unavailable`（終了コード `35`）で止まります。それ以外の想定外のエラーは従来どおり詳細を出さずに `generic_error` と表示し、例外のクラス名だけを `error_type=` として出します。`orchestune complete` も、PR の証跡（head・base・状態・マージコミット・変更ファイル・CI のチェック）を REST で取得します。REST API は「その PR が閉じる Issue」とレビュー判定を返さないため、これらは記録されません。また、マージ済みの PR で完了しようとした場合は、閉じる Issue を照合できないので拒否されます。
+GitHub GraphQL が使えない環境（例: Claude Code のクラウドセッションは HTTP 403 を返す。古い `gh` は `parent` / `blockedBy` フィールドを受け付けない）では、claim は REST API（`gh api`）で Issue を読み書きします。対象は Issue の本文・状態・ラベル・ネイティブの親と blocked-by 依存、リポジトリ名です。依存は、REST API が件数を返し、取得した一覧がその件数と一致した場合にだけ受け入れます。確認できない場合は「依存なし」とはみなさず、`forge_unavailable`（終了コード `35`）で止まります。それ以外の想定外のエラーは従来どおり詳細を出さずに `generic_error` と表示し、例外のクラス名だけを `error_type=` として出します。`orchestune complete` も、PR の証跡（head・base・状態・マージコミット・変更ファイル・CI のチェック）を REST で取得します。REST API は「その PR が閉じる Issue」とレビュー判定を返さないため、レビュー判定は記録されません。マージ済みの PR で完了する場合は、対象の Issue のタイムラインで、そのマージが Issue を閉じたことを確かめます。条件は、PR 本文の closing keyword（`Closes #N` など、同じリポジトリの `#N` の形）がその Issue を指し、GitHub がその PR と Issue を結び付けていて（`cross-referenced`）、マージした人がマージ直後にその Issue を閉じ、その後に再オープンされていないことです。確かめられない場合（サイドバーでの手動リンク、既定以外のブランチ宛ての PR、マージ後に手で閉じたなど）は拒否されるので、GitHub GraphQL が使える環境で完了してください。
 
 ### footprint 重複の警告
 

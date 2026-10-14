@@ -120,8 +120,10 @@ def test_pending_open_completion_resumes_after_merge(completion_env):
 def test_merged_evidence_must_match_current_claim(completion_env, problem):
     _, active, _, request, forge = completion_env
     if problem == "unknown-closing":
-        # #1336: a REST-built record cannot confirm the closing references.
-        forge.pr = replace(forge.pr, closing_references_known=False)
+        # #1336/#1341: a REST-built record that could not verify this Issue.
+        forge.pr = replace(
+            forge.pr, closing_references_known=False, closes_issue_numbers=()
+        )
     elif problem == "head":
         forge.pr = replace(forge.pr, head_sha="c" * 40)
     elif problem == "identity":
@@ -169,9 +171,20 @@ def test_generation_is_rechecked_after_ci(completion_env, monkeypatch):
 
 def test_unknown_closing_references_name_the_rest_limitation(completion_env):
     _, active, _, _, forge = completion_env
-    forge.pr = replace(forge.pr, closing_references_known=False)
+    forge.pr = replace(
+        forge.pr, closing_references_known=False, closes_issue_numbers=()
+    )
 
     problem = validate_merged_completion(forge.pr, active, forge)
 
-    assert problem is not None and "closing references" in problem
-    assert "REST" in problem
+    assert problem is not None and "REST" in problem
+    # #1341: the message names the evidence REST looks for.
+    assert "closing keyword" in problem and "closed" in problem
+
+
+def test_rest_verified_closing_reference_completes(completion_env):
+    """#1341: REST proved that this merge closed the claimed Issue."""
+    _, active, _, _, forge = completion_env
+    forge.pr = replace(forge.pr, closing_references_known=False)
+
+    assert validate_merged_completion(forge.pr, active, forge) is None

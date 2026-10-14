@@ -25,8 +25,10 @@ def validate_merged_completion(pr: Any, active: Any, forge: Any) -> str | None:
         identity = identity_status(pr, active.core.issue_number, subtask)
         if identity == "unknown":
             return (
-                "Merged PR closing references are unavailable from the REST API; "
-                "complete where GitHub GraphQL is available"
+                "The REST API could not prove that this merge closed the claimed "
+                "Issue (a closing keyword such as 'Closes #N' in the PR body, and "
+                "the Issue closed by the merge); complete where GitHub GraphQL is "
+                "available"
             )
         if identity != "match":
             return "Merged PR closing identity does not match the claimed Issue"

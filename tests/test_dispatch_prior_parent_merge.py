@@ -832,6 +832,15 @@ def test_an_actively_executing_issue_is_not_attempted():
 def test_unknown_closing_references_are_indeterminate():
     """#1336: a REST-built record cannot confirm closing references, so even a
     canonical head must not count as a verified prior merge."""
-    result = _evaluate([_merged_pr(closing_references_known=False)])
+    result = _evaluate(
+        [_merged_pr(closing_references_known=False, closes_issue_numbers=())]
+    )
 
     assert result.status is PriorParentMergeStatus.INDETERMINATE
+
+
+def test_rest_verified_closing_reference_is_a_prior_merge():
+    """#1341: a REST record that verified this Issue decides like a known list."""
+    result = _evaluate([_merged_pr(closing_references_known=False)])
+
+    assert result.status is PriorParentMergeStatus.ALREADY_MERGED

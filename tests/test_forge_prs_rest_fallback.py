@@ -236,3 +236,195 @@ class TestGraphQLPathUnchanged:
         assert pr.closes_issue_numbers == (42,)
         assert pr.closing_references_known is True
         assert gh_run.call_args.args[0][:3] == ["gh", "pr", "view"]
+
+
+REPO_URL = "https://api.github.com/repos/o/r"
+MERGED_AT = "2026-01-02T00:00:00Z"
+
+
+def _timeline_path(issue: int) -> str:
+    return f"repos/{{owner}}/{{repo}}/issues/{issue}/timeline?per_page=100"
+
+
+def _merged_pull(**overrides: Any) -> dict[str, Any]:
+    payload = _pull(
+        state="closed",
+        merged_at=MERGED_AT,
+        closed_at=MERGED_AT,
+        merged_by={"login": "merger"},
+        base={"ref": "main", "repo": {"full_name": "o/r", "url": REPO_URL}},
+    )
+    payload.update(overrides)
+    return payload
+
+
+def _cross_reference(pr: int = 5, repository_url: str = REPO_URL) -> dict[str, Any]:
+    return {
+        "event": "cross-referenced",
+        "source": {
+            "type": "issue",
+            "issue": {
+                "number": pr,
+                "pull_request": {"merged_at": MERGED_AT},
+                "repository_url": repository_url,
+            },
+        },
+    }
+
+
+def _closed(at: str = "2026-01-02T00:00:02Z", actor: str = "merger") -> dict[str, Any]:
+    return {"event": "closed", "created_at": at, "actor": {"login": actor}}
+
+
+def _closing_events() -> list[dict[str, Any]]:
+    return [_cross_reference(), _closed()]
+
+
+def _merged_rest(
+    pull: dict[str, Any] | None = None,
+    timelines: dict[int, list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    rest = _rest(pull=pull or _merged_pull())
+    for issue, events in (timelines or {42: _closing_events()}).items():
+        # Two pages, so a verdict cannot depend on reading only the first page.
+        rest[_timeline_path(issue)] = [events[:1], events[1:]]
+    return rest
+
+
+class TestMergedClosingEvidence:
+    """#1341: REST proves that this merge closed an Issue, never the full list."""
+
+    def test_issue_closed_by_this_merge_is_verified(self, forge: GitHubForge, fake_gh):
+        fake_gh(rest=_merged_rest())
+
+        pr = forge.get_pull_request(5)
+
+        assert pr.closes_issue_numbers == (42,)
+        # Only a verified subset: the full list is still unknown.
+        assert pr.closing_references_known is False
+
+    @pytest.mark.parametrize(
+        "body",
+        ["closes #42", "Fixes: #42", "RESOLVED #42", "fixed  #42.", "close #42\n"],
+    )
+    def test_closing_keywords(self, forge: GitHubForge, fake_gh, body: str):
+        fake_gh(rest=_merged_rest(pull=_merged_pull(body=body)))
+
+        assert forge.get_pull_request(5).closes_issue_numbers == (42,)
+
+    @pytest.mark.parametrize(
+        "body",
+        ["Refs #42", "Closes o/r#42", "Closes https://github.com/o/r/issues/42", ""],
+    )
+    def test_body_without_a_short_closing_reference_is_not_verified(
+        self, forge: GitHubForge, fake_gh, body: str
+    ):
+        fake = fake_gh(rest=_merged_rest(pull=_merged_pull(body=body)))
+
+        assert forge.get_pull_request(5).closes_issue_numbers == ()
+        assert not any("timeline" in arg for call in fake.calls for arg in call)
+
+    @pytest.mark.parametrize(
+        "events",
+        [
+            [_closed()],
+            [_cross_reference(pr=6), _closed()],
+            [
+                _cross_reference(repository_url="https://api.github.com/repos/x/y"),
+                _closed(),
+            ],
+            [_cross_reference(), _closed(at="2026-01-01T23:59:59Z")],
+            [_cross_reference(), _closed(at="2026-01-02T00:05:00Z")],
+            [_cross_reference(), _closed(actor="someone-else")],
+            [
+                _cross_reference(),
+                _closed(),
+                {"event": "reopened", "created_at": "2026-01-03T00:00:00Z"},
+            ],
+            [_cross_reference()],
+        ],
+        ids=[
+            "no-cross-reference",
+            "cross-reference-from-another-pr",
+            "cross-reference-from-another-repository",
+            "closed-before-merge",
+            "closed-long-after-merge",
+            "closed-by-someone-else",
+            "reopened-later",
+            "not-closed",
+        ],
+    )
+    def test_missing_evidence_is_not_verified(
+        self, forge: GitHubForge, fake_gh, events: list[dict[str, Any]]
+    ):
+        fake_gh(rest=_merged_rest(timelines={42: events}))
+
+        assert forge.get_pull_request(5).closes_issue_numbers == ()
+
+    def test_cross_reference_must_come_from_a_pull_request(
+        self, forge: GitHubForge, fake_gh
+    ):
+        reference = _cross_reference()
+        del reference["source"]["issue"]["pull_request"]
+        fake_gh(rest=_merged_rest(timelines={42: [reference, _closed()]}))
+
+        assert forge.get_pull_request(5).closes_issue_numbers == ()
+
+    def test_only_the_verified_issues_are_reported(self, forge: GitHubForge, fake_gh):
+        fake_gh(
+            rest=_merged_rest(
+                pull=_merged_pull(body="Closes #42, fixes #43 and resolves #44"),
+                timelines={
+                    42: _closing_events(),
+                    43: [_closed()],
+                    44: _closing_events(),
+                },
+            )
+        )
+
+        assert forge.get_pull_request(5).closes_issue_numbers == (42, 44)
+
+    def test_candidates_beyond_the_limit_are_not_checked(
+        self, forge: GitHubForge, fake_gh
+    ):
+        body = " ".join(f"Closes #{n}" for n in range(1, 12))
+        fake = fake_gh(
+            rest=_merged_rest(
+                pull=_merged_pull(body=body),
+                timelines={n: _closing_events() for n in range(1, 12)},
+            )
+        )
+
+        assert forge.get_pull_request(5).closes_issue_numbers == tuple(range(1, 11))
+        assert not any(_timeline_path(11) in call for call in fake.calls)
+
+    @pytest.mark.parametrize(
+        "rest_errors",
+        [{_timeline_path(42): "gh: Server Error (HTTP 502)"}, {}],
+        ids=["error", "malformed"],
+    )
+    def test_unreadable_timeline_is_not_evidence(
+        self, forge: GitHubForge, fake_gh, rest_errors: dict[str, str]
+    ):
+        rest = _merged_rest()
+        if not rest_errors:
+            rest[_timeline_path(42)] = {"message": "not a page list"}
+        fake_gh(rest=rest, rest_errors=rest_errors)
+
+        pr = forge.get_pull_request(5)
+
+        assert pr.state == "MERGED"
+        assert pr.closes_issue_numbers == ()
+
+    def test_missing_merger_is_not_evidence(self, forge: GitHubForge, fake_gh):
+        fake_gh(rest=_merged_rest(pull=_merged_pull(merged_by=None)))
+
+        assert forge.get_pull_request(5).closes_issue_numbers == ()
+
+    def test_unmerged_pull_request_never_reads_timelines(
+        self, forge: GitHubForge, fake_gh
+    ):
+        fake = fake_gh(rest=_merged_rest(pull=_pull()))
+
+        assert forge.get_pull_request(5).closes_issue_numbers == ()
+        assert not any("timeline" in arg for call in fake.calls for arg in call)
