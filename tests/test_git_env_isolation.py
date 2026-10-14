@@ -176,3 +176,54 @@ def test_run_git_honors_isolate_git_env_false(tmp_path: Path):
     run_git(["init"], cwd=local_dir, env=polluted_env, isolate_git_env=False)
     # local_dir should NOT have .git directory because git operated on GIT_DIR
     assert not (local_dir / ".git").exists()
+
+
+def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=False
+    )
+
+
+def test_broken_global_signing_config_does_not_reach_test_commits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """#1335: a developer's global `commit.gpgsign=true` with an unusable signer
+    must not fail the suite's own `git commit` calls."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".gitconfig").write_text(
+        "[user]\n\tname = Developer\n\temail = dev@example.invalid\n"
+        "[commit]\n\tgpgsign = true\n"
+        "[gpg]\n\tformat = ssh\n"
+        f'[gpg "ssh"]\n\tprogram = {tmp_path / "missing-signer"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assert _git(["init", "-q"], repo).returncode == 0
+
+    commit = _git(["commit", "-q", "--allow-empty", "-m", "unsigned"], repo)
+
+    assert commit.returncode == 0, commit.stderr
+    assert _git(["log", "-1", "--format=%G?"], repo).stdout.strip() == "N"
+
+
+def test_signing_setting_comes_from_the_isolated_global_config(tmp_path: Path):
+    shown = _git(["config", "--show-scope", "--get", "commit.gpgsign"], tmp_path)
+
+    assert shown.stdout.strip().split("\t") == ["global", "false"]
+    assert "gpgsign = false" in Path(os.environ["GIT_CONFIG_GLOBAL"]).read_text(
+        encoding="utf-8"
+    )
+
+
+def test_clean_git_env_keeps_the_config_isolation():
+    """`run_git` and `get_clean_git_env` strip only the dangerous variables, so the
+    isolation reaches every child git process."""
+    from tests.conftest import get_clean_git_env
+
+    clean = get_clean_git_env()
+
+    assert clean["GIT_CONFIG_GLOBAL"] == os.environ["GIT_CONFIG_GLOBAL"]

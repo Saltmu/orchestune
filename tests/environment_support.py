@@ -27,11 +27,36 @@ def worktree_tmp_path(request: pytest.FixtureRequest) -> Iterator[Path]:
         shutil.rmtree(path, ignore_errors=True)
 
 
+@pytest.fixture(scope="session")
+def _isolated_gitconfig(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """#1335: the only global git config test processes read.
+
+    Commits must not depend on the developer's signing setup, so signing is off.
+    `init.defaultBranch` stays unset to keep git's built-in default, as on CI.
+    The system config stays in effect: it belongs to the installed git (Git for
+    Windows enables `core.autocrlf` there) and tests rely on those defaults.
+    """
+    path = tmp_path_factory.mktemp("gitconfig") / "gitconfig"
+    path.write_text(
+        "[user]\n"
+        "\tname = Orchestune Test\n"
+        "\temail = test@example.invalid\n"
+        "[commit]\n"
+        "\tgpgsign = false\n"
+        "[tag]\n"
+        "\tgpgsign = false\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 @pytest.fixture(autouse=True)
-def _isolate_git_env(monkeypatch: pytest.MonkeyPatch):
-    """Ensure tests run in an isolated Git environment where GIT_* variables are stripped."""
+def _isolate_git_env(monkeypatch: pytest.MonkeyPatch, _isolated_gitconfig: Path):
+    """Ensure tests run in an isolated Git environment where GIT_* variables are stripped
+    and the developer's global git config is not read (#1335)."""
     for var in DANGEROUS_GIT_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(_isolated_gitconfig))
     yield
 
 
