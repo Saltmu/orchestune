@@ -408,6 +408,8 @@ class TestForgeProtocols:
             # #1334: REST fallbacks for issue operations when GraphQL is unavailable.
             "issues_rest.py",
             "prs.py",
+            # #1336: REST fallback for pull request evidence.
+            "prs_rest.py",
         }
 
 

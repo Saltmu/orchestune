@@ -100,3 +100,6 @@ class PrRecord:
     title: str = ""
     body: str = ""
     head_sha: str = ""
+    #: #1336: False when the record came from the REST API, which cannot report
+    #: closing-issue references; `closes_issue_numbers` is then not evidence.
+    closing_references_known: bool = True

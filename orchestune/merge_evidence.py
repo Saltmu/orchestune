@@ -34,7 +34,13 @@ def is_after_reopen(merged_at: str, reopened_at: str | None) -> bool | None:
 
 
 def identity_status(pr: PrRecord, issue_number: int, subtask_id: str) -> str:
-    """Return ``match``, ``none``, or ``conflict`` for strict Issue identity."""
+    """Return ``match``, ``none``, ``conflict`` or ``unknown`` for strict Issue identity.
+
+    ``unknown`` (#1336) means the record cannot confirm its closing references,
+    so neither a match nor its absence is proven.
+    """
+    if not pr.closing_references_known:
+        return "unknown"
     explicit = issue_number in pr.closes_issue_numbers
     canonical = branch_matches_task(pr.head_ref, issue_number, subtask_id)
     parsed = parse_task_branch_name(pr.head_ref)

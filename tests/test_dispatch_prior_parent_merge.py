@@ -827,3 +827,11 @@ def test_an_actively_executing_issue_is_not_attempted():
     result = _attempted(forge, active_issue_numbers=frozenset({101}))
 
     assert result.repair_attempted_issue_numbers == frozenset()
+
+
+def test_unknown_closing_references_are_indeterminate():
+    """#1336: a REST-built record cannot confirm closing references, so even a
+    canonical head must not count as a verified prior merge."""
+    result = _evaluate([_merged_pr(closing_references_known=False)])
+
+    assert result.status is PriorParentMergeStatus.INDETERMINATE

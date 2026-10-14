@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
@@ -17,6 +17,8 @@ from orchestune.validation import (
 )
 
 from .admin import ForgeGraphQLUnavailableError, RelationshipUnavailableError
+from .graphql_fallback import GraphQLFallbackMixin
+from .graphql_fallback import error_detail as _error_detail
 
 _T = TypeVar("_T")
 _ISSUE_VIEW_FIELDS = "number,title,body,state,labels,createdAt,parent,blockedBy"
@@ -45,15 +47,6 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
   }
 }
 """
-
-
-def _error_detail(exc: subprocess.CalledProcessError) -> str:
-    return " ".join(
-        value.decode("utf-8", errors="replace")
-        if isinstance(value, bytes)
-        else str(value or "")
-        for value in (exc.output, exc.stderr)
-    ).lower()
 
 
 def _is_relationship_unavailable_error(exc: subprocess.CalledProcessError) -> bool:
@@ -87,32 +80,10 @@ def _is_not_found(exc: subprocess.CalledProcessError) -> bool:
     return "404" in detail or "not found" in detail
 
 
-class GitHubIssueMixin:
+class GitHubIssueMixin(GraphQLFallbackMixin):
     """Issue-specific implementation mixed into :class:`GitHubForge`."""
 
     _run: _Runner
-    #: #1334: set once a GraphQL-backed `gh` call proved GraphQL unusable here.
-    _graphql_unavailable: bool = False
-
-    def _graphql_or_rest(
-        self,
-        graphql: Callable[[], _T],
-        rest: Callable[[], _T],
-        requested_fields: str = "",
-    ) -> _T:
-        """Run the usual `gh` subcommand, or the REST fallback once GraphQL is unusable."""
-        if not self._graphql_unavailable:
-            try:
-                return graphql()
-            except subprocess.CalledProcessError as exc:
-                detail = _error_detail(exc)
-                if issues_rest.is_graphql_unavailable(detail):
-                    self._graphql_unavailable = True
-                elif not issues_rest.is_unsupported_issue_field(
-                    detail, requested_fields
-                ):
-                    raise
-        return rest()
 
     def list_issues_by_label(
         self, label: str, state: str = "open", limit: int = 1000

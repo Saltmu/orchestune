@@ -9,8 +9,11 @@ import sys
 from typing import Any, Protocol
 from urllib.parse import quote
 
+import orchestune.forge.prs_rest as prs_rest
 from orchestune.models import PrRecord
 from orchestune.validation import validate_issue_number, validate_ref_name
+
+from .graphql_fallback import GraphQLFallbackMixin
 
 _PR_JSON_FIELDS = (
     "number,headRefName,headRefOid,baseRefName,isCrossRepository,state,createdAt,closedAt,"
@@ -42,7 +45,7 @@ class _Runner(Protocol):
     def __call__(self, args: list[str], input_text: str | None = None) -> str: ...
 
 
-class GitHubPullRequestMixin:
+class GitHubPullRequestMixin(GraphQLFallbackMixin):
     """Pull-request-specific implementation mixed into :class:`GitHubForge`."""
 
     _run: _Runner
@@ -307,6 +310,14 @@ class GitHubPullRequestMixin:
     def get_pull_request(self, pr_number: int | str) -> PrRecord:
         """Fetch one pull request directly instead of listing repository history."""
         number = validate_issue_number(pr_number)
+        return self._graphql_or_rest(
+            lambda: self._get_pull_request_graphql(number),
+            lambda: prs_rest.pull_request_record(
+                self._run, number, self._is_check_passing
+            ),
+        )
+
+    def _get_pull_request_graphql(self, number: int) -> PrRecord:
         stdout = self._run(["gh", "pr", "view", str(number), "--json", _PR_JSON_FIELDS])
         raw = json.loads(stdout)
         if not isinstance(raw, dict):

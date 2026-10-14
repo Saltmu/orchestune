@@ -86,6 +86,8 @@ def _validated_candidate(
         return None, ""
     if identity == "conflict":
         return None, "conflicting PR branch and closing identity"
+    if identity == "unknown":
+        return None, "closing references unavailable"
     if pr.is_cross_repository is not False:
         return (
             (None, "missing repository identity metadata")
