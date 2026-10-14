@@ -106,11 +106,23 @@ def test_pending_open_completion_resumes_after_merge(completion_env):
 
 
 @pytest.mark.parametrize(
-    "problem", ["head", "identity", "fork", "unreachable", "reopened", "old-merge"]
+    "problem",
+    [
+        "head",
+        "identity",
+        "unknown-closing",
+        "fork",
+        "unreachable",
+        "reopened",
+        "old-merge",
+    ],
 )
 def test_merged_evidence_must_match_current_claim(completion_env, problem):
     _, active, _, request, forge = completion_env
-    if problem == "head":
+    if problem == "unknown-closing":
+        # #1336: a REST-built record cannot confirm the closing references.
+        forge.pr = replace(forge.pr, closing_references_known=False)
+    elif problem == "head":
         forge.pr = replace(forge.pr, head_sha="c" * 40)
     elif problem == "identity":
         forge.pr = replace(forge.pr, closes_issue_numbers=(8,))
@@ -153,3 +165,13 @@ def test_generation_is_rechecked_after_ci(completion_env, monkeypatch):
     monkeypatch.setattr("orchestune.complete.service.run_local_ci_if_needed", ci)
     result = complete_task(request, forge=forge)
     assert not result.success and not forge.comments
+
+
+def test_unknown_closing_references_name_the_rest_limitation(completion_env):
+    _, active, _, _, forge = completion_env
+    forge.pr = replace(forge.pr, closing_references_known=False)
+
+    problem = validate_merged_completion(forge.pr, active, forge)
+
+    assert problem is not None and "closing references" in problem
+    assert "REST" in problem

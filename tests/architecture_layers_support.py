@@ -229,8 +229,10 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
         {
             "forge",
             "forge.admin",
+            "forge.graphql_fallback",
             "forge.issues",
             "forge.issues_rest",
+            "forge.prs_rest",
             "forge.prs",
             "infra.git_cli",
             "infra.managed_process",

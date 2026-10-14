@@ -22,7 +22,13 @@ def validate_merged_completion(pr: Any, active: Any, forge: Any) -> str | None:
         path = Path(active.core.worktree_path)
         parsed = parse_task_branch_name(active.core.branch)
         subtask = parsed.subtask_id if parsed else ""
-        if identity_status(pr, active.core.issue_number, subtask) != "match":
+        identity = identity_status(pr, active.core.issue_number, subtask)
+        if identity == "unknown":
+            return (
+                "Merged PR closing references are unavailable from the REST API; "
+                "complete where GitHub GraphQL is available"
+            )
+        if identity != "match":
             return "Merged PR closing identity does not match the claimed Issue"
         head = run_git(["rev-parse", "HEAD"], cwd=path).stdout.strip()
         if not getattr(pr, "head_sha", None) or pr.head_sha != head:
