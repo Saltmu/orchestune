@@ -29,9 +29,7 @@ def test_known_closing_references_keep_the_existing_verdicts():
 def test_unknown_closing_references_are_never_a_match():
     """#1336: REST cannot report closing references, so identity is unknown
     even for a canonical head."""
-    assert (
-        identity_status(_pr(closing_references_known=False), 42, "task") == "unknown"
-    )
+    assert identity_status(_pr(closing_references_known=False), 42, "task") == "unknown"
     assert (
         identity_status(
             _pr(
