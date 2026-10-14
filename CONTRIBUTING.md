@@ -86,6 +86,12 @@ Execute the full test suite using `pytest`:
 uv run pytest
 ```
 
+Tests do not read your global or system git configuration: an autouse fixture
+points `GIT_CONFIG_GLOBAL` at a test-only file (commit signing off) and sets
+`GIT_CONFIG_NOSYSTEM=1`. When a test builds a child process environment, start
+from `get_clean_git_env()` instead of dropping every `GIT_*` variable, which
+would also drop this isolation.
+
 The six real symlink tests for config loading and installer payload/migration
 skip only when Windows reports missing creation privilege (`WinError 1314`).
 Other filesystem errors still fail; a Windows OS check alone never skips them.
