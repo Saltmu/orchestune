@@ -33,6 +33,8 @@ def _isolated_gitconfig(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     Commits must not depend on the developer's signing setup, so signing is off.
     `init.defaultBranch` stays unset to keep git's built-in default, as on CI.
+    The system config stays in effect: it belongs to the installed git (Git for
+    Windows enables `core.autocrlf` there) and tests rely on those defaults.
     """
     path = tmp_path_factory.mktemp("gitconfig") / "gitconfig"
     path.write_text(
@@ -51,11 +53,10 @@ def _isolated_gitconfig(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @pytest.fixture(autouse=True)
 def _isolate_git_env(monkeypatch: pytest.MonkeyPatch, _isolated_gitconfig: Path):
     """Ensure tests run in an isolated Git environment where GIT_* variables are stripped
-    and the developer's global and system git config is not read (#1335)."""
+    and the developer's global git config is not read (#1335)."""
     for var in DANGEROUS_GIT_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(_isolated_gitconfig))
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     yield
 
 

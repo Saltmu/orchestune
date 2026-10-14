@@ -210,15 +210,12 @@ def test_broken_global_signing_config_does_not_reach_test_commits(
     assert _git(["log", "-1", "--format=%G?"], repo).stdout.strip() == "N"
 
 
-def test_signing_setting_comes_from_the_isolated_config(tmp_path: Path):
-    shown = _git(["config", "--show-origin", "--get", "commit.gpgsign"], tmp_path)
+def test_signing_setting_comes_from_the_isolated_global_config(tmp_path: Path):
+    shown = _git(["config", "--show-scope", "--get", "commit.gpgsign"], tmp_path)
 
-    origin, _, value = shown.stdout.strip().partition("\t")
-    assert value == "false"
-    assert origin.startswith("file:")
-    assert (
-        Path(origin.removeprefix("file:")).resolve()
-        == Path(os.environ["GIT_CONFIG_GLOBAL"]).resolve()
+    assert shown.stdout.strip().split("\t") == ["global", "false"]
+    assert "gpgsign = false" in Path(os.environ["GIT_CONFIG_GLOBAL"]).read_text(
+        encoding="utf-8"
     )
 
 
@@ -230,4 +227,3 @@ def test_clean_git_env_keeps_the_config_isolation():
     clean = get_clean_git_env()
 
     assert clean["GIT_CONFIG_GLOBAL"] == os.environ["GIT_CONFIG_GLOBAL"]
-    assert clean["GIT_CONFIG_NOSYSTEM"] == "1"
