@@ -52,16 +52,32 @@ def _check_runs(run: Runner, sha: str) -> list[dict[str, object]]:
 
 
 def _status_contexts(run: Runner, sha: str) -> list[dict[str, object]]:
-    raw = json.loads(
-        run(["gh", "api", f"repos/{{owner}}/{{repo}}/commits/{sha}/status"])
+    """Every context of the combined status; it pages at 30 contexts by default."""
+    pages = json.loads(
+        run(
+            [
+                "gh",
+                "api",
+                "--paginate",
+                "--slurp",
+                f"repos/{{owner}}/{{repo}}/commits/{sha}/status?per_page=100",
+            ]
+        )
     )
-    statuses = raw.get("statuses") if isinstance(raw, dict) else None
-    if not isinstance(statuses, list):
-        raise ValueError("GitHub returned an unusable combined status")
+    if not isinstance(pages, list) or any(not isinstance(page, dict) for page in pages):
+        raise ValueError("GitHub returned incomplete combined-status pages")
+    statuses = [
+        status
+        for page in pages
+        for status in page.get("statuses", [])
+        if isinstance(status, dict)
+    ]
+    total = pages[0].get("total_count") if pages else 0
+    if not isinstance(total, int) or len(statuses) != total:
+        raise ValueError("GitHub returned an incomplete list of commit statuses")
     return [
         {"__typename": "StatusContext", "state": str(status.get("state") or "").upper()}
         for status in statuses
-        if isinstance(status, dict)
     ]
 
 

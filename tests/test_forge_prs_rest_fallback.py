@@ -20,7 +20,7 @@ SHA = "a" * 40
 PR_PATH = "repos/{owner}/{repo}/pulls/5"
 FILES_PATH = f"{PR_PATH}/files?per_page=100"
 CHECKS_PATH = f"repos/{{owner}}/{{repo}}/commits/{SHA}/check-runs?per_page=100"
-STATUS_PATH = f"repos/{{owner}}/{{repo}}/commits/{SHA}/status"
+STATUS_PATH = f"repos/{{owner}}/{{repo}}/commits/{SHA}/status?per_page=100"
 
 
 @pytest.fixture
@@ -73,7 +73,7 @@ def _rest(
                 else [{"status": "completed", "conclusion": "success"}]
             }
         ],
-        STATUS_PATH: {"statuses": statuses or []},
+        STATUS_PATH: [{"total_count": len(statuses or []), "statuses": statuses or []}],
     }
 
 
@@ -179,6 +179,25 @@ class TestGetPullRequestFallback:
         fake_gh(rest=_rest(checks=checks, statuses=statuses))
 
         assert forge.get_pull_request(5).is_ci_passing is passing
+
+    def test_status_contexts_on_later_pages_count(self, forge: GitHubForge, fake_gh):
+        """A pending context beyond the first page must not read as passing CI."""
+        rest = _rest()
+        rest[STATUS_PATH] = [
+            {"total_count": 2, "statuses": [{"state": "success"}]},
+            {"total_count": 2, "statuses": [{"state": "pending"}]},
+        ]
+        fake_gh(rest=rest)
+
+        assert forge.get_pull_request(5).is_ci_passing is False
+
+    def test_incomplete_status_pages_fail(self, forge: GitHubForge, fake_gh):
+        rest = _rest()
+        rest[STATUS_PATH] = [{"total_count": 31, "statuses": [{"state": "success"}]}]
+        fake_gh(rest=rest)
+
+        with pytest.raises(ValueError):
+            forge.get_pull_request(5)
 
     def test_rest_failures_propagate(self, forge: GitHubForge, fake_gh):
         fake_gh(rest=_rest(), rest_errors={FILES_PATH: "gh: Server Error (HTTP 502)"})
