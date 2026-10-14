@@ -181,7 +181,7 @@ def restore_plan_markdown_from_parent_body(body: str) -> str | None:
     return restore_plan_dict_to_markdown(plan_dict, prose_body=prose_body)
 
 
-def _parse_footprint_block(body: str) -> dict | None:
+def parse_footprint_block(body: str) -> dict | None:
     """Footprint YAMLフェンスをdictとして返す（存在しない/壊れている場合はNone）。"""
     match = FOOTPRINT_BLOCK_PATTERN.search(body)
     if not match:
@@ -224,7 +224,7 @@ def parent_issue_number_from_body(body: str) -> int | None:
     ネイティブの`issue.parent`が利用できる場合はそちらを優先すべきで、
     これは`gh`/GitHub MCPが関係操作を提供しない縮退時にのみ使われる。
     """
-    data = _parse_footprint_block(body)
+    data = parse_footprint_block(body)
     if not data:
         return None
     return _validated_parent_issue_number(data.get("parent_issue_number"))
@@ -323,7 +323,7 @@ def recovery_counters_from_body(body: str) -> tuple[int, bool]:
     作られたIssue）は、いずれも`(0, False)`——「まだ一度も再計算して
     いない」と同じ意味——にフォールバックする。
     """
-    data = _parse_footprint_block(body)
+    data = parse_footprint_block(body)
     if not data:
         return (0, False)
     recompute_count = _validated_recompute_count(data.get("recompute_count"))

@@ -27,7 +27,7 @@ from orchestune.provisioning.rendering import (
     _derive_labels,
     _render_issue_body,
     _subtask_id_from_body,
-    _validate_template_identity_marker,
+    validate_template_identity_marker,
 )
 from orchestune.provisioning.subtasks import (
     _link_subtask_relationships,
@@ -49,7 +49,7 @@ __all__ = (
     "_render_issue_body",
     "_resolve_parent_issue",
     "_subtask_id_from_body",
-    "_validate_template_identity_marker",
+    "validate_template_identity_marker",
     "main",
     "provision_issues",
 )

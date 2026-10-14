@@ -35,7 +35,7 @@ from orchestune.provisioning.rendering import (
     _build_subtask_issue_body,
     _derive_labels,
     _issue_title,
-    _validate_template_identity_marker,
+    validate_template_identity_marker,
 )
 from orchestune.provisioning.retry import ProvisionRetryForge
 from orchestune.provisioning.subtasks import (
@@ -238,7 +238,7 @@ def _prepare_provisioning_context(
     )
     dag = _build_provisioning_dag(subtasks, resolved_repo_root)
     template = Path(template_path).read_text(encoding="utf-8")
-    _validate_template_identity_marker(template, template_path)
+    validate_template_identity_marker(template, template_path)
     return resolved_repo_root, subtasks, metadata, validated_parent, dag, template
 
 

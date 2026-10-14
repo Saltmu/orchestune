@@ -30,7 +30,7 @@ class WorktreePreparation:
     rejection_reason: str | None = None
 
 
-def _branch_exists(
+def local_or_remote_branch_exists(
     branch_name: str,
     cwd: str | Path | None = None,
     *,
@@ -50,12 +50,12 @@ def _branch_exists(
     return remote.returncode == 0
 
 
-def _resolve_worktree_path(worktree_root: str | Path, branch_name: str) -> Path:
+def resolve_worktree_path(worktree_root: str | Path, branch_name: str) -> Path:
     validate_ref_name(branch_name)
     return Path(worktree_root) / branch_name.replace("/", "-")
 
 
-def _create_worktree(
+def create_worktree(
     worktree_path: Path,
     worktree_root: Path,
     branch_name: str,
@@ -67,7 +67,7 @@ def _create_worktree(
     branch_resolver: Callable[..., str] | None = None,
 ) -> None:
     runner = run_git if git_runner is None else git_runner
-    exists = _branch_exists if branch_exists is None else branch_exists
+    exists = local_or_remote_branch_exists if branch_exists is None else branch_exists
     resolve_branch = (
         resolve_local_or_remote_branch if branch_resolver is None else branch_resolver
     )
@@ -87,7 +87,7 @@ def _create_worktree(
     runner(command, cwd=cwd, check=True)
 
 
-def _resolve_worktree_head_sha(
+def resolve_worktree_head_sha(
     worktree_path: Path, *, git_runner: Callable[..., GitResult] | None = None
 ) -> str:
     runner = run_git if git_runner is None else git_runner
@@ -135,7 +135,7 @@ def _git_toplevel(
     return str(Path(result.stdout.strip()).resolve())
 
 
-def _verify_worktree_identity(
+def verify_worktree_identity(
     worktree_path: Path,
     branch: str,
     repository_root: str | Path | None = None,
@@ -165,9 +165,9 @@ def _create_and_claim_worktree(
     claim_id: str,
     cwd: str | Path | None = None,
 ) -> WorktreePreparation:
-    branch_created = not _branch_exists(branch, cwd=cwd)
-    _create_worktree(worktree_path, worktree_root, branch, base_branch, cwd=cwd)
-    base_sha = _resolve_worktree_head_sha(worktree_path)
+    branch_created = not local_or_remote_branch_exists(branch, cwd=cwd)
+    create_worktree(worktree_path, worktree_root, branch, base_branch, cwd=cwd)
+    base_sha = resolve_worktree_head_sha(worktree_path)
     write_claim_marker(
         worktree_path,
         claim_id=claim_id,
@@ -196,7 +196,7 @@ def _prepare_worktree_from_marker(
     claim_id = marker["claim_id"]
     base_sha = marker.get("base_sha")
     if worktree_path.exists():
-        if not _verify_worktree_identity(worktree_path, branch, repository_root=cwd):
+        if not verify_worktree_identity(worktree_path, branch, repository_root=cwd):
             return WorktreePreparation(
                 worktree_path=worktree_path,
                 branch=branch,
@@ -210,7 +210,7 @@ def _prepare_worktree_from_marker(
             created=False,
             base_sha=base_sha,
         )
-    if not _branch_exists(branch, cwd=cwd):
+    if not local_or_remote_branch_exists(branch, cwd=cwd):
         return _create_and_claim_worktree(
             worktree_path, worktree_root, branch, base_branch, claim_id, cwd=cwd
         )
@@ -251,7 +251,7 @@ def _prepare_worktree_unclaimed(
             accepted=False,
             rejection_reason="unclaimed_existing_worktree",
         )
-    if _branch_exists(branch, cwd=cwd):
+    if local_or_remote_branch_exists(branch, cwd=cwd):
         if not trust_unclaimed_branch:
             return WorktreePreparation(
                 worktree_path=worktree_path,
@@ -262,7 +262,7 @@ def _prepare_worktree_unclaimed(
         run_git(["worktree", "prune"], cwd=cwd, check=False)
         worktree_root.mkdir(parents=True, exist_ok=True)
         run_git(["worktree", "add", str(worktree_path), branch], cwd=cwd, check=True)
-        base_sha = _resolve_worktree_head_sha(worktree_path)
+        base_sha = resolve_worktree_head_sha(worktree_path)
         write_claim_marker(
             worktree_path,
             claim_id=claim_id,
@@ -294,7 +294,7 @@ def prepare_task_worktree(
 ) -> WorktreePreparation:
     """Prepare a claim-owned worktree without force-removing unknown state."""
     worktree_root_path = Path(worktree_root)
-    worktree_path = _resolve_worktree_path(worktree_root_path, branch)
+    worktree_path = resolve_worktree_path(worktree_root_path, branch)
     with file_lock(claim_lock_path(worktree_path)):
         marker = read_claim_marker(worktree_path)
         if marker is not None:

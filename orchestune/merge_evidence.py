@@ -9,7 +9,7 @@ from orchestune.branch_naming import branch_matches_task, parse_task_branch_name
 from orchestune.models import PrRecord
 
 
-def _is_after_reopen(merged_at: str, reopened_at: str | None) -> bool | None:
+def is_after_reopen(merged_at: str, reopened_at: str | None) -> bool | None:
     """Return whether the merge is provably later than the latest reopen.
 
     GitHub timestamps used here are ISO-8601 UTC strings with second precision.
@@ -33,7 +33,7 @@ def _is_after_reopen(merged_at: str, reopened_at: str | None) -> bool | None:
     return merged > reopened
 
 
-def _identity_status(pr: PrRecord, issue_number: int, subtask_id: str) -> str:
+def identity_status(pr: PrRecord, issue_number: int, subtask_id: str) -> str:
     """Return ``match``, ``none``, or ``conflict`` for strict Issue identity."""
     explicit = issue_number in pr.closes_issue_numbers
     canonical = branch_matches_task(pr.head_ref, issue_number, subtask_id)

@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from orchestune.issue_parsing import (
-    _parse_footprint_block,
     decomposition_plan_from_parent_body,
     find_children_by_parent,
+    parse_footprint_block,
 )
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.pr_link_notice import extract_issue_numbers_from_pr
@@ -59,7 +59,7 @@ def _old_candidates(parent: IssueRecord) -> tuple[RetirementCandidate, ...]:
 def _body_subtask_id(issue: IssueRecord) -> str | None:
     """Read a Footprint subtask ID without treating malformed text as a match."""
 
-    value = _parse_footprint_block(issue.body)
+    value = parse_footprint_block(issue.body)
     raw_id = value.get("subtask_id") if isinstance(value, dict) else None
     return raw_id if isinstance(raw_id, str) and raw_id.strip() else None
 

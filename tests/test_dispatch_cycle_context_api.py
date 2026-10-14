@@ -281,7 +281,7 @@ class TestQueries:
         assert ctx.queued_tasks() == ()
 
     def test_launch_fact_is_none_when_external_id_is_empty_string(self):
-        # #868レビュー対応: `_parse_active_worktrees`は空文字列のexternal_id
+        # #868レビュー対応: `parse_active_worktrees`は空文字列のexternal_id
         # をそのまま保持するため、`is not None`だけでは有効なhandleとして
         # 誤認する。空文字列はpid欠如と同じ「照会不能」として扱う。
         ctx = _ctx(
@@ -295,7 +295,7 @@ class TestQueries:
         assert ctx.launch_fact(1) is None
 
     def test_launch_fact_is_none_when_pid_is_not_a_usable_process_id(self):
-        # #868レビュー対応: `_parse_active_worktrees`はpidを検証せず復元する
+        # #868レビュー対応: `parse_active_worktrees`はpidを検証せず復元する
         # ため、0・負数・boolも届き得る。POSIXでは0/負数のpidはプロセス
         # グループ宛のシグナルという別の意味を持ち、生存確認には使えない。
         for bad_pid in (0, -1, True):

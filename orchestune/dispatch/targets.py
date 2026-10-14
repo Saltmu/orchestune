@@ -56,21 +56,11 @@ from orchestune.targets.support import (
     BranchReachabilityError as BranchReachabilityError,
 )
 from orchestune.targets.support import (
-    _lookup_issue_outcome as _lookup_issue_outcome,
-)
-from orchestune.targets.support import (
-    _noninteractive_instruction,
-    _resolve_base_branch_val,
-    _task_pr_completion_status,
-)
-from orchestune.targets.support import (
-    _push_branch_and_verify as _push_branch_and_verify,
+    noninteractive_instruction,
+    resolve_base_branch_val,
+    task_pr_completion_status,
 )
 from orchestune.targets.usage import LocalUsageProvider
-from orchestune.targets.usage import (
-    _extract_usage_from_dict as _extract_usage_from_dict,
-)
-from orchestune.targets.usage import _parse_usage_from_log as _parse_usage_from_log
 from orchestune.task_metadata import TaskMetadata
 
 logger = logging.getLogger(__name__)
@@ -120,7 +110,7 @@ def _default_local_cmd_template(
 ) -> str:
     return _LOCAL_CMD_BASE_BY_TARGET[target_name].replace(
         NONINTERACTIVE_DISPATCH_INSTRUCTION,
-        _noninteractive_instruction(reviewer_bot),
+        noninteractive_instruction(reviewer_bot),
     )
 
 
@@ -194,7 +184,7 @@ def _format_local_cmd(
     reviewer_bot: ReviewerBot | None = None,
     base_branch: str | None = None,
 ) -> list[str]:
-    base_branch_val = _resolve_base_branch_val(base_branch)
+    base_branch_val = resolve_base_branch_val(base_branch)
     formatted_cmd = local_cmd.format(
         issue_number=task.issue_number,
         subtask_id=task.subtask_id or "",
@@ -461,7 +451,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
         self, task: TaskMetadata, branch_name: str, base_branch: str | None = None
     ) -> str:
         footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
-        base_branch_val = _resolve_base_branch_val(base_branch)
+        base_branch_val = resolve_base_branch_val(base_branch)
         return (
             f"GitHub Issue #{task.issue_number}"
             f"（サブタスク: {task.subtask_id or '不明'}）を"
@@ -469,7 +459,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
             f"作業ブランチ名は必ず `{branch_name}` としてください。\n"
             f"想定footprint: {footprint}\n"
             f"PR作成時は必ずベースブランチに `{base_branch_val}` を指定してください（`gh pr create --base {base_branch_val}`）。\n"
-            f"{_noninteractive_instruction(self._reviewer_bot)}\n"
+            f"{noninteractive_instruction(self._reviewer_bot)}\n"
         )
 
     def _fetch_task_status(self, task_id: str) -> str | None:
@@ -527,7 +517,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
     def completion_status(
         self, handle: DispatchHandle, forge: Forge | None = None
     ) -> Literal["pending", "completed", "abandoned"]:
-        pr_status = _task_pr_completion_status(handle, forge=forge)
+        pr_status = task_pr_completion_status(handle, forge=forge)
         if pr_status == "unknown":
             # PRの取得失敗時はCloud障害を誤ってabandoned扱いにしない
             return "pending"

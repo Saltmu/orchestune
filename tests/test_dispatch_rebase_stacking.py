@@ -112,13 +112,13 @@ class TestBranchStacking:
             # 実行しようとするため、実gitリポジトリを持たないこのテストでも
             # 通過できるよう既存の他ファイルと同じ境界でmockする。
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
             patch("orchestune.infra.git_cli.subprocess.run") as mock_subproc_run,
             patch(
-                "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
+                "orchestune.worktree_ops.preparation.resolve_worktree_head_sha",
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
@@ -255,13 +255,13 @@ class TestBranchStacking:
             # 実行しようとするため、実gitリポジトリを持たないこのテストでも
             # 通過できるよう既存の他ファイルと同じ境界でmockする。
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
             patch("orchestune.infra.git_cli.subprocess.run") as mock_subproc_run,
             patch(
-                "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
+                "orchestune.worktree_ops.preparation.resolve_worktree_head_sha",
                 autospec=True,
                 return_value="deadbeefcafe",
             ),
@@ -695,13 +695,13 @@ class TestBranchStacking:
             # 実行しようとするため、実gitリポジトリを持たないこのテストでも
             # 通過できるよう既存の他ファイルと同じ境界でmockする。
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
             patch("orchestune.infra.git_cli.subprocess.run") as mock_subproc_run,
             patch(
-                "orchestune.worktree_ops.preparation._resolve_worktree_head_sha",
+                "orchestune.worktree_ops.preparation.resolve_worktree_head_sha",
                 autospec=True,
                 return_value="deadbeefcafe",
             ),

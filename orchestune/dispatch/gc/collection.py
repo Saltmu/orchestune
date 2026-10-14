@@ -40,8 +40,8 @@ from orchestune.ledger.completion_reservations import (
 )
 from orchestune.ledger.run_state import (
     ActiveWorktree,
-    _parse_active_worktrees,
     load_run_state_readonly,
+    parse_active_worktrees,
 )
 from orchestune.task_metadata import TaskMetadata
 from orchestune.worktree_ops.claim_marker import (
@@ -77,7 +77,7 @@ def _read_gc_state(path: Path) -> tuple[dict[str, Any], dict[str, ActiveWorktree
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("run_state root must be an object")
-    active = _parse_active_worktrees(raw)
+    active = parse_active_worktrees(raw)
     completed = raw.get("completed_worktrees", [])
     if not isinstance(completed, list):
         raise ValueError("completed_worktrees schema error: value must be an array")

@@ -526,7 +526,7 @@ def _parse_active_worktree(key: object, value: object) -> ActiveWorktree:
     )
 
 
-def _parse_active_worktrees(data: dict[str, object]) -> dict[str, ActiveWorktree]:
+def parse_active_worktrees(data: dict[str, object]) -> dict[str, ActiveWorktree]:
     raw_active = data.get("active_worktrees", {})
     if not isinstance(raw_active, dict):
         raise ValueError("active_worktrees schema error: value must be an object")
@@ -617,7 +617,7 @@ def load_run_state_readonly(path: str | Path) -> RunState:
 
 def _run_state_from_data(data: dict[str, Any]) -> RunState:
     return RunState(
-        active_worktrees=_parse_active_worktrees(data),
+        active_worktrees=parse_active_worktrees(data),
         launch_history=list(data.get("launch_history", [])),
         completed_worktrees=_parse_completed_worktrees(data),
         last_reconciled_at=data.get("last_reconciled_at"),

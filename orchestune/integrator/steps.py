@@ -62,7 +62,7 @@ from orchestune.integrator.types import (
 from orchestune.integrator.worktree import IntegrationWorktree
 from orchestune.labels import StatusLabel
 from orchestune.ledger.escalation import (
-    _REMOVABLE_STATUS_LABELS,
+    REMOVABLE_STATUS_LABELS,
     apply_human_review_escalation,
 )
 from orchestune.ledger.status_labels import transition_status_label
@@ -803,7 +803,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     StatusLabel.BLOCKED_HUMAN_REVIEW,
                     (
                         label
-                        for label in _REMOVABLE_STATUS_LABELS
+                        for label in REMOVABLE_STATUS_LABELS
                         if label in current_labels
                     ),
                 )

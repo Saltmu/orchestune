@@ -12,7 +12,7 @@ from orchestune.forge import GitHubForge
 from orchestune.issue_parsing import embed_decomposition_plan_in_parent_body
 from orchestune.plan_writer import validate_subtask_issue_number_targets
 from orchestune.provisioning.plan import GITHUB_ISSUE_BODY_LIMIT
-from orchestune.provisioning.rendering import _validate_template_identity_marker
+from orchestune.provisioning.rendering import validate_template_identity_marker
 from orchestune.replan.audit import (
     find_existing_replan_audit,
     render_replan_audit,
@@ -287,7 +287,7 @@ def apply_replan(
 
     root = Path(repo_root) if repo_root is not None else Path.cwd()
     template = Path(template_path).read_text(encoding="utf-8")
-    _validate_template_identity_marker(template, template_path)
+    validate_template_identity_marker(template, template_path)
     resolved, created, reused = _prepare_generations(
         resolved_forge, preview, plan_path, template, root, parent
     )

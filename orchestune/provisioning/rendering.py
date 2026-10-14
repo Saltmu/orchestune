@@ -261,9 +261,7 @@ def _validate_template_profile_and_tier_markers(
         )
 
 
-def _validate_template_identity_marker(
-    template: str, template_path: str | Path
-) -> None:
+def validate_template_identity_marker(template: str, template_path: str | Path) -> None:
     probe_id = "orchestune-template-probe: needs-quoting #1"
     probe_deps = ("orchestune-template-probe-dep",)
     probe = _make_probe(probe_id, probe_deps, "probe-profile", "strong")

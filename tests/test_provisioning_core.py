@@ -22,7 +22,7 @@ from orchestune.provisioning.rendering import (
     _derive_labels,
     _render_issue_body,
     _subtask_id_from_body,
-    _validate_template_identity_marker,
+    validate_template_identity_marker,
 )
 from tests.test_provisioning_support import (
     _PLAN,
@@ -252,7 +252,7 @@ class TestValidateTemplateIdentityMarker:
     def test_accepts_the_real_template(self, template_path: Path):
         # Must not raise: _TEMPLATE (used by the `template_path` fixture)
         # already includes every required placeholder.
-        _validate_template_identity_marker(
+        validate_template_identity_marker(
             template_path.read_text(encoding="utf-8"), template_path
         )
 
@@ -267,7 +267,7 @@ class TestValidateTemplateIdentityMarker:
             "```\n"
         )
         with pytest.raises(ValueError, match="depends_on"):
-            _validate_template_identity_marker(template, tmp_path / "t.md")
+            validate_template_identity_marker(template, tmp_path / "t.md")
 
     def test_rejects_template_missing_parent_issue_number_placeholder(
         self, tmp_path: Path
@@ -282,7 +282,7 @@ class TestValidateTemplateIdentityMarker:
             "```\n"
         )
         with pytest.raises(ValueError, match="parent_issue_number"):
-            _validate_template_identity_marker(template, tmp_path / "t.md")
+            validate_template_identity_marker(template, tmp_path / "t.md")
 
     def test_rejects_template_missing_subtask_id_placeholder(self, tmp_path: Path):
         template = (
@@ -295,7 +295,7 @@ class TestValidateTemplateIdentityMarker:
             "```\n"
         )
         with pytest.raises(ValueError, match="subtask_id"):
-            _validate_template_identity_marker(template, tmp_path / "t.md")
+            validate_template_identity_marker(template, tmp_path / "t.md")
 
     def test_rejects_template_missing_execution_profile_placeholder(
         self, tmp_path: Path
@@ -310,7 +310,7 @@ class TestValidateTemplateIdentityMarker:
             "```\n"
         )
         with pytest.raises(ValueError, match="execution_profile"):
-            _validate_template_identity_marker(template, tmp_path / "t.md")
+            validate_template_identity_marker(template, tmp_path / "t.md")
 
     def test_rejects_template_with_quoted_execution_profile_placeholder(
         self, tmp_path: Path
@@ -326,7 +326,7 @@ class TestValidateTemplateIdentityMarker:
             "```\n"
         )
         with pytest.raises(ValueError, match="execution_profile"):
-            _validate_template_identity_marker(template, tmp_path / "t.md")
+            validate_template_identity_marker(template, tmp_path / "t.md")
 
     def test_rejects_template_missing_model_tier_placeholder(self, tmp_path: Path):
         template = (
@@ -339,7 +339,7 @@ class TestValidateTemplateIdentityMarker:
             "```\n"
         )
         with pytest.raises(ValueError, match="model_tier"):
-            _validate_template_identity_marker(template, tmp_path / "t.md")
+            validate_template_identity_marker(template, tmp_path / "t.md")
 
     def test_rejects_template_with_quoted_model_tier_placeholder(self, tmp_path: Path):
         template = (
@@ -353,7 +353,7 @@ class TestValidateTemplateIdentityMarker:
             "```\n"
         )
         with pytest.raises(ValueError, match="model_tier"):
-            _validate_template_identity_marker(template, tmp_path / "t.md")
+            validate_template_identity_marker(template, tmp_path / "t.md")
 
 
 class TestIsEpicIssue:

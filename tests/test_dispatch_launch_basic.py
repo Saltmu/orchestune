@@ -385,7 +385,7 @@ class TestApplyTaskLaunches:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -446,7 +446,7 @@ class TestApplyTaskLaunches:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -508,7 +508,7 @@ class TestApplyTaskLaunches:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -581,7 +581,7 @@ class TestApplyTaskLaunches:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -660,7 +660,7 @@ class TestApplyTaskLaunches:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -718,7 +718,7 @@ class TestApplyTaskLaunchesLabelOrdering:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -781,7 +781,7 @@ class TestApplyTaskLaunchesLabelOrdering:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
@@ -875,7 +875,7 @@ class TestLaunchSelectedTasks:
 
         with (
             patch(
-                "orchestune.worktree_ops.preparation._branch_exists",
+                "orchestune.worktree_ops.preparation.local_or_remote_branch_exists",
                 autospec=True,
                 return_value=False,
             ),
