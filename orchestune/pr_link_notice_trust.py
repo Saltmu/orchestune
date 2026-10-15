@@ -86,6 +86,7 @@ class TrustContext:
 
         Returns (NoticePresence, deferred_reason).
         """
+        self._last_deferred_reason = None
         if not candidate_comments:
             return NoticePresence.ABSENT, None
 

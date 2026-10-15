@@ -8,7 +8,7 @@ from typing import Any
 
 from orchestune.forge import Forge
 from orchestune.integrator.proofs import TaskIntegrationProof
-from orchestune.pr_link_notice import ensure_pr_merged_notice
+from orchestune.pr_link_notice import NoticeDelivery, ensure_pr_merged_notice
 from orchestune.task_branch_resolution import ResolutionSource, is_commit_oid
 
 RECEIPT_MARKER = "<!-- orchestune:task-integration-proof -->"
@@ -240,16 +240,14 @@ def resolve_merged_close_delivery(
     issue_number: int,
     integration_pr_number: int | None,
     notice_base_branch: str,
-) -> tuple[bool, str | None]:
+) -> tuple[NoticeDelivery, str | None]:
     """AutoMergeChildIntegrationStep用のマージ通知試行とクローズ判定。"""
     if integration_pr_number is not None:
         delivery = ensure_pr_merged_notice(
             forge, issue_number, integration_pr_number, notice_base_branch
         )
-        if not delivery.can_close:
-            return False, None
-        return True, None
-    return True, (
+        return delivery, None
+    return NoticeDelivery.ALREADY_PRESENT, (
         "Integratorが親ブランチへの自動マージを完了したため、"
         "このIssueを自動的にクローズしました。"
     )
@@ -260,7 +258,7 @@ def resolve_retry_close_delivery(
     issue_number: int,
     subtask_id: str,
     base_branch: str,
-) -> tuple[bool, str | None]:
+) -> tuple[NoticeDelivery, str | None]:
     """RetryChildIssueCloseStep用の通知再試行とクローズ判定。"""
     target = find_latest_integration_receipt(
         forge, issue_number, subtask_id, base_branch
@@ -274,10 +272,8 @@ def resolve_retry_close_delivery(
         delivery = ensure_pr_merged_notice(
             forge, issue_number, target.integration_pr_number, notice_base
         )
-        if not delivery.can_close:
-            return False, None
-        return True, None
-    return True, (
+        return delivery, None
+    return NoticeDelivery.ALREADY_PRESENT, (
         "Integratorが親ブランチへの自動マージを完了済みですが、"
         "前回のクローズ処理に失敗していたため再試行しました。"
     )

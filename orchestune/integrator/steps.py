@@ -203,12 +203,13 @@ class RetryChildIssueCloseStep(IntegrationComponent):
                     _ReceiptRecovery.DEFERRED,
                 }:
                     continue
-            can_close, comment = resolve_retry_close_delivery(
+            delivery, comment = resolve_retry_close_delivery(
                 ctx.forge, task.issue_number, task.subtask_id, ctx.base_branch
             )
-            if not can_close:
+            if not delivery.can_close:
                 print(
-                    f"Warning: Deferred retry closing issue #{task.issue_number}: notice delivery deferred",
+                    f"Warning: Deferred retry closing issue #{task.issue_number}: "
+                    f"notice delivery deferred ({delivery.value})",
                     file=sys.stderr,
                 )
                 held.deferred.append(task.issue_number)
@@ -1152,12 +1153,13 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             if task is None:
                 continue
 
-            can_close, comment = resolve_merged_close_delivery(
+            delivery, comment = resolve_merged_close_delivery(
                 ctx.forge, task.issue_number, ctx.integration_pr_number, base_branch
             )
-            if not can_close:
+            if not delivery.can_close:
                 print(
-                    f"Warning: Deferred closing issue #{task.issue_number}: notice delivery deferred",
+                    f"Warning: Deferred closing issue #{task.issue_number}: "
+                    f"notice delivery deferred ({delivery.value})",
                     file=sys.stderr,
                 )
                 continue
