@@ -1182,7 +1182,8 @@ class TestPreconditions:
         real = fake_forge.create_issue_comment.side_effect
 
         def recording(issue: int, body: str) -> dict[str, Any]:
-            trace.append("event")
+            if "integration-execution:v1" in body:
+                trace.append("event")
             created: dict[str, Any] = real(issue, body)
             return created
 

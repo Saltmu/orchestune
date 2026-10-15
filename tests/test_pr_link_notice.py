@@ -16,6 +16,7 @@ from orchestune.models import PrRecord
 from orchestune.pr_link_notice import (
     KIND_CREATED,
     KIND_MERGED,
+    NoticeDelivery,
     ensure_pr_merged_notice,
     extract_issue_numbers_from_pr,
     has_notice,
@@ -26,6 +27,12 @@ from orchestune.pr_link_notice import (
     pr_matches_issue,
     render_created_notice,
     render_merged_notice,
+)
+from orchestune.pr_link_notice_trust import (
+    REASON_COLLABORATORS_UNAVAILABLE,
+    REASON_IDENTITY_UNRESOLVED,
+    NoticePresence,
+    TrustContext,
 )
 from tests.conftest import make_issue, make_pr, make_task
 
@@ -90,8 +97,13 @@ class TestPrMatchesIssue:
         assert pr_matches_issue(pr, 710, subtask_id="guarded-repair-rollout") is False
 
 
-def _comment(body: str) -> dict[str, Any]:
-    return {"body": body, "author": "bot", "created_at": "2026-01-01T00:00:00+00:00"}
+def _comment(body: str, author: str = "bot") -> dict[str, Any]:
+    return {
+        "body": body,
+        "author": author,
+        "user": {"login": author},
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
 
 
 class TestNoticeRendering:
@@ -115,91 +127,318 @@ class TestNoticeRendering:
 
 
 class TestHasNotice:
-    def test_true_when_marker_present(self):
-        comments = [_comment(render_created_notice(456, "parent/issue-100"))]
+    def test_absent_when_no_comments(self):
+        trust = TrustContext(MagicMock())
+        assert has_notice([], KIND_CREATED, 456, trust=trust) is NoticePresence.ABSENT
 
-        assert has_notice(comments, KIND_CREATED, 456) is True
+    def test_present_when_marker_posted_by_self(self):
+        forge = MagicMock()
+        forge.get_authenticated_user.return_value = "my-bot"
+        trust = TrustContext(forge)
+        comments = [
+            _comment(render_created_notice(456, "parent/issue-100"), author="my-bot")
+        ]
+
+        assert (
+            has_notice(comments, KIND_CREATED, 456, trust=trust)
+            is NoticePresence.PRESENT
+        )
+        forge.list_notice_trusted_authors.assert_not_called()
+
+    def test_casefold_match_with_self(self):
+        forge = MagicMock()
+        forge.get_authenticated_user.return_value = "My-Bot"
+        trust = TrustContext(forge)
+        comments = [
+            _comment(render_created_notice(456, "parent/issue-100"), author="my-bot")
+        ]
+
+        assert (
+            has_notice(comments, KIND_CREATED, 456, trust=trust)
+            is NoticePresence.PRESENT
+        )
+
+    def test_does_not_strip_bot_suffix_when_comparing_self(self):
+        forge = MagicMock()
+        forge.get_authenticated_user.return_value = "github-actions[bot]"
+        forge.list_notice_trusted_authors.return_value = frozenset()
+        trust = TrustContext(forge)
+        comments = [
+            _comment(
+                render_created_notice(456, "parent/issue-100"),
+                author="github-actions",
+            )
+        ]
+
+        assert (
+            has_notice(comments, KIND_CREATED, 456, trust=trust)
+            is NoticePresence.ABSENT
+        )
+
+    def test_present_when_marker_posted_by_collaborator(self):
+        forge = MagicMock()
+        forge.get_authenticated_user.return_value = "my-bot"
+        forge.list_notice_trusted_authors.return_value = frozenset({"collab-user"})
+        trust = TrustContext(forge)
+        comments = [
+            _comment(
+                render_created_notice(456, "parent/issue-100"),
+                author="collab-user",
+            )
+        ]
+
+        assert (
+            has_notice(comments, KIND_CREATED, 456, trust=trust)
+            is NoticePresence.PRESENT
+        )
+
+    def test_absent_when_marker_posted_by_untrusted_third_party(self):
+        forge = MagicMock()
+        forge.get_authenticated_user.return_value = "my-bot"
+        forge.list_notice_trusted_authors.return_value = frozenset({"collab-user"})
+        trust = TrustContext(forge)
+        comments = [
+            _comment(
+                render_created_notice(456, "parent/issue-100"),
+                author="attacker",
+            )
+        ]
+
+        assert (
+            has_notice(comments, KIND_CREATED, 456, trust=trust)
+            is NoticePresence.ABSENT
+        )
+
+    def test_unknown_when_identity_unresolved_and_candidate_present(self):
+        forge = MagicMock()
+        forge.get_authenticated_user.side_effect = RuntimeError(
+            "Token cannot get /user"
+        )
+        forge.list_notice_trusted_authors.return_value = frozenset({"collab-user"})
+        trust = TrustContext(forge)
+        comments = [
+            _comment(
+                render_created_notice(456, "parent/issue-100"),
+                author="attacker",
+            )
+        ]
+
+        assert (
+            has_notice(comments, KIND_CREATED, 456, trust=trust)
+            is NoticePresence.UNKNOWN
+        )
+        assert trust.last_deferred_reason == REASON_IDENTITY_UNRESOLVED
+
+    def test_unknown_when_collaborators_api_fails(self):
+        forge = MagicMock()
+        forge.get_authenticated_user.return_value = "my-bot"
+        forge.list_notice_trusted_authors.side_effect = RuntimeError(
+            "Collaborators API 500"
+        )
+        trust = TrustContext(forge)
+        comments = [
+            _comment(
+                render_created_notice(456, "parent/issue-100"),
+                author="someone-else",
+            )
+        ]
+
+        assert (
+            has_notice(comments, KIND_CREATED, 456, trust=trust)
+            is NoticePresence.UNKNOWN
+        )
+        assert trust.last_deferred_reason == REASON_COLLABORATORS_UNAVAILABLE
+
+    def test_present_when_trusted_follows_unknown_candidate(self):
+        forge = MagicMock()
+        forge.get_authenticated_user.side_effect = RuntimeError("No GET /user")
+        forge.list_notice_trusted_authors.return_value = frozenset({"trusted-collab"})
+        trust = TrustContext(forge)
+        comments = [
+            _comment(
+                render_created_notice(456, "parent/issue-100"),
+                author="random-user",
+            )
+        ]
+        assert (
+            has_notice(comments, KIND_CREATED, 456, trust=trust)
+            is NoticePresence.UNKNOWN
+        )
+        # 信頼済み候補が後ろにあれば PRESENT
+        comments.append(
+            _comment(
+                render_created_notice(456, "parent/issue-100"),
+                author="trusted-collab",
+            )
+        )
+        assert (
+            has_notice(comments, KIND_CREATED, 456, trust=trust)
+            is NoticePresence.PRESENT
+        )
 
     def test_false_for_other_pr_or_kind(self):
-        comments = [_comment(render_created_notice(456, "parent/issue-100"))]
+        forge = MagicMock()
+        forge.get_authenticated_user.return_value = "my-bot"
+        trust = TrustContext(forge)
+        comments = [
+            _comment(render_created_notice(456, "parent/issue-100"), author="my-bot")
+        ]
 
-        assert has_notice(comments, KIND_CREATED, 457) is False
-        assert has_notice(comments, KIND_MERGED, 456) is False
+        assert (
+            has_notice(comments, KIND_CREATED, 457, trust=trust)
+            is NoticePresence.ABSENT
+        )
+        assert (
+            has_notice(comments, KIND_MERGED, 456, trust=trust) is NoticePresence.ABSENT
+        )
 
     def test_tolerates_comments_without_body(self):
-        assert has_notice([{"author": "bot"}], KIND_CREATED, 456) is False
+        trust = TrustContext(MagicMock())
+        assert (
+            has_notice([{"author": "bot"}], KIND_CREATED, 456, trust=trust)
+            is NoticePresence.ABSENT
+        )
 
     def test_matches_marker_stored_with_crlf(self):
-        # #664と同じ理由: GitHubから読み戻す本文はCRLFになり得る。
+        forge = MagicMock()
+        forge.get_authenticated_user.return_value = "bot"
+        trust = TrustContext(forge)
         body = render_created_notice(456, "parent/issue-100").replace("\n", "\r\n")
 
-        assert has_notice([_comment(body)], KIND_CREATED, 456) is True
+        assert (
+            has_notice([_comment(body)], KIND_CREATED, 456, trust=trust)
+            is NoticePresence.PRESENT
+        )
 
 
 class TestNotifyPrCreated:
     def test_posts_once(self, fake_forge: MagicMock):
         assert notify_pr_created(fake_forge, 12, 456, "parent/issue-100") is True
 
-        fake_forge.add_comment.assert_called_once()
-        issue_number, body = fake_forge.add_comment.call_args.args
+        fake_forge.create_issue_comment.assert_called_once()
+        issue_number, body = fake_forge.create_issue_comment.call_args.args[:2]
         assert issue_number == 12
         assert notice_marker(KIND_CREATED, 456) in body
 
-    def test_skips_when_already_notified(self, fake_forge: MagicMock):
-        fake_forge.list_comments.return_value = [
-            _comment(render_created_notice(456, "parent/issue-100"))
-        ]
+    def test_skips_when_already_notified_by_self(self, fake_forge: MagicMock):
+        fake_forge.create_issue_comment(
+            12, render_created_notice(456, "parent/issue-100"), author="bot"
+        )
+        fake_forge.create_issue_comment.reset_mock()
 
         assert notify_pr_created(fake_forge, 12, 456, "parent/issue-100") is False
-        fake_forge.add_comment.assert_not_called()
+        fake_forge.create_issue_comment.assert_not_called()
+
+    def test_posts_when_existing_marker_is_untrusted(self, fake_forge: MagicMock):
+        fake_forge.create_issue_comment(
+            12, render_created_notice(456, "parent/issue-100"), author="attacker"
+        )
+        fake_forge.create_issue_comment.reset_mock()
+
+        assert notify_pr_created(fake_forge, 12, 456, "parent/issue-100") is True
+        fake_forge.create_issue_comment.assert_called_once()
 
     def test_fails_closed_when_comments_cannot_be_read(self, fake_forge: MagicMock):
-        # 既存コメントを確認できない状態で投稿すると多重投稿になり得る。
-        # 投稿を見送り、次サイクルの再試行に委ねる。
-        fake_forge.list_comments.side_effect = RuntimeError("API unavailable")
+        fake_forge.list_all_issue_comments.side_effect = RuntimeError("API unavailable")
 
         assert notify_pr_created(fake_forge, 12, 456, "parent/issue-100") is False
-        fake_forge.add_comment.assert_not_called()
+        fake_forge.create_issue_comment.assert_not_called()
+
+    def test_fails_closed_when_identity_unresolved_with_candidate(
+        self, fake_forge: MagicMock
+    ):
+        fake_forge.create_issue_comment(
+            12, render_created_notice(456, "parent/issue-100"), author="someone"
+        )
+        fake_forge.create_issue_comment.reset_mock()
+        fake_forge.get_authenticated_user.side_effect = RuntimeError("No GET /user")
+
+        assert notify_pr_created(fake_forge, 12, 456, "parent/issue-100") is False
+        fake_forge.create_issue_comment.assert_not_called()
 
     def test_comment_failure_is_reported_but_not_raised(self, fake_forge: MagicMock):
-        fake_forge.add_comment.side_effect = RuntimeError("API unavailable")
+        fake_forge.create_issue_comment.side_effect = RuntimeError("API unavailable")
 
         assert notify_pr_created(fake_forge, 12, 456, "parent/issue-100") is False
+
+    def test_posts_when_no_candidates_even_if_identity_fails(
+        self, fake_forge: MagicMock
+    ):
+        fake_forge.get_authenticated_user.side_effect = RuntimeError("No GET /user")
+        assert notify_pr_created(fake_forge, 12, 456, "parent/issue-100") is True
+        fake_forge.create_issue_comment.assert_called_once()
 
 
 class TestEnsurePrMergedNotice:
     def test_posts_when_not_yet_notified(self, fake_forge: MagicMock):
-        assert ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100") is True
+        delivery = ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100")
+        assert delivery is NoticeDelivery.POSTED
+        assert delivery.can_close is True
 
-        fake_forge.add_comment.assert_called_once()
-        issue_number, body = fake_forge.add_comment.call_args.args
+        fake_forge.create_issue_comment.assert_called_once()
+        issue_number, body = fake_forge.create_issue_comment.call_args.args[:2]
         assert issue_number == 12
         assert notice_marker(KIND_MERGED, 456) in body
 
-    def test_reports_success_without_reposting_when_already_notified(
+    def test_already_present_when_notified_by_self(self, fake_forge: MagicMock):
+        fake_forge.create_issue_comment(
+            12, render_merged_notice(456, "parent/issue-100"), author="bot"
+        )
+        fake_forge.create_issue_comment.reset_mock()
+
+        delivery = ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100")
+        assert delivery is NoticeDelivery.ALREADY_PRESENT
+        assert delivery.can_close is True
+        fake_forge.create_issue_comment.assert_not_called()
+
+    def test_posts_when_existing_marker_is_untrusted(self, fake_forge: MagicMock):
+        fake_forge.create_issue_comment(
+            12, render_merged_notice(456, "parent/issue-100"), author="attacker"
+        )
+        fake_forge.create_issue_comment.reset_mock()
+
+        delivery = ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100")
+        assert delivery is NoticeDelivery.POSTED
+        assert delivery.can_close is True
+        fake_forge.create_issue_comment.assert_called_once()
+
+    def test_deferred_read_when_comments_cannot_be_read(self, fake_forge: MagicMock):
+        fake_forge.list_all_issue_comments.side_effect = RuntimeError("API unavailable")
+
+        delivery = ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100")
+        assert delivery is NoticeDelivery.DEFERRED_READ
+        assert delivery.can_close is False
+        fake_forge.create_issue_comment.assert_not_called()
+
+    def test_deferred_trust_when_candidate_marker_with_unresolved_identity(
         self, fake_forge: MagicMock
     ):
-        fake_forge.list_comments.return_value = [
-            _comment(render_merged_notice(456, "parent/issue-100"))
-        ]
+        fake_forge.create_issue_comment(
+            12, render_merged_notice(456, "parent/issue-100"), author="someone"
+        )
+        fake_forge.create_issue_comment.reset_mock()
+        fake_forge.get_authenticated_user.side_effect = RuntimeError("No GET /user")
 
-        assert ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100") is True
-        fake_forge.add_comment.assert_not_called()
+        delivery = ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100")
+        assert delivery is NoticeDelivery.DEFERRED_TRUST
+        assert delivery.can_close is False
+        fake_forge.create_issue_comment.assert_not_called()
 
-    def test_posts_anyway_when_comments_cannot_be_read(self, fake_forge: MagicMock):
-        # マージ通知はIssueをクローズする直前の書き込みで、クローズ後は統合対象から
-        # 外れて再試行されない。判定不能なら重複の可能性を受け入れて投稿する。
-        fake_forge.list_comments.side_effect = RuntimeError("API unavailable")
+    def test_deferred_write_when_comment_fails_to_post(self, fake_forge: MagicMock):
+        fake_forge.create_issue_comment.side_effect = RuntimeError("API write failed")
 
-        assert ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100") is True
-        fake_forge.add_comment.assert_called_once()
+        delivery = ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100")
+        assert delivery is NoticeDelivery.DEFERRED_WRITE
+        assert delivery.can_close is False
 
-    def test_reports_failure_when_the_comment_cannot_be_posted(
+    def test_posts_when_no_candidates_even_if_identity_fails(
         self, fake_forge: MagicMock
     ):
-        fake_forge.add_comment.side_effect = RuntimeError("API unavailable")
-
-        assert ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100") is False
+        fake_forge.get_authenticated_user.side_effect = RuntimeError("No GET /user")
+        delivery = ensure_pr_merged_notice(fake_forge, 12, 456, "parent/issue-100")
+        assert delivery is NoticeDelivery.POSTED
+        assert delivery.can_close is True
+        fake_forge.create_issue_comment.assert_called_once()
 
 
 class TestNotifyOpenPrLinks:
@@ -215,7 +454,7 @@ class TestNotifyOpenPrLinks:
         events = notify_open_pr_links(fake_forge, [pr], {12: "parent/issue-100"})
 
         assert events == [{"issue_number": 12, "pr_number": 456, "kind": KIND_CREATED}]
-        fake_forge.add_comment.assert_called_once()
+        fake_forge.create_issue_comment.assert_called_once()
 
     def test_resolves_issue_from_head_branch_without_closes_reference(
         self, fake_forge: MagicMock
@@ -242,7 +481,7 @@ class TestNotifyOpenPrLinks:
         )
 
         assert notify_open_pr_links(fake_forge, [pr], {12: "parent/issue-100"}) == []
-        fake_forge.add_comment.assert_not_called()
+        fake_forge.create_issue_comment.assert_not_called()
 
     def test_skips_issues_outside_the_known_set(self, fake_forge: MagicMock):
         pr = make_pr(
@@ -254,7 +493,7 @@ class TestNotifyOpenPrLinks:
         )
 
         assert notify_open_pr_links(fake_forge, [pr], {12: "parent/issue-100"}) == []
-        fake_forge.add_comment.assert_not_called()
+        fake_forge.create_issue_comment.assert_not_called()
 
     def test_skips_prs_without_resolvable_issue(self, fake_forge: MagicMock):
         pr = make_pr(
@@ -265,12 +504,13 @@ class TestNotifyOpenPrLinks:
         )
 
         assert notify_open_pr_links(fake_forge, [pr], {12: "parent/issue-100"}) == []
-        fake_forge.add_comment.assert_not_called()
+        fake_forge.create_issue_comment.assert_not_called()
 
     def test_does_not_repost_for_an_already_notified_pr(self, fake_forge: MagicMock):
-        fake_forge.list_comments.return_value = [
-            _comment(render_created_notice(456, "parent/issue-100"))
-        ]
+        fake_forge.create_issue_comment(
+            12, render_created_notice(456, "parent/issue-100"), author="bot"
+        )
+        fake_forge.create_issue_comment.reset_mock()
         pr = make_pr(
             456,
             head_ref="claude/issue-12-task-a",
@@ -280,12 +520,15 @@ class TestNotifyOpenPrLinks:
         )
 
         assert notify_open_pr_links(fake_forge, [pr], {12: "parent/issue-100"}) == []
-        fake_forge.add_comment.assert_not_called()
+        fake_forge.create_issue_comment.assert_not_called()
 
     def test_one_pr_failure_does_not_stop_the_remaining_prs(
         self, fake_forge: MagicMock
     ):
-        fake_forge.add_comment.side_effect = [RuntimeError("API unavailable"), None]
+        fake_forge.create_issue_comment.side_effect = [
+            RuntimeError("API unavailable"),
+            None,
+        ]
         prs = [
             make_pr(
                 456,
@@ -350,13 +593,15 @@ class TestDispatchCycleWiring:
     ):
         self._run_cycle(self._config(tmp_path, apply=True), fake_forge)
 
-        bodies = [call.args[1] for call in fake_forge.add_comment.call_args_list]
+        bodies = [
+            call.args[1] for call in fake_forge.create_issue_comment.call_args_list
+        ]
         assert any(notice_marker(KIND_CREATED, 456) in body for body in bodies)
 
     def test_dry_run_posts_nothing(self, tmp_path: Any, fake_forge: MagicMock):
         self._run_cycle(self._config(tmp_path, apply=False), fake_forge)
 
-        fake_forge.add_comment.assert_not_called()
+        fake_forge.create_issue_comment.assert_not_called()
 
 
 class TestNoticeExpectedBases:
@@ -427,7 +672,7 @@ class TestBaseBranchMustMatchTheTaskParent:
         )
 
         assert notify_open_pr_links(fake_forge, [pr], {12: "parent/issue-100"}) == []
-        fake_forge.add_comment.assert_not_called()
+        fake_forge.create_issue_comment.assert_not_called()
 
 
 class TestCrossRepositoryPrs:
@@ -452,7 +697,7 @@ class TestCrossRepositoryPrs:
             )
             == []
         )
-        fake_forge.add_comment.assert_not_called()
+        fake_forge.create_issue_comment.assert_not_called()
 
     def test_skips_pr_with_unknown_identity(self, fake_forge: MagicMock):
         assert (
@@ -461,7 +706,7 @@ class TestCrossRepositoryPrs:
             )
             == []
         )
-        fake_forge.add_comment.assert_not_called()
+        fake_forge.create_issue_comment.assert_not_called()
 
     def test_notifies_upstream_pr(self, fake_forge: MagicMock):
         events = notify_open_pr_links(

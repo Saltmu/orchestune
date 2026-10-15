@@ -828,19 +828,32 @@ class TestChildIssueCloseNotice:
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
 
         call_order: list[str] = []
-        integrator_env.add_comment.side_effect = lambda *a, **k: call_order.append(
-            "add_comment"
+        integrator_env.add_comment.side_effect = lambda issue, *a, **k: (
+            call_order.append("add_comment") if issue == 1 else None
         )
-        integrator_env.close_issue.side_effect = lambda *a, **k: call_order.append(
-            "close_issue"
+        orig_create = integrator_env.create_issue_comment.side_effect
+
+        def tracked_create(issue, *a, **k):
+            if issue == 1:
+                call_order.append("create_issue_comment")
+            return orig_create(issue, *a, **k)
+
+        integrator_env.create_issue_comment.side_effect = tracked_create
+        integrator_env.close_issue.side_effect = lambda issue, *a, **k: (
+            call_order.append("close_issue") if issue == 1 else None
         )
 
         res = Integrator(_child_config()).run()
 
         assert res["closed_issues"] == [1]
-        assert call_order == ["add_comment", "add_comment", "close_issue"]
-        issue_number, body = integrator_env.add_comment.call_args.args
-        assert issue_number == 1
+        assert call_order == ["add_comment", "create_issue_comment", "close_issue"]
+        child_calls = [
+            c
+            for c in integrator_env.create_issue_comment.call_args_list
+            if c.args[0] == 1
+        ]
+        assert len(child_calls) == 1
+        body = child_calls[0].args[1]
         assert notice_marker(KIND_MERGED, 999) in body
         assert "#999" in body
         assert "parent/issue-100" in body
@@ -851,35 +864,44 @@ class TestChildIssueCloseNotice:
     ):
         # 前サイクルで通知済み（クローズだけが失敗した）場合に、同じ通知を
         # 二重投稿しない。クローズ自体は再試行する。
-        fake_forge.list_comments.return_value = [
-            {
-                "body": render_merged_notice(999, "parent/issue-100"),
-                "author": "bot",
-                "created_at": "2026-01-01T00:00:00+00:00",
-            }
-        ]
+        fake_forge.create_issue_comment(
+            1, render_merged_notice(999, "parent/issue-100"), author="bot"
+        )
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
 
         res = Integrator(_child_config()).run()
 
         assert res["closed_issues"] == [1]
+        # 事前作成の1件のみで、子Issueへの新規通知投稿は行われない
+        child_calls = [
+            c
+            for c in integrator_env.create_issue_comment.call_args_list
+            if c.args[0] == 1
+        ]
+        assert len(child_calls) == 1
         assert integrator_env.add_comment.call_count == 1
         assert "task-integration-proof" in integrator_env.add_comment.call_args.args[1]
         integrator_env.close_issue.assert_called_once_with(1, "completed", comment=None)
 
-    def test_falls_back_to_the_close_comment_when_the_notice_cannot_be_posted(
+    def test_defers_close_when_the_notice_cannot_be_posted(
         self, integrator_env: IntegratorEnv
     ):
-        # 独立コメントの投稿に失敗した場合の最後の手段として、クローズコメント
-        # そのものに通知を載せる。
+        # #686: 独立コメントの投稿に失敗した場合、クローズコメントへの同梱
+        # fallbackは行わず、Issueクローズ自体を保留する。
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
-        integrator_env.add_comment.side_effect = [None, RuntimeError("API unavailable")]
+        orig_create = integrator_env.create_issue_comment.side_effect
+
+        def fail_child_notice(issue, *a, **k):
+            if issue == 1:
+                raise RuntimeError("API unavailable")
+            return orig_create(issue, *a, **k)
+
+        integrator_env.create_issue_comment.side_effect = fail_child_notice
 
         res = Integrator(_child_config()).run()
 
-        assert res["closed_issues"] == [1]
-        comment = integrator_env.close_issue.call_args.kwargs["comment"]
-        assert notice_marker(KIND_MERGED, 999) in comment
+        assert res["closed_issues"] == []
+        integrator_env.close_issue.assert_not_called()
 
     def test_falls_back_to_plain_comment_without_an_integration_pr(
         self, integrator_env: IntegratorEnv

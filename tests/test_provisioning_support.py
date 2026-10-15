@@ -214,6 +214,17 @@ class FakeForge:
     def get_issue_last_reopened_at(self, issue_number: int | str) -> str | None:
         raise NotImplementedError
 
+    def list_all_issue_comments(self, issue_number: int | str) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    def create_issue_comment(
+        self, issue_number: int | str, body: str
+    ) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def list_notice_trusted_authors(self) -> frozenset[str]:
+        raise NotImplementedError
+
 
 @pytest.fixture
 def provisioning_forge(monkeypatch: pytest.MonkeyPatch) -> FakeForge:

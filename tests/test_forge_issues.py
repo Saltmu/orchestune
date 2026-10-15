@@ -1028,3 +1028,157 @@ class TestListComments:
             "--json",
             "comments",
         ]
+
+
+class TestListNoticeTrustedAuthors:
+    def test_extracts_trusted_logins_and_excludes_pull_only(
+        self, forge: GitHubForge, gh_run
+    ):
+        pages = [
+            [
+                {
+                    "login": "alice",
+                    "permissions": {
+                        "admin": False,
+                        "maintain": False,
+                        "push": True,
+                        "triage": False,
+                        "pull": True,
+                    },
+                },
+                {
+                    "login": "bob",
+                    "permissions": {
+                        "admin": False,
+                        "maintain": False,
+                        "push": False,
+                        "triage": False,
+                        "pull": True,
+                    },
+                },
+            ],
+            [
+                {
+                    "login": "charlie",
+                    "permissions": {
+                        "admin": True,
+                        "maintain": False,
+                        "push": True,
+                        "triage": True,
+                        "pull": True,
+                    },
+                },
+                {
+                    "login": "david",
+                    "permissions": {
+                        "admin": False,
+                        "maintain": True,
+                        "push": False,
+                        "triage": False,
+                        "pull": True,
+                    },
+                },
+                {
+                    "login": "eve",
+                    "permissions": {
+                        "admin": False,
+                        "maintain": False,
+                        "push": False,
+                        "triage": True,
+                        "pull": True,
+                    },
+                },
+            ],
+        ]
+        gh_run.stdout(json.dumps(pages))
+
+        result = forge.list_notice_trusted_authors()
+
+        assert result == frozenset({"alice", "charlie", "david", "eve"})
+        called_args = gh_run.call_args.args[0]
+        assert called_args == [
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            "repos/{owner}/{repo}/collaborators?affiliation=all&per_page=100",
+        ]
+
+    def test_tolerates_missing_optional_permissions(self, forge: GitHubForge, gh_run):
+        pages = [
+            [
+                {
+                    "login": "frank",
+                    "permissions": {
+                        "admin": False,
+                        "push": True,
+                        "pull": True,
+                        # triage, maintain missing -> treated as False
+                    },
+                },
+                {
+                    "login": "grace",
+                    "permissions": {
+                        "admin": False,
+                        "push": False,
+                        "pull": True,
+                        # triage, maintain missing -> treated as False
+                    },
+                },
+            ]
+        ]
+        gh_run.stdout(json.dumps(pages))
+
+        result = forge.list_notice_trusted_authors()
+
+        assert result == frozenset({"frank"})
+
+    def test_raises_on_missing_required_permissions(self, forge: GitHubForge, gh_run):
+        pages = [
+            [
+                {
+                    "login": "heidi",
+                    "permissions": {
+                        # admin missing
+                        "push": True,
+                        "pull": True,
+                    },
+                }
+            ]
+        ]
+        gh_run.stdout(json.dumps(pages))
+
+        with pytest.raises(ValueError, match="invalid collaborator schema"):
+            forge.list_notice_trusted_authors()
+
+    def test_raises_on_non_boolean_permission(self, forge: GitHubForge, gh_run):
+        pages = [
+            [
+                {
+                    "login": "ivan",
+                    "permissions": {
+                        "admin": "true",  # string, not boolean
+                        "push": False,
+                        "pull": True,
+                    },
+                }
+            ]
+        ]
+        gh_run.stdout(json.dumps(pages))
+
+        with pytest.raises(ValueError, match="invalid collaborator schema"):
+            forge.list_notice_trusted_authors()
+
+    def test_raises_on_invalid_page_structure(self, forge: GitHubForge, gh_run):
+        gh_run.stdout('{"not": "a list of pages"}')
+
+        with pytest.raises(ValueError, match="invalid page"):
+            forge.list_notice_trusted_authors()
+
+    def test_propagates_subprocess_error(self, forge: GitHubForge, gh_run):
+        gh_run.side_effect = subprocess.CalledProcessError(
+            1, ["gh", "api"], stderr="HTTP 403: Forbidden"
+        )
+
+        with pytest.raises(subprocess.CalledProcessError):
+            forge.list_notice_trusted_authors()
