@@ -1049,3 +1049,48 @@ def test_control_prior_merge_repair_exclusion_removal_is_detected(monkeypatch):
     )
     with expect_violation("P3C-LIVENESS-PRIOR-MERGE-DRYRUN"):
         scenario_prior_merge_dependency_keeps_its_label_after_faulted_apply_cycles()
+
+
+class _Drawn:
+    """A fixed ``st.data()`` stand-in that replays one recorded draw."""
+
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+    def draw(self, strategy: object) -> int:
+        del strategy
+        return self.value
+
+
+def test_late_finished_intermediate_promotion_is_reported_as_recovered():
+    """#1343: the shrunk Hypothesis counterexample, replayed step by step.
+
+    Cycle 0 adds ``queued`` to 11 but the removal of ``blocked`` fails. Cycle 1
+    finishes that transition through the primary-status conflict repair, after
+    the cycle's reports were delivered. Cycle 2 delivers it while dependency 13
+    is revoked: the report is a late one, so it must not count as cycle 2's own
+    promotion of 11.
+    """
+    machine = DependencyLivenessMachine()
+    try:
+        machine.start(
+            topology=LivenessTopology(
+                dep_issues=(11, 12, 13),
+                t_depends_on=("dep-a", "dep-b"),
+                issue_depends_on={11: ("dep-c",), 12: ("dep-c",)},
+                required_to_promote=(11, 12),
+            ),
+            recompute=False,
+        )
+        machine.complete_dependency(data=_Drawn(13), path=CompletionPath.LABEL)
+        machine.fail_next(op="remove", mode="before")
+        machine.duplicate_completion(data=_Drawn(13))
+        machine.duplicate_completion(data=_Drawn(13))
+        machine.cycle(apply=True, lag=False)
+        machine.cycle(apply=True, lag=False)
+        machine.stale_snapshot(kind="revoke")
+        machine.cycle(apply=True, lag=False)
+        late = machine.world.observations[-1].reported_events
+        assert [(e.issue_number, e.recovered) for e in late] == [(11, True)]
+    finally:
+        machine.teardown()
