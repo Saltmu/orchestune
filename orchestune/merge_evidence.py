@@ -37,11 +37,13 @@ def identity_status(pr: PrRecord, issue_number: int, subtask_id: str) -> str:
     """Return ``match``, ``none``, ``conflict`` or ``unknown`` for strict Issue identity.
 
     ``unknown`` (#1336) means the record cannot confirm its closing references,
-    so neither a match nor its absence is proven.
+    so neither a match nor its absence is proven. A record without the full list
+    still decides once it proves that the Issue is closed by the pull request
+    (#1341): the branch name alone then tells a match from a conflict.
     """
-    if not pr.closing_references_known:
-        return "unknown"
     explicit = issue_number in pr.closes_issue_numbers
+    if not pr.closing_references_known and not explicit:
+        return "unknown"
     canonical = branch_matches_task(pr.head_ref, issue_number, subtask_id)
     parsed = parse_task_branch_name(pr.head_ref)
     if parsed is not None and parsed.issue_number != issue_number:

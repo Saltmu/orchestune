@@ -4,12 +4,20 @@
 403. The REST API cannot report `closingIssuesReferences` or `reviewDecision`,
 so a record built here marks closing references as unknown and leaves the
 review decision empty instead of guessing them.
+
+#1341: for a merged pull request, an Issue still counts as closed by it when
+the Issue's timeline proves it: GitHub linked this pull request to the Issue and
+the merger closed the Issue right at the merge. Only that verified subset is
+reported; the full list stays unknown.
 """
 
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 from orchestune.models import PrRecord
@@ -86,6 +94,86 @@ def status_checks(run: Runner, sha: str) -> list[dict[str, object]]:
     return _check_runs(run, sha) + _status_contexts(run, sha)
 
 
+#: GitHub's closing keywords followed by a same-repository `#N` (#1341). The
+#: `owner/repo#N` and URL forms are left out, so they never become evidence.
+_CLOSING_REFERENCE = re.compile(
+    r"(?<![\w/#])(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?::\s*|\s+)#(\d+)\b",
+    re.IGNORECASE,
+)
+#: At most this many referenced Issues are checked, one timeline read each.
+_MAX_CLOSING_CANDIDATES = 10
+#: GitHub closes the Issue within seconds of the merge; later is a manual close.
+_CLOSE_AFTER_MERGE_SECONDS = 60
+
+
+def _closing_candidates(body: str) -> list[int]:
+    numbers = dict.fromkeys(int(n) for n in _CLOSING_REFERENCE.findall(body))
+    return list(numbers)[:_MAX_CLOSING_CANDIDATES]
+
+
+def _timestamp(value: object) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _links_this_pull(event: dict[str, Any], number: int, repository_url: str) -> bool:
+    source = event.get("source")
+    issue = source.get("issue") if isinstance(source, dict) else None
+    return (
+        event.get("event") == "cross-referenced"
+        and isinstance(issue, dict)
+        and issue.get("number") == number
+        and isinstance(issue.get("pull_request"), dict)
+        and issue.get("repository_url") == repository_url
+    )
+
+
+def _closed_at_merge(event: dict[str, Any], merged: datetime, merger: str) -> bool:
+    if event.get("event") != "closed":
+        return False
+    actor = event.get("actor")
+    closed = _timestamp(event.get("created_at"))
+    return (
+        isinstance(actor, dict)
+        and actor.get("login") == merger
+        and closed is not None
+        and 0 <= (closed - merged).total_seconds() <= _CLOSE_AFTER_MERGE_SECONDS
+    )
+
+
+def _closed_by_this_merge(
+    events: list[Any], number: int, repository_url: str, merged: datetime, merger: str
+) -> bool:
+    events = [event for event in events if isinstance(event, dict)]
+    closes = [i for i, e in enumerate(events) if _closed_at_merge(e, merged, merger)]
+    return (
+        bool(closes)
+        and any(_links_this_pull(e, number, repository_url) for e in events)
+        and not any(e.get("event") == "reopened" for e in events[closes[-1] + 1 :])
+    )
+
+
+def _verified_closing_issues(run: Runner, raw: dict[str, Any]) -> tuple[int, ...]:
+    """Issues whose timeline proves that this merge closed them (#1341)."""
+    merged = _timestamp(raw.get("merged_at"))
+    merger = (raw.get("merged_by") or {}).get("login")
+    repository_url = ((raw.get("base") or {}).get("repo") or {}).get("url")
+    if merged is None or not merger or not repository_url:
+        return ()
+    verified = []
+    for issue in _closing_candidates(str(raw.get("body") or "")):
+        path = f"repos/{{owner}}/{{repo}}/issues/{issue}/timeline?per_page=100"
+        try:
+            events = _pages(run, path)
+        except (subprocess.CalledProcessError, ValueError):
+            continue  # An unreadable timeline is no evidence, not a failed lookup.
+        if _closed_by_this_merge(events, raw["number"], repository_url, merged, merger):
+            verified.append(issue)
+    return tuple(verified)
+
+
 def pull_request_record(
     run: Runner, number: int, is_check_passing: Callable[[dict[str, object]], bool]
 ) -> PrRecord:
@@ -108,8 +196,9 @@ def pull_request_record(
         changed_files=changed_files,
         created_at=raw.get("created_at") or "",
         closed_at=raw.get("closed_at") or "",
-        # The REST API has no closingIssuesReferences; see closing_references_known.
-        closes_issue_numbers=(),
+        # The REST API has no closingIssuesReferences, so only the Issues this
+        # merge provably closed are listed; see closing_references_known.
+        closes_issue_numbers=_verified_closing_issues(run, raw) if merged_at else (),
         closing_references_known=False,
         review_decision="",
         is_ci_passing=bool(checks) and all(is_check_passing(c) for c in checks),
