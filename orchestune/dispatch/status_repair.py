@@ -421,12 +421,14 @@ def _execute(
         return None
     journal.mark_applied(current.intent_id)
     if is_reportable_promotion(current.operation, expected):
+        # #1343: only the promotion command re-checks the dependencies now.
+        # Another command (a conflict cleanup) finishes an earlier promotion.
         _register_promotion_report(
             config,
             current,
             verified_labels,
             subtask_id=fresh.task.subtask_id or None,
-            recovered=False,
+            recovered=not is_reportable_promotion_command(command),
             observed_at=now,
         )
     journal.mark_verified(current.intent_id)
