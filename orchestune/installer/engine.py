@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import datetime
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -295,35 +294,18 @@ def _uninstall_consumer_or_bundle(
     payload: BundlePayload,
     manifest: InstallerManifest,
     target_consumers: list[str],
+    tx: SkillTransaction,
 ) -> list[str]:
     entry = manifest.bundles[payload.bundle_name]
     remaining_consumers = [c for c in entry.consumers if c not in target_consumers]
-
-    actions: list[str] = []
+    removed_consumers = [c for c in entry.consumers if c in target_consumers]
     if remaining_consumers:
-        entry.consumers = remaining_consumers
-        manifest.generation += 1
-        manifest.updated_at = datetime.datetime.now(datetime.UTC).isoformat()
-        save_manifest(root.path, manifest)
-        actions.append(
-            f"removed consumers {target_consumers}, remaining: {remaining_consumers}"
-        )
-    else:
-        # Deregister bundle from manifest first to avoid leaving manifest in MODIFIED state if crash
-        del manifest.bundles[payload.bundle_name]
-        manifest.generation += 1
-        manifest.updated_at = datetime.datetime.now(datetime.UTC).isoformat()
-        save_manifest(root.path, manifest)
-
-        for skill_name in entry.skills.keys():
-            s_path = root.path / skill_name
-            if s_path.is_dir() and not s_path.is_symlink():
-                shutil.rmtree(s_path)
-            elif s_path.exists() or s_path.is_symlink():
-                s_path.unlink()
-
-        actions.append(f"removed {payload.bundle_name} bundle files and deregistered")
-    return actions
+        tx.commit_uninstall(manifest, payload.bundle_name, remaining_consumers)
+        return [
+            f"removed consumers {removed_consumers}, remaining: {remaining_consumers}"
+        ]
+    tx.commit_uninstall(manifest, payload.bundle_name, [])
+    return [f"removed {payload.bundle_name} bundle files and deregistered"]
 
 
 def _noop_uninstall(
@@ -340,6 +322,87 @@ def _noop_uninstall(
     )
 
 
+def _uninstall_result(
+    root: PhysicalRoot,
+    payload: BundlePayload,
+    state_before: BundleState,
+    state_after: BundleState,
+    actions: list[str],
+) -> OperationResult:
+    return OperationResult(
+        physical_root=root.path,
+        bundle_name=payload.bundle_name,
+        operation="uninstall",
+        state_before=state_before,
+        state_after=state_after,
+        actions=actions,
+        success=True,
+    )
+
+
+def _completed_uninstall_result(
+    root: PhysicalRoot,
+    payload: BundlePayload,
+    state_before: BundleState,
+    target_consumers: list[str],
+    tx: SkillTransaction,
+) -> OperationResult | None:
+    if payload.bundle_name not in tx.recovered_uninstalls:
+        return None
+    manifest = load_manifest(root.path)
+    entry = manifest.bundles.get(payload.bundle_name) if manifest is not None else None
+    if entry is not None and any(c in entry.consumers for c in target_consumers):
+        return None
+    return _uninstall_result(
+        root,
+        payload,
+        state_before,
+        inspect_bundle_state(root.path, payload),
+        [f"completed pending uninstall operation for {payload.bundle_name} bundle"],
+    )
+
+
+def _uninstall_locked(
+    root: PhysicalRoot,
+    payload: BundlePayload,
+    state_before: BundleState,
+    target_consumers: list[str],
+    tx: SkillTransaction,
+) -> OperationResult | list[str]:
+    completion = _completed_uninstall_result(
+        root, payload, state_before, target_consumers, tx
+    )
+    if completion is not None:
+        return completion
+
+    current_state = inspect_bundle_state(root.path, payload)
+    if current_state == BundleState.ABSENT:
+        return _uninstall_result(
+            root, payload, state_before, current_state, ["not installed (no-op)"]
+        )
+    if current_state == BundleState.MODIFIED:
+        raise ConflictError(
+            f"Skills in '{payload.bundle_name}' at {root.path} have been modified by user. "
+            "Refusing to uninstall automatically."
+        )
+    manifest = load_manifest(root.path)
+    if not manifest or payload.bundle_name not in manifest.bundles:
+        return _uninstall_result(
+            root, payload, state_before, current_state, ["unmanaged (no-op)"]
+        )
+
+    entry = manifest.bundles[payload.bundle_name]
+    if not any(consumer in entry.consumers for consumer in target_consumers):
+        return _uninstall_result(
+            root,
+            payload,
+            state_before,
+            current_state,
+            ["not installed for requested consumer (no-op)"],
+        )
+    return _uninstall_consumer_or_bundle(root, payload, manifest, target_consumers, tx)
+
+
 def uninstall_skills(
     root: PhysicalRoot,
     payload: BundlePayload,
@@ -351,34 +414,21 @@ def uninstall_skills(
     if dry_run:
         return _noop_uninstall(root, payload, state, "dry_run_preview")
 
-    if state == BundleState.ABSENT:
+    installer_dir = get_installer_dir(root.path)
+    if state == BundleState.ABSENT and not (
+        installer_dir.exists() or installer_dir.is_symlink()
+    ):
+        # No manifest or pending transaction can exist without installer state.
+        # Avoid creating the root for an absent no-op; if state appears afterward,
+        # this request linearizes before the operation that creates it.
         return _noop_uninstall(root, payload, state, "not installed (no-op)")
 
-    if state == BundleState.MODIFIED:
-        raise ConflictError(
-            f"Skills in '{payload.bundle_name}' at {root.path} have been modified by user. "
-            "Refusing to uninstall automatically."
-        )
+    tx = SkillTransaction(root.path)
+    with tx:
+        outcome = _uninstall_locked(root, payload, state, target_consumers, tx)
 
-    installer_dir = get_installer_dir(root.path)
-    installer_dir.mkdir(parents=True, exist_ok=True)
-    with FileLock(installer_dir / LOCK_FILENAME, timeout=10.0):
-        recover_pending_transactions(root.path)
-        manifest = load_manifest(root.path)
-        if not manifest or payload.bundle_name not in manifest.bundles:
-            return _noop_uninstall(root, payload, state, "unmanaged (no-op)")
-
-        actions = _uninstall_consumer_or_bundle(
-            root, payload, manifest, target_consumers
-        )
+    if isinstance(outcome, OperationResult):
+        return outcome
 
     new_state = inspect_bundle_state(root.path, payload)
-    return OperationResult(
-        physical_root=root.path,
-        bundle_name=payload.bundle_name,
-        operation="uninstall",
-        state_before=state,
-        state_after=new_state,
-        actions=actions,
-        success=True,
-    )
+    return _uninstall_result(root, payload, state, new_state, outcome)
