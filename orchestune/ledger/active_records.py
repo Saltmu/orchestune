@@ -14,24 +14,17 @@ from math import isfinite
 from types import MappingProxyType
 from typing import Any
 
-from orchestune.ownership_contracts import ClaimStage, OwnerKind, ReservationKind
+from orchestune.ownership_contracts import (
+    ClaimStage,
+    CompleteStage,
+    OwnerKind,
+    ReservationKind,
+)
 
 LAUNCH_PHASES = frozenset({"prepared", "unknown", "launching", "launched", "failed"})
-# Keep ledger independent of complete; these are persisted strings, not proof.
-COMPLETION_STAGES = frozenset(
-    {
-        "initializing",
-        "preflight_validating",
-        "evidence_verifying",
-        "journaling",
-        "posting",
-        "handed_off_to_gc",
-        "reserved",
-        "outcome_posted",
-        "label_confirmed",
-        "handed_off",
-    }
-)
+# Persisted strings, not proof; derived from the shared L0 vocabulary so the
+# ledger never imports the complete package.
+COMPLETION_STAGES = frozenset(stage.value for stage in CompleteStage)
 
 
 def _strings(record: Any, names: tuple[str, ...]) -> None:

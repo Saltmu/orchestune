@@ -56,9 +56,13 @@ This document describes the responsibilities and dependency rule of `ledger`, th
 ## 2. Ownership contracts
 
 `ownership_contracts` is an independent L0 module defining `OwnerKind`,
-`ClaimStage`, and `ReservationKind`. Ledger imports it directly; `claim.contracts`
-may re-export those same enums and retains claim-specific requests/outcomes.
-The shared enums have no dependency on claim, ledger, or dispatch implementations.
+`ClaimStage`, `ReservationKind`, and `CompleteStage`. Ledger imports it directly;
+`claim.contracts` and `complete.contracts` may re-export those same enums and
+retain claim/complete-specific requests, outcomes, and transition rules.
+The shared enums have no dependency on claim, complete, ledger, or dispatch
+implementations. Ledger derives its accepted persisted completion-stage values
+(`COMPLETION_STAGES`) and its handoff and reservation checks from `CompleteStage`
+members instead of keeping separate string sets.
 
 ## 3. The ledger dependency rule
 

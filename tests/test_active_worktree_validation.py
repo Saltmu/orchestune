@@ -162,3 +162,62 @@ def test_valid_enum_values_match_owner_contracts() -> None:
     from orchestune.ledger.active_records import COMPLETION_STAGES
 
     assert COMPLETION_STAGES == {stage.value for stage in CompleteStage}
+
+
+_PERSISTED_COMPLETION_STAGES = frozenset(
+    {
+        "initializing",
+        "preflight_validating",
+        "evidence_verifying",
+        "journaling",
+        "posting",
+        "handed_off_to_gc",
+        "reserved",
+        "outcome_posted",
+        "label_confirmed",
+        "handed_off",
+    }
+)
+
+
+def test_completion_stages_are_the_persisted_names() -> None:
+    from orchestune.ledger.active_records import COMPLETION_STAGES
+
+    assert COMPLETION_STAGES == _PERSISTED_COMPLETION_STAGES
+
+
+@pytest.mark.parametrize("stage", sorted(_PERSISTED_COMPLETION_STAGES))
+def test_every_persisted_completion_stage_round_trips(stage: str) -> None:
+    raw = {
+        "issue_number": 1,
+        "branch": "b",
+        "worktree_path": "p",
+        "declared_footprint": [],
+        "completion_id": "c"
+        if stage not in {"handed_off", "handed_off_to_gc"}
+        else None,
+        "completion_stage": stage,
+    }
+    active = decode_active_worktree(raw)
+    assert active.completion.completion_stage == stage
+    assert encode_active_worktree(active)["completion_stage"] == stage
+
+
+@pytest.mark.parametrize("stage", ["", "Handed_Off", "handed-off", "done", 7])
+def test_unknown_completion_stage_is_rejected(stage: object) -> None:
+    with pytest.raises(ValueError, match="completion_stage"):
+        ActiveCompletionJournal(completion_stage=stage)  # type: ignore[arg-type]
+
+
+def test_ledger_records_do_not_import_the_complete_package() -> None:
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; import orchestune.ledger.active_records, "
+        "orchestune.ledger.active_lifecycle, orchestune.ledger.completion_reservations; "
+        "sys.exit(1 if any(m == 'orchestune.complete' or m.startswith('orchestune.complete.') "
+        "for m in sys.modules) else 0)"
+    )
+    result = subprocess.run([sys.executable, "-I", "-c", code], check=False)
+    assert result.returncode == 0

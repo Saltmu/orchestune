@@ -7,6 +7,15 @@ from typing import Any
 
 from orchestune.labels import NOT_NEEDED_REVIEW_PENDING
 from orchestune.ledger.run_state import load_run_state_readonly
+from orchestune.ownership_contracts import CompleteStage
+
+_PENDING_STAGES = frozenset(
+    {
+        CompleteStage.RESERVED.value,
+        CompleteStage.OUTCOME_POSTED.value,
+        CompleteStage.LABEL_CONFIRMED.value,
+    }
+)
 
 _IDENTITY = (
     "repository_id",
@@ -62,9 +71,9 @@ def completion_reservation_status(state: Any, issue_number: int) -> str:
         if record is None:
             return "legacy"
         stage = record.get("stage")
-        if stage in {"reserved", "outcome_posted", "label_confirmed"}:
+        if stage in _PENDING_STAGES:
             return "pending"
-        if stage != "handed_off":
+        if stage != CompleteStage.HANDED_OFF.value:
             return "invalid"
         posting, labels = record.get("posting_evidence"), record.get("label_evidence")
         if (

@@ -318,3 +318,72 @@ def test_dependency_guard_reloads_reservation_created_after_snapshot(
     assert not complete_task(request, forge=forge).success
     assert stale.completion_reservations == {}
     assert dependency_completion_blocked_fresh(stale, 1110, request.state_path)
+
+
+_RESERVATION_IDENTITY = {
+    "repository_id": "repo",
+    "issue_number": 10,
+    "generation_id": "g",
+    "completion_id": "c",
+    "owner_token_digest": "d",
+    "request_fingerprint": "f",
+    "result": "done",
+    "target_label": "status:done",
+    "outcome_payload": {},
+}
+
+
+def _journaled(stage: str, **extra):
+    record = {**_RESERVATION_IDENTITY, "stage": stage, **extra}
+    return RunState(
+        completion_reservations={"repo::10": dict(_RESERVATION_IDENTITY)},
+        completion_journal={"repo::10::g::c": record},
+    )
+
+
+def test_reservation_status_is_legacy_without_a_reservation():
+    from orchestune.ledger.completion_reservations import completion_reservation_status
+
+    assert completion_reservation_status(RunState(), 10) == "legacy"
+
+
+@pytest.mark.parametrize("stage", ["reserved", "outcome_posted", "label_confirmed"])
+def test_reservation_status_is_pending_before_handoff(stage):
+    from orchestune.ledger.completion_reservations import completion_reservation_status
+
+    assert completion_reservation_status(_journaled(stage), 10) == "pending"
+
+
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "initializing",
+        "preflight_validating",
+        "evidence_verifying",
+        "journaling",
+        "posting",
+        "handed_off_to_gc",
+        "Handed_Off",
+        "unknown",
+        None,
+    ],
+)
+def test_reservation_status_never_releases_on_other_stages(stage):
+    from orchestune.ledger.completion_reservations import completion_reservation_status
+
+    assert completion_reservation_status(_journaled(stage), 10) == "invalid"
+
+
+def test_reservation_status_requires_handoff_evidence_and_receipt():
+    from orchestune.ledger.completion_reservations import completion_reservation_status
+
+    evidence = {
+        "posting_evidence": {"comment_id": 1, "comment_url": "https://x/1"},
+        "label_evidence": {"status": "confirmed", "observed_labels": ["status:done"]},
+    }
+    assert completion_reservation_status(_journaled("handed_off"), 10) == "invalid"
+    state = _journaled("handed_off", **evidence)
+    assert completion_reservation_status(state, 10) == "invalid"
+    record = state.completion_journal["repo::10::g::c"]
+    state.completion_replay_receipts = {"repo::10::g::c": dict(record)}
+    assert completion_reservation_status(state, 10) == "handed_off"

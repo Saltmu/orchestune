@@ -984,3 +984,48 @@ class TestCompleteFailureAndExitCodes:
         assert failure.exit_code == 55
         assert CompleteExitCode.FORGE_POST_FAILED == 51
         assert res.completion_id == "completion-997"
+
+
+# Persisted completion-stage values, spelled out independently of the Enum so a
+# rename or reorder cannot slip through a self-derived comparison (#1346).
+_PERSISTED_COMPLETE_STAGES = (
+    ("INITIALIZING", "initializing"),
+    ("PREFLIGHT_VALIDATING", "preflight_validating"),
+    ("EVIDENCE_VERIFYING", "evidence_verifying"),
+    ("JOURNALING", "journaling"),
+    ("POSTING", "posting"),
+    ("HANDED_OFF_TO_GC", "handed_off_to_gc"),
+    ("RESERVED", "reserved"),
+    ("OUTCOME_POSTED", "outcome_posted"),
+    ("LABEL_CONFIRMED", "label_confirmed"),
+    ("HANDED_OFF", "handed_off"),
+)
+
+
+def test_complete_stage_is_the_shared_ownership_contract() -> None:
+    import orchestune.complete as complete_package
+    from orchestune import ownership_contracts
+    from orchestune.complete import contracts
+
+    assert contracts.CompleteStage is ownership_contracts.CompleteStage
+    assert complete_package.CompleteStage is ownership_contracts.CompleteStage
+
+
+def test_complete_stage_keeps_persisted_names_values_and_order() -> None:
+    assert [(s.name, s.value) for s in CompleteStage] == list(
+        _PERSISTED_COMPLETE_STAGES
+    )
+    assert all(isinstance(stage, str) for stage in CompleteStage)
+    assert str(CompleteStage.HANDED_OFF) == "CompleteStage.HANDED_OFF"
+    assert repr(CompleteStage.HANDED_OFF) == "<CompleteStage.HANDED_OFF: 'handed_off'>"
+    assert CompleteStage("handed_off") is CompleteStage.HANDED_OFF
+    with pytest.raises(ValueError):
+        CompleteStage("handed-off")
+
+
+def test_stage_transitions_stay_with_the_complete_contract() -> None:
+    from orchestune import ownership_contracts
+
+    assert not hasattr(ownership_contracts, "can_transition")
+    assert can_transition(CompleteStage.JOURNALING, CompleteStage.RESERVED)
+    assert not can_transition(CompleteStage.RESERVED, CompleteStage.HANDED_OFF)
