@@ -1,9 +1,10 @@
-"""#664: 親Issue本文への分解計画同期の安全弁。
+"""#664 / #814: 親Issue本文への分解計画同期の安全弁。
 
 - 本文がGitHubの上限（65,536文字）を超える書き込みは行わない。
 - 同期に失敗した`orchestune provision`は成功終了しない（親Issueだけ古いまま、
   という状態に気付けなくなるため）。
 - 同じ`issue_number`を計画ファイルへ二重書き込みしない。
+- 親計画にだけある登録済みsubtaskを、古いローカル計画で消さない（#814）。
 """
 
 from __future__ import annotations
@@ -13,11 +14,16 @@ from pathlib import Path
 import pytest
 
 import orchestune.provisioning.cli as cli_module
-from orchestune.issue_parsing import DECOMPOSITION_PLAN_MARKER, PARENT_MARKER
+from orchestune.issue_parsing import (
+    DECOMPOSITION_PLAN_MARKER,
+    PARENT_MARKER,
+    embed_decomposition_plan_in_parent_body,
+)
 from orchestune.provisioning.cli import main as provisioning_main
 from orchestune.provisioning.flow import ProvisionResult
 from orchestune.provisioning.plan import (
     GITHUB_ISSUE_BODY_LIMIT,
+    parent_only_subtask_ids,
     sync_parent_decomposition_plan,
 )
 from tests.test_provisioning_support import _PLAN, _TEMPLATE, FakeForge
@@ -165,3 +171,116 @@ def test_issue_number_is_written_to_plan_once_per_subtask(tmp_path, monkeypatch)
 
     written_subtask_ids = [key for call in calls for key in call]
     assert sorted(written_subtask_ids) == ["task-a", "task-b"]
+
+
+# ---------------------------------------------------------------------------
+# #814: 親計画にだけある登録済みsubtaskを、古いローカル計画で消さない。
+# ---------------------------------------------------------------------------
+
+_PARENT_PLAN_WITH_REMEDIATION = {
+    "title": "Example big rock",
+    "subtasks": [
+        {"id": "task-a", "issue_number": None},
+        {"id": "task-b", "issue_number": None},
+        {"id": "fix-integration-bug", "issue_number": 150},
+    ],
+}
+
+
+def _parent_with_plan(forge: FakeForge, plan_data: dict) -> int:
+    body = embed_decomposition_plan_in_parent_body(
+        f"prose\n\n{PARENT_MARKER}", plan_data
+    )
+    return forge.create_issue("[EPIC] Example big rock", body)
+
+
+def test_parent_only_subtask_ids_lists_registered_entries_missing_locally():
+    body = embed_decomposition_plan_in_parent_body(
+        f"prose\n\n{PARENT_MARKER}", _PARENT_PLAN_WITH_REMEDIATION
+    )
+    local = {"subtasks": [{"id": "task-a"}, {"id": "task-b"}]}
+
+    assert parent_only_subtask_ids(body, local) == ("fix-integration-bug",)
+
+
+def test_parent_only_subtask_ids_ignores_entries_without_issue_number():
+    """`issue_number`のない親計画エントリはprovision途中の状態でもありうる。"""
+    body = embed_decomposition_plan_in_parent_body(
+        f"prose\n\n{PARENT_MARKER}",
+        {"subtasks": [{"id": "task-a"}, {"id": "draft-only", "issue_number": None}]},
+    )
+
+    assert parent_only_subtask_ids(body, {"subtasks": [{"id": "task-a"}]}) == ()
+
+
+def test_parent_only_subtask_ids_is_empty_without_a_parent_plan():
+    assert parent_only_subtask_ids(f"prose\n\n{PARENT_MARKER}", {"subtasks": []}) == ()
+
+
+def test_sync_refuses_to_drop_a_registered_parent_only_subtask(tmp_path, capsys):
+    plan_path, _ = _write_plan(tmp_path)
+    forge = FakeForge()
+    parent = _parent_with_plan(forge, _PARENT_PLAN_WITH_REMEDIATION)
+    before = forge.issues[parent]["body"]
+
+    assert sync_parent_decomposition_plan(forge, parent, plan_path) is False
+
+    assert forge.issues[parent]["body"] == before
+    err = capsys.readouterr().err
+    assert "fix-integration-bug" in err
+    assert f"provision --restore-plan {parent}" in err
+
+
+def test_sync_overwrites_a_parent_only_entry_without_issue_number(tmp_path):
+    plan_path, _ = _write_plan(tmp_path)
+    forge = FakeForge()
+    parent = _parent_with_plan(
+        forge,
+        {"subtasks": [{"id": "task-a"}, {"id": "draft-only", "issue_number": None}]},
+    )
+
+    assert sync_parent_decomposition_plan(forge, parent, plan_path) is True
+
+    assert "draft-only" not in forge.issues[parent]["body"]
+
+
+def test_provision_stops_before_creating_any_issue_on_parent_only_subtask(tmp_path):
+    plan_path, template_path = _write_plan(tmp_path)
+    forge = FakeForge()
+    parent = _parent_with_plan(forge, _PARENT_PLAN_WITH_REMEDIATION)
+    issues_before = set(forge.issues)
+
+    import orchestune.provisioning.flow as flow_module
+
+    result = flow_module.provision_issues(
+        plan_path,
+        forge=forge,
+        apply=True,
+        template_path=template_path,
+        repo_root=tmp_path,
+        parent_issue=parent,
+    )
+
+    assert set(forge.issues) == issues_before
+    assert result.created == {}
+    assert result.plan_synced is False
+    assert result.parent_only_subtask_ids == ("fix-integration-bug",)
+
+
+def test_provision_cli_exits_3_with_restore_hint_on_parent_only_subtask(
+    tmp_path, monkeypatch, capsys
+):
+    _stub_provision_result(
+        monkeypatch,
+        created={},
+        plan_synced=False,
+        parent_only_subtask_ids=("fix-integration-bug",),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        provisioning_main(["--plan", str(tmp_path / "decomposition_plan.md")])
+
+    assert excinfo.value.code == 3
+    out = capsys.readouterr().out
+    assert "fix-integration-bug" in out
+    assert "provision --restore-plan 100" in out

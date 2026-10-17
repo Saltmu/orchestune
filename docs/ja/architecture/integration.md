@@ -56,6 +56,7 @@ sequenceDiagram
    なお、依存先が`parent/issue-{N}`へマージされた後にその成果物を取り込むのは、この自動リベースではなく**後続タスク起動時のbase選択**の役割です。本節1の`parent/issue-{N}`から分岐するのは、共通policyがtargetを返さなかった場合に限られます。targetが返った場合、起動時のbaseはその依存先ブランチになるため（`orchestune/dispatch/launch.py`の`_decide_task_launch_plan`）、`parent/issue-{N}`へマージ済みの成果物が引き継がれるかどうかは、そのstack先ブランチがそれを含んでいるかに依存します。例えばCが「マージ済みのB」と「CI通過済みで未完了のD」に依存する場合、Cのbaseは`parent/issue-{N}`ではなくDとなり、DがBのマージ前に分岐していてB自体に依存していなければ、CはBの成果物を取り込みません。この使い分けは[§4の共通stack target policy](#dependency-target-fallback)が正本です。
 5. **親Issue配下の全完了検知と最終PR作成（Integratorの責務）**:
    親Issue配下の全子Issueがクローズされたことを検知すると、`orchestune/integrator/parent_completion.py`が`parent/issue-{N}` → `main`の最終PRを作成します。このPRは自動マージされません。
+   最終PRの作成後に子Issueが追加され、openな子Issueがある間は、Integratorが毎サイクル既存の最終PRの本文を保留表示へ更新します（`orchestune/integrator/pr.py`の`mark_parent_final_pr_pending`）。冒頭が「⚠️ 未完了の子Issue #X があります。親ブランチへの反映までマージしないでください」に替わり、未完了の子Issueはこの警告に列挙されます（一覧表の列は変わりません）。PRは新規作成せず、子Issueの一覧を1件も作れなかったサイクルでは本文を書き換えません。全子Issueがクローズされると、通常の本文へ戻ります。保留中に人間が最終PRをマージしても、openな子Issueがあるため親Issueはクローズされず、追加分が親ブランチへ統合されると新しい最終PRが作られます。
 6. **検収マージと親Issueクローズ**:
    人間がこの最終PRをレビューしてマージします（唯一の人間クリック）。マージが検知されると、Integratorが親Issueを`completed`理由で自動的にクローズします。
 7. **子レビュー証跡ゲート（第1層・必須）とセマンティックレビュー（第2層・advisory）**: 子のレビュー自体は統合ステップの責務ではなく、Integratorは「レビューが行われたこと」だけを確認します。

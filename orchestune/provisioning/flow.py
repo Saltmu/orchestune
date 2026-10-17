@@ -17,6 +17,7 @@ from orchestune.dag.models import (
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
 )
+from orchestune.dag.parsing import extract_frontmatter_and_body
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import GitHubForge, IssueForge, RelationshipUnavailableError
 from orchestune.infra.repository_config import find_and_load_config_file
@@ -29,6 +30,7 @@ from orchestune.provisioning.parent import _resolve_parent_issue
 from orchestune.provisioning.plan import (
     PlanMetadata,
     _load_plan,
+    parent_only_subtask_ids,
     sync_parent_decomposition_plan,
 )
 from orchestune.provisioning.rendering import (
@@ -64,6 +66,8 @@ class ProvisionResult:
     previews: tuple[IssuePreview, ...] = ()
     degraded_subtask_ids: tuple[str, ...] = ()
     plan_synced: bool = True
+    # #814: 親計画にだけある登録済みsubtask。空でなければ子Issueを作らずに止まる。
+    parent_only_subtask_ids: tuple[str, ...] = ()
 
 
 def _build_provisioning_dag(subtasks: list[SubTask], repo_root: Path) -> DagResult:
@@ -242,6 +246,33 @@ def _prepare_provisioning_context(
     return resolved_repo_root, subtasks, metadata, validated_parent, dag, template
 
 
+def _stop_on_parent_only_subtasks(
+    forge: IssueForge, parent_issue_number: int, plan_path: str | Path
+) -> ProvisionResult | None:
+    """#814: 古いローカル計画なら、子Issueを作る前に止めた結果を返す。
+
+    同期は子Issueを1件作るたびにも走るため、そこで初めて気付くと既にIssueを
+    作った後になる。
+    """
+    parent = forge.get_issue(parent_issue_number)
+    if parent is None:
+        return None
+    local_plan_data, _ = extract_frontmatter_and_body(
+        Path(plan_path).read_text(encoding="utf-8")
+    )
+    parent_only = parent_only_subtask_ids(parent.body, local_plan_data)
+    if not parent_only:
+        return None
+    return ProvisionResult(
+        parent_issue_number,
+        True,
+        {},
+        {},
+        plan_synced=False,
+        parent_only_subtask_ids=parent_only,
+    )
+
+
 def _apply_provisioning(
     forge: IssueForge | None,
     metadata: PlanMetadata,
@@ -261,6 +292,10 @@ def _apply_provisioning(
     parent_issue_number, parent_plan_synced = _resolve_parent_issue(
         resolved_forge, metadata, plan_path, explicit_parent_issue=validated_parent
     )
+    if stopped := _stop_on_parent_only_subtasks(
+        resolved_forge, parent_issue_number, plan_path
+    ):
+        return stopped
     existing_by_subtask_id, metadata_search_supported = _index_sub_issues_by_subtask_id(
         resolved_forge, parent_issue_number
     )

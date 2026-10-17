@@ -103,6 +103,18 @@ def _print_result(result: ProvisionResult) -> None:
         print(
             "\nOperating mode: full (native sub-issue/blocked_by relationships linked)"
         )
+    if result.parent_only_subtask_ids:
+        print(
+            f"\nError: the plan of #{result.parent_issue_number} has registered "
+            f"subtasks missing from the local plan: "
+            f"{', '.join(result.parent_only_subtask_ids)}"
+        )
+        print(
+            "No Issues were created. Restore the plan with "
+            f"`orchestune provision --restore-plan {result.parent_issue_number}` "
+            "and rerun provision."
+        )
+        return
     if not result.plan_synced:
         print(
             f"\nWarning: could not sync decomposition plan into #{result.parent_issue_number}'s body."

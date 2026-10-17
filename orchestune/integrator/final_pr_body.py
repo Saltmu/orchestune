@@ -125,24 +125,40 @@ def _render_row(summary: ChildSummary) -> str:
 
 
 def render_final_pr_body(
-    parent_issue_number: int, summaries: Sequence[ChildSummary]
+    parent_issue_number: int,
+    summaries: Sequence[ChildSummary],
+    pending_children: Sequence[int] = (),
 ) -> str:
     """最終統合PRの本文を組み立てる（純粋関数）。
 
     `summaries`が空ならテーブルごと省略する。これは子Issueを1件も解決できな
     かった縮退状態であり、見出しだけの空テーブルは「サブタスクが無い」という
     誤った情報になる。
+
+    #814: `pending_children`は最終PR作成後に追加された未完了の子Issue。空で
+    なければ冒頭の説明をマージ保留の警告へ替える。一覧表に状態列は無いため、
+    未完了の子Issueは警告文に列挙し、表の列は変えない。
     """
-    lines = [
-        _parent_issue_reference(parent_issue_number),
-        "",
-        f"親Issue #{parent_issue_number} 配下の全子Issueが完了したため、"
-        "Orchestune Integratorが作成した最終統合PRです。",
-        "",
-        "このPRのマージが最終マージです。人間がレビューの上マージしてください。"
-        "Orchestuneはマージを検知し、全子Issueの完了と現在の親ブランチtipの"
-        "mainへの反映を確認した後に親Issueをクローズします。",
-    ]
+    lines = [_parent_issue_reference(parent_issue_number), ""]
+    if pending_children:
+        listed = "、".join(f"#{number}" for number in sorted(pending_children))
+        lines += [
+            f"⚠️ 未完了の子Issue {listed} があります。"
+            "親ブランチへの反映までマージしないでください。",
+            "",
+            f"親Issue #{parent_issue_number} の最終統合PRの作成後に、子Issueが"
+            "追加されました。Orchestuneは全子Issueの完了後に、この本文を通常の"
+            "内容へ戻します。",
+        ]
+    else:
+        lines += [
+            f"親Issue #{parent_issue_number} 配下の全子Issueが完了したため、"
+            "Orchestune Integratorが作成した最終統合PRです。",
+            "",
+            "このPRのマージが最終マージです。人間がレビューの上マージしてください。"
+            "Orchestuneはマージを検知し、全子Issueの完了と現在の親ブランチtipの"
+            "mainへの反映を確認した後に親Issueをクローズします。",
+        ]
     if summaries:
         lines += ["", "## 子Issue・サブタスクPR一覧", "", *_TABLE_HEADER]
         lines += [_render_row(summary) for summary in summaries]
