@@ -341,6 +341,26 @@ def test_resume_preserves_claim_metadata_and_running_status(tmp_path: Path) -> N
     assert "#10" in forge.comments[1][0]["body"]
 
 
+def test_resume_rejects_footprint_drift_without_overwriting_claim(
+    tmp_path: Path,
+) -> None:
+    from orchestune.claim.issue_metadata import update_issue_claim_metadata
+
+    forge = ApplyForge()
+    path = write_spec(tmp_path)
+    with patch.object(forge, "add_comment", side_effect=RuntimeError("network")):
+        assert apply_remediation(path, token(path, forge), forge=forge).exit_code == 4
+    current = forge.existing[42]
+    body = update_issue_claim_metadata(
+        current.body, "interactive", "claim-example", "footprint"
+    ).replace("src/a.py", "src/expanded.py")
+    forge.existing[42] = replace(current, body=body, labels=("status:in-progress",))
+    before = list(forge.writes)
+    assert apply_remediation(path, token(path, forge), forge=forge).exit_code == 6
+    assert forge.existing[42].body == body
+    assert forge.writes == before
+
+
 def test_registered_child_enters_cycle_dependency_and_conflict_evaluation(
     tmp_path: Path,
     fake_forge: Any,

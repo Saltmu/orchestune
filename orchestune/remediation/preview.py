@@ -183,6 +183,20 @@ def _extra_footprint_keys(own_record: bool) -> set[str]:
     return keys
 
 
+def _metadata_conflicts(
+    current: dict[str, Any] | None, expected: dict[str, Any], own_record: bool
+) -> list[str]:
+    current = current or {}
+    reasons = []
+    if current.get("subtask_id") not in (None, expected["subtask_id"]):
+        reasons.append("existing Footprint subtask_id differs")
+    if own_record and any(current.get(k) != v for k, v in expected.items()):
+        reasons.append(
+            "registered Issue metadata changed; manual-review without overwriting"
+        )
+    return reasons
+
+
 def _issue_checks(
     issue: IssueRecord,
     task: RemediationTask,
@@ -225,8 +239,7 @@ def _issue_checks(
         or not current.keys() <= expected.keys() | _extra_footprint_keys(own_record)
     ):
         reasons.append("first YAML block is not a compatible Footprint mapping")
-    if current and current.get("subtask_id") not in (None, task.subtask.id):
-        reasons.append("existing Footprint subtask_id differs")
+    reasons.extend(_metadata_conflicts(current, expected, own_record))
     resolved = {numbers[d] for d in task.subtask.depends_on if d in numbers}
     if set(issue.blocked_by) - resolved:
         reasons.append("native blocked_by cannot be resolved by spec depends_on")

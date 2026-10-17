@@ -38,6 +38,7 @@ It does not start Dispatcher; the next `orchestune dispatch -p 693` cycle evalua
 
 Exit 3 means a stale confirmation token, with no writes. Exit 4 means partial registration or concurrent changes.
 Keep the children, preview the same spec again, inspect `resume` and its remaining stages, then apply with the new token.
+If a registered child's Footprint or other task metadata has changed, registration stops for manual review and preserves the running claim and edited metadata.
 If number writeback failed immediately after creation, parent metadata and subtask_id identify the existing child.
 A Forge without parent-metadata search may not rediscover a child interrupted before native linking. Check created Issues and put the existing number in the spec to avoid duplicates.
 Exit 5 means all tasks are registered; 6 rejects parent/existing Issue state; 7 requires scope review; 2 means invalid input.

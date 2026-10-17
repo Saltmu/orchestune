@@ -52,6 +52,12 @@ def registration_body(
     match = FOOTPRINT_BLOCK_PATTERN.search(body)
     if match:
         current = parse_footprint_block(body) or {}
+        if MARKER in body and any(
+            current.get(k) != v for k, v in expected_footprint(task, parent).items()
+        ):
+            raise ValueError(
+                "registered Issue metadata changed; preserve claim and review manually"
+            )
         if MARKER in body and all(
             current.get(k) == v for k, v in expected_footprint(task, parent).items()
         ):
