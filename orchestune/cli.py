@@ -33,6 +33,10 @@ def _dispatch_command(cmd: str) -> None:
         from orchestune.replan.cli import main as replan_main
 
         sys.exit(replan_main())
+    elif cmd == "remediate":
+        from orchestune.remediation.cli import main as remediate_main
+
+        sys.exit(remediate_main())
     elif cmd == "claim":
         from orchestune.claim.cli import main as claim_main
 
@@ -87,6 +91,7 @@ def main() -> None:
         print("  bootstrap Verify gh auth and ensure required GitHub labels exist")
         print("  provision Provision GitHub Issues from decomposition_plan.md")
         print("  replan    Preview or replace an unstarted decomposition generation")
+        print("  remediate Preview parent-scope remediation tasks")
         print("  claim     Claim a task issue (--no-apply for a read-only preview)")
         print("  complete  Complete a claimed task issue")
         print("  recover   Inspect or recover one stopped claim (preview by default)")
