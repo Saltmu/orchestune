@@ -66,3 +66,10 @@ class RemediationPreview:
     tasks: tuple[TaskPreview, ...]
     problems: tuple[PreviewProblem, ...]
     exit_code: int
+
+
+@dataclass(frozen=True)
+class RemediationResult:
+    exit_code: int
+    message: str
+    issue_numbers: tuple[int, ...] = ()

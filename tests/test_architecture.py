@@ -873,6 +873,16 @@ def test_package_dependency_cycles_match_allowlist() -> None:
 
 KNOWN_CROSS_PACKAGE_PRIVATE_IMPORTS: dict[tuple[str, str, str], str] = {
     (
+        "remediation.apply",
+        "dag.parsing",
+        "_parse_subtask",
+    ): "Validate appended parent entries with the canonical subtask grammar (#1355)",
+    (
+        "remediation.body",
+        "provisioning.rendering",
+        "_subtask_id_from_body",
+    ): "Acceptance requires readback with the provisioning identity parser (#1355)",
+    (
         "remediation.spec",
         "dag.parsing",
         "_parse_subtask",
