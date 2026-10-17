@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from orchestune.consistency.supervisor import (
     ConsistencyCycleReport,
@@ -55,11 +55,11 @@ class CycleReport:
     )
 
 
-def build_event_log_entry(report: CycleReport, now: float) -> dict:
+def build_event_log_entry(report: CycleReport, now: float) -> dict[str, object]:
     """#239: KPI A1〜A4/C2/C3集計用に、1サイクル分のイベントをJSON Lines化する。"""
-    selected_entries = []
+    selected_entries: list[dict[str, object]] = []
     for t in report.selected:
-        entry: dict[str, Any] = {
+        entry: dict[str, object] = {
             "issue_number": t.issue_number,
             "subtask_id": t.subtask_id,
         }
@@ -93,7 +93,7 @@ def build_event_log_entry(report: CycleReport, now: float) -> dict:
     }
 
 
-def append_event_log(entry: dict, path: str | Path) -> None:
+def append_event_log(entry: dict[str, object], path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:

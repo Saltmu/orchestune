@@ -82,6 +82,7 @@ from orchestune.dispatch.cycle_events import (
     WorktreeCompletionHold,
 )
 from orchestune.dispatch.cycle_execution import execute_cycle, execute_pipeline
+from orchestune.dispatch.cycle_execution_contracts import CycleExecutionDependencies
 from orchestune.dispatch.cycle_report import (
     CycleReport,
 )
@@ -936,7 +937,7 @@ def _execute_cycle_pipeline(
     prior_parent_merge_events: tuple[PriorMergeEvidenceCompletion, ...] = (),
 ) -> CycleReport:
     return execute_pipeline(
-        sys.modules[__name__],
+        _build_execution_dependencies(),
         ctx,
         issues,
         run_state,
@@ -989,5 +990,28 @@ def _prepare_cycle_context(
     return issues, ctx, recovery_report, prior_merges
 
 
+def _build_execution_dependencies() -> (
+    CycleExecutionDependencies[_ConsistencyRuntime | None, _RepairCycleState]
+):
+    """Bind cycle callbacks at invocation time so test patches remain effective."""
+    return CycleExecutionDependencies(
+        load_state=load_run_state,
+        now=time.time,
+        state_lock=run_state_lock,
+        prepare_context=_prepare_cycle_context,
+        start_consistency=_start_consistency_runtime,
+        new_repair_state=_RepairCycleState,
+        run_pipeline=_execute_cycle_pipeline,
+        finish_consistency=_finish_consistency_runtime,
+        notify_pr_links=_notify_pr_links,
+        run_gc=_run_gc_reclaim_phase,
+        reconcile_before_scheduling=_run_pre_scheduling_reconciliation,
+        schedule=run_scheduling_phase,
+        build_report=_pipeline_report,
+        build_event_log=build_event_log_entry,
+        append_event_log=append_event_log,
+    )
+
+
 def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
-    return execute_cycle(sys.modules[__name__], config)
+    return execute_cycle(_build_execution_dependencies(), config)

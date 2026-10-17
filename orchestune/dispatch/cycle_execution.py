@@ -1,20 +1,17 @@
-"""Cycle orchestration with observable phase boundaries.
-
-The facade is passed explicitly to preserve the cycle module's existing patch
-surfaces without duplicating business decisions or introducing import cycles.
-"""
-
-# ruff: noqa: SLF001 - explicit internal cycle facade preserves existing patch surfaces
+"""Cycle orchestration with observable phase boundaries."""
 
 from __future__ import annotations
 
 from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
-from types import ModuleType
-from typing import cast
+from typing import TYPE_CHECKING, TypeVar
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle_execution_contracts import (
+    CycleExecutionDependencies,
+    RepairCycleAccumulator,
+)
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.progress import progress_phase
 from orchestune.dispatch.promotion_reporting import confirm_promotion_reports
@@ -25,21 +22,38 @@ from orchestune.dispatch.timings import (
 )
 from orchestune.infra.command_metrics import command_observer_scope
 
+if TYPE_CHECKING:
+    from orchestune.dispatch.cycle_context import IssuesByStatus
+    from orchestune.dispatch.cycle_events import PriorMergeEvidenceCompletion
+    from orchestune.dispatch.rules import CycleContext
+    from orchestune.ledger.run_state import RunState
+
+
+RuntimeT = TypeVar("RuntimeT")
+RepairT = TypeVar("RepairT", bound=RepairCycleAccumulator)
+
 
 def execute_pipeline(
-    api: ModuleType, ctx, issues, run_state, config, now, repair_cycle, prior_events
+    dependencies: CycleExecutionDependencies[RuntimeT, RepairT],
+    ctx: CycleContext,
+    issues: IssuesByStatus,
+    run_state: RunState,
+    config: DispatcherConfig,
+    now: float,
+    repair_cycle: RepairT,
+    prior_events: tuple[PriorMergeEvidenceCompletion, ...],
 ) -> CycleReport:
     sink = config.progress
     with progress_phase(sink, "active_worktrees"):
         active = ctx.process_active_worktrees()
         completion_events = [*prior_events, *active.completion_events]
-        api._notify_pr_links(ctx, config)
+        dependencies.notify_pr_links(ctx, config)
     with progress_phase(sink, "gc_reclaim"):
-        completion_events = api._run_gc_reclaim_phase(
+        completion_events = dependencies.run_gc(
             ctx, config, completion_events, repair_cycle
         )
     with progress_phase(sink, "reconciliation_external_locks"):
-        promotion_events, lock_result = api._run_pre_scheduling_reconciliation(
+        promotion_events, lock_result = dependencies.reconcile_before_scheduling(
             ctx=ctx,
             issues=issues,
             run_state=run_state,
@@ -47,49 +61,46 @@ def execute_pipeline(
             repair_cycle=repair_cycle,
         )
     with progress_phase(sink, "scheduling"):
-        scheduling = api.run_scheduling_phase(
+        scheduling = dependencies.schedule(
             ctx, lock_result, list(active.deviation_events)
         )
-    return cast(
-        CycleReport,
-        api._pipeline_report(
-            scheduling,
-            lock_result,
-            deviation_events=list(active.deviation_events),
-            completion_events=completion_events,
-            promotion_events=promotion_events,
-            applied=config.apply,
-        ),
+    return dependencies.build_report(
+        scheduling,
+        lock_result,
+        deviation_events=list(active.deviation_events),
+        completion_events=completion_events,
+        promotion_events=promotion_events,
+        applied=config.apply,
     )
 
 
 def execute_locked_cycle(
-    api: ModuleType,
+    dependencies: CycleExecutionDependencies[RuntimeT, RepairT],
     config: DispatcherConfig,
     collector: CycleTimingCollector | None = None,
 ) -> CycleReport:
     sink = config.progress
     with progress_phase(sink, "state_load"):
-        run_state = api.load_run_state(config.run_state_path)
-        now = api.time.time()
-    issues, ctx, recovery_report, prior_merges = api._prepare_cycle_context(
+        run_state = dependencies.load_state(config.run_state_path)
+        now = dependencies.now()
+    issues, ctx, recovery_report, prior_merges = dependencies.prepare_context(
         run_state, config, now
     )
     with progress_phase(sink, "consistency"):
-        runtime = api._start_consistency_runtime(config, run_state, issues, ctx)
-    repair_cycle = api._RepairCycleState()
+        runtime = dependencies.start_consistency(config, run_state, issues, ctx)
+    repair_cycle = dependencies.new_repair_state()
     repair_cycle.add_report(recovery_report)
-    report = api._execute_cycle_pipeline(
+    report = dependencies.run_pipeline(
         ctx, issues, run_state, config, now, repair_cycle, prior_merges.events
     )
     with progress_phase(sink, "consistency_postprocessing"):
-        api._finish_consistency_runtime(runtime, report, ctx, now, config, repair_cycle)
-    record_cycle_events(api, report, now, config, collector)
-    return cast(CycleReport, report)
+        dependencies.finish_consistency(runtime, report, ctx, now, config, repair_cycle)
+    record_cycle_events(dependencies, report, now, config, collector)
+    return report
 
 
 def record_cycle_events(
-    api: ModuleType,
+    dependencies: CycleExecutionDependencies[RuntimeT, RepairT],
     report: CycleReport,
     now: float,
     config: DispatcherConfig,
@@ -105,13 +116,16 @@ def record_cycle_events(
         sink.emit("events_record", "skipped", reason="dry_run")
         return
     with progress_phase(sink, "events_record"):
-        entry = api.build_event_log_entry(report, now)
+        entry = dependencies.build_event_log(report, now)
         entry["timings"] = timing_snapshot(collector)
-        api.append_event_log(entry, config.events_log_path)
+        dependencies.append_event_log(entry, config.events_log_path)
         confirm_promotion_reports(config, report.promotion_events)
 
 
-def execute_cycle(api: ModuleType, config: DispatcherConfig) -> CycleReport:
+def execute_cycle(
+    dependencies: CycleExecutionDependencies[RuntimeT, RepairT],
+    config: DispatcherConfig,
+) -> CycleReport:
     collector = None
     try:
         candidate = CycleTimingCollector()
@@ -124,6 +138,8 @@ def execute_cycle(api: ModuleType, config: DispatcherConfig) -> CycleReport:
         with ExitStack() as stack:
             with progress_phase(sink, "state_lock"):
                 stack.enter_context(
-                    api.run_state_lock(Path(config.run_state_path).with_suffix(".lock"))
+                    dependencies.state_lock(
+                        Path(config.run_state_path).with_suffix(".lock")
+                    )
                 )
-            return execute_locked_cycle(api, config, collector)
+            return execute_locked_cycle(dependencies, config, collector)

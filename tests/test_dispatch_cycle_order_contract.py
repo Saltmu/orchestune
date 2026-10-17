@@ -357,7 +357,14 @@ def test_skipped_and_failed_repairs_remain_observable_in_cycle_report() -> None:
 
     serialized = build_event_log_entry(report, 1.0)
 
-    results = serialized["consistency"]["repair_passes"][0]["results"]
+    consistency_payload = serialized["consistency"]
+    assert isinstance(consistency_payload, dict)
+    repair_passes = consistency_payload["repair_passes"]
+    assert isinstance(repair_passes, list)
+    first_pass = repair_passes[0]
+    assert isinstance(first_pass, dict)
+    results = first_pass["results"]
+    assert isinstance(results, list)
     assert [result["status"] for result in results] == ["skipped", "failed"]
     assert _pipeline_state_changes(report, 1.0) == ()
 

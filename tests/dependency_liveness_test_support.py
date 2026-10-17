@@ -16,13 +16,11 @@ the case table below.
 from __future__ import annotations
 
 import json
-import types
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
 from unittest.mock import patch
 
 from orchestune.consistency.models import RepairCommand, RepairResult
@@ -31,12 +29,18 @@ from orchestune.dispatch import cycle as cycle_module
 from orchestune.dispatch import cycle_execution
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.cycle_events import PromotionEvent
+from orchestune.dispatch.cycle_context import IssuesByStatus
+from orchestune.dispatch.cycle_events import (
+    DeviationEvent,
+    PromotionEvent,
+)
+from orchestune.dispatch.cycle_execution_contracts import CycleExecutionDependencies
 from orchestune.dispatch.phase_scheduling import SchedulingPhaseResult
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.status_repair import status_intent_journal_path
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import RunState, load_run_state
+from orchestune.lock_contracts import ExternalLockScanResult
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeRecord
 from tests.conftest import FakeForge, make_issue
@@ -594,24 +598,46 @@ class _PromotionProbe:
         self.assessment = ctx.assess_dependencies(DEPENDENT)
 
 
-def _skip_scheduling(ctx, lock_result, deviation_events) -> SchedulingPhaseResult:
+def _skip_scheduling(
+    ctx: CycleContext,
+    lock_result: ExternalLockScanResult,
+    deviation_events: list[DeviationEvent],
+) -> SchedulingPhaseResult:
     del ctx, lock_result, deviation_events
     return SchedulingPhaseResult(selected=[], quota_slots_available=0, decisions=[])
 
 
-def _pipeline_api(probe: _PromotionProbe) -> types.ModuleType:
-    """The real cycle facade; only post-promotion scheduling is stubbed."""
-    api = types.ModuleType("dependency_liveness_cycle_api")
-    api.__dict__.update(vars(cycle_module))
-    real_reconciliation = cycle_module._run_pre_scheduling_reconciliation
+def _pipeline_dependencies(
+    probe: _PromotionProbe,
+) -> CycleExecutionDependencies[
+    cycle_module._ConsistencyRuntime | None, cycle_module._RepairCycleState
+]:
+    """The real typed dependencies; only reconciliation and scheduling are probed."""
+    dependencies = cycle_module._build_execution_dependencies()
+    real_reconciliation = dependencies.reconcile_before_scheduling
 
-    def reconciliation(**kwargs: Any):
-        probe(kwargs["ctx"])
-        return real_reconciliation(**kwargs)
+    def reconciliation(
+        *,
+        ctx: CycleContext,
+        issues: IssuesByStatus,
+        run_state: RunState,
+        config: DispatcherConfig,
+        repair_cycle: cycle_module._RepairCycleState,
+    ) -> tuple[list[PromotionEvent], ExternalLockScanResult]:
+        probe(ctx)
+        return real_reconciliation(
+            ctx=ctx,
+            issues=issues,
+            run_state=run_state,
+            config=config,
+            repair_cycle=repair_cycle,
+        )
 
-    api._run_pre_scheduling_reconciliation = reconciliation  # type: ignore[attr-defined]
-    api.run_scheduling_phase = _skip_scheduling  # type: ignore[attr-defined]
-    return api
+    return replace(
+        dependencies,
+        reconcile_before_scheduling=reconciliation,
+        schedule=_skip_scheduling,
+    )
 
 
 @contextmanager
@@ -653,9 +679,10 @@ def run_one_cycle(world: LivenessWorld, *, apply: bool, probe: _PromotionProbe):
         probe.snapshot = {issue.number: issue for issue in issues.all()}
         repair_cycle = cycle_module._RepairCycleState()
         repair_cycle.add_report(recovery)
+        dependencies = _pipeline_dependencies(probe)
         try:
             report = cycle_module.execute_pipeline(
-                _pipeline_api(probe),
+                dependencies,
                 ctx,
                 issues,
                 run_state,
@@ -667,7 +694,7 @@ def run_one_cycle(world: LivenessWorld, *, apply: bool, probe: _PromotionProbe):
         finally:
             world.boundary.frozen = None
         # The confirmed log is what makes a late report final (#1296).
-        cycle_execution.record_cycle_events(cycle_module, report, now, config)
+        cycle_execution.record_cycle_events(dependencies, report, now, config)
     return list(report.promotion_events)
 
 
