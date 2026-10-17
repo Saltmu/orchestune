@@ -17,10 +17,27 @@ from __future__ import annotations
 import re
 import sys
 from collections.abc import Iterable, Mapping
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from orchestune.forge import Forge
 from orchestune.models import PrRecord, normalize_newlines
+from orchestune.pr_link_notice_trust import NoticePresence, TrustContext
+
+
+class NoticeDelivery(Enum):
+    """Result of attempting to ensure a PR link notice."""
+
+    ALREADY_PRESENT = "ALREADY_PRESENT"
+    POSTED = "POSTED"
+    DEFERRED_READ = "DEFERRED_READ"
+    DEFERRED_TRUST = "DEFERRED_TRUST"
+    DEFERRED_WRITE = "DEFERRED_WRITE"
+
+    @property
+    def can_close(self) -> bool:
+        """Return True if the child issue may be closed safely."""
+        return self in {NoticeDelivery.ALREADY_PRESENT, NoticeDelivery.POSTED}
+
 
 if TYPE_CHECKING:
     from orchestune.task_metadata import TaskMetadata
@@ -123,25 +140,38 @@ def render_merged_notice(pr_number: int, base_branch: str) -> str:
 
 
 def has_notice(
-    comments: Iterable[Mapping[str, Any]], kind: str, pr_number: int
-) -> bool:
+    comments: Iterable[Mapping[str, Any]],
+    kind: str,
+    pr_number: int,
+    *,
+    trust: TrustContext,
+) -> NoticePresence:
+    """通知マーカーの一致と投稿者の信頼性を検証し、存在状態を返す。"""
     marker = notice_marker(kind, pr_number)
-    return any(
-        marker in normalize_newlines(str(comment.get("body") or ""))
+    candidates: list[dict[str, Any]] = [
+        dict(comment)
         for comment in comments
-    )
+        if marker in normalize_newlines(str(comment.get("body") or ""))
+    ]
+    presence, _ = trust.evaluate_candidate_markers(candidates)
+    return presence
 
 
 def _already_notified(
-    forge: Forge, issue_number: int, kind: str, pr_number: int
-) -> bool | None:
-    """通知済みかどうかを返す。判定できなかった場合は`None`。
+    forge: Any,
+    issue_number: int,
+    kind: str,
+    pr_number: int,
+    trust: TrustContext,
+) -> NoticePresence | None:
+    """通知済みかどうかを返す。読み取りに失敗した場合は`None`。
 
     コメント一覧を読めないまま投稿すると多重投稿になり得るため、呼び出し側は
     `None`をfail closed（投稿しない）として扱い、次サイクルの再試行に委ねる。
     """
     try:
-        return has_notice(forge.list_comments(issue_number), kind, pr_number)
+        comments = forge.list_all_issue_comments(issue_number)
+        return has_notice(comments, kind, pr_number, trust=trust)
     except Exception as error:  # noqa: BLE001 - 通知はベストエフォート
         print(
             f"Warning: Failed to read comments on issue #{issue_number} while "
@@ -152,13 +182,22 @@ def _already_notified(
 
 
 def notify_pr_created(
-    forge: Forge, issue_number: int, pr_number: int, base_branch: str
+    forge: Any,
+    issue_number: int,
+    pr_number: int,
+    base_branch: str,
+    *,
+    trust: TrustContext | None = None,
 ) -> bool:
     """未通知であればPR作成の通知コメントを投稿し、投稿したかどうかを返す。"""
-    if _already_notified(forge, issue_number, KIND_CREATED, pr_number) is not False:
+    ctx = trust or TrustContext(forge)
+    presence = _already_notified(forge, issue_number, KIND_CREATED, pr_number, ctx)
+    if presence is not NoticePresence.ABSENT:
         return False
     try:
-        forge.add_comment(issue_number, render_created_notice(pr_number, base_branch))
+        forge.create_issue_comment(
+            issue_number, render_created_notice(pr_number, base_branch)
+        )
     except Exception as error:  # noqa: BLE001 - 通知はベストエフォート
         print(
             f"Warning: Failed to post the created PR link notice for PR "
@@ -170,35 +209,55 @@ def notify_pr_created(
 
 
 def ensure_pr_merged_notice(
-    forge: Forge, issue_number: int, pr_number: int, base_branch: str
-) -> bool:
-    """マージ完了通知がIssueに存在する状態を保証し、成否を返す。
+    forge: Any,
+    issue_number: int,
+    pr_number: int,
+    base_branch: str,
+    *,
+    trust: TrustContext | None = None,
+) -> NoticeDelivery:
+    """マージ完了通知がIssueに存在する状態を保証し、配送結果を返す。
 
-    既に投稿済みなら何もせず`True`を返す。投稿自体に失敗した場合だけ`False`を
-    返し、呼び出し側に最後の手段（クローズコメントへの同梱）を委ねる。
-
-    PR#684レビュー対応(Codex P2): Integratorは**Issueをクローズする前に**
-    これを呼ぶ。クローズコメントに通知を同梱すると、クローズが失敗した場合に
-    次サイクルの`RetryChildIssueCloseStep`が汎用コメントでクローズし直し、
-    その時点では統合PR番号も失われているため、PRリンクが恒久的に失われる。
-
-    通知済みかどうかを判定できなかった場合は、作成通知(`notify_pr_created`)とは
-    逆に**fail open**で投稿する。クローズ済みIssueは以降のサイクルで統合対象から
-    外れる（`PrepareTasksStep`）ため再試行の機会がなく、ここで見送ると通知が
-    永久に失われる。重複コメントの可能性より通知の欠落を避ける。
+    #686: マーカー判定と投稿者検証を分離し、NoticeDeliveryを返す。
+    ALREADY_PRESENT または POSTED の場合のみクローズ可能（can_close=True）。
+    保留時はクローズを抑止し、次サイクルでの再試行に委ねる。
     """
-    if _already_notified(forge, issue_number, KIND_MERGED, pr_number) is True:
-        return True
+    ctx = trust or TrustContext(forge)
     try:
-        forge.add_comment(issue_number, render_merged_notice(pr_number, base_branch))
-    except Exception as error:  # noqa: BLE001 - 通知はベストエフォート
+        comments = forge.list_all_issue_comments(issue_number)
+    except Exception as error:
+        print(
+            f"Warning: Failed to read comments on issue #{issue_number} while "
+            f"checking the merged PR link notice for PR #{pr_number}: {error}",
+            file=sys.stderr,
+        )
+        return NoticeDelivery.DEFERRED_READ
+
+    presence = has_notice(comments, KIND_MERGED, pr_number, trust=ctx)
+    if presence is NoticePresence.PRESENT:
+        return NoticeDelivery.ALREADY_PRESENT
+    if presence is NoticePresence.UNKNOWN:
+        reason = ctx.last_deferred_reason or "unknown"
+        print(
+            f"Warning: Deferred merged PR link notice for PR #{pr_number} on "
+            f"issue #{issue_number} due to untrusted/unresolved marker: {reason}",
+            file=sys.stderr,
+        )
+        return NoticeDelivery.DEFERRED_TRUST
+
+    try:
+        forge.create_issue_comment(
+            issue_number, render_merged_notice(pr_number, base_branch)
+        )
+    except Exception as error:
         print(
             f"Warning: Failed to post the merged PR link notice for PR "
             f"#{pr_number} on issue #{issue_number}: {error}",
             file=sys.stderr,
         )
-        return False
-    return True
+        return NoticeDelivery.DEFERRED_WRITE
+
+    return NoticeDelivery.POSTED
 
 
 def requires_link_notice(pr: PrRecord) -> bool:
@@ -255,19 +314,23 @@ def notice_expected_bases(tasks: Iterable[TaskMetadata]) -> dict[int, str]:
 
 
 def notify_open_pr_links(
-    forge: Forge, prs: Iterable[PrRecord], expected_bases: Mapping[int, str]
+    forge: Any, prs: Iterable[PrRecord], expected_bases: Mapping[int, str]
 ) -> list[dict[str, Any]]:
     """親ブランチ宛てのオープンPRについて、未通知の対象Issueへ通知を投稿する。
 
     ディスパッチャーが検知したPRを起点にするため、エージェントが自分で起票した
     PRも同じ経路で通知される。1件の失敗は他のPRの通知を止めない。
+    TrustContextをバッチ内で共有し、identityとcollaborator一覧を再利用する。
     """
     events: list[dict[str, Any]] = []
+    trust = TrustContext(forge)
     for pr in prs:
         if not requires_link_notice(pr):
             continue
         for issue_number in target_issue_numbers(pr, expected_bases):
-            if notify_pr_created(forge, issue_number, pr.number, pr.base_ref):
+            if notify_pr_created(
+                forge, issue_number, pr.number, pr.base_ref, trust=trust
+            ):
                 events.append(
                     {
                         "issue_number": issue_number,
@@ -281,6 +344,7 @@ def notify_open_pr_links(
 __all__ = [
     "KIND_CREATED",
     "KIND_MERGED",
+    "NoticeDelivery",
     "ensure_pr_merged_notice",
     "extract_issue_numbers_from_pr",
     "has_notice",

@@ -58,6 +58,16 @@ ci-command = "make ci"
 
 Orchestune requires Python 3.12+, uv, and the GitHub CLI (`gh auth status` must be authenticated).
 
+### GitHub Authentication and Token Requirements
+Running Orchestune requires authentication via the GitHub CLI (`gh auth login`) or a Personal Access Token (PAT).
+
+- **Recommended Setup (PAT / User Authentication)**:
+  To verify that PR link notices (on PR creation and merge) originate from trusted actors, Orchestune checks the runner's self identity using the GitHub API (`GET /user`) and repository collaborators ([Issue #686](https://github.com/Saltmu/orchestune/issues/686)). We strongly recommend authenticating as a user via `gh auth login` or a PAT.
+  *Note: When using `GITHUB_TOKEN` or a GitHub App token where `GET /user` is not supported, self-identity resolution fails (`identity_unresolved`), and notice confirmation and issue closure are safely deferred (degraded mode).*
+- **Required Token Scopes**:
+  - `repo` (Read/write access to issues, PRs, branch push, and merge)
+  - `read:org` (Required when running against organization repositories to list and verify collaborators)
+
 ### Using Orchestune in a Separate Project
 To run `orchestune-dag` / `orchestune-dispatch` via an agent inside a separate project (e.g., a project named `manuscriptune`), follow these setup steps:
 

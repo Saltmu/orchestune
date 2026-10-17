@@ -58,6 +58,16 @@ ci-command = "make ci"
 
 OrchestuneはPython 3.12以上、uv、およびGitHub CLI（`gh auth status` で認証済みであること）が必要です。
 
+### GitHub認証とトークン要件
+Orchestuneの実行には、GitHub CLI（`gh auth login`）または個人用アクセストークン（PAT）による認証が必要です。
+
+- **推奨構成（PAT / ユーザー認証）**:
+  Orchestuneは、PRリンク通知（PR作成時・マージ完了時）の投稿者が信頼できるかを判定するために、GitHub API（`GET /user`）を用いて実行者自身の identity を取得・検証します（[Issue #686](https://github.com/Saltmu/orchestune/issues/686)）。そのため、`gh auth login` による個人アカウント認証、または個人用アクセストークン（PAT）による構成を強く推奨します。
+  ※ `GITHUB_TOKEN` や GitHub App トークンの場合、`GET /user` エンドポイントが利用できないため、identity 未解決（`identity_unresolved`）として通知確認およびクローズが安全のため保留（縮退動作）となります。
+- **必要なトークンスコープ**:
+  - `repo`（Issue/PRの読み書き、ブランチ作成・プッシュ・マージ）
+  - `read:org`（Organization配下のリポジトリでcollaborator一覧を取得・検証するために必要）
+
 ### 別のプロジェクトでOrchestuneを利用する場合
 `orchestune-dag` / `orchestune-dispatch` を別のプロジェクト（例: `manuscriptune` というプロジェクト）内でエージェントに実行させたい場合は、以下の2ステップでセットアップを行います。
 

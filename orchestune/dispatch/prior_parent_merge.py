@@ -289,7 +289,11 @@ def _apply_verified_repair(
     )
     transition_status_label(forge, issue.number, StatusLabel.DONE, stale_statuses)
     assert evidence.pr_number is not None
-    ensure_pr_merged_notice(forge, issue.number, evidence.pr_number, evidence.base_ref)
+    delivery = ensure_pr_merged_notice(
+        forge, issue.number, evidence.pr_number, evidence.base_ref
+    )
+    if not delivery.can_close:
+        return
     forge.close_issue(issue.number, "completed")
 
 

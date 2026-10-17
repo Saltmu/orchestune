@@ -844,3 +844,23 @@ def test_rest_verified_closing_reference_is_a_prior_merge():
     result = _evaluate([_merged_pr(closing_references_known=False)])
 
     assert result.status is PriorParentMergeStatus.ALREADY_MERGED
+
+
+def test_reconciliation_defers_close_when_merged_notice_delivery_is_deferred():
+    """#686: when merge notice delivery is deferred (e.g. write error or untrusted marker),
+
+    the issue is transitioned to status:done but closing is deferred.
+    """
+    issue = _issue()
+    forge = _forge_for_reconciliation(issue)
+    forge.list_all_issue_comments.return_value = []
+    forge.create_issue_comment.side_effect = RuntimeError("API unavailable")
+
+    result = reconcile_prior_parent_merges(
+        forge, {101: _task()}, apply=True, issues_by_number={101: issue}
+    )
+
+    forge.add_label.assert_called_once_with(101, StatusLabel.DONE)
+    forge.remove_label.assert_called_once_with(101, StatusLabel.QUEUED)
+    forge.close_issue.assert_not_called()
+    assert result.held_issue_numbers == {101}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -792,3 +793,211 @@ def test_a_blocked_child_whose_proof_does_not_reach_the_parent_stays_held(
     conditional_delete.assert_not_called()
     fake_forge.close_issue.assert_not_called()
     fake_forge.remove_label.assert_not_called()
+
+
+def _setup_receipt_comments(fake_forge):
+    comments_by_issue: dict[int, list[dict[str, Any]]] = {}
+
+    def add_comment(issue_number, body):
+        comments_by_issue.setdefault(int(issue_number), []).append(
+            {"body": body, "author": fake_forge.get_authenticated_user()}
+        )
+
+    def list_comments(issue_number):
+        return list(comments_by_issue.get(int(issue_number), []))
+
+    fake_forge.add_comment.side_effect = add_comment
+    fake_forge.list_comments.side_effect = list_comments
+
+
+def test_ensure_integration_receipt_persists_pr_number_and_does_not_duplicate(
+    fake_forge,
+):
+    from orchestune.integrator.finalization import (
+        ensure_integration_receipt,
+        find_latest_integration_receipt,
+    )
+
+    _setup_receipt_comments(fake_forge)
+
+    proof = TaskIntegrationProof(
+        issue_number=10,
+        subtask_id="task-10",
+        branch_name="claude/issue-10-task-10",
+        source_sha="c" * 40,
+    )
+
+    # 初回保存
+    assert ensure_integration_receipt(
+        fake_forge, proof, "origin/parent/issue-1", integration_pr_number=123
+    )
+    # 同一PR番号での再保存は重複せず True
+    assert ensure_integration_receipt(
+        fake_forge, proof, "origin/parent/issue-1", integration_pr_number=123
+    )
+
+    comments = fake_forge.list_comments(10)
+    assert len(comments) == 1
+
+    target = find_latest_integration_receipt(
+        fake_forge, 10, "task-10", "origin/parent/issue-1"
+    )
+    assert target is not None
+    assert target.has_integration_pr_key is True
+    assert target.integration_pr_number == 123
+    assert target.notice_base_branch == "parent/issue-1"
+
+
+def test_find_latest_integration_receipt_prefers_new_form_over_old_form(
+    fake_forge,
+):
+    from orchestune.integrator.finalization import (
+        ensure_integration_receipt,
+        find_latest_integration_receipt,
+        render_integration_receipt,
+    )
+
+    _setup_receipt_comments(fake_forge)
+
+    proof = TaskIntegrationProof(
+        issue_number=10,
+        subtask_id="task-10",
+        branch_name="claude/issue-10-task-10",
+        source_sha="d" * 40,
+    )
+    # 旧形式 receipt を先に追加
+    fake_forge.add_comment(
+        10, render_integration_receipt(proof, "origin/parent/issue-1")
+    )
+    # 新形式 receipt（PR番号付き）を追加
+    ensure_integration_receipt(
+        fake_forge, proof, "origin/parent/issue-1", integration_pr_number=456
+    )
+
+    target = find_latest_integration_receipt(
+        fake_forge, 10, "task-10", "origin/parent/issue-1"
+    )
+    assert target is not None
+    assert target.has_integration_pr_key is True
+    assert target.integration_pr_number == 456
+
+
+def test_find_latest_integration_receipt_with_null_pr_number(fake_forge):
+    from orchestune.integrator.finalization import (
+        ensure_integration_receipt,
+        find_latest_integration_receipt,
+    )
+
+    _setup_receipt_comments(fake_forge)
+
+    proof = TaskIntegrationProof(
+        issue_number=10,
+        subtask_id="task-10",
+        branch_name="claude/issue-10-task-10",
+        source_sha="e" * 40,
+    )
+    # integration_pr_number が None（null）
+    ensure_integration_receipt(
+        fake_forge, proof, "origin/parent/issue-1", integration_pr_number=None
+    )
+
+    target = find_latest_integration_receipt(
+        fake_forge, 10, "task-10", "origin/parent/issue-1"
+    )
+    assert target is not None
+    assert target.has_integration_pr_key is True
+    assert target.integration_pr_number is None
+
+
+def test_retry_close_defers_and_does_not_close_when_notice_is_unknown(
+    fake_forge, tmp_path: Path
+):
+    from orchestune.integrator.finalization import ensure_integration_receipt
+    from orchestune.pr_link_notice import render_merged_notice
+
+    _setup_receipt_comments(fake_forge)
+
+    task = make_task(
+        10,
+        subtask_id="task-10",
+        status_labels=("status:done", "integration:included"),
+    )
+    proof = TaskIntegrationProof(
+        issue_number=10,
+        subtask_id="task-10",
+        branch_name="claude/issue-10-task-10",
+        source_sha="f" * 40,
+    )
+    ensure_integration_receipt(
+        fake_forge, proof, "origin/parent/issue-1", integration_pr_number=789
+    )
+    # 他者によるマーカーがあり、collaborators API が失敗することにより UNKNOWN
+    fake_forge.create_issue_comment(
+        10, render_merged_notice(789, "parent/issue-1"), author="untrusted_author"
+    )
+    fake_forge.list_notice_trusted_authors.side_effect = RuntimeError(
+        "No collaborators API"
+    )
+
+    ctx = IntegrationContext(
+        config=IntegratorConfig(
+            parent_issue_number=1,
+            base_branch="parent/issue-1",
+            apply=True,
+            forge=fake_forge,
+        ),
+        repository_root=tmp_path,
+        original_root=tmp_path,
+        base_branch="origin/parent/issue-1",
+        temp_branch="integration/temp-parent-issue-1-test",
+        active_done_tasks=[task],
+    )
+
+    report = RetryChildIssueCloseStep().execute(ctx)
+
+    assert 10 not in report.get("retried_closed_issues", [])
+    assert 10 in report.get("finalization_deferred", [])
+    fake_forge.close_issue.assert_not_called()
+
+
+def test_retry_close_closes_with_generic_comment_when_pr_number_is_null(
+    fake_forge, tmp_path: Path
+):
+    from orchestune.integrator.finalization import ensure_integration_receipt
+
+    _setup_receipt_comments(fake_forge)
+
+    task = make_task(
+        10,
+        subtask_id="task-10",
+        status_labels=("status:done", "integration:included"),
+    )
+    proof = TaskIntegrationProof(
+        issue_number=10,
+        subtask_id="task-10",
+        branch_name="claude/issue-10-task-10",
+        source_sha="1" * 40,
+    )
+    ensure_integration_receipt(
+        fake_forge, proof, "origin/parent/issue-1", integration_pr_number=None
+    )
+
+    ctx = IntegrationContext(
+        config=IntegratorConfig(
+            parent_issue_number=1,
+            base_branch="parent/issue-1",
+            apply=True,
+            forge=fake_forge,
+        ),
+        repository_root=tmp_path,
+        original_root=tmp_path,
+        base_branch="origin/parent/issue-1",
+        temp_branch="integration/temp-parent-issue-1-test",
+        active_done_tasks=[task],
+    )
+
+    report = RetryChildIssueCloseStep().execute(ctx)
+
+    assert report.get("retried_closed_issues") == [10]
+    fake_forge.close_issue.assert_called_once()
+    assert "完了済み" in (fake_forge.close_issue.call_args.kwargs.get("comment") or "")

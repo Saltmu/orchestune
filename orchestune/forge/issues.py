@@ -80,6 +80,33 @@ def _is_not_found(exc: subprocess.CalledProcessError) -> bool:
     return "404" in detail or "not found" in detail
 
 
+def _extract_trusted_collaborator(item: Any) -> str | None:
+    if not isinstance(item, dict):
+        raise ValueError("invalid collaborator schema: item is not a dict")
+    login = item.get("login")
+    if not isinstance(login, str) or not login:
+        raise ValueError("invalid collaborator schema: missing or invalid login")
+    permissions = item.get("permissions")
+    if not isinstance(permissions, dict):
+        raise ValueError("invalid collaborator schema: missing or invalid permissions")
+    for req_key in ("pull", "push", "admin"):
+        if req_key not in permissions or not isinstance(permissions[req_key], bool):
+            raise ValueError(
+                f"invalid collaborator schema: missing or non-boolean {req_key}"
+            )
+    for opt_key in ("triage", "maintain"):
+        if opt_key in permissions and not isinstance(permissions[opt_key], bool):
+            raise ValueError(f"invalid collaborator schema: non-boolean {opt_key}")
+    if (
+        permissions.get("triage") is True
+        or permissions["push"] is True
+        or permissions.get("maintain") is True
+        or permissions["admin"] is True
+    ):
+        return login
+    return None
+
+
 class GitHubIssueMixin(GraphQLFallbackMixin):
     """Issue-specific implementation mixed into :class:`GitHubForge`."""
 
@@ -285,6 +312,37 @@ class GitHubIssueMixin(GraphQLFallbackMixin):
         if not isinstance(response, dict):
             raise ValueError("GitHub did not return an Issue comment object")
         return response
+
+    def list_notice_trusted_authors(self) -> frozenset[str]:
+        """Return the logins of collaborators trusted to post PR link notices.
+
+        Fetches all collaborators with permissions.triage, push, maintain, or admin.
+        Requires pull/push/admin as boolean values in the GitHub API schema; triage and
+        maintain are optional (default to False).
+        """
+        stdout = self._run(
+            [
+                "gh",
+                "api",
+                "--paginate",
+                "--slurp",
+                "repos/{owner}/{repo}/collaborators?affiliation=all&per_page=100",
+            ]
+        )
+        pages = json.loads(stdout)
+        if not isinstance(pages, list) or not all(
+            isinstance(page, list) for page in pages
+        ):
+            raise ValueError("GitHub collaborators response has an invalid page")
+
+        trusted: set[str] = set()
+        for page in pages:
+            for item in page:
+                login = _extract_trusted_collaborator(item)
+                if login is not None:
+                    trusted.add(login)
+
+        return frozenset(trusted)
 
     def get_authenticated_user(self) -> str:
         """Return the GitHub identity that will author Forge writes."""

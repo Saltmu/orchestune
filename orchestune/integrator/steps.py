@@ -30,6 +30,8 @@ from orchestune.infra.process_utils import default_ci_command, file_lock
 from orchestune.integrator.finalization import (
     ensure_integration_receipt,
     find_integration_receipt,
+    resolve_merged_close_delivery,
+    resolve_retry_close_delivery,
 )
 from orchestune.integrator.finalization_retry import (
     BLOCKED_LABEL,
@@ -67,10 +69,6 @@ from orchestune.ledger.escalation import (
 )
 from orchestune.ledger.status_labels import transition_status_label
 from orchestune.models import Task
-from orchestune.pr_link_notice import (
-    ensure_pr_merged_notice,
-    render_merged_notice,
-)
 from orchestune.task_branch_resolution import BranchCapability, TaskBranchResolver
 from orchestune.worktree_ops.temp_branches import (
     prune_stale_integration_temp_branches,
@@ -205,20 +203,23 @@ class RetryChildIssueCloseStep(IntegrationComponent):
                     _ReceiptRecovery.DEFERRED,
                 }:
                     continue
-            try:
-                ctx.forge.close_issue(
-                    task.issue_number,
-                    "completed",
-                    comment=(
-                        "Integratorが親ブランチへの自動マージを完了済みですが、"
-                        "前回のクローズ処理に失敗していたため再試行しました。"
-                    ),
+            delivery, comment = resolve_retry_close_delivery(
+                ctx.forge, task.issue_number, task.subtask_id, ctx.base_branch
+            )
+            if not delivery.can_close:
+                print(
+                    f"Warning: Deferred retry closing issue #{task.issue_number}: "
+                    f"notice delivery deferred ({delivery.value})",
+                    file=sys.stderr,
                 )
+                held.deferred.append(task.issue_number)
+                continue
+            try:
+                ctx.forge.close_issue(task.issue_number, "completed", comment=comment)
                 retried_closed.append(task.issue_number)
             except Exception as error:
                 print(
-                    "Warning: Failed to retry closing issue "
-                    f"#{task.issue_number}: {error}",
+                    f"Warning: Failed to retry closing issue #{task.issue_number}: {error}",
                     file=sys.stderr,
                 )
 
@@ -890,6 +891,47 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 "auto_merged": False,
             }
 
+    def _finalize_single_child_task(
+        self, ctx: IntegrationContext, task: Task, proof: TaskIntegrationProof
+    ) -> bool:
+        if not ensure_integration_receipt(
+            ctx.forge,
+            proof,
+            ctx.base_branch,
+            integration_pr_number=ctx.integration_pr_number,
+            notice_base_branch=ctx.base_branch.removeprefix("origin/"),
+        ):
+            print(
+                f"Warning: Failed to persist integration receipt for #{proof.issue_number}",
+                file=sys.stderr,
+            )
+            return False
+        receipt = ctx.task_merge_receipts.get(task.issue_number, proof.merge_receipt)
+        if not receipt.allows(BranchCapability.DELETE):
+            return True
+        result = delete_remote_branch_if_matches(
+            ctx.repository_root, receipt.branch_name, receipt.fetched_commit_oid
+        )
+        if result in {
+            ConditionalBranchDeletionResult.DELETED,
+            ConditionalBranchDeletionResult.ALREADY_ABSENT,
+        }:
+            return True
+        print(
+            "Warning: Deferred child finalization for "
+            f"#{proof.issue_number}; branch deletion result={result}",
+            file=sys.stderr,
+        )
+        if result is ConditionalBranchDeletionResult.DENIED:
+            handle_denied_deletion(
+                ctx.forge,
+                proof,
+                ctx.base_branch,
+                ctx.config.integration_run_id,
+                ctx.config.parent_issue_number,
+            )
+        return False
+
     def _finalize_merged_child_tasks(self, ctx: IntegrationContext) -> set[str]:
         """Finalize children after persisting proof and applying deletion policy."""
         finalized: set[str] = set()
@@ -903,40 +945,8 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             proof = ctx.merged_task_proofs.get(task.issue_number)
             if proof is None:
                 continue
-            if not ensure_integration_receipt(ctx.forge, proof, ctx.base_branch):
-                print(
-                    f"Warning: Failed to persist integration receipt for #{proof.issue_number}",
-                    file=sys.stderr,
-                )
-                continue
-            receipt = ctx.task_merge_receipts.get(
-                task.issue_number, proof.merge_receipt
-            )
-            if not receipt.allows(BranchCapability.DELETE):
+            if self._finalize_single_child_task(ctx, task, proof):
                 finalized.add(subtask_id)
-                continue
-            result = delete_remote_branch_if_matches(
-                ctx.repository_root, receipt.branch_name, receipt.fetched_commit_oid
-            )
-            if result in {
-                ConditionalBranchDeletionResult.DELETED,
-                ConditionalBranchDeletionResult.ALREADY_ABSENT,
-            }:
-                finalized.add(subtask_id)
-                continue
-            print(
-                "Warning: Deferred child finalization for "
-                f"#{proof.issue_number}; branch deletion result={result}",
-                file=sys.stderr,
-            )
-            if result is ConditionalBranchDeletionResult.DENIED:
-                handle_denied_deletion(
-                    ctx.forge,
-                    proof,
-                    ctx.base_branch,
-                    ctx.config.integration_run_id,
-                    ctx.config.parent_issue_number,
-                )
         return finalized
 
     @staticmethod
@@ -1135,55 +1145,34 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
         task_by_subtask_id = {
             task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
         }
+        base_branch = ctx.base_branch.removeprefix("origin/")
         for subtask_id in ctx.merged_tasks:
             if subtask_ids is not None and subtask_id not in subtask_ids:
                 continue
             task = task_by_subtask_id.get(subtask_id)
             if task is None:
                 continue
-            try:
-                ctx.forge.close_issue(
-                    task.issue_number,
-                    "completed",
-                    comment=_close_comment(ctx, task.issue_number),
+
+            delivery, comment = resolve_merged_close_delivery(
+                ctx.forge, task.issue_number, ctx.integration_pr_number, base_branch
+            )
+            if not delivery.can_close:
+                print(
+                    f"Warning: Deferred closing issue #{task.issue_number}: "
+                    f"notice delivery deferred ({delivery.value})",
+                    file=sys.stderr,
                 )
+                continue
+
+            try:
+                ctx.forge.close_issue(task.issue_number, "completed", comment=comment)
                 closed_issues.append(task.issue_number)
             except Exception as error:
                 print(
-                    f"Warning: Failed to close issue #{task.issue_number} "
-                    f"after auto-merge: {error}",
+                    f"Warning: Failed to close issue #{task.issue_number} after auto-merge: {error}",
                     file=sys.stderr,
                 )
         return closed_issues
-
-
-def _close_comment(ctx: IntegrationContext, issue_number: int) -> str | None:
-    """#676: マージ完了通知をクローズ前に残し、クローズコメントを決める。
-
-    GitHubは既定ブランチ以外を対象とするPRをIssueの「Development」欄へ自動
-    リンクしないため、この通知が子Issue側から親ブランチへのマージを辿る唯一の
-    手掛かりになる。PR#684レビュー対応(Codex P2): 通知はクローズコメントに
-    同梱せず、クローズ**前**に独立したコメントとして投稿する。同梱すると、
-    クローズだけが失敗した場合に次サイクルの`RetryChildIssueCloseStep`が
-    （統合PR番号を復元できないまま）汎用コメントでクローズし直し、リンクが
-    恒久的に失われる。
-
-    戻り値は`close_issue`へ渡すコメント本文:
-    - 通知を残せた場合は`None`（重複を避け、クローズだけを行う）
-    - 通知の投稿に失敗した場合は最後の手段として通知本文そのもの
-    - リンクすべき統合PRが無い場合は従来どおりの文面
-    """
-    base_branch = ctx.base_branch.removeprefix("origin/")
-    if ctx.integration_pr_number is None:
-        return (
-            "Integratorが親ブランチへの自動マージを完了したため、"
-            "このIssueを自動的にクローズしました。"
-        )
-    if ensure_pr_merged_notice(
-        ctx.forge, issue_number, ctx.integration_pr_number, base_branch
-    ):
-        return None
-    return render_merged_notice(ctx.integration_pr_number, base_branch)
 
 
 __all__ = [

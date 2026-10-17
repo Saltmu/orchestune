@@ -924,6 +924,8 @@ class IntegratorEnv:
     branch_exists: MagicMock
     get_issue_labels: MagicMock
     ensure_labels: MagicMock
+    create_issue_comment: MagicMock = None  # type: ignore[assignment]
+    list_all_issue_comments: MagicMock = None  # type: ignore[assignment]
 
     def set_done_issues(
         self,
@@ -1011,48 +1013,35 @@ def integrator_env(
         lambda *args: ConditionalBranchDeletionResult.DELETED,
     )
     with patch("orchestune.integrator.subprocess.run") as run:
-        list_issues = fake_forge.list_issues_by_label
-        list_open_prs = fake_forge.list_open_prs
-        create_pr = fake_forge.create_pull_request
-        merge_pr = fake_forge.merge_pull_request
-        close_issue = fake_forge.close_issue
-        add_label = fake_forge.add_label
-        remove_label = fake_forge.remove_label
-        add_comment = fake_forge.add_comment
-        tip = fake_forge.is_current_branch_tip_merged_into
-        reachable = fake_forge.is_merge_commit_reachable_from
-        tip_sha = fake_forge.get_current_branch_tip_sha_if_merged_into
-        delete_branch = fake_forge.delete_branch
-        branch_exists = fake_forge.branch_exists
-        get_issue_labels = fake_forge.get_issue_labels
-        ensure_labels = fake_forge.ensure_labels
+        fake_forge.list_issues_by_label.side_effect = lambda label, *a, **k: []
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.create_pull_request.return_value = 999
+        fake_forge.is_current_branch_tip_merged_into.return_value = False
+        fake_forge.is_merge_commit_reachable_from.return_value = False
+        fake_forge.get_current_branch_tip_sha_if_merged_into.return_value = None
+        fake_forge.branch_exists.return_value = True
+        fake_forge.get_issue_labels.return_value = ()
+        fake_forge.ensure_labels.return_value = BootstrapResult((), ())
         run.side_effect = lambda args, **kwargs: _default_git_completed(args)
-        list_issues.side_effect = lambda label, *a, **k: []
-        list_open_prs.return_value = []
-        create_pr.return_value = 999
-        tip.return_value = False
-        reachable.return_value = False
-        tip_sha.return_value = None
-        branch_exists.return_value = True
-        get_issue_labels.return_value = ()
-        ensure_labels.return_value = BootstrapResult((), ())
         yield IntegratorEnv(
             run=run,
-            list_issues_by_label=list_issues,
-            list_open_prs=list_open_prs,
-            create_pull_request=create_pr,
-            merge_pull_request=merge_pr,
-            close_issue=close_issue,
-            add_label=add_label,
-            remove_label=remove_label,
-            add_comment=add_comment,
-            is_current_branch_tip_merged_into=tip,
-            is_merge_commit_reachable_from=reachable,
-            current_branch_tip_sha_if_merged_into=tip_sha,
-            delete_branch=delete_branch,
-            branch_exists=branch_exists,
-            get_issue_labels=get_issue_labels,
-            ensure_labels=ensure_labels,
+            list_issues_by_label=fake_forge.list_issues_by_label,
+            list_open_prs=fake_forge.list_open_prs,
+            create_pull_request=fake_forge.create_pull_request,
+            merge_pull_request=fake_forge.merge_pull_request,
+            close_issue=fake_forge.close_issue,
+            add_label=fake_forge.add_label,
+            remove_label=fake_forge.remove_label,
+            add_comment=fake_forge.add_comment,
+            is_current_branch_tip_merged_into=fake_forge.is_current_branch_tip_merged_into,
+            is_merge_commit_reachable_from=fake_forge.is_merge_commit_reachable_from,
+            current_branch_tip_sha_if_merged_into=fake_forge.get_current_branch_tip_sha_if_merged_into,
+            delete_branch=fake_forge.delete_branch,
+            branch_exists=fake_forge.branch_exists,
+            get_issue_labels=fake_forge.get_issue_labels,
+            ensure_labels=fake_forge.ensure_labels,
+            create_issue_comment=fake_forge.create_issue_comment,
+            list_all_issue_comments=fake_forge.list_all_issue_comments,
         )
 
 

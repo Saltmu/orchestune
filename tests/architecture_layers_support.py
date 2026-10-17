@@ -201,6 +201,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "ledger.status_labels",
             "ledger.status_machine",
             "pr_link_notice",
+            "pr_link_notice_trust",
             "provisioning.parent",
             "provisioning.plan",
             "provisioning.plan_loading",
