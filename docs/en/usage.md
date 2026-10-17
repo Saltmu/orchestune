@@ -127,6 +127,7 @@ When `orchestune provision` (Stage 4) runs, the parent (EPIC) issue is created o
 - **Safe Recovery from Lost Plan Files**:
   1. Run `orchestune provision --restore-plan <parent_number>` (and optionally `--plan <output_path>`) to automatically restore `decomposition_plan.md` (frontmatter and original prose description) directly from the parent issue body.
   2. If re-running `orchestune provision` after restoring the plan file, specify `--parent-issue <parent_number>` and first run with `--no-apply` to preview and confirm that existing child issues will be reused.
+- **A Stale Local Plan Never Overwrites the Parent Plan**: when the parent plan has a subtask with an `issue_number` whose `id` is missing from the local plan (for example, a task added to the parent plan directly), `orchestune provision` stops with exit code 3 before creating any child issue and leaves the parent issue body untouched. Restore the plan with `orchestune provision --restore-plan <parent_number>` and rerun. Parent plan entries without an `issue_number` do not trigger this stop.
 - **Concurrent Big Rocks**:
   To manage multiple big rocks in parallel, specify separate plan paths (e.g. `orchestune provision --plan plans/rock-a.md`) or manage them in isolated worktrees. Since each big rock's plan is persisted directly in its corresponding parent issue body, they remain cleanly separated and never conflict.
 - **`orchestune-dispatch` Does Not Read Plan Files**:

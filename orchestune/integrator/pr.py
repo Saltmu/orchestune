@@ -174,7 +174,7 @@ def ensure_parent_final_pr(
     forge = forge or GitHubForge()
     try:
         head = f"parent/issue-{parent_issue_number}"
-        title = f"Integrate parent issue #{parent_issue_number} into {base_branch}"
+        title = _parent_final_pr_title(parent_issue_number, base_branch)
         summaries = _final_pr_summaries(forge, parent_issue_number, children)
         body = render_final_pr_body(parent_issue_number, summaries)
 
@@ -203,6 +203,64 @@ def ensure_parent_final_pr(
         raise
     except Exception as e:
         print(f"Warning: Failed to ensure parent final PR: {e}", file=sys.stderr)
+        return None
+
+
+def _parent_final_pr_title(parent_issue_number: int, base_branch: str) -> str:
+    return f"Integrate parent issue #{parent_issue_number} into {base_branch}"
+
+
+def mark_parent_final_pr_pending(
+    parent_issue_number: int,
+    children: Sequence[IssueRecord],
+    forge: Forge,
+    base_branch: str = "main",
+) -> int | None:
+    """#814: 未完了の子Issueがある間、openな最終統合PRの本文を保留表示にする。
+
+    最終PR作成後に子Issueが追加されると、本文が「全子Issueが完了したため」の
+    ままになり、人間が誤ってマージできる。既存の最終PRだけを更新し、PRは
+    新規作成しない（作成は全子Issue完了後の`ensure_parent_final_pr`が担い、
+    そのときに通常の本文へ戻る）。`ensure_parent_final_pr`と同じく、一覧を
+    1件も作れない縮退サイクルでは書き換えない。待機経路を止めないよう、
+    失敗は警告に留める。
+    """
+    pending = [
+        child.number
+        for child in children
+        if child.state != "CLOSED" and child.number != parent_issue_number
+    ]
+    if not pending:
+        return None
+    try:
+        head = f"parent/issue-{parent_issue_number}"
+        existing = _find_reusable_integration_pr(forge, head, base_branch)
+        if existing is None:
+            return None
+        summaries = collect_child_summaries(
+            forge,
+            parent_issue_number,
+            [child for child in children if child.number != parent_issue_number],
+        )
+        if not summaries:
+            return existing.number
+        body = render_final_pr_body(
+            parent_issue_number, summaries, pending_children=pending
+        )
+        if body != existing.body:
+            _update_reused_integration_pr(
+                forge,
+                existing.number,
+                _parent_final_pr_title(parent_issue_number, base_branch),
+                body,
+            )
+        return existing.number
+    except Exception as e:
+        print(
+            f"Warning: Failed to mark the parent final PR of "
+            f"#{parent_issue_number} as pending: {e}",
+            file=sys.stderr,
+        )
         return None
 
 

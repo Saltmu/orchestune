@@ -120,6 +120,7 @@ subtasks:
 - **計画ファイルを失った状態からの安全な復元と再実行**:
   1. `orchestune provision --restore-plan <親Issue番号>`（必要に応じて `--plan <出力先>`）を実行すると、親Issue本文から `decomposition_plan.md`（Frontmatter および元の説明文）が直接ファイルへ復元されます。
   2. 復元した状態で再度 `orchestune provision` を行う場合は、必ず `--parent-issue <親番号>` を指定し、まずは `--no-apply` でプレビューして既存の子Issueが正しく再利用されることを確認してください。
+- **古いローカル計画で親計画を上書きしない**: 親計画に `issue_number` を持つsubtaskがあり、同じ `id` のsubtaskがローカルの計画にない場合（親計画へ直接追加されたタスクがある場合など）、`orchestune provision` は子Issueを1件も作らずに終了コード3で止まり、親Issue本文も書き換えません。`orchestune provision --restore-plan <親番号>` で計画を復元してから再実行してください。`issue_number` を持たない親計画のエントリでは止まりません。
 - **複数 big rock（計画）の並行運用**:
   複数の大きな石を並行して進める場合は、`orchestune provision --plan plans/rock-a.md` のように `--plan` オプションで個別パスを指定するか、別々のworktreeで作成してください。いずれの場合も `provision` 実行時に各big rockの親Issue本文へ個別に計画が永続化されるため、衝突することなく安全に分離・管理されます。
 - **`orchestune-dispatch` は計画ファイルを参照しない**:

@@ -3,9 +3,10 @@ from __future__ import annotations
 import subprocess
 from unittest.mock import ANY, MagicMock, patch
 
+from orchestune.integrator.parent_branch_state import is_current_parent_branch_merged
 from orchestune.integrator.parent_completion import process_parent_completion
 from orchestune.integrator.pr import ParentFinalPrMigrationError
-from orchestune.models import IssueRecord
+from orchestune.models import IssueRecord, PrRecord
 
 
 def _issue(number: int, state: str) -> IssueRecord:
@@ -437,3 +438,116 @@ class TestProcessParentCompletionWithFakeForge:
         passed_children = mock_ensure_pr.call_args[1]["children"]
         assert [c.number for c in passed_children] == [101]
         assert res == {"status": "final_pr_ready", "pr_number": 777}
+
+
+def _final_pr(body: str = "Parent issue: #100\n") -> PrRecord:
+    return PrRecord(
+        number=321,
+        head_ref="parent/issue-100",
+        changed_files=(),
+        base_ref="main",
+        is_cross_repository=False,
+        title="Integrate parent issue #100 into main",
+        body=body,
+    )
+
+
+class TestPendingFinalPr:
+    """#814: 最終PR作成後に子Issueが追加された場合の保留表示と復帰。"""
+
+    def test_waiting_path_marks_the_open_final_pr_pending(self, fake_forge: MagicMock):
+        fake_forge.list_sub_issues.return_value = [
+            _issue(101, "CLOSED"),
+            _issue(102, "OPEN"),
+        ]
+        fake_forge.list_open_prs.return_value = [_final_pr()]
+
+        res = process_parent_completion(100, apply=True, forge=fake_forge)
+
+        assert res == {"status": "waiting_on_children", "open_children": [102]}
+        fake_forge.create_pull_request.assert_not_called()
+        body = fake_forge.update_pull_request.call_args.kwargs["body"]
+        assert "⚠️ 未完了の子Issue #102 があります。" in body
+
+    @patch(
+        "orchestune.integrator.parent_completion.mark_parent_final_pr_pending",
+        autospec=True,
+    )
+    @patch(
+        "orchestune.integrator.parent_completion.migrate_open_parent_final_pr",
+        autospec=True,
+    )
+    def test_unsafe_legacy_pr_is_not_marked_pending(
+        self, mock_migrate_legacy_pr, mock_mark_pending, fake_forge: MagicMock
+    ):
+        """legacy参照を安全化できないPRは、保留表示より先にunsafeとして報告する。"""
+        fake_forge.list_sub_issues.return_value = [_issue(101, "OPEN")]
+        mock_migrate_legacy_pr.side_effect = ParentFinalPrMigrationError(
+            321, RuntimeError("transient API failure")
+        )
+
+        res = process_parent_completion(100, apply=True, forge=fake_forge)
+
+        assert res["status"] == "unsafe_final_pr"
+        mock_mark_pending.assert_not_called()
+
+    def test_human_merge_while_pending_leads_to_a_new_final_pr(
+        self, fake_forge: MagicMock
+    ):
+        """保留中に人間が最終PRをマージしても親は閉じず、補修が親ブランチへ
+        統合された後（tipがmain未到達）に新しい最終PRが作られる。"""
+        fake_forge.get_merged_pr_timestamp.return_value = "2026-10-17T10:00:00Z"
+        fake_forge.get_issue_last_reopened_at.return_value = None
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.list_sub_issues.return_value = [
+            _issue(101, "CLOSED"),
+            _issue(102, "OPEN"),
+        ]
+
+        first = process_parent_completion(100, apply=True, forge=fake_forge)
+
+        assert first == {"status": "waiting_on_children", "open_children": [102]}
+        fake_forge.close_issue.assert_not_called()
+
+        fake_forge.list_sub_issues.return_value = [
+            _issue(101, "CLOSED"),
+            _issue(102, "CLOSED"),
+        ]
+        fake_forge.is_current_branch_tip_merged_into.return_value = False
+        fake_forge.create_pull_request.return_value = 777
+
+        second = process_parent_completion(100, apply=True, forge=fake_forge)
+
+        assert second == {"status": "final_pr_ready", "pr_number": 777}
+        fake_forge.close_issue.assert_not_called()
+        assert (
+            fake_forge.create_pull_request.call_args.kwargs["head"]
+            == "parent/issue-100"
+        )
+
+
+class TestParentBranchState:
+    """#814: 親ブランチのマージ判定はL2の`parent_branch_state`が持つ。"""
+
+    def test_unmerged_without_a_merged_pr_record(self, fake_forge: MagicMock):
+        fake_forge.get_merged_pr_timestamp.return_value = None
+
+        assert (
+            is_current_parent_branch_merged("parent/issue-100", 100, fake_forge)
+            is False
+        )
+
+    @patch(
+        "orchestune.integrator.parent_completion.is_current_parent_branch_merged",
+        autospec=True,
+        return_value=False,
+    )
+    def test_parent_completion_uses_the_shared_check(
+        self, mock_merged, fake_forge: MagicMock
+    ):
+        fake_forge.list_sub_issues.return_value = [_issue(101, "CLOSED")]
+        fake_forge.create_pull_request.return_value = 777
+
+        process_parent_completion(100, apply=True, forge=fake_forge)
+
+        mock_merged.assert_called_once_with("parent/issue-100", 100, fake_forge)

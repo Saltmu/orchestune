@@ -7,6 +7,7 @@ from orchestune.integrator.pr import (
     ensure_integration_pr,
     ensure_parent_final_pr,
     handle_merge_failure,
+    mark_parent_final_pr_pending,
 )
 from orchestune.models import IssueRecord, PrRecord, Task
 
@@ -524,3 +525,100 @@ class TestEnsureParentFinalPrBody(_FakeForgeTest):
             ensure_parent_final_pr(100, forge=self.forge, children=[])
 
         assert error.value.pr_number == 321
+
+
+class TestMarkParentFinalPrPending(_FakeForgeTest):
+    """#814: 未完了の子Issueがある間、openな最終PRの本文を保留表示にする。"""
+
+    def _child(self, number: int, state: str) -> IssueRecord:
+        return IssueRecord(
+            number=number,
+            title=f"Issue {number}",
+            body="",
+            labels=(),
+            created_at="2026-01-01T00:00:00Z",
+            state=state,
+        )
+
+    def _final_pr(self, body: str = "Parent issue: #100\n") -> PrRecord:
+        return PrRecord(
+            number=321,
+            head_ref="parent/issue-100",
+            changed_files=(),
+            base_ref="main",
+            is_cross_repository=False,
+            title="Integrate parent issue #100 into main",
+            body=body,
+        )
+
+    def _children(self) -> list[IssueRecord]:
+        return [self._child(101, "CLOSED"), self._child(102, "OPEN")]
+
+    def test_updates_the_open_final_pr_to_the_pending_body(self):
+        self.forge.list_open_prs.return_value = [self._final_pr()]
+
+        pr_number = mark_parent_final_pr_pending(100, self._children(), self.forge)
+
+        assert pr_number == 321
+        self.forge.create_pull_request.assert_not_called()
+        self.forge.update_pull_request.assert_called_once()
+        call = self.forge.update_pull_request.call_args
+        assert call.args[0] == 321
+        assert call.kwargs["title"] == "Integrate parent issue #100 into main"
+        assert "⚠️ 未完了の子Issue #102 があります。" in call.kwargs["body"]
+        assert "| #101 |" in call.kwargs["body"]
+        assert "| #102 |" in call.kwargs["body"]
+
+    def test_does_nothing_without_an_open_final_pr(self):
+        self.forge.list_open_prs.return_value = []
+
+        assert mark_parent_final_pr_pending(100, self._children(), self.forge) is None
+
+        self.forge.update_pull_request.assert_not_called()
+        self.forge.create_pull_request.assert_not_called()
+
+    def test_does_nothing_without_open_children(self):
+        self.forge.list_open_prs.return_value = [self._final_pr()]
+
+        result = mark_parent_final_pr_pending(
+            100, [self._child(101, "CLOSED")], self.forge
+        )
+
+        assert result is None
+        self.forge.update_pull_request.assert_not_called()
+
+    def test_parent_itself_is_not_an_unfinished_child(self):
+        self.forge.list_open_prs.return_value = [self._final_pr()]
+
+        result = mark_parent_final_pr_pending(
+            100, [self._child(101, "CLOSED"), self._child(100, "OPEN")], self.forge
+        )
+
+        assert result is None
+        self.forge.update_pull_request.assert_not_called()
+
+    def test_keeps_the_body_when_no_summary_could_be_built(self):
+        """一時的なAPI障害で、投稿済みの正しい一覧を失わせない。"""
+        self.forge.list_open_prs.return_value = [self._final_pr()]
+        self.forge.list_prs.side_effect = RuntimeError("transient API failure")
+
+        mark_parent_final_pr_pending(100, self._children(), self.forge)
+
+        self.forge.update_pull_request.assert_not_called()
+
+    def test_skips_the_write_when_the_body_is_already_pending(self):
+        self.forge.list_open_prs.return_value = [self._final_pr()]
+        mark_parent_final_pr_pending(100, self._children(), self.forge)
+        pending_body = self.forge.update_pull_request.call_args.kwargs["body"]
+        self.forge.update_pull_request.reset_mock()
+        self.forge.list_open_prs.return_value = [self._final_pr(pending_body)]
+
+        pr_number = mark_parent_final_pr_pending(100, self._children(), self.forge)
+
+        assert pr_number == 321
+        self.forge.update_pull_request.assert_not_called()
+
+    def test_forge_failure_is_non_fatal(self):
+        self.forge.list_open_prs.side_effect = RuntimeError("transient API failure")
+
+        assert mark_parent_final_pr_pending(100, self._children(), self.forge) is None

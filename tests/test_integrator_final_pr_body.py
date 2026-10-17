@@ -506,3 +506,37 @@ class TestCollectChildSummaries:
         assert [call.args[0] for call in self.forge.list_comments.call_args_list] == [
             101
         ]
+
+
+class TestRenderPendingFinalPrBody:
+    """#814: 最終PR作成後に追加された未完了の子Issueがある間の保留表示。"""
+
+    def test_pending_body_warns_and_lists_unfinished_children(self):
+        body = render_final_pr_body(
+            100,
+            [ChildSummary(issue_number=101, title="t"), ChildSummary(102, "u")],
+            pending_children=(103, 102),
+        )
+
+        lines = body.splitlines()
+        assert lines[0] == "Parent issue: #100"
+        assert lines[2] == (
+            "⚠️ 未完了の子Issue #102、#103 があります。"
+            "親ブランチへの反映までマージしないでください。"
+        )
+        assert "全子Issueが完了したため" not in body
+
+    def test_pending_body_keeps_the_table_columns(self):
+        body = render_final_pr_body(
+            100, [ChildSummary(issue_number=101, title="t")], pending_children=(102,)
+        )
+
+        assert "| 子Issue | タイトル | サブタスクPR | レビュー結果 |" in body
+        assert "| #101 | t | — | — |" in body
+
+    def test_no_pending_children_keeps_the_normal_body(self):
+        summaries = [ChildSummary(issue_number=101, title="t")]
+
+        assert render_final_pr_body(
+            100, summaries, pending_children=()
+        ) == render_final_pr_body(100, summaries)
