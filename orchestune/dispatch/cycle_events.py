@@ -357,26 +357,6 @@ class WorktreeCompletionHold(_SerializedCompletion):
     _OMIT_NONE: ClassVar[frozenset[str]] = frozenset({"usage", "operation", "error"})
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class TaskWorktreeCompletion(_SerializedCompletion):
-    issue_number: int
-    subtask_id: str
-    worktree_path: str
-    action: Literal[
-        "not_needed",
-        "not_needed_review_dispatched",
-        "abandoned_pr_requeued",
-        "completion_skipped_dirty_worktree",
-        "escalated_reclaim_limit_exceeded",
-    ]
-    _SERIALIZE_FIELDS: ClassVar[tuple[str, ...]] = (
-        "issue_number",
-        "subtask_id",
-        "worktree_path",
-        "action",
-    )
-
-
 type TaskWorktreeCompletionAction = Literal[
     "not_needed",
     "not_needed_review_dispatched",
@@ -384,6 +364,20 @@ type TaskWorktreeCompletionAction = Literal[
     "completion_skipped_dirty_worktree",
     "escalated_reclaim_limit_exceeded",
 ]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TaskWorktreeCompletion(_SerializedCompletion):
+    issue_number: int
+    subtask_id: str
+    worktree_path: str
+    action: TaskWorktreeCompletionAction
+    _SERIALIZE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "issue_number",
+        "subtask_id",
+        "worktree_path",
+        "action",
+    )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

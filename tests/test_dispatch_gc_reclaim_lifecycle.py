@@ -330,6 +330,64 @@ class TestDirtyWorktreeHoldLimit:
         assert ctx.run_state.active_worktrees == {}
         assert load_run_state(ctx.config.run_state_path).active_worktrees == {}
 
+    def test_escalation_is_reported_as_the_canonical_escalated_event(
+        self, tmp_path, fake_forge
+    ):
+        """#1349: castで偽装せず`DirtyWorktreeEscalatedCompletion`を返す。
+
+        field・出力順・省略規則は従来のholdイベントの`replace`と同一でなければ
+        ならない（events.jsonlの既存出力を維持する）。
+        """
+        from orchestune.dispatch.cycle_events import DirtyWorktreeEscalatedCompletion
+
+        ctx = _ctx(forge=fake_forge)
+        ctx.config.apply = True
+        ctx.config.run_state_path = tmp_path / "run_state.json"
+        ctx.config.max_task_reclaims = 0
+        active = ctx.run_state.active_worktrees.setdefault(
+            "1", _active(issue_number=280, worktree_path="worktrees/w1")
+        )
+        task = _task(status_labels=("status:in-progress",))
+        held = WorktreeCompletionHold(
+            issue_number=280,
+            worktree_path=active.core.worktree_path,
+            action="completion_skipped_dirty_worktree",
+            operation="list_prs",
+            error="boom",
+        )
+
+        with (
+            patch(
+                "orchestune.dispatch.gc._is_worktree_complete",
+                autospec=True,
+                return_value=True,
+            ),
+            patch(
+                "orchestune.dispatch.gc._finalize_completed_worktree",
+                autospec=True,
+                return_value=held,
+            ),
+        ):
+            outcome = _rule_completed(ctx, "1", active, task)
+
+        assert outcome is not None
+        event = outcome.completion_event
+        assert isinstance(event, DirtyWorktreeEscalatedCompletion)
+        assert event.to_dict() == {
+            "issue_number": 280,
+            "worktree_path": active.core.worktree_path,
+            "action": "escalated_reclaim_limit_exceeded",
+            "operation": "list_prs",
+            "error": "boom",
+        }
+        assert list(event.to_dict()) == [
+            "issue_number",
+            "worktree_path",
+            "action",
+            "operation",
+            "error",
+        ]
+
     def test_dry_run_does_not_count_the_hold(self, tmp_path, fake_forge):
         ctx = _ctx(forge=fake_forge)
         ctx.config.apply = False
