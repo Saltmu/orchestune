@@ -340,6 +340,28 @@ def _uninstall_result(
     )
 
 
+def _completed_uninstall_result(
+    root: PhysicalRoot,
+    payload: BundlePayload,
+    state_before: BundleState,
+    target_consumers: list[str],
+    tx: SkillTransaction,
+) -> OperationResult | None:
+    if payload.bundle_name not in tx.recovered_uninstalls:
+        return None
+    manifest = load_manifest(root.path)
+    entry = manifest.bundles.get(payload.bundle_name) if manifest is not None else None
+    if entry is not None and any(c in entry.consumers for c in target_consumers):
+        return None
+    return _uninstall_result(
+        root,
+        payload,
+        state_before,
+        inspect_bundle_state(root.path, payload),
+        [f"completed pending uninstall operation for {payload.bundle_name} bundle"],
+    )
+
+
 def _uninstall_locked(
     root: PhysicalRoot,
     payload: BundlePayload,
@@ -347,14 +369,11 @@ def _uninstall_locked(
     target_consumers: list[str],
     tx: SkillTransaction,
 ) -> OperationResult | list[str]:
-    if payload.bundle_name in tx.recovered_uninstalls:
-        return _uninstall_result(
-            root,
-            payload,
-            state_before,
-            inspect_bundle_state(root.path, payload),
-            [f"completed pending uninstall operation for {payload.bundle_name} bundle"],
-        )
+    completion = _completed_uninstall_result(
+        root, payload, state_before, target_consumers, tx
+    )
+    if completion is not None:
+        return completion
 
     current_state = inspect_bundle_state(root.path, payload)
     if current_state == BundleState.ABSENT:

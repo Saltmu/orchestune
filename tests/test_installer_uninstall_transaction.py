@@ -229,6 +229,41 @@ def test_uninstall_preserves_files_owned_by_another_bundle(tmp_path: Path) -> No
     assert "other" in updated_manifest.bundles
 
 
+def test_consumer_only_uninstall_allows_shared_bundle_skill(
+    tmp_path: Path,
+) -> None:
+    skills_root = tmp_path / "skills"
+    payload = _make_payload(tmp_path)
+    root_both = PhysicalRoot(
+        path=skills_root,
+        target_types=[TargetType.CODEX, TargetType.ANTIGRAVITY],
+        scope=ScopeType.PROJECT,
+    )
+    install_skills(root_both, payload)
+    manifest = load_manifest(skills_root)
+    assert manifest is not None
+    manifest.bundles["other"] = BundleManifestEntry(
+        package_version="0.5.0",
+        source_kind="installed_distribution",
+        bundle_digest="other-digest",
+        consumers=["claude"],
+        skills=manifest.bundles["standard"].skills.copy(),
+    )
+    save_manifest(skills_root, manifest)
+
+    result = uninstall_skills(_physical_root(skills_root), payload)
+
+    assert result.success is True
+    assert "removed consumers" in result.actions[0]
+    assert (skills_root / "orchestune" / "SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "managed orchestune"
+    updated_manifest = load_manifest(skills_root)
+    assert updated_manifest is not None
+    assert updated_manifest.bundles["standard"].consumers == ["antigravity"]
+    assert "other" in updated_manifest.bundles
+
+
 def test_uninstall_recovery_refuses_to_overwrite_new_public_skill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -459,6 +494,45 @@ def test_recovery_after_manifest_save_finishes_committed_uninstall(
     committed_manifest = load_manifest(skills_root)
     assert committed_manifest is not None
     assert "standard" not in committed_manifest.bundles
+
+
+def test_recovery_then_uninstall_processes_remaining_consumer(
+    tmp_path: Path,
+) -> None:
+    skills_root = tmp_path / "skills"
+    payload = _make_payload(tmp_path)
+    root_both = PhysicalRoot(
+        path=skills_root,
+        target_types=[TargetType.CODEX, TargetType.ANTIGRAVITY],
+        scope=ScopeType.PROJECT,
+    )
+    install_skills(root_both, payload)
+
+    tx = SkillTransaction(skills_root)
+    tx.tx_dir.mkdir(parents=True)
+    details = _uninstall_journal_details(skills_root, tx)
+    details["remaining_consumers"] = ["antigravity"]
+    details["skills"] = []
+    tx._write_journal("MANIFEST_COMMITTED", details)
+
+    manifest = load_manifest(skills_root)
+    assert manifest is not None
+    manifest.bundles["standard"].consumers = ["antigravity"]
+    manifest.generation += 1
+    manifest.transaction_id = tx.tx_id
+    save_manifest(skills_root, manifest)
+
+    result = uninstall_skills(
+        _physical_root(skills_root, TargetType.ANTIGRAVITY), payload
+    )
+
+    assert result.state_before is BundleState.RECOVERY_REQUIRED
+    assert any("removed standard bundle files" in action for action in result.actions)
+    assert result.state_after is BundleState.ABSENT
+    assert not (skills_root / "orchestune").exists()
+    final_manifest = load_manifest(skills_root)
+    assert final_manifest is not None
+    assert "standard" not in final_manifest.bundles
 
 
 def test_committed_recovery_preserves_changed_backup_and_journal(

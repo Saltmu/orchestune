@@ -645,7 +645,8 @@ def _build_uninstall_plan(
     if set(remaining_consumers) == set(entry.consumers):
         raise TransactionError("Uninstall must remove at least one consumer")
 
-    _reject_shared_uninstall_skills(manifest, bundle_name, entry)
+    if not remaining_consumers:
+        _reject_shared_uninstall_skills(manifest, bundle_name, entry)
     for skill_name, skill_info in entry.skills.items():
         _validate_skill_name(skill_name)
         _validate_skill_manifest(skill_info)
