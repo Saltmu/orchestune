@@ -1,4 +1,4 @@
-"""Preview remediation registrations; apply is intentionally unavailable."""
+"""Preview and explicitly confirm remediation registrations."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from orchestune.forge import GitHubForge
+from orchestune.remediation.apply import apply_remediation
 from orchestune.remediation.models import RemediationPreview
 from orchestune.remediation.preview import build_remediation_preview
 from orchestune.remediation.snapshot import collect_remediation_snapshot
@@ -47,7 +48,23 @@ def main(argv: Sequence[str] | None = None, *, forge: Any = None) -> int:
     parser.add_argument("--spec", required=True)
     parser.add_argument("--parent-issue", type=int)
     parser.add_argument("--template", default=".github/issue_template.md")
+    parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--confirm-preview")
     args = parser.parse_args(argv)
+    if args.apply and not args.confirm_preview:
+        parser.error("--apply requires --confirm-preview")
+    if args.confirm_preview and not args.apply:
+        parser.error("--confirm-preview requires --apply")
+    if args.apply:
+        result = apply_remediation(
+            args.spec,
+            args.confirm_preview,
+            forge=forge,
+            template_path=args.template,
+            parent_issue_number=args.parent_issue,
+        )
+        print(result.message)
+        return result.exit_code
     try:
         spec = load_remediation_spec(args.spec)
         if args.parent_issue is not None and spec.parent_issue_number not in (

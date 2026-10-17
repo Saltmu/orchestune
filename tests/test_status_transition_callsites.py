@@ -81,6 +81,7 @@ CI_RED = "ci:base-branch-red"
 #: Every call of `transition_status_label` under `orchestune/`:
 #: "<file>::<enclosing function>" -> number of calls.
 CALL_SITES: dict[str, int] = {
+    "remediation/operations.py::ensure_initial_label": 1,
     "claim/service.py::_apply_status_label": 1,
     "dispatch/launch.py::_apply_yaml_error_blocking": 1,
     "dispatch/launch.py::_apply_invalid_footprint_blocking": 1,
@@ -442,6 +443,27 @@ def _repair_recovery_escalation() -> list[Case]:
 
 CASES: tuple[Case, ...] = tuple(
     [
+        _case(
+            "remediation/operations.py::ensure_initial_label",
+            "remediation_init",
+            "no-deps",
+            (),
+            Q,
+            (),
+            INI,
+            {Q},
+        ),
+        _case(
+            "remediation/operations.py::ensure_initial_label",
+            "remediation_init",
+            "has-deps",
+            (),
+            B,
+            (),
+            INI,
+            {B},
+            depends_on=("old",),
+        ),
         *_claim(),
         *_launch(),
         *_attempt_and_reconciliation(),

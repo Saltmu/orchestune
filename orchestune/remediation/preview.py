@@ -170,6 +170,19 @@ def _record(issue: IssueRecord) -> dict[str, Any] | None:
     return value
 
 
+def _extra_footprint_keys(own_record: bool) -> set[str]:
+    keys = {"description", "risk", "priority"}
+    if own_record:
+        keys |= {
+            "claim_id",
+            "owner_kind",
+            "reservation_kind",
+            "forced_serial",
+            "recompute_count",
+        }
+    return keys
+
+
 def _issue_checks(
     issue: IssueRecord,
     task: RemediationTask,
@@ -209,7 +222,7 @@ def _issue_checks(
     if FOOTPRINT_BLOCK_PATTERN.search(issue.body) and (
         current is None
         or not current.keys() & expected.keys()
-        or not current.keys() <= expected.keys() | {"description", "risk", "priority"}
+        or not current.keys() <= expected.keys() | _extra_footprint_keys(own_record)
     ):
         reasons.append("first YAML block is not a compatible Footprint mapping")
     if current and current.get("subtask_id") not in (None, task.subtask.id):
@@ -245,14 +258,20 @@ def _registration_steps(
         if pr.state.upper() == "OPEN"
     )
     audit = f"<!-- orchestune:remediation-audit spec_revision={spec.spec_revision} -->"
+    audited = any(audit in comment for comment in snapshot.parent_comments)
+    metadata_ready = all(current.get(k) == v for k, v in expected.items())
     stages = {
-        "footprint": all(current.get(k) == v for k, v in expected.items()),
+        "footprint": metadata_ready,
         "labels": len(primary) == 1,
-        "relationships": (issue.parent or {}).get("number") == snapshot.parent.number
-        and dependencies <= set(issue.blocked_by),
+        # The terminal audit proves linking completed, including supported metadata fallback.
+        "relationships": (
+            (issue.parent or {}).get("number") == snapshot.parent.number
+            and dependencies <= set(issue.blocked_by)
+        )
+        or (audited and metadata_ready),
         "plan": plan_ready,
         "final-pr": final_ready,
-        "audit": any(audit in comment for comment in snapshot.parent_comments),
+        "audit": audited,
     }
     return tuple(k for k, v in stages.items() if v), tuple(
         k for k, v in stages.items() if not v

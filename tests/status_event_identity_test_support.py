@@ -20,6 +20,7 @@ _MANUAL_CLAIM = "claim/service.py::_apply_status_label"
 # route below and remain checked by P3A-ROUTE-COVERAGE.
 EXPECTED_SOURCES = frozenset(
     {
+        "remediation/operations.py::ensure_initial_label",
         "claim/service.py::_apply_status_label",
         "dispatch/launch.py::_apply_yaml_error_blocking",
         "dispatch/launch.py::_apply_invalid_footprint_blocking",

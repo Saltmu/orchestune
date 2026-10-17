@@ -200,6 +200,10 @@ def _r(event: Event, kind: Kind, *cases: str) -> Route:
 #: the conditions of `tests/test_status_transition_callsites.py::CASES`; the
 #: other cases are `EVENT_CASES` below.
 EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
+    "remediation/operations.py::ensure_initial_label": (
+        _r(_E.QUEUE, _K.PLAIN, "no-deps"),
+        _r(_E.BLOCK, _K.PLAIN, "has-deps"),
+    ),
     "claim/service.py::_apply_status_label": (
         _r(
             _E.LAUNCH,
