@@ -5,12 +5,13 @@
 """
 
 import threading
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from orchestune.dispatch import cycle_execution, dispatcher
+from orchestune.dispatch import cycle, cycle_execution, dispatcher
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.launch import _persist_launch_history
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
@@ -127,7 +128,7 @@ def test_execute_cycle_holds_run_state_lock_only_during_locked_cycle(
     seen: list[bool] = []
     sentinel = object()
 
-    def fake_locked_cycle(api, config, collector=None):
+    def fake_locked_cycle(dependencies, config, collector=None):
         seen.append(is_run_state_lock_held(lock))
         return sentinel
 
@@ -138,8 +139,10 @@ def test_execute_cycle_holds_run_state_lock_only_during_locked_cycle(
         run_state_path=tmp_path / "run_state.json",
         events_log_path=tmp_path / "events.jsonl",
     )
-    api = SimpleNamespace(run_state_lock=run_state_lock)
-    assert cycle_execution.execute_cycle(api, config) is sentinel
+    dependencies = replace(
+        cycle._build_execution_dependencies(), state_lock=run_state_lock
+    )
+    assert cycle_execution.execute_cycle(dependencies, config) is sentinel
     assert seen == [True]
     assert not is_run_state_lock_held(lock)
 

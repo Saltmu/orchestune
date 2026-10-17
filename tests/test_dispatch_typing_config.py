@@ -10,6 +10,8 @@ import pytest
 
 STRICT_MODULES = (
     "orchestune.dispatch.cycle",
+    "orchestune.dispatch.cycle_execution",
+    "orchestune.dispatch.cycle_execution_contracts",
     "orchestune.dispatch.cycle_actions",
     "orchestune.dispatch.cycle_state_changes",
 )
