@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -18,12 +19,21 @@ import pytest
 from orchestune.dependencies.assessment import DependencyState
 from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.cycle_context_state import RecordStatus
-from orchestune.dispatch.cycle_events import TaskWorktreeCompletion, WorktreeCompletion
+from orchestune.dispatch.cycle_events import (
+    DirtyWorktreeEscalatedCompletion,
+    EarlyDeathRequeuedCompletion,
+    ForgeFailureCompletion,
+    PriorMergeEvidenceCompletion,
+    TaskWorktreeCompletion,
+    WorktreeCompletion,
+    WorktreeCompletionHold,
+)
 from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.gc import (
     _handle_completed_event_outcome,
     _record_completed_worktree,
 )
+from orchestune.dispatch.gc.completion_disposition import UnclassifiedCompletionError
 from tests.dispatch_gc_test_support import _active, _task
 from tests.dispatch_gc_test_support import _rule_ctx as _ctx
 
@@ -70,6 +80,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
                     worktree_path=active.core.worktree_path,
                     action="completed",
                 ),
+                may_issue_receipt=True,
             )
 
         mock_save.assert_called_once_with(
@@ -99,6 +110,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
                     worktree_path=active.core.worktree_path,
                     action="already_merged",
                 ),
+                may_issue_receipt=True,
             )
 
         assert ctx.is_completion_confirmed(active.core.issue_number) is True
@@ -127,6 +139,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
                     worktree_path=active.core.worktree_path,
                     action="not_needed",
                 ),
+                may_issue_receipt=True,
             )
 
         mock_save.assert_called_once()
@@ -178,6 +191,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
                     worktree_path=active.core.worktree_path,
                     action="not_needed",
                 ),
+                may_issue_receipt=True,
             )
 
         assert ctx.run_state.active_worktrees["1"] is active
@@ -200,6 +214,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
                     worktree_path=active.core.worktree_path,
                     action="escalated_token_limit_exceeded",
                 ),
+                may_issue_receipt=False,
             )
 
         assert ctx.is_completion_confirmed(active.core.issue_number) is False
@@ -225,6 +240,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
                     worktree_path=active.core.worktree_path,
                     action="completed",
                 ),
+                may_issue_receipt=True,
             )
 
         assert ctx.is_completion_confirmed(active.core.issue_number) is False
@@ -250,6 +266,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
                     worktree_path=active.core.worktree_path,
                     action="completed",
                 ),
+                may_issue_receipt=True,
             )
 
         mock_save.assert_not_called()
@@ -290,6 +307,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
                     worktree_path=active.core.worktree_path,
                     action="completed",
                 ),
+                may_issue_receipt=True,
             )
 
         after = ctx.assess_dependencies(281)
@@ -307,4 +325,135 @@ class TestRecordCompletionNoopDoesNotGrowHistory:
 
         assert first.status is RecordStatus.APPLIED
         assert second.status is RecordStatus.NOOP
+        assert ctx.run_state.completed_worktrees == []
+
+
+class TestCompletedEventRoutes:
+    """#1349: 後処理の経路は`completion_handling`の分類だけで決まる。"""
+
+    def _setup(self):
+        task = _task(status_labels=("status:in-progress",))
+        ctx = _ctx(tasks_by_issue={task.issue_number: task})
+        ctx.config.apply = True
+        active = _active()
+        ctx.run_state.active_worktrees["1"] = active
+        return ctx, task, active
+
+    @pytest.mark.parametrize(
+        "make_event",
+        [
+            lambda a: ForgeFailureCompletion(
+                issue_number=280, worktree_path=a.core.worktree_path
+            ),
+            lambda a: WorktreeCompletionHold(
+                issue_number=280,
+                worktree_path=a.core.worktree_path,
+                action="completion_skipped_forge_error",
+            ),
+            lambda a: WorktreeCompletionHold(
+                issue_number=280,
+                worktree_path=a.core.worktree_path,
+                action="completion_skipped_prior_merge_indeterminate",
+            ),
+            lambda a: TaskWorktreeCompletion(
+                issue_number=280,
+                subtask_id="s",
+                worktree_path=a.core.worktree_path,
+                action="completion_skipped_dirty_worktree",
+            ),
+            lambda a: DirtyWorktreeEscalatedCompletion(
+                issue_number=280, worktree_path=a.core.worktree_path
+            ),
+            lambda a: PriorMergeEvidenceCompletion(
+                issue_number=280,
+                action="already_merged",
+                pr_number=1,
+                base_ref="main",
+                merged_at="2026-01-01T00:00:00Z",
+                reason="r",
+            ),
+        ],
+    )
+    def test_keep_events_change_no_ledger_state(self, make_event):
+        ctx, task, active = self._setup()
+        event = make_event(active)
+
+        with patch("orchestune.dispatch.gc.save_run_state", autospec=True) as save:
+            outcome = _handle_completed_event_outcome(ctx, "1", active, task, event)
+
+        assert outcome is not None
+        assert outcome.completion_event is event
+        assert outcome.terminal is True
+        save.assert_not_called()
+        assert ctx.run_state.active_worktrees == {"1": active}
+        assert ctx.run_state.completed_worktrees == []
+        assert ctx.is_completion_confirmed(280) is False
+
+    def test_token_escalation_is_history_only_and_confirms_nothing(self):
+        ctx, task, active = self._setup()
+        event = WorktreeCompletion(
+            issue_number=280,
+            worktree_path=active.core.worktree_path,
+            action="escalated_token_limit_exceeded",
+        )
+
+        with patch("orchestune.dispatch.gc.save_run_state", autospec=True) as save:
+            outcome = _handle_completed_event_outcome(ctx, "1", active, task, event)
+
+        assert outcome is not None and outcome.completion_event is event
+        save.assert_called_once()
+        assert len(ctx.run_state.completed_worktrees) == 1
+        assert "1" not in ctx.run_state.active_worktrees
+        assert ctx.is_completion_confirmed(280) is False
+
+    @pytest.mark.parametrize(
+        "make_event",
+        [
+            lambda a: EarlyDeathRequeuedCompletion(
+                issue_number=280,
+                worktree_path=a.core.worktree_path,
+                early_death_retry_at=1.0,
+            ),
+            lambda a: WorktreeCompletion(
+                issue_number=280,
+                worktree_path=a.core.worktree_path,
+                action="blocked_unknown_reason",
+            ),
+            lambda a: TaskWorktreeCompletion(
+                issue_number=280,
+                subtask_id="s",
+                worktree_path=a.core.worktree_path,
+                action="not_needed_review_dispatched",
+            ),
+        ],
+    )
+    def test_retire_events_drop_the_active_entry_without_history_or_receipt(
+        self, make_event
+    ):
+        ctx, task, active = self._setup()
+        event = make_event(active)
+
+        with patch("orchestune.dispatch.gc.save_run_state", autospec=True) as save:
+            outcome = _handle_completed_event_outcome(ctx, "1", active, task, event)
+
+        assert outcome is not None and outcome.completion_event is event
+        save.assert_not_called()
+        assert ctx.run_state.active_worktrees == {}
+        assert ctx.run_state.completed_worktrees == []
+        assert ctx.is_completion_confirmed(280) is False
+
+    def test_unclassified_action_fails_before_any_side_effect(self):
+        ctx, task, active = self._setup()
+        event = WorktreeCompletion(
+            issue_number=280,
+            worktree_path=active.core.worktree_path,
+            action=cast(Any, "brand_new_action"),
+        )
+
+        with patch("orchestune.dispatch.gc.save_run_state", autospec=True) as save:
+            with pytest.raises(UnclassifiedCompletionError):
+                _handle_completed_event_outcome(ctx, "1", active, task, event)
+
+        save.assert_not_called()
+        assert ctx.run_state.active_worktrees == {"1": active}
         assert ctx.run_state.completed_worktrees == []

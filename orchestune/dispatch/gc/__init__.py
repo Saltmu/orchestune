@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import Literal, cast
+from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
@@ -19,10 +19,9 @@ from orchestune.dispatch.cycle_events import (
     AbandonmentPersistenceFailureCompletion,
     ActiveReservationHold,
     CompletionEvent,
+    DirtyWorktreeEscalatedCompletion,
     ForgeFailureCompletion,
-    TaskWorktreeCompletion,
     WorktreeCompletionHold,
-    WorktreeCompletionHoldAction,
 )
 from orchestune.dispatch.cycle_records import CompletionReceipt
 from orchestune.dispatch.external_execution import (
@@ -53,6 +52,10 @@ from orchestune.dispatch.gc.completion import (
     failure_descriptions,
     is_completion_hold_event,
     warn_forge_failure,
+)
+from orchestune.dispatch.gc.completion_disposition import (
+    PostCompletionRoute,
+    completion_handling,
 )
 from orchestune.dispatch.gc.confirmed import collect_confirmed_completion
 from orchestune.dispatch.gc.external_guard import fresh_external_hold
@@ -159,26 +162,8 @@ def _rule_not_needed(
     completion_event = _finalize_not_needed_worktree(
         active, active_task, ctx.config, ctx.not_needed_review_dispatcher
     )
-    if (
-        isinstance(completion_event, TaskWorktreeCompletion)
-        and completion_event.action == "not_needed"
-    ):
-        return _record_completed_worktree(
-            ctx, key, active, active_task, completion_event
-        )
-    if (
-        isinstance(completion_event, TaskWorktreeCompletion)
-        and completion_event.action == "not_needed_review_dispatched"
-        and ctx.config.apply
-    ):
-        if hold := fresh_external_hold(active, ctx.config, "completion", ctx.run_state):
-            return ActiveWorktreeRuleOutcome(
-                completion_event=hold.event(), terminal=True
-            )
-        del ctx.run_state.active_worktrees[key]
-    return ActiveWorktreeRuleOutcome(
-        completion_event=completion_event,
-        terminal=True,
+    return _handle_completed_event_outcome(
+        ctx, key, active, active_task, completion_event
     )
 
 
@@ -307,14 +292,6 @@ def _apply_dirty_worktree_hold(
     return _escalate_held_dirty_worktree(ctx, key, active, active_task, hold_count)
 
 
-# GC completion actions confirmed enough to mint a `CompletionReceipt` (#882).
-# Exact membership only: several other actions share the `completed`-prefix
-# (`completed_no_commits`, `completed_without_outcome`) without being a
-# genuine confirmed completion, and `escalated_token_limit_exceeded` is still
-# recorded to history below but must never confirm completion.
-_CONFIRMED_COMPLETION_ACTIONS = frozenset({"completed", "already_merged", "not_needed"})
-
-
 def _persist_and_confirm_completion(
     ctx: _RuleExecutionContext,
     completion_active: ActiveWorktree,
@@ -361,12 +338,19 @@ def _record_completed_worktree(
     completion_active: ActiveWorktree,
     active_task: TaskMetadata | None,
     completion_event: CompletionEvent,
+    *,
+    may_issue_receipt: bool,
 ) -> ActiveWorktreeRuleOutcome:
-    """完了（またはトークン上限超過）で終端したworktreeを完了履歴へ退避する。"""
+    """完了（またはトークン上限超過）で終端したworktreeを完了履歴へ退避する。
+
+    `may_issue_receipt`は`completion_disposition`の分類結果で、receiptを作れる
+    候補かどうかだけを示す。外部実行の停止確認と保存の成功は、ここで従来どおり
+    検証してからreceiptを消費する（報告イベントは完了の証明にならない）。
+    """
     action = completion_event.action
     receipt = (
         CompletionReceipt(issue_number=completion_active.core.issue_number)
-        if action in _CONFIRMED_COMPLETION_ACTIONS
+        if may_issue_receipt
         else None
     )
     if ctx.config.apply:
@@ -807,48 +791,53 @@ def _handle_completed_event_outcome(
     active_task: TaskMetadata | None,
     completion_event: CompletionEvent,
 ) -> ActiveWorktreeRuleOutcome | None:
-    """完了イベントのアクションに応じてクリーンアップまたは履歴保存を行う。"""
-    action = completion_event.action
-    if action in (
-        "completion_skipped_forge_error",
-        "completion_skipped_prior_merge_indeterminate",
-    ):
-        return ActiveWorktreeRuleOutcome(
-            completion_event=completion_event, terminal=True
-        )
-    if action in (
-        "completed",
-        "already_merged",
-        "escalated_token_limit_exceeded",
-        "not_needed",
-    ):
-        return _record_completed_worktree(
-            ctx, key, completion_active, active_task, completion_event
-        )
-    if action in (
-        "completed_no_commits",
-        "early_death_requeued",
-        "completed_without_outcome",
-        "not_needed_review_dispatched",
-        "blocked_base_branch_red",
-        "escalated_base_branch_red",
-        "blocked_review_timeout",
-        "escalated_review_timeout",
-        "blocked_unknown_reason",
-    ):
-        return _retire_completed_without_receipt(
-            ctx, ctx.run_state, key, completion_active, completion_event
-        )
-    if action == "completion_skipped_dirty_worktree" and isinstance(
-        completion_event, WorktreeCompletionHold
-    ):
-        new_action = _apply_dirty_worktree_hold(
-            ctx, key, completion_active, active_task
-        )
-        completion_event = replace(
-            completion_event, action=cast(WorktreeCompletionHoldAction, new_action)
-        )
+    """完了イベントの分類(`completion_handling`)に従って後処理を行う。
+
+    未分類のvariant/actionは副作用より前に`UnclassifiedCompletionError`となる。
+    """
+    handling = completion_handling(completion_event)
+    match handling.route:
+        case PostCompletionRoute.HISTORY:
+            return _record_completed_worktree(
+                ctx,
+                key,
+                completion_active,
+                active_task,
+                completion_event,
+                may_issue_receipt=handling.may_issue_receipt,
+            )
+        case PostCompletionRoute.RETIRE:
+            return _retire_completed_without_receipt(
+                ctx, ctx.run_state, key, completion_active, completion_event
+            )
+        case PostCompletionRoute.DIRTY_HOLD:
+            assert isinstance(completion_event, WorktreeCompletionHold)
+            completion_event = _apply_dirty_hold_to_event(
+                ctx, key, completion_active, active_task, completion_event
+            )
+        case PostCompletionRoute.KEEP:
+            pass
     return ActiveWorktreeRuleOutcome(completion_event=completion_event, terminal=True)
+
+
+def _apply_dirty_hold_to_event(
+    ctx: _RuleExecutionContext,
+    key: str,
+    completion_active: ActiveWorktree,
+    active_task: TaskMetadata | None,
+    held: WorktreeCompletionHold,
+) -> WorktreeCompletionHold | DirtyWorktreeEscalatedCompletion:
+    """dirty保留に上限を効かせ、超過時は正規のescalationイベントへ置き換える。"""
+    new_action = _apply_dirty_worktree_hold(ctx, key, completion_active, active_task)
+    if new_action != "escalated_reclaim_limit_exceeded":
+        return held
+    return DirtyWorktreeEscalatedCompletion(
+        issue_number=held.issue_number,
+        worktree_path=held.worktree_path,
+        usage=held.usage,
+        operation=held.operation,
+        error=held.error,
+    )
 
 
 def _rule_completed(

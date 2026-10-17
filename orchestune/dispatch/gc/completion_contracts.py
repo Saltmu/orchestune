@@ -14,6 +14,7 @@ from orchestune.dispatch.cycle_events import (
     WorktreeCompletionHold,
     WorktreeCompletionHoldAction,
 )
+from orchestune.dispatch.gc.completion_disposition import completion_handling
 from orchestune.dispatch.rules import NotNeededReviewDispatcher
 from orchestune.dispatch.summary import WARN_PREFIX, ascii_safe
 from orchestune.ledger.run_state import ActiveWorktree, RunState
@@ -46,24 +47,19 @@ class _CompletionContext(NamedTuple):
     on_review_timeout_requeue: Callable[[], None] | None
 
 
-COMPLETION_HOLD_ACTIONS = frozenset(
-    {
-        "completion_skipped_dirty_worktree",
-        "completion_skipped_forge_error",
-        "completion_skipped_prior_merge_indeterminate",
-    }
-)
-
-
 def is_completion_hold_event(
     event: CompletionEvent,
 ) -> TypeGuard[
     WorktreeCompletionHold | TaskWorktreeCompletion | ForgeFailureCompletion
 ]:
     """Return whether a completion event must be excluded from same-cycle GC."""
-    return isinstance(
-        event, WorktreeCompletionHold | TaskWorktreeCompletion | ForgeFailureCompletion
-    ) and (event.action in COMPLETION_HOLD_ACTIONS)
+    return (
+        isinstance(
+            event,
+            WorktreeCompletionHold | TaskWorktreeCompletion | ForgeFailureCompletion,
+        )
+        and completion_handling(event).exclude_same_cycle_reclaim
+    )
 
 
 class ForgeFailure(NamedTuple):

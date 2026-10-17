@@ -135,6 +135,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.gc.completion",
             "dispatch.gc.cloud_completion",
             "dispatch.gc.completion_contracts",
+            "dispatch.gc.completion_disposition",
             "dispatch.gc.external_guard",
             "dispatch.gc.git",
             "dispatch.gc.handoff",

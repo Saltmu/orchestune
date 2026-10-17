@@ -19,10 +19,6 @@ from orchestune.dispatch.cycle_events import (
     WorktreeCompletion,
     WorktreeCompletionAction,
     WorktreeCompletionHold,
-    WorktreeCompletionHoldAction,
-)
-from orchestune.dispatch.gc.completion_contracts import (
-    COMPLETION_HOLD_ACTIONS as COMPLETION_HOLD_ACTIONS,
 )
 from orchestune.dispatch.gc.completion_contracts import (
     CompletedWorktreeDecision as CompletedWorktreeDecision,
@@ -48,6 +44,7 @@ from orchestune.dispatch.gc.completion_contracts import (
 from orchestune.dispatch.gc.completion_contracts import (
     warn_forge_failure as warn_forge_failure,
 )
+from orchestune.dispatch.gc.completion_disposition import is_decision_hold_action
 from orchestune.dispatch.gc.external_guard import (
     ExternalExecutionChanged,
     fresh_external_hold,
@@ -733,12 +730,13 @@ def _completion_hold_event(
     usage: Usage | None,
 ) -> WorktreeCompletionHold | None:
     """同一サイクルでの完了処理を見送る判定か。保留理由をイベントへ書き足す。"""
-    if decision.action not in COMPLETION_HOLD_ACTIONS:
+    action = decision.action
+    if not is_decision_hold_action(action):
         return None
     return WorktreeCompletionHold(
         issue_number=ctx.active.core.issue_number,
         worktree_path=ctx.active.core.worktree_path,
-        action=cast(WorktreeCompletionHoldAction, decision.action),
+        action=action,
         usage=usage,
         operation=decision.operation or None,
         error=decision.error or None,
