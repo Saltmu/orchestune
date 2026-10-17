@@ -45,6 +45,19 @@ def test_cli_delegates_to_bootstrap():
         assert sys.argv == ["orchestune"]
 
 
+def test_cli_delegates_to_remediate():
+    from orchestune.cli import main
+
+    with (
+        patch("sys.argv", ["orchestune", "remediate", "--spec", "fix.md"]),
+        patch("orchestune.remediation.cli.main", autospec=True, return_value=7) as run,
+        pytest.raises(SystemExit) as exit_info,
+    ):
+        main()
+    assert exit_info.value.code == 7
+    run.assert_called_once()
+
+
 def test_cli_delegates_to_replan():
     from orchestune.cli import main
 
