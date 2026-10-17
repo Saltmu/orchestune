@@ -20,30 +20,8 @@ from orchestune.outcome_record import (
     ReviewSummary,
     is_known_reason,
 )
+from orchestune.ownership_contracts import CompleteStage as CompleteStage
 from orchestune.ownership_contracts import OwnerKind
-
-
-class CompleteStage(str, Enum):
-    """Progression stages of complete side-effects.
-
-    The complete CLI advances through these stages up to GC handoff.
-    Physical worktree removal and completion receipts are reserved
-    exclusively for the GC subsystem.
-    """
-
-    INITIALIZING = "initializing"
-    PREFLIGHT_VALIDATING = "preflight_validating"
-    EVIDENCE_VERIFYING = "evidence_verifying"
-    JOURNALING = "journaling"
-    POSTING = "posting"
-    HANDED_OFF_TO_GC = "handed_off_to_gc"
-    # Label-confirmed lifecycle stages. The legacy POSTING -> HANDED_OFF_TO_GC
-    # path stays available until the new writer and readers switch together.
-    RESERVED = "reserved"
-    OUTCOME_POSTED = "outcome_posted"
-    LABEL_CONFIRMED = "label_confirmed"
-    HANDED_OFF = "handed_off"
-
 
 _VALID_STAGE_TRANSITIONS: dict[CompleteStage, frozenset[CompleteStage]] = {
     CompleteStage.INITIALIZING: frozenset({CompleteStage.PREFLIGHT_VALIDATING}),

@@ -28,6 +28,7 @@ from orchestune.ledger.run_state import ActiveWorktree, load_run_state_readonly
 from orchestune.merge_evidence import merged_pr_problem
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
+from orchestune.ownership_contracts import CompleteStage
 from orchestune.worktree_ops.claim_marker import claim_marker_path, read_claim_marker
 
 
@@ -298,7 +299,7 @@ def inspect_handoff(
     if not _is_handoff_ready(active):
         if (
             completion.completion_handoff_ready
-            or completion.completion_stage == "handed_off_to_gc"
+            or completion.completion_stage == CompleteStage.HANDED_OFF_TO_GC.value
         ):
             return _held_plan(active, "legacy_unverified")
         return _held_plan(active, "not_handoff_ready")

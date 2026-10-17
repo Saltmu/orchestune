@@ -43,6 +43,7 @@ from orchestune.ledger.run_state import (
     load_run_state_readonly,
     parse_active_worktrees,
 )
+from orchestune.ownership_contracts import CompleteStage
 from orchestune.task_metadata import TaskMetadata
 from orchestune.worktree_ops.claim_marker import (
     claim_lock_path,
@@ -374,7 +375,7 @@ def _inspect_or_hold(
             action="hold",
             reason="legacy_unverified"
             if completion.completion_handoff_ready
-            or completion.completion_stage == "handed_off_to_gc"
+            or completion.completion_stage == CompleteStage.HANDED_OFF_TO_GC.value
             else "not_handoff_ready",
             worktree_action="retain",
         )

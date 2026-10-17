@@ -45,10 +45,12 @@
 
 ## 2. 所有権契約
 
-`ownership_contracts` は `OwnerKind`・`ClaimStage`・`ReservationKind` を定義する
-独立した L0 モジュールです。ledger はここを直接参照します。`claim.contracts` は
-同じ enum の再エクスポートを許可し、claim 固有の Request・Outcome を保持します。
-共有 enum は claim・ledger・dispatch の実装に依存しません。
+`ownership_contracts` は `OwnerKind`・`ClaimStage`・`ReservationKind`・`CompleteStage` を
+定義する独立した L0 モジュールです。ledger はここを直接参照します。`claim.contracts` と
+`complete.contracts` は同じ enum の再エクスポートを許可し、claim・complete 固有の
+Request・Outcome・遷移規則を保持します。共有 enum は claim・complete・ledger・dispatch の
+実装に依存しません。ledger が受け付ける永続化済みの完了段階（`COMPLETION_STAGES`）と、
+handoff・予約の判定は、別の文字列集合を持たず `CompleteStage` のメンバーから導出します。
 
 ## 3. ledger の依存規則
 

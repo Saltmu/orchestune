@@ -12,7 +12,7 @@ from enum import Enum
 from hashlib import sha256
 
 from orchestune.ledger.active_records import ActiveWorktree
-from orchestune.ownership_contracts import ClaimStage, OwnerKind
+from orchestune.ownership_contracts import ClaimStage, CompleteStage, OwnerKind
 
 
 class ActiveWorktreeLifecycle(str, Enum):
@@ -27,9 +27,9 @@ class ActiveWorktreeLifecycle(str, Enum):
     HANDOFF_READY = "handoff_ready"
 
 
-# Keep persisted completion-stage values local: importing complete.contracts
-# here would add a complete <-> ledger package cycle.
-_HANDOFF_STAGES = frozenset({"handed_off_to_gc", "handed_off"})
+_HANDOFF_STAGES = frozenset(
+    {CompleteStage.HANDED_OFF_TO_GC.value, CompleteStage.HANDED_OFF.value}
+)
 _LAUNCHED_PHASE = "launched"
 _RESERVED_CLAIM_STAGE = ClaimStage.RESERVED.value
 _RECOVERED_CLAIM_PREFIX = "recovered-"
