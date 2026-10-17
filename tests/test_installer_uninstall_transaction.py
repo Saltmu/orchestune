@@ -172,6 +172,20 @@ def test_uninstall_dry_run_does_not_create_or_change_transaction_files(
     assert not list(transaction_root.glob("*/journal.json"))
 
 
+def test_uninstall_of_absent_root_does_not_create_installer_state(
+    tmp_path: Path,
+) -> None:
+    skills_root = tmp_path / "absent-skills"
+    payload = _make_payload(tmp_path)
+    root = _physical_root(skills_root)
+
+    result = uninstall_skills(root, payload)
+
+    assert result.state_before is BundleState.ABSENT
+    assert result.actions == ["not installed (no-op)"]
+    assert not skills_root.exists()
+
+
 def test_uninstall_rechecks_initially_absent_state_under_transaction_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

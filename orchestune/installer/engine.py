@@ -414,6 +414,15 @@ def uninstall_skills(
     if dry_run:
         return _noop_uninstall(root, payload, state, "dry_run_preview")
 
+    installer_dir = get_installer_dir(root.path)
+    if state == BundleState.ABSENT and not (
+        installer_dir.exists() or installer_dir.is_symlink()
+    ):
+        # No manifest or pending transaction can exist without installer state.
+        # Avoid creating the root for an absent no-op; if state appears afterward,
+        # this request linearizes before the operation that creates it.
+        return _noop_uninstall(root, payload, state, "not installed (no-op)")
+
     tx = SkillTransaction(root.path)
     with tx:
         outcome = _uninstall_locked(root, payload, state, target_consumers, tx)
