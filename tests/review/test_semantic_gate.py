@@ -161,6 +161,7 @@ def full_state() -> SemanticReviewStateV1:
         fix_input_sha=HEAD,
         fix_output_sha=FIXED,
         fix_completed=True,
+        restart_count=2,
     )
 
 
@@ -923,3 +924,32 @@ def test_optional_state_fields_default_and_override_needs_a_mapping() -> None:
     assert SemanticReviewStateV1.from_dict(minimal) == make_state()
     with pytest.raises(ValueError):
         SemanticReviewHumanOverrideV1.from_dict([])  # type: ignore[arg-type]
+
+
+def test_child_source_ref_instances_are_validated_and_normalized() -> None:
+    with pytest.raises(ValueError):
+        IntegrationAttemptIdentity.create(1033, BASE, [ChildSourceRef(0, "", "")])
+    padded: list[Any] = [ChildSourceRef(11, " alpha ", f" {'1' * 40} "), CHILDREN[0]]
+    assert IntegrationAttemptIdentity.create(1033, BASE, padded) == IDENTITY
+
+
+def test_judgment_job_that_changes_head_escalates() -> None:
+    state = reserved(P.CHANGES_REQUESTED, KIND.JUDGMENT)
+    decision = run(state, operation=done(state, FIXED), observed_head_sha=FIXED)
+    assert decision.next_phase == P.ESCALATED
+    assert decision.reason == "judgment_operation_changed_head"
+
+
+def test_restart_reserves_operations_distinct_from_pre_restart_jobs() -> None:
+    evidence: dict[str, Any] = {"review_complete": True, "reviewed_sha": HEAD}
+    old = reserved(P.FIX_IN_PROGRESS, KIND.FIX)
+    stale = done(old, FIXED)
+    escalated = replace(old, phase=P.ESCALATED)
+    restarted = run(escalated, retry_requested=True).next_state
+    assert restarted.restart_count == 1
+    step = run(restarted).next_state
+    step = run(step, judgments=FIX_NEEDED, **evidence).next_state
+    assert step.phase == P.FIX_IN_PROGRESS
+    assert step.operation_id != old.operation_id
+    assert_hold(step, "operation_in_flight", operation=stale, observed_head_sha=HEAD)
+    assert run(step, operation=stale, observed_head_sha=FIXED).reason == "head_changed"

@@ -121,7 +121,7 @@ class ChildSourceRef:
     def from_value(cls, value: object) -> ChildSourceRef:
         """Accept a ref, an `(issue, subtask, sha)` triple or its dict form."""
         if isinstance(value, ChildSourceRef):
-            return value
+            value = value.key()
         if isinstance(value, Mapping):
             if set(value) != {"issue_number", "subtask_id", "source_sha"}:
                 raise ValueError("child source has unexpected keys")
@@ -224,7 +224,14 @@ def _require_enum(
 
 
 _INT_FIELDS = frozenset(
-    {"round", "fix_retries", "state_revision", "claim_generation", "pr_number"}
+    {
+        "restart_count",
+        "round",
+        "fix_retries",
+        "state_revision",
+        "claim_generation",
+        "pr_number",
+    }
 )
 _REQUIRED_TEXT_FIELDS = frozenset({"attempt_id", "head_sha", "base_sha"})
 
@@ -263,6 +270,7 @@ class SemanticReviewStateV1:
     fix_input_sha: str | None = None
     fix_output_sha: str | None = None
     fix_completed: bool = False
+    restart_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {f.name: getattr(self, f.name) for f in fields(self)}
@@ -626,10 +634,18 @@ _PHASE_TIMEOUTS: Mapping[SemanticReviewPhase, str] = {
 
 
 def semantic_operation_id(
-    attempt_id: str, round_num: int, kind: SemanticOperationKind, retry: int
+    attempt_id: str,
+    round_num: int,
+    kind: SemanticOperationKind,
+    retry: int,
+    restart: int = 0,
 ) -> str:
-    """Deterministic, so re-evaluating one step reserves the same operation."""
-    return f"{attempt_id[:12]}-r{round_num}-{kind.value}-{retry}"
+    """Deterministic, so re-evaluating one step reserves the same operation.
+
+    The restart generation keeps a late result of a pre-restart job from being
+    taken for the job reserved after an explicit restart.
+    """
+    return f"{attempt_id[:12]}-g{restart}-r{round_num}-{kind.value}-{retry}"
 
 
 @dataclass(frozen=True)
@@ -699,7 +715,9 @@ class _Step:
             phase,
             reason,
             fix_retries=retry,
-            operation_id=semantic_operation_id(s.attempt_id, s.round, kind, retry),
+            operation_id=semantic_operation_id(
+                s.attempt_id, s.round, kind, retry, s.restart_count
+            ),
             operation_kind=kind,
             operation_status=SemanticOperationStatus.RESERVED,
             provider_handle=None,
@@ -824,6 +842,7 @@ def _restart(step: _Step) -> SemanticTransitionDecision:
         _P.NOT_STARTED,
         "restart_requested",
         round=0,
+        restart_count=step.state.restart_count + 1,
         fix_retries=0,
         attempt_started_at=step.now,
         escalation_reason=None,
@@ -901,6 +920,8 @@ def _on_operation(step: _Step) -> SemanticTransitionDecision:
         return step.retry(kind, "operation_failed", f"{kind.value}_retry_limit")
     if op.output_sha is None:
         return step.escalate("operation_output_unknown")
+    if op.output_sha != s.head_sha and kind == SemanticOperationKind.JUDGMENT:
+        return step.escalate("judgment_operation_changed_head")
     if op.output_sha == s.head_sha:
         if not _review_evidence(step):
             return step.hold("review_evidence_missing")
