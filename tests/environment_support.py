@@ -99,10 +99,26 @@ def _stub_jev_context_for_review_result_tests(
     )
 
 
+@pytest.fixture(scope="session")
+def _jev_isolated_dir(request: pytest.FixtureRequest) -> Iterator[Path]:
+    """Session directory for worker-isolated Jev evaluations."""
+    path = (
+        Path(request.config.rootpath)
+        / ".orchestune"
+        / "tmp"
+        / f"jev-isolated-{os.getpid()}-{uuid.uuid4().hex}"
+    )
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_jev_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
-) -> None:
+    monkeypatch: pytest.MonkeyPatch, _jev_isolated_dir: Path
+) -> Iterator[None]:
     """Require tests to opt into Jev instead of using real session credentials,
 
     and isolate Jev log output to a temporary directory by default.
@@ -115,5 +131,9 @@ def _isolate_jev_env(
     ):
         monkeypatch.delenv(name, raising=False)
 
-    tmp_jev_log = tmp_path_factory.mktemp("jev_isolated") / "evaluations.jsonl"
-    monkeypatch.setenv("JEV_LOG_PATH", str(tmp_jev_log))
+    assigned_log = _jev_isolated_dir / f"evaluations-{uuid.uuid4().hex}.jsonl"
+    monkeypatch.setenv("JEV_LOG_PATH", str(assigned_log))
+    try:
+        yield
+    finally:
+        assigned_log.unlink(missing_ok=True)
