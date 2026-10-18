@@ -117,7 +117,10 @@ class TestIntegratorRun:
         fake_forge.list_comments.side_effect = list_comments_mock
 
         config = IntegratorConfig(
-            apply=True, parent_issue_number=100, integration_run_id="test-run"
+            apply=True,
+            parent_issue_number=100,
+            integration_run_id="test-run",
+            semantic_review_mode="off",
         )
         res = Integrator(config).run()
 
@@ -137,10 +140,10 @@ class TestIntegratorRun:
         # のみ人間が行う）。
         create_pr = integrator_env.create_pull_request
         create_pr.assert_called_once()
-        assert (
-            create_pr.call_args.kwargs["head"]
-            == "integration/temp-parent-issue-100-test-run"
+        assert create_pr.call_args.kwargs["head"].startswith(
+            "integration/temp-parent-issue-100-"
         )
+        assert not create_pr.call_args.kwargs["head"].endswith("test-run")
         assert create_pr.call_args.kwargs["base"] == "parent/issue-100"
         assert "task-1" in create_pr.call_args.kwargs["body"]
         assert "自動的にマージ" in create_pr.call_args.kwargs["body"]
@@ -194,6 +197,7 @@ class TestIntegrationPipeline:
             "integration_pr_number": None,
             "semantic_review_dispatched": False,
             "newly_included": [],
+            "deferred_tasks": [],
         }
         assert ctx.merged_tasks == ["task-1", "task-2"]
 
@@ -216,6 +220,42 @@ class TestIntegrationPipeline:
         assert res["status"] == IntegrationStatus.FAILURE
         assert "error" in res
         assert ctx.merged_tasks == []
+
+    def test_pending_is_reported_with_attempt_metadata(self):
+        from orchestune.review.semantic_gate import (
+            ChildSourceRef,
+            IntegrationAttemptIdentity,
+            SemanticReviewPhase,
+            SemanticReviewStateV1,
+        )
+
+        class PendingStep(IntegrationComponent):
+            def execute(self, ctx: IntegrationContext) -> IntegrationReport:
+                child = ChildSourceRef(1, "task-1", "a" * 40)
+                identity = IntegrationAttemptIdentity.create(100, "b" * 40, [child])
+                ctx.attempt_identity = identity
+                ctx.integration_pr_number = 7
+                ctx.merged_tasks.append("task-1")
+                ctx.deferred_tasks.append("task-2")
+                ctx.semantic_review_state = SemanticReviewStateV1(
+                    identity.attempt_id,
+                    100,
+                    7,
+                    SemanticReviewPhase.NOT_STARTED,
+                    0,
+                    "c" * 40,
+                    identity.base_sha,
+                    identity.child_sources,
+                )
+                return {"status": IntegrationStatus.SEMANTIC_REVIEW_PENDING}
+
+        result = IntegrationPipeline([PendingStep()]).execute(_context(_config()))
+
+        assert result["status"] is IntegrationStatus.SEMANTIC_REVIEW_PENDING
+        assert result["integration_pr_number"] == 7
+        assert result["deferred_tasks"] == ["task-2"]
+        assert result["semantic_review_phase"] == "not_started"
+        assert result["attempt_id"]
 
     def test_does_not_clear_stale_marker_label_when_apply_is_false(self, fake_forge):
         # #437レビュー対応: dry-run（apply=False）は他の全ステップと同様に
@@ -289,6 +329,17 @@ class TestMultiIssueIntegrator:
         res = runner.execute(_context(_config(parent_issue_number=100)))
 
         assert res["status"] == IntegrationStatus.COMPOSITE_PARTIAL_SUCCESS
+
+    def test_semantic_review_pending_counts_as_success(self):
+        class PendingDummy(IntegrationComponent):
+            def execute(self, ctx: IntegrationContext) -> IntegrationReport:
+                return {"status": IntegrationStatus.SEMANTIC_REVIEW_PENDING}
+
+        result = MultiIssueIntegrator([PendingDummy()]).execute(
+            _context(_config(parent_issue_number=100))
+        )
+
+        assert result["status"] is IntegrationStatus.COMPOSITE_SUCCESS
 
     def test_composite_failure_when_all_children_fail(self):
         class FailDummy(IntegrationComponent):

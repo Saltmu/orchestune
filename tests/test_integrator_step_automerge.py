@@ -52,6 +52,7 @@ def _child_config(**overrides: Any) -> IntegratorConfig:
         "parent_issue_number": 100,
         "integration_run_id": "test-run",
         "child_review_gate": "off",
+        "semantic_review_mode": "off",
     }
     values.update(overrides)
     return IntegratorConfig(**values)
@@ -345,9 +346,9 @@ class TestAutoMergeChildIntegration:
         assert "claude/issue-1-task-1" in conditional_delete.call_args.args[1]
         assert conditional_delete.call_args.args[2] == "a" * 40
         # 一時ブランチだけは従来のForge削除経路を使う。
-        integrator_env.delete_branch.assert_any_call(
-            "integration/temp-parent-issue-100-test-run"
-        )
+        deleted_temp = integrator_env.delete_branch.call_args.args[0]
+        assert deleted_temp.startswith("integration/temp-parent-issue-100-")
+        assert not deleted_temp.endswith("test-run")
         assert integrator_env.delete_branch.call_count == 1
 
     def test_defers_completion_when_verified_child_deletion_fails(
@@ -649,6 +650,7 @@ def test_parent_push_rejects_stale_base_without_updating_remote(fake_forge):
             apply=True,
             forge=fake_forge,
             child_review_gate="off",
+            semantic_review_mode="off",
         )
         ctx = IntegrationContext(
             config=config,
