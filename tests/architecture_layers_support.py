@@ -190,6 +190,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator.parent_branch_state",
             "integrator.pr",
             "integrator.proofs",
+            "integrator.semantic_claim",
             "integrator.tasks",
             "integrator.timeout_retry",
             "integrator.worktree",
