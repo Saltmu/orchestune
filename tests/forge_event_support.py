@@ -7,6 +7,7 @@ retry-budget events as parent Issue comments, so every Forge double used with
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -36,6 +37,7 @@ def install_event_comment_store(forge: MagicMock) -> list[dict[str, Any]]:
             user_dict["type"] = user_type
         comment = {
             "id": len(event_comments) + 1,
+            "created_at": datetime.now(UTC).isoformat(),
             "issue_number": int(issue_number),
             "body": body,
             "html_url": f"https://example.test/{issue_number}#c{len(event_comments) + 1}",
@@ -101,9 +103,34 @@ class EventCommentForgeMixin:
             user_dict["type"] = user_type
         comment = {
             "id": len(self.event_comments) + 1,
+            "created_at": datetime.now(UTC).isoformat(),
             "issue_number": int(issue_number),
             "body": body,
             "user": user_dict,
         }
         self.event_comments.append(comment)
         return dict(comment)
+
+
+def install_receipt_lookup_adapter(forge: MagicMock) -> None:
+    """Expose legacy receipt fixtures through REST without merging notice stores."""
+    native_list = forge.list_all_issue_comments.side_effect
+
+    def list_comments(issue_number):
+        native = native_list(issue_number)
+        receipts = []
+        for index, comment in enumerate(forge.list_comments(issue_number)):
+            body = comment.get("body", "")
+            if "<!-- orchestune:task-integration-proof -->" not in body:
+                continue
+            receipts.append(
+                {
+                    "id": 1000000 + index,
+                    "created_at": comment.get("created_at", "2026-01-01T00:00:00Z"),
+                    "body": body,
+                    "user": {"login": comment.get("author")},
+                }
+            )
+        return [*native, *receipts]
+
+    forge.list_all_issue_comments.side_effect = list_comments
