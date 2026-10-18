@@ -17,25 +17,36 @@ from orchestune.review.semantic_gate import (
     IntegrationAttemptIdentity,
     SemanticCiConclusion,
     SemanticCiObservation,
+    SemanticFixResultV1,
     SemanticJudgmentDecision,
     SemanticOperationKind,
     SemanticOperationObservation,
     SemanticOperationStatus,
+    SemanticRetryKind,
     SemanticReviewHumanOverrideV1,
     SemanticReviewLimits,
     SemanticReviewMode,
     SemanticReviewPhase,
+    SemanticReviewRetryV1,
     SemanticReviewStateV1,
+    SemanticTransitionDecision,
     SemanticTransitionObservation,
     evaluate_semantic_judgments,
     evaluate_semantic_review_transition,
     evaluate_single_task_fast_path,
+    format_semantic_fix_result_marker,
     format_semantic_review_override_marker,
+    format_semantic_review_retry_marker,
     format_semantic_review_state_marker,
+    parse_semantic_fix_result_marker,
     parse_semantic_review_override_marker,
+    parse_semantic_review_retry_marker,
     parse_semantic_review_state_marker,
+    restore_latest_fix_result,
     restore_latest_human_override,
+    restore_latest_retry_request,
     restore_latest_semantic_review_state,
+    semantic_fix_output_branch,
     semantic_operation_id,
 )
 
@@ -145,6 +156,7 @@ def full_state() -> SemanticReviewStateV1:
         judgment_digest="j" * 64,
         preflight_notice_key="notice-1",
         escalation_reason="why --> <b>",
+        escalated_from=P.CI_VERIFICATION,
         fix_retries=1,
         updated_at=EARLIER,
         state_revision=9,
@@ -162,6 +174,8 @@ def full_state() -> SemanticReviewStateV1:
         fix_output_sha=FIXED,
         fix_completed=True,
         restart_count=2,
+        last_retry_request_id="req-0",
+        limits_reset_reason="config fixed",
     )
 
 
@@ -206,7 +220,9 @@ def test_malformed_state_markers_raise(body: str) -> None:
         ("state_revision", "1"),
         ("parent_issue_number", 0),
         ("operation_status", "paused"),
-        ("operation_kind", "deploy"),
+        ("operation_kind", "judgment"),
+        ("escalated_from", "changes_requested"),
+        ("last_retry_request_id", 3),
         ("fix_completed", "yes"),
         ("head_sha", ""),
         ("claim_holder", 5),
@@ -257,6 +273,31 @@ def test_restore_never_falls_back_past_a_corrupt_newer_marker() -> None:
     assert restored is not None and restored.phase == P.PASSED
 
 
+@pytest.mark.parametrize(
+    "revisions,conflict",
+    [
+        ([1, 2, 3], False),
+        ([1, 2, 2], False),
+        ([1, 3, 2], True),
+        ([2, 2], True),
+        ([4, 1], True),
+    ],
+)
+def test_restore_rejects_revision_conflicts(
+    revisions: list[int], conflict: bool
+) -> None:
+    states = [make_state(state_revision=r) for r in revisions]
+    if revisions == [2, 2]:
+        states[1] = replace(states[1], phase=P.PASSED)
+    other = format_semantic_review_state_marker(make_state(attempt_id="x"))
+    bodies = [other, *map(format_semantic_review_state_marker, states)]
+    if conflict:
+        with pytest.raises(ValueError, match="revision conflict"):
+            restore_latest_semantic_review_state(bodies)
+        return
+    assert restore_latest_semantic_review_state(bodies) == states[-1]
+
+
 # --- override marker --------------------------------------------------------
 
 
@@ -288,6 +329,125 @@ def test_invalid_override_markers_raise(payload: str) -> None:
         parse_semantic_review_override_marker(
             f"<!-- orchestune:semantic-review-override:v1 {payload} -->"
         )
+
+
+# --- retry and fix-result markers -----------------------------------------
+
+
+def retry_req(
+    kind: SemanticRetryKind = "retry", request_id: str = "req-1", **c: Any
+) -> SemanticReviewRetryV1:
+    return SemanticReviewRetryV1(
+        IDENTITY.attempt_id, HEAD, request_id, kind, "config fixed", **c
+    )
+
+
+def test_retry_marker_round_trip_and_restore() -> None:
+    request = retry_req("restart", reset_limits=True, actor="alice")
+    marker = format_semantic_review_retry_marker(request)
+    assert "\n" not in marker and parse_semantic_review_retry_marker(marker) == request
+    assert parse_semantic_review_retry_marker(f"> {marker}") is None
+    assert parse_semantic_review_retry_marker(f"```\n{marker}\n```") is None
+    older = format_semantic_review_retry_marker(retry_req(request_id="req-0"))
+    stale = format_semantic_review_retry_marker(replace(request, head_sha=OTHER))
+    bodies = [older, marker, stale, f"> {older}"]
+    kwargs: dict[str, Any] = {"attempt_id": IDENTITY.attempt_id, "head_sha": HEAD}
+    assert restore_latest_retry_request(bodies, consumed_request_ids=(), **kwargs) == (
+        request
+    )
+    # A consumed newest request never lets an older one be revived.
+    consumed = restore_latest_retry_request(
+        bodies, consumed_request_ids={"req-1"}, **kwargs
+    )
+    assert consumed is None
+    kwargs["head_sha"] = FIXED
+    assert (
+        restore_latest_retry_request(bodies, consumed_request_ids=(), **kwargs) is None
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"kind": "resume"},
+        {"kind": ["retry"]},
+        {"reset_limits": "yes"},
+        {"request_id": ""},
+        {"actor": 3},
+        {"extra": 1},
+        {"reason": None},
+    ],
+)
+def test_invalid_retry_markers_raise(change: dict[str, Any]) -> None:
+    data = {**retry_req().to_dict(), **change}
+    with pytest.raises(ValueError):
+        SemanticReviewRetryV1.from_dict(data)
+    with pytest.raises(ValueError):
+        SemanticReviewRetryV1.from_dict([])  # type: ignore[arg-type]
+
+
+OP = semantic_operation_id(IDENTITY.attempt_id, 1, SemanticOperationKind.FIX, 0)
+FIX_RESULT = SemanticFixResultV1(IDENTITY.attempt_id, OP, HEAD, FIXED, 42, "completed")
+
+
+def test_fix_result_marker_round_trip_and_restore() -> None:
+    marker = format_semantic_fix_result_marker(FIX_RESULT)
+    assert parse_semantic_fix_result_marker(marker) == FIX_RESULT
+    assert parse_semantic_fix_result_marker(f"> {marker}") is None
+    assert parse_semantic_fix_result_marker(f"```\n{marker}\n```") is None
+    unchanged = replace(FIX_RESULT, output_sha=None, judgment_comment_id=None)
+    newer = format_semantic_fix_result_marker(unchanged)
+    other = format_semantic_fix_result_marker(
+        replace(FIX_RESULT, operation_id=f"{OP}x")
+    )
+    bodies = [marker, newer, other]
+    kwargs = {"attempt_id": IDENTITY.attempt_id, "operation_id": OP}
+    assert restore_latest_fix_result(bodies, **kwargs) == unchanged
+    assert restore_latest_fix_result([other], **kwargs) is None
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"status": "done"},
+        {"status": ["failed"]},
+        {"status": "failed"},
+        {"operation_id": "zzz-g0-r1-fix-0"},
+        {"judgment_comment_id": 0},
+        {"judgment_comment_id": True},
+        {"input_sha": None},
+        {"output_sha": ""},
+        {"extra": 1},
+    ],
+)
+def test_invalid_fix_results_raise(change: dict[str, Any]) -> None:
+    data = {**FIX_RESULT.to_dict(), **change}
+    with pytest.raises(ValueError):
+        SemanticFixResultV1.from_dict(data)
+    del data["output_sha"]
+    with pytest.raises(ValueError):
+        SemanticFixResultV1.from_dict(data)
+
+
+def test_fix_output_branch_is_outside_temp_gc() -> None:
+    branch = semantic_fix_output_branch(OP)
+    assert branch == f"integration/semantic-fix/{OP}"
+    assert OP.startswith(IDENTITY.attempt_id[:12])
+    assert not branch.startswith("integration/temp-")
+    for bad in ("", "a/b", "a..b", "-a", "a b", "x.lock", None):
+        with pytest.raises(ValueError):
+            semantic_fix_output_branch(bad)  # type: ignore[arg-type]
+
+
+def test_fix_result_maps_to_an_operation_observation() -> None:
+    changed = SemanticOperationObservation.from_fix_result(FIX_RESULT)
+    assert changed == SemanticOperationObservation(OP, OK.COMPLETED, FIXED, HEAD)
+    same = replace(FIX_RESULT, output_sha=None)
+    assert SemanticOperationObservation.from_fix_result(same).output_sha == HEAD
+    failed = replace(FIX_RESULT, output_sha=None, status="failed")
+    assert SemanticOperationObservation.from_fix_result(failed) == (
+        SemanticOperationObservation(OP, OK.FAILED, None, HEAD)
+    )
 
 
 # --- fast path --------------------------------------------------------------
@@ -447,7 +607,6 @@ LIMITS = SemanticReviewLimits(
     max_rounds=2,
     max_fix_retries=1,
     review_timeout_seconds=600,
-    judgment_timeout_seconds=600,
     fix_timeout_seconds=600,
     ci_timeout_seconds=600,
     attempt_timeout_seconds=3600,
@@ -460,6 +619,7 @@ DEFER = SemanticJudgmentDecision(
     True, "deferred_judgments", 1, "f" * 64, rows=1, deferred=1
 )
 EMPTY = SemanticJudgmentDecision(True, "empty_judgment_table", 1, "0" * 64)
+EVIDENCE: dict[str, Any] = {"review_complete": True, "reviewed_sha": HEAD}
 
 
 def obs(**changes: Any) -> SemanticTransitionObservation:
@@ -483,12 +643,18 @@ def active(phase: SemanticReviewPhase, **changes: Any) -> SemanticReviewStateV1:
     return make_state(phase=phase, **{**defaults, **changes})
 
 
-def reserved(phase: SemanticReviewPhase, kind: SemanticOperationKind, **c: Any):  # type: ignore[no-untyped-def]
-    op = semantic_operation_id(IDENTITY.attempt_id, 1, kind, c.get("fix_retries", 0))
+def reserved(**c: Any) -> SemanticReviewStateV1:
+    op = semantic_operation_id(
+        IDENTITY.attempt_id,
+        c.get("round", 1),
+        KIND.FIX,
+        c.get("fix_retries", 0),
+        c.get("restart_count", 0),
+    )
     return active(
-        phase,
+        P.FIX_IN_PROGRESS,
         operation_id=op,
-        operation_kind=kind,
+        operation_kind=KIND.FIX,
         operation_status=OK.RESERVED,
         fix_input_sha=HEAD,
         **c,
@@ -500,17 +666,19 @@ def done(state: SemanticReviewStateV1, output: str | None = HEAD, status=OK.COMP
     return SemanticOperationObservation(state.operation_id, status, output)
 
 
-def run(state: SemanticReviewStateV1, **changes: Any):  # type: ignore[no-untyped-def]
+def run(state: SemanticReviewStateV1, **changes: Any) -> SemanticTransitionDecision:
     return evaluate_semantic_review_transition(state, obs(**changes))
 
 
-def assert_hold(state: SemanticReviewStateV1, reason: str, **changes: Any) -> None:
-    decision = run(state, **changes)
+def assert_hold(
+    state: SemanticReviewStateV1, reason: str, *, promotion: bool = False, **c: Any
+) -> None:
+    decision = run(state, **c)
     assert decision.reason == reason
     assert decision.next_state is state
+    assert decision.requires_fix_promotion is promotion
     assert not (
         decision.requires_fix_dispatch
-        or decision.requires_judgment_dispatch
         or decision.requires_review_trigger
         or decision.requires_escalation
     )
@@ -532,54 +700,26 @@ def test_review_pending_waits_for_a_complete_review_of_this_head() -> None:
     assert_hold(state, "review_pending", reviewed_sha=HEAD, judgments=PASS)
 
 
-@pytest.mark.parametrize(
-    "judgments", [None, replace(PASS, round=2), replace(PASS, valid=False)]
-)
-def test_missing_or_stale_judgments_reserve_one_evaluation(
+@pytest.mark.parametrize("judgments", [None, PASS, FIX_NEEDED, DEFER, EMPTY])
+def test_completed_review_reserves_one_judgment_and_fix_job(
     judgments: SemanticJudgmentDecision | None,
 ) -> None:
     state = active(P.REVIEW_PENDING)
-    decision = run(state, review_complete=True, reviewed_sha=HEAD, judgments=judgments)
-    assert decision.next_phase == P.CHANGES_REQUESTED
-    assert decision.requires_judgment_dispatch and not decision.requires_fix_dispatch
+    decision = run(state, judgments=judgments, **EVIDENCE)
+    assert decision.next_phase == P.FIX_IN_PROGRESS and decision.requires_fix_dispatch
     nxt = decision.next_state
-    assert nxt.operation_kind == KIND.JUDGMENT and nxt.operation_status == OK.RESERVED
-    assert nxt.fix_retries == 0 and nxt.round == 1
-    # Re-evaluating with the job reserved never reserves a second one.
-    assert_hold(nxt, "operation_in_flight", review_complete=True, reviewed_sha=HEAD)
-
-
-def test_review_routes_unresolved_to_fix_and_deferred_to_escalation() -> None:
-    state = active(P.REVIEW_PENDING)
-    kwargs = {"review_complete": True, "reviewed_sha": HEAD}
-    fix = run(state, judgments=FIX_NEEDED, **kwargs)
-    assert fix.next_phase == P.FIX_IN_PROGRESS and fix.requires_fix_dispatch
-    assert fix.next_state.operation_id == semantic_operation_id(
+    assert nxt.operation_kind == KIND.FIX and nxt.operation_status == OK.RESERVED
+    assert nxt.operation_id == semantic_operation_id(
         IDENTITY.attempt_id, 1, KIND.FIX, 0
     )
-    deferred = run(state, judgments=DEFER, **kwargs)
-    assert deferred.next_phase == P.ESCALATED and deferred.requires_escalation
-    assert deferred.next_state.escalation_reason == "deferred_judgments"
-    empty = run(state, judgments=EMPTY, **kwargs)
-    assert empty.reason == "empty_judgment_table" and empty.next_phase == P.ESCALATED
-
-
-def test_settled_review_records_evidence_and_awaits_ci() -> None:
-    decision = run(
-        active(P.REVIEW_PENDING),
-        review_complete=True,
-        reviewed_sha=HEAD,
-        judgments=PASS,
-    )
-    assert decision.next_phase == P.CI_VERIFICATION
-    assert decision.next_state.reviewed_sha == HEAD
-    assert decision.next_state.judgment_digest == PASS.digest
-    assert not decision.requires_review_trigger
+    assert (nxt.fix_retries, nxt.round, nxt.fix_input_sha) == (0, 1, HEAD)
+    # Re-evaluating with the job reserved never reserves a second one.
+    assert_hold(nxt, "operation_in_flight", **EVIDENCE)
 
 
 @pytest.mark.parametrize("status", [OK.RESERVED, OK.DISPATCHING, OK.RUNNING])
 def test_jobs_in_flight_are_awaited_even_with_green_pre_fix_ci(status: OK) -> None:
-    state = reserved(P.FIX_IN_PROGRESS, KIND.FIX)
+    state = reserved()
     green = SemanticCiObservation(HEAD, SemanticCiConclusion.SUCCESS)
     assert_hold(
         state, "operation_in_flight", operation=done(state, None, status), ci=green
@@ -594,46 +734,45 @@ def test_operation_without_reservation_escalates() -> None:
     assert decision.reason == "operation_missing" and decision.requires_escalation
 
 
-def test_indeterminate_or_unknown_output_escalates() -> None:
-    state = reserved(P.FIX_IN_PROGRESS, KIND.FIX)
+def test_indeterminate_unknown_or_foreign_input_escalates() -> None:
+    state = reserved()
     assert run(state, operation=done(state, None, OK.INDETERMINATE)).reason == (
         "operation_indeterminate"
     )
     assert run(state, operation=done(state, None)).reason == "operation_output_unknown"
+    foreign = replace(done(state, FIXED), input_sha=OTHER)
+    decision = run(state, operation=foreign, observed_head_sha=FIXED)
+    assert decision.reason == "operation_input_mismatch"
+    assert decision.next_state.escalated_from == P.FIX_IN_PROGRESS
 
 
-@pytest.mark.parametrize(
-    "phase,kind",
-    [(P.FIX_IN_PROGRESS, KIND.FIX), (P.CHANGES_REQUESTED, KIND.JUDGMENT)],
-)
-def test_failed_jobs_retry_once_then_escalate(
-    phase: SemanticReviewPhase, kind: SemanticOperationKind
-) -> None:
-    state = reserved(phase, kind)
+def test_failed_jobs_retry_once_then_escalate() -> None:
+    state = reserved()
     retry = run(state, operation=done(state, None, OK.FAILED))
-    assert retry.next_phase == phase and retry.next_fix_retries == 1
+    assert retry.next_phase == P.FIX_IN_PROGRESS and retry.next_fix_retries == 1
     assert retry.next_state.operation_id != state.operation_id
-    assert retry.requires_fix_dispatch is (kind == KIND.FIX)
-    assert retry.requires_judgment_dispatch is (kind == KIND.JUDGMENT)
+    assert retry.requires_fix_dispatch
     assert retry.next_state.phase_started_at == state.phase_started_at
     again = retry.next_state
     final = run(again, operation=done(again, None, OK.FAILED))
-    assert final.next_phase == P.ESCALATED
-    assert final.reason == f"{kind.value}_retry_limit"
+    assert final.next_phase == P.ESCALATED and final.reason == "fix_retry_limit"
 
 
-def test_fix_that_changes_head_clears_old_evidence_and_awaits_ci() -> None:
+def test_fix_output_waits_for_promotion_then_awaits_ci() -> None:
     state = reserved(
-        P.FIX_IN_PROGRESS,
-        KIND.FIX,
         reviewed_sha=HEAD,
         judgment_digest="x",
         ci_verified_sha=HEAD,
         review_source_digest="y",
     )
-    assert_hold(state, "awaiting_operation_head", operation=done(state, FIXED))
-    decision = run(state, operation=done(state, FIXED), observed_head_sha=FIXED)
+    result = SemanticFixResultV1(
+        IDENTITY.attempt_id, str(state.operation_id), HEAD, FIXED, 7, "completed"
+    )
+    job = SemanticOperationObservation.from_fix_result(result)
+    assert_hold(state, "awaiting_fix_promotion", promotion=True, operation=job)
+    decision = run(state, operation=job, observed_head_sha=FIXED)
     assert decision.next_phase == P.CI_VERIFICATION
+    assert not decision.requires_fix_promotion
     nxt = decision.next_state
     assert (nxt.head_sha, nxt.fix_output_sha, nxt.fix_completed) == (FIXED, FIXED, True)
     assert nxt.reviewed_sha is nxt.judgment_digest is nxt.ci_verified_sha is None
@@ -642,39 +781,58 @@ def test_fix_that_changes_head_clears_old_evidence_and_awaits_ci() -> None:
 
 
 def test_head_change_outside_the_job_invalidates() -> None:
-    state = reserved(P.FIX_IN_PROGRESS, KIND.FIX)
+    state = reserved()
     decision = run(state, operation=done(state, FIXED), observed_head_sha=OTHER)
     assert decision.next_phase == P.INVALIDATED and decision.reason == "head_changed"
 
 
-def test_unchanged_fix_needs_new_judgments_then_bounded_retry() -> None:
-    state = reserved(P.FIX_IN_PROGRESS, KIND.FIX)
-    evidence = {"review_complete": True, "reviewed_sha": HEAD}
+@pytest.mark.parametrize(
+    "judgments,reason",
+    [
+        (None, "judgments_missing"),
+        (
+            replace(PASS, valid=False, reason="judgments_invalid: x"),
+            "judgments_invalid: x",
+        ),
+        (replace(PASS, round=2), "judgments_round_mismatch"),
+        (DEFER, "deferred_judgments"),
+        (EMPTY, "empty_judgment_table"),
+    ],
+)
+def test_unchanged_job_with_unsettled_contract_escalates(
+    judgments: SemanticJudgmentDecision | None, reason: str
+) -> None:
+    state = reserved()
+    decision = run(state, operation=done(state), judgments=judgments, **EVIDENCE)
+    assert decision.next_phase == P.ESCALATED and decision.reason == reason
+    assert decision.next_state.escalation_reason == reason
+
+
+def test_unchanged_job_with_unresolved_adopt_retries_then_escalates() -> None:
+    state = reserved()
     assert_hold(state, "review_evidence_missing", operation=done(state))
-    retry = run(state, operation=done(state), judgments=FIX_NEEDED, **evidence)
+    retry = run(state, operation=done(state), judgments=FIX_NEEDED, **EVIDENCE)
     assert retry.reason == "unresolved_after_fix" and retry.next_fix_retries == 1
-    assert retry.requires_fix_dispatch
+    assert retry.requires_fix_dispatch and retry.next_phase == P.FIX_IN_PROGRESS
     nxt = retry.next_state
-    final = run(nxt, operation=done(nxt), judgments=FIX_NEEDED, **evidence)
+    final = run(nxt, operation=done(nxt), judgments=FIX_NEEDED, **EVIDENCE)
     assert final.next_phase == P.ESCALATED and final.reason == "fix_retry_limit"
-    rejudge = run(state, operation=done(state), judgments=None, **evidence)
-    assert rejudge.next_phase == P.CHANGES_REQUESTED and rejudge.next_fix_retries == 1
-    settled = run(state, operation=done(state), judgments=PASS, **evidence)
-    assert settled.next_phase == P.CI_VERIFICATION
-    assert settled.next_state.operation_status == OK.COMPLETED
 
 
-def test_completed_evaluation_routes_its_judgments() -> None:
-    state = reserved(P.CHANGES_REQUESTED, KIND.JUDGMENT)
-    evidence = {"review_complete": True, "reviewed_sha": HEAD}
-    fix = run(state, operation=done(state), judgments=FIX_NEEDED, **evidence)
-    assert fix.next_phase == P.FIX_IN_PROGRESS and fix.next_fix_retries == 0
-    assert fix.requires_fix_dispatch
-    invalid = run(state, operation=done(state), judgments=None, **evidence)
-    assert invalid.next_phase == P.CHANGES_REQUESTED and invalid.next_fix_retries == 1
-    exhausted = invalid.next_state
-    final = run(exhausted, operation=done(exhausted), judgments=None, **evidence)
-    assert final.reason == "judgment_retry_limit"
+def test_unchanged_settled_job_needs_ci_of_this_head_to_pass() -> None:
+    state = reserved()
+    unverified = run(state, operation=done(state), judgments=PASS, **EVIDENCE)
+    assert unverified.next_phase == P.CI_VERIFICATION
+    nxt = unverified.next_state
+    assert (nxt.reviewed_sha, nxt.judgment_digest) == (HEAD, PASS.digest)
+    assert nxt.operation_status == OK.COMPLETED
+    verified = replace(state, ci_verified_sha=HEAD)
+    passed = run(verified, operation=done(verified), judgments=PASS, **EVIDENCE)
+    assert passed.next_phase == P.PASSED and passed.reason == "passed"
+    stale = replace(state, ci_verified_sha=OTHER)
+    assert run(stale, operation=done(stale), judgments=PASS, **EVIDENCE).next_phase == (
+        P.CI_VERIFICATION
+    )
 
 
 CI_OK = SemanticCiObservation(HEAD, SemanticCiConclusion.SUCCESS)
@@ -698,7 +856,7 @@ def test_ci_verification_accepts_only_current_head_results() -> None:
 
 def test_ci_success_with_current_review_evidence_passes() -> None:
     state = active(P.CI_VERIFICATION, reviewed_sha=HEAD, judgment_digest=PASS.digest)
-    evidence = {"review_complete": True, "reviewed_sha": HEAD, "judgments": PASS}
+    evidence = {**EVIDENCE, "judgments": PASS}
     decision = run(state, ci=CI_OK, **evidence)
     assert (
         decision.next_phase == P.PASSED and decision.next_state.ci_verified_sha == HEAD
@@ -712,18 +870,10 @@ def test_ci_success_with_current_review_evidence_passes() -> None:
     [
         {"review_complete": False, "reviewed_sha": HEAD, "judgments": PASS},
         {"review_complete": True, "reviewed_sha": OTHER, "judgments": PASS},
-        {"review_complete": True, "reviewed_sha": HEAD, "judgments": FIX_NEEDED},
-        {
-            "review_complete": True,
-            "reviewed_sha": HEAD,
-            "judgments": replace(PASS, digest="z"),
-        },
-        {
-            "review_complete": True,
-            "reviewed_sha": HEAD,
-            "judgments": replace(PASS, round=2),
-        },
-        {"review_complete": True, "reviewed_sha": HEAD, "judgments": None},
+        {**EVIDENCE, "judgments": FIX_NEEDED},
+        {**EVIDENCE, "judgments": replace(PASS, digest="z")},
+        {**EVIDENCE, "judgments": replace(PASS, round=2)},
+        {**EVIDENCE, "judgments": None},
     ],
 )
 def test_ci_success_without_valid_pass_evidence_escalates(
@@ -739,12 +889,11 @@ def test_ci_success_without_valid_pass_evidence_escalates(
 
 def test_ci_success_after_head_change_starts_a_new_review_round() -> None:
     state = active(P.CI_VERIFICATION, fix_completed=True)
-    decision = run(
-        state, ci=CI_OK, judgments=PASS, review_complete=True, reviewed_sha=HEAD
-    )
+    decision = run(state, ci=CI_OK, judgments=PASS, **EVIDENCE)
     assert decision.next_phase == P.REVIEW_PENDING and decision.next_round == 2
     assert decision.requires_review_trigger
     assert decision.next_state.round_started_at == "2026-10-18T12:00:00Z"
+    assert decision.next_state.ci_verified_sha == HEAD
     last = active(P.CI_VERIFICATION, round=2)
     capped = run(last, ci=CI_OK)
     assert capped.next_phase == P.ESCALATED and capped.reason == "max_rounds"
@@ -764,7 +913,6 @@ def test_ci_failure_retries_fix_then_escalates() -> None:
     "phase,started,reason",
     [
         (P.REVIEW_PENDING, "2026-10-18T11:50:00Z", "review_pending_timeout"),
-        (P.CHANGES_REQUESTED, "2026-10-18T11:50:00Z", "changes_requested_timeout"),
         (P.FIX_IN_PROGRESS, "2026-10-18T11:50:00Z", "fix_in_progress_timeout"),
         (P.CI_VERIFICATION, "2026-10-18T11:50:00Z", "ci_verification_timeout"),
         (P.REVIEW_PENDING, None, "phase_started_at_invalid"),
@@ -777,7 +925,7 @@ def test_phase_timeouts_escalate(
 ) -> None:
     decision = run(active(phase, phase_started_at=started))
     assert decision.next_phase == P.ESCALATED and decision.reason == reason
-    assert decision.requires_escalation
+    assert decision.requires_escalation and decision.next_state.escalated_from == phase
 
 
 @pytest.mark.parametrize(
@@ -831,7 +979,7 @@ def test_passed_terminal_is_invalidated_by_a_new_head() -> None:
 def test_invalidated_is_never_revived() -> None:
     state = make_state(phase=P.INVALIDATED)
     override = SemanticReviewHumanOverrideV1(IDENTITY.attempt_id, HEAD, "skip")
-    assert_hold(state, "invalidated", override=override, retry_requested=True)
+    assert_hold(state, "invalidated", override=override, retry_request=retry_req())
 
 
 @pytest.mark.parametrize("phase", sorted(ACTIVE_PENDING_PHASES | {P.ESCALATED}))
@@ -862,22 +1010,124 @@ def test_passed_terminals_trigger_nothing(phase: SemanticReviewPhase) -> None:
     assert_hold(make_state(phase=phase), "terminal_passed", override=override)
 
 
-def test_escalated_waits_for_explicit_retry() -> None:
-    state = active(P.ESCALATED, escalation_reason="x", fix_retries=1, reviewed_sha=HEAD)
+# --- explicit retry / restart -----------------------------------------------
+
+
+def escalated(phase: SemanticReviewPhase, **c: Any) -> SemanticReviewStateV1:
+    """Escalate a state of `phase` through the state machine itself."""
+    late = NOW - timedelta(minutes=1)
+    state = active(phase, phase_started_at="2026-10-18T11:40:00Z", **c)
+    decision = evaluate_semantic_review_transition(state, obs(now=late))
+    assert decision.next_phase == P.ESCALATED
+    assert decision.next_state.escalated_from == phase
+    return decision.next_state
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [
+        None,
+        replace(retry_req(), attempt_id="other"),
+        replace(retry_req(), head_sha=OTHER),
+        retry_req(request_id="req-0"),
+    ],
+)
+def test_escalated_ignores_absent_foreign_or_consumed_requests(
+    request_: SemanticReviewRetryV1 | None,
+) -> None:
+    state = escalated(P.REVIEW_PENDING, last_retry_request_id="req-0")
+    assert_hold(state, "escalated", retry_request=request_)
     assert_hold(state, "escalated", mode=SemanticReviewMode.OFF)
-    decision = run(state, retry_requested=True)
-    assert (
-        decision.next_phase == P.NOT_STARTED and decision.reason == "restart_requested"
-    )
+
+
+@pytest.mark.parametrize(
+    "phase,trigger,dispatch",
+    [
+        (P.REVIEW_PENDING, True, False),
+        (P.CI_VERIFICATION, False, False),
+        (P.FIX_IN_PROGRESS, False, True),
+    ],
+)
+def test_retry_resumes_the_escalated_step_keeping_limits(
+    phase: SemanticReviewPhase, trigger: bool, dispatch: bool
+) -> None:
+    state = escalated(phase, round=2, fix_retries=1, reviewed_sha=HEAD)
+    decision = run(state, retry_request=retry_req())
+    assert decision.next_phase == phase and decision.reason == "retry_requested"
+    assert decision.requires_review_trigger is trigger
+    assert decision.requires_fix_dispatch is dispatch
     nxt = decision.next_state
-    assert (nxt.round, nxt.fix_retries, nxt.escalation_reason, nxt.reviewed_sha) == (
-        0,
-        0,
-        None,
-        None,
+    assert (nxt.round, nxt.fix_retries, nxt.attempt_started_at) == (2, 1, EARLIER)
+    assert (nxt.restart_count, nxt.last_retry_request_id) == (1, "req-1")
+    assert nxt.escalation_reason is nxt.escalated_from is None
+    assert nxt.phase_started_at == "2026-10-18T12:00:00Z"
+    assert nxt.reviewed_sha == HEAD and nxt.limits_reset_reason is None
+    if dispatch:
+        assert nxt.operation_id == semantic_operation_id(
+            IDENTITY.attempt_id, 2, KIND.FIX, 1, 1
+        )
+    # The consumed request is never applied twice.
+    assert run(replace(nxt, phase=P.ESCALATED), retry_request=retry_req()).reason == (
+        "escalated"
     )
+
+
+def test_retry_of_an_exhausted_attempt_escalates_again() -> None:
+    state = escalated(P.NOT_STARTED, attempt_started_at="2026-10-18T10:00:00Z")
+    resumed = run(state, retry_request=retry_req())
+    assert resumed.next_phase == P.NOT_STARTED
+    assert resumed.next_state.attempt_started_at == "2026-10-18T10:00:00Z"
+    assert run(resumed.next_state).reason == "attempt_timeout"
+
+
+def test_retry_without_a_recorded_step_is_held() -> None:
+    state = active(P.ESCALATED, escalation_reason="legacy")
+    assert_hold(state, "retry_phase_unknown", retry_request=retry_req())
+
+
+def test_restart_reviews_the_head_in_the_next_round() -> None:
+    state = escalated(P.CI_VERIFICATION, fix_retries=1, reviewed_sha=HEAD)
+    decision = run(state, retry_request=retry_req("restart"))
+    assert decision.next_phase == P.REVIEW_PENDING and decision.next_round == 2
+    assert decision.reason == "restart_requested" and decision.requires_review_trigger
+    nxt = decision.next_state
+    assert (nxt.fix_retries, nxt.attempt_started_at, nxt.restart_count) == (
+        1,
+        EARLIER,
+        1,
+    )
+    assert nxt.reviewed_sha is nxt.operation_id is nxt.escalated_from is None
+    capped = replace(state, round=2)
+    assert_hold(capped, "restart_max_rounds", retry_request=retry_req("restart"))
+
+
+@pytest.mark.parametrize("kind", ["retry", "restart"])
+def test_reset_limits_starts_a_fresh_round_one(kind: SemanticRetryKind) -> None:
+    state = escalated(P.CI_VERIFICATION, round=2, fix_retries=1, reviewed_sha=HEAD)
+    request = retry_req(kind, reset_limits=True)
+    decision = run(state, retry_request=request)
+    assert decision.next_phase == P.REVIEW_PENDING and decision.reason == "limits_reset"
+    nxt = decision.next_state
+    assert (nxt.round, nxt.fix_retries) == (1, 0)
     assert nxt.attempt_started_at == "2026-10-18T12:00:00Z"
-    assert run(nxt).next_phase == P.REVIEW_PENDING
+    assert nxt.limits_reset_reason == "config fixed" and nxt.reviewed_sha is None
+
+
+def test_restart_reserves_operations_distinct_from_pre_restart_jobs() -> None:
+    old = reserved()
+    stale = done(old, FIXED)
+    restarted = run(
+        replace(old, phase=P.ESCALATED, escalated_from=P.FIX_IN_PROGRESS),
+        retry_request=retry_req(),
+    ).next_state
+    assert restarted.restart_count == 1 and restarted.phase == P.FIX_IN_PROGRESS
+    assert restarted.operation_id != old.operation_id
+    assert_hold(restarted, "operation_in_flight", operation=stale)
+    decision = run(restarted, operation=stale, observed_head_sha=FIXED)
+    assert decision.reason == "head_changed"
+
+
+# --- misc -------------------------------------------------------------------
 
 
 def test_mode_off_records_explicit_reason() -> None:
@@ -896,22 +1146,26 @@ def test_limits_must_be_positive() -> None:
 
 
 def test_full_loop_review_fix_ci_rereview_pass() -> None:
-    evidence: dict[str, Any] = {"review_complete": True, "reviewed_sha": HEAD}
     step = run(make_state()).next_state
-    step = run(step, judgments=FIX_NEEDED, **evidence).next_state
+    step = run(step, **EVIDENCE).next_state
     assert step.phase == P.FIX_IN_PROGRESS
     step = run(step, operation=done(step, FIXED), observed_head_sha=FIXED).next_state
     fixed_ci = SemanticCiObservation(FIXED, SemanticCiConclusion.SUCCESS)
     step = run(step, observed_head_sha=FIXED, ci=fixed_ci).next_state
-    assert (step.phase, step.round) == (P.REVIEW_PENDING, 2)
-    round2 = replace(PASS, round=2)
-    fixed_evidence = {"review_complete": True, "reviewed_sha": FIXED}
-    step = run(
-        step, observed_head_sha=FIXED, judgments=round2, **fixed_evidence
-    ).next_state
-    assert step.phase == P.CI_VERIFICATION
+    assert (step.phase, step.round, step.ci_verified_sha) == (
+        P.REVIEW_PENDING,
+        2,
+        FIXED,
+    )
+    fixed: dict[str, Any] = {
+        "observed_head_sha": FIXED,
+        "review_complete": True,
+        "reviewed_sha": FIXED,
+    }
+    step = run(step, **fixed).next_state
+    assert step.phase == P.FIX_IN_PROGRESS and step.fix_input_sha == FIXED
     final = run(
-        step, observed_head_sha=FIXED, ci=fixed_ci, judgments=round2, **fixed_evidence
+        step, operation=done(step, FIXED), judgments=replace(PASS, round=2), **fixed
     )
     assert final.next_phase == P.PASSED and final.next_state.ci_verified_sha == FIXED
 
@@ -931,25 +1185,3 @@ def test_child_source_ref_instances_are_validated_and_normalized() -> None:
         IntegrationAttemptIdentity.create(1033, BASE, [ChildSourceRef(0, "", "")])
     padded: list[Any] = [ChildSourceRef(11, " alpha ", f" {'1' * 40} "), CHILDREN[0]]
     assert IntegrationAttemptIdentity.create(1033, BASE, padded) == IDENTITY
-
-
-def test_judgment_job_that_changes_head_escalates() -> None:
-    state = reserved(P.CHANGES_REQUESTED, KIND.JUDGMENT)
-    decision = run(state, operation=done(state, FIXED), observed_head_sha=FIXED)
-    assert decision.next_phase == P.ESCALATED
-    assert decision.reason == "judgment_operation_changed_head"
-
-
-def test_restart_reserves_operations_distinct_from_pre_restart_jobs() -> None:
-    evidence: dict[str, Any] = {"review_complete": True, "reviewed_sha": HEAD}
-    old = reserved(P.FIX_IN_PROGRESS, KIND.FIX)
-    stale = done(old, FIXED)
-    escalated = replace(old, phase=P.ESCALATED)
-    restarted = run(escalated, retry_requested=True).next_state
-    assert restarted.restart_count == 1
-    step = run(restarted).next_state
-    step = run(step, judgments=FIX_NEEDED, **evidence).next_state
-    assert step.phase == P.FIX_IN_PROGRESS
-    assert step.operation_id != old.operation_id
-    assert_hold(step, "operation_in_flight", operation=stale, observed_head_sha=HEAD)
-    assert run(step, operation=stale, observed_head_sha=FIXED).reason == "head_changed"
