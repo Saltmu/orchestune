@@ -2,8 +2,8 @@
 
 A GitHub comment is append-only and cannot be compared-and-swapped, so the
 claim lives in a Git ref: ``refs/orchestune/semantic-claims/parent-issue-{N}``.
-Its value is an empty-tree commit whose message is the claim JSON and whose
-parent is the previous claim commit. Every write is a ``git push`` with an
+Its value is an empty-tree commit whose message is the claim JSON (followed
+by a per-commit nonce) and whose parent is the previous claim commit. Every write is a ``git push`` with an
 expected old value (``--force-with-lease``), which makes the remote the only
 arbiter of ownership.
 
@@ -75,6 +75,7 @@ _IDENTITY = {
 _LEASE_MARKERS = ("stale info", "[rejected]")
 _REMOTE_REJECTED = "[remote rejected]"
 _ATOMIC_UNSUPPORTED = "does not support --atomic"
+_NONCE_TRAILER = "Orchestune-Claim-Nonce"
 # ``(ref, new_oid, expected_old_oid)`` for one ref of an atomic push.
 _Change = tuple[str, str | None, str | None]
 
@@ -473,6 +474,11 @@ def _create_claim_commit(
             "expires_at": claim.expires_at.isoformat(),
         }
     )
+    # Two advancements of one claim with equal content and second-precision
+    # dates would otherwise produce the same commit: Git treats the second
+    # push of that OID as up to date and skips its lease, so a reused claim
+    # could write twice. The nonce keeps every claim commit unique.
+    message += f"\n\n{_NONCE_TRAILER}: {uuid.uuid4().hex}"
     return _commit_tree(repository_root, message, parent=parent, now=now)
 
 
@@ -505,7 +511,8 @@ def _parse_claim_commit(
     if raw.returncode != 0 or "\n\n" not in raw.stdout:
         raise SemanticClaimCorruptError(f"claim ref {oid} is not a claim commit")
     try:
-        data = json.loads(raw.stdout.split("\n\n", 1)[1])
+        message = raw.stdout.split("\n\n", 1)[1]
+        data = json.loads(message.split("\n\n", 1)[0])
         claim = _claim_from_json(data, oid)
     except (ValueError, TypeError) as error:
         raise SemanticClaimCorruptError(f"claim {oid} is corrupt: {error}") from error

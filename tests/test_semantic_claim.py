@@ -136,7 +136,7 @@ class TestAcquire:
         claim = _acquire(worker, holder="worker-1").claim
         assert claim is not None
 
-        message = _git(remote.origin, "log", "-1", "--format=%B", claim.ref_oid)
+        message = _git(remote.origin, "log", "-1", "--format=%s", claim.ref_oid)
         assert json.loads(message) == {
             "version": 1,
             "parent_issue_number": PARENT,
@@ -466,6 +466,35 @@ class TestPushUnderClaim:
         assert remote.oid(f"refs/heads/{TEMP}") == new
         assert remote.oid("refs/heads/created") == new
         assert read_semantic_claim(worker, PARENT) == advanced
+
+    def test_a_reused_claim_cannot_push_twice_in_the_same_second(
+        self, remote: Remote
+    ) -> None:
+        """Identical claim commits would make the second lease a no-op (#1376)."""
+        worker = remote.worker("w1")
+        claim = _acquire(worker, holder="worker-1").claim
+        assert claim is not None
+        first = push_refs_under_claim(
+            worker, claim, [RefUpdate("refs/heads/one", remote.base, None)], now=NOW
+        )
+        second = push_refs_under_claim(
+            worker, claim, [RefUpdate("refs/heads/two", remote.base, None)], now=NOW
+        )
+
+        assert first.status is PushStatus.PUSHED
+        assert second.status is PushStatus.REJECTED
+        assert first.claim is not None
+        assert remote.oid(CLAIM_REF) == first.claim.ref_oid
+        assert remote.oid("refs/heads/two") is None
+
+    def test_same_holder_racing_itself_has_one_winner(self, remote: Remote) -> None:
+        worker = remote.worker("w1")
+        claim = _acquire(worker, holder="worker-1").claim
+        assert claim is not None
+        renewed = renew_semantic_claim(worker, claim, now=NOW, ttl_seconds=TTL)
+        stale = renew_semantic_claim(worker, claim, now=NOW, ttl_seconds=TTL)
+        assert renewed.status is PushStatus.PUSHED
+        assert stale.status is PushStatus.REJECTED
 
     def test_deletes_a_ref_under_claim(self, remote: Remote) -> None:
         worker = remote.worker("w1")
