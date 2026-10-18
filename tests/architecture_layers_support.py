@@ -295,6 +295,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "not_needed_review_contract",
             "review",
             "review.markers",
+            "review.semantic_gate",
             "review.acquisition",
             "review.judgment",
             "review.offline",
