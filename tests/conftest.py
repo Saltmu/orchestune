@@ -45,17 +45,29 @@ GIT_ENV_VARS_TO_CLEAR = DANGEROUS_GIT_ENV_VARS
 SUITE_MARKERS = frozenset({"unit", "integration", "e2e"})
 
 
+def __getattr__(name: str) -> Any:
+    if name == "_github_isolation_workspace":
+        from tests.github_isolation import _github_isolation_workspace
+
+        return _github_isolation_workspace
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 @pytest.fixture(autouse=True)
 def github_access_isolation(
-    monkeypatch: pytest.MonkeyPatch, _isolate_github_env: None
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    _isolate_github_env: None,
 ) -> Iterator[Any]:
     """Guard every test and inherited Python/shell child against live GitHub access."""
     from tests.github_isolation import configure_test_isolation
 
+    workspace = request.getfixturevalue("_github_isolation_workspace")
     with configure_test_isolation(
         monkeypatch.setenv,
         monkeypatch.setattr,
         Path(__file__).resolve().parents[1],
+        workspace=workspace,
     ) as monitor:
         yield monitor
 
@@ -1140,6 +1152,17 @@ def _stub_run_state_lock_assertion_by_default(request: pytest.FixtureRequest):
         yield
 
 
+_ROOT_EVENTS_LOG = Path(__file__).resolve().parent.parent / "events.jsonl"
+
+
+def _events_log_state(path: Path) -> tuple[float, int] | None:
+    try:
+        st = path.stat()
+        return (st.st_mtime, st.st_size)
+    except FileNotFoundError:
+        return None
+
+
 @pytest.fixture(autouse=True)
 def _guard_events_log_path(monkeypatch: pytest.MonkeyPatch):
     """Ensure tests do not create or modify 'events.jsonl' in the repository root."""
@@ -1155,25 +1178,19 @@ def _guard_events_log_path(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(DispatcherConfig, "__init__", guarded_init)
 
-    root_events_log = Path(__file__).resolve().parent.parent / "events.jsonl"
-    exists_before = root_events_log.exists()
-    mtime_before = root_events_log.stat().st_mtime if exists_before else None
-    size_before = root_events_log.stat().st_size if exists_before else None
+    state_before = _events_log_state(_ROOT_EVENTS_LOG)
     yield
-    exists_after = root_events_log.exists()
-    mtime_after = root_events_log.stat().st_mtime if exists_after else None
-    size_after = root_events_log.stat().st_size if exists_after else None
-    if not exists_before and exists_after:
+    state_after = _events_log_state(_ROOT_EVENTS_LOG)
+    if state_before is None and state_after is not None:
         pytest.fail(
             "Test created 'events.jsonl' in the repository root instead of using tmp_path."
         )
-    elif exists_before and not exists_after:
+    elif state_before is not None and state_after is None:
         pytest.fail("Test deleted 'events.jsonl' from the repository root.")
-    elif exists_before and exists_after:
-        if mtime_before != mtime_after or size_before != size_after:
-            pytest.fail(
-                "Test modified 'events.jsonl' in the repository root instead of using tmp_path."
-            )
+    elif state_before != state_after:
+        pytest.fail(
+            "Test modified 'events.jsonl' in the repository root instead of using tmp_path."
+        )
 
 
 @pytest.fixture(autouse=True)

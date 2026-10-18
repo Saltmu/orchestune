@@ -10,6 +10,7 @@ import sys
 import urllib.request
 from http.client import HTTPConnection, HTTPSConnection
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -364,3 +365,142 @@ def test_local_socket_connections_remain_available() -> None:
         listener.listen(1)
         with socket.create_connection(listener.getsockname(), timeout=1) as client:
             assert client.getpeername() == listener.getsockname()
+
+
+def test_github_isolation_workspace_lifecycle(tmp_path: Path) -> None:
+    from tests.github_isolation import GitHubIsolationWorkspace
+
+    workspace = GitHubIsolationWorkspace.create(tmp_path)
+    try:
+        assert workspace.scratch.is_dir()
+        assert workspace.bin_dir.is_dir()
+        assert workspace.python_dir.is_dir()
+        assert workspace.config_dir.is_dir()
+
+        # Check CLI shim
+        shim = workspace.bin_dir / ("gh.cmd" if os.name == "nt" else "gh")
+        assert shim.is_file()
+
+        # Check sitecustomize
+        sitecustomize = workspace.python_dir / "sitecustomize.py"
+        assert sitecustomize.is_file()
+
+        # Check reset_config_dir cleans residual files and dirs
+        sub_dir = workspace.config_dir / "subdir"
+        sub_dir.mkdir()
+        (sub_dir / "token.txt").write_text("secret", encoding="utf-8")
+        (workspace.config_dir / "config.yml").write_text("key: val", encoding="utf-8")
+
+        workspace.reset_config_dir()
+        assert workspace.config_dir.is_dir()
+        assert list(workspace.config_dir.iterdir()) == []
+    finally:
+        workspace.destroy()
+        assert not workspace.scratch.exists()
+
+
+def test_make_popen_guard_is_cached_per_original_class() -> None:
+    from tests.github_isolation import _make_popen_guard
+
+    guard1 = _make_popen_guard(subprocess.Popen)
+    guard2 = _make_popen_guard(subprocess.Popen)
+    assert guard1 is guard2
+
+    class OtherPopen(subprocess.Popen):
+        pass
+
+    other_guard = _make_popen_guard(OtherPopen)
+    assert other_guard is not guard1
+    assert _make_popen_guard(OtherPopen) is other_guard
+
+
+def test_cached_popen_guard_resolves_environment_dynamically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.github_isolation import (
+        _BIN_ENV,
+        _LOG_ENV,
+        _PROJECT_ENV,
+        _PYTHON_ENV,
+        _make_popen_guard,
+    )
+
+    guard_cls = _make_popen_guard(subprocess.Popen)
+    log1 = tmp_path / "blocked1.log"
+    monkeypatch.setenv(_LOG_ENV, str(log1))
+    monkeypatch.setenv(_BIN_ENV, str(tmp_path / "bin"))
+    monkeypatch.setenv(_PYTHON_ENV, str(tmp_path / "python"))
+    monkeypatch.setenv(_PROJECT_ENV, str(tmp_path))
+    monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path / "gh-config"))
+
+    # When instantiated, env is computed dynamically from current os.environ
+    proc1 = guard_cls(
+        [
+            sys.executable,
+            "-c",
+            "import os; print(os.environ.get('ORCHESTUNE_TEST_GITHUB_GUARD_LOG'))",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    out1, _ = proc1.communicate()
+    assert out1.strip() == str(log1)
+
+    # Change environment
+    log2 = tmp_path / "blocked2.log"
+    monkeypatch.setenv(_LOG_ENV, str(log2))
+    proc2 = guard_cls(
+        [
+            sys.executable,
+            "-c",
+            "import os; print(os.environ.get('ORCHESTUNE_TEST_GITHUB_GUARD_LOG'))",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    out2, _ = proc2.communicate()
+    assert out2.strip() == str(log2)
+
+
+def test_configure_test_isolation_with_shared_workspace(tmp_path: Path) -> None:
+    from tests.github_isolation import (
+        GitHubIsolationWorkspace,
+        configure_test_isolation,
+    )
+
+    workspace = GitHubIsolationWorkspace.create(tmp_path)
+    env_store = {}
+    attr_store = []
+
+    def setenv(k: str, v: str) -> None:
+        env_store[k] = v
+
+    def setattr_(target: Any, name: str, val: Any) -> None:
+        attr_store.append((target, name, getattr(target, name)))
+        setattr(target, name, val)
+
+    try:
+        # Test 1
+        with configure_test_isolation(
+            setenv, setattr_, tmp_path, workspace=workspace
+        ) as mon1:
+            log1 = mon1.log_path
+            assert not log1.exists(), "Log must not be pre-touched"
+            assert log1.parent == workspace.scratch
+            # Write a residual in config_dir
+            (workspace.config_dir / "test.txt").write_text("residual", encoding="utf-8")
+
+        assert not log1.exists()
+        assert (
+            list(workspace.config_dir.iterdir()) == []
+        ), "reset_config_dir should clean up"
+
+        # Test 2 with same workspace
+        with configure_test_isolation(
+            setenv, setattr_, tmp_path, workspace=workspace
+        ) as mon2:
+            log2 = mon2.log_path
+            assert log2 != log1, "Consecutive tests must receive distinct log paths"
+            assert not log2.exists()
+    finally:
+        workspace.destroy()

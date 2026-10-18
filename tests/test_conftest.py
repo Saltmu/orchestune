@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -300,3 +301,59 @@ class TestFakeForgeClass:
         forge.create_issue(title="Task", body="Body")
         forge.set_issue_last_reopened_at(1, "2026-08-23T10:00:00Z")
         assert forge.get_issue_last_reopened_at(1) == "2026-08-23T10:00:00Z"
+
+
+def test_root_events_log_constant() -> None:
+    from tests.conftest import _ROOT_EVENTS_LOG
+
+    expected = Path(__file__).resolve().parent.parent / "events.jsonl"
+    assert _ROOT_EVENTS_LOG == expected
+
+
+def test_events_log_state_helper(tmp_path: Path) -> None:
+    from tests.conftest import _events_log_state
+
+    missing_file = tmp_path / "nonexistent.jsonl"
+    assert _events_log_state(missing_file) is None
+
+    existing_file = tmp_path / "events.jsonl"
+    existing_file.write_text("hello\n", encoding="utf-8")
+    st = existing_file.stat()
+    assert _events_log_state(existing_file) == (st.st_mtime, st.st_size)
+
+    # PermissionError or unexpected OSError must not be caught
+    from unittest.mock import patch
+
+    with patch.object(Path, "stat", side_effect=PermissionError("denied")):
+        with pytest.raises(PermissionError):
+            _events_log_state(existing_file)
+
+
+def test_guard_events_log_path_stat_aggregation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_guard_events_log_path calls _events_log_state once before and once after."""
+    from tests import conftest
+    from tests.conftest import _guard_events_log_path
+
+    call_count = 0
+    test_file = tmp_path / "fake_events.jsonl"
+    monkeypatch.setattr(conftest, "_ROOT_EVENTS_LOG", test_file)
+
+    orig_events_log_state = getattr(conftest, "_events_log_state", None)
+    if orig_events_log_state is not None:
+
+        def spy_events_log_state(path: Path):
+            nonlocal call_count
+            call_count += 1
+            return orig_events_log_state(path)
+
+        monkeypatch.setattr(conftest, "_events_log_state", spy_events_log_state)
+
+    gen = cast(Any, _guard_events_log_path).__wrapped__(monkeypatch)
+    next(gen)
+    assert call_count == 1, "Must call state check once before test"
+
+    with pytest.raises(StopIteration):
+        next(gen)
+    assert call_count == 2, "Must call state check once after test"
