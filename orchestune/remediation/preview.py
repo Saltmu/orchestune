@@ -170,6 +170,33 @@ def _record(issue: IssueRecord) -> dict[str, Any] | None:
     return value
 
 
+def _extra_footprint_keys(own_record: bool) -> set[str]:
+    keys = {"description", "risk", "priority"}
+    if own_record:
+        keys |= {
+            "claim_id",
+            "owner_kind",
+            "reservation_kind",
+            "forced_serial",
+            "recompute_count",
+        }
+    return keys
+
+
+def _metadata_conflicts(
+    current: dict[str, Any] | None, expected: dict[str, Any], own_record: bool
+) -> list[str]:
+    current = current or {}
+    reasons = []
+    if current.get("subtask_id") not in (None, expected["subtask_id"]):
+        reasons.append("existing Footprint subtask_id differs")
+    if own_record and any(current.get(k) != v for k, v in expected.items()):
+        reasons.append(
+            "registered Issue metadata changed; manual-review without overwriting"
+        )
+    return reasons
+
+
 def _issue_checks(
     issue: IssueRecord,
     task: RemediationTask,
@@ -209,11 +236,10 @@ def _issue_checks(
     if FOOTPRINT_BLOCK_PATTERN.search(issue.body) and (
         current is None
         or not current.keys() & expected.keys()
-        or not current.keys() <= expected.keys() | {"description", "risk", "priority"}
+        or not current.keys() <= expected.keys() | _extra_footprint_keys(own_record)
     ):
         reasons.append("first YAML block is not a compatible Footprint mapping")
-    if current and current.get("subtask_id") not in (None, task.subtask.id):
-        reasons.append("existing Footprint subtask_id differs")
+    reasons.extend(_metadata_conflicts(current, expected, own_record))
     resolved = {numbers[d] for d in task.subtask.depends_on if d in numbers}
     if set(issue.blocked_by) - resolved:
         reasons.append("native blocked_by cannot be resolved by spec depends_on")
@@ -245,14 +271,20 @@ def _registration_steps(
         if pr.state.upper() == "OPEN"
     )
     audit = f"<!-- orchestune:remediation-audit spec_revision={spec.spec_revision} -->"
+    audited = any(audit in comment for comment in snapshot.parent_comments)
+    metadata_ready = all(current.get(k) == v for k, v in expected.items())
     stages = {
-        "footprint": all(current.get(k) == v for k, v in expected.items()),
+        "footprint": metadata_ready,
         "labels": len(primary) == 1,
-        "relationships": (issue.parent or {}).get("number") == snapshot.parent.number
-        and dependencies <= set(issue.blocked_by),
+        # The terminal audit proves linking completed, including supported metadata fallback.
+        "relationships": (
+            (issue.parent or {}).get("number") == snapshot.parent.number
+            and dependencies <= set(issue.blocked_by)
+        )
+        or (audited and metadata_ready),
         "plan": plan_ready,
         "final-pr": final_ready,
-        "audit": any(audit in comment for comment in snapshot.parent_comments),
+        "audit": audited,
     }
     return tuple(k for k, v in stages.items() if v), tuple(
         k for k, v in stages.items() if not v

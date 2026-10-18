@@ -1,5 +1,53 @@
 # 使用方法とコマンドリファレンス
 
+## 親スコープ内の補修タスクを追加する（remediate）
+
+`remediate` はレビュー残件や統合バグを、既存EPICの要件を満たすための子Issueとして追加します。
+未着手の分解世代を置き換える `replan` と異なり、完了済み・進行中の子Issueを保持します。
+新しい要件は親の編集や別EPICで扱ってください。
+
+frontmatter付きMarkdownのspecを作成します。`issue_number` を省略すると新規起票し、指定すると既存Issueを登録します。
+`kind` は `review-followup` または `integration-bug` です。`parent_acceptance` は親本文のチェック項目か既存タスクの受け入れ条件と一致させ、
+`origins` は同じ親の子Issue・親ブランチのPR・そのコメントを指定します。
+
+```yaml
+---
+parent_issue_number: 693
+subtasks:
+  - id: repair-validation
+    description: 統合レビューで見つかった検証漏れを修正する
+    kind: review-followup
+    # issue_number: 806  # 既存のフォローアップ・バグIssueを登録する場合
+    footprint: [src/validation.py]
+    depends_on: [existing-subtask-id]
+    parent_acceptance: [親の受け入れ条件の文言]
+    origins: ['#805']
+    reason: 親の検証要件を完遂するため
+---
+```
+
+```bash
+orchestune remediate --spec remediation.md
+orchestune remediate --spec remediation.md --apply --confirm-preview <表示されたtoken>
+```
+
+previewで根拠・変更するFootprint・依存関係を確認します。既存IssueのタイトルとFootprint以外の本文は保持し、補修の根拠を追記します。
+#1277のフォローアップ（`depends_on` だけのFootprintや `blocked-by #N` を含む本文）も、specに完全なFootprintと解決できる依存を記載して登録できます。
+起票した番号はspecに書き戻します。親計画の末尾へ追加し、openな最終PRを保留表示にし、親へ監査コメントを残します。
+登録でDispatcherは起動しません。次の `orchestune dispatch -p 693` サイクルで依存・競合を評価します。
+
+終了コード3はtokenの不一致です。書き込みは行いません。終了コード4は部分登録または並行更新です。
+子Issueを取り消さず、同じspecで再previewし、`resume` と残りの段階を確認して新しいtokenでapplyしてください。
+登録後に子IssueのFootprint等が変わっている場合は手動確認で止め、進行中のclaim情報や変更済みmetadataを上書きしません。
+起票後の番号書き戻しに失敗した場合も、親metadataとsubtask_idで既存Issueを再発見します。
+親metadata検索に対応しないForgeでは、親子関係を張る前の中断から再発見できない場合があります。重複起票を避けるため、作成済みIssueを確認してspecへ番号を記載してください。
+全件登録済みは5、親・既存Issueの状態による拒否は6、スコープ確認が必要な場合は7、入力不備は2です。
+closedな親や現在の親ブランチがマージ済みの場合は自動でreopenしません。
+
+親本文は書き込み直前に再取得し、計画ブロックのfingerprintを照合します。計画以外の本文（Human Notesを含む）を保持し、書き込み後にも読み戻します。
+GitHubのIssue本文APIにはcompare-and-swapがないため、最終照合と書き込みの間の競合は完全には防げません。
+同じ親への登録・provision・replan・本文編集を直列に実行してください。Issue本文は既存Forgeモデルの改行正規化を経由します。
+
 ### クラウド起動の障害復旧
 
 通常の`cloud-routine`・`codex-cloud`ワーカー起動では、起動前にタスクIssueへ

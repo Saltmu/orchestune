@@ -389,7 +389,24 @@ def integrator_restore_blocked_label(env: Env) -> None:
     )
 
 
+def remediation_init(env: Env) -> None:
+    from orchestune.remediation.operations import ensure_initial_label
+
+    ensure_initial_label(
+        env.forge,
+        ISSUE,
+        _fake(
+            subtask=_fake(
+                depends_on=env.params.get("depends_on", ()),
+                priority="medium",
+                risk=False,
+            )
+        ),
+    )
+
+
 DRIVERS: dict[str, Driver] = {
+    "remediation_init": remediation_init,
     "claim_apply_status_label": claim_apply_status_label,
     "launch_yaml_error": launch_yaml_error,
     "launch_invalid_footprint": launch_invalid_footprint,

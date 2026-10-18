@@ -1,5 +1,53 @@
 # Usage & Command Reference
 
+## Add parent-scope repair tasks with remediate
+
+`remediate` adds review follow-ups and integration bugs needed to complete an existing EPIC.
+It preserves completed and active children. Use `replan` to replace an unstarted decomposition generation;
+handle new requirements by editing the parent or opening a separate EPIC.
+
+Create a Markdown spec with YAML frontmatter. Omit `issue_number` to create an Issue, or set it to register an existing follow-up or bug.
+Use `review-followup` or `integration-bug` for `kind`. Each `parent_acceptance` must match a parent checklist item or an existing subtask's acceptance criterion.
+Origins must resolve to this parent's children, parent-branch PRs, or their comments.
+
+```yaml
+---
+parent_issue_number: 693
+subtasks:
+  - id: repair-validation
+    description: Repair validation found in integration review
+    kind: review-followup
+    # issue_number: 806  # Register an existing follow-up or integration bug
+    footprint: [src/validation.py]
+    depends_on: [existing-subtask-id]
+    parent_acceptance: [Exact parent acceptance text]
+    origins: ['#805']
+    reason: Required to complete the parent validation requirement
+---
+```
+
+```bash
+orchestune remediate --spec remediation.md
+orchestune remediate --spec remediation.md --apply --confirm-preview <displayed-token>
+```
+
+Inspect the evidence, Footprint changes, and dependencies in preview. Existing titles and text outside the Footprint are preserved, with repair evidence appended.
+Follow-ups from #1277, including a depends_on-only Footprint or a `blocked-by #N` body reference, can be registered by supplying complete metadata and resolvable dependencies in the spec.
+Created numbers are written back to the spec. Apply appends parent plan entries, marks an open final PR pending, and posts one parent audit per revision.
+It does not start Dispatcher; the next `orchestune dispatch -p 693` cycle evaluates dependencies and conflicts.
+
+Exit 3 means a stale confirmation token, with no writes. Exit 4 means partial registration or concurrent changes.
+Keep the children, preview the same spec again, inspect `resume` and its remaining stages, then apply with the new token.
+If a registered child's Footprint or other task metadata has changed, registration stops for manual review and preserves the running claim and edited metadata.
+If number writeback failed immediately after creation, parent metadata and subtask_id identify the existing child.
+A Forge without parent-metadata search may not rediscover a child interrupted before native linking. Check created Issues and put the existing number in the spec to avoid duplicates.
+Exit 5 means all tasks are registered; 6 rejects parent/existing Issue state; 7 requires scope review; 2 means invalid input.
+A closed parent or an already merged current parent branch is never implicitly reopened.
+
+Apply re-fetches the parent immediately before writing, checks the plan block fingerprint, preserves text outside that block including Human Notes, and verifies readback.
+GitHub's Issue body API has no compare-and-swap: a race between the final check and write cannot be fully prevented.
+Serialize registration, provision, replan, and manual body edits for the same parent. Issue text passes through the existing Forge model's newline normalization.
+
 ### Cloud launch recovery
 
 Ordinary `cloud-routine` and `codex-cloud` worker launches persist an

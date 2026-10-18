@@ -23,10 +23,32 @@ def test_cli_prints_scope_and_token(
         assert text in output
 
 
-def test_apply_is_not_supported() -> None:
+def test_apply_requires_confirmation() -> None:
     with pytest.raises(SystemExit) as error:
         main(["--spec", "x", "--apply"])
     assert error.value.code == 2
+
+
+def test_cli_applies_confirmed_preview(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from test_remediation_apply import ApplyForge, token
+
+    forge = ApplyForge()
+    path = write_spec(tmp_path)
+    assert (
+        main(
+            ["--spec", str(path), "--apply", "--confirm-preview", token(path, forge)],
+            forge=forge,
+        )
+        == 0
+    )
+    assert "orchestune dispatch -p 1" in capsys.readouterr().out
+
+
+def test_confirmation_without_apply_is_rejected() -> None:
+    with pytest.raises(SystemExit):
+        main(["--spec", "x", "--confirm-preview", "token"])
 
 
 def test_cli_input_errors(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

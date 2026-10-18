@@ -1,5 +1,11 @@
 # status:* ラベルのライフサイクル
 
+`remediate --apply` で新規作成する補修タスクは、provisionと同じ初期ラベルを使います。
+未完了の依存ありは `status:blocked`、依存なし・全依存完了済みは `status:queued` に加え、priorityと必要に応じてriskを付けます。
+既存Issueにlifecycleラベルがない場合は `transition_status_label` のINITとして1つだけ付け、
+既存のqueued/blockedや再開中のlifecycleを保持します。補助ラベルは変更しません。
+登録だけではDispatcherを起動せず、次の通常サイクルで状態を評価します。
+
 Orchestuneは、各サブタスクの進行状況をGitHub Issueの`status:*`ラベルとして
 Source of Truthに保持します（[アーキテクチャ](./architecture.md)の「自己修復」で
 述べた通り、`run_state.json`が消失してもこのラベルとオープンなPRから状態を
@@ -156,6 +162,8 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 
 | Event | 遷移元 | 遷移先 | 発生元 |
 |---|---|---|---|
+| `QUEUE` (`PLAIN`) | `status:blocked` | `status:queued` | `remediation/operations.py::ensure_initial_label` |
+| `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `remediation/operations.py::ensure_initial_label` |
 | `LAUNCH` (`CLAIM`) | `status:blocked`, `status:queued` | `status:in-progress` | `claim/service.py::_apply_status_label` |
 | `COMPLETE` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:done` | `complete/status_labels.py::_completion_mutate` |
 | `NOT_NEEDED` (`COMPLETION`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
@@ -748,6 +756,8 @@ merged成果物ありのIssueは置換せず、manual reviewとしてpreviewに�
 
 | Source | Condition | Event / Kind | Identity input | Guard | Scope | Old input: expected result / effect | Test node | Excluded path reason |
 |---|---|---|---|---|---|---|---|---|
+| remediation/operations.py::ensure_initial_label | `no-deps` | `queue` / `plain` | no execution identity is passed as a launch fact at this event source | source-local status, operation, or freshness guards; no record_launch guard | not an execution launch; any operation/generation protection is source-specific | N/A: no launch identity enters this event source; the source-specific event effect is covered by its EVENT_BY_SOURCE case | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | launch identity does not apply to this Event/Kind route |
+| remediation/operations.py::ensure_initial_label | `has-deps` | `block` / `plain` | no execution identity is passed as a launch fact at this event source | source-local status, operation, or freshness guards; no record_launch guard | not an execution launch; any operation/generation protection is source-specific | N/A: no launch identity enters this event source; the source-specific event effect is covered by its EVENT_BY_SOURCE case | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | launch identity does not apply to this Event/Kind route |
 | claim/service.py::_apply_status_label | `queued` | `launch` / `claim` | no: this is a user-driven label claim, not a LaunchFact | no execution-identity guard at this source | none; status mutation is governed by the claim operation | old launch identity is unavailable to this call; the label effect may occur; claim label mutation can take effect without CycleContext.record_launch | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | candidate: decide separately whether manual claim needs a generation guard |
 | claim/service.py::_apply_status_label | `blocked` | `launch` / `claim` | no: this is a user-driven label claim, not a LaunchFact | no execution-identity guard at this source | none; status mutation is governed by the claim operation | old launch identity is unavailable to this call; the label effect may occur; claim label mutation can take effect without CycleContext.record_launch | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | candidate: decide separately whether manual claim needs a generation guard |
 | claim/service.py::_apply_status_label | `aux-force-serial` | `launch` / `claim` | no: this is a user-driven label claim, not a LaunchFact | no execution-identity guard at this source | none; status mutation is governed by the claim operation | old launch identity is unavailable to this call; the label effect may occur; claim label mutation can take effect without CycleContext.record_launch | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | candidate: decide separately whether manual claim needs a generation guard |
