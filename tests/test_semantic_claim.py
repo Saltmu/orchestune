@@ -8,6 +8,7 @@ outcome is reported as a transport failure.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 import threading
@@ -598,6 +599,15 @@ class TestPushUnderClaim:
         assert claim is not None
         with pytest.raises(ValueError):
             push_refs_under_claim(worker, claim, [update], now=NOW)
+
+    def test_a_claim_without_a_valid_ref_oid_is_rejected(self, remote: Remote) -> None:
+        worker = remote.worker("w1")
+        claim = _acquire(worker, holder="worker-1").claim
+        assert claim is not None
+        forged = dataclasses.replace(claim, ref_oid="--upload-pack=x")
+        with pytest.raises(ValueError):
+            push_refs_under_claim(worker, forged, [], now=NOW)
+        assert remote.oid(CLAIM_REF) == claim.ref_oid
 
     def test_duplicate_refs_are_rejected(self, remote: Remote) -> None:
         worker = remote.worker("w1")

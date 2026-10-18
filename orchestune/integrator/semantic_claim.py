@@ -362,6 +362,7 @@ def _advance_claim(
     expires_at: datetime,
     now: datetime,
 ) -> PushResult:
+    _oid(claim.ref_oid)
     advanced = replace(claim, expires_at=expires_at)
     oid = _create_claim_commit(repository_root, advanced, parent=claim.ref_oid, now=now)
     advanced = replace(advanced, ref_oid=oid)
