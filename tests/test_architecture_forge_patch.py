@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import ast
+import functools
 import re
 from collections import defaultdict
 from pathlib import Path
 
-PACKAGE_ROOT = Path(__file__).parents[1] / "orchestune"
-TESTS_ROOT = Path(__file__).parent
-REPO_ROOT = Path(__file__).parents[1]
+PACKAGE_ROOT = (Path(__file__).parents[1] / "orchestune").resolve()
+TESTS_ROOT = (Path(__file__).parent).resolve()
+REPO_ROOT = (Path(__file__).parents[1]).resolve()
 
 GITHUB_FORGE_PATCH_EXEMPTIONS = frozenset({"test_forge.py"})
 _GITHUB_FORGE_PATCH_TARGET = re.compile(r"(?:^|\.)GitHubForge(?:\.|$)")
+
+from architecture_source_support import _source_ast, _source_text  # noqa: E402
 
 # Re-use shared AST walking and scope helpers from architecture_test_support
 from architecture_test_support import (  # noqa: E402
@@ -22,10 +25,21 @@ from architecture_test_support import (  # noqa: E402
 )
 
 
+@functools.cache
+def _test_module_asts() -> tuple[tuple[Path, str, ast.Module], ...]:
+    return tuple(
+        (path, _source_text(path), _source_ast(path))
+        for path in sorted(TESTS_ROOT.rglob("*.py"))
+    )
+
+
+def _clear_forge_patch_caches() -> None:
+    _test_module_asts.cache_clear()
+
+
 def _stale_github_patch_targets() -> list[str]:
     stale_targets: list[str] = []
-    for path in TESTS_ROOT.rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    for path, _source, tree in _test_module_asts():
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not node.args:
                 continue
@@ -209,8 +223,7 @@ def _scan_github_forge_patch_scope(
             violations.append(node.lineno)
 
 
-def _github_forge_patch_lines(source: str) -> list[int]:
-    tree = ast.parse(source)
+def _github_forge_patch_lines_ast(tree: ast.AST) -> list[int]:
     patch_references, github_forge_names = _mock_patch_references(tree)
     violations: list[int] = []
     _scan_github_forge_patch_scope(
@@ -219,13 +232,17 @@ def _github_forge_patch_lines(source: str) -> list[int]:
     return sorted(violations)
 
 
+def _github_forge_patch_lines(source: str) -> list[int]:
+    return _github_forge_patch_lines_ast(ast.parse(source))
+
+
 def _github_forge_patch_violations() -> list[str]:
     violations: list[str] = []
-    for path in sorted(TESTS_ROOT.rglob("*.py")):
+    for path, _source, tree in _test_module_asts():
         relative_path = path.relative_to(TESTS_ROOT).as_posix()
         if relative_path in GITHUB_FORGE_PATCH_EXEMPTIONS:
             continue
-        for line in _github_forge_patch_lines(path.read_text(encoding="utf-8")):
+        for line in _github_forge_patch_lines_ast(tree):
             violations.append(f"{path.relative_to(REPO_ROOT)}:{line}")
     return violations
 

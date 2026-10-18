@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import ast
+import functools
 from dataclasses import dataclass
 from pathlib import Path
+
+from architecture_source_support import _source_ast
 
 RAW_DEPENDENCY_ATTRIBUTES = frozenset({"depends_on", "native_depends_on"})
 REMOVED_CONTEXT_ATTRIBUTES = frozenset(
@@ -309,6 +312,24 @@ def _resolved_import_from(
     return ".".join(base)
 
 
+def _boundary_violations_ast(
+    tree: ast.AST,
+    *,
+    module: str,
+    exceptions: frozenset[BoundaryException] = frozenset(),
+    is_package: bool = False,
+) -> tuple[BoundaryViolation, ...]:
+    visitor = _BoundaryVisitor(module, is_package=is_package)
+    visitor.visit(tree)
+    allowed = {(item.module, item.function, item.attribute) for item in exceptions}
+    return tuple(
+        item
+        for item in visitor.violations
+        if item.kind == "literal-getattr"
+        or (item.module, item.function, item.attribute) not in allowed
+    )
+
+
 def boundary_violations(
     source: str,
     *,
@@ -316,14 +337,11 @@ def boundary_violations(
     exceptions: frozenset[BoundaryException] = frozenset(),
     is_package: bool = False,
 ) -> tuple[BoundaryViolation, ...]:
-    visitor = _BoundaryVisitor(module, is_package=is_package)
-    visitor.visit(ast.parse(source))
-    allowed = {(item.module, item.function, item.attribute) for item in exceptions}
-    return tuple(
-        item
-        for item in visitor.violations
-        if item.kind == "literal-getattr"
-        or (item.module, item.function, item.attribute) not in allowed
+    return _boundary_violations_ast(
+        ast.parse(source),
+        module=module,
+        exceptions=exceptions,
+        is_package=is_package,
     )
 
 
@@ -362,16 +380,19 @@ def _module_name(package_root: Path, path: Path) -> str:
     return ".".join(parts)
 
 
-def _production_observations(repo_root: Path) -> tuple[BoundaryViolation, ...]:
-    package_root = repo_root / "orchestune"
+@functools.cache
+def _cached_production_observations(
+    resolved_repo_root: Path,
+) -> tuple[BoundaryViolation, ...]:
+    package_root = resolved_repo_root / "orchestune"
     paths = [package_root / "task_metadata.py"]
     paths.extend(sorted((package_root / "dependencies").rglob("*.py")))
     paths.extend(sorted((package_root / "dispatch").rglob("*.py")))
     observations = [
         violation
         for path in paths
-        for violation in boundary_violations(
-            path.read_text(encoding="utf-8"),
+        for violation in _boundary_violations_ast(
+            _source_ast(path),
             module=_module_name(package_root, path),
             is_package=path.name == "__init__.py",
         )
@@ -379,6 +400,14 @@ def _production_observations(repo_root: Path) -> tuple[BoundaryViolation, ...]:
     return tuple(
         sorted(observations, key=lambda item: (item.module, item.line, item.kind))
     )
+
+
+def _production_observations(repo_root: Path) -> tuple[BoundaryViolation, ...]:
+    return _cached_production_observations(Path(repo_root).resolve())
+
+
+def _clear_dependency_boundary_observations() -> None:
+    _cached_production_observations.cache_clear()
 
 
 def production_boundary_violations(repo_root: Path) -> tuple[BoundaryViolation, ...]:

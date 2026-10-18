@@ -5,9 +5,13 @@ from __future__ import annotations
 import ast
 import functools
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
-PACKAGE_ROOT = Path(__file__).parents[1] / "orchestune"
+from architecture_source_support import _source_ast, _source_text
+
+PACKAGE_ROOT = (Path(__file__).parents[1] / "orchestune").resolve()
 PACKAGE_NAME = "orchestune"
 _SUBPROCESS_CALLS = frozenset({"run", "call", "Popen", "check_call", "check_output"})
 _COMMANDS = frozenset({"git", "gh"})
@@ -32,7 +36,34 @@ def _package_modules() -> dict[str, Path]:
     package tree doesn't change mid test-run, so repeated calls (12+ across
     this module's tests) can safely share one filesystem walk.
     """
-    return {_module_name(path): path for path in PACKAGE_ROOT.rglob("*.py")}
+    return {
+        _module_name(path): path.resolve()
+        for path in sorted(PACKAGE_ROOT.rglob("*.py"))
+    }
+
+
+@functools.cache
+def _package_sources() -> Mapping[str, str]:
+    """Read-only view of {module_name: source_text} for every module under `orchestune/`."""
+    return MappingProxyType(
+        {module: _source_text(path) for module, path in _package_modules().items()}
+    )
+
+
+@functools.cache
+def _package_asts() -> Mapping[str, ast.Module]:
+    """Read-only view of {module_name: ast.Module} for every module under `orchestune/`."""
+    return MappingProxyType(
+        {module: _source_ast(path) for module, path in _package_modules().items()}
+    )
+
+
+def _clear_package_caches() -> None:
+    """Clear package enumeration and derived graph caches."""
+    _package_modules.cache_clear()
+    _package_sources.cache_clear()
+    _package_asts.cache_clear()
+    _import_graph.cache_clear()
 
 
 def _relative_import_name(
@@ -95,13 +126,14 @@ def _internal_imports(
 @functools.cache
 def _import_graph() -> dict[str, set[str]]:
     modules = _package_modules()
+    asts = _package_asts()
     known_modules = set(modules)
     return {
         module.removeprefix(f"{PACKAGE_NAME}."): {
             dependency.removeprefix(f"{PACKAGE_NAME}.")
             for dependency in _internal_imports(
                 module,
-                ast.parse(path.read_text(encoding="utf-8")),
+                asts[module],
                 known_modules,
                 is_package=path.name == "__init__.py",
             )
@@ -396,8 +428,7 @@ def _subprocess_command_modules() -> dict[str, set[str]]:
     追跡しません。
     """
     command_modules: dict[str, set[str]] = defaultdict(set)
-    for module, path in _package_modules().items():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    for module, tree in _package_asts().items():
         subprocess_names = {"subprocess"}
         call_names: set[str] = set()
         for node in ast.walk(tree):
@@ -460,10 +491,12 @@ def _cross_package_private_imports_in_tree(
 
 def _cross_package_private_imports() -> set[tuple[str, str, str]]:
     found: set[tuple[str, str, str]] = set()
-    for module, path in _package_modules().items():
+    modules = _package_modules()
+    asts = _package_asts()
+    for module, path in modules.items():
         found |= _cross_package_private_imports_in_tree(
             module,
-            ast.parse(path.read_text(encoding="utf-8")),
+            asts[module],
             is_package=path.name == "__init__.py",
         )
     return found

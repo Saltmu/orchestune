@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import copy
+import functools
 import inspect
 import re
 import tomllib
@@ -16,6 +18,7 @@ from active_worktree_architecture_support import (
 )
 from architecture_layer_table_support import layer_table_tokens, parse_layer_table
 from architecture_layers_support import EXPECTED_LAYERS
+from architecture_source_support import _source_ast, _source_text
 from architecture_test_support import (
     _SUBPROCESS_CALLS,
     PACKAGE_NAME,
@@ -25,6 +28,7 @@ from architecture_test_support import (
     _cycle_members,
     _import_graph,
     _layer_table_universe,
+    _package_asts,
     _package_cycle_edges,
     _package_import_graph,
     _package_modules,
@@ -37,10 +41,10 @@ from dependency_boundary_test_support import (
     unused_production_boundary_exceptions,
 )
 
-TESTS_ROOT = Path(__file__).parent
-REPO_ROOT = Path(__file__).parents[1]
-SKILLS_ROOT = REPO_ROOT / "skills"
-DOCS_ROOT = Path(__file__).parents[1] / "docs"
+TESTS_ROOT = (Path(__file__).parent).resolve()
+REPO_ROOT = (Path(__file__).parents[1]).resolve()
+SKILLS_ROOT = (REPO_ROOT / "skills").resolve()
+DOCS_ROOT = (REPO_ROOT / "docs").resolve()
 DOC_LANGUAGES = ("en", "ja")
 # `local-ci-developer` documents this repo's own dev workflow (TDD/local CI
 # rules) and is deliberately never linked into other projects by
@@ -174,11 +178,12 @@ def test_l4_modules_do_not_gain_new_dependents() -> None:
 
 def test_internal_imports_are_not_hidden_inside_functions() -> None:
     hidden_imports: list[str] = []
-    for module, path in _package_modules().items():
+    modules = _package_modules()
+    for module, tree in _package_asts().items():
         short_name = module.removeprefix(f"{PACKAGE_NAME}.")
         if short_name == "cli":
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        is_package = modules[module].name == "__init__.py"
         for function in (
             node
             for node in ast.walk(tree)
@@ -194,7 +199,7 @@ def test_internal_imports_are_not_hidden_inside_functions() -> None:
                     ]
                 elif isinstance(node, ast.ImportFrom):
                     imported = _relative_import_name(
-                        module, node, is_package=path.name == "__init__.py"
+                        module, node, is_package=is_package
                     )
                     names = (
                         [imported]
@@ -215,9 +220,8 @@ def test_internal_imports_are_not_hidden_inside_functions() -> None:
 
 
 def _architecture_doc(lang: str) -> list[str]:
-    return (
-        (DOCS_ROOT / lang / "architecture.md").read_text(encoding="utf-8").splitlines()
-    )
+    text: str = _source_text(DOCS_ROOT / lang / "architecture.md")
+    return list(text.splitlines())
 
 
 def _determinism_section(lang: str) -> list[str]:
@@ -380,11 +384,10 @@ def _pure_contract_violations(contract_modules: set[str]) -> list[str]:
         "orchestune.forge",
     }
     violations: list[str] = []
-    modules = _package_modules()
+    asts = _package_asts()
     import_graph = _import_graph()
     for module_name in contract_modules:
-        path = modules[f"{PACKAGE_NAME}.{module_name}"]
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = asts[f"{PACKAGE_NAME}.{module_name}"]
         imports = {
             alias.name
             for node in ast.walk(tree)
@@ -458,8 +461,17 @@ def test_documented_subprocess_partition_matches_the_enforced_one() -> None:
         assert _documented_subprocess_partition(lang) == expected, lang
 
 
+@functools.cache
+def _cached_pyproject() -> dict[str, Any]:
+    return tomllib.loads(_source_text(REPO_ROOT / "pyproject.toml"))
+
+
 def _pyproject() -> dict[str, Any]:
-    return tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return copy.deepcopy(_cached_pyproject())
+
+
+def _clear_architecture_test_caches() -> None:
+    _cached_pyproject.cache_clear()
 
 
 def _hatch_skill_force_includes(target: str) -> dict[str, str]:
@@ -574,7 +586,7 @@ def test_architecture_docs_mention_dispatch_cycle_report() -> None:
     for lang in DOC_LANGUAGES:
         # #1316: サイクルレポートの仕様はarchitecture.mdから詳細文書へ移した。
         path = DOCS_ROOT / lang / "architecture" / "dispatch-cycle.md"
-        doc_text = path.read_text(encoding="utf-8")
+        doc_text = _source_text(path)
         assert header in doc_text, f"{lang}のdispatch-cycle.mdに'{header}'がありません"
 
 
@@ -607,11 +619,11 @@ def test_architecture_docs_document_the_determinism_principle() -> None:
         )
 
 
-def _module_int_constants(source: str) -> dict[str, int]:
+def _module_int_constants_ast(tree: ast.AST) -> dict[str, int]:
     """モジュール直下の`NAME = <int>`を集める（既定値の定数参照の解決用）。"""
     return {
         node.targets[0].id: node.value.value
-        for node in ast.parse(source).body
+        for node in getattr(tree, "body", ())
         if isinstance(node, ast.Assign)
         and len(node.targets) == 1
         and isinstance(node.targets[0], ast.Name)
@@ -620,8 +632,12 @@ def _module_int_constants(source: str) -> dict[str, int]:
     }
 
 
-def _bounded_recovery_limits(
-    config_source: str, constants: dict[str, int] | None = None
+def _module_int_constants(source: str) -> dict[str, int]:
+    return _module_int_constants_ast(ast.parse(source))
+
+
+def _bounded_recovery_limits_ast(
+    tree: ast.AST, constants: dict[str, int] | None = None
 ) -> set[str]:
     """有限なリトライ／回収設定だけを`DispatcherConfig`から抽出する。
 
@@ -638,10 +654,9 @@ def _bounded_recovery_limits(
             return (constants or {}).get(value.id)
         return None
 
-    tree = ast.parse(config_source)
     config = next(
         node
-        for node in tree.body
+        for node in getattr(tree, "body", ())
         if isinstance(node, ast.ClassDef) and node.name == "DispatcherConfig"
     )
     return {
@@ -655,9 +670,14 @@ def _bounded_recovery_limits(
     }
 
 
-def _source_has_terminal_marker(source: str, marker: str) -> bool:
+def _bounded_recovery_limits(
+    config_source: str, constants: dict[str, int] | None = None
+) -> set[str]:
+    return _bounded_recovery_limits_ast(ast.parse(config_source), constants)
+
+
+def _source_has_terminal_marker_ast(tree: ast.AST, marker: str) -> bool:
     """AST上で終端動作を表す関数名または文字列リテラルを検出する。"""
-    tree = ast.parse(source)
     return any(
         (isinstance(node, ast.Name) and node.id == marker)
         or (isinstance(node, ast.Constant) and node.value == marker)
@@ -665,21 +685,19 @@ def _source_has_terminal_marker(source: str, marker: str) -> bool:
     )
 
 
+def _source_has_terminal_marker(source: str, marker: str) -> bool:
+    return _source_has_terminal_marker_ast(ast.parse(source), marker)
+
+
 def test_bounded_recovery_limit_registry_covers_every_finite_config_setting() -> None:
     """#566: 新たな有限リトライ／回収上限には終端動作を必ず宣言させる。"""
-    config_source = (PACKAGE_ROOT / "dispatch" / "config.py").read_text(
-        encoding="utf-8"
+    config_tree = _source_ast(PACKAGE_ROOT / "dispatch" / "config.py")
+    retry_tree = _source_ast(PACKAGE_ROOT / "dispatch" / "retry_policy.py")
+    policy_tree = _source_ast(PACKAGE_ROOT / "integrator" / "timeout_policy.py")
+    constants = _module_int_constants_ast(retry_tree) | _module_int_constants_ast(
+        policy_tree
     )
-    retry_source = (PACKAGE_ROOT / "dispatch" / "retry_policy.py").read_text(
-        encoding="utf-8"
-    )
-    policy_source = (PACKAGE_ROOT / "integrator" / "timeout_policy.py").read_text(
-        encoding="utf-8"
-    )
-    constants = _module_int_constants(retry_source) | _module_int_constants(
-        policy_source
-    )
-    assert _bounded_recovery_limits(config_source, constants) == set(
+    assert _bounded_recovery_limits_ast(config_tree, constants) == set(
         BOUNDED_RECOVERY_TERMINALS
     )
 
@@ -687,9 +705,9 @@ def test_bounded_recovery_limit_registry_covers_every_finite_config_setting() ->
 def test_bounded_recovery_limit_registry_points_at_terminal_behaviour() -> None:
     """#566: 登録済み上限が収束または人間エスカレーションへ実際に到達する。"""
     for limit, (module, marker) in BOUNDED_RECOVERY_TERMINALS.items():
-        source = (PACKAGE_ROOT / module).read_text(encoding="utf-8")
-        assert _source_has_terminal_marker(
-            source, marker
+        tree = _source_ast(PACKAGE_ROOT / module)
+        assert _source_has_terminal_marker_ast(
+            tree, marker
         ), f"{limit} has no terminal behaviour marker {marker!r} in {module}"
 
 
@@ -782,9 +800,8 @@ def _unencoded_text_subprocess_calls() -> list[str]:
     伴わなければならない。
     """
     violations: list[str] = []
-    for module, path in _package_modules().items():
+    for module, tree in _package_asts().items():
         short_name = module.removeprefix(f"{PACKAGE_NAME}.")
-        tree = ast.parse(path.read_text(encoding="utf-8"))
         dict_assignments = _collect_dict_assignments(tree)
 
         for node in ast.walk(tree):
@@ -809,9 +826,8 @@ def _unencoded_write_text_calls() -> list[str]:
     必ずencoding="utf-8"を明示しなければならない。
     """
     violations: list[str] = []
-    for module, path in _package_modules().items():
+    for module, tree in _package_asts().items():
         short_name = module.removeprefix(f"{PACKAGE_NAME}.")
-        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import ast
+import functools
 from dataclasses import dataclass
 from pathlib import Path
+
+from architecture_source_support import _source_ast
 
 SUBRECORDS = frozenset({"core", "launch", "claim", "completion"})
 SUBRECORD_CLASSES = frozenset(
@@ -639,15 +642,28 @@ def _match_exception(
     return False
 
 
+def _active_worktree_boundary_violations_ast(
+    tree: ast.AST,
+    *,
+    module: str,
+    exceptions: frozenset[ActiveWorktreeBoundaryException] = frozenset(),
+) -> tuple[ActiveWorktreeBoundaryViolation, ...]:
+    visitor = _ActiveWorktreeVisitor(module)
+    visitor.visit(tree)
+    return tuple(v for v in visitor.violations if not _match_exception(v, exceptions))
+
+
 def active_worktree_boundary_violations(
     source: str,
     *,
     module: str,
     exceptions: frozenset[ActiveWorktreeBoundaryException] = frozenset(),
 ) -> tuple[ActiveWorktreeBoundaryViolation, ...]:
-    visitor = _ActiveWorktreeVisitor(module)
-    visitor.visit(ast.parse(source))
-    return tuple(v for v in visitor.violations if not _match_exception(v, exceptions))
+    return _active_worktree_boundary_violations_ast(
+        ast.parse(source),
+        module=module,
+        exceptions=exceptions,
+    )
 
 
 def _module_name(package_root: Path, path: Path) -> str:
@@ -657,22 +673,33 @@ def _module_name(package_root: Path, path: Path) -> str:
     return ".".join(parts)
 
 
-def _production_observations(
-    repo_root: Path,
+@functools.cache
+def _cached_production_observations(
+    resolved_repo_root: Path,
 ) -> tuple[ActiveWorktreeBoundaryViolation, ...]:
-    package_root = repo_root / "orchestune"
+    package_root = resolved_repo_root / "orchestune"
     paths = sorted(package_root.rglob("*.py"))
     observations = [
         violation
         for path in paths
-        for violation in active_worktree_boundary_violations(
-            path.read_text(encoding="utf-8"),
+        for violation in _active_worktree_boundary_violations_ast(
+            _source_ast(path),
             module=_module_name(package_root, path),
         )
     ]
     return tuple(
         sorted(observations, key=lambda item: (item.module, item.line, item.kind))
     )
+
+
+def _production_observations(
+    repo_root: Path,
+) -> tuple[ActiveWorktreeBoundaryViolation, ...]:
+    return _cached_production_observations(Path(repo_root).resolve())
+
+
+def _clear_active_worktree_observations() -> None:
+    _cached_production_observations.cache_clear()
 
 
 def production_active_worktree_violations(
