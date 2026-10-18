@@ -10,6 +10,7 @@ outside it. Python children started with ``-I`` or ``-S`` also skip the
 
 from __future__ import annotations
 
+import functools
 import http.client
 import inspect
 import ntpath
@@ -26,6 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
+
+import pytest
 
 _LOG_ENV = "ORCHESTUNE_TEST_GITHUB_GUARD_LOG"
 _PROCESS_ENV = "ORCHESTUNE_TEST_GITHUB_GUARD_PROCESS"
@@ -262,6 +265,7 @@ def _child_environment(explicit: Mapping[str, Any] | None) -> dict[str, str]:
     return env
 
 
+@functools.cache
 def _make_popen_guard(
     original: type[subprocess.Popen[Any]],
 ) -> type[subprocess.Popen[Any]]:
@@ -426,45 +430,94 @@ def _write_sitecustomize(python_dir: Path) -> None:
     )
 
 
+@dataclass(frozen=True)
+class GitHubIsolationWorkspace:
+    """Session-scoped directories and shims for GitHub test isolation."""
+
+    project_root: Path
+    scratch: Path
+    bin_dir: Path
+    python_dir: Path
+    config_dir: Path
+
+    @classmethod
+    def create(cls, project_root: Path) -> GitHubIsolationWorkspace:
+        scratch = (
+            project_root
+            / ".orchestune"
+            / "tmp"
+            / f"github-isolation-{os.getpid()}-{uuid.uuid4().hex}"
+        )
+        bin_dir = scratch / "bin"
+        python_dir = scratch / "python"
+        config_dir = scratch / "gh-config"
+        try:
+            scratch.mkdir(parents=True)
+            config_dir.mkdir()
+            _write_cli_shim(bin_dir)
+            _write_sitecustomize(python_dir)
+        except BaseException:
+            shutil.rmtree(scratch, ignore_errors=True)
+            raise
+        return cls(
+            project_root=project_root,
+            scratch=scratch,
+            bin_dir=bin_dir,
+            python_dir=python_dir,
+            config_dir=config_dir,
+        )
+
+    def reset_config_dir(self) -> None:
+        """Enumerate and delete files and subdirectories in config_dir."""
+        for entry in list(self.config_dir.iterdir()):
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+
+    def cleanup_log(self, log_path: Path) -> None:
+        log_path.unlink(missing_ok=True)
+
+    def destroy(self) -> None:
+        shutil.rmtree(self.scratch, ignore_errors=True)
+
+
 @contextmanager
 def configure_test_isolation(
     setenv: Callable[[str, str], None],
     setattr: Callable[[Any, str, Any], None],
     project_root: Path,
+    workspace: GitHubIsolationWorkspace | None = None,
 ) -> Iterator[GitHubAccessMonitor]:
     """Install parent and child guards and monitor blocked calls for one test."""
-    scratch = (
-        project_root
-        / ".orchestune"
-        / "tmp"
-        / (f"github-isolation-{os.getpid()}-{uuid.uuid4().hex}")
-    )
-    bin_dir = scratch / "bin"
-    python_dir = scratch / "python"
-    scratch.mkdir(parents=True)
-    config_dir = scratch / "gh-config"
-    config_dir.mkdir()
-    _write_cli_shim(bin_dir)
-    _write_sitecustomize(python_dir)
-    log_path = scratch / "blocked.log"
-    log_path.touch()
+    owns_workspace = False
+    if workspace is None:
+        workspace = GitHubIsolationWorkspace.create(project_root)
+        owns_workspace = True
+
+    workspace.reset_config_dir()
+    log_path = workspace.scratch / f"blocked-{uuid.uuid4().hex}.log"
     for name, value in (
         (_LOG_ENV, str(log_path)),
         (_PROCESS_ENV, "parent"),
-        (_BIN_ENV, str(bin_dir)),
-        (_PYTHON_ENV, str(python_dir)),
+        (_BIN_ENV, str(workspace.bin_dir)),
+        (_PYTHON_ENV, str(workspace.python_dir)),
         (_PROJECT_ENV, str(project_root)),
-        ("GH_CONFIG_DIR", str(config_dir)),
+        ("GH_CONFIG_DIR", str(workspace.config_dir)),
     ):
         setenv(name, value)
 
     current_path = os.environ.get("PATH", "")
-    setenv("PATH", os.pathsep.join(filter(None, (str(bin_dir), current_path))))
+    setenv(
+        "PATH", os.pathsep.join(filter(None, (str(workspace.bin_dir), current_path)))
+    )
     current_pythonpath = os.environ.get("PYTHONPATH", "")
     setenv(
         "PYTHONPATH",
         os.pathsep.join(
-            filter(None, (str(python_dir), str(project_root), current_pythonpath))
+            filter(
+                None, (str(workspace.python_dir), str(project_root), current_pythonpath)
+            )
         ),
     )
     _install_guards(setattr)
@@ -476,4 +529,21 @@ def configure_test_isolation(
         try:
             monitor.assert_expected()
         finally:
-            shutil.rmtree(scratch, ignore_errors=True)
+            try:
+                workspace.cleanup_log(log_path)
+                workspace.reset_config_dir()
+            finally:
+                if owns_workspace:
+                    workspace.destroy()
+
+
+@pytest.fixture(scope="session")
+def _github_isolation_workspace(
+    request: pytest.FixtureRequest,
+) -> Iterator[GitHubIsolationWorkspace]:
+    """Shared GitHub isolation directories and CLI shims for the pytest worker session."""
+    workspace = GitHubIsolationWorkspace.create(Path(request.config.rootpath))
+    try:
+        yield workspace
+    finally:
+        workspace.destroy()
