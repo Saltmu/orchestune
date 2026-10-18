@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from orchestune.forge import Forge
 from orchestune.integrator.proofs import TaskIntegrationProof
+from orchestune.models import normalize_newlines
 from orchestune.pr_link_notice import NoticeDelivery, ensure_pr_merged_notice
 from orchestune.task_branch_resolution import ResolutionSource, is_commit_oid
 
@@ -106,6 +110,51 @@ def render_integration_receipt(
     )
 
 
+def _matching_payload(
+    comment: dict[str, Any],
+    trusted_author: str,
+    issue_number: int,
+    subtask_id: str,
+    base_branch: str,
+) -> dict[str, Any] | None:
+    payload = _parse_receipt(comment, trusted_author)
+    if payload is None or (
+        (
+            not isinstance(payload.get("issue_number"), int)
+            or isinstance(payload.get("issue_number"), bool)
+        )
+        or payload.get("issue_number") != issue_number
+        or payload.get("subtask_id") != subtask_id
+        or payload.get("base_branch") != base_branch.removeprefix("origin/")
+    ):
+        return None
+    return payload
+
+
+def _proof_from_payload(payload: dict[str, Any]) -> TaskIntegrationProof | None:
+    source_sha = payload.get("source_sha")
+    stored_branch = payload.get("branch_name")
+    source_value = payload.get("source", ResolutionSource.CANONICAL.value)
+    if (
+        not is_commit_oid(source_sha)
+        or not isinstance(stored_branch, str)
+        or not stored_branch
+        or not isinstance(source_value, str)
+    ):
+        return None
+    try:
+        source = ResolutionSource(source_value)
+    except ValueError:
+        return None
+    return TaskIntegrationProof(
+        issue_number=payload["issue_number"],
+        subtask_id=payload["subtask_id"],
+        branch_name=stored_branch,
+        source_sha=source_sha,
+        source=source,
+    )
+
+
 def _parse_matching_proofs(
     comments: list[dict[str, Any]],
     trusted_author: str,
@@ -113,37 +162,15 @@ def _parse_matching_proofs(
     subtask_id: str,
     base_branch: str,
 ) -> list[tuple[TaskIntegrationProof, dict[str, Any]]]:
-    clean_base = base_branch.removeprefix("origin/")
-    results: list[tuple[TaskIntegrationProof, dict[str, Any]]] = []
+    results = []
     for comment in comments:
-        payload = _parse_receipt(comment, trusted_author)
-        if not isinstance(payload, dict):
-            continue
-        if (
-            payload.get("issue_number") != issue_number
-            or payload.get("subtask_id") != subtask_id
-            or payload.get("base_branch") != clean_base
-        ):
-            continue
-        source_sha = payload.get("source_sha")
-        if is_commit_oid(source_sha):
-            stored_branch = payload.get("branch_name")
-            if not isinstance(stored_branch, str) or not stored_branch:
-                continue
-            try:
-                source = ResolutionSource(
-                    payload.get("source", ResolutionSource.CANONICAL.value)
-                )
-            except ValueError:
-                continue
-            proof = TaskIntegrationProof(
-                issue_number=issue_number,
-                subtask_id=subtask_id,
-                branch_name=stored_branch,
-                source_sha=source_sha,
-                source=source,
-            )
-            results.append((proof, payload))
+        payload = _matching_payload(
+            comment, trusted_author, issue_number, subtask_id, base_branch
+        )
+        if payload is not None:
+            proof = _proof_from_payload(payload)
+            if proof is not None:
+                results.append((proof, payload))
     return results
 
 
@@ -165,48 +192,167 @@ def find_integration_receipt(
     return matching[0][0] if matching else None
 
 
+class ReceiptLookupStatus(StrEnum):
+    FOUND = "FOUND"
+    ABSENT = "ABSENT"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+@dataclass(frozen=True)
+class ReceiptLookupResult:
+    """Distinguish missing evidence from evidence that cannot safely be used."""
+
+    status: ReceiptLookupStatus
+    receipt: IntegrationNoticeTarget | None = None
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class _ReceiptCandidate:
+    payload: dict[str, Any]
+    comment: dict[str, Any]
+    target: IntegrationNoticeTarget
+
+
+def _unavailable(reason: str) -> ReceiptLookupResult:
+    return ReceiptLookupResult(ReceiptLookupStatus.UNAVAILABLE, reason=reason)
+
+
+def _notice_fields_valid(payload: dict[str, Any], base_branch: str) -> bool:
+    number = payload.get("integration_pr_number")
+    if number is not None and (
+        not isinstance(number, int) or isinstance(number, bool) or number <= 0
+    ):
+        return False
+    if "notice_base_branch" in payload:
+        base = payload["notice_base_branch"]
+        if (
+            not isinstance(base, str)
+            or not base
+            or base != base_branch.removeprefix("origin/")
+        ):
+            return False
+    return True
+
+
+def _rest_receipt_comment(comment: dict[str, Any]) -> dict[str, Any]:
+    user = comment.get("user")
+    body = comment.get("body")
+    return {
+        "author": user.get("login") if isinstance(user, dict) else None,
+        "body": normalize_newlines(body) if isinstance(body, str) else body,
+    }
+
+
+def lookup_integration_receipt(
+    forge: Forge,
+    issue_number: int,
+    subtask_id: str,
+    base_branch: str,
+) -> ReceiptLookupResult:
+    """Read all durable receipts once and select a complete proof/notice pair."""
+    try:
+        author = forge.get_authenticated_user()
+        if not isinstance(author, str) or not author:
+            return _unavailable("receipt_lookup_failed")
+        comments = forge.list_all_issue_comments(issue_number)
+    except Exception:
+        return _unavailable("receipt_lookup_failed")
+    candidates = []
+    for comment in comments:
+        payload = _matching_payload(
+            _rest_receipt_comment(comment),
+            author,
+            issue_number,
+            subtask_id,
+            base_branch,
+        )
+        if payload is None:
+            continue
+        proof = _proof_from_payload(payload)
+        if proof is None or not _notice_fields_valid(payload, base_branch):
+            return _unavailable("receipt_invalid")
+        target = IntegrationNoticeTarget(
+            proof=proof,
+            has_integration_pr_key="integration_pr_number" in payload,
+            integration_pr_number=payload.get("integration_pr_number"),
+            notice_base_branch=payload.get("notice_base_branch"),
+        )
+        candidates.append(_ReceiptCandidate(payload, comment, target))
+    if not candidates:
+        return ReceiptLookupResult(ReceiptLookupStatus.ABSENT)
+    keyed = [c for c in candidates if c.target.has_integration_pr_key]
+    return _select_receipt(keyed or candidates)
+
+
+_RECEIPT_TIMESTAMP = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])"
+)
+
+
+def _comment_time(comment: dict[str, Any]) -> datetime | None:
+    value = comment.get("created_at")
+    if not isinstance(value, str) or _RECEIPT_TIMESTAMP.fullmatch(value) is None:
+        return None
+    try:
+        return datetime.fromisoformat(value).astimezone(UTC)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _comment_id(comment: dict[str, Any]) -> int | None:
+    value = comment.get("id")
+    return (
+        value
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0
+        else None
+    )
+
+
+def _duplicate_ids_conflict(candidates: list[_ReceiptCandidate]) -> bool:
+    seen: dict[int, _ReceiptCandidate] = {}
+    for candidate in candidates:
+        comment_id = _comment_id(candidate.comment)
+        if comment_id is None:
+            continue
+        previous = seen.get(comment_id)
+        if previous is not None and (
+            previous.payload != candidate.payload
+            or _comment_time(previous.comment) != _comment_time(candidate.comment)
+        ):
+            return True
+        seen[comment_id] = candidate
+    return False
+
+
+def _select_receipt(candidates: list[_ReceiptCandidate]) -> ReceiptLookupResult:
+    if _duplicate_ids_conflict(candidates):
+        return _unavailable("receipt_order_unavailable")
+    first = candidates[0]
+    if all(c.payload == first.payload for c in candidates):
+        return ReceiptLookupResult(ReceiptLookupStatus.FOUND, first.target)
+    ordered = []
+    for candidate in candidates:
+        created_at = _comment_time(candidate.comment)
+        comment_id = _comment_id(candidate.comment)
+        if created_at is None or comment_id is None:
+            return _unavailable("receipt_order_unavailable")
+        ordered.append(((created_at, comment_id), candidate))
+    latest = max(ordered, key=lambda entry: entry[0])[1]
+    return ReceiptLookupResult(ReceiptLookupStatus.FOUND, latest.target)
+
+
 def find_latest_integration_receipt(
     forge: Forge,
     issue_number: int,
     subtask_id: str,
     base_branch: str,
 ) -> IntegrationNoticeTarget | None:
-    """Return the newest matching proof receipt, preferring one with integration_pr_number."""
-    try:
-        trusted_author = forge.get_authenticated_user()
-        comments = forge.list_comments(issue_number)
-    except Exception:
-        return None
-
-    matching_proofs = _parse_matching_proofs(
-        comments, trusted_author, issue_number, subtask_id, base_branch
-    )
-    if not matching_proofs:
-        return None
-
-    # integration_pr_number キーを持つ receipt を優先
-    has_pr_key_proofs = [
-        (proof, payload)
-        for proof, payload in matching_proofs
-        if "integration_pr_number" in payload
-    ]
-    if has_pr_key_proofs:
-        proof, payload = has_pr_key_proofs[-1]
-        return IntegrationNoticeTarget(
-            proof=proof,
-            has_integration_pr_key=True,
-            integration_pr_number=payload.get("integration_pr_number"),
-            notice_base_branch=payload.get("notice_base_branch"),
-        )
-
-    # キーを持つ receipt が1件もない場合だけ旧形式の最新を採用
-    proof, payload = matching_proofs[-1]
-    return IntegrationNoticeTarget(
-        proof=proof,
-        has_integration_pr_key=False,
-        integration_pr_number=None,
-        notice_base_branch=None,
-    )
+    """Compatibility wrapper; retry callers must retain the three-state result."""
+    return lookup_integration_receipt(
+        forge, issue_number, subtask_id, base_branch
+    ).receipt
 
 
 def _matches_receipt(
@@ -258,11 +404,18 @@ def resolve_retry_close_delivery(
     issue_number: int,
     subtask_id: str,
     base_branch: str,
+    *,
+    lookup: ReceiptLookupResult | None = None,
 ) -> tuple[NoticeDelivery, str | None]:
     """RetryChildIssueCloseStep用の通知再試行とクローズ判定。"""
-    target = find_latest_integration_receipt(
-        forge, issue_number, subtask_id, base_branch
+    result = (
+        lookup
+        if lookup is not None
+        else lookup_integration_receipt(forge, issue_number, subtask_id, base_branch)
     )
+    if result.status is ReceiptLookupStatus.UNAVAILABLE:
+        return NoticeDelivery.DEFERRED_READ, None
+    target = result.receipt
     if (
         target is not None
         and target.has_integration_pr_key
@@ -282,6 +435,9 @@ def resolve_retry_close_delivery(
 __all__ = [
     "IntegrationNoticeTarget",
     "RECEIPT_MARKER",
+    "ReceiptLookupResult",
+    "ReceiptLookupStatus",
+    "lookup_integration_receipt",
     "ensure_integration_receipt",
     "find_integration_receipt",
     "find_latest_integration_receipt",

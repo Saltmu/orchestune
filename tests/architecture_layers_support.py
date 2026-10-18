@@ -45,6 +45,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.postcycle",
             "dispatch.report",
             "integrator",
+            "integrator.child_issue_close",
             "integrator.coordinator",
             "integrator.parent_completion",
             "integrator.review_gate",

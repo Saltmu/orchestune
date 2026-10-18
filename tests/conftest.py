@@ -1012,6 +1012,10 @@ def integrator_env(
         "orchestune.integrator.steps.delete_remote_branch_if_matches",
         lambda *args: ConditionalBranchDeletionResult.DELETED,
     )
+    monkeypatch.setattr(
+        "orchestune.integrator.child_issue_close.delete_remote_branch_if_matches",
+        lambda *args: ConditionalBranchDeletionResult.DELETED,
+    )
     with patch("orchestune.integrator.subprocess.run") as run:
         fake_forge.list_issues_by_label.side_effect = lambda label, *a, **k: []
         fake_forge.list_open_prs.return_value = []
