@@ -321,6 +321,11 @@ class PushTempBranchStep(IntegrationComponent):
             return {"status": ctx.status}
         if ctx.reuse_existing_temp_branch:
             return {"status": IntegrationStatus.SUCCESS}
+        # Reject Layer 1 before publishing a PR without resumable review state.
+        decision = _decide_child_review_gate(ctx)
+        if not decision.passed:
+            AutoMergeChildIntegrationStep().handle_review_gate_block(ctx, decision)
+            return {"status": IntegrationStatus.REVIEW_GATE_BLOCKED}
         if ctx.attempt_identity is None:
             return {
                 "status": IntegrationStatus.FAILED_TO_PUSH_TEMP_BRANCH,

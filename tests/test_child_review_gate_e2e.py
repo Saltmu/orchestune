@@ -183,6 +183,7 @@ def integrate(
     *,
     merge_sha: str = HEAD,
     gate: str = "required",
+    semantic_mode: str = "off",
     parent_comments: list[str] | None = None,
     parent_labels: tuple[str, ...] = (),
 ) -> IntegrationReport:
@@ -209,7 +210,7 @@ def integrate(
         integration_run_id="e2e",
         child_review_gate=gate,
         # These scenarios exercise Layer 1; Layer 2 has its own gate tests.
-        semantic_review_mode="off",
+        semantic_review_mode=semantic_mode,
     )
     return Integrator(config).run()
 
@@ -242,6 +243,29 @@ def reviewed_pr(tmp_path: Path) -> ChildPr:
 
 
 class TestPassingEvidenceUpdatesParent:
+    def test_required_layer1_rejection_does_not_publish_and_can_retry(
+        self, tmp_path, monkeypatch, reviewed_pr, integrator_env, fake_forge
+    ):
+        rejected = integrate(integrator_env, fake_forge, [], semantic_mode="required")
+        assert rejected["status"] == IntegrationStatus.REVIEW_GATE_BLOCKED
+        integrator_env.create_pull_request.assert_not_called()
+        assert not integrator_env.calls_with("push")
+
+        result, posted = complete_reviewed(
+            tmp_path, monkeypatch, reviewed_pr, local_head=HEAD
+        )
+        assert result.success, result.failure
+        retried = integrate(
+            integrator_env, fake_forge, posted, semantic_mode="required"
+        )
+        assert retried["status"] == IntegrationStatus.SEMANTIC_REVIEW_PENDING
+        integrator_env.create_pull_request.assert_called_once()
+        assert any(
+            "orchestune:semantic-review-state:v1" in call.args[1]
+            for call in integrator_env.add_comment.call_args_list
+        )
+        assert not parent_updated(integrator_env)
+
     def test_complete_pass_evidence_lets_integrator_update_parent(
         self, tmp_path, monkeypatch, reviewed_pr, integrator_env, fake_forge
     ):
