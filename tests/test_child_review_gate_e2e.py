@@ -208,6 +208,8 @@ def integrate(
         parent_issue_number=PARENT,
         integration_run_id="e2e",
         child_review_gate=gate,
+        # These scenarios exercise Layer 1; Layer 2 has its own gate tests.
+        semantic_review_mode="off",
     )
     return Integrator(config).run()
 

@@ -18,9 +18,11 @@ from orchestune.integrator.attempt import (
     check_fast_forward_identity,
     checkout_verified_attempt_head,
     find_open_attempts,
+    prepare_attempt_context,
     publish_attempt_branch,
     publish_parent_under_claim,
     select_attempt_children,
+    start_required_review,
     validate_finalization_context,
 )
 from orchestune.integrator.pr import list_open_attempt_prs
@@ -170,6 +172,31 @@ def test_find_open_attempts_marks_trusted_corrupt_latest_state_fail_closed():
     assert attempt.state_error is not None
 
 
+def test_find_open_attempts_does_not_trust_human_collaborator_state():
+    state = _state(CHILD_A)
+    forge = MagicMock(spec=Forge)
+    forge.get_authenticated_user.return_value = "orchestune"
+    forge.list_notice_trusted_authors.return_value = frozenset({"alice"})
+    forge.list_open_prs.return_value = [
+        PrRecord(
+            7,
+            _identity(CHILD_A).temp_branch,
+            (),
+            base_ref="parent/issue-100",
+            is_cross_repository=False,
+            head_sha=HEAD,
+        )
+    ]
+    forge.list_comments.return_value = [
+        {"body": format_semantic_review_state_marker(state), "author": "alice"}
+    ]
+
+    attempt = find_open_attempts(forge, 100)[0]
+
+    assert attempt.state is None
+    assert attempt.state_error == "trusted semantic review state is missing"
+
+
 def test_select_attempt_children_freezes_existing_set_and_defers_new_child():
     selection = select_attempt_children([_attempt(CHILD_A)], BASE, [CHILD_A, CHILD_B])
 
@@ -208,6 +235,45 @@ def test_select_attempt_children_fails_closed_for_corrupt_attempt():
     assert selection.fail_closed is True
 
 
+def test_changed_attempt_stays_blocked_until_runner_persists_invalidation():
+    changed = ChildSourceRef(1, "task-a", "f" * 40)
+    ctx = SimpleNamespace(
+        config=SimpleNamespace(apply=True, parent_issue_number=100),
+        forge=MagicMock(spec=Forge),
+        repository_root=Path("."),
+    )
+    with (
+        patch(
+            "orchestune.integrator.attempt.find_open_attempts",
+            return_value=[_attempt(CHILD_A)],
+        ),
+        patch(
+            "orchestune.integrator.attempt._discover_child_sources",
+            return_value=([changed], {}),
+        ),
+        patch("orchestune.integrator.attempt._base_sha", return_value=BASE),
+    ):
+        status, error = prepare_attempt_context(ctx, object())
+
+    assert status == "review_gate_blocked"
+    assert error == "existing attempt needs trusted invalidation"
+
+
+def test_pr_without_trusted_state_is_a_fail_closed_crash_window():
+    missing = OpenAttempt(
+        7,
+        _identity(CHILD_A).temp_branch,
+        "parent/issue-100",
+        HEAD,
+        state_error="trusted semantic review state is missing",
+    )
+
+    selection = select_attempt_children([missing], BASE, [CHILD_A])
+
+    assert selection.fail_closed is True
+    assert selection.reusable is None
+
+
 def test_build_attempt_identity_is_order_independent_and_deterministic():
     first = build_attempt_identity(100, BASE, [CHILD_B, CHILD_A])
     second = build_attempt_identity(100, BASE, [CHILD_A, CHILD_B])
@@ -225,6 +291,103 @@ def test_fast_forward_identity_accepts_multi_commit_descendant():
             cwd=Path("."),
             check=False,
         )
+
+
+def test_fast_path_lookup_failure_posts_not_started_state_when_review_is_managed():
+    identity = _identity(CHILD_A)
+    forge = MagicMock(spec=Forge)
+    ctx = SimpleNamespace(
+        attempt_identity=identity,
+        integration_pr_number=7,
+        repository_root=Path("."),
+        forge=forge,
+        config=SimpleNamespace(
+            force_integration_review=False,
+            coordinator=object(),
+        ),
+        semantic_review_state=None,
+    )
+    with patch("orchestune.integrator.attempt.run_git") as run:
+        run.return_value = GitResult(0, HEAD + "\n", "")
+        status = start_required_review(
+            ctx, lambda _forge, _issue: (_ for _ in ()).throw(OSError("offline"))
+        )
+
+    assert status == "semantic_review_pending"
+    assert ctx.semantic_review_state.phase is SemanticReviewPhase.NOT_STARTED
+    forge.add_comment.assert_called_once()
+
+
+@pytest.mark.parametrize("lookup_error", [False, True])
+def test_required_single_without_coordinator_persists_pending(lookup_error):
+    ctx = _finalization_context()
+    ctx.config.coordinator = None
+    ctx.semantic_review_state = None
+    outcome = MagicMock()
+    outcome.record = None
+    fetch = MagicMock(return_value=outcome)
+    if lookup_error:
+        fetch.side_effect = OSError("offline")
+    with (
+        patch(
+            "orchestune.integrator.attempt.run_git", return_value=GitResult(0, HEAD, "")
+        ),
+        patch(
+            "orchestune.integrator.attempt.check_fast_forward_identity",
+            return_value=False,
+        ),
+    ):
+        status = start_required_review(ctx, fetch)
+    assert status == "semantic_review_pending"
+    assert ctx.semantic_review_state.phase is SemanticReviewPhase.NOT_STARTED
+    ctx.forge.add_comment.assert_called_once()
+
+
+def test_required_single_without_state_cannot_finalize_without_coordinator():
+    ctx = _finalization_context()
+    ctx.config.coordinator = None
+    ctx.semantic_review_state = None
+    assert validate_finalization_context(ctx) == "semantic review state is missing"
+
+
+def test_runner_invalidated_attempt_allows_fresh_preparation():
+    ctx = SimpleNamespace(
+        config=SimpleNamespace(apply=True, parent_issue_number=100),
+        forge=MagicMock(spec=Forge),
+        repository_root=Path("."),
+    )
+    with (
+        patch(
+            "orchestune.integrator.attempt.find_open_attempts",
+            return_value=[_attempt(CHILD_A, phase=SemanticReviewPhase.INVALIDATED)],
+        ),
+        patch(
+            "orchestune.integrator.attempt._discover_child_sources",
+            return_value=([CHILD_B], {}),
+        ),
+        patch("orchestune.integrator.attempt._base_sha", return_value=BASE),
+    ):
+        assert prepare_attempt_context(ctx, object()) == (None, None)
+    ctx.forge.add_comment.assert_not_called()
+
+
+def test_reuse_restores_frozen_children_without_duplicates():
+    from orchestune.integrator.attempt import _restore_attempt_context
+
+    selection = select_attempt_children([_attempt(CHILD_A)], BASE, [CHILD_A, CHILD_B])
+    ctx = SimpleNamespace(
+        config=SimpleNamespace(),
+        merged_tasks=["task-a", "task-b"],
+        active_done_tasks=[
+            SimpleNamespace(subtask_id="task-a"),
+            SimpleNamespace(subtask_id="task-b"),
+        ],
+        merged_task_proofs={},
+        task_merge_receipts={},
+    )
+    assert _restore_attempt_context(ctx, selection, {}) == "semantic_review_pending"
+    assert ctx.merged_tasks == ["task-a"]
+    assert ctx.deferred_tasks == ["task-b"]
 
 
 def test_publish_attempt_branch_is_create_only():

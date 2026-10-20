@@ -77,26 +77,31 @@ from orchestune.worktree_ops.temp_branches import (
 
 @contextmanager
 def _retry_file_lock(lock_path, attempts: int = 3) -> Iterator[None]:
-    last_error = None
+    """短時間の共有git操作に限り、競合ロックを少数回リトライする。"""
+    lock = None
+    last_error: RuntimeError | None = None
     for attempt in range(attempts):
-        lock = file_lock(lock_path)
+        candidate = file_lock(lock_path)
         try:
-            lock.__enter__()
+            candidate.__enter__()
         except RuntimeError as error:
             last_error = error
             if attempt + 1 < attempts:
                 time.sleep(0.05 * (attempt + 1))
             continue
-        try:
-            yield
-        except BaseException as error:
-            lock.__exit__(type(error), error, error.__traceback__)
-            raise
-        else:
-            lock.__exit__(None, None, None)
-        return
-    assert last_error is not None
-    raise last_error
+        lock = candidate
+        break
+    if lock is None:
+        assert last_error is not None
+        raise last_error
+
+    try:
+        yield
+    except BaseException as error:
+        lock.__exit__(type(error), error, error.__traceback__)
+        raise
+    else:
+        lock.__exit__(None, None, None)
 
 
 class PrepareTasksStep(IntegrationComponent):
@@ -467,10 +472,18 @@ def _decide_child_review_gate(ctx: IntegrationContext) -> ChildReviewGateDecisio
     return decide_child_review_gate(inputs, precomputed_failures=failures)
 
 
-#: Standard markers that distinguish a CAS rejection from other push failures.
+#: pushが拒否されたことを示すgitの標準的な文言。認証エラーやネットワーク障害等の
+#: 他のpush失敗と区別し、実際のnon-fast-forward（CAS拒否）だけを陳腐化として
+#: 検知するために使う。"fetch first"は、fetchしていない状態で先に別のpushが
+#: 入った場合にgitが出すバリエーション。
 _CAS_REJECTION_MARKERS = ("non-fast-forward", "[rejected]", "fetch first")
 
-#: Durable marker for a parent-branch CAS rejection in the previous cycle.
+#: 親Issueに付与し、直前サイクルでも親branch pushがnon-fast-forward拒否されて
+#: いたことを示すマーカーラベル。#437レビュー対応: このカウントをローカルの
+#: state fileへ永続化すると、GitHub Actionsのスケジュール実行ではジョブごとに
+#: 新しいランナー（`actions/checkout`）を使うため、ファイルがサイクルをまたいで
+#: 残らずリトライ判定が機能しない。GitHub上のラベルという、ランナーをまたいでも
+#: 失われない場所に状態を置くことで、この問題自体を発生させない。
 _PARENT_BRANCH_STALE_LABEL = "integration:parent-branch-stale"
 
 #: #437レビュー対応: `orchestune bootstrap`は`ensure_labels`の唯一の呼び出し元
@@ -506,7 +519,36 @@ def _is_parent_branch_cas_rejection(error: Exception) -> bool:
 
 
 def clear_parent_branch_stale_marker(ctx: IntegrationContext) -> None:
-    """Remove the prior-cycle CAS marker unless this cycle set it again."""
+    """#437: `_PARENT_BRANCH_STALE_LABEL`マーカーを親Issueから除去する。
+
+    #437レビュー対応: このマーカーは「サイクルが実際にCAS拒否で終わったか」
+    だけを追う必要があるため、クリア自体は`IntegrationPipeline.execute`
+    （`orchestune/integrator.py`）から、パイプラインがどのステップで終わった
+    かに関わらず一律に呼ばれる。当初`AutoMergeChildIntegrationStep`内の
+    push成功時／non-CAS失敗時にのみクリアしていたが、`SetupWorktreeStep`・
+    `MergeAndTestStep`・`PushTempBranchStep`等、このステップに到達する前に
+    サイクルが終わるケースを見落としており、直前のCAS拒否のマーカーが古いまま
+    残ってしまっていた（レビュー指摘）。CAS拒否を確認したサイクルだけは
+    `ctx.parent_branch_cas_rejected_this_cycle`を立てることで、このクリア処理
+    をスキップし、マーカーの管理を`_handle_parent_branch_staleness`自身に
+    委ねる。
+
+    #437レビュー対応（既知の限度）: この除去はラベルの単純な上書きであり、
+    GitHub側にCAS（compare-and-swap）機構が無いため、他ランナーが同時に
+    マーカーを新規付与した直後にここが実行されると、その新しいイベントを
+    消してしまう可能性が理論上ある。分散ロックを避ける#437自身の設計方針
+    （footprintの事前検証により競合率が低い前提で悲観ロックより楽観的並行
+    制御を選ぶ）と同じ理由で、ここでも追加のロック機構は導入しない。
+    cross-runner競合そのものは、推奨される`concurrency`グループ設定
+    （#436, docs/ja/setup.md#6）により実運用上は発生しない前提であり、この
+    残存リスクはその設定を行わない場合にのみ顕在化する。
+
+    #437レビュー対応: `remove_label`が一時的なAPI障害で失敗した場合、単に
+    警告を出すだけで古いマーカーを残置すると、後で発生する無関係なCAS拒否が
+    誤って「2サイクル連続」と判定され誤エスカレーションしうる（読み取り側の
+    レース＝上記の既知の限度とは異なり、これは書き込みの単純な失敗であり、
+    リトライで解消できる）。少数回・短い間隔でリトライする。
+    """
     last_error: Exception | None = None
     for attempt in range(_CLEAR_STALE_MARKER_ATTEMPTS):
         try:

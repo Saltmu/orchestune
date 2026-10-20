@@ -123,7 +123,11 @@ def _trusted_state_authors(forge: Forge, trust: TrustContext) -> frozenset[str]:
         trusted.add(identity.casefold())
     configured = trust.get_trusted_collaborators()
     if configured:
-        trusted.update(author.casefold() for author in configured)
+        trusted.update(
+            author.casefold()
+            for author in configured
+            if author.casefold().endswith("[bot]")
+        )
     return frozenset(trusted)
 
 
@@ -343,7 +347,7 @@ def _restore_attempt_context(
     ctx.active_done_tasks = [
         task for task in ctx.active_done_tasks if task.subtask_id in selected
     ]
-    ctx.merged_tasks.extend(child.subtask_id for child in state.child_sources)
+    ctx.merged_tasks = [child.subtask_id for child in state.child_sources]
     ctx.merged_task_proofs.update(
         {
             number: proof
@@ -384,6 +388,8 @@ def prepare_attempt_context(ctx: Any, merger: Any) -> tuple[str | None, str | No
     children, proofs = discovered
     selection = select_attempt_children(attempts, _base_sha(ctx), children)
     if selection.fail_closed or selection.invalidated:
+        # #1362 owns the durable INVALIDATED transition. Until that trusted
+        # marker exists, publishing a replacement attempt would race its runner.
         return "review_gate_blocked", "existing attempt needs trusted invalidation"
     if selection.reusable is None:
         return None, None
@@ -446,14 +452,14 @@ def start_required_review(ctx: Any, fetch_outcome: Callable[[Forge, int], Any]) 
     )
     phase = SemanticReviewPhase.NOT_STARTED
     if len(identity.child_sources) == 1:
-        decision = _single_fast_path(ctx, identity, fetch_outcome)
-        phase = decision.phase
-        if (
-            not decision.eligible
-            and ctx.config.coordinator is None
-            and not ctx.config.force_integration_review
-        ):
-            return "success"
+        try:
+            decision = _single_fast_path(ctx, identity, fetch_outcome)
+            phase = decision.phase
+        except Exception as error:
+            print(
+                f"Warning: failed to evaluate the single-task Fast-Path: {error}",
+                file=sys.stderr,
+            )
     state = SemanticReviewStateV1(
         identity.attempt_id,
         identity.parent_issue_number,
@@ -538,18 +544,10 @@ def validate_finalization_context(ctx: Any) -> str | None:
 
 
 def _semantic_finalization_exempt(ctx: Any) -> bool:
-    identity = ctx.attempt_identity
-    legacy_single = (
-        identity is not None
-        and len(identity.child_sources) == 1
-        and ctx.config.coordinator is None
-        and not ctx.config.force_integration_review
-    )
     return (
         ctx.config.semantic_review_mode in {"off", "advisory"}
         or not ctx.config.enable_semantic_review
         or ctx.config.child_review_gate == "off"
-        or legacy_single
     )
 
 
