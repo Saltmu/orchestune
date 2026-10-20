@@ -1,4 +1,9 @@
-"""Concrete steps executed by the integration pipeline."""
+"""Concrete steps executed by the integration pipeline.
+
+The orchestration primitives and shared context live in :mod:`orchestune.integrator`.
+Keeping the concrete operations here makes the dependency direction explicit: steps
+depend on the pipeline contract, while the integrator loads its default steps lazily.
+"""
 
 from __future__ import annotations
 

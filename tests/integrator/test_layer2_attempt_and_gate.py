@@ -274,6 +274,46 @@ def test_pr_without_trusted_state_is_a_fail_closed_crash_window():
     assert selection.reusable is None
 
 
+def test_existing_attempt_blocks_when_child_sources_cannot_be_resolved():
+    ctx = SimpleNamespace(
+        config=SimpleNamespace(apply=True, parent_issue_number=100),
+        forge=MagicMock(spec=Forge),
+    )
+    with (
+        patch(
+            "orchestune.integrator.attempt.find_open_attempts",
+            return_value=[_attempt(CHILD_A)],
+        ),
+        patch(
+            "orchestune.integrator.attempt._discover_child_sources", return_value=None
+        ),
+    ):
+        status, error = prepare_attempt_context(ctx, object())
+    assert status == "review_gate_blocked"
+    assert error == "existing attempt child sources could not be verified"
+    ctx.forge.add_comment.assert_not_called()
+
+
+def test_required_coordinator_waits_for_runner_to_dispatch_review():
+    ctx = _finalization_context()
+    ctx.semantic_review_state = None
+    ctx.config.coordinator = MagicMock()
+    with (
+        patch(
+            "orchestune.integrator.attempt.run_git", return_value=GitResult(0, HEAD, "")
+        ),
+        patch(
+            "orchestune.integrator.attempt._single_fast_path",
+            return_value=SimpleNamespace(phase=SemanticReviewPhase.NOT_STARTED),
+        ),
+    ):
+        assert start_required_review(ctx, MagicMock()) == "semantic_review_pending"
+    assert ctx.semantic_review_state.phase is SemanticReviewPhase.NOT_STARTED
+    assert ctx.semantic_review_state.ci_verified_sha == HEAD
+    ctx.forge.add_comment.assert_called_once()
+    ctx.config.coordinator.dispatch_review.assert_not_called()
+
+
 def test_build_attempt_identity_is_order_independent_and_deterministic():
     first = build_attempt_identity(100, BASE, [CHILD_B, CHILD_A])
     second = build_attempt_identity(100, BASE, [CHILD_A, CHILD_B])

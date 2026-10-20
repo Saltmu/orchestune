@@ -384,7 +384,10 @@ def prepare_attempt_context(ctx: Any, merger: Any) -> tuple[str | None, str | No
         return None, None
     discovered = _discover_child_sources(ctx, merger)
     if discovered is None:
-        return None, None
+        return (
+            "review_gate_blocked",
+            "existing attempt child sources could not be verified",
+        )
     children, proofs = discovered
     selection = select_attempt_children(attempts, _base_sha(ctx), children)
     if selection.fail_closed or selection.invalidated:
@@ -445,6 +448,7 @@ def handle_non_required_review(ctx: Any) -> tuple[bool, bool]:
 
 
 def start_required_review(ctx: Any, fetch_outcome: Callable[[Forge, int], Any]) -> str:
+    """Persist NOT_STARTED for Runner #1362, which owns required review dispatch."""
     identity = ctx.attempt_identity
     assert identity is not None and ctx.integration_pr_number is not None
     head = (
