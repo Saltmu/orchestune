@@ -593,7 +593,7 @@ Orchestune uses a two-tier review gate architecture for integrating child tasks 
 **Two levels of explicit human skip**
 
 1. **Entire run skip**: Specifying `--semantic-review-mode off` (or config key `semantic-review-mode = "off"`, env var `ORCHESTUNE_SEMANTIC_REVIEW_MODE=off`) skips Layer-2 review for all integration PRs in the run.
-2. **Per-attempt human override**: On an integration PR in `status:blocked-human-review` or `escalated` state, a collaborator can post an override comment (`<!-- orchestune:semantic-review-override:v1 action=skip reason="..." -->`) to transition the attempt to `skipped_by_human` and safely resume integration.
+2. **Per-attempt human override**: On an integration PR in `status:blocked-human-review` or `escalated` state, a collaborator can post an override comment with a valid JSON payload (`<!-- orchestune:semantic-review-override:v1 {"attempt_id": "<attempt_id>", "head_sha": "<head_sha>", "reason": "..."} -->`) to transition the attempt to `skipped_by_human` and safely resume integration.
 
 **Layer-1 actor responsibilities**
 

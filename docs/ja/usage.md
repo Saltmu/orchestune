@@ -586,7 +586,7 @@ Orchestuneでは、子タスクから親ブランチ（`parent/issue-{N}`）へ�
 **人間による2段階のスキップ方法**
 
 1. **実行全体スキップ**: `--semantic-review-mode off`（設定キー `semantic-review-mode = "off"`、環境変数 `ORCHESTUNE_SEMANTIC_REVIEW_MODE=off`）を指定すると、第2層セマンティックレビューをオフにして統合を進めます。
-2. **個別統合PRの明示スキップ**: `status:blocked-human-review` やエスカレーション（`escalated`）状態の統合PRに対し、コラボレーター権限を持つ人間が `<!-- orchestune:semantic-review-override:v1 action=skip reason="人間による確認完了" -->` コメントをPRに投稿することで、試行を `skipped_by_human` に遷移させて安全に親ブランチへ確定・統合できます。
+2. **個別統合PRの明示スキップ**: `status:blocked-human-review` やエスカレーション（`escalated`）状態の統合PRに対し、コラボレーター権限を持つ人間が有効なJSONペイロードを含むoverrideコメント（`<!-- orchestune:semantic-review-override:v1 {"attempt_id": "<attempt_id>", "head_sha": "<head_sha>", "reason": "人間による確認完了"} -->`）をPRに投稿することで、試行を `skipped_by_human` に遷移させて安全に親ブランチへ確定・統合できます。
 
 **第1層の責務分担**
 
