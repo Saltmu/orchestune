@@ -203,10 +203,20 @@ class IntegrationPipeline(IntegrationComponent):
         final_report["status"] = ctx.status
         final_report["merged"] = ctx.merged_tasks
 
-        if ctx.status == IntegrationStatus.SUCCESS:
+        if ctx.status in (
+            IntegrationStatus.SUCCESS,
+            IntegrationStatus.SEMANTIC_REVIEW_PENDING,
+        ):
             final_report["integration_pr_number"] = ctx.integration_pr_number
             final_report["semantic_review_dispatched"] = ctx.semantic_review_dispatched
             final_report["newly_included"] = ctx.newly_included
+            final_report["deferred_tasks"] = list(ctx.deferred_tasks)
+            if ctx.attempt_identity is not None:
+                final_report["attempt_id"] = ctx.attempt_identity.attempt_id
+            if ctx.semantic_review_state is not None:
+                final_report["semantic_review_phase"] = (
+                    ctx.semantic_review_state.phase.value
+                )
         if ctx.failed_tasks:
             final_report["failed"] = ctx.failed_tasks
             final_report["failed_reasons"] = ctx.failed_reasons
@@ -248,6 +258,7 @@ class MultiIssueIntegrator(IntegrationComponent):
             details[key] = result
             if result.get("status") in (
                 IntegrationStatus.SUCCESS,
+                IntegrationStatus.SEMANTIC_REVIEW_PENDING,
                 IntegrationStatus.NO_DONE_TASKS,
             ):
                 success_count += 1
@@ -323,7 +334,11 @@ class SingleIssueIntegrator(IntegrationComponent):
         ctx: IntegrationContext, state: ExecutionState, report: IntegrationReport
     ) -> IntegrationReport:
         normal_success = (
-            report.get("status") == IntegrationStatus.SUCCESS
+            report.get("status")
+            in (
+                IntegrationStatus.SUCCESS,
+                IntegrationStatus.SEMANTIC_REVIEW_PENDING,
+            )
             and not ctx.failed_tasks
             and bool(ctx.merged_tasks)
         )

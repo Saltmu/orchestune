@@ -24,6 +24,20 @@ from orchestune.infra.git_cli import (
     run_git,
 )
 from orchestune.infra.process_utils import default_ci_command, file_lock
+from orchestune.integrator.attempt import (
+    PublishStatus,
+    cleanup_attempt_fix_outputs,
+    handle_non_required_review,
+    prepare_attempt_context,
+    publish_attempt_branch,
+    publish_parent_under_claim,
+    set_new_attempt_identity,
+    start_required_review,
+    validate_finalization_context,
+)
+from orchestune.integrator.attempt import (
+    mark_tasks_included as _mark_tasks_included,
+)
 from orchestune.integrator.child_issue_close import RetryChildIssueCloseStep
 from orchestune.integrator.finalization import (
     ensure_integration_receipt,
@@ -218,6 +232,17 @@ class MergeAndTestStep(IntegrationComponent):
     def execute(self, ctx: IntegrationContext) -> IntegrationReport:
         try:
             merger = self._new_merger(ctx)
+            reuse, error = prepare_attempt_context(ctx, merger)
+            if reuse is not None:
+                report: IntegrationReport = {"status": IntegrationStatus(reuse)}
+                if error is not None:
+                    report["error"] = error
+                return report
+            if ctx.config.apply:
+                ctx.attempt_base_sha = run_git(
+                    ["rev-parse", "--verify", ctx.base_branch],
+                    cwd=ctx.repository_root,
+                ).stdout.strip()
             if not merger.create_temp_branch(
                 ctx.temp_branch, ctx.base_branch, ctx.config.apply
             ):
@@ -232,7 +257,10 @@ class MergeAndTestStep(IntegrationComponent):
                 ctx.config.apply,
                 dependency_states=ctx.dependency_states,
             )
-            return self._record_merge_results(ctx, results, merger.merged_task_proofs)
+            report = self._record_merge_results(ctx, results, merger.merged_task_proofs)
+            if report["status"] == IntegrationStatus.SUCCESS and ctx.config.apply:
+                set_new_attempt_identity(ctx)
+            return report
         except Exception as error:
             return {
                 "status": IntegrationStatus.FAILURE,
@@ -291,16 +319,35 @@ class PushTempBranchStep(IntegrationComponent):
             return {"status": IntegrationStatus.SUCCESS}
         if ctx.failed_tasks or not ctx.merged_tasks:
             return {"status": ctx.status}
+        if ctx.reuse_existing_temp_branch:
+            return {"status": IntegrationStatus.SUCCESS}
+        # Reject Layer 1 before publishing a PR without resumable review state.
+        decision = _decide_child_review_gate(ctx)
+        if not decision.passed:
+            AutoMergeChildIntegrationStep().handle_review_gate_block(ctx, decision)
+            return {"status": IntegrationStatus.REVIEW_GATE_BLOCKED}
+        if ctx.attempt_identity is None:
+            return {
+                "status": IntegrationStatus.FAILED_TO_PUSH_TEMP_BRANCH,
+                "error": "integration attempt identity is missing",
+            }
 
         try:
-            run_git(
-                ["push", "--force", "origin", ctx.temp_branch],
-                cwd=ctx.repository_root,
-                check=True,
+            head = (
+                run_git(["rev-parse", "HEAD"], cwd=ctx.repository_root).stdout.strip()
+                or "HEAD"
             )
-            return {"status": IntegrationStatus.SUCCESS}
-        except subprocess.CalledProcessError as error:
-            push_error = error.stderr or ""
+            result = publish_attempt_branch(
+                ctx.repository_root, ctx.attempt_identity, head
+            )
+            if result.status in {PublishStatus.CREATED, PublishStatus.ADOPTED}:
+                return {"status": IntegrationStatus.SUCCESS}
+            return {
+                "status": IntegrationStatus.FAILED_TO_PUSH_TEMP_BRANCH,
+                "error": result.detail,
+            }
+        except (subprocess.CalledProcessError, OSError) as error:
+            push_error = getattr(error, "stderr", None) or str(error)
             print(f"Failed to push temp branch: {push_error}", file=sys.stderr)
             return {
                 "status": IntegrationStatus.FAILED_TO_PUSH_TEMP_BRANCH,
@@ -318,6 +365,11 @@ class EnsureIntegrationPrStep(IntegrationComponent):
             or not ctx.merged_tasks
         ):
             return {"status": ctx.status}
+        if ctx.integration_pr_number is not None:
+            return {
+                "status": IntegrationStatus.SUCCESS,
+                "integration_pr_number": ctx.integration_pr_number,
+            }
 
         try:
             pr_number = ensure_integration_pr(
@@ -347,28 +399,24 @@ class SemanticReviewStep(IntegrationComponent):
         ):
             return {"status": ctx.status}
 
-        if ctx.config.enable_semantic_review and ctx.config.coordinator is not None:
-            try:
-                ctx.config.coordinator.dispatch_review(
-                    temp_branch=ctx.temp_branch,
-                    base_branch=ctx.base_branch,
-                    pr_number=ctx.integration_pr_number,
-                    parent_issue_number=ctx.config.parent_issue_number,
-                    merged_subtask_ids=ctx.merged_tasks,
-                )
-                ctx.semantic_review_dispatched = True
-                return {
-                    "status": IntegrationStatus.SUCCESS,
-                    "semantic_review_dispatched": True,
-                }
-            except Exception as error:
-                print(
-                    f"Warning: Failed to dispatch semantic review: {error}",
-                    file=sys.stderr,
-                )
+        decision = _decide_child_review_gate(ctx)
+        if not decision.passed:
+            AutoMergeChildIntegrationStep().handle_review_gate_block(ctx, decision)
+            return {"status": IntegrationStatus.REVIEW_GATE_BLOCKED}
+
+        if ctx.semantic_review_state is not None:
+            return {"status": IntegrationStatus.SUCCESS}
+
+        handled, dispatched = handle_non_required_review(ctx)
+        if handled:
+            return {
+                "status": IntegrationStatus.SUCCESS,
+                "semantic_review_dispatched": dispatched,
+            }
         return {
-            "status": IntegrationStatus.SUCCESS,
-            "semantic_review_dispatched": False,
+            "status": IntegrationStatus(
+                start_required_review(ctx, fetch_child_review_gate_outcome)
+            )
         }
 
 
@@ -382,30 +430,56 @@ class LabelIncludedStep(IntegrationComponent):
         }
 
 
-def _mark_tasks_included(
-    ctx: IntegrationContext, subtask_ids: set[str] | None = None
-) -> list[str]:
-    """Label merged tasks that have not already been marked as included."""
-    newly_included: list[str] = []
-    task_by_subtask_id = {
+def _build_child_review_gate_inputs(
+    ctx: IntegrationContext,
+) -> tuple[list[ChildReviewGateInput], list[ChildReviewGateFailure]]:
+    tasks_by_subtask = {
         task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
     }
+    gate_inputs: list[ChildReviewGateInput] = []
+    failures: list[ChildReviewGateFailure] = []
     for subtask_id in ctx.merged_tasks:
-        if subtask_ids is not None and subtask_id not in subtask_ids:
-            continue
-        task = task_by_subtask_id.get(subtask_id)
-        if task is None or "integration:included" in task.status_labels:
-            continue
-        try:
-            ctx.forge.add_label(task.issue_number, "integration:included")
-            newly_included.append(subtask_id)
-        except Exception as error:
-            print(
-                "Warning: Failed to add integration:included label to "
-                f"issue #{task.issue_number}: {error}",
-                file=sys.stderr,
+        task = tasks_by_subtask.get(subtask_id)
+        proof = None if task is None else ctx.merged_task_proofs.get(task.issue_number)
+        receipt = (
+            None
+            if task is None
+            else ctx.task_merge_receipts.get(
+                task.issue_number, proof.merge_receipt if proof else None
             )
-    return newly_included
+        )
+        expected_sha = (
+            receipt.fetched_commit_oid
+            if receipt
+            else (proof.source_sha if proof else "")
+        )
+        if task is None or not expected_sha:
+            failures.append(
+                ChildReviewGateFailure(
+                    issue_number=None if task is None else task.issue_number,
+                    subtask_id=subtask_id,
+                    reason=REASON_INTEGRATION_EVIDENCE_MISSING,
+                )
+            )
+            continue
+        gate_inputs.append(
+            ChildReviewGateInput(
+                issue_number=task.issue_number,
+                subtask_id=subtask_id,
+                expected_commit_oid=expected_sha,
+                lookup_result=fetch_child_review_gate_outcome(
+                    ctx.forge, task.issue_number
+                ),
+            )
+        )
+    return gate_inputs, failures
+
+
+def _decide_child_review_gate(ctx: IntegrationContext) -> ChildReviewGateDecision:
+    if ctx.config.child_review_gate == "off":
+        return ChildReviewGateDecision(passed=True)
+    inputs, failures = _build_child_review_gate_inputs(ctx)
+    return decide_child_review_gate(inputs, precomputed_failures=failures)
 
 
 #: pushが拒否されたことを示すgitの標準的な文言。認証エラーやネットワーク障害等の
@@ -515,10 +589,18 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
         gate_blocked = self._evaluate_child_review_gate(ctx)
         if gate_blocked is not None:
             return gate_blocked
+        semantic_error = validate_finalization_context(ctx)
+        if semantic_error is not None:
+            return {
+                "status": IntegrationStatus.REVIEW_GATE_BLOCKED,
+                "error": semantic_error,
+                "auto_merged": False,
+            }
         failure = self._update_parent_branch(ctx)
         if failure is not None:
             return failure
         finalized_task_ids = self._finalize_merged_child_tasks(ctx)
+        cleanup_attempt_fix_outputs(ctx)
         self._delete_temp_branch(ctx)
         newly_included = _mark_tasks_included(ctx, finalized_task_ids)
         ctx.newly_included = newly_included
@@ -539,14 +621,11 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             )
             return None
 
-        gate_inputs, precomputed_failures = self._build_child_review_gate_inputs(ctx)
-        decision = decide_child_review_gate(
-            gate_inputs, precomputed_failures=precomputed_failures
-        )
+        decision = _decide_child_review_gate(ctx)
         if decision.passed:
             return None
 
-        self._handle_review_gate_block(ctx, decision)
+        self.handle_review_gate_block(ctx, decision)
         return {
             "status": IntegrationStatus.REVIEW_GATE_BLOCKED,
             "auto_merged": False,
@@ -555,50 +634,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
     def _build_child_review_gate_inputs(
         self, ctx: IntegrationContext
     ) -> tuple[list[ChildReviewGateInput], list[ChildReviewGateFailure]]:
-        tasks_by_subtask = {
-            task.subtask_id: task for task in ctx.active_done_tasks if task.subtask_id
-        }
-        gate_inputs: list[ChildReviewGateInput] = []
-        precomputed_failures: list[ChildReviewGateFailure] = []
-        for subtask_id in ctx.merged_tasks:
-            task = tasks_by_subtask.get(subtask_id)
-            if task is None:
-                precomputed_failures.append(
-                    ChildReviewGateFailure(
-                        issue_number=None,
-                        subtask_id=subtask_id,
-                        reason=REASON_INTEGRATION_EVIDENCE_MISSING,
-                    )
-                )
-                continue
-            proof = ctx.merged_task_proofs.get(task.issue_number)
-            receipt = ctx.task_merge_receipts.get(
-                task.issue_number, proof.merge_receipt if proof else None
-            )
-            expected_sha = (
-                receipt.fetched_commit_oid
-                if receipt
-                else (proof.source_sha if proof else "")
-            )
-            if not expected_sha:
-                precomputed_failures.append(
-                    ChildReviewGateFailure(
-                        issue_number=task.issue_number,
-                        subtask_id=subtask_id,
-                        reason=REASON_INTEGRATION_EVIDENCE_MISSING,
-                    )
-                )
-                continue
-            lookup = fetch_child_review_gate_outcome(ctx.forge, task.issue_number)
-            gate_inputs.append(
-                ChildReviewGateInput(
-                    issue_number=task.issue_number,
-                    subtask_id=subtask_id,
-                    expected_commit_oid=expected_sha,
-                    lookup_result=lookup,
-                )
-            )
-        return gate_inputs, precomputed_failures
+        return _build_child_review_gate_inputs(ctx)
 
     def _restore_blocked_label(
         self,
@@ -624,7 +660,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     file=sys.stderr,
                 )
 
-    def _handle_review_gate_block(
+    def handle_review_gate_block(
         self, ctx: IntegrationContext, decision: ChildReviewGateDecision
     ) -> None:
         parent_issue_number = ctx.config.parent_issue_number
@@ -679,6 +715,15 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 None if self._verify_already_integrated(ctx) else {"status": ctx.status}
             )
         try:
+            claimed = publish_parent_under_claim(ctx)
+            if claimed.handled:
+                if claimed.pushed:
+                    return None
+                return {
+                    "status": IntegrationStatus.PARENT_BRANCH_ADVANCED,
+                    "error": claimed.detail,
+                    "auto_merged": False,
+                }
             base_branch = ctx.base_branch.removeprefix("origin/")
             run_git(
                 ["push", "origin", f"HEAD:refs/heads/{base_branch}"],

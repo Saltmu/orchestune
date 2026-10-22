@@ -95,6 +95,19 @@ def _find_reusable_integration_pr(
     )
 
 
+def list_open_attempt_prs(forge: Forge, parent_issue_number: int) -> list[PrRecord]:
+    """List upstream integration-attempt PRs for exactly one parent branch."""
+    prefix = f"integration/temp-parent-issue-{parent_issue_number}-"
+    base = f"parent/issue-{parent_issue_number}"
+    return [
+        pr
+        for pr in forge.list_open_prs()
+        if pr.head_ref.startswith(prefix)
+        and pr.base_ref == base
+        and pr.is_cross_repository is False
+    ]
+
+
 def _update_reused_integration_pr(
     forge: Forge, number: int, title: str, body: str
 ) -> None:
