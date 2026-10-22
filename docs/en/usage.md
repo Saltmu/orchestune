@@ -347,8 +347,8 @@ Routine dispatch execution uses strictly the following 7 options. Detailed param
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | auto-selected (non-CI: `auto` / GitHub Actions: `cloud-routine`) | Target environment to launch agents. When unspecified, resolved from configuration file or auto-selected from runtime environment (`GITHUB_ACTIONS`). `auto` detects a local CLI on `PATH`. `local` gives the backward-compatible no-op dummy (for tests/dry-runs). |
 | `--max-concurrent <int>` | `2` (when unset in config) | Maximum number of subtask agents running concurrently. CLI argument overrides configuration file setting. |
 | `--profile <name>` | - | Override the task execution profile (e.g. `balanced`, `fast-code`, `deep-reasoning`) for this entire run, taking precedence over task metadata profile or model tier. |
-| `--child-review-gate {required,off}` | - | Child sub-issue review gate mode (`required` or `off`). When omitted, falls back to config file (`child-review-gate`), env var (`ORCHESTUNE_CHILD_REVIEW_GATE`), or default `required`. `off` skips verification with a warning. See [§4.5](#45-child-review-evidence-gate). |
-| `--semantic-review-mode {required,advisory,off}` | - | Layer-2 integration-PR semantic review mode (`required`, `advisory`, or `off`). When omitted, falls back to config file (`semantic-review-mode`), env var (`ORCHESTUNE_SEMANTIC_REVIEW_MODE`), or default `required`. `off` skips verification. See [§4.5](#45-child-review-evidence-gate). |
+| `--child-review-gate {required,off}` | - | Child sub-issue review gate mode (`required` or `off`). When omitted, falls back to config file (`child-review-gate`), env var (`ORCHESTUNE_CHILD_REVIEW_GATE`), or default `required`. `off` skips verification with a warning. See [§4.5](#45-child-review-evidence-gate-and-layer-2-semantic-review-gate). |
+| `--semantic-review-mode {required,advisory,off}` | - | Layer-2 integration-PR semantic review mode (`required`, `advisory`, or `off`). When omitted, falls back to config file (`semantic-review-mode`), env var (`ORCHESTUNE_SEMANTIC_REVIEW_MODE`), or default `required`. `off` skips verification. See [§4.5](#45-child-review-evidence-gate-and-layer-2-semantic-review-gate). |
 | `--force-integration-review` | - | Forces layer-2 integration-PR review even when a single child task qualifies for the Fast-Path. |
 | `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`). For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error. |
 
@@ -583,6 +583,7 @@ If a candidate marker originates from an untrusted third party, if author/permis
 
 ---
 
+<a id="45-child-review-evidence-gate"></a>
 ### 4.5 Child review-evidence gate and Layer-2 semantic review gate
 
 Orchestune uses a two-tier review gate architecture for integrating child tasks into the parent branch (`parent/issue-{N}`):
@@ -757,7 +758,7 @@ The new footprint is the union of the held footprint, the Issue footprint, and e
 
 ## 8. Local CI Evidence Storage and Task Completion (`orchestune complete`)
 
-`orchestune complete` succeeds when it has posted the fixed Outcome Record, confirmed the corresponding Issue label (`status:done`, `status:blocked`, or `status:not-needed`), and durably saved the handoff and replay receipt in the shared ledger. Success does not mean the PR is merged, an independent not-needed review is approved, or the worktree is collected. `done` validates local CI, PR/head, child review evidence ([§4.5](#45-child-review-evidence-gate)) and token-limit evidence before publication; GC consumes that evidence. Legacy completion paths still perform their own token-limit checks.
+`orchestune complete` succeeds when it has posted the fixed Outcome Record, confirmed the corresponding Issue label (`status:done`, `status:blocked`, or `status:not-needed`), and durably saved the handoff and replay receipt in the shared ledger. Success does not mean the PR is merged, an independent not-needed review is approved, or the worktree is collected. `done` validates local CI, PR/head, child review evidence ([§4.5](#45-child-review-evidence-gate-and-layer-2-semantic-review-gate)) and token-limit evidence before publication; GC consumes that evidence. Legacy completion paths still perform their own token-limit checks.
 
 Run `orchestune complete --issue <N> --pr <PR> --result done` from the claimed worktree; `blocked` requires `--reason`, and `not-needed` can also reserve an unclaimed Issue without creating a worktree. The command prints a completion ID before remote effects. To resume interrupted publication, repeat the same arguments with `--completion-id <ID>` using the matching claim marker, or the explicit completion ID for an unclaimed Issue. A changed request or owner/generation cannot overwrite the frozen request. After handoff, replay returns the stored result even if a later policy queued the Issue or GC removed the active entry; it does not restore old labels.
 
