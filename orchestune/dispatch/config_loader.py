@@ -45,6 +45,7 @@ from orchestune.infra.repository_config import (
     find_and_load_config_file as find_and_load_config_file,
 )
 from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
+from orchestune.review.semantic_gate import VALID_SEMANTIC_REVIEW_MODES
 
 _DISPATCH_TARGET_HELP = (
     "#215/#163: エージェントの実ディスパッチ先。未指定時は実行環境から自動選択される"
@@ -122,6 +123,18 @@ def _add_execution_cli_arguments(parser: argparse.ArgumentParser) -> None:
         choices=["required", "off"],
         default=None,
         help="子タスクのレビュー合格証跡（verdict=pass, SHA一致）を検証するゲート（既定: required）。offで検証をスキップ。",
+    )
+    parser.add_argument(
+        "--semantic-review-mode",
+        choices=["required", "advisory", "off"],
+        default=None,
+        help="統合PRの第2層セマンティックレビュー（既定: required）。",
+    )
+    parser.add_argument(
+        "--force-integration-review",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="単一タスクFast-Pathでも統合PRレビューを強制する。",
     )
     parser.add_argument(
         "--allow-unsafe-agent-execution",
@@ -310,6 +323,55 @@ def _resolve_child_review_gate(args: Any, toml_data: dict[str, Any]) -> str:
     return env_gate or "required"
 
 
+def _resolve_semantic_review_mode(args: Any, toml_data: dict[str, Any]) -> str:
+    env_mode: str | None = None
+    if "ORCHESTUNE_SEMANTIC_REVIEW_MODE" in os.environ:
+        raw_env = os.environ["ORCHESTUNE_SEMANTIC_REVIEW_MODE"].strip()
+        if raw_env not in VALID_SEMANTIC_REVIEW_MODES:
+            choices = ", ".join(repr(c) for c in sorted(VALID_SEMANTIC_REVIEW_MODES))
+            raise config_contracts.ConfigError(
+                "environment variable 'ORCHESTUNE_SEMANTIC_REVIEW_MODE' "
+                f"must be one of: {choices}"
+            )
+        env_mode = raw_env
+    cli_mode = getattr(args, "semantic_review_mode", None)
+    if cli_mode is not None:
+        return str(cli_mode)
+    toml_mode = toml_data.get("semantic_review_mode")
+    if toml_mode is not None:
+        return str(toml_mode)
+    if env_mode is not None:
+        return env_mode
+    return "off" if os.environ.get("ORCHESTUNE_SEMANTIC_REVIEW") == "0" else "required"
+
+
+def _extract_semantic_config_kwargs(
+    args: Any,
+    toml_data: dict[str, Any],
+) -> dict[str, Any]:
+    semantic_keys = (
+        "semantic_review_provider",
+        "semantic_fix_provider",
+        "semantic_review_trigger",
+        "max_semantic_review_rounds",
+        "max_semantic_fix_retries",
+        "semantic_review_timeout_seconds",
+        "semantic_fix_timeout_seconds",
+        "semantic_ci_timeout_seconds",
+        "semantic_attempt_timeout_seconds",
+    )
+    force_rev = getattr(args, "force_integration_review", None)
+    return {
+        "semantic_review_mode": _resolve_semantic_review_mode(args, toml_data),
+        "force_integration_review": (
+            force_rev
+            if force_rev is not None
+            else toml_data.get("force_integration_review", False)
+        ),
+        **{k: toml_data[k] for k in semantic_keys if k in toml_data},
+    }
+
+
 def _assemble_dispatcher_config(
     args: Any,
     toml_data: dict[str, Any],
@@ -331,15 +393,13 @@ def _assemble_dispatcher_config(
     ci_raw = toml_data.get("ci_command")
     ci_cmd = parse_ci_command(ci_raw) if ci_raw is not None else None
     repair_codes = list(toml_data.get("consistency_repair_code", []))
-    child_review_gate = _resolve_child_review_gate(args, toml_data)
-
     config_kwargs: dict[str, Any] = {
         "parent_issue_number": parent_issue,
         "apply": args.apply if args.apply is not None else toml_data.get("apply", True),
         **paths,
         "dispatch_target": dispatch_target,
         "profile": args.profile,
-        "child_review_gate": child_review_gate,
+        "child_review_gate": _resolve_child_review_gate(args, toml_data),
         "ci_command": ci_cmd,
         "dag_ignore_patterns": dag_ignore_patterns,
         "dag_similarity_threshold": dag_similarity_threshold,
@@ -347,6 +407,7 @@ def _assemble_dispatcher_config(
         "consistency_mode": ConsistencyMode(toml_data.get("consistency_mode", "off")),
         "consistency_repair_allowlist": frozenset(repair_codes),
         **runtime_tuning_overrides(toml_data),
+        **_extract_semantic_config_kwargs(args, toml_data),
     }
     if args.max_concurrent is not None:
         config_kwargs["max_concurrent"] = args.max_concurrent

@@ -192,6 +192,8 @@ class TestDispatcherCliSingleResponsibility:
             "profile",
             "child_review_gate",
             "allow_unsafe_agent_execution",
+            "semantic_review_mode",
+            "force_integration_review",
         }
 
     @pytest.mark.parametrize(

@@ -17,6 +17,7 @@ from orchestune.dag.models import (
 )
 from orchestune.dispatch.execution_profiles import extract_execution_profile_config
 from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
+from orchestune.review.rounds import MAX_REVIEW_ROUNDS
 from orchestune.targets.cloud_routine import ROUTINE_TOKEN_ENV_VAR
 
 PROHIBITED_TOML_KEYS: dict[str, str] = {
@@ -99,6 +100,7 @@ NON_NEGATIVE_INT_KEYS = frozenset(
         "max_tokens_per_task",
         # #820: zero retries means "the first timeout is terminal".
         "max_integration_timeout_retries",
+        "max_semantic_fix_retries",
     }
 )
 
@@ -114,10 +116,15 @@ POSITIVE_INT_KEYS = frozenset(
         "integration_timeout_backoff_seconds",
         # #1270: zero would retry a session-limit exit immediately.
         "usage_limit_backoff_seconds",
+        "max_semantic_review_rounds",
+        "semantic_review_timeout_seconds",
+        "semantic_fix_timeout_seconds",
+        "semantic_ci_timeout_seconds",
+        "semantic_attempt_timeout_seconds",
     }
 )
 
-BOOLEAN_CONFIG_KEYS = frozenset({"apply", "zombie_gc"})
+BOOLEAN_CONFIG_KEYS = frozenset({"apply", "zombie_gc", "force_integration_review"})
 
 STRING_KEYS = frozenset(
     {"local_cmd", "routine_id", "codex_cloud_env", "default_execution_profile"}
@@ -140,6 +147,21 @@ _REVIEWER_BOT_CHOICES = frozenset({"auto", "claude", "codex"})
 _CONSISTENCY_MODE_CHOICES = frozenset({"off", "shadow", "repair"})
 
 _CHILD_REVIEW_GATE_CHOICES = VALID_CHILD_REVIEW_GATE_MODES
+
+_SEMANTIC_REVIEW_MODE_CHOICES = frozenset({"required", "advisory", "off"})
+_SEMANTIC_REVIEW_PROVIDER_CHOICES = frozenset({"auto", "claude", "codex"})
+_SEMANTIC_FIX_PROVIDER_CHOICES = frozenset(
+    {
+        "auto",
+        "claude-cli",
+        "codex-cli",
+        "agy-cli",
+        "cloud-routine",
+        "codex-cloud",
+        "local",
+    }
+)
+_SEMANTIC_REVIEW_TRIGGER_CHOICES = frozenset({"pr-comment", "dispatch-target"})
 
 _EXECUTION_PROFILE_TABLE_KEYS = frozenset(
     {"execution_profiles", "execution-profiles", "model_tiers", "model-tiers"}
@@ -189,6 +211,10 @@ def _validate_numeric_entry(normalized_key: str, raw_key: str, value: Any) -> An
         raise config_contracts.ConfigError(
             f"{raw_key!r} must be greater than or equal to 1"
         )
+    if normalized_key == "max_semantic_review_rounds" and value > MAX_REVIEW_ROUNDS:
+        raise config_contracts.ConfigError(
+            f"{raw_key!r} must be less than or equal to {MAX_REVIEW_ROUNDS}"
+        )
     return value
 
 
@@ -198,6 +224,10 @@ def _validate_choice_entry(normalized_key: str, raw_key: str, value: Any) -> Any
         "reviewer_bot": _REVIEWER_BOT_CHOICES,
         "consistency_mode": _CONSISTENCY_MODE_CHOICES,
         "child_review_gate": _CHILD_REVIEW_GATE_CHOICES,
+        "semantic_review_mode": _SEMANTIC_REVIEW_MODE_CHOICES,
+        "semantic_review_provider": _SEMANTIC_REVIEW_PROVIDER_CHOICES,
+        "semantic_fix_provider": _SEMANTIC_FIX_PROVIDER_CHOICES,
+        "semantic_review_trigger": _SEMANTIC_REVIEW_TRIGGER_CHOICES,
     }
     allowed = choice_map[normalized_key]
     if not isinstance(value, str) or value not in allowed:
@@ -289,6 +319,10 @@ def _validate_single_entry(normalized_key: str, raw_key: str, value: Any) -> Any
         "reviewer_bot",
         "consistency_mode",
         "child_review_gate",
+        "semantic_review_mode",
+        "semantic_review_provider",
+        "semantic_fix_provider",
+        "semantic_review_trigger",
     }:
         return _validate_choice_entry(normalized_key, raw_key, value)
     return _validate_compound_entry(normalized_key, raw_key, value)
