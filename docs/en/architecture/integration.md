@@ -57,7 +57,7 @@ sequenceDiagram
      - **Single-task Fast-Path**: when a single child task that already passed Layer 1 is being merged, Layer-2 review is bypassed (`fast_path_passed`) and the attempt is finalized immediately by the Integrator (can be forced via `--force-integration-review`).
      - **Review acquisition, judgment, and fix**: under #1099 judgment table evaluation, findings trigger a judgment & fix job that pushes fixes to a dedicated output branch (`integration/semantic-fix/*`).
      - **Promotion under claim & local CI verification**: fix commits are promoted to the temporary branch and verified by local CI (`ci-command`) bound to the fixed head.
-     - **Re-review & finalization**: passing the subsequent review round saves a `PASSED` terminal state, which the Integrator atomically pushes to the parent branch within the same cycle. Exceeding limits escalates to `status:blocked-human-review`. Humans can explicitly skip via `--semantic-review-mode off` or override comments (`<!-- orchestune:semantic-review-override:v1 ... -->`).
+     - **Re-review & finalization**: passing the subsequent review round saves a `PASSED` terminal state, which the Integrator atomically pushes to the parent branch within the same cycle. Exceeding limits escalates to `status:blocked-human-review`. Humans can explicitly skip via `--semantic-review-mode off` or override comments (`<!-- orchestune:semantic-review-override:v1 {"attempt_id": "<attempt_id>", "head_sha": "<head_sha>", "reason": "..."} -->`).
 
 ---
 

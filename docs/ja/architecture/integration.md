@@ -65,7 +65,7 @@ sequenceDiagram
      - **単一タスクFast-Path**: 子タスクが1件のみで第1層レビューを通過している場合、第2層レビューはバイパス（`fast_path_passed`）され、即座にIntegratorにより親ブランチへ確定されます（`--force-integration-review` で強制可能）。
      - **レビュー収集と判断・修正**: #1099準拠の判断表評価のもと、指摘がある場合は判断兼修正ジョブを起動し、修正出力ブランチ（`integration/semantic-fix/*`）へプッシュします。
      - **claim付き昇格とローカルCI検証**: 修正コミットは一時統合ブランチへ昇格され、修正後HEADに束縛したローカルCI（`ci-command`）で検証されます。
-     - **再レビューと確定**: 次ラウンドの再レビューが合格（`pass`）すると、`PASSED` 終端状態が保存され、Integratorが同一サイクル内で親ブランチへatomic pushして確定します。上限超過時は親Issueを `status:blocked-human-review` へエスカレーションします。人間は `--semantic-review-mode off` または override コメント（`<!-- orchestune:semantic-review-override:v1 ... -->`）で明示スキップ可能です。
+     - **再レビューと確定**: 次ラウンドの再レビューが合格（`pass`）すると、`PASSED` 終端状態が保存され、Integratorが同一サイクル内で親ブランチへatomic pushして確定します。上限超過時は親Issueを `status:blocked-human-review` へエスカレーションします。人間は `--semantic-review-mode off` または override コメント（`<!-- orchestune:semantic-review-override:v1 {"attempt_id": "<attempt_id>", "head_sha": "<head_sha>", "reason": "..."} -->`）で明示スキップ可能です。
 
 ---
 
