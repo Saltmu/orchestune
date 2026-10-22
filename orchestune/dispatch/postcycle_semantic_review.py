@@ -18,7 +18,7 @@ import socket
 import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -59,11 +59,12 @@ from orchestune.issue_notice import latest_notice_body, post_notice_if_changed
 from orchestune.labels import StatusLabel
 from orchestune.pr_link_notice_trust import NoticePresence, TrustContext
 from orchestune.review.acquisition import collect_review_state
-from orchestune.review.markers import derive_review_target
+from orchestune.review.markers import build_trigger_body, derive_review_target
 from orchestune.review.rounds import (
-    activity_bounds,
+    ReviewTrigger,
     build_restorable_trigger_body,
-    restore_triggers,
+    parse_trigger,
+    precise_created_at,
     trigger_comment_ids,
 )
 from orchestune.review.semantic_gate import (
@@ -91,7 +92,7 @@ from orchestune.review.semantic_gate import (
     restore_latest_semantic_review_state,
     semantic_fix_output_branch,
 )
-from orchestune.review.snapshot import EvidenceContractError
+from orchestune.review.snapshot import EvidenceContractError, normalize_timestamp
 
 _P = SemanticReviewPhase
 #: The head check of `find_open_attempts`; a promoted fix output trips it until
@@ -103,6 +104,8 @@ _UNSETTLED_OPERATIONS = IN_FLIGHT_OPERATION_STATUSES | {
     SemanticOperationStatus.INDETERMINATE
 }
 _CLAIM_TTL_SECONDS = 300
+#: Tolerated GitHub/local clock difference when a trigger is matched to a round.
+_CLOCK_SKEW = timedelta(seconds=60)
 _WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 _SEMANTIC_MARKERS = (
     "orchestune:semantic-review-",
@@ -282,6 +285,53 @@ def _authored(
     return selected
 
 
+def _triggers(comments: list[dict[str, Any]]) -> list[ReviewTrigger]:
+    """Every well-formed trigger in creation order.
+
+    Rounds repeat on one PR once a human resets the limits, so the strict
+    PR-wide `restore_triggers` ordering cannot apply; a round's trigger is
+    told apart by its head and by being posted after the round started.
+    """
+    triggers = []
+    for comment in comments:
+        try:
+            trigger = parse_trigger(comment)
+        except EvidenceContractError:
+            continue
+        if trigger is not None:
+            triggers.append(trigger)
+    return sorted(triggers, key=lambda t: t.created_at)
+
+
+def _round_trigger(
+    triggers: list[ReviewTrigger], state: SemanticReviewStateV1, *, fresh: bool
+) -> ReviewTrigger | None:
+    """The latest trigger of this round and head, posted since the round began
+    (``fresh``) or only before it (a stale request of an earlier run)."""
+    started = _parse_iso(state.round_started_at)
+    floor = (
+        None
+        if started is None
+        else normalize_timestamp((started - _CLOCK_SKEW).isoformat())
+    )
+    matching = [
+        t
+        for t in triggers
+        if t.round == state.round
+        and t.requested_head_sha == state.head_sha
+        and (floor is None or (t.created_at >= floor) == fresh)
+    ]
+    return matching[-1] if matching else None
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+    return parsed if parsed is None or parsed.tzinfo else None
+
+
 def _is_target(attempt: OpenAttempt) -> bool:
     if attempt.state_error is not None:
         return True
@@ -338,7 +388,11 @@ class SemanticReviewCycleRunner:
         operations: SemanticReviewOperations | None = None,
         claims: SemanticClaimClient | None = None,
         remote_head_fn: RemoteHeadFn | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
+        """``now`` fixes what this cycle observes and decides; claims are
+        acquired, renewed and released at the ``clock`` time of each write,
+        so a long CI run cannot leave a lease that expired before it began."""
         if now.tzinfo is None:
             raise ValueError("now must be timezone-aware")
         self._config = config
@@ -346,6 +400,7 @@ class SemanticReviewCycleRunner:
         self._root = repository_root
         self._now = now.astimezone(UTC)
         self._worker = worker_id
+        self._clock = clock or (lambda: datetime.now(UTC))
         self._verify_ci = verify_ci_fn
         self._ops = operations or SemanticReviewOperations()
         self._claims = claims or SemanticClaimClient()
@@ -495,20 +550,13 @@ class SemanticReviewCycleRunner:
     def _acquire_review(self, ctx: _Attempt) -> _Review:
         """The current round's review of the requested head, by its reviewer only."""
         state, comments = ctx.state, ctx.comments
-        try:
-            triggers = restore_triggers(comments)
-        except (EvidenceContractError, ValueError):
+        triggers = _triggers(comments)
+        trigger = _round_trigger(triggers, state, fresh=True)
+        if trigger is None:
             return _Review()
-        current = [
-            t
-            for t in triggers
-            if t.round == state.round and t.requested_head_sha == state.head_sha
-        ]
-        if len(current) != 1:
-            return _Review()
-        trigger = current[0]
-        later = [t for t in triggers if t.round > trigger.round]
-        started, ended = activity_bounds(comments, triggers, trigger)
+        later = [t for t in triggers if t.created_at > trigger.created_at]
+        started = precise_created_at(comments, trigger)
+        ended = precise_created_at(comments, later[0]) if later else ""
         excluded: set[int | str] = trigger_comment_ids(comments) | {
             c["id"] for c in comments if _has_semantic_marker(c.get("body"))
         }
@@ -705,7 +753,7 @@ class SemanticReviewCycleRunner:
             parent_issue_number=ctx.state.parent_issue_number,
             attempt_id=ctx.state.attempt_id,
             holder=self._worker,
-            now=self._now,
+            now=self._clock(),
             ttl_seconds=_CLAIM_TTL_SECONDS,
         )
         if result.status is ClaimStatus.HELD_BY_OTHER:
@@ -719,7 +767,7 @@ class SemanticReviewCycleRunner:
         """Renew (and so re-prove) ownership right before an external write."""
         assert ctx.claim is not None
         result = self._claims.renew(
-            self._root, ctx.claim, now=self._now, ttl_seconds=ttl
+            self._root, ctx.claim, now=self._clock(), ttl_seconds=ttl
         )
         if result.status is not PushStatus.PUSHED or result.claim is None:
             ctx.claim = None
@@ -730,7 +778,7 @@ class SemanticReviewCycleRunner:
         if ctx.claim is None:
             return
         try:
-            self._claims.release(self._root, ctx.claim, now=self._now)
+            self._claims.release(self._root, ctx.claim, now=self._clock())
         except Exception:  # an unreleased claim only expires later  # noqa: BLE001
             pass
         ctx.claim = None
@@ -751,7 +799,11 @@ class SemanticReviewCycleRunner:
         if ci is None:
             raise _Stop("ci_discarded", head_sha=state.head_sha)
         assert ctx.obs is not None
-        return evaluate_semantic_review_transition(state, replace(ctx.obs, ci=ci))
+        # Decided at the end of the run: the next phase starts (and its deadline
+        # counts) from now, and an attempt deadline passed during CI applies.
+        self._now = self._clock().astimezone(UTC)
+        obs = replace(ctx.obs, ci=ci, now=self._now)
+        return evaluate_semantic_review_transition(state, obs)
 
     def _promote(
         self, ctx: _Attempt, decision: SemanticTransitionDecision
@@ -764,7 +816,7 @@ class SemanticReviewCycleRunner:
             temp_branch=ctx.pr.temp_branch,
             expected_head_sha=str(state.fix_input_sha),
             fix_branch=semantic_fix_output_branch(state.operation_id),
-            now=self._now,
+            now=self._clock(),
         )
         if result.status is not PushStatus.PUSHED or result.claim is None:
             if result.detail == DETAIL_FIX_NOT_DESCENDANT:
@@ -855,7 +907,21 @@ class SemanticReviewCycleRunner:
             build_restorable_trigger_body(reply, reviewer, nxt.round, nxt.head_sha)
         except EvidenceContractError:
             reply = f"Review head: `{nxt.head_sha}`."
+        triggers = _triggers(ctx.comments)
+        fresh = _round_trigger(triggers, nxt, fresh=True)
+        if fresh is not None and any(
+            c.get("id") == fresh.id and self._trusted(ctx, c) for c in ctx.comments
+        ):
+            return  # posted by an earlier, interrupted run of this transition
         self._revalidate(ctx)
+        if _round_trigger(triggers, nxt, fresh=False) is not None:
+            # A reset round repeats an old (round, head) request, which the
+            # adapter would take as already posted: request a new review.
+            self._forge.create_issue_comment(
+                ctx.pr.pr_number,
+                build_trigger_body(reply, reviewer, nxt.round, nxt.head_sha),
+            )
+            return
         result = self._ops.trigger(
             self._forge,
             pr_number=ctx.pr.pr_number,
@@ -893,13 +959,19 @@ class SemanticReviewCycleRunner:
         return self._save(ctx, launched)
 
     def _escalation_recorded(self, state: SemanticReviewStateV1) -> bool:
+        """Notice posted and the parent still blocked, else the (idempotent)
+        escalation is redone; an unreadable answer counts as recorded, since a
+        repeated escalation comments again."""
         reason = state.escalation_reason or "escalated"
         kind = _escalation_notice_kind(state.attempt_id, reason)
+        parent = state.parent_issue_number
         try:
-            comments = self._forge.list_comments(state.parent_issue_number)
-        except Exception:  # unreadable: never risk a duplicate notice  # noqa: BLE001
+            if latest_notice_body(self._forge.list_comments(parent), kind) is None:
+                return False
+            labels = self._forge.get_issue_labels(parent)
+        except Exception:  # noqa: BLE001
             return True
-        return latest_notice_body(comments, kind) is not None
+        return StatusLabel.BLOCKED_HUMAN_REVIEW.value in labels
 
     def _escalate(self, ctx: _Attempt, state: SemanticReviewStateV1) -> None:
         reason = state.escalation_reason or "escalated"

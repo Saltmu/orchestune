@@ -105,6 +105,7 @@ class World:
         }
         self.claim: SemanticClaim | None = None
         self.lose_claim = False
+        self.renewed_at: list[datetime] = []
         self.fail_save_after = -1
         self.dispatched: list[str] = []
         self.polls: dict[str, SemanticOperationResult] = {}
@@ -216,7 +217,10 @@ class World:
             )
             return ClaimResult(ClaimStatus.ACQUIRED, self.claim)
 
-        def renew(_root: Any, claim: SemanticClaim, **_: Any) -> PushResult:
+        def renew(
+            _root: Any, claim: SemanticClaim, *, now: datetime, **_: Any
+        ) -> PushResult:
+            self.renewed_at.append(now)
             if self.lose_claim:
                 return PushResult(PushStatus.REJECTED, None, "claim_lost")
             return PushResult(PushStatus.PUSHED, claim)
@@ -285,6 +289,7 @@ class World:
 
     def verify_ci(self, branch: str, sha: str) -> SemanticCiObservation | None:
         self.ci.append((branch, sha))
+        self.clock += timedelta(minutes=20)  # a long CI run
         if self.ci_result == "success":
             return SemanticCiObservation(sha, SemanticCiConclusion.SUCCESS)
         if self.ci_result == "failure":
@@ -303,6 +308,7 @@ class World:
             operations=replace(self.operations(), **self.ops_overrides),
             claims=replace(self.claims(), **self.claim_overrides),
             remote_head_fn=self.refs.get,
+            clock=lambda: self.clock,
         )
         reports = runner.run()
         assert len(reports) == 1
@@ -515,6 +521,17 @@ class TestLimitsAndEscalation:
         assert world.escalations == ["review_not_acknowledged"]
         assert len(world.comments[PARENT]) == parent_comments
 
+    def test_interrupted_escalation_is_completed_once(self, world: World) -> None:
+        world.seed()
+        world.cycle()
+        world.cycle(minutes=31)
+        world.labels[PARENT].discard("status:blocked-human-review")  # label failed
+        assert world.cycle()["status"] == "advanced"
+        assert "status:blocked-human-review" in world.labels[PARENT]
+        parent_comments = len(world.comments[PARENT])
+        assert world.cycle()["status"] == "held"
+        assert len(world.comments[PARENT]) == parent_comments
+
     def test_max_rounds_escalates(self, world: World) -> None:
         world.seed(
             phase=P.CI_VERIFICATION,
@@ -554,6 +571,17 @@ class TestLimitsAndEscalation:
         report = world.cycle()
         assert _phases(report) == ("ci_verification", "fix_in_progress")
         assert world.state.fix_retries == 1 and len(world.dispatched) == 1
+
+    def test_claim_is_renewed_at_the_time_of_each_write(self, world: World) -> None:
+        world.seed(
+            phase=P.CI_VERIFICATION,
+            round=1,
+            ci_verified_sha=None,
+            attempt_started_at=T0.isoformat(),
+            phase_started_at=T0.isoformat(),
+        )
+        world.cycle()
+        assert world.renewed_at[-1] - world.renewed_at[0] >= timedelta(minutes=20)
 
     def test_head_moving_around_ci_discards_the_result(self, world: World) -> None:
         world.seed(
@@ -778,6 +806,29 @@ class TestInvalidationOverrideAndRetry:
         world.cycle()
         assert (world.state.round, world.state.fix_retries) == (1, 0)
         assert world.state.phase is P.REVIEW_PENDING
+
+    def test_reset_round_requests_a_new_review_of_the_same_head(
+        self, world: World
+    ) -> None:
+        world.seed()
+        world.cycle()
+        world.review("round 1 review of the first run")
+        world.seed(
+            phase=P.ESCALATED,
+            escalated_from=P.CI_VERIFICATION,
+            escalation_reason="max_rounds",
+            round=3,
+            state_revision=5,
+            attempt_started_at=T0.isoformat(),
+            phase_started_at=T0.isoformat(),
+        )
+        request = SemanticReviewRetryV1(ATTEMPT, HEAD, "r", "retry", "go", True)
+        world.post(PR, format_semantic_review_retry_marker(request), "alice")
+        world.cycle(minutes=10)
+        assert world.state.round == 1 and len(world.triggers()) == 2
+        assert world.cycle()["status"] == "held"  # the old review is not evidence
+        world.review("fresh review")
+        assert world.cycle()["next_phase"] == "fix_in_progress"
 
 
 class TestPostcycleWiring:
