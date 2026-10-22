@@ -70,8 +70,8 @@ class TestEnsureIntegrationPr:
             )
         ).run()
 
-        assert res["status"] == "success"
-        assert res["integration_pr_number"] == 777
+        assert res["status"] == "review_gate_blocked"
+        assert "trusted invalidation" in res["error"]
         integrator_env.create_pull_request.assert_not_called()
 
     def test_creation_failure_is_non_fatal_but_blocks_inclusion_label(
@@ -82,7 +82,13 @@ class TestEnsureIntegrationPr:
             "no commits between main and branch"
         )
 
-        res = Integrator(IntegratorConfig(parent_issue_number=100, apply=True)).run()
+        res = Integrator(
+            IntegratorConfig(
+                parent_issue_number=100,
+                apply=True,
+                semantic_review_mode="off",
+            )
+        ).run()
 
         assert res["status"] == "success"
         assert res["merged"] == ["task-1"]
@@ -171,6 +177,7 @@ class TestSemanticReview:
             parent_issue_number=100,
             integration_run_id="review-run",
             enable_semantic_review=True,
+            semantic_review_mode="advisory",
             coordinator=coordinator,
         )
         res = Integrator(config).run()
@@ -184,9 +191,8 @@ class TestSemanticReview:
         # 状態を記録したりはしない（自動マージ等の後続処理が無くなったため）。
         assert len(coordinator.calls) == 1
         assert coordinator.calls[0]["merged_subtask_ids"] == ["task-1"]
-        assert (
-            coordinator.calls[0]["temp_branch"]
-            == "integration/temp-parent-issue-100-review-run"
+        assert coordinator.calls[0]["temp_branch"].startswith(
+            "integration/temp-parent-issue-100-"
         )
         assert coordinator.calls[0]["pr_number"] == 315
 
@@ -203,6 +209,7 @@ class TestSemanticReview:
             apply=True,
             parent_issue_number=100,
             enable_semantic_review=False,
+            semantic_review_mode="off",
             coordinator=coordinator,
         )
         res = Integrator(config).run()
@@ -211,18 +218,33 @@ class TestSemanticReview:
         assert coordinator.calls == []
         assert res["semantic_review_dispatched"] is False
 
-    def test_default_on_but_skipped_without_coordinator(
-        self, integrator_env: IntegratorEnv
+    def test_default_required_waits_without_coordinator(
+        self, integrator_env: IntegratorEnv, fake_forge
     ):
-        # 既定ONだが coordinator 未注入なら安全にスキップ（既存の直接構築呼び出しを壊さない）。
+        from orchestune.outcome_record import OutcomeRecord, ReviewSummary
+
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))
         integrator_env.create_pull_request.return_value = 315
+        record = OutcomeRecord(
+            issue=1,
+            head_sha="a" * 40,
+            result="done",
+            review=ReviewSummary(
+                verdict="pass", reviewed_head_sha="a" * 40, bot="claude"
+            ),
+        )
+        fake_forge.list_comments.side_effect = lambda issue: (
+            [{"body": record.render(), "author": "bot"}] if issue == 1 else []
+        )
 
         config = IntegratorConfig(
-            parent_issue_number=100, apply=True
-        )  # coordinator=None, enable=既定True
+            parent_issue_number=100,
+            apply=True,
+            child_review_gate="required",
+            force_integration_review=True,
+        )
         assert config.enable_semantic_review is True
         res = Integrator(config).run()
 
-        assert res["status"] == "success"
+        assert res["status"] == "semantic_review_pending"
         assert res["semantic_review_dispatched"] is False

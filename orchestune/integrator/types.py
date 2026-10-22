@@ -34,6 +34,12 @@ from orchestune.integrator.timeout_policy import (
 )
 from orchestune.models import Task
 from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
+from orchestune.review.semantic_gate import (
+    VALID_SEMANTIC_REVIEW_MODES,
+    IntegrationAttemptIdentity,
+    SemanticReviewHumanOverrideV1,
+    SemanticReviewStateV1,
+)
 from orchestune.task_branch_resolution import TaskBranchResolver, TaskMergeReceipt
 
 
@@ -47,6 +53,7 @@ def _default_integration_run_id() -> str:
 
 class IntegrationStatus(StrEnum):
     SUCCESS = "success"
+    SEMANTIC_REVIEW_PENDING = "semantic_review_pending"
     FAILURE = "failure"
     PARTIAL_SUCCESS = "partial_success"
     NO_DONE_TASKS = "no_done_tasks"
@@ -79,6 +86,9 @@ class IntegrationReport(TypedDict, total=False):
     blocked_reasons: dict[str, str]
     integration_pr_number: int | None
     semantic_review_dispatched: bool
+    semantic_review_phase: str
+    attempt_id: str
+    deferred_tasks: list[str]
     newly_included: list[str]
     unparsable_done_issues: list[int]
     retried_closed_issues: list[int]
@@ -104,6 +114,8 @@ class IntegratorConfig:
     integration_run_id: str = field(default_factory=_default_integration_run_id)
     apply: bool = False
     enable_semantic_review: bool = True
+    semantic_review_mode: str = "required"
+    force_integration_review: bool = False
     coordinator: IntegrationCoordinator | None = None
     forge: Forge | None = None
     # #398/#404/#407/#659: DispatcherConfigと同じConflict Graph設定を
@@ -138,6 +150,11 @@ class IntegratorConfig:
         if self.child_review_gate not in VALID_CHILD_REVIEW_GATE_MODES:
             raise ValueError(
                 f"child_review_gate must be 'required' or 'off', got {self.child_review_gate!r}"
+            )
+        if self.semantic_review_mode not in VALID_SEMANTIC_REVIEW_MODES:
+            raise ValueError(
+                "semantic_review_mode must be 'required', 'advisory', or 'off', "
+                f"got {self.semantic_review_mode!r}"
             )
         self.build_execution_policy()  # validate the explicit settings
         self.base_branch = f"origin/parent/issue-{self.parent_issue_number}"
@@ -185,6 +202,12 @@ class IntegrationContext:
     dependency_states: DependencyIntegrationStates | None = None
     integration_pr_number: int | None = None
     semantic_review_dispatched: bool = False
+    attempt_identity: IntegrationAttemptIdentity | None = None
+    semantic_review_state: SemanticReviewStateV1 | None = None
+    semantic_review_override: SemanticReviewHumanOverrideV1 | None = None
+    reuse_existing_temp_branch: bool = False
+    deferred_tasks: list[str] = field(default_factory=list)
+    attempt_base_sha: str = ""
     newly_included: list[str] = field(default_factory=list)
     temp_worktree_path: Path | None = None
     status: IntegrationStatus = IntegrationStatus.SUCCESS

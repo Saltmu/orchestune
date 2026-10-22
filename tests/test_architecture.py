@@ -152,6 +152,26 @@ BOUNDED_RECOVERY_TERMINALS = {
         "integrator/execution.py",
         "apply_human_review_escalation",
     ),
+    "semantic_review_timeout_seconds": (
+        "dispatch/semantic_review_adapters.py",
+        "apply_human_review_escalation",
+    ),
+    "semantic_fix_timeout_seconds": (
+        "dispatch/semantic_review_adapters.py",
+        "apply_human_review_escalation",
+    ),
+    "semantic_ci_timeout_seconds": (
+        "dispatch/semantic_review_adapters.py",
+        "apply_human_review_escalation",
+    ),
+    "semantic_attempt_timeout_seconds": (
+        "dispatch/semantic_review_adapters.py",
+        "apply_human_review_escalation",
+    ),
+    "max_semantic_fix_retries": (
+        "dispatch/semantic_review_adapters.py",
+        "apply_human_review_escalation",
+    ),
 }
 
 

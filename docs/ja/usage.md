@@ -340,7 +340,9 @@ else { Write-Warning 'report not created' }
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | 自動選択（非CI: `auto` / GitHub Actions: `cloud-routine`） | エージェントの起動先。未指定時は設定ファイルの値、または実行環境（`GITHUB_ACTIONS`環境変数）から自動選択されます。`auto`はPATH上のローカルCLIを検出します。`local`は後方互換のダミー起動（no-op、テスト・dry-run用途）になります。 |
 | `--max-concurrent <int>` | `2` (設定ファイル未指定時) | 同時に実行（起動）できるサブタスクエージェントの最大数。設定ファイルの値よりもCLI引数が優先されます。 |
 | `--profile <name>` | - | この実行全体で使用するタスクプロファイル（例: `balanced`, `fast-code`, `deep-reasoning`）をオーバーライドします。タスクメタデータのプロファイルやモデルランクより優先されます。 |
-| `--child-review-gate {required,off}` | - | 子サブIssueのレビュー合否検証モード（`required` または `off`）。未指定時は設定ファイル（`child-review-gate`）または環境変数（`ORCHESTUNE_CHILD_REVIEW_GATE`）、既定値は `required`。`off` 指定時は検証をスキップし警告を出力。[§4.5](#45-子レビュー証跡ゲート)を参照。 |
+| `--child-review-gate {required,off}` | - | 子サブIssueのレビュー合否検証モード（`required` または `off`）。未指定時は設定ファイル（`child-review-gate`）または環境変数（`ORCHESTUNE_CHILD_REVIEW_GATE`）、既定値は `required`。`off` 指定時は検証をスキップし警告を出力。[§4.5](#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)を参照。 |
+| `--semantic-review-mode {required,advisory,off}` | - | 統合PRの第2層セマンティックレビューモード（`required`、`advisory`、または `off`）。未指定時は設定ファイル（`semantic-review-mode`）または環境変数（`ORCHESTUNE_SEMANTIC_REVIEW_MODE`）、既定値は `required`。`off` でスキップ。[§4.5](#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)を参照。 |
+| `--force-integration-review` | - | 単一タスクFast-Pathをバイパスし、子タスク1件の場合でも統合PRセマンティックレビュー（第2層）を強制実行するフラグ。 |
 | `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。安全のためCLI引数でのみ指定可能（設定ファイルでの指定は禁止）です。未指定でローカルCLIターゲットを実行しようとした場合は設定エラーで拒否されます（Fail-Closed）。 |
 
 ### 設定ファイル (`orchestune.toml`) による詳細設定
@@ -354,6 +356,17 @@ else { Write-Warning 'report not created' }
 | `reviewer-bot` | `"auto"` | 実装後に依頼するレビュアー（`"auto"`, `"claude"`, `"codex"`）。`auto`はターゲットから判定し、Claude系にはCodex、Codex/agy系にはClaudeを割り当てます。 |
 | `ci-command` | `"./scripts/local-ci.sh"` | Integratorが統合ブランチ上で実行するCIコマンド（shlex構文の文字列または文字列リスト。例: `"make ci"`）。導入先リポジトリのCIエントリーポイントが異なる場合は必ず設定してください。 |
 | `child-review-gate` | `"required"` | 子タスクのレビュー合格証跡（`verdict=pass`、SHA一致）を検証するゲート（`"required"`, `"off"`）。`"off"`で検証をスキップし警告を出力。 |
+| `semantic-review-mode` | `"required"` | 統合PRの第2層セマンティックレビューモード（`"required"`, `"advisory"`, `"off"`）。既定値は`"required"`。 |
+| `force-integration-review` | `false` | 単一タスクFast-Pathをバイパスし、子タスク1件の場合でも統合PRセマンティックレビュー（第2層）を強制実行するかどうか。 |
+| `semantic-review-provider` | `"auto"` | 第2層セマンティックレビューのレビュアープロバイダ（`"auto"`, `"claude"`, `"codex"`）。 |
+| `semantic-fix-provider` | `"auto"` | 第2層セマンティック修正のプロバイダ（`"auto"` または設定されたディスパッチターゲット）。 |
+| `semantic-review-trigger` | `"pr-comment"` | 第2層セマンティックレビューのトリガー方式（`"pr-comment"`）。 |
+| `max-semantic-review-rounds` | `3` | 第2層セマンティックレビューの最大ラウンド数（1〜5）。超過時はエスカレーション。 |
+| `max-semantic-fix-retries` | `2` | 第2層セマンティック修正の最大リトライ数（0で自動修正無効化）。 |
+| `semantic-review-timeout-seconds` | `1800` | 第2層セマンティックレビュー1回のタイムアウト秒数（既定30分）。 |
+| `semantic-fix-timeout-seconds` | `1800` | 第2層セマンティック修正1回のタイムアウト秒数（既定30分）。 |
+| `semantic-ci-timeout-seconds` | `1800` | 修正後HEADに束縛したローカルCI検証のタイムアウト秒数（既定30分）。 |
+| `semantic-attempt-timeout-seconds` | `7200` | 第2層統合PRの試行全体（全ラウンド・修正・CI）のタイムアウト秒数（既定2時間）。超過時はエスカレーション。 |
 | `max-launches-per-window` | 未設定（上限なし） | 時間窓（`window-seconds`）あたりの起動数上限。未設定: 時間単位の上限なし（並行数 `max-concurrent` が主軸。トークン予算・競合などの制約は維持）。`0`: 起動禁止（ラベル更新・GCなどの処理は行う）。`1`以上: 時間窓あたりの起動数上限。TOMLにnullはないため、未設定にするにはキーを省略します。 |
 | `window-seconds` | `7200` | 起動数上限・`max-tokens-per-window`の集計・aging正規化・起動履歴の保持に使う時間窓の秒数（既定は2時間）。 |
 | `deviation-buffer-lines` | `5` | ライブロックを防止するための、フットプリントから逸脱したファイルの変更行数の許容バッファ値。 |
@@ -563,11 +576,22 @@ GitHubの `Closes #N` による自動リンクとIssueサイドバーの「Devel
 
 ---
 
-### 4.5 子レビュー証跡ゲート
+<a id="45-子レビュー証跡ゲート"></a>
+### 4.5 子レビュー証跡ゲートと第2層セマンティックレビューゲート
 
-Integratorが`parent/issue-{N}`を更新する（4.2の自動マージ）直前に、統合対象の各子が合格したレビュー証跡を持つことを検証します。これが必須の第1層ゲートです。統合PRのセマンティックレビュー（第2層）はadvisoryのままで、マージをブロックしません（[architecture/integration.md](architecture/integration.md)）。
+Orchestuneでは、子タスクから親ブランチ（`parent/issue-{N}`）への統合において、**第1層（子PRレビュー証跡ゲート）**と**第2層（統合PRセマンティックレビュー・修正ループゲート）**の二段構えゲートを採用しています。
 
-**責務分担**
+- **第1層（子PRレビュー証跡ゲート）**: Integratorが統合一時ブランチを作成する前に、統合対象の各子が合格したレビュー証跡（`verdict=pass`、HEAD SHA一致）を持つことを検証します（既定: `required`）。
+- **第2層（統合PRセマンティックレビューゲート）**: 複数タスクの統合PRに対し、結合特化のセマンティックレビュー・修正ループ（レビュー収集 → 判断兼修正ジョブ → claim付き昇格 → ローカルCI → 再レビュー）を実行します（既定: `required`）。子タスクが1件のみで第1層を通過している場合は、単一タスクFast-Path（`fast_path_passed`）により第2層レビューをバイパスして即時統合されます（`--force-integration-review` で強制可能）。詳細なアーキテクチャは [architecture/integration.md](architecture/integration.md) を参照してください。
+  > [!NOTE]
+  > 現行バージョンにおいてIntegratorによる第2層ゲート検証はセマンティックレビュー対応ターゲット（`ClaudeCodeCloudRoutineDispatchTarget`等）のもとで適用されます。全ローカル／非クラウドターゲットにおける完全なターゲット非依存のゲート適用は #1384 にて追跡されています。
+
+**人間による2段階のスキップ方法**
+
+1. **実行全体スキップ**: `--semantic-review-mode off`（設定キー `semantic-review-mode = "off"`、環境変数 `ORCHESTUNE_SEMANTIC_REVIEW_MODE=off`）を指定すると、第2層セマンティックレビューをオフにして統合を進めます。
+2. **個別統合PRの明示スキップ**: `status:blocked-human-review` やエスカレーション（`escalated`）状態の統合PRに対し、コラボレーター権限を持つ人間が有効なJSONペイロードを含むoverrideコメント（`<!-- orchestune:semantic-review-override:v1 {"attempt_id": "<attempt_id>", "head_sha": "<head_sha>", "reason": "人間による確認完了"} -->`）をPRに投稿することで、試行を `skipped_by_human` に遷移させて安全に親ブランチへ確定・統合できます。
+
+**第1層の責務分担**
 
 | 担当 | 責務 |
 | :--- | :--- |
@@ -598,6 +622,8 @@ Integratorが`parent/issue-{N}`を更新する（4.2の自動マージ）直前�
 **設定**: `--child-review-gate {required,off}`、設定キー`child-review-gate`、環境変数`ORCHESTUNE_CHILD_REVIEW_GATE`。既定値は`required`です。`off`はその実行のすべての子で検証をスキップし、警告を出力します。明示的なオプトアウトであり、自動で選ばれることはありません。
 
 **移行**: このゲート導入前に投稿されたOutcome Recordにはレビュー証跡がなく、`legacy`として停止します。移行期間中は、(a) 進行中の子の統合が終わるまで明示的に`off`を指定する、または (b) 停止を前提に、まだhandoffされていない子は子PRで再レビューして`orchestune complete`を再実行し、すでにhandoff済みの子は (a) を使います。legacyの子の統合が済んだら`required`へ戻してください。
+
+**第2層ゲートの移行と注意点**: 第2層セマンティックレビューは既定で `required` です。セマンティックレビューbotやワークフローが未導入のリポジトリでは、複数タスクの統合PRが `review_not_acknowledged` でエスカレーションします。未導入環境では `--semantic-review-mode advisory` または `--semantic-review-mode off` を指定して運用してください。なお、統合PRのCI検証はリポジトリの `ci-command`（ローカルCI）によって検証され、修正出力は一時ブランチ（`integration/semantic-fix/*`）へ安全に退避・昇格されます。トークン上限管理は本レイヤのスコープ外（未対応）です。
 
 ### 4.6 統合実行の期限とtimeoutからの復旧
 
@@ -722,7 +748,7 @@ orchestune claim <N> --amend-footprint
 
 ## 8. ローカルCI証跡の保存と完了処理 (`orchestune complete`)
 
-`orchestune complete` の成功は、固定したOutcome Recordの投稿、結果に対応するIssueラベル（`status:done` / `status:blocked` / `status:not-needed`）の確認、および共有台帳へのhandoffとreplay receiptの永続保存が成立したことを意味します。PRマージ、対応不要の独立レビュー承認、worktree回収の完了までは意味しません。`done` は公開前にローカルCI、PR/head、子レビュー証跡（[§4.5](#45-子レビュー証跡ゲート)）、トークン上限の証跡を検証し、GCはその証跡を消費します。予約なしの旧完了経路ではGC側のトークン上限判定を維持します。
+`orchestune complete` の成功は、固定したOutcome Recordの投稿、結果に対応するIssueラベル（`status:done` / `status:blocked` / `status:not-needed`）の確認、および共有台帳へのhandoffとreplay receiptの永続保存が成立したことを意味します。PRマージ、対応不要の独立レビュー承認、worktree回収の完了までは意味しません。`done` は公開前にローカルCI、PR/head、子レビュー証跡（[§4.5](#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)）、トークン上限の証跡を検証し、GCはその証跡を消費します。予約なしの旧完了経路ではGC側のトークン上限判定を維持します。
 
 claim済みworktreeから `orchestune complete --issue <N> --pr <PR> --result done` を実行します。`blocked` は `--reason` が必要です。`not-needed` は未claimのIssueにもworktreeを作らず予約できます。コマンドは外部操作前にcompletion IDを表示します。途中から再開するには、対応する claim marker を保持したまま、同一引数に `--completion-id <ID>` を付けて再実行してください。引数・所有者・generationが変わると固定済み要求を上書きできません。handoff後の再実行は、後続ポリシーがIssueをqueuedにした後やactive回収後でも保存結果を返し、古いラベルへ戻しません。
 

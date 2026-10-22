@@ -137,12 +137,35 @@ def test_post_trigger_has_separate_head_and_unchanged_workflow_marker():
     assert body.count("orchestune:review-head") == 1
 
 
-def test_trigger_resume_uses_original_head_after_push():
+def test_trigger_reposts_when_pr_head_moved_since_trigger():
+    from scripts.wait_for_review import _handle_review_trigger
+
+    new_head = "b" * 40
+    posted = {
+        "id": 2,
+        "body": f"<!-- orchestune:review-head {new_head} -->",
+        "created_at": "2026-01-01T00:05:00Z",
+    }
+    with (
+        patch(
+            "scripts.wait_for_review.post_review_trigger", return_value=posted
+        ) as post,
+        patch("scripts.wait_for_review._fetch_pr_head_sha", return_value=new_head),
+    ):
+        _, trigger_id, requested = _handle_review_trigger(
+            1, "claude", previous_round(), {}, set(), 1, 5, None, None
+        )
+    assert requested == new_head
+    assert trigger_id == 2
+    post.assert_called_once()
+
+
+def test_trigger_resume_reuses_trigger_when_head_matches():
     from scripts.wait_for_review import _handle_review_trigger
 
     with (
         patch("scripts.wait_for_review.post_review_trigger") as post,
-        patch("scripts.wait_for_review._fetch_pr_head_sha", return_value="b" * 40),
+        patch("scripts.wait_for_review._fetch_pr_head_sha", return_value=SHA),
     ):
         _, _, requested = _handle_review_trigger(
             1, "claude", previous_round(), {}, set(), 1, 5, None, None

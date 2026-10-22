@@ -632,7 +632,7 @@ class TestDispatcherConfigLoading:
             )
             out = json.loads(Path(saved_line.split("report saved: ", 1)[1]).read_text())
             assert "post_cycle_results" in out
-            assert len(out["post_cycle_results"]) == 5
+            assert len(out["post_cycle_results"]) == 6
             assert out["post_cycle_results"][0]["status"] == "success"
 
         # ケース2: RETRYABLE_FAILURE
@@ -683,8 +683,8 @@ class TestDispatcherConfigLoading:
                 line for line in captured.out.splitlines() if "report saved: " in line
             )
             out = json.loads(Path(saved_line.split("report saved: ", 1)[1]).read_text())
-            assert out["post_cycle_results"][1]["status"] == "retryable_failure"
-            assert out["post_cycle_results"][1]["error_message"] == "retryable-error"
+            assert out["post_cycle_results"][2]["status"] == "retryable_failure"
+            assert out["post_cycle_results"][2]["error_message"] == "retryable-error"
 
         # ケース3: FATAL_FAILURE
         with (
@@ -734,7 +734,7 @@ class TestDispatcherConfigLoading:
                 line for line in captured.out.splitlines() if "report saved: " in line
             )
             out = json.loads(Path(saved_line.split("report saved: ", 1)[1]).read_text())
-            assert out["post_cycle_results"][1]["status"] == "fatal_failure"
+            assert out["post_cycle_results"][2]["status"] == "fatal_failure"
 
         # ケース4: main()のcheck_auth()自体がForgeAuthErrorを投げる場合
         fake_forge.check_auth.reset_mock(side_effect=True)
@@ -762,7 +762,7 @@ class TestDispatcherConfigLoading:
             )
             out = json.loads(Path(saved_line.split("report saved: ", 1)[1]).read_text())
             assert "post_cycle_results" in out
-            assert len(out["post_cycle_results"]) == 5
+            assert len(out["post_cycle_results"]) == 6
             for res in out["post_cycle_results"]:
                 assert res["status"] == "fatal_failure"
                 assert "main-auth-failed" in res["error_message"]

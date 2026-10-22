@@ -70,6 +70,20 @@ reviewer-bot = "auto"
 # Verifies that every merged child has a valid review evidence pass with matching SHA.
 child-review-gate = "required"
 
+# Layer-2 integration-PR semantic review. This is independent from the child
+# review gate above and from legacy not-needed verification.
+# semantic-review-mode = "required"      # required / advisory / off (default: required)
+# force-integration-review = false       # bypass the single-task Fast-Path (default: false)
+semantic-review-provider = "auto"        # auto / claude / codex
+semantic-fix-provider = "auto"           # auto or a configured dispatch target
+semantic-review-trigger = "pr-comment"  # dispatch-target is reserved, not supported yet
+max-semantic-review-rounds = 3            # 1..5
+max-semantic-fix-retries = 2              # 0 disables automatic fix retries
+semantic-review-timeout-seconds = 1800
+semantic-fix-timeout-seconds = 1800
+semantic-ci-timeout-seconds = 1800
+semantic-attempt-timeout-seconds = 7200
+
 # -----------------------------------------------------------------------------
 # Consistency supervisor defaults
 # -----------------------------------------------------------------------------

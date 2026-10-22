@@ -46,6 +46,25 @@ from orchestune.integrator.timeout_policy import (
     IntegrationExecutionPolicy,
 )
 from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
+from orchestune.review.rounds import MAX_REVIEW_ROUNDS
+from orchestune.review.semantic_gate import (
+    VALID_SEMANTIC_REVIEW_MODES,
+    SemanticReviewLimits,
+)
+
+VALID_SEMANTIC_REVIEW_PROVIDERS = frozenset({"auto", "claude", "codex"})
+VALID_SEMANTIC_FIX_PROVIDERS = frozenset(
+    {
+        "auto",
+        "claude-cli",
+        "codex-cli",
+        "agy-cli",
+        "cloud-routine",
+        "codex-cloud",
+        "local",
+    }
+)
+VALID_SEMANTIC_REVIEW_TRIGGERS = frozenset({"pr-comment", "dispatch-target"})
 
 DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST = frozenset(
     {
@@ -141,6 +160,19 @@ class DispatcherConfig:
     profile: str | None = None
     # #1031: 子タスクのレビュー合格証跡（verdict=pass, SHA一致）を検証するゲート
     child_review_gate: str = "required"
+    # #1361: Layer-1 child review and not-needed review are independent from this
+    # Layer-2 integration-PR semantic review policy.
+    semantic_review_mode: str = "required"
+    force_integration_review: bool = False
+    semantic_review_provider: str = "auto"
+    semantic_fix_provider: str = "auto"
+    semantic_review_trigger: str = "pr-comment"
+    max_semantic_review_rounds: int = 3
+    max_semantic_fix_retries: int = 2
+    semantic_review_timeout_seconds: int = 1800
+    semantic_fix_timeout_seconds: int = 1800
+    semantic_ci_timeout_seconds: int = 1800
+    semantic_attempt_timeout_seconds: int = 7200
     # #820: Integratorの依存準備・CI・親Issue単位の統合サイクル・期限後の後始末・
     # 補助git/ghコマンドの待機上限（秒）と、確認済みtimeout後の自動再試行回数。
     # 既定値はIntegratorConfigと共通のポリシー定数から取る。0による無期限化は
@@ -172,6 +204,7 @@ class DispatcherConfig:
             raise ValueError(
                 f"child_review_gate must be 'required' or 'off', got {self.child_review_gate!r}"
             )
+        self._validate_semantic_review_settings()
         _ = self.integration_execution_policy  # validates the seven #820 settings
         if not isinstance(self.consistency_mode, ConsistencyMode):
             self.consistency_mode = ConsistencyMode(self.consistency_mode)
@@ -199,6 +232,50 @@ class DispatcherConfig:
             max_integration_timeout_retries=self.max_integration_timeout_retries,
             integration_timeout_backoff_seconds=self.integration_timeout_backoff_seconds,
         )
+
+    @property
+    def semantic_review_limits(self) -> SemanticReviewLimits:
+        return SemanticReviewLimits(
+            max_rounds=self.max_semantic_review_rounds,
+            max_fix_retries=self.max_semantic_fix_retries,
+            review_timeout_seconds=self.semantic_review_timeout_seconds,
+            fix_timeout_seconds=self.semantic_fix_timeout_seconds,
+            ci_timeout_seconds=self.semantic_ci_timeout_seconds,
+            attempt_timeout_seconds=self.semantic_attempt_timeout_seconds,
+        )
+
+    def _validate_semantic_review_settings(self) -> None:
+        choices = (
+            ("semantic_review_mode", VALID_SEMANTIC_REVIEW_MODES),
+            ("semantic_review_provider", VALID_SEMANTIC_REVIEW_PROVIDERS),
+            ("semantic_fix_provider", VALID_SEMANTIC_FIX_PROVIDERS),
+            ("semantic_review_trigger", VALID_SEMANTIC_REVIEW_TRIGGERS),
+        )
+        for name, allowed in choices:
+            value = getattr(self, name)
+            if value not in allowed:
+                raise ValueError(f"{name} has unsupported value {value!r}")
+        for key in (
+            "max_semantic_review_rounds",
+            "max_semantic_fix_retries",
+            "semantic_review_timeout_seconds",
+            "semantic_fix_timeout_seconds",
+            "semantic_ci_timeout_seconds",
+            "semantic_attempt_timeout_seconds",
+        ):
+            val = getattr(self, key)
+            if not isinstance(val, int) or isinstance(val, bool):
+                raise ValueError(f"{key} must be an integer, got {val!r}")
+        if not isinstance(self.force_integration_review, bool):
+            raise ValueError("force_integration_review must be a boolean")
+        if not 1 <= self.max_semantic_review_rounds <= MAX_REVIEW_ROUNDS:
+            raise ValueError(
+                "max_semantic_review_rounds must be between "
+                f"1 and {MAX_REVIEW_ROUNDS}"
+            )
+        if self.max_semantic_fix_retries < 0:
+            raise ValueError("max_semantic_fix_retries must be non-negative")
+        _ = self.semantic_review_limits
 
     @property
     def resolved_forge(self) -> Forge:
