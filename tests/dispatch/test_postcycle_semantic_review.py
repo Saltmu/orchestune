@@ -498,6 +498,15 @@ class TestReviewFixLoop:
         world.post(PR, world.triggers()[-1], "mallory")  # a copied request
         assert _phases(world.cycle()) == ("review_pending", "fix_in_progress")
 
+    def test_unknown_comment_trust_surfaces_as_inputs_unknown(
+        self, world: World
+    ) -> None:
+        world.seed()
+        world.cycle()
+        cast(Any, world.config.forge).list_notice_trusted_authors.return_value = None
+        world.post(PR, world.triggers()[-1], "someone")
+        assert world.cycle()["status"] == "inputs_unknown"
+
     def test_review_before_the_trigger_or_of_another_head_is_not_evidence(
         self, world: World
     ) -> None:

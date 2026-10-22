@@ -627,6 +627,8 @@ class SemanticReviewCycleRunner:
 
     def _trusted(self, ctx: _Attempt, comment: dict[str, Any]) -> bool:
         presence, _ = ctx.trust.evaluate_candidate_markers([comment])
+        if presence is NoticePresence.UNKNOWN:
+            raise _Stop("inputs_unknown", error="comment author trust is unknown")
         return presence is NoticePresence.PRESENT
 
     def _trusted_triggers(self, ctx: _Attempt) -> list[ReviewTrigger]:
