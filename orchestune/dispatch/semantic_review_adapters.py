@@ -13,6 +13,7 @@ import re
 import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, cast
@@ -50,7 +51,7 @@ _LOCAL_FIX_BINARIES = {
     "codex-cloud": "codex",
 }
 _SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b(token|secret|password|authorization)\s*[:=]\s*([^\s,;]+)"
+    r"(?i)\b(authorization)\s*[:=]\s*(?:(?:bearer|basic)\s+)?\S+|\b(token|secret|password)\s*[:=]\s*\S+"
 )
 
 
@@ -77,9 +78,11 @@ class SemanticOperationResult:
 
 
 def _redact(value: object) -> str:
-    text = _SECRET_ASSIGNMENT.sub(r"\1=<redacted>", str(value))
+    text = _SECRET_ASSIGNMENT.sub(
+        lambda m: f"{m.group(1) or m.group(2)}=<redacted>", str(value)
+    )
     for key, secret in os.environ.items():
-        if secret and any(
+        if len(secret) >= 8 and any(
             word in key.upper() for word in ("TOKEN", "SECRET", "PASSWORD")
         ):
             text = text.replace(secret, "<redacted>")
@@ -216,6 +219,7 @@ def trigger_semantic_review_round(
         forge.list_comments(pr_number), reviewer, round_number, head_sha
     )
     trust = TrustContext(forge)
+    has_unknown = False
     for comment in reversed(matches):
         presence, _ = trust.evaluate_candidate_markers([comment])
         if presence is NoticePresence.PRESENT:
@@ -226,12 +230,14 @@ def trigger_semantic_review_round(
                 input_sha=head_sha,
             )
         if presence is NoticePresence.UNKNOWN:
-            return SemanticOperationResult(
-                operation_id,
-                SemanticOperationStatus.INDETERMINATE,
-                input_sha=head_sha,
-                error_code="trigger_author_unknown",
-            )
+            has_unknown = True
+    if has_unknown:
+        return SemanticOperationResult(
+            operation_id,
+            SemanticOperationStatus.INDETERMINATE,
+            input_sha=head_sha,
+            error_code="trigger_author_unknown",
+        )
     created = forge.create_issue_comment(
         pr_number, build_trigger_body(reply_body, reviewer, round_number, head_sha)
     )
@@ -391,7 +397,18 @@ def poll_semantic_operation(
     pr_number: int,
     attempt_id: str,
     operation_id: str,
+    started_at: datetime | None = None,
+    timeout_seconds: int | None = None,
+    now: datetime | None = None,
 ) -> SemanticOperationResult:
+    if started_at is not None and timeout_seconds is not None:
+        current_time = now if now is not None else datetime.now(UTC)
+        if current_time >= started_at + timedelta(seconds=timeout_seconds):
+            return SemanticOperationResult(
+                operation_id,
+                SemanticOperationStatus.INDETERMINATE,
+                error_code="operation_timed_out",
+            )
     try:
         bodies = _trusted_comment_bodies(forge, forge.list_comments(pr_number))
         result = restore_latest_fix_result(

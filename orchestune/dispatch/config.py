@@ -255,6 +255,17 @@ class DispatcherConfig:
             value = getattr(self, name)
             if value not in allowed:
                 raise ValueError(f"{name} has unsupported value {value!r}")
+        for key in (
+            "max_semantic_review_rounds",
+            "max_semantic_fix_retries",
+            "semantic_review_timeout_seconds",
+            "semantic_fix_timeout_seconds",
+            "semantic_ci_timeout_seconds",
+            "semantic_attempt_timeout_seconds",
+        ):
+            val = getattr(self, key)
+            if not isinstance(val, int) or isinstance(val, bool):
+                raise ValueError(f"{key} must be an integer, got {val!r}")
         if not isinstance(self.force_integration_review, bool):
             raise ValueError("force_integration_review must be a boolean")
         if not 1 <= self.max_semantic_review_rounds <= MAX_REVIEW_ROUNDS:

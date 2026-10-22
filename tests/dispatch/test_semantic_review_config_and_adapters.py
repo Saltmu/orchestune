@@ -427,3 +427,73 @@ class TestSemanticReviewOperations:
         )
         with pytest.raises(AttributeError):
             result.completed = True  # type: ignore[misc]
+
+    def test_poll_returns_indeterminate_on_deadline_exceeded(
+        self, tmp_path: Path
+    ) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        forge = CommentForge([])
+        started = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
+        overdue = started + timedelta(seconds=1801)
+        res = poll_semantic_operation(
+            forge,  # type: ignore[arg-type]
+            tmp_path,
+            pr_number=7,
+            attempt_id=ATTEMPT,
+            operation_id=OPERATION,
+            started_at=started,
+            timeout_seconds=1800,
+            now=overdue,
+        )
+        assert res.status == SemanticOperationStatus.INDETERMINATE
+        assert res.error_code == "operation_timed_out"
+
+    def test_redact_handles_bearer_tokens_and_long_env_values(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from orchestune.dispatch.semantic_review_adapters import _redact
+
+        monkeypatch.setenv("SHORT_TOKEN", "1")
+        monkeypatch.setenv("MY_SECRET_TOKEN", "secret-token-12345")
+        text = "Authorization: Bearer secret-token-12345 and count is 1"
+        redacted = _redact(text)
+        assert "secret-token-12345" not in redacted
+        assert "count is 1" in redacted
+        assert "Authorization=<redacted>" in redacted
+
+    def test_trigger_prefers_present_over_unknown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from orchestune.pr_link_notice_trust import NoticePresence
+
+        marker = build_trigger_body("summary", "claude", 1, HEAD)
+        forge = CommentForge(
+            [
+                {"id": 101, "author": "trusted[bot]", "body": marker},
+                {"id": 102, "author": "unknown-user", "body": marker},
+            ]
+        )
+        evaluations = [NoticePresence.UNKNOWN, NoticePresence.PRESENT]
+        monkeypatch.setattr(
+            "orchestune.dispatch.semantic_review_adapters.TrustContext.evaluate_candidate_markers",
+            lambda _self, _comments: (evaluations.pop(0), "evaluated"),
+        )
+        res = trigger_semantic_review_round(
+            forge,  # type: ignore[arg-type]
+            pr_number=1,
+            attempt_id=ATTEMPT,
+            round_number=1,
+            head_sha=HEAD,
+            reviewer="claude",
+            reply_body="summary",
+        )
+        assert res.status == SemanticOperationStatus.DISPATCHING
+        assert res.trigger_comment_id == 101
+
+    def test_config_rejects_bool_for_integer_timeouts(self) -> None:
+        with pytest.raises(ValueError, match="must be an integer"):
+            DispatcherConfig(
+                parent_issue_number=1033,
+                semantic_review_timeout_seconds=True,  # type: ignore[arg-type]
+            )
