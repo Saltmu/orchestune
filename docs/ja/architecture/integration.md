@@ -59,10 +59,13 @@ sequenceDiagram
    最終PRの作成後に子Issueが追加され、openな子Issueがある間は、Integratorが毎サイクル既存の最終PRの本文を保留表示へ更新します（`orchestune/integrator/pr.py`の`mark_parent_final_pr_pending`）。冒頭が「⚠️ 未完了の子Issue #X があります。親ブランチへの反映までマージしないでください」に替わり、未完了の子Issueはこの警告に列挙されます（一覧表の列は変わりません）。PRは新規作成せず、子Issueの一覧を1件も作れなかったサイクルでは本文を書き換えません。全子Issueがクローズされると、通常の本文へ戻ります。保留中に人間が最終PRをマージしても、openな子Issueがあるため親Issueはクローズされず、追加分が親ブランチへ統合されると新しい最終PRが作られます。
 6. **検収マージと親Issueクローズ**:
    人間がこの最終PRをレビューしてマージします（唯一の人間クリック）。マージが検知されると、Integratorが親Issueを`completed`理由で自動的にクローズします。
-7. **子レビュー証跡ゲート（第1層・必須）とセマンティックレビュー（第2層・advisory）**: 子のレビュー自体は統合ステップの責務ではなく、Integratorは「レビューが行われたこと」だけを確認します。
-   - **第1層 — 子レビュー証跡ゲート（既定`required`）**: 子PR上で開発スキルのレビューループ（`skills/local-ci-developer/references/review-loop.md`のStep 11）が実行され、LLMが指摘ごとに判断を記録します。`orchestune complete --result done`がPRのレビュー取得状態を取得し直し、判断表とレビュー対象SHAを検証して、結果をレビュー証跡としてdone Outcome Recordへ保存します。検証に失敗した場合はcompleteを拒否し、何も投稿しません。Integratorは`parent/issue-{N}`を更新する直前に、統合対象の各子についてその証跡を**検証するだけ**です。子が合格するのは、最新のOutcome Recordが`result=done`かつ`verdict=pass`で、記録されたheadとレビュー済みheadの両方がマージ対象のコミットと一致する場合に限ります。1件でも満たさなければfail-closedで、親ブランチを更新せず、子Issueのクローズも子ブランチの削除も行わず、**親Issue**を`status:blocked-human-review`へエスカレーションします（失敗の組み合わせごとにコメント1件。理由は`legacy`・`skipped`・`not_pass`・`sha_mismatch`・`absent`・`lookup_unknown`・`integration_evidence_missing`）。再開・移行の手順は[使い方 §4.5](../usage.md#45-子レビュー証跡ゲート)を参照してください。
-   - **第2層 — セマンティックレビュー（advisory）**: 子レベルの統合PR作成時にAIが自動で変更点の整合性をレビューし、不整合（例えばインターフェースの変更が反映されていないなど）をPRへのコメントとして検出・報告します。子の自動マージを待たせることも取り消すこともなく、Python側が結果を追跡することもありません（fire-and-forget）。この層を必須ゲートにするのは後続Epic #1033の範囲です。
-   第2層の所見は子の統合PRに付き、検収PR（親ブランチ→`main`）へ転記もリンクもされません。非同期の所見が子PRのクローズ後に届くこともあるため、読むには子PRを個別に辿る必要があります。
+7. **二層レビューゲート（第1層・必須 ＋ 第2層・必須）**:
+   - **第1層 — 子レビュー証跡ゲート（既定`required`）**: 子PR上で開発スキルのレビューループ（`skills/local-ci-developer/references/review-loop.md`のStep 11）が実行され、LLMが指摘ごとに判断を記録します。`orchestune complete --result done`がPRのレビュー取得状態を取得し直し、判断表とレビュー対象SHAを検証して、結果をレビュー証跡としてdone Outcome Recordへ保存します。検証に失敗した場合はcompleteを拒否し、何も投稿しません。Integratorは`parent/issue-{N}`を更新する直前に、統合対象の各子についてその証跡を**検証するだけ**です。子が合格するのは、最新のOutcome Recordが`result=done`かつ`verdict=pass`で、記録されたheadとレビュー済みheadの両方がマージ対象のコミットと一致する場合に限ります。1件でも満たさなければfail-closedで、親ブランチを更新せず、子Issueのクローズも子ブランチの削除も行わず、**親Issue**を`status:blocked-human-review`へエスカレーションします（失敗の組み合わせごとにコメント1件。理由は`legacy`・`skipped`・`not_pass`・`sha_mismatch`・`absent`・`lookup_unknown`・`integration_evidence_missing`）。再開・移行の手順は[使い方 §4.5](../usage.md#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)を参照してください。
+   - **第2層 — 統合PRセマンティックレビュー・修正ループゲート（既定`required`）**: 複数タスクの統合PRに対して、Dispatcher post-cycleの `SemanticReviewCycleRunner`（#1362）がリモートclaim（Git refのCAS・世代付き所有権、#1370）による排他制御のもと、1サイクル1フェーズずつ状態マシンを進めます。
+     - **単一タスクFast-Path**: 子タスクが1件のみで第1層レビューを通過している場合、第2層レビューはバイパス（`fast_path_passed`）され、即座にIntegratorにより親ブランチへ確定されます（`--force-integration-review` で強制可能）。
+     - **レビュー収集と判断・修正**: #1099準拠の判断表評価のもと、指摘がある場合は判断兼修正ジョブを起動し、修正出力ブランチ（`integration/semantic-fix/*`）へプッシュします。
+     - **claim付き昇格とローカルCI検証**: 修正コミットは一時統合ブランチへ昇格され、修正後HEADに束縛したローカルCI（`ci-command`）で検証されます。
+     - **再レビューと確定**: 次ラウンドの再レビューが合格（`pass`）すると、`PASSED` 終端状態が保存され、Integratorが同一サイクル内で親ブランチへatomic pushして確定します。上限超過時は親Issueを `status:blocked-human-review` へエスカレーションします。人間は `--semantic-review-mode off` または override コメント（`<!-- orchestune:semantic-review-override:v1 ... -->`）で明示スキップ可能です。
 
 ---
 

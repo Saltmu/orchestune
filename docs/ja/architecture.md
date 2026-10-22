@@ -152,15 +152,15 @@ Orchestuneは、人間が**内容を判断・レビューする**地点を「分
 
 子レベルの統合におけるマージ前CI検証は、実質的にサブタスク単位の人間レビューの代替として機能します。すべての子レベル統合PRは`parent/issue-{N}`にマージされる前にCIをパスする必要があるため、個々の差分を人間が見なくても機械的な正しさは自動的に担保されます。
 
-#### 子レビュー証跡ゲート
+#### 二層レビューゲート（第1層子レビュー証跡ゲート ＋ 第2層統合PRセマンティックレビューゲート）
 
-CIだけが自動ゲートではありません。各子PRのレビューはCIとは別の必須チェックで、責務は次の3者に分かれます。
+CIだけが自動ゲートではありません。Orchestuneでは子PRレビュー（第1層）と統合PRセマンティックレビュー（第2層）の二段構えで安全性を担保します。
 
 - 開発スキル（第1層）: 子PR上でレビューループを実行し、LLMが指摘ごとに判断を記録します。
 - `orchestune complete --result done`: その判断表を、PRから取得し直したレビュー状態・レビュー対象SHAと突き合わせて検証し、結果をレビュー証跡としてdone Outcome Recordへ保存します。検証に失敗した場合はcompleteを拒否し、何も投稿しません。
-- Integrator: `parent/issue-{N}`を更新する直前に、保存済みの証跡を検証するだけで、自らレビューは実行しません。
+- Integrator & Runner（第2層）: 複数タスク統合PRに対して、Dispatcher post-cycleの `SemanticReviewCycleRunner` がセマンティックレビュー・修正ループを駆動し（既定 `required`）、Integratorが確定します。子タスク1件の場合は単一タスクFast-Pathで即時統合されます。
 
-既定の`required`では、マージ対象のコミットに対する合格証跡を持たない子が1件でもあれば統合をfail-closedで停止し、親Issueを`status:blocked-human-review`へ遷移させます。統合diffを対象とする別系統のセマンティックレビュー（第2層）はadvisoryのままで、必須化は後続Epic #1033の範囲です。詳細は[integration.md](architecture/integration.md)、運用・再開・移行は[使い方 §4.5](usage.md#45-子レビュー証跡ゲート)を参照してください。
+既定の`required`では、マージ対象のコミットに対する合格証跡を持たない子が1件でもあれば統合をfail-closedで停止し、親Issueを`status:blocked-human-review`へ遷移させます。詳細は[integration.md](architecture/integration.md)、運用・再開・移行は[使い方 §4.5](usage.md#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)を参照してください。
 
 #### トレーサビリティの補完
 

@@ -348,6 +348,8 @@ Routine dispatch execution uses strictly the following 7 options. Detailed param
 | `--max-concurrent <int>` | `2` (when unset in config) | Maximum number of subtask agents running concurrently. CLI argument overrides configuration file setting. |
 | `--profile <name>` | - | Override the task execution profile (e.g. `balanced`, `fast-code`, `deep-reasoning`) for this entire run, taking precedence over task metadata profile or model tier. |
 | `--child-review-gate {required,off}` | - | Child sub-issue review gate mode (`required` or `off`). When omitted, falls back to config file (`child-review-gate`), env var (`ORCHESTUNE_CHILD_REVIEW_GATE`), or default `required`. `off` skips verification with a warning. See [§4.5](#45-child-review-evidence-gate). |
+| `--semantic-review-mode {required,advisory,off}` | - | Layer-2 integration-PR semantic review mode (`required`, `advisory`, or `off`). When omitted, falls back to config file (`semantic-review-mode`), env var (`ORCHESTUNE_SEMANTIC_REVIEW_MODE`), or default `required`. `off` skips verification. See [§4.5](#45-child-review-evidence-gate). |
+| `--force-integration-review` | - | Forces layer-2 integration-PR review even when a single child task qualifies for the Fast-Path. |
 | `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`). For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error. |
 
 ### Configuration File (`orchestune.toml`) for Detailed Settings
@@ -361,6 +363,17 @@ Non-routine options (storage paths, rate limits, timeouts, reviewer selection, c
 | `reviewer-bot` | `"auto"` | Reviewer requested after implementation (`"auto"`, `"claude"`, `"codex"`). `auto` evaluates target type and maps Claude targets to Codex, and Codex/agy targets to Claude. |
 | `ci-command` | `"./scripts/local-ci.sh"` | The CI command the Integrator runs on the integration branch (a shell-like string parsed with shlex or string list, e.g. `"make ci"`). Set this explicitly if your repository's CI entrypoint differs. |
 | `child-review-gate` | `"required"` | Child sub-issue review gate mode (`"required"`, `"off"`). Verifies review evidence (`verdict=pass`, SHA match) before merging to parent branch. `"off"` skips verification with a warning. |
+| `semantic-review-mode` | `"required"` | Layer-2 integration-PR semantic review mode (`"required"`, `"advisory"`, `"off"`). Default is `"required"`. |
+| `force-integration-review` | `false` | Forces layer-2 integration-PR review even when a single child task qualifies for the Fast-Path. |
+| `semantic-review-provider` | `"auto"` | Layer-2 semantic review provider (`"auto"`, `"claude"`, `"codex"`). |
+| `semantic-fix-provider` | `"auto"` | Layer-2 semantic fix provider (`"auto"` or a configured dispatch target). |
+| `semantic-review-trigger` | `"pr-comment"` | Layer-2 semantic review trigger mechanism (`"pr-comment"`). |
+| `max-semantic-review-rounds` | `3` | Maximum review rounds for layer-2 semantic review (1..5). Escalates on exceedance. |
+| `max-semantic-fix-retries` | `2` | Maximum retry attempts for layer-2 semantic fix jobs (0 disables automatic fixes). |
+| `semantic-review-timeout-seconds` | `1800` | Timeout per layer-2 semantic review round in seconds (default: 30 minutes). |
+| `semantic-fix-timeout-seconds` | `1800` | Timeout per layer-2 semantic fix job in seconds (default: 30 minutes). |
+| `semantic-ci-timeout-seconds` | `1800` | Timeout for local CI verification bound to fixed head in seconds (default: 30 minutes). |
+| `semantic-attempt-timeout-seconds` | `7200` | Timeout for the entire integration attempt across all rounds, fixes, and CI in seconds (default: 2 hours). Escalates on exceedance. |
 | `max-launches-per-window` | unset (no limit) | Time-based launch cap within `window-seconds`. Unset: no cap (concurrency via `max-concurrent` is the primary control; token budget, conflicts, etc. still apply). `0`: launches are prohibited, while label updates, GC and other processing still run. `1` or more: maximum launches per window. Omit the key to leave it unset (TOML has no null). |
 | `window-seconds` | `7200` | Sliding window in seconds (default 2 hours) for the launch cap, `max-tokens-per-window` aggregation, aging normalization, and launch-history retention. |
 | `deviation-buffer-lines` | `5` | Allowed line modifications buffer outside the declared footprint to prevent live-locks. |
@@ -570,11 +583,19 @@ If a candidate marker originates from an untrusted third party, if author/permis
 
 ---
 
-### 4.5 Child review-evidence gate
+### 4.5 Child review-evidence gate and Layer-2 semantic review gate
 
-Before the integrator updates `parent/issue-{N}` (the auto-merge in 4.2), it verifies that every child in the merge has passing review evidence. This is the required layer-1 gate. The Semantic Review of the integration PR (layer 2) stays advisory and never blocks the merge ([architecture/integration.md](architecture/integration.md)).
+Orchestune uses a two-tier review gate architecture for integrating child tasks into the parent branch (`parent/issue-{N}`):
 
-**Who does what**
+- **Layer 1 (Child review-evidence gate)**: Before the Integrator builds an integration temporary branch, it verifies that every merged child has passing review evidence (`verdict=pass`, matching HEAD SHA) (default: `required`).
+- **Layer 2 (Integration-PR semantic review gate)**: Advances a multi-round review and fix loop (review acquisition → judgment & fix job → promotion with claim → local CI → re-review) on multi-task integration PRs (default: `required`). When only a single child task is being merged and passed Layer 1, the single-task Fast-Path (`fast_path_passed`) bypasses Layer-2 review and integrates immediately (can be forced with `--force-integration-review`). For full architectural details, see [architecture/integration.md](architecture/integration.md).
+
+**Two levels of explicit human skip**
+
+1. **Entire run skip**: Specifying `--semantic-review-mode off` (or config key `semantic-review-mode = "off"`, env var `ORCHESTUNE_SEMANTIC_REVIEW_MODE=off`) skips Layer-2 review for all integration PRs in the run.
+2. **Per-attempt human override**: On an integration PR in `status:blocked-human-review` or `escalated` state, a collaborator can post an override comment (`<!-- orchestune:semantic-review-override:v1 action=skip reason="..." -->`) to transition the attempt to `skipped_by_human` and safely resume integration.
+
+**Layer-1 actor responsibilities**
 
 | Actor | Responsibility |
 | :--- | :--- |
@@ -605,6 +626,8 @@ Before the integrator updates `parent/issue-{N}` (the auto-merge in 4.2), it ver
 **Settings**: `--child-review-gate {required,off}`, the `child-review-gate` configuration key and `ORCHESTUNE_CHILD_REVIEW_GATE`; the default is `required`. `off` skips the verification for all children in the run and prints a warning. It is an explicit opt-out, never selected automatically.
 
 **Migration**: Outcome Records posted before this gate have no review evidence and stop as `legacy`. During the migration period either (a) set `off` explicitly until the in-flight children are integrated, or (b) accept the stop and, for children that have not yet been handed off, review on the child PR and run `orchestune complete` again; for children already handed off, use (a). Return to `required` once the legacy children are integrated.
+
+**Layer-2 gate migration and considerations**: Layer-2 semantic review defaults to `required`. In repositories without semantic review bots or workflows configured, multi-task integration PRs will escalate with `review_not_acknowledged`. In such environments, configure `--semantic-review-mode advisory` or `--semantic-review-mode off`. Integration PRs are verified using the repository's `ci-command` (local CI), and fixed outputs are promoted safely via temporary branches (`integration/semantic-fix/*`). Token budget management is out of scope for this layer.
 
 ### 4.6 Bounded integration execution and timeout recovery
 
