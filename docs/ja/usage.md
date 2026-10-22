@@ -583,6 +583,8 @@ Orchestuneでは、子タスクから親ブランチ（`parent/issue-{N}`）へ�
 
 - **第1層（子PRレビュー証跡ゲート）**: Integratorが統合一時ブランチを作成する前に、統合対象の各子が合格したレビュー証跡（`verdict=pass`、HEAD SHA一致）を持つことを検証します（既定: `required`）。
 - **第2層（統合PRセマンティックレビューゲート）**: 複数タスクの統合PRに対し、結合特化のセマンティックレビュー・修正ループ（レビュー収集 → 判断兼修正ジョブ → claim付き昇格 → ローカルCI → 再レビュー）を実行します（既定: `required`）。子タスクが1件のみで第1層を通過している場合は、単一タスクFast-Path（`fast_path_passed`）により第2層レビューをバイパスして即時統合されます（`--force-integration-review` で強制可能）。詳細なアーキテクチャは [architecture/integration.md](architecture/integration.md) を参照してください。
+  > [!NOTE]
+  > 現行バージョンにおいてIntegratorによる第2層ゲート検証はセマンティックレビュー対応ターゲット（`ClaudeCodeCloudRoutineDispatchTarget`等）のもとで適用されます。全ローカル／非クラウドターゲットにおける完全なターゲット非依存のゲート適用は #1384 にて追跡されています。
 
 **人間による2段階のスキップ方法**
 

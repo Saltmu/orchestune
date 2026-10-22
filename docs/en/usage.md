@@ -590,6 +590,8 @@ Orchestune uses a two-tier review gate architecture for integrating child tasks 
 
 - **Layer 1 (Child review-evidence gate)**: Before the Integrator builds an integration temporary branch, it verifies that every merged child has passing review evidence (`verdict=pass`, matching HEAD SHA) (default: `required`).
 - **Layer 2 (Integration-PR semantic review gate)**: Advances a multi-round review and fix loop (review acquisition → judgment & fix job → promotion with claim → local CI → re-review) on multi-task integration PRs (default: `required`). When only a single child task is being merged and passed Layer 1, the single-task Fast-Path (`fast_path_passed`) bypasses Layer-2 review and integrates immediately (can be forced with `--force-integration-review`). For full architectural details, see [architecture/integration.md](architecture/integration.md).
+  > [!NOTE]
+  > In current versions, Integrator Layer-2 gating applies under semantic-review-enabled dispatch targets (e.g. `ClaudeCodeCloudRoutineDispatchTarget`); full target-independent gating across all local/non-cloud targets is tracked under #1384.
 
 **Two levels of explicit human skip**
 
