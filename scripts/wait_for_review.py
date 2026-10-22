@@ -491,6 +491,7 @@ def _handle_review_trigger(
     Resume never guesses from the current head, which may have advanced since
     the trigger. Legacy triggers without a head marker keep requested SHA unknown.
     """
+    requested_head_sha = _fetch_pr_head_sha(pr_number)
     existing_trigger = _find_existing_trigger_comment(
         initial_data, bot_name, current_round
     )
@@ -498,24 +499,30 @@ def _handle_review_trigger(
         trigger_id = existing_trigger.get("id")
         trigger_time = str(existing_trigger.get("created_at") or "")
         existing_body = existing_trigger.get("body") or ""
+        existing_head = parse_head_marker(existing_body)
         if trigger_id is not None:
             excluded_ids.add(trigger_id)
-        if _has_review_trigger_mention(existing_body, bot_name):
+        if existing_head and requested_head_sha and existing_head != requested_head_sha:
+            print(
+                f"Review trigger for @{bot_name} (Round {current_round}) exists for older head {existing_head[:10]}, "
+                f"but PR head moved to {requested_head_sha[:10]}; reposting trigger..."
+            )
+        elif _has_review_trigger_mention(existing_body, bot_name):
             print(
                 f"Review trigger for @{bot_name} (Round {current_round}) already exists "
                 f"(Comment ID: {trigger_id}); skipping post and waiting..."
             )
-            return trigger_time, trigger_id, parse_head_marker(existing_body)
-        print(
-            f"Review trigger comment for Round {current_round} (Comment ID: {trigger_id}) "
-            f"is missing @{bot_name} review mention; reposting trigger..."
-        )
+            return trigger_time, trigger_id, existing_head
+        else:
+            print(
+                f"Review trigger comment for Round {current_round} (Comment ID: {trigger_id}) "
+                f"is missing @{bot_name} review mention; reposting trigger..."
+            )
 
     print(
         f"Posting review trigger comment (Round {current_round}/{max_rounds}) "
         f"for @{bot_name} on PR #{pr_number}..."
     )
-    requested_head_sha = _fetch_pr_head_sha(pr_number)
     trigger_info = post_review_trigger(
         pr_number,
         bot_name=bot_name,
