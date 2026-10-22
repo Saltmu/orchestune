@@ -489,6 +489,15 @@ class TestReviewFixLoop:
         assert world.cycle()["next_phase"] == "escalated"
         assert world.state.escalation_reason == "deferred_judgments"
 
+    def test_untrusted_trigger_does_not_move_the_review_window(
+        self, world: World
+    ) -> None:
+        world.seed()
+        world.cycle()
+        world.review()
+        world.post(PR, world.triggers()[-1], "mallory")  # a copied request
+        assert _phases(world.cycle()) == ("review_pending", "fix_in_progress")
+
     def test_review_before_the_trigger_or_of_another_head_is_not_evidence(
         self, world: World
     ) -> None:
@@ -624,6 +633,22 @@ class TestClaimAndRecovery:
         )
         assert len(world.comments[PR]) == before and world.claim is None
         assert world.preflight_calls == 0  # its claim-backend probe pushes refs
+
+    def test_state_saved_by_another_worker_meanwhile_is_not_overwritten(
+        self, world: World
+    ) -> None:
+        world.seed()
+        acquire = world.claims().acquire
+
+        def racing_acquire(*args: Any, **kwargs: Any) -> ClaimResult:
+            world.seed(phase=P.REVIEW_PENDING, round=1, state_revision=1)
+            return acquire(*args, **kwargs)
+
+        world.claim_overrides["acquire"] = racing_acquire
+        assert world.cycle()["status"] == "state_changed"
+        assert [s.state_revision for s in world.states()] == [0, 1]
+        assert world.triggers() == [] and world.claim is not None
+        assert world.claim.is_expired(world.clock)  # released
 
     def test_unknown_claim_outcome_writes_nothing(self, world: World) -> None:
         world.seed()
@@ -856,8 +881,11 @@ class TestPostcycleWiring:
         ("status", "expected"),
         [
             ("no_pending_attempt", PhaseStatus.SUCCESS),
+            ("claimed_by_other", PhaseStatus.SUCCESS),
             ("claim_unknown", PhaseStatus.WARNING),
+            ("trigger_indeterminate", PhaseStatus.WARNING),
             ("error", PhaseStatus.RETRYABLE_FAILURE),
+            ("promotion_failed", PhaseStatus.RETRYABLE_FAILURE),
         ],
     )
     def test_phase_status(self, status: str, expected: PhaseStatus) -> None:

@@ -115,9 +115,30 @@ _SEMANTIC_MARKERS = (
 _JUDGMENT_BLOCK = re.compile(
     r"^```orchestune-review-judgments[^\n]*\n.*?^```[^\S\n]*$", re.M | re.S
 )
-#: Statuses that leave an attempt for a human or a later cycle to settle.
+#: Report statuses of a cycle that went as designed (another worker holding
+#: the claim is progress, not a failure).
+SUCCESS_STATUSES = frozenset(
+    {
+        "no_pending_attempt",
+        "not_pending",
+        "held",
+        "planned",
+        "advanced",
+        "claimed_by_other",
+    }
+)
+#: Indeterminate outcomes a later cycle or a human settles; any other status
+#: (`error`, a failed promotion, ...) is a definite failure to retry.
 WARNING_STATUSES = frozenset(
-    {"state_unreadable", "inputs_unknown", "claim_unknown", "claim_lost"}
+    {
+        "state_unreadable",
+        "state_changed",
+        "inputs_unknown",
+        "claim_unknown",
+        "claim_lost",
+        "trigger_indeterminate",
+        "ci_discarded",
+    }
 )
 
 VerifyCiFn = Callable[[str, str], SemanticCiObservation | None]
@@ -550,7 +571,7 @@ class SemanticReviewCycleRunner:
     def _acquire_review(self, ctx: _Attempt) -> _Review:
         """The current round's review of the requested head, by its reviewer only."""
         state, comments = ctx.state, ctx.comments
-        triggers = _triggers(comments)
+        triggers = self._trusted_triggers(ctx)
         trigger = _round_trigger(triggers, state, fresh=True)
         if trigger is None:
             return _Review()
@@ -607,6 +628,10 @@ class SemanticReviewCycleRunner:
     def _trusted(self, ctx: _Attempt, comment: dict[str, Any]) -> bool:
         presence, _ = ctx.trust.evaluate_candidate_markers([comment])
         return presence is NoticePresence.PRESENT
+
+    def _trusted_triggers(self, ctx: _Attempt) -> list[ReviewTrigger]:
+        """Only trusted requests open or bound a round's review window."""
+        return _triggers([c for c in ctx.comments if self._trusted(ctx, c)])
 
     def _judgment_comment(self, ctx: _Attempt) -> dict[str, Any] | None:
         """The trusted table the round's job named in its trusted result marker."""
@@ -741,6 +766,7 @@ class SemanticReviewCycleRunner:
             )
         self._acquire(ctx)
         try:
+            self._require_unchanged(ctx)
             decision = self._claimed_observations(ctx, decision)
             final = self._apply(ctx, decision)
         finally:
@@ -762,6 +788,23 @@ class SemanticReviewCycleRunner:
         if result.status is not ClaimStatus.ACQUIRED or result.claim is None:
             raise _Stop("claim_unknown", detail=result.detail)
         ctx.claim = result.claim
+
+    def _require_unchanged(self, ctx: _Attempt) -> None:
+        """Another worker may have saved between our read and our claim: then
+        this decision is stale and saving it would fork the state revision."""
+        comments = self._forge.list_all_issue_comments(ctx.pr.pr_number)
+        trusted = _state_authors(ctx.trust)
+        try:
+            latest = restore_latest_semantic_review_state(
+                [
+                    body
+                    for body, _ in _authored(comments, ctx.trust, trusted.__contains__)
+                ]
+            )
+        except ValueError as error:
+            raise _Stop("state_unreadable", error=str(error)) from error
+        if latest != ctx.state:
+            raise _Stop("state_changed")
 
     def _revalidate(self, ctx: _Attempt, ttl: float = _CLAIM_TTL_SECONDS) -> None:
         """Renew (and so re-prove) ownership right before an external write."""
@@ -907,11 +950,8 @@ class SemanticReviewCycleRunner:
             build_restorable_trigger_body(reply, reviewer, nxt.round, nxt.head_sha)
         except EvidenceContractError:
             reply = f"Review head: `{nxt.head_sha}`."
-        triggers = _triggers(ctx.comments)
-        fresh = _round_trigger(triggers, nxt, fresh=True)
-        if fresh is not None and any(
-            c.get("id") == fresh.id and self._trusted(ctx, c) for c in ctx.comments
-        ):
+        triggers = self._trusted_triggers(ctx)
+        if _round_trigger(triggers, nxt, fresh=True) is not None:
             return  # posted by an earlier, interrupted run of this transition
         self._revalidate(ctx)
         if _round_trigger(triggers, nxt, fresh=False) is not None:
@@ -1078,6 +1118,7 @@ __all__ = [
     "SemanticReviewCycleReport",
     "SemanticReviewCycleRunner",
     "SemanticReviewOperations",
+    "SUCCESS_STATUSES",
     "WARNING_STATUSES",
     "advance_pending_semantic_reviews",
     "remote_branch_sha",

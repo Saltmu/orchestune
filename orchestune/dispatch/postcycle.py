@@ -47,6 +47,9 @@ from orchestune.dispatch.cycle_events import (
     WorktreeCompletion,
 )
 from orchestune.dispatch.postcycle_semantic_review import (
+    SUCCESS_STATUSES as SEMANTIC_SUCCESS_STATUSES,
+)
+from orchestune.dispatch.postcycle_semantic_review import (
     WARNING_STATUSES,
     advance_pending_semantic_reviews,
 )
@@ -231,7 +234,9 @@ def _advance_pending_semantic_reviews(
 
     def evaluate_report(report: dict) -> tuple[PhaseStatus, bool]:
         statuses = {attempt.get("status") for attempt in report.get("attempts", [])}
-        if "error" in statuses:
+        # Allow-list like `_INTEGRATOR_SUCCESS_STATUSES`: a new failure status
+        # is retried rather than silently reported as success.
+        if statuses - SEMANTIC_SUCCESS_STATUSES - WARNING_STATUSES:
             return PhaseStatus.RETRYABLE_FAILURE, True
         if statuses & WARNING_STATUSES:
             return PhaseStatus.WARNING, False
