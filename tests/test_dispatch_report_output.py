@@ -131,6 +131,10 @@ def test_cli_saves_exact_old_schema_and_no_stdout_json(tmp_path, capsys, apply):
             return_value=False,
         ),
         patch(
+            "orchestune.dispatch.dispatcher._advance_pending_semantic_reviews",
+            return_value=phase,
+        ),
+        patch(
             "orchestune.dispatch.dispatcher._run_semantic_integrator",
             return_value=phase,
         ),
@@ -147,7 +151,7 @@ def test_cli_saves_exact_old_schema_and_no_stdout_json(tmp_path, capsys, apply):
     ):
         assert main([]) == 0
     expected = _report_to_dict(report)
-    expected["post_cycle_results"] = [phase.to_dict()] * 4 if apply else []
+    expected["post_cycle_results"] = [phase.to_dict()] * 5 if apply else []
     assert json.loads(cfg.report_path.read_text()) == expected
     stdout = capsys.readouterr().out
     assert '"selected"' not in stdout
@@ -178,6 +182,12 @@ def test_postcycle_exception_keeps_completed_results_and_skips_rest(tmp_path, ca
             ),
         ),
         patch(
+            "orchestune.dispatch.dispatcher._advance_pending_semantic_reviews",
+            return_value=PhaseResult(
+                "advance_pending_semantic_reviews", PhaseStatus.SUCCESS
+            ),
+        ),
+        patch(
             "orchestune.dispatch.dispatcher._run_semantic_integrator",
             side_effect=ValueError("unexpected"),
         ),
@@ -185,8 +195,8 @@ def test_postcycle_exception_keeps_completed_results_and_skips_rest(tmp_path, ca
     ):
         assert main([]) == 1
     results = json.loads(cfg.report_path.read_text())["post_cycle_results"]
-    assert [r["status"] for r in results] == ["success", "fatal_failure"]
-    assert results[1]["error_message"] == "unexpected"
+    assert [r["status"] for r in results] == ["success", "success", "fatal_failure"]
+    assert results[2]["error_message"] == "unexpected"
     later.assert_not_called()
     assert "prior_failure" in capsys.readouterr().out
 

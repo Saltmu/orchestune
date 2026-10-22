@@ -21,6 +21,7 @@ from orchestune.dispatch.config_schema import validate_toml_config
 from orchestune.dispatch.cycle import run_dispatch_cycle
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.postcycle import (
+    _advance_pending_semantic_reviews,
     _decide_semantic_review_enabled,
     _poll_pending_not_needed_reviews,
     _post_event_log_comment,
@@ -94,6 +95,13 @@ def _post_cycle_steps(config, report, semantic_review_enabled, auth_error):
                 timeout_seconds=config.not_needed_review_timeout_seconds,
             ),
             semantic_review_enabled,
+        ),
+        # #1362: right before the Integrator, so a passed terminal saved here is
+        # finalized in the same cycle; independent of the legacy semantic flag.
+        (
+            "advance_pending_semantic_reviews",
+            lambda: _advance_pending_semantic_reviews(config, auth_error=auth_error),
+            True,
         ),
         (
             "run_semantic_integrator",

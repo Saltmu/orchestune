@@ -46,6 +46,10 @@ from orchestune.dispatch.cycle_events import (
     UsageLimitCompletion,
     WorktreeCompletion,
 )
+from orchestune.dispatch.postcycle_semantic_review import (
+    WARNING_STATUSES,
+    advance_pending_semantic_reviews,
+)
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.summary import (
     merge_skips,
@@ -165,6 +169,8 @@ def _poll_pending_not_needed_reviews(
 _INTEGRATOR_SUCCESS_STATUSES = {
     IntegrationStatus.SUCCESS,
     IntegrationStatus.NO_DONE_TASKS,
+    # #1362: a layer-2 review awaiting the runner is a wait, not a failure.
+    IntegrationStatus.SEMANTIC_REVIEW_PENDING,
 }
 
 
@@ -190,6 +196,8 @@ def _build_integrator_config(
         dag_ignore_patterns=config.dag_ignore_patterns,
         dag_similarity_threshold=config.dag_similarity_threshold,
         child_review_gate=config.child_review_gate,
+        semantic_review_mode=config.semantic_review_mode,
+        force_integration_review=config.force_integration_review,
         integration_dependency_timeout_seconds=config.integration_dependency_timeout_seconds,
         integration_ci_timeout_seconds=config.integration_ci_timeout_seconds,
         integration_cycle_timeout_seconds=config.integration_cycle_timeout_seconds,
@@ -206,6 +214,38 @@ def _build_integrator_config(
     else:
         integrator_config.enable_semantic_review = False
     return integrator_config
+
+
+def _advance_pending_semantic_reviews(
+    config: DispatcherConfig, auth_error: ForgeAuthError | None = None
+) -> PhaseResult:
+    """#1362: advance layer-2 review/fix loops one phase before the Integrator.
+
+    Runs in every mode: the mode resolved by #1361 (not the legacy
+    `ORCHESTUNE_SEMANTIC_REVIEW` flag) decides what each attempt does. A passed
+    terminal it saves is finalized by the Integrator of the same post-cycle.
+    """
+
+    def work() -> dict:
+        return advance_pending_semantic_reviews(config)
+
+    def evaluate_report(report: dict) -> tuple[PhaseStatus, bool]:
+        statuses = {attempt.get("status") for attempt in report.get("attempts", [])}
+        if "error" in statuses:
+            return PhaseStatus.RETRYABLE_FAILURE, True
+        if statuses & WARNING_STATUSES:
+            return PhaseStatus.WARNING, False
+        return PhaseStatus.SUCCESS, False
+
+    return _run_best_effort_phase(
+        phase_name="advance_pending_semantic_reviews",
+        report_label="Semantic Review Cycle Report",
+        work=work,
+        auth_error=auth_error,
+        auth_error_message="authentication failed while advancing semantic reviews",
+        failure_message="failed to advance pending semantic reviews",
+        evaluate_report=evaluate_report,
+    )
 
 
 def _run_semantic_integrator(
