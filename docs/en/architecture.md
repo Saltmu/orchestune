@@ -152,15 +152,15 @@ Every subtask's history (Issue, PR, commits, CI logs) is preserved on GitHub, so
 
 The pre-merge CI verification described in the integration pipeline substitutes for per-task human review. Every child integration PR must pass CI before the integrator merges it into `parent/issue-{N}`, so mechanical correctness is enforced automatically even though no human looks at each individual diff.
 
-#### Child review-evidence gate
+#### Two-tier review gate (Layer 1 child review-evidence + Layer 2 integration semantic review)
 
-CI is not the only automated gate. The review of each child PR is a separate, required check, and responsibility is split three ways:
+CI is not the only automated gate. Orchestune provides a two-tier safety gate: child PR review evidence (Layer 1) and integration-PR semantic review (Layer 2).
 
 - The development skill (layer 1): runs the review loop on the child PR, and the LLM records a judgment for every finding.
 - `orchestune complete --result done`: verifies that judgment table together with the PR's freshly acquired review state and reviewed SHA, and saves the outcome as review evidence in the done Outcome Record. It rejects the completion and posts nothing when verification fails.
-- The Integrator: only verifies that saved evidence before updating `parent/issue-{N}`; it never runs a review itself.
+- Integrator & Runner (layer 2): for multi-task integration PRs, the post-cycle `SemanticReviewCycleRunner` advances the semantic review and fix loop (default `required`), while the Integrator finalizes it. Single-child integrations bypass Layer 2 via the single-task Fast-Path.
 
-Under the default `required` setting, a child without passing evidence for the exact commit being merged stops the integration (fail-closed) and the parent Issue moves to `status:blocked-human-review`. The separate Semantic Review of the integration diff (layer 2) stays advisory; making it required is the follow-up Epic #1033. Details: [integration.md](architecture/integration.md); operation, resume and migration: [Usage §4.5](usage.md#45-child-review-evidence-gate).
+Under the default `required` setting, a child without passing evidence for the exact commit being merged stops the integration (fail-closed) and the parent Issue moves to `status:blocked-human-review`. Details: [integration.md](architecture/integration.md); operation, resume and migration: [Usage §4.5](usage.md#45-child-review-evidence-gate-and-layer-2-semantic-review-gate).
 
 #### Traceability backstop
 
