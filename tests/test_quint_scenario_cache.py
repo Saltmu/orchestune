@@ -46,10 +46,16 @@ def _fake_violation_runner(out_dir: Path, scenario: str) -> ModelRun:
     )
 
 
+@pytest.fixture
+def mock_project_dir(tmp_path: Path) -> Path:
+    (tmp_path / ".gitignore").write_text(".orchestune/tmp/\n", encoding="utf-8")
+    return tmp_path
+
+
 # ---- ScenarioRunCache tests --------------------------------------------------
 
 
-def test_scenario_run_cache_cold_and_hit(tmp_path: Path) -> None:
+def test_scenario_run_cache_cold_and_hit(mock_project_dir: Path) -> None:
     calls: list[str] = []
 
     def runner(scenario: str, out_dir: Path | None = None) -> ModelRun:
@@ -60,7 +66,7 @@ def test_scenario_run_cache_cold_and_hit(tmp_path: Path) -> None:
     cache = ScenarioRunCache(
         known_scenarios=("final_apply", "final_dry"),
         runner=runner,
-        project_dir=tmp_path,
+        project_dir=mock_project_dir,
     )
     try:
         # First call (cold)
@@ -94,11 +100,11 @@ def test_scenario_run_cache_cold_and_hit(tmp_path: Path) -> None:
         cache.close()
 
 
-def test_scenario_run_cache_unknown_scenario_rejected(tmp_path: Path) -> None:
+def test_scenario_run_cache_unknown_scenario_rejected(mock_project_dir: Path) -> None:
     cache = ScenarioRunCache(
         known_scenarios=("final_apply",),
-        runner=lambda s, out_dir=None: _fake_ok_runner(out_dir or tmp_path, s),
-        project_dir=tmp_path,
+        runner=lambda s, out_dir=None: _fake_ok_runner(out_dir or mock_project_dir, s),
+        project_dir=mock_project_dir,
     )
     try:
         with pytest.raises(KeyError, match="unknown scenario"):
@@ -109,7 +115,7 @@ def test_scenario_run_cache_unknown_scenario_rejected(tmp_path: Path) -> None:
         cache.close()
 
 
-def test_scenario_run_cache_error_not_cached(tmp_path: Path) -> None:
+def test_scenario_run_cache_error_not_cached(mock_project_dir: Path) -> None:
     calls: list[str] = []
 
     def failing_runner(scenario: str, out_dir: Path | None = None) -> ModelRun:
@@ -133,7 +139,7 @@ def test_scenario_run_cache_error_not_cached(tmp_path: Path) -> None:
     cache = ScenarioRunCache(
         known_scenarios=("final_apply",),
         runner=failing_runner,
-        project_dir=tmp_path,
+        project_dir=mock_project_dir,
     )
     try:
         with pytest.raises(ToolError):
@@ -148,7 +154,7 @@ def test_scenario_run_cache_error_not_cached(tmp_path: Path) -> None:
         cache.close()
 
 
-def test_scenario_run_cache_missing_itf_not_cached(tmp_path: Path) -> None:
+def test_scenario_run_cache_missing_itf_not_cached(mock_project_dir: Path) -> None:
     calls: list[str] = []
 
     def missing_itf_runner(scenario: str, out_dir: Path | None = None) -> ModelRun:
@@ -170,7 +176,7 @@ def test_scenario_run_cache_missing_itf_not_cached(tmp_path: Path) -> None:
     cache = ScenarioRunCache(
         known_scenarios=("final_apply",),
         runner=missing_itf_runner,
-        project_dir=tmp_path,
+        project_dir=mock_project_dir,
     )
     try:
         with pytest.raises(ReplayFormatError):
@@ -180,7 +186,7 @@ def test_scenario_run_cache_missing_itf_not_cached(tmp_path: Path) -> None:
         cache.close()
 
 
-def test_scenario_run_cache_empty_itf_not_cached(tmp_path: Path) -> None:
+def test_scenario_run_cache_empty_itf_not_cached(mock_project_dir: Path) -> None:
     calls: list[str] = []
 
     def empty_itf_runner(scenario: str, out_dir: Path | None = None) -> ModelRun:
@@ -203,7 +209,7 @@ def test_scenario_run_cache_empty_itf_not_cached(tmp_path: Path) -> None:
     cache = ScenarioRunCache(
         known_scenarios=("final_apply",),
         runner=empty_itf_runner,
-        project_dir=tmp_path,
+        project_dir=mock_project_dir,
     )
     try:
         with pytest.raises(ReplayFormatError, match="empty"):
@@ -213,7 +219,7 @@ def test_scenario_run_cache_empty_itf_not_cached(tmp_path: Path) -> None:
         cache.close()
 
 
-def test_scenario_run_cache_violation_cached(tmp_path: Path) -> None:
+def test_scenario_run_cache_violation_cached(mock_project_dir: Path) -> None:
     calls: list[str] = []
 
     def runner(scenario: str, out_dir: Path | None = None) -> ModelRun:
@@ -224,7 +230,7 @@ def test_scenario_run_cache_violation_cached(tmp_path: Path) -> None:
     cache = ScenarioRunCache(
         known_scenarios=("fault_suppress",),
         runner=runner,
-        project_dir=tmp_path,
+        project_dir=mock_project_dir,
     )
     try:
         run1 = cache.get("fault_suppress")
@@ -240,11 +246,11 @@ def test_scenario_run_cache_violation_cached(tmp_path: Path) -> None:
         cache.close()
 
 
-def test_scenario_run_cache_cleanup_removes_dir(tmp_path: Path) -> None:
+def test_scenario_run_cache_cleanup_removes_dir(mock_project_dir: Path) -> None:
     cache = ScenarioRunCache(
         known_scenarios=("final_apply",),
-        runner=lambda s, out_dir=None: _fake_ok_runner(out_dir or tmp_path, s),
-        project_dir=tmp_path,
+        runner=lambda s, out_dir=None: _fake_ok_runner(out_dir or mock_project_dir, s),
+        project_dir=mock_project_dir,
     )
     session_dir = cache.session_dir
     assert session_dir.is_dir()
@@ -276,8 +282,8 @@ def test_scenario_run_cache_explicit_session_dir_and_context_manager(
         assert run.outcome == "ok"
         assert len(calls) == 1
 
-    # Verified cleaned up on exit
-    assert not custom_dir.exists()
+    # Caller-supplied session directory is preserved on exit
+    assert custom_dir.exists()
 
 
 def test_scenario_run_cache_unexpected_outcome(tmp_path: Path) -> None:

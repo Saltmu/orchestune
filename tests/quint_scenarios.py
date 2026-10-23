@@ -123,7 +123,7 @@ def run_scenario(scenario: str, out_dir: Path | None = None) -> ModelRun:
     """Low-level uncached scenario runner entry point (#1367).
 
     Runs the model with SCENARIO_BOUNDS directly. Callers that need deduplication
-    across tests should use the ScenarioRunCache fixture instead.
+    across tests should use the model_scenario fixture instead.
     """
     return run_model(SCENARIO_BOUNDS, init=f"init_{scenario}", out_dir=out_dir)
 

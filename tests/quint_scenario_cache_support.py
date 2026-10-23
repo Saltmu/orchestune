@@ -14,46 +14,15 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from orchestune.session_dirs import (
-    SessionDirError,
-    create_session_dir,
-    find_project_root,
-)
+from orchestune.session_dirs import create_session_dir
 from tests.quint_replay import (
-    BACKEND,
-    MODEL,
-    ROOT,
     ModelRun,
     ReplayFormatError,
     ToolError,
     Trace,
     parse_trace,
-    pinned_quint_version,
 )
-from tests.quint_scenarios import SCENARIO_BOUNDS, run_scenario, scenario_ids
-
-
-@dataclasses.dataclass(frozen=True)
-class ScenarioExecutionContext:
-    """Fixed execution context snapshot for cached scenario runs."""
-
-    quint_version: str
-    backend: str
-    model_path: str
-    seed: str
-    max_samples: int
-    max_steps: int
-
-    @classmethod
-    def current(cls) -> ScenarioExecutionContext:
-        return cls(
-            quint_version=pinned_quint_version(),
-            backend=BACKEND,
-            model_path=MODEL.relative_to(ROOT).as_posix(),
-            seed=SCENARIO_BOUNDS.seed,
-            max_samples=SCENARIO_BOUNDS.max_samples,
-            max_steps=SCENARIO_BOUNDS.max_steps,
-        )
+from tests.quint_scenarios import run_scenario, scenario_ids
 
 
 class ScenarioRunCache:
@@ -76,39 +45,20 @@ class ScenarioRunCache:
             else frozenset(scenario_ids())
         )
         self._runner = runner or run_scenario
-        self.context = ScenarioExecutionContext.current()
         self._cache: dict[str, ModelRun] = {}
 
         if session_dir is not None:
             self.session_dir = session_dir.resolve()
             self.session_dir.mkdir(parents=True, exist_ok=True)
+            self._owns_dir = False
         else:
-            base_project = (project_dir or find_project_root()).resolve()
-            # In synthetic test environments without git / gitignore, supply local ignore
-            if (
-                not (base_project / ".git").exists()
-                and not (base_project / ".gitignore").is_file()
-            ):
-                base_project.mkdir(parents=True, exist_ok=True)
-                (base_project / ".gitignore").write_text(
-                    ".orchestune/tmp/\n", encoding="utf-8"
-                )
-            try:
-                self.session_dir = create_session_dir(
-                    "quint-scenario-cache", "1367", project_dir=base_project
-                )
-            except SessionDirError:
-                tmp_dir = base_project / ".orchestune" / "tmp"
-                tmp_dir.mkdir(parents=True, exist_ok=True)
-                import uuid
-
-                self.session_dir = (
-                    tmp_dir / f"quint-scenario-cache-1367-{uuid.uuid4().hex[:8]}"
-                )
-                self.session_dir.mkdir(parents=True, exist_ok=True)
+            self.session_dir = create_session_dir(
+                "quint-scenario-cache", "1367", project_dir=project_dir
+            )
+            self._owns_dir = True
 
     def get(self, scenario: str) -> ModelRun:
-        if scenario not in self.known_scenarios or "/" in scenario or "\\" in scenario:
+        if scenario not in self.known_scenarios:
             raise KeyError(f"unknown scenario: {scenario}")
 
         if scenario in self._cache:
@@ -147,7 +97,8 @@ class ScenarioRunCache:
         return self.get(scenario)
 
     def close(self) -> None:
-        shutil.rmtree(self.session_dir, ignore_errors=True)
+        if self._owns_dir:
+            shutil.rmtree(self.session_dir, ignore_errors=True)
         self._cache.clear()
 
     def __enter__(self) -> ScenarioRunCache:
