@@ -22,6 +22,7 @@ import os
 import shutil
 import subprocess
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,7 @@ from tests.quint_replay import (
     ReplayFormatError,
     ReplayReport,
     ToolError,
+    Trace,
     build_topology,
     normalized,
     parse_trace,
@@ -57,6 +59,10 @@ from tests.quint_replay import (
     quint_executable,
     replay_trace,
     run_model,
+)
+from tests.quint_scenario_cache_support import (
+    ScenarioRunCache,
+    StoredTraceCache,
 )
 from tests.quint_scenarios import (
     EXPLORATION,
@@ -71,7 +77,6 @@ from tests.quint_scenarios import (
     load_fixture,
     require_traces,
     routes_of,
-    run_scenario,
     scenario_ids,
     write_summary,
 )
@@ -83,10 +88,24 @@ from tests.verification_contract_test_support import (
 )
 
 STORED = {entry["id"]: entry for entry in load_fixture(TRACES_FIXTURE)["traces"]}
+_STORED_TRACE_CACHE = StoredTraceCache(STORED)
 FAULTS = load_fixture(FAULTS_FIXTURE)["faults"]
 NON_FAULT_SCENARIOS = tuple(
     name for name in scenario_ids() if not name.startswith("fault_")
 )
+
+
+@pytest.fixture(scope="module")
+def stored_trace() -> StoredTraceCache:
+    """Worker-scoped cache for parsed stored regression traces (#1367)."""
+    return _STORED_TRACE_CACHE
+
+
+@pytest.fixture(scope="module")
+def model_scenario() -> Iterator[ScenarioRunCache]:
+    """Worker-scoped cache for deterministic scripted Quint scenario runs (#1367)."""
+    with ScenarioRunCache() as cache:
+        yield cache
 
 
 def assert_model_run_ok(run: ModelRun, label: str) -> None:
@@ -106,11 +125,17 @@ def assert_model_run_ok(run: ModelRun, label: str) -> None:
     )
 
 
-def replay_stored(scenario: str, root: Path, wiring: FaultPlan | None = None) -> None:
+def replay_stored(
+    scenario: str,
+    root: Path,
+    wiring: FaultPlan | None = None,
+    *,
+    trace: Trace | None = None,
+) -> None:
     entry = STORED[scenario]
-    replay_trace(
-        parse_trace(entry["itf"]), root, known_defect(entry["known_defect"]), wiring
-    )
+    if trace is None:
+        trace = _STORED_TRACE_CACHE.get(scenario)
+    replay_trace(trace, root, known_defect(entry["known_defect"]), wiring)
 
 
 # ---- toolchain ------------------------------------------------------------------------
@@ -279,14 +304,14 @@ def test_every_hypothesis_topology_is_in_the_replay_table() -> None:
 
 @pytest.mark.parametrize("scenario", NON_FAULT_SCENARIOS)
 def test_each_scenario_runs_on_the_model_and_replays(
-    scenario: str, tmp_path: Path
+    scenario: str, tmp_path: Path, model_scenario: ScenarioRunCache
 ) -> None:
-    """Generate the scenario fresh, check it against the saved fixture, replay it.
+    """Generate the scenario fresh or retrieve cached, check against fixture, replay it.
 
     A model change without regenerating the fixture fails here.  The defect
     scenarios are replayed by their strict-xfail tests below, not here.
     """
-    run = run_scenario(scenario, tmp_path / "model")
+    run = model_scenario(scenario)
     assert_model_run_ok(run, scenario)
     (path,) = run.traces
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -316,25 +341,31 @@ def test_stored_traces_are_the_declared_scenarios_of_the_pinned_tool() -> None:
             assert flag in entry["command"], (entry["id"], flag)
 
 
-def test_stored_traces_cover_the_required_routes() -> None:
+def test_stored_traces_cover_the_required_routes(
+    stored_trace: StoredTraceCache,
+) -> None:
     covered: set[str] = set()
     for scenario in STORED_SCENARIOS:
-        covered |= routes_of(parse_trace(STORED[scenario]["itf"]))
+        covered |= routes_of(stored_trace(scenario))
     assert REQUIRED_ROUTES <= covered, sorted(REQUIRED_ROUTES - covered)
 
 
-def test_stored_traces_exercise_every_mapped_action() -> None:
+def test_stored_traces_exercise_every_mapped_action(
+    stored_trace: StoredTraceCache,
+) -> None:
     used: set[str] = set()
     for scenario in STORED_SCENARIOS:
-        used |= {step.action for step in parse_trace(STORED[scenario]["itf"]).steps[1:]}
+        used |= {step.action for step in stored_trace(scenario).steps[1:]}
     assert used == set(ACTIONS)
 
 
 @pytest.mark.parametrize("scenario", STORED_SCENARIOS)
-def test_stored_trace_replays_on_production(scenario: str, tmp_path: Path) -> None:
+def test_stored_trace_replays_on_production(
+    scenario: str, tmp_path: Path, stored_trace: StoredTraceCache
+) -> None:
     entry = STORED[scenario]
     assert entry["known_defect"] is None
-    trace = parse_trace(entry["itf"])
+    trace = stored_trace(scenario)
     report = replay_trace(trace, tmp_path)
     assert report.transitions == trace.transitions > 0
     assert report.cycles > 0
@@ -346,14 +377,14 @@ def test_no_production_defect_is_pinned_in_the_saved_traces() -> None:
 
 
 def test_a_known_defect_pin_is_exact(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stored_trace: StoredTraceCache
 ) -> None:
     """The replay re-labels a mismatch only at the registered step, node and contract.
 
     No production defect is pinned any more (#1300), so the mechanism is
     exercised with a production fault: every promotion is skipped.
     """
-    trace = parse_trace(STORED["final_apply"]["itf"])
+    trace = stored_trace("final_apply")
     step = next(s.index for s in trace.steps if s.state["mustQueue"])
     pin = KnownDefect(
         issue=1,
@@ -383,13 +414,13 @@ def test_a_known_defect_pin_is_exact(
 
 @pytest.mark.parametrize("entry", FAULTS, ids=lambda entry: entry["fault"])
 def test_control_model_fault_is_detected_by_its_invariant(
-    entry: dict[str, Any], tmp_path: Path
+    entry: dict[str, Any], tmp_path: Path, model_scenario: ScenarioRunCache
 ) -> None:
-    ok = run_scenario(entry["ok_scenario"], tmp_path / "ok")
+    ok = model_scenario(entry["ok_scenario"])
     assert_model_run_ok(ok, entry["ok_scenario"])
     ok_trace = json.loads(ok.traces[0].read_text(encoding="utf-8"))
     assert len(ok_trace["states"]) == entry["ok_states"]  # reached the planned end
-    bad = run_scenario(entry["fault_scenario"], tmp_path / "bad")
+    bad = model_scenario(entry["fault_scenario"])
     with expect_violation("P3C-QUINT-MODEL"):
         assert_model_run_ok(bad, entry["fault_scenario"])
     assert set(bad.violated) == set(entry["expect_violated"])
@@ -399,10 +430,10 @@ def test_control_model_fault_is_detected_by_its_invariant(
 
 
 def test_a_model_violation_reports_a_reproducible_counterexample(
-    tmp_path: Path,
+    tmp_path: Path, model_scenario: ScenarioRunCache
 ) -> None:
     """The failure names the invariant, the exact command and the saved trace."""
-    run = run_scenario("fault_suppress", tmp_path)
+    run = model_scenario("fault_suppress")
     with pytest.raises(ContractViolation) as caught:
         assert_model_run_ok(run, "fault_suppress")
     detail = caught.value.detail
@@ -445,9 +476,11 @@ def test_a_timeout_is_an_error_not_a_success() -> None:
         run_model(Exploration("0x1", 10**9, 10**6, timeout=2.0))
 
 
-def test_a_violation_with_the_wrong_invariant_does_not_match_the_fault() -> None:
+def test_a_violation_with_the_wrong_invariant_does_not_match_the_fault(
+    model_scenario: ScenarioRunCache,
+) -> None:
     entry = next(e for e in FAULTS if e["fault"] == "stale-evidence")
-    run = run_scenario(entry["fault_scenario"])
+    run = model_scenario(entry["fault_scenario"])
     assert run.outcome == "violation" and run.violated == ("safety",)
     assert set(run.violated) != {"liveness"}
 
@@ -628,14 +661,16 @@ def test_control_replay_detects_a_promotion_reported_twice(
         replay_stored("lagged_chain_reported_later", tmp_path / "fault")
 
 
-def test_a_late_report_is_not_a_promotion_of_the_cycle(tmp_path: Path) -> None:
+def test_a_late_report_is_not_a_promotion_of_the_cycle(
+    tmp_path: Path, stored_trace: StoredTraceCache
+) -> None:
     """The report of an earlier promotion must not count against a later hold."""
     for scenario in (
         "lagged_chain_reservation_then_apply",
         "lagged_chain_dry_then_apply",
     ):
-        replay_stored(scenario, tmp_path / scenario)
-    trace = parse_trace(STORED["lagged_chain_reservation_then_apply"]["itf"])
+        replay_stored(scenario, tmp_path / scenario, trace=stored_trace(scenario))
+    trace = stored_trace("lagged_chain_reservation_then_apply")
     assert any(step.state["recoveredEvents"] for step in trace.steps)
 
 
