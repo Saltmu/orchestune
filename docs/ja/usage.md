@@ -167,10 +167,10 @@ subtasks:
 - **親Issueへの永続化と起票済みサブタスクの正本（Source of Truth）**:
   AIエージェントの使い捨てworktreeが削除されてローカルの `decomposition_plan.md` が消失しても、親Issue本文に計画（各サブタスクの定義や起票された `issue_number`、説明文）が記録として残ります。ただし、起票済みのサブタスクについては、その文章（`overview`, `proposed_changes`, `acceptance_criteria`, `verification_plan`）および `footprint`, `symbols` の正本は子Issue本文となります。
 - **計画ファイルを失った状態からの安全な復元と再実行**:
-  1. `orchestune provision --restore-plan <親Issue番号>`（必要に応じて `--plan <出力先>` や `--template <テンプレートパス>`）を実行すると、親計画と各子Issue本文から完全な `decomposition_plan.md` が復元されます。起票済みエントリは各子Issue本文から最新の文章とFootprintが復元され（親に残った古い文章へはフォールバックしません）、未起票エントリは親計画の値が維持されます。
+  1. `orchestune provision --restore-plan <親Issue番号>`（必要に応じて `--plan <出力先>` や `--template <テンプレートパス>`）を実行すると、親計画と各子Issue本文から完全な `decomposition_plan.md` が復元されます。起票済みエントリは各子Issue本文から最新の文章とFootprintが復元され（親に残った古い文章へはフォールバックしません）、未起票エントリは親計画の値が維持されます。復元後のローカル計画は全エントリがインライン展開された形式となるため、親計画が目次形式（`plan_format: manifest-v1`）であっても `plan_format` は付与されません。
   2. 親の構造と子の本文・メタデータ（`id`, `description`, `depends_on`, 共有メタデータ等）は厳密に照合され、不整合や子Issueの欠落がある場合は fail closed として復元を拒否します。
   3. 復元処理の最終段階で親および取得済みの子Issueを再取得して並行編集を検知した場合は出力を中止し再実行を促します（分散トランザクションは行わず、完全な同時点 snapshot は保証しません）。出力先ファイルは一時ファイルを経由してアトミックに置き換えられるため、復元失敗時に既存の出力ファイルが破壊されることはありません。
-  4. 既存Issueを補修タスクとして登録した等の理由で本文がテンプレート構造に適合しない場合は、子Issue本文をテンプレートの形式に手動で整えてから再実行してください。
+  4. 既存Issueを補修タスクとして登録した等の理由で本文がテンプレート構造に適合しない場合は、子Issue本文をテンプレートの形式に手動で整えてから再実行してください。なお、`orchestune provision` 実行時には起票前バリデーション（`validate_reversible_subtask`）が走り、箇条書きの空行・末尾空白・改行混入・予約語「特になし」を事前検出して復元不可能な計画の起票を未然に防止します。
   5. 復元した状態で再度 `orchestune provision` を行う場合は、必ず `--parent-issue <親番号>` を指定し、まずは `--no-apply` でプレビューして既存の子Issueが正しく再利用されることを確認してください。
 - **古いローカル計画で親計画を上書きしない**: 親計画に `issue_number` を持つsubtaskがあり、同じ `id` のsubtaskがローカルの計画にない場合（親計画へ直接追加されたタスクがある場合など）、`orchestune provision` は子Issueを1件も作らずに終了コード3で止まり、親Issue本文も書き換えません。`orchestune provision --restore-plan <親番号>` で計画を復元してから再実行してください。`issue_number` を持たない親計画のエントリでは止まりません。
 - **複数 big rock（計画）の並行運用**:

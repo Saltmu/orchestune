@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-PLAN_MANIFEST_FORMAT = "manifest-v1"
+from orchestune.issue_parsing import PLAN_MANIFEST_FORMAT
+
 SUPPORTED_PLAN_FORMATS = frozenset({PLAN_MANIFEST_FORMAT})
 
 

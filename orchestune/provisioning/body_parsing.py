@@ -13,6 +13,7 @@ from orchestune.dispatch.attempt_record import attempt_from_body
 from orchestune.footprint_paths import normalize_footprint_path
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
+    REMEDIATION_MARKER,
     normalize_newlines,
     remediation_record_from_body,
 )
@@ -27,7 +28,7 @@ _REPLAN_GEN_PATTERN = re.compile(
 )
 
 _LAUNCH_ATTEMPT_MARKER = "<!-- orchestune:launch-attempt -->"
-_REMEDIATION_MARKER = "<!-- orchestune:remediation-v1 -->"
+_REMEDIATION_MARKER = REMEDIATION_MARKER
 _SYMBOLS_WARNING_HEADER = (
     "\n\n---\n\n⚠️ **symbols未検出**: 以下のシンボルは、Footprintに列挙されたファイル内に"
     "見つかりませんでした。このsubtaskで新規追加する予定であれば問題ありません"
@@ -54,7 +55,7 @@ def validate_reversible_subtask(subtask: SubTask | dict[str, Any]) -> None:
     """Validate that subtask bullet lists can be reversibly restored.
 
     Rejects items containing '\\n- ', items with leading/trailing whitespace,
-    and empty string items.
+    empty string items, and reserved empty placeholder '特になし'.
     """
     for field_name in ("proposed_changes", "acceptance_criteria", "verification_plan"):
         raw_items = (
@@ -72,6 +73,10 @@ def validate_reversible_subtask(subtask: SubTask | dict[str, Any]) -> None:
             if item != item.strip():
                 raise ValueError(
                     f"leading or trailing whitespace in {field_name} item: {item!r}"
+                )
+            if item.strip() == "特になし":
+                raise ValueError(
+                    f"item in {field_name} cannot be '特になし' (reserved for empty section placeholder)"
                 )
             if "\n- " in item:
                 raise ValueError(
@@ -272,9 +277,13 @@ def extract_subtask_section(template: str, body: str, placeholder: str) -> str:
     return body[start:end]
 
 
-def _match_prose_candidates(
-    template_prefix: str, body_prefix: str
-) -> list[dict[str, str]]:
+def _match_prose(template_prefix: str, body_prefix: str) -> dict[str, str] | None:
+    """Match body prefix against template prefix structure and return captured placeholders.
+
+    Note: The regex uses non-greedy capture groups and fullmatch, which produces at most
+    one valid match. Ambiguities or mismatches are strictly caught by subsequent
+    roundtrip verification (_verify_roundtrip_match).
+    """
     segments: list[str] = []
     keys: list[str] = []
     last_end = 0
@@ -294,9 +303,8 @@ def _match_prose_candidates(
 
     match = regex.fullmatch(body_prefix)
     if not match:
-        return []
-    res = {keys[i]: match.group(f"p_{i}") for i in range(len(keys))}
-    return [res]
+        return None
+    return {keys[i]: match.group(f"p_{i}") for i in range(len(keys))}
 
 
 def _verify_roundtrip_match(
@@ -306,6 +314,12 @@ def _verify_roundtrip_match(
     b_match: re.Match[str],
     parent_issue_number: int | None,
 ) -> None:
+    # Note: Footprint YAML block is masked because formatting differences (flow vs block
+    # sequences, extra runtime keys added by claim/amend like recompute_count/claim_id)
+    # are tolerated. Exact semantic equality of canonical plan keys is enforced separately
+    # via _coerce_footprint_plan_keys and _reconcile_subtask. Extra YAML keys not part of the
+    # canonical 9 plan keys are ignored, and fields not stored in child body (e.g. risk,
+    # risk_reasons) retain their parent plan values.
     expected = _render_issue_body(subtask, template, parent_issue_number)
     exp_b_match = FOOTPRINT_BLOCK_PATTERN.search(expected)
     if not exp_b_match:
@@ -417,13 +431,10 @@ def parse_subtask_issue_body(template: str, title: str, body: str) -> dict[str, 
     t_prefix = template[: t_match.start()]
     b_prefix = sanitized_body[: b_match.start()]
 
-    candidates = _match_prose_candidates(t_prefix, b_prefix)
-    if not candidates:
+    captured = _match_prose(t_prefix, b_prefix)
+    if captured is None:
         raise ValueError("could not match body structure to template")
-    if len(candidates) > 1:
-        raise ValueError("ambiguous boundary in prose: multiple valid splits")
 
-    captured = candidates[0]
     description, overview, changes, criteria, verify = _extract_prose_fields(
         captured, title, fp_keys["subtask_id"]
     )

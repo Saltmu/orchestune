@@ -480,3 +480,15 @@ def test_all_update_issue_body_callers_are_known() -> None:
 
     expected_callers = {path for path, _ in KNOWN_UPDATE_ISSUE_BODY_CALLERS}
     assert actual_callers == expected_callers
+
+
+def test_validate_reversible_subtask_rejects_tokuninashi_item() -> None:
+    subtask = {
+        "id": "item-tokuninashi",
+        "proposed_changes": ["特になし"],
+    }
+    with pytest.raises(
+        ValueError,
+        match="cannot be '特になし' \\(reserved for empty section placeholder\\)",
+    ):
+        validate_reversible_subtask(subtask)

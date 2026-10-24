@@ -158,7 +158,9 @@ class ManifestPlanError(ValueError):
     """Raised when attempting to restore a plan directly from a manifest parent body without children."""
 
 
-_REMEDIATION_MARKER = "<!-- orchestune:remediation-v1 -->"
+PLAN_MANIFEST_FORMAT = "manifest-v1"
+REMEDIATION_MARKER = "<!-- orchestune:remediation-v1 -->"
+_REMEDIATION_MARKER = REMEDIATION_MARKER
 _REMEDIATION_RECORD_PATTERN = re.compile(
     re.escape(_REMEDIATION_MARKER) + r"\s*```json\s*\n(.*?)```", re.DOTALL
 )
@@ -188,7 +190,7 @@ def restore_plan_markdown_from_parent_body(body: str) -> str | None:
     plan_dict = decomposition_plan_from_parent_body(body)
     if not plan_dict:
         return None
-    if plan_dict.get("plan_format") == "manifest-v1":
+    if plan_dict.get("plan_format") == PLAN_MANIFEST_FORMAT:
         raise ManifestPlanError(
             "Parent issue contains a manifest decomposition plan; restore requires child issues"
         )

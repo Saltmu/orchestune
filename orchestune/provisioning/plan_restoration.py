@@ -20,7 +20,7 @@ from orchestune.issue_parsing import (
 )
 from orchestune.models import IssueRecord
 from orchestune.provisioning.body_parsing import parse_subtask_issue_body
-from orchestune.provisioning.plan_manifest import SUPPORTED_PLAN_FORMATS
+from orchestune.provisioning.plan_manifest import is_manifest_plan
 from orchestune.provisioning.rendering import validate_template_identity_marker
 from orchestune.validation import validate_issue_number
 
@@ -39,11 +39,7 @@ def _load_template_content(template_path: str | Path | None) -> tuple[str, Path]
 
 
 def _validate_parent_plan_structure(plan_dict: dict[str, Any]) -> None:
-    fmt = plan_dict.get("plan_format")
-    if fmt is not None and fmt not in SUPPORTED_PLAN_FORMATS:
-        raise ValueError(
-            f"unsupported plan_format: {fmt!r} (must be one of {sorted(SUPPORTED_PLAN_FORMATS)})"
-        )
+    is_manifest_plan(plan_dict)
     subtasks = plan_dict.get("subtasks")
     if not isinstance(subtasks, list):
         raise ValueError("parent plan 'subtasks' must be a list")
@@ -89,29 +85,32 @@ def _reconcile_shared_metadata(
     issue_num: int,
     restored: dict[str, Any],
 ) -> None:
+    if "writes_shared_contract" in entry:
+        p_bool = bool(entry["writes_shared_contract"])
+        c_bool = bool(child_data.get("writes_shared_contract", False))
+        if p_bool != c_bool:
+            raise ValueError(
+                f"writes_shared_contract mismatch for #{issue_num}: parent {p_bool} != child {c_bool}"
+            )
+        restored["writes_shared_contract"] = c_bool
+    else:
+        restored["writes_shared_contract"] = bool(
+            child_data.get("writes_shared_contract", False)
+        )
+
     for key in (
         "shared_contract",
-        "writes_shared_contract",
         "execution_profile",
         "model_tier",
         "parent_issue_number",
     ):
         p_val = entry.get(key)
         c_val = child_data.get(key)
-        if key == "writes_shared_contract":
-            p_bool = bool(p_val) if key in entry else None
-            c_bool = bool(c_val)
-            if p_bool is not None and p_bool != c_bool:
-                raise ValueError(
-                    f"{key} mismatch for #{issue_num}: parent {p_bool} != child {c_bool}"
-                )
-            restored[key] = c_bool
-        else:
-            if p_val is not None and c_val is not None and p_val != c_val:
-                raise ValueError(
-                    f"{key} mismatch for #{issue_num}: parent {p_val!r} != child {c_val!r}"
-                )
-            restored[key] = c_val if p_val is None else p_val
+        if p_val is not None and c_val is not None and p_val != c_val:
+            raise ValueError(
+                f"{key} mismatch for #{issue_num}: parent {p_val!r} != child {c_val!r}"
+            )
+        restored[key] = c_val if p_val is None else p_val
 
 
 def _reconcile_subtask(
@@ -245,7 +244,15 @@ def restore_plan_from_parent(
     parent_issue_number: int,
     template_path: str | Path | None = None,
 ) -> tuple[dict[str, Any], IssueRecord, dict[int, IssueRecord]]:
-    """Fetch parent and children, validate, and build the fully restored plan dictionary."""
+    """Fetch parent and children, validate, and build the fully restored plan dictionary.
+
+    Returns:
+        tuple[dict[str, Any], IssueRecord, dict[int, IssueRecord]]:
+            A tuple of (restored_plan, parent_issue, fetched_children).
+            Note: Callers persisting restored plans to disk (such as restore_plan_file_from_parent)
+            must validate concurrent modifications with _validate_concurrent_modifications
+            using the returned fetched_children before atomic file write.
+    """
     template_content, _ = _load_template_content(template_path)
     parent_issue = forge.get_issue(parent_issue_number)
     if parent_issue is None:
