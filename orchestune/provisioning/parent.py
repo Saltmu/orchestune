@@ -14,6 +14,80 @@ from orchestune.provisioning.plan import (
 )
 
 
+def _inspect_explicit_parent(
+    forge: IssueForge, validated_parent: int
+) -> tuple[int, str]:
+    issue = forge.get_issue(validated_parent)
+    if issue is None:
+        raise RuntimeError(
+            f"Adopted parent issue #{validated_parent} does not exist; refusing to provision subtasks under it."
+        )
+    if issue.state.upper() == "CLOSED":
+        raise RuntimeError(
+            f"Adopted parent issue #{validated_parent} is closed; refusing to adopt a closed issue as EPIC parent."
+        )
+    body = (
+        ensure_parent_marker(issue.body)
+        if PARENT_MARKER not in issue.body
+        else issue.body
+    )
+    return validated_parent, body
+
+
+def _inspect_adopted_parent(
+    forge: IssueForge, metadata: PlanMetadata
+) -> tuple[int, str]:
+    if metadata.parent_issue_number is None:
+        raise ValueError(
+            "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
+            "'parent_issue_number' が設定されていません"
+        )
+    candidate = forge.get_issue(metadata.parent_issue_number)
+    if candidate is None:
+        raise RuntimeError(
+            f"Adopted parent issue #{metadata.parent_issue_number} does not exist; refusing to provision subtasks under it."
+        )
+    if candidate.state.upper() == "CLOSED":
+        raise RuntimeError(
+            f"Adopted parent issue #{metadata.parent_issue_number} is closed; refusing to adopt a closed issue as EPIC parent."
+        )
+    if not is_epic_issue(candidate):
+        raise RuntimeError(
+            f"Adopted parent issue #{metadata.parent_issue_number} is not an Orchestune EPIC issue "
+            "(missing '[EPIC] ' prefix or parent marker); refusing to automatically mutate an unconfirmed issue. "
+            f"If you intended to adopt this issue, pass '--parent-issue {metadata.parent_issue_number}' explicitly."
+        )
+    return metadata.parent_issue_number, candidate.body
+
+
+def inspect_candidate_parent(
+    forge: IssueForge,
+    metadata: PlanMetadata,
+    validated_parent: int | None,
+) -> tuple[int | None, str]:
+    if validated_parent is not None:
+        return _inspect_explicit_parent(forge, validated_parent)
+    if metadata.parent_issue_source == "adopted":
+        return _inspect_adopted_parent(forge, metadata)
+
+    parent_title = f"[EPIC] {metadata.title}"
+    if metadata.parent_issue_number is not None:
+        candidate = forge.get_issue(metadata.parent_issue_number)
+        if (
+            candidate is not None
+            and candidate.title == parent_title
+            and PARENT_MARKER in candidate.body
+        ):
+            return metadata.parent_issue_number, candidate.body
+
+    candidates = forge.find_open_issues_by_exact_title(parent_title)
+    marked = next((c for c in candidates if PARENT_MARKER in c.body), None)
+    if marked is not None:
+        return marked.number, marked.body
+
+    return None, _parent_body(metadata.title, metadata.description, None)
+
+
 def _resolve_explicit_parent_issue(
     forge: IssueForge,
     parent_issue_number: int,
@@ -21,15 +95,9 @@ def _resolve_explicit_parent_issue(
     metadata: PlanMetadata | None = None,
     sync_plan: bool = True,
 ) -> tuple[int, bool]:
+    _, body = _inspect_explicit_parent(forge, parent_issue_number)
     issue = forge.get_issue(parent_issue_number)
-    if issue is None:
-        raise RuntimeError(
-            f"Adopted parent issue #{parent_issue_number} does not exist; refusing to provision subtasks under it."
-        )
-    if issue.state.upper() == "CLOSED":
-        raise RuntimeError(
-            f"Adopted parent issue #{parent_issue_number} is closed; refusing to adopt a closed issue as EPIC parent."
-        )
+    assert issue is not None
     if not is_epic_issue(issue):
         title = (
             issue.title
@@ -39,9 +107,7 @@ def _resolve_explicit_parent_issue(
         if title != issue.title:
             forge.update_issue_title(parent_issue_number, title)
         if PARENT_MARKER not in issue.body:
-            forge.update_issue_body(
-                parent_issue_number, ensure_parent_marker(issue.body)
-            )
+            forge.update_issue_body(parent_issue_number, body)
     if (
         metadata is None
         or metadata.parent_issue_number != parent_issue_number
@@ -65,28 +131,9 @@ def _resolve_adopted_parent_metadata(
     plan_path: str | Path,
     sync_plan: bool = True,
 ) -> tuple[int, bool]:
-    if metadata.parent_issue_number is None:
-        raise ValueError(
-            "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
-            "'parent_issue_number' が設定されていません"
-        )
-    candidate = forge.get_issue(metadata.parent_issue_number)
-    if candidate is None:
-        raise RuntimeError(
-            f"Adopted parent issue #{metadata.parent_issue_number} does not exist; refusing to provision subtasks under it."
-        )
-    if candidate.state.upper() == "CLOSED":
-        raise RuntimeError(
-            f"Adopted parent issue #{metadata.parent_issue_number} is closed; refusing to adopt a closed issue as EPIC parent."
-        )
-    if not is_epic_issue(candidate):
-        raise RuntimeError(
-            f"Adopted parent issue #{metadata.parent_issue_number} is not an Orchestune EPIC issue "
-            "(missing '[EPIC] ' prefix or parent marker); refusing to automatically mutate an unconfirmed issue. "
-            f"If you intended to adopt this issue, pass '--parent-issue {metadata.parent_issue_number}' explicitly."
-        )
+    num, _ = _inspect_adopted_parent(forge, metadata)
     return _resolve_explicit_parent_issue(
-        forge, metadata.parent_issue_number, plan_path, metadata, sync_plan=sync_plan
+        forge, num, plan_path, metadata, sync_plan=sync_plan
     )
 
 
@@ -96,34 +143,15 @@ def _resolve_derived_parent_issue(
     plan_path: str | Path,
     sync_plan: bool = True,
 ) -> tuple[int, bool]:
-    parent_issue_number = metadata.parent_issue_number
-    parent_title = f"[EPIC] {metadata.title}"
-    if parent_issue_number is not None:
-        candidate = forge.get_issue(parent_issue_number)
-        if (
-            candidate is None
-            or candidate.title != parent_title
-            or PARENT_MARKER not in candidate.body
-        ):
-            parent_issue_number = None
+    parent_issue_number, initial_body = inspect_candidate_parent(forge, metadata, None)
     if parent_issue_number is None:
-        candidates = forge.find_open_issues_by_exact_title(parent_title)
-        marked_candidate = next(
-            (candidate for candidate in candidates if PARENT_MARKER in candidate.body),
-            None,
-        )
-        if marked_candidate is not None:
-            parent_issue_number = marked_candidate.number
-        else:
-            parent_issue_number = forge.create_issue(
-                parent_title,
-                _parent_body(metadata.title, metadata.description, None),
-            )
-        write_issue_numbers(
-            plan_path,
-            parent_issue_number=parent_issue_number,
-            parent_issue_source="derived",
-        )
+        parent_title = f"[EPIC] {metadata.title}"
+        parent_issue_number = forge.create_issue(parent_title, initial_body)
+    write_issue_numbers(
+        plan_path,
+        parent_issue_number=parent_issue_number,
+        parent_issue_source="derived",
+    )
     if not sync_plan:
         return parent_issue_number, True
     return parent_issue_number, sync_parent_decomposition_plan(

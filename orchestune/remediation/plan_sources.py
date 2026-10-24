@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from pathlib import Path
 from typing import Any
 
 from orchestune.dag.models import SubTask
@@ -31,12 +30,7 @@ def _extract_child_acceptance(
     sources: dict[str, list[str]],
     problems: list[PreviewProblem],
 ) -> None:
-    resolved_template = template
-    if resolved_template is None:
-        tpl_path = Path(".github/issue_template.md")
-        if tpl_path.exists():
-            resolved_template = tpl_path.read_text(encoding="utf-8")
-    if not resolved_template:
+    if not template:
         problems.append(
             PreviewProblem(
                 "input",
@@ -46,13 +40,13 @@ def _extract_child_acceptance(
         return
     try:
         section_text = extract_subtask_section(
-            resolved_template, child.body, "acceptance_criteria"
+            template, child.body, "acceptance_criteria"
         )
         for item in parse_bullet_list(section_text):
             sources.setdefault(" ".join(item.split()), []).append(
                 f"subtask {sid}: {item}"
             )
-    except Exception as exc:
+    except (ValueError, KeyError) as exc:
         problems.append(
             PreviewProblem(
                 "existing",
@@ -104,6 +98,51 @@ def extract_subtask_acceptance_sources(
     return {k: tuple(v) for k, v in sources.items()}, problems
 
 
+def _entry_to_subtask(entry: dict[str, Any], snapshot: RemediationSnapshot) -> SubTask:
+    sid = str(entry.get("id", "")).strip()
+    issue_num = entry.get("issue_number")
+    child = (
+        next(
+            (
+                c
+                for c in (*snapshot.children, *snapshot.existing)
+                if c.number == issue_num
+            ),
+            None,
+        )
+        if issue_num
+        else None
+    )
+    if issue_num is not None and child is None:
+        raise ValueError(
+            f"child Issue #{issue_num} for subtask '{sid}' not found in snapshot; "
+            "cannot determine Footprint for DAG validation"
+        )
+    if child is not None:
+        parsed = parse_task_from_issue(child)
+        footprint = tuple(parsed.footprint or ())
+        symbols = tuple(parsed.symbols or ())
+    else:
+        footprint = tuple(entry.get("footprint") or ())
+        symbols = tuple(entry.get("symbols") or ())
+
+    return SubTask(
+        id=sid,
+        description=str(entry.get("description", "")),
+        footprint=footprint,
+        symbols=symbols,
+        depends_on=tuple(str(d) for d in entry.get("depends_on", ())),
+        risk=bool(entry.get("risk", False)),
+        risk_reasons=tuple(str(r) for r in entry.get("risk_reasons", ())),
+        priority=str(entry.get("priority", "medium")),
+        shared_contract=entry.get("shared_contract"),
+        writes_shared_contract=bool(entry.get("writes_shared_contract", False)),
+        issue_number=issue_num,
+        execution_profile=entry.get("execution_profile"),
+        model_tier=entry.get("model_tier"),
+    )
+
+
 def build_dag_subtasks(
     entries: list[dict[str, Any]],
     snapshot: RemediationSnapshot,
@@ -112,52 +151,12 @@ def build_dag_subtasks(
     """Construct full SubTask models for DAG validation, sourcing footprint from children."""
     spec_map = {t.subtask.id: t.subtask for t in spec_tasks}
     result: list[SubTask] = []
-
     for entry in entries:
         sid = str(entry.get("id", "")).strip()
-        if sid in spec_map:
-            continue
-        issue_num = entry.get("issue_number")
-        child = (
-            next(
-                (
-                    c
-                    for c in (*snapshot.children, *snapshot.existing)
-                    if c.number == issue_num
-                ),
-                None,
-            )
-            if issue_num
-            else None
-        )
-        if child is not None:
-            parsed = parse_task_from_issue(child)
-            footprint = tuple(parsed.footprint or ())
-            symbols = tuple(parsed.symbols or ())
-        else:
-            footprint = tuple(entry.get("footprint") or ())
-            symbols = tuple(entry.get("symbols") or ())
-
-        subtask = SubTask(
-            id=sid,
-            description=str(entry.get("description", "")),
-            footprint=footprint,
-            symbols=symbols,
-            depends_on=tuple(str(d) for d in entry.get("depends_on", ())),
-            risk=bool(entry.get("risk", False)),
-            risk_reasons=tuple(str(r) for r in entry.get("risk_reasons", ())),
-            priority=str(entry.get("priority", "medium")),
-            shared_contract=entry.get("shared_contract"),
-            writes_shared_contract=bool(entry.get("writes_shared_contract", False)),
-            issue_number=issue_num,
-            execution_profile=entry.get("execution_profile"),
-            model_tier=entry.get("model_tier"),
-        )
-        result.append(subtask)
-
+        if sid not in spec_map:
+            result.append(_entry_to_subtask(entry, snapshot))
     for task in spec_tasks:
         result.append(task.subtask)
-
     return result
 
 
@@ -203,7 +202,7 @@ def is_plan_entry_ready(
         expected["model_tier"] = task.subtask.model_tier
     try:
         return project_single_subtask(entry) == project_single_subtask(expected)
-    except Exception:
+    except (ValueError, TypeError):
         return False
 
 

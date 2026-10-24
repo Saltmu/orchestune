@@ -36,7 +36,7 @@ def is_manifest_plan(plan: dict[str, Any]) -> bool:
     return bool(plan_format == PLAN_MANIFEST_FORMAT)
 
 
-def _project_single_subtask(subtask: dict[str, Any]) -> dict[str, Any]:
+def project_single_subtask(subtask: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(subtask, dict) or "id" not in subtask:
         raise ValueError("Each subtask in parent plan must be a dict with 'id'")
     subtask_id = str(subtask["id"]).strip()
@@ -63,7 +63,7 @@ def project_plan_manifest(plan: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("parent plan 'subtasks' must be a list")
 
     deep_copied = copy.deepcopy(plan)
-    projected_subtasks = [_project_single_subtask(st) for st in deep_copied["subtasks"]]
+    projected_subtasks = [project_single_subtask(st) for st in deep_copied["subtasks"]]
 
     result: dict[str, Any] = {"plan_format": PLAN_MANIFEST_FORMAT}
     for k, v in deep_copied.items():
@@ -78,8 +78,6 @@ def project_plan_manifest(plan: dict[str, Any]) -> dict[str, Any]:
         result["subtasks"] = projected_subtasks
     return result
 
-
-project_single_subtask = _project_single_subtask
 
 __all__ = [
     "PLAN_MANIFEST_FORMAT",

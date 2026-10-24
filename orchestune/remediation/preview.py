@@ -481,7 +481,7 @@ def build_remediation_preview(
     snapshot: RemediationSnapshot,
     template: str | None = None,
 ) -> RemediationPreview:
-    """Return every problem and the first applicable exit category, without I/O."""
+    """Return every problem and the first applicable exit category."""
     problems: list[PreviewProblem] = []
     entries = _parent_plan(snapshot, problems)
     if any(t.subtask.issue_number == snapshot.parent.number for t in spec.tasks):

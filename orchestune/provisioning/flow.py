@@ -23,10 +23,7 @@ from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import GitHubForge, IssueForge, RelationshipUnavailableError
 from orchestune.infra.repository_config import find_and_load_config_file
 from orchestune.issue_parsing import (
-    PARENT_MARKER,
     embed_decomposition_plan_in_parent_body,
-    ensure_parent_marker,
-    is_epic_issue,
 )
 from orchestune.models import IssueRecord
 from orchestune.plan_writer import (
@@ -34,12 +31,14 @@ from orchestune.plan_writer import (
     write_issue_numbers,
 )
 from orchestune.provisioning.body_parsing import validate_reversible_subtask
-from orchestune.provisioning.parent import _resolve_parent_issue
+from orchestune.provisioning.parent import (
+    _resolve_parent_issue,
+    inspect_candidate_parent,
+)
 from orchestune.provisioning.plan import (
     GITHUB_ISSUE_BODY_LIMIT,
     PlanMetadata,
     _load_plan,
-    _parent_body,
     parent_only_subtask_ids,
     sync_parent_decomposition_plan,
 )
@@ -257,80 +256,6 @@ def _prepare_provisioning_context(
     return resolved_repo_root, subtasks, metadata, validated_parent, dag, template
 
 
-def _inspect_explicit_parent(
-    forge: IssueForge, validated_parent: int
-) -> tuple[int, str]:
-    issue = forge.get_issue(validated_parent)
-    if issue is None:
-        raise RuntimeError(
-            f"Adopted parent issue #{validated_parent} does not exist; refusing to provision subtasks under it."
-        )
-    if issue.state.upper() == "CLOSED":
-        raise RuntimeError(
-            f"Adopted parent issue #{validated_parent} is closed; refusing to adopt a closed issue as EPIC parent."
-        )
-    body = (
-        ensure_parent_marker(issue.body)
-        if PARENT_MARKER not in issue.body
-        else issue.body
-    )
-    return validated_parent, body
-
-
-def _inspect_adopted_parent(
-    forge: IssueForge, metadata: PlanMetadata
-) -> tuple[int, str]:
-    if metadata.parent_issue_number is None:
-        raise ValueError(
-            "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
-            "'parent_issue_number' が設定されていません"
-        )
-    candidate = forge.get_issue(metadata.parent_issue_number)
-    if candidate is None:
-        raise RuntimeError(
-            f"Adopted parent issue #{metadata.parent_issue_number} does not exist; refusing to provision subtasks under it."
-        )
-    if candidate.state.upper() == "CLOSED":
-        raise RuntimeError(
-            f"Adopted parent issue #{metadata.parent_issue_number} is closed; refusing to adopt a closed issue as EPIC parent."
-        )
-    if not is_epic_issue(candidate):
-        raise RuntimeError(
-            f"Adopted parent issue #{metadata.parent_issue_number} is not an Orchestune EPIC issue "
-            "(missing '[EPIC] ' prefix or parent marker); refusing to automatically mutate an unconfirmed issue. "
-            f"If you intended to adopt this issue, pass '--parent-issue {metadata.parent_issue_number}' explicitly."
-        )
-    return metadata.parent_issue_number, candidate.body
-
-
-def _inspect_candidate_parent(
-    forge: IssueForge,
-    metadata: PlanMetadata,
-    validated_parent: int | None,
-) -> tuple[int | None, str]:
-    if validated_parent is not None:
-        return _inspect_explicit_parent(forge, validated_parent)
-    if metadata.parent_issue_source == "adopted":
-        return _inspect_adopted_parent(forge, metadata)
-
-    parent_title = f"[EPIC] {metadata.title}"
-    if metadata.parent_issue_number is not None:
-        candidate = forge.get_issue(metadata.parent_issue_number)
-        if (
-            candidate is not None
-            and candidate.title == parent_title
-            and PARENT_MARKER in candidate.body
-        ):
-            return metadata.parent_issue_number, candidate.body
-
-    candidates = forge.find_open_issues_by_exact_title(parent_title)
-    marked = next((c for c in candidates if PARENT_MARKER in c.body), None)
-    if marked is not None:
-        return marked.number, marked.body
-
-    return None, _parent_body(metadata.title, metadata.description, None)
-
-
 def _preflight_provisioning_fit(
     candidate_number: int | None,
     candidate_body: str,
@@ -398,7 +323,7 @@ def _preflight_parent_fit(
     raw_frontmatter, _ = extract_frontmatter_and_body(
         Path(plan_path).read_text(encoding="utf-8")
     )
-    candidate_number, candidate_body = _inspect_candidate_parent(
+    candidate_number, candidate_body = inspect_candidate_parent(
         forge, metadata, validated_parent
     )
     return _preflight_provisioning_fit(

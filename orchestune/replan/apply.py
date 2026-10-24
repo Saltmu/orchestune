@@ -309,4 +309,4 @@ def apply_replan(
     return result
 
 
-__all__ = ["PROJECTED_ISSUE_NUMBER", "apply_replan"]
+__all__ = ["apply_replan"]

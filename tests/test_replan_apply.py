@@ -15,8 +15,11 @@ from orchestune.issue_parsing import (
 )
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.provisioning.plan import GITHUB_ISSUE_BODY_LIMIT
-from orchestune.provisioning.plan_manifest import project_plan_manifest
-from orchestune.replan.apply import PROJECTED_ISSUE_NUMBER, apply_replan
+from orchestune.provisioning.plan_manifest import (
+    PROJECTED_ISSUE_NUMBER,
+    project_plan_manifest,
+)
+from orchestune.replan.apply import apply_replan
 from orchestune.replan.audit import replan_audit_marker, retirement_marker
 from orchestune.replan.plan import load_replan_plan
 from orchestune.replan.preview import build_replan_preview

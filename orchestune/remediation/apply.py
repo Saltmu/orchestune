@@ -42,8 +42,6 @@ from orchestune.remediation.preview import build_remediation_preview
 from orchestune.remediation.snapshot import collect_remediation_snapshot
 from orchestune.remediation.spec import load_remediation_spec, positive_number
 
-PROJECTED_NUMBER = PROJECTED_ISSUE_NUMBER
-
 
 def _entries(
     spec: RemediationSpec, raw: dict[str, Any], parent: int, numbers: dict[str, int]
@@ -82,7 +80,8 @@ def _prepare(
     validate_subtask_issue_number_targets(path, (t.subtask.id for t in spec.tasks))
     raw = extract_frontmatter(path.read_text(encoding="utf-8"))
     projected = {
-        p.task.subtask.id: p.issue_number or PROJECTED_NUMBER for p in preview.tasks
+        p.task.subtask.id: p.issue_number or PROJECTED_ISSUE_NUMBER
+        for p in preview.tasks
     }
     updated = append_plan(
         snapshot.parent.body, _entries(spec, raw, snapshot.parent.number, projected)
