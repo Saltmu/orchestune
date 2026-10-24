@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from architecture_source_support import _source_ast
 
 from orchestune import footprint_paths
 from orchestune.footprint_paths import (
@@ -120,7 +121,7 @@ def _python_sources() -> list[Path]:
 
 
 def test_footprint_paths_imports_only_the_standard_library() -> None:
-    tree = ast.parse(Path(footprint_paths.__file__).read_text(encoding="utf-8"))
+    tree = _source_ast(Path(footprint_paths.__file__))
     imported: set[str] = set()
     for node in ast.walk(tree):
         assert not (
@@ -145,7 +146,7 @@ def test_no_source_takes_the_moved_symbols_from_dag_models() -> None:
     """Imports are checked on the AST, so multi-line, aliased and relative forms count."""
     offenders = []
     for path in _python_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = _source_ast(path)
         is_dag_package = path.parent == _REPO_ROOT / "orchestune" / "dag"
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
