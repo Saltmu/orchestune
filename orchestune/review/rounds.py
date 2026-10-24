@@ -335,8 +335,18 @@ def activity_bounds(
     which would move a boundary by up to a second; the end is the next
     round's trigger, empty for the latest round.
     """
-    later = [t for t in triggers if t.round > current.round]
-    end = precise_created_at(comments, later[0]) if later else ""
+    later = [
+        t for t in (trigger_history(comments) or triggers) if t.round > current.round
+    ]
+    boundary = (
+        min(
+            later,
+            key=lambda t: parse_utc(precise_created_at(comments, t), "created_at"),
+        )
+        if later
+        else None
+    )
+    end = precise_created_at(comments, boundary) if boundary else ""
     return precise_created_at(comments, current), end
 
 
@@ -582,6 +592,7 @@ def select_round(
     pr_number: int,
     requested_round: int | None = None,
     max_rounds: int = MAX_REVIEW_ROUNDS,
+    history: Sequence[ReviewTrigger] | None = None,
 ) -> ReviewRoundContext:
     """The posted round to evaluate: the PR-wide latest unless one is requested."""
     max_rounds = min(max_rounds, MAX_REVIEW_ROUNDS)
@@ -607,7 +618,11 @@ def select_round(
         raise RoundLimitError(
             f"round {chosen.round} exceeds the limit of {max_rounds} rounds"
         )
-    later = [t for t in triggers if t.round > chosen.round]
+    later = [
+        t
+        for t in (history if history is not None else triggers)
+        if t.round > chosen.round
+    ]
     return ReviewRoundContext(
         repository=repository,
         pr_number=pr_number,
@@ -615,7 +630,7 @@ def select_round(
         round=chosen.round,
         trigger_id=chosen.id,
         started_at=chosen.created_at,
-        ended_at=later[0].created_at if later else None,
+        ended_at=min(t.created_at for t in later) if later else None,
         requested_head_sha=chosen.requested_head_sha,
         is_latest=not later,
     )

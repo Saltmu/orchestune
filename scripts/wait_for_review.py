@@ -259,6 +259,7 @@ def _is_trigger_comment(
 def _get_latest_review_round(
     data: dict[str, list[dict[str, Any]]], bot_name: str | None = None
 ) -> int:
+    """PR-wide consumed round; bot_name is retained only for caller compatibility."""
     comments = data.get("issue_comments", [])
     restore_triggers(comments)
     return consumed_round(comments)
@@ -642,11 +643,12 @@ def _resolve_current_round(
         }
         result = collect_review_state(
             state,
-            bot_name,
+            latest.reviewer,
             exclude_issue_comment_ids=trigger_comment_ids(state["issue_comments"]),
             round_started_at=latest.created_at,
             requested_head_sha=latest.requested_head_sha,
         )
+        bind_replacement_results(state["issue_comments"], latest.id, result)
         if result.get("acquisition_status") != ACQUISITION_ACQUIRED:
             return latest.round
     return latest_existing_round + 1
@@ -725,9 +727,10 @@ def _record_skip(
 
 
 def _check_round_limit(current_round: int, max_rounds: int) -> None:
-    if current_round > min(max_rounds, MAX_REVIEW_ROUNDS):
+    effective_limit = min(max_rounds, MAX_REVIEW_ROUNDS)
+    if current_round > effective_limit:
         raise MaxRoundsExceededError(
-            f"Maximum review rounds ({max_rounds}) exceeded (attempted round {current_round})."
+            f"Maximum review rounds ({effective_limit}) exceeded (attempted round {current_round})."
         )
 
 
@@ -776,6 +779,19 @@ def _prepare_review_round(
     return current_round
 
 
+def _validate_online_operation(
+    bot_name, post_trigger, repair_trigger_markers, round_num
+):
+    if not post_trigger and bot_name == "skip":
+        raise ValueError("--no-post is read-only and cannot publish a skip selection")
+    if repair_trigger_markers and not post_trigger:
+        raise ValueError("--no-post is read-only; marker repair requires posting mode")
+    if repair_trigger_markers and (round_num is None or bot_name == "skip"):
+        raise ValueError(
+            "marker repair requires an explicit posted --round and reviewer"
+        )
+
+
 def wait_for_review(
     pr_number: int,
     *,
@@ -794,12 +810,9 @@ def wait_for_review(
     completed_grace_seconds: float = DEFAULT_COMPLETED_GRACE_SECONDS,
     repair_trigger_markers: bool = False,
 ) -> dict[str, Any]:
-    if repair_trigger_markers and not post_trigger:
-        raise ValueError("--no-post is read-only; marker repair requires posting mode")
-    if repair_trigger_markers and (round_num is None or bot_name == "skip"):
-        raise ValueError(
-            "marker repair requires an explicit posted --round and reviewer"
-        )
+    _validate_online_operation(
+        bot_name, post_trigger, repair_trigger_markers, round_num
+    )
     context_cache: dict[int, JevReviewContext] = {}
     repository = _fetch_repository_slug()
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -810,7 +823,9 @@ def wait_for_review(
             interval,
             max_retries=max_retries,
         )
-        _validate_review_selection(initial_data, bot_name, switch_reviewer)
+        _validate_review_selection(
+            initial_data, bot_name, switch_reviewer and post_trigger
+        )
         if bot_name == "skip":
             return _record_skip(pr_number, initial_data, repository)
         initial_snapshot = _build_snapshot(initial_data, bot_name)

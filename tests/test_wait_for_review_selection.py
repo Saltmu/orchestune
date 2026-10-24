@@ -10,6 +10,49 @@ from scripts.wait_for_review import _extract_review_result, main, wait_for_revie
 SHA = "a" * 40
 
 
+def test_no_post_cannot_switch_to_a_different_reviewer():
+    with (
+        patch(
+            "scripts.wait_for_review._get_initial_pr_data",
+            return_value=previous_round("claude"),
+        ),
+        patch("scripts.wait_for_review._run_gh") as gh,
+    ):
+        with pytest.raises(ValueError, match="switch-reviewer"):
+            wait_for_review(
+                1, bot_name="codex", switch_reviewer=True, post_trigger=False
+            )
+    gh.assert_not_called()
+
+
+def test_no_post_cannot_publish_skip_selection():
+    with patch("scripts.wait_for_review._run_gh") as gh:
+        with pytest.raises(ValueError, match="read-only"):
+            wait_for_review(1, bot_name="skip", post_trigger=False)
+    gh.assert_not_called()
+
+
+def test_switch_after_completed_round_requires_next_round_judgments():
+    with (
+        patch(
+            "scripts.wait_for_review._get_initial_pr_data",
+            return_value=previous_round("claude"),
+        ),
+        patch(
+            "scripts.wait_for_review._get_pr_data",
+            return_value=previous_round("claude"),
+        ),
+        patch("scripts.wait_for_review.publish_replacement") as replace,
+        patch("scripts.wait_for_review.post_review_trigger") as post,
+    ):
+        with pytest.raises(ValueError, match="round 2.*body-file"):
+            wait_for_review(
+                1, bot_name="codex", switch_reviewer=True, timeout=0, interval=0
+            )
+    replace.assert_not_called()
+    post.assert_not_called()
+
+
 def replacement_round():
     from orchestune.review.rounds import build_restorable_trigger_body
 

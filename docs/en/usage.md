@@ -770,7 +770,7 @@ To replace the current round after a HEAD change, specify its `--round <n>` in p
 
 If POST confirmation is unknown, re-fetch; never resend an unconfirmed request. If marker cleanup fails after verification, resume the verified trigger or use `--round <n> --repair-trigger-markers` to retry only the old-marker cleanup. This option cannot be combined with `--no-post` and never replaces a HEAD/reviewer. The durable local posting journal is under `.orchestune/ci/review-replacements/`.
 
-MCP `--validate-request` returns `request_operation: replace`, the source trigger ID/reviewer/HEAD, the target HEAD/reviewer/round and one combined `trigger_body`. The external client performs the same post/re-fetch/cleanup protocol; offline evaluation never POSTs or PATCHes. Unrelated duplicates, forks, missing sources and cross-author replacements stop processing. After replacement, timestamp-only results are insufficient: a result must bind explicitly to the requested commit; old-HEAD results remain history.
+MCP `--validate-request` returns `request_operation: replace`, the source trigger ID/reviewer/HEAD/author, the target HEAD/reviewer/round and one combined `trigger_body`. Replacement snapshots must preserve `user.login` on source and destination comments; missing source authors return Exit 30 before posting. The external client performs the same post/re-fetch/cleanup protocol; offline evaluation never POSTs or PATCHes. Unrelated duplicates, forks, missing sources and cross-author replacements stop processing. After replacement, timestamp-only results are insufficient: a result must bind explicitly to the requested commit; old-HEAD results remain history.
 
 ## 8. Local CI Evidence Storage and Task Completion (`orchestune complete`)
 

@@ -263,6 +263,7 @@ def _evaluate(
         pr_number=evidence.pr_number,
         requested_round=requested_round,
         max_rounds=max_rounds,
+        history=trigger_history(comments),
     )
     _check_evaluation_context(evidence, context, bot_name)
     reply = _verify_posted_reply(evidence.state, triggers, context, body_text)
@@ -415,6 +416,10 @@ def _replacement_receipt(
     body_text: str | None,
 ) -> OfflineOutcome:
     comments = evidence.state["issue_comments"]
+    if posted.author is None:
+        raise InsufficientEvidenceError(
+            "replacement source author is missing; re-fetch comments with user.login"
+        )
     if posted.round != consumed_round(comments):
         raise EvidenceContractError("historical rounds cannot be replaced")
     validate_replacement_target(
@@ -437,6 +442,7 @@ def _replacement_receipt(
         replaces_trigger_id=posted.id,
         replaces_reviewer=posted.reviewer,
         replaces_head_sha=posted.requested_head_sha,
+        replaces_author=posted.author,
     )
     return OfflineOutcome(EXIT_ACQUIRED, receipt)
 

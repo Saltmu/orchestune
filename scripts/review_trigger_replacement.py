@@ -84,6 +84,7 @@ def _supersede_body(body: str, bot: str) -> str:
         effective = effective_lines(prefix)
         if (
             len(effective) > count
+            and effective[-1].startswith("<!--")
             and "orchestune:review-trigger" in effective[-1].lower()
         ):
             ending = line[len(line.rstrip("\r\n")) :]

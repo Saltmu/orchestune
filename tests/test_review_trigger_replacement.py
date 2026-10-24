@@ -107,7 +107,7 @@ def test_retiring_marker_preserves_quoted_examples_and_exact_reply_text():
     from scripts.review_trigger_replacement import _supersede_body
 
     marker = "<!-- orchestune:review-trigger bot=codex -->"
-    body = f"reply\n```\n{marker}\n```\n> {marker}\n\n{marker}\nend\n"
+    body = f"reply\nInline example: {marker}\n```\n{marker}\n```\n> {marker}\n\n{marker}\nend\n"
     expected = (
         body.rsplit(marker, 1)[0]
         + "<!-- orchestune:superseded-trigger bot=codex -->\nend\n"

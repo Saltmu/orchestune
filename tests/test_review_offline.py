@@ -27,6 +27,38 @@ HEAD = "a" * 40
 OLD = "c" * 40
 
 
+def test_historical_round_ends_at_original_next_trigger_before_replacement():
+    first = trig(1, 1, 1)
+    old = trig(2, 2, 3, head=OLD, reply=table(["review:10"]))
+    new = trig(3, 2, 6, reply=table(["review:10"]))
+    new["body"] += "\n<!-- orchestune:review-replaces trigger=2 -->"
+    result = evaluate_snapshot(
+        snap([first, old, new], [review(10, 2), review(11, 4, commit=OLD)]),
+        bot_name="claude",
+        pr_number=7,
+        now=NOW,
+        requested_round=1,
+    )
+    assert result.payload["round_ended_at"] == at(3)
+    assert result.payload["review_target_sha"] == HEAD
+    assert (
+        next(item for item in result.payload["review_items"] if item["id"] == 11)[
+            "provenance"
+        ]
+        != "current"
+    )
+
+
+def test_replacement_receipt_requires_the_source_author():
+    old = trig(1, 1, 1, head=OLD)
+    old.pop("user")
+    result = validate_request(
+        snap([old]), bot_name="claude", pr_number=7, now=NOW, explicit_round=1
+    )
+    assert result.exit_code == 30
+    assert "author" in result.payload["reason"]
+
+
 def test_replacement_request_receipt_names_source_and_current_target():
     old = trig(1, 1, 1, head=OLD)
     outcome = validate_request(

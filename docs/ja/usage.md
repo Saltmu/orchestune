@@ -758,7 +758,7 @@ HEAD 変更後に現在のラウンドを置換するには、投稿モードで
 
 POST の成否が不明なら再取得し、未確認のまま再送しないでください。投稿確認後の旧 marker 編集に失敗した場合は、確認済みトリガーの待機を再開するか、`--round <n> --repair-trigger-markers` で旧 marker の編集だけを再試行します。このオプションは `--no-post` と併用できず、HEAD・reviewer の置換もしません。投稿状態の永続記録は `.orchestune/ci/review-replacements/` に保存します。
 
-MCP の `--validate-request` は、`request_operation: replace`、置換元の id・reviewer・HEAD、置換先の HEAD・reviewer・round、および結合済みの `trigger_body` を返します。外部クライアントが同じ投稿・再取得・旧 marker 編集手順を実行し、offline 評価自体は POST/PATCH しません。無関係な重複、分岐、参照先欠落、別投稿者からの置換は停止します。置換後の結果は時刻だけでは現実行の証跡にせず、要求したコミットとの明示的な一致を必要とします。旧 HEAD の結果は履歴に残します。
+MCP の `--validate-request` は、`request_operation: replace`、置換元の id・reviewer・HEAD・投稿者、置換先の HEAD・reviewer・round、および結合済みの `trigger_body` を返します。置換 snapshot は置換元・置換先の `user.login` を保持してください。置換元の投稿者が欠けていれば投稿前に Exit 30 を返します。外部クライアントが同じ投稿・再取得・旧 marker 編集手順を実行し、offline 評価自体は POST/PATCH しません。無関係な重複、分岐、参照先欠落、別投稿者からの置換は停止します。置換後の結果は時刻だけでは現実行の証跡にせず、要求したコミットとの明示的な一致を必要とします。旧 HEAD の結果は履歴に残します。
 
 ## 8. ローカルCI証跡の保存と完了処理 (`orchestune complete`)
 
