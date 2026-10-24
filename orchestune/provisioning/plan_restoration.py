@@ -39,6 +39,7 @@ def _load_template_content(template_path: str | Path | None) -> tuple[str, Path]
 
 
 def _validate_parent_plan_structure(plan_dict: dict[str, Any]) -> None:
+    # Validate plan_format against SUPPORTED_PLAN_FORMATS (raises ValueError if unsupported)
     is_manifest_plan(plan_dict)
     subtasks = plan_dict.get("subtasks")
     if not isinstance(subtasks, list):

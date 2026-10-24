@@ -28,7 +28,6 @@ _REPLAN_GEN_PATTERN = re.compile(
 )
 
 _LAUNCH_ATTEMPT_MARKER = "<!-- orchestune:launch-attempt -->"
-_REMEDIATION_MARKER = REMEDIATION_MARKER
 _SYMBOLS_WARNING_HEADER = (
     "\n\n---\n\n⚠️ **symbols未検出**: 以下のシンボルは、Footprintに列挙されたファイル内に"
     "見つかりませんでした。このsubtaskで新規追加する予定であれば問題ありません"
@@ -109,7 +108,7 @@ def _strip_launch_attempt(body: str) -> str:
 
 
 def _strip_remediation_section(body: str) -> str:
-    if _REMEDIATION_MARKER not in body:
+    if REMEDIATION_MARKER not in body:
         return body
     record = remediation_record_from_body(body)
     if record is None:

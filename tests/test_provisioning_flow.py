@@ -962,3 +962,39 @@ class TestProvisioningDagSharedDocuments:
         assert dag.edges == []
         (edge,) = (e for e in dag.conflict_graph.edges if e.reason == "shared-document")
         assert edge.resources == ("docs/ja/architecture.md",)
+
+
+class TestProvisioningFlowReversibleValidation:
+    def test_prepare_provisioning_context_rejects_non_reversible_subtasks(
+        self, tmp_path: Path
+    ) -> None:
+        from orchestune.provisioning.flow import _prepare_provisioning_context
+
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(
+            """---
+title: Test Plan
+subtasks:
+  - id: subtask-tokuninashi
+    description: Test
+    proposed_changes:
+      - 特になし
+---
+# Overview
+""",
+            encoding="utf-8",
+        )
+        template_file = tmp_path / "template.md"
+        template_file.write_text(
+            "template <!-- orchestune:subtask-issue-template -->\n"
+            "{{overview}}\n{{proposed_changes}}\n{{acceptance_criteria}}\n{{verification_plan}}",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="cannot be '特になし'"):
+            _prepare_provisioning_context(
+                plan_path=plan_file,
+                template_path=template_file,
+                repo_root=tmp_path,
+                parent_issue=None,
+            )

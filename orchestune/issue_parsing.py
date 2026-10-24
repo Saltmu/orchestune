@@ -160,18 +160,17 @@ class ManifestPlanError(ValueError):
 
 PLAN_MANIFEST_FORMAT = "manifest-v1"
 REMEDIATION_MARKER = "<!-- orchestune:remediation-v1 -->"
-_REMEDIATION_MARKER = REMEDIATION_MARKER
 _REMEDIATION_RECORD_PATTERN = re.compile(
-    re.escape(_REMEDIATION_MARKER) + r"\s*```json\s*\n(.*?)```", re.DOTALL
+    re.escape(REMEDIATION_MARKER) + r"\s*```json\s*\n(.*?)```", re.DOTALL
 )
 
 
 def remediation_record_from_body(body: str) -> dict[str, Any] | None:
     """Extract and validate the remediation JSON record from an issue body."""
-    if _REMEDIATION_MARKER not in body:
+    if REMEDIATION_MARKER not in body:
         return None
     matches = list(_REMEDIATION_RECORD_PATTERN.finditer(body))
-    if len(matches) != 1 or body.count(_REMEDIATION_MARKER) != 1:
+    if len(matches) != 1 or body.count(REMEDIATION_MARKER) != 1:
         raise ValueError("malformed or duplicate remediation record")
     try:
         value = json.loads(matches[0][1])
