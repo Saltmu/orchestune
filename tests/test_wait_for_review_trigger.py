@@ -169,7 +169,7 @@ def test_has_review_trigger_mention():
     assert _has_review_trigger_mention("", "claude") is False
 
 
-def test_find_existing_trigger_comment_prefers_comment_with_mention():
+def test_find_existing_trigger_comment_rejects_unrelated_duplicates():
     data = {
         "issue_comments": [
             {
@@ -184,9 +184,8 @@ def test_find_existing_trigger_comment_prefers_comment_with_mention():
             },
         ]
     }
-    result = _find_existing_trigger_comment(data, "codex", round_num=2)
-    assert result is not None
-    assert result["id"] == 503
+    with pytest.raises(EvidenceContractError, match="multiple triggers"):
+        _find_existing_trigger_comment(data, "codex", round_num=2)
 
 
 def test_resolve_current_round():
@@ -200,7 +199,7 @@ def test_resolve_current_round():
         ]
     }
     assert (
-        _resolve_current_round(data_5, "claude", round_num=None, post_trigger=True) == 6
+        _resolve_current_round(data_5, "claude", round_num=None, post_trigger=True) == 5
     )
 
     # Explicit round_num override takes precedence
@@ -264,7 +263,7 @@ def test_handle_review_trigger_skips_when_existing_trigger_has_mention(mock_post
 
 
 @patch("scripts.wait_for_review.post_review_trigger", autospec=True)
-def test_handle_review_trigger_reposts_when_existing_trigger_lacks_mention(mock_post):
+def test_handle_review_trigger_reuses_when_existing_trigger_lacks_mention(mock_post):
     data = {
         "issue_comments": [
             {
@@ -294,21 +293,11 @@ def test_handle_review_trigger_reposts_when_existing_trigger_lacks_mention(mock_
         body_file=None,
     )
 
-    assert timestamp == "2026-08-20T10:01:00Z"
-    assert trigger_id == 503
-    # A new trigger was actually posted here, so the head at that moment is
-    # captured as requested_head_sha.
-    assert requested_head_sha == "c" * 40
-    assert 502 in excluded_ids
-    assert 503 in excluded_ids
-    mock_post.assert_called_once_with(
-        540,
-        bot_name="codex",
-        body="## Review response",
-        body_file=None,
-        round_num=2,
-        head_sha="c" * 40,
-    )
+    assert timestamp == "2026-08-20T10:00:00Z"
+    assert trigger_id == 502
+    assert requested_head_sha is None
+    assert excluded_ids == {502}
+    mock_post.assert_not_called()
 
 
 def test_post_review_trigger_failure():

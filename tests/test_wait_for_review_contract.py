@@ -409,8 +409,10 @@ def test_get_latest_review_round():
             },
         ]
     }
+    for minute, item in enumerate(data["issue_comments"]):
+        item["created_at"] = f"2026-08-20T10:0{minute}:00Z"
     assert _get_latest_review_round(data, "claude") == 2
-    assert _get_latest_review_round(data, "codex") == 0
+    assert _get_latest_review_round(data, "codex") == 2  # PR-wide, across reviewers
 
     empty_data = {"issue_comments": []}
     assert _get_latest_review_round(empty_data, "claude") == 0
@@ -433,7 +435,9 @@ def test_find_existing_trigger_comment():
             },
         ]
     }
-    # Should find human comment with round 1
+    with pytest.raises(ValueError, match="multiple triggers"):
+        _find_existing_trigger_comment(data, "claude", 1)
+    data["issue_comments"].pop()
     found = _find_existing_trigger_comment(data, "claude", 1)
     assert found is not None
     assert found["id"] == 10
@@ -534,6 +538,7 @@ def test_wait_for_review_max_rounds_exceeded(mock_get_data):
         "reviews": [],
         "inline_comments": [],
     }
+    data["issue_comments"][0]["created_at"] = "2026-08-20T10:00:00Z"
     mock_get_data.return_value = data
 
     with pytest.raises(MaxRoundsExceededError):
@@ -544,6 +549,7 @@ def test_wait_for_review_max_rounds_exceeded(mock_get_data):
             bot_name="claude",
             post_trigger=True,
             max_rounds=5,
+            round_num=6,
         )
 
 

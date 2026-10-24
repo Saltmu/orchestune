@@ -24,6 +24,24 @@ def review_trigger_marker(bot_name: str) -> str:
     return f"<!-- orchestune:review-trigger bot={bot_name.lower()} -->"
 
 
+REPLACEMENT_LINE = re.compile(
+    r"<!--\s*orchestune:review-replaces trigger=([1-9][0-9]*)\s*-->", re.I
+)
+SUPERSEDED_LINE = re.compile(
+    r"<!--\s*orchestune:superseded-trigger bot=(claude|codex)\s*-->", re.I
+)
+
+
+def review_replaces_marker(trigger_id: object) -> str:
+    if not re.fullmatch(r"[1-9][0-9]*", str(trigger_id)):
+        raise ValueError("replacement requires a positive trigger comment id")
+    return f"<!-- orchestune:review-replaces trigger={trigger_id} -->"
+
+
+def superseded_trigger_marker(bot_name: str) -> str:
+    return f"<!-- orchestune:superseded-trigger bot={bot_name.lower()} -->"
+
+
 def review_reply_marker() -> str:
     return "<!-- orchestune:review-reply -->"
 
@@ -106,7 +124,7 @@ def build_trigger_body(
     """
     head_marker = review_head_marker(head_sha)
     raw = re.sub(
-        r"<!--\s*orchestune:review-(?:head|round|trigger)\b.*?-->",
+        r"<!--\s*orchestune:(?:review-(?:head|round|trigger|replaces)|superseded-trigger)\b.*?-->",
         "",
         reply_body,
         flags=re.I,

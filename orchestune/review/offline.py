@@ -34,19 +34,24 @@ from orchestune.review.rounds import (
     ReviewRoundContext,
     ReviewTrigger,
     activity_bounds,
+    bind_replacement_results,
     build_restorable_trigger_body,
+    consumed_round,
     plan_next_round,
     precise_created_at,
     previous_round_window,
     restore_triggers,
     select_round,
     trigger_comment_ids,
+    trigger_history,
+    validate_replacement_target,
 )
 from orchestune.review.snapshot import (
     DEFAULT_MAX_SNAPSHOT_AGE_SECONDS,
     SECTIONS,
     EvidenceContractError,
     InsufficientEvidenceError,
+    RoundLimitError,
     SnapshotEvidence,
     validate_snapshot,
 )
@@ -216,6 +221,20 @@ def _verify_posted_reply(
     }
 
 
+def _check_evaluation_context(
+    evidence: SnapshotEvidence, context: ReviewRoundContext, bot_name: str
+) -> None:
+    if bot_name != context.reviewer:
+        raise EvidenceContractError(
+            f"round {context.round} was requested from {context.reviewer}; the "
+            f"reviewer cannot change when evaluating (--bot-name {bot_name})"
+        )
+    if evidence.observed_at < context.started_at:
+        raise EvidenceContractError(
+            "snapshot was observed before the trigger was posted"
+        )
+
+
 def _evaluate(
     value: object,
     *,
@@ -232,22 +251,21 @@ def _evaluate(
     )
     comments = evidence.state["issue_comments"]
     triggers = restore_triggers(comments)
+    if (
+        requested_round is None
+        and triggers
+        and triggers[-1].round < consumed_round(comments)
+    ):
+        raise InsufficientEvidenceError("latest consumed round has no active trigger")
     context = select_round(
         triggers,
         repository=evidence.repository,
         pr_number=evidence.pr_number,
         requested_round=requested_round,
         max_rounds=max_rounds,
+        history=trigger_history(comments),
     )
-    if bot_name != context.reviewer:
-        raise EvidenceContractError(
-            f"round {context.round} was requested from {context.reviewer}; the "
-            f"reviewer cannot change when evaluating (--bot-name {bot_name})"
-        )
-    if evidence.observed_at < context.started_at:
-        raise EvidenceContractError(
-            "snapshot was observed before the trigger was posted"
-        )
+    _check_evaluation_context(evidence, context, bot_name)
     reply = _verify_posted_reply(evidence.state, triggers, context, body_text)
     current_trigger = next(t for t in triggers if t.round == context.round)
     activity_start, activity_end = activity_bounds(comments, triggers, current_trigger)
@@ -261,6 +279,7 @@ def _evaluate(
         activity_started_at=activity_start,
         activity_ended_at=activity_end,
     )
+    bind_replacement_results(comments, context.trigger_id, result)
     result = _identify(result, evidence, context, reply)
     return OfflineOutcome(_EXIT_BY_STATUS[result["acquisition_status"]], result)
 
@@ -317,6 +336,7 @@ def _outstanding(evidence: SnapshotEvidence, latest: ReviewTrigger) -> bool:
         requested_head_sha=latest.requested_head_sha,
         activity_started_at=precise_created_at(comments, latest),
     )
+    bind_replacement_results(comments, latest.id, result)
     return bool(result["acquisition_status"] != ACQUISITION_ACQUIRED)
 
 
@@ -389,6 +409,74 @@ def _reply_for_next_round(
     )
 
 
+def _replacement_receipt(
+    evidence: SnapshotEvidence,
+    posted: ReviewTrigger,
+    bot_name: str,
+    body_text: str | None,
+) -> OfflineOutcome:
+    comments = evidence.state["issue_comments"]
+    if posted.author is None:
+        raise InsufficientEvidenceError(
+            "replacement source author is missing; re-fetch comments with user.login"
+        )
+    if posted.round != consumed_round(comments):
+        raise EvidenceContractError("historical rounds cannot be replaced")
+    validate_replacement_target(
+        trigger_history(comments), posted.id, bot_name, evidence.head_sha
+    )
+    reply = _reply_for_next_round(evidence, posted.round, body_text)
+    candidate = build_restorable_trigger_body(
+        body_text or "", bot_name, posted.round, evidence.head_sha, replaces=posted.id
+    )
+    receipt = _receipt(
+        evidence,
+        "valid",
+        reviewer=bot_name,
+        next_round=posted.round,
+        reply=reply,
+        trigger_body=candidate,
+    )
+    receipt.update(
+        request_operation="replace",
+        replaces_trigger_id=posted.id,
+        replaces_reviewer=posted.reviewer,
+        replaces_head_sha=posted.requested_head_sha,
+        replaces_author=posted.author,
+    )
+    return OfflineOutcome(EXIT_ACQUIRED, receipt)
+
+
+def _posted_request(
+    evidence: SnapshotEvidence,
+    posted: ReviewTrigger,
+    bot_name: str,
+    switch_reviewer: bool,
+    max_rounds: int,
+    body_text: str | None,
+) -> OfflineOutcome:
+    if posted.round > min(max_rounds, MAX_REVIEW_ROUNDS):
+        raise RoundLimitError("posted round exceeds the PR-wide limit")
+    if posted.reviewer != bot_name and not switch_reviewer:
+        raise EvidenceContractError("explicit --switch-reviewer required")
+    if posted.requested_head_sha is not None and (
+        posted.requested_head_sha != evidence.head_sha or posted.reviewer != bot_name
+    ):
+        return _replacement_receipt(evidence, posted, bot_name, body_text)
+    if posted.reviewer != bot_name:
+        raise EvidenceContractError(
+            "legacy trigger without HEAD requires manual repair before replacement"
+        )
+    receipt = _receipt(
+        evidence,
+        "already_posted",
+        reviewer=posted.reviewer,
+        next_round=posted.round,
+        existing=posted,
+    )
+    return OfflineOutcome(EXIT_ACQUIRED, receipt)
+
+
 def _validate_request(
     value: object,
     *,
@@ -408,20 +496,16 @@ def _validate_request(
     triggers = restore_triggers(comments)
     posted = _already_posted(evidence, triggers, explicit_round, body_text)
     if posted is not None:
-        receipt = _receipt(
-            evidence,
-            "already_posted",
-            reviewer=posted.reviewer,
-            next_round=posted.round,
-            existing=posted,
+        return _posted_request(
+            evidence, posted, bot_name, switch_reviewer, max_rounds, body_text
         )
-        return OfflineOutcome(EXIT_ACQUIRED, receipt)
     next_round = plan_next_round(
         triggers,
         bot=bot_name,
         switch_reviewer=switch_reviewer,
         max_rounds=max_rounds,
         explicit_round=explicit_round,
+        consumed_round_num=consumed_round(comments),
     )
     reply = _reply_for_next_round(evidence, next_round, body_text)
     candidate = build_restorable_trigger_body(

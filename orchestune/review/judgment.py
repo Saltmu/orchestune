@@ -13,7 +13,12 @@ from typing import Any
 import yaml
 
 from orchestune.review.acquisition import extract_review_result, normalize_review_state
-from orchestune.review.rounds import PreviousRoundWindow
+from orchestune.review.rounds import (
+    PreviousRoundWindow,
+    bind_replacement_results,
+    restore_triggers,
+)
+from orchestune.review.snapshot import InsufficientEvidenceError
 
 JUDGMENTS = frozenset(
     {"adopt", "decline", "already_addressed", "needs_information", "duplicate"}
@@ -157,6 +162,16 @@ def validate_previous_round_reply(
     # Its empty source set still requires an explicit, valid judgment table.
     if result is None:
         result = {"review_items": [], "inline_comments": []}
+    else:
+        comments = list(state.get("issue_comments", []))
+        previous = next(
+            (t for t in restore_triggers(comments) if t.round == window.previous_round),
+            None,
+        )
+        if previous and not bind_replacement_results(comments, previous.id, result):
+            raise InsufficientEvidenceError(
+                "previous replacement execution is unproven; re-fetch commit-bound evidence"
+            )
     result["round"] = window.previous_round
     validate_coverage(judgments, result)
     sources = tuple(sorted(current_sources(result)))
