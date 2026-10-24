@@ -820,3 +820,132 @@ def test_restore_plan_markdown_from_parent_body_raises_on_manifest():
     body = embed_decomposition_plan_in_parent_body("Parent prose", manifest_plan)
     with pytest.raises(ManifestPlanError, match="manifest decomposition plan"):
         restore_plan_markdown_from_parent_body(body)
+
+
+class TestYamlSafeLoaderAndSingleParse:
+    def test_yaml_safe_load_uses_c_loader_or_safe_loader(self):
+        import yaml
+
+        from orchestune import issue_parsing
+
+        assert hasattr(issue_parsing, "_YAML_SAFE_LOADER")
+        assert hasattr(issue_parsing, "_yaml_safe_load")
+        if hasattr(yaml, "CSafeLoader"):
+            assert issue_parsing._YAML_SAFE_LOADER is yaml.CSafeLoader
+        else:
+            assert issue_parsing._YAML_SAFE_LOADER is yaml.SafeLoader
+
+    def test_single_parse_in_parse_task_from_issue(self, monkeypatch):
+        from orchestune import issue_parsing
+        from orchestune.models import IssueRecord
+
+        calls = 0
+        original_loader = getattr(issue_parsing, "_yaml_safe_load", None)
+        if original_loader is None:
+            pytest.fail("_yaml_safe_load helper not implemented yet")
+
+        def counting_load(stream: str):
+            nonlocal calls
+            calls += 1
+            return original_loader(stream)
+
+        monkeypatch.setattr(issue_parsing, "_yaml_safe_load", counting_load)
+        body = (
+            "```yaml\n"
+            "subtask_id: task-1\n"
+            "depends_on: [task-0]\n"
+            "footprint: ['a.py']\n"
+            "```\n"
+        )
+        issue = IssueRecord(1, "title", body, (), "2026-01-01T00:00:00Z")
+        task = issue_parsing.parse_task_from_issue(issue)
+        assert task.subtask_id == "task-1"
+        assert task.depends_on == ("task-0",)
+        assert calls == 1
+
+    def test_single_parse_in_backfill_recovery_counters(self, monkeypatch):
+        from orchestune import issue_parsing
+
+        original_loader = getattr(issue_parsing, "_yaml_safe_load", None)
+        if original_loader is None:
+            pytest.fail("_yaml_safe_load helper not implemented yet")
+
+        calls = 0
+
+        def counting_load(stream: str):
+            nonlocal calls
+            calls += 1
+            return original_loader(stream)
+
+        monkeypatch.setattr(issue_parsing, "_yaml_safe_load", counting_load)
+        body = (
+            "```yaml\n"
+            "subtask_id: task-1\n"
+            "recompute_count: 1\n"
+            "forced_serial: false\n"
+            "```\n"
+        )
+        # Test case 1: needs backfill
+        calls = 0
+        updated = issue_parsing.backfill_recovery_counters(body, 2, True)
+        assert updated is not None
+        assert calls == 1
+
+        # Test case 2: already matching
+        calls = 0
+        unchanged = issue_parsing.backfill_recovery_counters(updated, 2, True)
+        assert unchanged is None
+        assert calls == 1
+
+    def test_safe_loader_fallback_parity(self, monkeypatch):
+        import yaml
+
+        from orchestune import issue_parsing
+        from orchestune.models import IssueRecord
+
+        if not hasattr(issue_parsing, "_YAML_SAFE_LOADER"):
+            pytest.fail("_YAML_SAFE_LOADER not defined")
+
+        body = (
+            "```yaml\n"
+            "subtask_id: task-parity\n"
+            "depends_on: [t1, t2]\n"
+            "footprint: ['foo.py']\n"
+            "symbols: ['sym1']\n"
+            "shared_contract: 'contract'\n"
+            "writes_shared_contract: true\n"
+            "execution_profile: standard\n"
+            "model_tier: strong\n"
+            "```\n"
+        )
+        issue = IssueRecord(1, "title", body, (), "2026-01-01T00:00:00Z")
+
+        # Result with current loader
+        task_default = issue_parsing.parse_task_from_issue(issue)
+
+        # Force pure Python SafeLoader
+        monkeypatch.setattr(issue_parsing, "_YAML_SAFE_LOADER", yaml.SafeLoader)
+        task_fallback = issue_parsing.parse_task_from_issue(issue)
+
+        assert task_default == task_fallback
+
+    def test_malformed_yaml_handling(self, capsys):
+        from orchestune import issue_parsing
+        from orchestune.models import IssueRecord
+
+        body = "```yaml\n: bad yaml: [\n```\n"
+        issue = IssueRecord(12, "title", body, (), "2026-01-01T00:00:00Z")
+        task = issue_parsing.parse_task_from_issue(issue)
+
+        assert task.yaml_error is True
+        assert task.depends_on == ()
+        captured = capsys.readouterr()
+        assert "Warning: Failed to parse YAML from issue #12:" in captured.err
+
+    def test_no_yaml_safe_load_in_issue_parsing_module(self):
+        import inspect
+
+        from orchestune import issue_parsing
+
+        source = inspect.getsource(issue_parsing)
+        assert "yaml.safe_load" not in source
