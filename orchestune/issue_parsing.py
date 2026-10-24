@@ -21,6 +21,14 @@ if TYPE_CHECKING:
 
 BASE_PRIORITY = {"low": 1.0, "medium": 2.0, "high": 3.0}
 
+_YAML_SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
+def _yaml_safe_load(stream: str) -> Any:
+    """Parse YAML with LibYAML's CSafeLoader when available, else SafeLoader."""
+    return yaml.load(stream, Loader=_YAML_SAFE_LOADER)
+
+
 FOOTPRINT_BLOCK_PATTERN = re.compile(r"```yaml\s*\n(.*?)```", re.DOTALL)
 
 # Embedded in every parent (EPIC) issue `provisioning.py` creates, and required
@@ -103,7 +111,7 @@ def decomposition_plan_from_parent_body(body: str) -> dict | None:
     if not match:
         return None
     try:
-        data = yaml.safe_load(match.group(1))
+        data = _yaml_safe_load(match.group(1))
     except yaml.YAMLError:
         return None
     return data if isinstance(data, dict) else None
@@ -219,7 +227,7 @@ def parse_footprint_block(body: str) -> dict | None:
     if not match:
         return None
     try:
-        data = yaml.safe_load(match.group(1))
+        data = _yaml_safe_load(match.group(1))
     except yaml.YAMLError:
         return None
     return data if isinstance(data, dict) else None
@@ -308,7 +316,7 @@ def backfill_parent_issue_number(body: str, parent_issue_number: int) -> str | N
     if not match:
         return None
     try:
-        data = yaml.safe_load(match.group(1))
+        data = _yaml_safe_load(match.group(1))
     except yaml.YAMLError:
         return None
     if not isinstance(data, dict):
@@ -345,6 +353,15 @@ def _validated_recompute_count(value: object) -> int:
     return 0
 
 
+def _recovery_counters_from_data(data: dict[str, Any] | None) -> tuple[int, bool]:
+    """#1401: パース済みの辞書から`recompute_count`/`forced_serial`を取り出す。"""
+    if not data:
+        return (0, False)
+    recompute_count = _validated_recompute_count(data.get("recompute_count"))
+    forced_serial = data.get("forced_serial") is True
+    return (recompute_count, forced_serial)
+
+
 def recovery_counters_from_body(body: str) -> tuple[int, bool]:
     """#513: Footprint YAMLフェンスへ永続化された`recompute_count`/
     `forced_serial`を読み取る。自己修復（`dispatch_recovery.py`）が
@@ -356,11 +373,7 @@ def recovery_counters_from_body(body: str) -> tuple[int, bool]:
     いない」と同じ意味——にフォールバックする。
     """
     data = parse_footprint_block(body)
-    if not data:
-        return (0, False)
-    recompute_count = _validated_recompute_count(data.get("recompute_count"))
-    forced_serial = data.get("forced_serial") is True
-    return (recompute_count, forced_serial)
+    return _recovery_counters_from_data(data)
 
 
 def backfill_recovery_counters(
@@ -375,12 +388,12 @@ def backfill_recovery_counters(
     if not match:
         return None
     try:
-        data = yaml.safe_load(match.group(1))
+        data = _yaml_safe_load(match.group(1))
     except yaml.YAMLError:
         return None
     if not isinstance(data, dict):
         return None
-    if recovery_counters_from_body(body) == (recompute_count, forced_serial):
+    if _recovery_counters_from_data(data) == (recompute_count, forced_serial):
         return None
     data["recompute_count"] = recompute_count
     data["forced_serial"] = forced_serial
@@ -421,7 +434,7 @@ def launch_history_from_body(body: str) -> list[float]:
 def _launch_history_from_block(raw_yaml: str) -> list[float]:
     """`launch_history`ブロック1個分のタイムスタンプ列を取り出す。"""
     try:
-        data = yaml.safe_load(raw_yaml)
+        data = _yaml_safe_load(raw_yaml)
     except yaml.YAMLError:
         return []
     if not isinstance(data, dict):
@@ -434,7 +447,7 @@ def _launch_history_from_block(raw_yaml: str) -> list[float]:
         if isinstance(item, bool) or not isinstance(item, int | float):
             continue
         # #519レビュー6巡目(P2): 本文が手で編集・破損して`.inf`/`.nan`が
-        # 入ると`yaml.safe_load`はPythonのfloatを返すため型チェックを通過する。
+        # 入ると`_yaml_safe_load`はPythonのfloatを返すため型チェックを通過する。
         # `.inf`は`quota_available`の`now - inf < window_seconds`が毎サイクル
         # 真になり、そのエントリが永久に1スロットを食い潰して親配下の
         # ディスパッチを止める。`.nan`は逆にあらゆる比較が偽になり、
@@ -598,11 +611,10 @@ def ensure_parent_marker(body: str) -> str:
     return f"{body.rstrip()}\n\n{PARENT_MARKER}\n"
 
 
-def _body_depends_on(match: re.Match | None, yaml_error: bool) -> tuple[str, ...]:
-    if not match or yaml_error:
+def _body_depends_on(data: dict[str, Any] | None) -> tuple[str, ...]:
+    if not data:
         return ()
     try:
-        data = yaml.safe_load(match.group(1))
         if isinstance(data, dict):
             return tuple(str(d) for d in (data.get("depends_on") or []))
     except Exception:
@@ -679,7 +691,7 @@ _FootprintMetadataTuple = tuple[
     str | None,
     bool,
     str | None,
-    re.Match[str] | None,
+    dict[str, Any] | None,
 ]
 
 
@@ -695,11 +707,13 @@ def _extract_footprint_metadata(
     model_tier: str | None = None
     yaml_error = False
     footprint_error: str | None = None
+    parsed_data: dict[str, Any] | None = None
     match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
     if match:
         try:
-            data = yaml.safe_load(match.group(1))
+            data = _yaml_safe_load(match.group(1))
             if isinstance(data, dict):
+                parsed_data = data
                 (
                     subtask_id,
                     footprint,
@@ -726,7 +740,7 @@ def _extract_footprint_metadata(
         model_tier,
         yaml_error,
         footprint_error,
-        match,
+        parsed_data,
     )
 
 
@@ -759,12 +773,31 @@ def _extract_labels_metadata(
     return priority, risk, progress_partial
 
 
-def _extract_parent_metadata(issue: IssueRecord) -> tuple[int | None, str | None]:
+def _extract_parent_metadata(
+    issue: IssueRecord,
+    data: dict[str, Any] | None = None,
+) -> tuple[int | None, str | None]:
     """#799: `effective_parent_number`に委譲し、自己親化除外（#802）を含む
     親判定規則をここでも一貫させる。旧実装は`issue.parent.get("number")`を
     無条件に採用しており、自己親化（自分自身を親とするIssue）を除外して
     いなかった。
     """
+    if issue.parent and issue.parent.get("number") is not None:
+        parent_number = effective_parent_number(issue)
+        if parent_number is None:
+            return None, None
+        return parent_number, issue.parent.get("state")
+
+    if data is not None:
+        body_parent = _validated_parent_issue_number(data.get("parent_issue_number"))
+        if (
+            body_parent is not None
+            and issue.number is not None
+            and body_parent == issue.number
+        ):
+            return None, None
+        return body_parent, None
+
     parent_number = effective_parent_number(issue)
     if parent_number is None:
         return None, None
@@ -793,13 +826,13 @@ def parse_task_from_issue(
         model_tier,
         yaml_error,
         footprint_error,
-        match,
+        data,
     ) = _extract_footprint_metadata(issue)
-    depends_on = _body_depends_on(match, yaml_error)
+    depends_on = _body_depends_on(data)
     priority, risk, progress_partial = _extract_labels_metadata(
         issue.labels, issue.number
     )
-    parent_number, parent_state = _extract_parent_metadata(issue)
+    parent_number, parent_state = _extract_parent_metadata(issue, data)
 
     return Task(
         issue_number=issue.number,
