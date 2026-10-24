@@ -11,10 +11,12 @@ from orchestune.issue_parsing import (
     PARENT_MARKER,
     decomposition_plan_from_parent_body,
     embed_decomposition_plan_in_parent_body,
-    restore_plan_markdown_from_parent_body,
 )
 from orchestune.provisioning.plan_loading import PlanMetadata as PlanMetadata
 from orchestune.provisioning.plan_loading import load_plan
+from orchestune.provisioning.plan_restoration import (
+    restore_plan_file_from_parent as _restore_plan_file_from_parent,
+)
 
 _load_plan = load_plan
 
@@ -42,20 +44,15 @@ def restore_plan_file_from_parent(
     forge: IssueForge,
     parent_issue_number: int,
     output_path: str | Path = "decomposition_plan.md",
+    *,
+    template_path: str | Path | None = None,
 ) -> Path:
-    parent_issue = forge.get_issue(parent_issue_number)
-    if parent_issue is None:
-        raise ValueError(
-            f"Parent issue #{parent_issue_number} was not found on the forge."
-        )
-    restored_markdown = restore_plan_markdown_from_parent_body(parent_issue.body)
-    if not restored_markdown:
-        raise ValueError(
-            f"Parent issue #{parent_issue_number} does not contain a valid decomposition plan block."
-        )
-    out_file = Path(output_path)
-    out_file.write_text(restored_markdown, encoding="utf-8")
-    return out_file
+    return _restore_plan_file_from_parent(
+        forge,
+        parent_issue_number,
+        output_path,
+        template_path=template_path,
+    )
 
 
 def _subtask_entries(plan_data: object) -> list[dict]:

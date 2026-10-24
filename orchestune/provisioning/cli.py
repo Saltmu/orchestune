@@ -144,7 +144,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         if args.restore_plan is not None:
             out = restore_plan_file_from_parent(
-                GitHubForge(), args.restore_plan, args.plan
+                GitHubForge(),
+                args.restore_plan,
+                args.plan,
+                template_path=args.template,
             )
             print(
                 f"Successfully restored decomposition plan from #{args.restore_plan} to {out}"

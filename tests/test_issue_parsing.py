@@ -803,3 +803,20 @@ class TestFootprintParsing:
             issue = IssueRecord(1, "title", body, (), "2026-01-01T00:00:00Z")
             task = parse_task_from_issue(issue)
             assert task.subtask_id == ""
+
+
+def test_restore_plan_markdown_from_parent_body_raises_on_manifest():
+    from orchestune.issue_parsing import (
+        ManifestPlanError,
+        embed_decomposition_plan_in_parent_body,
+        restore_plan_markdown_from_parent_body,
+    )
+
+    manifest_plan = {
+        "plan_format": "manifest-v1",
+        "title": "Manifest Plan",
+        "subtasks": [{"id": "sub-1", "issue_number": 1}],
+    }
+    body = embed_decomposition_plan_in_parent_body("Parent prose", manifest_plan)
+    with pytest.raises(ManifestPlanError, match="manifest decomposition plan"):
+        restore_plan_markdown_from_parent_body(body)

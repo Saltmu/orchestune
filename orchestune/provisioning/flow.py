@@ -26,6 +26,7 @@ from orchestune.plan_writer import (
     validate_subtask_issue_number_targets,
     write_issue_numbers,
 )
+from orchestune.provisioning.body_parsing import validate_reversible_subtask
 from orchestune.provisioning.parent import _resolve_parent_issue
 from orchestune.provisioning.plan import (
     PlanMetadata,
@@ -237,6 +238,8 @@ def _prepare_provisioning_context(
         raise ValueError(
             "decomposition_plan.md に必須の 'title' フィールドがありません"
         )
+    for subtask in subtasks:
+        validate_reversible_subtask(subtask)
     validated_parent = (
         validate_issue_number(parent_issue) if parent_issue is not None else None
     )

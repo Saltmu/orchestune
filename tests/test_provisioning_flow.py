@@ -59,6 +59,24 @@ class TestProvisionIssuesApply:
         assert forge.create_issue_calls == []
         assert forge.issues == {}
 
+    def test_non_reversible_subtask_fails_before_creating_any_issues(
+        self, plan_path: Path, template_path: Path
+    ):
+        content = plan_path.read_text(encoding="utf-8")
+        # Add an item containing newline followed by '- '
+        bad_content = content.replace(
+            "    symbols: [foo.Foo]",
+            '    symbols: [foo.Foo]\n    proposed_changes:\n      - "Item with\\n- nested dash"',
+        )
+        plan_path.write_text(bad_content, encoding="utf-8")
+        forge = FakeForge()
+
+        with pytest.raises(ValueError, match="newline followed by '- '"):
+            provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert forge.create_issue_calls == []
+        assert forge.issues == {}
+
     def test_lost_parent_create_response_reuses_parent(
         self, plan_path: Path, template_path: Path
     ):

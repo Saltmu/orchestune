@@ -139,6 +139,26 @@ def test_restore_plan_file_from_parent_helper(tmp_path: Path):
     )
     parent_num = forge.create_issue("[EPIC] CLI Restored Rock", body)
 
+    from orchestune.dag.models import SubTask
+    from orchestune.provisioning.rendering import _render_issue_body
+
+    template = Path(".github/issue_template.md").read_text(encoding="utf-8")
+    child_subtask = SubTask(
+        id="sub-1",
+        description="",
+        overview="Some child overview",
+        proposed_changes=(),
+        acceptance_criteria=(),
+        verification_plan=(),
+        footprint=(),
+        symbols=(),
+        depends_on=(),
+        risk=False,
+        risk_reasons=(),
+    )
+    child_body = _render_issue_body(child_subtask, template, parent_issue_number=500)
+    forge.issues[501] = {"title": "[FEAT] sub-1: ", "body": child_body, "labels": []}
+
     out_file = tmp_path / "restored_plan.md"
     result_path = restore_plan_file_from_parent(forge, parent_num, output_path=out_file)
     assert result_path == out_file

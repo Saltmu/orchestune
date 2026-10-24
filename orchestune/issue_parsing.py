@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import sys
@@ -153,6 +154,32 @@ def restore_plan_dict_to_markdown(
     return f"---\n{frontmatter_yaml}---\n\n{body_content}"
 
 
+class ManifestPlanError(ValueError):
+    """Raised when attempting to restore a plan directly from a manifest parent body without children."""
+
+
+_REMEDIATION_MARKER = "<!-- orchestune:remediation-v1 -->"
+_REMEDIATION_RECORD_PATTERN = re.compile(
+    re.escape(_REMEDIATION_MARKER) + r"\s*```json\s*\n(.*?)```", re.DOTALL
+)
+
+
+def remediation_record_from_body(body: str) -> dict[str, Any] | None:
+    """Extract and validate the remediation JSON record from an issue body."""
+    if _REMEDIATION_MARKER not in body:
+        return None
+    matches = list(_REMEDIATION_RECORD_PATTERN.finditer(body))
+    if len(matches) != 1 or body.count(_REMEDIATION_MARKER) != 1:
+        raise ValueError("malformed or duplicate remediation record")
+    try:
+        value = json.loads(matches[0][1])
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("malformed remediation JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError("remediation record must be an object")
+    return value
+
+
 def restore_plan_markdown_from_parent_body(body: str) -> str | None:
     """#532: 親Issue本文から分解計画dictを抽出し、`decomposition_plan.md`形式のMarkdown文書として復元する。
 
@@ -161,6 +188,10 @@ def restore_plan_markdown_from_parent_body(body: str) -> str | None:
     plan_dict = decomposition_plan_from_parent_body(body)
     if not plan_dict:
         return None
+    if plan_dict.get("plan_format") == "manifest-v1":
+        raise ManifestPlanError(
+            "Parent issue contains a manifest decomposition plan; restore requires child issues"
+        )
     # #664: 復元先はローカルの`decomposition_plan.md`なので、GitHub由来のCRLFを
     # 持ち込まずLFへ揃える。
     body = normalize_newlines(body)
