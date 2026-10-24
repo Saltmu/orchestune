@@ -6,6 +6,7 @@ from pathlib import Path
 
 from orchestune.forge import IssueForge
 from orchestune.issue_parsing import PARENT_MARKER, ensure_parent_marker, is_epic_issue
+from orchestune.models import IssueRecord
 from orchestune.plan_writer import write_issue_numbers
 from orchestune.provisioning.plan import (
     PlanMetadata,
@@ -16,7 +17,7 @@ from orchestune.provisioning.plan import (
 
 def _inspect_explicit_parent(
     forge: IssueForge, validated_parent: int
-) -> tuple[int, str]:
+) -> tuple[int, str, IssueRecord]:
     issue = forge.get_issue(validated_parent)
     if issue is None:
         raise RuntimeError(
@@ -31,7 +32,7 @@ def _inspect_explicit_parent(
         if PARENT_MARKER not in issue.body
         else issue.body
     )
-    return validated_parent, body
+    return validated_parent, body, issue
 
 
 def _inspect_adopted_parent(
@@ -66,7 +67,8 @@ def inspect_candidate_parent(
     validated_parent: int | None,
 ) -> tuple[int | None, str]:
     if validated_parent is not None:
-        return _inspect_explicit_parent(forge, validated_parent)
+        num, body, _ = _inspect_explicit_parent(forge, validated_parent)
+        return num, body
     if metadata.parent_issue_source == "adopted":
         return _inspect_adopted_parent(forge, metadata)
 
@@ -95,9 +97,7 @@ def _resolve_explicit_parent_issue(
     metadata: PlanMetadata | None = None,
     sync_plan: bool = True,
 ) -> tuple[int, bool]:
-    _, body = _inspect_explicit_parent(forge, parent_issue_number)
-    issue = forge.get_issue(parent_issue_number)
-    assert issue is not None
+    _, body, issue = _inspect_explicit_parent(forge, parent_issue_number)
     if not is_epic_issue(issue):
         title = (
             issue.title
@@ -147,11 +147,15 @@ def _resolve_derived_parent_issue(
     if parent_issue_number is None:
         parent_title = f"[EPIC] {metadata.title}"
         parent_issue_number = forge.create_issue(parent_title, initial_body)
-    write_issue_numbers(
-        plan_path,
-        parent_issue_number=parent_issue_number,
-        parent_issue_source="derived",
-    )
+    if (
+        metadata.parent_issue_number != parent_issue_number
+        or metadata.parent_issue_source != "derived"
+    ):
+        write_issue_numbers(
+            plan_path,
+            parent_issue_number=parent_issue_number,
+            parent_issue_source="derived",
+        )
     if not sync_plan:
         return parent_issue_number, True
     return parent_issue_number, sync_parent_decomposition_plan(

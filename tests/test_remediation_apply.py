@@ -427,3 +427,65 @@ def test_registered_child_enters_cycle_dependency_and_conflict_evaluation(
     )
     assert 42 not in {t.issue_number for t in scheduling.selected}
     assert any(d.issue_number == 42 for d in scheduling.decisions)
+
+
+def test_build_dag_subtasks_raises_for_missing_provisioned_child() -> None:
+    from orchestune.remediation.models import RemediationSnapshot
+    from orchestune.remediation.plan_sources import build_dag_subtasks
+
+    parent = issue(1, "parent body")
+    snapshot = RemediationSnapshot(parent, (), (), (), (), False)
+    entries = [{"id": "st-missing", "issue_number": 999, "depends_on": []}]
+    with pytest.raises(
+        ValueError,
+        match="child Issue #999 for subtask 'st-missing' not found in snapshot",
+    ):
+        build_dag_subtasks(entries, snapshot, ())
+
+
+def test_is_plan_entry_ready_narrowed_exceptions() -> None:
+    from orchestune.dag.models import SubTask
+    from orchestune.remediation.models import RemediationTask
+    from orchestune.remediation.plan_sources import is_plan_entry_ready
+
+    task = RemediationTask(
+        subtask=SubTask(
+            id="st-1",
+            description="desc",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+        ),
+        kind="bug",
+        parent_acceptance=(),
+        origins=(),
+        reason="test",
+    )
+    assert (
+        is_plan_entry_ready({"id": "st-1", "issue_number": -5}, task, 10, 1, "rev1")
+        is False
+    )
+    assert (
+        is_plan_entry_ready(
+            {"id": "st-1", "issue_number": "invalid"}, task, 10, 1, "rev1"
+        )
+        is False
+    )
+
+
+def test_extract_subtask_acceptance_sources_missing_template() -> None:
+    from orchestune.remediation.models import RemediationSnapshot
+    from orchestune.remediation.plan_sources import extract_subtask_acceptance_sources
+
+    child = issue(10, "body without sections")
+    parent = issue(1, "parent body")
+    snapshot = RemediationSnapshot(parent, (child,), (), (), (), False)
+    entries = [{"id": "st-1", "issue_number": 10}]
+    sources, problems = extract_subtask_acceptance_sources(
+        snapshot, entries, template=None
+    )
+    assert any(
+        p.category == "input" and "template required" in p.message for p in problems
+    )

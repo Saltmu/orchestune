@@ -110,7 +110,7 @@ def _entry_to_subtask(entry: dict[str, Any], snapshot: RemediationSnapshot) -> S
             ),
             None,
         )
-        if issue_num
+        if issue_num is not None
         else None
     )
     if issue_num is not None and child is None:
