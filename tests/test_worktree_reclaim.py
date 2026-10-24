@@ -620,3 +620,21 @@ def test_invalid_branch_name_is_left_to_preparation(tmp_path: Path) -> None:
     )
 
     assert (assessment.takeover, assessment.diagnostic) == (None, None)
+
+
+def test_staged_changes_outside_the_footprint_are_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    retained = _release_dirty_blocked(tmp_path, monkeypatch)
+    # README.md stays staged while its working tree matches the base again
+    (retained.worktree / "README.md").write_text("initial\n", encoding="utf-8")
+    assert _git(retained.worktree, "diff", "--name-only", retained.base_sha) == ""
+    before = _snapshot(retained.worktree)
+
+    outcome = _claim(retained, _issue(footprint=("notes.txt",)))
+
+    _assert_untouched(retained, before, outcome)
+    assert outcome.failure is not None
+    assert outcome.failure.message.endswith(
+        "outside the reservation footprint: README.md"
+    )
