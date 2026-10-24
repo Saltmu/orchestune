@@ -93,6 +93,7 @@ class TestResolveParentIssue:
         )
         forge = FakeForge()
         plan_dict = {
+            "plan_format": "manifest-v1",
             "title": "My Big Rock",
             "parent_issue_number": 100,
             "parent_issue_source": "adopted",

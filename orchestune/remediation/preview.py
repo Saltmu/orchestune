@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, cast
 
 from orchestune.issue_parsing import (
-    DECOMPOSITION_PLAN_BLOCK_PATTERN,
     FOOTPRINT_BLOCK_PATTERN,
     decomposition_plan_from_parent_body,
     is_epic_issue,
@@ -25,6 +25,10 @@ from orchestune.remediation.models import (
     RemediationSpec,
     RemediationTask,
     TaskPreview,
+)
+from orchestune.remediation.plan_sources import (
+    extract_subtask_acceptance_sources,
+    is_plan_entry_ready,
 )
 from orchestune.remediation.spec import stable_hash
 
@@ -93,25 +97,11 @@ def _parent_plan(
 
 
 def _acceptance(
-    snapshot: RemediationSnapshot, entries: list[dict[str, Any]]
-) -> dict[str, tuple[str, ...]]:
-    sources: dict[str, list[str]] = {}
-    body = DECOMPOSITION_PLAN_BLOCK_PATTERN.sub("", snapshot.parent.body)
-    for line in body.splitlines():
-        match = re.fullmatch(r"\s*[-*+]\s+\[[ xX]\]\s+(.+)", line)
-        if match:
-            sources.setdefault(" ".join(match[1].split()), []).append(
-                "parent checklist: " + match[1]
-            )
-    for entry in entries:
-        values = entry.get("acceptance_criteria", [])
-        if isinstance(values, list):
-            for value in values:
-                if isinstance(value, str):
-                    sources.setdefault(" ".join(value.split()), []).append(
-                        f"subtask {entry['id']}: {value}"
-                    )
-    return {key: tuple(value) for key, value in sources.items()}
+    snapshot: RemediationSnapshot,
+    entries: list[dict[str, Any]],
+    template: str | None = None,
+) -> tuple[dict[str, tuple[str, ...]], list[PreviewProblem]]:
+    return extract_subtask_acceptance_sources(snapshot, entries, template=template)
 
 
 def _validate_graph(
@@ -247,12 +237,9 @@ def _registration_steps(
     expected = expected_footprint(task, snapshot.parent.number)
     primary = lifecycle_labels(issue.labels)
     dependencies = {numbers[d] for d in task.subtask.depends_on if d in numbers}
-    entry = next((e for e in entries if e["id"] == task.subtask.id), {})
-    remediation = entry.get("remediation", {})
-    plan_ready = (
-        entry.get("issue_number") == issue.number
-        and isinstance(remediation, dict)
-        and remediation.get("spec_revision") == spec.spec_revision
+    entry = next((e for e in entries if e["id"] == task.subtask.id), None)
+    plan_ready = is_plan_entry_ready(
+        entry, task, issue.number, snapshot.parent.number, spec.spec_revision
     )
     final_ready = issue.state.upper() == "CLOSED" or all(
         re.search(rf"(?m)^⚠️[^\n]*#{issue.number}(?![0-9])", pr.body) is not None
@@ -362,6 +349,42 @@ def _resolve_target(
     return issue, number, own, bool(discovered)
 
 
+def _check_parent_plan_conflicts(
+    task: RemediationTask,
+    number: int | None,
+    own: bool,
+    issue: IssueRecord | None,
+    entries: list[dict[str, Any]],
+    problems: list[PreviewProblem],
+) -> None:
+    if number is not None:
+        other = next(
+            (
+                e
+                for e in entries
+                if e.get("id") != task.subtask.id and e.get("issue_number") == number
+            ),
+            None,
+        )
+        if other is not None:
+            problems.append(
+                PreviewProblem(
+                    "input",
+                    f"{task.subtask.id}: issue_number {number} already belongs to parent-plan task '{other['id']}'",
+                )
+            )
+    entry = next((e for e in entries if e["id"] == task.subtask.id), None)
+    if entry is not None and (
+        entry.get("issue_number") != number
+        or (not own and (issue is None or _MARKER not in issue.body))
+    ):
+        problems.append(
+            PreviewProblem(
+                "input", f"{task.subtask.id}: subtask_id already exists in parent plan"
+            )
+        )
+
+
 def _task_preview(
     task: RemediationTask,
     spec: RemediationSpec,
@@ -374,16 +397,7 @@ def _task_preview(
     issue, number, own, discovered = _resolve_target(
         task, spec, snapshot, entries, problems
     )
-    entry = next((e for e in entries if e["id"] == task.subtask.id), None)
-    if entry is not None and (
-        entry.get("issue_number") != number
-        or (not own and (issue is None or _MARKER not in issue.body))
-    ):
-        problems.append(
-            PreviewProblem(
-                "input", f"{task.subtask.id}: subtask_id already exists in parent plan"
-            )
-        )
+    _check_parent_plan_conflicts(task, number, own, issue, entries, problems)
     diff: tuple[str, ...] = ()
     done: tuple[str, ...] = ()
     remaining: tuple[str, ...] = ()
@@ -447,10 +461,27 @@ def _issue_numbers(
     return numbers
 
 
+def _compute_preview_token(
+    spec: RemediationSpec,
+    snapshot: RemediationSnapshot,
+    template: str | None,
+) -> str:
+    payload: dict[str, Any] = {
+        "spec_revision": spec.spec_revision,
+        "targets": sorted((t.subtask.id, t.subtask.issue_number) for t in spec.tasks),
+        "snapshot": _snapshot_state(snapshot),
+    }
+    if template is not None:
+        payload["template_hash"] = stable_hash(template)
+    return "remediate-preview-v1:sha256:" + stable_hash(payload)
+
+
 def build_remediation_preview(
-    spec: RemediationSpec, snapshot: RemediationSnapshot
+    spec: RemediationSpec,
+    snapshot: RemediationSnapshot,
+    template: str | None = None,
 ) -> RemediationPreview:
-    """Return every problem and the first applicable exit category, without I/O."""
+    """Return every problem and the first applicable exit category."""
     problems: list[PreviewProblem] = []
     entries = _parent_plan(snapshot, problems)
     if any(t.subtask.issue_number == snapshot.parent.number for t in spec.tasks):
@@ -461,7 +492,15 @@ def build_remediation_preview(
         )
     problems.extend(_validate_graph(spec, entries))
     numbers = _issue_numbers(spec, snapshot, entries)
-    sources = _acceptance(snapshot, entries)
+    resolved_template = template
+    if resolved_template is None:
+        tpl_path = Path(".github/issue_template.md")
+        if tpl_path.exists():
+            resolved_template = tpl_path.read_text(encoding="utf-8")
+    sources, acceptance_problems = _acceptance(
+        snapshot, entries, template=resolved_template
+    )
+    problems.extend(acceptance_problems)
     tasks = []
     for task in spec.tasks:
         decision, errors = _task_preview(
@@ -474,16 +513,7 @@ def build_remediation_preview(
         if problems
         else (5 if all(t.action == "registered" for t in tasks) else 0)
     )
-    state = _snapshot_state(snapshot)
-    token = "remediate-preview-v1:sha256:" + stable_hash(
-        {
-            "spec_revision": spec.spec_revision,
-            "targets": sorted(
-                (t.subtask.id, t.subtask.issue_number) for t in spec.tasks
-            ),
-            "snapshot": state,
-        }
-    )
+    token = _compute_preview_token(spec, snapshot, resolved_template)
     return RemediationPreview(
         spec.spec_revision, token, tuple(tasks), tuple(problems), exit_code
     )

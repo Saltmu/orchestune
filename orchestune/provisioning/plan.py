@@ -14,6 +14,7 @@ from orchestune.issue_parsing import (
 )
 from orchestune.provisioning.plan_loading import PlanMetadata as PlanMetadata
 from orchestune.provisioning.plan_loading import load_plan
+from orchestune.provisioning.plan_manifest import project_plan_manifest
 from orchestune.provisioning.plan_restoration import (
     restore_plan_file_from_parent as _restore_plan_file_from_parent,
 )
@@ -122,8 +123,9 @@ def sync_parent_decomposition_plan(
         if missing := parent_only_subtask_ids(parent_issue.body, raw_frontmatter):
             _warn_parent_only_subtasks(parent_issue_number, missing)
             return False
+        manifest_data = project_plan_manifest(raw_frontmatter)
         updated_body = embed_decomposition_plan_in_parent_body(
-            parent_issue.body, raw_frontmatter
+            parent_issue.body, manifest_data
         )
         if len(updated_body) > GITHUB_ISSUE_BODY_LIMIT:
             print(

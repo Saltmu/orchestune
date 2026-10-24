@@ -17,6 +17,10 @@ from orchestune.issue_parsing import (
     parse_task_from_issue,
 )
 from orchestune.models import IssueRecord
+from orchestune.provisioning.plan_manifest import (
+    project_plan_manifest,
+    project_single_subtask,
+)
 from orchestune.provisioning.rendering import _subtask_id_from_body
 from orchestune.remediation.models import RemediationTask
 from orchestune.remediation.preview import _record, expected_footprint
@@ -123,13 +127,16 @@ def append_plan(body: str, entries: list[dict[str, Any]]) -> str:
     current = {entry["id"]: entry for entry in plan["subtasks"]}
     for entry in entries:
         if entry["id"] in current:
-            if current[entry["id"]] != entry:
+            if project_single_subtask(current[entry["id"]]) != project_single_subtask(
+                entry
+            ):
                 raise ValueError(f"conflicting plan entry: {entry['id']}")
         else:
             plan["subtasks"].append(entry)
+    projected = project_plan_manifest(plan)
     block = (
         "<!-- orchestune:decomposition-plan -->\n```yaml\n"
-        + yaml.safe_dump(plan, allow_unicode=True, sort_keys=False)
+        + yaml.safe_dump(projected, allow_unicode=True, sort_keys=False)
         + "```"
     )
     match = DECOMPOSITION_PLAN_BLOCK_PATTERN.search(body)

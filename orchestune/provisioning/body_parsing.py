@@ -149,7 +149,7 @@ def _sanitize_known_additions(body: str) -> tuple[str, str | None]:
     return body, replan_id
 
 
-def _parse_bullet_list(text: str) -> list[str]:
+def parse_bullet_list(text: str) -> list[str]:
     stripped = text.strip()
     if stripped == "特になし":
         return []
@@ -357,9 +357,9 @@ def _extract_prose_fields(
             description = title.removeprefix(f"{subtask_id}: ").strip()
 
     overview = captured["overview"]
-    changes = _parse_bullet_list(captured["proposed_changes"])
-    criteria = _parse_bullet_list(captured["acceptance_criteria"])
-    verify = _parse_bullet_list(captured["verification_plan"])
+    changes = parse_bullet_list(captured["proposed_changes"])
+    criteria = parse_bullet_list(captured["acceptance_criteria"])
+    verify = parse_bullet_list(captured["verification_plan"])
     return description, overview, changes, criteria, verify
 
 
@@ -455,6 +455,7 @@ def parse_subtask_issue_body(template: str, title: str, body: str) -> dict[str, 
 
 __all__ = [
     "extract_subtask_section",
+    "parse_bullet_list",
     "parse_subtask_issue_body",
     "validate_reversible_subtask",
 ]

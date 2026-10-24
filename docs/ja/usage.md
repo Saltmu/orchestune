@@ -162,7 +162,7 @@ subtasks:
 ### 計画ファイルのライフサイクルと親Issueへの永続化（方針 (b)）
 
 `decomposition_plan.md` は、計画作成・DAG検証・ユーザー承認（Stage 1〜3）の段階ではローカル（または作業worktree）上のドラフトファイルとして扱われます。
-`orchestune provision`（Stage 4）を実行すると、親Issue（EPIC）の作成・採用とともに、親Issue本文の `<!-- orchestune:decomposition-plan -->` ブロックへ最新の計画内容（Frontmatter YAML）が自動的に埋め込まれ、同期・永続化されます。
+`orchestune provision`（Stage 4）を実行すると、親Issue（EPIC）の作成・採用および全サブタスクの起票・再利用完了後に、親Issue本文の `<!-- orchestune:decomposition-plan -->` ブロックへ目次形式（`plan_format: manifest-v1`）に射影された計画が1回だけ同期・永続化されます。親計画から起票済みエントリの長文・Footprintが除外されるため、大規模な分解計画でもGitHub本文上限（65,536文字）を超過しません。事前検査により、射影後の親Issue本文が上限に収まることをForge書き込み前に検証します。旧形式（全文章を含む計画）の親Issueは、次回以降の `provision`、`replan`、`remediation` の書き込み時に自動的に manifest-v1 形式へ移行されます。
 
 - **親Issueへの永続化と起票済みサブタスクの正本（Source of Truth）**:
   AIエージェントの使い捨てworktreeが削除されてローカルの `decomposition_plan.md` が消失しても、親Issue本文に計画（各サブタスクの定義や起票された `issue_number`、説明文）が記録として残ります。ただし、起票済みのサブタスクについては、その文章（`overview`, `proposed_changes`, `acceptance_criteria`, `verification_plan`）および `footprint`, `symbols` の正本は子Issue本文となります。
@@ -190,7 +190,7 @@ subtasks:
 
 ## 2. Issue起票（orchestune provision）
 
-承認済みの `decomposition_plan.md` から、`title` を親Issue、各サブタスクを子Issue（Sub-issue）としてGitHub上に起票します。`.github/issue_template.md` のプレースホルダー規則に沿って本文を生成し、`depends_on` のトポロジカル順で起票、`--parent`/`--blocked-by` 相当のnative関係を設定します。起票したIssue番号は都度 `decomposition_plan.md` のフロントマター（`parent_issue_number`、各サブタスクの `issue_number`）へ書き戻され、同時に親Issue本文の `<!-- orchestune:decomposition-plan -->` ブロックへも最新の計画YAMLが同期されます。そのため、**冪等**（既にIssueがあるサブタスクは再作成されない）かつ**部分失敗から再開可能**（N件目で失敗しても再実行時に1〜N-1件目は重複作成されない）です。
+承認済みの `decomposition_plan.md` から、`title` を親Issue、各サブタスクを子Issue（Sub-issue）としてGitHub上に起票します。`.github/issue_template.md` のプレースホルダー規則に沿って本文を生成し、`depends_on` のトポロジカル順で起票、`--parent`/`--blocked-by` 相当のnative関係を設定します。起票したIssue番号は都度 `decomposition_plan.md` のフロントマター（`parent_issue_number`、各サブタスクの `issue_number`）へ書き戻され、全サブタスクの番号確定後に親Issue本文の `<!-- orchestune:decomposition-plan -->` ブロックへ目次形式（`plan_format: manifest-v1`）に射影された計画YAMLが一度に同期されます。そのため、**冪等**（既にIssueがあるサブタスクは再作成されない）かつ**部分失敗から再開可能**（N件目で失敗しても再実行時に1〜N-1件目は重複作成されない）です。
 
 ```bash
 # プレビュー（GitHubへ書き込まず、生成される本文・ラベルのみ出力）
