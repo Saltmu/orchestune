@@ -638,3 +638,29 @@ def test_staged_changes_outside_the_footprint_are_refused(
     assert outcome.failure.message.endswith(
         "outside the reservation footprint: README.md"
     )
+
+
+def test_committed_changes_outside_the_footprint_are_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    retained = _release_dirty_blocked(tmp_path, monkeypatch)
+    _git(retained.worktree, "add", "-A")
+    _git(retained.worktree, "commit", "-m", "work of the released claim")
+    # the commit stays on the branch even after index and tree match the base
+    _git(
+        retained.worktree,
+        "restore",
+        f"--source={retained.base_sha}",
+        "--staged",
+        "--worktree",
+        "README.md",
+    )
+    before = _snapshot(retained.worktree)
+
+    outcome = _claim(retained, _issue(footprint=("notes.txt",)))
+
+    _assert_untouched(retained, before, outcome)
+    assert outcome.failure is not None
+    assert outcome.failure.message.endswith(
+        "outside the reservation footprint: README.md"
+    )

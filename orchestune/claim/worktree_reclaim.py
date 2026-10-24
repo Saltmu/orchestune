@@ -302,10 +302,11 @@ def _changes_outside_footprint(
         return []
     changed: set[str] = set()
     for args in (
-        # the working tree and the index are compared with the base separately:
-        # a staged edit can hide behind a working tree restored to the base
-        ["diff", "--name-only", "--no-renames", "-z", base_sha],
+        # commits, the index and the working tree are compared with the base
+        # separately: each can hide a change the others restored to the base
+        ["diff", "--name-only", "--no-renames", "-z", base_sha, "HEAD"],
         ["diff", "--cached", "--name-only", "--no-renames", "-z", base_sha],
+        ["diff", "--name-only", "--no-renames", "-z", base_sha],
         ["ls-files", "--others", "--exclude-standard", "-z"],
     ):
         result = run_git(args, cwd=path, check=False)
