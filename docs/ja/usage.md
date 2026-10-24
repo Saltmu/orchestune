@@ -760,6 +760,21 @@ POST の成否が不明なら再取得し、未確認のまま再送しないで
 
 MCP の `--validate-request` は、`request_operation: replace`、置換元の id・reviewer・HEAD・投稿者、置換先の HEAD・reviewer・round、および結合済みの `trigger_body` を返します。置換 snapshot は置換元・置換先の `user.login` を保持してください。置換元の投稿者が欠けていれば投稿前に Exit 30 を返します。外部クライアントが同じ投稿・再取得・旧 marker 編集手順を実行し、offline 評価自体は POST/PATCH しません。無関係な重複、分岐、参照先欠落、別投稿者からの置換は停止します。置換後の結果は時刻だけでは現実行の証跡にせず、要求したコミットとの明示的な一致を必要とします。旧 HEAD の結果は履歴に残します。
 
+### レビュー待機の timeout と stall
+
+オンライン待機は必ず有限時間で終わります。Exit 20 は `--timeout`（既定1800秒）以内に結果が得られなかったこと、Exit 21 は現在のラウンド（同じ round・要求 HEAD）の進行中 tracker が `--stall-grace`（既定600秒）のあいだ同じ署名のままだったことを示します。tracker に変化があれば stall の猶予は計り直しますが、全体の timeout は計り直しません。前のラウンドや別 HEAD の tracker は stall とみなさないため、応答のないトリガーは Exit 20 のままです。どちらの期限も単調時計で測るため、壁時計の補正で短くも長くもなりません。sleep は残り時間を超えません。期限を超えうるのは実行中の1回の poll（`gh` 呼び出しはそれぞれ30秒まで）と、最後の HEAD 再取得（30秒まで）だけです。Exit 30（Completed だがレビュー本文なし）と Exit 11（単一 snapshot の評価）の意味は変わりません。
+
+`--output-file` を指定すると、Exit 20/21 でもこの実行の診断でファイルを置き換えます。内容は `acquisition_status: unavailable`、`reason_code`（`review_timeout` / `review_stalled`）、`exit_code`、repository・PR・reviewer・round・trigger の ID と時刻・要求 HEAD、再取得した `current_head_sha`（取得失敗時は null。要求 HEAD で代用しません）、および `wait_diagnostics`（経過時間、timeout と猶予の設定、現在ラウンドで最後に見た tracker の ID・status・更新時刻・本文 SHA-256、トリガー以降に観測した bot 項目の出所情報）です。`reviewed_head_sha` と `review_target_sha` は null なので、`orchestune complete` のレビュー証跡にはなりません。各 section を `complete` とするのは最後の poll で取得できた場合だけです。ファイルを書き込めない場合は Exit 2 で終了し、以前の成功結果を残さないよう旧ファイルを削除します。
+
+復旧も同じ単一の待機経路で行います。
+
+1. 終了コード、診断 JSON、対象のトリガーと HEAD を確認します。
+2. Exit 20: 同じ reviewer で `--no-post --round <n>` を1回だけ実行して待機を再開します。Round 2 以降はそのラウンドの `--body-file` も渡します。再開では投稿も新ラウンドの採番もしません。
+3. Exit 21: tracker の最後の進行と、見える場合は関連する workflow run / job を確認します。Codex の内部 job は見えないため「不明」と記録し、GitHub Actions の実行がある前提にしません。その後は手順2と同じく再開します。
+4. Exit 30: `--no-post` で再取得します。tracker の表はレビュー結果ではありません。
+5. reviewer の切り替えは、人間が明示的に選んだ場合だけ `--switch-reviewer` で行います（検証付きの置換、または次のラウンド）。自動復旧の既定にはしません。Claude が起動しない場合は、再投稿せずに workflow の actor・`allowed_bots`・trigger marker・job の conclusion を確認します。
+6. 有限回の再開でも完了しなければ、`orchestune complete --issue <N> --result blocked --reason review-timeout`（または `review-stalled`）で停止します。timeout をレビューの pass や skip に読み替えません。
+
 ## 8. ローカルCI証跡の保存と完了処理 (`orchestune complete`)
 
 `orchestune complete` の成功は、固定したOutcome Recordの投稿、結果に対応するIssueラベル（`status:done` / `status:blocked` / `status:not-needed`）の確認、および共有台帳へのhandoffとreplay receiptの永続保存が成立したことを意味します。PRマージ、対応不要の独立レビュー承認、worktree回収の完了までは意味しません。`done` は公開前にローカルCI、PR/head、子レビュー証跡（[§4.5](#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)）、トークン上限の証跡を検証し、GCはその証跡を消費します。予約なしの旧完了経路ではGC側のトークン上限判定を維持します。

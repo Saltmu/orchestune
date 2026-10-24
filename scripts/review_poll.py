@@ -18,6 +18,7 @@ from orchestune.review.acquisition import (
     SCHEMA_VERSION,
     _activity_signature,
     _build_snapshot,
+    _filter_bot_items,
     _get_item_created_timestamp,
     _get_item_timestamp,
     _in_activity_round,
@@ -33,19 +34,16 @@ from orchestune.review.progress_tracker import (
 from orchestune.review.tracker_activity import CompletedGrace
 from scripts.jev_context import JevReviewContext
 from scripts.review_cli import print_review_result
+from scripts.review_wait_diagnostics import (
+    StalledReviewError,
+    TrackerObservation,
+    WaitContext,
+    body_digest,
+)
 
 COMPLETENESS_SECTIONS = ("issue_comments", "reviews", "inline_comments")
 
-
-class StalledReviewError(RuntimeError):
-    """Raised when a bot's in-progress tracker comment stops changing.
-
-    This is distinct from a plain timeout: it means the review polling loop
-    positively observed the same "in progress" tracker signature for longer
-    than the stall grace window, which is strong evidence the workflow run
-    that owns the comment already ended (success or failure) without ever
-    posting a final result, rather than merely being slow.
-    """
+__all__ = ["StalledReviewError"]
 
 
 def summary_gate_open(
@@ -79,6 +77,7 @@ def track_stall(
     pr_number: int,
     latest_trigger_time: str = "",
     requested_head_sha: str | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> tuple[str | None, float | None]:
     """Update in-progress tracker staleness state for one poll iteration.
 
@@ -96,6 +95,9 @@ def track_stall(
     A reused Codex tracker is placed by its last update instead of its creation
     (#1274): a Round 2+ Running update is the current round's activity, while an
     untouched earlier tracker still is not.
+
+    `clock` is monotonic (#1388): a wall-clock correction must neither trip nor
+    postpone the grace. Server timestamps only place activity in a round.
     """
     if (
         current_bot_activity is None
@@ -115,8 +117,8 @@ def track_stall(
 
     signature = _activity_signature(current_bot_activity, bot_name)
     if signature != last_signature:
-        return signature, time.time()
-    if since is not None and time.time() - since >= stall_grace_seconds:
+        return signature, clock()
+    if since is not None and clock() - since >= stall_grace_seconds:
         raise StalledReviewError(
             f"@{bot_name}'s in-progress tracker comment on PR #{pr_number} has "
             f"not changed in over {stall_grace_seconds}s while still reporting "
@@ -168,6 +170,91 @@ class PollState:
     stall_signature: str | None = None
     stall_since: float | None = None
     completed_timestamp: str = field(default="")
+    # The last successfully fetched PR data, kept for the end-of-wait diagnostic.
+    last_data: dict[str, list[dict[str, Any]]] | None = None
+    last_poll_ok: bool = False
+
+
+def _tracker_observation(
+    data: dict[str, list[dict[str, Any]]], round_: WaitRound
+) -> TrackerObservation | None:
+    activity = _latest_bot_activity_item(
+        data,
+        round_.bot_name,
+        exclude_ids=round_.excluded_ids,
+        round_started_at=round_.trigger_time,
+        requested_head_sha=round_.requested_head_sha,
+    )
+    if activity is None:
+        return None
+    section = next(
+        (name for name, items in data.items() if any(i is activity for i in items)),
+        "unknown",
+    )
+    status = parse_codex_tracker_status(str(activity.get("body") or ""))
+    if status is None:
+        status_text = "in_progress" if _is_explicitly_in_progress(activity) else "other"
+    else:
+        status_text = status.value
+    return TrackerObservation(
+        id=activity.get("id"),
+        section=section,
+        status=status_text,
+        updated_at=_get_item_timestamp(activity),
+        body_sha256=body_digest(activity),
+    )
+
+
+def _observed_items(
+    data: dict[str, list[dict[str, Any]]], round_: WaitRound
+) -> tuple[dict[str, Any], ...]:
+    observed = []
+    for section in COMPLETENESS_SECTIONS:
+        for item in _filter_bot_items(
+            data.get(section, []), round_.bot_name, round_.excluded_ids
+        ):
+            if round_.trigger_time and _get_item_timestamp(item) < round_.trigger_time:
+                continue
+            observed.append(
+                {
+                    "section": section,
+                    "id": item.get("id"),
+                    "created_at": _get_item_created_timestamp(item),
+                    "updated_at": _get_item_timestamp(item),
+                    "in_progress": _is_explicitly_in_progress(item),
+                    "body_sha256": body_digest(item),
+                }
+            )
+    return tuple(observed)
+
+
+def wait_context(
+    round_: WaitRound,
+    state: PollState,
+    *,
+    elapsed_seconds: float,
+    timeout_seconds: float,
+    stall_grace_seconds: float,
+    completed_grace_seconds: float,
+) -> WaitContext:
+    """The diagnostic context of a wait that ended without a result (#1388)."""
+    data = state.last_data
+    return WaitContext(
+        repository=round_.repository,
+        pr_number=round_.pr_number,
+        reviewer=round_.bot_name,
+        round=round_.round_num,
+        trigger_id=round_.trigger_id,
+        triggered_at=round_.trigger_time or None,
+        requested_head_sha=round_.requested_head_sha,
+        elapsed_seconds=round(elapsed_seconds, 3),
+        timeout_seconds=timeout_seconds,
+        stall_grace_seconds=stall_grace_seconds,
+        completed_grace_seconds=completed_grace_seconds,
+        last_poll_ok=state.last_poll_ok,
+        last_tracker=_tracker_observation(data, round_) if data is not None else None,
+        observed_items=_observed_items(data, round_) if data is not None else (),
+    )
 
 
 def unavailable_result(
@@ -242,6 +329,7 @@ def poll_step(
         pr_number=round_.pr_number,
         latest_trigger_time=round_.trigger_time,
         requested_head_sha=round_.requested_head_sha,
+        clock=clock,
     )
     current_snapshot = _build_snapshot(data, bot_name, exclude_ids=round_.excluded_ids)
     has_changes = any(

@@ -11,8 +11,10 @@ dependencies (clock, Jev evaluation) are injected so callers can substitute them
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
+import os
 import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
@@ -276,11 +278,28 @@ def parse_args(
 
 
 def write_output_file(result: dict[str, Any], output_file: str) -> None:
+    """Atomically replace `output_file`; on failure never leave an older result.
+
+    A failed write removes the previous file (best effort) so that a stale
+    success cannot be read as this run's outcome (#1388).
+    """
+    target = Path(output_file)
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     try:
-        with open(output_file, "w", encoding="utf-8") as f:
+        with open(temporary, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
+        os.replace(temporary, target)
     except OSError as e:
-        raise RuntimeError(f"Failed to write --output-file {output_file}: {e}") from e
+        with contextlib.suppress(OSError):
+            temporary.unlink(missing_ok=True)
+        stale = ""
+        try:
+            target.unlink(missing_ok=True)
+        except OSError as unlink_error:
+            stale = f"; the previous file could not be removed: {unlink_error}"
+        raise RuntimeError(
+            f"Failed to write --output-file {output_file}: {e}{stale}"
+        ) from e
 
 
 def _print_header(result: dict[str, Any], bot_name: str) -> None:
