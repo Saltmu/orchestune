@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import asdict
 from typing import Any, cast
@@ -14,6 +13,7 @@ from orchestune.issue_parsing import (
     is_epic_issue,
     parent_issue_number_from_body,
     parse_footprint_block,
+    remediation_record_from_body,
 )
 from orchestune.labels import StatusLabel
 from orchestune.ledger.status_machine import lifecycle_labels
@@ -156,18 +156,7 @@ def _validate_graph(
 
 
 def _record(issue: IssueRecord) -> dict[str, Any] | None:
-    matches = list(_RECORD.finditer(issue.body))
-    if _MARKER not in issue.body:
-        return None
-    if len(matches) != 1 or issue.body.count(_MARKER) != 1:
-        raise ValueError("malformed or duplicate remediation record")
-    try:
-        value = json.loads(matches[0][1])
-    except ValueError as exc:
-        raise ValueError("malformed remediation JSON") from exc
-    if not isinstance(value, dict):
-        raise ValueError("remediation record must be an object")
-    return value
+    return remediation_record_from_body(issue.body)
 
 
 def _extra_footprint_keys(own_record: bool) -> set[str]:

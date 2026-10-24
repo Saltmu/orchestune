@@ -59,6 +59,24 @@ class TestProvisionIssuesApply:
         assert forge.create_issue_calls == []
         assert forge.issues == {}
 
+    def test_non_reversible_subtask_fails_before_creating_any_issues(
+        self, plan_path: Path, template_path: Path
+    ):
+        content = plan_path.read_text(encoding="utf-8")
+        # Add an item containing newline followed by '- '
+        bad_content = content.replace(
+            "    symbols: [foo.Foo]",
+            '    symbols: [foo.Foo]\n    proposed_changes:\n      - "Item with\\n- nested dash"',
+        )
+        plan_path.write_text(bad_content, encoding="utf-8")
+        forge = FakeForge()
+
+        with pytest.raises(ValueError, match="newline followed by '- '"):
+            provision_issues(plan_path, forge=forge, template_path=template_path)
+
+        assert forge.create_issue_calls == []
+        assert forge.issues == {}
+
     def test_lost_parent_create_response_reuses_parent(
         self, plan_path: Path, template_path: Path
     ):
@@ -944,3 +962,39 @@ class TestProvisioningDagSharedDocuments:
         assert dag.edges == []
         (edge,) = (e for e in dag.conflict_graph.edges if e.reason == "shared-document")
         assert edge.resources == ("docs/ja/architecture.md",)
+
+
+class TestProvisioningFlowReversibleValidation:
+    def test_prepare_provisioning_context_rejects_non_reversible_subtasks(
+        self, tmp_path: Path
+    ) -> None:
+        from orchestune.provisioning.flow import _prepare_provisioning_context
+
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(
+            """---
+title: Test Plan
+subtasks:
+  - id: subtask-tokuninashi
+    description: Test
+    proposed_changes:
+      - 特になし
+---
+# Overview
+""",
+            encoding="utf-8",
+        )
+        template_file = tmp_path / "template.md"
+        template_file.write_text(
+            "template <!-- orchestune:subtask-issue-template -->\n"
+            "{{overview}}\n{{proposed_changes}}\n{{acceptance_criteria}}\n{{verification_plan}}",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="cannot be '特になし'"):
+            _prepare_provisioning_context(
+                plan_path=plan_file,
+                template_path=template_file,
+                repo_root=tmp_path,
+                parent_issue=None,
+            )

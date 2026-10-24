@@ -60,10 +60,13 @@ Filing Issues from `<plan-path>` is fully codified into the `orchestune provisio
    ```
    The target Issue is normalized in place if it doesn't already look like an Orchestune EPIC (a `"[EPIC] "` title prefix and parent marker are added as needed, preserving its existing content) — no title match against the plan's `title` is required. The command writes `parent_issue_source: adopted` into `<plan-path>`, so **subsequent runs no longer require `--parent-issue` to be re-passed**; they will automatically reuse the adopted parent and existing child issues. If an adopted parent issue does not exist, provisioning aborts with an error rather than silently creating a duplicate parent.
 
-   **Restoring a lost plan file from parent**: if `<plan-path>` was lost (e.g. after worktree cleanup), create a fresh unique session directory and restore it directly from the parent Issue:
+   **Restoring a lost plan file from parent**: if `<plan-path>` was lost (e.g. after worktree cleanup), create a fresh unique session directory and restore it directly from the parent Issue and child Issues (child Issue bodies are the canonical source of truth for provisioned subtask prose and Footprints, while unprovisioned subtasks retain parent values):
    ```bash
    orchestune provision --restore-plan <parent_number> --plan <plan-path>
+   # Or when using a custom issue template:
+   # orchestune provision --restore-plan <parent_number> --plan <plan-path> --template <template-path>
    ```
+   Restoration validates structural consistency between parent and children, checks for concurrent edits, and fails closed without damaging existing files if issues or templates mismatch.
 4. **Return the list of filed Issues to the [orchestune skill](../orchestune/SKILL.md)**, for it to report to the user or hand off to the [orchestune-dispatch skill](../orchestune-dispatch/SKILL.md).
 
 ### Fallback for environments without `gh` (manual filing)
