@@ -209,11 +209,18 @@ def _build_integrator_config(
         max_integration_timeout_retries=config.max_integration_timeout_retries,
         integration_timeout_backoff_seconds=config.integration_timeout_backoff_seconds,
     )
-    if semantic_review_enabled and isinstance(
-        config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget
-    ):
+    if config.semantic_review_mode == "required":
         integrator_config.enable_semantic_review = True
-        integrator_config.coordinator = IntegrationCoordinator(config.dispatch_target)
+    elif config.semantic_review_mode == "advisory":
+        if semantic_review_enabled and isinstance(
+            config.dispatch_target, ClaudeCodeCloudRoutineDispatchTarget
+        ):
+            integrator_config.enable_semantic_review = True
+            integrator_config.coordinator = IntegrationCoordinator(
+                config.dispatch_target
+            )
+        else:
+            integrator_config.enable_semantic_review = False
     else:
         integrator_config.enable_semantic_review = False
     return integrator_config

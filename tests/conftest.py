@@ -992,6 +992,7 @@ def integrator_env(
     ) -> None:
         kwargs.setdefault("forge", fake_forge)
         kwargs.setdefault("child_review_gate", "off")
+        kwargs.setdefault("semantic_review_mode", "off")
         original_init(config, *args, **kwargs)
 
     monkeypatch.setattr(IntegratorConfig, "__init__", init_with_fake_forge)

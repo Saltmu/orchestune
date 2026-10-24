@@ -335,6 +335,7 @@ class TestRelativeRepositoryRoot:
                     apply=True,
                     forge=fake_forge,
                     child_review_gate="off",
+                    semantic_review_mode="off",
                 )
                 res = Integrator(config).run()
             finally:

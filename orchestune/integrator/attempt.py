@@ -417,11 +417,9 @@ def set_new_attempt_identity(ctx: Any) -> None:
 def handle_non_required_review(ctx: Any) -> tuple[bool, bool]:
     """Handle off/advisory modes and return ``(handled, dispatched)``."""
     mode = ctx.config.semantic_review_mode
-    if (
-        mode == "off"
-        or not ctx.config.enable_semantic_review
-        or (mode == "required" and ctx.config.child_review_gate == "off")
-    ):
+    if mode == "required":
+        return False, False
+    if mode == "off" or not ctx.config.enable_semantic_review:
         print(
             "Warning: semantic_review_mode is off; skipping layer-2 review",
             file=sys.stderr,
@@ -539,20 +537,17 @@ def validate_finalization_context(ctx: Any) -> str | None:
     if len(matching) != 1 or matching[0].head_sha != state.head_sha:
         return "live integration PR does not match the passed semantic review head"
     if state.phase is SemanticReviewPhase.SKIPPED_BY_HUMAN:
-        override = ctx.semantic_review_override
-        if override is None or override.attempt_id != state.attempt_id:
-            return "human override evidence is missing"
-        if override.head_sha != state.head_sha:
-            return "human override does not match the passed head"
+        if ctx.config.semantic_review_mode != "off":
+            override = ctx.semantic_review_override
+            if override is None or override.attempt_id != state.attempt_id:
+                return "human override evidence is missing"
+            if override.head_sha != state.head_sha:
+                return "human override does not match the passed head"
     return None
 
 
 def _semantic_finalization_exempt(ctx: Any) -> bool:
-    return (
-        ctx.config.semantic_review_mode in {"off", "advisory"}
-        or not ctx.config.enable_semantic_review
-        or ctx.config.child_review_gate == "off"
-    )
+    return ctx.config.semantic_review_mode in {"off", "advisory"}
 
 
 def publish_parent_under_claim(ctx: Any) -> ParentPublishResult:

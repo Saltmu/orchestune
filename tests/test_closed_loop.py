@@ -525,6 +525,7 @@ def test_closed_loop_flow():
             apply=True,
             forge=dummy_github,
             child_review_gate="off",
+            semantic_review_mode="off",
         )
         integrator = Integrator(int_config)
         res = integrator.run()
@@ -569,6 +570,7 @@ def test_closed_loop_flow():
             apply=True,
             forge=dummy_github,
             child_review_gate="off",
+            semantic_review_mode="off",
         )
         integrator2 = Integrator(int_config2)
         res2 = integrator2.run()

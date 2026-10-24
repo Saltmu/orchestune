@@ -872,6 +872,7 @@ class TestRealGitAndRealProcess:
             apply=True,
             forge=forge,
             child_review_gate="off",
+            semantic_review_mode="off",
             ci_command=ci,
             process_runner=ManagedProcessRunner(),
             integration_cleanup_timeout_seconds=10,

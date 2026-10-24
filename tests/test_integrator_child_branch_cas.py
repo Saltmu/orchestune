@@ -139,7 +139,11 @@ def test_moved_child_tip_is_not_labeled_or_closed(fake_forge, tmp_path: Path):
         source_sha="a" * 40,
     )
     config = IntegratorConfig(
-        apply=True, parent_issue_number=100, forge=fake_forge, child_review_gate="off"
+        apply=True,
+        parent_issue_number=100,
+        forge=fake_forge,
+        child_review_gate="off",
+        semantic_review_mode="off",
     )
     ctx = IntegrationContext(
         config=config,
@@ -696,6 +700,7 @@ def test_denied_deletion_in_the_merge_cycle_is_counted_and_not_finalized(
         parent_issue_number=100,
         forge=fake_forge,
         child_review_gate="off",
+        semantic_review_mode="off",
         integration_run_id="run-1",
     )
     ctx = IntegrationContext(

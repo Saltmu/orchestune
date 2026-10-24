@@ -14,10 +14,12 @@ from orchestune.infra.git_cli import GitResult
 from orchestune.integrator.attempt import (
     OpenAttempt,
     PublishStatus,
+    _semantic_finalization_exempt,
     build_attempt_identity,
     check_fast_forward_identity,
     checkout_verified_attempt_head,
     find_open_attempts,
+    handle_non_required_review,
     prepare_attempt_context,
     publish_attempt_branch,
     publish_parent_under_claim,
@@ -501,6 +503,7 @@ def _finalization_context():
         )
     ]
     config = SimpleNamespace(
+        parent_issue_number=100,
         semantic_review_mode="required",
         enable_semantic_review=True,
         child_review_gate="required",
@@ -569,3 +572,160 @@ def test_parent_update_is_atomic_under_the_attempt_claim():
     assert update.ref == "refs/heads/parent/issue-100"
     assert update.new_oid == HEAD
     assert update.expected_old_oid == BASE
+
+
+def test_handle_non_required_review_prioritizes_required_mode():
+    """#1384: required mode is never bypassed by enable=False or child_review_gate=off."""
+    ctx = _finalization_context()
+    ctx.config.semantic_review_mode = "required"
+    ctx.config.enable_semantic_review = False
+    ctx.config.child_review_gate = "off"
+
+    assert handle_non_required_review(ctx) == (False, False)
+
+
+def test_handle_non_required_review_off_and_advisory():
+    """#1384: off skips with warning; advisory dispatches or skips based on coordinator."""
+    ctx = _finalization_context()
+    ctx.config.semantic_review_mode = "off"
+    assert handle_non_required_review(ctx) == (True, False)
+
+    ctx.config.semantic_review_mode = "advisory"
+    ctx.config.enable_semantic_review = False
+    assert handle_non_required_review(ctx) == (True, False)
+
+    ctx.config.enable_semantic_review = True
+    coordinator = MagicMock()
+    ctx.config.coordinator = coordinator
+    ctx.temp_branch = "temp"
+    ctx.base_branch = "base"
+    ctx.integration_pr_number = 7
+    ctx.merged_tasks = ["task-a"]
+    assert handle_non_required_review(ctx) == (True, True)
+    coordinator.dispatch_review.assert_called_once_with(
+        temp_branch="temp",
+        base_branch="base",
+        pr_number=7,
+        parent_issue_number=100,
+        merged_subtask_ids=["task-a"],
+    )
+
+
+def test_semantic_finalization_exempt():
+    """#1384: _semantic_finalization_exempt only exempts off and advisory, never required."""
+    ctx = _finalization_context()
+    ctx.config.semantic_review_mode = "required"
+    ctx.config.enable_semantic_review = False
+    ctx.config.child_review_gate = "off"
+    assert _semantic_finalization_exempt(ctx) is False
+
+    ctx.config.semantic_review_mode = "advisory"
+    assert _semantic_finalization_exempt(ctx) is True
+
+    ctx.config.semantic_review_mode = "off"
+    assert _semantic_finalization_exempt(ctx) is True
+
+
+def test_validate_finalization_context_off_mode_skipped_by_human_without_override():
+    """#1384: off mode accepts trusted SKIPPED_BY_HUMAN without human override."""
+    ctx = _finalization_context()
+    ctx.config.semantic_review_mode = "off"
+    ctx.semantic_review_state = replace(
+        ctx.semantic_review_state, phase=SemanticReviewPhase.SKIPPED_BY_HUMAN
+    )
+    ctx.semantic_review_override = None
+
+    with patch("orchestune.integrator.attempt.run_git") as run:
+        run.return_value = GitResult(0, HEAD + "\n", "")
+        assert validate_finalization_context(ctx) is None
+
+
+def test_validate_finalization_context_off_mode_still_checks_invariants():
+    """#1384: off mode still verifies HEAD, CI, PR, and terminal phase."""
+    ctx = _finalization_context()
+    ctx.config.semantic_review_mode = "off"
+    ctx.semantic_review_state = replace(
+        ctx.semantic_review_state, phase=SemanticReviewPhase.SKIPPED_BY_HUMAN
+    )
+
+    # 1. Stale / mismatching checkout HEAD
+    with patch("orchestune.integrator.attempt.run_git") as run:
+        run.return_value = GitResult(0, "x" * 40 + "\n", "")
+        assert "checked out integration head differs" in validate_finalization_context(
+            ctx
+        )
+
+    # 2. CI mismatch
+    ctx.semantic_review_state = replace(
+        ctx.semantic_review_state, ci_verified_sha="x" * 40
+    )
+    with patch("orchestune.integrator.attempt.run_git") as run:
+        run.return_value = GitResult(0, HEAD + "\n", "")
+        assert "lacks matching CI evidence" in validate_finalization_context(ctx)
+    ctx.semantic_review_state = replace(ctx.semantic_review_state, ci_verified_sha=HEAD)
+
+    # 3. Live PR mismatch
+    ctx.forge.list_open_prs.return_value[0] = replace(
+        ctx.forge.list_open_prs.return_value[0], head_sha="x" * 40
+    )
+    with patch("orchestune.integrator.attempt.run_git") as run:
+        run.return_value = GitResult(0, HEAD + "\n", "")
+        assert "live integration PR" in validate_finalization_context(ctx)
+    ctx.forge.list_open_prs.return_value[0] = replace(
+        ctx.forge.list_open_prs.return_value[0], head_sha=HEAD
+    )
+
+    # 4. Non-terminal phase (e.g. NOT_STARTED)
+    ctx.semantic_review_state = replace(
+        ctx.semantic_review_state, phase=SemanticReviewPhase.NOT_STARTED
+    )
+    with patch("orchestune.integrator.attempt.run_git") as run:
+        run.return_value = GitResult(0, HEAD + "\n", "")
+        assert "phase is not passed: not_started" in validate_finalization_context(ctx)
+
+
+def test_validate_finalization_context_requires_override_when_mode_is_not_off():
+    """#1384: required and advisory require human override for SKIPPED_BY_HUMAN."""
+    from orchestune.review.semantic_gate import SemanticReviewHumanOverrideV1
+
+    ctx = _finalization_context()
+    ctx.semantic_review_state = replace(
+        ctx.semantic_review_state, phase=SemanticReviewPhase.SKIPPED_BY_HUMAN
+    )
+
+    with patch("orchestune.integrator.attempt.run_git") as run:
+        run.return_value = GitResult(0, HEAD + "\n", "")
+
+        # In required mode without override
+        ctx.config.semantic_review_mode = "required"
+        ctx.semantic_review_override = None
+        assert (
+            validate_finalization_context(ctx) == "human override evidence is missing"
+        )
+
+        # In advisory mode without override
+        ctx.config.semantic_review_mode = "advisory"
+        ctx.semantic_review_override = None
+        assert (
+            validate_finalization_context(ctx) == "human override evidence is missing"
+        )
+
+        # With override matching attempt_id and head_sha
+        ctx.config.semantic_review_mode = "required"
+        ctx.semantic_review_override = SemanticReviewHumanOverrideV1(
+            attempt_id=ctx.semantic_review_state.attempt_id,
+            head_sha=HEAD,
+            reason="human approved",
+        )
+        assert validate_finalization_context(ctx) is None
+
+        # With override having mismatched head_sha
+        ctx.semantic_review_override = SemanticReviewHumanOverrideV1(
+            attempt_id=ctx.semantic_review_state.attempt_id,
+            head_sha="x" * 40,
+            reason="human approved",
+        )
+        assert (
+            validate_finalization_context(ctx)
+            == "human override does not match the passed head"
+        )

@@ -223,6 +223,7 @@ class TestRunSemanticIntegrator:
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
+            semantic_review_mode="advisory",
         )
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
@@ -252,6 +253,7 @@ class TestRunSemanticIntegrator:
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
+            semantic_review_mode="advisory",
         )
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
@@ -274,6 +276,7 @@ class TestRunSemanticIntegrator:
             run_state_path=tmp_path / "run_state.json",
             worktree_root=tmp_path / "worktrees",
             dispatch_target=LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
+            semantic_review_mode="advisory",
         )
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
@@ -288,6 +291,48 @@ class TestRunSemanticIntegrator:
         assert result.status == PhaseStatus.SUCCESS
         integrator_config = mock_integrator_cls.call_args.args[0]
         assert integrator_config.enable_semantic_review is False
+
+    def test_required_mode_enables_semantic_review_regardless_of_target_and_flag(
+        self, tmp_path
+    ):
+        """#1384: required mode enables semantic review for all targets and flags."""
+        from orchestune.dispatch.postcycle import _build_integrator_config
+
+        targets = [
+            ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
+            LocalProcessDispatchTarget(log_dir=tmp_path / "logs"),
+        ]
+        for target in targets:
+            for flag in (True, False):
+                config = DispatcherConfig(
+                    parent_issue_number=100,
+                    events_log_path=tmp_path / "events.jsonl",
+                    run_state_path=tmp_path / "run_state.json",
+                    worktree_root=tmp_path / "worktrees",
+                    dispatch_target=target,
+                    semantic_review_mode="required",
+                )
+                integrator_cfg = _build_integrator_config(
+                    config, semantic_review_enabled=flag
+                )
+                assert integrator_cfg.enable_semantic_review is True
+                assert integrator_cfg.coordinator is None
+
+    def test_off_mode_disables_semantic_review_and_coordinator(self, tmp_path):
+        """#1384: off mode always disables semantic review and coordinator."""
+        from orchestune.dispatch.postcycle import _build_integrator_config
+
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
+            semantic_review_mode="off",
+        )
+        integrator_cfg = _build_integrator_config(config, semantic_review_enabled=True)
+        assert integrator_cfg.enable_semantic_review is False
+        assert integrator_cfg.coordinator is None
 
     def test_propagates_ci_command_from_dispatcher_config(self, tmp_path):
         """#394: `DispatcherConfig.ci_command`が`IntegratorConfig.ci_command`
