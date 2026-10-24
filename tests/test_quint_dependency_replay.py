@@ -103,8 +103,11 @@ def stored_trace() -> StoredTraceCache:
 
 @pytest.fixture(scope="module")
 def model_scenario() -> Iterator[ScenarioRunCache]:
-    """Worker-scoped cache for deterministic scripted Quint scenario runs (#1367)."""
-    with ScenarioRunCache() as cache:
+    """Worker-scoped cache for deterministic scripted Quint scenario runs (#1367, #1399)."""
+    session_dir = (
+        (ROOT / REPLAY_DIR / "_scenario_cache").resolve() if REPLAY_DIR else None
+    )
+    with ScenarioRunCache(session_dir=session_dir) as cache:
         yield cache
 
 

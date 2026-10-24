@@ -20,12 +20,15 @@ The correspondence between model actions and harness operations is the
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
+import signal
 import subprocess
+import sys
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -113,6 +116,52 @@ def pinned_quint_version() -> str:
     return version
 
 
+def _terminate_process_tree(proc: subprocess.Popen[str]) -> None:
+    """Kill a timed-out tool and every process that inherited its pipes."""
+    if sys.platform == "win32":
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+    else:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+    with contextlib.suppress(OSError):
+        proc.kill()
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        proc.communicate(timeout=5)
+
+
+def _run_bounded(
+    command: Sequence[str],
+    timeout: float,
+) -> subprocess.CompletedProcess[str]:
+    popen_kwargs: dict[str, Any] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+    }
+    if sys.platform != "win32":
+        popen_kwargs["start_new_session"] = True
+    proc = subprocess.Popen(command, **popen_kwargs)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _terminate_process_tree(proc)
+        raise
+    return subprocess.CompletedProcess(
+        command,
+        proc.returncode if proc.returncode is not None else -1,
+        stdout,
+        stderr,
+    )
+
+
 @lru_cache(maxsize=1)
 def quint_executable() -> Path:
     name = "quint.cmd" if os.name == "nt" else "quint"
@@ -122,13 +171,15 @@ def quint_executable() -> Path:
             f"{executable} is missing: run scripts/quint-check.sh "
             "(scripts/quint-check.ps1 on Windows); Quint is a required tool"
         )
-    done = subprocess.run(
-        [str(executable), "--version"],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
+    try:
+        done = _run_bounded(
+            [str(executable), "--version"],
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired as expired:
+        raise ToolError(
+            f"quint timed out after 120s: {[str(executable), '--version']}"
+        ) from expired
     if done.returncode != 0 or done.stdout.strip() != pinned_quint_version():
         raise ToolError(
             f"quint {done.stdout.strip() or done.stderr.strip()!r} is installed, "
@@ -225,14 +276,9 @@ def run_model(
         out_dir.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     try:
-        done = subprocess.run(
+        done = _run_bounded(
             command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=bounds.timeout,
-            check=False,
         )
     except subprocess.TimeoutExpired as expired:
         raise ToolError(
