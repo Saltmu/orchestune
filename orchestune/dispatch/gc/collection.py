@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +40,9 @@ from orchestune.ledger.completion_reservations import (
     completion_handoff_matches_active,
 )
 from orchestune.ledger.run_state import (
+    GC_RELEASE_OPERATION,
     ActiveWorktree,
+    gc_release_receipt_key,
     load_run_state_readonly,
     parse_active_worktrees,
 )
@@ -160,18 +163,53 @@ def _remove_verified_worktree(
     return None
 
 
+def _gc_release_receipt(
+    active: ActiveWorktree, snapshot: Any, workspace: ClaimWorkspace
+) -> dict[str, Any]:
+    """#1381: evidence that lets the next claim take over the retained worktree."""
+    return {
+        "schema_version": 1,
+        "operation": GC_RELEASE_OPERATION,
+        "repository_id": workspace.repository_identity,
+        "issue_number": active.core.issue_number,
+        "claim_id": active.claim.claim_id,
+        "completion_id": active.completion.completion_id,
+        "completion_result": active.completion.completion_result,
+        "branch": active.core.branch,
+        "worktree_path": str(_absolute_worktree_path(active, workspace).resolve()),
+        "base_sha": active.claim.base_sha,
+        "worktree_action": "retain",
+        # `_apply_release` checked `collection_stop_problem` just before this write.
+        "stop_confirmed": True,
+        "recorded_at": datetime.now(UTC).isoformat(),
+        "active": snapshot,
+    }
+
+
 def _updated_state_after_release(
     key: str,
     active: ActiveWorktree,
     plan: HandoffPlan,
     raw: dict[str, Any],
+    workspace: ClaimWorkspace,
     task: TaskMetadata | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     updated = copy.deepcopy(raw)
     active_records = updated.get("active_worktrees")
     if not isinstance(active_records, dict) or key not in active_records:
         return None, "state_changed"
-    del active_records[key]
+    snapshot = active_records.pop(key)
+    if plan.worktree_action == "retain":
+        receipts = updated.setdefault("recovery_receipts", {})
+        if not isinstance(receipts, dict):
+            return None, "recovery_receipts_invalid"
+        receipts[
+            gc_release_receipt_key(
+                workspace.repository_identity,
+                active.core.issue_number,
+                active.claim.claim_id,
+            )
+        ] = _gc_release_receipt(active, snapshot, workspace)
     outcome = plan.outcome
     if outcome is not None and outcome.result == "done":
         completed = updated.setdefault("completed_worktrees", [])
@@ -223,7 +261,9 @@ def _apply_release(
     current = fresh.get(key)
     if current is None or not same_execution(current, active):
         return False, "state_changed"
-    updated, reason = _updated_state_after_release(key, active, plan, raw, task)
+    updated, reason = _updated_state_after_release(
+        key, active, plan, raw, workspace, task
+    )
     if reason or updated is None:
         return False, reason or "state_update_failed"
     try:

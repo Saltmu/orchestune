@@ -31,3 +31,16 @@ operations and saves; physical GC also holds the claim lock. Different state pat
 are separate exclusion domains. Legacy `handed_off_to_gc` stays held until verified
 migration; recover publication with the original completion ID and matching claim marker.
 
+A retained worktree keeps its claim marker, and GC saves a `gc-release` recovery
+receipt in the same write that removes the active entry. The next claim of that
+Issue reuses the same worktree, branch, HEAD, index and uncommitted files only after
+it matches the receipt with the completion journal and replay evidence, confirms the
+released execution has stopped, and finds every retained change inside its own
+footprint. It never resets, cleans, stashes or commits the retained work, and the
+rollback of a failed launch never deletes the reused worktree or branch. The receipt records the
+takeover as `prepared`, `active_saved` and `completed`, so an interrupted claim resumes
+with the same old and new generations. Without that evidence claim stops with
+`claim_id_mismatch`, naming the old claim, branch, path and missing evidence for
+manual review; do not rewrite the marker by hand. Released generations, including
+GC-released ones, are never restored from launch journals or labels.
+

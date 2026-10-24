@@ -864,12 +864,24 @@ def usage_limit_wait(
     return None
 
 
+GC_RELEASE_OPERATION = "gc-release"
+"""#1381: GC released a generation but retained its worktree and marker."""
+
+_RELEASE_OPERATIONS = frozenset({"release", GC_RELEASE_OPERATION})
+
+
+def gc_release_receipt_key(
+    repository_id: str, issue_number: int, claim_id: str | None
+) -> str:
+    return f"{repository_id}::{issue_number}::{claim_id}::{GC_RELEASE_OPERATION}"
+
+
 def claim_was_released(
     state: RunState, issue_number: int, claim_id: str | None
 ) -> bool:
-    """Prevent recovery from resurrecting an explicitly released generation."""
+    """Prevent recovery from resurrecting an explicitly or GC-released generation."""
     return any(
-        receipt.get("operation") == "release"
+        receipt.get("operation") in _RELEASE_OPERATIONS
         and receipt.get("issue_number") == issue_number
         and receipt.get("claim_id") == claim_id
         for receipt in state.recovery_receipts.values()
@@ -879,7 +891,7 @@ def claim_was_released(
 def attempt_was_released(state: RunState, issue_number: int, attempt_id: str) -> bool:
     """A released claim's launch journal must not reconstruct another generation."""
     return any(
-        receipt.get("operation") == "release"
+        receipt.get("operation") in _RELEASE_OPERATIONS
         and receipt.get("issue_number") == issue_number
         and receipt.get("active", {}).get("launch_attempt_id") == attempt_id
         for receipt in state.recovery_receipts.values()

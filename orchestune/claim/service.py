@@ -43,6 +43,11 @@ from orchestune.claim.workspace import (
     check_repository_identity_match,
     resolve_claim_workspace,
 )
+from orchestune.claim.worktree_reclaim import (
+    begin_worktree_reclaim,
+    record_takeover_stage,
+    takeover_rejection_message,
+)
 from orchestune.forge import Forge, ForgeGraphQLUnavailableError, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
@@ -250,23 +255,32 @@ def _prepare_worktree_for_reservation(
     canonical_branch: str,
     base_ref: str,
     raw_token: str,
-    issue_number: int,
-    claim_id: str | None,
+    reservation: ActiveWorktree,
+    run_state: RunState,
 ) -> tuple[WorktreePreparation | None, ClaimOutcome | None]:
-    """Execute worktree preparation, returning structured failure on exception or rejection."""
+    """Execute worktree preparation, returning structured failure on exception or rejection.
+
+    #1381: a retained worktree of a GC-released generation is taken over only
+    with verified evidence, persisted as prepared before its marker moves.
+    """
     fail = partial(
         _worktree_reservation_failure,
-        issue_number=issue_number,
-        claim_id=claim_id,
+        issue_number=reservation.core.issue_number,
+        claim_id=reservation.claim.claim_id,
         canonical_branch=canonical_branch,
         raw_token=raw_token,
     )
+    reclaim, save_error = begin_worktree_reclaim(
+        run_state, workspace, reservation, save_run_state
+    )
+    if save_error is not None:
+        return None, fail(ClaimFailureReason.STATE_SAVE_FAILED, save_error)
     try:
         prep = prepare_task_worktree(
             canonical_branch,
             workspace.worktree_root,
             base_ref,
-            claim_id or "",
+            reservation.claim.claim_id or "",
             cwd=workspace.repository_root,
             # #943: この時点で`_validate_preflight_and_conflict`
             # (`evaluate_claim_conflicts`)が同じロック内で`run_state`全体を
@@ -275,6 +289,7 @@ def _prepare_worktree_for_reservation(
             # 完了・巻き戻し後の正当な再claimが、ブランチだけが残っている
             # ことを理由に永久拒否されないようにする。
             trust_unclaimed_branch=True,
+            takeover=reclaim.takeover,
         )
     except ValueError as e:
         # #943レビュー対応(Codex P2): `validate_ref_name`が送出する不正な
@@ -295,7 +310,7 @@ def _prepare_worktree_for_reservation(
     if not prep.accepted:
         return None, fail(
             ClaimFailureReason.WORKTREE_CREATION_FAILED,
-            f"prepare_task_worktree rejected: {prep.rejection_reason}",
+            takeover_rejection_message(prep.rejection_reason, reclaim),
         )
     return prep, None
 
@@ -317,14 +332,14 @@ def _prepare_and_persist_worktree(
     run_state: RunState,
     raw_token: str,
 ) -> tuple[ActiveWorktree, ClaimOutcome | None]:
-    """Create the worktree and update reservation to ACTIVE_SAVED."""
+    """Create (or take over) the worktree and update reservation to ACTIVE_SAVED."""
     prep, prep_failure = _prepare_worktree_for_reservation(
         workspace,
         canonical_branch,
         base_ref,
         raw_token,
-        reservation.core.issue_number,
-        reservation.claim.claim_id,
+        reservation,
+        run_state,
     )
     if prep_failure is not None or prep is None:
         return reservation, prep_failure
@@ -341,6 +356,7 @@ def _prepare_and_persist_worktree(
         ),
     )
     _replace_held_reservation(run_state, previous, reservation)
+    record_takeover_stage(run_state, reservation)
     try:
         save_run_state(run_state, workspace.run_state_path)
     except Exception as e:
@@ -502,6 +518,7 @@ def _transition_labels_and_finalize(
         dataclasses.replace(reservation.claim, claim_stage=ClaimStage.COMPLETED.value),
     )
     _replace_held_reservation(run_state, previous, reservation)
+    record_takeover_stage(run_state, reservation)
     try:
         save_run_state(run_state, workspace.run_state_path)
     except Exception as e:
