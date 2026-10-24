@@ -30,6 +30,19 @@ class WorktreePreparation:
     rejection_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class MarkerTakeover:
+    """#1381: permission to move a retained worktree to a new claim generation.
+
+    ``verify`` runs under the worktree claim lock and returns a rejection
+    reason, or None when the retained checkout may change hands. The caller
+    owns the ledger evidence; this module only compares and rewrites the marker.
+    """
+
+    previous_claim_ids: frozenset[str]
+    verify: Callable[[Path], str | None]
+
+
 def local_or_remote_branch_exists(
     branch_name: str,
     cwd: str | Path | None = None,
@@ -283,6 +296,58 @@ def _prepare_worktree_unclaimed(
     )
 
 
+def _take_over_worktree(
+    worktree_path: Path,
+    branch: str,
+    claim_id: str,
+    marker: dict[str, Any],
+    takeover: MarkerTakeover,
+    cwd: str | Path | None = None,
+) -> WorktreePreparation:
+    """Reuse the retained checkout as-is; nothing here touches its content."""
+    reason: str | None = None
+    if worktree_path.is_symlink() or not worktree_path.is_dir():
+        reason = "takeover_worktree_missing"
+    elif not verify_worktree_identity(worktree_path, branch, repository_root=cwd):
+        reason = "stale_marker_unverified_worktree"
+    elif problem := takeover.verify(worktree_path):
+        reason = f"takeover_rejected: {problem}"
+    if reason is not None:
+        return WorktreePreparation(
+            worktree_path=worktree_path,
+            branch=branch,
+            accepted=False,
+            rejection_reason=reason,
+        )
+    base_sha = marker.get("base_sha")
+    write_claim_marker(
+        worktree_path,
+        claim_id=claim_id,
+        branch=branch,
+        base_sha=base_sha,
+        branch_created=bool(marker.get("branch_created", False)),
+    )
+    # created=False keeps launch-failure rollback away from the retained work.
+    return WorktreePreparation(
+        worktree_path=worktree_path,
+        branch=branch,
+        accepted=True,
+        created=False,
+        base_sha=base_sha,
+    )
+
+
+def _takes_over(
+    marker: dict[str, Any], branch: str, claim_id: str, takeover: MarkerTakeover
+) -> bool:
+    previous = marker.get("claim_id")
+    return (
+        marker.get("branch") == branch
+        and previous != claim_id
+        and previous in takeover.previous_claim_ids
+    )
+
+
 def prepare_task_worktree(
     branch: str,
     worktree_root: str | Path,
@@ -291,13 +356,22 @@ def prepare_task_worktree(
     *,
     cwd: str | Path | None = None,
     trust_unclaimed_branch: bool = False,
+    takeover: MarkerTakeover | None = None,
 ) -> WorktreePreparation:
-    """Prepare a claim-owned worktree without force-removing unknown state."""
+    """Prepare a claim-owned worktree without force-removing unknown state.
+
+    A marker of another generation is rejected unless ``takeover`` names it and
+    its verification passes under the same lock (#1381).
+    """
     worktree_root_path = Path(worktree_root)
     worktree_path = resolve_worktree_path(worktree_root_path, branch)
     with file_lock(claim_lock_path(worktree_path)):
         marker = read_claim_marker(worktree_path)
         if marker is not None:
+            if takeover is not None and _takes_over(marker, branch, claim_id, takeover):
+                return _take_over_worktree(
+                    worktree_path, branch, claim_id, marker, takeover, cwd=cwd
+                )
             if marker.get("claim_id") != claim_id or marker.get("branch") != branch:
                 return WorktreePreparation(
                     worktree_path=worktree_path,

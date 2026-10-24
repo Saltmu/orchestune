@@ -8,7 +8,7 @@ and review discoveries separately rather than rewriting the original decisions.
 
 ## 1. Enumerate
 
-List the functions, classes, fields, constants, config keys and CLI options you intend to change.
+List the functions, classes, fields, constants, config keys and CLI options you intend to change; for a CLI option, also find tests that pin the parser's option set or groups (e.g. `tests/test_dispatcher_cli_options.py`) and add them to the footprint.
 Collect references with Serena (`find_symbol`, `find_referencing_symbols`, `get_symbols_overview`),
 which distinguishes same-named fields on different types. If unavailable, use `rg` / `grep`,
 record the fallback and manually distinguish same-named symbols; never skip investigation.
