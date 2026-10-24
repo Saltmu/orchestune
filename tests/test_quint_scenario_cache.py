@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -336,6 +336,144 @@ def test_scenario_run_cache_unexpected_trace_count(tmp_path: Path) -> None:
     ) as cache:
         with pytest.raises(ReplayFormatError, match="expected 1 ITF trace"):
             cache.get("final_apply")
+
+
+def test_scenario_run_cache_cross_instance_disk_hit(tmp_path: Path) -> None:
+    shared_dir = tmp_path / "shared_cache"
+    calls: list[str] = []
+
+    def runner(scenario: str, out_dir: Path | None = None) -> ModelRun:
+        assert out_dir is not None
+        calls.append(scenario)
+        return _fake_ok_runner(out_dir, scenario)
+
+    # First instance runs cold and writes to disk cache
+    with ScenarioRunCache(
+        known_scenarios=("final_apply",),
+        runner=runner,
+        session_dir=shared_dir,
+    ) as cache1:
+        run1 = cache1.get("final_apply")
+        assert len(calls) == 1
+        assert run1.outcome == "ok"
+        meta_file = shared_dir / "final_apply" / ".model_run.json"
+        assert meta_file.is_file()
+
+    # Second instance shares session_dir but has empty memory cache
+    with ScenarioRunCache(
+        known_scenarios=("final_apply",),
+        runner=runner,
+        session_dir=shared_dir,
+    ) as cache2:
+        run2 = cache2.get("final_apply")
+        # Runner was NOT called again; served from disk cache
+        assert len(calls) == 1
+        assert run2.outcome == "ok"
+        assert run2.returncode == run1.returncode
+        assert run2.command == run1.command
+        assert run2.seconds == run1.seconds
+        assert run2.traces[0] == run1.traces[0]
+        assert run2.traces[0].is_file()
+
+
+def test_scenario_run_cache_lock_contention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orchestune.infra.process_utils import FileLockContentionError
+
+    def contended_lock(*args: Any, **kwargs: Any) -> Any:
+        raise FileLockContentionError("contended")
+
+    monkeypatch.setattr("tests.quint_scenario_cache_support.file_lock", contended_lock)
+
+    with ScenarioRunCache(
+        known_scenarios=("final_apply",),
+        runner=lambda s, out_dir=None: _fake_ok_runner(out_dir or tmp_path, s),
+        session_dir=tmp_path / "session",
+    ) as cache:
+        with pytest.raises(ToolError, match="lock contention timed out"):
+            cache.get("final_apply")
+
+
+def test_scenario_run_cache_corrupt_disk_metadata_ignored_and_recomputed(
+    tmp_path: Path,
+) -> None:
+    shared_dir = tmp_path / "corrupt_cache"
+    scenario_dir = shared_dir / "final_apply"
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    # Write invalid json
+    (scenario_dir / ".model_run.json").write_text("{corrupt-json", encoding="utf-8")
+
+    calls: list[str] = []
+
+    def runner(scenario: str, out_dir: Path | None = None) -> ModelRun:
+        assert out_dir is not None
+        calls.append(scenario)
+        return _fake_ok_runner(out_dir, scenario)
+
+    with ScenarioRunCache(
+        known_scenarios=("final_apply",),
+        runner=runner,
+        session_dir=shared_dir,
+    ) as cache:
+        run = cache.get("final_apply")
+        assert len(calls) == 1
+        assert run.outcome == "ok"
+        # .model_run.json was rewritten with valid metadata
+        assert (scenario_dir / ".model_run.json").is_file()
+
+
+def test_scenario_run_cache_stale_traces_cleaned_before_runner(tmp_path: Path) -> None:
+    shared_dir = tmp_path / "stale_cache"
+    scenario_dir = shared_dir / "final_apply"
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    stale_trace = scenario_dir / "trace_stale.itf.json"
+    stale_trace.write_text("{}", encoding="utf-8")
+
+    def runner(scenario: str, out_dir: Path | None = None) -> ModelRun:
+        assert out_dir is not None
+        # Verify stale trace was deleted before runner execution
+        assert not stale_trace.exists()
+        return _fake_ok_runner(out_dir, scenario)
+
+    with ScenarioRunCache(
+        known_scenarios=("final_apply",),
+        runner=runner,
+        session_dir=shared_dir,
+    ) as cache:
+        run = cache.get("final_apply")
+        assert run.outcome == "ok"
+        assert not stale_trace.exists()
+
+
+def test_model_scenario_fixture_with_and_without_replay_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_quint_dependency_replay import model_scenario
+
+    fixture_fn = cast(Any, model_scenario).__wrapped__
+
+    # Without REPLAY_DIR
+    monkeypatch.setattr("tests.test_quint_dependency_replay.REPLAY_DIR", None)
+    gen1 = fixture_fn()
+    cache1 = next(gen1)
+    try:
+        assert cache1._owns_dir is True
+    finally:
+        next(gen1, None)
+
+    # With REPLAY_DIR
+    replay_dir = tmp_path / "replay_session"
+    monkeypatch.setattr(
+        "tests.test_quint_dependency_replay.REPLAY_DIR", str(replay_dir)
+    )
+    gen2 = fixture_fn()
+    cache2 = next(gen2)
+    try:
+        assert cache2._owns_dir is False
+        assert cache2.session_dir == (replay_dir / "_scenario_cache").resolve()
+    finally:
+        next(gen2, None)
 
 
 # ---- StoredTraceCache tests --------------------------------------------------
