@@ -241,6 +241,7 @@ class TestSemanticReview:
             parent_issue_number=100,
             apply=True,
             child_review_gate="required",
+            semantic_review_mode="required",
             force_integration_review=True,
         )
         assert config.enable_semantic_review is True

@@ -1,6 +1,6 @@
 """E2E scenario tests for Layer-2 Semantic Review Gate (#1033 / #1363).
 
-Covers all 19 required acceptance scenarios:
+Covers all 20 required acceptance scenarios:
 1. Single-task Fast-Path (bypasses layer 2 when single child passes layer 1)
 2. Single-task Layer 1 blocked (stops when child lacks pass evidence)
 3. Two-task review -> fix -> promotion -> CI -> re-review -> automerge
@@ -20,6 +20,7 @@ Covers all 19 required acceptance scenarios:
 17. Multi-commit child Fast-Path (descendant of base passes fast-path)
 18. Finalization ownership (Runner saves PASSED, Integrator updates parent ref)
 19. Bot non-acknowledgment and unsupported triggers
+20. Mode transitions and gating (required -> pending -> off -> skip -> finalize, off -> required rejection)
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import patch
 
 import pytest
 
@@ -36,6 +38,10 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.semantic_review_adapters import (
     SemanticOperationResult,
     validate_semantic_review_preflight,
+)
+from orchestune.infra.git_cli import GitResult
+from orchestune.integrator.attempt import (
+    validate_finalization_context,
 )
 from orchestune.integrator.semantic_claim import ClaimResult, SemanticClaim
 from orchestune.review.semantic_gate import (
@@ -53,6 +59,7 @@ from tests.dispatch.test_postcycle_semantic_review import (
     CHILDREN,
     FIXED,
     HEAD,
+    IDENTITY,
     PARENT,
     PR,
     T0,
@@ -68,7 +75,7 @@ def e2e_world(tmp_path: Path) -> World:
 
 
 class TestLayer2SemanticReviewGateE2E:
-    """19 comprehensive E2E scenario tests covering the Layer-2 gate lifecycle."""
+    """20 comprehensive E2E scenario tests covering the Layer-2 gate lifecycle."""
 
     def test_scenario_01_single_task_fast_path(self, e2e_world: World) -> None:
         """Scenario 1: Single child task with Layer 1 pass passes via Fast-Path without review."""
@@ -412,3 +419,63 @@ class TestLayer2SemanticReviewGateE2E:
         )
         assert not preflight_res.ok
         assert preflight_res.error_code == "trigger_unsupported"
+
+    def test_scenario_20_mode_transitions_and_gating(self, tmp_path: Path) -> None:
+        """Scenario 20: #1384: Mode transitions and gating:
+        1. required -> Runner pending, Integrator blocks finalization.
+        2. switch required -> off: Runner saves SKIPPED_BY_HUMAN (mode_off), Integrator finalizes without override.
+        3. switch off -> required: Integrator rejects SKIPPED_BY_HUMAN without human override.
+        """
+        world = World(tmp_path, semantic_review_mode="required")
+        world.seed(phase=P.NOT_STARTED, ci_verified_sha=HEAD)
+
+        # 1. required mode: Runner advances to review_pending
+        report = world.cycle()
+        assert report["next_phase"] == "review_pending"
+        assert world.state.phase is P.REVIEW_PENDING
+
+        integrator_ctx = SimpleNamespace(
+            attempt_identity=IDENTITY,
+            semantic_review_state=world.state,
+            semantic_review_override=None,
+            integration_pr_number=PR,
+            repository_root=tmp_path,
+            forge=world.forge(),
+            config=SimpleNamespace(
+                parent_issue_number=PARENT,
+                semantic_review_mode="required",
+                enable_semantic_review=True,
+                child_review_gate="required",
+                coordinator=None,
+                force_integration_review=False,
+            ),
+        )
+        with patch("orchestune.integrator.attempt.run_git") as run:
+            run.return_value = GitResult(0, HEAD + "\n", "")
+            assert (
+                validate_finalization_context(integrator_ctx)
+                == "semantic review phase is not passed: review_pending"
+            )
+
+        # 2. Switch to mode="off": Runner advances pending attempt to SKIPPED_BY_HUMAN (mode_off)
+        world.config.semantic_review_mode = "off"
+        report = world.cycle()
+        assert report["next_phase"] == "skipped_by_human"
+        assert report["details"]["reason"] == "mode_off"
+        assert world.state.phase is P.SKIPPED_BY_HUMAN
+
+        # Integrator in mode="off" finalizes without human override
+        integrator_ctx.config.semantic_review_mode = "off"
+        integrator_ctx.semantic_review_state = world.state
+        with patch("orchestune.integrator.attempt.run_git") as run:
+            run.return_value = GitResult(0, HEAD + "\n", "")
+            assert validate_finalization_context(integrator_ctx) is None
+
+        # 3. Switch off -> required: Integrator rejects skip without human override
+        integrator_ctx.config.semantic_review_mode = "required"
+        with patch("orchestune.integrator.attempt.run_git") as run:
+            run.return_value = GitResult(0, HEAD + "\n", "")
+            assert (
+                validate_finalization_context(integrator_ctx)
+                == "human override evidence is missing"
+            )
