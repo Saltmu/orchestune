@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.dag.graph import build_dag
-from orchestune.dag.parsing import _parse_subtask, extract_frontmatter
+from orchestune.dag.parsing import extract_frontmatter
 from orchestune.forge import GitHubForge
 from orchestune.integrator.pr import mark_parent_final_pr_pending
 from orchestune.issue_parsing import (
@@ -17,6 +17,7 @@ from orchestune.issue_parsing import (
 from orchestune.labels import StatusLabel
 from orchestune.plan_writer import validate_subtask_issue_number_targets
 from orchestune.provisioning.plan import GITHUB_ISSUE_BODY_LIMIT
+from orchestune.provisioning.plan_manifest import PROJECTED_ISSUE_NUMBER
 from orchestune.provisioning.rendering import (
     build_subtask_issue_body,
     validate_template_identity_marker,
@@ -36,11 +37,12 @@ from orchestune.remediation.models import (
     RemediationSpec,
 )
 from orchestune.remediation.operations import link_child, register_child
+from orchestune.remediation.plan_sources import build_dag_subtasks
 from orchestune.remediation.preview import build_remediation_preview
 from orchestune.remediation.snapshot import collect_remediation_snapshot
 from orchestune.remediation.spec import load_remediation_spec, positive_number
 
-PROJECTED_NUMBER = 10**10 - 1
+PROJECTED_NUMBER = PROJECTED_ISSUE_NUMBER
 
 
 def _entries(
@@ -103,7 +105,8 @@ def _prepare(
                 by_id[dependency].get("issue_number"),
                 f"dependency {dependency} issue_number",
             )
-    build_dag([_parse_subtask(e) for e in plan["subtasks"]], repo_root=root)
+    validation_subtasks = build_dag_subtasks(plan["subtasks"], snapshot, spec.tasks)
+    build_dag(validation_subtasks, repo_root=root)
     return _bodies(spec, snapshot, preview, template_path, root), raw
 
 
@@ -163,6 +166,7 @@ def _finish(
     numbers: dict[str, int],
     raw: dict[str, Any],
     path: Path,
+    template: str | None = None,
 ) -> None:
     plan = decomposition_plan_from_parent_body(snapshot.parent.body)
     assert plan is not None
@@ -190,7 +194,7 @@ def _finish(
     mark_parent_final_pr_pending(snapshot.parent.number, fresh.children, forge)
     if any(pr.state.upper() == "OPEN" for pr in fresh.final_prs):
         checked = collect_remediation_snapshot(forge, snapshot.parent.number, spec)
-        decision = build_remediation_preview(spec, checked)
+        decision = build_remediation_preview(spec, checked, template=template)
         if any("final-pr" in item.remaining_steps for item in decision.tasks):
             raise ValueError("final PR pending update is incomplete")
     audit_once(
@@ -247,7 +251,11 @@ class _Rejected(ValueError):
 
 
 def _validated_preview(
-    forge: Any, path: Path, confirm_token: str, parent_issue_number: int | None
+    forge: Any,
+    path: Path,
+    confirm_token: str,
+    parent_issue_number: int | None,
+    template: str | None = None,
 ) -> tuple[RemediationSpec, RemediationSnapshot, RemediationPreview]:
     spec = load_remediation_spec(path)
     if parent_issue_number is not None and spec.parent_issue_number not in (
@@ -262,7 +270,7 @@ def _validated_preview(
         "parent_issue_number",
     )
     snapshot = collect_remediation_snapshot(forge, parent, spec)
-    preview = build_remediation_preview(spec, snapshot)
+    preview = build_remediation_preview(spec, snapshot, template=template)
     if confirm_token != preview.preview_token:
         raise _Rejected(3, "Confirmed preview token is stale; run preview again")
     if preview.exit_code:
@@ -271,6 +279,41 @@ def _validated_preview(
             "; ".join(p.message for p in preview.problems) or "All tasks registered",
         )
     return spec, snapshot, preview
+
+
+def _preflight_remediation(
+    forge: Any,
+    path: Path,
+    confirm_token: str,
+    parent_issue_number: int | None,
+    template_path: str | Path,
+    repo_root: str | Path | None,
+) -> tuple[
+    RemediationSpec,
+    RemediationSnapshot,
+    RemediationPreview,
+    dict[str, str],
+    dict[str, Any],
+    str,
+]:
+    template = Path(template_path).read_text(encoding="utf-8")
+    validate_template_identity_marker(template, template_path)
+    spec, snapshot, preview = _validated_preview(
+        forge, path, confirm_token, parent_issue_number, template=template
+    )
+    parent = snapshot.parent.number
+    bodies, raw = _prepare(
+        spec, snapshot, preview, path, template_path, Path(repo_root or Path.cwd())
+    )
+    # Recheck parent, children, and local spec immediately before the first write.
+    fresh_spec = load_remediation_spec(path)
+    fresh = collect_remediation_snapshot(forge, parent, fresh_spec)
+    if (
+        build_remediation_preview(fresh_spec, fresh, template=template).preview_token
+        != confirm_token
+    ):
+        raise _Rejected(3, "State changed during preflight; run preview again")
+    return spec, snapshot, preview, bodies, raw, template
 
 
 def apply_remediation(
@@ -286,20 +329,9 @@ def apply_remediation(
     forge = forge if forge is not None else GitHubForge()
     path = Path(spec_path)
     try:
-        spec, snapshot, preview = _validated_preview(
-            forge, path, confirm_token, parent_issue_number
+        spec, snapshot, preview, bodies, raw, template = _preflight_remediation(
+            forge, path, confirm_token, parent_issue_number, template_path, repo_root
         )
-        parent = snapshot.parent.number
-        bodies, raw = _prepare(
-            spec, snapshot, preview, path, template_path, Path(repo_root or Path.cwd())
-        )
-        # Recheck parent, children, and local spec immediately before the first write.
-        fresh_spec = load_remediation_spec(path)
-        fresh = collect_remediation_snapshot(forge, parent, fresh_spec)
-        if build_remediation_preview(fresh_spec, fresh).preview_token != confirm_token:
-            return RemediationResult(
-                3, "State changed during preflight; run preview again"
-            )
     except _Rejected as exc:
         return RemediationResult(exc.code, str(exc))
     except Exception as exc:
@@ -307,7 +339,7 @@ def apply_remediation(
     numbers: dict[str, int] = {}
     try:
         _register_children(forge, snapshot, preview, bodies, path, numbers)
-        _finish(forge, spec, snapshot, numbers, raw, path)
+        _finish(forge, spec, snapshot, numbers, raw, path, template=template)
     except Exception as exc:
         return RemediationResult(
             4,
@@ -316,6 +348,6 @@ def apply_remediation(
         )
     return RemediationResult(
         0,
-        f"Registered. Next orchestune dispatch -p {parent} cycle will process these tasks",
+        f"Registered. Next orchestune dispatch -p {snapshot.parent.number} cycle will process these tasks",
         tuple(numbers.values()),
     )

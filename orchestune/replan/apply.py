@@ -11,7 +11,12 @@ from orchestune.dag.parsing import extract_frontmatter_and_body
 from orchestune.forge import GitHubForge
 from orchestune.issue_parsing import embed_decomposition_plan_in_parent_body
 from orchestune.plan_writer import validate_subtask_issue_number_targets
+from orchestune.provisioning.body_parsing import validate_reversible_subtask
 from orchestune.provisioning.plan import GITHUB_ISSUE_BODY_LIMIT
+from orchestune.provisioning.plan_manifest import (
+    PROJECTED_ISSUE_NUMBER,
+    project_plan_manifest,
+)
 from orchestune.provisioning.rendering import validate_template_identity_marker
 from orchestune.replan.audit import (
     find_existing_replan_audit,
@@ -32,10 +37,6 @@ from orchestune.replan.snapshot import (
     collect_replan_snapshot,
 )
 from orchestune.validation import validate_issue_number
-
-#: Widest issue number the preflight assumes for a generation that does not exist
-#: yet, so the projected parent body never underestimates the real one.
-PROJECTED_ISSUE_NUMBER = 10**10 - 1
 
 
 class ReplanApplyForge(ReplanOperationForge, ReplanSnapshotForge, Protocol):
@@ -122,9 +123,9 @@ def _assert_parent_plan_fits(
     resolved: Mapping[str, int | None],
 ) -> None:
     """Fail closed before the first write if the new plan cannot fit the parent body."""
-
+    manifest_data = project_plan_manifest(_projected_plan_data(plan_path, resolved))
     projected = embed_decomposition_plan_in_parent_body(
-        snapshot.parent_issue.body, _projected_plan_data(plan_path, resolved)
+        snapshot.parent_issue.body, manifest_data
     )
     if len(projected) > GITHUB_ISSUE_BODY_LIMIT:
         raise ValueError(
@@ -144,7 +145,8 @@ def _switch_parent_plan(
     plan_data, _ = extract_frontmatter_and_body(
         Path(plan_path).read_text(encoding="utf-8")
     )
-    updated = embed_decomposition_plan_in_parent_body(parent.body, plan_data)
+    manifest_data = project_plan_manifest(plan_data)
+    updated = embed_decomposition_plan_in_parent_body(parent.body, manifest_data)
     if len(updated) > GITHUB_ISSUE_BODY_LIMIT:
         print(
             f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: "
@@ -233,6 +235,8 @@ def _validated_preview(
     validate_subtask_issue_number_targets(
         plan_path, (subtask.id for subtask in plan.subtasks)
     )
+    for subtask in plan.subtasks:
+        validate_reversible_subtask(subtask)
     parent = _parent_number(plan.parent_issue_number, parent_issue_number)
     snapshot = collect_replan_snapshot(forge, parent)
     preview = build_replan_preview(plan, snapshot)
@@ -305,4 +309,4 @@ def apply_replan(
     return result
 
 
-__all__ = ["apply_replan"]
+__all__ = ["PROJECTED_ISSUE_NUMBER", "apply_replan"]

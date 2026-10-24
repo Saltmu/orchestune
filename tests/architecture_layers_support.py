@@ -232,6 +232,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "remediation.body",
             "remediation.audit",
             "remediation.operations",
+            "remediation.plan_sources",
             "status_snapshot",
             "task_branch_resolution",
             "worktree_ops",

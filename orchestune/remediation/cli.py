@@ -6,6 +6,7 @@ import argparse
 import subprocess
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from orchestune.forge import GitHubForge
@@ -81,7 +82,10 @@ def main(argv: Sequence[str] | None = None, *, forge: Any = None) -> int:
         snapshot = collect_remediation_snapshot(
             forge if forge is not None else GitHubForge(), parent, spec
         )
-        preview = build_remediation_preview(spec, snapshot)
+        template = None
+        if args.template and Path(args.template).is_file():
+            template = Path(args.template).read_text(encoding="utf-8")
+        preview = build_remediation_preview(spec, snapshot, template=template)
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2

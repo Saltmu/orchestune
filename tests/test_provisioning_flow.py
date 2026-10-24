@@ -11,6 +11,7 @@ from orchestune.forge import (
 )
 from orchestune.issue_parsing import (
     PARENT_MARKER,
+    decomposition_plan_from_parent_body,
 )
 from orchestune.provisioning.flow import (
     provision_issues,
@@ -21,6 +22,7 @@ from orchestune.provisioning.subtasks import (
     _provision_subtask,
 )
 from tests.test_provisioning_support import (
+    _TEMPLATE,
     FakeForge,
 )
 
@@ -998,3 +1000,168 @@ subtasks:
                 repo_root=tmp_path,
                 parent_issue=None,
             )
+
+
+class TestParentPlanManifestProvisioning:
+    def test_seven_large_subtasks_provisions_under_64k(self, tmp_path: Path) -> None:
+        template_file = tmp_path / "issue_template.md"
+        template_file.write_text(_TEMPLATE, encoding="utf-8")
+
+        # 7 subtasks each having ~10,000 characters of prose/overview
+        subtasks_yaml = []
+        for i in range(1, 8):
+            large_prose = f"Large section prose for task {i} " * 400  # ~12,000 chars
+            subtasks_yaml.append(
+                f"  - id: task-{i}\n"
+                f"    description: Task {i}\n"
+                f"    footprint: ['src/task_{i}.py']\n"
+                f"    symbols: ['task_{i}']\n"
+                f"    depends_on: []\n"
+                f"    overview: '{large_prose}'\n"
+                f"    proposed_changes:\n      - 'Change for task {i}'\n"
+                f"    acceptance_criteria:\n      - 'Criteria for task {i}'\n"
+                f"    verification_plan:\n      - 'Verify task {i}'\n"
+                f"    issue_number: null\n"
+            )
+
+        plan_file = tmp_path / "decomposition_plan.md"
+        plan_file.write_text(
+            "---\n"
+            "title: Seven Large Tasks Rock\n"
+            "parent_issue_number: null\n"
+            "subtasks:\n" + "".join(subtasks_yaml) + "---\n",
+            encoding="utf-8",
+        )
+
+        forge = FakeForge()
+        res = provision_issues(
+            plan_path=plan_file,
+            forge=forge,
+            template_path=template_file,
+            repo_root=tmp_path,
+        )
+
+        assert res.plan_synced is True
+        assert len(res.created) == 7
+        assert res.parent_issue_number is not None
+        parent = forge.get_issue(res.parent_issue_number)
+        assert parent is not None
+        assert len(parent.body) <= 65536
+
+        extracted = decomposition_plan_from_parent_body(parent.body)
+        assert extracted is not None
+        assert extracted["plan_format"] == "manifest-v1"
+        assert len(extracted["subtasks"]) == 7
+        for st in extracted["subtasks"]:
+            assert "overview" not in st
+            assert "proposed_changes" not in st
+            assert "acceptance_criteria" not in st
+            assert "verification_plan" not in st
+            assert "footprint" not in st
+            assert "symbols" not in st
+            assert st["issue_number"] is not None
+
+    def test_preflight_overflow_aborts_without_forge_writes(
+        self, tmp_path: Path
+    ) -> None:
+        template_file = tmp_path / "issue_template.md"
+        template_file.write_text(_TEMPLATE, encoding="utf-8")
+
+        # Huge description that alone pushes projected manifest parent over 65536
+        huge_desc = "x" * 65500
+        plan_file = tmp_path / "decomposition_plan.md"
+        plan_file.write_text(
+            f"---\ntitle: Overflow Rock\ndescription: {huge_desc}\nparent_issue_number: null\n"
+            "subtasks:\n  - id: task-1\n    description: T1\n    footprint: []\n    symbols: []\n"
+            "    depends_on: []\n    issue_number: null\n---\n",
+            encoding="utf-8",
+        )
+
+        forge = FakeForge()
+        res = provision_issues(
+            plan_path=plan_file,
+            forge=forge,
+            template_path=template_file,
+            repo_root=tmp_path,
+        )
+
+        assert res.applied is True
+        assert res.plan_synced is False
+        assert res.created == {}
+        assert res.reused == {}
+        assert len(forge.issues) == 0
+        local_content = plan_file.read_text(encoding="utf-8")
+        assert "9999999999" not in local_content
+
+    def test_all_reused_subtasks_migrates_parent_to_manifest_format(
+        self, tmp_path: Path
+    ) -> None:
+        template_file = tmp_path / "issue_template.md"
+        template_file.write_text(_TEMPLATE, encoding="utf-8")
+
+        plan_file = tmp_path / "decomposition_plan.md"
+        plan_file.write_text(
+            "---\n"
+            "title: Reused Migration Rock\n"
+            "parent_issue_number: 100\n"
+            "parent_issue_source: derived\n"
+            "subtasks:\n"
+            "  - id: task-1\n"
+            "    description: T1\n"
+            "    overview: Old prose\n"
+            "    footprint: ['src/t1.py']\n"
+            "    symbols: ['t1']\n"
+            "    depends_on: []\n"
+            "    issue_number: 101\n"
+            "---\n",
+            encoding="utf-8",
+        )
+
+        forge = FakeForge()
+        old_parent_body = (
+            "[EPIC] Reused Migration Rock\n\n"
+            f"配下のサブタスクはこのIssueのSub-issueとして紐付けられます。\n\n{PARENT_MARKER}\n\n"
+            "<!-- orchestune:decomposition-plan -->\n```yaml\n"
+            "title: Reused Migration Rock\n"
+            "subtasks:\n"
+            "  - id: task-1\n"
+            "    description: T1\n"
+            "    overview: Old prose\n"
+            "    footprint: ['src/t1.py']\n"
+            "    symbols: ['t1']\n"
+            "    depends_on: []\n"
+            "    issue_number: 101\n"
+            "```"
+        )
+        forge.issues[100] = {
+            "title": "[EPIC] Reused Migration Rock",
+            "body": old_parent_body,
+            "labels": [],
+            "state": "OPEN",
+        }
+        forge.issues[101] = {
+            "title": "[FEAT] task-1: T1",
+            "body": "child body <!-- orchestune:subtask-issue -->\n```yaml\nsubtask_id: task-1\nparent_issue_number: 100\n```",
+            "labels": ["status:in-progress"],
+            "state": "OPEN",
+        }
+
+        res = provision_issues(
+            plan_path=plan_file,
+            forge=forge,
+            template_path=template_file,
+            repo_root=tmp_path,
+        )
+
+        assert res.plan_synced is True
+        assert res.reused == {"task-1": 101}
+        assert res.created == {}
+
+        parent = forge.get_issue(100)
+        assert parent is not None
+        extracted = decomposition_plan_from_parent_body(parent.body)
+        assert extracted is not None
+        assert extracted["plan_format"] == "manifest-v1"
+        st = extracted["subtasks"][0]
+        assert "overview" not in st
+        assert "footprint" not in st

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orchestune.dag.parsing import extract_frontmatter_and_body
 from orchestune.forge import IssueForge
 from orchestune.issue_parsing import PARENT_MARKER, ensure_parent_marker, is_epic_issue
 from orchestune.plan_writer import write_issue_numbers
@@ -20,6 +19,7 @@ def _resolve_explicit_parent_issue(
     parent_issue_number: int,
     plan_path: str | Path,
     metadata: PlanMetadata | None = None,
+    sync_plan: bool = True,
 ) -> tuple[int, bool]:
     issue = forge.get_issue(parent_issue_number)
     if issue is None:
@@ -52,6 +52,8 @@ def _resolve_explicit_parent_issue(
             parent_issue_number=parent_issue_number,
             parent_issue_source="adopted",
         )
+    if not sync_plan:
+        return parent_issue_number, True
     return parent_issue_number, sync_parent_decomposition_plan(
         forge, parent_issue_number, plan_path
     )
@@ -61,6 +63,7 @@ def _resolve_adopted_parent_metadata(
     forge: IssueForge,
     metadata: PlanMetadata,
     plan_path: str | Path,
+    sync_plan: bool = True,
 ) -> tuple[int, bool]:
     if metadata.parent_issue_number is None:
         raise ValueError(
@@ -83,7 +86,7 @@ def _resolve_adopted_parent_metadata(
             f"If you intended to adopt this issue, pass '--parent-issue {metadata.parent_issue_number}' explicitly."
         )
     return _resolve_explicit_parent_issue(
-        forge, metadata.parent_issue_number, plan_path, metadata
+        forge, metadata.parent_issue_number, plan_path, metadata, sync_plan=sync_plan
     )
 
 
@@ -91,6 +94,7 @@ def _resolve_derived_parent_issue(
     forge: IssueForge,
     metadata: PlanMetadata,
     plan_path: str | Path,
+    sync_plan: bool = True,
 ) -> tuple[int, bool]:
     parent_issue_number = metadata.parent_issue_number
     parent_title = f"[EPIC] {metadata.title}"
@@ -111,18 +115,17 @@ def _resolve_derived_parent_issue(
         if marked_candidate is not None:
             parent_issue_number = marked_candidate.number
         else:
-            raw_frontmatter, _ = extract_frontmatter_and_body(
-                Path(plan_path).read_text(encoding="utf-8")
-            )
             parent_issue_number = forge.create_issue(
                 parent_title,
-                _parent_body(metadata.title, metadata.description, raw_frontmatter),
+                _parent_body(metadata.title, metadata.description, None),
             )
         write_issue_numbers(
             plan_path,
             parent_issue_number=parent_issue_number,
             parent_issue_source="derived",
         )
+    if not sync_plan:
+        return parent_issue_number, True
     return parent_issue_number, sync_parent_decomposition_plan(
         forge, parent_issue_number, plan_path
     )
@@ -134,11 +137,16 @@ def _resolve_parent_issue(
     plan_path: str | Path,
     *,
     explicit_parent_issue: int | None = None,
+    sync_plan: bool = True,
 ) -> tuple[int, bool]:
     if explicit_parent_issue is not None:
         return _resolve_explicit_parent_issue(
-            forge, explicit_parent_issue, plan_path, metadata
+            forge, explicit_parent_issue, plan_path, metadata, sync_plan=sync_plan
         )
     if metadata.parent_issue_source == "adopted":
-        return _resolve_adopted_parent_metadata(forge, metadata, plan_path)
-    return _resolve_derived_parent_issue(forge, metadata, plan_path)
+        return _resolve_adopted_parent_metadata(
+            forge, metadata, plan_path, sync_plan=sync_plan
+        )
+    return _resolve_derived_parent_issue(
+        forge, metadata, plan_path, sync_plan=sync_plan
+    )

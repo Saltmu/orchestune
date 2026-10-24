@@ -8,7 +8,10 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from orchestune.integrator.parent_branch_state import is_current_parent_branch_merged
-from orchestune.issue_parsing import find_children_by_parent
+from orchestune.issue_parsing import (
+    decomposition_plan_from_parent_body,
+    find_children_by_parent,
+)
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.remediation.models import (
     OriginObservation,
@@ -102,6 +105,25 @@ def _final_prs(forge: Any, branch: str) -> tuple[PrRecord, ...]:
     )
 
 
+def _collect_children_with_plan(
+    forge: Any, parent_issue_number: int, parent_body: str
+) -> tuple[IssueRecord, ...]:
+    children_issues = list(find_children_by_parent(forge, parent_issue_number).issues)
+    parent_plan = decomposition_plan_from_parent_body(parent_body) or {}
+    plan_child_numbers: set[int] = set()
+    for entry in parent_plan.get("subtasks", []):
+        if isinstance(entry, dict):
+            num = entry.get("issue_number")
+            if isinstance(num, int) and not isinstance(num, bool) and num > 0:
+                plan_child_numbers.add(num)
+    existing_child_numbers = {c.number for c in children_issues}
+    for child_num in sorted(plan_child_numbers - existing_child_numbers):
+        child_issue = forge.get_issue(child_num)
+        if child_issue is not None:
+            children_issues.append(child_issue)
+    return tuple(sorted(children_issues, key=lambda i: i.number))
+
+
 def collect_remediation_snapshot(
     forge: Any, parent_issue_number: int, spec: RemediationSpec
 ) -> RemediationSnapshot:
@@ -109,12 +131,7 @@ def collect_remediation_snapshot(
     parent: IssueRecord | None = forge.get_issue(parent_issue_number)
     if parent is None:
         raise ValueError(f"parent Issue #{parent_issue_number} was not found")
-    children = tuple(
-        sorted(
-            find_children_by_parent(forge, parent_issue_number).issues,
-            key=lambda i: i.number,
-        )
-    )
+    children = _collect_children_with_plan(forge, parent_issue_number, parent.body)
     branch = f"parent/issue-{parent_issue_number}"
     finals = _final_prs(forge, branch)
     existing = tuple(

@@ -389,14 +389,34 @@ def test_incremental_parent_sync_on_partial_failure(tmp_path: Path):
             repo_root=tmp_path,
         )
 
-    # Parent issue should already exist and contain step-1's issue number
+    # Parent issue exists, but its plan block is unpublished until all subtasks finish
     parent_issue = forge.issues[100]
     extracted = decomposition_plan_from_parent_body(parent_issue["body"])
-    assert extracted is not None
-    step_1 = next(s for s in extracted["subtasks"] if s["id"] == "step-1")
-    step_2 = next(s for s in extracted["subtasks"] if s["id"] == "step-2")
-    assert step_1["issue_number"] == 101
-    assert step_2["issue_number"] is None
+    assert extracted is None
+
+    # Step-1's issue number is already saved to the local plan
+    local_plan = plan_file.read_text(encoding="utf-8")
+    assert "issue_number: 101" in local_plan
+
+    # Resuming with the saved plan file reuses step-1 and completes with single final sync
+    res = provision_issues(
+        plan_path=plan_file,
+        forge=forge,
+        template_path=template_file,
+        repo_root=tmp_path,
+    )
+    assert res.plan_synced is True
+    assert res.reused == {"step-1": 101}
+    assert "step-2" in res.created
+
+    parent_after = forge.issues[100]
+    extracted_after = decomposition_plan_from_parent_body(parent_after["body"])
+    assert extracted_after is not None
+    assert extracted_after["plan_format"] == "manifest-v1"
+    s1 = next(s for s in extracted_after["subtasks"] if s["id"] == "step-1")
+    s2 = next(s for s in extracted_after["subtasks"] if s["id"] == "step-2")
+    assert s1["issue_number"] == 101
+    assert s2["issue_number"] == res.created["step-2"]
 
 
 def test_provision_reports_plan_synced_false_on_sync_failure(tmp_path: Path):

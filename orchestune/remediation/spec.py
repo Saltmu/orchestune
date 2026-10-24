@@ -11,6 +11,7 @@ from typing import Any
 import yaml
 
 from orchestune.dag.parsing import _parse_subtask, extract_frontmatter
+from orchestune.provisioning.body_parsing import validate_reversible_subtask
 from orchestune.remediation.models import RemediationSpec, RemediationTask
 
 _REMEDIATION_KEYS = {"kind", "parent_acceptance", "origins", "reason"}
@@ -127,6 +128,8 @@ def load_remediation_spec(path: str | Path) -> RemediationSpec:
     if not isinstance(entries, list) or not entries:
         raise ValueError("subtasks must be a non-empty list")
     tasks = tuple(_task(entry) for entry in entries)
+    for t in tasks:
+        validate_reversible_subtask(t.subtask)
     ids = [task.subtask.id for task in tasks]
     numbers = [
         t.subtask.issue_number for t in tasks if t.subtask.issue_number is not None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -21,6 +22,12 @@ from orchestune.dag.parsing import extract_frontmatter_and_body
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import GitHubForge, IssueForge, RelationshipUnavailableError
 from orchestune.infra.repository_config import find_and_load_config_file
+from orchestune.issue_parsing import (
+    PARENT_MARKER,
+    embed_decomposition_plan_in_parent_body,
+    ensure_parent_marker,
+    is_epic_issue,
+)
 from orchestune.models import IssueRecord
 from orchestune.plan_writer import (
     validate_subtask_issue_number_targets,
@@ -29,10 +36,16 @@ from orchestune.plan_writer import (
 from orchestune.provisioning.body_parsing import validate_reversible_subtask
 from orchestune.provisioning.parent import _resolve_parent_issue
 from orchestune.provisioning.plan import (
+    GITHUB_ISSUE_BODY_LIMIT,
     PlanMetadata,
     _load_plan,
+    _parent_body,
     parent_only_subtask_ids,
     sync_parent_decomposition_plan,
+)
+from orchestune.provisioning.plan_manifest import (
+    PROJECTED_ISSUE_NUMBER,
+    project_plan_manifest,
 )
 from orchestune.provisioning.rendering import (
     _build_subtask_issue_body,
@@ -179,13 +192,12 @@ def _provision_subtasks_loop(
     parent_issue_number: int,
     existing_by_subtask_id: dict[str, IssueRecord],
     metadata_search_supported: bool,
-) -> tuple[dict[str, int], dict[str, int], list[str], bool]:
+) -> tuple[dict[str, int], dict[str, int], list[str]]:
     resolved_numbers: dict[str, int] = {}
     dependencies_done: dict[str, bool] = {}
     created: dict[str, int] = {}
     reused: dict[str, int] = {}
     degraded_subtask_ids: list[str] = []
-    plan_synced = True
 
     for index, subtask_id in enumerate(dag.topological_order):
         subtask = dag.subtasks[subtask_id]
@@ -218,12 +230,8 @@ def _provision_subtasks_loop(
         # ファイルを2回書き換えることになる。
         if is_reused:
             write_issue_numbers(plan_path, {subtask_id: number})
-        if not sync_parent_decomposition_plan(
-            resolved_forge, parent_issue_number, plan_path
-        ):
-            plan_synced = False
 
-    return created, reused, degraded_subtask_ids, plan_synced
+    return created, reused, degraded_subtask_ids
 
 
 def _prepare_provisioning_context(
@@ -249,30 +257,152 @@ def _prepare_provisioning_context(
     return resolved_repo_root, subtasks, metadata, validated_parent, dag, template
 
 
-def _stop_on_parent_only_subtasks(
-    forge: IssueForge, parent_issue_number: int, plan_path: str | Path
-) -> ProvisionResult | None:
-    """#814: 古いローカル計画なら、子Issueを作る前に止めた結果を返す。
+def _inspect_explicit_parent(
+    forge: IssueForge, validated_parent: int
+) -> tuple[int, str]:
+    issue = forge.get_issue(validated_parent)
+    if issue is None:
+        raise RuntimeError(
+            f"Adopted parent issue #{validated_parent} does not exist; refusing to provision subtasks under it."
+        )
+    if issue.state.upper() == "CLOSED":
+        raise RuntimeError(
+            f"Adopted parent issue #{validated_parent} is closed; refusing to adopt a closed issue as EPIC parent."
+        )
+    body = (
+        ensure_parent_marker(issue.body)
+        if PARENT_MARKER not in issue.body
+        else issue.body
+    )
+    return validated_parent, body
 
-    同期は子Issueを1件作るたびにも走るため、そこで初めて気付くと既にIssueを
-    作った後になる。
-    """
-    parent = forge.get_issue(parent_issue_number)
-    if parent is None:
-        return None
-    local_plan_data, _ = extract_frontmatter_and_body(
+
+def _inspect_adopted_parent(
+    forge: IssueForge, metadata: PlanMetadata
+) -> tuple[int, str]:
+    if metadata.parent_issue_number is None:
+        raise ValueError(
+            "decomposition_plan.md に 'parent_issue_source: adopted' が指定されていますが、"
+            "'parent_issue_number' が設定されていません"
+        )
+    candidate = forge.get_issue(metadata.parent_issue_number)
+    if candidate is None:
+        raise RuntimeError(
+            f"Adopted parent issue #{metadata.parent_issue_number} does not exist; refusing to provision subtasks under it."
+        )
+    if candidate.state.upper() == "CLOSED":
+        raise RuntimeError(
+            f"Adopted parent issue #{metadata.parent_issue_number} is closed; refusing to adopt a closed issue as EPIC parent."
+        )
+    if not is_epic_issue(candidate):
+        raise RuntimeError(
+            f"Adopted parent issue #{metadata.parent_issue_number} is not an Orchestune EPIC issue "
+            "(missing '[EPIC] ' prefix or parent marker); refusing to automatically mutate an unconfirmed issue. "
+            f"If you intended to adopt this issue, pass '--parent-issue {metadata.parent_issue_number}' explicitly."
+        )
+    return metadata.parent_issue_number, candidate.body
+
+
+def _inspect_candidate_parent(
+    forge: IssueForge,
+    metadata: PlanMetadata,
+    validated_parent: int | None,
+) -> tuple[int | None, str]:
+    if validated_parent is not None:
+        return _inspect_explicit_parent(forge, validated_parent)
+    if metadata.parent_issue_source == "adopted":
+        return _inspect_adopted_parent(forge, metadata)
+
+    parent_title = f"[EPIC] {metadata.title}"
+    if metadata.parent_issue_number is not None:
+        candidate = forge.get_issue(metadata.parent_issue_number)
+        if (
+            candidate is not None
+            and candidate.title == parent_title
+            and PARENT_MARKER in candidate.body
+        ):
+            return metadata.parent_issue_number, candidate.body
+
+    candidates = forge.find_open_issues_by_exact_title(parent_title)
+    marked = next((c for c in candidates if PARENT_MARKER in c.body), None)
+    if marked is not None:
+        return marked.number, marked.body
+
+    return None, _parent_body(metadata.title, metadata.description, None)
+
+
+def _preflight_provisioning_fit(
+    candidate_number: int | None,
+    candidate_body: str,
+    raw_frontmatter: dict,
+) -> ProvisionResult | None:
+    if candidate_number is None and len(candidate_body) > GITHUB_ISSUE_BODY_LIMIT:
+        print(
+            f"Warning: could not create parent issue: the parent template body is "
+            f"{len(candidate_body)} characters, over GitHub's {GITHUB_ISSUE_BODY_LIMIT} character limit",
+            file=sys.stderr,
+        )
+        return ProvisionResult(None, True, {}, {}, plan_synced=False)
+
+    if candidate_number is not None:
+        if parent_only := parent_only_subtask_ids(candidate_body, raw_frontmatter):
+            return ProvisionResult(
+                candidate_number,
+                True,
+                {},
+                {},
+                plan_synced=False,
+                parent_only_subtask_ids=parent_only,
+            )
+
+    projected_plan = copy.deepcopy(raw_frontmatter)
+    projected_plan["parent_issue_number"] = (
+        candidate_number if candidate_number is not None else PROJECTED_ISSUE_NUMBER
+    )
+    for subtask in projected_plan.get("subtasks", []):
+        if not isinstance(subtask, dict):
+            continue
+        num = subtask.get("issue_number")
+        if num is None:
+            subtask["issue_number"] = PROJECTED_ISSUE_NUMBER
+
+    manifest_plan = project_plan_manifest(projected_plan)
+    projected_body = embed_decomposition_plan_in_parent_body(
+        candidate_body, manifest_plan
+    )
+    if len(projected_body) > GITHUB_ISSUE_BODY_LIMIT:
+        target = f"#{candidate_number}" if candidate_number is not None else "parent"
+        print(
+            f"Warning: could not sync decomposition plan into {target}'s body: "
+            f"the projected manifest body is {len(projected_body)} characters, "
+            f"over GitHub's {GITHUB_ISSUE_BODY_LIMIT} character limit",
+            file=sys.stderr,
+        )
+        return ProvisionResult(candidate_number, True, {}, {}, plan_synced=False)
+
+    return None
+
+
+def _resolve_provision_forge(forge: IssueForge | None) -> IssueForge:
+    base = forge or GitHubForge()
+    interval = 0.2 if isinstance(base, GitHubForge) else 0
+    return cast(IssueForge, ProvisionRetryForge(base, min_interval=interval))
+
+
+def _preflight_parent_fit(
+    forge: IssueForge,
+    metadata: PlanMetadata,
+    plan_path: str | Path,
+    validated_parent: int | None,
+) -> ProvisionResult | None:
+    raw_frontmatter, _ = extract_frontmatter_and_body(
         Path(plan_path).read_text(encoding="utf-8")
     )
-    parent_only = parent_only_subtask_ids(parent.body, local_plan_data)
-    if not parent_only:
-        return None
-    return ProvisionResult(
-        parent_issue_number,
-        True,
-        {},
-        {},
-        plan_synced=False,
-        parent_only_subtask_ids=parent_only,
+    candidate_number, candidate_body = _inspect_candidate_parent(
+        forge, metadata, validated_parent
+    )
+    return _preflight_provisioning_fit(
+        candidate_number, candidate_body, raw_frontmatter
     )
 
 
@@ -285,29 +415,23 @@ def _apply_provisioning(
     template: str,
     resolved_repo_root: Path,
 ) -> ProvisionResult:
-    base_forge = forge or GitHubForge()
-    resolved_forge = cast(
-        IssueForge,
-        ProvisionRetryForge(
-            base_forge, min_interval=0.2 if isinstance(base_forge, GitHubForge) else 0
-        ),
-    )
-    parent_issue_number, parent_plan_synced = _resolve_parent_issue(
-        resolved_forge, metadata, plan_path, explicit_parent_issue=validated_parent
-    )
-    if stopped := _stop_on_parent_only_subtasks(
-        resolved_forge, parent_issue_number, plan_path
+    resolved_forge = _resolve_provision_forge(forge)
+    if preflight_failed := _preflight_parent_fit(
+        resolved_forge, metadata, plan_path, validated_parent
     ):
-        return stopped
+        return preflight_failed
+
+    parent_issue_number, _ = _resolve_parent_issue(
+        resolved_forge,
+        metadata,
+        plan_path,
+        explicit_parent_issue=validated_parent,
+        sync_plan=False,
+    )
     existing_by_subtask_id, metadata_search_supported = _index_sub_issues_by_subtask_id(
         resolved_forge, parent_issue_number
     )
-    (
-        created,
-        reused,
-        degraded_subtask_ids,
-        loop_plan_synced,
-    ) = _provision_subtasks_loop(
+    created, reused, degraded_subtask_ids = _provision_subtasks_loop(
         resolved_forge,
         dag,
         template,
@@ -317,13 +441,16 @@ def _apply_provisioning(
         existing_by_subtask_id,
         metadata_search_supported,
     )
+    plan_synced = sync_parent_decomposition_plan(
+        resolved_forge, parent_issue_number, plan_path
+    )
     return ProvisionResult(
         parent_issue_number,
         True,
         created,
         reused,
         degraded_subtask_ids=tuple(degraded_subtask_ids),
-        plan_synced=parent_plan_synced and loop_plan_synced,
+        plan_synced=plan_synced,
     )
 
 

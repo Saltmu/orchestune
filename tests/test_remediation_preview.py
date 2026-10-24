@@ -19,13 +19,29 @@ def issue(number: int, body: str = "", **kwargs: Any) -> IssueRecord:
     )
 
 
+CHILD_BODY = (
+    "# [FEAT] old: Old Task\n\n"
+    "## 概要 (Overview)\nOld overview\n\n"
+    "## 変更内容 (Proposed Changes)\n- Old change\n\n"
+    "## 受け入れ基準 (Acceptance Criteria)\n- Old works\n\n"
+    "## 修正・検証計画 (Verification Plan)\n- Old verify\n\n"
+    "## Footprint\n```yaml\n"
+    "subtask_id: old\n"
+    "footprint: [src/old.py]\n"
+    "symbols: []\n"
+    "depends_on: []\n"
+    "parent_issue_number: 1\n"
+    "```\n"
+)
+
+
 class FakeForge:
     def __init__(self) -> None:
         self.parent = issue(
             1,
             "<!-- orchestune:decomposition-plan-parent -->\n- [ ] Works\n<!-- orchestune:decomposition-plan -->\n```yaml\nsubtasks:\n- id: old\n  issue_number: 10\n  acceptance_criteria: [Old works]\n```\n",
         )
-        self.children = [issue(10)]
+        self.children = [issue(10, CHILD_BODY)]
         self.existing: dict[int, IssueRecord] = {}
         self.prs: list[PrRecord] = []
         self.comments: dict[int, list[dict[str, Any]]] = {}
@@ -279,7 +295,12 @@ def registration(tmp_path: Path, forge: FakeForge) -> str:
         "spec_revision": spec.spec_revision,
     }
     body = (
-        "```yaml\n"
+        "# [FEAT] fix: Repair\n\n"
+        "## 概要 (Overview)\nRepair overview\n\n"
+        "## 変更内容 (Proposed Changes)\n- Fix change\n\n"
+        "## 受け入れ基準 (Acceptance Criteria)\n- Works\n\n"
+        "## 修正・検証計画 (Verification Plan)\n- Verify\n\n"
+        "## Footprint\n```yaml\n"
         + yaml.safe_dump(expected_footprint(task, 1))
         + "```\n<!-- orchestune:remediation-v1 -->\n```json\n"
         + json.dumps(record)
@@ -293,16 +314,28 @@ def registration(tmp_path: Path, forge: FakeForge) -> str:
 
 def test_resume_registered_and_revision_mismatch(tmp_path: Path) -> None:
     forge = FakeForge()
+    spec = load_remediation_spec(write_spec(tmp_path))
     revision = registration(tmp_path, forge)
     result = preview(tmp_path, forge)
     assert result.exit_code == 0
     assert result.tasks[0].action == "resume"
     assert result.tasks[0].issue_number == 42
     assert "plan" in result.tasks[0].remaining_steps
+    from orchestune.remediation.body import remediation_record
+
     entry = {
         "id": "fix",
+        "description": "Repair",
+        "depends_on": [],
+        "risk": False,
+        "risk_reasons": [],
+        "priority": "medium",
+        "shared_contract": None,
+        "writes_shared_contract": False,
+        "execution_profile": None,
+        "model_tier": None,
         "issue_number": 42,
-        "remediation": {"spec_revision": revision},
+        "remediation": remediation_record(spec.tasks[0], 1, revision),
     }
     from orchestune.issue_parsing import (
         decomposition_plan_from_parent_body,

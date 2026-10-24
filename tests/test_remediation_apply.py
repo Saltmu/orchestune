@@ -381,7 +381,7 @@ def test_registered_child_enters_cycle_dependency_and_conflict_evaluation(
 
     forge = ApplyForge()
     forge.children[0] = replace(
-        issue(10, "```yaml\nsubtask_id: old\nfootprint: [src/old.py]\n```"),
+        forge.children[0],
         labels=("status:queued",),
     )
     path = write_spec(tmp_path, depends_on=["old"])

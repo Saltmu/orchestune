@@ -453,8 +453,11 @@ def parse_subtask_issue_body(template: str, title: str, body: str) -> dict[str, 
     return _assemble_subtask_result(subtask, fp_keys["parent_issue_number"])
 
 
+parse_bullet_list = _parse_bullet_list
+
 __all__ = [
     "extract_subtask_section",
+    "parse_bullet_list",
     "parse_subtask_issue_body",
     "validate_reversible_subtask",
 ]

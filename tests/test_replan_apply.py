@@ -15,6 +15,7 @@ from orchestune.issue_parsing import (
 )
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.provisioning.plan import GITHUB_ISSUE_BODY_LIMIT
+from orchestune.provisioning.plan_manifest import project_plan_manifest
 from orchestune.replan.apply import PROJECTED_ISSUE_NUMBER, apply_replan
 from orchestune.replan.audit import replan_audit_marker, retirement_marker
 from orchestune.replan.plan import load_replan_plan
@@ -557,12 +558,13 @@ def _parent_body_projecting_to(
         subtask["issue_number"] = (
             assigned.pop(0) if assigned else PROJECTED_ISSUE_NUMBER
         )
+    manifest_data = project_plan_manifest(plan_data)
 
     def build(prose_length: int) -> tuple[str, str]:
         body = embed_decomposition_plan_in_parent_body(
             "x" * prose_length + "\n", OLD_PLAN
         )
-        return body, embed_decomposition_plan_in_parent_body(body, plan_data)
+        return body, embed_decomposition_plan_in_parent_body(body, manifest_data)
 
     _, probe = build(0)
     body, projected = build(target_length - len(probe))
@@ -762,3 +764,54 @@ def test_parent_body_inflated_after_preflight_degrades_without_raising(
     assert result.degraded is True
     assert "over GitHub's 65536 character limit" in capsys.readouterr().err
     assert "parent-body" not in forge.mutations
+
+
+def test_replan_migrates_parent_to_manifest_format(
+    replan_files: tuple[Path, Path],
+) -> None:
+    plan, template = replan_files
+    forge = FakeReplanForge()
+    result = apply_replan(
+        plan,
+        preview_token(forge, plan),
+        forge=forge,
+        template_path=template,
+        repo_root=plan.parent,
+    )
+    assert result.degraded is False
+    parent = forge.get_issue(PARENT)
+    assert parent is not None
+    extracted = decomposition_plan_from_parent_body(parent.body)
+    assert extracted is not None
+    assert extracted["plan_format"] == "manifest-v1"
+    for st in extracted["subtasks"]:
+        assert "overview" not in st
+        assert "proposed_changes" not in st
+        assert "acceptance_criteria" not in st
+        assert "verification_plan" not in st
+        assert "footprint" not in st
+        assert "symbols" not in st
+
+
+def test_replan_rejects_non_reversible_subtask_before_writes(
+    replan_files: tuple[Path, Path],
+) -> None:
+    plan, template = replan_files
+    # Add a non-reversible subtask
+    text = plan.read_text(encoding="utf-8")
+    bad_plan = text.replace(
+        "issue_number: null",
+        "issue_number: null\n    proposed_changes:\n      - 特になし",
+        1,
+    )
+    plan.write_text(bad_plan, encoding="utf-8")
+    forge = FakeReplanForge()
+    with pytest.raises(ValueError, match="cannot be '特になし'"):
+        apply_replan(
+            plan,
+            "dummy-token",
+            forge=forge,
+            template_path=template,
+            repo_root=plan.parent,
+        )
+    assert len(forge.mutations) == 0
