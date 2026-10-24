@@ -27,6 +27,92 @@ HEAD = "a" * 40
 HEAD2 = "b" * 40
 
 
+def test_explicit_replacement_chain_restores_only_its_tail() -> None:
+    old = trigger(1, 2, at(1), bot="codex", login="worker")
+    middle = trigger(2, 2, at(2), login="worker")
+    middle["body"] += "\n<!-- orchestune:review-replaces trigger=1 -->"
+    new = trigger(3, 2, at(3), bot="codex", head=HEAD2, login="worker")
+    new["body"] += "\n<!-- orchestune:review-replaces trigger=2 -->"
+    assert [t.id for t in restore_triggers([new, old, middle])] == [3]
+    old["body"] = old["body"].replace("review-trigger", "superseded-trigger")
+    assert [t.id for t in restore_triggers([old, middle, new])] == [3]
+    assert trigger_comment_ids([old, middle, new]) == {1, 2, 3}
+    third = trigger(4, 3, at(4), bot="codex", head=HEAD2, login="worker")
+    fourth = trigger(5, 4, at(5), bot="codex", head=HEAD2, login="worker")
+    assert [t.id for t in restore_triggers([fourth, new, old, third, middle])] == [
+        3,
+        4,
+        5,
+    ]
+
+
+@pytest.mark.parametrize(
+    "wrapper", ["```\n{marker}\n```", "> {marker}", "    {marker}"]
+)
+def test_quoted_replacement_metadata_never_supersedes(wrapper):
+    old = trigger(1, 1, at(1), login="worker")
+    new = trigger(2, 1, at(2), head=HEAD2, login="worker")
+    new["body"] += "\n" + wrapper.format(
+        marker="<!-- orchestune:review-replaces trigger=1 -->"
+    )
+    with pytest.raises(EvidenceContractError, match="multiple triggers"):
+        restore_triggers([old, new])
+
+
+def test_replacement_cannot_return_to_an_ancestor_execution_identity():
+    old = trigger(1, 1, at(1), login="worker")
+    mid = trigger(2, 1, at(2), bot="codex", login="worker")
+    mid["body"] += "\n<!-- orchestune:review-replaces trigger=1 -->"
+    new = trigger(3, 1, at(3), login="worker")
+    new["body"] += "\n<!-- orchestune:review-replaces trigger=2 -->"
+    with pytest.raises(EvidenceContractError, match="must resume"):
+        restore_triggers([old, mid, new])
+
+
+def test_previous_reply_window_ends_at_original_next_round_start():
+    first = trigger(1, 1, at(1), login="worker")
+    old = trigger(2, 2, at(2), login="worker")
+    new = trigger(3, 2, at(3), head=HEAD2, login="worker")
+    new["body"] += "\n<!-- orchestune:review-replaces trigger=2 -->"
+    window = previous_round_window([first, old, new], 2, strict=True)
+    assert window.ended_at == at(2)
+
+
+@pytest.mark.parametrize(
+    "invalid", ["missing", "author", "round", "time", "same", "branch"]
+)
+def test_invalid_replacement_fails_closed(invalid: str) -> None:
+    old = trigger(1, 1, at(1), login="worker")
+    new = trigger(2, 1, at(2), head=HEAD2, login="worker")
+    new["body"] += "\n<!-- orchestune:review-replaces trigger=1 -->"
+    comments = [old, new]
+    if invalid == "missing":
+        comments = [new]
+    elif invalid == "author":
+        new["user"] = {"login": "attacker"}
+    elif invalid == "round":
+        new["body"] = new["body"].replace("review-round 1", "review-round 2")
+    elif invalid == "time":
+        new["created_at"] = at(0)
+    elif invalid == "same":
+        new["body"] = new["body"].replace(HEAD2, HEAD)
+    else:
+        fork = {**new, "id": 3}
+        comments.append(fork)
+    with pytest.raises(EvidenceContractError):
+        restore_triggers(comments)
+
+
+def test_superseded_only_round_remains_consumed() -> None:
+    old = trigger(1, 5, at(1))
+    old["body"] = old["body"].replace("review-trigger", "superseded-trigger")
+    assert restore_triggers([old]) == []
+    assert trigger_comment_ids([old]) == {1}
+    from orchestune.review.rounds import consumed_round
+
+    assert consumed_round([old]) == 5
+
+
 def trigger(
     id_: int,
     round_num: int,
@@ -288,9 +374,8 @@ def test_lenient_window_tolerates_legacy_triggers_like_the_online_path() -> None
         "<!-- orchestune:review-round 1 -->",
     }
     duplicate = {**legacy, "id": 2, "created_at": at(2)}
-    window = previous_round_window([legacy, duplicate], 2, strict=False)
-    assert window.started_at == at(2)  # online picks the latest same-round trigger
-    assert window.exclude_ids == {1, 2}
+    with pytest.raises(EvidenceContractError):
+        previous_round_window([legacy, duplicate], 2, strict=False)
     with pytest.raises(EvidenceContractError):
         previous_round_window([legacy, duplicate], 2, strict=True)
 
@@ -298,7 +383,7 @@ def test_lenient_window_tolerates_legacy_triggers_like_the_online_path() -> None
 def test_lenient_window_requires_a_previous_trigger_timestamp() -> None:
     item = trigger(1, 1, at(1))
     item["created_at"] = ""
-    with pytest.raises(ValueError, match="timestamp is missing"):
+    with pytest.raises(ValueError, match="created_at timestamp"):
         previous_round_window([item], 2, strict=False)
 
 

@@ -750,6 +750,16 @@ orchestune claim <N> --amend-footprint
 
 新しい footprint は、保持中の footprint・Issue の footprint・claim の基点以降に worktree で変更済みのすべてのファイル（コミット済み・未コミット・未追跡）の和集合です。縮小はしません。他のすべての active 予約との衝突を再判定し、衝突した場合は何も変更せずに相手の Issue を表示します。interactive な予約との footprint 重複は、新規 claim と同じく警告として表示し、拡張は行います。成功すると不足分を Issue の footprint に追記して台帳を更新します。worktree・ブランチ・claim ID・ラベルは変わりません。対象は、claim を作成したワークスペース（対応する claim marker がある場所）で完了済みの interactive なファイル予約のみです。リポジトリ予約への切り替えはサポートしません。
 
+### レビュートリガーの再開と置換
+
+同じラウンド・reviewer・HEAD の待機は、`scripts/wait_for_review.py --pr <PR> --bot-name <bot> --round <n> --no-post` で再開します。`--no-post` は常に読み取り専用です。投稿モードでも既存トリガーを再利用し、mention が欠落していても再投稿しません。Round 2 以降の再開では投稿済み本文の判断表を検証します。新ラウンドや置換では `--body-file` で判断表を渡してください。
+
+HEAD 変更後に現在のラウンドを置換するには、投稿モードでその `--round <n>` を指定します。reviewer の変更には人間の明示指示と `--switch-reviewer` も必要です。新コメントの `<!-- orchestune:review-replaces trigger=<旧id> -->` から、同じ投稿者による一意な置換チェーンを検証します。新コメントを再取得して確認した後、旧コメントの trigger marker だけを `superseded-trigger` に変更し、判断表・round・HEAD を保持します。置換しても5ラウンド上限はリセットされません。チェーン内の過去と同じ reviewer・HEAD に戻る再投稿は、実行を区別できないため拒否します。
+
+POST の成否が不明なら再取得し、未確認のまま再送しないでください。投稿確認後の旧 marker 編集に失敗した場合は、確認済みトリガーの待機を再開するか、`--round <n> --repair-trigger-markers` で旧 marker の編集だけを再試行します。このオプションは `--no-post` と併用できず、HEAD・reviewer の置換もしません。投稿状態の永続記録は `.orchestune/ci/review-replacements/` に保存します。
+
+MCP の `--validate-request` は、`request_operation: replace`、置換元の id・reviewer・HEAD、置換先の HEAD・reviewer・round、および結合済みの `trigger_body` を返します。外部クライアントが同じ投稿・再取得・旧 marker 編集手順を実行し、offline 評価自体は POST/PATCH しません。無関係な重複、分岐、参照先欠落、別投稿者からの置換は停止します。置換後の結果は時刻だけでは現実行の証跡にせず、要求したコミットとの明示的な一致を必要とします。旧 HEAD の結果は履歴に残します。
+
 ## 8. ローカルCI証跡の保存と完了処理 (`orchestune complete`)
 
 `orchestune complete` の成功は、固定したOutcome Recordの投稿、結果に対応するIssueラベル（`status:done` / `status:blocked` / `status:not-needed`）の確認、および共有台帳へのhandoffとreplay receiptの永続保存が成立したことを意味します。PRマージ、対応不要の独立レビュー承認、worktree回収の完了までは意味しません。`done` は公開前にローカルCI、PR/head、子レビュー証跡（[§4.5](#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)）、トークン上限の証跡を検証し、GCはその証跡を消費します。予約なしの旧完了経路ではGC側のトークン上限判定を維持します。

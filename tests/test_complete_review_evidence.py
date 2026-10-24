@@ -116,6 +116,54 @@ def test_pass_is_bound_to_current_sources_and_head(evidence):
     assert summary.judgment_counts == {"already_addressed": 1, "resolved": 1}
 
 
+def test_completion_accepts_unique_replacement_and_commit_bound_result(evidence):
+    _, forge, _, judgments = evidence
+    from orchestune.review.rounds import build_restorable_trigger_body
+
+    forge.comments[0]["body"] = build_restorable_trigger_body("", "claude", 1, LATER)
+    forge.comments.append(
+        dict(
+            id=3,
+            body=build_restorable_trigger_body("", "claude", 1, HEAD, replaces=1),
+            created_at="2026-10-03T00:02:00Z",
+            user={"login": "worker"},
+        )
+    )
+    forge.reviews = [
+        dict(
+            id=4,
+            body="No required findings",
+            submitted_at="2026-10-03T00:03:00Z",
+            commit_id=HEAD,
+            user={"login": "claude[bot]"},
+        )
+    ]
+    judgments["findings"][0]["source"] = "review:4"
+    rewrite(evidence)
+    assert verify(evidence).reviewed_head_sha == HEAD
+    forge.reviews[0]["commit_id"] = LATER
+    with pytest.raises(CompletionJournalError):
+        verify(evidence)
+
+
+def test_completion_rejects_timestamp_only_result_after_replacement(evidence):
+    _, forge, _, _ = evidence
+    from orchestune.review.rounds import build_restorable_trigger_body
+
+    old = forge.comments[0]
+    old["body"] = build_restorable_trigger_body("", "claude", 1, LATER)
+    forge.comments.append(
+        dict(
+            id=3,
+            body=build_restorable_trigger_body("", "claude", 1, HEAD, replaces=1),
+            created_at="2026-10-03T00:00:30Z",
+            user={"login": "worker"},
+        )
+    )
+    with pytest.raises(CompletionJournalError):
+        verify(evidence)
+
+
 @pytest.mark.parametrize(
     "mutation",
     [

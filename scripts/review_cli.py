@@ -185,12 +185,21 @@ def build_parser(stall_grace_default: int) -> argparse.ArgumentParser:
         action="store_true",
         help="With --validate-request only: allow a reviewer change on explicit user instruction",
     )
+    parser.add_argument(
+        "--repair-trigger-markers",
+        action="store_true",
+        help="Online only: retry retiring verified replacement ancestors; never re-post the replacement",
+    )
     return parser
 
 
 def _validate_offline(
     parser: argparse.ArgumentParser, args: argparse.Namespace
 ) -> None:
+    if args.repair_trigger_markers:
+        parser.error(
+            "--repair-trigger-markers is online only; offline evaluation is read-only"
+        )
     online_only = [
         flag
         for flag, value in (
@@ -232,6 +241,8 @@ def _validate_offline(
 def _validate_online(
     parser: argparse.ArgumentParser, args: argparse.Namespace, stall_grace_default: int
 ) -> None:
+    if args.repair_trigger_markers and args.no_post:
+        parser.error("--no-post is read-only and cannot repair trigger markers")
     if args.pr is None:
         parser.error("--pr is required unless --review-state-file is used")
     if args.max_snapshot_age is not None:

@@ -25,6 +25,66 @@ from orchestune.review.snapshot import EvidenceContractError, RoundLimitError
 
 HEAD = "a" * 40
 OLD = "c" * 40
+
+
+def test_replacement_request_receipt_names_source_and_current_target():
+    old = trig(1, 1, 1, head=OLD)
+    outcome = validate_request(
+        snap([old]),
+        bot_name="codex",
+        pr_number=7,
+        now=NOW,
+        explicit_round=1,
+        switch_reviewer=True,
+    )
+    receipt = outcome.payload
+    assert receipt["request_operation"] == "replace"
+    assert (
+        receipt["replaces_trigger_id"],
+        receipt["replaces_head_sha"],
+        receipt["reviewer"],
+        receipt["next_round"],
+        receipt["head_sha"],
+    ) == (1, OLD, "codex", 1, HEAD)
+    assert "<!-- orchestune:review-replaces trigger=1 -->" in receipt["trigger_body"]
+    with pytest.raises(EvidenceContractError, match="switch-reviewer"):
+        validate_request(
+            snap([old]), bot_name="codex", pr_number=7, now=NOW, explicit_round=1
+        )
+
+
+def test_replaced_head_cannot_certify_late_old_or_unbound_results():
+    old = trig(1, 1, 1, head=OLD)
+    new = trig(2, 1, 2)
+    new["body"] += "\n<!-- orchestune:review-replaces trigger=1 -->"
+    late_old = review(3, 4, commit=OLD)
+    good = review(4, 5)
+    snapshot = snap([old, new], [late_old, good])
+    result = evaluate_snapshot(snapshot, bot_name="claude", pr_number=7, now=NOW)
+    assert result.exit_code == 0
+    assert result.payload["trigger_id"] == 2
+    assert result.payload["review_target_sha"] == HEAD
+    assert (
+        next(i for i in result.payload["review_items"] if i["id"] == 3)["provenance"]
+        == "historical"
+    )
+    unbound = evaluate_snapshot(
+        snap([old, new, comment(5, 6)], [late_old]),
+        bot_name="claude",
+        pr_number=7,
+        now=NOW,
+    )
+    assert unbound.exit_code == 30
+    assert unbound.payload["review_target_sha"] is None
+
+
+def test_superseded_round_five_cannot_reset_offline_round_budget():
+    old = trig(1, 5, 1)
+    old["body"] = old["body"].replace("review-trigger", "superseded-trigger")
+    with pytest.raises(RoundLimitError):
+        validate_request(snap([old]), bot_name="claude", pr_number=7, now=NOW)
+
+
 NOW = datetime(2026, 10, 4, 3, 30, 0, tzinfo=UTC)
 
 

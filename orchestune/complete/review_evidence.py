@@ -25,6 +25,8 @@ from orchestune.review.markers import derive_review_target, parse_selection_mark
 from orchestune.review.rounds import (
     MAX_REVIEW_ROUNDS,
     ReviewTrigger,
+    bind_replacement_results,
+    consumed_round,
     precise_created_at,
     restore_triggers,
     trigger_comment_ids,
@@ -102,6 +104,8 @@ def _latest_trigger(comments: list[dict[str, Any]], reviewer: str) -> ReviewTrig
         raise _invalid(f"Review triggers are ambiguous: {error}") from error
     if not triggers:
         raise _invalid("Latest review trigger is missing")
+    if triggers[-1].round != consumed_round(comments):
+        raise _invalid("Latest consumed round has no active trigger")
     if triggers[-1].reviewer != reviewer:
         raise _invalid("Latest trigger reviewer differs from --reviewer")
     return triggers[-1]
@@ -124,6 +128,7 @@ def _acquire(state: dict[str, Any], reviewer: str, head: str | None) -> dict[str
         requested_head_sha=requested,
         activity_started_at=precise_created_at(state["issue_comments"], trigger),
     )
+    bind_replacement_results(state["issue_comments"], trigger.id, result)
     if result["acquisition_status"] != "acquired" or any(
         status != "complete" for status in state["completeness"].values()
     ):

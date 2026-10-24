@@ -53,6 +53,7 @@ from orchestune.review.acquisition import (
 from orchestune.review.acquisition import (
     _is_explicitly_in_progress,
     _latest_bot_activity_item,
+    collect_review_state,
     extract_review_result,
     normalize_review_state,
 )
@@ -66,22 +67,25 @@ from orchestune.review.markers import (
     has_review_trigger_mention,
     mark_review_trigger,
     parse_head_marker,
-    parse_trigger_reviewer,
     review_round_marker,
     review_selection_marker,
 )
 from orchestune.review.markers import (
-    parse_round_marker as _parse_review_round_marker,
-)
-from orchestune.review.markers import (
-    review_trigger_marker as _review_trigger_marker,
+    parse_round_marker as _parse_review_round_marker,  # noqa: F401
 )
 from orchestune.review.offline import resolve_legacy_completeness
 from orchestune.review.rounds import (
     MAX_REVIEW_ROUNDS,
+    bind_replacement_results,
     build_restorable_trigger_body,
+    consumed_round,
+    legacy_trigger_timestamp,
+    parse_trigger,
     previous_round_window,
+    restore_triggers,
+    trigger_comment_ids,
 )
+from orchestune.review.snapshot import InsufficientEvidenceError
 from orchestune.review.tracker_activity import (
     DEFAULT_COMPLETED_GRACE_SECONDS,
     CompletedGrace,
@@ -113,6 +117,10 @@ from scripts.review_poll import (
     summary_gate_open,
     track_stall,
     unavailable_result,
+)
+from scripts.review_trigger_replacement import (
+    publish_replacement,
+    retire_replaced_triggers,
 )
 
 # Historical private names; tests and callers patch and import them from here.
@@ -239,52 +247,35 @@ def _fetch_repository_slug() -> str | None:
 def _is_trigger_comment(
     item: dict[str, Any], bot_name: str, round_num: int | None = None
 ) -> bool:
-    body = item.get("body") or ""
-    body_lower = body.lower()
-    marker = _review_trigger_marker(bot_name).lower()
-    trigger_line = f"@{bot_name.lower()} review"
-
-    is_trigger = marker in body_lower or any(
-        line.strip().lower() == trigger_line for line in body.splitlines()
+    trigger = parse_trigger(item)
+    return bool(
+        trigger
+        and trigger.active
+        and trigger.reviewer == bot_name
+        and (round_num is None or trigger.round == round_num)
     )
-    if not is_trigger:
-        return False
-    if round_num is not None:
-        return _parse_review_round_marker(body) == round_num
-    return True
 
 
 def _get_latest_review_round(
     data: dict[str, list[dict[str, Any]]], bot_name: str | None = None
 ) -> int:
-    rounds: list[int] = []
-    for item in data.get("issue_comments", []):
-        if bot_name and not _is_trigger_comment(item, bot_name):
-            continue
-        if bot_name is None and not any(
-            _is_trigger_comment(item, bot) for bot in ("claude", "codex")
-        ):
-            continue
-        round_num = _parse_review_round_marker(item.get("body") or "")
-        if round_num is not None:
-            rounds.append(round_num)
-    return max(rounds, default=0)
+    comments = data.get("issue_comments", [])
+    restore_triggers(comments)
+    return consumed_round(comments)
 
 
 def _find_existing_trigger_comment(
     data: dict[str, list[dict[str, Any]]], bot_name: str, round_num: int
 ) -> dict[str, Any] | None:
+    comments = data.get("issue_comments", [])
     matching = [
-        item
-        for item in data.get("issue_comments", [])
-        if _is_trigger_comment(item, bot_name, round_num=round_num)
+        t
+        for t in restore_triggers(comments)
+        if t.round == round_num and t.reviewer == bot_name
     ]
     if not matching:
         return None
-    for item in reversed(matching):
-        if _has_review_trigger_mention(item.get("body") or "", bot_name):
-            return item
-    return matching[0]
+    return next(item for item in comments if str(item.get("id")) == str(matching[0].id))
 
 
 def post_review_trigger(
@@ -355,11 +346,13 @@ def _latest_review_trigger_timestamp(
     data: dict[str, list[dict[str, Any]]], bot_name: str
 ) -> str:
     trigger_timestamps = [
-        item.get("created_at") or ""
-        for item in data.get("issue_comments", [])
-        if _is_trigger_comment(item, bot_name)
+        t.created_at
+        for t in restore_triggers(data.get("issue_comments", []))
+        if t.reviewer == bot_name
     ]
-    return max(trigger_timestamps, default="")
+    return max(trigger_timestamps, default="") or legacy_trigger_timestamp(
+        data.get("issue_comments", []), bot_name
+    )
 
 
 def _extract_review_result(
@@ -384,6 +377,9 @@ def _extract_review_result(
     )
     if result is None:
         return None
+    replacement_proven = bind_replacement_results(
+        current_data.get("issue_comments", []), trigger_id, result
+    )
 
     current_inlines = [
         item for item in result["inline_comments"] if item["provenance"] == "current"
@@ -421,8 +417,10 @@ def _extract_review_result(
     )
     full_result: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
-        "acquisition_status": ACQUISITION_ACQUIRED,
-        "reason": "",
+        "acquisition_status": ACQUISITION_ACQUIRED
+        if replacement_proven
+        else ACQUISITION_UNAVAILABLE,
+        "reason": result.get("reason", ""),
         "repository": repository,
         "pr_number": pr_number,
         "reviewer": bot_name,
@@ -485,6 +483,7 @@ def _handle_review_trigger(
     max_rounds: int,
     body: str | None,
     body_file: str | None,
+    repair_trigger_markers: bool = False,
 ) -> tuple[str, int | str | None, str | None]:
     """Post a head-bound trigger, or restore its recorded head on resume.
 
@@ -492,9 +491,14 @@ def _handle_review_trigger(
     the trigger. Legacy triggers without a head marker keep requested SHA unknown.
     """
     requested_head_sha = _fetch_pr_head_sha(pr_number)
-    existing_trigger = _find_existing_trigger_comment(
-        initial_data, bot_name, current_round
+    comments = initial_data.get("issue_comments", [])
+    excluded_ids.update(trigger_comment_ids(comments))
+    active = [t for t in restore_triggers(comments) if t.round == current_round]
+    existing_trigger = next(
+        (i for i in comments if active and str(i.get("id")) == str(active[0].id)), None
     )
+    if repair_trigger_markers and existing_trigger is None:
+        raise ValueError("marker repair requires an existing replacement trigger")
     if existing_trigger is not None:
         trigger_id = existing_trigger.get("id")
         trigger_time = str(existing_trigger.get("created_at") or "")
@@ -502,22 +506,41 @@ def _handle_review_trigger(
         existing_head = parse_head_marker(existing_body)
         if trigger_id is not None:
             excluded_ids.add(trigger_id)
-        if existing_head and requested_head_sha and existing_head != requested_head_sha:
-            print(
-                f"Review trigger for @{bot_name} (Round {current_round}) exists for older head {existing_head[:10]}, "
-                f"but PR head moved to {requested_head_sha[:10]}; reposting trigger..."
+        replacing = active[0].reviewer != bot_name or (
+            existing_head and requested_head_sha and existing_head != requested_head_sha
+        )
+        if repair_trigger_markers and replacing:
+            raise ValueError(
+                "marker repair cannot replace a reviewer or HEAD; resume the verified trigger"
             )
-        elif _has_review_trigger_mention(existing_body, bot_name):
+        if not replacing:
+            if repair_trigger_markers and active[0].replaces is not None:
+                retire_replaced_triggers(comments, trigger_id, _run_gh)
             print(
                 f"Review trigger for @{bot_name} (Round {current_round}) already exists "
                 f"(Comment ID: {trigger_id}); skipping post and waiting..."
             )
             return trigger_time, trigger_id, existing_head
-        else:
-            print(
-                f"Review trigger comment for Round {current_round} (Comment ID: {trigger_id}) "
-                f"is missing @{bot_name} review mention; reposting trigger..."
-            )
+        if requested_head_sha is None:
+            raise ValueError("cannot replace trigger without current PR HEAD")
+        raw = body or ""
+        if body_file:
+            with open(body_file, encoding="utf-8") as stream:
+                raw = stream.read()
+        trigger_info = publish_replacement(
+            pr_number=pr_number,
+            previous=existing_trigger,
+            bot_name=bot_name,
+            head_sha=requested_head_sha,
+            reply_body=raw,
+            fetch_comments=lambda: _run_gh_api(
+                f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments"
+            ),
+            fetch_head=lambda: _fetch_pr_head_sha(pr_number),
+            run_gh=_run_gh,
+        )
+        excluded_ids.add(trigger_info["id"])
+        return str(trigger_info["created_at"]), trigger_info["id"], requested_head_sha
 
     print(
         f"Posting review trigger comment (Round {current_round}/{max_rounds}) "
@@ -602,12 +625,30 @@ def _resolve_current_round(
     bot_name: str,
     round_num: int | None,
     post_trigger: bool,
+    *,
+    next_round_requested: bool = False,
 ) -> int:
     if round_num is not None:
         return round_num
     latest_existing_round = _get_latest_review_round(initial_data)
     if not post_trigger:
         return max(1, latest_existing_round)
+    triggers = restore_triggers(initial_data.get("issue_comments", []))
+    if triggers and not next_round_requested:
+        latest = triggers[-1]
+        state = {
+            section: initial_data.get(section, [])
+            for section in ("issue_comments", "reviews", "inline_comments")
+        }
+        result = collect_review_state(
+            state,
+            bot_name,
+            exclude_issue_comment_ids=trigger_comment_ids(state["issue_comments"]),
+            round_started_at=latest.created_at,
+            requested_head_sha=latest.requested_head_sha,
+        )
+        if result.get("acquisition_status") != ACQUISITION_ACQUIRED:
+            return latest.round
     return latest_existing_round + 1
 
 
@@ -616,21 +657,10 @@ def _validate_review_selection(
 ) -> None:
     if bot_name not in {"claude", "codex", "skip"}:
         raise ValueError("reviewer must be claude, codex or skip")
-    triggers = [
-        item
-        for item in data.get("issue_comments", [])
-        if parse_trigger_reviewer(item.get("body") or "")
-    ]
+    triggers = restore_triggers(data.get("issue_comments", []))
     if not triggers:
         return
-    previous = max(
-        triggers,
-        key=lambda item: (
-            _parse_review_round_marker(item.get("body") or "") or 0,
-            str(item.get("created_at") or ""),
-        ),
-    )
-    reviewer = parse_trigger_reviewer(previous.get("body") or "")
+    reviewer = triggers[-1].reviewer
     if reviewer != bot_name and not switch:
         raise ValueError(
             f"previous reviewer is {reviewer}; explicit --switch-reviewer required"
@@ -695,10 +725,55 @@ def _record_skip(
 
 
 def _check_round_limit(current_round: int, max_rounds: int) -> None:
-    if current_round > max_rounds:
+    if current_round > min(max_rounds, MAX_REVIEW_ROUNDS):
         raise MaxRoundsExceededError(
             f"Maximum review rounds ({max_rounds}) exceeded (attempted round {current_round})."
         )
+
+
+def _validate_resume_reply(data, current_round, existing, body_file):
+    if current_round < 2:
+        return
+    window = previous_round_window(data["issue_comments"], current_round, strict=True)
+    try:
+        posted = validate_previous_round_reply(data, window, existing.get("body") or "")
+        if body_file:
+            with open(body_file, encoding="utf-8") as stream:
+                given = validate_previous_round_reply(data, window, stream.read())
+            if given.judgment_digest != posted.judgment_digest:
+                raise ValueError("supplied table differs from the posted trigger table")
+    except ValueError as error:
+        raise ValueError(
+            "posted judgments are invalid or differ from --body-file; use a validated next round"
+        ) from error
+
+
+def _prepare_review_round(
+    pr_number, initial_data, bot_name, round_num, post_trigger, body_file, max_rounds
+):
+    current_round = _resolve_current_round(
+        initial_data,
+        bot_name,
+        round_num,
+        post_trigger,
+        next_round_requested=bool(body_file),
+    )
+    _check_round_limit(current_round, max_rounds)
+    consumed = consumed_round(initial_data.get("issue_comments", []))
+    if current_round < consumed or current_round > consumed + 1:
+        raise ValueError("rounds cannot be skipped or historical rounds replaced")
+    existing = _find_existing_trigger_comment(initial_data, bot_name, current_round)
+    recorded = parse_head_marker(existing.get("body") or "") if existing else None
+    head = _fetch_pr_head_sha(pr_number) if post_trigger else None
+    resuming = existing and (
+        not post_trigger or not head or not recorded or head == recorded
+    )
+    if post_trigger:
+        if not resuming:
+            _validate_review_reply(initial_data, bot_name, current_round, body_file)
+    if resuming:
+        _validate_resume_reply(initial_data, current_round, existing, body_file)
+    return current_round
 
 
 def wait_for_review(
@@ -717,7 +792,14 @@ def wait_for_review(
     jev_threshold: float | None = None,
     switch_reviewer: bool = False,
     completed_grace_seconds: float = DEFAULT_COMPLETED_GRACE_SECONDS,
+    repair_trigger_markers: bool = False,
 ) -> dict[str, Any]:
+    if repair_trigger_markers and not post_trigger:
+        raise ValueError("--no-post is read-only; marker repair requires posting mode")
+    if repair_trigger_markers and (round_num is None or bot_name == "skip"):
+        raise ValueError(
+            "marker repair requires an explicit posted --round and reviewer"
+        )
     context_cache: dict[int, JevReviewContext] = {}
     repository = _fetch_repository_slug()
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -732,14 +814,19 @@ def wait_for_review(
         if bot_name == "skip":
             return _record_skip(pr_number, initial_data, repository)
         initial_snapshot = _build_snapshot(initial_data, bot_name)
-        excluded_ids: set[int | str] = set()
-
-        current_round = _resolve_current_round(
-            initial_data, bot_name, round_num, post_trigger
+        excluded_ids: set[int | str] = trigger_comment_ids(
+            initial_data.get("issue_comments", [])
         )
 
-        _check_round_limit(current_round, max_rounds)
-        _validate_review_reply(initial_data, bot_name, current_round, body_file)
+        current_round = _prepare_review_round(
+            pr_number,
+            initial_data,
+            bot_name,
+            round_num,
+            post_trigger,
+            body_file,
+            max_rounds,
+        )
 
         trigger_id: int | str | None = None
         if post_trigger:
@@ -754,6 +841,7 @@ def wait_for_review(
                     max_rounds,
                     body,
                     body_file,
+                    repair_trigger_markers=repair_trigger_markers,
                 )
             )
         else:
@@ -872,6 +960,8 @@ def _run_online(args: Any) -> None:
     }
     if args.jev_threshold is not None:
         wait_kwargs["jev_threshold"] = args.jev_threshold
+    if getattr(args, "repair_trigger_markers", False):
+        wait_kwargs["repair_trigger_markers"] = True
     result = wait_for_review(args.pr, **wait_kwargs)
     if args.output_file:
         _write_output_file(result, args.output_file)
@@ -900,6 +990,9 @@ def main() -> None:
     except TimeoutError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(EXIT_TIMEOUT)
+    except InsufficientEvidenceError as e:
+        print(f"Insufficient evidence: {e}", file=sys.stderr)
+        sys.exit(EXIT_NO_RESULT)
     except Exception as e:
         print(f"Unexpected error: {e}", file=sys.stderr)
         sys.exit(EXIT_INTERNAL_ERROR)

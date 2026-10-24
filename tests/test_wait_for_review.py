@@ -160,8 +160,9 @@ def test_latest_review_trigger_timestamp_supports_machine_marker():
     data = {
         "issue_comments": [
             {
+                "id": 1,
                 "created_at": "2026-08-20T10:00:00Z",
-                "body": "Please check this\n\n<!-- orchestune:review-trigger bot=claude -->",
+                "body": "Please check this\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->",
             }
         ]
     }
@@ -173,6 +174,7 @@ def test_latest_review_trigger_timestamp_when_posted_by_bot():
     data = {
         "issue_comments": [
             {
+                "id": 1,
                 "created_at": "2026-08-20T10:00:00Z",
                 "user": {"login": "claude[bot]"},
                 "body": "@claude review\n\n<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->",

@@ -10,6 +10,88 @@ from scripts.wait_for_review import _extract_review_result, main, wait_for_revie
 SHA = "a" * 40
 
 
+def replacement_round():
+    from orchestune.review.rounds import build_restorable_trigger_body
+
+    old = {
+        "id": 1,
+        "body": build_restorable_trigger_body("", "claude", 1, "b" * 40),
+        "created_at": "2026-01-01T00:00:00Z",
+        "user": {"login": "worker"},
+    }
+    new = {
+        "id": 3,
+        "body": build_restorable_trigger_body("", "claude", 1, SHA, replaces=1),
+        "created_at": "2026-01-01T00:01:00Z",
+        "user": {"login": "worker"},
+    }
+    return {
+        "issue_comments": [old, new],
+        "reviews": [
+            {
+                "id": 4,
+                "body": "Clean",
+                "submitted_at": "2026-01-01T00:02:00Z",
+                "commit_id": SHA,
+                "user": {"login": "claude[bot]"},
+            }
+        ],
+        "inline_comments": [],
+    }
+
+
+def test_no_post_replacement_resume_is_read_only():
+    with (
+        patch(
+            "scripts.wait_for_review._get_initial_pr_data",
+            return_value=replacement_round(),
+        ),
+        patch("scripts.wait_for_review._run_gh") as gh,
+        patch("scripts.wait_for_review.post_review_trigger") as post,
+        patch("scripts.wait_for_review.retire_replaced_triggers") as retire,
+    ):
+        result = wait_for_review(1, bot_name="claude", post_trigger=False)
+    assert result["trigger_id"] == 3
+    assert result["review_target_sha"] == SHA
+    gh.assert_not_called()
+    post.assert_not_called()
+    retire.assert_not_called()
+
+
+def test_posting_mode_resume_does_not_patch_without_explicit_repair():
+    from scripts.wait_for_review import _handle_review_trigger
+
+    with (
+        patch("scripts.wait_for_review.post_review_trigger") as post,
+        patch("scripts.wait_for_review.retire_replaced_triggers") as retire,
+    ):
+        _handle_review_trigger(
+            1, "claude", replacement_round(), {}, set(), 1, 5, None, None
+        )
+        retire.assert_not_called()
+        _handle_review_trigger(
+            1,
+            "claude",
+            replacement_round(),
+            {},
+            set(),
+            1,
+            5,
+            None,
+            None,
+            repair_trigger_markers=True,
+        )
+        retire.assert_called_once()
+    post.assert_not_called()
+
+
+def test_no_post_cannot_repair_markers():
+    with pytest.raises(ValueError, match="read-only"):
+        wait_for_review(
+            1, bot_name="claude", post_trigger=False, repair_trigger_markers=True
+        )
+
+
 @pytest.fixture(autouse=True)
 def hermetic_metadata(monkeypatch):
     monkeypatch.setattr("scripts.wait_for_review._fetch_pr_head_sha", lambda _: SHA)
@@ -148,7 +230,7 @@ def test_trigger_reposts_when_pr_head_moved_since_trigger():
     }
     with (
         patch(
-            "scripts.wait_for_review.post_review_trigger", return_value=posted
+            "scripts.wait_for_review.publish_replacement", return_value=posted
         ) as post,
         patch("scripts.wait_for_review._fetch_pr_head_sha", return_value=new_head),
     ):
@@ -275,7 +357,9 @@ def test_switch_reviewer_requires_explicit_override():
     state = {
         "issue_comments": [
             {
-                "body": "<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->"
+                "id": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "body": "<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->",
             }
         ],
         "reviews": [],
@@ -328,7 +412,9 @@ def test_round_two_requires_body_file_before_trigger():
     state = {
         "issue_comments": [
             {
-                "body": "<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->"
+                "id": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "body": "<!-- orchestune:review-trigger bot=claude -->\n<!-- orchestune:review-round 1 -->",
             }
         ],
         "reviews": [],
@@ -340,7 +426,7 @@ def test_round_two_requires_body_file_before_trigger():
         patch("scripts.wait_for_review.post_review_trigger") as trigger,
     ):
         with pytest.raises(ValueError, match="body-file"):
-            wait_for_review(1, bot_name="claude")
+            wait_for_review(1, bot_name="claude", round_num=2)
         trigger.assert_not_called()
 
 
