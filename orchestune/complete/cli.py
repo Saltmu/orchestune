@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 from orchestune.claim.local_identity import caller_claim_id
 from orchestune.claim.workspace import resolve_claim_workspace
-from orchestune.complete.contracts import CompleteRequest, CompleteStage
+from orchestune.complete.contracts import CompleteRequest, CompleteResult, CompleteStage
 from orchestune.complete.service import complete_task
+from orchestune.infra.cli_output import CliOutput, make_output
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -86,9 +88,45 @@ def _request_from_args(args: argparse.Namespace) -> CompleteRequest:
     return CompleteRequest.not_needed(args.issue, **common)
 
 
+def _stdout() -> CliOutput:
+    return make_output(sys.stdout)
+
+
+def _write_lines(output: CliOutput, lines: Sequence[str]) -> None:
+    """Write literal lines through the shared output layer (plain text is unchanged)."""
+    for line in lines:
+        output.emit(output.text_block(line))
+
+
 def _print_progress(completion_id: str, stage: CompleteStage) -> None:
-    print(f"Completion ID: {completion_id}", flush=True)
-    print(f"Reached stage: {stage.value}", flush=True)
+    output = _stdout()
+    _write_lines(
+        output,
+        [f"Completion ID: {completion_id}", f"Reached stage: {stage.value}"],
+    )
+    output.policy.stream.flush()
+
+
+def _result_lines(result: CompleteResult) -> list[str]:
+    lines = []
+    if result.completion_id is not None:
+        lines.append(f"Completion ID: {result.completion_id}")
+    lines.append(f"Reached stage: {result.stage.value}")
+    if result.success:
+        if result.preview:
+            lines.append(
+                f"Completion preview validated for Issue #{result.issue_number}."
+            )
+        else:
+            lines.append(
+                f"Completion handed off to GC for Issue #{result.issue_number}."
+            )
+        return lines
+    assert result.failure is not None
+    lines.append(
+        f"Complete failed: {result.failure.reason.value}: {result.failure.message}"
+    )
+    return lines
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -96,19 +134,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         args = _parser().parse_args(argv)
         request = _request_from_args(args)
     except ValueError as exc:
-        print(f"Error: {exc}")
+        _write_lines(_stdout(), [f"Error: {exc}"])
         return 40
 
     result = complete_task(request, on_progress=_print_progress)
-    if result.completion_id is not None:
-        print(f"Completion ID: {result.completion_id}")
-    print(f"Reached stage: {result.stage.value}")
+    _write_lines(_stdout(), _result_lines(result))
     if result.success:
-        if result.preview:
-            print(f"Completion preview validated for Issue #{result.issue_number}.")
-            return 0
-        print(f"Completion handed off to GC for Issue #{result.issue_number}.")
         return 0
     assert result.failure is not None
-    print(f"Complete failed: {result.failure.reason.value}: {result.failure.message}")
     return int(result.failure.exit_code)

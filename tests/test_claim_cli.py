@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import io
+import sys
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from orchestune.claim.contracts import (
     ClaimFailure,
@@ -360,3 +364,127 @@ def test_amend_success_prints_overlap_warnings_to_stderr(tmp_path, capsys):
     ):
         assert main(["123", "--amend-footprint"]) == 0
     _assert_overlap_warning(capsys.readouterr().err)
+
+
+_PREVIEW_STDOUT = (
+    "Dry run: validation succeeded; no Git, Forge, or state changes were made.\n"
+    "Issue: #123\n"
+    "Claim ID: claim-123\n"
+    "Planned branch: codex/issue-123-example\n"
+    "Planned worktree: /tmp/worktrees/claim-123\n"
+    "Planned base: origin/main\n"
+    "Owner kind: interactive\n"
+    "Unverified: Git fetch, worktree creation, state persistence, Forge metadata "
+    "and label updates.\n"
+)
+_SUCCESS_STDOUT = (
+    "Issue: #123\n"
+    "Claim ID: claim-123\n"
+    "Branch: codex/issue-123-example\n"
+    "Worktree: /tmp/worktrees/claim-123\n"
+    "Base: origin/main\n"
+    "Owner kind: interactive\n"
+)
+_CONFLICT_STDERR = (
+    "Claim failed: reason=claim_conflict\n"
+    "Message: Claim conflict with issue #99\n"
+    "conflicting_issue=#99\n"
+    "conflicting_branch=codex/issue-99-active\n"
+    "conflicting_path=/tmp/worktrees/active\n"
+    "Next action: Resume the existing claim or select another issue.\n"
+)
+
+
+class _TtyStream(io.StringIO):
+    """A stand-in for an interactive UTF-8 terminal stream."""
+
+    @property
+    def encoding(self) -> str:  # type: ignore[override]
+        return "utf-8"
+
+    def isatty(self) -> bool:
+        return True
+
+
+def _use_tty(monkeypatch: pytest.MonkeyPatch, columns: int) -> _TtyStream:
+    stream = _TtyStream()
+    monkeypatch.setattr(sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stderr", stream)
+    for name in ("CI", "ORCHESTUNE_CLI_PLAIN", "NO_COLOR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setenv("COLUMNS", str(columns))
+    return stream
+
+
+def _failure_outcome() -> ClaimOutcome:
+    failure = ClaimFailure(
+        reason=ClaimFailureReason.CLAIM_CONFLICT,
+        message="Claim conflict with issue #99",
+        conflicting_issue_number=99,
+        conflicting_branch="codex/issue-99-active",
+        conflicting_path=Path("/tmp/worktrees/active"),
+        next_actions=("Resume the existing claim or select another issue.",),
+    )
+    return ClaimOutcome(success=False, issue_number=123, failure=failure)
+
+
+def test_plain_success_stdout_is_unchanged(tmp_path, capsys):
+    from orchestune.claim.cli import main
+
+    with (
+        patch("orchestune.claim.cli.claim_task", return_value=_success()),
+        patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
+    ):
+        assert main(["123"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == _SUCCESS_STDOUT
+    assert captured.err == ""
+
+
+def test_plain_preview_stdout_is_unchanged(tmp_path, capsys):
+    from orchestune.claim.cli import main
+
+    with (
+        patch("orchestune.claim.cli.claim_task", return_value=_success()),
+        patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
+    ):
+        assert main(["123", "--no-apply"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == _PREVIEW_STDOUT
+    assert captured.err == ""
+
+
+def test_plain_failure_stays_on_stderr_and_keeps_exit_code(capsys):
+    from orchestune.claim.cli import main
+
+    with patch("orchestune.claim.cli.claim_task", return_value=_failure_outcome()):
+        assert main(["123"]) == 20
+    captured = capsys.readouterr()
+    assert captured.err == _CONFLICT_STDERR
+    assert captured.out == ""
+
+
+@pytest.mark.parametrize("columns", [30, 200])
+def test_tty_success_and_preview_keep_every_value_intact(
+    tmp_path, monkeypatch, columns
+):
+    from orchestune.claim.cli import main
+
+    with (
+        patch("orchestune.claim.cli.claim_task", return_value=_success()),
+        patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
+    ):
+        stream = _use_tty(monkeypatch, columns)
+        assert main(["123"]) == 0
+        assert main(["123", "--no-apply"]) == 0
+    assert stream.getvalue() == _SUCCESS_STDOUT + _PREVIEW_STDOUT
+
+
+def test_tty_failure_keeps_conflicting_values_intact_on_narrow_width(monkeypatch):
+    from orchestune.claim.cli import main
+
+    with patch("orchestune.claim.cli.claim_task", return_value=_failure_outcome()):
+        stream = _use_tty(monkeypatch, 30)
+        assert main(["123"]) == 20
+    assert stream.getvalue() == _CONFLICT_STDERR
