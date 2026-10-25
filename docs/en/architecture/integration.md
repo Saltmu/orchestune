@@ -6,7 +6,7 @@ This document provides detailed specifications for Orchestune's two-tier branch 
 
 ## 1. Two-Tier Branch Model with Parent Branch
 
-When multiple agents complete their tasks, downstream tasks must integrate those updates. Orchestune's integrator coordinates this via a **two-tier branch model**, so that human review effort is concentrated on the one merge that actually matters (getting the "big rock" into `main`), while every intermediate child merge runs unattended.
+When multiple agents complete their tasks, downstream tasks must integrate those updates. Orchestune coordinates this via a **two-tier branch model**, where the Dispatcher execution runs a pre-integration cycle, followed by the pre-scheduling integration boundary (running Integrator and semantic review outside the `run_state_lock`, #1377), followed by the scheduling cycle and post-cycle. Integrating completed child tasks before external-lock evaluation eliminates transient `status:external-lock` labelling and unnecessary lock notifications. Human review effort is concentrated on the one merge that actually matters (getting the "big rock" into `main`), while every intermediate child merge runs unattended.
 
 ```mermaid
 sequenceDiagram
@@ -67,7 +67,7 @@ sequenceDiagram
 >
 > The requirement of the standard supported configuration for this constraint is, when running `orchestune dispatch` on a GitHub Actions schedule, to serialize the control executor to one with a repository-wide concurrency group (`orchestune-control-${{ github.repository }}`) (see [Setup Guide §6](../setup.md#6-scheduled-runs-on-github-actions-and-cross-runner-serialization) for details). This serialization is an operational preventive measure that requires no code changes.
 >
-> The run-state lock covers only the cycle (`execute_cycle` in `dispatch/cycle_execution.py`). The post-processing of `_run_dispatcher` in `dispatch/dispatcher.py` (not-needed review, Integrator, parent Issue completion, reporting) runs after the lock is released. The Integrator has a per-parent execution lock, per-run temp-branch isolation, and conflict detection when updating the parent ref, but these are not mechanisms that make selection and launch reservations unique across runners. Serialization of the whole CLI including post-processing must therefore be guaranteed operationally, by a single owner or an Actions group.
+> The run-state lock covers only the pre-integration and scheduling cycle executions (`execute_cycle` in `dispatch/cycle_execution.py`). The pre-scheduling integration boundary (not-needed review, layer-2 semantic review, Integrator, #1377) and post-cycle (parent Issue completion, reporting) run after the lock is released. This ensures that synchronous CI runs during integration never block other agent completions (`complete`) with state lock contention. The Integrator has a per-parent execution lock, per-run temp-branch isolation, and conflict detection when updating the parent ref, but these are not mechanisms that make selection and launch reservations unique across runners. Serialization of the whole CLI including post-processing must therefore be guaranteed operationally, by a single owner or an Actions group.
 >
 > Independently of this, per-run temp branch names and a compare-and-swap on the parent branch update (#435) ensure that, even under this constraint, a collision is never a silent data race — it is always surfaced as a push failure (defense in depth).
 

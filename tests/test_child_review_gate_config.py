@@ -14,7 +14,7 @@ from orchestune.dispatch.config_loader import (
     load_and_resolve_config,
 )
 from orchestune.dispatch.config_schema import validate_toml_config
-from orchestune.dispatch.postcycle import _build_integrator_config
+from orchestune.dispatch.pre_scheduling_integration import _build_integrator_config
 from orchestune.integrator.types import IntegratorConfig
 
 

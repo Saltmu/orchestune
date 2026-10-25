@@ -127,6 +127,10 @@ def test_cli_saves_exact_old_schema_and_no_stdout_json(tmp_path, capsys, apply):
         ),
         patch("orchestune.dispatch.dispatcher.run_dispatch_cycle", return_value=report),
         patch(
+            "orchestune.dispatch.dispatcher.run_pre_integration_cycle",
+            return_value=report,
+        ),
+        patch(
             "orchestune.dispatch.dispatcher._decide_semantic_review_enabled",
             return_value=False,
         ),
@@ -152,6 +156,8 @@ def test_cli_saves_exact_old_schema_and_no_stdout_json(tmp_path, capsys, apply):
         assert main([]) == 0
     expected = _report_to_dict(report)
     expected["post_cycle_results"] = [phase.to_dict()] * 5 if apply else []
+    if apply:
+        expected["pre_integration_cycle"] = _report_to_dict(report)
     assert json.loads(cfg.report_path.read_text()) == expected
     stdout = capsys.readouterr().out
     assert '"selected"' not in stdout
@@ -170,6 +176,10 @@ def test_postcycle_exception_keeps_completed_results_and_skips_rest(tmp_path, ca
         ),
         patch(
             "orchestune.dispatch.dispatcher.run_dispatch_cycle", return_value=_report()
+        ),
+        patch(
+            "orchestune.dispatch.dispatcher.run_pre_integration_cycle",
+            return_value=_report(),
         ),
         patch(
             "orchestune.dispatch.dispatcher._decide_semantic_review_enabled",
@@ -278,6 +288,10 @@ def test_save_failure_overrides_retryable_and_reports_both(tmp_path, capsys):
             "orchestune.dispatch.dispatcher.run_dispatch_cycle", return_value=_report()
         ),
         patch(
+            "orchestune.dispatch.dispatcher.run_pre_integration_cycle",
+            return_value=_report(),
+        ),
+        patch(
             "orchestune.dispatch.dispatcher._decide_semantic_review_enabled",
             return_value=False,
         ),
@@ -322,6 +336,10 @@ def test_stdout_failure_does_not_stop_cli_save(tmp_path, monkeypatch):
         patch(
             "orchestune.dispatch.dispatcher.run_dispatch_cycle", return_value=_report()
         ),
+        patch(
+            "orchestune.dispatch.dispatcher.run_pre_integration_cycle",
+            return_value=_report(),
+        ),
     ):
         assert main([]) == 0
     assert cfg.report_path.exists()
@@ -347,6 +365,10 @@ def test_cli_closes_owned_progress_stream_even_on_config_error(tmp_path, config_
         ),
         patch(
             "orchestune.dispatch.dispatcher.run_dispatch_cycle", return_value=_report()
+        ),
+        patch(
+            "orchestune.dispatch.dispatcher.run_pre_integration_cycle",
+            return_value=_report(),
         ),
     ):
         if config_error:

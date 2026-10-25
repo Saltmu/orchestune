@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from orchestune.dispatch.cycle_events import (
         CompletionEvent,
         DeviationEvent,
-        PriorMergeEvidenceCompletion,
         PromotionEvent,
     )
     from orchestune.dispatch.cycle_report import CycleReport
@@ -88,18 +87,7 @@ class CycleExecutionDependencies(Generic[RuntimeT, RepairT]):
         [DispatcherConfig, RunState, IssuesByStatus, CycleContext], RuntimeT
     ]
     new_repair_state: Callable[[], RepairT]
-    run_pipeline: Callable[
-        [
-            CycleContext,
-            IssuesByStatus,
-            RunState,
-            DispatcherConfig,
-            float,
-            RepairT,
-            tuple[PriorMergeEvidenceCompletion, ...],
-        ],
-        CycleReport,
-    ]
+    run_pipeline: Callable[..., CycleReport]
     finish_consistency: Callable[
         [RuntimeT, CycleReport, CycleContext, float, DispatcherConfig, RepairT],
         None,

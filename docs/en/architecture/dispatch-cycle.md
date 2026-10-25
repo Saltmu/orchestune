@@ -45,3 +45,15 @@ Applied cycle records also contain `timings` (version 1).
 | `gh.calls` | Counts attempts through `GitHubForge._run`, including stdin, failures, and timeouts, rather than HTTP requests or commands in child agents. |
 | Measurement failures | Produce `collection_status: partial` or `unavailable` and null for unknown scalar values, without changing dispatch results or exit codes. |
 | Compatibility | Old records can lack `timings`; result JSON and `CycleReport` remain unchanged. Dry runs and interrupted cycles retain the existing event-writing policy. |
+
+## 6. Dispatcher 4-Stage Execution Pipeline (#1377)
+
+In apply mode, Dispatcher splits each execution into four distinct stages:
+
+1. **Pre-integration cycle (`run_pre_integration_cycle`)**: Runs while holding the `run_state_lock` up through `gc_reclaim` (detecting completions, reclaiming worktrees, running consistency checks) and records cycle events (`stage="pre_integration"`). Task selection, launching, and external-lock scanning are skipped. Releases `run_state_lock` upon completion.
+2. **Integration boundary (`pre_scheduling_integration`)**: Runs outside the `run_state_lock`. Handles auth check, polls pending `status:not-needed` reviews, advances layer-2 semantic review, and runs `Integrator` once. Because `run_state_lock` is not held during synchronous CI runs, other agent completions are not blocked.
+3. **Scheduling cycle (`run_dispatch_cycle`)**: Acquires `run_state_lock` with a fresh context, evaluates `reconciliation_external_locks` (external-lock reconciliation and dependency promotions) and performs `scheduling` (selection and launching), recording events (`stage="scheduling"`). Releases `run_state_lock` upon completion.
+4. **Post-cycle (`_post_cycle_steps`)**: Runs outside `run_state_lock`. Processes parent completion, posts a combined event log comment to the parent Issue merging events from both cycles, and notifies finding notices from consistency evaluation.
+
+Under `--no-apply` (dry-run mode), the pre-integration cycle and integration boundary are skipped; only a single scheduling cycle runs FULL without side-effect writes.
+

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 from dataclasses import replace
+from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_execution_contracts import (
@@ -13,6 +14,7 @@ from orchestune.dispatch.cycle_execution_contracts import (
     RepairCycleAccumulator,
 )
 from orchestune.dispatch.cycle_report import CycleReport
+from orchestune.dispatch.phase_scheduling import SchedulingPhaseResult
 from orchestune.dispatch.progress import progress_phase
 from orchestune.dispatch.promotion_reporting import confirm_promotion_reports
 from orchestune.dispatch.timings import (
@@ -21,6 +23,13 @@ from orchestune.dispatch.timings import (
     timing_snapshot,
 )
 from orchestune.infra.command_metrics import command_observer_scope
+from orchestune.lock_contracts import ExternalLockScanResult
+
+
+class CycleStage(str, Enum):
+    FULL = "full"
+    PRE_INTEGRATION = "pre_integration"
+
 
 if TYPE_CHECKING:
     from orchestune.dispatch.cycle_context import IssuesByStatus
@@ -33,6 +42,66 @@ RuntimeT = TypeVar("RuntimeT")
 RepairT = TypeVar("RepairT", bound=RepairCycleAccumulator)
 
 
+def _build_pre_integration_report(
+    dependencies: CycleExecutionDependencies[RuntimeT, RepairT],
+    config: DispatcherConfig,
+    active_deviation_events: list[Any],
+    completion_events: list[Any],
+) -> CycleReport:
+    lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[], conflicts={})
+    scheduling = SchedulingPhaseResult(
+        selected=[],
+        quota_slots_available=0,
+        decisions=[],
+        execution_selections={},
+        skips=[],
+    )
+    report = dependencies.build_report(
+        scheduling,
+        lock_result,
+        deviation_events=active_deviation_events,
+        completion_events=completion_events,
+        promotion_events=[],
+        applied=config.apply,
+    )
+    report.stage = "pre_integration"
+    report.scheduling_deferred_reason = "pre_integration_stage"
+    return report
+
+
+def _execute_scheduling_pipeline(
+    dependencies: CycleExecutionDependencies[RuntimeT, RepairT],
+    ctx: CycleContext,
+    issues: IssuesByStatus,
+    run_state: RunState,
+    config: DispatcherConfig,
+    repair_cycle: RepairT,
+    active_deviation_events: list[Any],
+    completion_events: list[Any],
+) -> CycleReport:
+    sink = config.progress
+    with progress_phase(sink, "reconciliation_external_locks"):
+        promotion_events, lock_result = dependencies.reconcile_before_scheduling(
+            ctx=ctx,
+            issues=issues,
+            run_state=run_state,
+            config=config,
+            repair_cycle=repair_cycle,
+        )
+    with progress_phase(sink, "scheduling"):
+        scheduling = dependencies.schedule(ctx, lock_result, active_deviation_events)
+    report = dependencies.build_report(
+        scheduling,
+        lock_result,
+        deviation_events=active_deviation_events,
+        completion_events=completion_events,
+        promotion_events=promotion_events,
+        applied=config.apply,
+    )
+    report.stage = "scheduling"
+    return report
+
+
 def execute_pipeline(
     dependencies: CycleExecutionDependencies[RuntimeT, RepairT],
     ctx: CycleContext,
@@ -41,7 +110,8 @@ def execute_pipeline(
     config: DispatcherConfig,
     now: float,
     repair_cycle: RepairT,
-    prior_events: tuple[PriorMergeEvidenceCompletion, ...],
+    prior_events: tuple[PriorMergeEvidenceCompletion, ...] = (),
+    stage: CycleStage = CycleStage.FULL,
 ) -> CycleReport:
     sink = config.progress
     with progress_phase(sink, "active_worktrees"):
@@ -52,25 +122,20 @@ def execute_pipeline(
         completion_events = dependencies.run_gc(
             ctx, config, completion_events, repair_cycle
         )
-    with progress_phase(sink, "reconciliation_external_locks"):
-        promotion_events, lock_result = dependencies.reconcile_before_scheduling(
-            ctx=ctx,
-            issues=issues,
-            run_state=run_state,
-            config=config,
-            repair_cycle=repair_cycle,
+    active_deviations = list(active.deviation_events)
+    if stage == CycleStage.PRE_INTEGRATION:
+        return _build_pre_integration_report(
+            dependencies, config, active_deviations, completion_events
         )
-    with progress_phase(sink, "scheduling"):
-        scheduling = dependencies.schedule(
-            ctx, lock_result, list(active.deviation_events)
-        )
-    return dependencies.build_report(
-        scheduling,
-        lock_result,
-        deviation_events=list(active.deviation_events),
-        completion_events=completion_events,
-        promotion_events=promotion_events,
-        applied=config.apply,
+    return _execute_scheduling_pipeline(
+        dependencies,
+        ctx,
+        issues,
+        run_state,
+        config,
+        repair_cycle,
+        active_deviations,
+        completion_events,
     )
 
 
@@ -78,6 +143,7 @@ def execute_locked_cycle(
     dependencies: CycleExecutionDependencies[RuntimeT, RepairT],
     config: DispatcherConfig,
     collector: CycleTimingCollector | None = None,
+    stage: CycleStage = CycleStage.FULL,
 ) -> CycleReport:
     sink = config.progress
     with progress_phase(sink, "state_load"):
@@ -91,7 +157,14 @@ def execute_locked_cycle(
     repair_cycle = dependencies.new_repair_state()
     repair_cycle.add_report(recovery_report)
     report = dependencies.run_pipeline(
-        ctx, issues, run_state, config, now, repair_cycle, prior_merges.events
+        ctx,
+        issues,
+        run_state,
+        config,
+        now,
+        repair_cycle,
+        prior_merges.events,
+        stage=stage,
     )
     with progress_phase(sink, "consistency_postprocessing"):
         dependencies.finish_consistency(runtime, report, ctx, now, config, repair_cycle)
@@ -119,12 +192,14 @@ def record_cycle_events(
         entry = dependencies.build_event_log(report, now)
         entry["timings"] = timing_snapshot(collector)
         dependencies.append_event_log(entry, config.events_log_path)
-        confirm_promotion_reports(config, report.promotion_events)
+        if report.stage != CycleStage.PRE_INTEGRATION:
+            confirm_promotion_reports(config, report.promotion_events)
 
 
 def execute_cycle(
     dependencies: CycleExecutionDependencies[RuntimeT, RepairT],
     config: DispatcherConfig,
+    stage: CycleStage = CycleStage.FULL,
 ) -> CycleReport:
     collector = None
     try:
@@ -134,7 +209,10 @@ def execute_cycle(
     except Exception:
         pass
     sink = config.progress
-    with command_observer_scope(collector), progress_phase(sink, "cycle"):
+    phase_name = (
+        "pre_integration_cycle" if stage == CycleStage.PRE_INTEGRATION else "cycle"
+    )
+    with command_observer_scope(collector), progress_phase(sink, phase_name):
         with ExitStack() as stack:
             with progress_phase(sink, "state_lock"):
                 stack.enter_context(
@@ -142,4 +220,4 @@ def execute_cycle(
                         Path(config.run_state_path).with_suffix(".lock")
                     )
                 )
-            return execute_locked_cycle(dependencies, config, collector)
+            return execute_locked_cycle(dependencies, config, collector, stage=stage)

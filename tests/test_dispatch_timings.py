@@ -101,6 +101,10 @@ def test_metrics_failure_preserves_cli_exit_and_saved_json(
             return_value=False,
         ),
         patch(
+            "orchestune.dispatch.dispatcher._pre_scheduling_integration_steps",
+            return_value=[],
+        ),
+        patch(
             "orchestune.dispatch.dispatcher._post_cycle_steps",
             return_value=[("post", lambda: phase, True)],
         ),
@@ -109,13 +113,23 @@ def test_metrics_failure_preserves_cli_exit_and_saved_json(
         assert dispatcher.main([]) == expected
     saved = json.loads(config.report_path.read_text())
     result = emit.call_args.args[0]
-    assert saved == {
+    expected_saved = {
         **_report_to_dict(result.report),
         "post_cycle_results": [phase.to_dict()],
     }
-    assert (
-        json.loads(config.events_log_path.read_text())["timings"]["collection_status"]
-        == "unavailable"
+    if result.pre_integration_report is not None:
+        expected_saved["pre_integration_cycle"] = _report_to_dict(
+            result.pre_integration_report
+        )
+    assert saved == expected_saved
+    event_entries = [
+        json.loads(line)
+        for line in config.events_log_path.read_text().splitlines()
+        if line.strip()
+    ]
+    assert all(
+        entry["timings"]["collection_status"] == "unavailable"
+        for entry in event_entries
     )
 
 

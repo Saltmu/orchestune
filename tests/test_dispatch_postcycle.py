@@ -23,11 +23,13 @@ from orchestune.dispatch.cycle_events import (
     WorktreeCompletion,
 )
 from orchestune.dispatch.postcycle import (
-    _decide_semantic_review_enabled,
-    _poll_pending_not_needed_reviews,
     _post_event_log_comment,
     _process_parent_completion,
     _run_best_effort_phase,
+)
+from orchestune.dispatch.pre_scheduling_integration import (
+    _decide_semantic_review_enabled,
+    _poll_pending_not_needed_reviews,
     _run_semantic_integrator,
 )
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
@@ -136,7 +138,7 @@ class TestPollPendingNotNeededReviews:
     def test_returns_report_on_success(self, tmp_path):
         state_path = tmp_path / "s.json"
         with patch(
-            "orchestune.dispatch.postcycle.process_pending_not_needed_reviews",
+            "orchestune.dispatch.pre_scheduling_integration.process_pending_not_needed_reviews",
             autospec=True,
             return_value={"processed": 1},
         ) as mock_poll:
@@ -153,7 +155,7 @@ class TestPollPendingNotNeededReviews:
         `process_pending_not_needed_reviews`へ伝播する。"""
         state_path = tmp_path / "s.json"
         with patch(
-            "orchestune.dispatch.postcycle.process_pending_not_needed_reviews",
+            "orchestune.dispatch.pre_scheduling_integration.process_pending_not_needed_reviews",
             autospec=True,
             return_value={"processed": 1},
         ) as mock_poll:
@@ -168,7 +170,7 @@ class TestPollPendingNotNeededReviews:
 
         state_path = tmp_path / "s.json"
         with patch(
-            "orchestune.dispatch.postcycle.process_pending_not_needed_reviews",
+            "orchestune.dispatch.pre_scheduling_integration.process_pending_not_needed_reviews",
             autospec=True,
             return_value={"processed": 1},
         ) as mock_poll:
@@ -183,7 +185,7 @@ class TestPollPendingNotNeededReviews:
     def test_returns_none_and_warns_on_failure(self, tmp_path, capsys):
         state_path = tmp_path / "s.json"
         with patch(
-            "orchestune.dispatch.postcycle.process_pending_not_needed_reviews",
+            "orchestune.dispatch.pre_scheduling_integration.process_pending_not_needed_reviews",
             autospec=True,
             side_effect=RuntimeError("boom"),
         ):
@@ -229,12 +231,13 @@ class TestRunSemanticIntegrator:
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with (
             patch(
-                "orchestune.dispatch.postcycle.Integrator",
+                "orchestune.dispatch.pre_scheduling_integration.Integrator",
                 autospec=True,
                 return_value=mock_instance,
             ) as mock_integrator_cls,
             patch(
-                "orchestune.dispatch.postcycle.IntegrationCoordinator", autospec=True
+                "orchestune.dispatch.pre_scheduling_integration.IntegrationCoordinator",
+                autospec=True,
             ) as mock_coordinator_cls,
         ):
             result = _run_semantic_integrator(config, semantic_review_enabled=True)
@@ -258,7 +261,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             return_value=mock_instance,
         ) as mock_integrator_cls:
@@ -281,7 +284,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             return_value=mock_instance,
         ) as mock_integrator_cls:
@@ -296,7 +299,9 @@ class TestRunSemanticIntegrator:
         self, tmp_path
     ):
         """#1384: required mode enables semantic review for all targets and flags."""
-        from orchestune.dispatch.postcycle import _build_integrator_config
+        from orchestune.dispatch.pre_scheduling_integration import (
+            _build_integrator_config,
+        )
 
         targets = [
             ClaudeCodeCloudRoutineDispatchTarget("rid", "rtok"),
@@ -320,7 +325,9 @@ class TestRunSemanticIntegrator:
 
     def test_off_mode_disables_semantic_review_and_coordinator(self, tmp_path):
         """#1384: off mode always disables semantic review and coordinator."""
-        from orchestune.dispatch.postcycle import _build_integrator_config
+        from orchestune.dispatch.pre_scheduling_integration import (
+            _build_integrator_config,
+        )
 
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -348,7 +355,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             return_value=mock_instance,
         ) as mock_integrator_cls:
@@ -375,7 +382,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             return_value=mock_instance,
         ) as mock_integrator_cls:
@@ -397,7 +404,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             return_value=mock_instance,
         ) as mock_integrator_cls:
@@ -420,7 +427,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             return_value=mock_instance,
         ) as mock_integrator_cls:
@@ -445,7 +452,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             return_value=mock_instance,
         ) as mock_integrator_cls:
@@ -469,7 +476,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             return_value=mock_instance,
         ) as mock_integrator_cls:
@@ -491,7 +498,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "success", "ok": True}
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             return_value=mock_instance,
         ) as mock_integrator_cls:
@@ -517,7 +524,7 @@ class TestRunSemanticIntegrator:
             "status": IntegrationStatus.REVIEW_GATE_BLOCKED
         }
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             return_value=mock_instance,
         ):
@@ -536,7 +543,7 @@ class TestRunSemanticIntegrator:
             worktree_root=tmp_path / "worktrees",
         )
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             side_effect=RuntimeError("boom"),
         ):
@@ -558,7 +565,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": "failure", "failed": ["task-1"]}
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             return_value=mock_instance,
         ):
@@ -594,7 +601,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": error_status, "error": "boom"}
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             return_value=mock_instance,
         ):
@@ -616,7 +623,7 @@ class TestRunSemanticIntegrator:
         mock_instance = MagicMock()
         mock_instance.run.return_value = {"status": success_status}
         with patch(
-            "orchestune.dispatch.postcycle.Integrator",
+            "orchestune.dispatch.pre_scheduling_integration.Integrator",
             autospec=True,
             return_value=mock_instance,
         ):

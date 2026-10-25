@@ -15,7 +15,7 @@ from orchestune.dispatch.config_values import (
     RUNTIME_TUNING_KEYS,
     runtime_tuning_overrides,
 )
-from orchestune.dispatch.postcycle import (
+from orchestune.dispatch.pre_scheduling_integration import (
     _build_integrator_config,
     _run_semantic_integrator,
 )
@@ -201,12 +201,14 @@ def _phase(report: dict[str, Any]):  # type: ignore[no-untyped-def]
     config = MagicMock()
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(
-            "orchestune.dispatch.postcycle._build_integrator_config",
+            "orchestune.dispatch.pre_scheduling_integration._build_integrator_config",
             lambda *_: MagicMock(),
         )
         integrator = MagicMock()
         integrator.return_value.run.return_value = report
-        patch.setattr("orchestune.dispatch.postcycle.Integrator", integrator)
+        patch.setattr(
+            "orchestune.dispatch.pre_scheduling_integration.Integrator", integrator
+        )
         return _run_semantic_integrator(config, False)
 
 

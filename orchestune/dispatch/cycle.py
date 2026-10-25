@@ -81,7 +81,11 @@ from orchestune.dispatch.cycle_events import (
     PromotionEvent,
     WorktreeCompletionHold,
 )
-from orchestune.dispatch.cycle_execution import execute_cycle, execute_pipeline
+from orchestune.dispatch.cycle_execution import (
+    CycleStage,
+    execute_cycle,
+    execute_pipeline,
+)
 from orchestune.dispatch.cycle_execution_contracts import CycleExecutionDependencies
 from orchestune.dispatch.cycle_report import (
     CycleReport,
@@ -166,7 +170,7 @@ if TYPE_CHECKING:
     from orchestune.lock_contracts import ExternalLockScanResult
     from orchestune.models import PrRecord
 
-__all__ = ["CycleReport", "run_dispatch_cycle"]
+__all__ = ["CycleReport", "run_dispatch_cycle", "run_pre_integration_cycle"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -935,6 +939,7 @@ def _execute_cycle_pipeline(
     now: float,
     repair_cycle: _RepairCycleState,
     prior_parent_merge_events: tuple[PriorMergeEvidenceCompletion, ...] = (),
+    stage: CycleStage = CycleStage.FULL,
 ) -> CycleReport:
     return execute_pipeline(
         _build_execution_dependencies(),
@@ -945,6 +950,7 @@ def _execute_cycle_pipeline(
         now,
         repair_cycle,
         prior_parent_merge_events,
+        stage=stage,
     )
 
 
@@ -1014,4 +1020,10 @@ def _build_execution_dependencies() -> (
 
 
 def run_dispatch_cycle(config: DispatcherConfig) -> CycleReport:
-    return execute_cycle(_build_execution_dependencies(), config)
+    return execute_cycle(_build_execution_dependencies(), config, stage=CycleStage.FULL)
+
+
+def run_pre_integration_cycle(config: DispatcherConfig) -> CycleReport:
+    return execute_cycle(
+        _build_execution_dependencies(), config, stage=CycleStage.PRE_INTEGRATION
+    )
