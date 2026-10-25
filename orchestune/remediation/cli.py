@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.forge import GitHubForge
+from orchestune.infra.cli_output import CliOutput, make_output
 from orchestune.remediation.apply import apply_remediation
 from orchestune.remediation.models import RemediationPreview
 from orchestune.remediation.preview import build_remediation_preview
@@ -17,28 +18,47 @@ from orchestune.remediation.snapshot import collect_remediation_snapshot
 from orchestune.remediation.spec import load_remediation_spec, positive_number
 
 
-def _print_preview(preview: RemediationPreview, parent: int) -> None:
-    print(f"Remediation preview for parent Issue #{parent}")
-    print(f"Spec revision: {preview.spec_revision}")
+def _stdout() -> CliOutput:
+    return make_output(sys.stdout)
+
+
+def _stderr() -> CliOutput:
+    return make_output(sys.stderr)
+
+
+def _write_lines(output: CliOutput, lines: Sequence[str]) -> None:
+    """Write literal lines through the shared output layer (plain text is unchanged)."""
+    for line in lines:
+        output.emit(output.text_block(line))
+
+
+def _preview_lines(preview: RemediationPreview, parent: int) -> list[str]:
+    lines = [
+        f"Remediation preview for parent Issue #{parent}",
+        f"Spec revision: {preview.spec_revision}",
+    ]
     for item in preview.tasks:
         task = item.task
-        print(f"{item.action}: {task.subtask.id} (Issue {item.issue_number or 'new'})")
-        print(f"  kind: {task.kind}")
-        print(f"  parent_acceptance: {task.parent_acceptance}")
-        print(f"  matched sources: {item.acceptance_sources}")
-        print(f"  origins: {task.origins}")
-        print(f"  reason: {task.reason}")
-        print(f"  footprint: {task.subtask.footprint}")
-        print(f"  depends_on: {task.subtask.depends_on}")
-        for difference in item.footprint_diff:
-            print(f"  diff: {difference}")
+        lines.append(
+            f"{item.action}: {task.subtask.id} (Issue {item.issue_number or 'new'})"
+        )
+        lines.append(f"  kind: {task.kind}")
+        lines.append(f"  parent_acceptance: {task.parent_acceptance}")
+        lines.append(f"  matched sources: {item.acceptance_sources}")
+        lines.append(f"  origins: {task.origins}")
+        lines.append(f"  reason: {task.reason}")
+        lines.append(f"  footprint: {task.subtask.footprint}")
+        lines.append(f"  depends_on: {task.subtask.depends_on}")
+        lines.extend(f"  diff: {difference}" for difference in item.footprint_diff)
         if item.completed_steps or item.remaining_steps:
-            print(
+            lines.append(
                 f"  completed: {item.completed_steps}; remaining: {item.remaining_steps}"
             )
-    for problem in preview.problems:
-        print(f"Error [{problem.category}]: {problem.message}")
-    print(f"Preview token: {preview.preview_token}")
+    lines.extend(
+        f"Error [{problem.category}]: {problem.message}" for problem in preview.problems
+    )
+    lines.append(f"Preview token: {preview.preview_token}")
+    return lines
 
 
 def main(argv: Sequence[str] | None = None, *, forge: Any = None) -> int:
@@ -64,7 +84,7 @@ def main(argv: Sequence[str] | None = None, *, forge: Any = None) -> int:
             template_path=args.template,
             parent_issue_number=args.parent_issue,
         )
-        print(result.message)
+        _write_lines(_stdout(), [result.message])
         return result.exit_code
     try:
         spec = load_remediation_spec(args.spec)
@@ -87,9 +107,9 @@ def main(argv: Sequence[str] | None = None, *, forge: Any = None) -> int:
             template = Path(args.template).read_text(encoding="utf-8")
         preview = build_remediation_preview(spec, snapshot, template=template)
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        _write_lines(_stderr(), [f"Error: {exc}"])
         return 2
-    _print_preview(preview, parent)
+    _write_lines(_stdout(), _preview_lines(preview, parent))
     return preview.exit_code
 
 

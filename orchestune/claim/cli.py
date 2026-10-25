@@ -18,6 +18,7 @@ from orchestune.claim.contracts import (
 from orchestune.claim.service import claim_task, resume_claim
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.forge import ForgeGraphQLUnavailableError
+from orchestune.infra.cli_output import CliOutput, make_output
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -45,67 +46,85 @@ def _token_directory(state_path: Path | None) -> Path:
     return workspace.run_state_path.parent / ".orchestune" / "claim-tokens"
 
 
+def _stdout() -> CliOutput:
+    return make_output(sys.stdout)
+
+
+def _stderr() -> CliOutput:
+    return make_output(sys.stderr)
+
+
+def _write_lines(output: CliOutput, lines: Sequence[str]) -> None:
+    """Write literal lines through the shared output layer (plain text is unchanged)."""
+    for line in lines:
+        output.emit(output.text_block(line))
+
+
 def _print_success(outcome: ClaimOutcome, *, preview: bool) -> None:
+    owner = outcome.owner_kind.value if outcome.owner_kind else "unavailable"
     if preview:
-        print(
-            "Dry run: validation succeeded; no Git, Forge, or state changes were made."
-        )
-        print(f"Issue: #{outcome.issue_number}")
-        print(f"Claim ID: {outcome.claim_id or 'unavailable'}")
-        print(f"Planned branch: {outcome.branch or 'unavailable'}")
-        print(f"Planned worktree: {outcome.worktree_path or 'unavailable'}")
-        print(f"Planned base: {outcome.base_ref or 'unavailable'}")
-        print(
-            f"Owner kind: {(outcome.owner_kind.value if outcome.owner_kind else 'unavailable')}"
-        )
-        print(
-            "Unverified: Git fetch, worktree creation, state persistence, Forge metadata and label updates."
+        _write_lines(
+            _stdout(),
+            [
+                "Dry run: validation succeeded; no Git, Forge, or state changes were made.",
+                f"Issue: #{outcome.issue_number}",
+                f"Claim ID: {outcome.claim_id or 'unavailable'}",
+                f"Planned branch: {outcome.branch or 'unavailable'}",
+                f"Planned worktree: {outcome.worktree_path or 'unavailable'}",
+                f"Planned base: {outcome.base_ref or 'unavailable'}",
+                f"Owner kind: {owner}",
+                "Unverified: Git fetch, worktree creation, state persistence, Forge metadata and label updates.",
+            ],
         )
         return
-    print(f"Issue: #{outcome.issue_number}")
-    print(f"Claim ID: {outcome.claim_id or 'unavailable'}")
-    print(f"Branch: {outcome.branch or 'unavailable'}")
-    print(f"Worktree: {outcome.worktree_path or 'unavailable'}")
-    print(f"Base: {outcome.base_ref or 'unavailable'}")
-    print(
-        f"Owner kind: {(outcome.owner_kind.value if outcome.owner_kind else 'unavailable')}"
+    _write_lines(
+        _stdout(),
+        [
+            f"Issue: #{outcome.issue_number}",
+            f"Claim ID: {outcome.claim_id or 'unavailable'}",
+            f"Branch: {outcome.branch or 'unavailable'}",
+            f"Worktree: {outcome.worktree_path or 'unavailable'}",
+            f"Base: {outcome.base_ref or 'unavailable'}",
+            f"Owner kind: {owner}",
+        ],
     )
 
 
 def _print_overlap_warnings(warnings: tuple[ClaimOverlapWarning, ...]) -> None:
+    lines: list[str] = []
     for warning in warnings:
-        print(
+        lines.append(
             f"Warning: footprint overlaps issue #{warning.issue_number}: "
-            f"{', '.join(warning.paths)}",
-            file=sys.stderr,
+            f"{', '.join(warning.paths)}"
         )
-        print(
+        lines.append(
             f"  branch={warning.branch or 'unavailable'} "
-            f"worktree={warning.worktree_path or 'unavailable'}",
-            file=sys.stderr,
+            f"worktree={warning.worktree_path or 'unavailable'}"
         )
     if warnings:
-        print(
+        lines.append(
             "Warning: the claim is not blocked. Agree on the merge order with the "
-            "overlapping tasks and resolve merge conflicts when rebasing.",
-            file=sys.stderr,
+            "overlapping tasks and resolve merge conflicts when rebasing."
         )
+    _write_lines(_stderr(), lines)
 
 
 def _print_failure(failure: ClaimFailure) -> None:
-    print(f"Claim failed: reason={failure.reason.value}", file=sys.stderr)
-    print(f"Message: {failure.message}", file=sys.stderr)
+    lines = [
+        f"Claim failed: reason={failure.reason.value}",
+        f"Message: {failure.message}",
+    ]
     if failure.conflicting_issue_number is not None:
-        print(f"conflicting_issue=#{failure.conflicting_issue_number}", file=sys.stderr)
+        lines.append(f"conflicting_issue=#{failure.conflicting_issue_number}")
     if failure.conflicting_branch:
-        print(f"conflicting_branch={failure.conflicting_branch}", file=sys.stderr)
+        lines.append(f"conflicting_branch={failure.conflicting_branch}")
     if failure.conflicting_path:
-        print(f"conflicting_path={failure.conflicting_path}", file=sys.stderr)
+        lines.append(f"conflicting_path={failure.conflicting_path}")
     actions = failure.next_actions or (
         "Inspect the claim state and retry when the conflict is resolved.",
     )
-    for action in actions:
-        print(f"Next action: {action}", file=sys.stderr)
+    lines.extend(f"Next action: {action}" for action in actions)
+    _write_lines(_stderr(), lines)
 
 
 def _resume_or_preview(args: argparse.Namespace, token: str) -> ClaimOutcome:
@@ -150,17 +169,23 @@ def _render_amend(outcome: FootprintAmendOutcome, *, preview: bool) -> int:
         assert outcome.failure is not None
         _print_failure(outcome.failure)
         return int(outcome.failure.exit_code)
+    lines = []
     if preview:
-        print("Dry run: no Forge or state changes were made.")
-    print(f"Issue: #{outcome.issue_number}")
-    print(f"Claim ID: {outcome.claim_id}")
-    print(f"Worktree: {outcome.worktree_path}")
-    print(f"Added: {', '.join(outcome.added) or 'none'}")
-    print(f"Footprint: {', '.join(outcome.amended_footprint)}")
+        lines.append("Dry run: no Forge or state changes were made.")
+    lines.extend(
+        [
+            f"Issue: #{outcome.issue_number}",
+            f"Claim ID: {outcome.claim_id}",
+            f"Worktree: {outcome.worktree_path}",
+            f"Added: {', '.join(outcome.added) or 'none'}",
+            f"Footprint: {', '.join(outcome.amended_footprint)}",
+        ]
+    )
     if not preview:
-        print(
+        lines.append(
             f"Issue footprint updated: {'yes' if outcome.issue_body_updated else 'no'}"
         )
+    _write_lines(_stdout(), lines)
     _print_overlap_warnings(outcome.warnings)
     return 0
 
@@ -213,11 +238,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _report_forge_unavailable()
     except Exception as error:
         # Only the class name is shown: messages may carry tokens or local paths.
-        print(
-            "Claim failed: reason=generic_error\n"
-            "Message: claim service invocation failed; inspect protected local records and retry.\n"
-            f"error_type={type(error).__name__}",
-            file=sys.stderr,
+        _write_lines(
+            _stderr(),
+            [
+                "Claim failed: reason=generic_error",
+                "Message: claim service invocation failed; inspect protected local records and retry.",
+                f"error_type={type(error).__name__}",
+            ],
         )
         return 1
     if args.amend_footprint:

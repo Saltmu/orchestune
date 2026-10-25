@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -252,3 +254,144 @@ def test_cli_reports_generated_completion_id_before_service_returns(capsys):
         patch("orchestune.complete.cli.complete_task", side_effect=complete),
     ):
         assert main(["--issue", "1003", "--result", "not-needed"]) == 0
+
+
+class _TtyStream(io.StringIO):
+    """A stand-in for an interactive UTF-8 terminal stream."""
+
+    @property
+    def encoding(self) -> str:  # type: ignore[override]
+        return "utf-8"
+
+    def isatty(self) -> bool:
+        return True
+
+
+def _use_tty(monkeypatch: pytest.MonkeyPatch, columns: int) -> _TtyStream:
+    stream = _TtyStream()
+    monkeypatch.setattr(sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stderr", stream)
+    for name in ("CI", "ORCHESTUNE_CLI_PLAIN", "NO_COLOR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setenv("COLUMNS", str(columns))
+    return stream
+
+
+_DONE_ARGS = ["--issue", "1003", "--pr", "42", "--result", "done", "--reviewer", "skip"]
+
+
+def _run_done(result: CompleteResult, argv: list[str] | None = None) -> int:
+    from orchestune.complete.cli import main
+
+    with (
+        patch("orchestune.complete.cli._credentials", return_value=(None, None, None)),
+        patch("orchestune.complete.cli.complete_task", return_value=result),
+    ):
+        return main(_DONE_ARGS if argv is None else argv)
+
+
+def test_plain_handoff_stdout_is_unchanged(capsys) -> None:
+    result = CompleteResult.success_result(
+        1003, "done", pr=42, completion_id="completion-1003"
+    )
+    assert _run_done(result) == 0
+    assert capsys.readouterr().out == (
+        "Completion ID: completion-1003\n"
+        f"Reached stage: {result.stage.value}\n"
+        "Completion handed off to GC for Issue #1003.\n"
+    )
+
+
+def test_plain_preview_stdout_is_unchanged(capsys) -> None:
+    result = CompleteResult.preview_result(1003, "done", pr=42)
+    assert _run_done(result, [*_DONE_ARGS, "--no-apply"]) == 0
+    assert capsys.readouterr().out == (
+        f"Reached stage: {result.stage.value}\n"
+        "Completion preview validated for Issue #1003.\n"
+    )
+
+
+def test_plain_failure_stdout_and_exit_code_are_unchanged(capsys) -> None:
+    from orchestune.complete.contracts import (
+        CompleteFailure,
+        CompleteFailureReason,
+        CompleteStage,
+    )
+
+    failed = CompleteResult.failure_result(
+        1003,
+        "done",
+        CompleteStage.OUTCOME_POSTED,
+        CompleteFailure(
+            CompleteFailureReason.LABEL_CONFLICT,
+            "A protected status label prevents completion.",
+            issue_number=1003,
+        ),
+        completion_id="completion-1003",
+    )
+    assert _run_done(failed) == 55
+    assert capsys.readouterr().out == (
+        "Completion ID: completion-1003\n"
+        "Reached stage: outcome_posted\n"
+        "Complete failed: label_conflict: "
+        "A protected status label prevents completion.\n"
+    )
+
+
+def test_plain_argument_error_stays_on_stdout_with_exit_40(capsys) -> None:
+    from orchestune.complete.cli import main
+
+    assert main(["--issue", "1003", "--result", "done"]) == 40
+    assert capsys.readouterr().out == ("Error: --pr is required when --result=done\n")
+
+
+def test_progress_lines_are_printed_before_the_result(capsys) -> None:
+    from orchestune.complete.cli import main
+    from orchestune.complete.contracts import CompleteStage
+
+    def fake_service(request, *, on_progress):
+        on_progress("completion-1003", CompleteStage.OUTCOME_POSTED)
+        return CompleteResult.success_result(
+            1003, "done", pr=42, completion_id="completion-1003"
+        )
+
+    with (
+        patch("orchestune.complete.cli._credentials", return_value=(None, None, None)),
+        patch("orchestune.complete.cli.complete_task", side_effect=fake_service),
+    ):
+        assert main(_DONE_ARGS) == 0
+    assert capsys.readouterr().out.splitlines()[:2] == [
+        "Completion ID: completion-1003",
+        "Reached stage: outcome_posted",
+    ]
+
+
+@pytest.mark.parametrize("columns", [30, 200])
+def test_tty_output_keeps_completion_id_and_stage_intact(monkeypatch, columns) -> None:
+    from orchestune.complete.contracts import (
+        CompleteFailure,
+        CompleteFailureReason,
+        CompleteStage,
+    )
+
+    completion_id = "completion-" + "0123456789abcdef" * 4
+    result = CompleteResult.failure_result(
+        1003,
+        "done",
+        CompleteStage.OUTCOME_POSTED,
+        CompleteFailure(
+            CompleteFailureReason.LABEL_CONFLICT,
+            "A protected status label prevents completion.",
+            issue_number=1003,
+        ),
+        completion_id=completion_id,
+    )
+    stream = _use_tty(monkeypatch, columns)
+    assert _run_done(result) == 55
+    assert stream.getvalue() == (
+        f"Completion ID: {completion_id}\n"
+        "Reached stage: outcome_posted\n"
+        "Complete failed: label_conflict: "
+        "A protected status label prevents completion.\n"
+    )
