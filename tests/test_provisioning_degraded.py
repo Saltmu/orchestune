@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import re
 from pathlib import Path
 
 import pytest
@@ -8,6 +10,7 @@ from orchestune.forge import (
     MetadataSearchUnavailableError,
     RelationshipUnavailableError,
 )
+from orchestune.infra.cli_output import make_output
 from orchestune.issue_parsing import (
     PARENT_MARKER,
 )
@@ -22,6 +25,19 @@ from orchestune.provisioning.flow import (
 from tests.test_provisioning_support import (
     FakeForge,
 )
+
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+class _TtyStream(io.StringIO):
+    """A stream that reports itself as a UTF-8 terminal (decorated output)."""
+
+    def isatty(self) -> bool:
+        return True
+
+    @property
+    def encoding(self) -> str:  # type: ignore[override]
+        return "utf-8"
 
 
 class TestProvisionIssuesDegradedMode:
@@ -278,3 +294,18 @@ class TestProvisionIssuesDegradedMode:
         _print_result(result)
         captured = capsys.readouterr()
         assert "Operating mode: full" in captured.out
+
+    def test_print_result_warns_about_degraded_mode_on_tty(self):
+        result = ProvisionResult(
+            parent_issue_number=100,
+            applied=True,
+            created={"task-a": 101},
+            reused={},
+            degraded_subtask_ids=("task-a",),
+        )
+        stream = _TtyStream()
+        _print_result(result, make_output(stream, env={}, width=100))
+        text = _ANSI.sub("", stream.getvalue())
+        assert "Operating mode: degraded/parent-metadata for 1 subtask(s)" in text
+        assert "task-a" in text
+        assert "\x1b" in stream.getvalue()

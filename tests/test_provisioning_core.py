@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import io
+import re
 from pathlib import Path
 
 import pytest
 import yaml
 
 from orchestune.dag.models import SubTask
+from orchestune.infra import cli_progress
+from orchestune.infra.cli_output import make_output
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     PARENT_MARKER,
@@ -573,6 +577,131 @@ class TestMain:
         captured = capsys.readouterr()
         assert "Error:" in captured.err
         assert provisioning_forge.create_issue_calls == []
+
+
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+class _TtyStream(io.StringIO):
+    """A stream that reports itself as a UTF-8 terminal (decorated output)."""
+
+    def isatty(self) -> bool:
+        return True
+
+    @property
+    def encoding(self) -> str:  # type: ignore[override]
+        return "utf-8"
+
+
+class _LiveSpy(cli_progress.Live):
+    """Records the start/stop calls of the spinner's Live display."""
+
+    events: list[str] = []
+
+    def start(self, *args: object, **kwargs: object) -> None:
+        self.events.append("start")
+        super().start(*args, **kwargs)  # type: ignore[arg-type]
+
+    def stop(self) -> None:
+        self.events.append("stop")
+        super().stop()
+
+
+class TestMainPresentation:
+    """#1412: decorated TTY output and the spinner; plain output stays unchanged."""
+
+    @pytest.fixture
+    def live_events(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        _LiveSpy.events = []
+        monkeypatch.setattr(cli_progress, "Live", _LiveSpy)
+        return _LiveSpy.events
+
+    @pytest.fixture
+    def tty_output(self, monkeypatch: pytest.MonkeyPatch) -> _TtyStream:
+        stream = _TtyStream()
+        monkeypatch.setattr(
+            "orchestune.provisioning.cli.make_output",
+            lambda: make_output(stream, env={}, width=100),
+        )
+        return stream
+
+    def test_tty_apply_shows_summary_and_created_reused_table(
+        self,
+        plan_path: Path,
+        template_path: Path,
+        provisioning_forge: FakeForge,
+        tty_output: _TtyStream,
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--plan", str(plan_path), "--template", str(template_path)])
+        assert exc_info.value.code == 0
+        text = _ANSI.sub("", tty_output.getvalue())
+        assert "[OK]" in text
+        assert "Created" in text and "Reused" in text
+        assert "task-a" in text
+        assert "Operating mode: full" in text
+        assert len(provisioning_forge.create_issue_calls) == 3
+
+    def test_tty_dry_run_is_labelled_and_not_reported_as_executed(
+        self,
+        plan_path: Path,
+        template_path: Path,
+        provisioning_forge: FakeForge,
+        tty_output: _TtyStream,
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            main(
+                [
+                    "--plan",
+                    str(plan_path),
+                    "--template",
+                    str(template_path),
+                    "--no-apply",
+                ]
+            )
+        assert exc_info.value.code == 0
+        text = _ANSI.sub("", tty_output.getvalue())
+        assert "[DRY-RUN]" in text
+        assert "no Issues were created" in text
+        assert "task-a" in text
+        assert provisioning_forge.create_issue_calls == []
+
+    def test_spinner_stops_when_provisioning_raises(
+        self,
+        plan_path: Path,
+        template_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        live_events: list[str],
+        tty_output: _TtyStream,
+        capsys,
+    ):
+        def boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("orchestune.provisioning.cli._provision_issues", boom)
+
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--plan", str(plan_path), "--template", str(template_path)])
+        assert exc_info.value.code == 1
+        assert live_events == ["start", "stop"]
+        assert "Error: boom" in capsys.readouterr().err
+
+    def test_plain_run_never_starts_the_spinner_or_writes_ansi(
+        self,
+        plan_path: Path,
+        template_path: Path,
+        provisioning_forge: FakeForge,
+        live_events: list[str],
+        capsys,
+    ):
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--plan", str(plan_path), "--template", str(template_path)])
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        assert live_events == []
+        assert "\x1b" not in captured.out
+        assert "\x1b" not in captured.err
+        assert captured.out.startswith("Parent issue: #")
 
 
 def test_missing_subtask_id_yaml_placeholder_raises(tmp_path: Path, plan_path: Path):

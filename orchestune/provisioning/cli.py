@@ -8,6 +8,8 @@ from collections.abc import Sequence
 
 from orchestune.config_contracts import ConfigError
 from orchestune.forge import GitHubForge
+from orchestune.infra.cli_output import CliOutput, Level, make_output
+from orchestune.infra.cli_progress import progress
 from orchestune.infra.repository_config import resolve_repo_root
 from orchestune.provisioning.flow import (
     IssuePreview,
@@ -74,7 +76,19 @@ def _print_resume_hint(plan_path: str) -> None:
     )
 
 
-def _print_result(result: ProvisionResult) -> None:
+_PROGRESS_TEXT = "Provisioning Issues..."
+
+
+def _print_result(result: ProvisionResult, output: CliOutput | None = None) -> None:
+    """Print the outcome; decorated only on a TTY, otherwise the legacy plain text."""
+    output = make_output() if output is None else output
+    if output.policy.rich:
+        _print_result_rich(result, output)
+    else:
+        _print_result_plain(result)
+
+
+def _print_result_plain(result: ProvisionResult) -> None:
     if not result.applied:
         print("Dry run (--no-apply): no Issues were created.")
         if result.parent_issue_number is not None:
@@ -124,6 +138,76 @@ def _print_result(result: ProvisionResult) -> None:
         )
 
 
+def _print_preview_rich(result: ProvisionResult, output: CliOutput) -> None:
+    items = []
+    if result.parent_issue_number is not None:
+        items.append(("Target parent issue", f"#{result.parent_issue_number}"))
+    output.summary(Level.DRY_RUN, "Dry run (--no-apply): no Issues were created", items)
+    for preview in result.previews:
+        status = "reuse expected" if preview.already_has_issue else "would create"
+        output.summary(
+            Level.DRY_RUN,
+            f"{preview.subtask_id} ({status})",
+            [("Title", preview.title), ("Labels", ", ".join(preview.labels))],
+        )
+        output.emit(output.text_block(preview.body))
+
+
+def _print_outcome_rich(result: ProvisionResult, output: CliOutput) -> None:
+    number = result.parent_issue_number
+    if result.parent_only_subtask_ids:
+        level = Level.FAILURE
+    elif result.plan_synced:
+        level = Level.SUCCESS
+    else:
+        level = Level.WARNING
+    output.summary(
+        level,
+        f"Parent issue: #{number}",
+        [("Created", str(len(result.created))), ("Reused", str(len(result.reused)))],
+    )
+    rows = [("created", sid, f"#{n}") for sid, n in result.created.items()]
+    rows += [("reused", sid, f"#{n}") for sid, n in result.reused.items()]
+    if rows:
+        output.table(("Result", "Subtask", "Issue"), rows, title="Issues")
+
+
+def _print_result_rich(result: ProvisionResult, output: CliOutput) -> None:
+    if not result.applied:
+        _print_preview_rich(result, output)
+        return
+    _print_outcome_rich(result, output)
+    if result.degraded_subtask_ids:
+        output.message(
+            Level.WARNING,
+            "Operating mode: degraded/parent-metadata for "
+            f"{len(result.degraded_subtask_ids)} subtask(s)",
+            detail="\n".join(result.degraded_subtask_ids),
+        )
+    else:
+        output.message(
+            Level.SUCCESS,
+            "Operating mode: full (native sub-issue/blocked_by relationships linked)",
+        )
+    number = result.parent_issue_number
+    if result.parent_only_subtask_ids:
+        output.message(
+            Level.FAILURE,
+            f"the plan of #{number} has registered subtasks missing from the local plan: "
+            f"{', '.join(result.parent_only_subtask_ids)}",
+            detail="No Issues were created. Restore the plan with "
+            f"`orchestune provision --restore-plan {number}` and rerun provision.",
+        )
+        return
+    if not result.plan_synced:
+        output.message(
+            Level.WARNING,
+            f"could not sync decomposition plan into #{number}'s body.",
+            detail="The local plan file was updated, but the parent Issue body "
+            "does not reflect the latest state.",
+        )
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="orchestune provision: decomposition_plan.mdからIssueを起票する"
@@ -141,6 +225,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = _build_arg_parser().parse_args(argv)
+    output = make_output()
     try:
         if args.restore_plan is not None:
             out = restore_plan_file_from_parent(
@@ -153,14 +238,17 @@ def main(argv: Sequence[str] | None = None) -> None:
                 f"Successfully restored decomposition plan from #{args.restore_plan} to {out}"
             )
             raise SystemExit(0)
-        result = _provision_issues(
-            args.plan,
-            forge=GitHubForge(),
-            apply=args.apply,
-            template_path=args.template,
-            repo_root=resolve_repo_root(args.plan),
-            parent_issue=args.parent_issue,
-        )
+        # The spinner exists only on a decorated TTY; it stops before the result
+        # is printed and when provisioning raises.
+        with progress(output, _PROGRESS_TEXT if output.policy.rich else ""):
+            result = _provision_issues(
+                args.plan,
+                forge=GitHubForge(),
+                apply=args.apply,
+                template_path=args.template,
+                repo_root=resolve_repo_root(args.plan),
+                parent_issue=args.parent_issue,
+            )
     except ConfigError as error:
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
@@ -168,7 +256,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(f"Error: {error}", file=sys.stderr)
         _print_resume_hint(args.plan)
         raise SystemExit(1) from error
-    _print_result(result)
+    _print_result(result, output)
     # #664: 同期に失敗した実行を成功終了させると、「provisionは通ったのに親Issue
     # だけ古い」状態が検知されないまま残る（本文サイズ超過や書き込み拒否など）。
     raise SystemExit(3 if result.applied and not result.plan_synced else 0)
