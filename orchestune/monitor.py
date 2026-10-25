@@ -4,12 +4,31 @@ from __future__ import annotations
 
 import argparse
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
-from orchestune.forge import Forge
-from orchestune.status_snapshot import build_status_snapshot, format_status_report
+from rich.console import Group, RenderableType
 
-_CLEAR_SCREEN = "\x1b[2J\x1b[H"
+from orchestune.forge import Forge
+from orchestune.infra.cli_output import Block, CliOutput, make_output
+from orchestune.infra.cli_progress import progress
+from orchestune.status_snapshot import (
+    StatusSnapshot,
+    WorktreeStatus,
+    build_status_snapshot,
+    format_status_report,
+)
+
+_STATUS_HEADERS = ("State", "Issue", "Subtask", "Elapsed", "Branch")
+# format_status_report starts with: timestamp, last dispatch cycle, blank line.
+_REPORT_HEADING_LINES = 2
+_REPORT_BODY_START = 3
+_NO_DISPATCH = "現在アクティブなディスパッチはありません。"
+_OVERFLOW_NOTICE = (
+    "タスク詳細は表示領域に収まらないため省略しています。"
+    "`orchestune status` で全体を表示できます。"
+)
 
 
 def _positive_int(value: str) -> int:
@@ -61,39 +80,141 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None, *, forge: Forge | None = None) -> int:
+@dataclass(frozen=True)
+class StatusView:
+    """Strings for the decorated (TTY) status display; no Rich types."""
+
+    heading: str
+    headers: tuple[str, ...]
+    rows: tuple[tuple[str, ...], ...]
+    details: tuple[str, ...]
+
+
+def _elapsed_label(status: WorktreeStatus) -> str:
+    if status.elapsed_seconds is None:
+        return "不明"
+    hours, remainder = divmod(int(status.elapsed_seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}h{minutes:02d}m{seconds:02d}s"
+    if minutes > 0:
+        return f"{minutes}m{seconds:02d}s"
+    return f"{seconds}s"
+
+
+def _status_row(status: WorktreeStatus) -> tuple[str, ...]:
+    return (
+        status.state.value,
+        f"#{status.issue_number}",
+        status.subtask_id or "(不明)",
+        _elapsed_label(status),
+        status.branch,
+    )
+
+
+def present_status(snapshot: StatusSnapshot, now: float) -> StatusView:
+    """Turn a snapshot into table rows plus per-task detail text.
+
+    Heading and details are cut from the plain report (one task at a time), so the
+    decorated view can never drop a line the plain report shows.
+    """
+
+    def report_lines(worktrees: list[WorktreeStatus]) -> list[str]:
+        report = StatusSnapshot(worktrees, snapshot.last_reconciled_at)
+        return format_status_report(report, now).splitlines()
+
+    heading = "\n".join(report_lines([])[:_REPORT_HEADING_LINES])
+    details = tuple(
+        "\n".join(report_lines([status])[_REPORT_BODY_START:]).rstrip()
+        for status in snapshot.worktrees
+    )
+    return StatusView(
+        heading=heading,
+        headers=_STATUS_HEADERS,
+        rows=tuple(_status_row(s) for s in snapshot.worktrees),
+        details=details,
+    )
+
+
+def status_block(
+    out: CliOutput, snapshot: StatusSnapshot, now: float, footer: str | None = None
+) -> Block:
+    """The status display: the existing report when plain, a table view on a TTY."""
+    report = format_status_report(snapshot, now)
+    plain = out.text_block(report if footer is None else f"{report}\n{footer}")
+    if not out.policy.rich:
+        return plain
+    view = present_status(snapshot, now)
+    if not view.rows:
+        return _rich_block(plain, [view.heading, "\n" + _NO_DISPATCH], out, footer)
+    table = out.table_block(view.headers, view.rows).rich
+    details = "\n" + "\n\n".join(view.details)
+    full = _rich_block(plain, [view.heading, table, details], out, footer)
+    if footer is None or _fits_screen(out, full.rich):
+        return full
+    # Live crops what does not fit; keep the rows and the footer on screen instead.
+    return _rich_block(
+        plain, [view.heading, table, "\n" + _OVERFLOW_NOTICE], out, footer
+    )
+
+
+def _rich_block(
+    plain: Block, parts: list[str | RenderableType], out: CliOutput, footer: str | None
+) -> Block:
+    renderables = [
+        out.text_block(part).rich if isinstance(part, str) else part for part in parts
+    ]
+    if footer is not None:
+        renderables.append(out.text_block("\n" + footer).rich)
+    return Block(plain.plain, Group(*renderables), soft_wrap=False)
+
+
+def _fits_screen(out: CliOutput, renderable: RenderableType) -> bool:
+    console = out.console
+    if console is None:
+        return True
+    lines = console.render_lines(renderable, console.options, pad=False)
+    return len(lines) < console.height
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    forge: Forge | None = None,
+    output: CliOutput | None = None,
+    clock: Callable[[], float] | None = None,
+    sleep: Callable[[float], None] | None = None,
+) -> int:
     args = _build_arg_parser().parse_args(argv)
+    out = output if output is not None else make_output()
+    now_fn = clock if clock is not None else time.time
+    sleep_fn = sleep if sleep is not None else time.sleep
     label_cache: dict[int, tuple[float, tuple[str, ...]]] = {}
 
-    if not args.watch:
-        snapshot = build_status_snapshot(
+    def take_snapshot(now: float) -> StatusSnapshot:
+        return build_status_snapshot(
             args.run_state_path,
             args.log_dir,
-            time.time(),
+            now,
             args.tail_lines,
             label_cache,
             forge=forge,
         )
-        print(format_status_report(snapshot, time.time()))
+
+    if not args.watch:
+        now = now_fn()
+        out.emit(status_block(out, take_snapshot(now), now))
         return 0
 
+    footer = f"{args.interval}秒ごとに自動更新します。Ctrl+Cで終了してください。"
     try:
-        while True:
-            now = time.time()
-            snapshot = build_status_snapshot(
-                args.run_state_path,
-                args.log_dir,
-                now,
-                args.tail_lines,
-                label_cache,
-                forge=forge,
-            )
-            print(_CLEAR_SCREEN, end="")
-            print(format_status_report(snapshot, now))
-            print(f"{args.interval}秒ごとに自動更新します。Ctrl+Cで終了してください。")
-            time.sleep(args.interval)
+        with progress(out, spinner=False) as handle:
+            while True:
+                now = now_fn()
+                handle.update(status_block(out, take_snapshot(now), now, footer))
+                sleep_fn(args.interval)
     except KeyboardInterrupt:
-        print("\n監視を終了しました。")
+        out.emit(out.text_block("\n監視を終了しました。"))
 
     return 0
 
