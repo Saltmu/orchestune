@@ -439,6 +439,73 @@ class TestWatchLive:
         assert STOPPED in ANSI.sub("", stream.getvalue())
 
 
+def _many_tasks_args(tmp_path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(exist_ok=True)
+    active = {}
+    for number in (134, 135, 136):
+        branch = f"claude/issue-{number}-task"
+        (log_dir / f"claude-issue-{number}-task.log").write_text(
+            f"log-{number}-a\nlog-{number}-b\nlog-{number}-c\n"
+        )
+        active[str(number)] = _active(issue_number=number, branch=branch)
+    run_state_path = tmp_path / "run_state.json"
+    save_run_state(RunState(active_worktrees=active), run_state_path)
+    return [
+        "--run-state-path",
+        str(run_state_path),
+        "--log-dir",
+        str(log_dir),
+        "--watch",
+    ]
+
+
+def _watch_frame(tmp_path, forge, lines: str) -> str:
+    """Render one watch frame (footer given) exactly as the Live display shows it.
+
+    Live crops on screen while running, so the frame is rendered through ``emit``
+    to see what the display is given.
+    """
+    args = _many_tasks_args(tmp_path)
+    snapshot = monitor.build_status_snapshot(args[1], args[3], NOW, 3, {}, forge=forge)
+    out, stream = _output(tty=True, env={"LINES": lines})
+    out.emit(monitor.status_block(out, snapshot, NOW, "3秒ごとに自動更新します。"))
+    return ANSI.sub("", stream.getvalue())
+
+
+class TestWatchLiveOverflow:
+    def test_frame_taller_than_the_screen_degrades_to_the_table(
+        self, tmp_path, _stub_get_issue_labels
+    ):
+        text = _watch_frame(tmp_path, _stub_get_issue_labels, "14")
+
+        assert "#134" in text and "#135" in text and "#136" in text
+        assert "表示領域に収まらない" in text
+        assert "orchestune status" in text
+        assert "3秒ごとに自動更新します。" in text
+        assert "log-136-a" not in text
+
+    def test_frame_that_fits_keeps_every_detail(self, tmp_path, _stub_get_issue_labels):
+        text = _watch_frame(tmp_path, _stub_get_issue_labels, "100")
+
+        assert "表示領域に収まらない" not in text
+        assert "log-136-c" in text
+
+    def test_one_shot_is_never_degraded(self, tmp_path, _stub_get_issue_labels):
+        out, stream = _output(tty=True, env={"LINES": "14"})
+
+        main(
+            _many_tasks_args(tmp_path)[:-1],
+            forge=_stub_get_issue_labels,
+            output=out,
+            clock=lambda: NOW,
+        )
+
+        text = ANSI.sub("", stream.getvalue())
+        assert "表示領域に収まらない" not in text
+        assert "log-136-c" in text
+
+
 class TestOneShotDisplay:
     def test_tty_shows_table_and_details(self, tmp_path, _stub_get_issue_labels):
         out, stream = _output(tty=True)

@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from rich.console import Group
+from rich.console import Group, RenderableType
 
 from orchestune.forge import Forge
 from orchestune.infra.cli_output import Block, CliOutput, make_output
@@ -25,6 +25,10 @@ _STATUS_HEADERS = ("State", "Issue", "Subtask", "Elapsed", "Branch")
 _REPORT_HEADING_LINES = 2
 _REPORT_BODY_START = 3
 _NO_DISPATCH = "現在アクティブなディスパッチはありません。"
+_OVERFLOW_NOTICE = (
+    "タスク詳細は表示領域に収まらないため省略しています。"
+    "`orchestune status` で全体を表示できます。"
+)
 
 
 def _positive_int(value: str) -> int:
@@ -141,15 +145,36 @@ def status_block(
     if not out.policy.rich:
         return plain
     view = present_status(snapshot, now)
-    parts = [out.text_block(view.heading).rich]
-    if view.rows:
-        parts.append(out.table_block(view.headers, view.rows).rich)
-        parts.append(out.text_block("\n" + "\n\n".join(view.details)).rich)
-    else:
-        parts.append(out.text_block("\n" + _NO_DISPATCH).rich)
+    if not view.rows:
+        return _rich_block(plain, [view.heading, "\n" + _NO_DISPATCH], out, footer)
+    table = out.table_block(view.headers, view.rows).rich
+    details = "\n" + "\n\n".join(view.details)
+    full = _rich_block(plain, [view.heading, table, details], out, footer)
+    if footer is None or _fits_screen(out, full.rich):
+        return full
+    # Live crops what does not fit; keep the rows and the footer on screen instead.
+    return _rich_block(
+        plain, [view.heading, table, "\n" + _OVERFLOW_NOTICE], out, footer
+    )
+
+
+def _rich_block(
+    plain: Block, parts: list[str | RenderableType], out: CliOutput, footer: str | None
+) -> Block:
+    renderables = [
+        out.text_block(part).rich if isinstance(part, str) else part for part in parts
+    ]
     if footer is not None:
-        parts.append(out.text_block("\n" + footer).rich)
-    return Block(plain.plain, Group(*parts), soft_wrap=False)
+        renderables.append(out.text_block("\n" + footer).rich)
+    return Block(plain.plain, Group(*renderables), soft_wrap=False)
+
+
+def _fits_screen(out: CliOutput, renderable: RenderableType) -> bool:
+    console = out.console
+    if console is None:
+        return True
+    lines = console.render_lines(renderable, console.options, pad=False)
+    return len(lines) < console.height
 
 
 def main(
