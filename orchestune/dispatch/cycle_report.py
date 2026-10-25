@@ -53,6 +53,8 @@ class CycleReport:
     consistency: ConsistencyCycleReport = field(
         default_factory=lambda: ConsistencyCycleReport(mode=ConsistencyMode.OFF)
     )
+    stage: str = "scheduling"
+    scheduling_deferred_reason: str | None = None
 
 
 def build_event_log_entry(report: CycleReport, now: float) -> dict[str, object]:
@@ -76,6 +78,7 @@ def build_event_log_entry(report: CycleReport, now: float) -> dict[str, object]:
 
     return {
         "timestamp": now,
+        "stage": report.stage,
         "quota_slots_available": report.quota_slots_available,
         "selected": selected_entries,
         "deviation_events": [event.to_dict() for event in report.deviation_events],

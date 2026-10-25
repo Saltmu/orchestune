@@ -18,12 +18,16 @@ class PhaseResult:
     report: dict | None = None
     error_message: str | None = None
     retryable: bool = False
+    stage: str | None = None
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "phase_name": self.phase_name,
             "status": self.status.value,
             "report": self.report,
             "error_message": self.error_message,
             "retryable": self.retryable,
         }
+        if self.stage is not None:
+            result["stage"] = self.stage
+        return result

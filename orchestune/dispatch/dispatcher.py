@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from collections.abc import Callable
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -18,16 +19,30 @@ from orchestune.dispatch.config_loader import (
     load_and_resolve_config as load_and_resolve_config,
 )
 from orchestune.dispatch.config_schema import validate_toml_config
-from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.cycle import (
+    run_dispatch_cycle,
+    run_pre_integration_cycle,
+)
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.postcycle import (
-    _advance_pending_semantic_reviews,
-    _decide_semantic_review_enabled,
-    _poll_pending_not_needed_reviews,
     _post_event_log_comment,
     _post_finding_notices,
     _process_parent_completion,
-    _run_semantic_integrator,
+)
+from orchestune.dispatch.pre_scheduling_integration import (
+    _advance_pending_semantic_reviews as _advance_pending_semantic_reviews,
+)
+from orchestune.dispatch.pre_scheduling_integration import (
+    _build_integrator_config as _build_integrator_config,
+)
+from orchestune.dispatch.pre_scheduling_integration import (
+    _decide_semantic_review_enabled as _decide_semantic_review_enabled,
+)
+from orchestune.dispatch.pre_scheduling_integration import (
+    _poll_pending_not_needed_reviews as _poll_pending_not_needed_reviews,
+)
+from orchestune.dispatch.pre_scheduling_integration import (
+    _run_semantic_integrator as _run_semantic_integrator,
 )
 from orchestune.dispatch.progress import StdoutProgress, progress_phase, safe_stderr
 from orchestune.dispatch.report import _report_to_dict, write_github_step_summary
@@ -69,6 +84,10 @@ class _DispatcherRunResult:
     report: Any
     post_cycle_results: list[PhaseResult]
     integrator_run_report: Any
+    pre_integration_report: Any | None = None
+    integration_results: list[PhaseResult] = field(default_factory=list)
+    scheduling_deferred_reason: str | None = None
+    lock_contended: bool = False
 
 
 def _resolve_dispatch_shared_paths(
@@ -84,11 +103,20 @@ def _resolve_dispatch_shared_paths(
     return workspace.run_state_path, workspace.worktree_root
 
 
-def _post_cycle_steps(config, report, semantic_review_enabled, auth_error):
+def _pre_scheduling_integration_steps(
+    config: DispatcherConfig,
+    semantic_review_enabled: bool,
+    auth_error: ForgeAuthError | None = None,
+) -> list[tuple[str, Callable[[], PhaseResult], bool]]:
+    dispatcher_module = sys.modules[__name__]
     return [
         (
             "poll_pending_not_needed_reviews",
-            lambda: _poll_pending_not_needed_reviews(
+            lambda: getattr(
+                dispatcher_module,
+                "_poll_pending_not_needed_reviews",
+                _poll_pending_not_needed_reviews,
+            )(
                 config.not_needed_review_state_path,
                 forge=config.forge,
                 auth_error=auth_error,
@@ -96,35 +124,75 @@ def _post_cycle_steps(config, report, semantic_review_enabled, auth_error):
             ),
             semantic_review_enabled,
         ),
-        # #1362: right before the Integrator, so a passed terminal saved here is
-        # finalized in the same cycle; independent of the legacy semantic flag.
         (
             "advance_pending_semantic_reviews",
-            lambda: _advance_pending_semantic_reviews(config, auth_error=auth_error),
+            lambda: getattr(
+                dispatcher_module,
+                "_advance_pending_semantic_reviews",
+                _advance_pending_semantic_reviews,
+            )(config, auth_error=auth_error),
             True,
         ),
         (
             "run_semantic_integrator",
-            lambda: _run_semantic_integrator(
+            lambda: getattr(
+                dispatcher_module,
+                "_run_semantic_integrator",
+                _run_semantic_integrator,
+            )(
                 config,
                 semantic_review_enabled,
                 auth_error=auth_error,
             ),
             True,
         ),
+    ]
+
+
+def _post_cycle_steps(
+    config: DispatcherConfig,
+    report: Any,
+    semantic_review_enabled: bool,
+    auth_error: ForgeAuthError | None,
+    pre_integration_report: Any | None = None,
+) -> list[tuple[str, Callable[[], PhaseResult], bool]]:
+    dispatcher_module = sys.modules[__name__]
+    return [
         (
             "process_parent_completion",
-            lambda: _process_parent_completion(config, auth_error=auth_error),
+            lambda: getattr(
+                dispatcher_module,
+                "_process_parent_completion",
+                _process_parent_completion,
+            )(config, auth_error=auth_error),
             True,
         ),
         (
             "post_event_log_comment",
-            lambda: _post_event_log_comment(config, report, auth_error=auth_error),
+            lambda: getattr(
+                dispatcher_module,
+                "_post_event_log_comment",
+                _post_event_log_comment,
+            )(
+                config,
+                report,
+                auth_error=auth_error,
+                pre_integration_report=pre_integration_report,
+            ),
             True,
         ),
         (
             "post_finding_notices",
-            lambda: _post_finding_notices(config, report, auth_error=auth_error),
+            lambda: getattr(
+                dispatcher_module,
+                "_post_finding_notices",
+                _post_finding_notices,
+            )(
+                config,
+                report,
+                auth_error=auth_error,
+                pre_integration_report=pre_integration_report,
+            ),
             True,
         ),
     ]
@@ -152,50 +220,161 @@ def _run_post_cycle_step(
     return result, fatal_exception
 
 
-def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
-    report = run_dispatch_cycle(config)
-    results: list[PhaseResult] = []
-    integrator_report = None
+def _run_integration_boundary(
+    config: DispatcherConfig, decide_review_fn: Callable[[], bool]
+) -> tuple[list[PhaseResult], Any | None, bool, ForgeAuthError | None, bool]:
     auth_error = None
     semantic_review_enabled = False
     preparation_failed = False
-    if config.apply:
-        try:
-            with progress_phase(config.progress, "post_cycle_preparation"):
-                try:
-                    config.resolved_forge.check_auth()
-                except ForgeAuthError as exc:
-                    auth_error = exc
-                semantic_review_enabled = _decide_semantic_review_enabled()
-        except Exception as exc:
-            results.append(
-                PhaseResult(
-                    "post_cycle_preparation",
-                    PhaseStatus.FATAL_FAILURE,
-                    error_message=str(exc),
-                )
+    integration_results: list[PhaseResult] = []
+    integrator_report = None
+
+    try:
+        with progress_phase(config.progress, "integration_preparation"):
+            try:
+                config.resolved_forge.check_auth()
+            except ForgeAuthError as exc:
+                auth_error = exc
+            semantic_review_enabled = decide_review_fn()
+    except Exception as exc:
+        integration_results.append(
+            PhaseResult(
+                "integration_preparation",
+                PhaseStatus.FATAL_FAILURE,
+                error_message=str(exc),
+                stage="integration_boundary",
             )
-            safe_stderr(f"post_cycle_preparation: {exc}")
-            preparation_failed = True
+        )
+        safe_stderr(f"integration_preparation: {exc}")
+        preparation_failed = True
+
     stopped = preparation_failed
-    for name, call, enabled in _post_cycle_steps(
-        config, report, semantic_review_enabled, auth_error
-    ):
-        if not config.apply or stopped or not enabled:
-            reason = (
-                "dry_run"
-                if not config.apply
-                else "prior_failure"
-                if stopped
-                else "semantic_review_disabled"
-            )
+    steps_fn = getattr(
+        sys.modules[__name__],
+        "_pre_scheduling_integration_steps",
+        _pre_scheduling_integration_steps,
+    )
+    for name, call, enabled in steps_fn(config, semantic_review_enabled, auth_error):
+        if stopped or not enabled:
+            reason = "prior_failure" if stopped else "semantic_review_disabled"
             config.progress.emit(name, "skipped", reason=reason)
             continue
-        result, stopped = _run_post_cycle_step(config, name, call)
-        results.append(result)
+        result, fatal = _run_post_cycle_step(config, name, call)
+        integration_results.append(result)
+        if fatal:
+            stopped = True
         if name == "run_semantic_integrator":
             integrator_report = result.report
-    return _DispatcherRunResult(report, results, integrator_report)
+
+    return (
+        integration_results,
+        integrator_report,
+        semantic_review_enabled,
+        auth_error,
+        stopped,
+    )
+
+
+def _run_scheduling_cycle_stage(
+    config: DispatcherConfig,
+    run_dispatch_fn: Callable[[DispatcherConfig], CycleReport],
+    pre_integration_report: CycleReport,
+    stopped: bool,
+    auth_error: ForgeAuthError | None,
+) -> tuple[CycleReport, str | None, bool]:
+    if stopped or auth_error is not None:
+        config.progress.emit("cycle", "skipped", reason="prior_failure")
+        return pre_integration_report, "prior_failure", False
+    try:
+        return run_dispatch_fn(config), None, False
+    except RuntimeError as exc:
+        err_msg = str(exc)
+        if "holding the lock" in err_msg or "is currently held" in err_msg:
+            config.progress.emit("cycle", "skipped", reason="state_lock_contended")
+            return pre_integration_report, "state_lock_contended", True
+        raise
+
+
+def _run_post_cycle_phases(
+    config: DispatcherConfig,
+    scheduling_report: Any,
+    semantic_review_enabled: bool,
+    auth_error: ForgeAuthError | None,
+    pre_integration_report: Any,
+    post_stopped: bool,
+) -> list[PhaseResult]:
+    post_results: list[PhaseResult] = []
+    for name, call, enabled in _post_cycle_steps(
+        config,
+        scheduling_report,
+        semantic_review_enabled,
+        auth_error,
+        pre_integration_report=pre_integration_report,
+    ):
+        if post_stopped or not enabled:
+            reason = "prior_failure" if post_stopped else "disabled"
+            config.progress.emit(name, "skipped", reason=reason)
+            continue
+        result, fatal = _run_post_cycle_step(config, name, call)
+        post_results.append(result)
+        if fatal:
+            post_stopped = True
+    return post_results
+
+
+def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
+    dispatcher_module = sys.modules[__name__]
+    run_dispatch_fn = getattr(
+        dispatcher_module, "run_dispatch_cycle", run_dispatch_cycle
+    )
+    run_pre_integration_fn = getattr(
+        dispatcher_module, "run_pre_integration_cycle", run_pre_integration_cycle
+    )
+    decide_review_fn = getattr(
+        dispatcher_module,
+        "_decide_semantic_review_enabled",
+        _decide_semantic_review_enabled,
+    )
+
+    if not config.apply:
+        report = run_dispatch_fn(config)
+        for name, _call, _enabled in _post_cycle_steps(config, report, False, None):
+            config.progress.emit(name, "skipped", reason="dry_run")
+        return _DispatcherRunResult(
+            report=report, post_cycle_results=[], integrator_run_report=None
+        )
+
+    pre_integration_report = run_pre_integration_fn(config)
+    (
+        integration_results,
+        integrator_report,
+        semantic_review_enabled,
+        auth_error,
+        stopped,
+    ) = _run_integration_boundary(config, decide_review_fn)
+
+    scheduling_report, deferred_reason, lock_contended = _run_scheduling_cycle_stage(
+        config, run_dispatch_fn, pre_integration_report, stopped, auth_error
+    )
+
+    post_results = _run_post_cycle_phases(
+        config,
+        scheduling_report,
+        semantic_review_enabled,
+        auth_error,
+        pre_integration_report,
+        post_stopped=stopped,
+    )
+
+    return _DispatcherRunResult(
+        report=scheduling_report,
+        post_cycle_results=[*integration_results, *post_results],
+        integrator_run_report=integrator_report,
+        pre_integration_report=pre_integration_report,
+        integration_results=integration_results,
+        scheduling_deferred_reason=deferred_reason,
+        lock_contended=lock_contended,
+    )
 
 
 def _emit_human_summary(report: CycleReport) -> None:
@@ -227,15 +406,18 @@ def _emit_dispatcher_report(result: _DispatcherRunResult) -> None:
             integrator_report=result.integrator_run_report,
             summary_path=summary_path,
             post_cycle_results=result.post_cycle_results,
+            pre_integration_report=result.pre_integration_report,
         )
 
 
-def _post_cycle_exit_code(results: list[PhaseResult]) -> int:
-    exit_code = 0
+def _post_cycle_exit_code(
+    results: list[PhaseResult], lock_contended: bool = False
+) -> int:
+    exit_code = 2 if lock_contended else 0
     for result in results:
         if result.status == PhaseStatus.FATAL_FAILURE:
-            exit_code = 1
-        elif result.status == PhaseStatus.RETRYABLE_FAILURE and exit_code != 1:
+            return 1
+        if result.status == PhaseStatus.RETRYABLE_FAILURE and exit_code != 1:
             exit_code = 2
     return exit_code
 
@@ -292,10 +474,20 @@ def _execute_and_save(config: DispatcherConfig, output: ReportOutput) -> int:
         )
         safe_stderr(f"Error: {exc}; report not created: {output.path}")
         return 1
-    code = _post_cycle_exit_code(result.post_cycle_results)
+    code = _post_cycle_exit_code(
+        result.post_cycle_results, lock_contended=result.lock_contended
+    )
     try:
         with progress_phase(config.progress, "report_save"):
             final_dict = _report_to_dict(result.report)
+            if result.pre_integration_report is not None:
+                final_dict["pre_integration_cycle"] = _report_to_dict(
+                    result.pre_integration_report
+                )
+            if result.scheduling_deferred_reason is not None:
+                final_dict["scheduling_deferred_reason"] = (
+                    result.scheduling_deferred_reason
+                )
             final_dict["post_cycle_results"] = [
                 phase.to_dict() for phase in result.post_cycle_results
             ]

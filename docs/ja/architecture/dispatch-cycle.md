@@ -45,3 +45,15 @@ apply時のサイクルレコードには`timings`（version 1）も追加しま
 | `gh.calls` | `GitHubForge._run`経由の試行数で、stdin・失敗・timeoutも含みます。HTTP request数や子エージェント内のコマンド数ではありません。 |
 | 計測障害 | `collection_status: partial`または`unavailable`と、不明なscalar値のnullで表し、dispatch結果・終了コードを変更しません。 |
 | 互換性 | 過去レコードには`timings`が無い場合があります。結果JSONと`CycleReport`は維持し、dry-runと途中中断時のevents保存方針も従来どおりです。 |
+
+## 6. Dispatcher の 4 ステージ構成 (#1377)
+
+Dispatcher は apply モードにおいて、1 回の実行を以下の 4 つのステージに分割して実行します。
+
+1. **統合前cycle (`run_pre_integration_cycle`)**: `run_state_lock` を保持し、`gc_reclaim` までの完了検知・作業木回収・整合性検査を実行してイベントログに記録します（`stage="pre_integration"`）。選定・起動や external-lock 走査はスキップされます。完了後に `run_state_lock` を解放します。
+2. **統合境界 (`pre_scheduling_integration`)**: `run_state_lock` のスコープ外で実行されます。認証検証、`status:not-needed` レビューのポーリング、第2層セマンティックレビューの進行、および `Integrator` の実行（1回）を行います。CI実行中に `run_state_lock` を保持しないため、他のエージェントプロセスの完了報告をブロックしません。
+3. **scheduling cycle (`run_dispatch_cycle`)**: 再度 `run_state_lock` を取得し、最新の状態を再取得したコンテキストで `reconciliation_external_locks`（external-lock 判定・依存昇格）および `scheduling`（選定・起動）を実行し、イベントログに記録します（`stage="scheduling"`）。完了後に `run_state_lock` を解放します。
+4. **post-cycle (`_post_cycle_steps`)**: `run_state_lock` のスコープ外で、親Issue完了処理、両サイクルのイベントを統合した親Issueイベントログコメントの投稿、整合性スーパーバイザの finding 通知を行います。
+
+`--no-apply`（dry-run モード）では、統合前cycleおよび統合境界は実行されず、従来の単一 scheduling cycle のみが FULL で実行されます。
+

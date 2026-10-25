@@ -221,13 +221,27 @@ def write_github_step_summary(
     integrator_report: dict | None,
     summary_path: str,
     post_cycle_results: list[PhaseResult] | None = None,
+    pre_integration_report: CycleReport | None = None,
 ) -> None:
     lines = ["## 🤖 Orchestune Dispatch Summary\n"]
+    if pre_integration_report and pre_integration_report.completion_events:
+        lines.append("### 🏁 統合前サイクル完了検知（Pre-integration Completions）")
+        lines.append("| サブタスクID | Issue番号 | アクション |")
+        lines.append("| --- | --- | --- |")
+        for event in pre_integration_report.completion_events:
+            lines.append(
+                f"| `{getattr(event, 'subtask_id', '-')}` | #{getattr(event, 'issue_number', '-')} | `{getattr(event, 'action', 'completed')}` |"
+            )
+        lines.append("")
     if post_cycle_results:
         lines.extend(_format_post_cycle_summary(post_cycle_results))
     if integrator_report:
         lines.extend(_format_integrator_summary(integrator_report))
     if cycle_report:
+        if getattr(cycle_report, "scheduling_deferred_reason", None):
+            lines.append(
+                f"⚠️ **スケジューリング保留**: `{cycle_report.scheduling_deferred_reason}`\n"
+            )
         lines.extend(_format_cycle_report_summary(cycle_report))
 
     try:
@@ -238,7 +252,7 @@ def write_github_step_summary(
 
 
 def _report_to_dict(report: CycleReport) -> dict:
-    return {
+    d = {
         "applied": report.applied,
         "quota_slots_available": report.quota_slots_available,
         "selected": [task_metadata_to_dict(t) for t in report.selected],
@@ -266,4 +280,8 @@ def _report_to_dict(report: CycleReport) -> dict:
         if report.execution_selections
         else {},
         "consistency": consistency_cycle_to_dict(report.consistency),
+        "stage": getattr(report, "stage", "scheduling"),
     }
+    if getattr(report, "scheduling_deferred_reason", None) is not None:
+        d["scheduling_deferred_reason"] = report.scheduling_deferred_reason
+    return d
