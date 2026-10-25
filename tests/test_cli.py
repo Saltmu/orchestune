@@ -1,7 +1,13 @@
+import io
 import sys
 from unittest.mock import patch
 
 import pytest
+
+
+class _TTYStringIO(io.StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 def test_cli_delegates_to_dag():
@@ -262,10 +268,56 @@ def test_cli_no_args_exits(capsys):
 
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert "Usage: orchestune <command>" in captured.out
-    assert "claim" in captured.out
-    assert "skills" in captured.out
-    assert "scratch" in captured.out
+    assert captured.out == (
+        "Usage: orchestune <command> [<args>]\n"
+        "Available commands:\n"
+        "  dag       DAG validation tool\n"
+        "  dispatch  Dispatcher/scheduler tool\n"
+        "  status    Monitor dispatched agent sessions (--watch for live view)\n"
+        "  setup     Setup skills symlinks for AI assistants\n"
+        "  bootstrap Verify gh auth and ensure required GitHub labels exist\n"
+        "  provision Provision GitHub Issues from decomposition_plan.md\n"
+        "  replan    Preview or replace an unstarted decomposition generation\n"
+        "  remediate Preview parent-scope remediation tasks\n"
+        "  claim     Claim a task issue (--no-apply for a read-only preview)\n"
+        "  complete  Complete a claimed task issue\n"
+        "  recover   Inspect or recover one stopped claim (preview by default)\n"
+        "  gc        Release handoff-ready task reservations (--no-apply to preview)\n"
+        "  doctor    Diagnose dispatch single-executor setup (offline, read-only)\n"
+        "  config    Create or edit orchestune.toml interactively\n"
+        "  skills    Install and manage Orchestune skills for AI assistants\n"
+        "  scratch   Create scratch session directories for task artifacts\n"
+    )
+
+
+def test_cli_no_args_renders_command_table_on_tty():
+    from orchestune.cli import main
+
+    stream = _TTYStringIO()
+    with (
+        patch("sys.argv", ["orchestune"]),
+        patch("sys.stdout", stream),
+        patch.dict(
+            "os.environ",
+            {
+                "CI": "",
+                "COLUMNS": "120",
+                "TERM": "xterm-256color",
+                "ORCHESTUNE_CLI_PLAIN": "",
+            },
+        ),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 1
+    rendered = stream.getvalue()
+    assert "Usage: orchestune <command> [<args>]" in rendered
+    assert "Available commands" in rendered
+    assert "Description" in rendered
+    assert "DAG validation tool" in rendered
+    assert "scratch" in rendered
+    assert "╭" in rendered
 
 
 def test_cli_invalid_command_exits(capsys):

@@ -99,6 +99,14 @@ orchestune dispatch
 
 ---
 
+## CLI output
+
+Orchestune uses Rich formatting for human-facing output in an interactive terminal. It selects plain text automatically for piped or redirected output, CI, and `TERM=dumb`. Set `ORCHESTUNE_CLI_PLAIN=1` to force plain output in any environment.
+
+Set `NO_COLOR` to any non-empty value to disable color. On a TTY, tables and live progress can still be used without color.
+
+Existing machine-readable output stays suitable for scripts: JSON responses and the path printed by `orchestune scratch create` are not decorated or mixed with progress text. `orchestune status --watch` updates in place on a TTY; in plain or non-TTY mode it appends a static snapshot at each watch interval without clearing the screen.
+
 ## Contributing
 
 Want to develop Orchestune itself (run its test suite, local CI, etc.)? See [CONTRIBUTING.md](CONTRIBUTING.md).
