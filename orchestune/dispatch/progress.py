@@ -20,6 +20,21 @@ class ProgressSink(Protocol):
     ) -> None: ...
 
 
+class DispatchProgressSink(ProgressSink, Protocol):
+    """The sink ``dispatcher.main`` owns for one run.
+
+    ``parent_issue`` and ``apply`` are assigned once the configuration is resolved;
+    ``close`` ends the sink on every exit path. Implementations: ``StdoutProgress``
+    and ``progress_output.RichDispatchProgress``.
+    """
+
+    run_id: str
+    parent_issue: int | None
+    apply: bool | None
+
+    def close(self) -> None: ...
+
+
 class NoopProgress:
     def emit(
         self,
