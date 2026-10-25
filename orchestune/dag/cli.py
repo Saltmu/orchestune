@@ -16,6 +16,7 @@ from orchestune.dag.models import (
     extract_dag_similarity_threshold,
 )
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
+from orchestune.infra.cli_output import CliOutput, Level, make_output
 from orchestune.infra.repository_config import (
     find_and_load_config_file,
     resolve_repo_root,
@@ -40,42 +41,62 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _print_text_result(dag: dict[str, Any]) -> None:
-    topological_order = dag["topological_order"]
-    parallel_leaves = dag["parallel_leaves"]
-    risky_subtask_ids = dag["risky_subtask_ids"]
+_EDGE_HEADERS = ("Kind", "From", "To", "Reason", "Score", "Resources")
+
+
+def _score_text(score: float | None) -> str:
+    return "-" if score is None else f"{score:.2f}"
+
+
+def _edge_rows(dag: dict[str, Any]) -> list[list[str]]:
+    """One row per edge: dependency rows first, then conflict rows.
+
+    Every edge is kept as its own row, so a node with several parents or one
+    shared by several conflicts is never collapsed into a tree.
+    """
     precedence_edges = dag.get("precedence_edges", dag["edges"])
     conflict_edges = dag.get("conflict_edges", [])
-    print("DAG validation succeeded.")
-    print(f"Topological order: {' -> '.join(topological_order)}")
-    print(f"Parallel leaves: {', '.join(parallel_leaves)}")
-    if risky_subtask_ids:
-        print(f"Risky subtasks: {', '.join(risky_subtask_ids)}")
-    if precedence_edges:
-        print("Precedence edges:")
-        for edge in precedence_edges:
-            score = edge.get("score")
-            score_text = f" (score: {score:.2f})" if score is not None else ""
-            print(
-                f"  {edge['source']} -> {edge['target']} "
-                f"[reason: {edge['reason']}{score_text}]"
-            )
-    if conflict_edges:
-        print("Conflict edges:")
-        for edge in conflict_edges:
-            score = edge.get("score")
-            score_text = f", score: {score:.2f}" if score is not None else ""
-            resources = edge.get("resources") or []
-            resource_text = f", resources: {', '.join(resources)}" if resources else ""
-            print(
-                f"  {edge['left']} <-> {edge['right']} "
-                f"[reason: {edge['reason']}{score_text}{resource_text}]"
-            )
+    rows = [
+        [
+            "dependency",
+            edge["source"],
+            edge["target"],
+            edge["reason"],
+            _score_text(edge.get("score")),
+            "-",
+        ]
+        for edge in precedence_edges
+    ]
+    rows.extend(
+        [
+            "conflict",
+            edge["left"],
+            edge["right"],
+            edge["reason"],
+            _score_text(edge.get("score")),
+            ", ".join(edge.get("resources") or []) or "-",
+        ]
+        for edge in conflict_edges
+    )
+    return rows
+
+
+def _print_text_result(dag: dict[str, Any], output: CliOutput) -> None:
+    items = [
+        ("Topological order", " -> ".join(dag["topological_order"])),
+        ("Parallel leaves", ", ".join(dag["parallel_leaves"])),
+    ]
+    if dag["risky_subtask_ids"]:
+        items.append(("Risky subtasks", ", ".join(dag["risky_subtask_ids"])))
+    output.summary(Level.SUCCESS, "DAG validation succeeded.", items)
+    rows = _edge_rows(dag)
+    if rows:
+        output.table(_EDGE_HEADERS, rows, title="Edges")
     warnings = dag.get("warnings") or []
     if warnings:
-        print("Warnings:")
+        output.emit(output.text_block("Warnings:", multiline=False))
         for warning in warnings:
-            print(f"  {warning}")
+            output.message(Level.WARNING, warning)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -127,10 +148,11 @@ def main(argv: Sequence[str] | None = None) -> None:
             repo_root=repo_root,
             ignore_patterns=extra_ignore_patterns,
         )
+        # --json is a machine payload: it never goes through Rich, even on a TTY.
         if args.json:
-            print(json.dumps(dag, indent=2))
+            make_output(machine=True).payload(json.dumps(dag, indent=2))
         else:
-            _print_text_result(dag)
+            _print_text_result(dag, make_output())
     except Exception as error:
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(1) from error
