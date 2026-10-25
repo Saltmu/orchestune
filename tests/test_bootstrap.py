@@ -23,7 +23,7 @@ class TestRunBootstrap:
 
         assert exit_code == 1
         captured = capsys.readouterr()
-        assert "boom" in captured.err
+        assert "[FAIL] Error: boom" in captured.err
         forge.ensure_labels.assert_not_called()
 
     def test_returns_0_and_prints_summary_on_success(self, capsys):
@@ -35,8 +35,8 @@ class TestRunBootstrap:
 
         assert exit_code == 0
         captured = capsys.readouterr()
-        assert "Labels created: 1" in captured.out
-        assert "Labels already present: 2" in captured.out
+        assert "[OK] Labels created: 1" in captured.out
+        assert "[INFO] Labels already present: 2" in captured.out
 
     def test_returns_1_and_prints_error_when_label_listing_may_be_truncated(
         self, capsys

@@ -149,7 +149,7 @@ def test_setup_skills_already_exists_as_valid_copy(tmp_path, capsys):
         exit_code = setup_skills()
 
     captured = capsys.readouterr()
-    assert "Skipped" in captured.out
+    assert "[INFO] Existing" in captured.out
     assert exit_code == 0
 
 
@@ -346,7 +346,7 @@ def test_setup_skills_partial_failure_returns_1_with_summary(tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert exit_code == 1
-    assert "Setup completed with" in captured.out
+    assert "[FAIL] Setup completed with" in captured.out
 
 
 def test_setup_skills_with_workflow_skill_falls_back_to_packaged_source(
@@ -608,8 +608,8 @@ def test_link_one_skill_recovers_when_readlink_raises(tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert result is True
-    assert "Warning: Failed to resolve existing link" in captured.out
-    assert "Successfully linked" in captured.out
+    assert "[WARN] Warning: Failed to resolve existing link" in captured.out
+    assert "[OK] Successfully linked" in captured.out
     assert dest_skill.resolve() == src_skill.resolve()
 
 
@@ -682,7 +682,7 @@ def test_setup_for_assistant_skips_missing_skill_source(tmp_path, capsys):
 
     captured = capsys.readouterr()
     assert result == (1, 0)
-    assert "Skill source 'missing-skill' not found" in captured.out
+    assert "[WARN] Warning: Skill source 'missing-skill' not found" in captured.out
     assert (target_dir / "real-skill" / "SKILL.md").is_file()
     assert not (target_dir / "missing-skill").exists()
 

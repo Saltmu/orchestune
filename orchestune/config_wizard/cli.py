@@ -15,6 +15,11 @@ from orchestune.config_wizard.wizard import (
     PromptPort,
     run_config_wizard,
 )
+from orchestune.infra.cli_output import Level, make_output
+
+
+def _report_error(text: str) -> None:
+    make_output(sys.stderr).message(Level.FAILURE, text)
 
 
 def resolve_project_dir(
@@ -25,8 +30,8 @@ def resolve_project_dir(
     if explicit is not None:
         p = Path(explicit).resolve()
         if not p.exists() or not p.is_dir():
-            sys.stderr.write(
-                f"Error: Project directory '{explicit}' does not exist or is not a directory.\n"
+            _report_error(
+                f"Error: Project directory '{explicit}' does not exist or is not a directory."
             )
             sys.exit(2)
         return p
@@ -55,7 +60,7 @@ class TerminalPromptPort(PromptPort):
                     return default
                 if allow_empty:
                     return None
-                print("値を入力してください。")
+                self.display_message("値を入力してください。")
                 continue
             return val
 
@@ -67,10 +72,11 @@ class TerminalPromptPort(PromptPort):
         allow_empty: bool = True,
     ) -> str | None:
         dflt_hint = f" [既定: {default}]" if default is not None else ""
-        print(f"\n{message}{dflt_hint}")
-        for idx, c in enumerate(choices, start=1):
-            marker = " *" if c == default else ""
-            print(f"  {idx}) {c}{marker}")
+        options = "\n".join(
+            f"  {idx}) {c}{' *' if c == default else ''}"
+            for idx, c in enumerate(choices, start=1)
+        )
+        self.display_message(f"\n{message}{dflt_hint}\n{options}")
 
         while True:
             raw = input("番号または選択肢を入力 (Enterで既定): ").strip()
@@ -79,7 +85,7 @@ class TerminalPromptPort(PromptPort):
                     return default
                 if allow_empty:
                     return None
-                print("選択肢を入力してください。")
+                self.display_message("選択肢を入力してください。")
                 continue
 
             if raw.isdigit():
@@ -90,7 +96,7 @@ class TerminalPromptPort(PromptPort):
             if raw in choices:
                 return raw
 
-            print(
+            self.display_message(
                 f"無効な入力です。1〜{len(choices)}の番号または選択肢名を入力してください。"
             )
 
@@ -111,20 +117,20 @@ class TerminalPromptPort(PromptPort):
                     return default
                 if allow_empty:
                     return None
-                print("数値を入力してください。")
+                self.display_message("数値を入力してください。")
                 continue
 
             try:
                 val = int(raw)
             except ValueError:
-                print("整数を入力してください。")
+                self.display_message("整数を入力してください。")
                 continue
 
             if min_val is not None and val < min_val:
-                print(f"{min_val}以上の整数を入力してください。")
+                self.display_message(f"{min_val}以上の整数を入力してください。")
                 continue
             if max_val is not None and val > max_val:
-                print(f"{max_val}以下の整数を入力してください。")
+                self.display_message(f"{max_val}以下の整数を入力してください。")
                 continue
             return val
 
@@ -132,15 +138,14 @@ class TerminalPromptPort(PromptPort):
         self, message: str, current: list[str] | None = None
     ) -> list[str] | None:
         curr = list(current or [])
-        print(f"\n{message}")
-        print(f"現在の値: {curr}")
+        self.display_message(f"\n{message}\n現在の値: {curr}")
         while True:
             ans = input("新しい要素を追加 (空Enterで完了, 'clear'で全削除): ").strip()
             if not ans:
                 break
             if ans == "clear":
                 curr = []
-                print("クリアしました。")
+                self.display_message("クリアしました。")
                 continue
             curr.append(ans)
         return curr if curr else None
@@ -155,13 +160,15 @@ class TerminalPromptPort(PromptPort):
                 return True
             if raw in ("n", "no"):
                 return False
-            print("'y' または 'n' を入力してください。")
+            self.display_message("'y' または 'n' を入力してください。")
 
     def display_message(self, msg: str) -> None:
-        print(msg)
+        out = make_output(sys.stdout)
+        out.emit(out.text_block(msg))
 
     def display_diff(self, diff_str: str) -> None:
-        print(diff_str)
+        out = make_output(sys.stdout)
+        out.emit(out.text_block(diff_str))
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -201,9 +208,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not sys.stdin.isatty() or not sys.stdout.isatty():
-        sys.stderr.write(
-            "エラー: orchestune config は対話環境 (TTY) でのみ実行できます。\n"
-            "非対話環境での利用はサポートされていません。直接 orchestune.toml を編集してください。\n"
+        make_output(sys.stderr).message(
+            Level.FAILURE,
+            "エラー: orchestune config は対話環境 (TTY) でのみ実行できます。",
+            detail="非対話環境での利用はサポートされていません。直接 orchestune.toml を編集してください。",
         )
         return 2
 
@@ -218,20 +226,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     except ConfigConflictError as exc:
-        sys.stderr.write(f"競合エラー: {exc}\n")
+        _report_error(f"競合エラー: {exc}")
         return 3
     except ConfigError as exc:
-        sys.stderr.write(f"設定エラー: {exc}\n")
+        _report_error(f"設定エラー: {exc}")
         return 2
     except ConfigStorageError as exc:
-        sys.stderr.write(f"ストレージエラー: {exc}\n")
+        _report_error(f"ストレージエラー: {exc}")
         return 1
     except KeyboardInterrupt:
-        sys.stderr.write("\n中断されました (Ctrl+C)。設定は保存していません。\n")
+        err = make_output(sys.stderr)
+        err.emit(err.text_block(""))
+        err.message(Level.WARNING, "中断されました (Ctrl+C)。設定は保存していません。")
         return 130
     except EOFError:
-        sys.stderr.write("\nEOFが入力されました。設定は保存していません。\n")
+        err = make_output(sys.stderr)
+        err.emit(err.text_block(""))
+        err.message(Level.WARNING, "EOFが入力されました。設定は保存していません。")
         return 0
     except Exception as exc:
-        sys.stderr.write(f"予期しないエラー: {exc}\n")
+        _report_error(f"予期しないエラー: {exc}")
         return 1

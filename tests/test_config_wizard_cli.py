@@ -90,3 +90,40 @@ class TestConfigWizardCLI:
         ):
             code = main(["init", "--project-dir", str(tmp_path)])
             assert code == 130
+
+
+class TestConfigWizardCLIDisplay:
+    def test_non_tty_error_is_labelled_on_stderr(self, tmp_path: Path, capsys):
+        with (
+            patch("sys.stdin.isatty", return_value=False),
+            patch("sys.stdout.isatty", return_value=False),
+        ):
+            main(["init", "--project-dir", str(tmp_path)])
+
+        captured = capsys.readouterr()
+        assert captured.err.startswith("[FAIL] エラー: orchestune config")
+        assert captured.out == ""
+
+    def test_ctrl_c_is_labelled_as_warning(self, tmp_path: Path, capsys):
+        with (
+            patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdout.isatty", return_value=True),
+            patch(
+                "orchestune.config_wizard.cli.run_config_wizard",
+                side_effect=KeyboardInterrupt(),
+            ),
+        ):
+            main(["init", "--project-dir", str(tmp_path)])
+
+        assert "[WARN] " in capsys.readouterr().err
+
+    def test_display_helpers_write_text_unchanged_in_plain_mode(self, capsys):
+        from orchestune.config_wizard.cli import TerminalPromptPort
+
+        prompt = TerminalPromptPort()
+        prompt.display_message("\n--- 設定差分プレビュー ---")
+        prompt.display_diff("+ a = 1\n- b = 2")
+
+        assert capsys.readouterr().out == (
+            "\n--- 設定差分プレビュー ---\n+ a = 1\n- b = 2\n"
+        )

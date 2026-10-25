@@ -129,7 +129,7 @@ def test_setup_skills_with_workflow_skill_idempotent_when_already_present(
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert "Skipped" in captured.out
+    assert "[INFO] Existing" in captured.out
 
 
 def test_setup_skills_with_workflow_skill_missing_source_fails(tmp_path, capsys):
