@@ -772,6 +772,21 @@ If POST confirmation is unknown, re-fetch; never resend an unconfirmed request. 
 
 MCP `--validate-request` returns `request_operation: replace`, the source trigger ID/reviewer/HEAD/author, the target HEAD/reviewer/round and one combined `trigger_body`. Replacement snapshots must preserve `user.login` on source and destination comments; missing source authors return Exit 30 before posting. The external client performs the same post/re-fetch/cleanup protocol; offline evaluation never POSTs or PATCHes. Unrelated duplicates, forks, missing sources and cross-author replacements stop processing. After replacement, timestamp-only results are insufficient: a result must bind explicitly to the requested commit; old-HEAD results remain history.
 
+### Review wait timeouts and stalls
+
+Every online wait is finite. Exit 20 means no result within `--timeout` (default 1800 s); Exit 21 means the current round's in-progress tracker (same round and requested HEAD) kept the same signature for `--stall-grace` (default 600 s). Any change to that tracker restarts the stall grace, never the overall timeout. A tracker from an earlier round or another HEAD is not a stall, so an unanswered trigger stays Exit 20. Both budgets use a monotonic clock, so wall-clock corrections neither shorten nor extend them. Sleeps never exceed the remaining budget; the wait can be overrun only by the poll already in flight (each `gh` call is limited to 30 s) and one final 30 s HEAD lookup. Exit 30 (Completed with no review content) and Exit 11 (single-snapshot evaluation) keep their own meanings.
+
+With `--output-file`, Exit 20/21 replace the file with this run's diagnostic: `acquisition_status: unavailable`, `reason_code` (`review_timeout` / `review_stalled`), `exit_code`, repository, PR, reviewer, round, trigger ID and time, requested HEAD, a fresh `current_head_sha` (null when the lookup fails, never the requested HEAD) and `wait_diagnostics` (elapsed time, timeout and grace settings, the last current-round tracker's ID, status, update time and body SHA-256, and bot items observed since the trigger as provenance only). `reviewed_head_sha` and `review_target_sha` are null, so the record is never review evidence for `orchestune complete`. Sections are `complete` only when the last poll fetched them. If the file cannot be written, the command exits 2 and removes the old file instead of leaving an earlier success in place.
+
+Recovery uses the same single waiting path:
+
+1. Read the exit code, the diagnostic JSON and its trigger/HEAD.
+2. Exit 20: resume once with `--no-post --round <n>` for the same reviewer; from Round 2 also pass the round's `--body-file`. A resume never posts or opens a round.
+3. Exit 21: check the tracker's last progress and, when visible, the related workflow run/job. Codex's internal job is not visible: record it as unknown rather than assuming a GitHub Actions run exists. Then resume as in step 2.
+4. Exit 30: re-fetch with `--no-post`; the tracker table is not a review result.
+5. Change reviewers only when a human explicitly chooses it, with `--switch-reviewer` (verified replacement or the next round). Switching is not an automatic recovery default. If Claude does not start, check the workflow actor, `allowed_bots`, trigger marker and job conclusion instead of reposting.
+6. If bounded resumes still fail, stop with `orchestune complete --issue <N> --result blocked --reason review-timeout` (or `review-stalled`). A timeout is never a pass or a skip.
+
 ## 8. Local CI Evidence Storage and Task Completion (`orchestune complete`)
 
 `orchestune complete` succeeds when it has posted the fixed Outcome Record, confirmed the corresponding Issue label (`status:done`, `status:blocked`, or `status:not-needed`), and durably saved the handoff and replay receipt in the shared ledger. Success does not mean the PR is merged, an independent not-needed review is approved, or the worktree is collected. `done` validates local CI, PR/head, child review evidence ([§4.5](#45-child-review-evidence-gate-and-layer-2-semantic-review-gate)) and token-limit evidence before publication; GC consumes that evidence. Legacy completion paths still perform their own token-limit checks.

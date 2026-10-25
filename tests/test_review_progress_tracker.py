@@ -76,26 +76,28 @@ def test_marker_absence_is_not_a_codex_tracker() -> None:
 
 def test_unchanged_codex_running_tracker_uses_existing_stall_grace() -> None:
     item = _tracker_comment("Running", updated_at="2026-10-04T03:11:00Z")
-    with patch("scripts.wait_for_review.time.time", side_effect=[100.0, 106.0]):
-        signature, since = _track_stall(
+    clock = iter([100.0, 106.0]).__next__
+    signature, since = _track_stall(
+        item,
+        None,
+        None,
+        stall_grace_seconds=5,
+        bot_name="codex",
+        pr_number=1271,
+        latest_trigger_time="2026-10-04T03:10:00Z",
+        clock=clock,
+    )
+    with pytest.raises(StalledReviewError, match="PR #1271"):
+        _track_stall(
             item,
-            None,
-            None,
+            signature,
+            since,
             stall_grace_seconds=5,
             bot_name="codex",
             pr_number=1271,
             latest_trigger_time="2026-10-04T03:10:00Z",
+            clock=clock,
         )
-        with pytest.raises(StalledReviewError, match="PR #1271"):
-            _track_stall(
-                item,
-                signature,
-                since,
-                stall_grace_seconds=5,
-                bot_name="codex",
-                pr_number=1271,
-                latest_trigger_time="2026-10-04T03:10:00Z",
-            )
 
 
 def _tracker_comment(status: str, *, updated_at: str) -> dict[str, object]:
@@ -297,8 +299,10 @@ class _Clock:
     now = 0.0
 
 
-def _run(states, *, grace=30, timeout=10, post_trigger=True, **kwargs):
-    """Drive wait_for_review over (monotonic_time, state-or-Exception) steps."""
+def _run(states, *, grace=30, timeout=1000, post_trigger=True, **kwargs):
+    """Drive wait_for_review over (monotonic_time, state-or-Exception) steps.
+
+    The overall timeout runs on the same fake monotonic clock (#1388)."""
     clock = _Clock()
     steps = iter(states)
     last: list[object] = []
@@ -466,11 +470,11 @@ def test_recycled_running_tracker_counts_for_stall_detection():
         pr_number=1274,
         latest_trigger_time=TRIGGER_AT,
     )
-    with patch("scripts.wait_for_review.time.time", side_effect=[100.0, 106.0]):
-        signature, since = _track_stall(item, None, None, **kwargs)
-        assert signature is not None
-        with pytest.raises(StalledReviewError):
-            _track_stall(item, signature, since, **kwargs)
+    clock = iter([100.0, 106.0]).__next__
+    signature, since = _track_stall(item, None, None, clock=clock, **kwargs)
+    assert signature is not None
+    with pytest.raises(StalledReviewError):
+        _track_stall(item, signature, since, clock=clock, **kwargs)
 
 
 def test_untouched_old_tracker_is_not_a_stall_of_the_new_trigger():

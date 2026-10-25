@@ -117,10 +117,22 @@ from scripts.review_poll import (
     summary_gate_open,
     track_stall,
     unavailable_result,
+    wait_context,
 )
 from scripts.review_trigger_replacement import (
     publish_replacement,
     retire_replaced_triggers,
+)
+from scripts.review_wait_diagnostics import (
+    EXIT_STALLED as EXIT_STALLED,
+)
+from scripts.review_wait_diagnostics import (
+    EXIT_TIMEOUT as EXIT_TIMEOUT,
+)
+from scripts.review_wait_diagnostics import (
+    ReviewTimeoutError,
+    WaitContext,
+    diagnostic_result,
 )
 
 # Historical private names; tests and callers patch and import them from here.
@@ -131,15 +143,17 @@ _resolve_offline_completeness = resolve_legacy_completeness
 _review_round_marker = review_round_marker
 _track_stall = track_stall
 
-EXIT_TIMEOUT = 20  # Timeout waiting for review activity
-EXIT_STALLED = 21  # In-progress tracker comment stopped changing; job likely ended
-
 GH_COMMAND_TIMEOUT_SECONDS = 30
 
 
 def _monotonic() -> float:
-    """Clock for the Completed grace deadline; tests replace it."""
+    """Clock for every wait deadline (overall, stall, Completed grace); tests replace it."""
     return time.monotonic()
+
+
+def _sleep(seconds: float) -> None:
+    """Pause between polls; tests replace it to advance a fake clock."""
+    time.sleep(seconds)
 
 
 _COMPLETENESS_SECTIONS = COMPLETENESS_SECTIONS
@@ -455,7 +469,7 @@ def _get_initial_pr_data(
     interval: int,
     max_retries: int = 1,
 ) -> dict[str, list[dict[str, Any]]]:
-    initial_fetch_start = time.time()
+    initial_fetch_start = _monotonic()
     retries = 0
     while True:
         try:
@@ -466,12 +480,13 @@ def _get_initial_pr_data(
                 f"Warning: Error capturing initial PR review data: {e}",
                 file=sys.stderr,
             )
-            if retries > max_retries or (time.time() - initial_fetch_start >= timeout):
-                raise TimeoutError(
+            remaining = timeout - (_monotonic() - initial_fetch_start)
+            if retries > max_retries or remaining <= 0:
+                raise ReviewTimeoutError(
                     f"Timed out capturing initial PR review data for PR #{pr_number} "
                     f"after {timeout}s ({retries} retry attempts)."
                 ) from e
-            time.sleep(interval)
+            _sleep(min(interval, remaining))
 
 
 def _handle_review_trigger(
@@ -915,48 +930,65 @@ def wait_for_review(
             fetch_head_sha=_fetch_pr_head_sha,
         )
         state = PollState(initial_snapshot, CompletedGrace(completed_grace_seconds))
-        start_time = time.time()
+        start_time = _monotonic()
         consecutive_errors = 0
+
+        def ended_context() -> WaitContext:
+            return wait_context(
+                round_,
+                state,
+                elapsed_seconds=_monotonic() - start_time,
+                timeout_seconds=timeout,
+                stall_grace_seconds=stall_grace_seconds,
+                completed_grace_seconds=completed_grace_seconds,
+            )
 
         while True:
             try:
                 current_data = _get_pr_data(pr_number, executor=executor)
                 consecutive_errors = 0
+                state.last_data, state.last_poll_ok = current_data, True
                 result = poll_step(
                     round_,
                     state,
                     current_data,
                     stall_grace_seconds=stall_grace_seconds,
                     grace_seconds=completed_grace_seconds,
-                    timeout_remaining=timeout - (time.time() - start_time),
+                    timeout_remaining=timeout - (_monotonic() - start_time),
                     clock=_monotonic,
                 )
                 if result is not None:
                     return result
-            except StalledReviewError:
+            except StalledReviewError as e:
+                e.attach(ended_context())
                 raise
             except Exception as e:
                 consecutive_errors += 1
+                state.last_poll_ok = False
                 print(f"Warning: Error checking PR review data: {e}", file=sys.stderr)
                 if consecutive_errors > max_retries:
                     raise RuntimeError(
                         f"Exceeded maximum retries ({max_retries}) during review polling: {e}"
                     ) from e
 
-            remaining = timeout - (time.time() - start_time)
+            # The deadline is monotonic, so it can be overrun only by the poll in
+            # flight (each gh call is bounded by GH_COMMAND_TIMEOUT_SECONDS).
+            remaining = timeout - (_monotonic() - start_time)
             if remaining <= 0:
                 break
             pause = min(interval, remaining)
             grace_left = state.grace.remaining(_monotonic())
-            time.sleep(pause if grace_left is None else min(pause, grace_left))
+            _sleep(pause if grace_left is None else min(pause, grace_left))
 
-    if state.grace.active:
-        # A Completed tracker was confirmed by a normal fetch, and no review
-        # content arrived before the overall timeout.
-        return unavailable_result(round_, state, completed_grace_seconds)
-    raise TimeoutError(
-        f"Timed out waiting for @{bot_name} activity on PR #{pr_number} after {timeout}s."
-    )
+        if state.grace.active:
+            # A Completed tracker was confirmed by a normal fetch, and no review
+            # content arrived before the overall timeout.
+            return unavailable_result(round_, state, completed_grace_seconds)
+        raise ReviewTimeoutError(
+            f"Timed out waiting for @{bot_name} activity on PR #{pr_number} "
+            f"after {timeout}s.",
+            ended_context(),
+        )
 
 
 def _run_online(args: Any) -> None:
@@ -977,7 +1009,12 @@ def _run_online(args: Any) -> None:
         wait_kwargs["jev_threshold"] = args.jev_threshold
     if getattr(args, "repair_trigger_markers", False):
         wait_kwargs["repair_trigger_markers"] = True
-    result = wait_for_review(args.pr, **wait_kwargs)
+    try:
+        result = wait_for_review(args.pr, **wait_kwargs)
+    except (StalledReviewError, TimeoutError) as e:
+        if args.output_file:
+            _write_wait_diagnostic(e, args)
+        raise
     if args.output_file:
         _write_output_file(result, args.output_file)
     # An explicit skip keeps its historical exit 0; a real reviewer whose
@@ -988,6 +1025,29 @@ def _run_online(args: Any) -> None:
     ):
         sys.exit(EXIT_NO_RESULT)
     sys.exit(EXIT_ACQUIRED)
+
+
+def _write_wait_diagnostic(error: BaseException, args: Any) -> None:
+    """Replace `--output-file` with this run's Exit 20/21 diagnostic (#1388).
+
+    The current HEAD comes from one bounded lookup; a failure leaves it null.
+    A write failure exits 2 rather than 20/21, since the caller would otherwise
+    read whatever the file held before.
+    """
+    result = diagnostic_result(
+        error,
+        pr_number=args.pr,
+        reviewer=args.bot_name,
+        round_num=args.round,
+        current_head_sha=_fetch_pr_head_sha(args.pr),
+    )
+    try:
+        _write_output_file(result, args.output_file)
+    except RuntimeError as write_error:
+        raise RuntimeError(
+            f"{write_error} (the wait itself ended with Exit {result['exit_code']}: "
+            f"{error})"
+        ) from error
 
 
 def main() -> None:
