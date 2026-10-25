@@ -614,7 +614,7 @@ def test_cli_text_table_on_tty_is_boxed_and_json_stays_plain(
     text_stream = patch_tty_stdout(monkeypatch)
     _run_cli(["--plan", str(plan_path)])
     text = text_stream.getvalue()
-    assert "╭" in text
+    assert "╭" in text or "┌" in text
     assert "dependency" in text
     assert "task-a" in text and "task-b" in text
 

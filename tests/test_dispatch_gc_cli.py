@@ -104,7 +104,9 @@ def _use_tty(monkeypatch: pytest.MonkeyPatch, columns: int) -> _TtyStream:
     return stream
 
 
-_WORKTREE = "/repo/worktrees/claude-issue-1037-long-task-name-for-wrapping-check"
+_WORKTREE = str(
+    Path("/repo/worktrees/claude-issue-1037-long-task-name-for-wrapping-check")
+)
 _PREVIEW_ITEMS = (
     SimpleNamespace(
         issue_number=1037,
@@ -156,7 +158,7 @@ def test_tty_wide_console_draws_a_table_with_every_value(monkeypatch) -> None:
     stream = _use_tty(monkeypatch, 200)
     assert _run_preview() == 0
     output = stream.getvalue()
-    assert "╭" in output
+    assert "╭" in output or "┌" in output
     for value in ("#1037", "done", "would_release", "verified_merged", _WORKTREE):
         assert value in output
     assert _SUMMARY in output

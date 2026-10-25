@@ -317,7 +317,7 @@ def test_cli_no_args_renders_command_table_on_tty():
     assert "Description" in rendered
     assert "DAG validation tool" in rendered
     assert "scratch" in rendered
-    assert "╭" in rendered
+    assert "╭" in rendered or "┌" in rendered
 
 
 def test_cli_invalid_command_exits(capsys):

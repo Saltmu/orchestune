@@ -371,7 +371,7 @@ _PREVIEW_STDOUT = (
     "Issue: #123\n"
     "Claim ID: claim-123\n"
     "Planned branch: codex/issue-123-example\n"
-    "Planned worktree: /tmp/worktrees/claim-123\n"
+    f"Planned worktree: {Path('/tmp/worktrees/claim-123')}\n"
     "Planned base: origin/main\n"
     "Owner kind: interactive\n"
     "Unverified: Git fetch, worktree creation, state persistence, Forge metadata "
@@ -381,7 +381,7 @@ _SUCCESS_STDOUT = (
     "Issue: #123\n"
     "Claim ID: claim-123\n"
     "Branch: codex/issue-123-example\n"
-    "Worktree: /tmp/worktrees/claim-123\n"
+    f"Worktree: {Path('/tmp/worktrees/claim-123')}\n"
     "Base: origin/main\n"
     "Owner kind: interactive\n"
 )
@@ -390,7 +390,7 @@ _CONFLICT_STDERR = (
     "Message: Claim conflict with issue #99\n"
     "conflicting_issue=#99\n"
     "conflicting_branch=codex/issue-99-active\n"
-    "conflicting_path=/tmp/worktrees/active\n"
+    f"conflicting_path={Path('/tmp/worktrees/active')}\n"
     "Next action: Resume the existing claim or select another issue.\n"
 )
 
