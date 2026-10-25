@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass, field
@@ -108,15 +107,10 @@ def _pre_scheduling_integration_steps(
     semantic_review_enabled: bool,
     auth_error: ForgeAuthError | None = None,
 ) -> list[tuple[str, Callable[[], PhaseResult], bool]]:
-    dispatcher_module = sys.modules[__name__]
     return [
         (
             "poll_pending_not_needed_reviews",
-            lambda: getattr(
-                dispatcher_module,
-                "_poll_pending_not_needed_reviews",
-                _poll_pending_not_needed_reviews,
-            )(
+            lambda: _poll_pending_not_needed_reviews(
                 config.not_needed_review_state_path,
                 forge=config.forge,
                 auth_error=auth_error,
@@ -126,20 +120,12 @@ def _pre_scheduling_integration_steps(
         ),
         (
             "advance_pending_semantic_reviews",
-            lambda: getattr(
-                dispatcher_module,
-                "_advance_pending_semantic_reviews",
-                _advance_pending_semantic_reviews,
-            )(config, auth_error=auth_error),
+            lambda: _advance_pending_semantic_reviews(config, auth_error=auth_error),
             True,
         ),
         (
             "run_semantic_integrator",
-            lambda: getattr(
-                dispatcher_module,
-                "_run_semantic_integrator",
-                _run_semantic_integrator,
-            )(
+            lambda: _run_semantic_integrator(
                 config,
                 semantic_review_enabled,
                 auth_error=auth_error,
@@ -156,24 +142,15 @@ def _post_cycle_steps(
     auth_error: ForgeAuthError | None,
     pre_integration_report: Any | None = None,
 ) -> list[tuple[str, Callable[[], PhaseResult], bool]]:
-    dispatcher_module = sys.modules[__name__]
     return [
         (
             "process_parent_completion",
-            lambda: getattr(
-                dispatcher_module,
-                "_process_parent_completion",
-                _process_parent_completion,
-            )(config, auth_error=auth_error),
+            lambda: _process_parent_completion(config, auth_error=auth_error),
             True,
         ),
         (
             "post_event_log_comment",
-            lambda: getattr(
-                dispatcher_module,
-                "_post_event_log_comment",
-                _post_event_log_comment,
-            )(
+            lambda: _post_event_log_comment(
                 config,
                 report,
                 auth_error=auth_error,
@@ -183,11 +160,7 @@ def _post_cycle_steps(
         ),
         (
             "post_finding_notices",
-            lambda: getattr(
-                dispatcher_module,
-                "_post_finding_notices",
-                _post_finding_notices,
-            )(
+            lambda: _post_finding_notices(
                 config,
                 report,
                 auth_error=auth_error,
@@ -249,12 +222,9 @@ def _run_integration_boundary(
         preparation_failed = True
 
     stopped = preparation_failed
-    steps_fn = getattr(
-        sys.modules[__name__],
-        "_pre_scheduling_integration_steps",
-        _pre_scheduling_integration_steps,
-    )
-    for name, call, enabled in steps_fn(config, semantic_review_enabled, auth_error):
+    for name, call, enabled in _pre_scheduling_integration_steps(
+        config, semantic_review_enabled, auth_error
+    ):
         if stopped or not enabled:
             reason = "prior_failure" if stopped else "semantic_review_disabled"
             config.progress.emit(name, "skipped", reason=reason)
@@ -323,38 +293,25 @@ def _run_post_cycle_phases(
 
 
 def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
-    dispatcher_module = sys.modules[__name__]
-    run_dispatch_fn = getattr(
-        dispatcher_module, "run_dispatch_cycle", run_dispatch_cycle
-    )
-    run_pre_integration_fn = getattr(
-        dispatcher_module, "run_pre_integration_cycle", run_pre_integration_cycle
-    )
-    decide_review_fn = getattr(
-        dispatcher_module,
-        "_decide_semantic_review_enabled",
-        _decide_semantic_review_enabled,
-    )
-
     if not config.apply:
-        report = run_dispatch_fn(config)
+        report = run_dispatch_cycle(config)
         for name, _call, _enabled in _post_cycle_steps(config, report, False, None):
             config.progress.emit(name, "skipped", reason="dry_run")
         return _DispatcherRunResult(
             report=report, post_cycle_results=[], integrator_run_report=None
         )
 
-    pre_integration_report = run_pre_integration_fn(config)
+    pre_integration_report = run_pre_integration_cycle(config)
     (
         integration_results,
         integrator_report,
         semantic_review_enabled,
         auth_error,
         stopped,
-    ) = _run_integration_boundary(config, decide_review_fn)
+    ) = _run_integration_boundary(config, _decide_semantic_review_enabled)
 
     scheduling_report, deferred_reason, lock_contended = _run_scheduling_cycle_stage(
-        config, run_dispatch_fn, pre_integration_report, stopped, auth_error
+        config, run_dispatch_cycle, pre_integration_report, stopped, auth_error
     )
 
     post_results = _run_post_cycle_phases(

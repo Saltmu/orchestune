@@ -123,7 +123,7 @@ def execute_pipeline(
             ctx, config, completion_events, repair_cycle
         )
     active_deviations = list(active.deviation_events)
-    if stage == CycleStage.PRE_INTEGRATION or stage == "pre_integration":
+    if stage == CycleStage.PRE_INTEGRATION:
         return _build_pre_integration_report(
             dependencies, config, active_deviations, completion_events
         )
@@ -156,21 +156,16 @@ def execute_locked_cycle(
         runtime = dependencies.start_consistency(config, run_state, issues, ctx)
     repair_cycle = dependencies.new_repair_state()
     repair_cycle.add_report(recovery_report)
-    try:
-        report = dependencies.run_pipeline(
-            ctx,
-            issues,
-            run_state,
-            config,
-            now,
-            repair_cycle,
-            prior_merges.events,
-            stage=stage,
-        )
-    except TypeError:
-        report = dependencies.run_pipeline(
-            ctx, issues, run_state, config, now, repair_cycle, prior_merges.events
-        )
+    report = dependencies.run_pipeline(
+        ctx,
+        issues,
+        run_state,
+        config,
+        now,
+        repair_cycle,
+        prior_merges.events,
+        stage=stage,
+    )
     with progress_phase(sink, "consistency_postprocessing"):
         dependencies.finish_consistency(runtime, report, ctx, now, config, repair_cycle)
     record_cycle_events(dependencies, report, now, config, collector)
@@ -197,7 +192,7 @@ def record_cycle_events(
         entry = dependencies.build_event_log(report, now)
         entry["timings"] = timing_snapshot(collector)
         dependencies.append_event_log(entry, config.events_log_path)
-        if report.stage != "pre_integration":
+        if report.stage != CycleStage.PRE_INTEGRATION:
             confirm_promotion_reports(config, report.promotion_events)
 
 
@@ -215,9 +210,7 @@ def execute_cycle(
         pass
     sink = config.progress
     phase_name = (
-        "pre_integration_cycle"
-        if stage == CycleStage.PRE_INTEGRATION or stage == "pre_integration"
-        else "cycle"
+        "pre_integration_cycle" if stage == CycleStage.PRE_INTEGRATION else "cycle"
     )
     with command_observer_scope(collector), progress_phase(sink, phase_name):
         with ExitStack() as stack:
@@ -227,9 +220,4 @@ def execute_cycle(
                         Path(config.run_state_path).with_suffix(".lock")
                     )
                 )
-            try:
-                return execute_locked_cycle(
-                    dependencies, config, collector, stage=stage
-                )
-            except TypeError:
-                return execute_locked_cycle(dependencies, config, collector)
+            return execute_locked_cycle(dependencies, config, collector, stage=stage)

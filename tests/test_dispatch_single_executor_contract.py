@@ -128,7 +128,7 @@ def test_execute_cycle_holds_run_state_lock_only_during_locked_cycle(
     seen: list[bool] = []
     sentinel = object()
 
-    def fake_locked_cycle(dependencies, config, collector=None):
+    def fake_locked_cycle(dependencies, config, collector=None, stage=None, **kwargs):
         seen.append(is_run_state_lock_held(lock))
         return sentinel
 
