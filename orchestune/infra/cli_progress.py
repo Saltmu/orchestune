@@ -39,6 +39,7 @@ class ProgressHandle:
         self._spinner = spinner
         self._live: Live | None = None
         self._latest: Block | None = None
+        self._spinner_frame: Spinner | None = None
         self._active = False
         self._closed = False
 
@@ -51,8 +52,14 @@ class ProgressHandle:
         body: RenderableType = self._latest.rich if self._latest else Text()
         if not self._spinner:
             return body
-        name = _UNICODE_SPINNER if self._output.policy.unicode else _ASCII_SPINNER
-        return Spinner(name, text=body)
+        # One Spinner for the handle's lifetime: a new instance would restart its
+        # animation clock, so manual refreshes would always draw the first frame.
+        if self._spinner_frame is None:
+            name = _UNICODE_SPINNER if self._output.policy.unicode else _ASCII_SPINNER
+            self._spinner_frame = Spinner(name, text=body)
+        else:
+            self._spinner_frame.update(text=body)
+        return self._spinner_frame
 
     def _start(self) -> None:
         console = self._output.console
@@ -103,6 +110,8 @@ class ProgressHandle:
         try:
             yield
         finally:
+            # Updates made while paused only recorded the content: show it now.
+            live.update(self._renderable())
             live.start(refresh=True)
             self._active = True
 

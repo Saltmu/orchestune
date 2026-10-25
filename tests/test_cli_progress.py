@@ -192,3 +192,35 @@ class TestRichLive:
         before = stream.getvalue()
         handle.update("late")
         assert stream.getvalue() == before
+
+    def test_update_during_pause_is_shown_when_the_display_resumes(self) -> None:
+        output, stream = rich_output()
+        with progress(output, "old status") as handle:
+            with handle.pause():
+                mark = len(stream.getvalue())
+                handle.update("new status")
+            assert "new status" in ANSI.sub("", stream.getvalue()[mark:])
+
+    def test_one_spinner_instance_is_kept_across_updates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[object] = []
+        real_init = cli_progress.Live.__init__
+        real_update = cli_progress.Live.update
+
+        def spy_init(self, renderable=None, **kwargs):
+            seen.append(renderable)
+            real_init(self, renderable, **kwargs)
+
+        def spy_update(self, renderable, **kwargs):
+            seen.append(renderable)
+            real_update(self, renderable, **kwargs)
+
+        monkeypatch.setattr(cli_progress.Live, "__init__", spy_init)
+        monkeypatch.setattr(cli_progress.Live, "update", spy_update)
+        output, _ = rich_output()
+        with progress(output, "one") as handle:
+            handle.update("two")
+            handle.update("three")
+        assert len(seen) == 3
+        assert seen[0] is seen[1] is seen[2]
