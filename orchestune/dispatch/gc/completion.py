@@ -382,7 +382,7 @@ def _apply_escalated_review_timeout(
         f"AIレビュー待機のタイムアウト（review-timeout）が上限（{ctx.config.max_review_timeout_retries}回）に達したため、"
         "自動再投入を停止し`status:blocked-human-review`へエスカレーションしました。\n\n"
         "**診断導線**: レビューワークフローがスキップまたは失敗している可能性があります。"
-        "GitHub Actions の実行履歴（ワークフロー: `claude-code-review.yml` 等）を確認し、"
+        "GitHub Actions の実行履歴（レビュー用ワークフロー等）を確認し、"
         "actor（ボット名義）、job conclusion（skipped等）、および認可エラーの有無をご確認ください。"
         "問題解決後、必要であれば`status:queued`へ再設定してください。"
     )
