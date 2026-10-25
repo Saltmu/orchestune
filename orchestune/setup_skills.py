@@ -4,8 +4,15 @@ import shutil
 import sys
 from pathlib import Path
 
+from orchestune.infra.cli_output import Level, make_output
+
 SKILLS_EXCLUDED_FROM_SETUP = {"local-ci-developer", "workflow-template"}
 WORKFLOW_TEMPLATE_SKILL_NAME = "workflow-template"
+
+
+def _report(level: Level, text: str, *, err: bool = False) -> None:
+    """Write one labelled status line to stderr (``err``) or stdout."""
+    make_output(sys.stderr if err else sys.stdout).message(level, text)
 
 
 def _normalized_path(path: str) -> str:
@@ -67,14 +74,16 @@ def _handle_existing_skill_link(
 
     if not dest_skill.is_symlink():
         if dest_skill.is_dir() and (dest_skill / "SKILL.md").is_file():
-            print(
-                f"  Skipped '{skill_name}' (already present as a copy at {dest_skill})"
+            _report(
+                Level.INFO,
+                f"Existing '{skill_name}' (already present as a copy at {dest_skill})",
             )
             return True
-        print(
-            f"  Error: Path '{dest_skill}' is occupied by an unrelated file/directory "
+        _report(
+            Level.FAILURE,
+            f"Error: Path '{dest_skill}' is occupied by an unrelated file/directory "
             "and does not look like a valid skill installation.",
-            file=sys.stderr,
+            err=True,
         )
         return False
 
@@ -83,22 +92,28 @@ def _handle_existing_skill_link(
         if _normalized_path(str(link_target.resolve())) == _normalized_path(
             str(src_skill.resolve())
         ):
-            print(f"  Skipped '{skill_name}' (already correctly linked to {src_skill})")
+            _report(
+                Level.INFO,
+                f"Existing '{skill_name}' (already correctly linked to {src_skill})",
+            )
             return True
-        print(
-            f"  Updating link for '{skill_name}' (points to {link_target} -> updating to {src_skill})"
+        _report(
+            Level.INFO,
+            f"Updating link for '{skill_name}' (points to {link_target} -> updating to {src_skill})",
         )
         dest_skill.unlink()
     except Exception as e:
-        print(
-            f"  Warning: Failed to resolve existing link {dest_skill}: {e}. Trying to overwrite."
+        _report(
+            Level.WARNING,
+            f"Warning: Failed to resolve existing link {dest_skill}: {e}. Trying to overwrite.",
         )
         try:
             dest_skill.unlink()
         except Exception as unlink_e:
-            print(
-                f"  Error: Failed to remove stale link {dest_skill}: {unlink_e}",
-                file=sys.stderr,
+            _report(
+                Level.FAILURE,
+                f"Error: Failed to remove stale link {dest_skill}: {unlink_e}",
+                err=True,
             )
             return False
     return None
@@ -113,15 +128,22 @@ def _link_one_skill(src_skill: Path, dest_skill: Path, skill_name: str) -> bool:
     try:
         setup_method = _create_skill_link(src_skill, dest_skill)
         if setup_method == "copied":
-            print(
-                f"  Successfully copied '{skill_name}' to {dest_skill} "
-                "(symlink privilege is not available)"
+            _report(
+                Level.SUCCESS,
+                f"Successfully copied '{skill_name}' to {dest_skill} "
+                "(symlink privilege is not available)",
             )
         else:
-            print(f"  Successfully linked '{skill_name}' to {dest_skill}")
+            _report(
+                Level.SUCCESS, f"Successfully linked '{skill_name}' to {dest_skill}"
+            )
         return True
     except Exception as e:
-        print(f"  Error: Failed to set up '{skill_name}': {e}", file=sys.stderr)
+        _report(
+            Level.FAILURE,
+            f"Error: Failed to set up '{skill_name}': {e}",
+            err=True,
+        )
         return False
 
 
@@ -135,15 +157,21 @@ def _setup_for_assistant(
     """Set up all skills for one assistant. Returns (success, failure) counts, or
     None if the assistant's base directory was not found (not applicable)."""
     if not base_dir.is_dir():
-        print(f"Skipping {assistant_name} (base directory {base_dir} not found).")
+        _report(
+            Level.SKIPPED,
+            f"Skipping {assistant_name} (base directory {base_dir} not found).",
+        )
         return None
 
-    print(f"Setting up skills for {assistant_name}...")
+    _report(Level.INFO, f"Setting up skills for {assistant_name}...")
 
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        print(f"  Warning: Could not create directory {target_dir}: {e}")
+        _report(
+            Level.WARNING,
+            f"Warning: Could not create directory {target_dir}: {e}",
+        )
         return (0, max(len(skills_to_link), 1))
 
     success_count = 0
@@ -151,8 +179,9 @@ def _setup_for_assistant(
     for skill_name in skills_to_link:
         src_skill = skills_dir / skill_name
         if not src_skill.is_dir():
-            print(
-                f"  Warning: Skill source '{skill_name}' not found in {skills_dir}, skipping."
+            _report(
+                Level.WARNING,
+                f"Warning: Skill source '{skill_name}' not found in {skills_dir}, skipping.",
             )
             continue
 
@@ -177,24 +206,29 @@ def _copy_workflow_template_skill(
     """
     if dest_skill.exists():
         if (dest_skill / "SKILL.md").is_file():
-            print(f"  Skipped '{skill_name}' (already present at {dest_skill})")
+            _report(
+                Level.INFO,
+                f"Existing '{skill_name}' (already present at {dest_skill})",
+            )
             return True
-        print(
-            f"  Error: Path '{dest_skill}' is occupied by an unrelated file/directory "
+        _report(
+            Level.FAILURE,
+            f"Error: Path '{dest_skill}' is occupied by an unrelated file/directory "
             "and does not look like a valid skill installation.",
-            file=sys.stderr,
+            err=True,
         )
         return False
 
     try:
         dest_skill.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(src_skill, dest_skill)
-        print(f"  Successfully copied '{skill_name}' to {dest_skill}")
+        _report(Level.SUCCESS, f"Successfully copied '{skill_name}' to {dest_skill}")
         return True
     except Exception as e:
-        print(
-            f"  Error: Failed to copy '{skill_name}' to {dest_skill}: {e}",
-            file=sys.stderr,
+        _report(
+            Level.FAILURE,
+            f"Error: Failed to copy '{skill_name}' to {dest_skill}: {e}",
+            err=True,
         )
         return False
 
@@ -216,10 +250,11 @@ def _setup_project_workflow_skill(
             src_workflow_skill = fallback
 
     if not src_workflow_skill.is_dir():
-        print(
-            f"  Error: workflow template skill source not found in {skills_dir}, "
+        _report(
+            Level.FAILURE,
+            f"Error: workflow template skill source not found in {skills_dir}, "
             "cannot fulfill --with-workflow-skill.",
-            file=sys.stderr,
+            err=True,
         )
         return False, 0, 1
 
@@ -253,28 +288,49 @@ def _evaluate_setup_outcome(
     assistants_detected: bool, success_count: int, failure_count: int
 ) -> int:
     if not assistants_detected and failure_count == 0:
-        print(
-            "\nNo supported AI assistants (Claude Code, Codex CLI, Antigravity) detected in your home directory."
+        _report(
+            Level.SKIPPED,
+            "No supported AI assistants (Claude Code, Codex CLI, Antigravity) detected in your home directory.",
         )
-        print("Please ensure at least one assistant is installed before running setup.")
+        _report(
+            Level.INFO,
+            "Please ensure at least one assistant is installed before running setup.",
+        )
         return 0
 
     if failure_count > 0 and success_count == 0:
-        print(
-            f"\nSetup failed: all {failure_count} skill link(s) could not be created or verified.",
-            file=sys.stderr,
+        _report(
+            Level.FAILURE,
+            f"Setup failed: all {failure_count} skill link(s) could not be created or verified.",
+            err=True,
         )
         return 1
 
     if failure_count > 0:
-        print(
-            f"\nSetup completed with {failure_count} failure(s) "
-            f"({success_count} succeeded, {failure_count} failed)."
+        _report(
+            Level.FAILURE,
+            f"Setup completed with {failure_count} failure(s) "
+            f"({success_count} succeeded, {failure_count} failed).",
         )
         return 1
 
-    print("\nSetup completed.")
+    _report(Level.SUCCESS, "Setup completed.")
     return 0
+
+
+def _distributable_skill_names(skills_dir: Path) -> list[str]:
+    """Sorted names of the skills in `skills_dir` that setup links by default."""
+    return sorted(
+        [
+            d.name
+            for d in skills_dir.iterdir()
+            if (
+                d.is_dir()
+                and (d / "SKILL.md").is_file()
+                and d.name not in SKILLS_EXCLUDED_FROM_SETUP
+            )
+        ]
+    )
 
 
 def setup_skills(with_workflow_skill: bool = False) -> int:
@@ -288,15 +344,16 @@ def setup_skills(with_workflow_skill: bool = False) -> int:
     Returns an exit code: 0 on full success (or nothing to do), 1 if any
     required skill link could not be created/verified.
     """
-    print(
+    _report(
+        Level.WARNING,
         "Warning: 'orchestune setup' is deprecated and will be removed in a future release. "
         "Use 'orchestune skills install' instead.",
-        file=sys.stderr,
+        err=True,
     )
     try:
         skills_dir = get_skills_source_dir()
     except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        _report(Level.FAILURE, f"Error: {e}", err=True)
         return 1
 
     home = Path.home()
@@ -305,17 +362,7 @@ def setup_skills(with_workflow_skill: bool = False) -> int:
         "Codex CLI": (home / ".codex", home / ".codex" / "skills"),
         "Antigravity": (home / ".gemini", home / ".gemini" / "config" / "skills"),
     }
-    skills_to_link = sorted(
-        [
-            d.name
-            for d in skills_dir.iterdir()
-            if (
-                d.is_dir()
-                and (d / "SKILL.md").is_file()
-                and d.name not in SKILLS_EXCLUDED_FROM_SETUP
-            )
-        ]
-    )
+    skills_to_link = _distributable_skill_names(skills_dir)
     assistants_detected = False
     success_count = 0
     failure_count = 0
