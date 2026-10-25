@@ -98,6 +98,14 @@ orchestune dispatch
 
 ---
 
+## CLIの表示
+
+Orchestuneは対話的な端末では、人向けの出力にRichの表示を使います。パイプやリダイレクトへの出力、CI環境、`TERM=dumb`では自動的にplain表示を選びます。環境にかかわらずplain表示にするには、`ORCHESTUNE_CLI_PLAIN=1`を設定してください。
+
+`NO_COLOR`に空でない値を設定すると、色だけを無効にできます。TTYでは色なしでも表やライブ進捗を利用できます。
+
+既存の機械可読出力はスクリプトで使える状態を保ちます。JSON応答や`orchestune scratch create`が出力するパスには装飾や進捗表示が混ざりません。`orchestune status --watch`はTTYでは表示を更新します。plain表示または非TTYでは画面を消去せず、watchの各間隔で静的なスナップショットを追記します。
+
 ## コントリビュート
 
 Orchestune自体を開発したい（テストスイートやローカルCIを実行したい）場合は、[CONTRIBUTING.ja.md](CONTRIBUTING.ja.md) を参照してください。

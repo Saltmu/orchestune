@@ -1,5 +1,6 @@
 import sys
 
+from orchestune.infra.cli_output import Block, make_output
 from orchestune.version import get_version
 
 
@@ -82,28 +83,36 @@ def _dispatch_tool_command(cmd: str) -> bool:
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: orchestune <command> [<args>]")
-        print("Available commands:")
-        print("  dag       DAG validation tool")
-        print("  dispatch  Dispatcher/scheduler tool")
-        print("  status    Monitor dispatched agent sessions (--watch for live view)")
-        print("  setup     Setup skills symlinks for AI assistants")
-        print("  bootstrap Verify gh auth and ensure required GitHub labels exist")
-        print("  provision Provision GitHub Issues from decomposition_plan.md")
-        print("  replan    Preview or replace an unstarted decomposition generation")
-        print("  remediate Preview parent-scope remediation tasks")
-        print("  claim     Claim a task issue (--no-apply for a read-only preview)")
-        print("  complete  Complete a claimed task issue")
-        print("  recover   Inspect or recover one stopped claim (preview by default)")
-        print(
-            "  gc        Release handoff-ready task reservations (--no-apply to preview)"
+        output = make_output()
+        commands = (
+            ("dag", "DAG validation tool"),
+            ("dispatch", "Dispatcher/scheduler tool"),
+            ("status", "Monitor dispatched agent sessions (--watch for live view)"),
+            ("setup", "Setup skills symlinks for AI assistants"),
+            ("bootstrap", "Verify gh auth and ensure required GitHub labels exist"),
+            ("provision", "Provision GitHub Issues from decomposition_plan.md"),
+            ("replan", "Preview or replace an unstarted decomposition generation"),
+            ("remediate", "Preview parent-scope remediation tasks"),
+            ("claim", "Claim a task issue (--no-apply for a read-only preview)"),
+            ("complete", "Complete a claimed task issue"),
+            ("recover", "Inspect or recover one stopped claim (preview by default)"),
+            ("gc", "Release handoff-ready task reservations (--no-apply to preview)"),
+            ("doctor", "Diagnose dispatch single-executor setup (offline, read-only)"),
+            ("config", "Create or edit orchestune.toml interactively"),
+            ("skills", "Install and manage Orchestune skills for AI assistants"),
+            ("scratch", "Create scratch session directories for task artifacts"),
         )
-        print(
-            "  doctor    Diagnose dispatch single-executor setup (offline, read-only)"
+        plain_commands = "\n".join(
+            f"  {command:<10}{description}" for command, description in commands
         )
-        print("  config    Create or edit orchestune.toml interactively")
-        print("  skills    Install and manage Orchestune skills for AI assistants")
-        print("  scratch   Create scratch session directories for task artifacts")
+
+        output.emit(output.text_block("Usage: orchestune <command> [<args>]"))
+        table = output.table_block(
+            ("Command", "Description"), commands, title="Available commands"
+        )
+        output.emit(
+            Block(f"Available commands:\n{plain_commands}", table.rich, soft_wrap=False)
+        )
         sys.exit(1)
 
     cmd = sys.argv[1]
