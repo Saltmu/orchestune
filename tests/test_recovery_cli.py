@@ -5,6 +5,7 @@ import json
 import pytest
 
 from orchestune.recovery.cli import main
+from tests.cli_tty_support import patch_tty_stdout
 
 pytest_plugins = ["tests.test_local_claim_identity"]
 
@@ -105,3 +106,22 @@ def test_restart_cli_requires_operator_identity_and_reason(monkeypatch, capsys):
         == 0
     )
     assert requests[0].restart_blocked and not requests[0].apply
+
+
+def test_recovery_output_is_identical_on_tty(local_claim, monkeypatch, capsys):
+    # #1409: the JSON default and the failure note keep one machine stream, so a
+    # TTY must receive the same bytes as a pipe, with no Rich decoration.
+    workspace, _active, _worktree = local_claim
+    monkeypatch.chdir(workspace.repository_root)
+    assert main(["--issue", "7"]) == 0
+    preview_plain = capsys.readouterr().out
+    assert main(["--issue", "7", "--apply"]) == 43
+    failure_plain = capsys.readouterr().out
+    assert failure_plain.rstrip("\n").splitlines()[-1].startswith("Next: ")
+
+    stream = patch_tty_stdout(monkeypatch)
+    assert main(["--issue", "7"]) == 0
+    assert stream.getvalue() == preview_plain
+    stream = patch_tty_stdout(monkeypatch)
+    assert main(["--issue", "7", "--apply"]) == 43
+    assert stream.getvalue() == failure_plain

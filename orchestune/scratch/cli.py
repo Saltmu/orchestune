@@ -4,6 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from orchestune.infra.cli_output import make_output
 from orchestune.session_dirs import SessionDirError, create_session_dir
 
 
@@ -44,7 +45,8 @@ def main(argv: list[str] | None = None) -> int:
                 issue_or_task=args.issue_or_task,
                 project_dir=args.project_dir,
             )
-            print(str(path))
+            # stdout carries only the path line (command substitution), never Rich.
+            make_output(machine=True).payload(str(path))
             return 0
         except SessionDirError as e:
             print(f"Error: {e}", file=sys.stderr)
