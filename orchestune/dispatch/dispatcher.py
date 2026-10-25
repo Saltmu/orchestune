@@ -43,7 +43,12 @@ from orchestune.dispatch.pre_scheduling_integration import (
 from orchestune.dispatch.pre_scheduling_integration import (
     _run_semantic_integrator as _run_semantic_integrator,
 )
-from orchestune.dispatch.progress import StdoutProgress, progress_phase, safe_stderr
+from orchestune.dispatch.progress import (
+    DispatchProgressSink,
+    progress_phase,
+    safe_stderr,
+)
+from orchestune.dispatch.progress_output import select_progress_sink
 from orchestune.dispatch.report import _report_to_dict, write_github_step_summary
 from orchestune.dispatch.report_output import ReportOutput, new_run_id, reserve_report
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
@@ -380,7 +385,7 @@ def _post_cycle_exit_code(
 
 
 def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
-    sink = StdoutProgress(new_run_id(), None, None)
+    sink = select_progress_sink(new_run_id())
     try:
         return _main_with_sink(argv, cwd, sink)
     finally:
@@ -388,7 +393,7 @@ def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
 
 
 def _main_with_sink(
-    argv: list[str] | None, cwd: Path | None, sink: StdoutProgress
+    argv: list[str] | None, cwd: Path | None, sink: DispatchProgressSink
 ) -> int:
     parser = _build_arg_parser()
     sink.emit("configuration", "started")

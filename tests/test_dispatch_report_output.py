@@ -1,5 +1,6 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
+from io import StringIO
 from threading import Event
 from unittest.mock import Mock, patch
 
@@ -378,3 +379,95 @@ def test_cli_closes_owned_progress_stream_even_on_config_error(tmp_path, config_
         else:
             assert main([]) == 0
     assert stream.closed
+
+
+class _TtyStream(StringIO):
+    def isatty(self):
+        return True
+
+    @property
+    def encoding(self):
+        return "utf-8"
+
+
+def _run_main_with_tty_sink(tmp_path, stream, cycle):
+    from orchestune.dispatch.dispatcher import main
+    from orchestune.dispatch.progress_output import RichDispatchProgress
+
+    cfg = config(tmp_path, tmp_path / "result.json")
+    sink = RichDispatchProgress("run-tty", None, None, stream=stream, env={})
+    with (
+        patch("orchestune.dispatch.dispatcher.select_progress_sink", return_value=sink),
+        patch(
+            "orchestune.dispatch.dispatcher.load_and_resolve_config", return_value=cfg
+        ),
+        patch("orchestune.dispatch.dispatcher.run_dispatch_cycle", side_effect=cycle),
+    ):
+        return cfg, sink, main([])
+
+
+HIDE_CURSOR, SHOW_CURSOR = "\x1b[?25l", "\x1b[?25h"
+
+
+def _phase_then(outcome):
+    def cycle(cfg):
+        cfg.progress.emit("cycle", "started")
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    return cycle
+
+
+def test_tty_progress_saves_report_and_never_prints_json(tmp_path, capsys):
+    from orchestune.dispatch.report import _report_to_dict
+
+    report = _report()
+    stream = _TtyStream()
+    cfg, sink, code = _run_main_with_tty_sink(tmp_path, stream, _phase_then(report))
+    assert code == 0
+    saved = json.loads(cfg.report_path.read_text())
+    assert saved == {**_report_to_dict(report), "post_cycle_results": []}
+    text = stream.getvalue()
+    assert f"report saved: {cfg.report_path}" in text
+    assert "run-tty" in text and "dry-run" in text and "#1070" in text
+    assert text.count(HIDE_CURSOR) == text.count(SHOW_CURSOR) >= 1
+    assert sink.disabled
+    assert '"selected"' not in text + capsys.readouterr().out
+
+
+def test_broken_tty_progress_still_saves_report(tmp_path, capsys):
+    class Broken(_TtyStream):
+        def write(self, value):
+            raise BrokenPipeError("closed")
+
+    cfg, _sink, code = _run_main_with_tty_sink(
+        tmp_path, Broken(), _phase_then(_report())
+    )
+    assert code == 0
+    assert cfg.report_path.exists()
+    assert capsys.readouterr().err.count("progress unavailable") == 1
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        (RuntimeError("boom"), "report not created"),
+        (KeyboardInterrupt(), "interrupted; report not created"),
+    ],
+)
+def test_tty_progress_restores_cursor_on_failure(tmp_path, failure, message):
+    stream = _TtyStream()
+    if isinstance(failure, KeyboardInterrupt):
+        with pytest.raises(KeyboardInterrupt):
+            _run_main_with_tty_sink(tmp_path, stream, _phase_then(failure))
+    else:
+        cfg, _sink, code = _run_main_with_tty_sink(
+            tmp_path, stream, _phase_then(failure)
+        )
+        assert code == 1
+        assert not cfg.report_path.exists()
+    text = stream.getvalue()
+    assert message in text
+    assert text.count(HIDE_CURSOR) == text.count(SHOW_CURSOR) >= 1
+    assert text.rfind(SHOW_CURSOR) > text.rfind(HIDE_CURSOR)
