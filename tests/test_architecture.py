@@ -529,6 +529,7 @@ def test_pyproject_uses_pep621_metadata_and_hatchling() -> None:
         "requires-python": ">=3.12,<4.0",
         "dependencies": [
             "pyyaml>=6.0.3,<7.0.0",
+            "rich>=13.7.0,<16.0.0",
             "tomlkit>=0.13.0,<1.0.0",
             "tzdata>=2024.1; sys_platform == 'win32'",
         ],
