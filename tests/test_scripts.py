@@ -64,6 +64,21 @@ def test_powershell_local_ci_configurable_workers():
         assert not re.search(pattern, opt), f"Expected pattern not to match: {opt}"
 
 
+def test_local_ci_sh_configurable_workers():
+    import re
+
+    local_ci_sh = PROJECT_ROOT / "scripts" / "local-ci.sh"
+    content = local_ci_sh.read_text(encoding="utf-8")
+
+    assert "ORCHESTUNE_TEST_WORKERS" in content
+    assert '${PYTEST_WORKER_ARGS[@]+"${PYTEST_WORKER_ARGS[@]}"}' in content
+    # Ensure no bare "${...[@]}" array expansions exist under set -u for bash 3.2 compatibility
+    naked_array_expansions = re.findall(r'(?<!\+)"\$\{[a-zA-Z0-9_]+\[@\]\}"', content)
+    assert (
+        not naked_array_expansions
+    ), f"Found unsafe array expansion under set -u: {naked_array_expansions}"
+
+
 def test_powershell_setup_git_hooks_contract():
     setup_hooks_ps1 = PROJECT_ROOT / "scripts" / "setup-git-hooks.ps1"
     content = setup_hooks_ps1.read_text(encoding="utf-8")

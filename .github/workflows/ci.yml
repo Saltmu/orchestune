@@ -63,6 +63,9 @@ jobs:
 
       - name: Run CI checks (Linux)
         if: runner.os == 'Linux'
+        env:
+          ORCHESTUNE_TEST_WORKERS: "4"
+          PYTEST_ADDOPTS: "--durations=30"
         run: |
           chmod +x scripts/local-ci.sh
           ./scripts/local-ci.sh
