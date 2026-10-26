@@ -47,11 +47,40 @@ def test_multiple_suite_markers_are_rejected() -> None:
 
 def test_heavy_test_module_priority_files_exist() -> None:
     repo_root = Path(__file__).parents[1]
-    assert len(_HEAVY_TEST_MODULE_PRIORITY) == 11
+    assert len(_HEAVY_TEST_MODULE_PRIORITY) == 15
     for rel_path in _HEAVY_TEST_MODULE_PRIORITY:
         assert (
             repo_root / rel_path
         ).is_file(), f"Priority entry {rel_path} does not exist"
+
+
+def test_order_and_classify_front_loads_packaging_and_subprocess_modules() -> None:
+    item_unprioritized = _FakeItem(nodeid="tests/test_zeta.py::test_z")
+    item_wheel = _FakeItem(nodeid="tests/test_wheel_skills_packaging.py::test_build")
+    item_git_ops = _FakeItem(nodeid="tests/test_integrator_git_ops.py::test_ops")
+    item_typing = _FakeItem(
+        nodeid="tests/test_dispatch_cycle_execution_typing.py::test_typing"
+    )
+    item_ports = _FakeItem(
+        nodeid="tests/test_dispatch_cycle_port_contracts.py::test_ports"
+    )
+
+    items = [
+        item_unprioritized,
+        item_wheel,
+        item_git_ops,
+        item_typing,
+        item_ports,
+    ]
+    order_and_classify(items)
+
+    assert items == [
+        item_wheel,
+        item_git_ops,
+        item_typing,
+        item_ports,
+        item_unprioritized,
+    ]
 
 
 def test_order_and_classify_front_loads_heavy_modules_and_preserves_order() -> None:

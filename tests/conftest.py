@@ -31,7 +31,12 @@ from tests.forge_event_support import (
     EventCommentForgeMixin,
     install_event_comment_store,
 )
-from tests.suite_collection_support import order_and_classify
+from tests.suite_collection_support import (
+    _HEAVY_TEST_MODULE_PRIORITY as _HEAVY_TEST_MODULE_PRIORITY,
+)
+from tests.suite_collection_support import (
+    order_and_classify,
+)
 
 pytest_plugins = [
     "tests.process_runner_support",

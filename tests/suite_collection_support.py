@@ -20,6 +20,10 @@ _HEAVY_TEST_MODULE_PRIORITY: dict[str, int] = {
     "tests/test_architecture_forge_patch.py": 8,
     "tests/test_architecture.py": 9,
     "tests/test_footprint_paths.py": 10,
+    "tests/test_wheel_skills_packaging.py": 11,
+    "tests/test_integrator_git_ops.py": 12,
+    "tests/test_dispatch_cycle_execution_typing.py": 13,
+    "tests/test_dispatch_cycle_port_contracts.py": 14,
 }
 
 
