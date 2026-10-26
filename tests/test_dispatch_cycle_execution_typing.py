@@ -16,9 +16,23 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _CACHE_DIR = _REPO_ROOT / ".pytest_cache" / "typing_cache"
 
 
+def _cache_digest(source: str, repo_root: Path = _REPO_ROOT) -> str:
+    h = hashlib.sha256(source.encode("utf-8"))
+    h.update(sys.version.encode("utf-8"))
+    for rel in (
+        "pyproject.toml",
+        "orchestune/dispatch/cycle.py",
+        "orchestune/dispatch/cycle_execution_contracts.py",
+    ):
+        target = repo_root / rel
+        if target.is_file():
+            h.update(target.read_bytes())
+    return h.hexdigest()
+
+
 @functools.cache
 def _run_mypy(source: str) -> subprocess.CompletedProcess[str]:
-    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    digest = _cache_digest(source)
     cache_file = _CACHE_DIR / f"{digest}.json"
     lock_file = _CACHE_DIR / f"{digest}.lock"
 
@@ -96,6 +110,32 @@ def _run_mypy(source: str) -> subprocess.CompletedProcess[str]:
                 lock_file.unlink()
         except Exception:
             pass
+
+
+def test_cache_digest_invalidates_on_checked_code_or_source_change(
+    tmp_path: Path,
+) -> None:
+    base_digest = _cache_digest("source_a")
+    diff_source = _cache_digest("source_b")
+    assert base_digest != diff_source
+
+    fake_root = tmp_path / "repo"
+    fake_root.mkdir()
+    (fake_root / "pyproject.toml").write_text("[tool.mypy]\nstrict = true\n")
+    cycle_dir = fake_root / "orchestune" / "dispatch"
+    cycle_dir.mkdir(parents=True)
+    cycle_file = cycle_dir / "cycle.py"
+    cycle_file.write_text("# version 1\n")
+    contracts_file = cycle_dir / "cycle_execution_contracts.py"
+    contracts_file.write_text("# version 1\n")
+
+    d_v1 = _cache_digest("source_a", repo_root=fake_root)
+    cycle_file.write_text("# version 2 with callback modification\n")
+    d_v2 = _cache_digest("source_a", repo_root=fake_root)
+    assert d_v1 != d_v2
+    contracts_file.write_text("# version 2 with contract modification\n")
+    d_v3 = _cache_digest("source_a", repo_root=fake_root)
+    assert d_v2 != d_v3
 
 
 def test_cycle_dependency_builder_returns_frozen_contract() -> None:
