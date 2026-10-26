@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import io
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -169,3 +172,156 @@ def test_invalid_plan_is_a_configuration_error(
 
     assert main(["--plan", str(plan), "--parent-issue", str(PARENT)]) == 2
     assert "Error:" in capsys.readouterr().err
+
+
+class _TtyStream(io.StringIO):
+    """A stand-in for an interactive UTF-8 terminal stream."""
+
+    @property
+    def encoding(self) -> str:  # type: ignore[override]
+        return "utf-8"
+
+    def isatty(self) -> bool:
+        return True
+
+
+def _use_tty(monkeypatch: pytest.MonkeyPatch, columns: int) -> _TtyStream:
+    stream = _TtyStream()
+    monkeypatch.setattr(sys, "stdout", stream)
+    monkeypatch.setattr(sys, "stderr", stream)
+    for name in ("CI", "ORCHESTUNE_CLI_PLAIN", "NO_COLOR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setenv("COLUMNS", str(columns))
+    return stream
+
+
+_PREVIEW_TEXT = (
+    "Replan preview for parent Issue #693\n"
+    "Plan revision: rev-1\n"
+    "create: task-a — new\n"
+    "retire: old-a (#10) — superseded\n"
+    "Preview token: tok-1\n"
+)
+
+
+def _decision(action: str, subject: str, issue_number, reason: str):
+    return SimpleNamespace(
+        action=action, subject=subject, issue_number=issue_number, reason=reason
+    )
+
+
+def _stub_preview(monkeypatch: pytest.MonkeyPatch, decisions, token: str = "tok-1"):
+    preview = SimpleNamespace(
+        plan_revision="rev-1", decisions=tuple(decisions), preview_token=token
+    )
+    monkeypatch.setattr("orchestune.replan.cli.GitHubForge", lambda: None)
+    monkeypatch.setattr(
+        "orchestune.replan.cli.load_replan_plan",
+        lambda path: SimpleNamespace(parent_issue_number=693),
+    )
+    monkeypatch.setattr(
+        "orchestune.replan.cli.collect_replan_snapshot", lambda forge, parent: None
+    )
+    monkeypatch.setattr(
+        "orchestune.replan.cli.build_replan_preview",
+        lambda plan, snapshot: preview,
+    )
+
+
+_SAFE_DECISIONS = (
+    _decision("create", "task-a", None, "new"),
+    _decision("retire", "old-a", 10, "superseded"),
+)
+
+
+def test_plain_preview_stdout_is_unchanged(monkeypatch, capsys) -> None:
+    _stub_preview(monkeypatch, _SAFE_DECISIONS)
+    assert main(["--parent-issue", "693"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == _PREVIEW_TEXT
+    assert captured.err == ""
+
+
+def test_plain_unsafe_preview_reports_conflict_on_stderr(monkeypatch, capsys) -> None:
+    _stub_preview(monkeypatch, [_decision("manual-review", "old-a", 10, "in use")])
+    assert main(["--parent-issue", "693"]) == 6
+    captured = capsys.readouterr()
+    assert captured.out == (
+        "Replan preview for parent Issue #693\n"
+        "Plan revision: rev-1\n"
+        "manual-review: old-a (#10) — in use\n"
+        "Preview token: tok-1\n"
+    )
+    assert captured.err == "Error: preview contains conflicts requiring manual review\n"
+
+
+def test_plain_apply_without_confirmation_keeps_preview_and_error(
+    monkeypatch, capsys
+) -> None:
+    _stub_preview(monkeypatch, _SAFE_DECISIONS)
+    assert main(["--parent-issue", "693", "--apply"]) == 3
+    captured = capsys.readouterr()
+    assert captured.out == _PREVIEW_TEXT
+    assert captured.err == "Error: --apply requires --confirm-preview TOKEN\n"
+
+
+def test_plain_apply_success_and_noop_messages_are_unchanged(
+    monkeypatch, capsys
+) -> None:
+    _stub_preview(monkeypatch, _SAFE_DECISIONS)
+    applied = SimpleNamespace(
+        degraded=False,
+        created_issue_numbers=(11,),
+        reused_issue_numbers=(),
+        retired_issue_numbers=(10,),
+    )
+    monkeypatch.setattr("orchestune.replan.cli.apply_replan", lambda *a, **k: applied)
+    argv = ["--parent-issue", "693", "--apply", "--confirm-preview", "tok-1"]
+    assert main(argv) == 0
+    assert capsys.readouterr().out == (
+        _PREVIEW_TEXT + "Applied replan: created=1, reused=0, retired=1\n"
+    )
+
+    noop = SimpleNamespace(
+        degraded=False,
+        created_issue_numbers=(),
+        reused_issue_numbers=(),
+        retired_issue_numbers=(),
+    )
+    monkeypatch.setattr("orchestune.replan.cli.apply_replan", lambda *a, **k: noop)
+    assert main(argv) == 5
+    assert capsys.readouterr().out == (
+        _PREVIEW_TEXT + "No-op: this generation is already active.\n"
+    )
+
+
+def test_plain_apply_failure_and_config_error_stay_on_stderr(
+    monkeypatch, capsys
+) -> None:
+    _stub_preview(monkeypatch, _SAFE_DECISIONS)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("orchestune.replan.cli.apply_replan", boom)
+    argv = ["--parent-issue", "693", "--apply", "--confirm-preview", "tok-1"]
+    assert main(argv) == 4
+    assert capsys.readouterr().err == (
+        "Error: replan did not complete; run a new preview before retrying: boom\n"
+    )
+
+    def bad_plan(path):
+        raise ValueError("bad plan")
+
+    monkeypatch.setattr("orchestune.replan.cli.load_replan_plan", bad_plan)
+    assert main(["--parent-issue", "693"]) == 2
+    assert capsys.readouterr().err == "Error: bad plan\n"
+
+
+def test_tty_preview_keeps_long_token_intact_on_narrow_width(monkeypatch) -> None:
+    long_token = "tok-" + "0123456789abcdef" * 5
+    _stub_preview(monkeypatch, _SAFE_DECISIONS, token=long_token)
+    stream = _use_tty(monkeypatch, 30)
+    assert main(["--parent-issue", "693"]) == 0
+    assert stream.getvalue() == _PREVIEW_TEXT.replace("tok-1", long_token)

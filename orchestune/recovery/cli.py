@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 
+from orchestune.infra.cli_output import make_output
 from orchestune.recovery.contracts import RecoveryRequest
 from orchestune.recovery.service import recover_claim
 
@@ -67,9 +68,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ValueError as error:
             parser.error(str(error))
     result = recover_claim(request)
-    print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+    # The default output is JSON even without --json, and the failure note joins
+    # that same stream. A machine stream never goes through Rich, so the bytes are
+    # identical on a TTY and in a pipe.
+    output = make_output(machine=True)
+    output.payload(json.dumps(asdict(result), ensure_ascii=False, indent=2))
     if not result.success:
-        print(
+        output.payload(
             "Next: stop/reconcile the agent, or restore the marker and resume complete with its saved ID."
         )
     return 0 if result.success else 43

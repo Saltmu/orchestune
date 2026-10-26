@@ -11,6 +11,7 @@ from orchestune.dag.models import (
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
 )
+from tests.cli_tty_support import patch_tty_stdout
 
 
 def _write_plan(path, content: str) -> None:
@@ -38,6 +39,12 @@ def _run_cli_json(argv, capsys):
     """Run the CLI with --json and return the parsed DAG result dict."""
     _run_cli([*argv, "--json"])
     return json.loads(capsys.readouterr().out)
+
+
+def _edge_table(output: str) -> list[list[str]]:
+    """Cells of each Edges-table row (the header row is excluded)."""
+    rows = [line.split() for line in output.splitlines()]
+    return [row for row in rows if row[:1] in (["dependency"], ["conflict"])]
 
 
 def test_cli_validation_success(tmp_path, capsys):
@@ -102,10 +109,12 @@ def test_cli_prints_precedence_and_conflict_edges_separately(tmp_path, capsys):
     _run_cli(["--plan", str(plan_path), "--threshold", "0.1"])
 
     output = capsys.readouterr().out
-    assert "Precedence edges:" in output
-    assert "task-a -> task-b [reason: explicit]" in output
-    assert "Conflict edges:" in output
-    assert "task-a <-> task-b [reason: similarity" in output
+    assert "Edges" in output
+    rows = _edge_table(output)
+    assert ["dependency", "task-a", "task-b", "explicit", "-", "-"] in rows
+    conflicts = [row for row in rows if row[0] == "conflict"]
+    assert [row[1:3] for row in conflicts] == [["task-a", "task-b"]]
+    assert conflicts[0][3] == "similarity"
 
 
 def test_cli_validation_cycle_failure(tmp_path, capsys):
@@ -534,9 +543,14 @@ def test_cli_reports_shared_document_edges_in_text_and_json(tmp_path, capsys):
 
     _run_cli(["--plan", str(plan_path)])
     output = capsys.readouterr().out
-    assert "task-a <-> task-b [reason: shared-document" in output
-    assert "docs/ja/architecture.md" in output
-    assert "Precedence edges:" not in output or "task-a ->" not in output
+    assert [
+        "conflict",
+        "task-a",
+        "task-b",
+        "shared-document",
+        "-",
+        "docs/ja/architecture.md",
+    ] in _edge_table(output)
 
     data = _run_cli_json(["--plan", str(plan_path)], capsys)
     document_edges = [
@@ -544,3 +558,68 @@ def test_cli_reports_shared_document_edges_in_text_and_json(tmp_path, capsys):
     ]
     assert document_edges[0]["resources"] == ["docs/ja/architecture.md"]
     assert data["edges"] == []
+
+
+def test_cli_text_table_keeps_every_edge_of_a_shared_node(tmp_path, capsys):
+    # task-c has two parents, and task-b is both a child of task-a and a parent
+    # of task-c. Every dependency edge must stay in the table, not a single tree.
+    plan_path = tmp_path / "plan.md"
+    _write_plan(
+        plan_path,
+        """\
+        ---
+        subtasks:
+          - id: task-a
+            footprint: ["src/a.py"]
+          - id: task-b
+            footprint: ["src/b.py"]
+            depends_on: ["task-a"]
+          - id: task-c
+            footprint: ["src/c.py"]
+            depends_on: ["task-a", "task-b"]
+        ---
+        """,
+    )
+
+    _run_cli(["--plan", str(plan_path)])
+
+    output = capsys.readouterr().out
+    assert "Topological order: task-a -> task-b -> task-c" in output
+    dependency_rows = [row[:3] for row in _edge_table(output)]
+    assert sorted(dependency_rows) == [
+        ["dependency", "task-a", "task-b"],
+        ["dependency", "task-a", "task-c"],
+        ["dependency", "task-b", "task-c"],
+    ]
+
+
+def test_cli_text_table_on_tty_is_boxed_and_json_stays_plain(
+    tmp_path, capsys, monkeypatch
+):
+    plan_path = tmp_path / "plan.md"
+    _write_plan(
+        plan_path,
+        """\
+        ---
+        subtasks:
+          - id: task-a
+            footprint: ["src/a.py"]
+          - id: task-b
+            footprint: ["src/b.py"]
+            depends_on: ["task-a"]
+        ---
+        """,
+    )
+
+    text_stream = patch_tty_stdout(monkeypatch)
+    _run_cli(["--plan", str(plan_path)])
+    text = text_stream.getvalue()
+    assert "╭" in text or "┌" in text
+    assert "dependency" in text
+    assert "task-a" in text and "task-b" in text
+
+    json_stream = patch_tty_stdout(monkeypatch)
+    _run_cli(["--plan", str(plan_path), "--json"])
+    payload = json_stream.getvalue()
+    assert "\x1b" not in payload
+    assert json.loads(payload)["precedence_edges"][0]["source"] == "task-a"

@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from orchestune.infra.cli_output import Level, make_output
 from orchestune.installer.contracts import (
     BundlePayload,
     BundleState,
@@ -27,6 +28,17 @@ from orchestune.installer.engine import (
 )
 from orchestune.installer.payload import resolve_payload
 from orchestune.installer.targets import resolve_targets
+
+_DOCTOR_LEVELS: dict[str, Level] = {
+    "ok": Level.SUCCESS,
+    "warning": Level.WARNING,
+    "error": Level.FAILURE,
+    "not_checked": Level.SKIPPED,
+}
+
+
+def _report_error(text: str) -> None:
+    make_output(sys.stderr).message(Level.FAILURE, text)
 
 
 def _add_common_arguments(sub: argparse.ArgumentParser) -> None:
@@ -124,17 +136,13 @@ def _handle_doctor(
             ],
             "overall_status": "failed" if has_error else "ok",
         }
-        print(json.dumps(output, indent=2))
+        make_output(machine=True).payload(json.dumps(output, indent=2))
     else:
-        print("=== Orchestune Skills Doctor ===")
+        out = make_output(sys.stdout)
+        out.emit(out.text_block("=== Orchestune Skills Doctor ==="))
         for d in diagnostics:
-            prefix = {
-                "ok": "✓",
-                "warning": "⚠",
-                "error": "✗",
-                "not_checked": "○",
-            }.get(d.status, "?")
-            print(f"[{prefix}] {d.check_name}: {d.message}")
+            level = _DOCTOR_LEVELS.get(d.status, Level.UNVERIFIED)
+            out.message(level, f"{d.check_name}: {d.message}")
     return InstallerExitCode.ERROR if has_error else InstallerExitCode.OK
 
 
@@ -169,7 +177,7 @@ def _execute_root_operation(
         res = _dispatch_action(root, subcommand, payload, dry_run, migrate_legacy)
         return res, InstallerExitCode.OK
     except ConflictError as e:
-        print(f"Conflict error at {root.path}: {e}", file=sys.stderr)
+        _report_error(f"Conflict error at {root.path}: {e}")
         res = OperationResult(
             physical_root=root.path,
             bundle_name=payload.bundle_name,
@@ -181,7 +189,7 @@ def _execute_root_operation(
         )
         return res, InstallerExitCode.CONFLICT
     except InstallerError as e:
-        print(f"Installer error at {root.path}: {e}", file=sys.stderr)
+        _report_error(f"Installer error at {root.path}: {e}")
         res = OperationResult(
             physical_root=root.path,
             bundle_name=payload.bundle_name,
@@ -193,7 +201,7 @@ def _execute_root_operation(
         )
         return res, e.exit_code
     except Exception as e:
-        print(f"Unexpected error at {root.path}: {e}", file=sys.stderr)
+        _report_error(f"Unexpected error at {root.path}: {e}")
         res = OperationResult(
             physical_root=root.path,
             bundle_name=payload.bundle_name,
@@ -230,16 +238,17 @@ def _print_results(
             "results": [r.to_dict() for r in results],
             "overall_status": overall_status,
         }
-        print(json.dumps(output_data, indent=2))
+        make_output(machine=True).payload(json.dumps(output_data, indent=2))
     else:
-        print(f"Orchestune skills {subcommand} completed:")
+        out = make_output(sys.stdout)
+        out.message(Level.INFO, f"Orchestune skills {subcommand} completed:")
         for r in results:
-            status_str = "SUCCESS" if r.success else "FAILED"
-            print(f"  [{status_str}] {r.physical_root} ({r.bundle_name}):")
+            level = Level.SUCCESS if r.success else Level.FAILURE
+            out.message(level, f"{r.physical_root} ({r.bundle_name}):")
             for act in r.actions:
-                print(f"    - {act}")
+                out.emit(out.text_block(f"    - {act}"))
             if r.error:
-                print(f"    Error: {r.error}")
+                out.message(Level.FAILURE, f"Error: {r.error}")
 
 
 def _resolve_roots_and_payload(
@@ -248,9 +257,8 @@ def _resolve_roots_and_payload(
     scope = ScopeType(args.scope)
     with_workflow = getattr(args, "with_workflow_skill", False)
     if with_workflow and scope == ScopeType.USER:
-        print(
-            "Error: --with-workflow-skill is only allowed with --scope project.",
-            file=sys.stderr,
+        _report_error(
+            "Error: --with-workflow-skill is only allowed with --scope project."
         )
         return int(InstallerExitCode.CONTRACT_ERROR)
 
@@ -264,7 +272,7 @@ def _resolve_roots_and_payload(
             skills_dir=args.skills_dir,
         )
     except TargetResolutionError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        _report_error(f"Error: {e}")
         return int(InstallerExitCode.CONTRACT_ERROR)
 
     if args.subcommand == "doctor":
@@ -276,7 +284,7 @@ def _resolve_roots_and_payload(
             source_dir=source_dir, with_workflow_skill=with_workflow
         )
     except PayloadError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        _report_error(f"Error: {e}")
         return int(InstallerExitCode.CONTRACT_ERROR)
 
     return roots, payload

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from orchestune.forge import REQUIRED_LABELS, ForgeError, GitHubForge, RepoAdminForge
+from orchestune.infra.cli_output import Level, make_output
 from orchestune.infra.git_cli import run_git
 
 
@@ -24,9 +25,9 @@ def _initialize_empty_repo(cwd: Path) -> None:
     if res_staged.stdout.strip():
         raise RuntimeError("Staged files already exist in index before initial commit.")
 
-    print(
+    make_output(sys.stderr).message(
+        Level.INFO,
         "Detected an empty Git repository. Initializing with initial commit...",
-        file=sys.stderr,
     )
 
     try:
@@ -54,7 +55,9 @@ def _initialize_empty_repo(cwd: Path) -> None:
 
     res_remote = run_git(["remote"], cwd=cwd, check=True)
     if "origin" in res_remote.stdout.splitlines():
-        print("Pushing initial commit to origin/main...", file=sys.stderr)
+        make_output(sys.stderr).message(
+            Level.INFO, "Pushing initial commit to origin/main..."
+        )
         run_git(["push", "-u", "origin", "main"], cwd=cwd, check=True)
 
 
@@ -70,22 +73,31 @@ def run_bootstrap(forge: RepoAdminForge | None = None, cwd: Path = Path(".")) ->
             # 格納される。str(e)だけでは終了コードしか分からず、認証・権限
             # エラー等の実際の原因が失われるため、明示的に含める。
             detail = e.stderr.strip() if e.stderr else str(e)
-            print(f"Error initializing empty repository: {detail}", file=sys.stderr)
+            make_output(sys.stderr).message(
+                Level.FAILURE, f"Error initializing empty repository: {detail}"
+            )
             return 1
         except Exception as e:
-            print(f"Error initializing empty repository: {e}", file=sys.stderr)
+            make_output(sys.stderr).message(
+                Level.FAILURE, f"Error initializing empty repository: {e}"
+            )
             return 1
 
+    stdout = make_output(sys.stdout)
     try:
         forge.check_auth()
         result = forge.ensure_labels(REQUIRED_LABELS)
     except ForgeError as e:
-        print(f"Error: {e}", file=sys.stderr)
+        make_output(sys.stderr).message(Level.FAILURE, f"Error: {e}")
         return 1
-    print(f"Labels created: {len(result.created_labels)}")
-    for name in result.created_labels:
-        print(f"  + {name}")
-    print(f"Labels already present: {len(result.existing_labels)}")
+    created = result.created_labels
+    stdout.message(
+        Level.SUCCESS if created else Level.INFO,
+        f"Labels created: {len(created)}",
+    )
+    for name in created:
+        stdout.message(Level.SUCCESS, f"created label {name}")
+    stdout.message(Level.INFO, f"Labels already present: {len(result.existing_labels)}")
     return 0
 
 
