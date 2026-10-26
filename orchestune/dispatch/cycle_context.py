@@ -11,7 +11,6 @@ from orchestune.branch_naming import build_task_branch_name
 from orchestune.dependencies.resolution import resolve_all_dependencies
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_action_contracts import CycleActions
-from orchestune.dispatch.recovery import _extract_raw_subtask_id
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import parse_task_from_issue
 from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
@@ -252,15 +251,8 @@ def _fetch_issues(config: DispatcherConfig) -> IssuesByStatus:
 def _build_task_mappings(
     all_issues: list[IssueRecord],
 ) -> tuple[dict, dict, set[int]]:
-    issue_to_subtask_id: dict[int, str] = {}
-    for issue in all_issues:
-        sub_id = _extract_raw_subtask_id(issue)
-        if sub_id:
-            issue_to_subtask_id[issue.number] = sub_id
-
     tasks_by_issue = {
-        issue.number: parse_task_from_issue(issue, issue_to_subtask_id)
-        for issue in all_issues
+        issue.number: parse_task_from_issue(issue) for issue in all_issues
     }
     # #799: 表示・footprint DAG通知専用（依存解決には使わない。
     # `dependency_resolution`参照）。
