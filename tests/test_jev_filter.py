@@ -258,9 +258,12 @@ class TestEvaluateFindingWithJev:
 
     def test_api_error_falls_back_safely(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("JEV_API_KEY", "secret-test-key")
-        with patch(
-            "urllib.request.urlopen",
-            side_effect=urllib.error.URLError("Network unreachable"),
+        with (
+            patch(
+                "urllib.request.urlopen",
+                side_effect=urllib.error.URLError("Network unreachable"),
+            ),
+            patch("time.sleep") as mock_sleep,
         ):
             # Should not crash; safe fallback
             result = evaluate_finding_with_jev(
@@ -271,6 +274,7 @@ class TestEvaluateFindingWithJev:
             assert result.validity == 1.0
             assert result.impact == "HIGH"
             assert result.bypassed is True
+            assert mock_sleep.call_count == 3
 
     def test_api_key_not_leaked_in_exceptions_or_attributes(
         self, monkeypatch: pytest.MonkeyPatch
@@ -925,9 +929,12 @@ class TestJevLogPersistence:
     def test_filter_logs_when_bypassed_due_to_api_error(self, tmp_path: Path) -> None:
         log_file = tmp_path / "bypassed.jsonl"
         finding = {"body": "Potential issue", "path": "x.py", "line": 5}
-        with patch(
-            "urllib.request.urlopen",
-            side_effect=urllib.error.URLError("Connection refused"),
+        with (
+            patch(
+                "urllib.request.urlopen",
+                side_effect=urllib.error.URLError("Connection refused"),
+            ),
+            patch("time.sleep") as mock_sleep,
         ):
             result = filter_review_findings(
                 [finding],
@@ -942,6 +949,7 @@ class TestJevLogPersistence:
         record = json.loads(lines[0])
         assert record["bypassed"] is True
         assert record["accepted"] is True
+        assert mock_sleep.call_count == 3
 
 
 def test_speculative_requires_evidence_and_bypass_wins() -> None:
