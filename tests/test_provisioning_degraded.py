@@ -309,3 +309,198 @@ class TestProvisionIssuesDegradedMode:
         assert "Operating mode: degraded/parent-metadata for 1 subtask(s)" in text
         assert "task-a" in text
         assert "\x1b" in stream.getvalue()
+
+
+_HOSTILE = "red\x1b[31m!\x1b[0m\x1b]0;pwned\x07\u202eevil\u2066\x01\x80end"
+_HOSTILE_CLEAN = "red!evilend"
+_FORBIDDEN = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
+
+
+def _preview(**overrides: object):
+    from orchestune.provisioning.flow import IssuePreview
+
+    fields: dict[str, object] = {
+        "subtask_id": "task-a",
+        "title": "Do the thing",
+        "body": "line one\n\nline three\n",
+        "labels": ("status:queued", "priority:medium"),
+        "already_has_issue": False,
+    }
+    fields.update(overrides)
+    return IssuePreview(**fields)  # type: ignore[arg-type]
+
+
+def _plain_text(result: ProvisionResult, capsys: pytest.CaptureFixture[str]) -> str:
+    _print_result(result)
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    return captured.out
+
+
+class TestPrintResultPlain:
+    """#1441: plain output goes through the shared layer; wording is unchanged."""
+
+    def test_dry_run_text_is_unchanged(self, capsys):
+        result = ProvisionResult(
+            parent_issue_number=100,
+            applied=False,
+            created={},
+            reused={},
+            previews=(
+                _preview(),
+                _preview(subtask_id="task-b", already_has_issue=True),
+            ),
+        )
+        assert _plain_text(result, capsys) == (
+            "Dry run (--no-apply): no Issues were created.\n"
+            "Target parent issue: #100\n"
+            "\n"
+            "=== task-a (would create) ===\n"
+            "Title: Do the thing\n"
+            "Labels: status:queued, priority:medium\n"
+            "line one\n\nline three\n\n"
+            "\n"
+            "=== task-b (reuse expected) ===\n"
+            "Title: Do the thing\n"
+            "Labels: status:queued, priority:medium\n"
+            "line one\n\nline three\n\n"
+        )
+
+    def test_dry_run_without_parent_omits_target_line(self, capsys):
+        result = ProvisionResult(
+            parent_issue_number=None, applied=False, created={}, reused={}
+        )
+        assert _plain_text(result, capsys) == (
+            "Dry run (--no-apply): no Issues were created.\n"
+        )
+
+    def test_applied_text_is_unchanged(self, capsys):
+        result = ProvisionResult(
+            parent_issue_number=100,
+            applied=True,
+            created={"task-a": 101},
+            reused={"task-b": 102},
+        )
+        assert _plain_text(result, capsys) == (
+            "Parent issue: #100\n"
+            "Created: 1\n"
+            "  + task-a -> #101\n"
+            "Reused: 1\n"
+            "  = task-b -> #102\n"
+            "\n"
+            "Operating mode: full (native sub-issue/blocked_by relationships linked)\n"
+        )
+
+    def test_degraded_text_is_unchanged(self, capsys):
+        result = ProvisionResult(
+            parent_issue_number=100,
+            applied=True,
+            created={"task-a": 101},
+            reused={},
+            degraded_subtask_ids=("task-a",),
+        )
+        assert _plain_text(result, capsys) == (
+            "Parent issue: #100\n"
+            "Created: 1\n"
+            "  + task-a -> #101\n"
+            "Reused: 0\n"
+            "\n"
+            "Operating mode: degraded/parent-metadata for 1 subtask(s)\n"
+            "  ! task-a\n"
+        )
+
+    def test_parent_only_error_text_is_unchanged(self, capsys):
+        result = ProvisionResult(
+            parent_issue_number=100,
+            applied=True,
+            created={},
+            reused={},
+            parent_only_subtask_ids=("ghost-a", "ghost-b"),
+        )
+        assert _plain_text(result, capsys) == (
+            "Parent issue: #100\n"
+            "Created: 0\n"
+            "Reused: 0\n"
+            "\n"
+            "Operating mode: full (native sub-issue/blocked_by relationships linked)\n"
+            "\n"
+            "Error: the plan of #100 has registered subtasks missing from the "
+            "local plan: ghost-a, ghost-b\n"
+            "No Issues were created. Restore the plan with "
+            "`orchestune provision --restore-plan 100` and rerun provision.\n"
+        )
+
+    def test_plan_sync_failure_text_is_unchanged(self, capsys):
+        result = ProvisionResult(
+            parent_issue_number=100,
+            applied=True,
+            created={},
+            reused={},
+            plan_synced=False,
+        )
+        assert _plain_text(result, capsys) == (
+            "Parent issue: #100\n"
+            "Created: 0\n"
+            "Reused: 0\n"
+            "\n"
+            "Operating mode: full (native sub-issue/blocked_by relationships linked)\n"
+            "\n"
+            "Warning: could not sync decomposition plan into #100's body.\n"
+            "The local plan file was updated, but the parent Issue body does not "
+            "reflect the latest state.\n"
+        )
+
+    def test_dry_run_strips_controls_and_keeps_body_newlines(self, capsys):
+        result = ProvisionResult(
+            parent_issue_number=100,
+            applied=False,
+            created={},
+            reused={},
+            previews=(
+                _preview(
+                    subtask_id=f"id-{_HOSTILE}",
+                    title=f"T-{_HOSTILE}\nsecond",
+                    body=f"head {_HOSTILE}\n\tindented\nlast",
+                    labels=(f"l-{_HOSTILE}", "ok"),
+                ),
+            ),
+        )
+        out = _plain_text(result, capsys)
+        assert not _FORBIDDEN.search(out.replace("\n", "").replace("\t", ""))
+        assert f"=== id-{_HOSTILE_CLEAN} (would create) ===\n" in out
+        assert f"Title: T-{_HOSTILE_CLEAN} second\n" in out
+        assert f"Labels: l-{_HOSTILE_CLEAN}, ok\n" in out
+        assert f"head {_HOSTILE_CLEAN}\n\tindented\nlast\n" in out
+
+    def test_applied_strips_controls_from_subtask_ids(self, capsys):
+        result = ProvisionResult(
+            parent_issue_number=100,
+            applied=True,
+            created={f"c-{_HOSTILE}": 101},
+            reused={f"r-{_HOSTILE}": 102},
+            degraded_subtask_ids=(f"d-{_HOSTILE}",),
+            parent_only_subtask_ids=(f"p-{_HOSTILE}",),
+        )
+        out = _plain_text(result, capsys)
+        assert not _FORBIDDEN.search(out.replace("\n", ""))
+        assert f"  + c-{_HOSTILE_CLEAN} -> #101\n" in out
+        assert f"  = r-{_HOSTILE_CLEAN} -> #102\n" in out
+        assert f"  ! d-{_HOSTILE_CLEAN}\n" in out
+        assert f"local plan: p-{_HOSTILE_CLEAN}\n" in out
+
+    def test_plain_env_on_a_tty_sanitizes_without_decoration(self):
+        stream = _TtyStream()
+        result = ProvisionResult(
+            parent_issue_number=100,
+            applied=False,
+            created={},
+            reused={},
+            previews=(_preview(title=_HOSTILE, body=f"b {_HOSTILE}\nz"),),
+        )
+        output = make_output(stream, env={"ORCHESTUNE_CLI_PLAIN": "1"})
+        _print_result(result, output)
+        text = stream.getvalue()
+        assert "\x1b" not in text
+        assert not _FORBIDDEN.search(text.replace("\n", ""))
+        assert f"Title: {_HOSTILE_CLEAN}\n" in text
+        assert f"b {_HOSTILE_CLEAN}\nz\n" in text
