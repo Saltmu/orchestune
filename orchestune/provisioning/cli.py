@@ -62,18 +62,27 @@ def provision_issues(*args: object, **kwargs: object) -> ProvisionResult:
     return _provision_issues(*args, **kwargs)  # type: ignore[arg-type]
 
 
+def _say(output: CliOutput, text: str = "", *, multiline: bool = False) -> None:
+    """Write one plain line (or block) through the shared sanitizing layer."""
+    output.emit(output.text_block(text, multiline=multiline))
+
+
 def _print_resume_hint(plan_path: str) -> None:
     try:
         subtasks, metadata = _load_plan(plan_path)
     except Exception:
         return
     known = {task.id: task.issue_number for task in subtasks if task.issue_number}
-    print(
+    _say(
+        make_output(sys.stderr),
         f"Saved Issue numbers: parent={metadata.parent_issue_number}, "
         f"subtasks={known}; unfinished={len(subtasks) - len(known)}. "
         "Rerun the same provision command after resolving the error.",
-        file=sys.stderr,
     )
+
+
+def _print_error(error: Exception) -> None:
+    _say(make_output(sys.stderr), f"Error: {error}", multiline=True)
 
 
 _PROGRESS_TEXT = "Provisioning Issues..."
@@ -85,56 +94,71 @@ def _print_result(result: ProvisionResult, output: CliOutput | None = None) -> N
     if output.policy.rich:
         _print_result_rich(result, output)
     else:
-        _print_result_plain(result)
+        _print_result_plain(result, output)
 
 
-def _print_result_plain(result: ProvisionResult) -> None:
+def _print_preview_plain(result: ProvisionResult, output: CliOutput) -> None:
+    _say(output, "Dry run (--no-apply): no Issues were created.")
+    if result.parent_issue_number is not None:
+        _say(output, f"Target parent issue: #{result.parent_issue_number}")
+    for preview in result.previews:
+        status = "reuse expected" if preview.already_has_issue else "would create"
+        _say(output)
+        _say(output, f"=== {preview.subtask_id} ({status}) ===")
+        _say(output, f"Title: {preview.title}")
+        _say(output, f"Labels: {', '.join(preview.labels)}")
+        _say(output, preview.body, multiline=True)
+
+
+def _print_result_plain(result: ProvisionResult, output: CliOutput) -> None:
     if not result.applied:
-        print("Dry run (--no-apply): no Issues were created.")
-        if result.parent_issue_number is not None:
-            print(f"Target parent issue: #{result.parent_issue_number}")
-        for preview in result.previews:
-            status = "reuse expected" if preview.already_has_issue else "would create"
-            print(f"\n=== {preview.subtask_id} ({status}) ===")
-            print(f"Title: {preview.title}")
-            print(f"Labels: {', '.join(preview.labels)}")
-            print(preview.body)
+        _print_preview_plain(result, output)
         return
-    print(f"Parent issue: #{result.parent_issue_number}")
-    print(f"Created: {len(result.created)}")
+    _say(output, f"Parent issue: #{result.parent_issue_number}")
+    _say(output, f"Created: {len(result.created)}")
     for subtask_id, number in result.created.items():
-        print(f"  + {subtask_id} -> #{number}")
-    print(f"Reused: {len(result.reused)}")
+        _say(output, f"  + {subtask_id} -> #{number}")
+    _say(output, f"Reused: {len(result.reused)}")
     for subtask_id, number in result.reused.items():
-        print(f"  = {subtask_id} -> #{number}")
+        _say(output, f"  = {subtask_id} -> #{number}")
+    _say(output)
     if result.degraded_subtask_ids:
-        print(
-            f"\nOperating mode: degraded/parent-metadata for {len(result.degraded_subtask_ids)} subtask(s)"
+        _say(
+            output,
+            "Operating mode: degraded/parent-metadata for "
+            f"{len(result.degraded_subtask_ids)} subtask(s)",
         )
         for subtask_id in result.degraded_subtask_ids:
-            print(f"  ! {subtask_id}")
+            _say(output, f"  ! {subtask_id}")
     else:
-        print(
-            "\nOperating mode: full (native sub-issue/blocked_by relationships linked)"
+        _say(
+            output,
+            "Operating mode: full (native sub-issue/blocked_by relationships linked)",
         )
     if result.parent_only_subtask_ids:
-        print(
-            f"\nError: the plan of #{result.parent_issue_number} has registered "
+        _say(output)
+        _say(
+            output,
+            f"Error: the plan of #{result.parent_issue_number} has registered "
             f"subtasks missing from the local plan: "
-            f"{', '.join(result.parent_only_subtask_ids)}"
+            f"{', '.join(result.parent_only_subtask_ids)}",
         )
-        print(
+        _say(
+            output,
             "No Issues were created. Restore the plan with "
             f"`orchestune provision --restore-plan {result.parent_issue_number}` "
-            "and rerun provision."
+            "and rerun provision.",
         )
         return
     if not result.plan_synced:
-        print(
-            f"\nWarning: could not sync decomposition plan into #{result.parent_issue_number}'s body."
+        _say(output)
+        _say(
+            output,
+            f"Warning: could not sync decomposition plan into #{result.parent_issue_number}'s body.",
         )
-        print(
-            "The local plan file was updated, but the parent Issue body does not reflect the latest state."
+        _say(
+            output,
+            "The local plan file was updated, but the parent Issue body does not reflect the latest state.",
         )
 
 
@@ -234,8 +258,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                 args.plan,
                 template_path=args.template,
             )
-            print(
-                f"Successfully restored decomposition plan from #{args.restore_plan} to {out}"
+            _say(
+                output,
+                f"Successfully restored decomposition plan from #{args.restore_plan} to {out}",
             )
             raise SystemExit(0)
         # The spinner exists only on a decorated TTY; it stops before the result
@@ -250,10 +275,10 @@ def main(argv: Sequence[str] | None = None) -> None:
                 parent_issue=args.parent_issue,
             )
     except ConfigError as error:
-        print(f"Error: {error}", file=sys.stderr)
+        _print_error(error)
         raise SystemExit(2) from error
     except Exception as error:
-        print(f"Error: {error}", file=sys.stderr)
+        _print_error(error)
         _print_resume_hint(args.plan)
         raise SystemExit(1) from error
     _print_result(result, output)

@@ -621,7 +621,10 @@ class TestMainPresentation:
         stream = _TtyStream()
         monkeypatch.setattr(
             "orchestune.provisioning.cli.make_output",
-            lambda: make_output(stream, env={}, width=100),
+            # Only the default (stdout) stream is the fake TTY; stderr stays real.
+            lambda target=None: make_output(
+                stream if target is None else target, env={}, width=100
+            ),
         )
         return stream
 
@@ -893,3 +896,153 @@ class TestBuildSubtaskIssueBody:
         )
         body = _build_subtask_issue_body(subtask, _TEMPLATE, tmp_path)
         assert "parent_issue_number: null" in body
+
+
+_HOSTILE = "bad\x1b[31m!\x1b[0m\x1b]0;pwned\x07‮evil\x01\x80end"
+_HOSTILE_CLEAN = "bad!evilend"
+_FORBIDDEN = re.compile(r"[\x1b\x00-\x08\x0b-\x1f\x7f-\x9f‪-‮⁦-⁩]")
+
+
+class TestMainPlainErrorOutput:
+    """#1441: stderr/stdout of the error and restore paths use the shared layer."""
+
+    def _raise(self, monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
+        def boom(*args: object, **kwargs: object) -> None:
+            raise error
+
+        monkeypatch.setattr("orchestune.provisioning.cli._provision_issues", boom)
+
+    def test_general_error_keeps_text_and_resume_hint(
+        self,
+        plan_path: Path,
+        template_path: Path,
+        provisioning_forge: FakeForge,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys,
+    ):
+        self._raise(monkeypatch, RuntimeError("boom\nsecond line"))
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--plan", str(plan_path), "--template", str(template_path)])
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err.startswith("Error: boom\nsecond line\nSaved Issue numbers:")
+        assert captured.err.endswith(
+            "Rerun the same provision command after resolving the error.\n"
+        )
+
+    def test_general_error_strips_controls_from_the_error_text(
+        self,
+        plan_path: Path,
+        template_path: Path,
+        provisioning_forge: FakeForge,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys,
+    ):
+        self._raise(monkeypatch, RuntimeError(_HOSTILE))
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--plan", str(plan_path), "--template", str(template_path)])
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert err.startswith(f"Error: {_HOSTILE_CLEAN}\n")
+        assert not _FORBIDDEN.search(err)
+
+    def test_config_error_keeps_exit_code_and_strips_controls(
+        self,
+        plan_path: Path,
+        template_path: Path,
+        provisioning_forge: FakeForge,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys,
+    ):
+        from orchestune.config_contracts import ConfigError
+
+        self._raise(monkeypatch, ConfigError(f"bad config {_HOSTILE}"))
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--plan", str(plan_path), "--template", str(template_path)])
+        assert exc_info.value.code == 2
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == f"Error: bad config {_HOSTILE_CLEAN}\n"
+
+    def test_resume_hint_strips_controls_from_plan_ids(
+        self, monkeypatch: pytest.MonkeyPatch, capsys
+    ):
+        from orchestune.provisioning import cli as cli_module
+        from orchestune.provisioning.plan import PlanMetadata
+
+        task = SubTask(
+            id=f"task-{_HOSTILE}",
+            description="d",
+            footprint=(),
+            symbols=(),
+            depends_on=(),
+            risk=False,
+            risk_reasons=(),
+            issue_number=101,
+        )
+        metadata = PlanMetadata(parent_issue_number=100, title="t")
+        monkeypatch.setattr(cli_module, "_load_plan", lambda path: ([task], metadata))
+        cli_module._print_resume_hint("plan.md")
+        err = capsys.readouterr().err
+        assert err.startswith("Saved Issue numbers: parent=100, subtasks={")
+        assert err.endswith(
+            "unfinished=0. Rerun the same provision command after resolving the error.\n"
+        )
+        assert not _FORBIDDEN.search(err.rstrip("\n"))
+
+    @pytest.mark.parametrize("hostile", [False, True])
+    def test_restore_plan_message(
+        self,
+        tmp_path: Path,
+        provisioning_forge: FakeForge,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys,
+        hostile: bool,
+    ):
+        target = f"out-{_HOSTILE}.md" if hostile else "out.md"
+        monkeypatch.setattr(
+            "orchestune.provisioning.cli.restore_plan_file_from_parent",
+            lambda *args, **kwargs: target,
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--restore-plan", "100", "--plan", str(tmp_path / "p.md")])
+        assert exc_info.value.code == 0
+        captured = capsys.readouterr()
+        clean = f"out-{_HOSTILE_CLEAN}.md" if hostile else "out.md"
+        assert captured.err == ""
+        assert captured.out == (
+            f"Successfully restored decomposition plan from #100 to {clean}\n"
+        )
+
+    def test_plain_env_on_a_tty_sanitizes_errors(
+        self,
+        plan_path: Path,
+        template_path: Path,
+        provisioning_forge: FakeForge,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        stderr = _TtyStream()
+        monkeypatch.setenv("ORCHESTUNE_CLI_PLAIN", "1")
+        monkeypatch.setattr("sys.stderr", stderr)
+        self._raise(monkeypatch, RuntimeError(_HOSTILE))
+        with pytest.raises(SystemExit):
+            main(["--plan", str(plan_path), "--template", str(template_path)])
+        text = stderr.getvalue()
+        assert text.startswith(f"Error: {_HOSTILE_CLEAN}\n")
+        assert not _FORBIDDEN.search(text)
+
+    def test_cli_module_has_no_direct_print_calls(self):
+        import ast
+
+        import orchestune.provisioning.cli as cli_module
+
+        tree = ast.parse(Path(cli_module.__file__).read_text(encoding="utf-8"))
+        prints = [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "print"
+        ]
+        assert prints == []
