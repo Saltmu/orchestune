@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -286,46 +286,62 @@ def plan_recovery_bookkeeping_repairs(
     return tuple(commands)
 
 
-def _extract_raw_subtask_id(issue: IssueRecord) -> str | None:
-    """Issue本文のFootprint YAMLブロックから、素のsubtask_id（未検出ならNone）を取り出す。
-
-    呼び出し側ごとにNone時のフォールバック方針が異なる（自己修復ブランチ名生成では
-    合成IDへフォールバックするが、依存解決用マップでは未検出issueを含めない）ため、
-    フォールバックを持たない共通の抽出処理として切り出している。
-    """
-    if not (match := FOOTPRINT_BLOCK_PATTERN.search(issue.body)):
-        return None
-    try:
-        data = yaml.safe_load(match.group(1))
-    except Exception:
-        return None
-    subtask_id = data.get("subtask_id") if isinstance(data, dict) else None
-    return str(subtask_id) if subtask_id else None
+_YAML_SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 
-def _parse_claim_info_from_issue(
-    issue: IssueRecord,
-) -> tuple[str, str | None, str]:
+def _yaml_safe_load(stream: str) -> Any:
+    """Parse YAML with LibYAML's CSafeLoader when available, else SafeLoader."""
+    return yaml.load(stream, Loader=_YAML_SAFE_LOADER)
+
+
+class ClaimInfo(tuple[str, str | None, str]):
+    recompute_count: int
+    forced_serial: bool
+
+    def __new__(
+        cls,
+        owner_kind: str,
+        claim_id: str | None,
+        reservation_kind: str,
+        *,
+        recompute_count: int = 0,
+        forced_serial: bool = False,
+    ) -> ClaimInfo:
+        instance = super().__new__(cls, (owner_kind, claim_id, reservation_kind))
+        instance.recompute_count = recompute_count
+        instance.forced_serial = forced_serial
+        return instance
+
+    owner_kind = property(lambda self: self[0])
+    claim_id = property(lambda self: self[1])
+    reservation_kind = property(lambda self: self[2])
+
+
+def _parse_claim_info_from_issue(issue: IssueRecord) -> ClaimInfo:
     """Issueの本文から owner_kind, claim_id, reservation_kind を抽出する。
     欠落時は (owner_kind='dispatch', claim_id=None, reservation_kind='footprint') を返す。
     """
-    owner_kind = "dispatch"
-    claim_id = None
-    reservation_kind = "footprint"
-    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
-    if match:
+    owner, cid, rk, rc, fs = "dispatch", None, "footprint", 0, False
+    if match := FOOTPRINT_BLOCK_PATTERN.search(issue.body):
         try:
-            data = yaml.safe_load(match.group(1))
-            if isinstance(data, dict):
-                if (k := data.get("owner_kind")) in {"interactive", "dispatch"}:
-                    owner_kind = k
-                if isinstance(cid := data.get("claim_id"), str) and cid:
-                    claim_id = cid
-                if (rk := data.get("reservation_kind")) in {"footprint", "repository"}:
-                    reservation_kind = rk
+            d = _yaml_safe_load(match.group(1))
+            if isinstance(d, dict):
+                k = d.get("owner_kind")
+                owner = k if k in {"interactive", "dispatch"} else owner
+                c = d.get("claim_id")
+                cid = c if isinstance(c, str) and c else None
+                r = d.get("reservation_kind")
+                rk = r if r in {"footprint", "repository"} else rk
+                n = d.get("recompute_count")
+                rc = (
+                    n
+                    if isinstance(n, int) and not isinstance(n, bool) and n >= 0
+                    else 0
+                )
+                fs = d.get("forced_serial") is True
         except Exception:
             pass
-    return owner_kind, claim_id, reservation_kind
+    return ClaimInfo(owner, cid, rk, recompute_count=rc, forced_serial=fs)
 
 
 def _parse_subtask_info_from_issue(
@@ -335,7 +351,7 @@ def _parse_subtask_info_from_issue(
     """Issueの本文から subtask_id と declared_footprint を抽出する。"""
     parsed = task if task is not None else parse_task_from_issue(issue)
     declared_footprint = () if parsed.footprint_error else parsed.footprint
-    subtask_id = _extract_raw_subtask_id(issue)
+    subtask_id = parsed.subtask_id
     if not subtask_id:
         owner_kind, _, _ = _parse_claim_info_from_issue(issue)
         subtask_id = (
@@ -421,10 +437,7 @@ def _recovery_counters_for_issue(issue: IssueRecord) -> tuple[int, bool]:
 
 
 def _tasks_from_issues(issues: Sequence[IssueRecord]) -> dict[int, Task]:
-    mapping = {
-        i.number: raw for i in issues if (raw := _extract_raw_subtask_id(i)) is not None
-    }
-    return {i.number: parse_task_from_issue(i, mapping) for i in issues}
+    return {i.number: parse_task_from_issue(i) for i in issues}
 
 
 def _counter_targets(
@@ -546,6 +559,17 @@ def _restored_worktree_workspace(
     return branch_name, str(worktree_path), external_id, external_url
 
 
+def _counters_from_claim_or_issue(
+    issue: IssueRecord, claim_info: ClaimInfo | None
+) -> tuple[int, bool]:
+    if claim_info is not None:
+        return (
+            claim_info.recompute_count,
+            claim_info.forced_serial or StatusLabel.FORCE_SERIAL in issue.labels,
+        )
+    return _recovery_counters_for_issue(issue)
+
+
 def _build_restored_standard_worktree(
     issue: IssueRecord,
     subtask_id: str,
@@ -559,6 +583,7 @@ def _build_restored_standard_worktree(
     reservation_kind: str,
     config: DispatcherConfig,
     task: TaskMetadata | None = None,
+    claim_info: ClaimInfo | None = None,
 ) -> ActiveWorktree:
     if owner_kind == "interactive" and subtask_id == f"issue-{issue.number}":
         subtask_id = resolve_claim_subtask_id(issue)
@@ -566,23 +591,19 @@ def _build_restored_standard_worktree(
         issue, subtask_id, resolver, resolutions, config
     )
     restored_base = _restored_base_branch(
-        issue,
-        issue_to_subtask_id,
-        dependency_resolution,
-        resolver,
-        resolutions,
-        config,
+        issue, issue_to_subtask_id, dependency_resolution, resolver, resolutions, config
     )
-    recompute_count, forced_serial = _recovery_counters_for_issue(issue)
-    parsed = task if task is not None else parse_task_from_issue(issue)
-    selection = resolve_task_execution_selection(parsed, config)
+    rc, fs = _counters_from_claim_or_issue(issue, claim_info)
+    selection = resolve_task_execution_selection(
+        task if task is not None else parse_task_from_issue(issue), config
+    )
     return restored_active_record(
         issue_number=issue.number,
         branch=branch,
         worktree_path=worktree_path,
         footprint=declared_footprint,
-        recompute_count=recompute_count,
-        forced_serial=forced_serial,
+        recompute_count=rc,
+        forced_serial=fs,
         external_id=external_id,
         external_url=external_url,
         base_branch=restored_base,
@@ -609,7 +630,8 @@ def _build_restored_active_worktree(
     config: DispatcherConfig,
     task: TaskMetadata | None = None,
 ) -> ActiveWorktree:
-    owner_kind, claim_id, reservation_kind = _parse_claim_info_from_issue(issue)
+    claim_info = _parse_claim_info_from_issue(issue)
+    owner_kind, claim_id, reservation_kind = claim_info
     parsed = task if task is not None else parse_task_from_issue(issue)
     if (
         parsed.footprint_error or parsed.yaml_error
@@ -644,6 +666,7 @@ def _build_restored_active_worktree(
         reservation_kind,
         config,
         task=parsed,
+        claim_info=claim_info,
     )
 
 
@@ -651,35 +674,26 @@ def _restoration_candidates(
     issues: Sequence[IssueRecord],
     open_prs: Sequence[PrRecord],
     config: DispatcherConfig,
+    *,
+    tasks_by_issue: Mapping[int, Task] | None = None,
 ) -> tuple[_Restoration, ...]:
-    issue_to_subtask_id = {
-        issue.number: raw
-        for issue in issues
-        if (raw := _extract_raw_subtask_id(issue)) is not None
-    }
-    tasks_by_issue = _tasks_from_issues(issues)
-    dependency_resolution = resolve_all_dependencies(tasks_by_issue)
+    tasks = _tasks_from_issues(issues) if tasks_by_issue is None else tasks_by_issue
+    id_map = {n: t.subtask_id for n, t in tasks.items() if t.subtask_id}
+    deps = resolve_all_dependencies(tasks)
     resolver = TaskBranchResolver(open_prs)
-    resolutions: dict[int, TaskBranchResolution] = {}
-    candidates = []
-    for issue in issues:
-        parsed_task = tasks_by_issue.get(issue.number)
-        subtask_id, declared_footprint = _parse_subtask_info_from_issue(
-            issue, task=parsed_task
+    res: dict[int, TaskBranchResolution] = {}
+    return tuple(
+        (
+            str(i.number),
+            sub_id,
+            _build_restored_active_worktree(
+                i, sub_id, fp, resolver, res, id_map, deps, config, task=t
+            ),
         )
-        active = _build_restored_active_worktree(
-            issue,
-            subtask_id,
-            declared_footprint,
-            resolver,
-            resolutions,
-            issue_to_subtask_id,
-            dependency_resolution,
-            config,
-            task=parsed_task,
-        )
-        candidates.append((str(issue.number), subtask_id, active))
-    return tuple(candidates)
+        for i in issues
+        for t in (tasks.get(i.number),)
+        for sub_id, fp in (_parse_subtask_info_from_issue(i, task=t),)
+    )
 
 
 def _observation(
@@ -774,10 +788,13 @@ class RecoveryBookkeepingAdapter:
         issues = _include_queued_attempts(in_progress, self._config)
         open_prs = tuple(forge.list_open_prs())
         parent_issue = forge.get_issue(self._config.parent_issue_number)
+        tasks_by_issue = _tasks_from_issues(issues)
         self._snapshot = RecoveryBookkeepingSnapshot(
-            tasks_by_issue=_tasks_from_issues(issues),
+            tasks_by_issue=tasks_by_issue,
             open_prs=open_prs,
-            restorations=_restoration_candidates(issues, open_prs, self._config),
+            restorations=_restoration_candidates(
+                issues, open_prs, self._config, tasks_by_issue=tasks_by_issue
+            ),
             counter_targets=_counter_targets(self._run_state, in_progress),
             launch_history=_merged_launch_history(
                 self._run_state,
@@ -786,7 +803,7 @@ class RecoveryBookkeepingAdapter:
                 window_seconds=self._config.window_seconds,
             ),
             attempt_tasks=tuple(
-                parse_task_from_issue(issue)
+                tasks_by_issue[issue.number]
                 for issue in issues
                 if (attempt := attempt_from_body(issue.body)) is not None
                 and attempt.phase != "prepared"

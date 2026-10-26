@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+import pytest
+
 from orchestune.consistency.invariants.execution import RUN_STATE_MISSING
 from orchestune.consistency.models import (
     ConsistencyScope,
@@ -11,7 +13,6 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.recovery import (
     RecoveryBookkeepingSnapshot,
     _counter_targets,
-    _extract_raw_subtask_id,
     _include_queued_attempts,
     _parse_subtask_info_from_issue,
     _restoration_candidates,
@@ -155,26 +156,25 @@ class TestIncludeQueuedAttempts:
         assert [issue.number for issue in included] == [1, 2]
 
 
-class TestExtractRawSubtaskId:
-    """decide層の共通ヘルパー: フォールバックを持たない素の抽出結果を検証する。"""
+class TestSubtaskIdExtractionAndFallback:
+    """Issue Footprint からの subtask_id 抽出および空白・欠落フォールバックの検証。"""
 
-    def test_returns_subtask_id_when_present(self):
-        issue = _issue_with_footprint(1, subtask_id="task-a")
-        assert _extract_raw_subtask_id(issue) == "task-a"
-
-    def test_returns_none_when_no_footprint_block(self):
-        issue = _issue_with_footprint(1, subtask_id=None)
-        assert _extract_raw_subtask_id(issue) is None
-
-    def test_returns_none_when_subtask_id_missing_in_yaml(self):
-        issue = IssueRecord(
-            number=1,
-            title="t",
-            body="## Footprint\n```yaml\nfootprint: []\n```\n",
-            labels=(),
-            created_at="2026-01-01T00:00:00+00:00",
-        )
-        assert _extract_raw_subtask_id(issue) is None
+    @pytest.mark.parametrize(
+        ("body", "expected"),
+        [
+            ('## Footprint\n```yaml\nsubtask_id: "task-a"\n```\n', "task-a"),
+            ("本文のみでFootprintブロックなし", "issue-1"),
+            ("## Footprint\n```yaml\nfootprint: []\n```\n", "issue-1"),
+            ('## Footprint\n```yaml\nsubtask_id: " task-a "\n```\n', "task-a"),
+            ('## Footprint\n```yaml\nsubtask_id: "   "\n```\n', "issue-1"),
+            ("## Footprint\n```yaml\nsubtask_id: 123\n```\n", "123"),
+            ("## Footprint\n```yaml\n: invalid yaml\n```\n", "issue-1"),
+        ],
+    )
+    def test_subtask_id_resolution(self, body: str, expected: str) -> None:
+        issue = IssueRecord(1, "t", body, (), "2026-01-01T00:00:00+00:00")
+        subtask_id, _ = _parse_subtask_info_from_issue(issue)
+        assert subtask_id == expected
 
 
 class TestParseSubtaskInfoFromIssue:
@@ -1111,3 +1111,73 @@ class TestRecoveryCounterBookkeepingExecution:
         assert run_state.active_worktrees["101"] is active
         assert run_state.active_worktrees["101"].launch.recompute_count == 1
         assert run_state.active_worktrees["101"].launch.forced_serial is False
+
+
+class TestYamlParseDeduplication:
+    """cycle_context and recoveryにおけるYAMLパースの重複削減とCSafeLoader使用を検証する。"""
+
+    @staticmethod
+    def _install_yaml_counters(monkeypatch):
+        import yaml
+
+        from orchestune import issue_parsing
+        from orchestune.dispatch import recovery
+
+        counts = {"csafe": 0, "py": 0}
+        orig_csafe = issue_parsing._yaml_safe_load
+        orig_py = yaml.safe_load
+
+        def count_csafe(stream):
+            counts["csafe"] += 1
+            return orig_csafe(stream)
+
+        def count_py(stream):
+            counts["py"] += 1
+            return orig_py(stream)
+
+        monkeypatch.setattr(issue_parsing, "_yaml_safe_load", count_csafe)
+        monkeypatch.setattr(recovery, "_yaml_safe_load", count_csafe)
+        monkeypatch.setattr(yaml, "safe_load", count_py)
+        return counts
+
+    def test_build_task_mappings_parses_yaml_once_per_issue(self, monkeypatch):
+        from orchestune.dispatch.cycle_context import _build_task_mappings
+
+        counts = self._install_yaml_counters(monkeypatch)
+        issues = [
+            _issue_with_footprint(1, subtask_id="task-1", footprint=["a.py"]),
+            _issue_with_footprint(2, subtask_id="task-2", footprint=["b.py"]),
+        ]
+        tasks, _, _ = _build_task_mappings(issues)
+        assert len(tasks) == 2
+        assert counts["csafe"] == 2
+        assert counts["py"] == 0
+
+    def test_refresh_snapshot_parses_yaml_at_most_twice_per_issue(
+        self, monkeypatch, tmp_path, fake_forge
+    ):
+        from orchestune.dispatch.recovery import RecoveryBookkeepingAdapter
+
+        counts = self._install_yaml_counters(monkeypatch)
+        issues = [
+            _issue_with_footprint(101, subtask_id="task-1", footprint=["a.py"]),
+            _issue_with_footprint(102, subtask_id="task-2", footprint=["b.py"]),
+        ]
+        fake_forge.list_issues_by_label.return_value = issues
+        fake_forge.list_open_prs.return_value = []
+        fake_forge.get_issue.return_value = _issue_with_footprint(
+            100, subtask_id="parent"
+        )
+
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            worktree_root=str(tmp_path / "worktrees"),
+            forge=fake_forge,
+        )
+        adapter = RecoveryBookkeepingAdapter("repo", RunState(), config, now=0.0)
+        snapshot = adapter._refresh_snapshot()
+
+        assert len(snapshot.tasks_by_issue) == 2
+        assert counts["csafe"] <= 4
+        assert counts["py"] == 0
