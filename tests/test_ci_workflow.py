@@ -153,8 +153,8 @@ def test_ci_workflow_disables_defender_only_on_windows_before_checks():
     assert steps.index(defender_step) < steps.index(windows_step)
 
 
-def test_ci_workflow_scopes_four_workers_and_durations_to_windows():
-    """Hosted Windows CI uses four workers without changing other jobs."""
+def test_ci_workflow_scopes_four_workers_and_durations_to_ci_steps():
+    """Hosted Linux and Windows CI use four workers and durations without changing other jobs."""
     workflow_path = os.path.join(
         os.path.dirname(__file__), "..", ".github", "workflows", "ci.yml"
     )
@@ -163,15 +163,24 @@ def test_ci_workflow_scopes_four_workers_and_durations_to_windows():
 
     assert "ORCHESTUNE_TEST_WORKERS" not in workflow.get("env", {})
     assert "PYTEST_ADDOPTS" not in workflow.get("env", {})
+    configured_steps = set()
     for job in workflow["jobs"].values():
         assert "ORCHESTUNE_TEST_WORKERS" not in job.get("env", {})
         assert "PYTEST_ADDOPTS" not in job.get("env", {})
         for step in job["steps"]:
             env = step.get("env", {})
-            if step["name"] == "Run CI checks (Windows)":
+            name = step.get("name")
+            if name == "Run CI checks (Windows)":
                 assert step["if"] == "runner.os == 'Windows'"
                 assert env["ORCHESTUNE_TEST_WORKERS"] == "4"
                 assert env["PYTEST_ADDOPTS"] == "--durations=30"
+                configured_steps.add(name)
+            elif name == "Run CI checks (Linux)":
+                assert step["if"] == "runner.os == 'Linux'"
+                assert env["ORCHESTUNE_TEST_WORKERS"] == "4"
+                assert env["PYTEST_ADDOPTS"] == "--durations=30"
+                configured_steps.add(name)
             else:
                 assert "ORCHESTUNE_TEST_WORKERS" not in env
                 assert "PYTEST_ADDOPTS" not in env
+    assert configured_steps == {"Run CI checks (Linux)", "Run CI checks (Windows)"}

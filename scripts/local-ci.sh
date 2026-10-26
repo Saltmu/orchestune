@@ -62,7 +62,7 @@ else
   if [ -n "${ORCHESTUNE_ISSUE_NUMBER:-}" ]; then
     BASE_RESOLVE_ARGS+=("--issue" "${ORCHESTUNE_ISSUE_NUMBER}")
   fi
-  if ! CI_START_BASE=$(uv run --no-sync python -m orchestune.complete.ci_evidence resolve-base "${BASE_RESOLVE_ARGS[@]}" 2>/dev/null) || [ -z "${CI_START_BASE}" ]; then
+  if ! CI_START_BASE=$(uv run --no-sync python -m orchestune.complete.ci_evidence resolve-base ${BASE_RESOLVE_ARGS[@]+"${BASE_RESOLVE_ARGS[@]}"} 2>/dev/null) || [ -z "${CI_START_BASE}" ]; then
     echo "ERROR: Failed to resolve initial base SHA before starting CI." >&2
     exit 1
   fi
@@ -98,7 +98,11 @@ echo "[5/7] Running tests with coverage (pytest)..."
   unset ORCHESTUNE_EXPECTED_HEAD ORCHESTUNE_EXPECTED_TREE
   unset ORCHESTUNE_BASE_SHA ORCHESTUNE_BASE_REF ORCHESTUNE_STATE_PATH
   unset ORCHESTUNE_ISSUE_NUMBER ORCHESTUNE_CI_EVIDENCE_PATH
-  uv run pytest --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
+  PYTEST_WORKER_ARGS=()
+  if [ -n "${ORCHESTUNE_TEST_WORKERS:-}" ]; then
+    PYTEST_WORKER_ARGS+=("-n" "${ORCHESTUNE_TEST_WORKERS}")
+  fi
+  uv run pytest ${PYTEST_WORKER_ARGS[@]+"${PYTEST_WORKER_ARGS[@]}"} --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
 )
 
 QUINT_SUMMARY="${QUINT_REPLAY_DIR}/test_bounded_exploration_replays_on_production/exploration-summary.json"
@@ -156,4 +160,4 @@ if [ -n "${ORCHESTUNE_ISSUE_NUMBER:-}" ]; then
   RECORD_ARGS+=("--issue" "${ORCHESTUNE_ISSUE_NUMBER}")
 fi
 
-uv run python -m orchestune.complete.ci_evidence record "${RECORD_ARGS[@]}"
+uv run python -m orchestune.complete.ci_evidence record ${RECORD_ARGS[@]+"${RECORD_ARGS[@]}"}
