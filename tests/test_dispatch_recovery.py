@@ -178,33 +178,24 @@ class TestSubtaskIdExtractionAndFallback:
 
 
 class TestParseSubtaskInfoFromIssue:
-    def test_uses_synthetic_fallback_when_missing(self):
-        issue = _issue_with_footprint(42, subtask_id=None)
-        subtask_id, footprint = _parse_subtask_info_from_issue(issue)
-        assert subtask_id == "issue-42"
-        assert footprint == ()
-
-    def test_extracts_declared_footprint(self):
-        issue = _issue_with_footprint(1, subtask_id="task-a", footprint=["src/foo.py"])
-        subtask_id, footprint = _parse_subtask_info_from_issue(issue)
-        assert subtask_id == "task-a"
-        assert footprint == ("src/foo.py",)
-
-    def test_extracts_declared_footprint_normalized(self):
-        issue = _issue_with_footprint(
-            1, subtask_id="task-a", footprint=["./src/foo.py", "src/foo.py"]
-        )
-        subtask_id, footprint = _parse_subtask_info_from_issue(issue)
-        assert subtask_id == "task-a"
-        assert footprint == ("src/foo.py",)
-
-    def test_falls_back_to_empty_footprint_on_footprint_error(self):
-        issue = _issue_with_footprint(
-            1, subtask_id="task-a", footprint=["../outside.py"]
-        )
-        subtask_id, footprint = _parse_subtask_info_from_issue(issue)
-        assert subtask_id == "task-a"
-        assert footprint == ()
+    @pytest.mark.parametrize(
+        ("subtask_id", "footprint_in", "expected_id", "expected_fp"),
+        [
+            (None, None, "issue-42", ()),
+            ("task-a", ["src/foo.py"], "task-a", ("src/foo.py",)),
+            ("task-a", ["./src/foo.py", "src/foo.py"], "task-a", ("src/foo.py",)),
+            ("task-a", ["../outside.py"], "task-a", ()),
+        ],
+    )
+    def test_parse_subtask_info(
+        self, subtask_id, footprint_in, expected_id, expected_fp
+    ):
+        num = 42 if subtask_id is None else 1
+        kw = {"subtask_id": subtask_id}
+        if footprint_in is not None:
+            kw["footprint"] = footprint_in
+        sub_id, fp = _parse_subtask_info_from_issue(_issue_with_footprint(num, **kw))
+        assert (sub_id, fp) == (expected_id, expected_fp)
 
 
 class TestRestorationCandidateProjection:
@@ -1149,9 +1140,7 @@ class TestYamlParseDeduplication:
             _issue_with_footprint(2, subtask_id="task-2", footprint=["b.py"]),
         ]
         tasks, _, _ = _build_task_mappings(issues)
-        assert len(tasks) == 2
-        assert counts["csafe"] == 2
-        assert counts["py"] == 0
+        assert len(tasks) == 2 and counts["csafe"] == 2 and counts["py"] == 0
 
     def test_refresh_snapshot_parses_yaml_at_most_twice_per_issue(
         self, monkeypatch, tmp_path, fake_forge
@@ -1159,16 +1148,14 @@ class TestYamlParseDeduplication:
         from orchestune.dispatch.recovery import RecoveryBookkeepingAdapter
 
         counts = self._install_yaml_counters(monkeypatch)
-        issues = [
+        fake_forge.list_issues_by_label.return_value = [
             _issue_with_footprint(101, subtask_id="task-1", footprint=["a.py"]),
             _issue_with_footprint(102, subtask_id="task-2", footprint=["b.py"]),
         ]
-        fake_forge.list_issues_by_label.return_value = issues
         fake_forge.list_open_prs.return_value = []
         fake_forge.get_issue.return_value = _issue_with_footprint(
             100, subtask_id="parent"
         )
-
         config = DispatcherConfig(
             parent_issue_number=100,
             events_log_path=tmp_path / "events.jsonl",
@@ -1177,7 +1164,26 @@ class TestYamlParseDeduplication:
         )
         adapter = RecoveryBookkeepingAdapter("repo", RunState(), config, now=0.0)
         snapshot = adapter._refresh_snapshot()
+        assert (
+            len(snapshot.tasks_by_issue) == 2
+            and counts["csafe"] <= 4
+            and counts["py"] == 0
+        )
 
-        assert len(snapshot.tasks_by_issue) == 2
-        assert counts["csafe"] <= 4
-        assert counts["py"] == 0
+    def test_parse_claim_info_preserves_counters_with_malformed_metadata(self):
+        from orchestune.dispatch.recovery import _parse_claim_info_from_issue
+
+        body = (
+            "## Summary\n\n<!-- orchestune:subtask-footprint -->\n"
+            "```yaml\nsubtask_id: task-1\nowner_kind: [invalid]\n"
+            "reservation_kind: {bad: dict}\nrecompute_count: 3\nforced_serial: true\n```\n"
+        )
+        info = _parse_claim_info_from_issue(
+            IssueRecord(42, "T", body, (), "2026-01-01T00:00:00+00:00")
+        )
+        assert (
+            info.owner_kind,
+            info.reservation_kind,
+            info.recompute_count,
+            info.forced_serial,
+        ) == ("dispatch", "footprint", 3, True)

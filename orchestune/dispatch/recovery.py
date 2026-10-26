@@ -300,17 +300,16 @@ class ClaimInfo(tuple[str, str | None, str]):
 
     def __new__(
         cls,
-        owner_kind: str,
-        claim_id: str | None,
-        reservation_kind: str,
+        owner: str,
+        cid: str | None,
+        rk: str,
         *,
         recompute_count: int = 0,
         forced_serial: bool = False,
     ) -> ClaimInfo:
-        instance = super().__new__(cls, (owner_kind, claim_id, reservation_kind))
-        instance.recompute_count = recompute_count
-        instance.forced_serial = forced_serial
-        return instance
+        inst = super().__new__(cls, (owner, cid, rk))
+        inst.recompute_count, inst.forced_serial = recompute_count, forced_serial
+        return inst
 
     owner_kind = property(lambda self: self[0])
     claim_id = property(lambda self: self[1])
@@ -326,12 +325,6 @@ def _parse_claim_info_from_issue(issue: IssueRecord) -> ClaimInfo:
         try:
             d = _yaml_safe_load(match.group(1))
             if isinstance(d, dict):
-                k = d.get("owner_kind")
-                owner = k if k in {"interactive", "dispatch"} else owner
-                c = d.get("claim_id")
-                cid = c if isinstance(c, str) and c else None
-                r = d.get("reservation_kind")
-                rk = r if r in {"footprint", "repository"} else rk
                 n = d.get("recompute_count")
                 rc = (
                     n
@@ -339,6 +332,18 @@ def _parse_claim_info_from_issue(issue: IssueRecord) -> ClaimInfo:
                     else 0
                 )
                 fs = d.get("forced_serial") is True
+                if isinstance(k := d.get("owner_kind"), str) and k in {
+                    "interactive",
+                    "dispatch",
+                }:
+                    owner = k
+                if isinstance(c := d.get("claim_id"), str) and c:
+                    cid = c
+                if isinstance(r := d.get("reservation_kind"), str) and r in {
+                    "footprint",
+                    "repository",
+                }:
+                    rk = r
         except Exception:
             pass
     return ClaimInfo(owner, cid, rk, recompute_count=rc, forced_serial=fs)
