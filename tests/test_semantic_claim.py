@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
+import shutil
 import subprocess
 import threading
 from datetime import UTC, datetime, timedelta
@@ -45,17 +47,24 @@ OTHER_ATTEMPT = "ffffeeeeddddccccbbbb"
 TEMP = "integration/parent-issue-1033/attempt"
 
 
-def _git(cwd: Path, *args: str) -> str:
+def _git(cwd: Path, *args: str, env: dict[str, str] | None = None) -> str:
     return subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
     ).stdout.strip()
 
 
-def _commit(repository: Path, filename: str, contents: str) -> str:
+def _commit(
+    repository: Path, filename: str, contents: str, env: dict[str, str] | None = None
+) -> str:
     (repository / filename).write_text(contents, encoding="utf-8")
-    _git(repository, "add", filename)
-    _git(repository, "commit", "-q", "-m", filename)
-    return _git(repository, "rev-parse", "HEAD")
+    _git(repository, "add", filename, env=env)
+    _git(repository, "commit", "-q", "-m", filename, env=env)
+    return _git(repository, "rev-parse", "HEAD", env=env)
 
 
 def _remote_oid(origin: Path, ref: str) -> str | None:
@@ -63,24 +72,63 @@ def _remote_oid(origin: Path, ref: str) -> str | None:
     return out or None
 
 
+@dataclasses.dataclass(frozen=True)
+class _RemoteTemplate:
+    origin: Path
+    author: Path
+    worker: Path
+    base: str
+
+
+@pytest.fixture(scope="session")
+def _remote_template(
+    tmp_path_factory: pytest.TempPathFactory,
+    _isolated_gitconfig: Path,
+) -> _RemoteTemplate:
+    root = tmp_path_factory.mktemp("semantic-claim-template")
+    origin = root / "origin.git"
+    author = root / "author"
+    worker = root / "worker"
+    env = git_cli.get_clean_git_env({"GIT_CONFIG_GLOBAL": str(_isolated_gitconfig)})
+
+    _git(root, "init", "-q", "--bare", str(origin), env=env)
+    _git(root, "init", "-q", "-b", "main", str(author), env=env)
+    _git(author, "config", "user.name", "Author", env=env)
+    _git(author, "config", "user.email", "author@example.com", env=env)
+    base = _commit(author, "base.txt", "base\n", env=env)
+    _git(author, "remote", "add", "origin", origin.as_posix(), env=env)
+    _git(author, "push", "-q", "origin", "main", f"main:refs/heads/{TEMP}", env=env)
+    _git(root, "clone", "-q", origin.as_posix(), str(worker), env=env)
+    return _RemoteTemplate(origin=origin, author=author, worker=worker, base=base)
+
+
+def _rewrite_git_config_url(config_path: Path, new_url: str) -> None:
+    text = config_path.read_text(encoding="utf-8")
+    updated = re.sub(
+        r"(?m)^(\s*url\s*=\s*).*$",
+        lambda m: m.group(1) + new_url,
+        text,
+    )
+    config_path.write_text(updated, encoding="utf-8")
+
+
 class Remote:
     """A bare origin, an author clone that seeds branches, and worker clones."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, template: _RemoteTemplate) -> None:
         self.root = root
+        self._template = template
         self.origin = root / "origin.git"
-        _git(root, "init", "-q", "--bare", str(self.origin))
         self.author = root / "author"
-        _git(root, "init", "-q", "-b", "main", str(self.author))
-        _git(self.author, "config", "user.name", "Author")
-        _git(self.author, "config", "user.email", "author@example.com")
-        self.base = _commit(self.author, "base.txt", "base\n")
-        _git(self.author, "remote", "add", "origin", str(self.origin))
-        _git(self.author, "push", "-q", "origin", "main", f"main:refs/heads/{TEMP}")
+        self.base = template.base
+        shutil.copytree(template.origin, self.origin)
+        shutil.copytree(template.author, self.author)
+        _rewrite_git_config_url(self.author / ".git" / "config", self.origin.as_posix())
 
     def worker(self, name: str) -> Path:
         path = self.root / name
-        _git(self.root, "clone", "-q", str(self.origin), str(path))
+        shutil.copytree(self._template.worker, path)
+        _rewrite_git_config_url(path / ".git" / "config", self.origin.as_posix())
         return path
 
     def push_branch(self, branch: str, filename: str, parent: str) -> str:
@@ -94,8 +142,8 @@ class Remote:
 
 
 @pytest.fixture
-def remote(tmp_path: Path) -> Remote:
-    return Remote(tmp_path)
+def remote(tmp_path: Path, _remote_template: _RemoteTemplate) -> Remote:
+    return Remote(tmp_path, _remote_template)
 
 
 def _acquire(worker: Path, *, holder: str, attempt: str = ATTEMPT, now=NOW, ttl=TTL):
@@ -665,7 +713,8 @@ class TestRenewAndRelease:
         assert read_semantic_claim(worker, PARENT) == result.claim
 
     def test_renew_by_a_former_holder_is_rejected(self, remote: Remote) -> None:
-        stale = _acquire(remote.worker("w1"), holder="worker-1").claim
+        old_worker = remote.worker("w1")
+        stale = _acquire(old_worker, holder="worker-1").claim
         assert stale is not None
         taken = _acquire(
             remote.worker("w2"),
@@ -675,9 +724,7 @@ class TestRenewAndRelease:
         ).claim
         assert taken is not None
 
-        result = renew_semantic_claim(
-            remote.worker("w3"), stale, now=NOW, ttl_seconds=TTL
-        )
+        result = renew_semantic_claim(old_worker, stale, now=NOW, ttl_seconds=TTL)
         assert result.status is PushStatus.REJECTED
         assert remote.oid(CLAIM_REF) == taken.ref_oid
 
@@ -900,3 +947,18 @@ class TestProbeClaimBackend:
         _git(worker, "remote", "set-url", "origin", str(remote.root / "missing.git"))
         with pytest.raises(SemanticClaimError):
             probe_claim_backend(worker)
+
+
+class TestRemoteTemplateOptimization:
+    def test_remote_and_worker_do_not_spawn_git(
+        self, tmp_path: Path, _remote_template, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def no_git(*args, **kwargs):
+            raise AssertionError(f"git invoked unexpectedly: {args} {kwargs}")
+
+        monkeypatch.setattr(subprocess, "run", no_git)
+        rem = Remote(tmp_path, _remote_template)
+        worker = rem.worker("worker1")
+        assert (rem.origin / "HEAD").exists()
+        assert (rem.author / ".git").exists()
+        assert (worker / ".git").exists()
