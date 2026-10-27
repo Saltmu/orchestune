@@ -108,12 +108,16 @@ def test_timeout_terminates_child_and_grandchild_and_confirms_empty_job(
     parent, pids = _write_scripts(
         tmp_path,
         parent_body=(
+            f"while not (os.path.exists({str(pid_file)!r})"
+            f" and os.path.getsize({str(pid_file)!r}) > 0): time.sleep(0.05)\n"
             f"open({str(pid_file)!r}, 'a').write(str(os.getpid()) + ' ')\n"
             "time.sleep(60)\n"
         ),
     )
 
-    result = _run_script(parent, timeout=2.0)
+    # The timeout runs from before the parent starts, so leave headroom for a
+    # slow grandchild start; the parent waits for the grandchild's PID first.
+    result = _run_script(parent, timeout=8.0)
 
     assert result.outcome is ProcessOutcome.TIMED_OUT
     assert result.stop_confirmed is True
