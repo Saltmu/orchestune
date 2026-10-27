@@ -27,3 +27,27 @@ def test_claude_workflow_accepts_review_mention_on_pull_request_comments():
     assert "'review'" not in condition
     assert "github.event_name == 'issue_comment'" in condition
     assert "github.event_name == 'pull_request_review_comment'" in condition
+
+
+REVIEW_TRIGGER_MARKER = "<!-- orchestune:review-trigger bot=claude -->"
+
+
+def _action_inputs():
+    steps = _load_workflow()["jobs"]["claude"]["steps"]
+    (step,) = (s for s in steps if s.get("id") == "claude")
+    return step["with"]
+
+
+def test_claude_workflow_allows_only_marked_claude_bot_triggers():
+    condition = _load_workflow()["jobs"]["claude"]["if"]
+
+    # Bots are skipped unless they are exactly claude[bot] and carry the marker
+    # that wait_for_review.py stamps; the action's own comments never carry it,
+    # so they cannot retrigger the job (issue #1457, see #692).
+    assert "!endsWith(github.actor, '[bot]')" in condition
+    assert "github.actor == 'claude[bot]'" in condition
+    assert REVIEW_TRIGGER_MARKER in condition
+
+
+def test_claude_workflow_allowed_bots_is_limited_to_claude_bot():
+    assert _action_inputs()["allowed_bots"] == "claude[bot]"
