@@ -255,6 +255,16 @@ def witness_counts(stdout: str) -> dict[str, int]:
     }
 
 
+def classify_run(returncode: int, stdout: str) -> tuple[str, tuple[str, ...]]:
+    """Determine outcome and violated invariants from process returncode and stdout."""
+    violated = tuple(re.findall(r"❌\s+(\w+)", stdout))
+    if returncode == 0 and "[ok]" in stdout:
+        return "ok", violated
+    if returncode == 1 and "[violation]" in stdout and violated:
+        return "violation", violated
+    return "error", violated
+
+
 def run_model(
     bounds: Exploration,
     *,
@@ -285,13 +295,7 @@ def run_model(
             f"quint timed out after {bounds.timeout}s: {command}"
         ) from expired
     seconds = time.monotonic() - started
-    violated = tuple(re.findall(r"❌\s+(\w+)", done.stdout))
-    if done.returncode == 0 and "[ok]" in done.stdout:
-        outcome = "ok"
-    elif done.returncode == 1 and "[violation]" in done.stdout and violated:
-        outcome = "violation"
-    else:
-        outcome = "error"
+    outcome, violated = classify_run(done.returncode, done.stdout)
     traces = tuple(sorted(out_dir.glob("trace_*.itf.json"))) if out_dir else ()
     return ModelRun(
         outcome,
