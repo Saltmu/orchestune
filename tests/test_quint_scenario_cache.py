@@ -2,16 +2,30 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-from tests.quint_replay import ModelRun, ReplayFormatError, ToolError, Trace
+from tests.quint_replay import (
+    MODEL,
+    ModelRun,
+    ReplayFormatError,
+    ToolError,
+    Trace,
+    classify_run,
+    command_line,
+    normalized,
+    quint_executable,
+)
 from tests.quint_scenario_cache_support import (
     ScenarioRunCache,
     StoredTraceCache,
+    _batch_prewarm_scenarios,
+    _persist,
 )
+from tests.quint_scenarios import SCENARIO_BOUNDS, run_scenario
 
 
 def _fake_ok_runner(out_dir: Path, scenario: str) -> ModelRun:
@@ -522,3 +536,224 @@ def test_stored_trace_cache_unknown_scenario() -> None:
     cache = StoredTraceCache(stored={})
     with pytest.raises(KeyError, match="unknown stored scenario"):
         cache.get("non_existent")
+
+
+# ---- Batch prewarm & classify_run tests (#1447) -------------------------------
+
+
+def test_classify_run_ok() -> None:
+    stdout = "Running...\n[ok] No violation found (38ms at 26 traces/second).\n"
+    outcome, violated = classify_run(0, stdout)
+    assert outcome == "ok"
+    assert violated == ()
+
+
+def test_classify_run_violation() -> None:
+    stdout = (
+        "Running...\n"
+        "[violation] Found an issue (37ms at 27 traces/second).\n"
+        "  ❌ liveness\n"
+        "  ❌ safety\n"
+    )
+    outcome, violated = classify_run(1, stdout)
+    assert outcome == "violation"
+    assert violated == ("liveness", "safety")
+
+
+def test_classify_run_error() -> None:
+    # Non-zero returncode but no violation marker
+    outcome1, violated1 = classify_run(1, "Syntax error in model\n")
+    assert outcome1 == "error"
+    assert violated1 == ()
+
+    # Returncode is 0 but missing [ok]
+    outcome2, _ = classify_run(0, "Something unexpected\n")
+    assert outcome2 == "error"
+
+    # Returncode is 1 with [violation] but no invariants extracted
+    outcome3, _ = classify_run(1, "[violation] Found an issue but no invariant\n")
+    assert outcome3 == "error"
+
+    # Returncode > 1
+    outcome4, _ = classify_run(2, "[ok] No violation found\n")
+    assert outcome4 == "error"
+
+
+def test_scenario_run_cache_prewarm_called_on_cold_miss_and_avoids_runner(
+    tmp_path: Path,
+) -> None:
+    prewarmer_calls: list[list[str]] = []
+    runner_calls: list[str] = []
+
+    def fake_prewarmer(missing: Sequence[str], session_dir: Path) -> set[str]:
+        prewarmer_calls.append(list(missing))
+        for sc in missing:
+            sc_dir = session_dir / sc
+            sc_dir.mkdir(parents=True, exist_ok=True)
+            run = _fake_ok_runner(sc_dir, sc)
+            _persist(sc_dir, run)
+        return set(missing)
+
+    def fake_runner(scenario: str, out_dir: Path | None = None) -> ModelRun:
+        assert out_dir is not None
+        runner_calls.append(scenario)
+        return _fake_ok_runner(out_dir, scenario)
+
+    cache = ScenarioRunCache(
+        known_scenarios=("final_apply", "fault_suppress"),
+        runner=fake_runner,
+        prewarmer=fake_prewarmer,
+        session_dir=tmp_path,
+    )
+    try:
+        # First call: triggers prewarmer for all known scenarios
+        run1 = cache.get("final_apply")
+        assert run1.outcome == "ok"
+        assert len(prewarmer_calls) == 1
+        assert sorted(prewarmer_calls[0]) == ["fault_suppress", "final_apply"]
+        assert len(runner_calls) == 0
+
+        # Second call for the other scenario: disk/memory hit, runner and prewarmer not called
+        run2 = cache.get("fault_suppress")
+        assert run2.outcome == "ok"
+        assert len(prewarmer_calls) == 1
+        assert len(runner_calls) == 0
+
+        # Third call: memory hit
+        run3 = cache.get("final_apply")
+        assert run3.outcome == "ok"
+        assert len(prewarmer_calls) == 1
+        assert len(runner_calls) == 0
+    finally:
+        cache.close()
+
+
+def test_scenario_run_cache_partial_prewarm_falls_back_to_runner(
+    tmp_path: Path,
+) -> None:
+    prewarmer_calls: list[list[str]] = []
+    runner_calls: list[str] = []
+
+    def partial_prewarmer(missing: Sequence[str], session_dir: Path) -> set[str]:
+        prewarmer_calls.append(list(missing))
+        # Only prewarm final_apply, omit fault_suppress
+        if "final_apply" in missing:
+            sc_dir = session_dir / "final_apply"
+            sc_dir.mkdir(parents=True, exist_ok=True)
+            run = _fake_ok_runner(sc_dir, "final_apply")
+            _persist(sc_dir, run)
+            return {"final_apply"}
+        return set()
+
+    def fake_runner(scenario: str, out_dir: Path | None = None) -> ModelRun:
+        assert out_dir is not None
+        runner_calls.append(scenario)
+        return _fake_ok_runner(out_dir, scenario)
+
+    cache = ScenarioRunCache(
+        known_scenarios=("final_apply", "fault_suppress"),
+        runner=fake_runner,
+        prewarmer=partial_prewarmer,
+        session_dir=tmp_path,
+    )
+    try:
+        # Request fault_suppress (which prewarmer omits)
+        run = cache.get("fault_suppress")
+        assert run.outcome == "ok"
+        assert len(prewarmer_calls) == 1
+        # Runner was called for fault_suppress
+        assert runner_calls == ["fault_suppress"]
+
+        # Request final_apply (which was prewarmed during the batch)
+        run_apply = cache.get("final_apply")
+        assert run_apply.outcome == "ok"
+        # Prewarmer not called again, runner not called for final_apply
+        assert len(prewarmer_calls) == 1
+        assert runner_calls == ["fault_suppress"]
+    finally:
+        cache.close()
+
+
+def test_scenario_run_cache_prewarmer_exception_disables_and_falls_back(
+    tmp_path: Path,
+) -> None:
+    prewarmer_calls: list[list[str]] = []
+    runner_calls: list[str] = []
+
+    def failing_prewarmer(missing: Sequence[str], session_dir: Path) -> set[str]:
+        prewarmer_calls.append(list(missing))
+        raise RuntimeError("prewarmer crashed")
+
+    def fake_runner(scenario: str, out_dir: Path | None = None) -> ModelRun:
+        assert out_dir is not None
+        runner_calls.append(scenario)
+        return _fake_ok_runner(out_dir, scenario)
+
+    cache = ScenarioRunCache(
+        known_scenarios=("final_apply", "fault_suppress"),
+        runner=fake_runner,
+        prewarmer=failing_prewarmer,
+        session_dir=tmp_path,
+    )
+    try:
+        # First call: prewarmer raises, falls back to runner
+        run1 = cache.get("final_apply")
+        assert run1.outcome == "ok"
+        assert len(prewarmer_calls) == 1
+        assert runner_calls == ["final_apply"]
+
+        # Second call: prewarmer was disabled on instance, goes straight to runner
+        run2 = cache.get("fault_suppress")
+        assert run2.outcome == "ok"
+        assert len(prewarmer_calls) == 1  # Not called again
+        assert runner_calls == ["final_apply", "fault_suppress"]
+    finally:
+        cache.close()
+
+
+@pytest.mark.integration
+def test_batch_prewarm_matches_run_scenario_for_ok_and_violation(
+    tmp_path: Path,
+) -> None:
+    import json
+
+    scenarios = ("final_apply", "fault_suppress")
+    batch_dir = tmp_path / "batch"
+    batch_dir.mkdir()
+
+    persisted = _batch_prewarm_scenarios(scenarios, batch_dir)
+    assert persisted == set(scenarios)
+
+    single_dir = tmp_path / "single"
+    single_dir.mkdir()
+
+    cache = ScenarioRunCache(
+        known_scenarios=scenarios,
+        prewarmer=_batch_prewarm_scenarios,
+        session_dir=batch_dir,
+    )
+    try:
+        for sc in scenarios:
+            batch_run = cache.get(sc)
+            single_run = run_scenario(sc, out_dir=single_dir / sc)
+
+            assert batch_run.outcome == single_run.outcome
+            assert batch_run.returncode == single_run.returncode
+            assert batch_run.violated == single_run.violated
+
+            expected_cmd = command_line(
+                SCENARIO_BOUNDS,
+                init=f"init_{sc}",
+                out_dir=batch_dir / sc,
+                model=str(MODEL),
+                executable=str(quint_executable()),
+            )
+            assert batch_run.command == tuple(expected_cmd)
+
+            assert len(batch_run.traces) == 1
+            assert len(single_run.traces) == 1
+            batch_itf = json.loads(batch_run.traces[0].read_text(encoding="utf-8"))
+            single_itf = json.loads(single_run.traces[0].read_text(encoding="utf-8"))
+            assert normalized(batch_itf) == normalized(single_itf)
+    finally:
+        cache.close()
