@@ -12,11 +12,27 @@ on:
 
 jobs:
   claude:
+    # Bot actors are accepted only as exactly `claude[bot]` (matching
+    # `allowed_bots` below) with the Orchestune trigger marker that
+    # scripts/wait_for_review.py stamps on its own trigger comments. This lets
+    # Claude Code on the Web's bot-authored `@claude review` through, skips any
+    # other bot instead of letting claude-code-action hard-fail, and keeps the
+    # action's own comments (which never carry the marker) from retriggering.
+    # See issues #692 and #1457.
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && !contains(github.event.comment.body, 'review')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && !contains(github.event.comment.body, 'review')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      (
+        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+        (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      ) &&
+      (
+        !endsWith(github.actor, '[bot]') ||
+        (
+          github.actor == 'claude[bot]' &&
+          contains(github.event.comment.body, '<!-- orchestune:review-trigger bot=claude -->')
+        )
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -35,6 +51,12 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          # Minimal allow-list: only the official Claude GitHub App identity may
+          # trigger this action as a bot actor. Never widen to '*' or add other
+          # bots without a verified posting path (allowed bots are not checked
+          # for repository write access).
+          allowed_bots: 'claude[bot]'
 
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
