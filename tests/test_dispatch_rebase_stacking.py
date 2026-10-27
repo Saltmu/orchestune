@@ -462,6 +462,7 @@ class TestBranchStacking:
             patch(
                 "fake_forge_proxy.active_fake_forge.list_issues_by_label"
             ) as mock_list,
+            patch("orchestune.dispatch.rebase.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
                 autospec=True,
@@ -807,6 +808,7 @@ class TestBranchStacking:
                     [issue_a, issue_b] if label == "status:in-progress" else []
                 ),
             ),
+            patch("orchestune.dispatch.rebase.is_process_alive", return_value=False),
             patch(
                 "orchestune.dispatch.phase_rebase.list_remote_branches",
                 autospec=True,

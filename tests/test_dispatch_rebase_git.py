@@ -8,6 +8,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
+import pytest
+
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.rebase import RebaseContext
 from orchestune.dispatch.scoring import Task
@@ -92,6 +94,11 @@ class TestWaitForProcessTerminate:
 
 
 class TestApplyAutoRebase:
+    @pytest.fixture(autouse=True)
+    def _worker_already_exited(self):
+        with patch("orchestune.dispatch.rebase.is_process_alive", return_value=False):
+            yield
+
     @patch("orchestune.dispatch.rebase.os.kill")
     @patch("orchestune.dispatch.rebase.subprocess.run")
     @patch(
