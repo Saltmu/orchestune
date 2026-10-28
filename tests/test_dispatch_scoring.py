@@ -325,14 +325,14 @@ class TestQuotaAvailable:
                     1,
                     branch="b1",
                     worktree_path="w1",
-                    pid=1,
+                    pid=4_200_001,
                     started_at=1_699_999_000.0,
                 ),
                 "2": make_test_active_worktree(
                     2,
                     branch="b2",
                     worktree_path="w2",
-                    pid=2,
+                    pid=4_200_002,
                     started_at=1_699_999_000.0,
                 ),
             },
@@ -402,7 +402,11 @@ class TestSelectNextTasks:
         state = RunState(
             active_worktrees={
                 "1": make_test_active_worktree(
-                    1, branch="b", worktree_path="w", pid=1, started_at=1_699_999_000.0
+                    1,
+                    branch="b",
+                    worktree_path="w",
+                    pid=4_200_001,
+                    started_at=1_699_999_000.0,
                 )
             },
             launch_history=[],
@@ -448,7 +452,11 @@ class TestSelectNextTasks:
         state = RunState(
             active_worktrees={
                 "1": make_test_active_worktree(
-                    1, branch="b", worktree_path="w", pid=1, started_at=1_699_999_000.0
+                    1,
+                    branch="b",
+                    worktree_path="w",
+                    pid=4_200_001,
+                    started_at=1_699_999_000.0,
                 )
             },
             launch_history=[],
@@ -664,7 +672,11 @@ class TestSharedDocumentConflictsInSelection:
         state = RunState(
             active_worktrees={
                 "1": make_test_active_worktree(
-                    1, branch="b", worktree_path="w", pid=1, started_at=1_699_999_000.0
+                    1,
+                    branch="b",
+                    worktree_path="w",
+                    pid=4_200_001,
+                    started_at=1_699_999_000.0,
                 )
             },
             launch_history=[],

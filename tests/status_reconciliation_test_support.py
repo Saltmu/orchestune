@@ -138,14 +138,14 @@ class ReconciliationLoop:
         from orchestune.consistency.observation import ExecutionRecord
 
         executions = (
-            (ExecutionRecord(issue_number=708, branch="task", pid=123),)
+            (ExecutionRecord(issue_number=708, branch="task", pid=4_200_123),)
             if self.execution
             else ()
         )
         if self.fact_shape == "ambiguous":
             executions = (
-                ExecutionRecord(issue_number=708, branch="one", pid=1),
-                ExecutionRecord(issue_number=708, branch="two", pid=2),
+                ExecutionRecord(issue_number=708, branch="one", pid=4_200_001),
+                ExecutionRecord(issue_number=708, branch="two", pid=4_200_002),
             )
         snapshot = ObservationCollector(
             repository_id="reconciliation", clock=lambda: NOW

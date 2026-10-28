@@ -180,7 +180,7 @@ def _write_state(repo: Path, active: ActiveWorktree) -> Path:
             base_branch="origin/main",
         ),
         launch=LaunchInfo(
-            pid=123,
+            pid=4_200_123,
             started_at=2.0,
         ),
         claim=ClaimInfo(

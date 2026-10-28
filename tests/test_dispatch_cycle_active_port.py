@@ -15,7 +15,7 @@ from tests.dispatch_gc_test_support import _active, _ctx, _task
 
 class TestProcessActiveWorktrees:
     def test_completion_reaches_the_adapters_own_run_state(self, fake_forge):
-        active = _active(pid=123, started_at=1_699_999_000.0)
+        active = _active(pid=4_200_123, started_at=1_699_999_000.0)
         task = _task(status_labels=("status:in-progress",))
         run_state = RunState(active_worktrees={"1": active})
         ctx = _ctx(forge=fake_forge, tasks_by_issue={280: task}, run_state=run_state)
@@ -52,7 +52,7 @@ class TestProcessActiveWorktrees:
         assert result.completion_events[0].action == "completed"
 
     def test_dirty_hold_event_is_still_recognized_downstream(self, fake_forge):
-        active = _active(pid=123, started_at=1_699_999_000.0)
+        active = _active(pid=4_200_123, started_at=1_699_999_000.0)
         task = _task(status_labels=("status:in-progress",))
         run_state = RunState(active_worktrees={"1": active})
         ctx = _ctx(forge=fake_forge, tasks_by_issue={280: task}, run_state=run_state)
@@ -152,7 +152,7 @@ class TestRunGc:
 class TestActivePhaseResult:
     def _build(self, fake_forge, *, forced_serial: bool):
         active = _active(
-            pid=123, started_at=1_699_999_000.0, forced_serial=forced_serial
+            pid=4_200_123, started_at=1_699_999_000.0, forced_serial=forced_serial
         )
         task = _task(status_labels=("status:in-progress",), depends_on=())
         run_state = RunState(active_worktrees={"1": active})

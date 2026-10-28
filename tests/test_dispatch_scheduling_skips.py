@@ -327,7 +327,7 @@ class TestInProgressTasksAreNotSkipCandidates:
                     issue_number=5,
                     branch="claude/issue-5-task-a",
                     worktree_path="worktrees/w5",
-                    pid=1,
+                    pid=4_200_001,
                     started_at=1.0,
                     declared_footprint=(),
                 )

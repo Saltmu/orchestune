@@ -779,7 +779,7 @@ class TestRunDispatchCycleCompletion:
             mock_subproc_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
-            mock_popen.return_value.pid = 999
+            mock_popen.return_value.pid = 4_200_999
             report = run_dispatch_cycle(config)
 
         assert [t.issue_number for t in report.selected] == [2]

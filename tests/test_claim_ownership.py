@@ -52,7 +52,7 @@ def test_dispatch_claim_identity_factory_preserves_owner_and_scope() -> None:
 def test_claim_update_replaces_only_claim_and_keeps_original_generation() -> None:
     original = ActiveWorktree.from_records(
         core=ActiveWorktreeCore(10, "task/10", "worktrees/10", ("a.py",)),
-        launch=LaunchInfo(pid=123, launch_phase="launched"),
+        launch=LaunchInfo(pid=4_200_123, launch_phase="launched"),
         claim=ClaimInfo(
             owner_kind="dispatch",
             claim_id="generation-1",
@@ -95,7 +95,7 @@ def test_completion_lifecycle_suppresses_amend_recovery_hint(
 
     active = ActiveWorktree.from_records(
         core=ActiveWorktreeCore(10, "task/10", "worktrees/10", ("a.py",)),
-        launch=LaunchInfo(pid=123),
+        launch=LaunchInfo(pid=4_200_123),
         claim=ClaimInfo(
             owner_kind="interactive", claim_id="generation-1", claim_stage="completed"
         ),
@@ -126,7 +126,7 @@ def test_handoff_candidate_without_identity_preserves_legacy_claim_eligibility(
             "branch": "task/10",
             "worktree_path": "worktrees/10",
             "declared_footprint": ["a.py"],
-            "pid": 123,
+            "pid": 4_200_123,
             "owner_kind": "interactive",
             "claim_id": "generation-1",
             "claim_stage": "completed",

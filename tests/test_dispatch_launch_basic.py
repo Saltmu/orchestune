@@ -395,7 +395,7 @@ class TestApplyTaskLaunches:
             patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_add_comment,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             selected = _apply_task_launches(
                 plans, run_state, 1000.0, config, claim_fn=real_claim_fn(config)
             )
@@ -458,7 +458,7 @@ class TestApplyTaskLaunches:
             ),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             _apply_task_launches(
                 plans, run_state, cycle_now, config, claim_fn=real_claim_fn(config)
             )
@@ -516,7 +516,7 @@ class TestApplyTaskLaunches:
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             _apply_task_launches(
                 plans, run_state, 1000.0, config, claim_fn=real_claim_fn(config)
             )
@@ -589,7 +589,7 @@ class TestApplyTaskLaunches:
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             _apply_task_launches(
                 plans, run_state, 1000.0, config, claim_fn=real_claim_fn(config)
             )
@@ -673,7 +673,7 @@ class TestApplyTaskLaunches:
             patch("fake_forge_proxy.active_fake_forge.add_comment"),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             selected = _apply_task_launches(
                 plans, run_state, 1000.0, config, claim_fn=real_claim_fn(config)
             )
@@ -734,7 +734,7 @@ class TestApplyTaskLaunchesLabelOrdering:
             ),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             _apply_task_launches(
                 plans, run_state, 1000.0, config, claim_fn=real_claim_fn(config)
             )
@@ -885,7 +885,7 @@ class TestLaunchSelectedTasks:
             patch("fake_forge_proxy.active_fake_forge.add_comment"),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             selected = _launch_selected_tasks(ctx)
 
         assert selected == [task]

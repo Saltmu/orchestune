@@ -153,7 +153,7 @@ def test_stale_discard_proceeds_when_provider_confirms_stopped(tmp_path, fake_fo
 
 
 def test_local_execution_is_not_held_by_external_guard(tmp_path, fake_forge):
-    active = _active(worktree_path=str(tmp_path / "missing"), pid=999)
+    active = _active(worktree_path=str(tmp_path / "missing"), pid=4_200_999)
     config = _config(tmp_path, fake_forge)
     assert hold_if_not_stopped(active, config, "stale") is None
 

@@ -73,7 +73,7 @@ def _active(
     tmp_path,
     issue_number: int,
     *,
-    pid: int | None = 100,
+    pid: int | None = 4_200_100,
     external_id: str | None = None,
     started_at: float | None = 1_000.0,
 ) -> ActiveWorktree:
@@ -288,7 +288,7 @@ def test_dispatch_adapter_normalizes_handler_failure_and_wrong_result() -> None:
 
 
 def test_dead_local_is_reclaimed_but_cloud_pid_none_is_not(tmp_path, fake_forge):
-    local = _active(tmp_path, 707, pid=707)
+    local = _active(tmp_path, 707, pid=4_200_707)
     cloud = _active(tmp_path, 708, pid=None, external_id="cloud-708")
     run_state = RunState(active_worktrees={"707": local, "708": cloud})
     config = _config(
@@ -339,7 +339,7 @@ def test_handleless_local_is_deferred_but_cloud_pid_none_is_not(tmp_path, fake_f
 
 
 def test_elapsed_timeout_is_a_kernel_finding_and_typed_plan(tmp_path, fake_forge):
-    active = _active(tmp_path, 707, pid=707, started_at=1_000.0)
+    active = _active(tmp_path, 707, pid=4_200_707, started_at=1_000.0)
     config = _config(tmp_path, fake_forge, task_timeout_seconds=60)
 
     with (
@@ -393,7 +393,7 @@ def test_provider_unknown_still_reaches_hold_capable_timeout_reclaim(
 
 
 def test_missing_and_stale_run_state_use_bookkeeping_commands(tmp_path, fake_forge):
-    stale = _active(tmp_path, 708, pid=708)
+    stale = _active(tmp_path, 708, pid=4_200_708)
     run_state = RunState(active_worktrees={"708": stale})
     tasks = {
         707: _task(707, "status:in-progress"),
@@ -423,7 +423,7 @@ def test_missing_and_stale_run_state_use_bookkeeping_commands(tmp_path, fake_for
 
 
 def test_completion_hold_filters_destructive_commands(tmp_path, fake_forge):
-    active = _active(tmp_path, 707, pid=707)
+    active = _active(tmp_path, 707, pid=4_200_707)
     config = _config(tmp_path, fake_forge)
 
     with (
@@ -447,7 +447,7 @@ def test_completion_hold_filters_destructive_commands(tmp_path, fake_forge):
 
 
 def test_gc_reobserves_and_defers_when_process_state_changes(tmp_path, fake_forge):
-    active = _active(tmp_path, 707, pid=707, started_at=None)
+    active = _active(tmp_path, 707, pid=4_200_707, started_at=None)
     run_state = RunState(active_worktrees={"707": active})
     config = _config(tmp_path, fake_forge, apply=True)
 
@@ -474,8 +474,8 @@ def test_gc_reobserves_and_defers_when_process_state_changes(tmp_path, fake_forg
 
 
 def test_gc_supervisor_reobserves_the_authoritative_snapshot(tmp_path, fake_forge):
-    dead = _active(tmp_path, 707, pid=707, started_at=None)
-    alive = _active(tmp_path, 708, pid=708, started_at=None)
+    dead = _active(tmp_path, 707, pid=4_200_707, started_at=None)
+    alive = _active(tmp_path, 708, pid=4_200_708, started_at=None)
     run_state = RunState(active_worktrees={"707": dead, "708": alive})
     config = _config(tmp_path, fake_forge, apply=False)
 
@@ -483,7 +483,7 @@ def test_gc_supervisor_reobserves_the_authoritative_snapshot(tmp_path, fake_forg
         patch(
             "orchestune.dispatch.execution_repair.is_process_alive",
             autospec=True,
-            side_effect=lambda pid: pid == 708,
+            side_effect=lambda pid: pid == 4_200_708,
         ) as process_probe,
         patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
     ):
@@ -494,10 +494,10 @@ def test_gc_supervisor_reobserves_the_authoritative_snapshot(tmp_path, fake_forg
         )
 
     assert [call.args for call in process_probe.call_args_list] == [
-        (707,),
-        (708,),
-        (707,),
-        (708,),
+        (4_200_707,),
+        (4_200_708,),
+        (4_200_707,),
+        (4_200_708,),
     ]
     assert [event.to_dict()["issue_number"] for event in events] == [707]
 
@@ -508,7 +508,7 @@ def test_legacy_execution_repair_entrypoints_are_removed():
 
 
 def test_dispatch_cycle_uses_supervisor_for_execution_consistency(tmp_path, fake_forge):
-    dead = _active(tmp_path, 707, pid=707, started_at=None)
+    dead = _active(tmp_path, 707, pid=4_200_707, started_at=None)
     run_state = RunState(active_worktrees={"707": dead})
     config = _config(tmp_path, fake_forge, apply=False)
     save_run_state(run_state, config.run_state_path)
@@ -610,7 +610,7 @@ def test_revalidate_preconditions_skips_when_active_changes_to_launched(
             base_branch="origin/main",
         ),
         launch=LaunchInfo(
-            pid=1234,
+            pid=4_201_234,
             started_at=2000.0,
             launch_phase="launched",
         ),
@@ -654,7 +654,7 @@ def test_execution_record_from_active_projection():
             base_branch="origin/main",
         ),
         launch=LaunchInfo(
-            pid=123,
+            pid=4_200_123,
             started_at=100.0,
             external_id=None,
             launch_phase="launched",
@@ -670,7 +670,7 @@ def test_execution_record_from_active_projection():
     assert record.issue_number == 42
     assert record.branch == "claude/issue-42"
     assert record.worktree_path == "/path/to/worktree"
-    assert record.pid == 123
+    assert record.pid == 4_200_123
     assert record.external_id is None
     assert record.started_at == 100.0
     assert record.kind == "local"

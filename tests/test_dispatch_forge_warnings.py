@@ -30,7 +30,7 @@ def _active(tmp_path, **overrides):
         issue_number=702,
         branch="claude/issue-702-task-a",
         worktree_path=str(tmp_path / "w1"),
-        pid=123,
+        pid=4_200_123,
         started_at=1_700_000_000.0,
         declared_footprint=(),
     )

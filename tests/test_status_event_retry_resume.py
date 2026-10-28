@@ -408,7 +408,7 @@ def _fresh_launch(
         issue_number=ISSUE,
         branch=branch,
         worktree_path="worktrees/w2",
-        pid=2,
+        pid=4_200_002,
         launched=True,
         dispatch_started_at=NOW,
     )

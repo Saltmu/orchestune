@@ -306,7 +306,7 @@ class TestProcessActiveWorktrees:
         worktree_path = tmp_path / "w1"
         if create_worktree:
             worktree_path.mkdir()
-        active_values = {"worktree_path": str(worktree_path), "pid": 123}
+        active_values = {"worktree_path": str(worktree_path), "pid": 4_200_123}
         active_values.update(active_overrides or {})
         active = _active(**active_values)
         task = _task()
@@ -510,7 +510,7 @@ class TestProcessActiveWorktrees:
         active = _active(
             branch="feature",
             worktree_path="worktrees/w1",
-            pid=123,
+            pid=4_200_123,
         )
         task = _task(
             issue_number=1,

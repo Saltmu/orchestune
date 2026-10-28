@@ -26,7 +26,7 @@ class TestApplyStaleActiveEntryDiscard:
     worktree・プロセスの後始末を行うことを検証する。"""
 
     def test_kills_live_process_and_removes_worktree(self, tmp_path, fake_forge):
-        active = _active(worktree_path=str(tmp_path), pid=12345)
+        active = _active(worktree_path=str(tmp_path), pid=4_212_345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -59,14 +59,14 @@ class TestApplyStaleActiveEntryDiscard:
         mock_backup.assert_called_once_with(
             str(tmp_path), "WIP: backup by Orchestune GC (stale active entry)"
         )
-        mock_kill.assert_called_once_with(12345, 9)
+        mock_kill.assert_called_once_with(4_212_345, 9)
         mock_remove.assert_called_once_with(str(tmp_path))
         assert run_state.active_worktrees == {}
 
     def test_dead_process_skips_kill_but_still_removes_worktree(
         self, tmp_path, fake_forge
     ):
-        active = _active(worktree_path=str(tmp_path), pid=12345)
+        active = _active(worktree_path=str(tmp_path), pid=4_212_345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -101,7 +101,7 @@ class TestApplyStaleActiveEntryDiscard:
         assert run_state.active_worktrees == {}
 
     def test_missing_worktree_skips_backup_and_removal(self, tmp_path, fake_forge):
-        active = _active(worktree_path="worktrees/does-not-exist", pid=12345)
+        active = _active(worktree_path="worktrees/does-not-exist", pid=4_212_345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -132,13 +132,13 @@ class TestApplyStaleActiveEntryDiscard:
         mock_backup.assert_not_called()
         mock_remove.assert_not_called()
         # プロセスが生存中なら、worktreeの有無に関わらず停止は行う。
-        mock_kill.assert_called_once_with(12345, 9)
+        mock_kill.assert_called_once_with(4_212_345, 9)
         assert run_state.active_worktrees == {}
 
     def test_backup_failure_skips_discard_and_preserves_entry(
         self, tmp_path, fake_forge
     ):
-        active = _active(worktree_path=str(tmp_path), pid=12345)
+        active = _active(worktree_path=str(tmp_path), pid=4_212_345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -176,7 +176,7 @@ class TestApplyStaleActiveEntryDiscard:
         assert run_state.active_worktrees == {"280": active}
 
     def test_dry_run_does_not_touch_anything(self, tmp_path, fake_forge):
-        active = _active(worktree_path=str(tmp_path), pid=12345)
+        active = _active(worktree_path=str(tmp_path), pid=4_212_345)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -209,7 +209,7 @@ class TestSupervisorOwnedStaleEntry:
     def test_stale_entry_is_applied_by_the_typed_gc_repair(self, tmp_path, fake_forge):
         worktree = tmp_path / "active-worktree"
         worktree.mkdir()
-        active = _active(worktree_path=str(worktree), pid=12345)
+        active = _active(worktree_path=str(worktree), pid=4_212_345)
         task = _task(status_labels=("status:blocked",))
         run_state = RunState(active_worktrees={"280": active})
         fake_forge.branch_exists.return_value = True
@@ -255,11 +255,11 @@ class TestSupervisorOwnedStaleEntry:
             "stale_active_entry_discarded"
         ]
         assert run_state.active_worktrees == {}
-        kill.assert_called_once_with(12345, 9)
+        kill.assert_called_once_with(4_212_345, 9)
         remove.assert_called_once_with(str(worktree))
 
     def test_live_in_progress_label_cancels_stale_cleanup(self, tmp_path, fake_forge):
-        active = _active(worktree_path=str(tmp_path / "active"), pid=12345)
+        active = _active(worktree_path=str(tmp_path / "active"), pid=4_212_345)
         cached_task = _task(status_labels=("status:blocked",))
         run_state = RunState(active_worktrees={"280": active})
         fake_forge.branch_exists.return_value = True
@@ -304,7 +304,7 @@ class TestSupervisorOwnedStaleEntry:
         remove.assert_not_called()
 
     def test_forge_error_defers_stale_cleanup(self, tmp_path, fake_forge):
-        active = _active(worktree_path=str(tmp_path / "active"), pid=12345)
+        active = _active(worktree_path=str(tmp_path / "active"), pid=4_212_345)
         cached_task = _task(status_labels=("status:blocked",))
         run_state = RunState(active_worktrees={"280": active})
         fake_forge.branch_exists.return_value = True

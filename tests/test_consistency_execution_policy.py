@@ -103,7 +103,7 @@ def _task_scope(
     subject_id: str,
     *,
     kind: str = EXECUTION_KIND_LOCAL,
-    pid: int | None = 100,
+    pid: int | None = 4_200_100,
     external_id: str | None = None,
     process_alive: bool | None = True,
     external_status: str | None = None,
@@ -188,8 +188,12 @@ def _codes(report: ConsistencyReport) -> list[str]:
 
 
 def test_repository_ownership_conflicts_are_exhaustive_and_deterministic() -> None:
-    first = _task_scope("703", branch="shared", worktree="worktree/shared", pid=42)
-    second = _task_scope("704", branch="shared", worktree="worktree/shared", pid=42)
+    first = _task_scope(
+        "703", branch="shared", worktree="worktree/shared", pid=4_200_042
+    )
+    second = _task_scope(
+        "704", branch="shared", worktree="worktree/shared", pid=4_200_042
+    )
 
     report = _evaluate(_state(first, second), _desired(**{"703": True, "704": True}))
     reversed_report = _evaluate(
@@ -333,7 +337,7 @@ def test_provider_uncertainty_blocks_reclaim_from_other_task_findings() -> None:
 
 def test_missing_resources_stale_run_state_and_orphan_have_stable_codes() -> None:
     missing = _task_scope("703", branch_exists=False, worktree_exists=False)
-    orphan = _task_scope("704", issue_state=None, pid=101)
+    orphan = _task_scope("704", issue_state=None, pid=4_200_101)
 
     report = _evaluate(
         _state(missing, orphan),
@@ -392,7 +396,7 @@ def test_pr_association_unknown_and_head_base_mismatches_are_diagnosable() -> No
     mismatch = _task_scope("704", branch="codex/issue-704", extra=pr_facts)
     unknown_pr = _task_scope(
         "705",
-        pid=101,
+        pid=4_200_101,
         pr_number=None,
         extra=(
             _observation(
@@ -451,7 +455,7 @@ def test_observed_pull_request_base_mismatch_is_diagnosable() -> None:
                 issue_number=726,
                 branch="codex/issue-726",
                 worktree_path="worktree/726",
-                pid=100,
+                pid=4_200_100,
             ),
         ),
         clock=lambda: NOW,

@@ -216,13 +216,13 @@ def test_invalid_fact_fields_are_normalized_independently() -> None:
     invalid_external = make_test_active_worktree(
         ISSUE,
         external_id=17,
-        pid=222,
+        pid=4_200_222,
         started_at=True,
         launch_attempt_id="attempt-a",
         claim_id="claim-a",
     )
     expected_external = expected_launch_fact(invalid_external)
-    assert expected_external.pid == 222
+    assert expected_external.pid == 4_200_222
     assert expected_external.started_at is None
     assert expected_external.external_id is None
     external_context = make_test_cycle_context(

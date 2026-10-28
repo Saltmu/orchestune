@@ -244,9 +244,13 @@ class TestPatchGcProcessAlive:
 
         modules = (execution_repair, gc, completion, zombies, usage_limit)
         with patch_gc_process_alive(return_value=False):
-            assert [module.is_process_alive(1) for module in modules] == [False] * 5
+            assert [module.is_process_alive(4_200_001) for module in modules] == [
+                False
+            ] * 5
         with patch_gc_process_alive(return_value=True):
-            assert [module.is_process_alive(1) for module in modules] == [True] * 5
+            assert [module.is_process_alive(4_200_001) for module in modules] == [
+                True
+            ] * 5
 
 
 class TestForgeStubs:

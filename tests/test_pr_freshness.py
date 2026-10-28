@@ -151,7 +151,7 @@ def _statuses(tmp_path, prs, *, started_at=LAUNCH):
         1,
         branch=FAKE_BRANCH,
         worktree_path=str(tmp_path / "worktrees/claude-issue-1-task-1"),
-        pid=123,
+        pid=4_200_123,
         started_at=started_at,
     )
     return (

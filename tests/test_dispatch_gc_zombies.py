@@ -143,7 +143,7 @@ class TestCollectZombiesAndTimeouts:
         active = _active(
             started_at=1_000.0,
             worktree_path=str(tmp_path / "missing-worktree"),
-            pid=111,
+            pid=4_200_111,
         )
         run_state = RunState(active_worktrees={"280": active})
         task = _task(status_labels=("status:in-progress",))
@@ -206,7 +206,7 @@ class TestDecideZombieOrTimeoutReclaims:
     def test_zombie_dead_process_with_dirty_worktree_is_reclaimed(
         self, tmp_path, fake_forge
     ):
-        active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
+        active = _active(worktree_path=str(tmp_path), pid=4_200_111, started_at=None)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -242,7 +242,7 @@ class TestDecideZombieOrTimeoutReclaims:
     def test_dead_process_with_clean_worktree_is_reclaimed_as_zombie(
         self, tmp_path, fake_forge
     ):
-        active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
+        active = _active(worktree_path=str(tmp_path), pid=4_200_111, started_at=None)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -299,7 +299,7 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaims == []
 
     def test_timeout_exceeded_reclaims_with_reason_timeout(self, tmp_path, fake_forge):
-        active = _active(started_at=1_000.0, pid=111)
+        active = _active(started_at=1_000.0, pid=4_200_111)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -330,7 +330,7 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaim.process_alive is True
 
     def test_unknown_start_time_is_not_timed_out(self, tmp_path, fake_forge):
-        active = _active(started_at=None, pid=111)
+        active = _active(started_at=None, pid=4_200_111)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -387,7 +387,7 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaim.process_alive is False
 
     def test_held_worktree_path_is_excluded(self, tmp_path, fake_forge):
-        active = _active(worktree_path=str(tmp_path), pid=111, started_at=None)
+        active = _active(worktree_path=str(tmp_path), pid=4_200_111, started_at=None)
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -442,7 +442,7 @@ class TestDecideZombieOrTimeoutReclaims:
         mock_is_alive.assert_not_called()
 
     def test_subtask_id_resolved_from_tasks_by_issue(self, tmp_path, fake_forge):
-        active = _active(started_at=1_000.0, pid=111)
+        active = _active(started_at=1_000.0, pid=4_200_111)
         task = _task(status_labels=("status:in-progress",))
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
@@ -470,7 +470,7 @@ class TestDecideZombieOrTimeoutReclaims:
         assert reclaims_without_task[0].subtask_id == ""
 
     def test_key_field_matches_active_worktrees_dict_key(self, tmp_path, fake_forge):
-        active = _active(started_at=1_000.0, pid=111)
+        active = _active(started_at=1_000.0, pid=4_200_111)
         run_state = RunState(active_worktrees={"custom-key": active})
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -508,7 +508,7 @@ class TestInteractiveOwnershipGcExclusion:
         active_interactive = _active(
             started_at=1_000.0,
             worktree_path=str(tmp_path / "interactive-worktree"),
-            pid=111,
+            pid=4_200_111,
             owner_kind="interactive",
             claim_id="claim-interactive-1",
         )
@@ -560,7 +560,7 @@ class TestInteractiveOwnershipGcExclusion:
         active_dispatch = _active(
             started_at=1_000.0,
             worktree_path=str(tmp_path / "dispatch-worktree"),
-            pid=111,
+            pid=4_200_111,
             owner_kind="dispatch",
         )
         run_state = RunState(active_worktrees={"280": active_dispatch})
@@ -646,7 +646,7 @@ class TestInteractiveOwnershipGcExclusion:
 
         active = _active(
             started_at=100.0,
-            pid=111,
+            pid=4_200_111,
             owner_kind="interactive",
             claim_id="claim-test-1",
         )
@@ -694,7 +694,7 @@ class TestInteractiveOwnershipGcExclusion:
             issue_number=280,
             started_at=1_000.0,
             worktree_path=str(worktree_path),
-            pid=99999,  # 終了した短命claimプロセスのPID
+            pid=4_299_999,  # 終了した短命claimプロセスのPID
             owner_kind="interactive",
             claim_id="claim-h2-test",
         )

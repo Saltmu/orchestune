@@ -33,7 +33,7 @@ def test_issue_outcome_is_found_without_listing_pull_requests(tmp_path):
         issue_number=702,
         branch="claude/issue-702-task-a",
         worktree_path=str(tmp_path / "worktree"),
-        pid=123,
+        pid=4_200_123,
         started_at=None,
         declared_footprint=(),
     )
@@ -60,7 +60,7 @@ def test_pr_only_outcome_is_ignored_by_local_completion(tmp_path):
         issue_number=702,
         branch="claude/issue-702-task-a",
         worktree_path=str(tmp_path / "worktree"),
-        pid=123,
+        pid=4_200_123,
         started_at=None,
         declared_footprint=(),
     )
@@ -91,7 +91,7 @@ def test_pr_only_outcome_is_ignored_by_local_completion(tmp_path):
 def test_issue_comment_lookup_failure_holds_before_closed_pr_reclaim(
     fake_forge,
 ):
-    active = _active(pid=123)
+    active = _active(pid=4_200_123)
     task = _task(status_labels=("status:in-progress",))
     ctx = _rule_ctx(forge=fake_forge)
     fake_forge.list_comments.side_effect = RuntimeError("page two failed")

@@ -484,7 +484,7 @@ def _active_worktree(issue_number):
         issue_number=issue_number,
         branch=f"claude/issue-{issue_number}-task",
         worktree_path=f"worktrees/w{issue_number}",
-        pid=1000 + issue_number,
+        pid=4_201_000 + issue_number,
         started_at=1_700_000_000.0,
         declared_footprint=(),
     )

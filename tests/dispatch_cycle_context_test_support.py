@@ -54,7 +54,7 @@ def _active(issue_number: int, **overrides: Any) -> ActiveWorktree:
     defaults: dict[str, Any] = {
         "branch": f"claude/issue-{issue_number}-task",
         "worktree_path": f"worktrees/w{issue_number}",
-        "pid": 1000 + issue_number,
+        "pid": 4_201_000 + issue_number,
         "started_at": 1_700_000_000.0,
     }
     defaults.update(overrides)

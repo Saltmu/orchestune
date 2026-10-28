@@ -107,7 +107,7 @@ class TestConflictAwareSchedulingPhase:
                     issue_number=1,
                     branch="task/active",
                     worktree_path=str(tmp_path / "active"),
-                    pid=123,
+                    pid=4_200_123,
                     started_at=1.0,
                     declared_footprint=active_task.footprint,
                 )
@@ -576,7 +576,7 @@ class TestRunDispatchCycle:
             mock_subproc_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
-            mock_popen.return_value.pid = 555
+            mock_popen.return_value.pid = 4_200_555
             report = run_dispatch_cycle(config)
 
         assert report.applied is True
