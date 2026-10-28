@@ -152,6 +152,12 @@ def _has_canonical_active_worktree_shape(values: dict[str, Any]) -> bool:
     return core_is_valid and completion_is_valid
 
 
+# Above Linux's PID_MAX_LIMIT (2**22), so no host process can own it. A low fixed
+# PID can collide with a real process (is_process_alive treats a PermissionError
+# from another user's process as alive), which flips GC/cycle tests on CI (#1461).
+UNUSED_PID = 4_194_305
+
+
 def make_test_active_worktree(
     issue_number: int = 1, **overrides: Any
 ) -> ActiveWorktree:
@@ -164,7 +170,7 @@ def make_test_active_worktree(
         "issue_number": issue_number,
         "branch": f"claude/issue-{issue_number}-task-a",
         "worktree_path": "worktrees/w1",
-        "pid": 111,
+        "pid": UNUSED_PID,
         "started_at": 1_699_999_000.0,
         "declared_footprint": (),
     }

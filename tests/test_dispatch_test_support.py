@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.infra.process_utils import is_process_alive
 from orchestune.ledger.active_records import (
     ActiveCompletionJournal,
     ActiveWorktreeCore,
@@ -23,6 +24,7 @@ from tests.conftest import make_issue
 from tests.dispatch_test_support import (
     DEFAULT_CREATED_AT,
     GC_PROCESS_ALIVE_TARGETS,
+    UNUSED_PID,
     make_footprint_issue,
     make_plain_issue,
     make_state_root,
@@ -68,6 +70,13 @@ class TestMakeTestTask:
         assert task.issue_state == "CLOSED"
 
 
+class TestUnusedPid:
+    def test_exceeds_the_linux_pid_limit_so_no_host_process_can_own_it(self):
+        # 低い固定PIDは実在プロセスと被り、is_process_aliveが生存と判定する(#1461)。
+        assert UNUSED_PID > 2**22
+        assert not is_process_alive(UNUSED_PID)
+
+
 class TestMakeTestActiveWorktree:
     def test_defaults_describe_a_live_worktree(self):
         assert make_test_active_worktree() == ActiveWorktree.from_records(
@@ -77,7 +86,7 @@ class TestMakeTestActiveWorktree:
                 worktree_path="worktrees/w1",
                 declared_footprint=(),
             ),
-            launch=LaunchInfo(pid=111, started_at=1_699_999_000.0),
+            launch=LaunchInfo(pid=UNUSED_PID, started_at=1_699_999_000.0),
             claim=ClaimInfo(),
             completion=ActiveCompletionJournal(),
         )
@@ -174,7 +183,7 @@ class TestMakeTestCycleContext:
         assert (fact.branch, fact.worktree_path, fact.pid) == (
             "claude/issue-7-task-a",
             "worktrees/w1",
-            111,
+            UNUSED_PID,
         )
 
 
