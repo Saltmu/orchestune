@@ -25,6 +25,7 @@ from orchestune.ledger.run_state import (
 )
 from orchestune.outcome_record import OutcomeRecord, ReviewSummary
 from tests.dispatch_test_support import (
+    UNUSED_PID,
     flat_active_worktree,
     stub_label_actor_permission,
 )
@@ -64,7 +65,7 @@ class TestRunDispatchCycleCompletion:
             issue_number=1,
             branch="claude/issue-1-task-a",
             worktree_path=str(tmp_path / "w1"),
-            pid=111,
+            pid=UNUSED_PID,
             started_at=1_699_999_000.0,
             declared_footprint=("src/foo.py",),
         )
@@ -811,7 +812,7 @@ class TestRunDispatchCycleNotNeeded:
             issue_number=1,
             branch="claude/issue-1-task-a",
             worktree_path=str(tmp_path / "w1"),
-            pid=111,
+            pid=UNUSED_PID,
             started_at=1_699_999_000.0,
             declared_footprint=("src/foo.py",),
         )
