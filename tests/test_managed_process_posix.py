@@ -22,6 +22,10 @@ pytestmark = pytest.mark.skipif(
 
 PY = sys.executable
 
+# The managed-process timeout counts from before the child starts, so tests that
+# need a child to record its PID first must not race interpreter startup (#1459).
+START_HEADROOM_SECONDS = 5.0
+
 
 def _write_scripts(tmp_path: Path, *, parent_body: str) -> tuple[Path, Path]:
     """Write a recording grandchild script and a parent script that spawns it."""
@@ -101,12 +105,16 @@ def test_timeout_stops_child_and_grandchild(tmp_path: Path) -> None:
     parent, pids = _write_scripts(
         tmp_path,
         parent_body=(
+            f"while not (os.path.exists({str(pid_file)!r})"
+            f" and os.path.getsize({str(pid_file)!r}) > 0): time.sleep(0.05)\n"
             f"open({str(pid_file)!r}, 'a').write(str(os.getpid()) + ' ')\n"
             "time.sleep(60)\n"
         ),
     )
 
-    result = _run_script(parent, timeout=1.0)
+    # The timeout runs from before the parent starts, so leave headroom for a
+    # slow grandchild start; the parent waits for the grandchild's PID first.
+    result = _run_script(parent, timeout=START_HEADROOM_SECONDS)
 
     assert result.outcome is ProcessOutcome.TIMED_OUT
     assert result.stop_confirmed is True
@@ -127,7 +135,8 @@ def test_child_ignoring_sigterm_is_killed_after_the_grace_period(
         encoding="utf-8",
     )
 
-    result = _run_script(script, timeout=1.0)
+    # Headroom for a slow interpreter start: the PID is recorded after startup.
+    result = _run_script(script, timeout=START_HEADROOM_SECONDS)
 
     assert result.outcome is ProcessOutcome.TIMED_OUT
     assert result.stop_confirmed is True
