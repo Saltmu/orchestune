@@ -30,20 +30,26 @@ def find_orphaned_pr(
     ]
     if len(candidates) != 1:
         return None
-    ref = (
-        f"refs/remotes/origin/{active.core.branch}"
+    ref = f"refs/heads/{active.core.branch}"
+    args = (
+        ["ls-remote", "--heads", "origin", ref]
         if active.launch.external_id
-        else f"refs/heads/{active.core.branch}"
+        else ["rev-parse", "--verify", ref]
     )
     try:
         result = git(
-            ["rev-parse", "--verify", ref],
+            args,
             cwd=root or Path(active.core.worktree_path).parent,
             check=True,
         )
     except (subprocess.CalledProcessError, OSError):
         return None
-    return candidates[0] if result.stdout.strip() == candidates[0].head_sha else None
+    expected = (
+        [candidates[0].head_sha, ref]
+        if active.launch.external_id
+        else [candidates[0].head_sha]
+    )
+    return candidates[0] if result.stdout.strip().split() == expected else None
 
 
 def orphan_decision(

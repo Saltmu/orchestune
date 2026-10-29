@@ -17,7 +17,7 @@ from orchestune.dispatch.launch import DuplicateCandidateDecision, _apply_duplic
 from orchestune.ledger.run_state import RunState
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord
-from tests.dispatch_gc_test_support import _active, _task
+from tests.dispatch_gc_test_support import _active, _rule_ctx, _task
 from tests.test_dispatch_launch_basic import _task as _launch_task
 
 
@@ -35,6 +35,66 @@ def test_receipt_binds_pr_and_old_claim():
     assert receipt["active"]["claim_id"] == "claim-1"
     assert receipt["pr_number"] == 9
     assert receipt["head_sha"] == "a" * 40
+
+
+def test_stopped_cloud_execution_with_open_pr_reaches_completion():
+    from orchestune.dispatch.gc import _resolve_cloud_completion
+
+    active = _active(external_id="cloud-1")
+    pr = PrRecord(
+        number=77,
+        head_ref=active.core.branch,
+        changed_files=(),
+        state="OPEN",
+        is_cross_repository=False,
+        head_sha="a" * 40,
+    )
+    ctx = _rule_ctx(prs=[pr])
+    with (
+        patch(
+            "orchestune.dispatch.gc._cloud_worktree_completion_status",
+            return_value="pending",
+        ),
+        patch("orchestune.dispatch.gc.fresh_external_hold", return_value=None),
+        patch(
+            "orchestune.dispatch.gc.run_git",
+            return_value=subprocess.CompletedProcess(
+                [], 0, stdout=f"{pr.head_sha}\trefs/heads/{pr.head_ref}\n"
+            ),
+        ),
+    ):
+        result = _resolve_cloud_completion(ctx, "280", active, _task())
+    assert result.state == "ready"
+
+
+def test_cloud_pr_stays_pending_when_stop_is_unconfirmed():
+    from orchestune.dispatch.gc import _resolve_cloud_completion
+
+    active = _active(external_id="cloud-1")
+    pr = PrRecord(
+        number=77,
+        head_ref=active.core.branch,
+        changed_files=(),
+        state="OPEN",
+        is_cross_repository=False,
+        head_sha="a" * 40,
+    )
+    ctx = _rule_ctx(prs=[pr])
+    with (
+        patch(
+            "orchestune.dispatch.gc._cloud_worktree_completion_status",
+            return_value="pending",
+        ),
+        patch("orchestune.dispatch.gc.fresh_external_hold", return_value=object()),
+        patch(
+            "orchestune.dispatch.gc.run_git",
+            return_value=subprocess.CompletedProcess(
+                [], 0, stdout=f"{pr.head_sha}\trefs/heads/{pr.head_ref}\n"
+            ),
+        ),
+    ):
+        result = _resolve_cloud_completion(ctx, "280", active, _task())
+    assert result.state == "pending"
 
 
 @pytest.mark.parametrize("overrides", [{"claim_id": None}, {"repository_id": None}])
