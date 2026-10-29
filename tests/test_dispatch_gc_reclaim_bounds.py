@@ -273,7 +273,7 @@ class TestReclaimRetryBound:
         ラベル遷移のいずれの副作用も起こさない（記録が先、破壊は後）。"""
         worktree = tmp_path / "wt-280"
         worktree.mkdir()
-        active = _active(worktree_path=str(worktree), pid=4242)
+        active = _active(worktree_path=str(worktree), pid=4_204_242)
         run_state = RunState(active_worktrees={"280": active})
         config = _config(tmp_path)
 
@@ -423,7 +423,7 @@ class TestReclaimRetryBound:
         """
         worktree = tmp_path / "wt-280"
         worktree.mkdir()
-        active = _active(worktree_path=str(worktree), pid=4242)
+        active = _active(worktree_path=str(worktree), pid=4_204_242)
         run_state = RunState(active_worktrees={"280": active})
         config = _config(
             tmp_path,
@@ -521,7 +521,7 @@ class TestReclaimRetryBound:
         """
         worktree = tmp_path / "wt-280"
         worktree.mkdir()
-        active = _active(worktree_path=str(worktree), pid=4242)
+        active = _active(worktree_path=str(worktree), pid=4_204_242)
         run_state = RunState(active_worktrees={"280": active})
         config = _config(tmp_path, task_timeout_seconds=60, max_task_reclaims=0)
 

@@ -57,7 +57,7 @@ def test_observer_emits_every_fact_read_by_invariants() -> None:
                 issue_number=701,
                 branch="codex/issue-701",
                 worktree_path="worktree/701",
-                pid=1,
+                pid=4_200_001,
             ),
         ),
         clock=lambda: NOW,

@@ -120,7 +120,7 @@ class TestFinalizeLaunchContextRecording:
             issue_number=1,
             branch="feat/issue-1-task-a",
             worktree_path=str(tmp_path / "worktrees" / "task-a"),
-            pid=123,
+            pid=4_200_123,
             started_at=1.0,
             declared_footprint=(),
             launch_phase="launched",
@@ -160,7 +160,7 @@ class TestFinalizeLaunchContextRecording:
             issue_number=999,
             branch="feat/issue-999-unknown",
             worktree_path=str(tmp_path / "worktrees" / "unknown"),
-            pid=123,
+            pid=4_200_123,
             started_at=1.0,
             declared_footprint=(),
             launch_phase="launched",
@@ -243,7 +243,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
             patch("fake_forge_proxy.active_fake_forge.remove_label"),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             _apply_task_launches(
                 plans, run_state, now, config, claim_fn=real_claim_fn(config)
             )
@@ -285,7 +285,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
             patch("fake_forge_proxy.active_fake_forge.remove_label"),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             _apply_task_launches(
                 plans,
                 RunState(active_worktrees={}),
@@ -341,7 +341,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
             patch("fake_forge_proxy.active_fake_forge.remove_label"),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             _apply_task_launches(
                 plans, run_state, 1000.0, config, claim_fn=real_claim_fn(config)
             )
@@ -397,7 +397,7 @@ class TestApplyTaskLaunchesRunStatePersistence:
             patch("fake_forge_proxy.active_fake_forge.remove_label"),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             _apply_task_launches(
                 plans,
                 run_state,
@@ -458,7 +458,7 @@ class TestApplyTaskLaunchesPersistsLaunchHistoryToParentIssue:
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             _apply_task_launches(
                 plans, run_state, now, config, claim_fn=real_claim_fn(config)
             )
@@ -553,7 +553,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             _apply_task_launches(
                 plans, run_state, now, config, claim_fn=real_claim_fn(config)
             )
@@ -611,7 +611,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             ),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             _apply_task_launches(
                 plans,
                 RunState(active_worktrees={}),
@@ -668,7 +668,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-            mock_popen.return_value.pid = 1234
+            mock_popen.return_value.pid = 4_201_234
             selected = _apply_task_launches(
                 plans,
                 run_state,

@@ -680,7 +680,7 @@ class TestHandleBlockedRecomputeRecovery:
                 declared_footprint=(),
             ),
             launch=LaunchInfo(
-                pid=111,
+                pid=4_200_111,
                 started_at=1_699_999_000.0,
             ),
             claim=ClaimInfo(

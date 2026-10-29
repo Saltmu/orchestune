@@ -828,7 +828,7 @@ class TestBookkeepingRepairCommand:
             issue_number=999,
             branch="codex/issue-999",
             worktree_path="worktrees/issue-999",
-            pid=999,
+            pid=4_200_999,
             started_at=1.0,
             declared_footprint=(),
         )

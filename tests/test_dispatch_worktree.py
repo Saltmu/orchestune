@@ -85,7 +85,7 @@ class TestCreateWorktreeAndLaunch:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
-            mock_popen.return_value.pid = 4242
+            mock_popen.return_value.pid = 4_204_242
             result = create_worktree_and_launch(
                 task,
                 branch_name="claude/issue-1-task-1",
@@ -96,7 +96,7 @@ class TestCreateWorktreeAndLaunch:
         assert mock_run.called
         assert mock_popen.called
         assert result.launched is True
-        assert result.pid == 4242
+        assert result.pid == 4_204_242
 
     def test_dispatch_started_at_is_captured_immediately_before_dispatch_launch(
         self, tmp_path
@@ -300,7 +300,7 @@ class TestCreateWorktreeAndLaunch:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
-            mock_popen.return_value.pid = 4242
+            mock_popen.return_value.pid = 4_204_242
             result = create_worktree_and_launch(
                 task,
                 branch_name="claude/issue-1-task-1",
@@ -343,7 +343,7 @@ class TestCreateWorktreeAndLaunch:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
-            mock_popen.return_value.pid = 4242
+            mock_popen.return_value.pid = 4_204_242
             result = create_worktree_and_launch(
                 task,
                 branch_name="claude/issue-1-task-1",
@@ -847,7 +847,7 @@ class TestProvisionAndLaunch:
         worktree_path = tmp_path / "worktrees" / "feature-1"
         fake_target = MagicMock()
         fake_handle = DispatchHandle(
-            pid=999, external_id="ext-1", branch_name="feature/1"
+            pid=4_200_999, external_id="ext-1", branch_name="feature/1"
         )
         fake_target.launch.return_value = fake_handle
 
@@ -870,7 +870,7 @@ class TestProvisionAndLaunch:
         worktree_path = tmp_path / "worktrees" / "feature-1"
         fake_target = MagicMock()
         fake_handle = DispatchHandle(
-            pid=999, external_id="ext-1", branch_name="feature/1"
+            pid=4_200_999, external_id="ext-1", branch_name="feature/1"
         )
         fake_target.launch.return_value = fake_handle
 
@@ -914,7 +914,7 @@ class TestProvisionAndLaunch:
             ) -> DispatchHandle:
                 self.call_count += 1
                 self.called_with = (task, branch_name, worktree_path, force_push)
-                return DispatchHandle(branch_name=branch_name, pid=123)
+                return DispatchHandle(branch_name=branch_name, pid=4_200_123)
 
         legacy_target = _CustomLegacyTarget()
         selection = ExecutionSelection(
@@ -927,7 +927,7 @@ class TestProvisionAndLaunch:
             worktree_path,
             execution_selection=selection,
         )
-        assert handle.pid == 123
+        assert handle.pid == 4_200_123
         assert legacy_target.call_count == 1
         assert legacy_target.called_with == (task, "feature/1", worktree_path, False)
 
@@ -960,7 +960,7 @@ class TestLaunchAttributionPlumbing:
 
         target = MagicMock()
         target.launch.return_value = DispatchHandle(
-            pid=5,
+            pid=4_200_005,
             target_name="claude-cli",
             log_path=str(tmp_path / "x.log"),
             log_offset=10,

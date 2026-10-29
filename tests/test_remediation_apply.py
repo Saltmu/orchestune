@@ -405,7 +405,7 @@ def test_registered_child_enters_cycle_dependency_and_conflict_evaluation(
                 issue_number=99,
                 branch="task/active",
                 worktree_path=str(tmp_path / "active"),
-                pid=123,
+                pid=4_200_123,
                 started_at=1.0,
                 declared_footprint=active.footprint,
             )

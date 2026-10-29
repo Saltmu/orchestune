@@ -171,7 +171,7 @@ class TestIsProcessAlivePosix:
             patch("orchestune.infra.process_utils.os.kill") as mock_kill,
         ):
             mock_kill.return_value = None
-            assert is_process_alive(12345) is True
+            assert is_process_alive(4_212_345) is True
 
     def test_missing_pid_returns_false(self):
         with (
@@ -180,7 +180,7 @@ class TestIsProcessAlivePosix:
                 "orchestune.infra.process_utils.os.kill", side_effect=ProcessLookupError
             ),
         ):
-            assert is_process_alive(12345) is False
+            assert is_process_alive(4_212_345) is False
 
     def test_permission_error_is_treated_as_alive(self):
         with (
@@ -189,14 +189,14 @@ class TestIsProcessAlivePosix:
                 "orchestune.infra.process_utils.os.kill", side_effect=PermissionError
             ),
         ):
-            assert is_process_alive(1) is True
+            assert is_process_alive(4_200_001) is True
 
     def test_other_os_error_returns_false(self):
         with (
             patch("orchestune.infra.process_utils._kernel32", None),
             patch("orchestune.infra.process_utils.os.kill", side_effect=OSError),
         ):
-            assert is_process_alive(1) is False
+            assert is_process_alive(4_200_001) is False
 
 
 class TestIsProcessAliveWindows:
@@ -224,13 +224,13 @@ class TestIsProcessAliveWindows:
             patch("orchestune.infra.process_utils._kernel32", mock_kernel32),
             patch("orchestune.infra.process_utils.os.kill") as mock_kill,
         ):
-            assert is_process_alive(12345) is True
+            assert is_process_alive(4_212_345) is True
             mock_kill.assert_not_called()
 
     def test_returns_false_when_process_has_exited(self):
         mock_kernel32 = self._fake_kernel32(exit_code=0)
         with patch("orchestune.infra.process_utils._kernel32", mock_kernel32):
-            assert is_process_alive(12345) is False
+            assert is_process_alive(4_212_345) is False
 
     def test_returns_false_when_open_process_fails_with_unknown_error(self):
         mock_kernel32 = MagicMock()
@@ -243,7 +243,7 @@ class TestIsProcessAliveWindows:
                 create=True,
             ),
         ):
-            assert is_process_alive(12345) is False
+            assert is_process_alive(4_212_345) is False
 
     def test_treats_access_denied_as_alive(self):
         mock_kernel32 = MagicMock()
@@ -256,17 +256,17 @@ class TestIsProcessAliveWindows:
                 create=True,
             ),
         ):
-            assert is_process_alive(12345) is True
+            assert is_process_alive(4_212_345) is True
 
     def test_returns_false_when_get_exit_code_process_fails(self):
         mock_kernel32 = self._fake_kernel32(get_exit_code_succeeds=False)
         with patch("orchestune.infra.process_utils._kernel32", mock_kernel32):
-            assert is_process_alive(12345) is False
+            assert is_process_alive(4_212_345) is False
 
     def test_closes_handle_after_use(self):
         mock_kernel32 = self._fake_kernel32(exit_code=259)
         with patch("orchestune.infra.process_utils._kernel32", mock_kernel32):
-            is_process_alive(12345)
+            is_process_alive(4_212_345)
         mock_kernel32.CloseHandle.assert_called_once_with(4242)
 
 

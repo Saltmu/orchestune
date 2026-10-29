@@ -136,15 +136,17 @@ class TestRecordLaunch:
 
     def test_legacy_none_attempt_id_matches_only_on_full_field_equality(self):
         ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
-        ctx.record_launch(_active(1, pid=42, started_at=1.0))
-        same = ctx.record_launch(_active(1, pid=42, started_at=1.0))
+        ctx.record_launch(_active(1, pid=4_200_042, started_at=1.0))
+        same = ctx.record_launch(_active(1, pid=4_200_042, started_at=1.0))
         assert same.status == RecordStatus.NOOP
 
     def test_one_sided_attempt_id_is_never_treated_as_a_match(self):
         ctx = _ctx(tasks_by_issue={1: _task(1, status_labels=(StatusLabel.QUEUED,))})
-        ctx.record_launch(_active(1, pid=42, started_at=1.0, launch_attempt_id=None))
+        ctx.record_launch(
+            _active(1, pid=4_200_042, started_at=1.0, launch_attempt_id=None)
+        )
         result = ctx.record_launch(
-            _active(1, pid=42, started_at=1.0, launch_attempt_id="attempt-1")
+            _active(1, pid=4_200_042, started_at=1.0, launch_attempt_id="attempt-1")
         )
         assert result.status == RecordStatus.CONFLICT
         assert result.reason == REASON_LAUNCH_MISMATCH
@@ -753,7 +755,7 @@ class TestRecordInvariantRegressions:
         assert retry.status == RecordStatus.NOOP
 
     @pytest.mark.parametrize("initial", [False, True])
-    @pytest.mark.parametrize("pid,external_id", [(111, True), (-1, "remote")])
+    @pytest.mark.parametrize("pid,external_id", [(4_200_111, True), (-1, "remote")])
     def test_mixed_handle_normalization_is_shared_by_both_entry_points(
         self, initial, pid, external_id
     ):
@@ -765,5 +767,5 @@ class TestRecordInvariantRegressions:
         result = ctx.record_launch(active)
         assert result.status == (RecordStatus.NOOP if initial else RecordStatus.APPLIED)
         fact = ctx.launch_fact(1)
-        assert fact.pid == (111 if pid == 111 else None)
+        assert fact.pid == (4_200_111 if pid == 4_200_111 else None)
         assert fact.external_id == ("remote" if external_id == "remote" else None)

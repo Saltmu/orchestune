@@ -76,7 +76,7 @@ class TestConfirmedCompletionFacts:
             issue_number=280,
             branch="claude/issue-280-task-a",
             worktree_path="worktrees/w1",
-            pid=111,
+            pid=4_200_111,
             started_at=1_699_999_000.0,
             declared_footprint=(),
         )
@@ -118,7 +118,7 @@ class TestConfirmedCompletionFacts:
             issue_number=280,
             branch="claude/issue-280-task-a",
             worktree_path="worktrees/w1",
-            pid=111,
+            pid=4_200_111,
             started_at=1_699_999_000.0,
             declared_footprint=(),
         )

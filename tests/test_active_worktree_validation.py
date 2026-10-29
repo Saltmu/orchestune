@@ -73,7 +73,7 @@ def test_completion_rejects_invalid_canonical_values(values: dict) -> None:
 
 
 def test_valid_overlapping_owner_facts_are_not_prohibited() -> None:
-    assert LaunchInfo(pid=12, launch_phase="launched").pid == 12
+    assert LaunchInfo(pid=4_200_012, launch_phase="launched").pid == 4_200_012
     assert (
         ClaimInfo(owner_kind="dispatch", claim_stage="completed").claim_stage
         == "completed"

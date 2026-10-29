@@ -201,7 +201,7 @@ def _execution(
     *,
     branch: str | None = None,
     worktree_path: str | None = "worktrees/703",
-    pid: int | None = 4242,
+    pid: int | None = 4_204_242,
     external_id: str | None = None,
 ) -> ExecutionRecord:
     return ExecutionRecord(
@@ -262,7 +262,7 @@ def test_task_observation_links_issue_execution_branch_worktree_and_pr() -> None
     collector = _collector(
         git_probe=FakeGitProbe({"claude/issue-703"}),
         worktree_probe=FakeWorktreeProbe({"worktrees/703"}),
-        process_probe=FakeProcessProbe({4242}),
+        process_probe=FakeProcessProbe({4_204_242}),
     )
 
     state = collector.collect(forge=snapshot, executions=(_execution(703),))
@@ -275,7 +275,7 @@ def test_task_observation_links_issue_execution_branch_worktree_and_pr() -> None
         "status:in-progress",
     )
     assert _task_fact(state, 703, FACT_EXECUTION_KIND).value == EXECUTION_KIND_LOCAL
-    assert _task_fact(state, 703, FACT_EXECUTION_PID).value == 4242
+    assert _task_fact(state, 703, FACT_EXECUTION_PID).value == 4_204_242
     assert _task_fact(state, 703, FACT_EXECUTION_PROCESS_ALIVE).value is True
     assert _task_fact(state, 703, FACT_BRANCH_NAME).value == "claude/issue-703"
     assert _task_fact(state, 703, FACT_BRANCH_EXISTS).value is True
@@ -809,11 +809,11 @@ def test_pull_request_is_unknown_when_the_branch_itself_is_unknown() -> None:
 
 def test_multiple_executions_for_one_issue_are_unknown_with_candidates() -> None:
     executions = (
-        _execution(703, branch="claude/issue-703-b", pid=2),
-        _execution(703, branch="claude/issue-703-a", pid=1),
+        _execution(703, branch="claude/issue-703-b", pid=4_200_002),
+        _execution(703, branch="claude/issue-703-a", pid=4_200_001),
     )
 
-    state = _collector(process_probe=FakeProcessProbe({1, 2})).collect(
+    state = _collector(process_probe=FakeProcessProbe({4_200_001, 4_200_002})).collect(
         executions=executions
     )
 
@@ -844,8 +844,8 @@ def test_conflicting_branch_records_are_unknown_with_both_candidates() -> None:
 
 
 def test_ambiguous_execution_does_not_probe_a_process() -> None:
-    process = FakeProcessProbe({1, 2})
-    executions = (_execution(703, pid=1), _execution(703, pid=2))
+    process = FakeProcessProbe({4_200_001, 4_200_002})
+    executions = (_execution(703, pid=4_200_001), _execution(703, pid=4_200_002))
 
     _collector(process_probe=process).collect(executions=executions)
 
@@ -1005,7 +1005,7 @@ def test_cloud_execution_never_probes_the_local_process() -> None:
 
 def test_dead_local_process_is_a_known_negative() -> None:
     state = _collector(process_probe=FakeProcessProbe(set())).collect(
-        executions=(_execution(703, pid=4242),)
+        executions=(_execution(703, pid=4_204_242),)
     )
 
     alive = _task_fact(state, 703, FACT_EXECUTION_PROCESS_ALIVE)
@@ -1017,7 +1017,7 @@ def test_dead_local_process_is_a_known_negative() -> None:
 def test_local_execution_without_a_recorded_pid_is_unknown() -> None:
     execution = _execution(703, pid=None, external_id=None)
 
-    state = _collector(process_probe=FakeProcessProbe({4242})).collect(
+    state = _collector(process_probe=FakeProcessProbe({4_204_242})).collect(
         executions=(execution,)
     )
 
@@ -1052,7 +1052,7 @@ def test_external_status_is_absent_for_a_purely_local_execution() -> None:
     external = FakeExternalProbe({})
 
     state = _collector(external_probe=external).collect(
-        executions=(_execution(703, pid=4242),)
+        executions=(_execution(703, pid=4_204_242),)
     )
 
     status = _task_fact(state, 703, FACT_EXECUTION_EXTERNAL_STATUS)
@@ -1089,7 +1089,7 @@ def test_repeated_collection_over_identical_inputs_is_equal() -> None:
         return _collector(
             git_probe=FakeGitProbe({"claude/issue-703"}),
             worktree_probe=FakeWorktreeProbe({"worktrees/703"}),
-            process_probe=FakeProcessProbe({4242}),
+            process_probe=FakeProcessProbe({4_204_242}),
             external_probe=FakeExternalProbe({"codex-cloud:abc": "running"}),
         ).collect(forge=snapshot, executions=executions)
 
@@ -1147,14 +1147,14 @@ def test_inputs_are_frozen_and_left_unmodified() -> None:
     _collector(
         git_probe=FakeGitProbe({"claude/issue-703"}),
         worktree_probe=FakeWorktreeProbe(set()),
-        process_probe=FakeProcessProbe({4242}),
+        process_probe=FakeProcessProbe({4_204_242}),
         external_probe=FakeExternalProbe({"codex-cloud:abc": "running"}),
     ).collect(forge=snapshot, executions=executions)
 
     assert snapshot == snapshot_before
     assert executions == executions_before
     with pytest.raises(FrozenInstanceError):
-        executions[0].pid = 1  # type: ignore[misc]
+        executions[0].pid = 4_200_001  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
         snapshot.fetched_at = NOW  # type: ignore[misc]
 
@@ -1163,7 +1163,7 @@ def test_collector_only_issues_read_probes() -> None:
     snapshot, executions = _full_inputs()
     git = FakeGitProbe({"claude/issue-703"})
     worktree = FakeWorktreeProbe({"worktrees/703"})
-    process = FakeProcessProbe({4242})
+    process = FakeProcessProbe({4_204_242})
     external = FakeExternalProbe({"codex-cloud:abc": "running"})
 
     _collector(
@@ -1234,10 +1234,10 @@ def test_build_observed_repository_state_matches_the_collector() -> None:
         repository_id=REPOSITORY_ID,
         forge=snapshot,
         executions=executions,
-        process_probe=FakeProcessProbe({4242}),
+        process_probe=FakeProcessProbe({4_204_242}),
         clock=_clock,
     )
-    collected = _collector(process_probe=FakeProcessProbe({4242})).collect(
+    collected = _collector(process_probe=FakeProcessProbe({4_204_242})).collect(
         forge=snapshot, executions=executions
     )
 

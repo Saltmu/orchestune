@@ -442,7 +442,7 @@ class TestLaunchOrderingCrashSafety:
             mock_subproc_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
             )
-            mock_popen.return_value.pid = 555
+            mock_popen.return_value.pid = 4_200_555
 
             # #943: dispatchの起動はclaim_task経由になった。claim_task自身が
             # ラベルAPI失敗を`ClaimFailure(LABEL_UPDATE_FAILED)`として捕捉し、
@@ -484,7 +484,7 @@ class TestStaleActiveEntryReconciliation:
                         issue_number=1,
                         branch="claude/issue-1-task-a",
                         worktree_path=str(tmp_path / "w1"),
-                        pid=111,
+                        pid=4_200_111,
                         started_at=1_699_999_000.0,
                         declared_footprint=("src/foo.py",),
                     )
@@ -666,7 +666,7 @@ class TestPreventDuplicateSessions:
                 is_ci_passing=True,
             )
         ]
-        mock_popen.return_value.pid = 12345
+        mock_popen.return_value.pid = 4_212_345
         mock_subproc_run.return_value = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="", stderr=""
         )
@@ -761,7 +761,7 @@ class TestPreventDuplicateSessions:
             ) as mock_subprocess_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
-            mock_popen.return_value.pid = 12345
+            mock_popen.return_value.pid = 4_212_345
             mock_list.side_effect = lambda label, **_: (
                 [queued_issue] if label == "status:queued" else []
             )

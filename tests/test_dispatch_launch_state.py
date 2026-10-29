@@ -59,7 +59,7 @@ def _core() -> ActiveWorktreeCore:
 def _held_record():
     return make_test_active_worktree(
         7,
-        pid=11,
+        pid=4_200_011,
         launch_phase="launching",
         launch_attempt_id="attempt-7",
         owner_kind="dispatch",
@@ -76,7 +76,7 @@ def _held_record():
 def test_build_launch_record_keeps_each_owner_record() -> None:
     claim = ClaimInfo(claim_id="claim-7", claim_stage="completed")
     completion = ActiveCompletionJournal(completion_policy_config={"source": "x"})
-    launch = LaunchInfo(pid=5, started_at=2.0, launch_phase="launched")
+    launch = LaunchInfo(pid=4_200_005, started_at=2.0, launch_phase="launched")
 
     active = build_launch_record(
         core=_core(), launch=launch, claim=claim, completion=completion
@@ -140,7 +140,7 @@ def test_selection_fields_come_from_the_execution_selection() -> None:
     )
 
     launch = launch_info_with_selection(
-        LaunchInfo(pid=3), selection, fallback_profile="ignored"
+        LaunchInfo(pid=4_200_003), selection, fallback_profile="ignored"
     )
 
     assert (
@@ -149,7 +149,7 @@ def test_selection_fields_come_from_the_execution_selection() -> None:
         launch.model,
         launch.reasoning_effort,
         launch.selection_reason,
-    ) == (3, "luna-xhigh", "m", "high", "tier")
+    ) == (4_200_003, "luna-xhigh", "m", "high", "tier")
 
 
 def test_selection_absent_keeps_only_the_fallback_profile() -> None:
@@ -169,11 +169,11 @@ def test_selection_absent_keeps_only_the_fallback_profile() -> None:
 
 @pytest.mark.parametrize("tokens", [1200, None])
 def test_token_estimate_is_recorded_even_when_unknown(tokens) -> None:
-    launch = launch_info_with_token_estimate(LaunchInfo(pid=3), tokens)
+    launch = launch_info_with_token_estimate(LaunchInfo(pid=4_200_003), tokens)
 
     assert launch.estimated_tokens == tokens
     assert launch.token_estimate_recorded is True
-    assert launch.pid == 3
+    assert launch.pid == 4_200_003
 
 
 class TestUsageLimitLaunchGate:
@@ -304,7 +304,7 @@ class _Launched:
             issue_number=ISSUE,
             branch=BRANCH,
             worktree_path="worktrees/w2",
-            pid=2,
+            pid=4_200_002,
             launched=True,
             dispatch_started_at=NOW,
         )

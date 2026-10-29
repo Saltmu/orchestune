@@ -123,7 +123,7 @@ class TestApplyAutoRebase:
 
         mock_target = MagicMock()
         mock_target.launch.return_value = MagicMock(
-            pid=222, external_id="ext-1", external_url="url-1"
+            pid=4_200_222, external_id="ext-1", external_url="url-1"
         )
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -138,7 +138,7 @@ class TestApplyAutoRebase:
 
         # Assert base_branch updated to parent-branch
         assert run_state.active_worktrees["1"].core.base_branch == "parent-branch"
-        assert run_state.active_worktrees["1"].launch.pid == 222
+        assert run_state.active_worktrees["1"].launch.pid == 4_200_222
         # 再launch時はforce_push=Trueを明示的に渡し、base_branchも伝達する。
         mock_target.launch.assert_called_once_with(
             task,
@@ -542,7 +542,7 @@ class TestApplyAutoRebase:
 
         mock_target = MagicMock()
         mock_target.launch.return_value = MagicMock(
-            pid=222, external_id="ext-1", external_url="url-1"
+            pid=4_200_222, external_id="ext-1", external_url="url-1"
         )
         config = DispatcherConfig(
             parent_issue_number=100,

@@ -42,7 +42,7 @@ def _seed_active(tmp_path, **overrides):
         declared_footprint=tuple(overrides.get("declared_footprint", ())),
     )
     launch = LaunchInfo(
-        pid=overrides.get("pid", 12345),
+        pid=overrides.get("pid", 4_212_345),
         started_at=overrides.get("started_at", 1700000000.0),
     )
     claim = ClaimInfo(
@@ -741,7 +741,7 @@ class TestLabelConfirmedCompletionContract:
                 core=ActiveWorktreeCore(
                     10, "claude/issue-10-x", "worktrees/claude-issue-10-x", ()
                 ),
-                launch=LaunchInfo(pid=54321, started_at=1700000100.0),
+                launch=LaunchInfo(pid=4_254_321, started_at=1700000100.0),
                 claim=ClaimInfo(
                     owner_kind="interactive",
                     claim_id="claim-10-b",
@@ -864,7 +864,7 @@ class TestLabelConfirmedCompletionContract:
 class TestJournalOwnerApi:
     def test_with_completion_replaces_only_completion_fields(self):
         core = ActiveWorktreeCore(10, "claude/issue-10", "wt", ())
-        launch = LaunchInfo(pid=123)
+        launch = LaunchInfo(pid=4_200_123)
         claim = ClaimInfo(claim_id="claim-10")
         active = ActiveWorktree.from_records(
             core=core,
@@ -939,7 +939,7 @@ class TestJournalOwnerApi:
         self,
     ):
         core = ActiveWorktreeCore(10, "claude/issue-10", "wt", ())
-        launch = LaunchInfo(pid=123)
+        launch = LaunchInfo(pid=4_200_123)
         claim = ClaimInfo(claim_id="claim-10")
         active = ActiveWorktree.from_records(
             core=core,

@@ -173,7 +173,7 @@ def test_recovery_bookkeeping_is_monotonic_and_idempotent_after_restart(
             base_branch="origin/main",
         ),
         launch=LaunchInfo(
-            pid=744,
+            pid=4_200_744,
             started_at=now - 120,
             recompute_count=1,
             forced_serial=False,
@@ -244,7 +244,7 @@ def test_recovery_counters_use_repository_wide_in_progress_snapshot(
             base_branch="origin/main",
         ),
         launch=LaunchInfo(
-            pid=745,
+            pid=4_200_745,
             started_at=900.0,
             recompute_count=1,
             forced_serial=False,
@@ -343,7 +343,7 @@ def test_gc_reclaim_runs_as_a_supervisor_typed_repair(tmp_path, fake_forge) -> N
             base_branch="origin/main",
         ),
         launch=LaunchInfo(
-            pid=745,
+            pid=4_200_745,
             started_at=None,
         ),
         claim=ClaimInfo(

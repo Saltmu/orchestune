@@ -144,7 +144,7 @@ class TestBranchStacking:
             mock_launch.return_value = MagicMock(
                 launch_attempt_id=None,
                 launched=True,
-                pid=123,
+                pid=4_200_123,
                 branch="claude/issue-2-task-2",
                 worktree_path="worktrees/claude-issue-2-task-2",
                 error_message=None,
@@ -283,7 +283,7 @@ class TestBranchStacking:
             mock_launch.return_value = MagicMock(
                 launch_attempt_id=None,
                 launched=True,
-                pid=123,
+                pid=4_200_123,
                 branch="claude/issue-2-task-2",
                 worktree_path="worktrees/claude-issue-2-task-2",
                 error_message=None,
@@ -327,7 +327,7 @@ class TestBranchStacking:
                     issue_number=2,
                     branch="claude/issue-2-task-2",
                     worktree_path=str(tmp_path / "worktrees/claude-issue-2-task-2"),
-                    pid=12345,
+                    pid=4_212_345,
                     started_at=1700000000.0,
                     declared_footprint=(),
                 )
@@ -402,12 +402,12 @@ class TestBranchStacking:
                 )
 
             mock_run.side_effect = run_mock
-            mock_popen.return_value.pid = 99999
+            mock_popen.return_value.pid = 4_299_999
 
             run_dispatch_cycle(config)
 
         # プロセスがkillされ、rebaseされ、再起動されたことを確認
-        mock_kill.assert_any_call(12345, 9)  # SIGKILL (or SIGTERM)
+        mock_kill.assert_any_call(4_212_345, 9)  # SIGKILL (or SIGTERM)
         # rebase実行の引数チェック（#213: rebase前にWIP退避チェックのgit statusが
         # 挟まるため、"rebase"を含む呼び出しを探して検証する）
         rebase_call = next(c for c in mock_run.call_args_list if "rebase" in c.args[0])
@@ -415,14 +415,14 @@ class TestBranchStacking:
 
         # 新しいPIDで状態が保存されていることを確認
         loaded = load_run_state(config.run_state_path)
-        assert loaded.active_worktrees["2"].launch.pid == 99999
+        assert loaded.active_worktrees["2"].launch.pid == 4_299_999
 
     def test_auto_rebase_passes_base_branch_and_execution_selection_to_dispatch_target(
         self, tmp_path
     ):
         target = MagicMock()
         target.launch.return_value = DispatchHandle(
-            pid=8888, branch_name="claude/issue-2-task-2"
+            pid=4_208_888, branch_name="claude/issue-2-task-2"
         )
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -446,7 +446,7 @@ class TestBranchStacking:
                     issue_number=2,
                     branch="claude/issue-2-task-2",
                     worktree_path=str(tmp_path / "worktrees/claude-issue-2-task-2"),
-                    pid=12345,
+                    pid=4_212_345,
                     started_at=1700000000.0,
                     declared_footprint=(),
                     profile="deep",
@@ -643,7 +643,7 @@ class TestBranchStacking:
                     issue_number=1,
                     branch="claude/issue-1-task-1",
                     worktree_path=str(tmp_path / "worktrees/claude-issue-1-task-1"),
-                    pid=123,
+                    pid=4_200_123,
                     started_at=1700000000.0,
                     declared_footprint=(),
                     base_branch="origin/main",
@@ -744,7 +744,7 @@ class TestBranchStacking:
             mock_launch.return_value = MagicMock(
                 launch_attempt_id=None,
                 launched=True,
-                pid=456,
+                pid=4_200_456,
                 branch="claude/issue-3-task-3",
                 worktree_path="worktrees/claude-issue-3-task-3",
                 error_message=None,
@@ -793,7 +793,7 @@ class TestBranchStacking:
                     issue_number=2,
                     branch="claude/issue-2-task-2",
                     worktree_path=str(tmp_path / "worktrees/claude-issue-2-task-2"),
-                    pid=12345,
+                    pid=4_212_345,
                     started_at=1700000000.0,
                     declared_footprint=(),
                 )
@@ -919,7 +919,7 @@ class TestBranchStacking:
                     issue_number=2,
                     branch="claude/issue-2-task-2",
                     worktree_path=str(tmp_path / "worktrees/claude-issue-2-task-2"),
-                    pid=12345,
+                    pid=4_212_345,
                     started_at=1700000000.0,
                     declared_footprint=(),
                 )
@@ -972,7 +972,7 @@ class TestBranchStacking:
             run_dispatch_cycle(config)
 
         # プロセスがkillされたこと
-        mock_kill.assert_called_with(12345, 9)
+        mock_kill.assert_called_with(4_212_345, 9)
 
         # エスカレーションラベル付与
         mock_remove_label.assert_any_call(2, "status:in-progress")

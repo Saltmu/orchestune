@@ -307,7 +307,7 @@ class TestRunDispatchCycleBranchNormalization:
                         issue_number=1,
                         branch="claude/issue-1-task-a",
                         worktree_path=str(tmp_path / "w1"),
-                        pid=111,
+                        pid=4_200_111,
                         started_at=1_699_999_000.0,
                         declared_footprint=("src/shared.py",),
                     )

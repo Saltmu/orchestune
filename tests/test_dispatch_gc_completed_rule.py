@@ -19,7 +19,7 @@ class TestRuleCompleted:
     def test_closed_unmerged_local_pr_is_requeued_without_completing_dependency(
         self, fake_forge
     ):
-        active = _active(pid=123, started_at=1_699_999_000.0)
+        active = _active(pid=4_200_123, started_at=1_699_999_000.0)
         task = _task(status_labels=("status:in-progress",))
         prs = [
             PrRecord(
@@ -67,7 +67,7 @@ class TestRuleCompleted:
     ):
         # #381: 途中でクラッシュしてもIssueが必ずいずれかのstatus:*ラベルを
         # 持ち続けるよう、addがremoveより先に呼ばれなければならない。
-        active = _active(pid=123, started_at=1_699_999_000.0)
+        active = _active(pid=4_200_123, started_at=1_699_999_000.0)
         task = _task(status_labels=("status:in-progress",))
         prs = [
             PrRecord(
@@ -155,7 +155,7 @@ class TestRuleCompleted:
     def test_local_pr_waits_for_process_before_using_open_pr_as_completion(
         self, fake_forge
     ):
-        active = _active(pid=123, started_at=1_699_999_000.0)
+        active = _active(pid=4_200_123, started_at=1_699_999_000.0)
         task = _task(status_labels=("status:in-progress",))
         ctx = _ctx(forge=fake_forge)
         with (
@@ -171,7 +171,7 @@ class TestRuleCompleted:
         fake_forge.list_prs.assert_not_called()
 
     def test_local_closed_pr_closed_before_launch_is_ignored_as_stale(self, fake_forge):
-        active = _active(pid=123, started_at=1_800_000_000.0)
+        active = _active(pid=4_200_123, started_at=1_800_000_000.0)
         task = _task(status_labels=("status:in-progress",))
         ctx = _ctx(forge=fake_forge)
         ctx.config.apply = True
@@ -215,7 +215,7 @@ class TestRuleCompleted:
         abandonedで再投入」する契約は廃止した。そのPRは前の世代のものなので、
         現在の実行の最中に閉じられても現在の実行の放棄を意味しない。回収・回収予算の
         消費・再投入には進まず、Outcomeの無い通常経路へ進む。"""
-        active = _active(pid=123, started_at=1_800_000_000.0)
+        active = _active(pid=4_200_123, started_at=1_800_000_000.0)
         task = _task(status_labels=("status:in-progress",))
         ctx = _ctx(forge=fake_forge)
         ctx.config.apply = True
@@ -261,7 +261,7 @@ class TestRuleCompleted:
     def test_all_state_lookup_failure_holds_local_completion_for_retry(
         self, fake_forge
     ):
-        active = _active(pid=123)
+        active = _active(pid=4_200_123)
         task = _task(status_labels=("status:in-progress",))
         ctx = _ctx(forge=fake_forge)
         fake_forge.list_prs.side_effect = RuntimeError("temporary GitHub failure")

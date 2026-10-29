@@ -43,7 +43,7 @@ class TestGC:
                     issue_number=1,
                     branch="claude/issue-1-task-1",
                     worktree_path=str(wt_path),
-                    pid=12345,
+                    pid=4_212_345,
                     started_at=1700000000.0,
                     declared_footprint=(),
                 )
@@ -137,7 +137,7 @@ class TestGC:
                     issue_number=1,
                     branch="claude/issue-1-task-1",
                     worktree_path=str(wt_path),
-                    pid=12345,
+                    pid=4_212_345,
                     started_at=1700000000.0,
                     declared_footprint=(),
                 )
@@ -221,7 +221,7 @@ class TestGC:
                     issue_number=1,
                     branch="claude/issue-1-task-1",
                     worktree_path=str(wt_path),
-                    pid=12345,
+                    pid=4_212_345,
                     started_at=1700000000.0,
                     declared_footprint=(),
                 )
@@ -302,7 +302,7 @@ class TestGC:
                     issue_number=1,
                     branch="claude/issue-1-task-1",
                     worktree_path=str(wt_path),
-                    pid=12345,
+                    pid=4_212_345,
                     started_at=old_time,
                     declared_footprint=(),
                 )
@@ -379,7 +379,7 @@ class TestGC:
                     issue_number=1,
                     branch="claude/issue-1-task-1",
                     worktree_path=str(wt_path),
-                    pid=12345,
+                    pid=4_212_345,
                     started_at=1700000000.0,
                     declared_footprint=(),
                 )

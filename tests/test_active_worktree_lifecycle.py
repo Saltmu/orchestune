@@ -178,7 +178,7 @@ def test_reservation_predicate_preserves_legacy_identity_semantics() -> None:
                         "branch": "b",
                         "worktree_path": "p",
                         "declared_footprint": [],
-                        "pid": 42,
+                        "pid": 4_200_042,
                         "completion_id": completion_id,
                         "completion_stage": stage,
                         "completion_handoff_ready": ready,

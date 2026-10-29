@@ -104,7 +104,7 @@ class TestApplyZombieOrTimeoutReclaim:
     ):
         active = _active(worktree_path=str(tmp_path))
         replacement = _active(
-            pid=999,
+            pid=4_200_999,
             worktree_path=str(tmp_path / "replacement"),
         )
         reclaim = self._reclaim(active, finding_codes=(LOCAL_PROCESS_DEAD,))
@@ -143,7 +143,7 @@ class TestApplyZombieOrTimeoutReclaim:
     def test_typed_reclaim_rechecks_process_before_side_effects(
         self, tmp_path, fake_forge
     ):
-        active = _active(worktree_path=str(tmp_path), pid=280, started_at=None)
+        active = _active(worktree_path=str(tmp_path), pid=4_200_280, started_at=None)
         reclaim = self._reclaim(active, finding_codes=(LOCAL_PROCESS_DEAD,))
         command = RepairCommand(
             code=COMMAND_RECLAIM,
@@ -425,7 +425,7 @@ class TestApplyZombieOrTimeoutReclaim:
         assert event.to_dict()["action"] == "gc_reclaimed"
 
     def test_timeout_apply_kills_alive_process(self, tmp_path, fake_forge):
-        active = _active(pid=111, worktree_path=str(tmp_path))
+        active = _active(pid=4_200_111, worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(
             active, reason="timeout exceeded", is_timeout=True, process_alive=True
@@ -449,7 +449,7 @@ class TestApplyZombieOrTimeoutReclaim:
         ):
             _apply_zombie_or_timeout_reclaim(run_state, reclaim, config)
 
-        mock_kill.assert_called_once_with(111, 9)
+        mock_kill.assert_called_once_with(4_200_111, 9)
 
     def test_timeout_apply_kills_process_before_backing_up_wip(
         self, tmp_path, fake_forge
@@ -458,7 +458,7 @@ class TestApplyZombieOrTimeoutReclaim:
         まだworktreeへ書き込み中である可能性があるため、WIPバックアップより
         先にプロセスを停止（os.kill）しなければならない。順序が逆だと、
         書き込み途中の不整合なスナップショットやgit操作のロック競合を招く。"""
-        active = _active(pid=111, worktree_path=str(tmp_path))
+        active = _active(pid=4_200_111, worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(
             active, reason="timeout exceeded", is_timeout=True, process_alive=True
@@ -496,7 +496,7 @@ class TestApplyZombieOrTimeoutReclaim:
     def test_timeout_apply_skips_kill_when_process_already_dead(
         self, tmp_path, fake_forge
     ):
-        active = _active(pid=111, worktree_path=str(tmp_path))
+        active = _active(pid=4_200_111, worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(
             active, reason="timeout exceeded", is_timeout=True, process_alive=False
@@ -550,7 +550,7 @@ class TestApplyZombieOrTimeoutReclaim:
         mock_kill.assert_not_called()
 
     def test_kill_exception_is_swallowed(self, tmp_path, fake_forge):
-        active = _active(pid=111, worktree_path=str(tmp_path))
+        active = _active(pid=4_200_111, worktree_path=str(tmp_path))
         run_state = RunState(active_worktrees={"280": active})
         reclaim = self._reclaim(
             active, reason="timeout exceeded", is_timeout=True, process_alive=True
@@ -722,7 +722,9 @@ class TestApplyZombieOrTimeoutReclaim:
         正しく行われること（decide時点のスナップショットを固定して信用しない）。
         """
         worktree_dir = tmp_path / "wt"
-        active = _active(worktree_path=str(worktree_dir), pid=111, started_at=1_000.0)
+        active = _active(
+            worktree_path=str(worktree_dir), pid=4_200_111, started_at=1_000.0
+        )
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,
@@ -777,7 +779,9 @@ class TestApplyZombieOrTimeoutReclaim:
         """
         worktree_dir = tmp_path / "wt"
         worktree_dir.mkdir()
-        active = _active(worktree_path=str(worktree_dir), pid=111, started_at=None)
+        active = _active(
+            worktree_path=str(worktree_dir), pid=4_200_111, started_at=None
+        )
         run_state = RunState(active_worktrees={"280": active})
         config = DispatcherConfig(
             parent_issue_number=100,

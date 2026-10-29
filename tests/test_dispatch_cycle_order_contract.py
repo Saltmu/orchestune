@@ -380,7 +380,7 @@ def test_successful_launch_partial_update_contract(
         issue_number=10,
         branch=plan.branch_name,
         worktree_path=str(tmp_path / "worktrees" / "task-10"),
-        pid=123,
+        pid=4_200_123,
         launched=True,
     )
     forge = fake_forge

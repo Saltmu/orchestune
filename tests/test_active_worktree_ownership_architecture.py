@@ -24,7 +24,7 @@ def mutate(active: ActiveWorktree):
     active.claim = ClaimInfo()
     active.completion = ActiveCompletionJournal()
     active.core = ActiveWorktreeCore(1, "b", "p", ())
-    active.launch.pid = 1234
+    active.launch.pid = 4_201_234
     active.claim.claim_id = "claim-test"
 """
     violations = active_worktree_boundary_violations(
@@ -48,7 +48,7 @@ from orchestune.ledger.active_records import ActiveWorktree, LaunchInfo
 def mutate(active: ActiveWorktree):
     setattr(active, "launch", LaunchInfo())
     setattr(active, "claim", None)
-    setattr(active.launch, "pid", 123)
+    setattr(active.launch, "pid", 4_200_123)
 """
     violations = active_worktree_boundary_violations(
         source, module="orchestune.dispatch.scoring"
@@ -238,9 +238,9 @@ from orchestune.ledger.active_records import ActiveWorktree
 
 def access_flat(active: ActiveWorktree):
     # Writes
-    active.pid = 9999
+    active.pid = 4_209_999
     active.claim_id = "old"
-    replace(active, pid=9999)
+    replace(active, pid=4_209_999)
     # Reads
     p = active.pid
     if active.claim_id:
@@ -264,7 +264,7 @@ from orchestune.ledger.active_records import ActiveWorktree
 
 def handle_pipe_union(active: ActiveWorktree | None):
     if active is not None:
-        active.launch.pid = 9999
+        active.launch.pid = 4_209_999
 
 def handle_optional(worktree: Optional[ActiveWorktree]):
     if worktree:
@@ -519,7 +519,7 @@ def test_owner_can_update_whole_record_but_not_mutate_frozen_fields() -> None:
 from orchestune.ledger.active_records import ActiveWorktree, LaunchInfo
 def update(active: ActiveWorktree):
     active.launch = LaunchInfo()
-    active.launch.pid = 123
+    active.launch.pid = 4_200_123
     active.claim = None
 """
     violations = active_worktree_boundary_violations(

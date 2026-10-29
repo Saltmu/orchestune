@@ -622,7 +622,7 @@ def _worktree_status(started_at: float):
         issue_number=7,
         subtask_id="s",
         branch="claude/issue-7-s",
-        pid=1,
+        pid=4_200_001,
         alive=True,
         started_at=started_at,
         elapsed_seconds=NOW - started_at,

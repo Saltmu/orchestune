@@ -115,10 +115,10 @@ class TestLocalProcessDispatchTarget:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 4242
+            mock_popen.return_value.pid = 4_204_242
             handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
 
-        assert handle.pid == 4242
+        assert handle.pid == 4_204_242
         assert handle.external_id is None
         assert handle.branch_name == "claude/issue-1-task-a"
         assert mock_popen.call_args.kwargs["cwd"] == str(tmp_path / "wt")
@@ -129,7 +129,7 @@ class TestLocalProcessDispatchTarget:
             default_dry_run_command_builder, log_dir=log_dir
         )
         with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 1
+            mock_popen.return_value.pid = 4_200_001
             target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
         assert (log_dir / "claude-issue-1-task-a.log").exists()
 
@@ -144,7 +144,7 @@ class TestLocalProcessDispatchTarget:
         log_path = log_dir / "claude-issue-1-task-a.log"
         log_path.write_bytes(b"previous run error\n")
         with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 7
+            mock_popen.return_value.pid = 4_200_007
             handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
 
         assert handle.target_name == "claude-cli"
@@ -157,7 +157,7 @@ class TestLocalProcessDispatchTarget:
             default_dry_run_command_builder, log_dir=tmp_path / "logs"
         )
         with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 7
+            mock_popen.return_value.pid = 4_200_007
             handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
 
         assert handle.log_offset == 0
@@ -170,7 +170,7 @@ class TestLocalProcessDispatchTarget:
             autospec=True,
             return_value=False,
         ):
-            assert target.is_complete(DispatchHandle(pid=123)) is True
+            assert target.is_complete(DispatchHandle(pid=4_200_123)) is True
 
     def test_is_complete_false_when_pid_alive(self):
         target = LocalProcessDispatchTarget()
@@ -179,7 +179,7 @@ class TestLocalProcessDispatchTarget:
             autospec=True,
             return_value=True,
         ):
-            assert target.is_complete(DispatchHandle(pid=123)) is False
+            assert target.is_complete(DispatchHandle(pid=4_200_123)) is False
 
     def test_launch_with_local_cmd_templates(self, tmp_path):
         target = LocalProcessDispatchTarget(
@@ -187,7 +187,7 @@ class TestLocalProcessDispatchTarget:
             local_cmd="agy --issue {issue_number} --subtask '{subtask_id}' --branch {branch_name} --path {worktree_path}",
         )
         with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 9999
+            mock_popen.return_value.pid = 4_209_999
             target.launch(
                 _task(issue_number=42, subtask_id="sub-x"),
                 "claude/issue-42-sub-x",
@@ -216,7 +216,7 @@ class TestLocalProcessDispatchTarget:
             reviewer_bot="codex",
         )
         with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 9999
+            mock_popen.return_value.pid = 4_209_999
             target.launch(_task(issue_number=42), "agent/issue-42", tmp_path / "wt")
 
         assert mock_popen.call_args.args[0] == [
@@ -233,7 +233,7 @@ class TestLocalProcessDispatchTarget:
             local_cmd="runner --base {base_branch} --issue {issue_number}",
         )
         with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 9999
+            mock_popen.return_value.pid = 4_209_999
             target.launch(
                 _task(issue_number=42),
                 "agent/issue-42",
@@ -255,7 +255,7 @@ class TestLocalProcessDispatchTarget:
             local_cmd="runner --base {base_branch} --issue {issue_number}",
         )
         with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 9999
+            mock_popen.return_value.pid = 4_209_999
             target.launch(_task(issue_number=42), "agent/issue-42", tmp_path / "wt")
 
         assert mock_popen.call_args.args[0] == [
@@ -276,7 +276,7 @@ class TestLocalProcessDispatchTarget:
             local_cmd=CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
         )
         with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 9999
+            mock_popen.return_value.pid = 4_209_999
             target.launch(_task(issue_number=42), "claude/issue-42", tmp_path / "wt")
 
         cmd = mock_popen.call_args.args[0]
@@ -305,7 +305,7 @@ class TestLocalProcessDispatchTarget:
             caplog.at_level(logging.WARNING),
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
-            mock_popen.return_value.pid = 1001
+            mock_popen.return_value.pid = 4_201_001
             target.launch(
                 _task(),
                 "claude/issue-1-task-a",
@@ -342,7 +342,7 @@ class TestLocalProcessDispatchTarget:
             caplog.at_level(logging.WARNING),
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
         ):
-            mock_popen.return_value.pid = 1002
+            mock_popen.return_value.pid = 4_201_002
             target.launch(
                 _task(),
                 "claude/issue-1-task-a",
@@ -372,7 +372,7 @@ class TestLocalProcessDispatchTarget:
             reason="test",
         )
         with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 1003
+            mock_popen.return_value.pid = 4_201_003
             target.launch(
                 _task(),
                 "claude/issue-1-task-a",
@@ -404,7 +404,7 @@ class TestLocalProcessDispatchTarget:
             reason="test",
         )
         with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 1004
+            mock_popen.return_value.pid = 4_201_004
             target.launch(
                 _task(issue_number=55),
                 "claude/issue-55-task-a",

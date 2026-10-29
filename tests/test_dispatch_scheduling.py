@@ -627,7 +627,11 @@ class TestIneligibleCandidatesAreStillReported:
         state = RunState(
             active_worktrees={
                 "2": make_test_active_worktree(
-                    2, branch="b", worktree_path="w", pid=1, started_at=NOW - 600
+                    2,
+                    branch="b",
+                    worktree_path="w",
+                    pid=4_200_001,
+                    started_at=NOW - 600,
                 ),
             }
         )
@@ -693,7 +697,11 @@ class TestTokenBudgetAcrossCycles:
             active_worktrees=(
                 {
                     "1": make_test_active_worktree(
-                        1, branch="b", worktree_path="w", pid=1, started_at=NOW - 120
+                        1,
+                        branch="b",
+                        worktree_path="w",
+                        pid=4_200_001,
+                        started_at=NOW - 120,
                     )
                 }
                 if active
@@ -731,7 +739,7 @@ class TestTokenBudgetAcrossCycles:
                     1,
                     branch="b",
                     worktree_path="w",
-                    pid=1,
+                    pid=4_200_001,
                     started_at=NOW - 120,
                     estimated_tokens=400,
                     token_estimate_recorded=True,
@@ -780,7 +788,11 @@ class TestTokenBudgetAcrossCycles:
             completed_worktrees=[_completed(9, NOW - 300)],
             active_worktrees={
                 "1": make_test_active_worktree(
-                    1, branch="b", worktree_path="w", pid=1, started_at=NOW - 120
+                    1,
+                    branch="b",
+                    worktree_path="w",
+                    pid=4_200_001,
+                    started_at=NOW - 120,
                 )
             },
         )
@@ -804,7 +816,7 @@ class TestTokenBudgetAcrossCycles:
                     1,
                     branch="b",
                     worktree_path="w",
-                    pid=1,
+                    pid=4_200_001,
                     started_at=NOW - 120,
                     estimated_tokens=None,
                     token_estimate_recorded=True,

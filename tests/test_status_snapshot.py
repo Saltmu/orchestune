@@ -456,7 +456,7 @@ def _status(**overrides):
         issue_number=133,
         subtask_id="monitor-cli",
         branch="claude/issue-133-monitor-cli",
-        pid=12345,
+        pid=4_212_345,
         alive=True,
         started_at=1_700_000_000.0,
         elapsed_seconds=100.0,

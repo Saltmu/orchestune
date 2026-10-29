@@ -34,7 +34,7 @@ def _records(
     )
     return (
         core,
-        LaunchInfo(pid=321, started_at=1.5, launch_phase="launching"),
+        LaunchInfo(pid=4_200_321, started_at=1.5, launch_phase="launching"),
         ClaimInfo(owner_kind="dispatch", claim_id="claim-17", claim_stage="completed"),
         ActiveCompletionJournal(
             completion_id="completion-17", completion_payload=payload
@@ -106,7 +106,7 @@ def test_direct_construction_checks_record_types_and_defaults_owner_records() ->
     assert active.claim == ClaimInfo()
     assert active.completion == ActiveCompletionJournal()
     with pytest.raises(TypeError, match="launch must be LaunchInfo"):
-        ActiveWorktree(core=core, launch={"pid": 1})  # type: ignore[arg-type]
+        ActiveWorktree(core=core, launch={"pid": 4_200_001})  # type: ignore[arg-type]
 
 
 def test_flat_constructor_and_attributes_are_removed() -> None:
@@ -125,7 +125,7 @@ def test_stale_writes_to_removed_flat_attributes_fail_loudly() -> None:
     active = ActiveWorktree(core=_records()[0])
 
     with pytest.raises(AttributeError):
-        active.pid = 1  # type: ignore[attr-defined]
+        active.pid = 4_200_001  # type: ignore[attr-defined]
     with pytest.raises(AttributeError):
         active.claim_id = "stale"  # type: ignore[attr-defined]
 

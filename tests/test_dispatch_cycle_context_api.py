@@ -356,11 +356,11 @@ class TestQueries:
         valid_pid = _ctx(
             tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
             run_state=RunState(
-                active_worktrees={"1": _active(1, pid=111, external_id=True)}
+                active_worktrees={"1": _active(1, pid=4_200_111, external_id=True)}
             ),
         )
         fact = valid_pid.launch_fact(1)
-        assert fact.pid == 111
+        assert fact.pid == 4_200_111
         assert fact.external_id is None
 
         valid_external_id = _ctx(
@@ -390,7 +390,9 @@ class TestQueries:
         ctx = _ctx(
             tasks_by_issue={1: _task(1, status_labels=(StatusLabel.IN_PROGRESS,))},
             run_state=RunState(
-                active_worktrees={"1": _active(1, pid=42, started_at=oversized_time)}
+                active_worktrees={
+                    "1": _active(1, pid=4_200_042, started_at=oversized_time)
+                }
             ),
         )
         fact = ctx.launch_fact(1)
