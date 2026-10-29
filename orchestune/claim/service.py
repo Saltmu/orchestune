@@ -10,6 +10,7 @@ from typing import Any
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.claim.adopt_pr import (
+    consume_adoption_receipt,
     inspect_adoption,
     revalidate_adoption,
     revalidate_if_adopted,
@@ -81,9 +82,7 @@ from orchestune.ledger.run_state import (
     load_run_state,
     save_run_state,
 )
-from orchestune.ledger.status_labels import (
-    transition_status_label,
-)
+from orchestune.ledger.status_labels import transition_status_label
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.task_metadata import TaskMetadata
 from orchestune.worktree_ops.preparation import (
@@ -539,9 +538,11 @@ def _persist_finalized_reservation(
     )
     _replace_held_reservation(run_state, previous, reservation)
     record_takeover_stage(run_state, reservation)
+    consumed = consume_adoption_receipt(run_state, reservation)
     try:
         save_run_state(run_state, workspace.run_state_path)
     except Exception as e:
+        run_state.recovery_receipts.update(consumed)
         failure = ClaimFailure(
             reason=ClaimFailureReason.STATE_SAVE_FAILED,
             message=f"Failed to persist run_state on completion: {e}",

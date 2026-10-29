@@ -279,6 +279,26 @@ def revalidate_adoption(
     return None
 
 
+def consume_adoption_receipt(
+    state: RunState, reservation: ActiveWorktree
+) -> dict[str, dict[str, Any]]:
+    """Consume only the evidence revalidated for this finalized adoption."""
+    if reservation.claim.adopted_pr_number is None:
+        return {}
+    matching = {
+        key: record
+        for key, record in state.recovery_receipts.items()
+        if record.get("operation") == "orphaned-pr"
+        and record.get("repository_id") == reservation.claim.repository_id
+        and record.get("issue_number") == reservation.core.issue_number
+        and record.get("pr_number") == reservation.claim.adopted_pr_number
+        and record.get("head_sha") == reservation.claim.adopted_pr_head_sha
+    }
+    for key in matching:
+        del state.recovery_receipts[key]
+    return matching
+
+
 def revalidate_if_adopted(
     active: ActiveWorktree,
     workspace: ClaimWorkspace,

@@ -745,6 +745,8 @@ orchestune complete --issue <issue> --pr <pr> --result done --reviewer <bot> --r
 
 The claim checks the recorded old generation and its stopped state, a trusted matching escalation notice, a unique open same-repository PR, canonical head branch, parent base, and matching remote HEAD. Missing or ambiguous evidence, another claim, an unfinished completion, a fork, or a changed HEAD causes rejection. The adopted PR number and HEAD are bound to the claim; a later HEAD change prevents completion. The normal local CI and review evidence gates still apply. Manual merging bypasses the Layer-1 gate.
 
+Comments mentioning `status:blocked-human-review` after the orphan notice can make the latest escalation reason ambiguous and cause adoption to be rejected.
+
 ### Failure Handling
 
 If a claim cannot proceed due to unmet dependencies, conflicts, or environmental errors, the command exits with a non-zero exit code and outputs the failure reason along with recommended next actions to stderr. Follow the diagnostic instructions to resolve conflicts or resume an interrupted claim using `--resume`. If already working inside the claimed task worktree, running claim again is not needed.

@@ -354,8 +354,10 @@ def test_adoption_reserves_exact_pr_head_and_finalizes(claim_env, move_head):
     if move_head:
         assert not outcome.success
         assert not forge.labels_added
+        assert key in load_run_state(state_path).recovery_receipts
     else:
         assert outcome.success, outcome.failure
+        assert key not in load_run_state(state_path).recovery_receipts
 
 
 def test_interrupted_adoption_revalidates_before_resume(claim_env):
