@@ -41,6 +41,14 @@ def _dispatch_command(cmd: str) -> None:
     elif cmd == "claim":
         from orchestune.claim.cli import main as claim_main
 
+        if any(
+            arg in {"--adopt-pr", "--resume"}
+            or arg.startswith(("--adopt-pr=", "--resume="))
+            for arg in sys.argv
+        ):
+            from orchestune.dispatch.runtime_reader import read_runtime
+
+            sys.exit(claim_main(observe_external=read_runtime))
         sys.exit(claim_main())
     elif cmd == "complete":
         from orchestune.complete.cli import main as complete_main

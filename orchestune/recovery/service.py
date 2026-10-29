@@ -44,7 +44,12 @@ def _recover(
             return RecoveryResult(
                 True, request.issue_number, "already_released", "saved release receipt"
             )
-        return RecoveryResult(False, request.issue_number, "held", "no active claim")
+        return RecoveryResult(
+            False,
+            request.issue_number,
+            "held",
+            f"no active claim; for an eligible orphan PR, preview orchestune claim {request.issue_number} --adopt-pr <PR> --no-apply",
+        )
     if len(matches) != 1:
         return RecoveryResult(
             False, request.issue_number, "held", "ambiguous active claims"

@@ -34,6 +34,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="widen the held claim to the Issue footprint and files already changed",
     )
+    mode.add_argument("--adopt-pr", type=int, metavar="PR", help="adopt an orphaned PR")
     parser.add_argument("--state", type=Path, help="path to the local run_state.json")
     parser.add_argument(
         "--timeout", type=float, help="run-state lock timeout in seconds"
@@ -127,7 +128,9 @@ def _print_failure(failure: ClaimFailure) -> None:
     _write_lines(_stderr(), lines)
 
 
-def _resume_or_preview(args: argparse.Namespace, token: str) -> ClaimOutcome:
+def _resume_or_preview(
+    args: argparse.Namespace, token: str, observe_external=None
+) -> ClaimOutcome:
     if args.no_apply:
         request = ClaimRequest(
             issue_number=args.issue_number,
@@ -137,21 +140,31 @@ def _resume_or_preview(args: argparse.Namespace, token: str) -> ClaimOutcome:
             timeout_seconds=args.timeout,
             state_path=args.state,
         )
+        if observe_external is not None:
+            return claim_task(request, apply=False, observe_external=observe_external)
         return claim_task(request, apply=False)
-    return resume_claim(
-        args.resume, token, state_path=args.state, timeout_seconds=args.timeout
-    )
+    kwargs = {"state_path": args.state, "timeout_seconds": args.timeout}
+    if observe_external is not None:
+        kwargs["observe_external"] = observe_external
+    return resume_claim(args.resume, token, **kwargs)
 
 
-def _run_claim(args: argparse.Namespace, token_dir: Path) -> ClaimOutcome:
+def _run_claim(
+    args: argparse.Namespace, token_dir: Path, observe_external=None
+) -> ClaimOutcome:
     if args.resume:
-        return _resume_or_preview(args, "")
+        return _resume_or_preview(args, "", observe_external)
     request = ClaimRequest(
         issue_number=args.issue_number,
+        adopt_pr=args.adopt_pr,
         dry_run=args.no_apply,
         timeout_seconds=args.timeout,
         state_path=args.state,
     )
+    if observe_external is not None:
+        return claim_task(
+            request, apply=not args.no_apply, observe_external=observe_external
+        )
     return claim_task(request, apply=not args.no_apply)
 
 
@@ -217,7 +230,7 @@ def _report_forge_unavailable() -> int:
     return int(failure.exit_code)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, observe_external=None) -> int:
     """Parse a claim request, invoke the service, and render safe diagnostics."""
     args = _build_parser().parse_args(argv)
     if args.timeout is not None and args.timeout < 0:
@@ -233,7 +246,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.amend_footprint:
             amended = _run_amend(args, token_dir)
         else:
-            outcome = _run_claim(args, token_dir)
+            outcome = _run_claim(args, token_dir, observe_external)
     except ForgeGraphQLUnavailableError:
         return _report_forge_unavailable()
     except Exception as error:

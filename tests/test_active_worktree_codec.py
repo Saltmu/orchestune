@@ -6,6 +6,8 @@ import json
 from dataclasses import fields, replace
 from pathlib import Path
 
+import pytest
+
 from orchestune.ledger.active_codec import (
     _ACTIVE_FIELD_NAMES,
     decode_active_worktree,
@@ -35,7 +37,7 @@ def test_codec_field_order_covers_every_subrecord_field_exactly_once() -> None:
         for item in fields(record_type)
     ]
 
-    assert len(_ACTIVE_FIELD_NAMES) == len(set(_ACTIVE_FIELD_NAMES)) == 39
+    assert len(_ACTIVE_FIELD_NAMES) == len(set(_ACTIVE_FIELD_NAMES)) == 41
     assert sorted(_ACTIVE_FIELD_NAMES) == sorted(record_names)
     assert _ACTIVE_FIELD_NAMES[:6] == (
         "issue_number",
@@ -72,6 +74,34 @@ def test_flat_codec_round_trip_keeps_dict_and_list_json_values() -> None:
     assert restored == original
     assert isinstance(restored.core.declared_footprint, tuple)
     assert isinstance(encode_active_worktree(restored)["completion_payload"], dict)
+
+
+def test_adopted_pr_identity_survives_ledger_loading(tmp_path: Path) -> None:
+    source = json.loads((FIXTURES / "states-input.json").read_text(encoding="utf-8"))
+    source["active_worktrees"]["103"]["adopted_pr_number"] = 42
+    source["active_worktrees"]["103"]["adopted_pr_head_sha"] = "a" * 40
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(source), encoding="utf-8")
+    active = load_run_state(path).active_worktrees["103"]
+    assert active.claim.adopted_pr_number == 42
+    assert active.claim.adopted_pr_head_sha == "a" * 40
+    assert decode_active_worktree(encode_active_worktree(active)) == active
+
+
+@pytest.mark.parametrize(
+    "number,sha", [(42, None), (None, "a" * 40), (True, "a" * 40), (42, "bad")]
+)
+def test_invalid_adoption_identity_is_not_silently_discarded(
+    tmp_path: Path, number, sha
+) -> None:
+    source = json.loads((FIXTURES / "states-input.json").read_text(encoding="utf-8"))
+    source["active_worktrees"]["103"].update(
+        adopted_pr_number=number, adopted_pr_head_sha=sha
+    )
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(source), encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_run_state(path)
 
 
 def test_encoded_nested_json_values_are_detached_from_the_subrecords() -> None:

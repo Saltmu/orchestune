@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import dataclasses
-import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 from pathlib import Path
 from typing import Any
 
 from orchestune.branch_naming import build_task_branch_name
+from orchestune.claim.adopt_pr import (
+    inspect_adoption,
+    revalidate_adoption,
+    revalidate_if_adopted,
+    verify_adopted_head,
+)
 from orchestune.claim.contracts import (
     ClaimFailure,
     ClaimFailureReason,
@@ -36,7 +41,19 @@ from orchestune.claim.preflight import (
     ClaimBaseResolutionView,
     PreflightDecision,
     evaluate_claim_preflight,
-    resolve_claim_base,
+)
+from orchestune.claim.reservation import (
+    _build_dry_run_outcome,
+    _build_success_outcome,
+    _initialize_reservation,
+    _make_active_saved_failure,
+    _resume_preview,
+    _validate_resume_active,
+)
+from orchestune.claim.resume_validation import (
+    _fetch_and_validate_resume_issue,
+    _preflight_labels,
+    _validate_issue_for_resume,
 )
 from orchestune.claim.workspace import (
     ClaimWorkspace,
@@ -50,10 +67,13 @@ from orchestune.claim.worktree_reclaim import (
 )
 from orchestune.forge import Forge, ForgeGraphQLUnavailableError, GitHubForge
 from orchestune.infra.git_cli import run_git
-from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
+from orchestune.infra.process_utils import (
+    FileLockContentionError,
+    is_process_alive,
+    run_state_lock,
+)
 from orchestune.issue_parsing import parse_task_from_issue
 from orchestune.labels import STATUS_LABEL_PREFIX, StatusLabel
-from orchestune.ledger.active_records import ActiveCompletionJournal
 from orchestune.ledger.completion_reservations import completion_mutation_blocked
 from orchestune.ledger.run_state import (
     ActiveWorktree,
@@ -62,11 +82,9 @@ from orchestune.ledger.run_state import (
     save_run_state,
 )
 from orchestune.ledger.status_labels import (
-    TERMINAL_ESCALATION_LABELS,
     transition_status_label,
 )
-from orchestune.models import IssueRecord
-from orchestune.targets.completion_policy import snapshot_publication_policy
+from orchestune.models import IssueRecord, PrRecord
 from orchestune.task_metadata import TaskMetadata
 from orchestune.worktree_ops.preparation import (
     WorktreePreparation,
@@ -164,6 +182,8 @@ def _validate_preflight_and_conflict(
     forge: Forge,
     view: Any,
     default_base: str,
+    *,
+    adoption: bool = False,
 ) -> tuple[
     PreflightDecision | None,
     IssueRecord | None,
@@ -182,7 +202,7 @@ def _validate_preflight_and_conflict(
     preflight_view = view if isinstance(view, ClaimBaseResolutionView) else None
     preflight = evaluate_claim_preflight(
         issue,
-        labels=issue.labels,
+        labels=_preflight_labels(issue, adoption),
         view=preflight_view,
         default_base=default_base,
     )
@@ -399,49 +419,6 @@ def _apply_status_label(
         )
 
 
-def _make_active_saved_failure(
-    reservation: ActiveWorktree,
-    failure: ClaimFailure,
-    raw_token: str,
-) -> ClaimOutcome:
-    """Construct a standardized active-saved failure outcome with owner token."""
-    return ClaimOutcome(
-        success=False,
-        issue_number=reservation.core.issue_number,
-        claim_id=reservation.claim.claim_id,
-        branch=reservation.core.branch,
-        worktree_path=Path(reservation.core.worktree_path)
-        if reservation.core.worktree_path
-        else None,
-        stage=ClaimStage.ACTIVE_SAVED,
-        failure=failure,
-        owner_token=raw_token,
-    )
-
-
-def _build_success_outcome(
-    reservation: ActiveWorktree,
-    raw_token: str,
-    owner_kind: OwnerKind,
-    reservation_kind: ReservationKind,
-) -> ClaimOutcome:
-    """Construct a completed ClaimOutcome from the finalized reservation."""
-    return ClaimOutcome(
-        success=True,
-        issue_number=reservation.core.issue_number,
-        claim_id=reservation.claim.claim_id,
-        branch=reservation.core.branch,
-        worktree_path=Path(reservation.core.worktree_path)
-        if reservation.core.worktree_path
-        else None,
-        base_ref=reservation.claim.base_ref,
-        owner_kind=owner_kind,
-        reservation_kind=reservation_kind,
-        stage=ClaimStage.COMPLETED,
-        owner_token=raw_token,
-    )
-
-
 def _validate_and_publish_issue_finalization(
     forge: Forge,
     reservation: ActiveWorktree,
@@ -461,12 +438,28 @@ def _validate_and_publish_issue_finalization(
         return None, _make_active_saved_failure(reservation, failure, raw_token)
 
     validation_error = _validate_issue_for_resume(
-        fresh_issue, view=view, default_base=default_base
+        fresh_issue,
+        view=view,
+        default_base=default_base,
+        adopted=reservation.claim.adopted_pr_number is not None,
     )
     if validation_error is not None:
         return None, _make_active_saved_failure(
             reservation, validation_error, raw_token
         )
+
+    if reservation.claim.adopted_pr_number is not None:
+        try:
+            verify_adopted_head(reservation, forge, run_git)
+        except Exception as error:
+            return None, _make_active_saved_failure(
+                reservation,
+                ClaimFailure(
+                    reason=ClaimFailureReason.CLAIM_CONFLICT,
+                    message=f"Adopted PR verification failed: {error}",
+                ),
+                raw_token,
+            )
 
     publish_error = publish_claim_ownership_to_issue(
         forge,
@@ -491,8 +484,22 @@ def _transition_labels_and_finalize(
     reservation_kind: ReservationKind,
     view: Any = None,
     default_base: str = "origin/main",
+    observe_external: Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]]
+    | None = None,
 ) -> ClaimOutcome:
     """Transition status:in-progress label and mark claim stage as COMPLETED."""
+    if reservation.claim.adopted_pr_number is not None:
+        failure = revalidate_adoption(
+            reservation,
+            workspace,
+            run_state,
+            forge,
+            observe_external,
+            is_process_alive,
+            run_git,
+        )
+        if failure is not None:
+            return _make_active_saved_failure(reservation, failure, raw_token)
     fresh_issue, prep_outcome = _validate_and_publish_issue_finalization(
         forge,
         reservation,
@@ -512,6 +519,19 @@ def _transition_labels_and_finalize(
     if label_failure is not None:
         return _make_active_saved_failure(reservation, label_failure, raw_token)
 
+    return _persist_finalized_reservation(
+        workspace, reservation, run_state, raw_token, owner_kind, reservation_kind
+    )
+
+
+def _persist_finalized_reservation(
+    workspace: ClaimWorkspace,
+    reservation: ActiveWorktree,
+    run_state: RunState,
+    raw_token: str,
+    owner_kind: OwnerKind,
+    reservation_kind: ReservationKind,
+) -> ClaimOutcome:
     previous = reservation
     reservation = with_claim(
         reservation,
@@ -530,75 +550,6 @@ def _transition_labels_and_finalize(
     return _build_success_outcome(reservation, raw_token, owner_kind, reservation_kind)
 
 
-def _initialize_reservation(
-    request: ClaimRequest,
-    issue: IssueRecord,
-    subtask_id: str | None,
-    base_ref: str,
-    repository_identity: str,
-) -> ActiveWorktree:
-    """Build and populate the initial reservation record."""
-    task_meta = parse_task_from_issue(issue)
-    reservation = build_reservation(request, task_meta)
-    reservation = reservation.with_core(
-        dataclasses.replace(
-            reservation.core,
-            branch=build_task_branch_name(issue.number, subtask_id),
-            base_branch=base_ref,
-        )
-    )
-    reservation = with_claim(
-        reservation,
-        dataclasses.replace(
-            reservation.claim,
-            base_ref=base_ref,
-            claimed_at=time.time(),
-            repository_id=repository_identity,
-        ),
-    )
-    return ActiveWorktree.from_records(
-        core=reservation.core,
-        launch=reservation.launch,
-        claim=reservation.claim,
-        completion=ActiveCompletionJournal(
-            completion_policy_config=snapshot_publication_policy(Path.cwd())
-        ),
-    )
-
-
-def _validate_resume_active(
-    claim_id: str,
-    owner_token: str,
-    run_state: RunState,
-    fallback_issue_number: int = 0,
-) -> tuple[ActiveWorktree | None, ClaimOutcome | None]:
-    """Find active reservation matching claim_id and authenticate owner token."""
-    matching = [
-        a for a in run_state.active_worktrees.values() if a.claim.claim_id == claim_id
-    ]
-    if not matching:
-        return None, _claim_failure(
-            fallback_issue_number,
-            ClaimFailure(
-                reason=ClaimFailureReason.INVALID_RESUME,
-                message=f"No active claim found with ID {claim_id}",
-            ),
-        )
-
-    active = matching[0]
-    if len(matching) != 1 or (
-        fallback_issue_number and active.core.issue_number != fallback_issue_number
-    ):
-        return None, _claim_failure(
-            active.core.issue_number,
-            ClaimFailure(
-                reason=ClaimFailureReason.INVALID_RESUME,
-                message="Claim ID does not uniquely match the requested Issue.",
-            ),
-        )
-    return active, None
-
-
 def _handle_request_resume(
     request: ClaimRequest,
     raw_token: str,
@@ -608,6 +559,8 @@ def _handle_request_resume(
     apply: bool = True,
     view: Any = None,
     default_base: str = "origin/main",
+    observe_external: Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]]
+    | None = None,
 ) -> ClaimOutcome | None:
     """Handle explicit resume via resume_claim_id in ClaimRequest if provided."""
     if not request.resume_claim_id:
@@ -625,17 +578,18 @@ def _handle_request_resume(
     if identity_error is not None:
         return identity_error
     if not apply:
-        return ClaimOutcome(
-            success=True,
-            issue_number=active.core.issue_number,
-            claim_id=active.claim.claim_id,
-            branch=active.core.branch,
-            base_ref=active.claim.base_ref or default_base,
-            owner_kind=request.owner_kind,
-            reservation_kind=ReservationKind(active.claim.reservation_kind),
-            stage=ClaimStage(active.claim.claim_stage),
-            owner_token=raw_token,
+        failure = revalidate_if_adopted(
+            active,
+            workspace,
+            run_state,
+            forge,
+            observe_external,
+            is_process_alive,
+            run_git,
         )
+        if failure is not None:
+            return _claim_failure(active.core.issue_number, failure)
+        return _resume_preview(active, request, default_base, raw_token)
     return _resume_from_active(
         active,
         workspace,
@@ -644,28 +598,7 @@ def _handle_request_resume(
         raw_token,
         view=view,
         default_base=default_base,
-    )
-
-
-def _build_dry_run_outcome(
-    issue: IssueRecord,
-    preflight: PreflightDecision,
-    canonical_branch: str,
-    base_ref: str,
-    request: ClaimRequest,
-    raw_token: str,
-) -> ClaimOutcome:
-    """Construct a non-mutating preview outcome for dry-run evaluations."""
-    return ClaimOutcome(
-        success=True,
-        issue_number=issue.number,
-        claim_id=f"dryrun-{issue.number}",
-        branch=canonical_branch,
-        base_ref=base_ref,
-        owner_kind=request.owner_kind,
-        reservation_kind=preflight.reservation_kind,
-        stage=ClaimStage.VALIDATING,
-        owner_token=raw_token,
+        observe_external=observe_external,
     )
 
 
@@ -677,10 +610,16 @@ def _persist_initial_reservation(
     base_ref: str,
     run_state: RunState,
     raw_token: str,
+    adopted_head: str | None = None,
 ) -> tuple[ActiveWorktree | None, ClaimOutcome | None]:
     """Initialize and persist reservation in run_state, returning error outcome on failure."""
     reservation = _initialize_reservation(
-        request, issue, subtask_id, base_ref, workspace.repository_identity
+        request,
+        issue,
+        subtask_id,
+        base_ref,
+        workspace.repository_identity,
+        adopted_head,
     )
     run_state.active_worktrees[str(issue.number)] = reservation
     try:
@@ -711,13 +650,14 @@ def _apply_claim_side_effects(
     raw_token: str,
     view: Any = None,
     default_base: str = "origin/main",
+    adopted_head: str | None = None,
+    observe_external: Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]]
+    | None = None,
 ) -> ClaimOutcome:
     """Apply Git fetch, reservation persistence, worktree creation, and labeling."""
     fetch_failure = _perform_git_fetch(workspace.repository_root, issue.number)
     if fetch_failure is not None:
-        return ClaimOutcome(
-            success=False, issue_number=issue.number, failure=fetch_failure
-        )
+        return _claim_failure(issue.number, fetch_failure)
 
     reservation, save_error = _persist_initial_reservation(
         workspace,
@@ -727,6 +667,7 @@ def _apply_claim_side_effects(
         base_ref,
         run_state,
         raw_token,
+        adopted_head,
     )
     if save_error is not None or reservation is None:
         assert save_error is not None
@@ -748,6 +689,7 @@ def _apply_claim_side_effects(
         preflight.reservation_kind,
         view=view,
         default_base=default_base,
+        observe_external=observe_external,
     )
 
 
@@ -761,6 +703,98 @@ def _unfinished_completion_failure(issue_number: int) -> ClaimOutcome:
     )
 
 
+def _preview_adoption(
+    request: ClaimRequest,
+    token: str,
+    workspace: ClaimWorkspace,
+    state: RunState,
+    forge: Forge,
+    view: Any,
+    default_base: str,
+    apply: bool,
+    observe_external: Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]]
+    | None,
+) -> ClaimOutcome:
+    """Read-only validation of identity, last escalation, and stopped execution."""
+    try:
+        plan, error = _prepare_adoption(
+            request, workspace, state, forge, view, default_base, observe_external
+        )
+        if error is not None:
+            return error
+        assert plan is not None
+        preflight, issue, warnings, branch, base, pr = plan
+    except Exception as error:
+        return _claim_failure(
+            request.issue_number,
+            ClaimFailure(
+                reason=ClaimFailureReason.CLAIM_CONFLICT,
+                message=f"Orphan PR adoption rejected: {error}",
+            ),
+        )
+    if apply:
+        result = _apply_claim_side_effects(
+            workspace,
+            request,
+            issue,
+            preflight,
+            branch,
+            base,
+            state,
+            forge,
+            token,
+            view=view,
+            default_base=default_base,
+            adopted_head=pr.head_sha,
+            observe_external=observe_external,
+        )
+    else:
+        result = _build_dry_run_outcome(issue, preflight, branch, base, request, token)
+    return _with_warnings(result, warnings)
+
+
+def _prepare_adoption(
+    request: ClaimRequest,
+    workspace: ClaimWorkspace,
+    state: RunState,
+    forge: Forge,
+    view: Any,
+    default_base: str,
+    observe_external: Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]]
+    | None,
+) -> tuple[
+    tuple[
+        PreflightDecision,
+        IssueRecord,
+        tuple[ClaimOverlapWarning, ...],
+        str,
+        str,
+        PrRecord,
+    ]
+    | None,
+    ClaimOutcome | None,
+]:
+    preflight, issue, error, warnings = _validate_preflight_and_conflict(
+        request, state, forge, view, default_base, adoption=True
+    )
+    if error is not None or preflight is None or issue is None:
+        assert error is not None
+        return None, error
+    branch, base, pr = inspect_adoption(
+        issue,
+        preflight,
+        request.adopt_pr,
+        default_base,
+        workspace,
+        state,
+        forge,
+        observe_external,
+        is_process_alive,
+        run_git,
+    )
+    return (preflight, issue, warnings, branch, base, pr), None
+
+
 def _execute_claim_in_lock(
     request: ClaimRequest,
     raw_token: str,
@@ -769,11 +803,25 @@ def _execute_claim_in_lock(
     apply: bool,
     view: Any,
     default_base: str,
+    observe_external: Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]]
+    | None = None,
 ) -> ClaimOutcome:
     """State-locked claim execution sequencing §5 lifecycle steps."""
     run_state = load_run_state(workspace.run_state_path)
     if completion_mutation_blocked(run_state, request.issue_number):
         return _unfinished_completion_failure(request.issue_number)
+    if request.adopt_pr is not None:
+        return _preview_adoption(
+            request,
+            raw_token,
+            workspace,
+            run_state,
+            forge,
+            view,
+            default_base,
+            apply,
+            observe_external,
+        )
     resume_outcome = _handle_request_resume(
         request,
         raw_token,
@@ -783,6 +831,7 @@ def _execute_claim_in_lock(
         apply=apply,
         view=view,
         default_base=default_base,
+        observe_external=observe_external,
     )
     if resume_outcome is not None:
         return resume_outcome
@@ -841,6 +890,8 @@ def claim_task(
     cwd: str | Path | None = None,
     view: Any = None,
     default_base: str = "origin/main",
+    observe_external: Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]]
+    | None = None,
 ) -> ClaimOutcome:
     """Execute the sequential lifecycle to claim an issue."""
     effective_apply = apply and not request.dry_run
@@ -874,6 +925,7 @@ def claim_task(
             effective_apply,
             view,
             default_base,
+            observe_external,
         )
     finally:
         cm.__exit__(None, None, None)
@@ -918,100 +970,6 @@ def _check_resume_identity(
     return None
 
 
-def _validate_blocked_dependency(
-    issue_number: int,
-    view: Any,
-    default_base: str,
-) -> ClaimFailure | None:
-    """Verify that a status:blocked issue remains stack-eligible."""
-    preflight_view = view if isinstance(view, ClaimBaseResolutionView) else None
-    if preflight_view is not None:
-        base_decision = resolve_claim_base(
-            issue_number, preflight_view, default_base=default_base
-        )
-        if not base_decision.allowed:
-            return base_decision.failure
-        if base_decision.kind != "stack":
-            return ClaimFailure(
-                reason=ClaimFailureReason.UNRESOLVED_DEPENDENCIES,
-                message=f"Issue #{issue_number} is status:blocked but not stack-eligible.",
-            )
-        return None
-    return ClaimFailure(
-        reason=ClaimFailureReason.UNRESOLVED_DEPENDENCIES,
-        message=f"Issue #{issue_number} is status:blocked but no resolution view is provided to verify stack eligibility.",
-    )
-
-
-def _validate_issue_for_resume(
-    issue: IssueRecord,
-    view: Any = None,
-    default_base: str = "origin/main",
-) -> ClaimFailure | None:
-    """Revalidate issue state (open, non-terminal, no external lock, dependencies) on resume/finalize."""
-    if issue.state.upper() != "OPEN":
-        return ClaimFailure(
-            reason=ClaimFailureReason.ISSUE_CLOSED,
-            message=f"Issue #{issue.number} is closed.",
-        )
-    label_set = set(issue.labels)
-    terminal = [lbl for lbl in label_set if lbl in TERMINAL_ESCALATION_LABELS]
-    if terminal:
-        return ClaimFailure(
-            reason=ClaimFailureReason.TERMINAL_ESCALATION,
-            message=f"Issue #{issue.number} has terminal escalation: {', '.join(terminal)}.",
-        )
-    if StatusLabel.DONE in label_set or StatusLabel.NOT_NEEDED in label_set:
-        return ClaimFailure(
-            reason=ClaimFailureReason.CLAIM_CONFLICT,
-            message=f"Issue #{issue.number} is already marked done/not-needed.",
-        )
-    if StatusLabel.EXTERNAL_LOCK in label_set:
-        return ClaimFailure(
-            reason=ClaimFailureReason.EXTERNAL_LOCK_CONFLICT,
-            message=f"Issue #{issue.number} is locked against external branches/PRs.",
-        )
-    if StatusLabel.BLOCKED in label_set:
-        return _validate_blocked_dependency(issue.number, view, default_base)
-    return None
-
-
-def _fetch_and_validate_resume_issue(
-    forge: Forge,
-    active: ActiveWorktree,
-    owner_token: str,
-    view: Any = None,
-    default_base: str = "origin/main",
-) -> tuple[IssueRecord | None, ClaimOutcome | None]:
-    """Fetch issue and validate it is eligible for resume."""
-    issue = forge.get_issue(active.core.issue_number)
-    if issue is None:
-        return None, ClaimOutcome(
-            success=False,
-            issue_number=active.core.issue_number,
-            failure=ClaimFailure(
-                reason=ClaimFailureReason.ISSUE_NOT_FOUND,
-                message=f"Issue #{active.core.issue_number} was not found on resume.",
-            ),
-            owner_token=owner_token,
-        )
-
-    resume_issue_error = _validate_issue_for_resume(
-        issue, view=view, default_base=default_base
-    )
-    if resume_issue_error is not None:
-        return None, ClaimOutcome(
-            success=False,
-            issue_number=active.core.issue_number,
-            claim_id=active.claim.claim_id,
-            branch=active.core.branch,
-            stage=ClaimStage(active.claim.claim_stage),
-            failure=resume_issue_error,
-            owner_token=owner_token,
-        )
-    return issue, None
-
-
 def _resume_from_active(
     active: ActiveWorktree,
     workspace: ClaimWorkspace,
@@ -1020,11 +978,19 @@ def _resume_from_active(
     owner_token: str,
     view: Any = None,
     default_base: str = "origin/main",
+    observe_external: Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]]
+    | None = None,
 ) -> ClaimOutcome:
     """Resume an active claim from its current progression stage."""
     identity_error = _check_resume_identity(workspace, active, owner_token)
     if identity_error is not None:
         return identity_error
+
+    failure = revalidate_if_adopted(
+        active, workspace, run_state, forge, observe_external, is_process_alive, run_git
+    )
+    if failure is not None:
+        return _claim_failure(active.core.issue_number, failure)
 
     owner_kind = OwnerKind(active.claim.owner_kind)
     reservation_kind = ReservationKind(active.claim.reservation_kind)
@@ -1032,24 +998,11 @@ def _resume_from_active(
     if active.claim.claim_stage == ClaimStage.COMPLETED.value:
         return _build_success_outcome(active, owner_token, owner_kind, reservation_kind)
 
-    issue, issue_error = _fetch_and_validate_resume_issue(
-        forge, active, owner_token, view=view, default_base=default_base
+    active, prep_error = _prepare_resume(
+        active, workspace, run_state, forge, owner_token, view, default_base
     )
-    if issue_error is not None or issue is None:
-        assert issue_error is not None
-        return issue_error
-
-    if active.claim.claim_stage == ClaimStage.RESERVED.value:
-        active, prep_error = _prepare_and_persist_worktree(
-            workspace,
-            active,
-            active.core.branch,
-            active.claim.base_ref or default_base,
-            run_state,
-            owner_token,
-        )
-        if prep_error is not None:
-            return prep_error
+    if prep_error is not None:
+        return prep_error
 
     return _transition_labels_and_finalize(
         workspace,
@@ -1061,7 +1014,36 @@ def _resume_from_active(
         reservation_kind,
         view=view,
         default_base=default_base,
+        observe_external=observe_external,
     )
+
+
+def _prepare_resume(
+    active: ActiveWorktree,
+    workspace: ClaimWorkspace,
+    state: RunState,
+    forge: Forge,
+    token: str,
+    view: Any,
+    default_base: str,
+) -> tuple[ActiveWorktree, ClaimOutcome | None]:
+    """Recheck the Issue and prepare only a reserved worktree."""
+    issue, error = _fetch_and_validate_resume_issue(
+        forge, active, token, view=view, default_base=default_base
+    )
+    if error is not None or issue is None:
+        assert error is not None
+        return active, error
+    if active.claim.claim_stage == ClaimStage.RESERVED.value:
+        return _prepare_and_persist_worktree(
+            workspace,
+            active,
+            active.core.branch,
+            active.claim.base_ref or default_base,
+            state,
+            token,
+        )
+    return active, None
 
 
 def _normalize_owner_token(owner_token: str | OwnerToken) -> str | None:
@@ -1077,6 +1059,8 @@ def _execute_resume_in_lock(
     active_forge: Forge,
     view: Any,
     default_base: str,
+    observe_external: Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]]
+    | None = None,
 ) -> ClaimOutcome:
     """Load run state, authenticate, and resume within active file lock."""
     run_state = load_run_state(workspace.run_state_path)
@@ -1100,6 +1084,7 @@ def _execute_resume_in_lock(
         raw_token,
         view=view,
         default_base=default_base,
+        observe_external=observe_external,
     )
 
 
@@ -1113,6 +1098,8 @@ def resume_claim(
     view: Any = None,
     default_base: str = "origin/main",
     timeout_seconds: float | None = None,
+    observe_external: Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]]
+    | None = None,
 ) -> ClaimOutcome:
     """Resume the explicitly selected local claim generation."""
     raw_token = _normalize_owner_token(owner_token) or ""
@@ -1141,6 +1128,7 @@ def resume_claim(
             active_forge,
             view,
             default_base,
+            observe_external,
         )
     finally:
         cm.__exit__(None, None, None)

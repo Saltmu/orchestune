@@ -183,10 +183,30 @@ def test_release_receipt_keeps_the_flat_active_snapshot_shape(local_claim):
     snapshot = _legacy_active_snapshot(active)
 
     # #1270: launch attribution is omitted while null, like before its introduction.
-    attribution = {"launch_target", "launch_log_path", "launch_log_offset"}
+    attribution = {
+        "launch_target",
+        "launch_log_path",
+        "launch_log_offset",
+        "adopted_pr_number",
+        "adopted_pr_head_sha",
+    }
     assert tuple(snapshot) == tuple(
         name for name in _ACTIVE_FIELD_NAMES if name not in attribution
     )
     assert snapshot["completion_policy_config"] is None
     assert snapshot["claim_id"] == active.claim.claim_id
     assert snapshot["declared_footprint"] == list(active.core.declared_footprint)
+
+
+def test_missing_active_claim_points_to_orphan_adoption(local_claim):
+    from orchestune.recovery.contracts import RecoveryRequest
+    from orchestune.recovery.service import recover_claim
+
+    workspace, _, _ = local_claim
+    state = load_run_state_readonly(workspace.run_state_path)
+    state.active_worktrees.pop("7")
+    with run_state_lock(workspace.lock_path):
+        save_run_state(state, workspace.run_state_path)
+    result = recover_claim(RecoveryRequest(7), cwd=workspace.repository_root)
+    assert not result.success
+    assert "orchestune claim 7 --adopt-pr <PR>" in result.reason

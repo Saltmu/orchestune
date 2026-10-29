@@ -1,6 +1,7 @@
 import tempfile
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from orchestune.branch_naming import build_task_branch_name, parse_task_branch_name
 from orchestune.dependencies.resolution import resolve_all_dependencies
@@ -353,7 +354,7 @@ class TestDecideDuplicateCandidates:
 
 class TestApplyTaskLaunches:
     def test_invalid_subtask_id_blocks_only_affected_task(self, tmp_path):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.dispatch.targets import (
@@ -420,7 +421,7 @@ class TestApplyTaskLaunches:
         呼び出し直前に取得した`dispatch_started_at`を使う（Codexレビュー指摘:
         launch呼び出し前に取得すると、worktree準備中に作成された無関係な
         既存PRまで新sessionの成果物と誤認する窓が生まれるため）。"""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.dispatch.targets import (
@@ -468,7 +469,7 @@ class TestApplyTaskLaunches:
         assert active.launch.started_at != cycle_now
 
     def test_apply_task_launches_passes_base_branch_to_target(self, tmp_path):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.dispatch.targets import LocalProcessDispatchTarget
@@ -530,7 +531,7 @@ class TestApplyTaskLaunches:
         ]
 
     def test_active_worktree_records_execution_selection_fields(self, tmp_path):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         from orchestune.dispatch.execution_profiles import ExecutionSelection
         from orchestune.dispatch.launch import _apply_task_launches
@@ -609,7 +610,7 @@ class TestApplyTaskLaunches:
         """不正なsubtask_idを持つタスクが解決済み依存関係を持っていても、1サイクル目で
         status:blocked-human-reviewに遷移し、2サイクル目以降にstatus:queuedへ自動昇格
         （再キュー）されないことを検証する。"""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         from orchestune.consistency.desired import TaskLifecycle
         from orchestune.dispatch.launch import _apply_task_launches
@@ -693,7 +694,7 @@ class TestApplyTaskLaunchesLabelOrdering:
     持たない状態になり、以降のどのサイクルからも発見できなくなる。"""
 
     def test_success_path_adds_in_progress_before_removing_queued(self, tmp_path):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.dispatch.targets import (
@@ -752,8 +753,6 @@ class TestApplyTaskLaunchesLabelOrdering:
         ]
 
     def test_failure_path_adds_new_status_before_removing_queued(self, tmp_path):
-        from unittest.mock import patch
-
         from orchestune.dispatch.launch import _apply_task_launches
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
@@ -807,8 +806,6 @@ class TestApplyTaskLaunchesLabelOrdering:
 
 class TestApplyYamlErrorBlockingLabelOrdering:
     def test_adds_blocked_before_removing_queued(self, tmp_path):
-        from unittest.mock import patch
-
         from orchestune.dispatch.launch import _apply_yaml_error_blocking
 
         task = _task(1, subtask_id="task-1", yaml_error=True)
@@ -842,7 +839,7 @@ class TestLaunchSelectedTasks:
     LaunchContext経由の呼び出しで検証する。"""
 
     def test_launches_selected_task_via_launch_context(self, tmp_path):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         from orchestune.dispatch.launch import LaunchContext, _launch_selected_tasks
         from orchestune.dispatch.targets import (
@@ -892,8 +889,6 @@ class TestLaunchSelectedTasks:
         assert "1" in run_state.active_worktrees
 
     def test_blocks_yaml_error_candidate_not_included_in_selected(self, tmp_path):
-        from unittest.mock import patch
-
         from orchestune.dispatch.launch import LaunchContext, _launch_selected_tasks
 
         bad_task = _task(1, subtask_id="bad-task", yaml_error=True)

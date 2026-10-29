@@ -193,14 +193,12 @@ class TestWorktreeHasNewCommits:
             )
             assert worktree_has_new_commits("worktrees/w1", "origin/main") is False
 
-    def test_git_error_falls_back_to_false(self):
-        """#135: 比較不能時（base_branch参照が解決できない等）は「新規コミット無し」
-        と同じ安全側（False）にフォールバックし、実体のない完了確定を防ぐ。"""
+    def test_comparison_failure_is_distinct_from_no_commits(self):
         with patch(
             "orchestune.dispatch.gc.git.subprocess.run",
             side_effect=subprocess.CalledProcessError(1, []),
         ):
-            assert worktree_has_new_commits("worktrees/missing", "origin/main") is False
+            assert worktree_has_new_commits("worktrees/missing", "origin/main") is None
 
     def test_git_error_logs_warning_to_stderr(self, capsys):
         """#135: 比較失敗時にstderrへ警告を出力し、原因調査を容易にする。"""

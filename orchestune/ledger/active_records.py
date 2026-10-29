@@ -101,6 +101,19 @@ def validate_claim(record: Any) -> None:
         if name != "claim_stage" and value is None:
             raise ValueError(f"{name} must be a known value")
     _finite("claimed_at", record.claimed_at)
+    number, sha = record.adopted_pr_number, record.adopted_pr_head_sha
+    if (number is None) != (sha is None):
+        raise ValueError("adopted PR number and head must be recorded together")
+    if number is not None and (
+        isinstance(number, bool) or not isinstance(number, int) or number <= 0
+    ):
+        raise ValueError("adopted PR number must be a positive integer")
+    if sha is not None and (
+        not isinstance(sha, str)
+        or len(sha) != 40
+        or any(c not in "0123456789abcdef" for c in sha)
+    ):
+        raise ValueError("adopted PR head must be a full SHA")
 
 
 def validate_completion(record: Any) -> None:
@@ -220,6 +233,8 @@ class ClaimInfo:
     repository_id: str | None = None
     claimed_at: float | None = None
     owner_token_digest: str | None = None
+    adopted_pr_number: int | None = None
+    adopted_pr_head_sha: str | None = None
     _legacy: InitVar[bool] = False
 
     def __post_init__(self, _legacy: bool) -> None:

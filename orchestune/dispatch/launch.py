@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Generic, TypeVar
 
 from orchestune.branch_naming import build_task_branch_name
+from orchestune.claim.adopt_pr import duplicate_marker
 from orchestune.claim.contracts import (
     ClaimFailureReason,
     ClaimOutcome,
@@ -192,17 +193,23 @@ def _apply_duplicate_skip(
         task = decision.task
         if decision.is_duplicate and decision.existing_pr:
             existing_pr = decision.existing_pr
-            print(
-                f"Skipping task {task.subtask_id} (Issue #{task.issue_number}) because an open PR #{existing_pr.number} already exists on branch '{existing_pr.head_ref}' and has been updated.",
-                file=sys.stderr,
+            message = (
+                f"{duplicate_marker(existing_pr)}\n"
+                f"重複起動防止: Issue #{task.issue_number} に open PR #{existing_pr.number} "
+                f"(branch `{existing_pr.head_ref}`, head `{existing_pr.head_sha or 'unknown'}`) が存在します。\n"
+                "旧実行の停止、PR の所有権、ローカル CI と HEAD に対するレビュー証跡は再確認が必要です。\n"
+                f"条件を確認後 `orchestune claim {task.issue_number} --adopt-pr {existing_pr.number}` → "
+                "`./scripts/local-ci.sh` → "
+                f"`orchestune complete --issue {task.issue_number} --pr {existing_pr.number} "
+                "--result done --reviewer <bot> --review-reply <file>`。\n"
+                "手動マージは Layer-1 ゲートを通らない代替手段です。"
             )
+            print(message, file=sys.stderr)
             if config.apply:
                 apply_human_review_escalation(
                     task.issue_number,
                     task.status_labels,
-                    f"重複起動防止: このサブタスクに対応するオープンなPR #{existing_pr.number} (ブランチ: `{existing_pr.head_ref}`) が既に検出され、更新されています。\n"
-                    f"重複したエージェントセッションの起動を防ぐため、自動起動をスキップし、ステータスを `status:blocked-human-review` に変更しました。\n"
-                    f"必要に応じて手動でPRをマージするか、再起動したい場合は既存のPRをクローズした上で再度 `status:queued` に設定してください。",
+                    message,
                     forge=config.resolved_forge,
                 )
         else:

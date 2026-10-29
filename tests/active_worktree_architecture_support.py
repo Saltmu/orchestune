@@ -53,6 +53,7 @@ CLAIM_OWNER_MODULES = frozenset(
     {
         "orchestune.ledger.active_records",
         "orchestune.claim.ownership",
+        "orchestune.claim.reservation",
         "orchestune.claim.service",
         "orchestune.claim.amend",
     }
@@ -88,6 +89,7 @@ ALLOWED_CONSTRUCTOR_MODULES = frozenset(
         "orchestune.ledger.active_records",
         "orchestune.ledger.active_codec",
         "orchestune.claim.ownership",
+        "orchestune.claim.reservation",
         "orchestune.claim.service",
         "orchestune.claim.amend",
         "orchestune.dispatch.launch_state",

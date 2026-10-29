@@ -714,9 +714,24 @@ orchestune claim 123
 | :--- | :--- | :--- |
 | `--no-apply` | 無効 | Git、GitHub、台帳の変更を行わず、事前検証と予定値の表示のみを行うプレビュー（ドライラン）モード。 |
 | `--resume <claim_id>` | なし | 途中停止した既存の claim を、期待する世代と登録worktreeを照合して再開する。 |
+| `--adopt-pr <番号>` | なし | 検証済みの孤立 PR を `status:blocked-human-review` から claim する。`--resume`、`--amend-footprint` とは併用不可。 |
 | `--amend-footprint` | 無効 | 保持中の claim のファイル予約を拡張する。`--resume` とは併用不可。詳細は後述。 |
 | `--state <path>` | `run_state.json` | 実行状態台帳ファイルのパスを指定。 |
 | `--timeout <seconds>` | なし | 台帳ロックのタイムアウト秒数。 |
+
+### 孤立 PR の復帰
+
+ワーカーが claim を完了せずに終了すると、GC が `completed_orphaned_pr` と報告することがあります。Issue を再キューせず既存 PR を引き継ぐには、主チェックアウトで次を実行します。
+
+```bash
+orchestune claim <issue> --adopt-pr <pr> --no-apply
+orchestune claim <issue> --adopt-pr <pr>
+cd <表示されたworktree>
+./scripts/local-ci.sh
+orchestune complete --issue <issue> --pr <pr> --result done --reviewer <bot> --review-reply <file>
+```
+
+旧実行の記録と停止状態、信頼できる対応するエスカレーション通知、同一リポジトリの一意な open PR、正規 head ブランチ、親 base、リモート HEAD の一致を確認します。証跡の欠落・曖昧さ、他の claim、未完了の completion、fork、HEAD の変更があれば拒否します。PR 番号と HEAD は claim に結び付けられ、その後 HEAD が変わると完了できません。通常のローカル CI とレビュー証跡のゲートも必要です。手動マージは Layer-1 ゲートを通らない代替手段です。
 
 ### 失敗時の対応
 

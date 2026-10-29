@@ -109,6 +109,7 @@ _declare(
     WorktreeCompletion,
     (
         "completed_no_commits",
+        "completed_orphaned_pr",
         "completed_without_outcome",
         "blocked_base_branch_red",
         "escalated_base_branch_red",

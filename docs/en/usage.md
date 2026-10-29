@@ -726,9 +726,24 @@ Upon success, the command prints the issue number, claim ID, branch name, prepar
 | :--- | :--- | :--- |
 | `--no-apply` | disabled | Dry-run mode: validates prerequisites and previews planned values without modifying Git, GitHub, or local state. |
 | `--resume <claim_id>` | none | Resumes an interrupted claim using its expected generation and verified local worktree. |
+| `--adopt-pr <number>` | none | Claims a verified orphaned PR from `status:blocked-human-review`; cannot be combined with `--resume` or `--amend-footprint`. |
 | `--amend-footprint` | disabled | Widens the held claim's file reservation. Cannot be combined with `--resume`. See below. |
 | `--state <path>` | `run_state.json` | Path to the run-state ledger file. |
 | `--timeout <seconds>` | none | Timeout in seconds for acquiring the run-state lock. |
+
+### Recovering an orphaned PR
+
+When a worker exits without completing its claim, GC may report `completed_orphaned_pr`. To adopt the existing PR without requeueing the issue, run from the primary checkout:
+
+```bash
+orchestune claim <issue> --adopt-pr <pr> --no-apply
+orchestune claim <issue> --adopt-pr <pr>
+cd <reported-worktree>
+./scripts/local-ci.sh
+orchestune complete --issue <issue> --pr <pr> --result done --reviewer <bot> --review-reply <file>
+```
+
+The claim checks the recorded old generation and its stopped state, a trusted matching escalation notice, a unique open same-repository PR, canonical head branch, parent base, and matching remote HEAD. Missing or ambiguous evidence, another claim, an unfinished completion, a fork, or a changed HEAD causes rejection. The adopted PR number and HEAD are bound to the claim; a later HEAD change prevents completion. The normal local CI and review evidence gates still apply. Manual merging bypasses the Layer-1 gate.
 
 ### Failure Handling
 

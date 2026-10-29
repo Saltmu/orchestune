@@ -95,14 +95,14 @@ def backup_wip_commit(worktree_path: str | Path, commit_message: str) -> str | N
     return None
 
 
-def worktree_has_new_commits(worktree_path: str | Path, base_branch: str) -> bool:
+def worktree_has_new_commits(
+    worktree_path: str | Path, base_branch: str
+) -> bool | None:
     """#74: base_branchに対して実コミットが積まれているかの確認。
 
     プロセス終了+cleanなworktreeというだけでは、権限拒否等で何も実装されずに
-    終了したケースと本当に完了したケースを区別できない。#135: 比較に失敗した場合
-    （`base_branch`参照が解決できない等）は「新規コミットが確認できた」わけでは
-    ないため、安全側に倒し「新規コミット無し」と同じ`False`を返す（既存の
-    `completed_no_commits`エスカレーション経路に合流させ、実体のない完了確定を防ぐ）。
+    終了したケースと本当に完了したケースを区別できない。比較できない場合は
+    None を返し、コミットがない場合の False と区別する。
     """
     try:
         # #172: 親ブランチがリモート追跡ブランチとしてのみ存在する場合に対応するため、
@@ -123,7 +123,7 @@ def worktree_has_new_commits(worktree_path: str | Path, base_branch: str) -> boo
             f"{base_branch!r}: {exc}",
             file=sys.stderr,
         )
-        return False
+        return None
 
 
 def remote_branch_commit_sha_if_ahead(
