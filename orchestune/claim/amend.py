@@ -32,7 +32,11 @@ from orchestune.footprint_paths import canonicalize_footprint
 from orchestune.forge import Forge, ForgeGraphQLUnavailableError, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
+from orchestune.issue_parsing import (
+    FOOTPRINT_BLOCK_PATTERN,
+    dump_footprint_yaml,
+    parse_task_from_issue,
+)
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
@@ -234,9 +238,7 @@ def _rewrite_issue_footprint(body: str, footprint: tuple[str, ...]) -> str:
     assert match is not None
     data = yaml.safe_load(match.group(1))
     data["footprint"] = list(footprint)
-    new_block = yaml.dump(
-        data, allow_unicode=True, default_flow_style=False, sort_keys=False
-    )
+    new_block = dump_footprint_yaml(data)
     start, end = match.span(1)
     return body[:start] + new_block + body[end:]
 

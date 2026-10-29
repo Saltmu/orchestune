@@ -10,6 +10,7 @@ from orchestune.issue_parsing import (
     backfill_launch_history,
     backfill_parent_issue_number,
     backfill_recovery_counters,
+    dump_footprint_yaml,
     effective_parent_number,
     ensure_parent_marker,
     find_children_by_parent,
@@ -949,3 +950,56 @@ class TestYamlSafeLoaderAndSingleParse:
 
         source = inspect.getsource(issue_parsing)
         assert "yaml.safe_load" not in source
+
+
+LONG_DESCRIPTION = "長い説明文が一行で書かれている。" + "あいうえお" * 30
+
+
+def _readable_body(*extra: str) -> str:
+    """#1465: a hand-written Footprint (non-sorted keys, indented list, long text)."""
+    tail = "".join(f"{line}\n" for line in extra)
+    return (
+        "Intro text.\n\n## Footprint\n\n```yaml\n"
+        "subtask_id: example\n"
+        f"description: {LONG_DESCRIPTION}\n"
+        "depends_on: []\n"
+        "footprint:\n"
+        "  - tests/a.py\n"
+        "  - tests/b.py\n"
+        f"{tail}```\n\nTrailing text.\n"
+    )
+
+
+class TestDumpFootprintYaml:
+    """#1465: one writer for the Footprint fence keeps the author's layout."""
+
+    def test_keeps_insertion_order(self):
+        assert dump_footprint_yaml({"z": 1, "a": 2, "m": 3}) == "z: 1\na: 2\nm: 3\n"
+
+    def test_indents_list_items_under_their_key(self):
+        assert dump_footprint_yaml({"footprint": ["a.py", "b.py"]}) == (
+            "footprint:\n  - a.py\n  - b.py\n"
+        )
+
+    def test_empty_list_stays_inline(self):
+        assert dump_footprint_yaml({"depends_on": []}) == "depends_on: []\n"
+
+    def test_long_text_is_not_wrapped(self):
+        assert dump_footprint_yaml({"description": LONG_DESCRIPTION}) == (
+            f"description: {LONG_DESCRIPTION}\n"
+        )
+
+    def test_non_ascii_is_not_escaped(self):
+        assert "日本語" in dump_footprint_yaml({"description": "日本語"})
+
+
+class TestBackfillKeepsFootprintLayout:
+    """#1465: backfills append their keys and leave the rest of the fence as written."""
+
+    def test_parent_issue_number_only_appends_the_key(self):
+        result = backfill_parent_issue_number(_readable_body(), 100)
+        assert result == _readable_body("parent_issue_number: 100")
+
+    def test_recovery_counters_only_append_the_keys(self):
+        result = backfill_recovery_counters(_readable_body(), 2, True)
+        assert result == _readable_body("recompute_count: 2", "forced_serial: true")

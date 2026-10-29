@@ -201,6 +201,42 @@ def test_amend_rewrites_issue_body_footprint_with_missing_files(amend_env):
     assert "subtask_id: test-task" in body
 
 
+def test_amend_keeps_the_issue_footprint_layout(amend_env):
+    """#1465: only the footprint list grows; key order, indent and long text stay."""
+    description = "長い説明文が一行で書かれている。" + "あいうえお" * 30
+    amend_env["forge"].issues[201] = _make_issue(
+        number=201,
+        body=(
+            "Intro text.\n\n## Footprint\n\n```yaml\n"
+            "subtask_id: test-task\n"
+            f"description: {description}\n"
+            "depends_on: []\n"
+            "footprint:\n"
+            "  - orchestune/foo.py\n"
+            "symbols: []\n"
+            "```\n\nTrailing text.\n"
+        ),
+    )
+    (amend_env["worktree"] / "extra.py").write_text("x")
+
+    outcome = _amend(amend_env)
+
+    assert outcome.success is True, outcome.failure
+    body = amend_env["forge"].issues[201].body
+    fence = body.split("```yaml\n")[1].split("```")[0]
+    lines = fence.splitlines()
+    assert lines[:4] == [
+        "subtask_id: test-task",
+        f"description: {description}",
+        "depends_on: []",
+        "footprint:",
+    ]
+    assert sorted(lines[4:-1]) == ["  - extra.py", "  - orchestune/foo.py"]
+    assert lines[-1] == "symbols: []"
+    assert body.startswith("Intro text.\n\n## Footprint\n\n```yaml\n")
+    assert body.endswith("```\n\nTrailing text.\n")
+
+
 def test_amend_leaves_issue_body_when_it_already_covers_footprint(amend_env):
     outcome = _amend(amend_env)
 
