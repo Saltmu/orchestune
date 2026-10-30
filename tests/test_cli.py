@@ -284,6 +284,7 @@ def test_cli_no_args_exits(capsys):
         "  recover   Inspect or recover one stopped claim (preview by default)\n"
         "  gc        Release handoff-ready task reservations (--no-apply to preview)\n"
         "  doctor    Diagnose dispatch single-executor setup (offline, read-only)\n"
+        "  review    Inspect, retry or override a Layer-2 semantic review\n"
         "  config    Create or edit orchestune.toml interactively\n"
         "  skills    Install and manage Orchestune skills for AI assistants\n"
         "  scratch   Create scratch session directories for task artifacts\n"

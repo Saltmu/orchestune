@@ -368,6 +368,9 @@ else { Write-Warning 'report not created' }
 | `max-semantic-review-rounds` | `3` | 第2層セマンティックレビューの最大ラウンド数（1〜5）。超過時はエスカレーション。 |
 | `max-semantic-fix-retries` | `2` | 第2層セマンティック修正の最大リトライ数（0で自動修正無効化）。 |
 | `semantic-review-timeout-seconds` | `1800` | 第2層セマンティックレビュー1回のタイムアウト秒数（既定30分）。 |
+| `semantic-review-ack-timeout-seconds` | `600` | レビュー依頼から reviewer の活動が一切ない状態を許す秒数。超えると `review_not_acknowledged` で停止します（既定10分。`semantic-review-timeout-seconds` を超えません）。 |
+| `semantic-review-auto-retry` | `false` | 誰も応答していない依頼に限り、追加で1回だけレビューを再依頼します（明示 opt-in）。reviewer の活動が一度でもあれば再依頼しません。 |
+| `semantic-review-retry-backoff-seconds` | `300` | ack 期限から opt-in の再依頼を投稿するまでの待ち秒数（0 なら期限と同時）。 |
 | `semantic-fix-timeout-seconds` | `1800` | 第2層セマンティック修正1回のタイムアウト秒数（既定30分）。 |
 | `semantic-ci-timeout-seconds` | `1800` | 修正後HEADに束縛したローカルCI検証のタイムアウト秒数（既定30分）。 |
 | `semantic-attempt-timeout-seconds` | `7200` | 第2層統合PRの試行全体（全ラウンド・修正・CI）のタイムアウト秒数（既定2時間）。超過時はエスカレーション。 |
@@ -628,6 +631,15 @@ Orchestuneでは、子タスクから親ブランチ（`parent/issue-{N}`）へ�
 **移行**: このゲート導入前に投稿されたOutcome Recordにはレビュー証跡がなく、`legacy`として停止します。移行期間中は、(a) 進行中の子の統合が終わるまで明示的に`off`を指定する、または (b) 停止を前提に、まだhandoffされていない子は子PRで再レビューして`orchestune complete`を再実行し、すでにhandoff済みの子は (a) を使います。legacyの子の統合が済んだら`required`へ戻してください。
 
 **第2層ゲートの移行と注意点**: 第2層セマンティックレビューは既定で `required` です。セマンティックレビューbotやワークフローが未導入のリポジトリでは、複数タスクの統合PRが `review_not_acknowledged` でエスカレーションします。未導入環境では `--semantic-review-mode advisory` または `--semantic-review-mode off` を指定して運用してください。なお、統合PRのCI検証はリポジトリの `ci-command`（ローカルCI）によって検証され、修正出力は一時ブランチ（`integration/semantic-fix/*`）へ安全に退避・昇格されます。トークン上限管理は本レイヤのスコープ外（未対応）です。
+
+#### 応答しない第2層 reviewer への対応（#1436）
+
+- **どの reviewer に依頼するか**: `semantic-review-provider = "claude"` / `"codex"` は明示指定です。`"auto"` は dispatch target から別ベンダーを選びます（`claude-cli`・`cloud-routine` → `codex`、`codex-cli`・`codex-cloud`・`agy-cli` → `claude`。汎用の `local` は解決できません）。`issue_comment` で動くワークフローは常に**デフォルトブランチ**の定義で動くため、そこでワークフローや App が有効でない reviewer は応答しません。
+- **早期停止**: 依頼から `semantic-review-ack-timeout-seconds` の間、reviewer の活動がなければ、`semantic-review-timeout-seconds` を待たずに `review_not_acknowledged` で停止します。PR と親 Issue の通知に、attempt・head・round・reviewer とその決まり方・依頼コメント・経過時間と期限・再開コマンドを載せます。通知は attempt と理由ごとに1回だけです。
+- **`orchestune review`**（`--pr` は統合 PR）:
+  - `orchestune review status --pr <PR> [--json]` は読み取り専用で、同じ情報をいつでも表示します。
+  - `orchestune review retry --pr <PR> --reason "<理由>"` は停止した attempt を再開して reviewer に再依頼し、`orchestune review override --pr <PR> --reason "<理由>"` はこの head のゲートをスキップします。どちらも `--apply` を付けない限りマーカーの**プレビューだけ**で、`--apply` で1回だけ投稿します。理由が空、書き込み権限を持つ人間ではない実行者、head の移動、invalidated／終了済みの attempt、複数の open attempt、読めない state は拒否し、投稿の直前にも再検証します。override は人間の判断に限り、自動では使いません。
+- **opt-in の再依頼**: `semantic-review-auto-retry = true` のとき、誰も応答していない依頼を `semantic-review-retry-backoff-seconds` 後に1回だけ繰り返します。再依頼にも独自の ack 期限があり、超えれば同じ停止になります。回数はその round・head で PR 上に既にある依頼の数なので、再起動や同時実行でも繰り返されません。別 bot への自動切替は未対応です。`semantic-review-provider` を変えたうえで `retry` を使ってください。
 
 ### 4.6 統合実行の期限とtimeoutからの復旧
 

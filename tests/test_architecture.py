@@ -78,6 +78,7 @@ ALLOWED_L4_DEPENDENTS = {
     "dag.cli": frozenset({"cli"}),
     "dispatch.dispatcher": frozenset({"cli"}),
     "dispatch.doctor_cli": frozenset({"cli"}),
+    "dispatch.review_cli": frozenset({"cli"}),
     "dispatch.gc_cli": frozenset({"cli"}),
     "monitor": frozenset({"cli"}),
     "provisioning.cli": frozenset({"cli"}),
@@ -153,6 +154,11 @@ BOUNDED_RECOVERY_TERMINALS = {
         "apply_human_review_escalation",
     ),
     "semantic_review_timeout_seconds": (
+        "dispatch/semantic_review_adapters.py",
+        "apply_human_review_escalation",
+    ),
+    # #1436: an unanswered review request stops at the ack deadline.
+    "semantic_review_ack_timeout_seconds": (
         "dispatch/semantic_review_adapters.py",
         "apply_human_review_escalation",
     ),
