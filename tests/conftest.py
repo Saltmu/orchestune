@@ -77,6 +77,7 @@ def github_access_isolation(
         yield monitor
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Give every collected test exactly one mutually exclusive suite marker and order items."""
     order_and_classify(items)

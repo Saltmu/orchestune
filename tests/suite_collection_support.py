@@ -17,14 +17,30 @@ _HEAVY_TEST_MODULE_PRIORITY: dict[str, int] = {
     "tests/test_closed_loop.py": 5,
     "tests/test_setup_git_hooks.py": 6,
     "tests/test_verification_contracts.py": 7,
-    "tests/test_architecture_forge_patch.py": 8,
-    "tests/test_architecture.py": 9,
-    "tests/test_footprint_paths.py": 10,
-    "tests/test_wheel_skills_packaging.py": 11,
-    "tests/test_integrator_git_ops.py": 12,
-    "tests/test_dispatch_cycle_execution_typing.py": 13,
-    "tests/test_dispatch_cycle_port_contracts.py": 14,
+    "tests/test_architecture_source_support.py": 8,
+    "tests/test_architecture_forge_patch.py": 9,
+    "tests/test_architecture.py": 10,
+    "tests/test_footprint_paths.py": 11,
+    "tests/test_wheel_skills_packaging.py": 12,
+    "tests/test_integrator_git_ops.py": 13,
+    "tests/test_dispatch_cycle_execution_typing.py": 14,
+    "tests/test_dispatch_cycle_port_contracts.py": 15,
 }
+
+_AST_SCAN_TEST_MODULES: tuple[str, ...] = (
+    "tests/test_active_worktree_ownership_architecture.py",
+    "tests/test_architecture.py",
+    "tests/test_architecture_forge_patch.py",
+    "tests/test_architecture_internals.py",
+    "tests/test_architecture_layer_table.py",
+    "tests/test_architecture_private_imports.py",
+    "tests/test_architecture_source_support.py",
+    "tests/test_dispatch_dependency_boundary.py",
+    "tests/test_footprint_paths.py",
+    "tests/test_labels.py",
+    "tests/test_ledger_architecture.py",
+)
+_AST_SCAN_TEST_MODULE_SET: frozenset[str] = frozenset(_AST_SCAN_TEST_MODULES)
 
 
 def _collection_priority_key(item: Any) -> int:
@@ -62,4 +78,7 @@ def order_and_classify(items: list[Any]) -> None:
             raise pytest.UsageError(
                 f"{item.nodeid} must have exactly one suite marker; got {markers}"
             )
+        module_path = item.nodeid.split("::", 1)[0]
+        if module_path in _AST_SCAN_TEST_MODULE_SET:
+            item.add_marker(pytest.mark.xdist_group("ast_scan"))
     items.sort(key=_collection_priority_key)

@@ -115,6 +115,20 @@ def test_pytest_addopts_uses_two_workers():
     ), "ordinary pytest runs must use exactly two xdist workers"
 
 
+def test_pytest_addopts_uses_loadgroup_distribution():
+    """Default pytest addopts must co-locate grouped tests via --dist=loadgroup."""
+    import tomllib
+
+    pyproject_path = os.path.join(os.path.dirname(__file__), "..", "pyproject.toml")
+    with open(pyproject_path, "rb") as f:
+        pyproject = tomllib.load(f)
+
+    addopts = pyproject["tool"]["pytest"]["ini_options"]["addopts"].split()
+    assert (
+        "--dist=loadgroup" in addopts
+    ), "addopts must specify --dist=loadgroup for xdist test grouping"
+
+
 def test_local_ci_sh_inherits_pytest_default():
     """scripts/local-ci.sh should inherit the two-worker pytest default."""
     local_ci_path = os.path.join(
