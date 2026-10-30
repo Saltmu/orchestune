@@ -781,3 +781,63 @@ class TestMergePullRequest:
         with pytest.raises(ValueError):
             forge.merge_pull_request("315; rm -rf /")  # type: ignore[arg-type]
         gh_run.assert_not_called()
+
+
+class TestClosePullRequest:
+    """#1440: closing a superseded integration PR is a REST call without GraphQL."""
+
+    def test_patches_the_pull_request_state_through_rest(
+        self, forge: GitHubForge, gh_run
+    ):
+        gh_run.stdout(json.dumps({"number": 77, "state": "closed"}))
+
+        forge.close_pull_request(77)
+
+        assert gh_run.call_args.args[0] == [
+            "gh",
+            "api",
+            "--method",
+            "PATCH",
+            "repos/{owner}/{repo}/pulls/77",
+            "-f",
+            "state=closed",
+        ]
+
+    def test_accepts_a_numeric_string(self, forge: GitHubForge, gh_run):
+        gh_run.stdout(json.dumps({"number": 77, "state": "closed"}))
+
+        forge.close_pull_request("77")
+
+        assert gh_run.call_args.args[0][4] == "repos/{owner}/{repo}/pulls/77"
+
+    @pytest.mark.parametrize("number", ["x", "0", -1, "77; rm"])
+    def test_rejects_an_invalid_number_without_calling_gh(
+        self, forge: GitHubForge, gh_run, number
+    ):
+        with pytest.raises(ValueError):
+            forge.close_pull_request(number)
+
+        gh_run.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "[]",
+            "not-json",
+            json.dumps({"number": 78, "state": "closed"}),
+            json.dumps({"number": 77, "state": "open"}),
+        ],
+    )
+    def test_an_unusable_answer_is_an_error_not_a_success(
+        self, forge: GitHubForge, gh_run, payload
+    ):
+        gh_run.stdout(payload)
+
+        with pytest.raises(ValueError):
+            forge.close_pull_request(77)
+
+    def test_propagates_a_gh_failure(self, forge: GitHubForge, gh_run):
+        gh_run.side_effect = subprocess.CalledProcessError(1, "gh", stderr="HTTP 403")
+
+        with pytest.raises(subprocess.CalledProcessError):
+            forge.close_pull_request(77)

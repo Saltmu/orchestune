@@ -17,7 +17,7 @@ import re
 import socket
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -39,15 +39,23 @@ from orchestune.dispatch.semantic_review_ci import (
     remote_branch_sha,
     verify_semantic_ci,
 )
+from orchestune.dispatch.semantic_review_cleanup import run_attempt_cleanup
 from orchestune.dispatch.semantic_review_diagnostics import (
     ReviewDiagnostics,
     build_review_diagnostics,
+)
+from orchestune.dispatch.semantic_review_triggers import (
+    parse_iso,
+    restore_round_triggers,
+    round_trigger,
+    round_triggers,
 )
 from orchestune.forge import Forge, ForgeAuthError
 from orchestune.integrator.attempt import (
     OpenAttempt,
     find_open_attempts,
 )
+from orchestune.integrator.attempt_cleanup import RemoteRefPorts
 from orchestune.integrator.semantic_claim import (
     DETAIL_FIX_NOT_DESCENDANT,
     ClaimResult,
@@ -69,7 +77,6 @@ from orchestune.review.markers import build_trigger_body, derive_review_target
 from orchestune.review.rounds import (
     ReviewTrigger,
     build_restorable_trigger_body,
-    parse_trigger,
     precise_created_at,
     trigger_comment_ids,
 )
@@ -109,8 +116,6 @@ _UNSETTLED_OPERATIONS = IN_FLIGHT_OPERATION_STATUSES | {
     SemanticOperationStatus.INDETERMINATE
 }
 _CLAIM_TTL_SECONDS = 300
-#: Tolerated GitHub/local clock difference when a trigger is matched to a round.
-_CLOCK_SKEW = timedelta(seconds=60)
 _WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 #: A reviewer that showed no activity after its request (#1436).
 _ACK_REASON = "review_not_acknowledged"
@@ -248,60 +253,6 @@ def _authored(
         if author and isinstance(body, str) and accept(author.casefold()):
             selected.append((body, author))
     return selected
-
-
-def _triggers(comments: list[dict[str, Any]]) -> list[ReviewTrigger]:
-    """Every well-formed trigger in creation order.
-
-    Rounds repeat on one PR once a human resets the limits, so the strict
-    PR-wide `restore_triggers` ordering cannot apply; a round's trigger is
-    told apart by its head and by being posted after the round started.
-    """
-    triggers = []
-    for comment in comments:
-        try:
-            trigger = parse_trigger(comment)
-        except EvidenceContractError:
-            continue
-        if trigger is not None:
-            triggers.append(trigger)
-    return sorted(triggers, key=lambda t: t.created_at)
-
-
-def _round_trigger(
-    triggers: list[ReviewTrigger], state: SemanticReviewStateV1, *, fresh: bool
-) -> ReviewTrigger | None:
-    """The latest trigger of this round and head, posted since the round began
-    (``fresh``) or only before it (a stale request of an earlier run)."""
-    matching = _round_triggers(triggers, state, fresh=fresh)
-    return matching[-1] if matching else None
-
-
-def _round_triggers(
-    triggers: list[ReviewTrigger], state: SemanticReviewStateV1, *, fresh: bool
-) -> list[ReviewTrigger]:
-    """Every request of this round and head (a retry repeats the first one)."""
-    started = _parse_iso(state.round_started_at)
-    floor = (
-        None
-        if started is None
-        else normalize_timestamp((started - _CLOCK_SKEW).isoformat())
-    )
-    return [
-        t
-        for t in triggers
-        if t.round == state.round
-        and t.requested_head_sha == state.head_sha
-        and (floor is None or (t.created_at >= floor) == fresh)
-    ]
-
-
-def _parse_iso(value: str | None) -> datetime | None:
-    try:
-        parsed = datetime.fromisoformat(value) if value else None
-    except ValueError:
-        return None
-    return parsed if parsed is None or parsed.tzinfo else None
 
 
 def _is_target(attempt: OpenAttempt) -> bool:
@@ -542,12 +493,12 @@ class SemanticReviewCycleRunner:
         """The current round's review of the requested head, by its reviewer only."""
         state, comments = ctx.state, ctx.comments
         triggers = self._trusted_triggers(ctx)
-        requested = _round_triggers(triggers, state, fresh=True)
+        requested = round_triggers(triggers, state, fresh=True)
         if not requested:
             return _Review()
         trigger = requested[-1]
         requests = tuple(
-            (str(t.id), _parse_iso(precise_created_at(comments, t)) or self._now)
+            (str(t.id), parse_iso(precise_created_at(comments, t)) or self._now)
             for t in requested
         )
         later = [t for t in triggers if t.created_at > trigger.created_at]
@@ -611,7 +562,9 @@ class SemanticReviewCycleRunner:
 
     def _trusted_triggers(self, ctx: _Attempt) -> list[ReviewTrigger]:
         """Only trusted requests open or bound a round's review window."""
-        return _triggers([c for c in ctx.comments if self._trusted(ctx, c)])
+        return restore_round_triggers(
+            [c for c in ctx.comments if self._trusted(ctx, c)]
+        )
 
     def _judgment_comment(self, ctx: _Attempt) -> dict[str, Any] | None:
         """The trusted table the round's job named in its trusted result marker."""
@@ -983,7 +936,7 @@ class SemanticReviewCycleRunner:
         if ctx.state.phase != _P.ESCALATED or nxt.round != ctx.state.round or not since:
             return False
         if not any(
-            t.created_at >= since for t in _round_triggers(triggers, nxt, fresh=True)
+            t.created_at >= since for t in round_triggers(triggers, nxt, fresh=True)
         ):
             self._revalidate(ctx)
             self._forge.create_issue_comment(
@@ -997,10 +950,10 @@ class SemanticReviewCycleRunner:
         triggers = self._trusted_triggers(ctx)
         if self._resumed_trigger(ctx, nxt, triggers):
             return
-        if _round_trigger(triggers, nxt, fresh=True) is not None:
+        if round_trigger(triggers, nxt, fresh=True) is not None:
             return  # posted by an earlier, interrupted run of this transition
         self._revalidate(ctx)
-        if _round_trigger(triggers, nxt, fresh=False) is not None:
+        if round_trigger(triggers, nxt, fresh=False) is not None:
             # A reset round repeats an old (round, head) request, which the
             # adapter would take as already posted: request a new review.
             self._forge.create_issue_comment(
@@ -1133,6 +1086,7 @@ def advance_pending_semantic_reviews(
     operations: SemanticReviewOperations | None = None,
     claims: SemanticClaimClient | None = None,
     remote_head_fn: RemoteHeadFn | None = None,
+    cleanup_refs: RemoteRefPorts | None = None,
 ) -> dict[str, Any]:
     """Advance every pending attempt of ``config``'s parent by at most one phase."""
     root = (repository_root or Path(".")).resolve()
@@ -1165,6 +1119,15 @@ def advance_pending_semantic_reviews(
         "status": statuses[0] if len(statuses) == 1 else "mixed",
         "mode": config.semantic_review_mode,
         "attempts": [report.to_dict() for report in reports],
+        "cleanup": run_attempt_cleanup(
+            config,
+            forge=config.resolved_forge,
+            repository_root=root,
+            worker_id=worker_id or _default_worker_id(),
+            claims=claims,
+            poll=operations.poll if operations else None,
+            refs=cleanup_refs,
+        ),
     }
 
 

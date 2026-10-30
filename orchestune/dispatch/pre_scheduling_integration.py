@@ -167,7 +167,8 @@ def _advance_pending_semantic_reviews(
         statuses = {attempt.get("status") for attempt in report.get("attempts", [])}
         if statuses - SEMANTIC_SUCCESS_STATUSES - WARNING_STATUSES:
             return PhaseStatus.RETRYABLE_FAILURE, True
-        if statuses & WARNING_STATUSES:
+        cleanup = {entry.get("status") for entry in report.get("cleanup", [])}
+        if statuses & WARNING_STATUSES or "failed" in cleanup:
             return PhaseStatus.WARNING, False
         return PhaseStatus.SUCCESS, False
 
