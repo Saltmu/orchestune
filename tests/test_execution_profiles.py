@@ -858,3 +858,34 @@ class TestResolveTaskExecutionSelection:
         assert sel.model == "custom-cli-model"
         assert sel.reasoning_effort == "high"
         assert "CLI profile override" in sel.reason
+
+    def test_unknown_cli_profile_uses_shared_default_fallback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        task = MagicMock(execution_profile="deep")
+        target = MagicMock(target_name="codex-cli")
+        profile_config = ExecutionProfileConfig(
+            default_execution_profile="balanced",
+            profiles={
+                "balanced": {
+                    "codex-cli": TargetExecutionConfig(
+                        model="default-model", reasoning_effort="medium"
+                    )
+                }
+            },
+        )
+        config = MagicMock(
+            profile="typo",
+            dispatch_target=target,
+            execution_profile_config=profile_config,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            selection = resolve_task_execution_selection(task, config)
+
+        assert selection.profile == "balanced"
+        assert selection.model == "default-model"
+        assert selection.reasoning_effort == "medium"
+        assert "unknown profile 'typo'" in selection.reason
+        assert "CLI profile override" in selection.reason
+        assert "falling back to default profile 'balanced'" in caplog.text
