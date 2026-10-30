@@ -23,12 +23,14 @@ from orchestune.integrator.attempt import (
     prepare_attempt_context,
     publish_attempt_branch,
     publish_parent_under_claim,
+    restore_attempt,
     select_attempt_children,
     start_required_review,
     validate_finalization_context,
 )
 from orchestune.integrator.pr import list_open_attempt_prs
 from orchestune.models import PrRecord
+from orchestune.pr_link_notice_trust import TrustContext
 from orchestune.review.semantic_gate import (
     ChildSourceRef,
     SemanticReviewPhase,
@@ -411,6 +413,62 @@ def test_runner_invalidated_attempt_allows_fresh_preparation():
     ):
         assert prepare_attempt_context(ctx, object()) == (None, None)
     ctx.forge.add_comment.assert_not_called()
+
+
+def test_a_leftover_invalidated_attempt_with_the_same_children_does_not_block_a_new_one():
+    """#1440: a failed branch deletion must not keep new attempts from starting."""
+    ctx = SimpleNamespace(
+        config=SimpleNamespace(apply=True, parent_issue_number=100),
+        forge=MagicMock(spec=Forge),
+        repository_root=Path("."),
+    )
+    leftover = _attempt(CHILD_A, phase=SemanticReviewPhase.INVALIDATED)
+    with (
+        patch(
+            "orchestune.integrator.attempt.find_open_attempts",
+            return_value=[leftover],
+        ),
+        patch(
+            "orchestune.integrator.attempt._discover_child_sources",
+            return_value=([CHILD_A], {}),
+        ),
+        patch("orchestune.integrator.attempt._base_sha", return_value=BASE),
+    ):
+        assert prepare_attempt_context(ctx, object()) == (None, None)
+    selection = select_attempt_children([leftover], BASE, [CHILD_A])
+    assert selection.reusable is None and not selection.fail_closed
+
+
+def test_restore_attempt_reads_a_closed_pr_with_the_same_trust_rules():
+    state = _state(CHILD_A, phase=SemanticReviewPhase.INVALIDATED)
+    forge = MagicMock(spec=Forge)
+    forge.get_authenticated_user.return_value = "orchestune"
+    forge.list_notice_trusted_authors.return_value = frozenset()
+    forge.list_comments.return_value = [
+        {"body": format_semantic_review_state_marker(state), "author": "mallory"},
+        {"body": format_semantic_review_state_marker(state), "author": "orchestune"},
+    ]
+    closed = PrRecord(
+        7,
+        _identity(CHILD_A).temp_branch,
+        (),
+        base_ref="parent/issue-100",
+        is_cross_repository=False,
+        head_sha=HEAD,
+        state="CLOSED",
+    )
+
+    attempt = restore_attempt(forge, TrustContext(forge), 100, closed)
+
+    assert attempt.state == state and attempt.state_error is None
+    moved = restore_attempt(
+        forge, TrustContext(forge), 100, replace(closed, head_sha="e" * 40)
+    )
+    assert moved.state is None and "head" in str(moved.state_error)
+    forged = restore_attempt(
+        forge, TrustContext(forge), 100, replace(closed, head_ref="integration/temp-x")
+    )
+    assert forged.state is None
 
 
 def test_reuse_restores_frozen_children_without_duplicates():

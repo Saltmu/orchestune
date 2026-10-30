@@ -111,6 +111,9 @@ class GitHubPullRequestMixin(GraphQLFallbackMixin):
             input_text=body,
         )
 
+    def close_pull_request(self, pr_number: int | str) -> None:
+        prs_rest.close_pull_request(self._run, validate_issue_number(pr_number))
+
     def is_branch_merged_into(self, head: str, base: str) -> bool:
         validate_ref_name(head)
         validate_ref_name(base)

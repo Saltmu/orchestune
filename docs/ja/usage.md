@@ -641,6 +641,17 @@ Orchestuneでは、子タスクから親ブランチ（`parent/issue-{N}`）へ�
   - `orchestune review retry --pr <PR> --reason "<理由>"` は停止した attempt を再開して reviewer に再依頼し、`orchestune review override --pr <PR> --reason "<理由>"` はこの head のゲートをスキップします。どちらも `--apply` を付けない限りマーカーの**プレビューだけ**で、`--apply` で1回だけ投稿します。理由が空、書き込み権限を持つ人間ではない実行者、head の移動、invalidated／終了済みの attempt、複数の open attempt、読めない state は拒否し、投稿の直前にも再検証します。override は人間の判断に限り、自動では使いません。
 - **opt-in の再依頼**: `semantic-review-auto-retry = true` のとき、誰も応答していない依頼を `semantic-review-retry-backoff-seconds` 後に1回だけ繰り返します。再依頼にも独自の ack 期限があり、超えれば同じ停止になります。回数はその round・head で PR 上に既にある依頼の数なので、再起動や同時実行でも繰り返されません。別 bot への自動切替は未対応です。`semantic-review-provider` を変えたうえで `retry` を使ってください。
 
+#### 無効化された第2層 attempt の後始末（#1440）
+
+親ブランチが進む、または子の集合が変わると、runner は旧 attempt を `invalidated` として保存し、再利用しません。post-cycle はこの attempt を、再開できる段階に分けて片付けます（結果は semantic review レポートの `cleanup` リスト。`--no-apply` は計画の報告だけです）。
+
+1. **通知**: 旧 PR に1回だけコメントします。attempt・理由・構築時の base・現在の親ブランチ先頭・この attempt の head を示し、レビューとマージの対象外になったと伝えます。後続の有無は書きますが、PR 番号は推測しません。
+2. **クローズ**: PR を閉じます（REST。冪等で、結果を読み戻します）。merged の PR は破壊的な清掃を止め、閉じた PR を再オープンすることもありません。
+3. **後続の案内**: 同じ親に正当な置き換え attempt がちょうど1つ確定したら、旧 PR に別のコメントで1回だけ案内します。旧 PR が閉じられブランチが消えた後でも追記し、重複させません。候補が複数なら案内しません。
+4. **ブランチ**: `integration/temp-parent-issue-<N>-<id>` を、信頼済みの `invalidated` 状態に記録された head を lease にして削除します。対象は、attempt ID から導いた名前が信頼済み state と一致し、本リポジトリ内で、PR が閉じており、他の open PR が使っていないブランチだけです。tip が進んでいる、fork、信頼できない state の場合は残します。
+
+各段階は毎サイクル、通知コメント・PR の状態・リモートのブランチから導き直すので、どこで中断しても最初の未完了の段階から再開し、人が先に閉じた PR の取り残しブランチも回収します。旧 fix ジョブの停止を（ポーリングで）確認してから、semantic claim の下で書き込みます。失敗した段階は `failed` として報告され（post-cycle の phase は警告）、次のサイクルで再試行します。新しい attempt の作成は止めず、レビュー結果も変えません。status は `cleaned`・`planned`・`pending`（claim 保持中・ジョブ実行中・クローズ未確認）・`blocked`（merged・tip 移動・共有ブランチ）・`failed` です。
+
 ### 4.6 統合実行の期限とtimeoutからの復旧
 
 依存準備（`uv sync`）・CIコマンド・親Issue1件の統合サイクル全体に期限を設けています（#820）。7つの設定（`integration-*`と`max-integration-timeout-retries`）は[設定表](#設定ファイル-orchestunetoml-による詳細設定)にあります。専用のCLIフラグや環境変数はなく、`0`が「無期限」を意味することもありません。

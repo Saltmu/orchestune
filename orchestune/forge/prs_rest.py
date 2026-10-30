@@ -219,3 +219,30 @@ def pull_request_record(
         body=raw.get("body") or "",
         head_sha=head_sha,
     )
+
+
+def close_pull_request(run: Runner, number: int) -> None:
+    """Close one pull request through REST (#1440); closing a closed one is a no-op.
+
+    A merged pull request stays merged and is reported by the caller's read-back.
+    The answer is checked so an unusable payload is never taken for success.
+    """
+    raw = json.loads(
+        run(
+            [
+                "gh",
+                "api",
+                "--method",
+                "PATCH",
+                f"repos/{{owner}}/{{repo}}/pulls/{number}",
+                "-f",
+                "state=closed",
+            ]
+        )
+    )
+    if (
+        not isinstance(raw, dict)
+        or raw.get("number") != number
+        or raw.get("state") != "closed"
+    ):
+        raise ValueError(f"Pull request #{number} close returned an unusable payload")

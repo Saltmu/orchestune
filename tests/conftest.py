@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -539,6 +539,19 @@ class FakeForge(EventCommentForgeMixin):
                 is_cross_repository=cur.is_cross_repository,
                 is_files_truncated=cur.is_files_truncated,
             )
+
+    def get_pull_request(self, pr_number: int | str) -> PrRecord:
+        return self.prs[int(pr_number)]
+
+    def close_pull_request(self, pr_number: int | str) -> None:
+        """Close an open PR; closing a closed PR is a no-op and a merged PR stays merged."""
+        num = int(pr_number)
+        if num not in self.prs or self.pr_states.get(num, "open") != "open":
+            return
+        self.pr_states[num] = "closed"
+        self.prs[num] = replace(
+            self.prs[num], state="CLOSED", closed_at=datetime.now(UTC).isoformat()
+        )
 
     def delete_branch(self, branch: str) -> None:
         self.branches.discard(branch)

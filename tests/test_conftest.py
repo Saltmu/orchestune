@@ -269,6 +269,23 @@ class TestFakeForgeClass:
         forge.delete_branch("feat/foo")
         assert forge.branch_exists("feat/foo") is False
 
+    def test_close_pull_request_is_idempotent_and_keeps_a_merged_pr_merged(self):
+        forge = FakeForge()
+        first = forge.create_pull_request("feat/a", "parent/issue-1", "t", "b")
+        second = forge.create_pull_request("feat/b", "parent/issue-1", "t", "b")
+        forge.merge_pull_request(second)
+
+        forge.close_pull_request(first)
+        forge.close_pull_request(first)
+        forge.close_pull_request(second)
+
+        assert forge.list_open_prs() == []
+        assert [pr.state for pr in forge.list_prs(state="closed")] == ["CLOSED"]
+        assert forge.get_pull_request(first).state == "CLOSED"
+        assert forge.get_pull_request(first).closed_at != ""
+        assert forge.get_pull_request(second).state == "MERGED"
+        assert forge.branch_exists("feat/a") is True
+
     def test_seed_pr_state_inference(self):
         forge = FakeForge()
         from orchestune.models import PrRecord

@@ -116,7 +116,7 @@ class ParentPublishResult:
     detail: str = ""
 
 
-def _trusted_state_authors(forge: Forge, trust: TrustContext) -> frozenset[str]:
+def trusted_state_authors(forge: Forge, trust: TrustContext) -> frozenset[str]:
     trusted: set[str] = set()
     identity = trust.get_self_identity()
     if identity:
@@ -194,9 +194,10 @@ def _state_binding_error(
     return None
 
 
-def _open_attempt(forge: Forge, trust: TrustContext, parent: int, pr) -> OpenAttempt:
+def restore_attempt(forge: Forge, trust: TrustContext, parent: int, pr) -> OpenAttempt:
+    """Trusted state and override of one attempt PR, open or closed (#1440)."""
     comments = forge.list_comments(pr.number)
-    trusted = _trusted_state_authors(forge, trust)
+    trusted = trusted_state_authors(forge, trust)
     try:
         state = restore_latest_semantic_review_state(
             _state_bodies(comments, trust, trusted)
@@ -230,7 +231,7 @@ def find_open_attempts(forge: Forge, parent_issue_number: int) -> list[OpenAttem
     attempts: list[OpenAttempt] = []
     for pr in list_open_attempt_prs(forge, parent_issue_number):
         try:
-            attempts.append(_open_attempt(forge, trust, parent_issue_number, pr))
+            attempts.append(restore_attempt(forge, trust, parent_issue_number, pr))
         except Exception as exc:
             attempts.append(
                 OpenAttempt(
@@ -735,8 +736,10 @@ __all__ = [
     "prepare_attempt_context",
     "publish_parent_under_claim",
     "mark_tasks_included",
+    "restore_attempt",
     "select_attempt_children",
     "set_new_attempt_identity",
     "start_required_review",
+    "trusted_state_authors",
     "validate_finalization_context",
 ]
