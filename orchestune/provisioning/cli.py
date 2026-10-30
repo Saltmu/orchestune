@@ -5,14 +5,19 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from contextlib import ExitStack, suppress
+
+from rich.text import Text
 
 from orchestune.config_contracts import ConfigError
 from orchestune.forge import GitHubForge
-from orchestune.infra.cli_output import CliOutput, Level, make_output
-from orchestune.infra.cli_progress import progress
+from orchestune.infra.cli_output import Block, CliOutput, Level, make_output
+from orchestune.infra.cli_progress import ProgressHandle, progress
 from orchestune.infra.repository_config import resolve_repo_root
 from orchestune.provisioning.flow import (
     IssuePreview,
+    ProvisionProgress,
+    ProvisionProgressHook,
     ProvisionResult,
     _build_provisioning_dag,
 )
@@ -86,6 +91,90 @@ def _print_error(error: Exception) -> None:
 
 
 _PROGRESS_TEXT = "Provisioning Issues..."
+
+
+class ProvisionProgressDisplay:
+    """Own one best-effort Live; display failures never retry provisioning."""
+
+    def __init__(self, output: CliOutput) -> None:
+        self._output = output
+        self._stack = ExitStack()
+        self._handle: ProgressHandle | None = None
+        self._description = _PROGRESS_TEXT
+        self._closed = False
+        self._disabled = False
+
+    def __enter__(self) -> ProvisionProgressHook | None:
+        if not self._output.policy.rich:
+            return None
+        try:
+            self._handle = self._stack.enter_context(progress(self._output))
+            self._update(self._description)
+        except Exception:
+            self._disable()
+        except BaseException:
+            self.close()
+            raise
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def __call__(self, event: ProvisionProgress) -> None:
+        if self._closed:
+            return
+        try:
+            if event.step == "stopped":
+                self.close()
+                return
+            if event.step == "retry-wait":
+                description = (
+                    f"{self._description} (retrying in {event.wait_seconds:g}s)"
+                )
+            else:
+                phase = (
+                    f"[{event.index}/{event.total}] {event.subtask_id}"
+                    if event.step == "subtask"
+                    else "syncing plan"
+                    if event.step == "sync"
+                    else event.step
+                )
+                self._description = f"{_PROGRESS_TEXT} {phase}"
+                description = self._description
+            self._update(description)
+        except Exception:
+            self._disable()
+
+    def _update(self, description: str) -> None:
+        block = self._output.text_block(description, multiline=False)
+        text = Text(block.plain, no_wrap=True, overflow="ellipsis")
+        # Spinner assembles a new Text on Rich 13–15, losing no_wrap. Bound its
+        # body as well so the frame and space cannot cause a second live line.
+        if self._output.console is not None:
+            text.truncate(max(0, self._output.console.width - 2), overflow="ellipsis")
+        if self._handle is not None:
+            self._handle.update(Block(block.plain, text))
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._stack.close()
+        except Exception:
+            self._disable()
+
+    def _disable(self) -> None:
+        if self._disabled:
+            return
+        self._disabled = self._closed = True
+        with suppress(Exception):
+            self._stack.close()
+        with suppress(Exception):
+            _say(
+                make_output(sys.stderr),
+                "Warning: progress unavailable; continuing provision",
+            )
 
 
 def _print_result(result: ProvisionResult, output: CliOutput | None = None) -> None:
@@ -263,9 +352,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 f"Successfully restored decomposition plan from #{args.restore_plan} to {out}",
             )
             raise SystemExit(0)
-        # The spinner exists only on a decorated TTY; it stops before the result
-        # is printed and when provisioning raises.
-        with progress(output, _PROGRESS_TEXT if output.policy.rich else ""):
+        with ProvisionProgressDisplay(output) as hook:
             result = _provision_issues(
                 args.plan,
                 forge=GitHubForge(),
@@ -273,6 +360,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 template_path=args.template,
                 repo_root=resolve_repo_root(args.plan),
                 parent_issue=args.parent_issue,
+                on_progress=hook,
             )
     except ConfigError as error:
         _print_error(error)

@@ -106,6 +106,7 @@ class ProvisionRetryForge:
         min_interval: float = 0.2,
         max_attempts: int = 4,
         max_wait: float = 30.0,
+        on_wait: Callable[[float], None] | None = None,
     ) -> None:
         self._forge = forge
         self._sleep = sleep
@@ -114,6 +115,12 @@ class ProvisionRetryForge:
         self._max_attempts = max_attempts
         self._max_wait = max_wait
         self._last_call: float | None = None
+        self._on_wait = on_wait
+
+    def _retry_sleep(self, delay: float) -> None:
+        if self._on_wait is not None:
+            self._on_wait(delay)
+        self._sleep(delay)
 
     def _paced(self, action: Callable[[], Any]) -> Any:
         if self._last_call is not None:
@@ -133,7 +140,7 @@ class ProvisionRetryForge:
                 f"Provision retry limit reached after {attempt + 1} attempts "
                 f"and {waited:g}s waiting: {_detail(error)}"
             ) from error
-        self._sleep(delay)
+        self._retry_sleep(delay)
         return waited + delay
 
     def _call(
@@ -170,7 +177,7 @@ class ProvisionRetryForge:
                                 "subtask_id or parent marker, record any Issue number in the plan, "
                                 "then rerun provision"
                             ) from uncertain_error
-                        self._sleep(probe_delay)
+                        self._retry_sleep(probe_delay)
                         waited += probe_delay
                         continue
                 return self._paced(action)
