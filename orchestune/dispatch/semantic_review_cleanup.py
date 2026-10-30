@@ -23,6 +23,9 @@ from orchestune.integrator.attempt_cleanup import (
 )
 from orchestune.review.semantic_gate import SemanticReviewStateV1
 
+#: Poll answer for a finished job whose output branch can no longer be fetched.
+_ARTIFACT_GONE = "artifact_pending"
+
 
 def _settler(
     forge: Forge, repository_root: Path, poll: Callable[..., Any]
@@ -45,7 +48,12 @@ def _settler(
             raise
         except Exception:  # noqa: BLE001
             return False
-        return bool(result.status not in UNSETTLED_OPERATION_STATUSES)
+        if result.status not in UNSETTLED_OPERATION_STATUSES:
+            return True
+        # A trusted terminal result marker with its output branch already gone
+        # (the runner deletes fix branches when it saves INVALIDATED) polls as
+        # RUNNING/artifact_pending: the job posted its result, so it has stopped.
+        return bool(result.error_code == _ARTIFACT_GONE)
 
     return settled
 

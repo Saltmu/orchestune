@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -16,12 +17,19 @@ from orchestune.dispatch.pre_scheduling_integration import (
     _advance_pending_semantic_reviews,
 )
 from orchestune.dispatch.result import PhaseStatus
-from orchestune.dispatch.semantic_review_adapters import SemanticOperationResult
+from orchestune.dispatch.semantic_review_adapters import (
+    SemanticOperationResult,
+    poll_semantic_operation,
+)
 from orchestune.forge import ForgeAuthError
 from orchestune.infra.git_cli import ConditionalBranchDeletionResult as Deletion
 from orchestune.integrator.attempt_cleanup import RemoteRefPorts
 from orchestune.models import PrRecord
-from orchestune.review.semantic_gate import SemanticOperationStatus
+from orchestune.review.semantic_gate import (
+    SemanticFixResultV1,
+    SemanticOperationStatus,
+    format_semantic_fix_result_marker,
+)
 from tests.dispatch.test_postcycle_semantic_review import (
     ATTEMPT,
     HEAD,
@@ -34,6 +42,7 @@ from tests.dispatch.test_postcycle_semantic_review import (
 )
 
 BRANCH = IDENTITY.temp_branch
+JOB = f"{ATTEMPT[:12]}-fix-0"
 
 
 class CleanupWorld(World):
@@ -94,15 +103,18 @@ class CleanupWorld(World):
             delete_ref=delete,
         )
 
-    def advance(self, *, minutes: float = 1) -> dict[str, Any]:
+    def advance(self, *, minutes: float = 1, real_poll: bool = False) -> dict[str, Any]:
         self.clock += timedelta(minutes=minutes)
+        operations = self.operations()
+        if real_poll:
+            operations = replace(operations, poll=poll_semantic_operation)
         return advance_pending_semantic_reviews(
             self.config,
             now=self.clock,
             repository_root=Path("."),
             worker_id="w1",
             verify_ci_fn=self.verify_ci,
-            operations=self.operations(),
+            operations=operations,
             claims=self.claims(),
             remote_head_fn=self.refs.get,
             cleanup_refs=self.refs_port(),
@@ -192,6 +204,39 @@ class TestCleanupInThePostCycle:
         (cleanup,) = world.advance()["cleanup"]
 
         assert cleanup["status"] == "cleaned" and world.pr_state == "CLOSED"
+
+    def _running_job(self, world: CleanupWorld, *, result_posted: bool) -> None:
+        world.seed(
+            phase=P.INVALIDATED,
+            operation_id=JOB,
+            operation_status=SemanticOperationStatus.RUNNING,
+        )
+        if result_posted:
+            marker = SemanticFixResultV1(ATTEMPT, JOB, HEAD, "2" * 40, 1, "completed")
+            world.post(PR, format_semantic_fix_result_marker(marker))
+
+    def test_a_finished_job_whose_output_branch_was_already_deleted_is_settled(
+        self, world: CleanupWorld
+    ) -> None:
+        """The runner deletes the fix branches when it saves INVALIDATED, so the
+        real poll answers RUNNING/artifact_pending for a job that has finished."""
+        self._running_job(world, result_posted=True)
+        with patch(
+            "orchestune.dispatch.semantic_review_adapters.fetch_remote_branch",
+            side_effect=RuntimeError("no such branch"),
+        ):
+            (cleanup,) = world.advance(real_poll=True)["cleanup"]
+
+        assert cleanup["status"] == "cleaned" and world.pr_state == "CLOSED"
+
+    def test_a_job_without_a_result_marker_is_still_running(
+        self, world: CleanupWorld
+    ) -> None:
+        self._running_job(world, result_posted=False)
+
+        (cleanup,) = world.advance(real_poll=True)["cleanup"]
+
+        assert cleanup["status"] == "pending" and world.pr_state == "OPEN"
 
     def test_an_unreadable_poll_is_not_settled(self, world: CleanupWorld) -> None:
         world.seed(
