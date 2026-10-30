@@ -6,7 +6,7 @@ import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -393,6 +393,85 @@ class TestResume:
 
         assert report.status == "pending" and "close" in report.detail
         assert "delete" not in repo.events and BRANCH in repo.refs
+
+
+class TestConcurrentCycles:
+    """The plan is made again under the claim (a stale plan would post twice)."""
+
+    def _other_worker_finishes_first(
+        self, repo: Repo, *, announce: bool = False
+    ) -> None:
+        acquire = repo.claims().acquire
+
+        def late(*args: Any, **kwargs: Any) -> ClaimResult:
+            # the other cycle ran to the end and released before this claim
+            repo.post(
+                PR,
+                "<!-- orchestune:notice:"
+                f"semantic-review-invalidated:{ATTEMPT} -->\nnotice",
+            )
+            repo.prs[PR] = replace(repo.prs[PR], state="CLOSED")
+            repo.refs.pop(BRANCH, None)
+            if announce:
+                repo.post(
+                    PR,
+                    "<!-- orchestune:notice:"
+                    f"semantic-review-superseded:{ATTEMPT}:{SUCCESSOR_PR} -->\nx",
+                )
+            return cast(ClaimResult, acquire(*args, **kwargs))
+
+        repo.claims = lambda: CleanupClaims(  # type: ignore[method-assign]
+            acquire=late,
+            renew=lambda _r, claim, **_: PushResult(PushStatus.PUSHED, claim),
+            release=lambda *_a, **_k: PushResult(PushStatus.PUSHED, None),
+        )
+
+    def test_a_cycle_that_lost_the_race_does_not_repeat_any_step(
+        self, repo: Repo
+    ) -> None:
+        repo.attempt()
+        self._other_worker_finishes_first(repo)
+
+        assert repo.run() == []
+
+        assert repo.events == []  # no notice, no close, no deletion
+        assert len(repo.notices(PR, "semantic-review-invalidated")) == 1
+
+    def test_an_announcement_made_meanwhile_is_not_repeated(self, repo: Repo) -> None:
+        repo.attempt()
+        repo.attempt(
+            SUCCESSOR,
+            SUCCESSOR_PR,
+            phase=SemanticReviewPhase.REVIEW_PENDING,
+            ref=False,
+        )
+        self._other_worker_finishes_first(repo, announce=True)
+
+        assert repo.run() == []
+
+        assert repo.events == []
+        assert len(repo.notices(PR, "semantic-review-superseded")) == 1
+
+    def test_a_pr_merged_meanwhile_stops_the_cleanup(self, repo: Repo) -> None:
+        repo.attempt()
+        acquire = repo.claims().acquire
+
+        def late(*args: Any, **kwargs: Any) -> ClaimResult:
+            repo.prs[PR] = replace(
+                repo.prs[PR], state="MERGED", merged_at="2026-10-26T00:00:00Z"
+            )
+            return cast(ClaimResult, acquire(*args, **kwargs))
+
+        repo.claims = lambda: CleanupClaims(  # type: ignore[method-assign]
+            acquire=late,
+            renew=lambda _r, claim, **_: PushResult(PushStatus.PUSHED, claim),
+            release=lambda *_a, **_k: PushResult(PushStatus.PUSHED, None),
+        )
+
+        (report,) = repo.run()
+
+        assert report.status == "blocked" and "merged" in report.detail
+        assert repo.events == [] and BRANCH in repo.refs
 
 
 class TestSafety:

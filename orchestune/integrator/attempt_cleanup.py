@@ -349,11 +349,16 @@ class AttemptCleaner:
             return None
         if not self._apply:
             return self._report(target, "planned", kept, done=tuple(steps))
+        was_open = pr.state.upper() == "OPEN"
         try:
             if steps:
                 if not self._settled(state, pr.number):
                     raise _Hold("pending", "the old fix operation may still be running")
                 self._acquire(target)
+                steps, kept, refs = self._replan(target, successor)
+                was_open = target.pr.state.upper() == "OPEN"
+                if not steps and not kept:
+                    return None  # another cycle finished while this one waited
             self._carry_out(target, steps, refs, successor)
         except _Hold as hold:
             return self._report(target, hold.status, hold.detail)
@@ -365,13 +370,27 @@ class AttemptCleaner:
             self._release(target)
         if kept:
             return self._report(target, "blocked", kept)
-        if refs is None and pr.state.upper() == "OPEN":
+        if refs is None and was_open:
             return self._report(
                 target,
                 "pending",
                 "remote refs unavailable; the branch is not cleaned yet",
             )
         return self._report(target, "cleaned", "")
+
+    def _replan(
+        self, target: _Target, successor: OpenAttempt | None
+    ) -> tuple[list[str], str, dict[str, str] | None]:
+        """Plan again under the claim: another cycle may have finished meanwhile,
+        and a stale plan would post its one-time comments a second time."""
+        current = self._forge.get_pull_request(target.pr.number)
+        if current.head_ref:
+            target.pr = current
+        if target.pr.state.upper() == "MERGED" or target.pr.merged_at:
+            raise _Hold("blocked", "the PR was merged; no destructive cleanup")
+        target.comments = self._forge.list_all_issue_comments(target.pr.number)
+        refs = self._refs.list_refs(self._root, self._parent)
+        return (*self._plan(target, refs, successor), refs)
 
     def _report(
         self,
