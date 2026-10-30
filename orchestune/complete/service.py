@@ -193,6 +193,18 @@ def _ensure_validated_head(
         )
 
 
+def _check_adopted_pr(
+    claim: Any, result: str, pr: int | None, head: str | None
+) -> None:
+    if result != "done" or claim.adopted_pr_number is None:
+        return
+    if pr != claim.adopted_pr_number or head != claim.adopted_pr_head_sha:
+        raise CompletionJournalError(
+            CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH,
+            "Adopted PR or HEAD changed since claim; re-establish ownership and review evidence",
+        )
+
+
 def _initial_issue_evidence(forge: Any, issue: int) -> dict[str, Any]:
     try:
         return {
@@ -235,13 +247,10 @@ def _new_record(
         completion_id=completion_id,
         head_sha=_head_sha(worktree),
     )
+    _check_adopted_pr(active.claim, request.result, outcome.pr, outcome.head_sha)
     outcome = _reviewed_outcome(outcome, request, policy)
     _ensure_validated_head(request, outcome.head_sha, policy)
-    policy = {
-        **policy,
-        "initial_issue": _initial_issue_evidence(forge, request.issue_number),
-        "context": {"active": encode_active_worktree(active)},
-    }
+    policy = _record_policy(policy, forge, request.issue_number, active)
     target = {
         "done": StatusLabel.DONE,
         "blocked": StatusLabel.BLOCKED,
@@ -270,6 +279,16 @@ def _new_record(
         prepublication_policy_evidence=policy,
         downstream_policy_records=policies,
     )
+
+
+def _record_policy(
+    policy: dict[str, Any], forge: Any, issue: int, active: Any
+) -> dict[str, Any]:
+    return {
+        **policy,
+        "initial_issue": _initial_issue_evidence(forge, issue),
+        "context": {"active": encode_active_worktree(active)},
+    }
 
 
 def _reject_policy(
@@ -526,6 +545,12 @@ def _active_preflight(
     request: CompleteRequest, state: Any, workspace: Any, worktree: Path, forge: Any
 ) -> None:
     active = state.active_worktrees[str(request.issue_number)]
+    _check_adopted_pr(
+        active.claim,
+        request.result,
+        request.to_outcome_record().pr,
+        _head_sha(worktree),
+    )
     _validate_claim_context(
         active,
         workspace.repository_identity,

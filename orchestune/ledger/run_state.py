@@ -452,12 +452,7 @@ def _build_active_worktree(
         "token_estimate_recorded": value.get(
             "token_estimate_recorded", "estimated_tokens" in value
         ),
-        "profile": value.get("profile"),
-        "model": value.get("model"),
-        "reasoning_effort": value.get("reasoning_effort"),
-        "selection_reason": value.get("selection_reason"),
-        "launch_attempt_id": value.get("launch_attempt_id"),
-        "launch_phase": value.get("launch_phase"),
+        **_active_launch_fields(value),
         **_launch_attribution_fields(value, key),
         "owner_kind": owner_kind,
         "claim_id": _required_active_string(value, "claim_id", key),
@@ -468,9 +463,27 @@ def _build_active_worktree(
         "repository_id": _required_active_string(value, "repository_id", key),
         "claimed_at": claimed_at,
         "owner_token_digest": _required_active_string(value, "owner_token_digest", key),
+        "adopted_pr_number": value.get("adopted_pr_number"),
+        "adopted_pr_head_sha": value.get("adopted_pr_head_sha"),
         **_parse_completion_journal_fields(value, key),
     }
-    return decode_active_worktree(normalized)
+    active = decode_active_worktree(normalized)
+    active.claim.validate()
+    return active
+
+
+def _active_launch_fields(value: dict[str, Any]) -> dict[str, Any]:
+    return {
+        name: value.get(name)
+        for name in (
+            "profile",
+            "model",
+            "reasoning_effort",
+            "selection_reason",
+            "launch_attempt_id",
+            "launch_phase",
+        )
+    }
 
 
 def _parse_active_worktree(key: object, value: object) -> ActiveWorktree:

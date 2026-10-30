@@ -79,6 +79,7 @@ class ClaimRequest:
     owner_kind: OwnerKind = OwnerKind.INTERACTIVE
     owner_id: str | None = None
     resume_claim_id: str | None = None
+    adopt_pr: int | None = None
     owner_token: str | None = field(default=None, repr=False)
     dry_run: bool = False
     timeout_seconds: float | None = None

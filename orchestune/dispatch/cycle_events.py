@@ -212,6 +212,7 @@ class _SerializedCompletion:
 type WorktreeCompletionAction = Literal[
     "completed",
     "completed_no_commits",
+    "completed_orphaned_pr",
     "completed_without_outcome",
     "already_merged",
     "blocked_base_branch_red",

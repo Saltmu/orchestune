@@ -71,6 +71,7 @@ from orchestune.dispatch.gc.git import (
     worktree_has_new_commits,
     worktree_has_uncommitted_changes,
 )
+from orchestune.dispatch.gc.orphaned_pr import find_orphaned_pr
 from orchestune.dispatch.gc.outcome_decision import _is_handoff_ready
 from orchestune.dispatch.gc.records import (
     _completed_worktree_record as _completed_worktree_record,
@@ -82,6 +83,7 @@ from orchestune.dispatch.gc.zombies import (
 )
 from orchestune.dispatch.launch_state import with_launch
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
+from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_lifecycle import has_completion_reservation
@@ -691,6 +693,14 @@ def _resolve_cloud_completion(
                 failure_descriptions(failures),
             )
         )
+    if status == "pending" and ctx.prs:
+        root = ctx.config.worktree_root.parent if ctx.config.worktree_root else None
+        if (
+            find_orphaned_pr(active, ctx.prs, root, run_git)
+            and fresh_external_hold(active, ctx.config, "completion", ctx.run_state)
+            is None
+        ):
+            return CompletionResolution.ready(active)
     if status != "completed":
         return CompletionResolution.pending()
     return CompletionResolution.ready(active)

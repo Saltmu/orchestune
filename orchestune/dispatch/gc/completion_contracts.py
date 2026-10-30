@@ -33,6 +33,7 @@ class CompletedWorktreeDecision:
     outcome: OutcomeRecord | None = None
     operation: str = ""
     error: str = ""
+    orphaned_pr: PrRecord | None = None
 
 
 class _CompletionContext(NamedTuple):

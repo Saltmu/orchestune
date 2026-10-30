@@ -48,6 +48,7 @@ _EXPECTED: dict[tuple[str, str], tuple[str, bool, bool]] = {
     ("WorktreeCompletion", "already_merged"): (HISTORY, True, False),
     ("WorktreeCompletion", "escalated_token_limit_exceeded"): (HISTORY, False, False),
     ("WorktreeCompletion", "completed_no_commits"): (RETIRE, False, False),
+    ("WorktreeCompletion", "completed_orphaned_pr"): (RETIRE, False, False),
     ("WorktreeCompletion", "completed_without_outcome"): (RETIRE, False, False),
     ("WorktreeCompletion", "blocked_base_branch_red"): (RETIRE, False, False),
     ("WorktreeCompletion", "escalated_base_branch_red"): (RETIRE, False, False),

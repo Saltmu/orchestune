@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from orchestune.claim.adopt_pr import orphan_marker, validate_escalation_reason
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_events import (
     CompletionEvent,
@@ -57,6 +59,12 @@ from orchestune.dispatch.gc.git import (
     worktree_has_uncommitted_changes,
 )
 from orchestune.dispatch.gc.handoff import HandoffForge, _verify_outcome
+from orchestune.dispatch.gc.orphaned_pr import (
+    orphan_decision,
+    orphan_message,
+    save_orphan_receipt,
+    saved_orphan_decision,
+)
 from orchestune.dispatch.gc.outcome_decision import (
     RetryKind,
     _decide_action_from_outcome,
@@ -109,6 +117,7 @@ from orchestune.pr_freshness import (  # noqa: F401 - gc package re-exports the 
 )
 from orchestune.pr_freshness import should_exclude_pr
 from orchestune.pr_link_notice import pr_matches_issue
+from orchestune.pr_link_notice_trust import NoticePresence, TrustContext
 from orchestune.targets.completion_policy import token_limit_decision
 from orchestune.task_metadata import TaskMetadata
 
@@ -143,15 +152,19 @@ def _fetch_outcome_for_active(
 
 def _detect_worktree_commits(
     active: ActiveWorktree, repository_root: str | Path | None
-) -> tuple[bool, str | None]:
+) -> tuple[bool | None, str | None]:
     if active.launch.external_id is None:
-        return worktree_has_new_commits(
+        local_result = worktree_has_new_commits(
             active.core.worktree_path, active.core.base_branch
-        ), None
+        )
+        if local_result is not None:
+            return local_result, None
     repo_root = repository_root or Path(active.core.worktree_path).parent
     sha = remote_branch_commit_sha_if_ahead(
         repo_root, active.core.branch, active.core.base_branch
     )
+    if active.launch.external_id is None and sha is None:
+        return None, None
     return sha is not None, sha
 
 
@@ -217,6 +230,7 @@ def _decide_completed_worktree_outcome(
     run_state: RunState | None = None,
     max_review_timeout_retries: int = DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS,
     issue: IssueRecord | None = None,
+    open_prs: Sequence[PrRecord] | None = None,
 ) -> CompletedWorktreeDecision:
     subtask_id = active_task.subtask_id if active_task else ""
     is_dirty = worktree_has_uncommitted_changes(active.core.worktree_path)
@@ -236,11 +250,46 @@ def _decide_completed_worktree_outcome(
         ):
             return prior_merge_decision
 
-    has_new_commits, commit_sha = _detect_worktree_commits(active, repository_root)
     if outcome is None:
         outcome, err_decision = _resolve_active_outcome(active, subtask_id, forge)
         if err_decision is not None:
             return err_decision
+
+    return _decide_clean_outcome(
+        active,
+        subtask_id,
+        repository_root,
+        outcome,
+        open_prs,
+        run_state,
+        max_review_timeout_retries,
+    )
+
+
+def _decide_clean_outcome(
+    active: ActiveWorktree,
+    subtask_id: str,
+    repository_root: str | Path | None,
+    outcome: OutcomeRecord | None,
+    open_prs: Sequence[PrRecord] | None,
+    run_state: RunState | None,
+    max_review_timeout_retries: int,
+) -> CompletedWorktreeDecision:
+    if saved := saved_orphan_decision(active, subtask_id, open_prs, run_state):
+        return saved
+    if outcome is None and open_prs:
+        if orphan := orphan_decision(
+            active, subtask_id, open_prs, repository_root, run_git
+        ):
+            return orphan
+    has_new_commits, commit_sha = _detect_worktree_commits(active, repository_root)
+    if has_new_commits is None:
+        return CompletedWorktreeDecision(
+            action="completion_skipped_forge_error",
+            subtask_id=subtask_id,
+            operation="commit_comparison",
+            error="Local comparison failed and remote progress could not be verified",
+        )
 
     retry_count, retry_pending = _get_review_timeout_retry_state(
         run_state, active.core.issue_number
@@ -252,6 +301,11 @@ def _decide_completed_worktree_outcome(
         max_review_timeout_retries=max_review_timeout_retries,
         review_timeout_retry_pending=retry_pending,
     )
+    if action == "completed_no_commits" and open_prs and not _is_handoff_ready(active):
+        if orphan := orphan_decision(
+            active, subtask_id, open_prs, repository_root, run_git
+        ):
+            return orphan
     return CompletedWorktreeDecision(
         action=action,
         subtask_id=subtask_id,
@@ -432,6 +486,38 @@ def _apply_no_commits_escalation(ctx: _CompletionContext) -> None:
     )
 
 
+def _apply_orphaned_pr_escalation(
+    ctx: _CompletionContext, decision: CompletedWorktreeDecision
+) -> None:
+    pr = decision.orphaned_pr
+    assert pr is not None
+    message = orphan_message(ctx.active, pr)
+    print(message, file=sys.stderr)
+    if ctx.config.apply:
+        forge = ctx.config.resolved_forge
+        comments = forge.list_comments(ctx.active.core.issue_number)
+        marker = orphan_marker(ctx.active.claim.claim_id or "", pr)
+        if any(marker in str(comment.get("body", "")) for comment in comments):
+            trust = TrustContext(forge)
+            validate_escalation_reason(
+                comments,
+                marker,
+                lambda comment: trust.evaluate_candidate_markers([comment])[0]
+                is NoticePresence.PRESENT,
+            )
+            stale = _prepare_apply_escalation(ctx.active, ctx.config, ctx.active_task)
+            if stale is not None:
+                apply_human_review_escalation(
+                    ctx.active.core.issue_number,
+                    stale,
+                    message,
+                    forge=forge,
+                    post_comment=False,
+                )
+            return
+    _apply_escalation(ctx.active, ctx.config, message, ctx.active_task)
+
+
 def _reserve_backoff_retry(
     run_state: RunState,
     issue_number: int,
@@ -609,6 +695,7 @@ def _apply_done_worktree_cleanup(ctx: _CompletionContext) -> str | None:
 
 
 _BLOCKED_ACTION_HANDLERS = {
+    "completed_orphaned_pr": _apply_orphaned_pr_escalation,
     "completed_without_outcome": lambda ctx, _: _apply_without_outcome_escalation(ctx),
     "blocked_base_branch_red": _apply_blocked_base_branch_red,
     "escalated_base_branch_red": _apply_escalated_base_branch_red,
@@ -787,6 +874,16 @@ def _apply_completed_worktree_outcome(
 ) -> CompletionEvent:
     if hold := fresh_external_hold(active, config, "completion", run_state):
         return hold.event()
+    if config.apply and decision.action == "completed_orphaned_pr":
+        if run_state is None or decision.orphaned_pr is None:
+            raise RuntimeError("orphaned PR escalation requires a run state and PR")
+        save_orphan_receipt(
+            active,
+            decision.orphaned_pr,
+            run_state,
+            config.run_state_path,
+            save_run_state,
+        )
     ctx = _CompletionContext(
         active,
         active_task,
@@ -825,6 +922,7 @@ def _finalize_completed_worktree(
         run_state=run_state,
         max_review_timeout_retries=config.max_review_timeout_retries,
         issue=issue,
+        open_prs=open_prs,
     )
     return _apply_completed_worktree_outcome(
         active,

@@ -83,7 +83,9 @@ def _selected(
 ) -> ActiveWorktree:
     active = state.active_worktrees.get(str(request.issue_number))
     if active is None or active.claim.claim_id != request.claim_id:
-        raise ValueError("Claim generation changed or active claim is absent")
+        raise ValueError(
+            f"Claim generation changed or active claim is absent; for an eligible orphan PR, preview orchestune claim {request.issue_number} --adopt-pr <PR> --no-apply"
+        )
     if active.claim.owner_kind != "interactive" or active.launch.external_id:
         raise ValueError("Restart supports only interactive local claims")
     _, problem = inspect_claim(active, state, workspace, cwd, restore_marker=False)

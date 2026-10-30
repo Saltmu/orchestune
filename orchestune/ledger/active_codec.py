@@ -58,6 +58,8 @@ _ACTIVE_FIELD_NAMES = (
     "launch_target",
     "launch_log_path",
     "launch_log_offset",
+    "adopted_pr_number",
+    "adopted_pr_head_sha",
 )
 
 #: Keys omitted from the encoded record while their value is null.
@@ -67,6 +69,8 @@ _OMIT_WHEN_NULL = frozenset(
         "launch_target",
         "launch_log_path",
         "launch_log_offset",
+        "adopted_pr_number",
+        "adopted_pr_head_sha",
     }
 )
 

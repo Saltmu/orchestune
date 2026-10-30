@@ -27,6 +27,8 @@ def apply_human_review_escalation(
     comment: str,
     forge: Forge | None = None,
     on_label_applied: Callable[[], None] | None = None,
+    *,
+    post_comment: bool = True,
 ) -> None:
     """現在保持しているstatus:*ラベル（in-progress/queued/blocked）を除去した上で
     status:blocked-human-reviewを付与し、理由をコメントする。
@@ -53,4 +55,5 @@ def apply_human_review_escalation(
         # status:blocked-human-reviewが付いた瞬間に確定させる。
         on_label_added=on_label_applied,
     )
-    forge.add_comment(issue_number, comment)
+    if post_comment:
+        forge.add_comment(issue_number, comment)
