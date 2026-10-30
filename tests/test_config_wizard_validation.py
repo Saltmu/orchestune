@@ -105,6 +105,24 @@ class TestValidateTomlConfigSharedEnhancements:
 
 
 class TestConfigWizardValidationAdapters:
+    def test_diagnose_hyphen_only_prohibited_key(self, monkeypatch):
+        from orchestune.config_wizard import validation
+
+        monkeypatch.setitem(
+            validation.PROHIBITED_TOML_KEYS,
+            "future-hyphen-only",
+            "setting 'future-hyphen-only' is retired; use the future replacement",
+        )
+
+        errors = validation.diagnose_existing_document(
+            {"future-hyphen-only": "secret-value"}
+        )
+
+        assert errors == [
+            "Prohibited key 'future-hyphen-only': setting 'future-hyphen-only' "
+            "is retired; use the future replacement"
+        ]
+
     @pytest.mark.parametrize("key", ["model_tiers", "model-tiers"])
     def test_diagnose_retired_model_tiers_with_migration_guidance(self, key):
         from orchestune.config_wizard.validation import diagnose_existing_document

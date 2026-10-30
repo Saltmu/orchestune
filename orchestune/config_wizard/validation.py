@@ -65,7 +65,11 @@ def diagnose_existing_document(doc_data: dict[str, Any]) -> list[str]:
     for raw_key in doc_data:
         norm_key = raw_key.replace("-", "_")
         if raw_key in PROHIBITED_TOML_KEYS or norm_key in PROHIBITED_TOML_KEYS:
-            guidance = PROHIBITED_TOML_KEYS.get(raw_key, PROHIBITED_TOML_KEYS[norm_key])
+            guidance = (
+                PROHIBITED_TOML_KEYS[raw_key]
+                if raw_key in PROHIBITED_TOML_KEYS
+                else PROHIBITED_TOML_KEYS[norm_key]
+            )
             msg = f"Prohibited key '{raw_key}': {guidance}"
             diagnostics.append(msg)
             seen.add(raw_key)
