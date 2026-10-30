@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from orchestune.dag.graph import build_dag
 from orchestune.dag.models import (
@@ -59,6 +59,25 @@ from orchestune.provisioning.subtasks import (
     _provision_subtask,
 )
 from orchestune.validation import validate_issue_number
+
+
+@dataclass(frozen=True)
+class ProvisionProgress:
+    """Observed phase; callbacks must not raise or alter provisioning state."""
+
+    step: Literal["parent", "index", "subtask", "retry-wait", "sync", "stopped"]
+    subtask_id: str | None = None
+    index: int | None = None
+    total: int | None = None
+    wait_seconds: float | None = None
+
+
+ProvisionProgressHook = Callable[[ProvisionProgress], None]
+
+
+def _notify(hook: ProvisionProgressHook | None, event: ProvisionProgress) -> None:
+    if hook is not None:
+        hook(event)
 
 
 @dataclass(frozen=True)
@@ -169,10 +188,12 @@ def _with_progress_diagnostic(
     reused: dict[str, int],
     remaining: int,
     plan_path: str | Path,
+    on_progress: ProvisionProgressHook | None = None,
 ) -> tuple[int, bool, bool, bool]:
     try:
         return operation()
     except Exception:
+        _notify(on_progress, ProvisionProgress("stopped"))
         print(
             f"Provision stopped: created={created}, reused={reused}, "
             f"unfinished={remaining}; check Issue numbers in {plan_path} "
@@ -191,20 +212,23 @@ def _provision_subtasks_loop(
     parent_issue_number: int,
     existing_by_subtask_id: dict[str, IssueRecord],
     metadata_search_supported: bool,
+    on_progress: ProvisionProgressHook | None = None,
 ) -> tuple[dict[str, int], dict[str, int], list[str]]:
     resolved_numbers: dict[str, int] = {}
     dependencies_done: dict[str, bool] = {}
     created: dict[str, int] = {}
     reused: dict[str, int] = {}
-    degraded_subtask_ids: list[str] = []
+    degraded: list[str] = []
+    total = len(dag.topological_order)
 
     for index, subtask_id in enumerate(dag.topological_order):
-        subtask = dag.subtasks[subtask_id]
-        number, is_reused, is_done, is_degraded = _with_progress_diagnostic(
+        event = ProvisionProgress("subtask", subtask_id, index + 1, total)
+        _notify(on_progress, event)
+        result = _with_progress_diagnostic(
             partial(
                 _provision_and_link_one_subtask,
                 resolved_forge,
-                subtask,
+                dag.subtasks[subtask_id],
                 template,
                 resolved_repo_root,
                 plan_path,
@@ -216,21 +240,32 @@ def _provision_subtasks_loop(
             ),
             created,
             reused,
-            len(dag.topological_order) - index,
+            total - index,
             plan_path,
+            on_progress,
         )
-        (reused if is_reused else created)[subtask_id] = number
-        dependencies_done[subtask_id] = is_done
-        if is_degraded:
-            degraded_subtask_ids.append(subtask_id)
-        resolved_numbers[subtask_id] = number
-        # #664: 新規作成分は`_provision_subtask`が（関係づけの前に）既に書き戻して
-        # いるため、ここで書くのは再利用分だけでよい。両方書くと同じ値で計画
-        # ファイルを2回書き換えることになる。
-        if is_reused:
-            write_issue_numbers(plan_path, {subtask_id: number})
+        _record_subtask(subtask_id, result, created, reused, degraded, plan_path)
+        resolved_numbers[subtask_id] = result[0]
+        dependencies_done[subtask_id] = result[2]
 
-    return created, reused, degraded_subtask_ids
+    return created, reused, degraded
+
+
+def _record_subtask(
+    subtask_id: str,
+    result: tuple[int, bool, bool, bool],
+    created: dict[str, int],
+    reused: dict[str, int],
+    degraded: list[str],
+    plan_path: str | Path,
+) -> None:
+    number, is_reused, _, is_degraded = result
+    (reused if is_reused else created)[subtask_id] = number
+    if is_degraded:
+        degraded.append(subtask_id)
+    # New Issues were already persisted before linking (#664).
+    if is_reused:
+        write_issue_numbers(plan_path, {subtask_id: number})
 
 
 def _prepare_provisioning_context(
@@ -308,10 +343,23 @@ def _preflight_provisioning_fit(
     return None
 
 
-def _resolve_provision_forge(forge: IssueForge | None) -> IssueForge:
+def _resolve_provision_forge(
+    forge: IssueForge | None, on_progress: ProvisionProgressHook | None = None
+) -> IssueForge:
     base = forge or GitHubForge()
     interval = 0.2 if isinstance(base, GitHubForge) else 0
-    return cast(IssueForge, ProvisionRetryForge(base, min_interval=interval))
+    on_wait = (
+        (
+            lambda seconds: on_progress(
+                ProvisionProgress("retry-wait", wait_seconds=seconds)
+            )
+        )
+        if on_progress is not None
+        else None
+    )
+    return cast(
+        IssueForge, ProvisionRetryForge(base, min_interval=interval, on_wait=on_wait)
+    )
 
 
 def _preflight_parent_fit(
@@ -339,8 +387,10 @@ def _apply_provisioning(
     dag: DagResult,
     template: str,
     resolved_repo_root: Path,
+    on_progress: ProvisionProgressHook | None = None,
 ) -> ProvisionResult:
-    resolved_forge = _resolve_provision_forge(forge)
+    resolved_forge = _resolve_provision_forge(forge, on_progress)
+    _notify(on_progress, ProvisionProgress("parent"))
     if preflight_failed := _preflight_parent_fit(
         resolved_forge, metadata, plan_path, validated_parent
     ):
@@ -353,6 +403,7 @@ def _apply_provisioning(
         explicit_parent_issue=validated_parent,
         sync_plan=False,
     )
+    _notify(on_progress, ProvisionProgress("index"))
     existing_by_subtask_id, metadata_search_supported = _index_sub_issues_by_subtask_id(
         resolved_forge, parent_issue_number
     )
@@ -365,7 +416,9 @@ def _apply_provisioning(
         parent_issue_number,
         existing_by_subtask_id,
         metadata_search_supported,
+        on_progress,
     )
+    _notify(on_progress, ProvisionProgress("sync"))
     plan_synced = sync_parent_decomposition_plan(
         resolved_forge, parent_issue_number, plan_path
     )
@@ -386,12 +439,16 @@ def provision_issues(
     template_path: str | Path = ".github/issue_template.md",
     repo_root: str | Path | None = None,
     parent_issue: int | None = None,
+    *,
+    on_progress: ProvisionProgressHook | None = None,
 ) -> ProvisionResult:
     """Provision plan subtasks idempotently, optionally under an adopted EPIC.
 
     ``repo_root`` resolves footprints and configuration independently of the
     caller's working directory. ``parent_issue`` adopts and normalizes an
     existing Issue instead of deriving a new parent from the plan title.
+    ``on_progress`` observes apply phases only and must not raise; callers own
+    display-error handling. Callback failures propagate without being swallowed.
     """
     (
         resolved_repo_root,
@@ -423,4 +480,5 @@ def provision_issues(
         dag,
         template,
         resolved_repo_root,
+        on_progress,
     )
