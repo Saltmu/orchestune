@@ -21,6 +21,8 @@ from orchestune.review.rounds import MAX_REVIEW_ROUNDS
 from orchestune.targets.cloud_routine import ROUTINE_TOKEN_ENV_VAR
 
 PROHIBITED_TOML_KEYS: dict[str, str] = {
+    "model_tiers": config_contracts.retired_model_tiers_message("model_tiers"),
+    "model-tiers": config_contracts.retired_model_tiers_message("model-tiers"),
     "routine_token": (
         "setting 'routine_token' is prohibited in configuration files; "
         f"set the {ROUTINE_TOKEN_ENV_VAR} environment variable instead"
@@ -168,9 +170,7 @@ _SEMANTIC_FIX_PROVIDER_CHOICES = frozenset(
 )
 _SEMANTIC_REVIEW_TRIGGER_CHOICES = frozenset({"pr-comment", "dispatch-target"})
 
-_EXECUTION_PROFILE_TABLE_KEYS = frozenset(
-    {"execution_profiles", "execution-profiles", "model_tiers", "model-tiers"}
-)
+_EXECUTION_PROFILE_TABLE_KEYS = frozenset({"execution_profiles", "execution-profiles"})
 
 
 def _normalize_key(key: str) -> str:
@@ -359,8 +359,6 @@ def validate_toml_config(config_data: dict[str, Any]) -> dict[str, Any]:
     if (
         "execution_profiles" in config_data
         or "execution-profiles" in config_data
-        or "model_tiers" in config_data
-        or "model-tiers" in config_data
         or "default_execution_profile" in config_data
         or "default-execution-profile" in config_data
     ):
