@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 import pytest
+from architecture_source_support import _source_ast
 
 from orchestune import StatusLabel
 from orchestune.forge.admin import REQUIRED_LABELS
@@ -86,8 +87,7 @@ def test_no_direct_status_string_literals_in_production_code() -> None:
         rel_path = py_file.relative_to(PACKAGE_ROOT)
         if rel_path.name in _EXEMPT_FILES:
             continue
-        code = py_file.read_text(encoding="utf-8")
-        tree = ast.parse(code, filename=str(py_file))
+        tree = _source_ast(py_file)
         file_violations = _find_status_literals_in_ast(tree, str(rel_path))
         if file_violations:
             violations_by_file[str(rel_path)] = file_violations
