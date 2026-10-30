@@ -64,7 +64,7 @@ from orchestune.integrator.semantic_claim import (
 from orchestune.issue_notice import latest_notice_body, post_notice_if_changed
 from orchestune.labels import StatusLabel
 from orchestune.pr_link_notice_trust import NoticePresence, TrustContext
-from orchestune.review.acquisition import collect_review_state
+from orchestune.review.acquisition import collect_review_state, has_reviewer_activity
 from orchestune.review.markers import build_trigger_body, derive_review_target
 from orchestune.review.rounds import (
     ReviewTrigger,
@@ -564,17 +564,20 @@ class SemanticReviewCycleRunner:
                 ctx.pr.pr_number
             ),
         }
-        result = collect_review_state(
-            snapshot,
-            trigger.reviewer,
-            exclude_issue_comment_ids=excluded,
-            round_started_at=trigger.created_at,
-            round_ended_at=later[0].created_at if later else "",
-            requested_head_sha=state.head_sha,
-            activity_started_at=started,
-            activity_ended_at=ended,
+        window: dict[str, Any] = {
+            "exclude_issue_comment_ids": excluded,
+            "round_started_at": trigger.created_at,
+            "round_ended_at": later[0].created_at if later else "",
+            "requested_head_sha": state.head_sha,
+            "activity_started_at": started,
+            "activity_ended_at": ended,
+        }
+        result = collect_review_state(snapshot, trigger.reviewer, **window)
+        acknowledged = result[
+            "acquisition_status"
+        ] != "unavailable" or has_reviewer_activity(
+            snapshot, trigger.reviewer, **window
         )
-        acknowledged = result["acquisition_status"] != "unavailable"
         if result["acquisition_status"] != "acquired":
             return _Review(acknowledged=acknowledged, requests=requests)
         target, _ = derive_review_target(
@@ -773,11 +776,9 @@ class SemanticReviewCycleRunner:
             self._require_unchanged(ctx)
             self._revalidate(ctx)
             ctx.comments = self._forge.list_all_issue_comments(ctx.pr.pr_number)
-            if (
-                len(_round_triggers(self._trusted_triggers(ctx), ctx.state, fresh=True))
-                > 1
-            ):
-                return self._report(ctx, "held", ctx.state, reason="retry_budget_spent")
+            ctx.review = self._acquire_review(ctx)  # a late answer cancels the retry
+            if self._diagnose(ctx, ctx.state, ctx.review)[1].action != AckAction.RETRY:
+                return self._report(ctx, "held", ctx.state, reason="retry_not_due")
             self._forge.create_issue_comment(
                 ctx.pr.pr_number, self._trigger_body(ctx, ctx.state)
             )

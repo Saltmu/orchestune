@@ -674,6 +674,37 @@ def _in_progress_result(
     )
 
 
+def has_reviewer_activity(
+    value: object,
+    bot_name: str,
+    *,
+    exclude_issue_comment_ids: set[int | str] | None = None,
+    round_started_at: str = "",
+    round_ended_at: str = "",
+    requested_head_sha: str | None = None,
+    activity_started_at: str = "",
+    activity_ended_at: str = "",
+) -> bool:
+    """Whether the bot did anything in the round, review content or not.
+
+    A lone "job finished" or tracker comment is no review content (the state is
+    `unavailable`) but proves the reviewer saw the request (#1436).
+    """
+    return (
+        _latest_bot_activity_item(
+            normalize_review_state(value),
+            bot_name,
+            exclude_issue_comment_ids=exclude_issue_comment_ids,
+            round_started_at=round_started_at,
+            round_ended_at=round_ended_at,
+            requested_head_sha=requested_head_sha,
+            activity_started_at=activity_started_at,
+            activity_ended_at=activity_ended_at,
+        )
+        is not None
+    )
+
+
 def collect_review_state(
     value: object,
     bot_name: str = "claude",
