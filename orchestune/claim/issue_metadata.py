@@ -11,7 +11,7 @@ from orchestune.claim.contracts import (
     ReservationKind,
 )
 from orchestune.forge import Forge
-from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
+from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, dump_footprint_yaml
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
 
@@ -43,7 +43,7 @@ def update_issue_claim_metadata(
         data["reservation_kind"] = reservation_kind
         if forced_serial:
             data["forced_serial"] = True
-        new_block = yaml.dump(data, allow_unicode=True, default_flow_style=False)
+        new_block = dump_footprint_yaml(data)
         start, end = match.span(1)
         return body[:start] + new_block + body[end:]
 
@@ -54,11 +54,7 @@ def update_issue_claim_metadata(
     }
     if forced_serial:
         fresh["forced_serial"] = True
-    new_yaml = yaml.dump(
-        fresh,
-        allow_unicode=True,
-        default_flow_style=False,
-    )
+    new_yaml = dump_footprint_yaml(fresh)
     separator = "" if body.endswith("\n") else "\n"
     return f"{body}{separator}\n## Footprint\n```yaml\n{new_yaml}```\n"
 

@@ -31,6 +31,35 @@ def _yaml_safe_load(stream: str) -> Any:
 
 FOOTPRINT_BLOCK_PATTERN = re.compile(r"```yaml\s*\n(.*?)```", re.DOTALL)
 
+
+class _FootprintDumper(yaml.SafeDumper):
+    """Indent block-sequence items under their key, as people write Footprint YAML."""
+
+    def increase_indent(self, flow: bool = False, indentless: bool = False) -> None:
+        super().increase_indent(flow, False)
+
+
+# `yaml.dump` wraps plain scalars at `width`; no real description comes close.
+_FOOTPRINT_YAML_WIDTH = 2**20
+
+
+def dump_footprint_yaml(data: dict[str, Any]) -> str:
+    """#1465: serialize a Footprint fence body without re-laying-out the author's YAML.
+
+    Every writer that edits an existing fence goes through here so claim, amend and
+    the backfills agree: keys keep their insertion order, list items stay indented
+    and long text stays on one line. (Comments are dropped by PyYAML on read.)
+    """
+    return yaml.dump(
+        data,
+        Dumper=_FootprintDumper,
+        allow_unicode=True,
+        default_flow_style=False,
+        sort_keys=False,
+        width=_FOOTPRINT_YAML_WIDTH,
+    )
+
+
 # Embedded in every parent (EPIC) issue `provisioning.py` creates, and required
 # (in addition to an exact title match) before an orphan-recovery lookup is
 # allowed to adopt an existing issue as "our" parent: an unrelated issue that
@@ -334,7 +363,7 @@ def backfill_parent_issue_number(body: str, parent_issue_number: int) -> str | N
     ):
         return None
     data["parent_issue_number"] = parent_issue_number
-    new_block = yaml.dump(data, allow_unicode=True, default_flow_style=False)
+    new_block = dump_footprint_yaml(data)
     start, end = match.span(1)
     return body[:start] + new_block + body[end:]
 
@@ -397,7 +426,7 @@ def backfill_recovery_counters(
         return None
     data["recompute_count"] = recompute_count
     data["forced_serial"] = forced_serial
-    new_block = yaml.dump(data, allow_unicode=True, default_flow_style=False)
+    new_block = dump_footprint_yaml(data)
     start, end = match.span(1)
     return body[:start] + new_block + body[end:]
 

@@ -58,6 +58,36 @@ def _update(body: str, **kwargs: bool) -> str:
     )
 
 
+class TestUpdateIssueClaimMetadataKeepsLayout:
+    """#1465: the claim appends its keys without re-sorting or re-wrapping the fence."""
+
+    def test_only_the_claim_keys_are_appended(self) -> None:
+        description = "長い説明文が一行で書かれている。" + "あいうえお" * 30
+
+        def body(*extra: str) -> str:
+            tail = "".join(f"{line}\n" for line in extra)
+            return (
+                "Intro text.\n\n## Footprint\n\n```yaml\n"
+                "subtask_id: example\n"
+                f"description: {description}\n"
+                "depends_on: []\n"
+                "footprint:\n"
+                "  - tests/a.py\n"
+                "  - tests/b.py\n"
+                f"{tail}```\n\nTrailing text.\n"
+            )
+
+        result = update_issue_claim_metadata(
+            body(), "interactive", "claim-1", "footprint"
+        )
+
+        assert result == body(
+            "owner_kind: interactive",
+            "claim_id: claim-1",
+            "reservation_kind: footprint",
+        )
+
+
 class TestUpdateIssueClaimMetadata:
     @pytest.mark.parametrize(
         "body",
