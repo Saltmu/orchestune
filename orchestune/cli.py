@@ -72,6 +72,10 @@ def _dispatch_tool_command(cmd: str) -> bool:
         from orchestune.dispatch.doctor_cli import main as doctor_main
 
         sys.exit(doctor_main())
+    elif cmd == "review":
+        from orchestune.dispatch.review_cli import main as review_main
+
+        sys.exit(review_main())
     elif cmd == "config":
         from orchestune.config_wizard.cli import main as config_main
 
@@ -106,6 +110,7 @@ def main() -> None:
             ("recover", "Inspect or recover one stopped claim (preview by default)"),
             ("gc", "Release handoff-ready task reservations (--no-apply to preview)"),
             ("doctor", "Diagnose dispatch single-executor setup (offline, read-only)"),
+            ("review", "Inspect, retry or override a Layer-2 semantic review"),
             ("config", "Create or edit orchestune.toml interactively"),
             ("skills", "Install and manage Orchestune skills for AI assistants"),
             ("scratch", "Create scratch session directories for task artifacts"),

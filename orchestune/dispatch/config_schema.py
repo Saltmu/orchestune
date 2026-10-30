@@ -101,6 +101,8 @@ NON_NEGATIVE_INT_KEYS = frozenset(
         # #820: zero retries means "the first timeout is terminal".
         "max_integration_timeout_retries",
         "max_semantic_fix_retries",
+        # #1436: zero retries the unanswered review request immediately.
+        "semantic_review_retry_backoff_seconds",
     }
 )
 
@@ -118,13 +120,16 @@ POSITIVE_INT_KEYS = frozenset(
         "usage_limit_backoff_seconds",
         "max_semantic_review_rounds",
         "semantic_review_timeout_seconds",
+        "semantic_review_ack_timeout_seconds",
         "semantic_fix_timeout_seconds",
         "semantic_ci_timeout_seconds",
         "semantic_attempt_timeout_seconds",
     }
 )
 
-BOOLEAN_CONFIG_KEYS = frozenset({"apply", "zombie_gc", "force_integration_review"})
+BOOLEAN_CONFIG_KEYS = frozenset(
+    {"apply", "zombie_gc", "force_integration_review", "semantic_review_auto_retry"}
+)
 
 STRING_KEYS = frozenset(
     {"local_cmd", "routine_id", "codex_cloud_env", "default_execution_profile"}

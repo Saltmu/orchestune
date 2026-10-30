@@ -15,7 +15,6 @@ import hashlib
 import os
 import re
 import socket
-import tempfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -25,6 +24,7 @@ from typing import Any, Literal, cast
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.reviewer import resolve_reviewer_bot
+from orchestune.dispatch.semantic_review_ack import AckAction, AckAssessment
 from orchestune.dispatch.semantic_review_adapters import (
     SemanticOperationResult,
     SemanticReviewPreflightResult,
@@ -34,14 +34,20 @@ from orchestune.dispatch.semantic_review_adapters import (
     trigger_semantic_review_round,
     validate_semantic_review_preflight,
 )
+from orchestune.dispatch.semantic_review_ci import (
+    RemoteHeadFn,
+    remote_branch_sha,
+    verify_semantic_ci,
+)
+from orchestune.dispatch.semantic_review_diagnostics import (
+    ReviewDiagnostics,
+    build_review_diagnostics,
+)
 from orchestune.forge import Forge, ForgeAuthError
-from orchestune.infra.git_cli import run_git
-from orchestune.infra.process_utils import default_ci_command
 from orchestune.integrator.attempt import (
     OpenAttempt,
     find_open_attempts,
 )
-from orchestune.integrator.ci_execution import run_ci_stages
 from orchestune.integrator.semantic_claim import (
     DETAIL_FIX_NOT_DESCENDANT,
     ClaimResult,
@@ -71,7 +77,6 @@ from orchestune.review.semantic_gate import (
     ACTIVE_PENDING_PHASES,
     IN_FLIGHT_OPERATION_STATUSES,
     IntegrationAttemptIdentity,
-    SemanticCiConclusion,
     SemanticCiObservation,
     SemanticJudgmentDecision,
     SemanticOperationObservation,
@@ -107,6 +112,8 @@ _CLAIM_TTL_SECONDS = 300
 #: Tolerated GitHub/local clock difference when a trigger is matched to a round.
 _CLOCK_SKEW = timedelta(seconds=60)
 _WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
+#: A reviewer that showed no activity after its request (#1436).
+_ACK_REASON = "review_not_acknowledged"
 _SEMANTIC_MARKERS = (
     "orchestune:semantic-review-",
     "orchestune:semantic-fix-result",
@@ -142,7 +149,6 @@ WARNING_STATUSES = frozenset(
 )
 
 VerifyCiFn = Callable[[str, str], SemanticCiObservation | None]
-RemoteHeadFn = Callable[[str], str | None]
 
 
 @dataclass(frozen=True)
@@ -188,6 +194,8 @@ class _Review:
     complete: bool = False
     acknowledged: bool = False
     result: dict[str, Any] | None = None
+    #: Trusted requests of this round and head: (comment id, creation time).
+    requests: tuple[tuple[str, datetime], ...] = ()
 
 
 @dataclass
@@ -202,6 +210,7 @@ class _Attempt:
     review: _Review = _Review()
     obs: SemanticTransitionObservation | None = None
     claim: SemanticClaim | None = None
+    ack: AckAssessment | None = None
 
 
 class _Stop(Exception):
@@ -211,71 +220,6 @@ class _Stop(Exception):
         super().__init__(status)
         self.status = status
         self.details = details
-
-
-def remote_branch_sha(repository_root: str | Path, branch: str) -> str | None:
-    """The remote tip of ``branch``; ``None`` only when the branch is absent."""
-    result = run_git(
-        ["ls-remote", "--exit-code", "origin", f"refs/heads/{branch}"],
-        cwd=repository_root,
-        check=False,
-    )
-    if result.returncode == 2:
-        return None
-    if result.returncode != 0 or not result.stdout.strip():
-        raise RuntimeError(f"failed to read origin/{branch}: {result.stderr}")
-    return result.stdout.split()[0].lower()
-
-
-def verify_semantic_ci(
-    temp_branch: str,
-    expected_head_sha: str,
-    *,
-    config: DispatcherConfig,
-    repository_root: Path,
-    remote_head_fn: RemoteHeadFn | None = None,
-    runner: Any = None,
-) -> SemanticCiObservation | None:
-    """Run ``ci_command`` on a detached checkout of exactly ``expected_head_sha``.
-
-    Integration PRs target ``parent/issue-{N}``, where GitHub CI does not run.
-    The result is discarded (``None``) when the remote head is not the expected
-    one before or after the run.
-    """
-    remote = remote_head_fn or (lambda name: remote_branch_sha(repository_root, name))
-    if remote(temp_branch) != expected_head_sha:
-        return None
-    policy = replace(
-        config.integration_execution_policy,
-        integration_ci_timeout_seconds=config.semantic_ci_timeout_seconds,
-    )
-    command = config.ci_command or default_ci_command()
-    run_git(
-        ["fetch", "--no-tags", "origin", f"+refs/heads/{temp_branch}"],
-        cwd=repository_root,
-    )
-    with tempfile.TemporaryDirectory(prefix="orchestune-semantic-ci-") as directory:
-        checkout = Path(directory) / "head"
-        run_git(
-            ["worktree", "add", "--detach", str(checkout), expected_head_sha],
-            cwd=repository_root,
-        )
-        try:
-            result = run_ci_stages(
-                command, checkout, repository_root, policy=policy, runner=runner
-            )
-        finally:
-            run_git(
-                ["worktree", "remove", "--force", str(checkout)],
-                cwd=repository_root,
-                check=False,
-            )
-    if remote(temp_branch) != expected_head_sha:
-        return None
-    conclusion = (
-        SemanticCiConclusion.SUCCESS if result.ok else SemanticCiConclusion.FAILURE
-    )
-    return SemanticCiObservation(expected_head_sha, conclusion)
 
 
 def _state_authors(trust: TrustContext) -> frozenset[str]:
@@ -329,20 +273,27 @@ def _round_trigger(
 ) -> ReviewTrigger | None:
     """The latest trigger of this round and head, posted since the round began
     (``fresh``) or only before it (a stale request of an earlier run)."""
+    matching = _round_triggers(triggers, state, fresh=fresh)
+    return matching[-1] if matching else None
+
+
+def _round_triggers(
+    triggers: list[ReviewTrigger], state: SemanticReviewStateV1, *, fresh: bool
+) -> list[ReviewTrigger]:
+    """Every request of this round and head (a retry repeats the first one)."""
     started = _parse_iso(state.round_started_at)
     floor = (
         None
         if started is None
         else normalize_timestamp((started - _CLOCK_SKEW).isoformat())
     )
-    matching = [
+    return [
         t
         for t in triggers
         if t.round == state.round
         and t.requested_head_sha == state.head_sha
         and (floor is None or (t.created_at >= floor) == fresh)
     ]
-    return matching[-1] if matching else None
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -445,6 +396,25 @@ class SemanticReviewCycleRunner:
         if not attempts:
             return [SemanticReviewCycleReport("no_pending_attempt")]
         return [self._advance_attempt(attempt) for attempt in attempts]
+
+    def inspect(
+        self, pr: OpenAttempt
+    ) -> tuple[SemanticReviewStateV1, ReviewDiagnostics]:
+        """Read-only state and diagnostics of one attempt (`review status`)."""
+        ctx = self._restore(pr)
+        return ctx.state, self._diagnose(ctx, ctx.state, self._acquire_review(ctx))[0]
+
+    def _diagnose(
+        self, ctx: _Attempt, state: SemanticReviewStateV1, review: _Review
+    ) -> tuple[ReviewDiagnostics, AckAssessment]:
+        return build_review_diagnostics(
+            self._config,
+            state,
+            pr_number=ctx.pr.pr_number,
+            requests=review.requests,
+            acknowledged=review.acknowledged,
+            now=self._now,
+        )
 
     # -- restoration and observation ---------------------------------------
 
@@ -572,9 +542,14 @@ class SemanticReviewCycleRunner:
         """The current round's review of the requested head, by its reviewer only."""
         state, comments = ctx.state, ctx.comments
         triggers = self._trusted_triggers(ctx)
-        trigger = _round_trigger(triggers, state, fresh=True)
-        if trigger is None:
+        requested = _round_triggers(triggers, state, fresh=True)
+        if not requested:
             return _Review()
+        trigger = requested[-1]
+        requests = tuple(
+            (str(t.id), _parse_iso(precise_created_at(comments, t)) or self._now)
+            for t in requested
+        )
         later = [t for t in triggers if t.created_at > trigger.created_at]
         started = precise_created_at(comments, trigger)
         ended = precise_created_at(comments, later[0]) if later else ""
@@ -601,12 +576,12 @@ class SemanticReviewCycleRunner:
         )
         acknowledged = result["acquisition_status"] != "unavailable"
         if result["acquisition_status"] != "acquired":
-            return _Review(acknowledged=acknowledged)
+            return _Review(acknowledged=acknowledged, requests=requests)
         target, _ = derive_review_target(
             result["review_items"], state.head_sha, state.head_sha
         )
         result = {**result, "round": state.round}
-        return _Review(target == state.head_sha, True, result)
+        return _Review(target == state.head_sha, True, result, requests)
 
     def _poll(self, ctx: _Attempt) -> SemanticOperationObservation:
         state = ctx.state
@@ -696,9 +671,20 @@ class SemanticReviewCycleRunner:
             if not preflight.ok:
                 return self._preflight_failed(state, preflight)
         if decision.reason == "review_pending_timeout" and not ctx.review.acknowledged:
-            reason = "review_not_acknowledged"
-            nxt = replace(decision.next_state, escalation_reason=reason)
-            return replace(decision, reason=reason, next_state=nxt)
+            nxt = replace(decision.next_state, escalation_reason=_ACK_REASON)
+            return replace(decision, reason=_ACK_REASON, next_state=nxt)
+        return self._ack_decision(ctx, decision)
+
+    def _ack_decision(
+        self, ctx: _Attempt, decision: SemanticTransitionDecision
+    ) -> SemanticTransitionDecision:
+        """Stop an unanswered request at the ack deadline instead of the (much
+        later) review timeout; the opt-in retry is carried out by `_carry_out`."""
+        if ctx.state.phase != _P.REVIEW_PENDING or decision.reason != "review_pending":
+            return decision
+        _, ctx.ack = self._diagnose(ctx, ctx.state, ctx.review)
+        if ctx.ack.action is AckAction.ESCALATE:
+            return _escalated(ctx.state, _ACK_REASON, self._stamp)
         return decision
 
     def _guard_invalidation(
@@ -758,6 +744,8 @@ class SemanticReviewCycleRunner:
     def _carry_out(
         self, ctx: _Attempt, decision: SemanticTransitionDecision
     ) -> SemanticReviewCycleReport:
+        if ctx.ack is not None and ctx.ack.action is AckAction.RETRY:
+            return self._repeat_request(ctx)
         if not self._needs_work(ctx, decision):
             return self._report(
                 ctx, "held", decision.next_state, reason=decision.reason
@@ -774,6 +762,28 @@ class SemanticReviewCycleRunner:
         finally:
             self._release(ctx)
         return self._report(ctx, "advanced", final, reason=decision.reason)
+
+    def _repeat_request(self, ctx: _Attempt) -> SemanticReviewCycleReport:
+        """Post the one extra request of an unanswered round (state unchanged)."""
+        reason = "review_request_retried"
+        if not self._config.apply:
+            return self._report(ctx, "planned", ctx.state, reason=reason)
+        self._acquire(ctx)
+        try:
+            self._require_unchanged(ctx)
+            self._revalidate(ctx)
+            ctx.comments = self._forge.list_all_issue_comments(ctx.pr.pr_number)
+            if (
+                len(_round_triggers(self._trusted_triggers(ctx), ctx.state, fresh=True))
+                > 1
+            ):
+                return self._report(ctx, "held", ctx.state, reason="retry_budget_spent")
+            self._forge.create_issue_comment(
+                ctx.pr.pr_number, self._trigger_body(ctx, ctx.state)
+            )
+        finally:
+            self._release(ctx)
+        return self._report(ctx, "advanced", ctx.state, reason=reason)
 
     def _acquire(self, ctx: _Attempt) -> None:
         result = self._claims.acquire(
@@ -945,14 +955,47 @@ class SemanticReviewCycleRunner:
             f"`{nxt.head_sha}`:\n\n{block.group(0)}\n"
         )
 
-    def _post_trigger(self, ctx: _Attempt, nxt: SemanticReviewStateV1) -> None:
-        reviewer = self._reviewer()
+    def _safe_reply(
+        self, ctx: _Attempt, nxt: SemanticReviewStateV1, reviewer: str
+    ) -> str:
         reply = self._trigger_reply(ctx, nxt)
         try:
             build_restorable_trigger_body(reply, reviewer, nxt.round, nxt.head_sha)
         except EvidenceContractError:
             reply = f"Review head: `{nxt.head_sha}`."
+        return reply
+
+    def _trigger_body(self, ctx: _Attempt, nxt: SemanticReviewStateV1) -> str:
+        reviewer = self._reviewer()
+        reply = self._safe_reply(ctx, nxt, reviewer)
+        return build_trigger_body(reply, reviewer, nxt.round, nxt.head_sha)
+
+    def _resumed_trigger(
+        self, ctx: _Attempt, nxt: SemanticReviewStateV1, triggers: list[ReviewTrigger]
+    ) -> bool:
+        """An explicit retry of the escalated round asks the reviewer again.
+
+        Requests from before the escalation are no answer to it; one posted
+        after the escalation was saved is this resume's own (interrupted run).
+        """
+        since = normalize_timestamp(ctx.state.updated_at)
+        if ctx.state.phase != _P.ESCALATED or nxt.round != ctx.state.round or not since:
+            return False
+        if not any(
+            t.created_at >= since for t in _round_triggers(triggers, nxt, fresh=True)
+        ):
+            self._revalidate(ctx)
+            self._forge.create_issue_comment(
+                ctx.pr.pr_number, self._trigger_body(ctx, nxt)
+            )
+        return True
+
+    def _post_trigger(self, ctx: _Attempt, nxt: SemanticReviewStateV1) -> None:
+        reviewer = self._reviewer()
+        reply = self._safe_reply(ctx, nxt, reviewer)
         triggers = self._trusted_triggers(ctx)
+        if self._resumed_trigger(ctx, nxt, triggers):
+            return
         if _round_trigger(triggers, nxt, fresh=True) is not None:
             return  # posted by an earlier, interrupted run of this transition
         self._revalidate(ctx)
@@ -1018,6 +1061,7 @@ class SemanticReviewCycleRunner:
     def _escalate(self, ctx: _Attempt, state: SemanticReviewStateV1) -> None:
         reason = state.escalation_reason or "escalated"
         source = state.escalated_from.value if state.escalated_from else "unknown"
+        guidance = self._ack_guidance(ctx, state) if reason == _ACK_REASON else ""
         self._ops.escalate(
             self._forge,
             parent_issue_number=state.parent_issue_number,
@@ -1028,8 +1072,16 @@ class SemanticReviewCycleRunner:
                 f"stopped at `{source}` (round {state.round}, head `{state.head_sha}`); "
                 "the head is kept. Resume with a semantic-review-retry marker or skip "
                 "with a semantic-review-override marker bound to this head."
+                f"{guidance}"
             ),
         )
+
+    def _ack_guidance(self, ctx: _Attempt, state: SemanticReviewStateV1) -> str:
+        """Facts and next steps of an unanswered request (#1436)."""
+        review = ctx.review
+        if not review.requests:  # recorded earlier: look at the PR again
+            review = self._acquire_review(replace(ctx, state=state))
+        return "\n\n" + self._diagnose(ctx, state, review)[0].guidance()
 
     def _note_skip(
         self, ctx: _Attempt, state: SemanticReviewStateV1, reason: str

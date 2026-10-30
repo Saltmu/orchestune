@@ -375,6 +375,9 @@ Non-routine options (storage paths, rate limits, timeouts, reviewer selection, c
 | `max-semantic-review-rounds` | `3` | Maximum review rounds for layer-2 semantic review (1..5). Escalates on exceedance. |
 | `max-semantic-fix-retries` | `2` | Maximum retry attempts for layer-2 semantic fix jobs (0 disables automatic fixes). |
 | `semantic-review-timeout-seconds` | `1800` | Timeout per layer-2 semantic review round in seconds (default: 30 minutes). |
+| `semantic-review-ack-timeout-seconds` | `600` | Seconds a review request may go without any reviewer activity before the attempt stops as `review_not_acknowledged` (default: 10 minutes; never longer than `semantic-review-timeout-seconds`). |
+| `semantic-review-auto-retry` | `false` | Opt in to one extra review request for a request nobody acknowledged. Never retries once the reviewer showed activity. |
+| `semantic-review-retry-backoff-seconds` | `300` | Seconds after the ack deadline before the opt-in retry is posted (0 retries at the deadline). |
 | `semantic-fix-timeout-seconds` | `1800` | Timeout per layer-2 semantic fix job in seconds (default: 30 minutes). |
 | `semantic-ci-timeout-seconds` | `1800` | Timeout for local CI verification bound to fixed head in seconds (default: 30 minutes). |
 | `semantic-attempt-timeout-seconds` | `7200` | Timeout for the entire integration attempt across all rounds, fixes, and CI in seconds (default: 2 hours). Escalates on exceedance. |
@@ -635,6 +638,15 @@ Orchestune uses a two-tier review gate architecture for integrating child tasks 
 **Migration**: Outcome Records posted before this gate have no review evidence and stop as `legacy`. During the migration period either (a) set `off` explicitly until the in-flight children are integrated, or (b) accept the stop and, for children that have not yet been handed off, review on the child PR and run `orchestune complete` again; for children already handed off, use (a). Return to `required` once the legacy children are integrated.
 
 **Layer-2 gate migration and considerations**: Layer-2 semantic review defaults to `required`. In repositories without semantic review bots or workflows configured, multi-task integration PRs will escalate with `review_not_acknowledged`. In such environments, configure `--semantic-review-mode advisory` or `--semantic-review-mode off`. Integration PRs are verified using the repository's `ci-command` (local CI), and fixed outputs are promoted safely via temporary branches (`integration/semantic-fix/*`). Token budget management is out of scope for this layer.
+
+#### Unresponsive Layer-2 reviewers (#1436)
+
+- **Which reviewer is asked**: `semantic-review-provider = "claude"` or `"codex"` names it explicitly. With `"auto"` it follows the dispatch target across vendors (`claude-cli` and `cloud-routine` → `codex`; `codex-cli`, `codex-cloud` and `agy-cli` → `claude`; a generic `local` target cannot be resolved). An `issue_comment` workflow always runs from the **default branch**, so a reviewer whose workflow or App is not enabled there never answers.
+- **Early stop**: when the reviewer shows no activity for `semantic-review-ack-timeout-seconds` after the request, the attempt stops as `review_not_acknowledged` instead of waiting for `semantic-review-timeout-seconds`. The notice on the PR and the parent Issue names the attempt, head, round, reviewer and how it was chosen, the request comment, the elapsed time and the deadlines, and the commands to resume. It is posted once per attempt and reason.
+- **`orchestune review`** (`--pr` is an integration PR):
+  - `orchestune review status --pr <PR> [--json]` is read-only and shows the same facts at any time.
+  - `orchestune review retry --pr <PR> --reason "<why>"` resumes an escalated attempt and asks the reviewer again; `orchestune review override --pr <PR> --reason "<why>"` skips the gate for this head. Both only **preview** the marker unless `--apply` is given, and `--apply` posts it once. They refuse an empty reason, an actor who is not a person with write access, a moved head, an invalidated or finished attempt, several open attempts and unreadable state; the checks run again right before posting. An override is always a person's decision and is never used automatically.
+- **Opt-in retry**: with `semantic-review-auto-retry = true`, a request nobody acknowledged is repeated once after `semantic-review-retry-backoff-seconds`; the repeat gets its own ack window and then stops the same way. The budget is the number of requests already on the PR for that round and head, so restarts and concurrent runners never repeat it. Switching to another bot automatically is not supported; set `semantic-review-provider` and use `retry`.
 
 ### 4.6 Bounded integration execution and timeout recovery
 

@@ -170,6 +170,13 @@ class DispatcherConfig:
     max_semantic_review_rounds: int = 3
     max_semantic_fix_retries: int = 2
     semantic_review_timeout_seconds: int = 1800
+    # #1436: a reviewer without any activity this long after the request is
+    # treated as unresponsive (`review_not_acknowledged`), before
+    # `semantic_review_timeout_seconds` (the shorter of the two applies). The opt-in retry posts one more request
+    # after the backoff and then stops at the next ack deadline.
+    semantic_review_ack_timeout_seconds: int = 600
+    semantic_review_auto_retry: bool = False
+    semantic_review_retry_backoff_seconds: int = 300
     semantic_fix_timeout_seconds: int = 1800
     semantic_ci_timeout_seconds: int = 1800
     semantic_attempt_timeout_seconds: int = 7200
@@ -244,6 +251,14 @@ class DispatcherConfig:
             attempt_timeout_seconds=self.semantic_attempt_timeout_seconds,
         )
 
+    @property
+    def semantic_review_ack_deadline_seconds(self) -> int:
+        """The ack window, never longer than the review timeout it precedes."""
+        return min(
+            self.semantic_review_ack_timeout_seconds,
+            self.semantic_review_timeout_seconds,
+        )
+
     def _validate_semantic_review_settings(self) -> None:
         choices = (
             ("semantic_review_mode", VALID_SEMANTIC_REVIEW_MODES),
@@ -259,6 +274,8 @@ class DispatcherConfig:
             "max_semantic_review_rounds",
             "max_semantic_fix_retries",
             "semantic_review_timeout_seconds",
+            "semantic_review_ack_timeout_seconds",
+            "semantic_review_retry_backoff_seconds",
             "semantic_fix_timeout_seconds",
             "semantic_ci_timeout_seconds",
             "semantic_attempt_timeout_seconds",
@@ -268,6 +285,14 @@ class DispatcherConfig:
                 raise ValueError(f"{key} must be an integer, got {val!r}")
         if not isinstance(self.force_integration_review, bool):
             raise ValueError("force_integration_review must be a boolean")
+        if not isinstance(self.semantic_review_auto_retry, bool):
+            raise ValueError("semantic_review_auto_retry must be a boolean")
+        if self.semantic_review_ack_timeout_seconds < 1:
+            raise ValueError("semantic_review_ack_timeout_seconds must be positive")
+        if self.semantic_review_retry_backoff_seconds < 0:
+            raise ValueError(
+                "semantic_review_retry_backoff_seconds must be non-negative"
+            )
         if not 1 <= self.max_semantic_review_rounds <= MAX_REVIEW_ROUNDS:
             raise ValueError(
                 "max_semantic_review_rounds must be between "

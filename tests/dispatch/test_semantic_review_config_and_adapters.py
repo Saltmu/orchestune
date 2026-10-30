@@ -91,6 +91,54 @@ class TestSemanticReviewConfiguration:
         assert config.semantic_review_limits.ci_timeout_seconds == 1800
         assert config.semantic_review_limits.attempt_timeout_seconds == 7200
 
+    def test_ack_and_retry_defaults_keep_the_current_behavior(
+        self, tmp_path: Path
+    ) -> None:
+        config = DispatcherConfig(
+            parent_issue_number=1033,
+            forge=MagicMock(),
+            events_log_path=tmp_path / "events.jsonl",
+        )
+
+        assert config.semantic_review_ack_timeout_seconds == 600
+        assert config.semantic_review_auto_retry is False
+        assert config.semantic_review_retry_backoff_seconds == 300
+
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            ({"semantic_review_ack_timeout_seconds": 0}, "ack_timeout"),
+            ({"semantic_review_retry_backoff_seconds": -1}, "retry_backoff"),
+            ({"semantic_review_auto_retry": "yes"}, "auto_retry"),
+            ({"semantic_review_ack_timeout_seconds": True}, "must be an integer"),
+        ],
+    )
+    def test_invalid_ack_and_retry_settings_are_rejected(
+        self, tmp_path: Path, overrides: dict[str, object], message: str
+    ) -> None:
+        with pytest.raises(ValueError, match=message):
+            DispatcherConfig(
+                parent_issue_number=1033,
+                forge=MagicMock(),
+                events_log_path=tmp_path / "events.jsonl",
+                **overrides,  # type: ignore[arg-type]
+            )
+
+    @pytest.mark.parametrize(
+        ("review", "ack", "deadline"), [(1800, 600, 600), (300, 600, 300)]
+    )
+    def test_ack_deadline_never_exceeds_the_review_timeout(
+        self, tmp_path: Path, review: int, ack: int, deadline: int
+    ) -> None:
+        config = DispatcherConfig(
+            parent_issue_number=1033,
+            forge=MagicMock(),
+            events_log_path=tmp_path / "events.jsonl",
+            semantic_review_timeout_seconds=review,
+            semantic_review_ack_timeout_seconds=ack,
+        )
+        assert config.semantic_review_ack_deadline_seconds == deadline
+
     @pytest.mark.parametrize(
         ("key", "value"),
         [
@@ -102,6 +150,9 @@ class TestSemanticReviewConfiguration:
             ("semantic-review-timeout-seconds", 0),
             ("max-semantic-fix-retries", -1),
             ("force-integration-review", "yes"),
+            ("semantic-review-ack-timeout-seconds", 0),
+            ("semantic-review-auto-retry", "yes"),
+            ("semantic-review-retry-backoff-seconds", -1),
         ],
     )
     def test_toml_rejects_invalid_semantic_settings(
@@ -123,8 +174,15 @@ class TestSemanticReviewConfiguration:
             "semantic-fix-timeout-seconds": 2,
             "semantic-ci-timeout-seconds": 3,
             "semantic-attempt-timeout-seconds": 4,
+            "semantic-review-ack-timeout-seconds": 5,
+            "semantic-review-auto-retry": True,
+            "semantic-review-retry-backoff-seconds": 0,
         }
         validated = validate_toml_config(values)
+
+        assert validated["semantic_review_ack_timeout_seconds"] == 5
+        assert validated["semantic_review_auto_retry"] is True
+        assert validated["semantic_review_retry_backoff_seconds"] == 0
 
         assert validated["semantic_review_mode"] == "advisory"
         assert validated["force_integration_review"] is True
