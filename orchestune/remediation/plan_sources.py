@@ -7,8 +7,10 @@ from collections.abc import Sequence
 from typing import Any
 
 from orchestune.dag.models import SubTask
+from orchestune.dag.parsing import reject_retired_model_tier
 from orchestune.issue_parsing import (
     DECOMPOSITION_PLAN_BLOCK_PATTERN,
+    parse_footprint_block,
     parse_task_from_issue,
 )
 from orchestune.provisioning.body_parsing import (
@@ -39,6 +41,9 @@ def _extract_child_acceptance(
         )
         return
     try:
+        reject_retired_model_tier(
+            (parse_footprint_block(child.body) or {}).get("model_tier")
+        )
         section_text = extract_subtask_section(
             template, child.body, "acceptance_criteria"
         )
@@ -99,6 +104,7 @@ def extract_subtask_acceptance_sources(
 
 
 def _entry_to_subtask(entry: dict[str, Any], snapshot: RemediationSnapshot) -> SubTask:
+    reject_retired_model_tier(entry.get("model_tier"))
     sid = str(entry.get("id", "")).strip()
     issue_num = entry.get("issue_number")
     child = (
@@ -119,6 +125,9 @@ def _entry_to_subtask(entry: dict[str, Any], snapshot: RemediationSnapshot) -> S
             "cannot determine Footprint for DAG validation"
         )
     if child is not None:
+        reject_retired_model_tier(
+            (parse_footprint_block(child.body) or {}).get("model_tier")
+        )
         parsed = parse_task_from_issue(child)
         footprint = tuple(parsed.footprint or ())
         symbols = tuple(parsed.symbols or ())
@@ -139,7 +148,6 @@ def _entry_to_subtask(entry: dict[str, Any], snapshot: RemediationSnapshot) -> S
         writes_shared_contract=bool(entry.get("writes_shared_contract", False)),
         issue_number=issue_num,
         execution_profile=entry.get("execution_profile"),
-        model_tier=entry.get("model_tier"),
     )
 
 
@@ -170,6 +178,7 @@ def is_plan_entry_ready(
     """Compare an existing plan entry to the expected remediation task via manifest projection."""
     if not entry or not isinstance(entry, dict):
         return False
+    reject_retired_model_tier(entry.get("model_tier"))
     expected: dict[str, Any] = {
         "id": task.subtask.id,
         "description": task.subtask.description,
@@ -198,8 +207,6 @@ def is_plan_entry_ready(
         expected["writes_shared_contract"] = task.subtask.writes_shared_contract
     if task.subtask.execution_profile is not None or "execution_profile" in entry:
         expected["execution_profile"] = task.subtask.execution_profile
-    if task.subtask.model_tier is not None or "model_tier" in entry:
-        expected["model_tier"] = task.subtask.model_tier
     try:
         return project_single_subtask(entry) == project_single_subtask(expected)
     except (ValueError, TypeError):

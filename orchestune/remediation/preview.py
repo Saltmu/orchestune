@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 
+from orchestune.dag.parsing import reject_retired_model_tier
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     decomposition_plan_from_parent_body,
@@ -52,7 +53,6 @@ def expected_footprint(task: RemediationTask, parent: int) -> dict[str, Any]:
         "writes_shared_contract": subtask.writes_shared_contract,
         "parent_issue_number": parent,
         "execution_profile": subtask.execution_profile,
-        "model_tier": subtask.model_tier,
     }
 
 
@@ -91,6 +91,15 @@ def _parent_plan(
     ):
         problems.append(PreviewProblem("input", "invalid parent plan subtask"))
         return []
+    try:
+        for entry in entries:
+            reject_retired_model_tier(entry.get("model_tier"))
+    except ValueError as exc:
+        problems.append(PreviewProblem("input", str(exc)))
+        return []
+    entries = [
+        {k: v for k, v in entry.items() if k != "model_tier"} for entry in entries
+    ]
     if len({entry["id"] for entry in entries}) != len(entries):
         problems.append(PreviewProblem("input", "duplicate parent plan subtask id"))
     return cast(list[dict[str, Any]], entries)
@@ -176,6 +185,17 @@ def _metadata_conflicts(
     return reasons
 
 
+def _current_footprint(issue: IssueRecord, reasons: list[str]) -> dict[str, Any] | None:
+    current = parse_footprint_block(issue.body)
+    try:
+        reject_retired_model_tier((current or {}).get("model_tier"))
+    except ValueError as exc:
+        reasons.append(str(exc))
+    if current is not None:
+        current = {k: v for k, v in current.items() if k != "model_tier"}
+    return current
+
+
 def _issue_checks(
     issue: IssueRecord,
     task: RemediationTask,
@@ -184,7 +204,7 @@ def _issue_checks(
     own_record: bool,
 ) -> tuple[list[str], tuple[str, ...]]:
     reasons: list[str] = []
-    current = parse_footprint_block(issue.body)
+    current = _current_footprint(issue, reasons)
     expected = expected_footprint(task, snapshot.parent.number)
     diff = tuple(
         f"{key}: {((current or {}).get(key))!r} -> {expected.get(key)!r}"

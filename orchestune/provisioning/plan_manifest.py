@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from orchestune.dag.parsing import reject_retired_model_tier
 from orchestune.issue_parsing import PLAN_MANIFEST_FORMAT
 
 PROJECTED_ISSUE_NUMBER = 10**10 - 1
@@ -39,6 +40,8 @@ def is_manifest_plan(plan: dict[str, Any]) -> bool:
 def project_single_subtask(subtask: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(subtask, dict) or "id" not in subtask:
         raise ValueError("Each subtask in parent plan must be a dict with 'id'")
+    reject_retired_model_tier(subtask.get("model_tier"))
+    subtask = {k: v for k, v in subtask.items() if k != "model_tier"}
     subtask_id = str(subtask["id"]).strip()
     issue_num = subtask.get("issue_number")
     if issue_num is None:

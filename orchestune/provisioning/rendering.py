@@ -8,6 +8,7 @@ from pathlib import Path
 
 import yaml
 
+from orchestune.config_contracts import retired_model_tier_message
 from orchestune.dag.models import SubTask
 from orchestune.dag.symbol_verification import find_missing_symbols
 from orchestune.issue_parsing import (
@@ -32,7 +33,6 @@ _PLACEHOLDERS = (
     "writes_shared_contract",
     "parent_issue_number",
     "execution_profile",
-    "model_tier",
 )
 _PLACEHOLDER_PATTERN = re.compile(
     "{{(" + "|".join(re.escape(name) for name in _PLACEHOLDERS) + ")}}"
@@ -108,9 +108,6 @@ def _render_issue_body(
             "null"
             if subtask.execution_profile is None
             else _yaml_scalar(subtask.execution_profile)
-        ),
-        "model_tier": (
-            "null" if subtask.model_tier is None else _yaml_scalar(subtask.model_tier)
         ),
     }
     return _PLACEHOLDER_PATTERN.sub(lambda match: values[match.group(1)], template)
@@ -201,25 +198,10 @@ def _execution_profile_from_body(body: str) -> str | None:
     return str(profile) if profile is not None else None
 
 
-def _model_tier_from_body(body: str) -> str | None:
-    match = FOOTPRINT_BLOCK_PATTERN.search(body or "")
-    if not match:
-        return None
-    try:
-        data = yaml.safe_load(match.group(1))
-    except yaml.YAMLError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    tier = data.get("model_tier")
-    return str(tier) if tier is not None else None
-
-
 def _make_probe(
     probe_id: str,
     probe_deps: tuple[str, ...],
     profile: str | None,
-    model_tier: str | None = None,
 ) -> SubTask:
     return SubTask(
         id=probe_id,
@@ -230,11 +212,10 @@ def _make_probe(
         risk=False,
         risk_reasons=(),
         execution_profile=profile,
-        model_tier=model_tier,
     )
 
 
-def _validate_template_profile_and_tier_markers(
+def _validate_template_profile_markers(
     rendered: str, rendered_none: str, template_path: str | Path
 ) -> None:
     if _execution_profile_from_body(rendered) != "probe-profile":
@@ -248,23 +229,16 @@ def _validate_template_profile_and_tier_markers(
             f"{template_path} から execution_profile(null) を再照合できません"
             "（'{{execution_profile}}' が引用符等で囲まれているため、未指定時に'null'文字列として解釈されます）"
         )
-    if _model_tier_from_body(rendered) != "strong":
-        raise ValueError(
-            f"{template_path} から model_tier を再照合できません"
-            "（'{{model_tier}}' がFootprint YAMLフェンス内の"
-            "'model_tier:' として描画されていません）。モデル能力ランクが永続化されません"
-        )
-    if _model_tier_from_body(rendered_none) is not None:
-        raise ValueError(
-            f"{template_path} から model_tier(null) を再照合できません"
-            "（'{{model_tier}}' が引用符等で囲まれているため、未指定時に'null'文字列として解釈されます）"
-        )
 
 
 def validate_template_identity_marker(template: str, template_path: str | Path) -> None:
+    if "{{model_tier}}" in template:
+        raise ValueError(
+            f"{template_path}: {{{{model_tier}}}}: {retired_model_tier_message()}"
+        )
     probe_id = "orchestune-template-probe: needs-quoting #1"
     probe_deps = ("orchestune-template-probe-dep",)
-    probe = _make_probe(probe_id, probe_deps, "probe-profile", "strong")
+    probe = _make_probe(probe_id, probe_deps, "probe-profile")
     rendered = _render_issue_body(probe, template)
 
     if _subtask_id_from_body(rendered) != probe_id:
@@ -291,9 +265,9 @@ def validate_template_identity_marker(template: str, template_path: str | Path) 
             "Sub-issue関係が使えない環境でDispatcherが子Issueを発見できなくなります"
         )
     rendered_none = _render_issue_body(
-        _make_probe(probe_id, probe_deps, None, None), template
+        _make_probe(probe_id, probe_deps, None), template
     )
-    _validate_template_profile_and_tier_markers(rendered, rendered_none, template_path)
+    _validate_template_profile_markers(rendered, rendered_none, template_path)
 
 
 __all__ = [

@@ -23,7 +23,6 @@ _TEMPLATE = (
     "writes_shared_contract: {{writes_shared_contract}}\n"
     "parent_issue_number: {{parent_issue_number}}\n"
     "execution_profile: {{execution_profile}}\n"
-    "model_tier: {{model_tier}}\n"
     "```\n"
 )
 
