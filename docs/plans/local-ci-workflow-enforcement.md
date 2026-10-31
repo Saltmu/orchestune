@@ -51,11 +51,11 @@ Stages are display values inferred from current evidence. They are not persisted
 | `blocked` | A canonical blocked Outcome exists for the current claim generation. | Show the recorded reason and recovery reference; do not automatically restart. |
 | `handed-off` | A canonical `handed_off` receipt exists for the current claim. | Report completion and point to the existing GC handoff. |
 
-Evaluate terminal evidence first (`handed-off`, then `blocked`), then determine the earliest unmet stage in workflow order. A stage is not advanced by a user checkbox or a stale artifact. If required evidence cannot be read or is inconsistent, keep the earliest affected stage and report `unmet` with a reason code. `reviewer=skip` is a recorded choice, but it is not a successful review: the existing human integration gate still applies.
+Evaluate terminal evidence first, then determine the earliest unmet stage in workflow order. Exactly one of a current-generation `handed_off` receipt or canonical `blocked` Outcome may determine the terminal stage. If both are present for the same generation, report `unmet` with `terminal_receipt_conflict`, identify `blocked` as the conflicted stage, and request reconciliation; do not prefer one receipt. A stage is not advanced by a user checkbox or a stale artifact. If required evidence cannot be read or is inconsistent, keep the earliest affected stage and report `unmet` with a reason code. `reviewer=skip` is a recorded choice, but it is not a successful review: the existing human integration gate still applies.
 
 For `next`, `stage_id` is the derived current stage. For `check`, `stage_id` is also the derived current stage, while `gate_id` names the specifically requested gate; they answer different questions. A check of a later gate still reports an earlier unmet stage and returns aggregate `unmet` (exit 2), even if the later gate's own checks pass. This prevents a gate from being treated as permission to skip an earlier stage. `check` for the current blocked stage returns `terminal_blocked` (exit 4).
 
-`next` reports a verified `handed-off` terminal stage as `ready` with no suggested actions and a `handed_off` reason code; exit 0 means that the workflow has reached its successful terminal handoff, not that another action remains. A verified blocked terminal stage is `terminal_blocked` with exit 4. In both cases the terminal receipt is included in `checks` and `artifacts`.
+`next` reports a verified `handed-off` terminal stage as `ready` with no suggested actions and a `handed_off` reason code; exit 0 means that the workflow has reached its successful terminal handoff, not that another action remains. A verified blocked terminal stage is `terminal_blocked` with exit 4; place its recorded reason in `actions` and its recovery procedure in `references`. In both cases the terminal receipt is included in `checks` and `artifacts`.
 
 ### Gates and checks
 
@@ -68,7 +68,7 @@ For `next`, `stage_id` is the derived current stage. For `check`, `stage_id` is 
 | `pre-pr` | Local CI evidence is current for HEAD/tree/base and worktree is clean; expected PR description sections are present; the target branch follows the parent/stack rule. | Read-only CI evidence validator, GitHub PR snapshot, PR template contract. | Does not run CI, create a PR, or prove that CI occurred before an out-of-band PR was opened. |
 | `pre-complete` | Existing completion preconditions, complete current-round finding judgments, current `review_target_sha`, required PR reply, and current claim generation are satisfied. | Existing read-only complete validators and GitHub review/PR snapshots. | Does not post a reply, trigger review, or create an Outcome. |
 
-Checks return `ready`, `unmet`, or `waiting_human`; each check names the evidence it read and the missing or stale condition. A non-mechanical judgment is never reported as mechanically ready merely because a table has the right shape.
+Checks return `ready`, `unmet`, or `waiting_human`; each check names the evidence it read and the missing or stale condition. A non-mechanical judgment is never reported as mechanically ready merely because a table has the right shape. Aggregate precedence is `unmet` over `waiting_human` over `ready`: for example, a missing reviewer choice together with stale CI returns `unmet` (exit 2), because the stale CI is invalid evidence even though a human choice is also pending.
 
 ## Evidence lifetime
 
@@ -234,7 +234,7 @@ The loader validates field types, unique stage IDs/orders, known gate/condition/
 
 ## Read-only architecture and integration
 
-The CLI reader should be a narrow L2 layer between CLI orchestration and existing validators/readers. Follow the [module-layer and package-boundary rules](../architecture.md#4-module-layers--package-boundary). It may read the active claim ledger, task worktree/Git status, Issue/PR/review snapshots through the selected backend, plan/state files, and CI evidence. It may call pure/read-only validation functions. It must not call claim or complete service orchestration, acquire `run_state_lock`, run CI, fetch Git, post GitHub comments, mutate labels, change a PR, or create/update workflow state.
+The `orchestune.workflow` package holds L2 domain logic and read-only checks; `orchestune.workflow.cli` is an L4 entrypoint. There is no L3 workflow service in the first advisory implementation. Follow the [module-layer and package-boundary rules](../en/architecture.md#4-module-layers--package-boundary). Workflow L2 modules may import L0/L1 modules and other L2 validation modules such as `claim.*` and `complete.*` (including pure/read-only CI and review evidence validators), subject to package-cycle checks. They must not import L3 `claim.service`, `complete.service`, or other workflow orchestration modules. They may read the active claim ledger, task worktree/Git status, Issue/PR/review snapshots through the selected backend, plan/state files, and CI evidence. They may call pure/read-only validation functions. They must not acquire `run_state_lock`, run CI, fetch Git, post GitHub comments, mutate labels, change a PR, or create/update workflow state.
 
 Prefer a snapshot passed into a validator over repeated network or filesystem reads. If snapshot sections are partial, expose that fact in `checks` and fail closed. A validation rule not currently exposed as a pure reader should be wrapped behind a narrow reader interface that reuses the same rule. The L2 workflow package must not import L3 claim/complete services.
 
@@ -256,7 +256,7 @@ Optional future work may validate PR description sections or reply markers serve
 
 - Add `orchestune workflow` as an additive CLI command. Existing claim, review, complete, and CI commands retain their current behavior.
 - Ship `orchestune/workflow/stages.toml` in wheels using the project's package-resource mechanism. Validate the installed-wheel path, not only source-tree execution.
-- Newer workflow guidance may use `orchestune workflow next/check` when available. Skills first probe with `orchestune workflow --help`; if the installed CLI reports an unknown command, use the current prose steps. Do not infer that a workflow evidence result is a missing-subcommand signal. Absence of the new subcommand must not block established work.
+- Newer workflow guidance may use `orchestune workflow next/check` when available. Skills first probe with `orchestune workflow --help`; if the probe exits nonzero or reports an unrecognized workflow command, use the current prose steps. Do not infer that a workflow evidence result is a missing-subcommand signal. Absence of the new subcommand must not block established work.
 - Treat unsupported state or TOML schema versions as a clear unmet/tool-version result. Do not silently reinterpret or rewrite user state.
 - Preserve unknown JSON fields when a supported forward-compatible reader can do so safely; reject conflicting identity and ownership fields.
 - Keep the initial-scope snapshot immutable. Schema evolution may add separate reconciliation metadata but must not alter the digest's source content.
@@ -267,7 +267,8 @@ Recommended follow-up order:
 2. Add the stage definitions and loader, package the TOML resource, and reconcile duplicated skill/AGENTS prose (Issue #1495).
 3. Implement read-only advisory `workflow check <gate>` against narrow readers and validators (Issue #1496).
 4. Implement `workflow next` over the stage definitions and check results (Issue #1497).
-5. Compare baseline and advisory arms using the linked evaluation plan; decide separately whether any stronger gate is justified.
+5. Merge the sibling evaluation-plan PR (#1493) into the parent before this PR, or integrate both together, so the relative evaluation link resolves when the parent branch is accepted.
+6. Compare baseline and advisory arms using the linked evaluation plan; decide separately whether any stronger gate is justified.
 
 ## Acceptance-criteria crosswalk
 
