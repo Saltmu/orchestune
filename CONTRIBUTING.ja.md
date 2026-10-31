@@ -140,7 +140,7 @@ with patch("orchestune.dispatch.worktree._branch_exists", autospec=True) as mock
   ```powershell
   .\scripts\local-ci.ps1
   ```
-  Windows環境では既定で 2 ワーカーによる並列テスト（`-n 2`）が実行されます。環境変数 `ORCHESTUNE_TEST_WORKERS`（例: `$env:ORCHESTUNE_TEST_WORKERS = "4"` や `"0"`）または `PYTEST_ADDOPTS` を設定することで並列度を調整できます。GitHub Actions の Windows ジョブは 4 ワーカーで実行し、遅いテスト上位 30 件の所要時間を出力します。ローカルの既定値は 2 ワーカーのままです。
+  Windows環境では既定で 2 ワーカーによる並列テスト（`-n 2`）が実行されます。環境変数 `ORCHESTUNE_TEST_WORKERS`（例: `$env:ORCHESTUNE_TEST_WORKERS = "4"` や `"0"`）または `PYTEST_ADDOPTS` を設定することで並列度を調整できます。GitHub Actions の Windows ジョブは 4 ワーカーで実行し、遅いテスト上位 30 件の所要時間を出力します。ローカルの既定値は 2 ワーカーのままです。実行時間を短縮するため、Windows ジョブではカバレッジ計測を行わず（`--no-cov`。90% のカバレッジゲートは Linux ジョブで検証します）、`TEMP`/`TMP` を高速な D: ドライブ上の `runner.temp` に向けます。ローカルで `local-ci.ps1` を実行した場合は従来どおりカバレッジを計測します。
 このスクリプトは以下のチェックを実行します。
 1. **Ruff フォーマット & Lint チェック**: `ruff format` と `ruff check`
 2. **Mypy 型チェック**: 型注釈の検証
