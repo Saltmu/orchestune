@@ -231,10 +231,20 @@ def _validate_template_profile_markers(
         )
 
 
+_RETIRED_TEMPLATE_HINT = (
+    "テンプレートが導入済みスキルの同梱ファイルなら 'orchestune skills update' で更新してください。"
+    "skills update はリポジトリ自身のコピー（例: .github/issue_template.md）を変更しないため、"
+    "リポジトリ側テンプレートの場合は旧 model_tier フィールド／残存プレースホルダーを除去し、"
+    "最新の同梱 orchestune-provision/resources/issue_template.md を参考に Footprint YAML 内の "
+    "execution_profile: に {{execution_profile}} を配置する（未指定時に YAML null として描画されるよう引用符なし）"
+    "契約へテンプレートを移行してください。"
+)
+
+
 def validate_template_identity_marker(template: str, template_path: str | Path) -> None:
     if "{{model_tier}}" in template:
         raise ValueError(
-            f"{template_path}: {{{{model_tier}}}}: {retired_model_tier_message()}"
+            f"{template_path}: {{{{model_tier}}}}: {retired_model_tier_message()}. {_RETIRED_TEMPLATE_HINT}"
         )
     probe_id = "orchestune-template-probe: needs-quoting #1"
     probe_deps = ("orchestune-template-probe-dep",)
