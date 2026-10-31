@@ -40,6 +40,7 @@ current evidence. A known gate without an applicable owner is `unmet`.
 | Exit | Status |
 |---:|---|
 | 0 | `ready` |
+| 1 | Tool error: invalid packaged stages or an unexpected execution failure; no result JSON. |
 | 2 | `unmet`: missing, invalid, stale, conflicting or unreadable evidence |
 | 3 | `waiting_human`: required approval or reviewer selection is pending |
 | 4 | `terminal_blocked`: verified blocked Outcome for the current generation |
@@ -49,9 +50,8 @@ waits. Verified successful handoff returns ready without actions; conflicting
 terminal receipts are unmet. `reviewer=skip` records skipped, never pass, and
 retains the existing human integration gate. CI validation reuses completion's
 current rules: base SHA is audit data; a base advancing alone does not invalidate
-a tested HEAD. Invalid packaged stages return exit 1 without result JSON. Usage
-errors also have no result JSON (exit 2); distinguish these from a valid unmet
-object.
+a tested HEAD. Tool errors return exit 1 without result JSON. Usage errors also
+have no result JSON (exit 2); distinguish these from a valid unmet object.
 
 For `backend=mcp`, pass `--snapshot PATH`; no GitHub CLI fallback is used. The
 UTF-8 JSON object contains `snapshot_version: 1`, `repository: "owner/repo"`,

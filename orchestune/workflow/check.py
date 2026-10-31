@@ -439,7 +439,10 @@ def _reply_posted(c: WorkflowContext, comments: list[dict[str, Any]]) -> _Observ
         )
     if c.review_reply is None:
         return _unmet("reply_missing", "Supply --review-reply PATH")
-    table = parse_judgments(c.review_reply.read_text(encoding="utf-8"))
+    try:
+        table = parse_judgments(c.review_reply.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
+        return _unmet("reply_invalid", str(error), "review reply")
     if not table["findings"]:
         return _Observation(
             source="review reply", value="zero sources; reply not required"
@@ -747,6 +750,9 @@ def check_gate(
     *,
     stages: tuple[StageDefinition, ...] | None = None,
 ) -> WorkflowResult:
-    """Check evidence serially with Git optional locks disabled and restored."""
+    """Check evidence serially with Git optional locks disabled and restored.
+
+    Not thread-safe: readonly_git temporarily changes the process environment.
+    """
     with readonly_git():
         return _check_gate(context, gate, stages=stages)

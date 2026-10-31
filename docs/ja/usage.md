@@ -38,6 +38,7 @@ JSON schema v1は `issue_number`、`claim_id`、導出した `stage_id`、指定
 | 終了コード | status |
 |---:|---|
 | 0 | `ready` |
+| 1 | ツールエラー：同梱stage定義の不正、または予期しない実行エラー。結果JSONなし。 |
 | 2 | `unmet`：証拠の不足・不正・古さ・矛盾・取得不能 |
 | 3 | `waiting_human`：必要な承認・reviewer選択が未回答 |
 | 4 | `terminal_blocked`：現claim世代の確定済みblocked Outcomeを確認 |
@@ -46,7 +47,7 @@ unknownなcheckは全体でunmetとし、人間待ちより不正な証拠を優
 成功したhandoffを確認できれば、操作提案なしのreadyを返します。終端証拠の矛盾はunmetです。
 `reviewer=skip` はskippedとして扱い、passにはせず既存の人間レビュー統合ゲートを保持します。
 CIの判定は従来の完了検証を再利用します。base SHAは監査用であり、baseが進んだだけでは
-検証済みHEADの証拠を無効にしません。同梱stage定義の不正は終了1、引数エラーは終了2で、
+検証済みHEADの証拠を無効にしません。ツールエラーは終了1、引数エラーは終了2で、
 どちらも結果JSONを出しません。有効なunmetのJSONと区別してください。
 
 `backend=mcp` では `--snapshot PATH` を渡します。ghへの自動fallbackはありません。

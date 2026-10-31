@@ -162,6 +162,33 @@ def test_invalid_reply_is_rejected_by_existing_review_validator(tmp_path, fault)
     assert "evidence_unavailable" not in result.reason_codes
 
 
+@pytest.mark.parametrize("fault", ["missing", "garbled", "encoding"])
+def test_reply_failure_after_validation_preserves_review(tmp_path, monkeypatch, fault):
+    import orchestune.workflow.check as checks
+
+    c = ready_context(tmp_path)
+    verify = checks.verify_review_evidence
+
+    def verify_then_change_reply(*args):
+        summary = verify(*args)
+        if fault == "missing":
+            c.review_reply.unlink()
+        elif fault == "garbled":
+            c.review_reply.write_text("invalid")
+        else:
+            c.review_reply.write_bytes(b"\xff")
+        return summary
+
+    monkeypatch.setattr(checks, "verify_review_evidence", verify_then_change_reply)
+    result = check_gate(c, "pre-complete")
+    observations = {check.id: check for check in result.checks}
+    assert observations["review_acquired"].status == "ready"
+    assert observations["reply_posted"].status == "unmet"
+    assert result.status == "unmet"
+    assert "reply_invalid" in result.reason_codes
+    assert "evidence_unavailable" not in result.reason_codes
+
+
 @pytest.mark.parametrize(
     "fault,reason",
     [
