@@ -397,50 +397,26 @@ class TestSubtaskFieldContract:
         with pytest.raises(ValueError, match="execution_profile"):
             parse_decomposition_plan(path)
 
-    def test_parses_model_tier(self, tmp_path):
-        plan = """\
-        ---
-        subtasks:
-          - id: task-a
-            model_tier: strong
-          - id: task-b
-            model_tier: middle
-          - id: task-c
-            model_tier: weak
-          - id: task-d
-        ---
-        """
-        path = _write_plan(tmp_path, plan)
-        subtasks = parse_decomposition_plan(path)
+    def test_null_and_absent_model_tier_are_removed(self, tmp_path):
+        from orchestune.dag.graph import build_dag
 
-        assert subtasks[0].model_tier == "strong"
-        assert subtasks[1].model_tier == "middle"
-        assert subtasks[2].model_tier == "weak"
-        assert subtasks[3].model_tier is None
-
-        from orchestune.dag.models import DagResult
-
-        res = DagResult(
-            subtasks={
-                subtasks[0].id: subtasks[0],
-                subtasks[1].id: subtasks[1],
-                subtasks[2].id: subtasks[2],
-                subtasks[3].id: subtasks[3],
-            },
-            edges=[],
-            topological_order=["task-a", "task-b", "task-c", "task-d"],
-            parallel_leaves=["task-a", "task-b", "task-c", "task-d"],
-            risky_subtask_ids=[],
+        path = _write_plan(
+            tmp_path,
+            "---\nsubtasks:\n  - id: absent\n  - id: tier-null\n    model_tier: null\n  - id: empty\n    model_tier:\n---\n",
         )
-        d = res.to_dict()
-        assert d["subtasks"]["task-a"]["model_tier"] == "strong"
-        assert d["subtasks"]["task-b"]["model_tier"] == "middle"
-        assert d["subtasks"]["task-c"]["model_tier"] == "weak"
-        assert d["subtasks"]["task-d"]["model_tier"] is None
+        subtasks = parse_decomposition_plan(path)
+        assert all(not hasattr(task, "model_tier") for task in subtasks)
+        assert all(
+            "model_tier" not in task
+            for task in build_dag(subtasks).to_dict()["subtasks"].values()
+        )
 
     @pytest.mark.parametrize(
         "invalid_tier",
         [
+            "weak",
+            "middle",
+            "strong",
             "ultra",
             "low",
             "high",
@@ -466,7 +442,7 @@ class TestSubtaskFieldContract:
 
         plan_yaml = f"---\n{yaml.dump(plan)}---\n"
         path = _write_plan(tmp_path, plan_yaml)
-        with pytest.raises(ValueError, match="model_tier"):
+        with pytest.raises(ValueError, match="model_tier.*retired.*execution_profile"):
             parse_decomposition_plan(path)
 
     @pytest.mark.parametrize(

@@ -98,3 +98,32 @@ def test_snapshot_rejects_non_string_subtask_id_in_parent_plan() -> None:
 
     with pytest.raises(ValueError, match="invalid old subtask"):
         collect_replan_snapshot(FakeForge(parent, [_issue(10)], []), 693)
+
+
+@pytest.mark.parametrize(
+    "tier_yaml", ["weak", "middle", "strong", "''", "false", "0", "[]", "{}"]
+)
+@pytest.mark.parametrize("number_yaml", ["  issue_number: 10\n", ""])
+def test_snapshot_rejects_retired_tier_in_all_parent_entries(tier_yaml, number_yaml):
+    parent = _issue(
+        693,
+        "<!-- orchestune:decomposition-plan -->\n```yaml\nsubtasks:\n"
+        f"- id: old-a\n{number_yaml}  model_tier: {tier_yaml}\n```\n",
+    )
+    with pytest.raises(ValueError, match="model_tier.*retired.*execution_profile"):
+        collect_replan_snapshot(FakeForge(parent, [], []), 693)
+
+
+@pytest.mark.parametrize("tier_yaml", ["null", ""])
+def test_snapshot_accepts_empty_and_null_tier(tier_yaml):
+    parent = _issue(
+        693,
+        "<!-- orchestune:decomposition-plan -->\n```yaml\nsubtasks:\n"
+        f"- id: old-a\n  issue_number: 10\n  model_tier: {tier_yaml}\n```\n",
+    )
+    assert (
+        collect_replan_snapshot(FakeForge(parent, [], []), 693)
+        .retirement_candidates[0]
+        .issue_number
+        == 10
+    )

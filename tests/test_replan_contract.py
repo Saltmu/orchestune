@@ -283,7 +283,6 @@ shared_contract: {{shared_contract}}
 writes_shared_contract: {{writes_shared_contract}}
 parent_issue_number: {{parent_issue_number}}
 execution_profile: {{execution_profile}}
-model_tier: {{model_tier}}
 ```
 """
 
@@ -335,3 +334,33 @@ def test_public_contract_excludes_superseded_reconciliation_types() -> None:
 
     assert removed.isdisjoint(contract.__all__)
     assert all(not hasattr(contract, name) for name in removed)
+
+
+def test_replan_canonical_plan_omits_tier_and_preserves_profile(tmp_path):
+    from orchestune.replan.plan import _canonical_plan
+
+    path = _write_plan(tmp_path / "plan.md")
+    original = compute_plan_revision(path)
+    path.write_text(path.read_text().replace("- id:", "- model_tier: null\n  id:"))
+    assert compute_plan_revision(path) == original
+    loaded = load_replan_plan(path)
+    loaded = dataclasses.replace(
+        loaded,
+        subtasks=tuple(
+            dataclasses.replace(t, execution_profile="deep-reasoning")
+            for t in loaded.subtasks
+        ),
+    )
+    for entry in _canonical_plan(loaded)["subtasks"]:
+        assert "model_tier" not in entry
+        assert entry["execution_profile"] == "deep-reasoning"
+
+
+@pytest.mark.parametrize("tier_yaml", ["strong", "''", "false", "[]", "{}"])
+def test_replan_rejects_retired_tier_in_new_plan(tmp_path, tier_yaml):
+    path = _write_plan(tmp_path / "plan.md")
+    path.write_text(
+        path.read_text().replace("- id:", f"- model_tier: {tier_yaml}\n  id:")
+    )
+    with pytest.raises(ValueError, match="model_tier.*retired.*execution_profile"):
+        compute_plan_revision(path)

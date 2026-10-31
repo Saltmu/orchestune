@@ -43,11 +43,23 @@ _TEMPLATE = (
     "depends_on: {{depends_on}}\n"
     "parent_issue_number: {{parent_issue_number}}\n"
     "execution_profile: {{execution_profile}}\n"
-    "model_tier: {{model_tier}}\n"
     "```\n"
 )
 
 _INVALID_CONFIG = 'dag_ignore_patterns = ["("]\n'
+
+
+@pytest.mark.parametrize("tier_yaml", ["strong", "''", "false", "[]", "{}"])
+def test_retired_plan_tier_exits_1_with_migration_guidance(tmp_path, capsys, tier_yaml):
+    path = tmp_path / "plan.md"
+    path.write_text(
+        _PLAN.replace("    footprint:", f"    model_tier: {tier_yaml}\n    footprint:")
+    )
+    with pytest.raises(SystemExit) as exc:
+        dag_main(["--plan", str(path)])
+    assert exc.value.code == 1
+    error = capsys.readouterr().err
+    assert "model_tier" in error and "execution_profile" in error
 
 
 @pytest.fixture(autouse=True)

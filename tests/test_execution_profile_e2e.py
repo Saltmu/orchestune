@@ -114,7 +114,6 @@ shared_contract: {{shared_contract}}
 writes_shared_contract: {{writes_shared_contract}}
 parent_issue_number: {{parent_issue_number}}
 execution_profile: {{execution_profile}}
-model_tier: {{model_tier}}
 ```
 """
 
@@ -858,3 +857,57 @@ model_tier: null
         assert sel2 is not None
         assert sel2.model == "custom-cli-model"
         assert sel2.reasoning_effort == "high"
+
+
+def test_profile_only_provision_restore_replan_and_remediation(
+    tmp_path, in_memory_forge
+):
+    from dataclasses import asdict
+
+    import yaml
+
+    from orchestune.issue_parsing import decomposition_plan_from_parent_body
+    from orchestune.provisioning.plan_restoration import restore_plan_file_from_parent
+    from orchestune.remediation.preview import expected_footprint
+    from orchestune.remediation.spec import load_remediation_spec
+    from orchestune.replan.plan import _canonical_plan, load_replan_plan
+
+    task = {
+        "id": "task-a",
+        "description": "Task",
+        "footprint": ["src/a.py"],
+        "symbols": [],
+        "depends_on": [],
+        "execution_profile": "deep-reasoning",
+        "model_tier": None,
+    }
+    path = tmp_path / "plan.md"
+    path.write_text(
+        "---\n" + yaml.safe_dump({"title": "Profiles", "subtasks": [task]}) + "---\n"
+    )
+    template = tmp_path / "template.md"
+    template.write_text(_SAMPLE_TEMPLATE)
+    result = provision_issues(path, forge=in_memory_forge, template_path=template)
+    parent = in_memory_forge.get_issue(result.parent_issue_number)
+    manifest = decomposition_plan_from_parent_body(parent.body)
+    assert manifest["subtasks"][0]["execution_profile"] == "deep-reasoning"
+    assert "model_tier" not in manifest["subtasks"][0]
+    restored = restore_plan_file_from_parent(
+        in_memory_forge, parent.number, tmp_path / "restored.md", template_path=template
+    )
+    canonical = _canonical_plan(load_replan_plan(restored))
+    assert "model_tier" not in canonical["subtasks"][0]
+    assert canonical["subtasks"][0]["execution_profile"] == "deep-reasoning"
+    task.update(
+        kind="integration-bug",
+        parent_acceptance=["Works"],
+        origins=["#10"],
+        reason="Required",
+    )
+    spec_path = tmp_path / "spec.md"
+    spec_path.write_text("---\n" + yaml.safe_dump({"subtasks": [task]}) + "---\n")
+    spec = load_remediation_spec(spec_path)
+    assert "model_tier" not in asdict(spec.tasks[0].subtask)
+    expected = expected_footprint(spec.tasks[0], parent.number)
+    assert "model_tier" not in expected
+    assert expected["execution_profile"] == "deep-reasoning"
