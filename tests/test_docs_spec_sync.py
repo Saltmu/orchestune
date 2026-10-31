@@ -325,6 +325,36 @@ class TestDocsSchemaConsistency:
             else "#### Migrating retired model tiers"
         )
         migration = section.split(heading, 1)[1].split("\n#### ", 1)[0]
+        tier_only_heading = (
+            "モデルランクのみを指定していた場合" if lang == "ja" else "Tier only"
+        )
+        profile_plus_heading = (
+            "プロファイルとモデルランクを併用していた場合"
+            if lang == "ja"
+            else "Profile plus tier"
+        )
+        tier_only = migration.split(tier_only_heading, 1)[1].split(
+            profile_plus_heading, 1
+        )[0]
+        effort_markers = (
+            (
+                "default_execution_profile",
+                "reasoning_effort",
+                "同じターゲット",
+                "明示",
+                "未設定",
+            )
+            if lang == "ja"
+            else (
+                "default_execution_profile",
+                "reasoning_effort",
+                "same target",
+                "explicitly",
+                "unset",
+            )
+        )
+        for marker in effort_markers:
+            assert marker in tier_only
         markers = (
             (
                 "専用プロファイル",
