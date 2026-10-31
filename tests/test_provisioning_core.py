@@ -594,7 +594,7 @@ class _TtyStream(io.StringIO):
 
 
 class _LiveSpy(cli_progress.Live):
-    """Records the start/stop calls of the spinner's Live display."""
+    """Records the start/stop calls of the status line's Live display."""
 
     events: list[str] = []
 
@@ -608,7 +608,7 @@ class _LiveSpy(cli_progress.Live):
 
 
 class TestMainPresentation:
-    """#1412: decorated TTY output and the spinner; plain output stays unchanged."""
+    """#1412: decorated TTY output and the status line; plain output stays unchanged."""
 
     @pytest.fixture
     def live_events(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -669,7 +669,7 @@ class TestMainPresentation:
         assert "task-a" in text
         assert provisioning_forge.create_issue_calls == []
 
-    def test_spinner_stops_when_provisioning_raises(
+    def test_live_stops_when_provisioning_raises(
         self,
         plan_path: Path,
         template_path: Path,
@@ -689,7 +689,7 @@ class TestMainPresentation:
         assert live_events == ["start", "stop"]
         assert "Error: boom" in capsys.readouterr().err
 
-    def test_plain_run_never_starts_the_spinner_or_writes_ansi(
+    def test_plain_run_never_starts_the_live_or_writes_ansi(
         self,
         plan_path: Path,
         template_path: Path,
