@@ -5,6 +5,7 @@ dag_ignore_patterns）に関するテスト。
 `FakeForge`/`template_path`フィクスチャはそちらと同じ定義を用いる。
 """
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -42,17 +43,30 @@ def template_path(tmp_path: Path) -> Path:
 def test_retired_template_fails_before_provision_side_effects(
     tmp_path: Path, template_path: Path, placeholder: str
 ) -> None:
+    from orchestune.provisioning.rendering import validate_template_identity_marker
     from tests.test_provisioning_support import _PLAN
 
-    template_path.write_text(_TEMPLATE + f"\n{placeholder}\n", encoding="utf-8")
+    template_content = _TEMPLATE + f"\n{placeholder}\n"
+    template_path.write_text(template_content, encoding="utf-8")
     path = tmp_path / "plan.md"
     path.write_text(_PLAN, encoding="utf-8")
     before = path.read_bytes()
     forge = FakeForge()
-    with pytest.raises(ValueError, match="model_tier.*retired.*execution_profile"):
+    with pytest.raises(ValueError) as exc_info:
         provision_issues(path, forge=forge, template_path=template_path)
+    message = str(exc_info.value)
+    assert re.search(r"model_tier.*retired.*execution_profile", message)
+    assert "orchestune skills update" in message
+    assert ".github/issue_template.md" in message
+    assert "更新しない" in message or "変更しない" in message
+    assert "{{execution_profile}}" in message
+    assert "execution_profile:" in message
+    assert "orchestune-provision/resources/issue_template.md" in message
     assert forge.issues == {}
     assert path.read_bytes() == before
+
+    migrated_template = template_content.replace(f"\n{placeholder}\n", "\n")
+    validate_template_identity_marker(migrated_template, template_path)
 
 
 @pytest.mark.parametrize(
