@@ -131,6 +131,37 @@ def test_another_worktrees_ci_evidence_is_rejected(tmp_path, monkeypatch):
     assert "ci_stale" in check_gate(c, "pre-pr").reason_codes
 
 
+@pytest.mark.parametrize("fence", ["```markdown", "~~~markdown", "````markdown"])
+def test_pr_sections_inside_code_fences_are_not_evidence(tmp_path, fence):
+    c = ready_context(tmp_path)
+    closing = fence.removesuffix("markdown")
+    c.pr_body = f"{fence}\n{c.pr_body}\n{closing}\n"
+    result = check_gate(c, "pre-pr")
+    assert result.status == "unmet"
+    assert "pr_body_invalid" in result.reason_codes
+
+
+def test_pr_sections_after_fence_close_are_evidence(tmp_path):
+    c = ready_context(tmp_path)
+    c.pr_body = f"````text\n```\n# Example\n````\n{c.pr_body}"
+    assert check_gate(c, "pre-pr").status == "ready"
+
+
+@pytest.mark.parametrize("fault", ["missing", "garbled"])
+def test_invalid_reply_is_rejected_by_existing_review_validator(tmp_path, fault):
+    c = ready_context(tmp_path)
+    if fault == "missing":
+        c.review_reply.unlink()
+    else:
+        c.review_reply.write_text("invalid")
+    result = check_gate(c, "pre-complete")
+    assert result.status == "unmet"
+    review = next(check for check in result.checks if check.id == "review_current")
+    assert review.status == "unmet"
+    assert "review_evidence_invalid" in result.reason_codes
+    assert "evidence_unavailable" not in result.reason_codes
+
+
 @pytest.mark.parametrize(
     "fault,reason",
     [
@@ -255,6 +286,16 @@ def test_conflicting_terminals_are_unmet_and_handoff_has_no_actions(tmp_path):
     assert result.status == "ready" and result.stage_id == "handed-off"
     assert not result.actions
     c.ledger.completion_journal["blocked"] = terminal_record(c)
+    result = check_gate(c, "pre-claim")
+    assert result.status == "unmet"
+    assert "terminal_receipt_conflict" in result.reason_codes
+
+
+def test_terminal_receipt_without_comment_url_is_unmet(tmp_path):
+    c = prepared_context(tmp_path)
+    record = terminal_record(c)
+    record["posting_evidence"].pop("comment_url")
+    c.ledger.completion_journal["current"] = record
     result = check_gate(c, "pre-claim")
     assert result.status == "unmet"
     assert "terminal_receipt_conflict" in result.reason_codes

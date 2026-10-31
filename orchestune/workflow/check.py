@@ -332,6 +332,27 @@ _PR_SECTIONS = (
 )
 
 
+def _pr_headings(text: str) -> list[str]:
+    """Read ATX headings outside fenced examples in the PR description."""
+    headings = []
+    fence = ""
+    for line in text.splitlines():
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if marker:
+            token, suffix = marker.groups()
+            if not fence:
+                fence = token
+            elif (
+                token[0] == fence[0] and len(token) >= len(fence) and not suffix.strip()
+            ):
+                fence = ""
+            continue
+        heading = re.match(r"^ {0,3}#{1,6}[ \t]+(.+)$", line)
+        if not fence and heading:
+            headings.append(heading[1])
+    return headings
+
+
 def _body(c: WorkflowContext) -> _Observation:
     if not c.pr_body or "pr_body" in c.errors:
         return _unmet(
@@ -339,7 +360,7 @@ def _body(c: WorkflowContext) -> _Observation:
             c.errors.get("pr_body", "Supply --pr-body or an existing PR description"),
         )
     text = re.sub(r"<!--.*?-->", "", c.pr_body, flags=re.S)
-    headings = re.findall(r"^#{1,6}\s+(.+)$", text, re.M)
+    headings = _pr_headings(text)
     missing = [
         names[0]
         for names in _PR_SECTIONS
