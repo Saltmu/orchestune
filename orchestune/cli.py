@@ -88,6 +88,10 @@ def _dispatch_tool_command(cmd: str) -> bool:
         from orchestune.scratch.cli import main as scratch_main
 
         sys.exit(scratch_main())
+    elif cmd == "workflow":
+        from orchestune.workflow.cli import main as workflow_main
+
+        sys.exit(workflow_main())
     else:
         return False
     return True
@@ -114,6 +118,7 @@ def main() -> None:
             ("config", "Create or edit orchestune.toml interactively"),
             ("skills", "Install and manage Orchestune skills for AI assistants"),
             ("scratch", "Create scratch session directories for task artifacts"),
+            ("workflow", "Check read-only advisory workflow gates"),
         )
         plain_commands = "\n".join(
             f"  {command:<10}{description}" for command, description in commands

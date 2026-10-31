@@ -1,5 +1,72 @@
 # Usage & Command Reference
 
+## Read-only workflow gates (`orchestune workflow check`)
+
+Inspect task evidence using an explicit session directory. These advisory checks
+do not claim, fetch, run CI, request reviews, post replies, change labels or write
+workflow state. Existing completion gates remain authoritative. A ready result
+checks observable structure and bindings; it cannot judge the meaning or
+completeness of an impact classification.
+
+```bash
+orchestune workflow check pre-claim --issue 1496 --session-dir .orchestune/tmp/task-example --json
+orchestune workflow check pre-edit --issue 1496 --session-dir .orchestune/tmp/task-example --json
+orchestune workflow check pre-pr --issue 1496 --session-dir .orchestune/tmp/task-example --pr-body .orchestune/tmp/task-example/pr-body.md --json
+orchestune workflow check pre-complete --issue 1496 --session-dir .orchestune/tmp/task-example --pr 42 --review-reply .orchestune/tmp/task-example/review-reply.md --json
+```
+
+| Gate | Evidence |
+|---|---|
+| `pre-claim` | Current Issue Footprint YAML and resolved dependencies, mode/backend, reviewer provenance and applicable plan approval. |
+| `pre-edit` | Matching Issue/state/ledger claim generation, repository/branch/worktree and reservation; immutable impact table and SHA256 digest. |
+| `pre-pr` | Clean worktree, current HEAD/tree/CI-definition/lockfile/environment evidence, claim base and required PR sections. Supply `--pr-body PATH` before PR creation, or `--pr N` to inspect its description. |
+| `pre-complete` | Current PR identity/base/head, existing completion and review validators, complete current-round judgments, review target SHA and exactly one required posted reply. |
+
+The plan contains exactly one `orchestune-workflow` YAML fence with
+`schema_version: 1` and `state: workflow-state.json`. State paths are relative to
+the plan within the session; escaping paths and symlinks are rejected. See the
+[state contract](../plans/local-ci-workflow-enforcement.md#persisted-workflow-context-and-plan-marker)
+for the executor-authored fields. The initial scope artifact contains only a
+Markdown table with `Reference`, `Decision`, `Rationale` columns. Decisions are
+`in scope` or `out of scope`, each with a nonempty rationale. Store discoveries
+in a separate reconciliation instead of rewriting that initial artifact.
+
+JSON schema v1 includes `issue_number`, `claim_id`, derived `stage_id`, requested
+`gate_id`, `status`, `reason_codes`, `checks`, `actions`, `references`, `artifacts`
+and `observed_head_sha`. Condition IDs come from packaged `stages.toml`. A later
+gate includes earlier applicable stages; an earlier gate is rechecked against
+current evidence. A known gate without an applicable owner is `unmet`.
+
+| Exit | Status |
+|---:|---|
+| 0 | `ready` |
+| 2 | `unmet`: missing, invalid, stale, conflicting or unreadable evidence |
+| 3 | `waiting_human`: required approval or reviewer selection is pending |
+| 4 | `terminal_blocked`: verified blocked Outcome for the current generation |
+
+Unknown checks aggregate to unmet; unmet evidence takes precedence over human
+waits. Verified successful handoff returns ready without actions; conflicting
+terminal receipts are unmet. `reviewer=skip` records skipped, never pass, and
+retains the existing human integration gate. CI validation reuses completion's
+current rules: base SHA is audit data; a base advancing alone does not invalidate
+a tested HEAD. Invalid packaged stages return exit 1 without result JSON. Usage
+errors also have no result JSON (exit 2); distinguish these from a valid unmet
+object.
+
+For `backend=mcp`, pass `--snapshot PATH`; no GitHub CLI fallback is used. The
+UTF-8 JSON object contains `snapshot_version: 1`, `repository: "owner/repo"`,
+RFC3339 `observed_at`, explicit `claim_id` (null before claim), an `issue` using
+`IssueRecord` fields, `dependency_issues` using the same format, and
+`dependencies_complete: true`. With `--pr`, include a `pr` using `PrRecord` fields
+and `review` using the existing
+[review snapshot v1 contract](../../orchestune/review/snapshot.py): repository/PR,
+acquisition period, HEAD before/after, fully paginated issue comments, reviews,
+inline comments and completeness declarations. Snapshots older than 300 seconds,
+changed HEADs and conflicting identities are unmet. A JSON declaration is not
+proof of collection completeness or permission. Deferred follow-up Issue
+type/state requires independent evidence; an unverifiable snapshot cannot certify
+it. Duplicate replies are diagnosed without repair or reposting.
+
 ## Add parent-scope repair tasks with remediate
 
 `remediate` adds review follow-ups and integration bugs needed to complete an existing EPIC.
