@@ -148,6 +148,39 @@ def _snapshot_issue(value: object) -> IssueRecord:
     return IssueRecord(**value)
 
 
+def _snapshot_pr(value: object, number: int) -> PrRecord:
+    """Validate JSON DTO fields before trusting PR identity or diff evidence."""
+    schema = {field.name: field for field in fields(PrRecord)}
+    if not isinstance(value, dict):
+        raise ValueError("snapshot PR must be an object")
+    if set(value) - schema.keys() or not {
+        "number",
+        "head_ref",
+        "changed_files",
+    }.issubset(value):
+        raise ValueError("snapshot PR has unsupported or missing fields")
+    for name, item in value.items():
+        if name == "number":
+            valid = isinstance(item, int) and not isinstance(item, bool) and item > 0
+        elif name == "changed_files":
+            valid = isinstance(item, list) and all(isinstance(x, str) for x in item)
+        elif name == "closes_issue_numbers":
+            valid = isinstance(item, list) and all(
+                isinstance(x, int) and not isinstance(x, bool) and x > 0 for x in item
+            )
+        elif name == "is_cross_repository":
+            valid = item is None or isinstance(item, bool)
+        elif isinstance(schema[name].default, bool):
+            valid = isinstance(item, bool)
+        else:
+            valid = isinstance(item, str)
+        if not valid:
+            raise ValueError(f"snapshot PR field {name} has an invalid type")
+    if value["number"] != number:
+        raise ValueError("snapshot PR identity differs from requested PR")
+    return PrRecord(**value)
+
+
 class SnapshotForge:
     """Read-only MCP transport using explicit, fresh, complete observations."""
 
@@ -196,9 +229,7 @@ class SnapshotForge:
     def _read_pr(value: object, number: int | None) -> PrRecord | None:
         if number is None:
             return None
-        if not isinstance(value, dict) or value.get("number") != number:
-            raise ValueError("snapshot PR identity differs from requested PR")
-        return PrRecord(**value)
+        return _snapshot_pr(value, number)
 
     def get_repository_slug(self) -> str:
         return str(self.repository)

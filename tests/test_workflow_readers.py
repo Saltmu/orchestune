@@ -304,6 +304,43 @@ def test_mcp_snapshot_matches_live_read_checks(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "field,value",
+    [
+        ("number", 42.0),
+        ("changed_files", "x.py"),
+        ("changed_files", [False]),
+        ("head_ref", []),
+        ("body", []),
+        ("state", False),
+        ("is_files_truncated", 0),
+        ("is_cross_repository", 0),
+        ("closes_issue_numbers", [True]),
+        ("closing_references_known", 1),
+        ("unknown_field", "value"),
+    ],
+)
+def test_snapshot_rejects_invalid_pr_field_types(tmp_path, field, value):
+    from orchestune.workflow.readers import SnapshotForge
+
+    c = ready_context(tmp_path)
+    snapshot, now = workflow_snapshot(c)
+    snapshot["pr"][field] = value
+    with pytest.raises(ValueError, match="snapshot PR"):
+        SnapshotForge(snapshot, issue=1496, pr=42, now=now)
+
+
+@pytest.mark.parametrize("field", ["number", "head_ref", "changed_files"])
+def test_snapshot_requires_pr_identity_and_diff_fields(tmp_path, field):
+    from orchestune.workflow.readers import SnapshotForge
+
+    c = ready_context(tmp_path)
+    snapshot, now = workflow_snapshot(c)
+    snapshot["pr"].pop(field)
+    with pytest.raises(ValueError, match="snapshot PR"):
+        SnapshotForge(snapshot, issue=1496, pr=42, now=now)
+
+
+@pytest.mark.parametrize(
     "fault",
     [
         "stale",
@@ -314,6 +351,7 @@ def test_mcp_snapshot_matches_live_read_checks(tmp_path):
         "issue",
         "version",
         "missing_period",
+        "pr_type",
     ],
 )
 def test_snapshot_invalidity_is_unmet_without_network(tmp_path, fault):
@@ -336,6 +374,8 @@ def test_snapshot_invalidity_is_unmet_without_network(tmp_path, fault):
         value["issue"]["number"] = 1
     elif fault == "version":
         value["snapshot_version"] = True
+    elif fault == "pr_type":
+        value["pr"]["changed_files"] = "x.py"
     else:
         value["review"].pop("acquisition")
     snapshot = c.session_dir / "snapshot.json"
