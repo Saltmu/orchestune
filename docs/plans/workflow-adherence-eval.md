@@ -27,7 +27,7 @@ Fill and approve the agreement below before creating trial workspaces. An empty 
 | Stop conditions and handling of interrupted trials | |
 | Approver(s), approval date/time, and agreement record link | |
 
-**Agreement rule:** targets, threshold, number of repetitions, stop conditions, and unavailable-trial handling must be completed and approved before measurement begins. The suggested initial design is all six cards × both arms × five repetitions = **60 trials per model configuration**. This is a planning value, not an approved sample size or statistical power claim. Set a seed and interleave or randomize A/B order per card before starting to reduce order effects. Do not silently replace failed or unavailable trials.
+**Agreement rule:** targets, threshold, number of repetitions, stop conditions, and unavailable-trial handling must be completed and approved before measurement begins. The suggested initial design is all six cards × both arms × five repetitions = **60 trials per model configuration**. This is a planning value, not an approved sample size or statistical power claim. Set a seed and interleave or randomize A/B order per card before starting to reduce order effects. Default to keeping an unavailable trial in its assigned slot without replacement. If the signed agreement permits replacement, preserve the original as unavailable and create a separately identified replacement for the same card, arm, model/profile, and replicate slot; report both records and do not count them as two planned replicates.
 
 ## 2. Common setup and controls
 
@@ -48,7 +48,7 @@ Reset by deleting the disposable sandbox and remote fixture, then recreate it fr
 
 ### 2.1.1 Fixed task fixture
 
-Each sandbox must be a disposable clone or fork of the full Orchestune repository, pinned to the agreed arm-specific SHA. The clone must retain its CLI, claim/completion machinery, tests, local CI scripts, skills, and configuration so the workflow under study is real. Do not use a toy repository as a substitute for the task environment. Before each trial, apply only the card's fixture overlay and create the synthetic Issue/remote. Preserve the overlay and setup procedure with the study records.
+Each sandbox must be a disposable clone or fork of the full Orchestune repository, pinned to the agreed arm-specific SHA. The clone must retain its CLI, claim/completion machinery, tests, local CI scripts, skills, and configuration so the workflow under study is real. Do not use a toy repository as a substitute for the task environment. Before each trial, apply only the card's fixture overlay and create the synthetic Issue/remote. Preserve the overlay and setup procedure with the study records. Before timed intake, run `./scripts/local-ci.sh` on the overlaid seed and record its result. The seed local CI must pass; if the overlay changes the baseline, fix the fixture and recreate the seed before starting a trial.
 
 For C1, C3, C4, C5, and C6, the seed checkout contains this previously unused fixture module at `tests/fixtures/workflow_adherence/number.py`; no test for it exists before the task begins:
 
@@ -58,7 +58,7 @@ def is_even(value: int) -> bool:
     return value % 2 != 0
 ```
 
-The task asks the agent to correct the function so it returns true exactly for even integers, including zero and negative values. Its acceptance input therefore provides a direct behavior contract, and the agent must add its own regression test before editing the function.
+For C1, C3, C5, and C6, ask the agent to correct the function so it returns true exactly for even integers, including zero and negative values. Its acceptance input provides a direct behavior contract, and the agent must add its own regression test before editing the function. C4 uses a separate positive-only prompt; it intentionally does not mention signed values or zero before the review event, so the fixed review finding adds a new test requirement.
 
 For C2, the pinned fixture commit contains `docs/fixtures/workflow_adherence/operator-guide.md`:
 
@@ -68,15 +68,16 @@ For C2, the pinned fixture commit contains `docs/fixtures/workflow_adherence/ope
 When a task is done, run the final check before opening a pull request.
 ```
 
-Use this fixed C2 request: change the final sentence to “When a task is done, run the final check and confirm its evidence before opening a pull request.” The intended C2 diff is only the guide file. For code trials, the intended scope includes the fixture module and one new regression-test file under `tests/`. Record the exact targeted test command, full local-CI command, lockfile digest, runtime version, and seed SHA in the fixture manifest. The targeted test must fail before the code fix and pass after it; the full local CI must pass on the final commit.
+Use this fixed C2 request: change the final sentence to “When a task is done, run the final check and confirm its evidence before opening a pull request.” The intended C2 diff is only the guide file. For code trials, the intended scope includes the fixture module and one new regression-test file under `tests/`. Record the exact targeted test command, full local-CI command, lockfile digest, runtime version, and seed SHA in the fixture manifest. The overlay must pass full local CI before timing. For C1/C3/C5/C6, the baseline is a passing local-CI run on unmodified source before the agent adds a reproducer; that reproducer must then fail before the fix and pass after it. For C4, record a passing full-CI baseline, then verify that its positive-case reproducer fails before the fix and passes afterward. The baseline does not include a fixture test failure.
 
 ### 2.2 Fix and record execution conditions
 
-- Fix the model/provider and `execution_profile` before the first run. Record the effective model and reasoning effort for every target that may execute; a profile name alone is insufficient.
+- Fix the agent model/provider and `execution_profile` before the first run. Record the effective model and reasoning effort for every target that may execute; a profile name alone is insufficient. Fix the reviewer provider/model/version where configurable, but retain the actual review output and metadata because live reviewer findings can vary.
 - Fix tool permissions, network access, operating system, Python/runtime and dependency lock, GitHub identity/permissions, and selected backend. Record changes or outages as trial evidence.
 - Pin A to the pre-advisory skill/repository revision and B to the revision containing advisory `next/check`. Keep the shared workflow rules and evaluation fixture identical. Store both repository SHA and skill SHA; record tool/plugin versions where applicable.
 - Use separate agent contexts and worktrees for each trial. Do not expose another arm's transcript, solution, or completed trial artifacts to the agent.
 - Count every human action that changes the agent's task state or supplies missing workflow guidance as an intervention. Routine fixture setup performed before the timed trial is not an intervention; record setup separately.
+- Treat live review findings as trial-specific. Archive each raw review output as a covariate; do not treat the fixed C4 injected finding as the entire review workload. Report item 6 and item 7 denominators, findings, and review rounds separately by card, arm, reviewer version, and trial. The injected C4 finding remains identical across arms and repetitions.
 - Collect duration and token/cost data from authoritative provider telemetry when available. If not available, write `unavailable` and the source limitation. Never estimate or write zero for missing telemetry.
 
 ### 2.3 Keep model scoring separate from deterministic integrity checks
@@ -92,8 +93,8 @@ Each card uses the common disposable-sandbox procedure. Before each replicate, r
 - **Purpose:** observe the full code path from task intake through reproducible change, CI, PR, review, and Outcome.
 - **Initial state:** full Orchestune seed checkout with the faulty fixture module and no test for it; no PR or claim exists.
 - **Input:** ask for the behavior change in the fixture manifest. Provide the existing Issue number, valid pre-claim footprint, and explicit reviewer `claude`. Use the selected GitHub backend and standard task-worktree setup.
-- **Expected operations:** inspect status and Issue footprint; record the plan and initial impact scope before production edits; add a reproducer and observe Red; record baseline on unmodified code (including its expected fixture failure); implement; observe Green; run repository local CI for the final commit; push and open the PR against the declared parent base; acquire and judge review for the current PR head; post a reply if any finding is judged; declare the canonical done Outcome.
-- **Injected event/timing:** none. The behavior bug is present in the seed commit.
+- **Expected operations:** inspect status and Issue footprint; record the plan and initial impact scope before production edits; record baseline local CI on unmodified source (expected pass); add a reproducer and observe Red; implement; observe Green; run repository local CI for the final commit; push and open the PR against the declared parent base; acquire and judge review for the current PR head; post a reply if any finding is judged; declare the canonical done Outcome.
+- **Injected event/timing:** none. The behavior bug is present in the seed commit. After footprint, scope, and baseline evidence are recorded, the agent creates the Red reproducer.
 - **Observe:** task transcript; Issue body and timeline; claim/worktree ledger; initial plan and impact table; baseline record; commit history; `ci_evidence.json`; PR base/head/body; review acquisition result and target SHA; review reply comment where required; Outcome receipt and Issue comment.
 - **Terminal condition:** done Outcome is confirmed for the trial claim and the final review target equals the final PR head, or the agreed limit is reached and the trial is recorded with its terminal failure/interruption.
 - **Reset:** recreate from the seed commit and remove all trial GitHub objects and local worktree/evidence except the archived record.
@@ -123,10 +124,10 @@ Each card uses the common disposable-sandbox procedure. Before each replicate, r
 ### C4 — Review finding and fix
 
 - **Purpose:** observe whether a required review finding is judged, fixed, revalidated, and reviewed against the changed head.
-- **Initial state:** full Orchestune seed checkout and code-change Issue configured like C1. The initial PR implements the requested positive even/odd cases; the signed-input coverage finding has not yet been shown to the agent.
+- **Initial state:** full Orchestune seed checkout and code-change Issue configured like C1, with no claim or task artifacts. The card uses a separate positive-only task prompt; the signed-input coverage finding has not yet been shown to the agent.
 - **Input:** ask for correct `is_even` behavior on positive values, with reviewer `claude`. After the first PR review request, inject the fixed finding: “The change has no regression test for a negative even input; add an assertion that `is_even(-4) is True`.”
 - **Expected operations:** complete the first implementation and CI; request and acquire the first review; inspect and record the finding and judgment; fix an adopted finding (or justify a decline against the acceptance criteria); run applicable tests and local CI after a fix; request another review when the PR head changed; verify the final review target; post the required review-reply comment; complete the Outcome.
-- **Injected event/timing:** after the first PR and review request exist, publish one fixture finding at the pinned current PR head. Keep finding text and source constant across arms and repetitions.
+- **Injected event/timing:** after the first PR and review request exist, publish one fixture finding at the pinned current PR head. Keep that injected finding text and source constant across arms and repetitions; archive any additional live reviewer findings separately.
 - **Observe:** first and later review rounds, finding source and judgment table, fix commits, post-fix CI evidence, trigger/review target/current SHA, reply comment, and Outcome. A fixed finding followed by no re-review is a failure even if the original review was valid for the earlier SHA.
 - **Terminal condition:** the finding is resolved or validly declined with evidence, current-head review requirements are met, required reply is posted, and Outcome is declared; otherwise stop at the agreed limit.
 - **Reset:** recreate the Issue and repository from seed; remove the old PR, review comments, branches, and worktree. Reinsert the finding only at the specified event.
@@ -134,10 +135,10 @@ Each card uses the common disposable-sandbox procedure. Before each replicate, r
 ### C5 — Interrupt and resume
 
 - **Purpose:** check recovery from a context interruption without losing claim identity or duplicating external actions.
-- **Initial state:** full Orchestune seeded code-change Issue and claim. The task worktree contains a plan and initial impact table but no production edit, commit, PR, or review request.
+- **Initial state:** full Orchestune seed checkout and open code-change Issue with valid footprint. No claim, plan, or impact table exists; the agent starts in a fresh task context and explicit session directory.
 - **Input:** begin the normal task with reviewer `claude`. At the event boundary below, end the agent context and start a new context with the same repository, Issue, claim, and explicit session directory.
-- **Expected operations:** before interruption, claim the task and record initial scope; interrupt after scope is recorded and before production edits. On resume, re-read Issue/claim/worktree/session evidence; continue the same claim and branch; complete the task and standard CI/PR/review/reply/Outcome sequence. Do not create a new claim generation or repeat a GitHub post already evidenced in the fixture.
-- **Injected event/timing:** terminate the first context immediately after the immutable initial impact table and active claim are confirmed. Supply only the standard resume handoff (Issue, repository/worktree, claim ID, and session directory); do not supply a summary of unrecorded state.
+- **Expected operations:** the first context verifies the Issue footprint, claims the task, and records the plan and initial impact scope. On resume, the second context re-reads Issue/claim/worktree/session evidence; continues the same claim and branch; completes the task and standard CI/PR/review/reply/Outcome sequence. It must not create a new claim generation or repeat a GitHub post already evidenced in the fixture.
+- **Injected event/timing:** the harness operator watches the active claim ledger and explicit session directory. Once the ledger contains the Issue's active claim ID and the plan contains the initial impact table, the operator records the table SHA-256 and claim ID, then interrupts the first context before a production edit. This is a scheduled intervention and must be counted. Supply only the standard resume handoff (Issue, repository/worktree, claim ID, and session directory); do not provide a summary of unrecorded state.
 - **Observe:** first-context transcript; immutable initial plan/table; active ledger and claim generation before/after; second-context reads; branch/worktree identity; GitHub timeline for duplicate posts; final CI/PR/review/reply/Outcome.
 - **Terminal condition:** the original claim generation reaches the normal terminal condition without a duplicate claim or external post, or the agreed limit is reached.
 - **Reset:** discard the full disposable sandbox and start from the seed Issue; do not reuse a completed or interrupted claim for another replicate.
@@ -145,10 +146,10 @@ Each card uses the common disposable-sandbox procedure. Before each replicate, r
 ### C6 — GitHub MCP backend
 
 - **Purpose:** observe the supported MCP path for Issue/PR/review-related GitHub reads and writes when `gh` is unavailable.
-- **Initial state:** full Orchestune seed checkout with a synthetic code-change Issue and isolated remote configured with the declared GitHub MCP connection and permissions. Disable `gh` for the agent and verify that the MCP backend is callable before the timed trial.
+- **Initial state:** full Orchestune seed checkout with a synthetic code-change Issue and isolated remote configured with the declared GitHub MCP connection and permissions. Disable `gh` for the agent and verify that the MCP backend is callable before timed intake. If this preflight fails, mark the whole card trial unavailable and record all eight rubric items as unavailable with the capability evidence; exclude it from every item's pass/fail denominator but report its unavailable count.
 - **Input:** request the fixture behavior change, explicitly require the MCP backend, and select reviewer `claude`.
 - **Expected operations:** use MCP for GitHub operations throughout; verify writes by re-fetching the Issue/PR/comment state; complete local Git/CI work as configured; acquire review through the supported MCP review flow; judge findings, post a required reply once, and declare Outcome through the supported completion path.
-- **Injected event/timing:** no mid-trial backend change. `gh` must be unavailable before task intake. If a usable MCP capability is absent or fails before the workflow can be evaluated, mark the trial `unavailable`; do not enable `gh` and count a fallback as success.
+- **Injected event/timing:** no mid-trial backend change. `gh` must be unavailable before task intake. If the MCP backend fails after timed intake, do not enable `gh`; score items for which the available records support a decision and mark every remaining indeterminate item unavailable with the collection failure.
 - **Observe:** tool inventory and availability check; transcript with actual backend calls; MCP write responses and read-after-write verification; Issue/PR/comment timeline; local CI evidence; review target/judgment; Outcome. Record tool/service version and any permission error.
 - **Terminal condition:** the declared MCP flow reaches a verified Outcome, or a capability/permission failure or agreed limit ends the trial with an explicit status and reason.
 - **Reset:** revoke/discard disposable MCP test objects and credentials according to the fixture procedure, remove trial GitHub objects, and rebuild from the seed repository. Never store credentials in the record.
@@ -178,9 +179,10 @@ If a required action has no evidence but the relevant source was available, scor
 ### 4.1 Cross-card N/A examples
 
 - C2 documentation fast path: rubric item 4 is N/A if the diff is genuinely documentation-only and the fast path permits skipping code reproducer/baseline steps. Local CI, review, and Outcome remain required.
-- C4 no finding returned: item 7 is N/A only if no finding was judged. If a finding was provided or judged, the required reply must be posted.
+- C1/C2 live review: item 7 is N/A only if no finding was judged. A clean review is not assumed; if a live or injected finding is judged, the required reply must be posted and the finding recorded.
+- C4: the positive-only task prompt is separate from the shared signed-input fixture contract; the injected negative-even test finding adds a new requirement after the initial review.
 - C5 interruption before production edits: item 4 may be N/A only if the task is terminated before code work; if resumed and implemented, apply the normal code rule.
-- C6 MCP capability absent: the trial is unavailable at the card level when the preflight check proves the required backend cannot be evaluated; do not turn each rubric item into a pass or score a `gh` fallback.
+- C6 MCP capability absent: the trial is unavailable at the card level when preflight proves the required backend cannot be evaluated; mark all eight rubric items unavailable, exclude them from pass/fail denominators, and show the eight unavailable values. Do not score a `gh` fallback.
 - `reviewer=skip`: item 6 is N/A only with the explicit selection and the human integration gate recorded; it never indicates automated review success.
 
 ## 5. Trial record
@@ -189,6 +191,7 @@ Create one record per card × arm × replicate. Keep raw transcripts, tool logs,
 
 ```yaml
 trial_id:
+replacement_for: # original trial_id, if this is an approved replacement
 card_id: C1
 arm: A # A=current workflow, B=advisory next/check
 replicate:
@@ -233,35 +236,35 @@ human_intervention_count:
 human_interventions: []
 rubric:
   - item: 1
-    result: pass # pass | fail | N/A | unavailable
+    result: # fill pass | fail | N/A | unavailable
     applicability_reason:
     evidence: []
   - item: 2
-    result: pass
+    result: # fill pass | fail | N/A | unavailable
     applicability_reason:
     evidence: []
   - item: 3
-    result: pass
+    result: # fill pass | fail | N/A | unavailable
     applicability_reason:
     evidence: []
   - item: 4
-    result: pass
+    result: # fill pass | fail | N/A | unavailable
     applicability_reason:
     evidence: []
   - item: 5
-    result: pass
+    result: # fill pass | fail | N/A | unavailable
     applicability_reason:
     evidence: []
   - item: 6
-    result: pass
+    result: # fill pass | fail | N/A | unavailable
     applicability_reason:
     evidence: []
   - item: 7
-    result: N/A
-    applicability_reason: no finding was judged
+    result: # fill pass | fail | N/A | unavailable
+    applicability_reason:
     evidence: []
   - item: 8
-    result: pass
+    result: # fill pass | fail | N/A | unavailable
     applicability_reason:
     evidence: []
 transcript_reference:
