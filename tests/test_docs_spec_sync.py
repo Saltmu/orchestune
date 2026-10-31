@@ -333,6 +333,10 @@ class TestDocsSchemaConsistency:
             if lang == "ja"
             else "Profile plus tier"
         )
+        assert tier_only_heading in migration, f"{lang}のTier only見出しがありません"
+        assert (
+            profile_plus_heading in migration
+        ), f"{lang}のProfile plus tier見出しがありません"
         tier_only = migration.split(tier_only_heading, 1)[1].split(
             profile_plus_heading, 1
         )[0]
