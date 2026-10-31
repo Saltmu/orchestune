@@ -155,3 +155,30 @@ def test_project_plan_manifest_rejects_unsupported_format() -> None:
     plan: dict[str, Any] = {"plan_format": "unknown-v99", "subtasks": []}
     with pytest.raises(ValueError, match="unsupported plan_format"):
         project_plan_manifest(plan)
+
+
+@pytest.mark.parametrize("issue_number", [None, 42])
+def test_manifest_omits_null_model_tier_without_mutating_input(issue_number):
+    entry = {
+        "id": "task",
+        "issue_number": issue_number,
+        "model_tier": None,
+        "execution_profile": "deep-reasoning",
+    }
+    projected = project_plan_manifest({"subtasks": [entry]})["subtasks"][0]
+    assert "model_tier" not in projected
+    assert projected["execution_profile"] == "deep-reasoning"
+    assert "model_tier" in entry
+
+
+@pytest.mark.parametrize("tier", ["weak", "middle", "strong", "", False, 0, [], {}])
+@pytest.mark.parametrize("issue_number", [None, 42])
+def test_manifest_rejects_retired_model_tier(tier, issue_number):
+    with pytest.raises(ValueError, match="model_tier.*retired.*execution_profile"):
+        project_plan_manifest(
+            {
+                "subtasks": [
+                    {"id": "task", "issue_number": issue_number, "model_tier": tier}
+                ]
+            }
+        )

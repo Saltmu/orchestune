@@ -50,7 +50,6 @@ shared_contract: {{shared_contract}}
 writes_shared_contract: {{writes_shared_contract}}
 parent_issue_number: {{parent_issue_number}}
 execution_profile: {{execution_profile}}
-model_tier: {{model_tier}}
 ```
 """
 
@@ -72,7 +71,6 @@ def _sample_subtask(**kwargs: Any) -> SubTask:
         "shared_contract": "contract.md",
         "writes_shared_contract": True,
         "execution_profile": "deep-reasoning",
-        "model_tier": "strong",
     }
     defaults.update(kwargs)
     return SubTask(**defaults)
@@ -97,7 +95,7 @@ def test_roundtrip_default_template() -> None:
     assert parsed["writes_shared_contract"] == subtask.writes_shared_contract
     assert parsed["parent_issue_number"] == 100
     assert parsed["execution_profile"] == subtask.execution_profile
-    assert parsed["model_tier"] == subtask.model_tier
+    assert "model_tier" not in parsed
 
 
 def test_roundtrip_empty_lists_and_defaults() -> None:
@@ -109,7 +107,6 @@ def test_roundtrip_empty_lists_and_defaults() -> None:
         shared_contract=None,
         writes_shared_contract=False,
         execution_profile=None,
-        model_tier=None,
     )
     body = _render_issue_body(subtask, DEFAULT_TEMPLATE)
     title = subtask_issue_title(subtask)
@@ -123,7 +120,7 @@ def test_roundtrip_empty_lists_and_defaults() -> None:
     assert parsed["writes_shared_contract"] is False
     assert parsed["parent_issue_number"] is None
     assert parsed["execution_profile"] is None
-    assert parsed["model_tier"] is None
+    assert "model_tier" not in parsed
 
 
 def test_item_named_tokuninashi() -> None:
@@ -188,7 +185,6 @@ def test_known_change_yaml_reformatting_and_runtime_keys() -> None:
         "writes_shared_contract": subtask.writes_shared_contract,
         "parent_issue_number": 100,
         "execution_profile": subtask.execution_profile,
-        "model_tier": subtask.model_tier,
     }
     dumped = yaml.safe_dump(footprint_data, sort_keys=False)
     new_body = body[: match.start()] + f"```yaml\n{dumped}```" + body[match.end() :]
@@ -492,3 +488,26 @@ def test_validate_reversible_subtask_rejects_tokuninashi_item() -> None:
         match="cannot be '特になし' \\(reserved for empty section placeholder\\)",
     ):
         validate_reversible_subtask(subtask)
+
+
+@pytest.mark.parametrize(
+    "tier_yaml", ["strong", "weak", "middle", "''", "false", "0", "[]", "{}"]
+)
+def test_child_body_rejects_retired_model_tier(tier_yaml):
+    subtask = _sample_subtask()
+    body = _render_issue_body(subtask, DEFAULT_TEMPLATE)
+    body = body.replace("subtask_id:", f"model_tier: {tier_yaml}\nsubtask_id:", 1)
+    with pytest.raises(ValueError, match="model_tier.*retired.*execution_profile"):
+        parse_subtask_issue_body(DEFAULT_TEMPLATE, subtask_issue_title(subtask), body)
+
+
+@pytest.mark.parametrize("tier_yaml", ["null", ""])
+def test_child_body_omits_null_and_empty_model_tier(tier_yaml):
+    subtask = _sample_subtask()
+    body = _render_issue_body(subtask, DEFAULT_TEMPLATE)
+    body = body.replace("subtask_id:", f"model_tier: {tier_yaml}\nsubtask_id:", 1)
+    parsed = parse_subtask_issue_body(
+        DEFAULT_TEMPLATE, subtask_issue_title(subtask), body
+    )
+    assert "model_tier" not in parsed
+    assert parsed["execution_profile"] == "deep-reasoning"

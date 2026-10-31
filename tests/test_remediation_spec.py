@@ -60,3 +60,22 @@ def test_unknown_top_level_key(tmp_path: Path) -> None:
 def test_external_dependencies_are_deferred_to_parent_snapshot(tmp_path: Path) -> None:
     spec = load_remediation_spec(write_spec(tmp_path, depends_on=["old"]))
     assert spec.tasks[0].subtask.depends_on == ("old",)
+
+
+@pytest.mark.parametrize("tier", ["weak", "middle", "strong", "", False, 0, [], {}])
+def test_spec_rejects_retired_model_tier(tmp_path, tier):
+    with pytest.raises(ValueError, match="model_tier.*retired.*execution_profile"):
+        load_remediation_spec(write_spec(tmp_path, model_tier=tier))
+
+
+def test_spec_null_model_tier_does_not_change_revision(tmp_path):
+    from dataclasses import asdict
+
+    first = load_remediation_spec(
+        write_spec(tmp_path, execution_profile="deep-reasoning")
+    )
+    second = load_remediation_spec(
+        write_spec(tmp_path, execution_profile="deep-reasoning", model_tier=None)
+    )
+    assert first.spec_revision == second.spec_revision
+    assert "model_tier" not in asdict(second.tasks[0].subtask)

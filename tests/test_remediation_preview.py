@@ -333,7 +333,6 @@ def test_resume_registered_and_revision_mismatch(tmp_path: Path) -> None:
         "shared_contract": None,
         "writes_shared_contract": False,
         "execution_profile": None,
-        "model_tier": None,
         "issue_number": 42,
         "remediation": remediation_record(spec.tasks[0], 1, revision),
     }
@@ -411,3 +410,90 @@ def test_self_cycle_and_missing_issue(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="cycle"):
         preview(tmp_path, FakeForge(), depends_on=["fix"])
     assert preview(tmp_path, FakeForge(), issue_number=999).exit_code == 6
+
+
+@pytest.mark.parametrize(
+    "tier_yaml", ["strong", "weak", "middle", "''", "false", "0", "[]", "{}"]
+)
+def test_preview_rejects_retired_tier_in_parent(tmp_path, tier_yaml):
+    forge = FakeForge()
+    forge.parent = replace(
+        forge.parent,
+        body=forge.parent.body.replace(
+            "- id: old", f"- model_tier: {tier_yaml}\n  id: old"
+        ),
+    )
+    result = preview(tmp_path, forge)
+    assert result.exit_code == 2
+    assert any(
+        "model_tier" in p.message and "execution_profile" in p.message
+        for p in result.problems
+    )
+    assert forge.writes == []
+
+
+@pytest.mark.parametrize("tier_yaml", ["null", ""])
+def test_preview_accepts_empty_tier_in_parent(tmp_path, tier_yaml):
+    forge = FakeForge()
+    forge.parent = replace(
+        forge.parent,
+        body=forge.parent.body.replace(
+            "- id: old", f"- model_tier: {tier_yaml}\n  id: old"
+        ),
+    )
+    assert preview(tmp_path, forge).exit_code == 0
+
+
+@pytest.mark.parametrize("tier_yaml", ["strong", "''", "false", "[]", "{}"])
+def test_preview_rejects_retired_tier_in_existing_issue(tmp_path, tier_yaml):
+    forge = FakeForge()
+    forge.existing[42] = issue(
+        42, f"```yaml\nsubtask_id: fix\nmodel_tier: {tier_yaml}\n```\n"
+    )
+    result = preview(tmp_path, forge, issue_number=42)
+    assert result.exit_code != 0
+    assert any(
+        "model_tier" in p.message and "execution_profile" in p.message
+        for p in result.problems
+    )
+    assert forge.writes == []
+
+
+@pytest.mark.parametrize("tier_yaml", ["null", ""])
+def test_preview_accepts_empty_tier_in_registered_issue(tmp_path, tier_yaml):
+    forge = FakeForge()
+    registration(tmp_path, forge)
+    child = forge.children[-1]
+    forge.children[-1] = replace(
+        child,
+        body=child.body.replace(
+            "subtask_id:", f"model_tier: {tier_yaml}\nsubtask_id:", 1
+        ),
+    )
+    assert preview(tmp_path, forge).exit_code == 0
+
+
+def test_remediation_plan_entry_ignores_null_tier_and_rejects_non_null(tmp_path):
+    from orchestune.remediation.body import remediation_record
+    from orchestune.remediation.plan_sources import (
+        build_dag_subtasks,
+        is_plan_entry_ready,
+    )
+
+    spec = load_remediation_spec(write_spec(tmp_path))
+    task = spec.tasks[0]
+    entry = {
+        "id": "fix",
+        "description": "Repair",
+        "issue_number": 42,
+        "model_tier": None,
+        "remediation": remediation_record(task, 1, spec.spec_revision),
+    }
+    assert is_plan_entry_ready(entry, task, 42, 1, spec.spec_revision)
+    entry["model_tier"] = "strong"
+    with pytest.raises(ValueError, match="model_tier.*retired.*execution_profile"):
+        is_plan_entry_ready(entry, task, 42, 1, spec.spec_revision)
+    forge = FakeForge()
+    snapshot = collect_remediation_snapshot(forge, 1, spec)
+    with pytest.raises(ValueError, match="model_tier.*retired.*execution_profile"):
+        build_dag_subtasks([entry], snapshot, [])

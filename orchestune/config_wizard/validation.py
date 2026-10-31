@@ -43,7 +43,6 @@ _KNOWN_SCALAR_KEYS = frozenset(
 _KNOWN_COMPOUND_KEYS = frozenset(
     {
         "execution_profiles",
-        "model_tiers",
     }
     | DAG_TOOL_CONFIG_KEYS
 )
@@ -66,7 +65,12 @@ def diagnose_existing_document(doc_data: dict[str, Any]) -> list[str]:
     for raw_key in doc_data:
         norm_key = raw_key.replace("-", "_")
         if raw_key in PROHIBITED_TOML_KEYS or norm_key in PROHIBITED_TOML_KEYS:
-            msg = f"Prohibited key '{raw_key}' is not allowed in orchestune configuration files."
+            guidance = (
+                PROHIBITED_TOML_KEYS[raw_key]
+                if raw_key in PROHIBITED_TOML_KEYS
+                else PROHIBITED_TOML_KEYS[norm_key]
+            )
+            msg = f"Prohibited key '{raw_key}': {guidance}"
             diagnostics.append(msg)
             seen.add(raw_key)
             seen.add(norm_key)
@@ -110,8 +114,6 @@ def validate_candidate_document(doc_str: str) -> tuple[bool, list[str]]:
         for k in (
             "execution_profiles",
             "execution-profiles",
-            "model_tiers",
-            "model-tiers",
             "default_execution_profile",
             "default-execution-profile",
         )

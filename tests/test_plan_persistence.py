@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from orchestune.issue_parsing import (
     DECOMPOSITION_PLAN_MARKER,
     PARENT_MARKER,
@@ -184,7 +186,6 @@ def test_provision_persists_plan_into_parent_issue_body(tmp_path: Path):
         "depends_on: {{depends_on}}\n"
         "parent_issue_number: {{parent_issue_number}}\n"
         "execution_profile: {{execution_profile}}\n"
-        "model_tier: {{model_tier}}\n"
         "```\n",
         encoding="utf-8",
     )
@@ -280,7 +281,6 @@ def test_provision_with_explicit_parent_persists_plan(tmp_path: Path):
         "depends_on: {{depends_on}}\n"
         "parent_issue_number: {{parent_issue_number}}\n"
         "execution_profile: {{execution_profile}}\n"
-        "model_tier: {{model_tier}}\n"
         "```\n",
         encoding="utf-8",
     )
@@ -339,7 +339,6 @@ def test_incremental_parent_sync_on_partial_failure(tmp_path: Path):
         "depends_on: {{depends_on}}\n"
         "parent_issue_number: {{parent_issue_number}}\n"
         "execution_profile: {{execution_profile}}\n"
-        "model_tier: {{model_tier}}\n"
         "```\n",
         encoding="utf-8",
     )
@@ -429,7 +428,6 @@ def test_provision_reports_plan_synced_false_on_sync_failure(tmp_path: Path):
         "depends_on: {{depends_on}}\n"
         "parent_issue_number: {{parent_issue_number}}\n"
         "execution_profile: {{execution_profile}}\n"
-        "model_tier: {{model_tier}}\n"
         "```\n",
         encoding="utf-8",
     )
@@ -516,7 +514,6 @@ def test_provision_initial_sync_failure_sticks_even_when_subtask_sync_succeeds(
         "depends_on: {{depends_on}}\n"
         "parent_issue_number: {{parent_issue_number}}\n"
         "execution_profile: {{execution_profile}}\n"
-        "model_tier: {{model_tier}}\n"
         "```\n",
         encoding="utf-8",
     )
@@ -560,3 +557,47 @@ def test_provision_initial_sync_failure_sticks_even_when_subtask_sync_succeeds(
     # plan_synced must stay False because initial sync failed, even though subtask sync succeeded
     assert result.plan_synced is False
     assert len(result.created) == 1
+
+
+@pytest.mark.parametrize("issue_number", [None, 2])
+def test_restore_parent_rejects_tier_and_normalizes_null(tmp_path, issue_number):
+    from orchestune.dag.parsing import _parse_subtask
+    from orchestune.provisioning.plan_restoration import restore_plan_from_parent
+    from orchestune.provisioning.rendering import _render_issue_body
+
+    forge = FakeForge()
+    template = tmp_path / "issue_template.md"
+    template.write_text(
+        Path(".github/issue_template.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    for tier in ("strong", "weak", "middle", "", False, 0, [], {}, None):
+        entry = {
+            "id": "task",
+            "description": "Task",
+            "footprint": ["src/a.py"],
+            "model_tier": tier,
+            "execution_profile": "deep-reasoning",
+            "issue_number": issue_number,
+        }
+        child_body = _render_issue_body(
+            _parse_subtask({k: v for k, v in entry.items() if k != "model_tier"}),
+            template.read_text(encoding="utf-8"),
+            1,
+        )
+        forge.issues[2] = {
+            "title": "[FEAT] task: Task",
+            "body": child_body,
+            "labels": [],
+        }
+        body = embed_decomposition_plan_in_parent_body("Parent", {"subtasks": [entry]})
+        forge.issues[1] = {"title": "[EPIC] Parent", "body": body, "labels": []}
+        if tier is not None:
+            with pytest.raises(
+                ValueError, match="model_tier.*retired.*execution_profile"
+            ):
+                restore_plan_from_parent(forge, 1, template)
+        else:
+            restored, _, _ = restore_plan_from_parent(forge, 1, template)
+            assert "model_tier" not in restored["subtasks"][0]
+            assert restored["subtasks"][0]["execution_profile"] == "deep-reasoning"

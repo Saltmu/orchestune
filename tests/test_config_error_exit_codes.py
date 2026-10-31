@@ -43,11 +43,24 @@ _TEMPLATE = (
     "depends_on: {{depends_on}}\n"
     "parent_issue_number: {{parent_issue_number}}\n"
     "execution_profile: {{execution_profile}}\n"
-    "model_tier: {{model_tier}}\n"
     "```\n"
 )
 
 _INVALID_CONFIG = 'dag_ignore_patterns = ["("]\n'
+
+
+@pytest.mark.parametrize("tier_yaml", ["strong", "''", "false", "[]", "{}"])
+def test_retired_plan_tier_exits_1_with_migration_guidance(tmp_path, capsys, tier_yaml):
+    path = tmp_path / "plan.md"
+    path.write_text(
+        _PLAN.replace("    footprint:", f"    model_tier: {tier_yaml}\n    footprint:"),
+        encoding="utf-8",
+    )
+    with pytest.raises(SystemExit) as exc:
+        dag_main(["--plan", str(path)])
+    assert exc.value.code == 1
+    error = capsys.readouterr().err
+    assert "model_tier" in error and "execution_profile" in error
 
 
 @pytest.fixture(autouse=True)
@@ -130,6 +143,34 @@ subtasks:
             dag_main(["--plan", str(plan_path)])
 
         assert excinfo.value.code == 1
+
+
+class TestRetiredModelTiersExitCodeConsistency:
+    @staticmethod
+    def _write_orchestune_toml(tmp_path: Path, key: str) -> None:
+        (tmp_path / "orchestune.toml").write_text(
+            f'[{key}.strong]\ncodex-cli = "old-model"\n', encoding="utf-8"
+        )
+
+    @staticmethod
+    def _write_pyproject_toml(tmp_path: Path, key: str) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            f'[tool.orchestune.{key}.strong]\ncodex-cli = "old-model"\n',
+            encoding="utf-8",
+        )
+
+    @pytest.mark.parametrize("key", ["model_tiers", "model-tiers"])
+    @pytest.mark.parametrize("writer", [_write_orchestune_toml, _write_pyproject_toml])
+    def test_dispatch_exits_2_with_migration_guidance(
+        self, tmp_path, capsys, key, writer
+    ):
+        writer(tmp_path, key)
+
+        with pytest.raises(SystemExit) as excinfo:
+            dispatcher_main(["--no-apply"], cwd=tmp_path)
+
+        assert excinfo.value.code == 2
+        assert "execution_profiles.<name>.<target>.model" in capsys.readouterr().err
 
 
 class TestDispatcherConfigErrorNotAffectedByChange:

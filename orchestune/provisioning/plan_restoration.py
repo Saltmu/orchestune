@@ -9,6 +9,7 @@ from typing import Any
 
 from orchestune.dag.graph import build_dag
 from orchestune.dag.models import SubTask
+from orchestune.dag.parsing import reject_retired_model_tier
 from orchestune.forge import IssueForge
 from orchestune.issue_parsing import (
     DECOMPOSITION_PLAN_MARKER,
@@ -50,6 +51,7 @@ def _validate_parent_plan_structure(plan_dict: dict[str, Any]) -> None:
     for entry in subtasks:
         if not isinstance(entry, dict) or "id" not in entry:
             raise ValueError("Each subtask in parent plan must be a dict with 'id'")
+        reject_retired_model_tier(entry.get("model_tier"))
         sid = str(entry["id"]).strip()
         if sid in seen_ids:
             raise ValueError(f"duplicate subtask id in parent plan: {sid!r}")
@@ -102,7 +104,6 @@ def _reconcile_shared_metadata(
     for key in (
         "shared_contract",
         "execution_profile",
-        "model_tier",
         "parent_issue_number",
     ):
         p_val = entry.get(key)
@@ -189,6 +190,7 @@ def _restore_single_subtask(
     template_content: str,
     fetched_children: dict[int, IssueRecord],
 ) -> dict[str, Any]:
+    entry = {k: v for k, v in entry.items() if k != "model_tier"}
     issue_num = entry.get("issue_number")
     if issue_num is None:
         return dict(entry)
@@ -233,7 +235,6 @@ def _validate_restored_dag(subtasks: list[dict[str, Any]]) -> None:
             writes_shared_contract=bool(t.get("writes_shared_contract", False)),
             issue_number=t.get("issue_number"),
             execution_profile=t.get("execution_profile"),
-            model_tier=t.get("model_tier"),
         )
         for t in subtasks
     ]

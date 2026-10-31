@@ -84,7 +84,6 @@ def _canonical_subtask(subtask: SubTask) -> dict[str, Any]:
         "shared_contract": subtask.shared_contract,
         "writes_shared_contract": subtask.writes_shared_contract,
         "execution_profile": subtask.execution_profile,
-        "model_tier": subtask.model_tier,
     }
 
 

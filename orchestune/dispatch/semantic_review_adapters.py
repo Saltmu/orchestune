@@ -299,7 +299,6 @@ def _launch_fix(
         status_labels=(),
         created_at="",
         execution_profile=None,
-        model_tier=None,
     )
     return target.launch_attempt(operation_id, task, branch, Path.cwd())
 

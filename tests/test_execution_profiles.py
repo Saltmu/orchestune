@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -706,155 +706,10 @@ class TestResolveExecutionProfile:
             validate_target_name("bad target!")
 
 
-class TestModelTiersConfig:
-    def test_extract_valid_model_tiers(self) -> None:
-        raw_config = {
-            "model_tiers": {
-                "strong": {
-                    "claude": "claude-3-7-sonnet",
-                    "codex": "o3-mini",
-                },
-                "middle": {
-                    "claude": "claude-3-5-sonnet",
-                    "codex": "gpt-4o",
-                },
-                "weak": {
-                    "claude": "claude-3-5-haiku",
-                    "codex": "gpt-4o-mini",
-                },
-            }
-        }
-        config = extract_execution_profile_config(raw_config)
-        assert "strong" in config.model_tiers
-        assert config.model_tiers["strong"]["claude"] == "claude-3-7-sonnet"
-        assert config.model_tiers["middle"]["codex"] == "gpt-4o"
-        assert config.model_tiers["weak"]["claude"] == "claude-3-5-haiku"
-
-    def test_hyphen_alias_model_tiers(self) -> None:
-        raw_config = {
-            "model-tiers": {
-                "strong": {
-                    "claude-cli": "claude-3-7-sonnet-20250219",
-                }
-            }
-        }
-        config = extract_execution_profile_config(raw_config)
-        assert (
-            config.model_tiers["strong"]["claude-cli"] == "claude-3-7-sonnet-20250219"
-        )
-
-    def test_invalid_tier_name_rejected(self) -> None:
-        raw_config = {
-            "model_tiers": {
-                "ultra": {
-                    "claude": "claude-3-7-sonnet",
-                }
-            }
-        }
-        with pytest.raises(ConfigError, match="invalid model tier"):
-            extract_execution_profile_config(raw_config)
-
-    @pytest.mark.parametrize(
-        ("invalid_data", "expected_err"),
-        [
-            ({"model_tiers": "not-a-dict"}, "must be a table"),
-            ({"model_tiers": {"strong": "not-a-dict"}}, "must be a table"),
-            ({"model_tiers": {"strong": {"claude": 123}}}, "must be a string"),
-            (
-                {"model_tiers": {"strong": {"claude": "--dangerously-skip"}}},
-                "invalid model name",
-            ),
-            (
-                {"model_tiers": {"strong": {"-bad-target": "claude-3-7-sonnet"}}},
-                "invalid target name",
-            ),
-        ],
-    )
-    def test_invalid_model_tiers_rejected(
-        self, invalid_data: dict, expected_err: str
-    ) -> None:
-        with pytest.raises(ConfigError) as exc_info:
-            extract_execution_profile_config(invalid_data)
-        assert expected_err in str(exc_info.value)
-
-
-class TestResolveModelTier:
-    def test_default_built_in_tiers_resolution(self) -> None:
-        # Without any config, built-in defaults are used
-        sel_strong_claude = resolve_execution_profile(
-            profile=None, target="claude-cli", config=None, model_tier="strong"
-        )
-        assert sel_strong_claude.model == "claude-3-7-sonnet"
-
-        sel_middle_codex = resolve_execution_profile(
-            profile=None, target="codex-cli", config=None, model_tier="middle"
-        )
-        assert sel_middle_codex.model == "gpt-4o"
-
-        sel_weak_agy = resolve_execution_profile(
-            profile=None, target="agy-cli", config=None, model_tier="weak"
-        )
-        assert sel_weak_agy.model == "gemini-2.5-flash-lite"
-
-    def test_custom_model_tiers_override_builtin(self) -> None:
-        config = ExecutionProfileConfig(
-            model_tiers={
-                "strong": {
-                    "claude-cli": "custom-claude-strong",
-                }
-            }
-        )
-        sel = resolve_execution_profile(
-            profile=None, target="claude-cli", config=config, model_tier="strong"
-        )
-        assert sel.model == "custom-claude-strong"
-
-    def test_model_tier_overrides_profile_model_and_retains_reasoning_effort(
-        self,
-    ) -> None:
-        config = ExecutionProfileConfig(
-            profiles={
-                "deep": {
-                    "claude-cli": TargetExecutionConfig(
-                        model="default-profile-model",
-                        reasoning_effort="high",
-                    )
-                }
-            }
-        )
-        sel = resolve_execution_profile(
-            profile="deep",
-            target="claude-cli",
-            config=config,
-            model_tier="weak",
-        )
-        assert sel.model == "claude-3-5-haiku"
-        assert sel.reasoning_effort == "high"
-        assert "model_tier" in sel.reason
-
-    def test_unknown_model_tier_logs_warning_and_falls_back(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        config = ExecutionProfileConfig(
-            profiles={
-                "balanced": {
-                    "claude-cli": TargetExecutionConfig(
-                        model="claude-3-7-sonnet-20250219",
-                        reasoning_effort="medium",
-                    )
-                }
-            }
-        )
-        with caplog.at_level(logging.WARNING):
-            sel = resolve_execution_profile(
-                profile="balanced",
-                target="claude-cli",
-                config=config,
-                model_tier="unknown-tier",
-            )
-        assert sel.model == "claude-3-7-sonnet-20250219"
-        assert sel.reasoning_effort == "medium"
-        assert "unknown-tier" in caplog.text
+class TestRetiredModelTiersConfig:
+    def test_execution_profile_config_has_no_model_tiers(self) -> None:
+        config = ExecutionProfileConfig()
+        assert not hasattr(config, "model_tiers")
 
 
 class TestResolveTaskExecutionSelection:
@@ -891,7 +746,7 @@ class TestResolveTaskExecutionSelection:
             progress_partial=False,
             status_labels=(),
             created_at="2026-01-01T00:00:00Z",
-            model_tier="weak",
+            execution_profile="balanced",
         )
         target = LocalProcessDispatchTarget(local_cmd=local_cmd)
         config = DispatcherConfig(
@@ -905,7 +760,11 @@ class TestResolveTaskExecutionSelection:
             apply=False,
             dispatch_target=target,
             execution_profile_config=ExecutionProfileConfig(
-                model_tiers={"weak": {expected_target: expected_model}}
+                profiles={
+                    "balanced": {
+                        expected_target: TargetExecutionConfig(model=expected_model)
+                    }
+                }
             ),
             forge=MagicMock(spec=Forge),
         )
@@ -913,7 +772,7 @@ class TestResolveTaskExecutionSelection:
         assert _extract_target_name(target) == expected_target
         assert resolve_task_execution_selection(task, config).model == expected_model
 
-    def test_resolve_task_execution_selection_with_model_tier(self) -> None:
+    def test_resolve_task_execution_selection_does_not_use_model_tier(self) -> None:
         from orchestune.models import Task
 
         task = Task(
@@ -926,7 +785,6 @@ class TestResolveTaskExecutionSelection:
             progress_partial=False,
             status_labels=(),
             created_at="2026-01-01T00:00:00Z",
-            model_tier="strong",
         )
         target = LocalProcessDispatchTarget(local_cmd="claude-cli")
         config = DispatcherConfig(
@@ -942,7 +800,7 @@ class TestResolveTaskExecutionSelection:
             forge=MagicMock(spec=Forge),
         )
         sel = resolve_task_execution_selection(task, config)
-        assert sel.model == "claude-3-7-sonnet"
+        assert sel.model is None
         assert "CLI override" not in sel.reason
 
     def test_resolve_task_execution_selection_with_cli_profile_override(self) -> None:
@@ -958,7 +816,6 @@ class TestResolveTaskExecutionSelection:
             progress_partial=False,
             status_labels=(),
             created_at="2026-01-01T00:00:00Z",
-            model_tier="weak",
             execution_profile="deep",
         )
         target = LocalProcessDispatchTarget(local_cmd="claude-cli")
@@ -989,7 +846,43 @@ class TestResolveTaskExecutionSelection:
             execution_profile_config=profile_config,
             forge=MagicMock(spec=Forge),
         )
-        sel = resolve_task_execution_selection(task, config)
+        with patch(
+            "orchestune.dispatch.execution_profiles.resolve_execution_profile",
+            wraps=resolve_execution_profile,
+        ) as resolver:
+            sel = resolve_task_execution_selection(task, config)
+        resolver.assert_called_once_with("custom-profile", target, profile_config)
         assert sel.model == "custom-cli-model"
         assert sel.reasoning_effort == "high"
         assert "CLI profile override" in sel.reason
+
+    def test_unknown_cli_profile_uses_shared_default_fallback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        task = MagicMock(execution_profile="deep")
+        target = MagicMock(target_name="codex-cli")
+        profile_config = ExecutionProfileConfig(
+            default_execution_profile="balanced",
+            profiles={
+                "balanced": {
+                    "codex-cli": TargetExecutionConfig(
+                        model="default-model", reasoning_effort="medium"
+                    )
+                }
+            },
+        )
+        config = MagicMock(
+            profile="typo",
+            dispatch_target=target,
+            execution_profile_config=profile_config,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            selection = resolve_task_execution_selection(task, config)
+
+        assert selection.profile == "balanced"
+        assert selection.model == "default-model"
+        assert selection.reasoning_effort == "medium"
+        assert "unknown profile 'typo'" in selection.reason
+        assert "CLI profile override" in selection.reason
+        assert "falling back to default profile 'balanced'" in caplog.text

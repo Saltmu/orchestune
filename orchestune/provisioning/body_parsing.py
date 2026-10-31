@@ -8,7 +8,8 @@ from typing import Any
 
 import yaml
 
-from orchestune.dag.models import VALID_MODEL_TIERS, SubTask
+from orchestune.dag.models import SubTask
+from orchestune.dag.parsing import reject_retired_model_tier
 from orchestune.dispatch.attempt_record import attempt_from_body
 from orchestune.footprint_paths import normalize_footprint_path
 from orchestune.issue_parsing import (
@@ -223,9 +224,7 @@ def _coerce_footprint_plan_keys(data: dict[str, Any]) -> dict[str, Any]:
             )
         parent_issue_number = raw_parent
 
-    model_tier = data.get("model_tier")
-    if model_tier is not None and model_tier not in VALID_MODEL_TIERS:
-        raise ValueError(f"invalid model_tier in Footprint: {model_tier!r}")
+    reject_retired_model_tier(data.get("model_tier"))
 
     return {
         "subtask_id": subtask_id.strip(),
@@ -236,7 +235,6 @@ def _coerce_footprint_plan_keys(data: dict[str, Any]) -> dict[str, Any]:
         "writes_shared_contract": bool(data.get("writes_shared_contract", False)),
         "parent_issue_number": parent_issue_number,
         "execution_profile": data.get("execution_profile"),
-        "model_tier": model_tier,
     }
 
 
@@ -386,7 +384,6 @@ def _create_subtask_model(
         shared_contract=fp_keys["shared_contract"],
         writes_shared_contract=fp_keys["writes_shared_contract"],
         execution_profile=fp_keys["execution_profile"],
-        model_tier=fp_keys["model_tier"],
     )
 
 
@@ -408,7 +405,6 @@ def _assemble_subtask_result(
         "writes_shared_contract": subtask.writes_shared_contract,
         "parent_issue_number": parent_issue_number,
         "execution_profile": subtask.execution_profile,
-        "model_tier": subtask.model_tier,
     }
 
 

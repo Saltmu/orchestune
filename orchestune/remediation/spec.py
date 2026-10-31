@@ -10,7 +10,11 @@ from typing import Any
 
 import yaml
 
-from orchestune.dag.parsing import _parse_subtask, extract_frontmatter
+from orchestune.dag.parsing import (
+    _parse_subtask,
+    extract_frontmatter,
+    reject_retired_model_tier,
+)
 from orchestune.provisioning.body_parsing import validate_reversible_subtask
 from orchestune.remediation.models import RemediationSpec, RemediationTask
 
@@ -30,7 +34,6 @@ _SUBTASK_KEYS = {
     "shared_contract",
     "writes_shared_contract",
     "execution_profile",
-    "model_tier",
     "issue_number",
 }
 
@@ -57,6 +60,8 @@ def _texts(value: object, field: str) -> tuple[str, ...]:
 def _task(raw: object) -> RemediationTask:
     if not isinstance(raw, dict):
         raise ValueError("subtask must be a mapping")
+    reject_retired_model_tier(raw.get("model_tier"))
+    raw = {k: v for k, v in raw.items() if k != "model_tier"}
     if unknown := raw.keys() - _SUBTASK_KEYS - _REMEDIATION_KEYS:
         raise ValueError(f"unknown task keys: {sorted(map(str, unknown))}")
     subtask = _parse_subtask({k: v for k, v in raw.items() if k in _SUBTASK_KEYS})

@@ -25,6 +25,7 @@ USAGE_DOCS = {
 }
 _REQUIRED_MARKERS = {"ja": "必須", "en": "required"}
 _OPTIONAL_MARKERS = {"ja": "任意", "en": "optional"}
+_RETIRED_PLAN_FIELDS = {"model_tier"}
 
 _OPTION_ROW_PATTERN = re.compile(
     r"^\|\s*`(--[a-z-]+)[^`]*`(?:\s*/\s*`--[a-z-]+`)?\s*\|\s*([^|]*?)\s*\|"
@@ -131,11 +132,11 @@ def _schema_bullet_block(lang: str, field: str) -> str:
 
 
 def _supported_plan_fields() -> set[str]:
-    """`_parse_subtask` のソースから、実際に参照される計画フィールド名を抽出する。"""
+    """`_parse_subtask` のソースから、受理される計画フィールド名を抽出する。"""
     source = inspect.getsource(_parse_subtask)
     fields = set(re.findall(r"""raw\.get\(\s*["']([a-z_]+)["']""", source))
     fields |= set(re.findall(r"""raw\[\s*["']([a-z_]+)["']\s*\]""", source))
-    return fields
+    return fields - _RETIRED_PLAN_FIELDS
 
 
 class TestDocsCliConsistency:
@@ -308,6 +309,51 @@ class TestDocsSchemaConsistency:
 
     def test_ja_and_en_schema_sections_agree(self):
         assert _documented_schema_fields("ja") == _documented_schema_fields("en")
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_retired_model_tier_is_not_a_supported_schema_field(self, lang):
+        assert "model_tier" not in _documented_schema_fields(lang)
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_execution_profile_migration_preserves_effort_and_checks_targets(
+        self, lang
+    ):
+        section = _section(lang, 4)
+        heading = (
+            "#### 廃止されたモデルランクからの移行"
+            if lang == "ja"
+            else "#### Migrating retired model tiers"
+        )
+        migration = section.split(heading, 1)[1].split("\n#### ", 1)[0]
+        markers = (
+            (
+                "専用プロファイル",
+                "既存の `reasoning_effort` はそのまま維持",
+                "execution_selections",
+                "claude-cli",
+                "以前のターゲット別デフォルト",
+                "orchestune.toml.example#L145-L164",
+            )
+            if lang == "ja"
+            else (
+                "dedicated profile",
+                "retain that target's existing `reasoning_effort`",
+                "execution_selections",
+                "--dispatch-target",
+                "previous per-target defaults",
+                "orchestune.toml.example#L145-L164",
+            )
+        )
+        for marker in markers:
+            assert marker in migration
+
+    def test_orchestune_skill_plan_template_uses_only_execution_profile(self):
+        skill = (REPO_ROOT / "skills" / "orchestune" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        assert "execution_profile:" in skill
+        assert "execution_profiles.<profile>.<target>" in skill
+        assert "model_tier" not in skill
 
 
 class TestDocsIntegrationConsistency:
@@ -565,12 +611,6 @@ class TestOrchestuneTomlExample:
         assert "deep-reasoning" in profile_config.profiles
         assert "fast-code" in profile_config.profiles
 
-        # model_tiers が正常に抽出できることを確認
-        if profile_config.model_tiers:
-            assert "strong" in profile_config.model_tiers
-            assert "middle" in profile_config.model_tiers
-            assert "weak" in profile_config.model_tiers
-
     def test_non_model_settings_keep_runtime_defaults(self):
         from orchestune.dag.models import (
             extract_dag_ignore_patterns,
@@ -649,36 +689,37 @@ class TestOrchestuneTomlExample:
             "routine-token",
             "model",
             "reasoning-effort",
+            "model_tiers",
+            "model-tiers",
         ):
             assert (
                 prohibited not in data
             ), f"禁止されたキー {prohibited!r} が設定例に含まれています"
 
     @pytest.mark.parametrize(
-        ("profile", "tier", "target", "expected_model", "expected_effort"),
+        ("profile", "target", "expected_model", "expected_effort"),
         [
-            ("balanced", "middle", "codex-cli", "gpt-5.6-terra", "medium"),
-            ("fast-code", "weak", "codex-cli", "gpt-5.6-luna", "medium"),
-            ("deep-reasoning", "strong", "codex-cli", "gpt-5.6-sol", "high"),
-            ("balanced", "middle", "codex-cloud", "gpt-5.6-terra", "medium"),
-            ("fast-code", "weak", "codex-cloud", "gpt-5.6-luna", "medium"),
-            ("deep-reasoning", "strong", "codex-cloud", "gpt-5.6-sol", "high"),
-            ("balanced", "middle", "claude-cli", "sonnet", "medium"),
-            ("fast-code", "weak", "claude-cli", "haiku", None),
-            ("deep-reasoning", "strong", "claude-cli", "opus", "high"),
-            ("balanced", "middle", "cloud-routine", "claude-sonnet-5", None),
+            ("balanced", "codex-cli", "gpt-5.6-terra", "medium"),
+            ("fast-code", "codex-cli", "gpt-5.6-luna", "medium"),
+            ("deep-reasoning", "codex-cli", "gpt-5.6-sol", "high"),
+            ("balanced", "codex-cloud", "gpt-5.6-terra", "medium"),
+            ("fast-code", "codex-cloud", "gpt-5.6-luna", "medium"),
+            ("deep-reasoning", "codex-cloud", "gpt-5.6-sol", "high"),
+            ("balanced", "claude-cli", "sonnet", "medium"),
+            ("fast-code", "claude-cli", "haiku", None),
+            ("deep-reasoning", "claude-cli", "opus", "high"),
+            ("balanced", "cloud-routine", "claude-sonnet-5", None),
             (
                 "fast-code",
-                "weak",
                 "cloud-routine",
                 "claude-haiku-4-5-20251001",
                 None,
             ),
-            ("deep-reasoning", "strong", "cloud-routine", "claude-opus-5", None),
+            ("deep-reasoning", "cloud-routine", "claude-opus-5", None),
         ],
     )
     def test_recommended_profiles_resolve_for_supported_targets(
-        self, profile, tier, target, expected_model, expected_effort
+        self, profile, target, expected_model, expected_effort
     ):
         from orchestune.dispatch.execution_profiles import (
             extract_execution_profile_config,
@@ -689,7 +730,7 @@ class TestOrchestuneTomlExample:
             (REPO_ROOT / "orchestune.toml.example").read_text(encoding="utf-8")
         )
         config = extract_execution_profile_config(data)
-        selection = resolve_execution_profile(profile, target, config, model_tier=tier)
+        selection = resolve_execution_profile(profile, target, config)
 
         assert selection.model == expected_model
         assert selection.reasoning_effort == expected_effort

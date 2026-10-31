@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Protocol
 
+from orchestune.dag.parsing import reject_retired_model_tier
 from orchestune.issue_parsing import (
     decomposition_plan_from_parent_body,
     find_children_by_parent,
@@ -40,6 +41,8 @@ def _old_candidates(parent: IssueRecord) -> tuple[RetirementCandidate, ...]:
         raise ValueError("parent Issue does not contain a valid decomposition plan")
     candidates: list[RetirementCandidate] = []
     for entry in plan["subtasks"]:
+        if isinstance(entry, dict):
+            reject_retired_model_tier(entry.get("model_tier"))
         if not isinstance(entry, dict) or "issue_number" not in entry:
             continue
         try:

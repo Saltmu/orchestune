@@ -2,7 +2,7 @@
 
 import pytest
 
-from orchestune.config_contracts import ConfigError
+from orchestune.config_contracts import ConfigError, retired_model_tier_message
 from orchestune.dispatch.config_schema import (
     parse_ci_command,
     validate_toml_config,
@@ -46,6 +46,21 @@ class TestParseCiCommand:
 
 
 class TestValidateTomlConfigSharedEnhancements:
+    def test_retired_model_tier_message_points_to_execution_profile(self):
+        message = retired_model_tier_message()
+        assert "model_tier" in message
+        assert "execution_profile" in message
+
+    @pytest.mark.parametrize("key", ["model_tiers", "model-tiers"])
+    def test_validate_toml_rejects_retired_model_tiers(self, key):
+        with pytest.raises(ConfigError) as exc_info:
+            validate_toml_config({key: {"strong": {"codex-cli": "old-model"}}})
+
+        message = str(exc_info.value)
+        assert key in message
+        assert "execution_profiles.<name>.<target>.model" in message
+        assert "execution_profile" in message
+
     def test_validate_toml_ci_command_string_valid(self):
         data = {"ci-command": "pytest -v"}
         validated = validate_toml_config(data)
@@ -90,6 +105,50 @@ class TestValidateTomlConfigSharedEnhancements:
 
 
 class TestConfigWizardValidationAdapters:
+    def test_diagnose_hyphen_only_prohibited_key(self, monkeypatch):
+        from orchestune.config_wizard import validation
+
+        monkeypatch.setitem(
+            validation.PROHIBITED_TOML_KEYS,
+            "future-hyphen-only",
+            "setting 'future-hyphen-only' is retired; use the future replacement",
+        )
+
+        errors = validation.diagnose_existing_document(
+            {"future-hyphen-only": "secret-value"}
+        )
+
+        assert errors == [
+            "Prohibited key 'future-hyphen-only': setting 'future-hyphen-only' "
+            "is retired; use the future replacement"
+        ]
+
+    @pytest.mark.parametrize("key", ["model_tiers", "model-tiers"])
+    def test_diagnose_retired_model_tiers_with_migration_guidance(self, key):
+        from orchestune.config_wizard.validation import diagnose_existing_document
+
+        errors = diagnose_existing_document(
+            {key: {"strong": {"codex-cli": "old-model"}}}
+        )
+
+        assert any("Prohibited key" in error and key in error for error in errors)
+        assert any(
+            "execution_profiles.<name>.<target>.model" in error for error in errors
+        )
+
+    @pytest.mark.parametrize("key", ["model_tiers", "model-tiers"])
+    def test_validate_candidate_rejects_retired_model_tiers(self, key):
+        from orchestune.config_wizard.validation import validate_candidate_document
+
+        ok, errors = validate_candidate_document(
+            f'[{key}.strong]\ncodex-cli = "old-model"\n'
+        )
+
+        assert ok is False
+        assert any(
+            "execution_profiles.<name>.<target>.model" in error for error in errors
+        )
+
     def test_diagnose_prohibited_key_redacts_value(self):
         from orchestune.config_wizard.validation import diagnose_existing_document
 

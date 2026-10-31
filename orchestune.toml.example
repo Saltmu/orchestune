@@ -130,38 +130,16 @@ dag_ignore_patterns = []
 dag_similarity_threshold = 0.2
 
 # -----------------------------------------------------------------------------
-# Recommended model tiers and use-case profiles
+# Recommended use-case profiles
 # -----------------------------------------------------------------------------
 # Profile guidance:
 # - balanced: ordinary SubIssue implementation (default recommendation)
 # - fast-code: small, explicit, routine changes
 # - deep-reasoning: architecture, uncertain requirements, or difficult refactors
 #
-# `model_tier` on a SubIssue overrides the profile's model while retaining the
-# profile's reasoning effort. Claude CLI aliases follow Claude Code's currently
-# recommended model versions; Cloud Routine uses explicit API model IDs.
+# Claude CLI aliases follow Claude Code's currently recommended model versions;
+# Cloud Routine uses explicit API model IDs.
 default_execution_profile = "balanced"
-
-[model_tiers.strong]
-claude-cli = "opus"
-codex-cli = "gpt-5.6-sol"
-agy-cli = "gemini-2.5-pro"
-cloud-routine = "claude-opus-5"
-codex-cloud = "gpt-5.6-sol"
-
-[model_tiers.middle]
-claude-cli = "sonnet"
-codex-cli = "gpt-5.6-terra"
-agy-cli = "gemini-2.5-flash"
-cloud-routine = "claude-sonnet-5"
-codex-cloud = "gpt-5.6-terra"
-
-[model_tiers.weak]
-claude-cli = "haiku"
-codex-cli = "gpt-5.6-luna"
-agy-cli = "gemini-2.5-flash-lite"
-cloud-routine = "claude-haiku-4-5-20251001"
-codex-cloud = "gpt-5.6-luna"
 
 [execution_profiles.balanced.claude-cli]
 model = "sonnet"

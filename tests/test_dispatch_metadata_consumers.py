@@ -32,7 +32,6 @@ def _task() -> Task:
         native_depends_on=(888,),
         parent_number=823,
         execution_profile="deep-reasoning",
-        model_tier="middle",
     )
 
 

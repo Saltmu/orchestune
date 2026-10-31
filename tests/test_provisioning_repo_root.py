@@ -27,7 +27,6 @@ _TEMPLATE = (
     "depends_on: {{depends_on}}\n"
     "parent_issue_number: {{parent_issue_number}}\n"
     "execution_profile: {{execution_profile}}\n"
-    "model_tier: {{model_tier}}\n"
     "```\n"
 )
 
@@ -37,6 +36,38 @@ def template_path(tmp_path: Path) -> Path:
     path = tmp_path / "issue_template.md"
     path.write_text(_TEMPLATE, encoding="utf-8")
     return path
+
+
+@pytest.mark.parametrize("placeholder", ["{{model_tier}}", '"{{model_tier}}"'])
+def test_retired_template_fails_before_provision_side_effects(
+    tmp_path: Path, template_path: Path, placeholder: str
+) -> None:
+    from tests.test_provisioning_support import _PLAN
+
+    template_path.write_text(_TEMPLATE + f"\n{placeholder}\n", encoding="utf-8")
+    path = tmp_path / "plan.md"
+    path.write_text(_PLAN, encoding="utf-8")
+    before = path.read_bytes()
+    forge = FakeForge()
+    with pytest.raises(ValueError, match="model_tier.*retired.*execution_profile"):
+        provision_issues(path, forge=forge, template_path=template_path)
+    assert forge.issues == {}
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".github/issue_template.md",
+        "skills/orchestune-provision/resources/issue_template.md",
+    ],
+)
+def test_bundled_templates_pass_without_retired_placeholder(path: str) -> None:
+    from orchestune.provisioning.rendering import validate_template_identity_marker
+
+    template = Path(path).read_text(encoding="utf-8")
+    assert "{{model_tier}}" not in template
+    validate_template_identity_marker(template, path)
 
 
 class TestSymbolVerificationWarning:
