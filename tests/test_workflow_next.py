@@ -115,6 +115,12 @@ def test_invalid_evidence_takes_priority_over_human_wait(tmp_path):
         action.get("decision") == "reviewer_selected" for action in result.actions
     )
     assert any(action.get("id") == "rerun_ci" for action in result.actions)
+    assert (
+        next(action for action in result.actions if action.get("id") == "rerun_ci")[
+            "stage_id"
+        ]
+        == "implement"
+    )
 
 
 def test_next_uses_review_stage_for_review_in_progress(tmp_path):

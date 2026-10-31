@@ -106,6 +106,7 @@ _CONDITION_REASONS = {
         "evidence_unavailable",
     },
 }
+_KNOWN_REASON_CODES = frozenset(_UNSAFE_REASONS.union(*_CONDITION_REASONS.values()))
 
 
 def _action(action, issue_number: int, stage_id: str) -> dict:
@@ -210,8 +211,7 @@ def _unsafe_reasons(result: WorkflowResult, stage: StageDefinition) -> tuple[str
         and not (code == "base_mismatch" and stage.id in {"prepare", "claim", "scope"})
         and not (code == "completion_unavailable" and stage.id != "complete")
     )
-    known = set(_UNSAFE_REASONS).union(*_CONDITION_REASONS.values())
-    unclassified = any(code not in known for code in result.reason_codes)
+    unclassified = any(code not in _KNOWN_REASON_CODES for code in result.reason_codes)
     unknown = any(check.status == "unknown" for check in result.checks)
     if (unclassified or unknown) and "evidence_unavailable" not in unsafe:
         return (*unsafe, "evidence_unavailable")
@@ -251,7 +251,6 @@ def _stage_status_actions(
             for action in candidate.on_failure:
                 if set(action.reason_codes) & set(unsafe):
                     for recovery in _stage_actions(candidate, issue_number, unsafe):
-                        recovery["stage_id"] = candidate.id
                         if recovery not in actions:
                             actions.append(recovery)
         actions.extend(action for action in decisions if action not in actions)
