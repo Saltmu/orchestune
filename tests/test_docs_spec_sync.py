@@ -358,7 +358,7 @@ class TestDocsSchemaConsistency:
             )
         )
         for marker in effort_markers:
-            assert marker in tier_only
+            assert marker in tier_only, f"{lang}: Tier only is missing {marker!r}"
         markers = (
             (
                 "専用プロファイル",
