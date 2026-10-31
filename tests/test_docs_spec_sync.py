@@ -332,6 +332,7 @@ class TestDocsSchemaConsistency:
                 "execution_selections",
                 "claude-cli",
                 "以前のターゲット別デフォルト",
+                "orchestune.toml.example#L145-L164",
             )
             if lang == "ja"
             else (
@@ -340,6 +341,7 @@ class TestDocsSchemaConsistency:
                 "execution_selections",
                 "--dispatch-target",
                 "previous per-target defaults",
+                "orchestune.toml.example#L145-L164",
             )
         )
         for marker in markers:
