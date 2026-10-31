@@ -132,6 +132,34 @@ subtasks:
         assert excinfo.value.code == 1
 
 
+class TestRetiredModelTiersExitCodeConsistency:
+    @staticmethod
+    def _write_orchestune_toml(tmp_path: Path, key: str) -> None:
+        (tmp_path / "orchestune.toml").write_text(
+            f'[{key}.strong]\ncodex-cli = "old-model"\n', encoding="utf-8"
+        )
+
+    @staticmethod
+    def _write_pyproject_toml(tmp_path: Path, key: str) -> None:
+        (tmp_path / "pyproject.toml").write_text(
+            f'[tool.orchestune.{key}.strong]\ncodex-cli = "old-model"\n',
+            encoding="utf-8",
+        )
+
+    @pytest.mark.parametrize("key", ["model_tiers", "model-tiers"])
+    @pytest.mark.parametrize("writer", [_write_orchestune_toml, _write_pyproject_toml])
+    def test_dispatch_exits_2_with_migration_guidance(
+        self, tmp_path, capsys, key, writer
+    ):
+        writer(tmp_path, key)
+
+        with pytest.raises(SystemExit) as excinfo:
+            dispatcher_main(["--no-apply"], cwd=tmp_path)
+
+        assert excinfo.value.code == 2
+        assert "execution_profiles.<name>.<target>.model" in capsys.readouterr().err
+
+
 class TestDispatcherConfigErrorNotAffectedByChange:
     """dispatcher.pyの既存の`except (ValueError, re.error)`は、`ConfigError`が
     `ValueError`のサブクラスであるため無改修のまま動作を維持することを

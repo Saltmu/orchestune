@@ -707,27 +707,27 @@ Testing full lifecycle of execution profiles.
         assert sel_codex.model == "o3-mini"
         assert sel_codex.reasoning_effort == "high"
 
-    def test_model_tier_and_cli_overrides_end_to_end(
+    def test_default_and_cli_profiles_end_to_end(
         self, tmp_path: Path, in_memory_forge: FakeForge
     ) -> None:
         in_memory_forge.set_actor_permission("bot", "write")
         in_memory_forge.set_actor_permission("", "write")
 
         num = in_memory_forge.create_issue(
-            title="[FEAT] task-tier: Test model tier resolution",
+            title="[FEAT] task-profile: Test execution profile resolution",
             body="""\
 ## Footprint
 ```yaml
-subtask_id: task-tier
+subtask_id: task-profile
 footprint:
-  - src/tier.py
+  - src/profile.py
 symbols: []
 depends_on: []
 shared_contract: null
 writes_shared_contract: false
 parent_issue_number: null
 execution_profile: null
-model_tier: strong
+model_tier: null
 ```
 """,
             labels=["status:queued", "priority:medium"],
@@ -736,11 +736,12 @@ model_tier: strong
         in_memory_forge.add_sub_issue(100, num)
 
         profile_config_dict: dict[str, Any] = {
-            "model_tiers": {
-                "strong": {
-                    "claude-cli": "claude-3-7-sonnet",
+            "default_execution_profile": "balanced",
+            "execution_profiles": {
+                "balanced": {
+                    "claude-cli": {"model": "claude-3-7-sonnet"},
                 }
-            }
+            },
         }
         profile_config = extract_execution_profile_config(profile_config_dict)
 

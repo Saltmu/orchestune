@@ -284,9 +284,9 @@ class TestParentIssueResolution:
 
 
 class TestProfileOverrideAndValidation:
-    """Acceptance condition: --profile overrides task profile and model tier, validates before side-effects."""
+    """Acceptance condition: --profile overrides the task profile before side effects."""
 
-    def test_cli_profile_overrides_task_profile_and_tier(self):
+    def test_cli_profile_overrides_task_profile(self):
         profile_cfg = ExecutionProfileConfig(
             default_execution_profile="balanced",
             profiles={
@@ -301,7 +301,6 @@ class TestProfileOverrideAndValidation:
                     )
                 },
             },
-            model_tiers={"weak": {"codex-cli": "gpt-5.6-luna"}},
         )
         task = MagicMock(
             issue_number=1,
@@ -330,7 +329,7 @@ class TestProfileOverrideAndValidation:
 
         sel2 = resolve_task_execution_selection(task, config_no_profile)
         assert sel2.profile == "balanced"
-        assert sel2.model == "gpt-5.6-luna"  # tier applied
+        assert sel2.model == "gpt-5.6-terra"
 
     def test_unknown_profile_raises_before_side_effects(self):
         profile_cfg = ExecutionProfileConfig(

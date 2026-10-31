@@ -565,12 +565,6 @@ class TestOrchestuneTomlExample:
         assert "deep-reasoning" in profile_config.profiles
         assert "fast-code" in profile_config.profiles
 
-        # model_tiers が正常に抽出できることを確認
-        if profile_config.model_tiers:
-            assert "strong" in profile_config.model_tiers
-            assert "middle" in profile_config.model_tiers
-            assert "weak" in profile_config.model_tiers
-
     def test_non_model_settings_keep_runtime_defaults(self):
         from orchestune.dag.models import (
             extract_dag_ignore_patterns,
@@ -649,36 +643,37 @@ class TestOrchestuneTomlExample:
             "routine-token",
             "model",
             "reasoning-effort",
+            "model_tiers",
+            "model-tiers",
         ):
             assert (
                 prohibited not in data
             ), f"禁止されたキー {prohibited!r} が設定例に含まれています"
 
     @pytest.mark.parametrize(
-        ("profile", "tier", "target", "expected_model", "expected_effort"),
+        ("profile", "target", "expected_model", "expected_effort"),
         [
-            ("balanced", "middle", "codex-cli", "gpt-5.6-terra", "medium"),
-            ("fast-code", "weak", "codex-cli", "gpt-5.6-luna", "medium"),
-            ("deep-reasoning", "strong", "codex-cli", "gpt-5.6-sol", "high"),
-            ("balanced", "middle", "codex-cloud", "gpt-5.6-terra", "medium"),
-            ("fast-code", "weak", "codex-cloud", "gpt-5.6-luna", "medium"),
-            ("deep-reasoning", "strong", "codex-cloud", "gpt-5.6-sol", "high"),
-            ("balanced", "middle", "claude-cli", "sonnet", "medium"),
-            ("fast-code", "weak", "claude-cli", "haiku", None),
-            ("deep-reasoning", "strong", "claude-cli", "opus", "high"),
-            ("balanced", "middle", "cloud-routine", "claude-sonnet-5", None),
+            ("balanced", "codex-cli", "gpt-5.6-terra", "medium"),
+            ("fast-code", "codex-cli", "gpt-5.6-luna", "medium"),
+            ("deep-reasoning", "codex-cli", "gpt-5.6-sol", "high"),
+            ("balanced", "codex-cloud", "gpt-5.6-terra", "medium"),
+            ("fast-code", "codex-cloud", "gpt-5.6-luna", "medium"),
+            ("deep-reasoning", "codex-cloud", "gpt-5.6-sol", "high"),
+            ("balanced", "claude-cli", "sonnet", "medium"),
+            ("fast-code", "claude-cli", "haiku", None),
+            ("deep-reasoning", "claude-cli", "opus", "high"),
+            ("balanced", "cloud-routine", "claude-sonnet-5", None),
             (
                 "fast-code",
-                "weak",
                 "cloud-routine",
                 "claude-haiku-4-5-20251001",
                 None,
             ),
-            ("deep-reasoning", "strong", "cloud-routine", "claude-opus-5", None),
+            ("deep-reasoning", "cloud-routine", "claude-opus-5", None),
         ],
     )
     def test_recommended_profiles_resolve_for_supported_targets(
-        self, profile, tier, target, expected_model, expected_effort
+        self, profile, target, expected_model, expected_effort
     ):
         from orchestune.dispatch.execution_profiles import (
             extract_execution_profile_config,
@@ -689,7 +684,7 @@ class TestOrchestuneTomlExample:
             (REPO_ROOT / "orchestune.toml.example").read_text(encoding="utf-8")
         )
         config = extract_execution_profile_config(data)
-        selection = resolve_execution_profile(profile, target, config, model_tier=tier)
+        selection = resolve_execution_profile(profile, target, config)
 
         assert selection.model == expected_model
         assert selection.reasoning_effort == expected_effort
