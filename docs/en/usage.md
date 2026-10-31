@@ -359,16 +359,16 @@ Routine dispatch execution uses strictly the following 7 options. Detailed param
 
 ### Configuration File (`orchestune.toml`) for Detailed Settings
 
+Non-routine options (storage paths, rate limits, timeouts, reviewer selection, consistency loops, etc.) are centralized in the repository's configuration file (`orchestune.toml` or the `[tool.orchestune]` section of `pyproject.toml`). Copy the template with `cp orchestune.toml.example orchestune.toml`. Keep the real file as untracked local configuration and publish shared changes through `orchestune.toml.example`.
+
 #### Migrating retired model tiers
 
 `model_tier` is retired. Remove it from decomposition plans and select an `execution_profile` instead. Define the model separately for each dispatch target under `[execution_profiles.<profile>.<target>]`.
 
-- **Tier only:** Create a dedicated profile for the former tier (for example, `tier-strong`), add a target table with the intended `model` for each target that will run the task, and set the task's `execution_profile` to that profile. Use the previous tier mapping as a reference when translating the model choice for each target.
+- **Tier only:** Create a dedicated profile for the former tier (for example, `tier-strong`), add a target table with the intended `model` for each target that will run the task, and set the task's `execution_profile` to that profile. The previous per-target defaults are listed in the [`model_tiers` table before its retirement](https://github.com/Saltmu/orchestune/blob/95822058eec1243bdec3d13b710a64dee05597ab/orchestune.toml.example#L145-L162).
 - **Profile plus tier:** Copy the existing profile to a dedicated profile so other tasks keep their current settings. For each target, replace `model` with the model previously selected by the tier and retain that target's existing `reasoning_effort`. Set the task's `execution_profile` to the dedicated profile.
 
 Check each target's resolved values with a dry-run dispatch, for example `orchestune-dispatch -p <N> --no-apply --dispatch-target claude-cli`. Read that run's saved `result.json` and inspect `execution_selections` for the task's `profile`, `model`, and `reasoning_effort`; repeat for every target used by the plan.
-
-Non-routine options (storage paths, rate limits, timeouts, reviewer selection, consistency loops, etc.) are centralized in the repository's configuration file (`orchestune.toml` or the `[tool.orchestune]` section of `pyproject.toml`). Copy the template with `cp orchestune.toml.example orchestune.toml`. Keep the real file as untracked local configuration and publish shared changes through `orchestune.toml.example`.
 
 #### Configuration File Settings
 

@@ -352,16 +352,16 @@ else { Write-Warning 'report not created' }
 
 ### 設定ファイル (`orchestune.toml`) による詳細設定
 
+日常オプション以外の設定（ストレージパス、レート制限、タイムアウト、レビュアー、整合性ループ等）は、リポジトリの設定ファイル（`orchestune.toml` または `pyproject.toml` の `[tool.orchestune]` セクション）に集約して定義します。`cp orchestune.toml.example orchestune.toml` でテンプレートをコピーして使用してください。実ファイルはローカル設定としてGit管理外にし、共有する変更は `orchestune.toml.example` へ反映します。
+
 #### 廃止されたモデルランクからの移行
 
 `model_tier` は廃止されました。計画から削除し、代わりに `execution_profile` を選択してください。モデルは `[execution_profiles.<profile>.<target>]` の下で、ディスパッチ先ごとに設定します。
 
-- **モデルランクのみを指定していた場合:** 以前のランクに対応する専用プロファイル（例: `tier-strong`）を作り、タスクを実行する各ターゲットに意図した `model` を設定して、タスクの `execution_profile` にそのプロファイルを指定します。各ターゲットのモデルを決める際は、以前のランク設定を参照します。
+- **モデルランクのみを指定していた場合:** 以前のランクに対応する専用プロファイル（例: `tier-strong`）を作り、タスクを実行する各ターゲットに意図した `model` を設定して、タスクの `execution_profile` にそのプロファイルを指定します。以前のターゲット別デフォルトは[廃止前の `model_tiers` テーブル](https://github.com/Saltmu/orchestune/blob/95822058eec1243bdec3d13b710a64dee05597ab/orchestune.toml.example#L145-L162)で確認できます。
 - **プロファイルとモデルランクを併用していた場合:** 他タスクの設定を変えないよう既存プロファイルを複製し、専用プロファイルを作ります。各ターゲットで `model` だけを以前のランクに対応するモデルへ置き換え、既存の `reasoning_effort` はそのまま維持します。タスクの `execution_profile` に新しいプロファイルを指定します。
 
 dry-run dispatchを使って各ターゲットの解決結果を確認します。たとえば `orchestune-dispatch -p <N> --no-apply --dispatch-target claude-cli` を実行し、その実行で保存された `result.json` の `execution_selections` を開きます。対象タスクの `profile`、`model`、`reasoning_effort` を確認し、計画で使う各ターゲットについて繰り返します。
-
-日常オプション以外の設定（ストレージパス、レート制限、タイムアウト、レビュアー、整合性ループ等）は、リポジトリの設定ファイル（`orchestune.toml` または `pyproject.toml` の `[tool.orchestune]` セクション）に集約して定義します。`cp orchestune.toml.example orchestune.toml` でテンプレートをコピーして使用してください。実ファイルはローカル設定としてGit管理外にし、共有する変更は `orchestune.toml.example` へ反映します。
 
 #### 設定ファイル項目一覧
 
