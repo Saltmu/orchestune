@@ -1,5 +1,26 @@
 # Usage & Command Reference
 
+## Next workflow action (`orchestune workflow next`)
+
+Use `next` with the task's explicit session directory to derive its earliest
+unfinished stage and show the checks, safe suggested actions, references, and
+expected artifacts. It reads the same workflow evidence as `check` and never
+claims, fetches, runs CI, requests review, posts comments, changes labels, or
+writes workflow state. JSON status controls the exit code; a suggested command
+is display-only and is never run.
+
+```bash
+orchestune workflow next --issue 1497 --session-dir .orchestune/tmp/task-example --json
+orchestune workflow next --issue 1497 --session-dir .orchestune/tmp/task-example --pr 42 --json
+```
+
+`next` returns `ready` when an action can be derived, `waiting_human` when a
+human decision is required, `unmet` for missing or invalid evidence that blocks
+a safe decision, and `terminal_blocked` only for a verified blocked Outcome.
+A verified handoff returns `ready`, reason `handed_off`, and no actions. See the
+[workflow evidence contract](../plans/local-ci-workflow-enforcement.md) for the
+stage and JSON schema details.
+
 ## Read-only workflow gates (`orchestune workflow check`)
 
 Inspect task evidence using an explicit session directory. These advisory checks

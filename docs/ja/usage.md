@@ -1,5 +1,22 @@
 # 使用方法とコマンドリファレンス
 
+## 次のワークフロー操作（`orchestune workflow next`）
+
+`next` にタスク固有のsession directoryを指定すると、最も早く未完了の段階と、
+その確認項目・安全な操作候補・参照先・成果物を表示します。`check` と同じ証拠を
+読み、claim、fetch、CI、レビュー依頼、コメント投稿、ラベル変更、workflow stateの
+保存は行いません。JSONのstatusが終了コードを決めます。表示されたコマンドも実行しません。
+
+```bash
+orchestune workflow next --issue 1497 --session-dir .orchestune/tmp/task-example --json
+orchestune workflow next --issue 1497 --session-dir .orchestune/tmp/task-example --pr 42 --json
+```
+
+操作を導出できれば `ready`、人間の判断が必要なら `waiting_human`、安全な判断を妨げる
+証拠の不足・不正があれば `unmet` を返します。`terminal_blocked` は確定済みのblocked Outcomeを
+確認した場合だけです。handoff済みは `ready` と `handed_off` を返し、操作候補はありません。
+段階とJSON schemaの詳細は[workflow証拠契約](../plans/local-ci-workflow-enforcement.md)を参照してください。
+
 ## ワークフローの読み取り専用チェック（`orchestune workflow check`）
 
 明示したタスクセッションの証拠を読み、4つのゲートを助言として判定します。

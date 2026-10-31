@@ -650,6 +650,9 @@ def test_local_ci_developer_preflight_and_backend_selection():
     assert "mcp" in skill_md_lower
     assert "backend" in skill_md_lower
     assert "selected backend" in skill_md_lower
+    assert "orchestune workflow next" in skill_md_lower
+    assert "orchestune workflow --help" in skill_md_lower
+    assert "follow these prose steps" in skill_md_lower
 
     # tdd.md prerequisites
     tdd_md_lower = tdd_md.lower()
