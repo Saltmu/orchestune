@@ -64,6 +64,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     ),
     2: frozenset(
         {
+            "workflow.stages",
             "config_wizard",
             "config_wizard.document",
             "config_wizard.questions",
@@ -283,6 +284,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     ),
     0: frozenset(
         {
+            "workflow",
             "bounded_limit",
             "branch_naming",
             "merge_evidence",

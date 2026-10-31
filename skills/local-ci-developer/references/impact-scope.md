@@ -2,6 +2,19 @@
 
 Run this **inside the task worktree, before writing any production code** to refine the [initial footprint](../SKILL.md#initial-footprint-before-issue-creation-or-claim) declared before Issue creation/claim. Reconcile the detailed findings with that declaration and the held reservation; follow the linked procedure if they differ.
 
+Start: matching claim/worktree and initial footprint. Actions: enumerate, classify and preserve the initial table below. Finish: its reference/decision/rationale rows and immutable snapshot are recorded. Failure: use text-search fallback for unavailable tools; reconcile ownership/scope conflicts before editing.
+
+## Plan marker (schema v1)
+During preparation the executor writes exactly one locator in `implementation-plan.md`:
+````markdown
+```orchestune-workflow
+schema_version: 1
+state: workflow-state.json
+```
+````
+The state path is relative to the plan and must remain within the explicit session directory (no absolute/escaping paths). Parse with safe YAML and only these scalar keys. Zero markers means absent; multiple markers, unknown keys/version or identity conflicts mean unmet, never approval. The [state contract](../../../docs/plans/local-ci-workflow-enforcement.md#persisted-workflow-context-and-plan-marker) owns its schema; readers never create/rewrite state.
+Digest the exact initial table only as UTF-8, LF, one final newline; record its relative path/digest in `impact_initial`. Preserve the initial snapshot before production edits and append reconciliation separately, never rewrite it.
+
 During #822 observation, start the [measurement record](measurement.md) before preparation
 or searches. Preserve the original table before implementation; append reconciliation
 and review discoveries separately rather than rewriting the original decisions.

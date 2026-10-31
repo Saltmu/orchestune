@@ -1,76 +1,36 @@
-# TDD & Local CI Reference (Steps 3–9)
+# TDD & Local CI (Steps 3–9; implement stage)
 
-This document provides detailed procedures for Test-Driven Development (TDD) and local CI verification.
+Perform edits, tests, commits and pushes in the claimed task worktree.
+Start: the current claim/worktree and preserved initial impact table are verified.
+Actions: follow the code path below; docs/typos without logic changes may skip Steps 3–8, but never Step 9.
+Finish: implementation and applicable tests pass, mandatory local CI passes before commit/push, and clean current-HEAD CI evidence is refreshed before PR/completion.
+Failure: apply the bounded analysis and autonomous refactoring below; escalate after three unsuccessful analysis/refactoring attempts.
 
-Perform every command in this document from the prepared worktree. Do not edit,
-test, commit, or push from the primary checkout.
+## 3. Reproducer
+For a bug fix, add a minimal reproducer under `tests/` and verify failure (Red) before fixing. New features proceed to Step 4.
 
----
+## 4. Baseline
+Prerequisites: `uv lock --check` and `uv sync` succeed so dependencies and environment scripts exist.
+Record unmodified-code CI to distinguish pre-existing failures from regressions:
+- Linux/macOS: `uv run python scripts/ci_baseline.py record`.
+- Windows: `uv run python scripts/ci_baseline.py record --ci-command "powershell -ExecutionPolicy Bypass -File .\\scripts\\local-ci.ps1"`.
 
-## 3. Reproducer Step
-- **For bug fixes**: Before implementing any fix, create a minimal test under `tests/` that reproduces the reported defect and verify that it fails (Red).
-- **For new features**: Skip this step and proceed to Step 4.
+## 5–6. Test first, then implement
+Add happy-path and major-scenario tests under `tests/`; verify the new tests fail with `uv run pytest` (Red).
+Implement the minimal change, then verify tests pass (Green).
 
-## 4. Baseline Recording (Baseline Record)
-- **Prerequisites**: Confirm that the worktree environment is ready before recording the baseline:
-  - Run `uv lock --check` to verify lockfile consistency.
-  - Run `uv sync` to ensure all dependencies and virtual environment scripts are available.
-- Record the baseline status on unmodified code (select command based on your OS):
-```bash
-# Linux / macOS
-uv run python scripts/ci_baseline.py record
+## 7–8. Failure analysis and boundaries
+After the same failure persists twice, stop uninformed edits: record its direct cause, why the prior hypothesis failed, and a concrete alternative. `ci_baseline.py` tracks consecutive failures; after three unsuccessful analysis attempts escalate.
+Add boundary/error scenarios and inspect `uv run pytest --cov=orchestune --cov-branch --cov-report=term-missing`.
 
-# Windows PowerShell
-uv run python scripts/ci_baseline.py record --ci-command "powershell -ExecutionPolicy Bypass -File .\\scripts\\local-ci.ps1"
-```
-- This record enables Step 9 to automatically distinguish between new regressions and pre-existing failures on the base branch.
+## 9. Mandatory local CI
+Determine the execution OS. Before committing or pushing, run Linux/macOS `./scripts/local-ci.sh` or Windows `.\\scripts\\local-ci.ps1` and confirm zero errors.
+Baseline-aware equivalent: `uv run python scripts/ci_baseline.py check`; on Windows append `--ci-command "powershell -ExecutionPolicy Bypass -File .\\scripts\\local-ci.ps1"`.
+Resolve regressions and record baseline failures; baseline classification never waives required quality gates.
+- Format/lint: `uv run ruff format`, `uv run ruff check --fix`.
+- Types: `uv run mypy orchestune tests`.
+- Tests: inspect baseline-aware failure classification and repair new failures.
+- Bloat: `uv run python scripts/detect_bloat.py --warn-only`. On edits or CI warnings, autonomously split modules/prompts to remove new/worsened warnings (code file 1000 lines, skill Markdown total 500, function 50); re-run format, lint, types and tests. After three unsuccessful refactoring attempts escalate.
 
-## 5. Pre-Implementation Test Creation (Test-First)
-- Write tests under `tests/` covering new features or revised specifications (happy path and major scenarios).
-- Run `uv run pytest` and verify that newly added tests fail as expected (Red).
-
-## 6. Feature Implementation & Test Passing
-- Implement the minimal code necessary to make the tests pass.
-- Run `uv run pytest` and verify that all tests pass (Green).
-
-## 7. Failure Analyst (Root Cause Analysis on Repeated Failures)
-- When the same test failure persists across 2 or more consecutive attempts, stop making uninformed changes and analyze:
-  1. Direct cause of failure (stack trace, diff location)
-  2. Hypothesis on why the expected fix did not resolve it
-  3. Specific alternative approach for the next attempt
-- `scripts/ci_baseline.py` automatically tracks consecutive failure counts. If not resolved after 3 analysis attempts, pause work and escalate.
-
-## 8. Edge Case & Error Handling Coverage
-- Strengthen test coverage by adding tests for boundary values, error conditions, and exception handling:
-```bash
-uv run pytest --cov=orchestune --cov-branch --cov-report=term-missing
-```
-
-## 9. Comprehensive Local CI Verification & Error Resolution
-- Execute baseline-aware CI verification (select command based on your OS):
-```bash
-# Linux / macOS
-uv run python scripts/ci_baseline.py check
-
-# Windows PowerShell
-uv run python scripts/ci_baseline.py check --ci-command "powershell -ExecutionPolicy Bypass -File .\\scripts\\local-ci.ps1"
-```
-- Alternatively, run standard OS CI scripts (Linux/macOS: `./scripts/local-ci.sh`, Windows: `.\\scripts\\local-ci.ps1`).
-
-### Error Resolution Procedures
-1. **Ruff Format/Lint**:
-   ```bash
-   uv run ruff format
-   uv run ruff check --fix
-   ```
-2. **Mypy Type Checking**:
-   ```bash
-   uv run mypy orchestune tests
-   ```
-3. **Pytest Test Failures**:
-   - `scripts/ci_baseline.py check` automatically categorizes new failures vs. baseline failures.
-4. **Detect Bloat Warnings**:
-   ```bash
-   uv run python scripts/detect_bloat.py --warn-only
-   ```
-   - If warnings for file size (code: 1000 lines, skill total: 500 lines) or function length (50 lines) are detected, **do not pause for user approval**; autonomously execute modular or prompt split refactoring to eliminate new or worsened bloat warnings before proceeding (if unresolved after 3 attempts, pause work and escalate). After refactoring, re-run verification procedures (steps 1–3) to ensure no regressions were introduced.
+## Evidence recovery
+CI followed by a fix, commit/amend or rebase: prior CI bindings are stale. Run the required checks before committing, then refresh local CI for the resulting clean HEAD; never reuse an older SHA's evidence for PR/completion.
