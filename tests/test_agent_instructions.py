@@ -105,14 +105,15 @@ def test_agent_rules_gh_pr_comment_ban_exempts_review_replies_without_rereview()
     instructions = (REPOSITORY_ROOT / ".agents" / "AGENTS.md").read_text(
         encoding="utf-8"
     )
-    wait_rule = next(
-        line for line in instructions.splitlines() if "wait_for_review.py" in line
+    canonical = "../skills/local-ci-developer/references/review-loop.md"
+    assert canonical in instructions
+    loop = (
+        (REPOSITORY_ROOT / ".agents" / canonical).resolve().read_text(encoding="utf-8")
     )
-
-    assert "事前の個別 `gh pr comment` 投稿は2重送信となるため禁止" in wait_rule
-    assert "再レビューを依頼しない" in wait_rule
-    assert "review-reply.md" in wait_rule
-    assert "対象外" in wait_rule
+    assert "single wait process" in loop
+    assert "do not post a separate trigger comment" in loop
+    assert "No re-review" in loop and "review-reply.md" in loop
+    assert "double-posting ban does not apply" in loop
 
 
 def test_agent_rules_define_collision_safe_repository_local_scratch_space():

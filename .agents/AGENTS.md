@@ -1,41 +1,23 @@
 # AIエージェント開発・運用ルール (Orchestune)
 
-本プロジェクトにおいて、AIエージェントが作業およびユーザーとのやり取りを行う際は、以下のルールを厳格に遵守してください。
+## 開発・検証・品質管理
 
-## 開発・検証・品質管理 (TDD/Lint)
-- **TDDとローカルCIの遵守**: ソースコードの新規作成および修正を行う際は、必ず [local-ci-developer スキル](../skills/local-ci-developer/SKILL.md) をロードしてそのワークフローを厳格に遵守してください。
-  - **意図**: AIによる修正とテストのサイクルを閉じ、開発プロセスを自動化することで、人間の確認・手戻り負荷を減らすため。
-- **Git Push時のローカルCI遵守**: 変更をコミット・プッシュする前に実行OSを判定し、Windows PowerShellでは`.\scripts\local-ci.ps1`、Linux/macOSでは`./scripts/local-ci.sh`を必ず実行してエラーがゼロであることを確認してください。
-  - **意図**: 壊れたコードが共有リポジトリに誤って追加されるのを防ぎ、常に正常稼働する最新コードベース（Mainブランチ）を維持するため。
-- **コード・スキルの肥大化検知時の自律的リファクタリング**:
-  ファイルやスキルの編集・更新時、またはOSに対応するローカルCI実行時に肥大化警告を検知した場合は、ユーザーへの確認のために作業を中断せず、エージェント自身が自律的にモジュールやプロンプトの分割リファクタリングを実施して警告を解消してください（3回試行しても解消できない場合は作業を中断しエスカレーションすること）。
-  - **意図**: 無人実行や自律的な開発サイクルを止めずに、LLM のコンテキスト長制限による処理品質の低下（ハルシネーションや応答途切れ）を防ぎ、コードとプロンプトの保守性を保つため。
-- **Issue起票・claim時のfootprint宣言**: 変更予定ファイルの初期宣言と既存Issueのclaim前確認は、[local-ci-developer スキル](../skills/local-ci-developer/SKILL.md#initial-footprint-before-issue-creation-or-claim)の手順に従ってください。
-- **実装着手前の影響範囲確定**:
-  コードの修正に着手する前に、変更予定のシンボル（関数・型・フィールド・設定キー等）の利用先をコード解析ツール（Serena MCP、[導入手順](../CONTRIBUTING.ja.md#コード解析ツールserena-mcp)）で列挙し、各利用先を「修正対象／対象外」へ根拠付きで仕分けてセッション固有の implementation plan とPR本文に記録してください。検索結果が空であることを影響なしの証明として扱わず、動的アクセス・文字列指定のmock対象・設定・ドキュメントはテキスト検索で補完すること。ツールが利用できない場合は既存のテキスト検索へフォールバックし、その旨を計画に明記して作業を止めないこと。手順の詳細は [impact-scope.md](../skills/local-ci-developer/references/impact-scope.md) を参照。
-  - **意図**: 変更が別経路・利用側へ伝搬していない状態でPRを出し、レビューで初めて漏れが発覚する手戻りを減らすため。仕分けの根拠を残すことで、漏れの原因が「列挙できていなかった」のか「列挙した上で誤って対象外と判断した」のかを事後に切り分けられる。
-- **開発ワークフローの厳格な適用（調査タスクからの移行時）**:
-  当初が質問や技術調査などの対話から始まった場合でも、実ファイル（コードや設定ファイル）の新規作成・修正を伴う作業フェーズへ移行する際は、必ず [local-ci-developer スキル](../skills/local-ci-developer/SKILL.md) をロードし、GitHub Issueの起票およびPRの作成を含む標準開発ワークフローを例外なく適用してください。
-  - **GitHub操作の代替手段 (重要)**: GitHub CLI (`gh` コマンド) がインストールされていない、または認証が設定されていない環境では、**GitHub MCP サーバーのツール**を使用するか、**GitHub Web UI（ブラウザ）から手動**で起票・作成を行ってください。
-  - **意図**: 調査フェーズからなし崩し的にファイル修正が始まるのを防ぎ、作業履歴のトレーサビリティと品質検証を必ず担保するため。
-- **セッション開始時のGit状態確認と手戻り防止**:
-  新しいセッションの開始時、または調査から実装フェーズへの移行時には、必ず最初に `git status` や `git diff` を実行して、コミットされていない変更や以前のセッションからの引き継ぎファイルを正確に把握してください。確認せずに安易な `git checkout` や上書きを行って成果物を消失させる手戻りを絶対に防ぐこと。
-  - **意図**: 以前のセッションで実装されたコードがコミットされていなかった場合に、作業履歴の破壊を防ぎ、手戻りを防止するため。
-- **作業中断・終了時のWIPコミット推奨**:
-  動作確認が完了したフェーズや、セッションを切り替える・中断する際は、こまめに動作する状態で `WIP` コミット（例: `WIP: ...`）を作成してローカル保存またはプッシュしてください。
-  - **意図**: コンテキストが薄れたり、セッションがリセットされた際にも、それまでの作業進捗を安全に復元できるようにするため。
-- **外部CI・PRレビュー待機とタスク多重起動防止**:
-  GitHub Actions や AI レビュー（Claude / Codex など）の完了を待機・監視する際は、`schedule` ツールによるタイマーループやコマンドの連打（プロセスの多重起動・割り込み）を厳禁とします。必ず `uv run python scripts/wait_for_review.py --pr <PR番号> --bot-name <claude|codex>` の単一コマンドを実行し、レビュー依頼コメントの投稿から完了待機・指摘解析サマリーの取得までをアトミックに完了させる構造とすること（事前の個別 `gh pr comment` 投稿は2重送信となるため禁止）。この禁止は再レビュー依頼（trigger）コメントの二重送信防止が目的であり、再レビューを依頼しない指摘対応の返信（`review-reply.md`）を `gh pr comment <PR番号> --body-file <session-dir>/review-reply.md` で投稿することは対象外である。**限定例外（GitHub MCP/App バックエンド）**: `--review-state-file` のオフライン評価は投稿しないため、[review-loop.md](../skills/local-ci-developer/references/review-loop.md) の「MCP posting」手順に従い、MCP クライアントが前ラウンドの判断表と次ラウンドの trigger を結合した通常コメントを一度だけ投稿してよい。別の trigger コメントの追加投稿、投稿有無が未確認の再送、および多重待機は引き続き禁止する。
-  - **意図**: タイマーや監視コマンドの重複生成によるエージェントプロセスのN重起動・割り込みループおよびコメントの重複送信を防ぎ、安定した実行環境を維持するため。
+実ファイルを作成・修正する前に [local-ci-developer スキル](../skills/local-ci-developer/SKILL.md) を全文読み、標準開発ワークフローに従うこと。調査・質問から実装へ移る場合も適用し、Issue・PR・レビュー・Outcome まで進める。開発手順の正本は同スキルと以下の参照先であり、本ファイルには重複して記述しない。
+
+| 要件 | 正本（該当段階に入る前に全文読む） |
+| --- | --- |
+| 実行モード別プラン、reviewer 選択、GitHub backend、ラベル管理、Outcome | [SKILL.md](../skills/local-ci-developer/SKILL.md) |
+| 開始時の Git 状態確認、footprint、claim、worktree、再開 | [worktree.md](../skills/local-ci-developer/references/worktree.md) |
+| 実装前の影響範囲確定（参照列挙・分類・予約照合・初版保存） | [impact-scope.md](../skills/local-ci-developer/references/impact-scope.md) |
+| TDD、コミット・push 前の OS 別 local CI、自律的リファクタリング、3回失敗時のエスカレーション | [tdd.md](../skills/local-ci-developer/references/tdd.md)（入口: [local-ci.sh](../scripts/local-ci.sh) / [local-ci.ps1](../scripts/local-ci.ps1)） |
+| PR 作成・ベース選択・リモート差分確認 | [pr.md](../skills/local-ci-developer/references/pr.md) |
+| 外部CI・PRレビュー待機、単一プロセス、再依頼と返信、全指摘判断、対象 SHA、上限 | [review-loop.md](../skills/local-ci-developer/references/review-loop.md) |
+| #822 の観測と初版 snapshot | [measurement.md](../skills/local-ci-developer/references/measurement.md) |
 
 ## セキュリティ & リソース制限
-- **一時成果物の配置と衝突回避**: エージェントが作る implementation plan、decomposition plan、PR本文、review reply、Outcome Record 下書きなどは、OS グローバルの `/tmp` やリポジトリ直下の固定名へ置かず、Git 管理外の `.orchestune/tmp/<artifact>-<issue-or-task>-<UTC timestamp>-<random>/` 配下へ置く。`<issue-or-task>` は Issue 番号（未採番なら短い task slug）、`<UTC timestamp>` は UTC の `YYYYMMDDTHHMMSSZ`、`<random>` は UUID 等の衝突回避値とする。作成時はインライン Python を実行せず、`./scripts/create-session-dir.sh <artifact> <issue-or-task>`（Windows では `.\\scripts\\create-session-dir.ps1 <artifact> <issue-or-task>`）を実行して生成すること。同じ作業内では作成した session directory を再利用し、CLI にはその配下の明示パスを渡す。既存ファイルを削除して固定名で再作成してはならない。
-  - **意図**: 一時成果物の誤 push、並行エージェント間の上書き、削除・再作成に伴う不要な許可要求を防ぐため。
-- **機密情報のコミット防止**: APIキーや認証情報をコミット、ログ、チャットに露出させない。
-  - **意図**: セキュリティの侵害や漏洩のリスクを極小化し、プロジェクト全体の安全性を保つため。
-- **ドキュメント・設定ファイルに絶対ローカルパスを書かない**: 他ファイルへの参照は常に相対パスで記述し、`file:///home/<user>/...` のようなローカル環境固有の絶対パスをコミットしない。
-  - **意図**: ユーザー名やディレクトリ構成の意図しない公開を防ぐため。`./scripts/local-ci.sh` の gitleaks スキャン（[`.gitleaks.toml`](../.gitleaks.toml)）でも機械的に検知されるが、そもそも生成しないことが望ましい。
-- **インジェクション対策**: 外部コマンド実行時の引数は適切にリスト化しサニタイズする。
-  - **意図**: 不正なコマンドの挿入・自動実行（OSコマンドインジェクション）による被害を防止するため。
-- **APIコスト制限**: LLM API呼び出し時はリトライ上限（最大3回程度）と指数バックオフを設定し、長文は適切に分割（チャンク化）して処理する。
-  - **意図**: APIリクエストの集中によるリソース上限エラーや、不必要なリトライループに伴う高額課金を防ぐため。
+
+- **一時成果物の配置と衝突回避**: implementation plan、PR 本文、review reply、Outcome 下書きなどは Git 管理外の `.orchestune/tmp/<artifact>-<issue-or-task>-<UTC timestamp>-<random>/` に置く。UTC は `YYYYMMDDTHHMMSSZ`、random は UUID 等。OS グローバルの `/tmp` やリポジトリ直下の固定名を使わない。作成は `./scripts/create-session-dir.sh <artifact> <issue-or-task>`（Windows: `.\\scripts\\create-session-dir.ps1 <artifact> <issue-or-task>`）で行い、インライン Python を使わない。同じ作業では session directory を再利用し、その配下の明示パスを CLI へ渡す。既存ファイルを削除して固定名で再作成しない。
+- **機密情報のコミット防止**: API キーや認証情報をコミット、ログ、チャットに露出させない。
+- **ドキュメント・設定ファイルに絶対ローカルパスを書かない**: 参照は相対パスを使い、環境固有の絶対パスをコミットしない。local CI の gitleaks でも検査する（[設定](../.gitleaks.toml)）。
+- **インジェクション対策**: 外部コマンドの引数は適切にリスト化しサニタイズする。
+- **APIコスト制限**: LLM API はリトライ上限を最大3回程度として指数バックオフを使い、長文はチャンク化する。

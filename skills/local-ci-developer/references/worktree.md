@@ -1,6 +1,9 @@
 # Task Claim and Worktree Preparation (Step 2.5)
 
-Before claim, follow [Initial Footprint](../SKILL.md#initial-footprint-before-issue-creation-or-claim) for new and existing Issues.
+Start: inspect `git status` and `git diff` before checkout/overwrite; preserve inherited changes. Before claim, follow [Initial Footprint](../SKILL.md#initial-footprint-before-issue-creation-or-claim) for new and existing Issues.
+
+Actions: use the claim/recovery paths below. Finish: current claim, reservation, worktree and migrated session agree.
+Failure: follow diagnostics without discarding work or bypassing reservations. Save working progress in WIP commits at interruptions/session changes.
 
 If you are already inside the task worktree (e.g. launched directly into the
 task workspace), the task is already claimed—proceed directly to Step 2.6 to reconcile the declaration with the held reservation; editing the Issue does not change that reservation.
@@ -27,12 +30,7 @@ cd <worktree_path>
 uv sync
 ```
 
-Create the unique worktree-local `<session-dir>` defined by the parent skill and
-migrate the approved plan from `<planning-session-dir>` to
-`<session-dir>/implementation-plan.md`. From this point, refer only to the explicit
-worktree-local path. Then implement, test, run local CI, commit, push, create
-the PR, handle review feedback, and run `orchestune complete` entirely from
-within this worktree.
+Create the parent's unique worktree-local `<session-dir>`, migrate `<planning-session-dir>/implementation-plan.md` into it, and use its explicit path. Implement, test, run local CI, commit, push, create the PR, resolve review and run `orchestune complete` entirely in this worktree.
 
 ## Claim failures and recovery
 
@@ -58,15 +56,9 @@ the in-progress state. From the primary checkout, preview the explicit restart:
 orchestune recover --issue <N> --claim-id <old-claim-id> --reason "blocker resolved" --restart-blocked
 ```
 
-Apply the same request with `--apply` after inspecting the preview. It retains the
-old Outcome, journal and replay receipt, preserves the branch, worktree and held
-footprint, and assigns a new claim generation. Continue inside the reported
-worktree; a separate `claim` is unnecessary. Retry the same old claim ID and
-reason to reconcile interrupted publication without rotating again.
-An explicit old `--completion-id` still replays its immutable result.
-Pending publication, live workers and dispatch/cloud claims cannot use this path.
-Restart does not waive CI or review gates: obtain successful local CI evidence
-for the current clean HEAD before `complete --result done`.
+Inspect the preview, then apply the same request with `--apply`. It preserves the old Outcome/journal/replay receipt, branch/worktree/footprint and assigns a new generation. Continue in the reported worktree without a separate claim. Retry the same old claim ID/reason to reconcile interrupted publication without rotating again; an old `--completion-id` still replays its immutable result. Pending publication, live workers and dispatch/cloud claims cannot restart this way. CI/review gates still apply: require successful CI for the current clean HEAD before done.
+
+Interruption example: re-read the explicit session, claim/Issue, Git status, PR and evidence before resuming. A stage printed before interruption cannot establish current readiness; a changed generation or worktree requires reconciliation.
 
 Complete preserves the worktree. Before GC, read and follow the shared
 [operator completion and GC lifecycle](../../../docs/operator-completion-lifecycle.md).
