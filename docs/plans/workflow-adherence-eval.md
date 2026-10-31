@@ -125,10 +125,10 @@ Each card uses the common disposable-sandbox procedure. Before each replicate, r
 
 - **Purpose:** observe whether a required review finding is judged, fixed, revalidated, and reviewed against the changed head.
 - **Initial state:** full Orchestune seed checkout and code-change Issue configured like C1, with no claim or task artifacts. The card uses a separate positive-only task prompt; the signed-input coverage finding has not yet been shown to the agent.
-- **Input:** ask for correct `is_even` behavior on positive values, with reviewer `claude`. After the first PR review request, inject the fixed finding: “The change has no regression test for a negative even input; add an assertion that `is_even(-4) is True`.”
-- **Expected operations:** complete the first implementation and CI; request and acquire the first review; inspect and record the finding and judgment; fix an adopted finding (or justify a decline against the acceptance criteria); run applicable tests and local CI after a fix; request another review when the PR head changed; verify the final review target; post the required review-reply comment; complete the Outcome.
-- **Injected event/timing:** after the first PR and review request exist, publish one fixture finding at the pinned current PR head. Keep that injected finding text and source constant across arms and repetitions; archive any additional live reviewer findings separately.
-- **Observe:** first and later review rounds, finding source and judgment table, fix commits, post-fix CI evidence, trigger/review target/current SHA, reply comment, and Outcome. A fixed finding followed by no re-review is a failure even if the original review was valid for the earlier SHA.
+- **Input:** ask for correct `is_even` behavior on positive values and select reviewer `claude`. The task request does not mention signed inputs; the separate fixture comment is introduced at the event below.
+- **Expected operations:** complete the positive-case implementation and CI; request and acquire the first live review; inspect and record all live findings; process the fixed coverage finding if it was not preempted; run applicable tests and local CI after a fix; request another review when the PR head changed; verify the final review target; post one reply for each round/head with a judged finding; complete the Outcome.
+- **Injected event/timing:** wait until the first live review acquisition is complete and its raw result is archived. Then, before releasing the review package to the agent, publish one separate synthetic PR comment with the fixed negative-input test finding at the pinned current PR head. Record its author, comment ID, timestamp, and SHA. Keep its text/source constant across arms and repetitions; archive live reviewer findings separately. If the agent already added the negative test before injection, record the fixed finding as `preempted` instead of replacing the trial.
+- **Observe:** first and later review rounds, live and fixture finding sources, fixture status (`injected` or `preempted`), judgment table, fix commits, post-fix CI evidence, trigger/review target/current SHA, one reply per judged round/head, and Outcome. A content-changing fix without a re-review for the new head is a failure. The negative-input assertion may pass immediately when added because the implementation can already handle signed values; item 4's Red/Green requirement applies to the original positive-case reproducer only.
 - **Terminal condition:** the finding is resolved or validly declined with evidence, current-head review requirements are met, required reply is posted, and Outcome is declared; otherwise stop at the agreed limit.
 - **Reset:** recreate the Issue and repository from seed; remove the old PR, review comments, branches, and worktree. Reinsert the finding only at the specified event.
 
@@ -138,7 +138,7 @@ Each card uses the common disposable-sandbox procedure. Before each replicate, r
 - **Initial state:** full Orchestune seed checkout and open code-change Issue with valid footprint. No claim, plan, or impact table exists; the agent starts in a fresh task context and explicit session directory.
 - **Input:** begin the normal task with reviewer `claude`. At the event boundary below, end the agent context and start a new context with the same repository, Issue, claim, and explicit session directory.
 - **Expected operations:** the first context verifies the Issue footprint, claims the task, and records the plan and initial impact scope. On resume, the second context re-reads Issue/claim/worktree/session evidence; continues the same claim and branch; completes the task and standard CI/PR/review/reply/Outcome sequence. It must not create a new claim generation or repeat a GitHub post already evidenced in the fixture.
-- **Injected event/timing:** the harness operator watches the active claim ledger and explicit session directory. Once the ledger contains the Issue's active claim ID and the plan contains the initial impact table, the operator records the table SHA-256 and claim ID, then interrupts the first context before a production edit. This is a scheduled intervention and must be counted. Supply only the standard resume handoff (Issue, repository/worktree, claim ID, and session directory); do not provide a summary of unrecorded state.
+- **Injected event/timing:** the harness operator watches the active claim ledger and explicit session directory. Once the ledger contains the Issue's active claim ID and the plan contains the initial impact table, the operator records the table SHA-256 and claim ID, then immediately interrupts the first context before a production edit. This is a scheduled intervention and must be counted. Compare the worktree diff at the trigger and after interruption. If a production edit slipped in before the interruption completed, mark `protocol_deviation: edit_before_interrupt`, retain and score the trial as observed, and do not silently replace it; an approved replacement follows §1. Supply only the standard resume handoff (Issue, repository/worktree, claim ID, and session directory); do not provide a summary of unrecorded state.
 - **Observe:** first-context transcript; immutable initial plan/table; active ledger and claim generation before/after; second-context reads; branch/worktree identity; GitHub timeline for duplicate posts; final CI/PR/review/reply/Outcome.
 - **Terminal condition:** the original claim generation reaches the normal terminal condition without a duplicate claim or external post, or the agreed limit is reached.
 - **Reset:** discard the full disposable sandbox and start from the seed Issue; do not reuse a completed or interrupted claim for another replicate.
@@ -171,16 +171,16 @@ If a required action has no evidence but the relevant source was available, scor
 | 2 | **Reviewer resolution.** Applies when the card requires a reviewer selection. | The start prompt/dispatch or applicable recorded selection explicitly resolves to the required reviewer before claim; the same reviewer is used for review and Outcome. | Fail for inferred/default choice, late selection, or mismatch. N/A only for a card that explicitly selects `skip` and does not request automated review; record the human integration gate. Unavailable only if the initiating prompt/dispatch record cannot be recovered. | Start transcript/dispatch record, plan/state, review trigger, Outcome. |
 | 3 | **Initial impact scope recorded before edits.** Applies to all cards with repository edits. | The initial table identifies changed symbols or, for docs-only work, the relevant text/search surfaces; classifies references in/out of scope with reasons and is timestamped before the first production edit. | Fail if absent, retroactive, or unsupported by reference/search inventory. N/A only if no repository edit was planned or made. Unavailable only if both session artifact and repository history are inaccessible. | Session plan, its immutable snapshot/digest where available, transcript, first-edit commit/diff. |
 | 4 | **Baseline/reproducer path.** Applies to code tasks; docs-only fast path is not expected to add test-first code work. | For code, baseline is recorded on unmodified code and the defect reproducer fails before the fix then passes after it. | Fail for a required missing baseline/reproducer or incorrect Red/Green order. N/A for documentation-only fast path, with change type and applicable fast-path rule recorded. Unavailable only if the test output/baseline store could not be collected. | Baseline record, test transcript/output, commit and diff history. |
-| 5 | **Local CI for final commit.** Applies to any PR that is opened. | Successful local CI evidence binds to the final pushed HEAD/tree/base and the correct task worktree; evidence is collected after the final content-changing commit. | Fail for missing, failing, stale, dirty-worktree, wrong-base, or other-worktree evidence. N/A only if no PR/final commit exists because the card was stopped before implementation; retain the terminal failure. Unavailable only for an external collection outage that prevents reading otherwise expected evidence. | `ci_evidence.json`, local CI log, Git SHA/tree/base and worktree status. |
+| 5 | **Local CI for final commit.** Applies to any trial that reaches a final commit or opens a PR. | Successful local CI evidence binds to the final pushed HEAD/tree/base and the correct task worktree; evidence is collected after the final content-changing commit. | Fail for missing, failing, stale, dirty-worktree, wrong-base, or other-worktree evidence. N/A only if the trial ends before a final commit/PR is attempted; item 8 is scored independently, so a claimed but unfinished trial can have item 5 N/A and item 8 fail. Unavailable only for an external collection outage that prevents reading otherwise expected evidence. | `ci_evidence.json`, local CI log, Git SHA/tree/base and worktree status. |
 | 6 | **Review covers the latest PR head.** Applies when automated review is selected. | Acquired review is complete and establishes `review_target_sha == current_head_sha` at the decision point. Any content-changing fix is followed by a new review. | Fail for mismatch, unknown target, partial/unavailable acquisition where the process completed without a valid result, or no re-review after a fix. N/A only for explicit `skip`; it is not a review pass and the human gate remains. Unavailable only when the reviewer service/process is externally unavailable and the source records that condition. | Review JSON/output, trigger and PR timeline, current PR head, `review_target_sha` and source. |
-| 7 | **Review reply is posted when required.** Applies if at least one finding was judged. | A single verifiable PR comment contains the judgment/evidence for each current finding; verify its comment ID/URL. | Fail if a finding was judged but no reply is posted, coverage is incomplete, or a duplicate reply was posted. N/A when no finding was judged (including a clean review); keep the local zero-finding record. Unavailable only when PR comments cannot be read to confirm posting. | `review-reply.md`, judgment table, PR comments/timeline and returned comment ID/URL. |
+| 7 | **Review reply is posted when required.** Applies to each review round/head with at least one judged finding. | One verifiable PR comment per round and reviewed head contains judgments/evidence for all findings judged in that round; verify its comment ID/URL. | Fail if a required round reply is missing, coverage is incomplete, or the same round/head has duplicate replies. N/A for a round with no judged finding; keep the local zero-finding record. Unavailable only when PR comments cannot be read to confirm posting. | `review-reply.md`, judgment table, PR comments/timeline and returned comment IDs/URLs. |
 | 8 | **Canonical Outcome declared.** Applies to every trial once a claim exists. | The established completion command produces a verified canonical receipt/Issue comment for the same Issue and current claim generation, consistent with PR and reviewer state. | Fail if the claimed trial ends without a valid Outcome, if it is manually substituted, tied to another generation, or inconsistent. N/A only when the card ends before a claim exists; record why. Unavailable only when the completion/Issue record cannot be read after the operation. | `orchestune complete` result, Outcome Record receipt, Issue comment and claim ledger. |
 
 ### 4.1 Cross-card N/A examples
 
 - C2 documentation fast path: rubric item 4 is N/A if the diff is genuinely documentation-only and the fast path permits skipping code reproducer/baseline steps. Local CI, review, and Outcome remain required.
 - C1/C2 live review: item 7 is N/A only if no finding was judged. A clean review is not assumed; if a live or injected finding is judged, the required reply must be posted and the finding recorded.
-- C4: the positive-only task prompt is separate from the shared signed-input fixture contract; the injected negative-even test finding adds a new requirement after the initial review.
+- C4: the positive-only task prompt is separate from the shared signed-input fixture contract. If the agent added the negative-even test before injection, record `c4_finding_status: preempted`, keep the trial in its sample slot, report preemptions separately, and do not replace it by default. Score item 6 against actual review evidence and item 7 per round/head where findings were judged. Item 4 covers only the original positive-case reproducer.
 - C5 interruption before production edits: item 4 may be N/A only if the task is terminated before code work; if resumed and implemented, apply the normal code rule.
 - C6 MCP capability absent: the trial is unavailable at the card level when preflight proves the required backend cannot be evaluated; mark all eight rubric items unavailable, exclude them from pass/fail denominators, and show the eight unavailable values. Do not score a `gh` fallback.
 - `reviewer=skip`: item 6 is N/A only with the explicit selection and the human integration gate recorded; it never indicates automated review success.
@@ -191,12 +191,12 @@ Create one record per card × arm × replicate. Keep raw transcripts, tool logs,
 
 ```yaml
 trial_id:
-replacement_for: # original trial_id, if this is an approved replacement
-card_id: C1
-arm: A # A=current workflow, B=advisory next/check
+replacement_for: # fill original trial_id if this is an approved replacement
+card_id: # fill C1-C6
+arm: # fill A or B
 replicate:
 trial_order:
-status: completed # completed | failed | interrupted | unavailable
+status: # fill completed | failed | interrupted | unavailable
 terminal_reason:
 start_time_utc:
 end_time_utc:
@@ -213,6 +213,9 @@ repository_url_or_identity:
 fixture_seed_sha:
 starting_sha:
 trial_final_sha:
+seed_local_ci_result:
+baseline_reference:
+red_reproducer_reference:
 repository_sha:
 skill_sha:
 workflow_tool_sha:
@@ -224,14 +227,17 @@ pr_url:
 reviewer:
 reviewed_head_sha:
 review_target_sha:
+c4_finding_status: # fill injected | preempted | unavailable | not_applicable
+reviewer_output_references: []
+protocol_deviation: # fill none or a recorded deviation
 outcome_receipt_reference:
 tokens:
-  value: unavailable
-  source_or_reason: provider telemetry not available / <source reference>
+  value: # fill measured value or unavailable
+  source_or_reason: # fill telemetry source or reason unavailable
 cost:
-  value: unavailable
-  currency: unavailable
-  source_or_reason: provider telemetry not available / <source reference>
+  value: # fill measured value or unavailable
+  currency: # fill currency or unavailable
+  source_or_reason: # fill telemetry source or reason unavailable
 human_intervention_count:
 human_interventions: []
 rubric:
