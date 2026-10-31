@@ -148,10 +148,6 @@ class ProvisionProgressDisplay:
     def _update(self, description: str) -> None:
         block = self._output.text_block(description, multiline=False)
         text = Text(block.plain, no_wrap=True, overflow="ellipsis")
-        # Spinner assembles a new Text on Rich 13–15, losing no_wrap. Bound its
-        # body as well so the frame and space cannot cause a second live line.
-        if self._output.console is not None:
-            text.truncate(max(0, self._output.console.width - 2), overflow="ellipsis")
         if self._handle is not None:
             self._handle.update(Block(block.plain, text))
 

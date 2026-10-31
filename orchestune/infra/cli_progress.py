@@ -1,7 +1,7 @@
-"""Live/spinner lifecycle on top of ``cli_output`` (#1408, parent #1368).
+"""Live lifecycle on top of ``cli_output`` (#1408, parent #1368).
 
-``progress`` wraps a Rich ``Live`` for decorated TTY output and degrades to static
-appended lines otherwise. The lifecycle contract:
+``progress`` wraps a Rich ``Live`` status region for decorated TTY output and degrades
+to static appended lines otherwise. The lifecycle contract:
 
 * ``Live`` is created with ``auto_refresh=False``, ``screen=False`` and without
   stdout/stderr redirection, so nothing is captured or cleared; the display is
@@ -12,7 +12,9 @@ appended lines otherwise. The lifecycle contract:
   owns the terminal, then resumes it.
 * Plain mode never emits clear/ANSI/CR sequences; machine mode writes nothing.
 
-An unknown-length task gets a spinner and text only: no percentage and no ETA.
+An unknown-length task gets text only: no percentage, no ETA and no animation. The
+region changes only when the caller reports progress, so it never looks alive while
+the work is stuck.
 """
 
 from __future__ import annotations
@@ -22,24 +24,18 @@ from contextlib import contextmanager
 
 from rich.console import RenderableType
 from rich.live import Live
-from rich.spinner import Spinner
 from rich.text import Text
 
 from orchestune.infra.cli_output import Block, CliOutput
-
-_UNICODE_SPINNER = "dots"
-_ASCII_SPINNER = "line"
 
 
 class ProgressHandle:
     """Updates the display started by ``progress``."""
 
-    def __init__(self, output: CliOutput, *, spinner: bool) -> None:
+    def __init__(self, output: CliOutput) -> None:
         self._output = output
-        self._spinner = spinner
         self._live: Live | None = None
         self._latest: Block | None = None
-        self._spinner_frame: Spinner | None = None
         self._active = False
         self._closed = False
 
@@ -49,17 +45,7 @@ class ProgressHandle:
         return self._active
 
     def _renderable(self) -> RenderableType:
-        body: RenderableType = self._latest.rich if self._latest else Text()
-        if not self._spinner:
-            return body
-        # One Spinner for the handle's lifetime: a new instance would restart its
-        # animation clock, so manual refreshes would always draw the first frame.
-        if self._spinner_frame is None:
-            name = _UNICODE_SPINNER if self._output.policy.unicode else _ASCII_SPINNER
-            self._spinner_frame = Spinner(name, text=body)
-        else:
-            self._spinner_frame.update(text=body)
-        return self._spinner_frame
+        return self._latest.rich if self._latest else Text()
 
     def _start(self) -> None:
         console = self._output.console
@@ -117,15 +103,12 @@ class ProgressHandle:
 
 
 @contextmanager
-def progress(
-    output: CliOutput, description: str = "", *, spinner: bool = True
-) -> Iterator[ProgressHandle]:
+def progress(output: CliOutput, description: str = "") -> Iterator[ProgressHandle]:
     """Run a block with progress display; see the module docstring for the contract.
 
-    ``description`` is shown immediately when non-empty. Use ``spinner=False`` for a
-    snapshot view (e.g. a watch loop) that only needs a refreshable region.
+    ``description`` is shown immediately when non-empty.
     """
-    handle = ProgressHandle(output, spinner=spinner)
+    handle = ProgressHandle(output)
     try:
         if description:
             handle.update(description)

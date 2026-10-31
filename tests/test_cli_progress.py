@@ -1,15 +1,17 @@
-"""Tests for orchestune.infra.cli_progress — Live/spinner lifecycle (#1408)."""
+"""Tests for orchestune.infra.cli_progress — Live lifecycle (#1408)."""
 
 from __future__ import annotations
 
+import inspect
 import io
 import re
 
 import pytest
+from rich.text import Text
 
 import orchestune.infra.cli_progress as cli_progress
 from orchestune.infra.cli_output import CliOutput, make_output
-from orchestune.infra.cli_progress import progress
+from orchestune.infra.cli_progress import ProgressHandle, progress
 
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 SHOW_CURSOR = "\x1b[?25h"
@@ -50,7 +52,7 @@ class TestPlainFallback:
 
     def test_multiline_update_is_appended_whole(self) -> None:
         output, stream = plain_output()
-        with progress(output, "", spinner=False) as handle:
+        with progress(output, "") as handle:
             handle.update("a\nb")
             handle.update("a\nb")
         assert stream.getvalue() == "a\nb\na\nb\n"
@@ -154,13 +156,15 @@ class TestRichLive:
         text = ANSI.sub("", raw)
         assert "[red]x[/red]" in text and "[bold]y[/bold]" in text
 
-    def test_spinner_false_shows_content_without_a_spinner_frame(self) -> None:
+    def test_shows_the_status_text_without_spinner_glyphs(self) -> None:
         output, stream = rich_output()
-        with progress(output, "", spinner=False) as handle:
+        with progress(output, "") as handle:
             handle.update("snapshot-body")
-        assert "snapshot-body" in ANSI.sub("", stream.getvalue())
+        text = ANSI.sub("", stream.getvalue())
+        assert "snapshot-body" in text
+        assert not re.search("[\u2800-\u28ff]", text)
 
-    def test_non_unicode_stream_gets_an_ascii_spinner(self) -> None:
+    def test_non_unicode_stream_output_is_encodable(self) -> None:
         stream = FakeStream(encoding="cp932")
         output = make_output(stream, env={}, width=60)
         with progress(output, "working") as handle:
@@ -201,7 +205,7 @@ class TestRichLive:
                 handle.update("new status")
             assert "new status" in ANSI.sub("", stream.getvalue()[mark:])
 
-    def test_one_spinner_instance_is_kept_across_updates(
+    def test_live_renders_the_status_block_not_a_spinner(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         seen: list[object] = []
@@ -221,6 +225,16 @@ class TestRichLive:
         output, _ = rich_output()
         with progress(output, "one") as handle:
             handle.update("two")
-            handle.update("three")
-        assert len(seen) == 3
-        assert seen[0] is seen[1] is seen[2]
+        assert len(seen) == 2
+        renderables = [r for r in seen if isinstance(r, Text)]
+        assert len(renderables) == len(seen)
+        assert [r.plain for r in renderables] == ["one", "two"]
+
+
+class TestNoSpinner:
+    def test_progress_and_handle_take_no_spinner_argument(self) -> None:
+        assert "spinner" not in inspect.signature(progress).parameters
+        assert "spinner" not in inspect.signature(ProgressHandle).parameters
+
+    def test_module_does_not_use_rich_spinner(self) -> None:
+        assert not hasattr(cli_progress, "Spinner")

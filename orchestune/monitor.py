@@ -208,7 +208,7 @@ def main(
 
     footer = f"{args.interval}秒ごとに自動更新します。Ctrl+Cで終了してください。"
     try:
-        with progress(out, spinner=False) as handle:
+        with progress(out) as handle:
             while True:
                 now = now_fn()
                 handle.update(status_block(out, take_snapshot(now), now, footer))

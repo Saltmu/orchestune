@@ -7,8 +7,9 @@ TTY gets ``RichDispatchProgress``, which renders the same ``emit`` phase/event
 notifications through ``infra.cli_output``/``infra.cli_progress``:
 
 * A ``started`` event opens ``(phase, task_issue)``; any other event for it closes
-  it together with everything opened after it. While something is open a manually refreshed spinner line shows the run ID,
-  parent, mode and the open phases. When nothing is open the live display is
+  it together with everything opened after it. While something is open a manually refreshed status line shows the run ID,
+  parent, mode and the open phases; it has no animation, so it changes only when a
+  phase opens or closes. When nothing is open the live display is
   stopped, so the dispatcher's own stderr messages, which follow a terminal event,
   never share a line with it.
 * Every other event is printed once as a labelled line (``[OK]``, ``[FAIL]``,
@@ -22,7 +23,7 @@ notifications through ``infra.cli_output``/``infra.cli_progress``:
   normal exit, on an exception and on ``KeyboardInterrupt``.
 
 stdout/stderr are not redirected. A module or subprocess that writes straight to
-the terminal while a phase is open appends to the spinner line; its text stays
+the terminal while a phase is open appends to the status line; its text stays
 visible because the live display never erases lines it did not draw.
 """
 
@@ -90,7 +91,7 @@ class RichDispatchProgress:
 
     @property
     def live_active(self) -> bool:
-        """Whether the spinner line is currently on screen."""
+        """Whether the status line is currently on screen."""
         return self._handle is not None and self._handle.active
 
     def emit(
