@@ -67,6 +67,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
         {
             "workflow.stages",
             "workflow.check",
+            "workflow.next",
             "workflow.readers",
             "config_wizard",
             "config_wizard.document",
