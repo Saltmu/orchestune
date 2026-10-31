@@ -16,6 +16,8 @@ orchestune workflow next --issue 1497 --session-dir .orchestune/tmp/task-example
 証拠の不足・不正があれば `unmet` を返します。`terminal_blocked` は確定済みのblocked Outcomeを
 確認した場合だけです。handoff済みは `ready` と `handed_off` を返し、操作候補はありません。
 段階とJSON schemaの詳細は[workflow証拠契約](../plans/local-ci-workflow-enforcement.md)を参照してください。
+`complete`段階では、全体statusが`ready`でも`terminal_receipt` checkは`unmet`になります。
+これは候補として表示された`complete`操作が作成するOutcome receiptを表します。
 
 ## ワークフローの読み取り専用チェック（`orchestune workflow check`）
 

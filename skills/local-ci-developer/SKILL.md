@@ -60,7 +60,7 @@ In Step 1, record design, preflight, selected backend/reviewer and expected chan
 ## Development Steps
 During the #822 observation period, read [measurement.md](references/measurement.md)
 before Step 2.6 and maintain its record through Steps 10–12, including zero-finding PRs.
-Prefer `orchestune workflow next --issue <N> --session-dir <session-dir> --json` and `workflow check` when available; if `orchestune workflow --help` fails on an older CLI, follow these prose steps. When a PR exists, pass `--pr` and applicable evidence paths. Treat status and actions as guidance; the commands never execute actions.
+Check `orchestune workflow --help` and use `workflow next` and `workflow check` when listed. If help fails or `next` is absent on an older CLI, follow these prose steps. When available, run `orchestune workflow next --issue <N> --session-dir <session-dir> --json`; pass `--pr` and applicable evidence paths when a PR exists. Status and actions are guidance; these commands never execute actions.
 
 | Step | Item | Contract / stage | Procedure (source of truth) |
 | :--- | :--- | :--- | :--- |

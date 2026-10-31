@@ -240,6 +240,45 @@ def test_next_only_returns_conditions_for_current_stage(tmp_path):
     assert {check.id for check in result.checks} == set(
         stages[result.stage_id].exit_conditions
     )
+    assert all(action["stage_id"] == result.stage_id for action in result.actions)
+
+
+def test_unclassified_gate_reason_fails_closed(tmp_path):
+    context = ready_context(tmp_path)
+    aggregate = next_step(context)
+    aggregate = replace(
+        aggregate,
+        gate_id="pre-complete",
+        reason_codes=(*aggregate.reason_codes, "future_unclassified_reason"),
+    )
+    with patch("orchestune.workflow.next.check_gate", return_value=aggregate):
+        result = next_step(context)
+
+    assert result.status == "unmet"
+    assert "evidence_unavailable" in result.reason_codes
+
+
+def test_unavailable_stage_definition_returns_unmet(tmp_path):
+    context = ready_context(tmp_path)
+    aggregate = WorkflowResult(
+        issue_number=context.issue_number,
+        claim_id=context.state["claim_id"],
+        stage_id="future-stage",
+        gate_id="pre-complete",
+        status="ready",
+        reason_codes=(),
+        checks=(),
+        actions=(),
+        references=(),
+        artifacts={},
+        observed_head_sha=context.head_sha,
+    )
+    with patch("orchestune.workflow.next.check_gate", return_value=aggregate):
+        result = next_step(context, stages=())
+
+    assert result.status == "unmet"
+    assert "stage_unavailable" in result.reason_codes
+    assert result.actions == ()
 
 
 def test_next_does_not_mutate_context_or_session_files(tmp_path):

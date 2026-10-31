@@ -108,8 +108,9 @@ _CONDITION_REASONS = {
 }
 
 
-def _action(action, issue_number: int) -> dict:
+def _action(action, issue_number: int, stage_id: str) -> dict:
     value = asdict(action)
+    value["stage_id"] = stage_id
     value["argv"] = [
         str(issue_number) if argument == "<issue>" else argument
         for argument in action.argv
@@ -129,6 +130,7 @@ def _stage_actions(
             return (
                 {
                     "id": "inspect_review",
+                    "stage_id": stage.id,
                     "description": (
                         "Inspect the current PR trigger, round, and wait process. "
                         "Reconnect to the same wait if it is running; resume only "
@@ -145,17 +147,18 @@ def _stage_actions(
             if not action.reason_codes or set(action.reason_codes) & set(reasons)
         )
         if recovery:
-            return tuple(_action(action, issue_number) for action in recovery)
+            return tuple(_action(action, issue_number, stage.id) for action in recovery)
         return (
             {
                 "id": "reconcile",
+                "stage_id": stage.id,
                 "description": "Reconcile the invalid workflow evidence before proceeding.",
                 "argv": [],
                 "references": stage.references,
                 "reason_codes": reasons,
             },
         )
-    return tuple(_action(action, issue_number) for action in stage.actions)
+    return tuple(_action(action, issue_number, stage.id) for action in stage.actions)
 
 
 def _stage_checks(
@@ -199,6 +202,37 @@ def _stage_reasons(
     return reasons
 
 
+def _unsafe_reasons(result: WorkflowResult, stage: StageDefinition) -> tuple[str, ...]:
+    unsafe = tuple(
+        code
+        for code in result.reason_codes
+        if code in _UNSAFE_REASONS
+        and not (code == "base_mismatch" and stage.id in {"prepare", "claim", "scope"})
+        and not (code == "completion_unavailable" and stage.id != "complete")
+    )
+    known = set(_UNSAFE_REASONS).union(*_CONDITION_REASONS.values())
+    unclassified = any(code not in known for code in result.reason_codes)
+    unknown = any(check.status == "unknown" for check in result.checks)
+    if (unclassified or unknown) and "evidence_unavailable" not in unsafe:
+        return (*unsafe, "evidence_unavailable")
+    return unsafe
+
+
+def _decision_actions(
+    stage: StageDefinition, checks: tuple[WorkflowCheck, ...]
+) -> tuple[dict, ...]:
+    return tuple(
+        {
+            "stage_id": stage.id,
+            "description": f"Resolve the human decision for {check.id}: "
+            + "; ".join(check.missing),
+            "decision": check.id,
+        }
+        for check in checks
+        if check.status == "waiting_human"
+    )
+
+
 def _stage_status_actions(
     result: WorkflowResult,
     stage: StageDefinition,
@@ -207,33 +241,17 @@ def _stage_status_actions(
     definitions: tuple[StageDefinition, ...],
 ) -> tuple[str, tuple[str, ...], tuple[dict, ...]]:
     reasons = _stage_reasons(result, checks)
-    unsafe = tuple(
-        code
-        for code in result.reason_codes
-        if code in _UNSAFE_REASONS
-        and not (code == "base_mismatch" and stage.id in {"prepare", "claim", "scope"})
-        and not (code == "completion_unavailable" and stage.id != "complete")
-    )
-    unknown = any(check.status == "unknown" for check in result.checks)
-    if unknown and "evidence_unavailable" not in unsafe:
-        unsafe = (*unsafe, "evidence_unavailable")
+    unsafe = _unsafe_reasons(result, stage)
     reasons = tuple(dict.fromkeys((*reasons, *unsafe)))
     invalid = bool(unsafe)
-    decisions = tuple(
-        {
-            "description": f"Resolve the human decision for {check.id}: "
-            + "; ".join(check.missing),
-            "decision": check.id,
-        }
-        for check in checks
-        if check.status == "waiting_human"
-    )
+    decisions = _decision_actions(stage, checks)
     if invalid:
         actions = list(_stage_actions(stage, issue_number, reasons))
         for candidate in definitions:
             for action in candidate.on_failure:
                 if set(action.reason_codes) & set(unsafe):
                     for recovery in _stage_actions(candidate, issue_number, unsafe):
+                        recovery["stage_id"] = candidate.id
                         if recovery not in actions:
                             actions.append(recovery)
         actions.extend(action for action in decisions if action not in actions)

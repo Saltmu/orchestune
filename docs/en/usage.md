@@ -19,7 +19,9 @@ human decision is required, `unmet` for missing or invalid evidence that blocks
 a safe decision, and `terminal_blocked` only for a verified blocked Outcome.
 A verified handoff returns `ready`, reason `handed_off`, and no actions. See the
 [workflow evidence contract](../plans/local-ci-workflow-enforcement.md) for the
-stage and JSON schema details.
+stage and JSON schema details. In the `complete` stage, `terminal_receipt` can
+be an `unmet` check inside an overall `ready` result: it represents the Outcome
+receipt that the suggested `complete` action will create.
 
 ## Read-only workflow gates (`orchestune workflow check`)
 
