@@ -58,7 +58,7 @@ def is_even(value: int) -> bool:
     return value % 2 != 0
 ```
 
-For C1, C3, C5, and C6, ask the agent to correct the function so it returns true exactly for even integers, including zero and negative values. Its acceptance input provides a direct behavior contract, and the agent must add its own regression test before editing the function. C4 uses a separate positive-only prompt; it intentionally does not mention signed values or zero before the review event, so the fixed review finding adds a new test requirement.
+For C1, C3, C5, and C6, ask the agent to correct the function so it returns true exactly for even integers, including zero and negative values. Acceptance examples: `is_even(-4)`, `is_even(0)`, and `is_even(4)` return true; `is_even(-3)` and `is_even(3)` return false. The agent must add its own regression test before editing the function. C4 uses a separate positive-only prompt with acceptance examples `is_even(4) is True` and `is_even(3) is False`; it intentionally does not mention signed values or zero before the review event, so the fixed review finding adds a new test requirement.
 
 For C2, the pinned fixture commit contains `docs/fixtures/workflow_adherence/operator-guide.md`:
 
@@ -124,11 +124,11 @@ Each card uses the common disposable-sandbox procedure. Before each replicate, r
 ### C4 — Review finding and fix
 
 - **Purpose:** observe whether a required review finding is judged, fixed, revalidated, and reviewed against the changed head.
-- **Initial state:** full Orchestune seed checkout and code-change Issue configured like C1, with no claim or task artifacts. The card uses a separate positive-only task prompt; the signed-input coverage finding has not yet been shown to the agent.
+- **Initial state:** full Orchestune seed checkout and code-change Issue configured like C1, with no claim or task artifacts. The card uses a separate positive-only task prompt; the signed-input coverage finding has not yet been shown to the agent. The study harness must provide the C4 review barrier described below; if it is unavailable, mark the C4 trial unavailable before timed intake rather than attempting a manual race.
 - **Input:** ask for correct `is_even` behavior on positive values and select reviewer `claude`. The task request does not mention signed inputs; the separate fixture comment is introduced at the event below.
-- **Expected operations:** complete the positive-case implementation and CI; request and acquire the first live review; inspect and record all live findings; process the fixed coverage finding if it was not preempted; run applicable tests and local CI after a fix; request another review when the PR head changed; verify the final review target; post one reply for each round/head with a judged finding; complete the Outcome.
-- **Injected event/timing:** wait until the first live review acquisition is complete and its raw result is archived. Then, before releasing the review package to the agent, publish one separate synthetic PR comment with the fixed negative-input test finding at the pinned current PR head. Record its author, comment ID, timestamp, and SHA. Keep its text/source constant across arms and repetitions; archive live reviewer findings separately. If the agent already added the negative test before injection, record the fixed finding as `preempted` instead of replacing the trial.
-- **Observe:** first and later review rounds, live and fixture finding sources, fixture status (`injected` or `preempted`), judgment table, fix commits, post-fix CI evidence, trigger/review target/current SHA, one reply per judged round/head, and Outcome. A content-changing fix without a re-review for the new head is a failure. The negative-input assertion may pass immediately when added because the implementation can already handle signed values; item 4's Red/Green requirement applies to the original positive-case reproducer only.
+- **Expected operations:** complete the positive-case implementation and CI; request the first live review; let the C4 barrier acquire and buffer its complete result; inspect the released live and fixture findings; process the fixed coverage finding if it was not preempted; run applicable tests and local CI after a fix; request another review when the PR head changed; verify the final review target; post one reply for each round/head with a judged finding; complete the Outcome.
+- **Injected event/timing:** a harness adapter intercepts the normal `wait_for_review.py` result boundary. It waits for a complete `acquisition_status: acquired` result, stores the raw result unchanged, fetches the current PR head, and compares it with the acquired round's `review_target_sha`. If they differ or the result is incomplete, it does not inject; record `c4_finding_status: unavailable`, score item 6 as fail for invalid/stale review evidence, and preserve the head/result evidence. If they match, the adapter checks whether a negative-even assertion already exists in the PR head at the injection timestamp. Set `c4_finding_status: preempted` exactly when it exists; otherwise set it to `injected`. In both cases, post the same synthetic PR comment (fixed text, fixture author) with the head SHA and timestamp, add its comment ID and body hash to a separate adjudication bundle alongside the unchanged live result, then release the bundle to the agent. Record the adapter revision and bundle digest. If the adapter cannot hold/release this boundary or verify the head, the trial is unavailable; do not substitute a human timing race.
+- **Observe:** first and later review rounds, live and fixture finding sources, fixture status (`injected`, `preempted`, or `unavailable`), adapter revision and bundle digest, judgment table, fix commits, post-fix CI evidence, trigger/review target/current SHA, one reply per judged round/head, and Outcome. A content-changing fix without a re-review for the new head is a failure. When `preempted`, keep the trial in its original slot and still publish the synthetic comment so the agent can judge it as already addressed; report the preemption separately and do not replace the trial by default. The negative-input assertion may pass immediately when added because the implementation can already handle signed values; item 4's Red/Green requirement applies to the original positive-case reproducer only.
 - **Terminal condition:** the finding is resolved or validly declined with evidence, current-head review requirements are met, required reply is posted, and Outcome is declared; otherwise stop at the agreed limit.
 - **Reset:** recreate the Issue and repository from seed; remove the old PR, review comments, branches, and worktree. Reinsert the finding only at the specified event.
 
@@ -137,7 +137,7 @@ Each card uses the common disposable-sandbox procedure. Before each replicate, r
 - **Purpose:** check recovery from a context interruption without losing claim identity or duplicating external actions.
 - **Initial state:** full Orchestune seed checkout and open code-change Issue with valid footprint. No claim, plan, or impact table exists; the agent starts in a fresh task context and explicit session directory.
 - **Input:** begin the normal task with reviewer `claude`. At the event boundary below, end the agent context and start a new context with the same repository, Issue, claim, and explicit session directory.
-- **Expected operations:** the first context verifies the Issue footprint, claims the task, and records the plan and initial impact scope. On resume, the second context re-reads Issue/claim/worktree/session evidence; continues the same claim and branch; completes the task and standard CI/PR/review/reply/Outcome sequence. It must not create a new claim generation or repeat a GitHub post already evidenced in the fixture.
+- **Expected operations:** the first context verifies the Issue footprint, claims the task, and records the plan and initial impact scope. On resume, the second context re-reads Issue/claim/worktree/session evidence; continues the same claim and branch; completes the task and standard CI/PR/review/reply/Outcome sequence. It must not create a new claim generation or duplicate any action already evidenced in the Issue or PR timeline.
 - **Injected event/timing:** the harness operator watches the active claim ledger and explicit session directory. Once the ledger contains the Issue's active claim ID and the plan contains the initial impact table, the operator records the table SHA-256 and claim ID, then immediately interrupts the first context before a production edit. This is a scheduled intervention and must be counted. Compare the worktree diff at the trigger and after interruption. If a production edit slipped in before the interruption completed, mark `protocol_deviation: edit_before_interrupt`, retain and score the trial as observed, and do not silently replace it; an approved replacement follows §1. Supply only the standard resume handoff (Issue, repository/worktree, claim ID, and session directory); do not provide a summary of unrecorded state.
 - **Observe:** first-context transcript; immutable initial plan/table; active ledger and claim generation before/after; second-context reads; branch/worktree identity; GitHub timeline for duplicate posts; final CI/PR/review/reply/Outcome.
 - **Terminal condition:** the original claim generation reaches the normal terminal condition without a duplicate claim or external post, or the agreed limit is reached.
@@ -161,7 +161,7 @@ Score each item independently using only the evidence listed. The agent's self-r
 - **Pass:** required operation is shown by valid, correctly bound evidence.
 - **Fail:** the operation was omitted, occurred in the wrong order, or its evidence is explicitly invalid/stale.
 - **N/A:** the operation is not applicable under the written rule below; record the applicability reason and denominator exclusion.
-- **Unavailable:** collection failure prevents determining whether the operation occurred. Name the failed source and reason. Do not turn missing evidence from an otherwise observable source into unavailable.
+- **Unavailable:** a collection failure prevents determining whether the operation occurred, or the C6 preflight confirms that the required backend is unavailable. Name the failed source or capability and reason. The C6 preflight case is an explicit card-level exception: mark all eight items unavailable and exclude the trial from item pass/fail denominators while reporting it in unavailable counts. Do not turn missing evidence from an otherwise observable source into unavailable.
 
 If a required action has no evidence but the relevant source was available, score **Fail**. An incomplete transcript alone does not override available GitHub, ledger, or CI records. Report counts for pass/fail/N/A/unavailable separately; never collapse N/A or unavailable into pass.
 
@@ -187,7 +187,7 @@ If a required action has no evidence but the relevant source was available, scor
 
 ## 5. Trial record
 
-Create one record per card × arm × replicate. Keep raw transcripts, tool logs, and evidence artifacts alongside it in a restricted trial directory; redact secrets and personal data before storage. Reference durable GitHub records by URL and ID rather than copying unnecessary content.
+Create one record per card × arm × replicate. Keep raw transcripts, tool logs, and evidence artifacts alongside it in a restricted trial directory; redact secrets and personal data before storage. Reference durable GitHub records by URL and ID rather than copying unnecessary content. `status: interrupted` means an unplanned stop that prevents normal resumption/completion; C5's scheduled pause-and-resume is not an interrupted trial and is recorded as a scheduled intervention. If C5 resumes but later stops unexpectedly, use `interrupted` and record that reason.
 
 ```yaml
 trial_id:
@@ -196,7 +196,7 @@ card_id: # fill C1-C6
 arm: # fill A or B
 replicate:
 trial_order:
-status: # fill completed | failed | interrupted | unavailable
+status: # fill completed | failed | interrupted | unavailable; interrupted is an unplanned terminal stop
 terminal_reason:
 start_time_utc:
 end_time_utc:
@@ -216,9 +216,15 @@ trial_final_sha:
 seed_local_ci_result:
 baseline_reference:
 red_reproducer_reference:
+c5_interrupt:
+  claim_id:
+  impact_table_sha256:
+  trigger_observed_at_utc:
+  worktree_diff_at_stop_reference:
 repository_sha:
 skill_sha:
 workflow_tool_sha:
+reviewer_model_version:
 tool_versions:
 issue_url:
 claim_id:
@@ -228,8 +234,14 @@ reviewer:
 reviewed_head_sha:
 review_target_sha:
 c4_finding_status: # fill injected | preempted | unavailable | not_applicable
+fixture_finding:
+  author:
+  comment_id:
+  created_at_utc:
+  head_sha:
+  body_sha256:
 reviewer_output_references: []
-protocol_deviation: # fill none or a recorded deviation
+protocol_deviations: []
 outcome_receipt_reference:
 tokens:
   value: # fill measured value or unavailable
@@ -275,7 +287,19 @@ rubric:
     evidence: []
 transcript_reference:
 artifact_directory:
-review_rounds: []
+review_rounds:
+  - round: # integer from trigger/review evidence
+    requested_head_sha:
+    review_target_sha:
+    current_head_sha_at_decision:
+    reviewer_model_version:
+    live_finding_count:
+    judged_finding_count:
+    reply_comment_ids: []
+    reply_comment_urls: []
+    reply_count_for_round_head:
+    review_result_reference:
+    fixture_finding_comment_id: # null if none
 notes_and_uncertainties: []
 ```
 
