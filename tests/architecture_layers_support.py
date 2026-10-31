@@ -20,6 +20,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "remediation.cli",
             "installer.cli",
             "scratch.cli",
+            "workflow.cli",
         }
     ),
     3: frozenset(
@@ -65,6 +66,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     2: frozenset(
         {
             "workflow.stages",
+            "workflow.check",
+            "workflow.readers",
             "config_wizard",
             "config_wizard.document",
             "config_wizard.questions",
@@ -285,6 +288,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     0: frozenset(
         {
             "workflow",
+            "workflow.contracts",
             "bounded_limit",
             "branch_naming",
             "merge_evidence",

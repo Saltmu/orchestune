@@ -87,6 +87,7 @@ ALLOWED_L4_DEPENDENTS = {
     "config_wizard.cli": frozenset({"cli"}),
     "installer.cli": frozenset({"cli"}),
     "scratch.cli": frozenset({"cli"}),
+    "workflow.cli": frozenset({"cli"}),
 }
 EXPECTED_SUBPROCESS_COMMAND_MODULES = {
     "gh": {"forge.admin"},

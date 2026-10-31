@@ -1,5 +1,66 @@
 # 使用方法とコマンドリファレンス
 
+## ワークフローの読み取り専用チェック（`orchestune workflow check`）
+
+明示したタスクセッションの証拠を読み、4つのゲートを助言として判定します。
+claim、Git fetch、CI実行、レビュー依頼、返信投稿、ラベル変更、state保存は行いません。
+完了時には従来の `complete` の検証が適用されます。`ready` は構造と証拠の対応を
+確認した結果であり、影響範囲の分類内容が妥当・網羅的であることまでは保証しません。
+
+```bash
+orchestune workflow check pre-claim --issue 1496 --session-dir .orchestune/tmp/task-example --json
+orchestune workflow check pre-edit --issue 1496 --session-dir .orchestune/tmp/task-example --json
+orchestune workflow check pre-pr --issue 1496 --session-dir .orchestune/tmp/task-example --pr-body .orchestune/tmp/task-example/pr-body.md --json
+orchestune workflow check pre-complete --issue 1496 --session-dir .orchestune/tmp/task-example --pr 42 --review-reply .orchestune/tmp/task-example/review-reply.md --json
+```
+
+| ゲート | 確認する証拠 |
+|---|---|
+| `pre-claim` | 最新IssueのFootprint YAMLと依存解決、mode/backend、reviewerの選択根拠、適用されるプラン承認。 |
+| `pre-edit` | Issue/state/台帳のclaim世代、repository/branch/worktreeと予約範囲の一致、影響範囲初版とSHA256 digest。 |
+| `pre-pr` | clean worktree、現HEAD/tree/CI定義/lockfile/実行環境に合うCI証拠、claimのbase、PR本文の必須節。作成前は `--pr-body PATH`、既存PRは `--pr N` で本文を指定。 |
+| `pre-complete` | 現PRの識別/base/head、従来の完了・レビュー検証、現ラウンドの判断表、review target SHA、必要な返信の投稿がちょうど1件であること。 |
+
+planには `orchestune-workflow` YAMLフェンスを1つだけ置き、`schema_version: 1` と
+`state: workflow-state.json` を記録します。stateのパスはplanからの相対指定で、
+session外への逸脱（symlinkを含む）は拒否します。実行者が記録する項目は
+[state契約](../plans/local-ci-workflow-enforcement.md#persisted-workflow-context-and-plan-marker)
+を参照してください。影響範囲の初版ファイルにはMarkdown表だけを保存し、列名を
+`Reference` / `Decision` / `Rationale` とします。判断は `in scope` / `out of scope`
+のいずれかで、各行に空でない根拠が必要です。後から判明した事項は別の照合記録へ追記します。
+
+JSON schema v1は `issue_number`、`claim_id`、導出した `stage_id`、指定した
+`gate_id`、`status`、`reason_codes`、`checks`、`actions`、`references`、`artifacts`、
+`observed_head_sha` を返します。condition IDは同梱の `stages.toml` と対応します。
+後段のゲートでは適用される先行段階も検証し、前段のゲートも現在の証拠で再判定します。
+既知のゲートに適用可能な所有段階がない場合は `unmet` です。
+
+| 終了コード | status |
+|---:|---|
+| 0 | `ready` |
+| 2 | `unmet`：証拠の不足・不正・古さ・矛盾・取得不能 |
+| 3 | `waiting_human`：必要な承認・reviewer選択が未回答 |
+| 4 | `terminal_blocked`：現claim世代の確定済みblocked Outcomeを確認 |
+
+unknownなcheckは全体でunmetとし、人間待ちより不正な証拠を優先します。
+成功したhandoffを確認できれば、操作提案なしのreadyを返します。終端証拠の矛盾はunmetです。
+`reviewer=skip` はskippedとして扱い、passにはせず既存の人間レビュー統合ゲートを保持します。
+CIの判定は従来の完了検証を再利用します。base SHAは監査用であり、baseが進んだだけでは
+検証済みHEADの証拠を無効にしません。同梱stage定義の不正は終了1、引数エラーは終了2で、
+どちらも結果JSONを出しません。有効なunmetのJSONと区別してください。
+
+`backend=mcp` では `--snapshot PATH` を渡します。ghへの自動fallbackはありません。
+UTF-8 JSONには `snapshot_version: 1`、`repository: "owner/repo"`、RFC3339形式の
+`observed_at`、明示的な `claim_id`（claim前はnull）、`IssueRecord` 形式の `issue`、
+同形式の `dependency_issues`、`dependencies_complete: true` を含めます。
+`--pr` 指定時は `PrRecord` 形式の `pr` と、従来の
+[review snapshot v1](../../orchestune/review/snapshot.py) 形式の `review` も必要です。
+reviewにはrepository/PR、取得期間、取得前後のHEAD、全ページの通常コメント・レビュー・
+インラインコメント、各セクションの取得完全性を記録します。300秒より古いsnapshot、
+取得中のHEAD変更、識別情報の不一致はunmetです。JSONの宣言だけでは取得完全性や権限を
+証明できません。延期したfollow-up Issueの種別・状態を独立に検証できない場合も通しません。
+返信の二重投稿は検出と案内だけを行い、修復や再投稿はしません。
+
 ## 親スコープ内の補修タスクを追加する（remediate）
 
 `remediate` はレビュー残件や統合バグを、既存EPICの要件を満たすための子Issueとして追加します。
