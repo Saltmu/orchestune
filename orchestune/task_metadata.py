@@ -54,8 +54,6 @@ class TaskMetadata(Protocol):
     def writes_shared_contract(self) -> bool: ...
     @property
     def execution_profile(self) -> str | None: ...
-    @property
-    def model_tier(self) -> str | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +77,6 @@ class CycleTask:
     shared_contract: str | None = None
     writes_shared_contract: bool = False
     execution_profile: str | None = None
-    model_tier: str | None = None
 
     @classmethod
     def from_task(cls, task: Task) -> CycleTask:
@@ -102,7 +99,6 @@ class CycleTask:
             shared_contract=task.shared_contract,
             writes_shared_contract=task.writes_shared_contract,
             execution_profile=task.execution_profile,
-            model_tier=task.model_tier,
         )
 
 
@@ -136,5 +132,4 @@ def task_metadata_to_dict(task: TaskMetadata) -> dict[str, object]:
         "shared_contract": task.shared_contract,
         "writes_shared_contract": task.writes_shared_contract,
         "execution_profile": task.execution_profile,
-        "model_tier": task.model_tier,
     }

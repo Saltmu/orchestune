@@ -29,7 +29,6 @@ _EXPECTED_PROPERTIES = (
     "shared_contract",
     "writes_shared_contract",
     "execution_profile",
-    "model_tier",
 )
 
 
@@ -53,7 +52,6 @@ def _sample_task(**overrides: object) -> Task:
         shared_contract="dispatcher-dependency-context",
         writes_shared_contract=True,
         execution_profile="deep-reasoning",
-        model_tier="middle",
     )
     base.update(overrides)
     return Task(**base)  # type: ignore[arg-type]
@@ -68,7 +66,8 @@ class TestCycleTaskFieldShape:
         expected = tuple(f.name for f in _non_raw_task_fields())
         actual = tuple(f.name for f in dataclasses.fields(CycleTask))
         assert actual == expected
-        assert len(actual) == 18
+        assert len(actual) == 17
+        assert "model_tier" not in actual
 
     def test_defaults_match_task_defaults(self) -> None:
         cycle_fields = {f.name: f for f in dataclasses.fields(CycleTask)}
@@ -130,7 +129,6 @@ class TestFromTask:
         assert cycle_task.shared_contract is None
         assert cycle_task.writes_shared_contract is False
         assert cycle_task.execution_profile is None
-        assert cycle_task.model_tier is None
 
 
 class TestFrozen:
@@ -156,6 +154,11 @@ class TestTaskMetadataProtocol:
             member = getattr(TaskMetadata, name)
             assert isinstance(member, property), name
             assert member.fset is None, f"{name} must be read-only"
+
+    def test_does_not_declare_retired_model_tier(self) -> None:
+        assert not hasattr(TaskMetadata, "model_tier")
+        assert not hasattr(CycleTask, "model_tier")
+        assert "model_tier" not in {f.name for f in dataclasses.fields(Task)}
 
     def test_does_not_declare_raw_dependency_fields(self) -> None:
         assert not hasattr(TaskMetadata, "depends_on")

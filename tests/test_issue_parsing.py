@@ -647,90 +647,88 @@ class TestExecutionProfileFromBody:
         assert task.yaml_error is False
 
 
-class TestModelTierFromBody:
-    """Footprint YAMLからのmodel_tier抽出とバリデーション。"""
+class TestRetiredModelTierFromBody:
+    """#1473: 非nullのmodel_tierはfootprint_errorへ移行案内を入れて止める。"""
 
-    @pytest.mark.parametrize("tier", ["weak", "middle", "strong"])
-    def test_parses_valid_model_tier(self, tier: str):
-        from orchestune.issue_parsing import parse_task_from_issue
-        from orchestune.models import IssueRecord
+    @staticmethod
+    def _issue(data: dict) -> IssueRecord:
+        import yaml
 
-        issue = IssueRecord(
+        return IssueRecord(
             number=1,
             title="[FEAT] task-a: test",
-            body=(
-                "```yaml\n"
-                "subtask_id: task-a\n"
-                "footprint: [src/foo.py]\n"
-                "symbols: [Foo]\n"
-                "depends_on: []\n"
-                f"model_tier: {tier}\n"
-                "```\n"
-            ),
+            body=f"```yaml\n{yaml.dump(data)}```\n",
             labels=(),
             created_at="2026-01-01T00:00:00Z",
         )
-        task = parse_task_from_issue(issue)
-        assert task.model_tier == tier
-
-    def test_model_tier_defaults_to_none_when_absent_or_null(self):
-        from orchestune.issue_parsing import parse_task_from_issue
-        from orchestune.models import IssueRecord
-
-        issue_absent = IssueRecord(
-            number=1,
-            title="[FEAT] task-a: test",
-            body="```yaml\nsubtask_id: task-a\n```\n",
-            labels=(),
-            created_at="2026-01-01T00:00:00Z",
-        )
-        assert parse_task_from_issue(issue_absent).model_tier is None
-
-        issue_null = IssueRecord(
-            number=2,
-            title="[FEAT] task-b: test",
-            body="```yaml\nsubtask_id: task-b\nmodel_tier: null\n```\n",
-            labels=(),
-            created_at="2026-01-01T00:00:00Z",
-        )
-        assert parse_task_from_issue(issue_null).model_tier is None
 
     @pytest.mark.parametrize(
-        "invalid_tier",
+        "body",
         [
-            "ultra",
-            "low",
+            "```yaml\nsubtask_id: task-a\nfootprint: [src/foo.py]\n```\n",
+            "```yaml\nsubtask_id: task-a\nfootprint: [src/foo.py]\nmodel_tier: null\n```\n",
+            "```yaml\nsubtask_id: task-a\nfootprint: [src/foo.py]\nmodel_tier:\n```\n",
+        ],
+        ids=["absent", "null", "empty-value"],
+    )
+    def test_absent_null_or_empty_value_is_accepted(self, body: str):
+        from orchestune.issue_parsing import parse_task_from_issue
+
+        issue = IssueRecord(1, "[FEAT] task-a: test", body, (), "2026-01-01T00:00:00Z")
+        task = parse_task_from_issue(issue)
+        assert task.footprint_error is None
+        assert task.footprint == ("src/foo.py",)
+        assert not hasattr(task, "model_tier")
+
+    @pytest.mark.parametrize(
+        "tier",
+        [
+            "weak",
+            "middle",
+            "strong",
             "high",
             "Strong",
-            "weak-tier",
             "",
             123,
             True,
+            False,
             ["list"],
             {"dict": "val"},
         ],
     )
-    def test_invalid_model_tier_falls_back_to_none_safely(self, invalid_tier):
-        import yaml
-
+    def test_non_null_model_tier_sets_migration_footprint_error(self, tier):
+        from orchestune.config_contracts import retired_model_tier_message
         from orchestune.issue_parsing import parse_task_from_issue
-        from orchestune.models import IssueRecord
 
-        data = {
-            "subtask_id": "task-a",
-            "model_tier": invalid_tier,
-        }
-        body = f"```yaml\n{yaml.dump(data)}```\n"
-        issue = IssueRecord(
-            number=1,
-            title="[FEAT] task-a: test",
-            body=body,
-            labels=(),
-            created_at="2026-01-01T00:00:00Z",
+        task = parse_task_from_issue(
+            self._issue(
+                {
+                    "subtask_id": "task-a",
+                    "footprint": ["src/foo.py"],
+                    "model_tier": tier,
+                }
+            )
         )
-        task = parse_task_from_issue(issue)
-        assert task.model_tier is None
+        assert task.footprint_error == retired_model_tier_message()
         assert task.yaml_error is False
+        assert task.footprint == ("src/foo.py",)
+
+    def test_migration_is_appended_to_existing_footprint_error(self):
+        from orchestune.config_contracts import retired_model_tier_message
+        from orchestune.issue_parsing import parse_task_from_issue
+
+        task = parse_task_from_issue(
+            self._issue(
+                {
+                    "subtask_id": "task-a",
+                    "footprint": "src/foo.py",
+                    "model_tier": "weak",
+                }
+            )
+        )
+        assert task.footprint_error is not None
+        assert task.footprint_error.endswith(f"; {retired_model_tier_message()}")
+        assert task.footprint_error != retired_model_tier_message()
 
 
 class TestFootprintParsing:

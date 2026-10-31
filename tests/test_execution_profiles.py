@@ -746,7 +746,6 @@ class TestResolveTaskExecutionSelection:
             progress_partial=False,
             status_labels=(),
             created_at="2026-01-01T00:00:00Z",
-            model_tier="weak",
             execution_profile="balanced",
         )
         target = LocalProcessDispatchTarget(local_cmd=local_cmd)
@@ -786,7 +785,6 @@ class TestResolveTaskExecutionSelection:
             progress_partial=False,
             status_labels=(),
             created_at="2026-01-01T00:00:00Z",
-            model_tier="strong",
         )
         target = LocalProcessDispatchTarget(local_cmd="claude-cli")
         config = DispatcherConfig(
@@ -818,7 +816,6 @@ class TestResolveTaskExecutionSelection:
             progress_partial=False,
             status_labels=(),
             created_at="2026-01-01T00:00:00Z",
-            model_tier="weak",
             execution_profile="deep",
         )
         target = LocalProcessDispatchTarget(local_cmd="claude-cli")

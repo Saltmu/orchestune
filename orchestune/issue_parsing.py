@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from orchestune import config_contracts
 from orchestune.footprint_paths import FootprintValidationError, parse_footprint_value
 from orchestune.forge import MetadataSearchUnavailableError
 from orchestune.models import IssueRecord, Task, normalize_newlines
@@ -652,7 +653,6 @@ def _body_depends_on(data: dict[str, Any] | None) -> tuple[str, ...]:
 
 
 _EXECUTION_PROFILE_PATTERN = re.compile(r"^[a-z0-9_-]{1,32}$")
-_VALID_MODEL_TIERS = frozenset({"weak", "middle", "strong"})
 
 
 def _validated_execution_profile(value: object) -> str | None:
@@ -663,13 +663,14 @@ def _validated_execution_profile(value: object) -> str | None:
     return None
 
 
-def _validated_model_tier(value: object) -> str | None:
-    if not isinstance(value, str) or isinstance(value, bool):
-        return None
-    tier = value.strip()
-    if tier in _VALID_MODEL_TIERS:
-        return tier
-    return None
+def _with_retired_model_tier_error(
+    data: dict[str, Any], footprint_error: str | None
+) -> str | None:
+    """#1473: 非nullの`model_tier`は移行案内つきの`footprint_error`で止める。"""
+    if data.get("model_tier") is None:
+        return footprint_error
+    migration = config_contracts.retired_model_tier_message()
+    return f"{footprint_error}; {migration}" if footprint_error else migration
 
 
 def _parse_yaml_footprint_dict(
@@ -680,7 +681,6 @@ def _parse_yaml_footprint_dict(
     tuple[str, ...],
     str | None,
     bool,
-    str | None,
     str | None,
     str | None,
 ]:
@@ -697,7 +697,7 @@ def _parse_yaml_footprint_dict(
     )
     writes_sc = data.get("writes_shared_contract") is True
     profile = _validated_execution_profile(data.get("execution_profile"))
-    model_tier = _validated_model_tier(data.get("model_tier"))
+    footprint_error = _with_retired_model_tier_error(data, footprint_error)
     return (
         subtask_id,
         footprint,
@@ -705,7 +705,6 @@ def _parse_yaml_footprint_dict(
         shared_contract,
         writes_sc,
         profile,
-        model_tier,
         footprint_error,
     )
 
@@ -716,7 +715,6 @@ _FootprintMetadataTuple = tuple[
     tuple[str, ...],
     str | None,
     bool,
-    str | None,
     str | None,
     bool,
     str | None,
@@ -733,7 +731,6 @@ def _extract_footprint_metadata(
     shared_contract: str | None = None
     writes_shared_contract = False
     execution_profile: str | None = None
-    model_tier: str | None = None
     yaml_error = False
     footprint_error: str | None = None
     parsed_data: dict[str, Any] | None = None
@@ -750,7 +747,6 @@ def _extract_footprint_metadata(
                     shared_contract,
                     writes_shared_contract,
                     execution_profile,
-                    model_tier,
                     footprint_error,
                 ) = _parse_yaml_footprint_dict(data)
         except yaml.YAMLError as e:
@@ -766,7 +762,6 @@ def _extract_footprint_metadata(
         shared_contract,
         writes_shared_contract,
         execution_profile,
-        model_tier,
         yaml_error,
         footprint_error,
         parsed_data,
@@ -852,7 +847,6 @@ def parse_task_from_issue(
         shared_contract,
         writes_shared_contract,
         execution_profile,
-        model_tier,
         yaml_error,
         footprint_error,
         data,
@@ -883,5 +877,4 @@ def parse_task_from_issue(
         shared_contract=shared_contract,
         writes_shared_contract=writes_shared_contract,
         execution_profile=execution_profile,
-        model_tier=model_tier,
     )
