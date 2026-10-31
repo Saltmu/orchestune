@@ -358,7 +358,7 @@ else { Write-Warning 'report not created' }
 
 `model_tier` は廃止されました。計画から削除し、代わりに `execution_profile` を選択してください。モデルは `[execution_profiles.<profile>.<target>]` の下で、ディスパッチ先ごとに設定します。
 
-- **モデルランクのみを指定していた場合:** 以前のランクに対応する専用プロファイル（例: `tier-strong`）を作り、タスクを実行する各ターゲットに意図した `model` を設定して、タスクの `execution_profile` にそのプロファイルを指定します。以前のターゲット別デフォルトは[廃止前の `model_tiers` テーブル](https://github.com/Saltmu/orchestune/blob/95822058eec1243bdec3d13b710a64dee05597ab/orchestune.toml.example#L145-L164)で確認できます。
+- **モデルランクのみを指定していた場合:** 以前のランクに対応する専用プロファイル（例: `tier-strong`）を作り、タスクを実行する各ターゲットに意図した `model` を設定して、タスクの `execution_profile` にそのプロファイルを指定します。各ターゲットの `reasoning_effort` は、旧環境の `default_execution_profile` が選ぶプロファイルにある同じターゲットの値を、専用プロファイルへ明示的に写します。プロファイルのフィールドは継承されないため、`reasoning_effort` を書かなければ未設定となり、その実行先の既定動作に委ねられます。旧 default profile にそのターゲットの `reasoning_effort` がなければ、未設定のままで構いません。旧 default profile を編集・削除する前に、その値を記録してください。以前のターゲット別デフォルトは[廃止前の `model_tiers` テーブル](https://github.com/Saltmu/orchestune/blob/95822058eec1243bdec3d13b710a64dee05597ab/orchestune.toml.example#L145-L164)で確認できます。
 - **プロファイルとモデルランクを併用していた場合:** 他タスクの設定を変えないよう既存プロファイルを複製し、専用プロファイルを作ります。各ターゲットで `model` だけを以前のランクに対応するモデルへ置き換え、既存の `reasoning_effort` はそのまま維持します。タスクの `execution_profile` に新しいプロファイルを指定します。
 
 dry-run dispatchを使って各ターゲットの解決結果を確認します。たとえば `orchestune-dispatch -p <N> --no-apply --dispatch-target claude-cli` を実行し、その実行で保存された `result.json` の `execution_selections` を開きます。対象タスクの `profile`、`model`、`reasoning_effort` を確認し、計画で使う各ターゲットについて繰り返します。
