@@ -156,8 +156,9 @@ subtasks:
 
     上記に一致しない独自のファイル名（例: `src/db/connection.py`、`src/custom_hook.py`）へ書き込む場合は自動判定が働かないため、**`writes_shared_contract: true` の明示が必要です**。指定を怠ると、同じ `shared_contract` タグを付けていても双方が消費者と見なされ、警告は一切出ません。
 * **`execution_profile`** (文字列または`null`, 任意, 既定値 `null`): サブタスクを実行するエージェントの抽象実行プロファイル名（例: `fast-code`、`deep-reasoning`）。英小文字・数字・ハイフン・アンダースコアで構成され、32文字以内である必要があります。
-* **`model_tier`** (文字列または`null`, 任意, 既定値 `null`): サブタスクに割り当てるモデル能力ランク（`weak` / `middle` / `strong`）。各ターゲット（`claude-cli`, `codex-cli`, `agy-cli` 等）ごとの具象モデル名へのマッピングはリポジトリの `orchestune.toml` の `[model_tiers]` セクション、またはビルトインの既定値に基づいて自動解決されます。`execution_profile` 内で具象モデル名が設定されていても、`model_tier` が指定された場合はこの能力ランク由来のモデル名が優先されます。`reasoning_effort`（推論強度）はプロファイル側の設定が維持されます。`weak` / `middle` / `strong` 以外の値を指定した場合はエラーになります。
 * **`issue_number`** (整数または`null`, 任意, 既定値 `null`): このサブタスクのIssue番号。**手動で設定しないでください** — `orchestune provision`がこのサブタスクのIssue作成（または既存Issueの再利用）後にこのファイルへ書き戻します。設定済みの場合、`orchestune provision`はそのサブタスクのIssueを再作成せず再利用します。
+
+`model_tier` は廃止され、計画でサポートされるフィールドではありません。既存計画から削除し、モデルの選択をターゲット別execution profileへ移行してください（[廃止されたモデルランクからの移行](#廃止されたモデルランクからの移行)を参照）。
 
 ### 計画ファイルのライフサイクルと親Issueへの永続化（方針 (b)）
 
@@ -343,13 +344,22 @@ else { Write-Warning 'report not created' }
 | `--apply` / `--no-apply` | `--apply` | 実際にタスク割り当てやGitブランチ作成を実行するか、プレビュー（ドライラン）のみにするかを選択。 |
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | 自動選択（非CI: `auto` / GitHub Actions: `cloud-routine`） | エージェントの起動先。未指定時は設定ファイルの値、または実行環境（`GITHUB_ACTIONS`環境変数）から自動選択されます。`auto`はPATH上のローカルCLIを検出します。`local`は後方互換のダミー起動（no-op、テスト・dry-run用途）になります。 |
 | `--max-concurrent <int>` | `2` (設定ファイル未指定時) | 同時に実行（起動）できるサブタスクエージェントの最大数。設定ファイルの値よりもCLI引数が優先されます。 |
-| `--profile <name>` | - | この実行全体で使用するタスクプロファイル（例: `balanced`, `fast-code`, `deep-reasoning`）をオーバーライドします。タスクメタデータのプロファイルやモデルランクより優先されます。 |
+| `--profile <name>` | - | この実行全体で使用するタスクプロファイル（例: `balanced`, `fast-code`, `deep-reasoning`）をオーバーライドします。タスクメタデータのプロファイルより優先されます。 |
 | `--child-review-gate {required,off}` | - | 子サブIssueのレビュー合否検証モード（`required` または `off`）。未指定時は設定ファイル（`child-review-gate`）または環境変数（`ORCHESTUNE_CHILD_REVIEW_GATE`）、既定値は `required`。`off` 指定時は検証をスキップし警告を出力。[§4.5](#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)を参照。 |
 | `--semantic-review-mode {required,advisory,off}` | - | 統合PRの第2層セマンティックレビューモード（`required`、`advisory`、または `off`）。未指定時は設定ファイル（`semantic-review-mode`）または環境変数（`ORCHESTUNE_SEMANTIC_REVIEW_MODE`）、既定値は `required`。`off` でスキップ。[§4.5](#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)を参照。 |
 | `--force-integration-review` | - | 単一タスクFast-Pathをバイパスし、子タスク1件の場合でも統合PRセマンティックレビュー（第2層）を強制実行するフラグ。 |
 | `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。安全のためCLI引数でのみ指定可能（設定ファイルでの指定は禁止）です。未指定でローカルCLIターゲットを実行しようとした場合は設定エラーで拒否されます（Fail-Closed）。 |
 
 ### 設定ファイル (`orchestune.toml`) による詳細設定
+
+#### 廃止されたモデルランクからの移行
+
+`model_tier` は廃止されました。計画から削除し、代わりに `execution_profile` を選択してください。モデルは `[execution_profiles.<profile>.<target>]` の下で、ディスパッチ先ごとに設定します。
+
+- **モデルランクのみを指定していた場合:** 以前のランクに対応する専用プロファイル（例: `tier-strong`）を作り、タスクを実行する各ターゲットに意図した `model` を設定して、タスクの `execution_profile` にそのプロファイルを指定します。各ターゲットのモデルを決める際は、以前のランク設定を参照します。
+- **プロファイルとモデルランクを併用していた場合:** 他タスクの設定を変えないよう既存プロファイルを複製し、専用プロファイルを作ります。各ターゲットで `model` だけを以前のランクに対応するモデルへ置き換え、既存の `reasoning_effort` はそのまま維持します。タスクの `execution_profile` に新しいプロファイルを指定します。
+
+dry-run dispatchを使って各ターゲットの解決結果を確認します。たとえば `orchestune-dispatch -p <N> --no-apply --dispatch-target claude-cli` を実行し、その実行で保存された `result.json` の `execution_selections` を開きます。対象タスクの `profile`、`model`、`reasoning_effort` を確認し、計画で使う各ターゲットについて繰り返します。
 
 日常オプション以外の設定（ストレージパス、レート制限、タイムアウト、レビュアー、整合性ループ等）は、リポジトリの設定ファイル（`orchestune.toml` または `pyproject.toml` の `[tool.orchestune]` セクション）に集約して定義します。`cp orchestune.toml.example orchestune.toml` でテンプレートをコピーして使用してください。実ファイルはローカル設定としてGit管理外にし、共有する変更は `orchestune.toml.example` へ反映します。
 

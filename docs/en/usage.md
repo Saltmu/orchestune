@@ -163,8 +163,9 @@ Each subtask item supports the following fields:
 
     Auto-detection does not apply to custom filenames outside those categories (e.g. `src/db/connection.py`, `src/custom_hook.py`), so for those you **must set `writes_shared_contract: true`**. Omitting it makes both subtasks count as consumers even when they share the same `shared_contract` tag, and no warning is emitted at all.
 * **`execution_profile`** (string or `null`, optional, defaults to `null`): An abstract execution profile name for the agent executing this subtask (e.g. `fast-code`, `deep-reasoning`). Must be up to 32 characters consisting of lowercase alphanumeric characters, hyphens, and underscores.
-* **`model_tier`** (string or `null`, optional, defaults to `null`): Abstract model capability tier assigned to the subtask (`weak` / `middle` / `strong`). Automatically resolved to a concrete model name for each dispatch target (`claude-cli`, `codex-cli`, `agy-cli`, etc.) based on `[model_tiers]` in `orchestune.toml` or built-in defaults. If specified, the model from `model_tier` overrides any model configured in the `execution_profile` while preserving `reasoning_effort`. Values other than `weak` / `middle` / `strong` are rejected with an error.
 * **`issue_number`** (integer or `null`, optional, defaults to `null`): This subtask's issue number. **Do not set this by hand** — `orchestune provision` writes it back after creating (or reusing) this subtask's issue. If it is already set, `orchestune provision` reuses that issue instead of creating a new one.
+
+`model_tier` is retired and is not a supported plan field. Remove it from existing plans and migrate its model choices to target-specific execution profiles; see [Migrating retired model tiers](#migrating-retired-model-tiers).
 
 ### Plan Lifecycle and Parent Issue Persistence (Option b)
 
@@ -350,13 +351,22 @@ Routine dispatch execution uses strictly the following 7 options. Detailed param
 | `--apply` / `--no-apply` | `--apply` | Choose whether to actually execute actions (worktree setup, API calls) or preview them (dry-run). |
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | auto-selected (non-CI: `auto` / GitHub Actions: `cloud-routine`) | Target environment to launch agents. When unspecified, resolved from configuration file or auto-selected from runtime environment (`GITHUB_ACTIONS`). `auto` detects a local CLI on `PATH`. `local` gives the backward-compatible no-op dummy (for tests/dry-runs). |
 | `--max-concurrent <int>` | `2` (when unset in config) | Maximum number of subtask agents running concurrently. CLI argument overrides configuration file setting. |
-| `--profile <name>` | - | Override the task execution profile (e.g. `balanced`, `fast-code`, `deep-reasoning`) for this entire run, taking precedence over task metadata profile or model tier. |
+| `--profile <name>` | - | Override the task execution profile (e.g. `balanced`, `fast-code`, `deep-reasoning`) for this entire run, taking precedence over the profile in task metadata. |
 | `--child-review-gate {required,off}` | - | Child sub-issue review gate mode (`required` or `off`). When omitted, falls back to config file (`child-review-gate`), env var (`ORCHESTUNE_CHILD_REVIEW_GATE`), or default `required`. `off` skips verification with a warning. See [§4.5](#45-child-review-evidence-gate-and-layer-2-semantic-review-gate). |
 | `--semantic-review-mode {required,advisory,off}` | - | Layer-2 integration-PR semantic review mode (`required`, `advisory`, or `off`). When omitted, falls back to config file (`semantic-review-mode`), env var (`ORCHESTUNE_SEMANTIC_REVIEW_MODE`), or default `required`. `off` skips verification. See [§4.5](#45-child-review-evidence-gate-and-layer-2-semantic-review-gate). |
 | `--force-integration-review` | - | Forces layer-2 integration-PR review even when a single child task qualifies for the Fast-Path. |
 | `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`). For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error. |
 
 ### Configuration File (`orchestune.toml`) for Detailed Settings
+
+#### Migrating retired model tiers
+
+`model_tier` is retired. Remove it from decomposition plans and select an `execution_profile` instead. Define the model separately for each dispatch target under `[execution_profiles.<profile>.<target>]`.
+
+- **Tier only:** Create a dedicated profile for the former tier (for example, `tier-strong`), add a target table with the intended `model` for each target that will run the task, and set the task's `execution_profile` to that profile. Use the previous tier mapping as a reference when translating the model choice for each target.
+- **Profile plus tier:** Copy the existing profile to a dedicated profile so other tasks keep their current settings. For each target, replace `model` with the model previously selected by the tier and retain that target's existing `reasoning_effort`. Set the task's `execution_profile` to the dedicated profile.
+
+Check each target's resolved values with a dry-run dispatch, for example `orchestune-dispatch -p <N> --no-apply --dispatch-target claude-cli`. Read that run's saved `result.json` and inspect `execution_selections` for the task's `profile`, `model`, and `reasoning_effort`; repeat for every target used by the plan.
 
 Non-routine options (storage paths, rate limits, timeouts, reviewer selection, consistency loops, etc.) are centralized in the repository's configuration file (`orchestune.toml` or the `[tool.orchestune]` section of `pyproject.toml`). Copy the template with `cp orchestune.toml.example orchestune.toml`. Keep the real file as untracked local configuration and publish shared changes through `orchestune.toml.example`.
 
