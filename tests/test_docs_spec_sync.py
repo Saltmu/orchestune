@@ -25,6 +25,7 @@ USAGE_DOCS = {
 }
 _REQUIRED_MARKERS = {"ja": "必須", "en": "required"}
 _OPTIONAL_MARKERS = {"ja": "任意", "en": "optional"}
+_RETIRED_PLAN_FIELDS = {"model_tier"}
 
 _OPTION_ROW_PATTERN = re.compile(
     r"^\|\s*`(--[a-z-]+)[^`]*`(?:\s*/\s*`--[a-z-]+`)?\s*\|\s*([^|]*?)\s*\|"
@@ -131,11 +132,11 @@ def _schema_bullet_block(lang: str, field: str) -> str:
 
 
 def _supported_plan_fields() -> set[str]:
-    """`_parse_subtask` のソースから、実際に参照される計画フィールド名を抽出する。"""
+    """`_parse_subtask` のソースから、受理される計画フィールド名を抽出する。"""
     source = inspect.getsource(_parse_subtask)
     fields = set(re.findall(r"""raw\.get\(\s*["']([a-z_]+)["']""", source))
     fields |= set(re.findall(r"""raw\[\s*["']([a-z_]+)["']\s*\]""", source))
-    return fields
+    return fields - _RETIRED_PLAN_FIELDS
 
 
 class TestDocsCliConsistency:
@@ -308,6 +309,51 @@ class TestDocsSchemaConsistency:
 
     def test_ja_and_en_schema_sections_agree(self):
         assert _documented_schema_fields("ja") == _documented_schema_fields("en")
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_retired_model_tier_is_not_a_supported_schema_field(self, lang):
+        assert "model_tier" not in _documented_schema_fields(lang)
+
+    @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
+    def test_execution_profile_migration_preserves_effort_and_checks_targets(
+        self, lang
+    ):
+        section = _section(lang, 4)
+        heading = (
+            "#### 廃止されたモデルランクからの移行"
+            if lang == "ja"
+            else "#### Migrating retired model tiers"
+        )
+        migration = section.split(heading, 1)[1].split("\n#### ", 1)[0]
+        markers = (
+            (
+                "専用プロファイル",
+                "既存の `reasoning_effort` はそのまま維持",
+                "execution_selections",
+                "claude-cli",
+                "以前のターゲット別デフォルト",
+                "orchestune.toml.example#L145-L164",
+            )
+            if lang == "ja"
+            else (
+                "dedicated profile",
+                "retain that target's existing `reasoning_effort`",
+                "execution_selections",
+                "--dispatch-target",
+                "previous per-target defaults",
+                "orchestune.toml.example#L145-L164",
+            )
+        )
+        for marker in markers:
+            assert marker in migration
+
+    def test_orchestune_skill_plan_template_uses_only_execution_profile(self):
+        skill = (REPO_ROOT / "skills" / "orchestune" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        assert "execution_profile:" in skill
+        assert "execution_profiles.<profile>.<target>" in skill
+        assert "model_tier" not in skill
 
 
 class TestDocsIntegrationConsistency:
