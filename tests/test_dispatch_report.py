@@ -174,6 +174,19 @@ class TestCycleReportSection:
         content = summary_file.read_text(encoding="utf-8")
         assert "外部ロックの変更はありませんでした。" in content
 
+    def test_report_json_lock_changes_omit_retired_model_tier(self):
+        lock_task = _task(issue_number=41, subtask_id="task-lock-41")
+        unlock_task = _task(issue_number=42, subtask_id="task-unlock-42")
+        report_dict = _report_to_dict(
+            _cycle_report(
+                lock_changes={"to_lock": [lock_task], "to_unlock": [unlock_task]},
+            )
+        )
+        for key in ("to_lock", "to_unlock"):
+            entry = report_dict["lock_changes"][key][0]
+            assert "execution_profile" in entry
+            assert "model_tier" not in entry
+
     def test_renders_unlock_rows(self, tmp_path):
         summary_file = tmp_path / "step_summary.md"
         unlock_task = _task(issue_number=42, subtask_id="task-unlock-42")
@@ -233,6 +246,8 @@ class TestCycleReportSection:
         assert event_log["selected"][0]["reasoning_effort"] == "high"
 
         report_dict = _report_to_dict(cycle_report)
+        assert report_dict["selected"][0]["execution_profile"] == "deep"
+        assert "model_tier" not in report_dict["selected"][0]
         assert "10" in report_dict["execution_selections"]
         assert (
             report_dict["execution_selections"]["10"]["model"]

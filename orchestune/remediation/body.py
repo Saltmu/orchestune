@@ -103,7 +103,6 @@ def validate_registered_body(
         or parsed.symbols != expected.symbols
         or parsed.depends_on != expected.depends_on
         or parsed.execution_profile != expected.execution_profile
-        or parsed.model_tier != expected.model_tier
         or parsed.shared_contract != expected.shared_contract
         or parsed.writes_shared_contract != expected.writes_shared_contract
     ):

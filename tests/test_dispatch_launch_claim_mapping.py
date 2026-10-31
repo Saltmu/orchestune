@@ -247,3 +247,91 @@ class TestLaunchSelectedTasksInvalidFootprint:
         mock_add_label.assert_called_once_with(1, "status:blocked-human-review")
         assert "bad path" in mock_comment.call_args[0][1]
         assert "footprint が不正なため" in mock_comment.call_args[0][1]
+
+
+class TestRetiredModelTierBlocksLaunchAndClaim:
+    """#1473: 子Issue本文の非null `model_tier` は既存のfootprint_error経路で
+    起動除外・blocked-human-review遷移・claim拒否される。"""
+
+    @staticmethod
+    def _issue():
+        from orchestune.models import IssueRecord
+
+        return IssueRecord(
+            number=7,
+            title="[FEAT] legacy-tier: test",
+            body=(
+                "```yaml\n"
+                "subtask_id: legacy-tier\n"
+                "footprint: [src/a.py]\n"
+                "execution_profile: balanced\n"
+                "model_tier: strong\n"
+                "```\n"
+            ),
+            labels=("status:queued",),
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+    def test_queued_task_is_excluded_blocked_and_commented(self, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        from orchestune.config_contracts import retired_model_tier_message
+        from orchestune.dispatch.launch import (
+            LaunchContext,
+            _decide_invalid_footprint_tasks,
+            _launch_selected_tasks,
+        )
+        from orchestune.dispatch.scoring import (
+            REASON_INVALID_FOOTPRINT,
+            _ineligibility_reason,
+        )
+        from orchestune.issue_parsing import parse_task_from_issue
+        from orchestune.ledger.run_state import RunState
+
+        task = parse_task_from_issue(self._issue())
+        assert _ineligibility_reason(task, set()) == REASON_INVALID_FOOTPRINT
+        assert _decide_invalid_footprint_tasks([task]) == [task]
+
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        claim_fn = MagicMock()
+        ctx = LaunchContext(
+            selected=[],
+            task_to_base_branch={},
+            candidate_tasks=[task],
+            run_state=RunState(active_worktrees={}),
+            now=1000.0,
+            config=config,
+            claim_fn=claim_fn,
+        )
+
+        with (
+            patch("fake_forge_proxy.active_fake_forge.add_label") as mock_add_label,
+            patch("fake_forge_proxy.active_fake_forge.remove_label") as mock_remove,
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment,
+        ):
+            _launch_selected_tasks(ctx)
+
+        claim_fn.assert_not_called()
+        mock_add_label.assert_called_once_with(7, "status:blocked-human-review")
+        mock_remove.assert_called_once_with(7, "status:queued")
+        comment = mock_comment.call_args[0][1]
+        assert "footprint が不正なため" in comment
+        assert retired_model_tier_message() in comment
+
+    def test_claim_preflight_rejects_with_invalid_footprint(self):
+        from orchestune.claim.contracts import ClaimExitCode, ClaimFailureReason
+        from orchestune.claim.preflight import evaluate_claim_preflight
+        from orchestune.config_contracts import retired_model_tier_message
+
+        decision = evaluate_claim_preflight(self._issue())
+
+        assert decision.allowed is False
+        assert decision.failure is not None
+        assert decision.failure.reason == ClaimFailureReason.INVALID_FOOTPRINT
+        assert decision.failure.exit_code == ClaimExitCode.INVALID_FOOTPRINT
+        assert retired_model_tier_message() in decision.failure.message
