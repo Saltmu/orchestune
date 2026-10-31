@@ -1285,3 +1285,31 @@ def test_review_loop_terminal_reply_example_contract(skill_name: str):
         ],
     }
     validate_coverage(judgments, artificial_result)
+
+
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_review_loop_wait_process_guidance_and_anti_patterns(skill_name: str):
+    """単一プロセス待機・ツールyield/中断時の継続取得と終了確認後再開・pgrep自己マッチ禁止を検証 (#1481)。"""
+    loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
+        encoding="utf-8"
+    )
+
+    # アンチパターン: pgrep -f / pkill -f による自己マッチとハングの禁止
+    assert "`pgrep -f`" in loop and "`pkill -f`" in loop
+    assert "self" in loop.lower()
+
+    # 推奨手順: wait_for_review.py 単一プロセスの待機（バックグラウンド監視ループの二重構造禁止）
+    assert "wait_for_review.py" in loop
+    assert "dual" in loop.lower() or "single" in loop.lower()
+
+    # ツールの yield と実行時間上限の区別・同一 session/task ID の継続取得
+    assert "session" in loop or "task ID" in loop
+    assert "--output-file" in loop
+
+    # 元プロセスの終了確認後に限定した同一ラウンド再開（--no-post --round）
+    assert "--no-post --round" in loop
+    assert "terminated" in loop.lower() or "termination" in loop.lower()
+
+    # シェル PID 扱い時の wait "$PID" と kill -0 の限界（生存確認にすぎず完了証明にならない）
+    assert '`wait "$PID"`' in loop
+    assert "`kill -0`" in loop

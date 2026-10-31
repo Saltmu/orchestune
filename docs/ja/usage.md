@@ -819,11 +819,13 @@ MCP の `--validate-request` は、`request_operation: replace`、置換元の i
 復旧も同じ単一の待機経路で行います。
 
 1. 終了コード、診断 JSON、対象のトリガーと HEAD を確認します。
-2. Exit 20: 同じ reviewer で `--no-post --round <n>` を1回だけ実行して待機を再開します。Round 2 以降はそのラウンドの `--body-file` も渡します。再開では投稿も新ラウンドの採番もしません。
+2. Exit 20: 同じ reviewer で `--no-post --round <n>` を1回だけ実行して待機を再開します。Round 2 以降の同ラウンド再開では `--body-file` の指定は任意です（投稿済み判断表を検証するため。渡す場合は投稿済み表と一致させます）。再開では投稿も新ラウンドの採番もしません。
 3. Exit 21: tracker の最後の進行と、見える場合は関連する workflow run / job を確認します。Codex の内部 job は見えないため「不明」と記録し、GitHub Actions の実行がある前提にしません。その後は手順2と同じく再開します。
 4. Exit 30: `--no-post` で再取得します。tracker の表はレビュー結果ではありません。
 5. reviewer の切り替えは、人間が明示的に選んだ場合だけ `--switch-reviewer` で行います（検証付きの置換、または次のラウンド）。自動復旧の既定にはしません。Claude が起動しない場合は、再投稿せずに workflow の actor・`allowed_bots`・trigger marker・job の conclusion を確認します。
 6. 有限回の再開でも完了しなければ、`orchestune complete --issue <N> --result blocked --reason review-timeout`（または `review-stalled`）で停止します。timeout をレビューの pass や skip に読み替えません。
+
+待機プロセスは `wait_for_review.py` の1本のみとし、バックグラウンド実行をポーリングループで監視する二重構造や、コマンドライン文字列に自己一致してハング・異常終了を引き起こす `pgrep -f` / `pkill -f` は厳禁です。ツール呼び出しが yield した場合は新しいプロセスを起動せず、同一 session/task ID への再接続や完了通知を利用してください。ツールの実行上限を設定できる場合は、polling や最終 HEAD 取得の余裕を `--timeout` に加算して強制終了を防ぎます。`--no-post --round <n>` による再開は必ず元の待機プロセスの終了を確認後に行い、終了確認不能時の多重起動や内部投稿制御を根拠にした並行待機は行わないでください。
 
 ## 8. ローカルCI証跡の保存と完了処理 (`orchestune complete`)
 
