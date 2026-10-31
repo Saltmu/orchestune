@@ -883,10 +883,11 @@ def test_profile_only_provision_restore_replan_and_remediation(
     }
     path = tmp_path / "plan.md"
     path.write_text(
-        "---\n" + yaml.safe_dump({"title": "Profiles", "subtasks": [task]}) + "---\n"
+        "---\n" + yaml.safe_dump({"title": "Profiles", "subtasks": [task]}) + "---\n",
+        encoding="utf-8",
     )
     template = tmp_path / "template.md"
-    template.write_text(_SAMPLE_TEMPLATE)
+    template.write_text(_SAMPLE_TEMPLATE, encoding="utf-8")
     result = provision_issues(path, forge=in_memory_forge, template_path=template)
     parent = in_memory_forge.get_issue(result.parent_issue_number)
     manifest = decomposition_plan_from_parent_body(parent.body)
@@ -905,7 +906,10 @@ def test_profile_only_provision_restore_replan_and_remediation(
         reason="Required",
     )
     spec_path = tmp_path / "spec.md"
-    spec_path.write_text("---\n" + yaml.safe_dump({"subtasks": [task]}) + "---\n")
+    spec_path.write_text(
+        "---\n" + yaml.safe_dump({"subtasks": [task]}) + "---\n",
+        encoding="utf-8",
+    )
     spec = load_remediation_spec(spec_path)
     assert "model_tier" not in asdict(spec.tasks[0].subtask)
     expected = expected_footprint(spec.tasks[0], parent.number)

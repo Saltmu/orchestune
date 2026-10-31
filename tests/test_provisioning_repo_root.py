@@ -44,9 +44,9 @@ def test_retired_template_fails_before_provision_side_effects(
 ) -> None:
     from tests.test_provisioning_support import _PLAN
 
-    template_path.write_text(_TEMPLATE + f"\n{placeholder}\n")
+    template_path.write_text(_TEMPLATE + f"\n{placeholder}\n", encoding="utf-8")
     path = tmp_path / "plan.md"
-    path.write_text(_PLAN)
+    path.write_text(_PLAN, encoding="utf-8")
     before = path.read_bytes()
     forge = FakeForge()
     with pytest.raises(ValueError, match="model_tier.*retired.*execution_profile"):
@@ -65,7 +65,7 @@ def test_retired_template_fails_before_provision_side_effects(
 def test_bundled_templates_pass_without_retired_placeholder(path: str) -> None:
     from orchestune.provisioning.rendering import validate_template_identity_marker
 
-    template = Path(path).read_text()
+    template = Path(path).read_text(encoding="utf-8")
     assert "{{model_tier}}" not in template
     validate_template_identity_marker(template, path)
 

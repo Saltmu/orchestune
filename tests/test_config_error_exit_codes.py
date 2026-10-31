@@ -53,7 +53,8 @@ _INVALID_CONFIG = 'dag_ignore_patterns = ["("]\n'
 def test_retired_plan_tier_exits_1_with_migration_guidance(tmp_path, capsys, tier_yaml):
     path = tmp_path / "plan.md"
     path.write_text(
-        _PLAN.replace("    footprint:", f"    model_tier: {tier_yaml}\n    footprint:")
+        _PLAN.replace("    footprint:", f"    model_tier: {tier_yaml}\n    footprint:"),
+        encoding="utf-8",
     )
     with pytest.raises(SystemExit) as exc:
         dag_main(["--plan", str(path)])

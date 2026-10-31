@@ -567,7 +567,10 @@ def test_restore_parent_rejects_tier_and_normalizes_null(tmp_path, issue_number)
 
     forge = FakeForge()
     template = tmp_path / "issue_template.md"
-    template.write_text(Path(".github/issue_template.md").read_text())
+    template.write_text(
+        Path(".github/issue_template.md").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     for tier in ("strong", "weak", "middle", "", False, 0, [], {}, None):
         entry = {
             "id": "task",
@@ -579,7 +582,7 @@ def test_restore_parent_rejects_tier_and_normalizes_null(tmp_path, issue_number)
         }
         child_body = _render_issue_body(
             _parse_subtask({k: v for k, v in entry.items() if k != "model_tier"}),
-            template.read_text(),
+            template.read_text(encoding="utf-8"),
             1,
         )
         forge.issues[2] = {

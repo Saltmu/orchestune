@@ -341,7 +341,10 @@ def test_replan_canonical_plan_omits_tier_and_preserves_profile(tmp_path):
 
     path = _write_plan(tmp_path / "plan.md")
     original = compute_plan_revision(path)
-    path.write_text(path.read_text().replace("- id:", "- model_tier: null\n  id:"))
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("- id:", "- model_tier: null\n  id:"),
+        encoding="utf-8",
+    )
     assert compute_plan_revision(path) == original
     loaded = load_replan_plan(path)
     loaded = dataclasses.replace(
@@ -360,7 +363,10 @@ def test_replan_canonical_plan_omits_tier_and_preserves_profile(tmp_path):
 def test_replan_rejects_retired_tier_in_new_plan(tmp_path, tier_yaml):
     path = _write_plan(tmp_path / "plan.md")
     path.write_text(
-        path.read_text().replace("- id:", f"- model_tier: {tier_yaml}\n  id:")
+        path.read_text(encoding="utf-8").replace(
+            "- id:", f"- model_tier: {tier_yaml}\n  id:"
+        ),
+        encoding="utf-8",
     )
     with pytest.raises(ValueError, match="model_tier.*retired.*execution_profile"):
         compute_plan_revision(path)
