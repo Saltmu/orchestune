@@ -2,7 +2,7 @@
 
 This document turns the approved design in [Issue #1417](https://github.com/Saltmu/orchestune/issues/1417) into an implementation contract for the follow-up issues. The first release is advisory and read-only. It derives a workflow stage from existing evidence; it does not add a second lifecycle state machine or weaken existing claim, CI, review, or completion requirements.
 
-The detailed comparison-study protocol belongs in [`workflow-adherence-eval.md`](workflow-adherence-eval.md). This document gives only the evaluation summary and its handoff.
+The detailed comparison-study protocol belongs in [`workflow-adherence-eval.md`](workflow-adherence-eval.md), the sibling deliverable tracked by [Issue #1493](https://github.com/Saltmu/orchestune/issues/1493). Until that sibling document is integrated, this relative link is expected to be unresolved on this branch. This document gives only the evaluation summary and its handoff.
 
 ## Goals and boundaries
 
@@ -53,13 +53,17 @@ Stages are display values inferred from current evidence. They are not persisted
 
 Evaluate terminal evidence first (`handed-off`, then `blocked`), then determine the earliest unmet stage in workflow order. A stage is not advanced by a user checkbox or a stale artifact. If required evidence cannot be read or is inconsistent, keep the earliest affected stage and report `unmet` with a reason code. `reviewer=skip` is a recorded choice, but it is not a successful review: the existing human integration gate still applies.
 
+For `next`, `stage_id` is the derived current stage. For `check`, `stage_id` is also the derived current stage, while `gate_id` names the specifically requested gate; they answer different questions. A check of a later gate still reports an earlier unmet stage and returns aggregate `unmet` (exit 2), even if the later gate's own checks pass. This prevents a gate from being treated as permission to skip an earlier stage. `check` for the current blocked stage returns `terminal_blocked` (exit 4).
+
+`next` reports a verified `handed-off` terminal stage as `ready` with no suggested actions and a `handed_off` reason code; exit 0 means that the workflow has reached its successful terminal handoff, not that another action remains. A verified blocked terminal stage is `terminal_blocked` with exit 4. In both cases the terminal receipt is included in `checks` and `artifacts`.
+
 ### Gates and checks
 
 `gate_id` identifies the contract being checked, independent of the current stage. The four gate IDs are stable machine-facing strings.
 
 | `gate_id` | Required checks | Reused rule or evidence | Structural limit |
 |---|---|---|---|
-| `pre-claim` | Existing Issue footprint is valid and covers the planned files; required execution mode is known; interactive mode has a recorded reviewer choice from `claude`, `codex`, `skip`. | Narrow footprint parser/validator and workflow state. | Does not acquire a claim or change labels. Auto mode follows its resolved reviewer policy. |
+| `pre-claim` | Existing Issue footprint is valid and covers the planned files; required execution mode is known; interactive mode has a recorded reviewer choice from `claude`, `codex`, `skip`; required plan approval is recorded as approved. | Narrow footprint parser/validator and workflow state. | Does not acquire a claim or change labels. Auto mode follows its resolved reviewer policy. In interactive mode, a missing reviewer choice or required `plan_approval.status: pending` returns `waiting_human`; an invalid reviewer or malformed approval value returns `unmet`. |
 | `pre-edit` | Current claim matches Issue and task worktree; initial impact table is present and has a reference, decision, and rationale for each row. | Active claim/ownership snapshot and parsed plan artifact. | Parser cannot certify that search results are complete or classifications are correct. |
 | `pre-pr` | Local CI evidence is current for HEAD/tree/base and worktree is clean; expected PR description sections are present; the target branch follows the parent/stack rule. | Read-only CI evidence validator, GitHub PR snapshot, PR template contract. | Does not run CI, create a PR, or prove that CI occurred before an out-of-band PR was opened. |
 | `pre-complete` | Existing completion preconditions, complete current-round finding judgments, current `review_target_sha`, required PR reply, and current claim generation are satisfied. | Existing read-only complete validators and GitHub review/PR snapshots. | Does not post a reply, trigger review, or create an Outcome. |
@@ -101,7 +105,7 @@ Both commands emit one UTF-8 JSON object when `--json` is set. Schema version 1 
 | `issue_number` | integer | Requested Issue. |
 | `claim_id` | string or null | Current claim generation ID, null before claim or if no current claim is evidenced. |
 | `stage_id` | enum string | One of the derived stage IDs above. |
-| `gate_id` | enum string or null | Requested gate for `check`; `null` for `next` unless a single gate is selected. |
+| `gate_id` | enum string or null | Requested gate for `check`; always `null` for `next`. |
 | `status` | enum string | `ready`, `unmet`, `waiting_human`, or `terminal_blocked`. |
 | `reason_codes` | array of strings | Stable machine-readable causes; empty only when no reason applies. |
 | `checks` | array | Objects with `id`, `status`, `evidence`, and `missing`; each `evidence` entry identifies source and observed value or SHA. |
@@ -110,7 +114,7 @@ Both commands emit one UTF-8 JSON object when `--json` is set. Schema version 1 
 | `artifacts` | object | Explicit paths and digests for plan, state, initial scope table, PR body, and review reply when present. |
 | `observed_head_sha` | string or null | HEAD read from the verified task worktree; null if it could not be established. |
 
-`checks[*].status` uses `ready`, `unmet`, `waiting_human`, or `unknown`. `evidence` may be empty; `missing` explains absent, stale, unreadable, or contradictory inputs. Never turn `unknown` into `ready`.
+`checks[*].status` uses `ready`, `unmet`, `waiting_human`, or `unknown`. `evidence` may be empty; `missing` explains absent, stale, unreadable, or contradictory inputs. Never turn `unknown` into `ready`: any required `unknown` check makes the aggregate result `unmet` with exit 2 and an unavailable reason code. Aggregate `waiting_human` applies only when the unresolved condition specifically requires a human decision and no contradictory invalid evidence exists.
 
 Example of ready evidence:
 
@@ -143,7 +147,7 @@ Example of ready evidence:
 | `3` | `waiting_human` | A required human approval or selection is pending. Keep the claim/worktree; this is not terminal. |
 | `4` | `terminal_blocked` | A canonical blocked Outcome for the current claim generation has been verified. This reports an existing terminal state and never declares one. |
 
-Malformed arguments, invalid JSON/TOML, and unexpected internal errors use the CLI's ordinary usage/error handling and must not masquerade as an evidence result. In JSON mode, a successfully produced result uses the exit code associated with `status`.
+Malformed arguments and unexpected internal errors use the CLI's ordinary error stream and do not emit a workflow-result JSON object; they are command errors, not evidence results. A valid workflow-result JSON object is emitted only for the status codes in the table above, so callers distinguish an argument error that happens to use the CLI's conventional exit code 2 by the absence of the JSON object. Invalid state/TOML is validly read workflow evidence and returns `unmet` (exit 2) with a reason code. In JSON mode, a successfully produced result uses the exit code associated with `status`.
 
 ## Persisted workflow context and plan marker
 
@@ -163,7 +167,9 @@ Store only non-derivable decisions in `<session-dir>/workflow-state.json`. This 
 | `plan_approval` | `{required: boolean, status: pending|approved|not_required, evidence: string|null}` | Record approval applicability and evidence; approval-required interactive work cannot be treated as approved by an empty field. |
 | `impact_initial` | `{relative_path: string, digest: string}` or null | Digest the immutable initial table; append implementation discoveries elsewhere. |
 
-The implementation must define canonical JSON encoding for digest calculation (UTF-8, deterministic key order, normalized line endings, and no absolute paths). Compute the digest from the exact initial table content, not the later appended reconciliation.
+The workflow executor (the human or agent carrying out the task, including an auto-dispatched agent) writes the initial context file and plan marker during preparation, before claim, and updates `claim_id` after the established claim command succeeds. `next` and `check` remain readers and never write these records. A dispatcher may supply initial execution metadata, but it does not own later plan approval or impact-table judgments.
+
+Compute the initial impact digest over the exact Markdown table text only, normalized to UTF-8 with LF line endings and one final newline, before any reconciliation is appended. This digest is not a JSON encoding. The state JSON itself uses UTF-8 and deterministic key ordering for reproducible serialization, and stores no absolute paths.
 
 Add one YAML block to the plan so tools can locate the state record without searching:
 
@@ -174,7 +180,7 @@ state: workflow-state.json
 ```
 ````
 
-The `state` path is relative to the plan file. The workflow marker is a locator and schema declaration, not evidence that approval or any gate passed. If the plan marker, state, Issue, or active claim disagree, return `unmet` with a conflict reason and show how to reconcile it; do not choose whichever value is more convenient. Reject absolute paths and paths that escape the session directory.
+Parse the fenced block as YAML with a safe loader, allow only the documented scalar keys, and require exactly one `orchestune-workflow` marker in a plan. Zero markers means the state locator is absent; multiple markers or unsupported keys are ambiguous and return `unmet`. The `state` path is relative to the plan file. The workflow marker is a locator and schema declaration, not evidence that approval or any gate passed. If the plan marker, state, Issue, or active claim disagree, return `unmet` with a conflict reason and show how to reconcile it; do not choose whichever value is more convenient. Reject absolute paths and paths that escape the session directory.
 
 ## Stage definitions file
 
@@ -216,7 +222,7 @@ The loader validates field types, unique stage IDs/orders, known gate/condition/
 
 | Situation | Required behavior |
 |---|---|
-| Approval/reviewer choice pending | `waiting_human` (exit 3); retain the active claim/worktree and resume after the selection is recorded. |
+| Approval/reviewer choice pending | `waiting_human` (exit 3); before claim, do not start the claim; after claim, retain the active claim/worktree. Resume after the selection is recorded. |
 | Interruption or context compaction | Re-read the explicit session state, active ledger/Issue, worktree, PR, and evidence. Derive the stage again; never trust a previously printed stage as current. |
 | Resume in another worktree | Require repository, Issue, claim ID, branch, and worktree ownership to match. Evidence from a different task worktree is stale. |
 | HEAD changed after CI | Invalidate the CI check and direct the user to run local CI for the new HEAD. |
@@ -228,7 +234,7 @@ The loader validates field types, unique stage IDs/orders, known gate/condition/
 
 ## Read-only architecture and integration
 
-The CLI reader should be a narrow L2 layer between CLI orchestration and existing validators/readers. It may read the active claim ledger, task worktree/Git status, Issue/PR/review snapshots through the selected backend, plan/state files, and CI evidence. It may call pure/read-only validation functions. It must not call claim or complete service orchestration, acquire `run_state_lock`, run CI, fetch Git, post GitHub comments, mutate labels, change a PR, or create/update workflow state.
+The CLI reader should be a narrow L2 layer between CLI orchestration and existing validators/readers. Follow the [module-layer and package-boundary rules](../architecture.md#4-module-layers--package-boundary). It may read the active claim ledger, task worktree/Git status, Issue/PR/review snapshots through the selected backend, plan/state files, and CI evidence. It may call pure/read-only validation functions. It must not call claim or complete service orchestration, acquire `run_state_lock`, run CI, fetch Git, post GitHub comments, mutate labels, change a PR, or create/update workflow state.
 
 Prefer a snapshot passed into a validator over repeated network or filesystem reads. If snapshot sections are partial, expose that fact in `checks` and fail closed. A validation rule not currently exposed as a pure reader should be wrapped behind a narrow reader interface that reuses the same rule. The L2 workflow package must not import L3 claim/complete services.
 
@@ -250,7 +256,7 @@ Optional future work may validate PR description sections or reply markers serve
 
 - Add `orchestune workflow` as an additive CLI command. Existing claim, review, complete, and CI commands retain their current behavior.
 - Ship `orchestune/workflow/stages.toml` in wheels using the project's package-resource mechanism. Validate the installed-wheel path, not only source-tree execution.
-- Newer workflow guidance may use `orchestune workflow next/check` when available. With an older Orchestune installation, fall back to the current prose steps; absence of the new subcommand must not block established work.
+- Newer workflow guidance may use `orchestune workflow next/check` when available. Skills first probe with `orchestune workflow --help`; if the installed CLI reports an unknown command, use the current prose steps. Do not infer that a workflow evidence result is a missing-subcommand signal. Absence of the new subcommand must not block established work.
 - Treat unsupported state or TOML schema versions as a clear unmet/tool-version result. Do not silently reinterpret or rewrite user state.
 - Preserve unknown JSON fields when a supported forward-compatible reader can do so safely; reject conflicting identity and ownership fields.
 - Keep the initial-scope snapshot immutable. Schema evolution may add separate reconciliation metadata but must not alter the digest's source content.
