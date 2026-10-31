@@ -831,11 +831,13 @@ With `--output-file`, Exit 20/21 replace the file with this run's diagnostic: `a
 Recovery uses the same single waiting path:
 
 1. Read the exit code, the diagnostic JSON and its trigger/HEAD.
-2. Exit 20: resume once with `--no-post --round <n>` for the same reviewer; from Round 2 also pass the round's `--body-file`. A resume never posts or opens a round.
+2. Exit 20: resume once with `--no-post --round <n>` for the same reviewer; from Round 2 passing the round's `--body-file` is optional (the resume validates the already-posted table; if passed, it must match). A resume never posts or opens a round.
 3. Exit 21: check the tracker's last progress and, when visible, the related workflow run/job. Codex's internal job is not visible: record it as unknown rather than assuming a GitHub Actions run exists. Then resume as in step 2.
 4. Exit 30: re-fetch with `--no-post`; the tracker table is not a review result.
 5. Change reviewers only when a human explicitly chooses it, with `--switch-reviewer` (verified replacement or the next round). Switching is not an automatic recovery default. If Claude does not start, check the workflow actor, `allowed_bots`, trigger marker and job conclusion instead of reposting.
 6. If bounded resumes still fail, stop with `orchestune complete --issue <N> --result blocked --reason review-timeout` (or `review-stalled`). A timeout is never a pass or a skip.
+
+Keep the wait to a single `wait_for_review.py` process. Never monitor a background wait with a polling loop or use `pgrep -f` / `pkill -f` (which self-matches the caller's command line and causes an infinite loop or terminates the shell). When a tool call yields, use the same session/task ID for continuation notifications rather than launching a new process. If tool execution limits can be configured, add margin beyond `--timeout` for polling (30 s per `gh` call) and the final HEAD lookup (30 s) to prevent abrupt termination. Resume with `--no-post --round <n>` only after confirming the original wait process has terminated; never rely on internal posting controls as authorization for concurrent wait processes.
 
 ## 8. Local CI Evidence Storage and Task Completion (`orchestune complete`)
 
