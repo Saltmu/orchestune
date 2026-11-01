@@ -29,6 +29,12 @@ from tests.dispatch_test_support import replace_flat
 pytest_plugins = ["tests.test_local_claim_identity"]
 
 
+@pytest.fixture(autouse=True)
+def _run_from_the_primary_checkout(local_claim, monkeypatch):
+    """The Dispatcher resolves its workspace from the checkout it runs in."""
+    monkeypatch.chdir(local_claim[0].repository_root)
+
+
 class _StateForge:
     def __init__(self, state: str | Exception) -> None:
         self.state = state
@@ -319,3 +325,32 @@ def test_gc_phase_releases_merged_pr_claim_before_an_overlapping_launch(local_cl
     persisted = load_run_state_readonly(workspace.run_state_path)
     assert claim_was_released(persisted, 7, active.claim.claim_id)
     assert worktree.exists()
+
+
+def test_dispatcher_release_with_a_worktree_root_outside_the_repository(
+    local_claim, tmp_path
+):
+    """Codex review: identity comes from the checkout, not worktree_root.parent."""
+    workspace, active, _ = local_claim
+    external_root = tmp_path / "elsewhere" / "worktrees"
+    external_root.mkdir(parents=True)
+    config = cast(
+        DispatcherConfig,
+        SimpleNamespace(
+            worktree_root=external_root,
+            run_state_path=workspace.run_state_path,
+            resolved_forge=_StateForge("MERGED"),
+            apply=True,
+            window_seconds=3600.0,
+        ),
+    )
+    state = load_run_state_readonly(workspace.run_state_path)
+
+    with run_state_lock(workspace.lock_path):
+        events = release_closed_target_claims(state, config)
+
+    assert [event.action for event in events] == [
+        "gc_released_interactive_closed_target"
+    ]
+    persisted = load_run_state_readonly(workspace.run_state_path)
+    assert claim_was_released(persisted, 7, active.claim.claim_id)

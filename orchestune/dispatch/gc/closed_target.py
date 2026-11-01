@@ -168,8 +168,13 @@ def decision_event(
 
 
 def _dispatcher_workspace(config: DispatcherConfig) -> ClaimWorkspace:
+    """Resolve from the Dispatcher's own checkout, like its shared-path setup.
+
+    ``worktree_root`` may live outside the repository, so its parent is not a
+    reliable checkout for the repository identity.
+    """
     return resolve_claim_workspace(
-        config.worktree_root.parent,
+        None,
         explicit_state_path=config.run_state_path,
         explicit_worktree_root=config.worktree_root,
     )
