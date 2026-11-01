@@ -382,11 +382,12 @@ class TestLabelConfirmedCompletionContract:
         persisted = load_run_state(path)
         assert next_reserved.generation_id == "claim-1108-reopened"
         assert (
-            persisted.completion_reservations[original.reservation_key]["generation_id"]
+            persisted.completion_reservations[original.reservation_key].generation_id
             == "claim-1108-reopened"
         )
-        assert persisted.completion_replay_receipts[original.receipt_key]["stage"] == (
-            "handed_off"
+        assert (
+            persisted.completion_replay_receipts[original.receipt_key].record.stage
+            is CompleteStage.HANDED_OFF
         )
         assert len(persisted.completion_journal) == 2
 
@@ -416,7 +417,9 @@ class TestLabelConfirmedCompletionContract:
 
         with run_state_lock(path.with_suffix(".lock")):
             state = load_run_state(path)
-            del state.completion_journal[initial.journal_key]["owner_token_digest"]
+            malformed = initial.to_dict()
+            del malformed["owner_token_digest"]
+            state.completion_journal[initial.journal_key] = malformed
             save_run_state_unlocked(state, path)
 
         with pytest.raises(CompletionJournalError) as excinfo:
@@ -521,8 +524,8 @@ class TestLabelConfirmedCompletionContract:
 
         assert excinfo.value.reason == CompleteFailureReason.STATE_SAVE_FAILED
         persisted = load_run_state(path)
-        assert persisted.completion_journal[labeled.journal_key]["stage"] == (
-            "label_confirmed"
+        assert persisted.completion_journal[labeled.journal_key].stage is (
+            CompleteStage.LABEL_CONFIRMED
         )
         assert persisted.completion_replay_receipts == {}
 
@@ -545,10 +548,11 @@ class TestLabelConfirmedCompletionContract:
             record=initial, owner_token=OWNER_TOKEN, state_path=path
         )
         state = load_run_state(path)
-        assert state.completion_journal[initial.journal_key] == initial.to_dict()
-        assert state.completion_reservations[initial.reservation_key][
-            "completion_id"
-        ] == (initial.completion_id)
+        assert state.completion_journal[initial.journal_key] == initial
+        assert (
+            state.completion_reservations[initial.reservation_key].completion_id
+            == initial.completion_id
+        )
         assert OWNER_TOKEN not in path.read_text(encoding="utf-8")
 
         posted = record_posting_evidence(
@@ -594,9 +598,10 @@ class TestLabelConfirmedCompletionContract:
         assert handed_off.stage == CompleteStage.HANDED_OFF
         persisted = load_run_state(path)
         receipt = persisted.completion_replay_receipts[initial.receipt_key]
-        assert receipt["completion_id"] == initial.completion_id
+        assert receipt.record.completion_id == initial.completion_id
         assert (
-            persisted.completion_journal[initial.journal_key]["stage"] == "handed_off"
+            persisted.completion_journal[initial.journal_key].stage
+            is CompleteStage.HANDED_OFF
         )
 
     def test_new_writer_rejects_owner_or_fingerprint_mismatch(self, tmp_path):
@@ -633,9 +638,10 @@ class TestLabelConfirmedCompletionContract:
             fingerprint_error.value.reason
             == CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH
         )
-        assert load_run_state(path).completion_journal[initial.journal_key][
-            "stage"
-        ] == ("reserved")
+        assert (
+            load_run_state(path).completion_journal[initial.journal_key].stage
+            is CompleteStage.RESERVED
+        )
 
         changed_owner = replace(initial, owner_token_digest="c" * 64)
         with pytest.raises(CompletionJournalError) as digest_error:

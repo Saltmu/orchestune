@@ -10,6 +10,7 @@ from typing import Any
 from orchestune.claim.adopt_pr import orphan_marker
 from orchestune.claim.adopt_pr import orphan_receipt as orphan_receipt
 from orchestune.dispatch.gc.completion_contracts import CompletedWorktreeDecision
+from orchestune.ledger.recovery_receipts import OrphanedPrReceipt
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import PrRecord
 
@@ -87,7 +88,8 @@ def saved_orphan_decision(
     candidates = [
         pr
         for pr in (prs or ())
-        if pr.number == receipt.get("pr_number")
+        if isinstance(receipt, OrphanedPrReceipt)
+        and pr.number == receipt.pr_number
         and pr.state.upper() == "OPEN"
         and pr.is_cross_repository is False
     ]

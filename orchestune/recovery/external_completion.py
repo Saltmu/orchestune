@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from orchestune.ledger.completion_records import (
+    CompletionJournalRecord,
+    InvalidLedgerRecord,
+)
 from orchestune.ledger.completion_reservations import (
     completion_record,
     completion_reservation_status,
@@ -17,27 +21,36 @@ def completion_retention(active: ActiveWorktree, state: RunState) -> tuple[bool,
     reserved = completion_record(state, issue)
     journals = []
     for key, record in state.completion_journal.items():
-        if not isinstance(record, dict):
-            raise ValueError("completion_state_invalid")
-        if record.get("issue_number") != issue:
+        if isinstance(record, InvalidLedgerRecord):
+            if record.raw_json.get("issue_number") == issue:
+                raise ValueError("completion_state_invalid")
             continue
-        required = ("repository_id", "issue_number", "generation_id", "completion_id")
-        if any(not record.get(name) for name in required):
+        if not isinstance(record, CompletionJournalRecord):
             raise ValueError("completion_state_invalid")
-        if key != "::".join(str(record[name]) for name in required):
+        if record.issue_number != issue:
+            continue
+        required = (
+            record.repository_id,
+            record.issue_number,
+            record.generation_id,
+            record.completion_id,
+        )
+        if any(not value for value in required):
             raise ValueError("completion_state_invalid")
-        if record["generation_id"] == active.claim.claim_id:
+        if key != "::".join(str(value) for value in required):
+            raise ValueError("completion_state_invalid")
+        if record.generation_id == active.claim.claim_id:
             journals.append(record)
     if len(journals) > 1:
         raise ValueError("completion_state_invalid")
     for record in journals + ([reserved] if reserved else []):
         if (
-            record.get("repository_id") != active.claim.repository_id
-            or record.get("generation_id") != active.claim.claim_id
-            or record.get("owner_token_digest") != active.claim.owner_token_digest
+            record.repository_id != active.claim.repository_id
+            or record.generation_id != active.claim.claim_id
+            or record.owner_token_digest != active.claim.owner_token_digest
             or (
                 bool(active.completion.completion_id)
-                and record.get("completion_id") != active.completion.completion_id
+                and record.completion_id != active.completion.completion_id
             )
         ):
             raise ValueError("completion_state_invalid")

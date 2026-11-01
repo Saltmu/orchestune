@@ -185,9 +185,9 @@ def test_escalation_response_loss_retries_without_duplicate_reason(
     assert forge.labels == {"status:blocked-human-review"}
     assert len(forge.comments) == 1
     state = load_run_state_readonly(request.state_path)
-    assert next(iter(state.completion_journal.values()))[
-        "prepublication_policy_evidence"
-    ]["escalation"]["confirmed"]
+    assert next(iter(state.completion_journal.values())).prepublication_policy_evidence[
+        "escalation"
+    ]["confirmed"]
 
 
 def test_completion_and_dispatch_share_the_usage_provider_method():

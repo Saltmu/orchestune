@@ -153,7 +153,11 @@ def test_missing_receipt_and_pending_label_never_mutate(tmp_path):
     assert not process_completion_policies(state, config)
     forge.add_label.assert_not_called()
     record = next(iter(state.completion_journal.values()))
-    record["stage"] = "label_confirmed"
+    from orchestune.complete.contracts import CompleteStage
+
+    state.completion_journal[record.journal_key] = replace(
+        record, stage=CompleteStage.LABEL_CONFIRMED
+    )
     with run_state_lock(config.run_state_path.with_suffix(".lock")):
         save_run_state(state, config.run_state_path)
     assert not process_completion_policies(state, config)
@@ -402,7 +406,7 @@ def test_receipt_reclaims_token_only_after_active_release(tmp_path):
     )
     update_record(state, record)
     state.completion_reservations[record.reservation_key] = (
-        CompletionReservation.from_journal(record).to_dict()
+        CompletionReservation.from_journal(record)
     )
     directory = config.run_state_path.parent / ".orchestune" / "claim-tokens"
     _write_owner_token(directory, record.generation_id, "test-owned-token")

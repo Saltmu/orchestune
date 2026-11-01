@@ -13,11 +13,16 @@ from orchestune.claim.workspace import ClaimWorkspace
 from orchestune.forge import Forge
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_codec import (
-    decode_active_worktree,
     encode_active_worktree,
 )
 from orchestune.ledger.active_records import ActiveWorktree
 from orchestune.ledger.external_stop_receipts import matching_confirmation
+from orchestune.ledger.recovery_receipts import (
+    ORPHANED_PR_OPERATION,
+    OrphanedPrReceipt,
+    RecoveryActiveSnapshot,
+    invalid_recovery_receipt_identity,
+)
 from orchestune.ledger.run_state import RunState
 from orchestune.models import PrRecord
 from orchestune.pr_link_notice import pr_matches_issue
@@ -129,32 +134,61 @@ def validate_orphan_evidence(
 ) -> ActiveWorktree:
     """Validate a unique retained execution identity and freshly prove it stopped."""
     _check_active_claims(state, issue_number, allowed_claim_id)
-    records = [
-        (key, record)
-        for key, record in state.recovery_receipts.items()
-        if record.get("operation") == "orphaned-pr"
-        and record.get("repository_id") == repository
-        and record.get("issue_number") == issue_number
-    ]
+    records = _orphan_records(state, repository, issue_number)
     if len(records) != 1:
         raise ValueError("Orphan execution evidence is missing or ambiguous")
     key, record = records[0]
+    return _validate_orphan_receipt(
+        key, record, repository, issue_number, pr, is_stopped
+    )
+
+
+def _orphan_records(
+    state: RunState, repository: str, issue_number: int
+) -> list[tuple[str, object]]:
+    return [
+        (key, record)
+        for key, record in state.recovery_receipts.items()
+        if (
+            isinstance(record, OrphanedPrReceipt)
+            and record.repository_id == repository
+            and record.issue_number == issue_number
+        )
+        or invalid_recovery_receipt_identity(
+            record,
+            operation=ORPHANED_PR_OPERATION,
+            repository_id=repository,
+            issue_number=issue_number,
+        )
+    ]
+
+
+def _validate_orphan_receipt(
+    key: str,
+    record: object,
+    repository: str,
+    issue_number: int,
+    pr: PrRecord,
+    is_stopped: Callable[[ActiveWorktree], bool],
+) -> ActiveWorktree:
     try:
-        old = decode_active_worktree(record["active"])
+        if not isinstance(record, OrphanedPrReceipt):
+            raise ValueError("Orphan execution evidence is invalid")
+        old = record.active.value
         old.claim.validate()
         old.launch.validate()
         claim_id = old.claim.claim_id
         expected_key = f"orphaned-pr::{repository}::{issue_number}::{claim_id}"
         if (
-            record.get("schema_version") != 1
+            record.schema_version != 1
             or not claim_id
             or key != expected_key
             or old.claim.repository_id != repository
             or old.core.issue_number != issue_number
             or old.core.branch != pr.head_ref
-            or record.get("claim_id") != claim_id
-            or record.get("pr_number") != pr.number
-            or record.get("head_sha") != pr.head_sha
+            or record.claim_id != claim_id
+            or record.pr_number != pr.number
+            or record.head_sha != pr.head_sha
         ):
             raise ValueError("Orphan execution evidence does not match the PR")
         if not is_stopped(old):
@@ -281,18 +315,18 @@ def revalidate_adoption(
 
 def consume_adoption_receipt(
     state: RunState, reservation: ActiveWorktree
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, OrphanedPrReceipt]:
     """Consume only the evidence revalidated for this finalized adoption."""
     if reservation.claim.adopted_pr_number is None:
         return {}
     matching = {
         key: record
         for key, record in state.recovery_receipts.items()
-        if record.get("operation") == "orphaned-pr"
-        and record.get("repository_id") == reservation.claim.repository_id
-        and record.get("issue_number") == reservation.core.issue_number
-        and record.get("pr_number") == reservation.claim.adopted_pr_number
-        and record.get("head_sha") == reservation.claim.adopted_pr_head_sha
+        if isinstance(record, OrphanedPrReceipt)
+        and record.repository_id == reservation.claim.repository_id
+        and record.issue_number == reservation.core.issue_number
+        and record.pr_number == reservation.claim.adopted_pr_number
+        and record.head_sha == reservation.claim.adopted_pr_head_sha
     }
     for key in matching:
         del state.recovery_receipts[key]
@@ -352,7 +386,9 @@ def verify_adopted_head(
         raise ValueError("Worktree head does not match the adopted PR")
 
 
-def orphan_receipt(active: ActiveWorktree, pr: PrRecord) -> tuple[str, dict[str, Any]]:
+def orphan_receipt(
+    active: ActiveWorktree, pr: PrRecord
+) -> tuple[str, OrphanedPrReceipt]:
     """Capture the retired execution; consumers must independently check it stopped."""
     repository = active.claim.repository_id
     claim = active.claim.claim_id
@@ -361,13 +397,13 @@ def orphan_receipt(active: ActiveWorktree, pr: PrRecord) -> tuple[str, dict[str,
     if pr.head_ref != active.core.branch or not pr.head_sha or pr.number <= 0:
         raise ValueError("orphaned PR does not match the execution")
     key = f"orphaned-pr::{repository}::{active.core.issue_number}::{claim}"
-    return key, {
-        "schema_version": 1,
-        "operation": "orphaned-pr",
-        "repository_id": repository,
-        "issue_number": active.core.issue_number,
-        "claim_id": claim,
-        "pr_number": pr.number,
-        "head_sha": pr.head_sha,
-        "active": encode_active_worktree(active),
-    }
+    return key, OrphanedPrReceipt(
+        schema_version=1,
+        operation=ORPHANED_PR_OPERATION,
+        repository_id=repository,
+        issue_number=active.core.issue_number,
+        claim_id=claim,
+        pr_number=pr.number,
+        head_sha=pr.head_sha,
+        active=RecoveryActiveSnapshot.from_json(encode_active_worktree(active)),
+    )
