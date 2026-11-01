@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from math import isfinite
 from typing import Any, Literal, cast
 
 from orchestune.ledger.active_codec import (
@@ -106,8 +108,7 @@ class RecoveryExecutionIdentity:
         for name in ("claimed_at", "started_at"):
             value = raw[name]
             if value is not None and (
-                type(value) not in (int, float)
-                or not __import__("math").isfinite(value)
+                type(value) not in (int, float) or not isfinite(value)
             ):
                 raise ValueError(f"execution identity {name} is invalid")
             times[name] = float(value) if value is not None else None
@@ -155,17 +156,15 @@ class RecoveryActiveSnapshot:
     def to_json(self) -> dict[str, Any]:
         if self.value == self._original_value:
             return deepcopy(self._source_json)
-        current = legacy_active_snapshot(self.value)
-        original = self._source_json
-        result = deepcopy(original)
-        for key, value in current.items():
-            if key in result or original.get(key, _MISSING) != value:
-                result[key] = value
-        return result
+        return _preserved_json(
+            self._source_json,
+            self._source_json,
+            legacy_active_snapshot(self.value),
+        )
 
 
 @dataclass(frozen=True, slots=True)
-class RecoveryReceiptBase:
+class RecoveryReceiptBase(ABC):
     schema_version: int
     repository_id: str
     issue_number: int
@@ -186,6 +185,10 @@ class RecoveryReceiptBase:
             "claim_id": self.claim_id,
             "operation": self.operation,
         }
+
+    @abstractmethod
+    def to_dict(self) -> dict[str, Any]:
+        """Encode the typed receipt at the run_state.json boundary."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,9 +400,16 @@ type RecoveryReceiptValue = RecoveryReceipt | InvalidLedgerRecord
 
 def _required(raw: dict[str, Any], key: str, expected: type[Any]) -> Any:
     value = raw[key]
-    if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
+    valid = type(value) is expected if expected is bool else isinstance(value, expected)
+    if not valid or (expected is int and isinstance(value, bool)):
         raise ValueError(f"{key} must be {expected.__name__}")
     return value
+
+
+def _optional(raw: dict[str, Any], key: str, expected: type[Any]) -> Any | None:
+    if key not in raw or raw[key] is None:
+        return None
+    return _required(raw, key, expected)
 
 
 def _positive_issue(raw: dict[str, Any]) -> int:
@@ -409,7 +419,7 @@ def _positive_issue(raw: dict[str, Any]) -> int:
     return cast(int, value)
 
 
-def _recorded_at(raw: dict[str, Any]) -> str:
+def _validated_recorded_at(raw: dict[str, Any]) -> str:
     value = _required(raw, "recorded_at", str)
     try:
         parsed = datetime.fromisoformat(value)
@@ -418,6 +428,14 @@ def _recorded_at(raw: dict[str, Any]) -> str:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("recorded_at must include a timezone")
     return cast(str, value)
+
+
+def _validated_utc_recorded_at(raw: dict[str, Any]) -> str:
+    value = _validated_recorded_at(raw)
+    parsed = datetime.fromisoformat(value)
+    if parsed.utcoffset() != UTC.utcoffset(parsed):
+        raise ValueError("external-stop recorded_at must be UTC")
+    return value
 
 
 def _decode_active(raw: dict[str, Any], key: str) -> RecoveryActiveSnapshot:
@@ -450,17 +468,43 @@ def _decode_external(raw: dict[str, Any]) -> ExternalStopConfirmation:
         or identity.claim_id != base["claim_id"]
     ):
         raise ValueError("external receipt identity differs")
+    active = _decode_active(raw, "active")
+    active_fields = encode_active_worktree(active.value)
+    active_identity = RecoveryExecutionIdentity.from_json(
+        {name: active_fields[name] for name in identity.to_json()}
+    )
+    if active_identity != identity:
+        raise ValueError("external active snapshot identity differs")
+    source = _required(raw, "source", str)
+    stopped = _required(raw, "confirmed_external_stopped", bool)
+    reason = _required(raw, "reason", str)
+    external_id = _required(raw, "external_id", str)
+    worktree_action = _required(raw, "worktree_action", str)
+    if (
+        source != "operator"
+        or stopped is not True
+        or not reason.strip()
+        or not external_id.strip()
+        or worktree_action != "retain"
+    ):
+        raise ValueError("external stop confirmation evidence is invalid")
+    launch_attempt_id = _optional(raw, "launch_attempt_id", str)
+    if (
+        identity.launch_attempt_id != launch_attempt_id
+        or identity.external_id != external_id
+    ):
+        raise ValueError("external receipt execution identity differs")
     return ExternalStopConfirmation(
         **base,
-        source=_required(raw, "source", str),
-        confirmed_external_stopped=raw["confirmed_external_stopped"],
-        reason=_required(raw, "reason", str),
-        recorded_at=_recorded_at(raw),
-        launch_attempt_id=raw.get("launch_attempt_id"),
-        external_id=_required(raw, "external_id", str),
+        source=source,
+        confirmed_external_stopped=stopped,
+        reason=reason,
+        recorded_at=_validated_utc_recorded_at(raw),
+        launch_attempt_id=launch_attempt_id,
+        external_id=external_id,
         execution_identity=identity,
-        active=_decode_active(raw, "active"),
-        worktree_action=_required(raw, "worktree_action", str),
+        active=active,
+        worktree_action=worktree_action,
         _codec_source_json=deepcopy(raw),
         _codec_original_fields=deepcopy(raw),
     )
@@ -476,15 +520,15 @@ def _decode_release(raw: dict[str, Any]) -> ReleaseReceipt:
     )
     return ReleaseReceipt(
         **base,
-        reason=raw.get("reason"),
-        recorded_at=_recorded_at(raw),
+        reason=_optional(raw, "reason", str),
+        recorded_at=_validated_recorded_at(raw),
         worktree_action=_required(raw, "worktree_action", str),
         active=_decode_active(raw, "active"),
-        confirmation_receipt_key=raw.get("confirmation_receipt_key"),
-        source=raw.get("source"),
-        confirmed_external_stopped=raw.get("confirmed_external_stopped"),
-        launch_attempt_id=raw.get("launch_attempt_id"),
-        external_id=raw.get("external_id"),
+        confirmation_receipt_key=_optional(raw, "confirmation_receipt_key", str),
+        source=_optional(raw, "source", str),
+        confirmed_external_stopped=_optional(raw, "confirmed_external_stopped", bool),
+        launch_attempt_id=_optional(raw, "launch_attempt_id", str),
+        external_id=_optional(raw, "external_id", str),
         execution_identity=identity,
         _codec_source_json=deepcopy(raw),
         _codec_original_fields=deepcopy(raw),
@@ -495,8 +539,8 @@ def _decode_restore_marker(raw: dict[str, Any]) -> RestoreMarkerReceipt:
     base = _base(raw, RESTORE_MARKER_OPERATION)
     return RestoreMarkerReceipt(
         **base,
-        reason=raw.get("reason"),
-        recorded_at=_recorded_at(raw),
+        reason=_optional(raw, "reason", str),
+        recorded_at=_validated_recorded_at(raw),
         worktree_action=_required(raw, "worktree_action", str),
         active=_decode_active(raw, "active"),
         _codec_source_json=deepcopy(raw),
@@ -517,9 +561,12 @@ def _decode_reclaim(raw: Any) -> ReclaimReceipt | None:
         raise ValueError("superseded_claim_ids must be an array of strings")
     recorded_at = raw.get("recorded_at")
     if recorded_at is not None:
-        recorded_at = _recorded_at(raw)
+        recorded_at = _validated_recorded_at(raw)
+    new_claim_id = _required(raw, "new_claim_id", str)
+    if not new_claim_id.strip():
+        raise ValueError("reclaim new_claim_id must be non-empty")
     return ReclaimReceipt(
-        new_claim_id=_required(raw, "new_claim_id", str),
+        new_claim_id=new_claim_id,
         phase=phase,
         recorded_at=recorded_at,
         superseded_claim_ids=tuple(ids),
@@ -548,8 +595,8 @@ def _decode_gc(raw: dict[str, Any]) -> GcReleaseReceipt:
         worktree_path=_required(raw, "worktree_path", str),
         base_sha=base_sha,
         worktree_action=_required(raw, "worktree_action", str),
-        stop_confirmed=raw["stop_confirmed"],
-        recorded_at=_recorded_at(raw),
+        stop_confirmed=_required(raw, "stop_confirmed", bool),
+        recorded_at=_validated_recorded_at(raw),
         active=_decode_active(raw, "active"),
         reclaim=_decode_reclaim(raw.get("reclaim")),
         _codec_source_json=deepcopy(raw),
@@ -562,12 +609,16 @@ def _decode_restart(raw: dict[str, Any]) -> RestartBlockedReceipt:
     phase = _required(raw, "phase", str)
     if phase not in RESTART_PHASES:
         raise ValueError("unknown restart-blocked phase")
+    reason = _required(raw, "reason", str)
+    new_claim_id = _required(raw, "new_claim_id", str)
+    if not reason.strip() or not new_claim_id.strip():
+        raise ValueError("restart-blocked receipt text is empty")
     return RestartBlockedReceipt(
         **base,
         phase=phase,
-        reason=_required(raw, "reason", str),
-        new_claim_id=_required(raw, "new_claim_id", str),
-        recorded_at=_recorded_at(raw),
+        reason=reason,
+        new_claim_id=new_claim_id,
+        recorded_at=_validated_recorded_at(raw),
         worktree_action=_required(raw, "worktree_action", str),
         active=_decode_active(raw, "active"),
         replacement=_decode_active(raw, "replacement"),
@@ -619,7 +670,7 @@ def encode_recovery_receipt(value: RecoveryReceiptValue) -> dict[str, Any]:
     if isinstance(value, InvalidLedgerRecord):
         return deepcopy(value.raw_json)
     if isinstance(value, RecoveryReceiptBase):
-        return value.to_dict()  # type: ignore[attr-defined]
+        return value.to_dict()
     raise TypeError(f"unsupported recovery receipt value: {type(value).__name__}")
 
 
@@ -662,9 +713,8 @@ def build_recovery_receipt(
     """Build the typed operator/GC release value without leaving ledger types."""
     if operation not in {RELEASE_OPERATION, RESTORE_MARKER_OPERATION}:
         raise ValueError(f"unsupported recovery receipt operation: {operation!r}")
-    key = recovery_receipt_key(
-        repository_id, issue_number, active.claim.claim_id, operation
-    )
+    claim_id = _required_active_claim_id(active)
+    key = recovery_receipt_key(repository_id, issue_number, claim_id, operation)
     receipt_type = (
         ReleaseReceipt if operation == RELEASE_OPERATION else RestoreMarkerReceipt
     )
@@ -672,7 +722,7 @@ def build_recovery_receipt(
         schema_version=1,
         repository_id=repository_id,
         issue_number=issue_number,
-        claim_id=active.claim.claim_id or "",
+        claim_id=claim_id,
         operation=operation,
         reason=reason,
         recorded_at=datetime.now(UTC).isoformat(),
@@ -680,6 +730,13 @@ def build_recovery_receipt(
         active=RecoveryActiveSnapshot.from_json(legacy_active_snapshot(active)),
     )
     return key, receipt
+
+
+def _required_active_claim_id(active: ActiveWorktree) -> str:
+    claim_id = active.claim.claim_id
+    if not isinstance(claim_id, str) or not claim_id.strip():
+        raise ValueError("recovery receipt requires an active claim_id")
+    return claim_id
 
 
 def record_recovery_in_raw(

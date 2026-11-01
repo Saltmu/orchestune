@@ -42,7 +42,20 @@ def _serialized_current_active(**overrides):
 
 
 def test_recovery_receipts_decode_to_typed_values_and_preserve_json(tmp_path):
-    raw = {
+    raw = _external_confirmation_json()
+    key = "external-stop-confirmation::fixture"
+    path = tmp_path / "run_state.json"
+    path.write_text(json.dumps({"recovery_receipts": {key: raw}}), encoding="utf-8")
+
+    state = load_run_state(path)
+    assert isinstance(state.recovery_receipts[key], ExternalStopConfirmation)
+    save_run_state(state, path)
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["recovery_receipts"][key] == raw
+
+
+def _external_confirmation_json():
+    return {
         "schema_version": 1,
         "operation": "external-stop-confirmation",
         "source": "operator",
@@ -71,15 +84,6 @@ def test_recovery_receipts_decode_to_typed_values_and_preserve_json(tmp_path):
         "worktree_action": "retain",
         "extension": {"preserve": [1, None, 3]},
     }
-    key = "external-stop-confirmation::fixture"
-    path = tmp_path / "run_state.json"
-    path.write_text(json.dumps({"recovery_receipts": {key: raw}}), encoding="utf-8")
-
-    state = load_run_state(path)
-    assert isinstance(state.recovery_receipts[key], ExternalStopConfirmation)
-    save_run_state(state, path)
-    persisted = json.loads(path.read_text(encoding="utf-8"))
-    assert persisted["recovery_receipts"][key] == raw
 
 
 def test_unknown_recovery_operation_is_invalid_and_round_trips(tmp_path):
@@ -154,3 +158,97 @@ def test_invalid_release_identity_still_prevents_generation_resurrection():
 def test_recovery_codec_rejects_structurally_invalid_map_entries():
     with pytest.raises(TypeError, match="entries must be objects"):
         decode_recovery_receipt("not-an-object")
+
+
+def test_non_utc_external_stop_timestamp_is_semantically_invalid():
+    raw = _external_confirmation_json()
+    raw["recorded_at"] = "2026-11-01T09:00:00+09:00"
+
+    value = decode_recovery_receipt(raw)
+
+    assert isinstance(value, InvalidLedgerRecord)
+    assert value.raw_json == raw
+
+
+@pytest.mark.parametrize(
+    "raw,field,value",
+    [
+        (
+            {
+                "schema_version": 1,
+                "operation": "gc-release",
+                "repository_id": "Saltmu/orchestune",
+                "issue_number": 10,
+                "claim_id": "claim-10",
+                "branch": "claude/issue-10-x",
+                "worktree_path": "worktrees/claude-issue-10-x",
+                "worktree_action": "retain",
+                "stop_confirmed": True,
+                "recorded_at": "2026-11-01T00:00:00+00:00",
+                "active": _serialized_current_active(),
+            },
+            "stop_confirmed",
+            "false",
+        ),
+        (
+            {
+                "schema_version": 1,
+                "operation": "release",
+                "repository_id": "Saltmu/orchestune",
+                "issue_number": 10,
+                "claim_id": "claim-10",
+                "reason": "released",
+                "recorded_at": "2026-11-01T00:00:00+00:00",
+                "worktree_action": "retain",
+                "active": _serialized_current_active(),
+                "confirmation_receipt_key": 42,
+            },
+            "confirmation_receipt_key",
+            42,
+        ),
+        (_external_confirmation_json(), "confirmed_external_stopped", 1),
+        (_external_confirmation_json(), "launch_attempt_id", 1),
+    ],
+)
+def test_wrong_typed_fields_are_invalid_and_preserve_raw_json(raw, field, value):
+    raw[field] = value
+
+    receipt = decode_recovery_receipt(raw)
+
+    assert isinstance(receipt, InvalidLedgerRecord)
+    assert receipt.raw_json == raw
+
+
+def test_missing_claim_id_rejects_typed_release_builder():
+    from dataclasses import replace
+
+    from orchestune.ledger.recovery_receipts import build_recovery_receipt
+    from tests.dispatch_test_support import flat_active_worktree
+
+    active = flat_active_worktree(
+        issue_number=10,
+        branch="claude/issue-10-x",
+        worktree_path="worktrees/claude-issue-10-x",
+        pid=100,
+        started_at=1.0,
+        declared_footprint=(),
+        owner_kind="dispatch",
+        claim_id="claim-10",
+        claim_stage="completed",
+        base_ref="origin/main",
+        base_sha="a" * 40,
+        reservation_kind="footprint",
+        repository_id="Saltmu/orchestune",
+        claimed_at=2.0,
+        owner_token_digest="sha256:abc123",
+    )
+    malformed = replace(active, claim=replace(active.claim, claim_id=None))
+
+    with pytest.raises(ValueError, match="claim_id"):
+        build_recovery_receipt(
+            repository_id="Saltmu/orchestune",
+            issue_number=10,
+            active=malformed,
+            operation="release",
+            reason="released",
+        )

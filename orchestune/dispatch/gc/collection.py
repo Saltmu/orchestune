@@ -171,12 +171,15 @@ def _gc_release_receipt(
     active: ActiveWorktree, snapshot: Any, workspace: ClaimWorkspace
 ) -> GcReleaseReceipt:
     """#1381: evidence that lets the next claim take over the retained worktree."""
+    claim_id = active.claim.claim_id
+    if not isinstance(claim_id, str) or not claim_id.strip():
+        raise ValueError("GC release receipt requires an active claim_id")
     return GcReleaseReceipt(
         schema_version=1,
         operation=GC_RELEASE_OPERATION,
         repository_id=workspace.repository_identity,
         issue_number=active.core.issue_number,
-        claim_id=active.claim.claim_id or "",
+        claim_id=claim_id,
         completion_id=active.completion.completion_id,
         completion_result=active.completion.completion_result,
         branch=active.core.branch,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -17,7 +18,9 @@ from orchestune.dispatch.gc.closed_target import (
     release_closed_target_claims,
     release_in_state,
 )
+from orchestune.dispatch.gc.collection import _gc_release_receipt
 from orchestune.infra.process_utils import run_state_lock
+from orchestune.ledger.active_codec import encode_active_worktree
 from orchestune.ledger.run_state import (
     claim_was_released,
     load_run_state_readonly,
@@ -186,6 +189,14 @@ def test_dispatcher_release_persists_and_retains_the_worktree(local_claim):
     assert claim_was_released(persisted, 7, active.claim.claim_id)
     assert (worktree / "file").read_text() == "uncommitted work"
     assert claim_marker_path(worktree).exists()
+
+
+def test_gc_release_receipt_rejects_missing_claim_identity(local_claim):
+    workspace, active, _ = local_claim
+    malformed = replace(active, claim=replace(active.claim, claim_id=None))
+
+    with pytest.raises(ValueError, match="claim_id"):
+        _gc_release_receipt(malformed, encode_active_worktree(malformed), workspace)
 
 
 def test_dispatcher_preview_only_reports(local_claim):

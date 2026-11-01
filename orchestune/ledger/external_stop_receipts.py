@@ -97,11 +97,26 @@ def valid_confirmation(key: str, record: object) -> bool:
         return False
     identity = record.execution_identity
     try:
+        recorded = datetime.fromisoformat(record.recorded_at)
+        validated_identity = RecoveryExecutionIdentity.from_json(identity.to_json())
         active_identity = execution_identity(record.active.value)
     except (KeyError, ValueError, TypeError, OverflowError):
         return False
     return (
-        key == identity_key(identity)
+        isinstance(record.schema_version, int)
+        and not isinstance(record.schema_version, bool)
+        and isinstance(record.issue_number, int)
+        and not isinstance(record.issue_number, bool)
+        and isinstance(record.repository_id, str)
+        and isinstance(record.claim_id, str)
+        and isinstance(record.reason, str)
+        and isinstance(record.external_id, str)
+        and (
+            record.launch_attempt_id is None
+            or isinstance(record.launch_attempt_id, str)
+        )
+        and key == identity_key(identity)
+        and validated_identity == identity
         and record.schema_version == 1
         and record.operation == EXTERNAL_STOP_OPERATION
         and record.source == "operator"
@@ -109,6 +124,8 @@ def valid_confirmation(key: str, record: object) -> bool:
         and bool(record.reason.strip())
         and bool(record.external_id.strip())
         and bool(record.recorded_at)
+        and recorded.tzinfo is not None
+        and recorded.utcoffset() == UTC.utcoffset(recorded)
         and record.worktree_action == "retain"
         and record.active.value.claim.claim_id == identity.claim_id
         and record.active.value.core.issue_number == identity.issue_number

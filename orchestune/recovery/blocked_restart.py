@@ -240,6 +240,16 @@ def _persist(path: Path, raw: dict[str, Any]) -> None:
 def _save_restart(
     request: RecoveryRequest, workspace: ClaimWorkspace, active: ActiveWorktree
 ) -> ActiveWorktree:
+    if (
+        not isinstance(request.claim_id, str)
+        or not request.claim_id.strip()
+        or not isinstance(active.claim.claim_id, str)
+        or not active.claim.claim_id.strip()
+        or request.claim_id != active.claim.claim_id
+    ):
+        raise ValueError("Restart receipt requires a matching claim_id")
+    if not isinstance(request.reason, str) or not request.reason.strip():
+        raise ValueError("Restart receipt requires a reason")
     target = registered_claim_path(active, workspace.run_state_path)
     marker = read_claim_marker(target)
     assert marker is not None
@@ -257,10 +267,10 @@ def _save_restart(
         schema_version=1,
         repository_id=workspace.repository_identity,
         issue_number=request.issue_number,
-        claim_id=request.claim_id or "",
+        claim_id=request.claim_id,
         operation=RESTART_BLOCKED_OPERATION,
         phase="prepared",
-        reason=request.reason or "",
+        reason=request.reason,
         new_claim_id=replacement.claim.claim_id or "",
         recorded_at=pending.recorded_at if pending else datetime.now(UTC).isoformat(),
         worktree_action="retain",

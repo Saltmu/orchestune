@@ -173,7 +173,7 @@ def record_reclaim_phase(
         return
     receipt = run_state.recovery_receipts[key]
     if not isinstance(receipt, GcReleaseReceipt):
-        return
+        raise ValueError("reclaim phase receipt is not a gc-release record")
     previous = receipt.reclaim
     superseded = list(previous.superseded_claim_ids if previous else ())
     if previous is not None and previous.new_claim_id != claim_id:
