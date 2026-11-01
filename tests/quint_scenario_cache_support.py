@@ -177,7 +177,8 @@ def _persist(scenario_dir: Path, run: ModelRun) -> None:
         "traces": [rel_trace],
     }
     scenario_dir.mkdir(parents=True, exist_ok=True)
-    tmp_meta = scenario_dir / f".model_run.json.tmp.{uuid.uuid4().hex}"
+    # Short name: long worktree paths otherwise exceed Windows MAX_PATH (#1531).
+    tmp_meta = scenario_dir / f".model_run.{uuid.uuid4().hex[:12]}.tmp"
     tmp_meta.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(tmp_meta, meta_file)
 
