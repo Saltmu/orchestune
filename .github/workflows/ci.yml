@@ -81,5 +81,9 @@ jobs:
         shell: pwsh
         env:
           ORCHESTUNE_TEST_WORKERS: "4"
-          PYTEST_ADDOPTS: "--durations=30"
+          # The Linux job enforces the coverage gate; skip tracing overhead here.
+          PYTEST_ADDOPTS: "--durations=30 --no-cov"
+          # runner.temp is on D:, which is faster than the default C: temp dir.
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: ./scripts/local-ci.ps1

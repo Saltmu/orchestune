@@ -187,7 +187,8 @@ def test_ci_workflow_scopes_four_workers_and_durations_to_ci_steps():
             if name == "Run CI checks (Windows)":
                 assert step["if"] == "runner.os == 'Windows'"
                 assert env["ORCHESTUNE_TEST_WORKERS"] == "4"
-                assert env["PYTEST_ADDOPTS"] == "--durations=30"
+                # Linux enforces the coverage gate; Windows skips the tracing overhead.
+                assert env["PYTEST_ADDOPTS"] == "--durations=30 --no-cov"
                 configured_steps.add(name)
             elif name == "Run CI checks (Linux)":
                 assert step["if"] == "runner.os == 'Linux'"
@@ -198,3 +199,21 @@ def test_ci_workflow_scopes_four_workers_and_durations_to_ci_steps():
                 assert "ORCHESTUNE_TEST_WORKERS" not in env
                 assert "PYTEST_ADDOPTS" not in env
     assert configured_steps == {"Run CI checks (Linux)", "Run CI checks (Windows)"}
+
+
+def test_ci_workflow_puts_windows_temp_on_the_runner_temp_drive():
+    """Only the Windows CI step moves TEMP/TMP off the slow system drive."""
+    workflow_path = os.path.join(
+        os.path.dirname(__file__), "..", ".github", "workflows", "ci.yml"
+    )
+    with open(workflow_path, encoding="utf-8") as f:
+        workflow = yaml.safe_load(f)
+
+    for step in workflow["jobs"]["ci"]["steps"]:
+        env = step.get("env", {})
+        if step.get("name") == "Run CI checks (Windows)":
+            assert env["TEMP"] == "${{ runner.temp }}"
+            assert env["TMP"] == "${{ runner.temp }}"
+        else:
+            assert "TEMP" not in env
+            assert "TMP" not in env
