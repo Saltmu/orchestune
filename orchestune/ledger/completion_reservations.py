@@ -43,7 +43,9 @@ def _invalid_reservation_applies(
     """Fail closed when identity is unattributable or the key and payload conflict.
 
     An unattributable record, or contradictory issue numbers, blocks every
-    Issue because the affected reservation cannot be determined safely.
+    Issue because the affected reservation cannot be determined safely. The
+    key parser expects a reservation key (<repository>::<issue>), not a journal
+    key whose issue number is not the final component.
     """
     raw_issue = raw_json.get("issue_number")
     raw_is_valid = (

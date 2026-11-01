@@ -38,7 +38,10 @@ from orchestune.ledger.active_records import (
     ActiveCompletionJournal,
     ActiveWorktree,
 )
-from orchestune.ledger.completion_records import InvalidLedgerRecord
+from orchestune.ledger.completion_records import (
+    InvalidLedgerRecord,
+    journal_key_for,
+)
 from orchestune.ledger.run_state import load_run_state, save_run_state
 
 
@@ -480,9 +483,11 @@ def _allow_terminal_generation_replacement(
             CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH,
             "Issue reservation belongs to a different repository or issue",
         )
-    old_key = (
-        f"{reservation.repository_id}::{reservation.issue_number}::"
-        f"{reservation.generation_id}::{reservation.completion_id}"
+    old_key = journal_key_for(
+        reservation.repository_id,
+        reservation.issue_number,
+        reservation.generation_id,
+        reservation.completion_id,
     )
     raw = state.completion_journal.get(old_key)
     if raw is None:

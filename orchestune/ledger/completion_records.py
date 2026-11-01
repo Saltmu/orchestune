@@ -35,6 +35,11 @@ def journal_key_for(
     return f"{repository_id}::{issue_number}::{generation_id}::{completion_id}"
 
 
+def reservation_key_for(repository_id: str, issue_number: int) -> str:
+    """Return the canonical key shared by completion reservation maps."""
+    return f"{repository_id}::{issue_number}"
+
+
 @dataclass(frozen=True, slots=True)
 class InvalidLedgerRecord:
     """A semantically invalid record retained verbatim by the JSON codec."""
@@ -221,7 +226,7 @@ class CompletionJournalRecord:
 
     @property
     def reservation_key(self) -> str:
-        return f"{self.repository_id}::{self.issue_number}"
+        return reservation_key_for(self.repository_id, self.issue_number)
 
     @property
     def receipt_key(self) -> str:
@@ -351,7 +356,7 @@ class CompletionReservation:
 
     @property
     def reservation_key(self) -> str:
-        return f"{self.repository_id}::{self.issue_number}"
+        return reservation_key_for(self.repository_id, self.issue_number)
 
     def to_dict(self) -> dict[str, Any]:
         current = {

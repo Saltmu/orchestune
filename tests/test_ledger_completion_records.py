@@ -106,13 +106,20 @@ def test_run_state_constructor_accepts_only_typed_completion_records():
     record = CompletionJournalRecord.from_dict(journal_json())
     state = RunState(completion_journal={record.journal_key: record})
     assert state.completion_journal[record.journal_key] is record
-    from orchestune.ledger.completion_records import journal_key_for
+    from orchestune.ledger.completion_records import (
+        journal_key_for,
+        reservation_key_for,
+    )
 
     assert record.journal_key == journal_key_for(
         record.repository_id,
         record.issue_number,
         record.generation_id,
         record.completion_id,
+    )
+    reservation = CompletionReservation.from_journal(record)
+    assert reservation.reservation_key == reservation_key_for(
+        record.repository_id, record.issue_number
     )
 
 
