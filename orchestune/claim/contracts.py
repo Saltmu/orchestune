@@ -35,6 +35,7 @@ class ClaimFailureReason(str, Enum):
     STATE_SAVE_FAILED = "state_save_failed"
     LABEL_UPDATE_FAILED = "label_update_failed"
     FORGE_UNAVAILABLE = "forge_unavailable"
+    NOT_AN_ISSUE = "not_an_issue"
 
 
 def failure_reason_to_exit_code(reason: ClaimFailureReason) -> ClaimExitCode:

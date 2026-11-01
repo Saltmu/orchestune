@@ -15,7 +15,6 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Literal, cast
 
 from orchestune.dispatch.config import DispatcherConfig
@@ -266,6 +265,9 @@ def _fix_prompt(
         "`orchestune-review-judgments` table to the integration PR, even with zero findings.\n"
         f"If code changes are required, push them to `{output_branch}`. "
         f"Do not push to `{temp_branch}`; Orchestune alone promotes the result.\n"
+        "Prohibited operations: do not run `orchestune claim` or `orchestune complete`, "
+        "do not create a pull request (gh pr create), do not push to temp branches, "
+        "and do not post review trigger comments.\n"
         "Finally post the SemanticFixResultV1 marker with operation_id, input_sha, "
         "output_sha (null when unchanged), judgment_comment_id, and status."
     )
@@ -280,27 +282,28 @@ def _provider_handle(handle: object) -> str | None:
 
 
 def _launch_fix(
-    target: Any, prompt: str, operation_id: str, branch: str, pr: int
-) -> object:
+    target: Any,
+    prompt: str,
+    operation_id: str,
+    branch: str,
+    pr: int,
+    *,
+    expected_head_sha: str | None = None,
+) -> Any:
     if callable(getattr(target, "fire_text_once", None)):
         return target.fire_text_once(prompt)
     if callable(getattr(target, "fire_text", None)):
         return target.fire_text(prompt)
     if callable(getattr(target, "launch_semantic_fix", None)):
-        return target.launch_semantic_fix(operation_id=operation_id, prompt=prompt)
-    task = SimpleNamespace(
-        issue_number=pr,
-        subtask_id=prompt,
-        footprint=(),
-        symbols=(),
-        risk=True,
-        priority="high",
-        progress_partial=False,
-        status_labels=(),
-        created_at="",
-        execution_profile=None,
-    )
-    return target.launch_attempt(operation_id, task, branch, Path.cwd())
+        try:
+            return target.launch_semantic_fix(
+                operation_id=operation_id,
+                prompt=prompt,
+                expected_head_sha=expected_head_sha,
+            )
+        except TypeError:
+            return target.launch_semantic_fix(operation_id=operation_id, prompt=prompt)
+    return None
 
 
 def dispatch_semantic_fix_agent(
@@ -323,13 +326,27 @@ def dispatch_semantic_fix_agent(
         round_number=round_number,
     )
     try:
-        handle = _launch_fix(target, prompt, operation_id, output_branch, pr_number)
+        handle = _launch_fix(
+            target,
+            prompt,
+            operation_id,
+            output_branch,
+            pr_number,
+            expected_head_sha=expected_head_sha,
+        )
     except Exception:  # an unknown launch response must never cause a second launch
         return SemanticOperationResult(
             operation_id,
             SemanticOperationStatus.INDETERMINATE,
             input_sha=expected_head_sha,
             error_code="launch_indeterminate",
+        )
+    if handle is None:
+        return SemanticOperationResult(
+            operation_id,
+            SemanticOperationStatus.FAILED,
+            input_sha=expected_head_sha,
+            error_code="fix_launch_unsupported",
         )
     return SemanticOperationResult(
         operation_id,

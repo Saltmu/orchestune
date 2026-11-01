@@ -158,7 +158,7 @@ CIだけが自動ゲートではありません。Orchestuneでは子PRレビュ
 
 - 開発スキル（第1層）: 子PR上でレビューループを実行し、LLMが指摘ごとに判断を記録します。
 - `orchestune complete --result done`: その判断表を、PRから取得し直したレビュー状態・レビュー対象SHAと突き合わせて検証し、結果をレビュー証跡としてdone Outcome Recordへ保存します。検証に失敗した場合はcompleteを拒否し、何も投稿しません。
-- Integrator & Runner（第2層）: 複数タスク統合PRに対して、Dispatcher post-cycleの `SemanticReviewCycleRunner` がセマンティックレビュー・修正ループを駆動し（既定 `required`）、Integratorが確定します。子タスク1件の場合は単一タスクFast-Pathで即時統合されます。
+- Integrator & Runner（第2層）: 複数タスク統合PRに対して、Dispatcher post-cycleの `SemanticReviewCycleRunner` がセマンティックレビュー・修正ループを駆動し（既定 `required`）、Integratorが確定します。子タスク1件の場合は単一タスクFast-Pathで即時統合されます。ローカルCLIターゲット（`claude-cli`, `codex-cli`, `agy-cli`）使用時、fixエージェントはメインチェックアウトではなく `dispatch.local_semantic_fix` が管理する入力SHAからの専用 detached worktree で実行され、operation 終端時に削除されます。
 
 既定の`required`では、マージ対象のコミットに対する合格証跡を持たない子が1件でもあれば統合をfail-closedで停止し、親Issueを`status:blocked-human-review`へ遷移させます。詳細は[integration.md](architecture/integration.md)、運用・再開・移行は[使い方 §4.5](usage.md#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)を参照してください。
 

@@ -20,6 +20,7 @@ class TaskExitCode(IntEnum):
     INVALID_RESUME = 16
     INVALID_BRANCH_NAME = 17
     INVALID_FOOTPRINT = 18
+    NOT_AN_ISSUE = 19
 
     CLAIM_CONFLICT = 20
     EXISTING_CLAIM_UNRECOVERED = 21
@@ -77,6 +78,7 @@ _CLAIM_FAILURE_EXIT_CODES: dict[str, TaskExitCode] = {
     "state_save_failed": TaskExitCode.STATE_SAVE_FAILED,
     "label_update_failed": TaskExitCode.LABEL_UPDATE_FAILED,
     "forge_unavailable": TaskExitCode.FORGE_UNAVAILABLE,
+    "not_an_issue": TaskExitCode.NOT_AN_ISSUE,
 }
 
 _COMPLETE_FAILURE_EXIT_CODES: dict[str, TaskExitCode] = {

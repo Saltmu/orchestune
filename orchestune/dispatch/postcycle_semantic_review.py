@@ -23,6 +23,8 @@ from typing import Any, Literal, cast
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.gc.git import evaluate_worktree_removal
+from orchestune.dispatch.local_semantic_fix import cleanup_semantic_fix_worktree
 from orchestune.dispatch.reviewer import resolve_reviewer_bot
 from orchestune.dispatch.semantic_review_ack import AckAction, AckAssessment
 from orchestune.dispatch.semantic_review_adapters import (
@@ -181,6 +183,7 @@ class SemanticReviewOperations:
     dispatch_fix: Callable[..., SemanticOperationResult] = dispatch_semantic_fix_agent
     poll: Callable[..., SemanticOperationResult] = poll_semantic_operation
     escalate: Callable[..., None] = escalate_semantic_review_to_human
+    cleanup_fix_worktree: Callable[..., bool] = cleanup_semantic_fix_worktree
 
 
 @dataclass(frozen=True)
@@ -550,9 +553,26 @@ class SemanticReviewCycleRunner:
         output = result.output_sha
         if result.status == SemanticOperationStatus.COMPLETED and output is None:
             output = result.input_sha  # a judgment-only result changed nothing
+        if result.status in (
+            SemanticOperationStatus.COMPLETED,
+            SemanticOperationStatus.FAILED,
+        ):
+            self._cleanup_fix_worktree(state.operation_id)
         return SemanticOperationObservation(
             state.operation_id, result.status, output, result.input_sha
         )
+
+    def _cleanup_fix_worktree(self, operation_id: str | None) -> None:
+        if not operation_id:
+            return
+        root = Path(self._config.worktree_root)
+        if not root.is_absolute():
+            root = Path(self._root) / root
+        wt_path = root / f"semantic-fix-{operation_id}"
+        if wt_path.exists():
+            self._ops.cleanup_fix_worktree(
+                wt_path, repo_root=self._root, evaluate_fn=evaluate_worktree_removal
+            )
 
     def _trusted(self, ctx: _Attempt, comment: dict[str, Any]) -> bool:
         presence, _ = ctx.trust.evaluate_candidate_markers([comment])
@@ -850,6 +870,7 @@ class SemanticReviewCycleRunner:
         if nxt.phase == _P.INVALIDATED:
             self._revalidate(ctx)
             self._claims.delete_fix_branches(self._root, nxt.attempt_id)
+            self._cleanup_fix_worktree(nxt.operation_id)
         if nxt != ctx.state:
             nxt = self._save(ctx, nxt)
         if decision.requires_fix_dispatch:

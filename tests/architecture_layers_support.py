@@ -173,6 +173,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.launch",
             "dispatch.launch_attempts",
             "dispatch.launch_state",
+            "dispatch.local_semantic_fix",
             "dispatch.locks",
             "dispatch.rebase",
             "dispatch.reconciliation",

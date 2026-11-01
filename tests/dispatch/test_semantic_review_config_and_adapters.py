@@ -383,6 +383,32 @@ class TestSemanticReviewOperations:
         assert "orchestune-review-judgments" in target.prompt
         assert "SemanticFixResultV1" in target.prompt
         assert "Do not push to `integration/temp-parent-1033`" in target.prompt
+        assert "orchestune claim" in target.prompt
+        assert "orchestune complete" in target.prompt
+
+    def test_fix_dispatch_fails_when_launch_unsupported_without_attempt(self) -> None:
+        class UnsupportedTarget:
+            def __init__(self) -> None:
+                self.launch_attempt_called = False
+
+            def launch_attempt(self, *args, **kwargs):
+                self.launch_attempt_called = True
+                return DispatchHandle(pid=999)
+
+        target = UnsupportedTarget()
+        result = dispatch_semantic_fix_agent(
+            target,
+            pr_number=7,
+            attempt_id=ATTEMPT,
+            operation_id=OPERATION,
+            temp_branch="integration/temp-parent-1033",
+            expected_head_sha=HEAD,
+            round_number=1,
+        )
+
+        assert result.status is SemanticOperationStatus.FAILED
+        assert result.error_code == "fix_launch_unsupported"
+        assert target.launch_attempt_called is False
 
     def test_poll_requires_trusted_result_marker(self, tmp_path: Path) -> None:
         marker = format_semantic_fix_result_marker(

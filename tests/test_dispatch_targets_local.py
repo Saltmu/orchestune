@@ -1085,3 +1085,28 @@ class TestFormatLocalCmdEffort:
         assert cmd[cmd.index("--model") + 1] == "o3-mini"
         assert "-c" in cmd
         assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
+
+
+class TestLocalProcessDispatchTargetSemanticFix:
+    def test_launch_semantic_fix_delegation(self, tmp_path):
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            target_name="claude-cli",
+        )
+        with patch(
+            "orchestune.dispatch.targets.launch_local_semantic_fix",
+            return_value=DispatchHandle(pid=456, target_name="claude-cli"),
+        ) as mock_fn:
+            handle = target.launch_semantic_fix(
+                operation_id="op-abc",
+                prompt="fix instructions",
+                expected_head_sha="deadbeef" * 5,
+            )
+            assert handle is not None
+            assert handle.pid == 456
+            mock_fn.assert_called_once_with(
+                target=target,
+                operation_id="op-abc",
+                prompt="fix instructions",
+                expected_head_sha="deadbeef" * 5,
+            )
