@@ -34,6 +34,8 @@ from orchestune.dispatch.cycle_events import (
     ForgeFailureCompletion,
     HandoffCollectionCompletion,
     HandoffPreviewCompletion,
+    InteractiveClosedTargetHeld,
+    InteractiveClosedTargetReleased,
     InteractiveExcludedCompletion,
     PolicyHoldCompletion,
     PolicyProgressCompletion,
@@ -176,6 +178,18 @@ _declare(
     ReclaimedCompletion, ("gc_reclaimed", "escalated_reclaim_limit_exceeded"), _KEEP
 )
 _declare(StaleEntryDiscardedCompletion, ("stale_active_entry_discarded",), _KEEP)
+# #1526: the closed-target release already removed (or previewed) the entry.
+_declare(
+    InteractiveClosedTargetReleased,
+    (
+        "gc_released_interactive_closed_target",
+        "gc_would_release_interactive_closed_target",
+    ),
+    _KEEP,
+)
+_declare(
+    InteractiveClosedTargetHeld, ("gc_release_held_interactive_closed_target",), _KEEP
+)
 _declare(
     AbandonmentPersistenceFailureCompletion,
     ("abandonment_skipped_persistence_failure",),

@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from orchestune.claim.workspace import ClaimWorkspace, resolve_claim_workspace
 from orchestune.dispatch.cycle_events import TokenHoldCompletion
 from orchestune.dispatch.cycle_records import CompletionReceipt
+from orchestune.dispatch.gc.closed_target import (
+    IssueStateReader,
+    apply_closed_target_items,
+    closed_target_candidates,
+    preview_closed_target_items,
+)
 from orchestune.dispatch.gc.collection import GcItemResult as GcItemResult
 from orchestune.dispatch.gc.collection import GcRunResult as GcRunResult
 from orchestune.dispatch.gc.collection import (
@@ -39,6 +46,7 @@ from orchestune.ledger.completion_reservations import (
 )
 from orchestune.ledger.run_state import (
     ActiveWorktree,
+    RunState,
     load_run_state_readonly,
 )
 
@@ -96,6 +104,30 @@ def _policy_items(
     ]
 
 
+def _gc_forge(
+    candidates: list[tuple[str, ActiveWorktree]],
+    state: RunState,
+    forge_factory: Callable[[], HandoffForge],
+) -> HandoffForge | None:
+    """Build the Forge only when a handoff, policy or closed target needs it."""
+    if not (
+        any(_is_handoff_ready(item) for _, item in candidates)
+        or policy_candidates(state)
+        or closed_target_candidates(state)
+    ):
+        return None
+    try:
+        return forge_factory()
+    except Exception:
+        return None
+
+
+def _issue_state_reader(forge: HandoffForge | None) -> IssueStateReader | None:
+    if forge is None or not callable(getattr(forge, "get_issue_state", None)):
+        return None
+    return cast(IssueStateReader, forge)
+
+
 def _preview(
     workspace: ClaimWorkspace,
     forge_factory: Callable[[], HandoffForge],
@@ -105,19 +137,17 @@ def _preview(
     except (OSError, ValueError):
         return GcRunResult((), 0, (), 1)
     candidates = _completion_gc_candidates(active, workspace.run_state_path)
-    skipped = len(active) - len(candidates)
-    forge: HandoffForge | None = None
-    if any(_is_handoff_ready(item) for _, item in candidates) or policy_candidates(
-        load_run_state_readonly(workspace.run_state_path)
-    ):
-        try:
-            forge = forge_factory()
-        except Exception:
-            forge = None
+    state = load_run_state_readonly(workspace.run_state_path)
+    forge = _gc_forge(candidates, state, forge_factory)
     policy_events = _gc_policy_events(workspace, forge, apply=False)
     items = _policy_items(
         [e for e in policy_events if str(e["issue_number"]) not in active]
     )
+    closed_items = preview_closed_target_items(
+        state, workspace, _issue_state_reader(forge), Path.cwd()
+    )
+    items.extend(closed_items)
+    skipped = len(active) - len(candidates) - len(closed_items)
     for key, item in sorted(candidates):
         plan = _inspect_or_hold(item, workspace, forge)
         action = "would_release" if plan.action == "release" else "held"
@@ -143,15 +173,14 @@ def _apply_locked(
     except (OSError, ValueError):
         return GcRunResult((), 0, (), 1)
     candidates = _completion_gc_candidates(active, workspace.run_state_path)
-    skipped = len(active) - len(candidates)
-    forge: HandoffForge | None = None
-    if any(_is_handoff_ready(item) for _, item in candidates) or policy_candidates(
-        load_run_state_readonly(workspace.run_state_path)
-    ):
-        try:
-            forge = forge_factory()
-        except Exception:
-            forge = None
+    forge = _gc_forge(
+        candidates, load_run_state_readonly(workspace.run_state_path), forge_factory
+    )
+    # #1526: closed-target interactive claims are disjoint from completion ones.
+    closed_items = apply_closed_target_items(
+        workspace, _issue_state_reader(forge), request.timeout_seconds, Path.cwd()
+    )
+    skipped = len(active) - len(candidates) - len(closed_items)
     policy_events = _gc_policy_events(workspace, forge, apply=True)
     held_issues = {
         e["issue_number"]
@@ -161,10 +190,14 @@ def _apply_locked(
     items = _policy_items(
         [e for e in policy_events if str(e["issue_number"]) not in active]
     )
+    items.extend(closed_items)
     receipts: list[CompletionReceipt] = []
-    return _run_candidates(
+    result = _run_candidates(
         candidates, held_issues, request, workspace, forge, items, receipts, skipped
     )
+    if result.exit_code == 0 and any(i.action == "failed" for i in closed_items):
+        return replace(result, exit_code=1)
+    return result
 
 
 def _run_candidates(

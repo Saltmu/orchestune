@@ -141,6 +141,20 @@ _EXPECTED: dict[tuple[str, str], tuple[str, bool, bool]] = {
         False,
         False,
     ),
+    ("InteractiveClosedTargetReleased", "gc_released_interactive_closed_target"): (
+        KEEP,
+        False,
+        False,
+    ),
+    (
+        "InteractiveClosedTargetReleased",
+        "gc_would_release_interactive_closed_target",
+    ): (KEEP, False, False),
+    ("InteractiveClosedTargetHeld", "gc_release_held_interactive_closed_target"): (
+        KEEP,
+        False,
+        False,
+    ),
     (
         "AbandonmentPersistenceFailureCompletion",
         "abandonment_skipped_persistence_failure",

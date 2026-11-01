@@ -938,6 +938,8 @@ active回収後もreplay receiptと後続処理の対象・設定情報を保持
 
 `--no-apply` はlockも作らない読み取り専用プレビューです。applyモードではIssueのラベル・コメント・closeを更新し、独立レビューを起動する場合があります。Dispatcher不在でも `orchestune gc` を再実行してpending処理を進められます。cloudレビューには `ORCHESTUNE_ROUTINE_ID` / `ORCHESTUNE_ROUTINE_TOKEN` が必要です。provider不在・起動結果不明ならレビューを保留します。保存済みlaunch/attempt IDをproviderのlookupで照合できる場合は復旧し、不明な起動を二重実行しません。設定されたレビューtimeoutまで起動結果を確認できない場合は人間の確認へ移行し、policyと依存は保留を維持します。レビュー結果コメントには当該operationのmarkerが必要で、一般的な結果ラベルだけではgenerationの承認にしません。
 
+対象のIssueまたはPRがすでに `CLOSED` / `MERGED` のinteractive claim（overrideマージ後に `orchestune complete` が実行されなかった場合など）は、Dispatcherのgcフェーズと `orchestune gc` のどちらでも解放され、後続claimの `footprint_overlap` の原因にならなくなります。解放するのは、interactive所有で、完了journal・stage・完了予約のいずれにも属さず、Forgeから取得した現在の状態が閉じており、`orchestune recover` と同じ検査（repository identity、markerの世代、launch phase、プロセス生存）に問題がない場合だけです。解放ではactiveエントリを削除し、理由 `closed-target:<CLOSED|MERGED>` の `release` recovery receiptを記録します。worktree・ブランチ・claim markerは残すため、未コミットの作業がないことを確認してから手動で削除してください。`--no-apply` では理由 `closed_target` の `would_release` を表示します。対象がOPENの場合は何もせず、Forgeの取得に失敗した場合は保留します。
+
 同じ解決済みstate pathを使うwriterは、上限付き外部操作と保存を含めて共通の再入可能な台帳lockを保持し、物理回収はworktree別claim lockも保持します。異なるstate path間にはこの排他は成立しません。実行中/current worktree、所有者不一致の保護は維持します。`current_worktree` の場合はprimary checkoutから再実行してください。旧 `handed_off_to_gc` は自動昇格せず証跡移行まで保留します。再開可能な公開処理は元のcompletion IDと対応するclaim markerで `complete` から再開してください。
 
 | オプション | デフォルト | 説明 |

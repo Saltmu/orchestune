@@ -4,9 +4,12 @@ import io
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import patch
 
 import pytest
+
+pytest_plugins = ["tests.test_local_claim_identity"]
 
 
 def test_gc_parser_defaults_to_apply_with_no_explicit_state():
@@ -173,3 +176,100 @@ def test_tty_narrow_console_stacks_rows_without_truncating_values(monkeypatch) -
     assert "RESULT: done" in output
     assert f"WORKTREE: would_remove: {_WORKTREE}" in output
     assert _SUMMARY in output
+
+
+class _ClosedTargetForge:
+    """#1526: only the live Issue/PR state is needed for a closed-target release."""
+
+    def __init__(self, state: str) -> None:
+        self.state = state
+
+    def get_issue_state(self, issue_number: int | str) -> str:
+        return self.state
+
+
+def _closed_target_factory(state: str):
+    from orchestune.dispatch.gc.handoff import HandoffForge
+
+    return lambda: cast("HandoffForge", _ClosedTargetForge(state))
+
+
+def test_gc_preview_reports_closed_target_without_changing_state(
+    local_claim, monkeypatch, capsys
+):
+    from functools import partial
+
+    from orchestune.dispatch import gc_cli
+    from orchestune.dispatch.gc_service import run_handoff_gc
+
+    workspace, _, worktree = local_claim
+    monkeypatch.chdir(workspace.repository_root)
+    before = workspace.run_state_path.read_bytes()
+    monkeypatch.setattr(
+        gc_cli,
+        "run_handoff_gc",
+        partial(run_handoff_gc, forge_factory=_closed_target_factory("MERGED")),
+    )
+
+    assert gc_cli.main(["--no-apply"]) == 0
+
+    output = capsys.readouterr().out
+    assert "would_release" in output and "closed_target" in output
+    assert "would_retain" in output
+    assert "Summary: 1 would release, 0 held, 0 failed, 0 skipped" in output
+    assert workspace.run_state_path.read_bytes() == before
+    assert worktree.exists()
+
+
+def test_gc_apply_releases_closed_target_and_retains_worktree(local_claim, monkeypatch):
+    from orchestune.dispatch.gc.handoff import GcRequest
+    from orchestune.dispatch.gc_service import run_handoff_gc
+    from orchestune.ledger.run_state import claim_was_released, load_run_state_readonly
+    from orchestune.worktree_ops.claim_marker import claim_marker_path
+
+    workspace, active, worktree = local_claim
+    monkeypatch.chdir(workspace.repository_root)
+
+    result = run_handoff_gc(GcRequest(), forge_factory=_closed_target_factory("CLOSED"))
+
+    assert result.exit_code == 0
+    assert [
+        (i.issue_number, i.action, i.reason, i.worktree_action) for i in result.items
+    ] == [(7, "released", "closed_target", "retain")]
+    state = load_run_state_readonly(workspace.run_state_path)
+    assert "7" not in state.active_worktrees
+    assert claim_was_released(state, 7, active.claim.claim_id)
+    (receipt,) = state.recovery_receipts.values()
+    assert receipt["reason"] == "closed-target:CLOSED"
+    assert worktree.exists() and claim_marker_path(worktree).exists()
+
+
+def test_gc_apply_keeps_open_target_claims(local_claim, monkeypatch):
+    from orchestune.dispatch.gc.handoff import GcRequest
+    from orchestune.dispatch.gc_service import run_handoff_gc
+
+    workspace, _, _ = local_claim
+    monkeypatch.chdir(workspace.repository_root)
+    before = workspace.run_state_path.read_bytes()
+
+    result = run_handoff_gc(GcRequest(), forge_factory=_closed_target_factory("OPEN"))
+
+    assert result.exit_code == 0 and result.items == () and result.skipped == 1
+    assert workspace.run_state_path.read_bytes() == before
+
+
+def test_gc_holds_closed_target_when_forge_is_unavailable(local_claim, monkeypatch):
+    from orchestune.dispatch.gc.handoff import GcRequest
+    from orchestune.dispatch.gc_service import run_handoff_gc
+
+    workspace, _, _ = local_claim
+    monkeypatch.chdir(workspace.repository_root)
+
+    def broken():
+        raise RuntimeError("gh is not authenticated")
+
+    result = run_handoff_gc(GcRequest(apply=False), forge_factory=broken)
+
+    assert [(i.action, i.reason) for i in result.items] == [
+        ("held", "forge_unavailable")
+    ]

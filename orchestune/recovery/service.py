@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import json
 from contextlib import nullcontext
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from orchestune.claim.inspection import inspect_claim
 from orchestune.claim.local_identity import registered_claim_path
 from orchestune.claim.workspace import ClaimWorkspace, resolve_claim_workspace
 from orchestune.infra.json_state import write_json_atomic
 from orchestune.infra.process_utils import FileLock, run_state_lock
-from orchestune.ledger.active_codec import encode_active_worktree
+from orchestune.ledger.recovery_receipts import (
+    RELEASE_OPERATION,
+    record_recovery_in_raw,
+    recovery_receipt_key,
+)
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
@@ -21,8 +25,16 @@ from orchestune.ledger.run_state import (
 from orchestune.recovery.blocked_restart import restart_blocked
 from orchestune.recovery.contracts import RecoveryRequest, RecoveryResult
 from orchestune.recovery.external_service import recover_external
-from orchestune.recovery.inspection import inspect_claim
 from orchestune.worktree_ops.claim_marker import claim_lock_path, write_claim_marker
+
+
+def _release_key(workspace: ClaimWorkspace, request: RecoveryRequest) -> str:
+    return recovery_receipt_key(
+        workspace.repository_identity,
+        request.issue_number,
+        request.claim_id,
+        RELEASE_OPERATION,
+    )
 
 
 def _recover(
@@ -38,7 +50,7 @@ def _recover(
         for key, active in state.active_worktrees.items()
         if active.core.issue_number == request.issue_number
     ]
-    receipt_key = f"{workspace.repository_identity}::{request.issue_number}::{request.claim_id}::release"
+    receipt_key = _release_key(workspace, request)
     if not matches:
         if request.claim_id and receipt_key in state.recovery_receipts:
             return RecoveryResult(
@@ -119,13 +131,6 @@ def _apply_recovery(
     )
 
 
-def _legacy_active_snapshot(active: ActiveWorktree) -> dict[str, Any]:
-    """Flat receipt snapshot; unlike the ledger, it keeps a null policy config."""
-    snapshot = encode_active_worktree(active)
-    snapshot.setdefault("completion_policy_config", None)
-    return snapshot
-
-
 def _save_recovery(
     request: RecoveryRequest,
     workspace: ClaimWorkspace,
@@ -134,20 +139,15 @@ def _save_recovery(
     operation: str,
 ) -> None:
     raw = json.loads(workspace.run_state_path.read_text(encoding="utf-8"))
-    if operation == "release":
-        del raw["active_worktrees"][key]
-    record_key = f"{workspace.repository_identity}::{request.issue_number}::{active.claim.claim_id}::{operation}"
-    raw.setdefault("recovery_receipts", {})[record_key] = {
-        "schema_version": 1,
-        "repository_id": workspace.repository_identity,
-        "issue_number": request.issue_number,
-        "claim_id": active.claim.claim_id,
-        "operation": operation,
-        "reason": request.reason,
-        "recorded_at": datetime.now(UTC).isoformat(),
-        "worktree_action": "retain",
-        "active": _legacy_active_snapshot(active),
-    }
+    record_recovery_in_raw(
+        raw,
+        key,
+        active,
+        repository_id=workspace.repository_identity,
+        issue_number=request.issue_number,
+        operation=operation,
+        reason=request.reason,
+    )
     # Preserve all other records and extensions exactly; no retention pruning.
     write_json_atomic(workspace.run_state_path, raw)
 

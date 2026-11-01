@@ -176,11 +176,11 @@ def test_unprepared_claim_reports_no_worktree(local_claim):
 def test_release_receipt_keeps_the_flat_active_snapshot_shape(local_claim):
     """The persisted receipt stays the pre-cutover flat ``asdict`` shape."""
     from orchestune.ledger.active_codec import _ACTIVE_FIELD_NAMES
-    from orchestune.recovery.service import _legacy_active_snapshot
+    from orchestune.ledger.recovery_receipts import legacy_active_snapshot
 
     _, active, _ = local_claim
 
-    snapshot = _legacy_active_snapshot(active)
+    snapshot = legacy_active_snapshot(active)
 
     # #1270: launch attribution is omitted while null, like before its introduction.
     attribution = {
