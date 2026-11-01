@@ -28,6 +28,13 @@ def _has_posting_evidence(comment_id: str | None, comment_url: str | None) -> bo
 _COMPLETION_SCHEMA_VERSION = 1
 
 
+def journal_key_for(
+    repository_id: str, issue_number: int, generation_id: str, completion_id: str
+) -> str:
+    """Return the canonical key shared by journal and replay receipt maps."""
+    return f"{repository_id}::{issue_number}::{generation_id}::{completion_id}"
+
+
 @dataclass(frozen=True, slots=True)
 class InvalidLedgerRecord:
     """A semantically invalid record retained verbatim by the JSON codec."""
@@ -205,7 +212,12 @@ class CompletionJournalRecord:
 
     @property
     def journal_key(self) -> str:
-        return f"{self.repository_id}::{self.issue_number}::{self.generation_id}::{self.completion_id}"
+        return journal_key_for(
+            self.repository_id,
+            self.issue_number,
+            self.generation_id,
+            self.completion_id,
+        )
 
     @property
     def reservation_key(self) -> str:

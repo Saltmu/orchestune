@@ -402,6 +402,36 @@ def test_invalid_reservation_uses_map_issue_as_attribution_fallback():
     assert not completion_mutation_blocked(state, 99)
 
 
+def test_invalid_reservation_with_conflicting_issue_numbers_blocks_globally():
+    from orchestune.ledger.completion_records import decode_completion_reservation
+    from orchestune.ledger.completion_reservations import completion_mutation_blocked
+
+    state = RunState(
+        completion_reservations={
+            "repo::10": decode_completion_reservation(
+                {"schema_version": 1, "issue_number": 11}
+            )
+        }
+    )
+    assert completion_mutation_blocked(state, 10)
+    assert completion_mutation_blocked(state, 11)
+    assert completion_mutation_blocked(state, 99)
+
+
+def test_completion_record_rejects_non_dict_journal():
+    from orchestune.ledger.completion_records import CompletionReservation
+    from orchestune.ledger.completion_reservations import completion_record
+
+    state = SimpleNamespace(
+        completion_reservations={
+            "repo::10": CompletionReservation.from_dict(_RESERVATION_IDENTITY)
+        },
+        completion_journal=None,
+    )
+    with pytest.raises(ValueError, match="Invalid completion journal"):
+        completion_record(state, 10)
+
+
 @pytest.mark.parametrize("stage", ["reserved", "outcome_posted", "label_confirmed"])
 def test_reservation_status_is_pending_before_handoff(stage):
     from orchestune.ledger.completion_reservations import completion_reservation_status

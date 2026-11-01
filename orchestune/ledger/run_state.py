@@ -108,6 +108,7 @@ class _CompletionLedgerMap(dict):
         if not isinstance(value, InvalidLedgerRecord):
             if getattr(value, self._key_attribute) != key:
                 if raw is None:
+                    # Only a correctly typed record can reach this branch.
                     raw = encode_completion_value(value)
                 value = InvalidLedgerRecord(
                     self._record_type,

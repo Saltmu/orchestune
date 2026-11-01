@@ -12,6 +12,7 @@ from orchestune.ledger.completion_records import (
     CompletionReplayReceipt,
     CompletionReservation,
     InvalidLedgerRecord,
+    journal_key_for,
 )
 from orchestune.ledger.run_state import load_run_state_readonly
 from orchestune.ownership_contracts import CompleteStage
@@ -39,7 +40,11 @@ _COMPLETION_IDENTITY_FIELDS = (
 def _invalid_reservation_applies(
     key: object, raw_json: dict[str, Any], issue_number: int
 ) -> bool:
-    """Fail closed globally when corrupt reservation identity cannot be attributed."""
+    """Fail closed when identity is unattributable or the key and payload conflict.
+
+    An unattributable record, or contradictory issue numbers, blocks every
+    Issue because the affected reservation cannot be determined safely.
+    """
     raw_issue = raw_json.get("issue_number")
     raw_is_valid = (
         isinstance(raw_issue, int) and not isinstance(raw_issue, bool) and raw_issue > 0
@@ -92,9 +97,13 @@ def completion_record(state: Any, issue_number: int) -> CompletionJournalRecord 
         raise ValueError("Ambiguous completion reservation")
     reservation = records[0]
     journal = getattr(state, "completion_journal", {})
-    journal_key = (
-        f"{reservation.repository_id}::{reservation.issue_number}::"
-        f"{reservation.generation_id}::{reservation.completion_id}"
+    if not isinstance(journal, dict):
+        raise ValueError("Invalid completion journal")
+    journal_key = journal_key_for(
+        reservation.repository_id,
+        reservation.issue_number,
+        reservation.generation_id,
+        reservation.completion_id,
     )
     record = journal.get(journal_key)
     if not isinstance(record, CompletionJournalRecord):

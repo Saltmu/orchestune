@@ -106,6 +106,14 @@ def test_run_state_constructor_accepts_only_typed_completion_records():
     record = CompletionJournalRecord.from_dict(journal_json())
     state = RunState(completion_journal={record.journal_key: record})
     assert state.completion_journal[record.journal_key] is record
+    from orchestune.ledger.completion_records import journal_key_for
+
+    assert record.journal_key == journal_key_for(
+        record.repository_id,
+        record.issue_number,
+        record.generation_id,
+        record.completion_id,
+    )
 
 
 def test_completion_map_mutation_apis_keep_values_typed_and_check_record_keys():
