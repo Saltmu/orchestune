@@ -204,6 +204,38 @@ def test_the_quint_check_fails_without_node(tmp_path: Path) -> None:
     assert "Node.js" in done.stderr and "CONTRIBUTING" in done.stderr
 
 
+@pytest.mark.skipif(
+    os.name != "nt", reason="Windows PowerShell 5.1 exists only on Windows"
+)
+def test_the_node_version_probe_works_under_windows_powershell(tmp_path: Path) -> None:
+    """#1527: `complete` runs local CI with powershell.exe, which drops `"` in native args."""
+    script = (ROOT / "scripts" / "quint-check.ps1").read_text(encoding="utf-8")
+    probe = next(
+        line for line in script.splitlines() if line.startswith("$nodeMajor =")
+    )
+    probe_file = tmp_path / "probe.ps1"
+    probe_file.write_text(f"{probe}\nWrite-Output $nodeMajor\n", encoding="utf-8")
+    done = subprocess.run(
+        [
+            shutil.which("powershell") or "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(probe_file),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    node_version = subprocess.run(
+        ["node", "--version"], capture_output=True, text=True, check=True
+    ).stdout
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert done.stdout.strip() == node_version.strip().lstrip("v").split(".")[0]
+
+
 # ---- bounded exploration, replayed on production ---------------------------------------
 
 

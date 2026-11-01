@@ -28,7 +28,8 @@ if ($package.engines.node -match '^>=(\d+) <(\d+)$') {
 } else {
     throw 'package.json engines.node must look like ">=24 <25"'
 }
-$nodeMajor = [int]((& node -p 'process.versions.node.split(".")[0]').Trim())
+# Single quotes inside: Windows PowerShell 5.1 strips `"` from native arguments (#1527).
+$nodeMajor = [int]((& node -p "process.versions.node.split('.')[0]").Trim())
 if ($nodeMajor -lt $lower -or $nodeMajor -ge $upper) {
     [Console]::Error.WriteLine("ERROR: Node.js $nodeMajor is installed; package.json requires >=$lower <$upper.")
     Show-InstallHelp
