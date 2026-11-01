@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -82,6 +83,7 @@ class DownstreamPolicyRecord:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "metadata", deepcopy(self.metadata))
         for name, value in (
             ("repository_id", self.repository_id),
             ("generation_id", self.generation_id),

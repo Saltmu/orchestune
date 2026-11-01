@@ -23,6 +23,41 @@ _PENDING_STAGES = frozenset(
         CompleteStage.LABEL_CONFIRMED,
     }
 )
+_COMPLETION_IDENTITY_FIELDS = (
+    "repository_id",
+    "issue_number",
+    "generation_id",
+    "completion_id",
+    "owner_token_digest",
+    "request_fingerprint",
+    "result",
+    "target_label",
+    "outcome_payload",
+)
+
+
+def _invalid_reservation_applies(
+    key: object, raw_json: dict[str, Any], issue_number: int
+) -> bool:
+    raw_issue = raw_json.get("issue_number")
+    raw_is_valid = (
+        isinstance(raw_issue, int) and not isinstance(raw_issue, bool) and raw_issue > 0
+    )
+    key_issue: int | None = None
+    if isinstance(key, str):
+        suffix = key.rsplit("::", 1)[-1]
+        if suffix.isdecimal():
+            parsed = int(suffix)
+            if parsed > 0 and str(parsed) == suffix:
+                key_issue = parsed
+
+    if raw_is_valid and key_issue is not None and raw_issue != key_issue:
+        return True
+    if raw_is_valid:
+        return raw_issue == issue_number or key_issue == issue_number
+    if key_issue is not None:
+        return key_issue == issue_number
+    return True
 
 
 def _records(state: Any, issue_number: int) -> list[CompletionReservation]:
@@ -32,7 +67,7 @@ def _records(state: Any, issue_number: int) -> list[CompletionReservation]:
     records: list[CompletionReservation] = []
     for key, value in raw.items():
         if isinstance(value, InvalidLedgerRecord):
-            if value.raw_json.get("issue_number") == issue_number:
+            if _invalid_reservation_applies(key, value.raw_json, issue_number):
                 raise ValueError("Invalid completion reservation")
             continue
         if not isinstance(value, CompletionReservation):
@@ -52,30 +87,26 @@ def completion_record(state: Any, issue_number: int) -> CompletionJournalRecord 
     if len(records) != 1:
         raise ValueError("Ambiguous completion reservation")
     reservation = records[0]
-    key = "::".join(
-        str(value)
-        for value in (
-            reservation.repository_id,
-            reservation.issue_number,
-            reservation.generation_id,
-            reservation.completion_id,
-        )
+    journal = getattr(state, "completion_journal", {})
+    record = next(
+        (
+            value
+            for value in journal.values()
+            if isinstance(value, CompletionJournalRecord)
+            and value.reservation_key == reservation.reservation_key
+            and value.generation_id == reservation.generation_id
+            and value.completion_id == reservation.completion_id
+        ),
+        None,
     )
-    record = getattr(state, "completion_journal", {}).get(key)
     if not isinstance(record, CompletionJournalRecord):
         raise ValueError("Completion journal identity mismatch")
-    identity = (
-        "repository_id",
-        "issue_number",
-        "generation_id",
-        "completion_id",
-        "owner_token_digest",
-        "request_fingerprint",
-        "result",
-        "target_label",
-        "outcome_payload",
-    )
-    if any(getattr(record, name) != getattr(reservation, name) for name in identity):
+    if journal.get(record.journal_key) is not record:
+        raise ValueError("Completion journal key does not match its identity")
+    if any(
+        getattr(record, name) != getattr(reservation, name)
+        for name in _COMPLETION_IDENTITY_FIELDS
+    ):
         raise ValueError("Completion journal identity mismatch")
     return record
 

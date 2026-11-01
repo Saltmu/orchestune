@@ -26,9 +26,13 @@ from orchestune.ledger.active_lifecycle import (
 )
 from orchestune.ledger.active_records import ActiveWorktree as ActiveWorktree
 from orchestune.ledger.completion_records import (
+    CompletionJournalRecord,
     CompletionJournalValue,
+    CompletionReplayReceipt,
     CompletionReplayReceiptValue,
+    CompletionReservation,
     CompletionReservationValue,
+    InvalidLedgerRecord,
     decode_completion_journal,
     decode_completion_replay_receipt,
     decode_completion_reservation,
@@ -39,18 +43,59 @@ from orchestune.ownership_contracts import ClaimStage, OwnerKind, ReservationKin
 
 
 class _CompletionLedgerMap(dict):
-    """Typed mapping that also normalizes explicit raw JSON test fixtures."""
+    """Keep completion map values typed across all standard dict mutation APIs."""
 
-    def __init__(self, values: dict[str, Any], decoder: Any) -> None:
+    def __init__(
+        self,
+        values: Any = (),
+        *,
+        decoder: Any = None,
+        expected_type: type[Any] | None = None,
+        record_type: str = "",
+        key_attribute: str = "",
+    ) -> None:
         self._decoder = decoder
+        self._expected_type = expected_type
+        self._record_type = record_type
+        self._key_attribute = key_attribute
         super().__init__()
-        for key, value in values.items():
-            self[key] = value
+        self.update(values)
 
     def __setitem__(self, key: str, value: Any) -> None:
-        if isinstance(value, dict):
-            value = self._decoder(value)
+        raw = value if isinstance(value, dict) else encode_completion_value(value)
+        if isinstance(value, dict) or (
+            not isinstance(value, InvalidLedgerRecord)
+            and self._expected_type is not None
+            and not isinstance(value, self._expected_type)
+        ):
+            if self._decoder is None:
+                raise TypeError("completion ledger map requires a decoder for raw JSON")
+            value = self._decoder(raw)
+        if not isinstance(value, InvalidLedgerRecord):
+            if getattr(value, self._key_attribute) != key:
+                value = InvalidLedgerRecord(
+                    self._record_type,
+                    f"map key {key!r} does not match record identity",
+                    raw,
+                )
         super().__setitem__(key, value)
+
+    @property
+    def record_type(self) -> str:
+        return self._record_type
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        for key, value in dict(*args, **kwargs).items():
+            self[key] = value
+
+    def setdefault(self, key: str, default: Any = None) -> Any:
+        if key not in self:
+            self[key] = default
+        return self[key]
+
+    def __ior__(self, other: Any) -> Any:  # type: ignore[override, misc]
+        self.update(other)
+        return self
 
 
 @dataclass
@@ -152,18 +197,42 @@ class RunState:
     # accountの識別が無いため、同じ台帳を使うtargetを1つの制限scopeとして扱う。
     usage_limit_cooldowns: dict[str, float] = field(default_factory=dict)
 
-    def __post_init__(self) -> None:
-        """Normalize explicit JSON test fixtures at the in-memory construction boundary."""
-        codecs = (
-            ("completion_journal", decode_completion_journal),
-            ("completion_reservations", decode_completion_reservation),
-            ("completion_replay_receipts", decode_completion_replay_receipt),
-        )
-        for attribute, decode in codecs:
-            values = getattr(self, attribute)
-            if not isinstance(values, dict):
-                raise ValueError(f"{attribute} must be an object")
-            setattr(self, attribute, _CompletionLedgerMap(values, decode))
+    def __setattr__(self, name: str, value: Any) -> None:
+        codecs = {
+            "completion_journal": (
+                decode_completion_journal,
+                CompletionJournalRecord,
+                "completion_journal",
+                "journal_key",
+            ),
+            "completion_reservations": (
+                decode_completion_reservation,
+                CompletionReservation,
+                "completion_reservations",
+                "reservation_key",
+            ),
+            "completion_replay_receipts": (
+                decode_completion_replay_receipt,
+                CompletionReplayReceipt,
+                "completion_replay_receipts",
+                "receipt_key",
+            ),
+        }
+        if name in codecs and (
+            not isinstance(value, _CompletionLedgerMap)
+            or value.record_type != codecs[name][2]
+        ):
+            decoder, expected_type, record_type, key_attribute = codecs[name]
+            if not isinstance(value, dict):
+                raise ValueError(f"{name} must be an object")
+            value = _CompletionLedgerMap(
+                value,
+                decoder=decoder,
+                expected_type=expected_type,
+                record_type=record_type,
+                key_attribute=key_attribute,
+            )
+        super().__setattr__(name, value)
 
 
 def _parse_non_negative_int(value: object, default: int = 0) -> int:

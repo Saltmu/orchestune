@@ -84,6 +84,15 @@ class CompletionJournalRecord:
     )
 
     def __post_init__(self) -> None:
+        for name in (
+            "outcome_payload",
+            "posting_evidence",
+            "label_evidence",
+            "prepublication_policy_evidence",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, deepcopy(value))
         self._validate_identity()
         self._validate_payload()
         self._validate_evidence()
@@ -301,6 +310,7 @@ class CompletionReservation:
     )
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "outcome_payload", deepcopy(self.outcome_payload))
         required_text(self.repository_id, "repository_id")
         required_text(self.generation_id, "generation_id")
         required_text(self.completion_id, "completion_id")

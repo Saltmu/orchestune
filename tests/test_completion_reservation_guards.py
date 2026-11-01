@@ -365,6 +365,36 @@ def test_reservation_status_is_legacy_without_a_reservation():
     assert completion_reservation_status(RunState(), 10) == "legacy"
 
 
+def test_unattributable_invalid_reservation_fails_closed():
+    from orchestune.ledger.completion_records import decode_completion_reservation
+    from orchestune.ledger.completion_reservations import completion_mutation_blocked
+
+    state = RunState(
+        completion_reservations={
+            "unparseable-key": decode_completion_reservation(
+                {"schema_version": 1, "issue_number": "10"}
+            )
+        }
+    )
+    assert completion_mutation_blocked(state, 10)
+    assert completion_mutation_blocked(state, 99)
+
+
+def test_invalid_reservation_uses_map_issue_as_attribution_fallback():
+    from orchestune.ledger.completion_records import decode_completion_reservation
+    from orchestune.ledger.completion_reservations import completion_mutation_blocked
+
+    state = RunState(
+        completion_reservations={
+            "repo::10": decode_completion_reservation(
+                {"schema_version": 1, "issue_number": "10"}
+            )
+        }
+    )
+    assert completion_mutation_blocked(state, 10)
+    assert not completion_mutation_blocked(state, 99)
+
+
 @pytest.mark.parametrize("stage", ["reserved", "outcome_posted", "label_confirmed"])
 def test_reservation_status_is_pending_before_handoff(stage):
     from orchestune.ledger.completion_reservations import completion_reservation_status

@@ -1,7 +1,7 @@
 """Typed values and JSON codec behavior for completion ledger entries."""
 
 import json
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
@@ -44,17 +44,18 @@ def test_record_models_are_frozen_slotted_and_reexported_from_legacy_module():
 
 def test_run_state_loads_typed_completion_ledgers_and_round_trips_source_json(tmp_path):
     raw = journal_json(extra_extension={"preserve": [1, 2]})
+    key = CompletionJournalRecord.from_dict(raw).journal_key
     state_path = tmp_path / "run_state.json"
     state_path.write_text(
-        json.dumps({"completion_journal": {"journal-key": raw}}), encoding="utf-8"
+        json.dumps({"completion_journal": {key: raw}}), encoding="utf-8"
     )
 
     state = load_run_state(state_path)
-    assert isinstance(state.completion_journal["journal-key"], CompletionJournalRecord)
+    assert isinstance(state.completion_journal[key], CompletionJournalRecord)
     save_run_state(state, state_path)
     persisted = json.loads(state_path.read_text(encoding="utf-8"))
-    assert persisted["completion_journal"]["journal-key"] == raw
-    assert "posting_evidence" not in persisted["completion_journal"]["journal-key"]
+    assert persisted["completion_journal"][key] == raw
+    assert "posting_evidence" not in persisted["completion_journal"][key]
 
 
 def test_semantically_invalid_record_is_typed_and_preserved_without_rejecting_state(
@@ -105,3 +106,56 @@ def test_run_state_constructor_accepts_only_typed_completion_records():
     record = CompletionJournalRecord.from_dict(journal_json())
     state = RunState(completion_journal={record.journal_key: record})
     assert state.completion_journal[record.journal_key] is record
+
+
+def test_completion_map_mutation_apis_keep_values_typed_and_check_record_keys():
+    record = CompletionJournalRecord.from_dict(journal_json())
+    state = RunState()
+    state.completion_journal.update({record.journal_key: journal_json()})
+    state.completion_journal.setdefault(
+        "wrong-key", journal_json(completion_id="other")
+    )
+    assert isinstance(
+        state.completion_journal[record.journal_key], CompletionJournalRecord
+    )
+    assert isinstance(state.completion_journal["wrong-key"], InvalidLedgerRecord)
+
+    handed_off = CompletionJournalRecord.from_dict(
+        journal_json(
+            stage="handed_off",
+            posting_evidence={
+                "comment_id": "1",
+                "comment_url": "https://example.test/1",
+            },
+            label_evidence={
+                "status": "confirmed",
+                "target_label": "status:done",
+                "observed_labels": ["status:done"],
+            },
+        )
+    )
+    receipts = {handed_off.receipt_key: handed_off}
+    state.completion_replay_receipts |= receipts
+    assert isinstance(
+        state.completion_replay_receipts[handed_off.receipt_key],
+        CompletionReplayReceipt,
+    )
+
+    state.completion_journal = {record.journal_key: journal_json()}
+    assert isinstance(
+        state.completion_journal[record.journal_key], CompletionJournalRecord
+    )
+
+
+def test_record_replace_and_reservation_copy_nested_mutable_fields():
+    raw_payload = {"result": "done", "issue": 1541, "pr": 1542, "extra": []}
+    record = CompletionJournalRecord.from_dict(
+        journal_json(outcome_payload=raw_payload)
+    )
+    reservation = CompletionReservation.from_journal(record)
+    record.outcome_payload["extra"].append("record-only")
+    assert reservation.outcome_payload["extra"] == []
+
+    replacement = replace(record, completion_id="copy")
+    replacement.outcome_payload["extra"].append("copy-only")
+    assert record.outcome_payload["extra"] == ["record-only"]
