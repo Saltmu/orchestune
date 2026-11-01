@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -458,6 +459,32 @@ def test_scenario_run_cache_stale_traces_cleaned_before_runner(tmp_path: Path) -
         run = cache.get("final_apply")
         assert run.outcome == "ok"
         assert not stale_trace.exists()
+
+
+def test_persist_temp_metadata_name_stays_short(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1531: the temp name sits under long worktree paths; keep it near the final name.
+
+    `.model_run.json.tmp.<hex32>` pushed the longest scenario path to 260 characters,
+    past Windows MAX_PATH, so the write failed with FileNotFoundError.
+    """
+    scenario_dir = tmp_path / "intermediate_dependency_reservation_dry"
+    run = _fake_ok_runner(scenario_dir, scenario_dir.name)
+    replaced: list[Path] = []
+    real_replace = os.replace
+
+    def spy_replace(src: Any, dst: Any) -> None:
+        replaced.append(Path(src))
+        real_replace(src, dst)
+
+    monkeypatch.setattr("tests.quint_scenario_cache_support.os.replace", spy_replace)
+    _persist(scenario_dir, run)
+
+    (tmp_meta,) = replaced
+    assert tmp_meta.parent == scenario_dir
+    assert len(tmp_meta.name) <= len(".model_run.json") + 12, tmp_meta.name
+    assert (scenario_dir / ".model_run.json").is_file()
 
 
 def test_model_scenario_fixture_with_and_without_replay_dir(
