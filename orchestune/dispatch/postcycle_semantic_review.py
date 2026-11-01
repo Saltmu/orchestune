@@ -23,6 +23,8 @@ from typing import Any, Literal, cast
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.gc.git import evaluate_worktree_removal
+from orchestune.dispatch.local_semantic_fix import cleanup_semantic_fix_worktree
 from orchestune.dispatch.reviewer import resolve_reviewer_bot
 from orchestune.dispatch.semantic_review_ack import AckAction, AckAssessment
 from orchestune.dispatch.semantic_review_adapters import (
@@ -174,13 +176,12 @@ class SemanticReviewCycleReport:
 class SemanticReviewOperations:
     """The #1361 operation adapters (replaceable for tests)."""
 
-    preflight: Callable[..., SemanticReviewPreflightResult] = (
-        validate_semantic_review_preflight
-    )
+    preflight: Callable[..., Any] = validate_semantic_review_preflight
     trigger: Callable[..., SemanticOperationResult] = trigger_semantic_review_round
     dispatch_fix: Callable[..., SemanticOperationResult] = dispatch_semantic_fix_agent
     poll: Callable[..., SemanticOperationResult] = poll_semantic_operation
     escalate: Callable[..., None] = escalate_semantic_review_to_human
+    cleanup_fix_worktree: Callable[..., bool] = cleanup_semantic_fix_worktree
 
 
 @dataclass(frozen=True)
@@ -550,9 +551,26 @@ class SemanticReviewCycleRunner:
         output = result.output_sha
         if result.status == SemanticOperationStatus.COMPLETED and output is None:
             output = result.input_sha  # a judgment-only result changed nothing
+        if result.status in (
+            SemanticOperationStatus.COMPLETED,
+            SemanticOperationStatus.FAILED,
+        ):
+            self._cleanup_fix_worktree(state.operation_id, state.provider_handle)
         return SemanticOperationObservation(
             state.operation_id, result.status, output, result.input_sha
         )
+
+    def _cleanup_fix_worktree(self, op: str | None, handle: str | None = None) -> None:
+        if not op:
+            return
+        wt = (
+            Path(self._root) / self._config.worktree_root / f"semantic-fix-{op}"
+        ).resolve()
+        if wt.exists():
+            pid = int(handle) if handle and handle.isdigit() else None
+            self._ops.cleanup_fix_worktree(
+                wt, repo_root=self._root, evaluate_fn=evaluate_worktree_removal, pid=pid
+            )
 
     def _trusted(self, ctx: _Attempt, comment: dict[str, Any]) -> bool:
         presence, _ = ctx.trust.evaluate_candidate_markers([comment])
@@ -850,6 +868,7 @@ class SemanticReviewCycleRunner:
         if nxt.phase == _P.INVALIDATED:
             self._revalidate(ctx)
             self._claims.delete_fix_branches(self._root, nxt.attempt_id)
+            self._cleanup_fix_worktree(nxt.operation_id, nxt.provider_handle)
         if nxt != ctx.state:
             nxt = self._save(ctx, nxt)
         if decision.requires_fix_dispatch:
@@ -987,6 +1006,8 @@ class SemanticReviewCycleRunner:
             temp_branch=ctx.pr.temp_branch,
             expected_head_sha=reserved.head_sha,
             round_number=reserved.round,
+            worktree_root=(self._root / self._config.worktree_root).resolve(),
+            repo_root=self._root,
         )
         launched = replace(
             reserved,

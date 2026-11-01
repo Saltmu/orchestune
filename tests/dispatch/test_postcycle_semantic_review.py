@@ -88,6 +88,7 @@ class World:
     """GitHub, remote refs, claim store and job adapters of one parent."""
 
     def __init__(self, tmp_path: Path, **config: Any) -> None:
+        self.tmp_path = tmp_path
         self.clock = T0
         self.comments: dict[int, list[dict[str, Any]]] = {PR: [], PARENT: []}
         self.labels: dict[int, set[str]] = {
@@ -111,6 +112,7 @@ class World:
         self.preflight_calls = 0
         self.escalations: list[str] = []
         self.deleted: list[str] = []
+        self.cleaned_worktrees: list[Path] = []
         self.ci: list[tuple[str, str]] = []
         self.ci_result: SemanticCiObservation | None | str = "success"
         self.ops_overrides: dict[str, Any] = {}
@@ -277,12 +279,19 @@ class World:
             self.escalations.append(kwargs["reason"])
             escalate_semantic_review_to_human(forge, **kwargs)
 
+        def cleanup_worktree(path: Path, repo_root: Any = None, **_k: Any) -> bool:
+            self.cleaned_worktrees.append(path)
+            return True
+
         return SemanticReviewOperations(
             preflight=preflight,
             trigger=trigger_semantic_review_round,
             dispatch_fix=dispatch,
             poll=poll,
             escalate=escalate,
+            cleanup_fix_worktree=self.ops_overrides.get(
+                "cleanup_fix_worktree", cleanup_worktree
+            ),
         )
 
     def verify_ci(self, branch: str, sha: str) -> SemanticCiObservation | None:
@@ -916,3 +925,20 @@ class TestPostcycleWiring:
         )
         assert result["status"] == "advanced"
         assert result["attempts"][0]["next_phase"] == "review_pending"
+
+    def test_fix_worktree_cleaned_up_on_terminal_status(self, tmp_path: Path) -> None:
+        world = World(tmp_path, worktree_root=tmp_path / "worktrees")
+        world.seed(
+            phase=P.FIX_IN_PROGRESS,
+            round=1,
+            operation_id="test-op-1",
+            operation_status=SemanticOperationStatus.RUNNING,
+            ci_verified_sha=None,
+            attempt_started_at=T0.isoformat(),
+            phase_started_at=T0.isoformat(),
+        )
+        wt_dir = tmp_path / "worktrees" / "semantic-fix-test-op-1"
+        wt_dir.mkdir(parents=True, exist_ok=True)
+        world.finish_job(output=None)
+        world.cycle()
+        assert wt_dir in world.cleaned_worktrees

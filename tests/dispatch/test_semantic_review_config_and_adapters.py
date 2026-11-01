@@ -383,6 +383,59 @@ class TestSemanticReviewOperations:
         assert "orchestune-review-judgments" in target.prompt
         assert "SemanticFixResultV1" in target.prompt
         assert "Do not push to `integration/temp-parent-1033`" in target.prompt
+        assert "orchestune claim" in target.prompt
+        assert "orchestune complete" in target.prompt
+
+    def test_fix_dispatch_fails_when_launch_unsupported_without_attempt(self) -> None:
+        class UnsupportedTarget:
+            def __init__(self) -> None:
+                self.launch_attempt_called = False
+
+            def launch_attempt(self, *args, **kwargs):
+                self.launch_attempt_called = True
+                return DispatchHandle(pid=999)
+
+        target = UnsupportedTarget()
+        result = dispatch_semantic_fix_agent(
+            target,
+            pr_number=7,
+            attempt_id=ATTEMPT,
+            operation_id=OPERATION,
+            temp_branch="integration/temp-parent-1033",
+            expected_head_sha=HEAD,
+            round_number=1,
+        )
+
+        assert result.status is SemanticOperationStatus.FAILED
+        assert result.error_code == "fix_launch_unsupported"
+
+    def test_launch_fix_does_not_retry_on_internal_type_error(self) -> None:
+        call_count = 0
+
+        class CrashingTarget:
+            def launch_semantic_fix(
+                self,
+                operation_id: str,
+                prompt: str,
+                expected_head_sha: str | None = None,
+            ) -> DispatchHandle:
+                nonlocal call_count
+                call_count += 1
+                raise TypeError("internal bug inside launch")
+
+        target = CrashingTarget()
+        result = dispatch_semantic_fix_agent(
+            target,
+            pr_number=7,
+            attempt_id=ATTEMPT,
+            operation_id=OPERATION,
+            temp_branch="integration/temp-parent-1033",
+            expected_head_sha=HEAD,
+            round_number=1,
+        )
+        assert call_count == 1
+        assert result.status is SemanticOperationStatus.INDETERMINATE
+        assert result.error_code == "launch_indeterminate"
 
     def test_poll_requires_trusted_result_marker(self, tmp_path: Path) -> None:
         marker = format_semantic_fix_result_marker(

@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from orchestune.dispatch.local_semantic_fix import launch_local_semantic_fix
 from orchestune.dispatch.reviewer import (
     ReviewerBot,
     ReviewerBotSetting,
@@ -307,6 +308,23 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
 
     def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:
         return not _is_pid_alive(handle.pid)
+
+    def launch_semantic_fix(
+        self,
+        operation_id: str,
+        prompt: str,
+        expected_head_sha: str | None = None,
+        worktree_root: Path | None = None,
+        repo_root: Path | None = None,
+    ) -> DispatchHandle | None:
+        return launch_local_semantic_fix(
+            target=self,
+            operation_id=operation_id,
+            prompt=prompt,
+            expected_head_sha=expected_head_sha,
+            worktree_root=worktree_root,
+            repo_root=repo_root,
+        )
 
 
 _CODEX_TASK_URL_RE = re.compile(r"https?://[^\s]+/tasks/([a-zA-Z0-9_-]+)")

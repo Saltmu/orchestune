@@ -241,6 +241,47 @@ class TestEvaluateClaimPreflight:
         assert decision.failure.reason == ClaimFailureReason.ALREADY_IN_PROGRESS
         assert decision.failure.exit_code == ClaimExitCode.ALREADY_IN_PROGRESS
 
+    def test_e7_pull_request_rejected(self) -> None:
+        from unittest.mock import MagicMock
+
+        from orchestune.forge.issues import IssueReference
+
+        issue = _make_issue()
+        forge = MagicMock()
+        forge.get_issue_reference.return_value = IssueReference(
+            number=issue.number, state="OPEN", is_pull_request=True
+        )
+        decision = evaluate_claim_preflight(issue, forge=forge)
+        assert decision.allowed is False
+        assert decision.failure is not None
+        assert decision.failure.reason == ClaimFailureReason.NOT_AN_ISSUE
+        assert decision.failure.exit_code == 19
+
+    def test_e8_forge_lookup_failure_rejected(self) -> None:
+        from unittest.mock import MagicMock
+
+        issue = _make_issue()
+        forge = MagicMock()
+        forge.get_issue_reference.side_effect = RuntimeError("network timeout")
+        decision = evaluate_claim_preflight(issue, forge=forge)
+        assert decision.allowed is False
+        assert decision.failure is not None
+        assert decision.failure.reason == ClaimFailureReason.FORGE_UNAVAILABLE
+        assert decision.failure.exit_code == ClaimExitCode.FORGE_UNAVAILABLE
+
+    def test_e9_issue_reference_normal_allowed(self) -> None:
+        from unittest.mock import MagicMock
+
+        from orchestune.forge.issues import IssueReference
+
+        issue = _make_issue()
+        forge = MagicMock()
+        forge.get_issue_reference.return_value = IssueReference(
+            number=issue.number, state="OPEN", is_pull_request=False
+        )
+        decision = evaluate_claim_preflight(issue, forge=forge)
+        assert decision.allowed is True
+
     @pytest.mark.parametrize(
         "label",
         [
@@ -574,3 +615,9 @@ class TestClaimPreflightFootprintValidation:
         decision_omitted = evaluate_claim_preflight(issue_omitted)
         assert decision_omitted.allowed is True
         assert decision_omitted.reservation_kind == ReservationKind.REPOSITORY
+
+    def test_forge_none_fails_open_for_offline_use(self) -> None:
+        issue = _make_issue(number=10, labels=(StatusLabel.QUEUED,))
+        decision = evaluate_claim_preflight(issue, forge=None)
+        assert decision.allowed is True
+        assert decision.failure is None

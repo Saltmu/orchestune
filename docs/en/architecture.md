@@ -158,7 +158,7 @@ CI is not the only automated gate. Orchestune provides a two-tier safety gate: c
 
 - The development skill (layer 1): runs the review loop on the child PR, and the LLM records a judgment for every finding.
 - `orchestune complete --result done`: verifies that judgment table together with the PR's freshly acquired review state and reviewed SHA, and saves the outcome as review evidence in the done Outcome Record. It rejects the completion and posts nothing when verification fails.
-- Integrator & Runner (layer 2): for multi-task integration PRs, the post-cycle `SemanticReviewCycleRunner` advances the semantic review and fix loop (default `required`), while the Integrator finalizes it. Single-child integrations bypass Layer 2 via the single-task Fast-Path.
+- Integrator & Runner (layer 2): for multi-task integration PRs, the post-cycle `SemanticReviewCycleRunner` advances the semantic review and fix loop (default `required`), while the Integrator finalizes it. Single-child integrations bypass Layer 2 via the single-task Fast-Path. For local CLI targets (`claude-cli`, `codex-cli`, `agy-cli`), fix agents run in a dedicated detached worktree managed by `dispatch.local_semantic_fix` rather than the primary checkout, and the worktree is cleaned up upon operation termination.
 
 Under the default `required` setting, a child without passing evidence for the exact commit being merged stops the integration (fail-closed) and the parent Issue moves to `status:blocked-human-review`. Details: [integration.md](architecture/integration.md); operation, resume and migration: [Usage §4.5](usage.md#45-child-review-evidence-gate-and-layer-2-semantic-review-gate).
 

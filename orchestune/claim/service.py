@@ -198,24 +198,17 @@ def _validate_preflight_and_conflict(
         )
         return None, None, _claim_failure(request.issue_number, failure), ()
 
-    preflight_view = view if isinstance(view, ClaimBaseResolutionView) else None
     preflight = evaluate_claim_preflight(
         issue,
         labels=_preflight_labels(issue, adoption),
-        view=preflight_view,
+        view=view if isinstance(view, ClaimBaseResolutionView) else None,
         default_base=default_base,
+        forge=forge,
     )
     if not preflight.allowed:
-        return (
-            None,
-            issue,
-            _claim_failure(request.issue_number, preflight.failure),
-            (),
-        )
+        return None, issue, _claim_failure(request.issue_number, preflight.failure), ()
 
-    task_meta = (
-        preflight.task if preflight.task is not None else parse_task_from_issue(issue)
-    )
+    task_meta = preflight.task or parse_task_from_issue(issue)
     reservation = build_reservation(request, task_meta)
     conflict_view = (
         view

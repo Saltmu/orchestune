@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from orchestune.claim.contracts import (
     ClaimFailure,
@@ -329,6 +329,24 @@ def _validate_issue_and_labels(
     return issue.number, label_set, failure
 
 
+def _validate_issue_not_pr(issue_number: int, forge: Any) -> ClaimFailure | None:
+    if forge is None or not hasattr(forge, "get_issue_reference"):
+        return None
+    try:
+        ref = forge.get_issue_reference(issue_number)
+        if ref is not None and getattr(ref, "is_pull_request", None) is True:
+            return ClaimFailure(
+                reason=ClaimFailureReason.NOT_AN_ISSUE,
+                message=f"#{issue_number} is a pull request, not an issue.",
+            )
+    except Exception as exc:
+        return ClaimFailure(
+            reason=ClaimFailureReason.FORGE_UNAVAILABLE,
+            message=f"Failed to verify whether #{issue_number} is an issue: {exc}",
+        )
+    return None
+
+
 def evaluate_claim_preflight(
     issue: IssueRecord | None,
     labels: Sequence[str] | Iterable[str] | None = None,
@@ -337,6 +355,7 @@ def evaluate_claim_preflight(
     *,
     view: ClaimBaseResolutionView | None = None,
     default_base: str = "origin/main",
+    forge: Any = None,
 ) -> PreflightDecision:
     """Validate issue status, labels, and dependencies before attempting claim."""
     issue_num, label_set, failure = _validate_issue_and_labels(
@@ -344,6 +363,12 @@ def evaluate_claim_preflight(
     )
     if failure is not None or issue is None:
         return PreflightDecision(allowed=False, issue_number=issue_num, failure=failure)
+
+    pr_failure = _validate_issue_not_pr(issue.number, forge)
+    if pr_failure is not None:
+        return PreflightDecision(
+            allowed=False, issue_number=issue.number, failure=pr_failure
+        )
 
     task = parse_task_from_issue(issue)
     subtask_id = resolve_claim_subtask_id(issue, task=task)
