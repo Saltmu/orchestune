@@ -8,6 +8,7 @@ shared human-escalation terminal without owning orchestration state.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 import re
 import shutil
@@ -289,21 +290,98 @@ def _launch_fix(
     pr: int,
     *,
     expected_head_sha: str | None = None,
+    worktree_root: Path | None = None,
+    repo_root: Path | None = None,
 ) -> Any:
     if callable(getattr(target, "fire_text_once", None)):
         return target.fire_text_once(prompt)
     if callable(getattr(target, "fire_text", None)):
         return target.fire_text(prompt)
     if callable(getattr(target, "launch_semantic_fix", None)):
-        try:
-            return target.launch_semantic_fix(
-                operation_id=operation_id,
-                prompt=prompt,
-                expected_head_sha=expected_head_sha,
-            )
-        except TypeError:
-            return target.launch_semantic_fix(operation_id=operation_id, prompt=prompt)
+        launch_fn = target.launch_semantic_fix
+        params = inspect.signature(launch_fn).parameters
+        kwargs: dict[str, Any] = {"operation_id": operation_id, "prompt": prompt}
+        if "expected_head_sha" in params:
+            kwargs["expected_head_sha"] = expected_head_sha
+        if "worktree_root" in params and worktree_root is not None:
+            kwargs["worktree_root"] = worktree_root
+        if "repo_root" in params and repo_root is not None:
+            kwargs["repo_root"] = repo_root
+        return launch_fn(**kwargs)
     return None
+
+
+def _make_fix_op_result(
+    operation_id: str,
+    status: SemanticOperationStatus,
+    input_sha: str | None = None,
+    *,
+    error_code: str | None = None,
+    handle: Any = None,
+) -> SemanticOperationResult:
+    return SemanticOperationResult(
+        operation_id,
+        status,
+        provider_handle=_provider_handle(handle) if handle is not None else None,
+        input_sha=input_sha,
+        error_code=error_code,
+    )
+
+
+def _build_fix_prompt(
+    pr: int, attempt: str, op: str, branch: str, sha: str, rnd: int
+) -> str:
+    return _fix_prompt(
+        pr_number=pr,
+        attempt_id=attempt,
+        operation_id=op,
+        temp_branch=branch,
+        expected_head_sha=sha,
+        round_number=rnd,
+    )
+
+
+def _launch_fix_agent(
+    target: Any,
+    prompt: str,
+    operation_id: str,
+    output_branch: str,
+    pr_number: int,
+    expected_head_sha: str,
+    worktree_root: Path | None,
+    repo_root: Path | None,
+) -> SemanticOperationResult:
+    try:
+        handle = _launch_fix(
+            target,
+            prompt,
+            operation_id,
+            output_branch,
+            pr_number,
+            expected_head_sha=expected_head_sha,
+            worktree_root=worktree_root,
+            repo_root=repo_root,
+        )
+    except Exception:  # an unknown launch response must never cause a second launch
+        return _make_fix_op_result(
+            operation_id,
+            SemanticOperationStatus.INDETERMINATE,
+            expected_head_sha,
+            error_code="launch_indeterminate",
+        )
+    if handle is None:
+        return _make_fix_op_result(
+            operation_id,
+            SemanticOperationStatus.FAILED,
+            expected_head_sha,
+            error_code="fix_launch_unsupported",
+        )
+    return _make_fix_op_result(
+        operation_id,
+        SemanticOperationStatus.DISPATCHING,
+        expected_head_sha,
+        handle=handle,
+    )
 
 
 def dispatch_semantic_fix_agent(
@@ -315,44 +393,27 @@ def dispatch_semantic_fix_agent(
     temp_branch: str,
     expected_head_sha: str,
     round_number: int,
+    worktree_root: Path | None = None,
+    repo_root: Path | None = None,
 ) -> SemanticOperationResult:
     output_branch = semantic_fix_output_branch(operation_id)
-    prompt = _fix_prompt(
-        pr_number=pr_number,
-        attempt_id=attempt_id,
-        operation_id=operation_id,
-        temp_branch=temp_branch,
-        expected_head_sha=expected_head_sha,
-        round_number=round_number,
-    )
-    try:
-        handle = _launch_fix(
-            target,
-            prompt,
-            operation_id,
-            output_branch,
-            pr_number,
-            expected_head_sha=expected_head_sha,
-        )
-    except Exception:  # an unknown launch response must never cause a second launch
-        return SemanticOperationResult(
-            operation_id,
-            SemanticOperationStatus.INDETERMINATE,
-            input_sha=expected_head_sha,
-            error_code="launch_indeterminate",
-        )
-    if handle is None:
-        return SemanticOperationResult(
-            operation_id,
-            SemanticOperationStatus.FAILED,
-            input_sha=expected_head_sha,
-            error_code="fix_launch_unsupported",
-        )
-    return SemanticOperationResult(
+    prompt = _build_fix_prompt(
+        pr_number,
+        attempt_id,
         operation_id,
-        SemanticOperationStatus.DISPATCHING,
-        provider_handle=_provider_handle(handle),
-        input_sha=expected_head_sha,
+        temp_branch,
+        expected_head_sha,
+        round_number,
+    )
+    return _launch_fix_agent(
+        target,
+        prompt,
+        operation_id,
+        output_branch,
+        pr_number,
+        expected_head_sha,
+        worktree_root,
+        repo_root,
     )
 
 

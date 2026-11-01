@@ -1109,4 +1109,6 @@ class TestLocalProcessDispatchTargetSemanticFix:
                 operation_id="op-abc",
                 prompt="fix instructions",
                 expected_head_sha="deadbeef" * 5,
+                worktree_root=None,
+                repo_root=None,
             )

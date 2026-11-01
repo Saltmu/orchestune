@@ -314,12 +314,16 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
         operation_id: str,
         prompt: str,
         expected_head_sha: str | None = None,
+        worktree_root: Path | None = None,
+        repo_root: Path | None = None,
     ) -> DispatchHandle | None:
         return launch_local_semantic_fix(
             target=self,
             operation_id=operation_id,
             prompt=prompt,
             expected_head_sha=expected_head_sha,
+            worktree_root=worktree_root,
+            repo_root=repo_root,
         )
 
 

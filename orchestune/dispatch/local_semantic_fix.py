@@ -124,29 +124,30 @@ def launch_local_semantic_fix(
     resolved_worktree_root = worktree_root or (resolved_repo_root / "worktrees")
     input_sha = expected_head_sha or "HEAD"
 
-    try:
-        wt_path = create_semantic_fix_worktree(
-            repo_root=resolved_repo_root,
-            worktree_root=resolved_worktree_root,
-            operation_id=operation_id,
-            input_sha=input_sha,
-        )
-    except Exception:
-        return None
+    wt_path = create_semantic_fix_worktree(
+        repo_root=resolved_repo_root,
+        worktree_root=resolved_worktree_root,
+        operation_id=operation_id,
+        input_sha=input_sha,
+    )
 
     log_dir = getattr(target, "_log_dir", Path("logs"))
     log_dir.mkdir(parents=True, exist_ok=True)
     slug = f"semantic-fix-{operation_id}"
     log_path = log_dir / f"{slug}.log"
-    with open(log_path, "ab") as log_fh:
-        log_offset = log_fh.tell()
-        process = subprocess.Popen(
-            cmd,
-            cwd=str(wt_path),
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+    try:
+        with open(log_path, "ab") as log_fh:
+            log_offset = log_fh.tell()
+            process = subprocess.Popen(
+                cmd,
+                cwd=str(wt_path),
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+    except Exception:
+        cleanup_semantic_fix_worktree(wt_path, repo_root=resolved_repo_root)
+        raise
 
     return DispatchHandle(
         pid=process.pid,

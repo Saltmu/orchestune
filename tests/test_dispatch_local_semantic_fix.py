@@ -136,6 +136,8 @@ class TestLocalProcessDispatchTargetLaunchSemanticFix:
                 operation_id="op-1",
                 prompt="fix prompt",
                 expected_head_sha="a" * 40,
+                worktree_root=tmp_path / "worktrees",
+                repo_root=tmp_path / "repo",
             )
             assert handle is not None
             assert handle.pid == 1234
@@ -144,6 +146,8 @@ class TestLocalProcessDispatchTargetLaunchSemanticFix:
                 operation_id="op-1",
                 prompt="fix prompt",
                 expected_head_sha="a" * 40,
+                worktree_root=tmp_path / "worktrees",
+                repo_root=tmp_path / "repo",
             )
 
     def test_custom_local_cmd_returns_none(self, tmp_path: Path) -> None:
@@ -158,3 +162,39 @@ class TestLocalProcessDispatchTargetLaunchSemanticFix:
             expected_head_sha="a" * 40,
         )
         assert handle is None
+
+    def test_popen_failure_cleans_up_created_worktree(self, tmp_path: Path) -> None:
+        import pytest
+
+        from orchestune.dispatch.local_semantic_fix import launch_local_semantic_fix
+
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            target_name="claude-cli",
+        )
+        with (
+            patch(
+                "orchestune.dispatch.local_semantic_fix.create_semantic_fix_worktree",
+                return_value=tmp_path / "worktrees" / "semantic-fix-op-err",
+            ),
+            patch(
+                "orchestune.dispatch.local_semantic_fix.subprocess.Popen",
+                side_effect=OSError("executable not found"),
+            ),
+            patch(
+                "orchestune.dispatch.local_semantic_fix.cleanup_semantic_fix_worktree"
+            ) as mock_cleanup,
+        ):
+            with pytest.raises(OSError, match="executable not found"):
+                launch_local_semantic_fix(
+                    target=target,
+                    operation_id="op-err",
+                    prompt="fix prompt",
+                    expected_head_sha="b" * 40,
+                    repo_root=tmp_path / "repo",
+                    worktree_root=tmp_path / "worktrees",
+                )
+            mock_cleanup.assert_called_once_with(
+                tmp_path / "worktrees" / "semantic-fix-op-err",
+                repo_root=tmp_path / "repo",
+            )

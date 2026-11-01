@@ -250,18 +250,21 @@ def _authored(
     accept: Callable[[str], bool],
 ) -> list[tuple[str, str]]:
     """``(body, author)`` of the comments whose author ``accept`` admits."""
-    selected = []
-    for comment in comments:
-        author, body = trust.extract_author(comment), comment.get("body")
-        if author and isinstance(body, str) and accept(author.casefold()):
-            selected.append((body, author))
-    return selected
+    return [
+        (str(c.get("body")), author)
+        for c in comments
+        if (author := trust.extract_author(c))
+        and isinstance(c.get("body"), str)
+        and accept(author.casefold())
+    ]
 
 
 def _is_target(attempt: OpenAttempt) -> bool:
-    if attempt.state_error is not None:
-        return True
-    return attempt.state is not None and attempt.state.phase in _TARGET_PHASES
+    return (
+        attempt.state_error is not None
+        or attempt.state is not None
+        and attempt.state.phase in _TARGET_PHASES
+    )
 
 
 def _escalation_notice_kind(attempt_id: str, reason: str) -> str:
@@ -274,10 +277,8 @@ def _has_semantic_marker(body: object) -> bool:
     return isinstance(body, str) and any(m in body for m in _SEMANTIC_MARKERS)
 
 
-def _hold(state: SemanticReviewStateV1, reason: str) -> SemanticTransitionDecision:
-    return SemanticTransitionDecision(
-        state.phase, state.round, state.fix_retries, reason, state
-    )
+def _hold(s: SemanticReviewStateV1, r: str) -> SemanticTransitionDecision:
+    return SemanticTransitionDecision(s.phase, s.round, s.fix_retries, r, s)
 
 
 def _escalated(
@@ -565,9 +566,7 @@ class SemanticReviewCycleRunner:
     def _cleanup_fix_worktree(self, operation_id: str | None) -> None:
         if not operation_id:
             return
-        root = Path(self._config.worktree_root)
-        if not root.is_absolute():
-            root = Path(self._root) / root
+        root = (Path(self._root) / self._config.worktree_root).resolve()
         wt_path = root / f"semantic-fix-{operation_id}"
         if wt_path.exists():
             self._ops.cleanup_fix_worktree(
@@ -1008,6 +1007,8 @@ class SemanticReviewCycleRunner:
             temp_branch=ctx.pr.temp_branch,
             expected_head_sha=reserved.head_sha,
             round_number=reserved.round,
+            worktree_root=(self._root / self._config.worktree_root).resolve(),
+            repo_root=self._root,
         )
         launched = replace(
             reserved,
@@ -1064,9 +1065,8 @@ class SemanticReviewCycleRunner:
         override = ctx.override if reason == "human_override" else None
         by = f" by @{override.actor}: {override.reason}" if override else ""
         body = (
-            "## Layer-2 semantic review skipped\n\n"
-            f"- Attempt: `{state.attempt_id}`\n- Head: `{state.head_sha}`\n"
-            f"- Reason: `{reason}`{by}"
+            f"## Layer-2 semantic review skipped\n\n"
+            f"- Attempt: `{state.attempt_id}`\n- Head: `{state.head_sha}`\n- Reason: `{reason}`{by}"
         )
         post_notice_if_changed(
             self._forge,
