@@ -240,7 +240,7 @@ def test_gc_apply_releases_closed_target_and_retains_worktree(local_claim, monke
     assert "7" not in state.active_worktrees
     assert claim_was_released(state, 7, active.claim.claim_id)
     (receipt,) = state.recovery_receipts.values()
-    assert receipt["reason"] == "closed-target:CLOSED"
+    assert receipt.reason == "closed-target:CLOSED"
     assert worktree.exists() and claim_marker_path(worktree).exists()
 
 

@@ -32,9 +32,9 @@ def test_receipt_binds_pr_and_old_claim():
     )
     key, receipt = orphan_receipt(active, pr)
     assert key == "orphaned-pr::repo-1::280::claim-1"
-    assert receipt["active"]["claim_id"] == "claim-1"
-    assert receipt["pr_number"] == 9
-    assert receipt["head_sha"] == "a" * 40
+    assert receipt.active.value.claim.claim_id == "claim-1"
+    assert receipt.pr_number == 9
+    assert receipt.head_sha == "a" * 40
 
 
 def test_stopped_cloud_execution_with_open_pr_reaches_completion():
@@ -138,7 +138,7 @@ def test_receipt_is_saved_before_escalation(tmp_path, fake_forge):
     ):
         _apply_completed_worktree_outcome(active, decision, config, run_state=state)
     assert (
-        state.recovery_receipts["orphaned-pr::repo-1::280::claim-1"]["head_sha"]
+        state.recovery_receipts["orphaned-pr::repo-1::280::claim-1"].head_sha
         == pr.head_sha
     )
     save.assert_called_once()

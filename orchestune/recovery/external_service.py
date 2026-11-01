@@ -20,6 +20,11 @@ from orchestune.ledger.external_stop_receipts import (
     matching_confirmation,
     valid_confirmation,
 )
+from orchestune.ledger.recovery_receipts import (
+    ExternalStopConfirmation,
+    RecoveryReceiptValue,
+    ReleaseReceipt,
+)
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
@@ -46,17 +51,17 @@ def _select(
     key, active = matches[0]
     identity = execution_identity(active)
     if (
-        identity["repository_id"] != workspace.repository_identity
-        or identity["claim_id"] != request.claim_id
-        or identity["external_id"] != request.external_id
-        or identity["launch_attempt_id"] != request.launch_attempt_id
+        identity.repository_id != workspace.repository_identity
+        or identity.claim_id != request.claim_id
+        or identity.external_id != request.external_id
+        or identity.launch_attempt_id != request.launch_attempt_id
     ):
         raise ValueError("external execution generation changed")
     receipts = _requested_confirmations(request, state, workspace)
     if receipts and (
         len(receipts) != 1
         or receipts[0][0] != confirmation_key(active)
-        or receipts[0][1].get("execution_identity") != identity
+        or receipts[0][1].execution_identity != identity
     ):
         raise ValueError("external execution generation changed")
     return key, active
@@ -69,21 +74,22 @@ def _absent(
     if len(matches) != 1 or not valid_confirmation(*matches[0]):
         raise ValueError("no unique valid external confirmation")
     key, confirmation = matches[0]
-    release = state.recovery_receipts.get(
+    release: RecoveryReceiptValue | None = state.recovery_receipts.get(
         f"{workspace.repository_identity}::{request.issue_number}::{request.claim_id}::release",
-        {},
+        None,
     )
     released = (
-        release.get("operation") == "release"
-        and release.get("schema_version") == 1
-        and release.get("confirmation_receipt_key") == key
-        and release.get("repository_id") == workspace.repository_identity
-        and release.get("issue_number") == request.issue_number
-        and release.get("claim_id") == request.claim_id
-        and _snapshot_matches(release.get("active"), confirmation["execution_identity"])
+        isinstance(release, ReleaseReceipt)
+        and release.confirmation_receipt_key == key
+        and release.repository_id == workspace.repository_identity
+        and release.issue_number == request.issue_number
+        and release.claim_id == request.claim_id
+        and release.execution_identity == confirmation.execution_identity
     )
-    if release.get("confirmation_receipt_key") == key and not _valid_linked_release(
-        key, release
+    if (
+        isinstance(release, ReleaseReceipt)
+        and release.confirmation_receipt_key == key
+        and not _valid_linked_release(key, release)
     ):
         raise ValueError("external_release_receipt_invalid")
     action = "already_external_stop_confirmed_" + (
@@ -96,38 +102,31 @@ def _absent(
 
 def _requested_confirmations(
     request: RecoveryRequest, state: RunState, workspace: ClaimWorkspace
-) -> list[tuple[str, dict[str, Any]]]:
+) -> list[tuple[str, ExternalStopConfirmation]]:
     matches = [
         (k, r)
         for k, r in state.recovery_receipts.items()
-        if r.get("operation") == "external-stop-confirmation"
+        if isinstance(r, ExternalStopConfirmation)
         and all(
-            r.get(n) == v
-            for n, v in (
-                ("repository_id", workspace.repository_identity),
-                ("issue_number", request.issue_number),
-                ("claim_id", request.claim_id),
-                ("external_id", request.external_id),
-                ("launch_attempt_id", request.launch_attempt_id),
+            actual == expected
+            for actual, expected in (
+                (r.repository_id, workspace.repository_identity),
+                (r.issue_number, request.issue_number),
+                (r.claim_id, request.claim_id),
+                (r.external_id, request.external_id),
+                (r.launch_attempt_id, request.launch_attempt_id),
             )
         )
     ]
     return matches
 
 
-def _snapshot_matches(snapshot: Any, identity: dict[str, Any]) -> bool:
-    return isinstance(snapshot, dict) and all(
-        n in snapshot and snapshot[n] == v for n, v in identity.items()
-    )
-
-
-def _valid_linked_release(key: str, release: dict[str, Any]) -> bool:
+def _valid_linked_release(key: str, release: Any) -> bool:
     return (
-        release.get("operation") == "release"
-        and release.get("confirmation_receipt_key") == key
-        and valid_confirmation(
-            key, {**release, "operation": "external-stop-confirmation"}
-        )
+        isinstance(release, ReleaseReceipt)
+        and release.confirmation_receipt_key == key
+        and release.execution_identity is not None
+        and release.active.value.claim.claim_id == release.claim_id
     )
 
 
@@ -257,16 +256,16 @@ def _save(
         )
     raw = json.loads(workspace.run_state_path.read_text(encoding="utf-8"))
     receipts = raw.setdefault("recovery_receipts", {})
-    receipts.setdefault(confirmation, confirmation_record(active, request.reason or ""))
+    confirmation_value = confirmation_record(active, request.reason or "")
+    receipts.setdefault(confirmation, confirmation_value.to_dict())
     if not retain:
         release_key = f"{workspace.repository_identity}::{request.issue_number}::{active.claim.claim_id}::release"
         if release_key in receipts and not _valid_linked_release(
             confirmation, receipts[release_key]
         ):
             raise ValueError("external_release_receipt_invalid")
-        release = dict(confirmation_record(active, request.reason or ""))
-        release.update(operation="release", confirmation_receipt_key=confirmation)
-        receipts.setdefault(release_key, release)
+        release = _linked_release_record(confirmation_value, confirmation)
+        receipts.setdefault(release_key, release.to_dict())
         del raw["active_worktrees"][key]
     write_json_atomic(workspace.run_state_path, raw)
     action = "external_stop_confirmed_" + ("active_retained" if retain else "released")
@@ -276,6 +275,28 @@ def _save(
         action,
         "worktree, branch, marker and GitHub retained",
         diagnostics,
+    )
+
+
+def _linked_release_record(
+    confirmation_value: ExternalStopConfirmation, confirmation: str
+) -> ReleaseReceipt:
+    return ReleaseReceipt(
+        schema_version=1,
+        repository_id=confirmation_value.repository_id,
+        issue_number=confirmation_value.issue_number,
+        claim_id=confirmation_value.claim_id,
+        operation="release",
+        reason=confirmation_value.reason,
+        recorded_at=confirmation_value.recorded_at,
+        worktree_action=confirmation_value.worktree_action,
+        active=confirmation_value.active,
+        confirmation_receipt_key=confirmation,
+        source=confirmation_value.source,
+        confirmed_external_stopped=confirmation_value.confirmed_external_stopped,
+        launch_attempt_id=confirmation_value.launch_attempt_id,
+        external_id=confirmation_value.external_id,
+        execution_identity=confirmation_value.execution_identity,
     )
 
 

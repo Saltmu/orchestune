@@ -277,7 +277,8 @@ ledger は claim・dispatch に依存しません。
 
 各モジュールの責務、所有権契約、および `targets`・リポジトリ設定・consistency status
 kernel の境界は、[共有実行台帳とパッケージ境界 (ledger.md)](architecture/ledger.md)に
-まとめています。`ActiveWorktree` の詳細な仕様とライフサイクルの優先順位は
+まとめています。`ledger.recovery_receipts` は操作別の型付き復旧receipt recordと
+JSON codecを管理します。`ActiveWorktree` の詳細な仕様とライフサイクルの優先順位は
 [ステートレスCIと自己修復 (state-recovery.md)](architecture/state-recovery.md#active-worktree-lifecycle)
 を参照してください。
 

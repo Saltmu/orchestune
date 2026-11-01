@@ -11,7 +11,11 @@ from orchestune.complete.contracts import CompleteRequest
 from orchestune.complete.service import complete_task
 from orchestune.infra.process_utils import run_state_lock
 from orchestune.ledger.completion_records import CompletionReplayReceipt
-from orchestune.ledger.run_state import load_run_state_readonly, save_run_state
+from orchestune.ledger.run_state import (
+    load_run_state_readonly,
+    save_run_state,
+)
+from orchestune.recovery.blocked_restart import _replayed, _save_restart, _write_marker
 from orchestune.recovery.contracts import RecoveryRequest
 from orchestune.recovery.service import recover_claim
 from orchestune.worktree_ops.claim_marker import claim_marker_path, read_claim_marker
@@ -96,6 +100,55 @@ def test_preview_restart_retry_and_historical_replay(blocked_claim):
         replace(old_request, completion_id=receipt.record.completion_id), forge=forge
     )
     assert replay.success and replay.result == "blocked"
+
+
+def test_invalid_restart_receipt_fails_closed_on_replay(blocked_claim):
+    workspace, active, _, forge, _ = blocked_claim
+    state = load_run_state_readonly(workspace.run_state_path)
+    key = (
+        f"{workspace.repository_identity}::7::{active.claim.claim_id}::restart-blocked"
+    )
+    state.recovery_receipts[key] = {
+        "schema_version": 1,
+        "operation": "restart-blocked",
+        "repository_id": workspace.repository_identity,
+        "issue_number": 7,
+        "claim_id": active.claim.claim_id,
+        "phase": "unknown",
+    }
+    save_run_state(state, workspace.run_state_path)
+
+    with pytest.raises(ValueError, match="Invalid restart receipt phase"):
+        _replayed(
+            restart_request(active),
+            state,
+            workspace,
+            workspace.repository_root,
+            forge,
+        )
+
+
+def test_restart_writer_rejects_missing_claim_identity(blocked_claim):
+    workspace, active, _, _, _ = blocked_claim
+    malformed = replace(active, claim=replace(active.claim, claim_id=None))
+    request = RecoveryRequest(
+        7,
+        claim_id=None,
+        reason="operator resolved blocker",
+        restart_blocked=True,
+        apply=True,
+    )
+
+    with pytest.raises(ValueError, match="claim_id"):
+        _save_restart(request, workspace, malformed)
+
+
+def test_restart_marker_rejects_missing_claim_identity(local_claim, tmp_path):
+    _, active, _ = local_claim
+    malformed = replace(active, claim=replace(active.claim, claim_id=None))
+
+    with pytest.raises(ValueError, match="claim_id"):
+        _write_marker(tmp_path, malformed, branch_created=False)
 
 
 @pytest.mark.parametrize(
@@ -228,7 +281,7 @@ def test_marker_write_failure_keeps_old_claim(blocked_claim, monkeypatch):
     assert not result.success
     state = load_run_state_readonly(workspace.run_state_path)
     assert state.active_worktrees["7"].claim.claim_id == active.claim.claim_id
-    assert next(iter(state.recovery_receipts.values()))["phase"] == "prepared"
+    assert next(iter(state.recovery_receipts.values())).phase == "prepared"
     assert claim_marker_path(worktree).read_bytes() == marker
 
 
@@ -290,9 +343,9 @@ def test_crash_after_marker_update_resumes_prepared_generation(
         recover_claim(request, cwd=workspace.repository_root, forge=forge)
     state = load_run_state_readonly(workspace.run_state_path)
     receipt = next(iter(state.recovery_receipts.values()))
-    assert receipt["phase"] == "prepared"
+    assert receipt.phase == "prepared"
     assert state.active_worktrees["7"].claim.claim_id == active.claim.claim_id
-    assert read_claim_marker(worktree)["claim_id"] == receipt["new_claim_id"]
+    assert read_claim_marker(worktree)["claim_id"] == receipt.new_claim_id
     before, marker = (
         workspace.run_state_path.read_bytes(),
         claim_marker_path(worktree).read_bytes(),
@@ -307,5 +360,5 @@ def test_crash_after_marker_update_resumes_prepared_generation(
     resumed = recover_claim(request, cwd=workspace.repository_root, forge=forge)
     assert resumed.success, resumed.reason
     state = load_run_state_readonly(workspace.run_state_path)
-    assert state.active_worktrees["7"].claim.claim_id == receipt["new_claim_id"]
-    assert read_claim_marker(worktree)["claim_id"] == receipt["new_claim_id"]
+    assert state.active_worktrees["7"].claim.claim_id == receipt.new_claim_id
+    assert read_claim_marker(worktree)["claim_id"] == receipt.new_claim_id

@@ -12,6 +12,7 @@ import pytest
 from orchestune.claim.contracts import ClaimRequest, ClaimStage, OwnerKind
 from orchestune.claim.service import claim_task
 from orchestune.claim.workspace import resolve_claim_workspace
+from orchestune.claim.worktree_reclaim import record_reclaim_phase
 from orchestune.dispatch.gc.handoff import GcRequest
 from orchestune.dispatch.gc_service import run_handoff_gc
 from orchestune.infra.git_cli import run_git
@@ -22,7 +23,9 @@ from orchestune.ledger.active_records import (
     ClaimInfo,
     LaunchInfo,
 )
-from orchestune.ledger.run_state import ActiveWorktree
+from orchestune.ledger.completion_records import InvalidLedgerRecord
+from orchestune.ledger.recovery_receipts import decode_recovery_receipt
+from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeRecord
 from orchestune.worktree_ops.claim_marker import read_claim_marker, write_claim_marker
@@ -37,6 +40,19 @@ ISSUE = 250
 BRANCH = "claude/issue-250-task"
 FOOTPRINT = ("README.md", "notes.txt")
 OLD_CLAIM = "claim-old"
+
+
+def test_reclaim_phase_rejects_a_non_gc_receipt():
+    state = RunState(
+        recovery_receipts={
+            "invalid": InvalidLedgerRecord(
+                "recovery_receipts", "bad record", {"operation": "release"}
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match="not a gc-release record"):
+        record_reclaim_phase(state, "claim-next", "prepared", receipt_key="invalid")
 
 
 @dataclass(frozen=True)
@@ -292,12 +308,14 @@ def test_released_generation_is_never_resurrected() -> None:
 
     state = RunState(
         recovery_receipts={
-            "repo::250::claim-old::gc-release": {
-                "operation": "gc-release",
-                "issue_number": ISSUE,
-                "claim_id": OLD_CLAIM,
-                "active": {"launch_attempt_id": "attempt-old"},
-            }
+            "repo::250::claim-old::gc-release": decode_recovery_receipt(
+                {
+                    "operation": "gc-release",
+                    "issue_number": ISSUE,
+                    "claim_id": OLD_CLAIM,
+                    "active": {"launch_attempt_id": "attempt-old"},
+                }
+            )
         }
     )
 
