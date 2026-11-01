@@ -1,6 +1,8 @@
 # Review Loop Reference (Step 11)
 
 Keep the review loop, feedback, CI, commits and pushes in the PR's task worktree. During #822 observation, apply [measurement.md](measurement.md) to every round: capture the reviewed SHA, deduplicate and classify findings, and record re-review reasons. Before Step 12, finalize the record even for zero findings, timeout, or blocked work.
+Start: verified current PR and selected reviewer. Actions: acquire and judge via the bounded procedure below. Finish: per-finding Steps 5/6 and current-head evidence permit completion. Failure: use the documented resume/escalation paths; schedule timers, repeated command launches and concurrent waits are prohibited. Never post a separate trigger before the atomic wait; the MCP combined-post path is its explicit limited exception.
+Recovery example: if review_target_sha is older than the fixed HEAD, refresh CI and request a new review round with the prior judgments; unknown SHA cannot become current by copying requested/current SHA.
 
 ## 11. Automated LLM PR Review Loop (Review Cycle)
 

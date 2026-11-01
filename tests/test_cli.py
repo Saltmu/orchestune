@@ -288,6 +288,7 @@ def test_cli_no_args_exits(capsys):
         "  config    Create or edit orchestune.toml interactively\n"
         "  skills    Install and manage Orchestune skills for AI assistants\n"
         "  scratch   Create scratch session directories for task artifacts\n"
+        "  workflow  Check read-only advisory workflow gates\n"
     )
 
 
@@ -333,6 +334,20 @@ def test_cli_invalid_command_exits(capsys):
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "Unknown command: invalid_cmd" in captured.out
+
+
+def test_cli_delegates_to_workflow():
+    from orchestune.cli import main
+
+    with (
+        patch("sys.argv", ["orchestune", "workflow", "check", "pre-pr"]),
+        patch("orchestune.workflow.cli.main", return_value=2) as run,
+        pytest.raises(SystemExit) as error,
+    ):
+        main()
+        assert sys.argv == ["orchestune", "check", "pre-pr"]
+    assert error.value.code == 2
+    run.assert_called_once_with()
 
 
 @pytest.mark.parametrize("flag", ["--version", "-V"])

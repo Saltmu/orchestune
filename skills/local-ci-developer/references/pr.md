@@ -1,6 +1,7 @@
 # Pull Request Reference (Step 10)
 
 Prepare and submit from the task worktree after local CI passes.
+Start: implementation and current clean-HEAD CI evidence. Actions: prepare the template, resolve the base and verify remote content below. Finish: PR head/base/body match the tested worktree. Failure: reconcile stale evidence or uncertain writes before continuing.
 
 ## Description
 Copy `.github/pull_request_template.md` to `<session-dir>/pr-body.md` and complete:
