@@ -615,3 +615,9 @@ class TestClaimPreflightFootprintValidation:
         decision_omitted = evaluate_claim_preflight(issue_omitted)
         assert decision_omitted.allowed is True
         assert decision_omitted.reservation_kind == ReservationKind.REPOSITORY
+
+    def test_forge_none_fails_open_for_offline_use(self) -> None:
+        issue = _make_issue(number=10, labels=(StatusLabel.QUEUED,))
+        decision = evaluate_claim_preflight(issue, forge=None)
+        assert decision.allowed is True
+        assert decision.failure is None

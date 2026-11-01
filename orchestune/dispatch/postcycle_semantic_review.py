@@ -176,9 +176,7 @@ class SemanticReviewCycleReport:
 class SemanticReviewOperations:
     """The #1361 operation adapters (replaceable for tests)."""
 
-    preflight: Callable[..., SemanticReviewPreflightResult] = (
-        validate_semantic_review_preflight
-    )
+    preflight: Callable[..., Any] = validate_semantic_review_preflight
     trigger: Callable[..., SemanticOperationResult] = trigger_semantic_review_round
     dispatch_fix: Callable[..., SemanticOperationResult] = dispatch_semantic_fix_agent
     poll: Callable[..., SemanticOperationResult] = poll_semantic_operation
@@ -250,21 +248,18 @@ def _authored(
     accept: Callable[[str], bool],
 ) -> list[tuple[str, str]]:
     """``(body, author)`` of the comments whose author ``accept`` admits."""
-    return [
-        (str(c.get("body")), author)
-        for c in comments
-        if (author := trust.extract_author(c))
-        and isinstance(c.get("body"), str)
-        and accept(author.casefold())
-    ]
+    selected = []
+    for comment in comments:
+        author, body = trust.extract_author(comment), comment.get("body")
+        if author and isinstance(body, str) and accept(author.casefold()):
+            selected.append((body, author))
+    return selected
 
 
 def _is_target(attempt: OpenAttempt) -> bool:
-    return (
-        attempt.state_error is not None
-        or attempt.state is not None
-        and attempt.state.phase in _TARGET_PHASES
-    )
+    if attempt.state_error is not None:
+        return True
+    return attempt.state is not None and attempt.state.phase in _TARGET_PHASES
 
 
 def _escalation_notice_kind(attempt_id: str, reason: str) -> str:
@@ -277,8 +272,10 @@ def _has_semantic_marker(body: object) -> bool:
     return isinstance(body, str) and any(m in body for m in _SEMANTIC_MARKERS)
 
 
-def _hold(s: SemanticReviewStateV1, r: str) -> SemanticTransitionDecision:
-    return SemanticTransitionDecision(s.phase, s.round, s.fix_retries, r, s)
+def _hold(state: SemanticReviewStateV1, reason: str) -> SemanticTransitionDecision:
+    return SemanticTransitionDecision(
+        state.phase, state.round, state.fix_retries, reason, state
+    )
 
 
 def _escalated(
@@ -558,19 +555,21 @@ class SemanticReviewCycleRunner:
             SemanticOperationStatus.COMPLETED,
             SemanticOperationStatus.FAILED,
         ):
-            self._cleanup_fix_worktree(state.operation_id)
+            self._cleanup_fix_worktree(state.operation_id, state.provider_handle)
         return SemanticOperationObservation(
             state.operation_id, result.status, output, result.input_sha
         )
 
-    def _cleanup_fix_worktree(self, operation_id: str | None) -> None:
-        if not operation_id:
+    def _cleanup_fix_worktree(self, op: str | None, handle: str | None = None) -> None:
+        if not op:
             return
-        root = (Path(self._root) / self._config.worktree_root).resolve()
-        wt_path = root / f"semantic-fix-{operation_id}"
-        if wt_path.exists():
+        wt = (
+            Path(self._root) / self._config.worktree_root / f"semantic-fix-{op}"
+        ).resolve()
+        if wt.exists():
+            pid = int(handle) if handle and handle.isdigit() else None
             self._ops.cleanup_fix_worktree(
-                wt_path, repo_root=self._root, evaluate_fn=evaluate_worktree_removal
+                wt, repo_root=self._root, evaluate_fn=evaluate_worktree_removal, pid=pid
             )
 
     def _trusted(self, ctx: _Attempt, comment: dict[str, Any]) -> bool:
@@ -869,7 +868,7 @@ class SemanticReviewCycleRunner:
         if nxt.phase == _P.INVALIDATED:
             self._revalidate(ctx)
             self._claims.delete_fix_branches(self._root, nxt.attempt_id)
-            self._cleanup_fix_worktree(nxt.operation_id)
+            self._cleanup_fix_worktree(nxt.operation_id, nxt.provider_handle)
         if nxt != ctx.state:
             nxt = self._save(ctx, nxt)
         if decision.requires_fix_dispatch:
@@ -1065,8 +1064,9 @@ class SemanticReviewCycleRunner:
         override = ctx.override if reason == "human_override" else None
         by = f" by @{override.actor}: {override.reason}" if override else ""
         body = (
-            f"## Layer-2 semantic review skipped\n\n"
-            f"- Attempt: `{state.attempt_id}`\n- Head: `{state.head_sha}`\n- Reason: `{reason}`{by}"
+            "## Layer-2 semantic review skipped\n\n"
+            f"- Attempt: `{state.attempt_id}`\n- Head: `{state.head_sha}`\n"
+            f"- Reason: `{reason}`{by}"
         )
         post_notice_if_changed(
             self._forge,

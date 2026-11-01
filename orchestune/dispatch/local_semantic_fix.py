@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.infra.git_cli import run_git
+from orchestune.infra.process_utils import is_process_alive
 from orchestune.targets.contracts import DispatchHandle
 
 
@@ -86,12 +87,15 @@ def cleanup_semantic_fix_worktree(
     repo_root: Path | None = None,
     *,
     evaluate_fn: Callable[..., Any] | None = None,
+    pid: int | None = None,
 ) -> bool:
     """Clean up a semantic fix worktree after terminal operation state.
 
     Only deletes the worktree if evaluate_fn confirms it is safe
-    (registered, non-primary, not dirty).
+    (registered, non-primary, not dirty) and any associated agent pid is dead.
     """
+    if pid is not None and is_process_alive(pid):
+        return False
     if evaluate_fn is not None:
         evaluation = evaluate_fn(worktree_path=worktree_path, repo_root=repo_root)
         if not getattr(evaluation, "can_remove", False):

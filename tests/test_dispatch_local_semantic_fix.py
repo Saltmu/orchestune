@@ -56,6 +56,19 @@ class TestBuildLocalSemanticFixCmd:
         cmd = build_local_semantic_fix_cmd("unknown-target", prompt="Fix this finding")
         assert cmd is None
 
+    def test_permission_flags_match_targets_base(self) -> None:
+        from orchestune.dispatch.targets import _LOCAL_CMD_BASE_BY_TARGET
+
+        for target_name, flag in [
+            ("claude-cli", "bypassPermissions"),
+            ("codex-cli", "--dangerously-bypass-approvals-and-sandbox"),
+            ("agy-cli", "--dangerously-skip-permissions"),
+        ]:
+            cmd = build_local_semantic_fix_cmd(target_name, prompt="test")
+            assert cmd is not None
+            assert flag in cmd or any(flag in arg for arg in cmd)
+            assert flag in _LOCAL_CMD_BASE_BY_TARGET[target_name]
+
 
 class TestSemanticFixWorktreeLifecycle:
     def test_create_semantic_fix_worktree(self, tmp_path: Path) -> None:
@@ -120,6 +133,17 @@ class TestSemanticFixWorktreeLifecycle:
             )
             assert removed is False
             mock_git.assert_not_called()
+
+    def test_cleanup_skips_when_process_alive(self, tmp_path: Path) -> None:
+        wt_path = tmp_path / "worktrees" / "semantic-fix-alive"
+        with patch(
+            "orchestune.dispatch.local_semantic_fix.is_process_alive",
+            return_value=True,
+        ):
+            with patch("orchestune.dispatch.local_semantic_fix.run_git") as mock_git:
+                removed = cleanup_semantic_fix_worktree(wt_path, pid=9999)
+                assert removed is False
+                mock_git.assert_not_called()
 
 
 class TestLocalProcessDispatchTargetLaunchSemanticFix:
