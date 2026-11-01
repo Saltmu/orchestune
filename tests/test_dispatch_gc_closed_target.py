@@ -154,11 +154,11 @@ def test_release_in_state_records_a_release_receipt(local_claim):
     assert key == (
         f"{workspace.repository_identity}::7::{active.claim.claim_id}::release"
     )
-    assert receipt["operation"] == "release"
-    assert receipt["reason"] == "closed-target:MERGED"
-    assert receipt["worktree_action"] == "retain"
-    assert receipt["claim_id"] == active.claim.claim_id
-    assert receipt["active"]["issue_number"] == 7
+    assert receipt.operation == "release"
+    assert receipt.reason == "closed-target:MERGED"
+    assert receipt.worktree_action == "retain"
+    assert receipt.claim_id == active.claim.claim_id
+    assert receipt.active.value.core.issue_number == 7
     assert claim_was_released(state, 7, active.claim.claim_id)
 
 
@@ -267,8 +267,9 @@ def test_recovery_receipt_matches_operator_release_shape(local_claim):
     assert result.action == "released"
     raw = json.loads(Path(workspace.run_state_path).read_text())
     (operator_receipt,) = raw["recovery_receipts"].values()
-    assert set(gc_receipt) == set(operator_receipt)
-    assert gc_receipt["active"] == operator_receipt["active"]
+    gc_json = gc_receipt.to_dict()
+    assert set(gc_json) == set(operator_receipt)
+    assert gc_json["active"] == operator_receipt["active"]
 
 
 def test_gc_phase_releases_merged_pr_claim_before_an_overlapping_launch(local_claim):

@@ -39,6 +39,10 @@ from orchestune.infra.process_utils import (
 from orchestune.ledger.completion_reservations import (
     completion_handoff_matches_active,
 )
+from orchestune.ledger.recovery_receipts import (
+    GcReleaseReceipt,
+    RecoveryActiveSnapshot,
+)
 from orchestune.ledger.run_state import (
     GC_RELEASE_OPERATION,
     ActiveWorktree,
@@ -165,25 +169,25 @@ def _remove_verified_worktree(
 
 def _gc_release_receipt(
     active: ActiveWorktree, snapshot: Any, workspace: ClaimWorkspace
-) -> dict[str, Any]:
+) -> GcReleaseReceipt:
     """#1381: evidence that lets the next claim take over the retained worktree."""
-    return {
-        "schema_version": 1,
-        "operation": GC_RELEASE_OPERATION,
-        "repository_id": workspace.repository_identity,
-        "issue_number": active.core.issue_number,
-        "claim_id": active.claim.claim_id,
-        "completion_id": active.completion.completion_id,
-        "completion_result": active.completion.completion_result,
-        "branch": active.core.branch,
-        "worktree_path": str(_absolute_worktree_path(active, workspace).resolve()),
-        "base_sha": active.claim.base_sha,
-        "worktree_action": "retain",
+    return GcReleaseReceipt(
+        schema_version=1,
+        operation=GC_RELEASE_OPERATION,
+        repository_id=workspace.repository_identity,
+        issue_number=active.core.issue_number,
+        claim_id=active.claim.claim_id or "",
+        completion_id=active.completion.completion_id,
+        completion_result=active.completion.completion_result,
+        branch=active.core.branch,
+        worktree_path=str(_absolute_worktree_path(active, workspace).resolve()),
+        base_sha=active.claim.base_sha,
+        worktree_action="retain",
         # `_apply_release` checked `collection_stop_problem` just before this write.
-        "stop_confirmed": True,
-        "recorded_at": datetime.now(UTC).isoformat(),
-        "active": snapshot,
-    }
+        stop_confirmed=True,
+        recorded_at=datetime.now(UTC).isoformat(),
+        active=RecoveryActiveSnapshot.from_json(snapshot),
+    )
 
 
 def _updated_state_after_release(
@@ -209,7 +213,7 @@ def _updated_state_after_release(
                 active.core.issue_number,
                 active.claim.claim_id,
             )
-        ] = _gc_release_receipt(active, snapshot, workspace)
+        ] = _gc_release_receipt(active, snapshot, workspace).to_dict()
     outcome = plan.outcome
     if outcome is not None and outcome.result == "done":
         completed = updated.setdefault("completed_worktrees", [])

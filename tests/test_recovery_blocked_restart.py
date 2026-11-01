@@ -228,7 +228,7 @@ def test_marker_write_failure_keeps_old_claim(blocked_claim, monkeypatch):
     assert not result.success
     state = load_run_state_readonly(workspace.run_state_path)
     assert state.active_worktrees["7"].claim.claim_id == active.claim.claim_id
-    assert next(iter(state.recovery_receipts.values()))["phase"] == "prepared"
+    assert next(iter(state.recovery_receipts.values())).phase == "prepared"
     assert claim_marker_path(worktree).read_bytes() == marker
 
 
@@ -290,9 +290,9 @@ def test_crash_after_marker_update_resumes_prepared_generation(
         recover_claim(request, cwd=workspace.repository_root, forge=forge)
     state = load_run_state_readonly(workspace.run_state_path)
     receipt = next(iter(state.recovery_receipts.values()))
-    assert receipt["phase"] == "prepared"
+    assert receipt.phase == "prepared"
     assert state.active_worktrees["7"].claim.claim_id == active.claim.claim_id
-    assert read_claim_marker(worktree)["claim_id"] == receipt["new_claim_id"]
+    assert read_claim_marker(worktree)["claim_id"] == receipt.new_claim_id
     before, marker = (
         workspace.run_state_path.read_bytes(),
         claim_marker_path(worktree).read_bytes(),
@@ -307,5 +307,5 @@ def test_crash_after_marker_update_resumes_prepared_generation(
     resumed = recover_claim(request, cwd=workspace.repository_root, forge=forge)
     assert resumed.success, resumed.reason
     state = load_run_state_readonly(workspace.run_state_path)
-    assert state.active_worktrees["7"].claim.claim_id == receipt["new_claim_id"]
-    assert read_claim_marker(worktree)["claim_id"] == receipt["new_claim_id"]
+    assert state.active_worktrees["7"].claim.claim_id == receipt.new_claim_id
+    assert read_claim_marker(worktree)["claim_id"] == receipt.new_claim_id

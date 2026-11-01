@@ -22,6 +22,7 @@ from orchestune.ledger.active_records import (
     ClaimInfo,
     LaunchInfo,
 )
+from orchestune.ledger.recovery_receipts import decode_recovery_receipt
 from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeRecord
@@ -292,12 +293,14 @@ def test_released_generation_is_never_resurrected() -> None:
 
     state = RunState(
         recovery_receipts={
-            "repo::250::claim-old::gc-release": {
-                "operation": "gc-release",
-                "issue_number": ISSUE,
-                "claim_id": OLD_CLAIM,
-                "active": {"launch_attempt_id": "attempt-old"},
-            }
+            "repo::250::claim-old::gc-release": decode_recovery_receipt(
+                {
+                    "operation": "gc-release",
+                    "issue_number": ISSUE,
+                    "claim_id": OLD_CLAIM,
+                    "active": {"launch_attempt_id": "attempt-old"},
+                }
+            )
         }
     )
 

@@ -23,11 +23,16 @@ from orchestune.infra.json_state import write_json_atomic
 from orchestune.infra.process_utils import FileLock
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_codec import (
-    decode_active_worktree,
     encode_active_worktree,
 )
 from orchestune.ledger.active_records import ActiveCompletionJournal
 from orchestune.ledger.completion_reservations import completion_handoff_matches_active
+from orchestune.ledger.recovery_receipts import (
+    RESTART_BLOCKED_OPERATION,
+    RecoveryActiveSnapshot,
+    RestartBlockedReceipt,
+    recovery_receipt_key,
+)
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
@@ -46,7 +51,12 @@ from orchestune.worktree_ops.claim_marker import (
 
 
 def _receipt_key(request: RecoveryRequest, workspace: ClaimWorkspace) -> str:
-    return f"{workspace.repository_identity}::{request.issue_number}::{request.claim_id}::restart-blocked"
+    return recovery_receipt_key(
+        workspace.repository_identity,
+        request.issue_number,
+        request.claim_id,
+        RESTART_BLOCKED_OPERATION,
+    )
 
 
 def _approved_issue(forge: Any, issue_number: int) -> Any:
@@ -110,26 +120,25 @@ def _replayed(
     receipt = state.recovery_receipts.get(_receipt_key(request, workspace))
     if receipt is None:
         return None
-    if receipt.get("phase") not in {"prepared", "restarted"}:
+    if not isinstance(receipt, RestartBlockedReceipt):
         raise ValueError("Invalid restart receipt phase")
-    if any(
-        receipt.get(name) != expected
-        for name, expected in (
-            ("schema_version", 1),
-            ("repository_id", workspace.repository_identity),
-            ("issue_number", request.issue_number),
-            ("claim_id", request.claim_id),
-            ("operation", "restart-blocked"),
-        )
+    if receipt.phase not in {"prepared", "restarted"}:
+        raise ValueError("Invalid restart receipt phase")
+    if (
+        receipt.schema_version != 1
+        or receipt.repository_id != workspace.repository_identity
+        or receipt.issue_number != request.issue_number
+        or receipt.claim_id != request.claim_id
+        or receipt.operation != RESTART_BLOCKED_OPERATION
     ):
         raise ValueError("Invalid restart receipt identity")
     active = state.active_worktrees.get(str(request.issue_number))
-    if receipt.get("phase") == "prepared" and active is not None:
+    if receipt.phase == "prepared" and active is not None:
         return _resume_prepared(request, receipt, active, state, workspace, cwd, forge)
     if (
-        receipt.get("reason") != request.reason
+        receipt.reason != request.reason
         or active is None
-        or active.claim.claim_id != receipt.get("new_claim_id")
+        or active.claim.claim_id != receipt.new_claim_id
     ):
         raise ValueError("Restart receipt differs or claim generation changed")
     validate_claim_worktree(active, workspace.run_state_path)
@@ -146,7 +155,7 @@ def _replayed(
 
 def _resume_prepared(
     request: RecoveryRequest,
-    receipt: dict[str, Any],
+    receipt: RestartBlockedReceipt,
     active: ActiveWorktree,
     state: RunState,
     workspace: ClaimWorkspace,
@@ -154,7 +163,7 @@ def _resume_prepared(
     forge: Any,
 ) -> RecoveryResult | None:
     if (
-        receipt.get("reason") != request.reason
+        receipt.reason != request.reason
         or active.claim.claim_id != request.claim_id
         or active.claim.owner_kind != "interactive"
         or active.launch.external_id
@@ -168,7 +177,7 @@ def _resume_prepared(
     marker = read_claim_marker(target)
     if (
         not marker
-        or marker.get("claim_id") not in {request.claim_id, receipt.get("new_claim_id")}
+        or marker.get("claim_id") not in {request.claim_id, receipt.new_claim_id}
         or marker.get("branch") != active.core.branch
         or marker.get("base_sha") != active.claim.base_sha
     ):
@@ -177,7 +186,7 @@ def _resume_prepared(
     if problem not in {None, "claim marker belongs to another generation"}:
         raise ValueError(problem)
     raw = json.loads(workspace.run_state_path.read_text(encoding="utf-8"))
-    if raw["active_worktrees"][str(request.issue_number)] != receipt.get("active"):
+    if raw["active_worktrees"][str(request.issue_number)] != receipt.active.to_json():
         raise ValueError("Prepared restart active snapshot differs")
     _planned_replacement(active, receipt)
     _approved_issue(forge, request.issue_number)
@@ -236,32 +245,56 @@ def _save_restart(
     assert marker is not None
     raw = json.loads(workspace.run_state_path.read_text(encoding="utf-8"))
     original = dict(raw["active_worktrees"][str(request.issue_number)])
-    pending = raw.get("recovery_receipts", {}).get(_receipt_key(request, workspace))
+    pending = load_run_state_readonly(workspace.run_state_path).recovery_receipts.get(
+        _receipt_key(request, workspace)
+    )
+    if pending is not None and not isinstance(pending, RestartBlockedReceipt):
+        raise ValueError("Invalid prepared restart receipt")
     replacement = (
         _planned_replacement(active, pending) if pending else _replacement(active)
     )
-    raw.setdefault("recovery_receipts", {})[_receipt_key(request, workspace)] = {
-        "schema_version": 1,
-        "repository_id": workspace.repository_identity,
-        "issue_number": request.issue_number,
-        "claim_id": request.claim_id,
-        "operation": "restart-blocked",
-        "phase": "prepared",
-        "reason": request.reason,
-        "new_claim_id": replacement.claim.claim_id,
-        "recorded_at": pending["recorded_at"]
-        if pending
-        else datetime.now(UTC).isoformat(),
-        "worktree_action": "retain",
-        "active": original,
-        "replacement": encode_active_worktree(replacement),
-    }
+    receipt = RestartBlockedReceipt(
+        schema_version=1,
+        repository_id=workspace.repository_identity,
+        issue_number=request.issue_number,
+        claim_id=request.claim_id or "",
+        operation=RESTART_BLOCKED_OPERATION,
+        phase="prepared",
+        reason=request.reason or "",
+        new_claim_id=replacement.claim.claim_id or "",
+        recorded_at=pending.recorded_at if pending else datetime.now(UTC).isoformat(),
+        worktree_action="retain",
+        active=RecoveryActiveSnapshot.from_json(original),
+        replacement=RecoveryActiveSnapshot.from_json(
+            encode_active_worktree(replacement)
+        ),
+    )
+    raw.setdefault("recovery_receipts", {})[_receipt_key(request, workspace)] = (
+        receipt.to_dict()
+    )
     _persist(workspace.run_state_path, raw)
+    return _finish_restart_transition(
+        request, workspace, target, active, replacement, receipt, marker, raw
+    )
+
+
+def _finish_restart_transition(
+    request: RecoveryRequest,
+    workspace: ClaimWorkspace,
+    target: Path,
+    active: ActiveWorktree,
+    replacement: ActiveWorktree,
+    receipt: RestartBlockedReceipt,
+    marker: dict[str, Any],
+    raw: dict[str, Any],
+) -> ActiveWorktree:
     _write_marker(target, replacement, bool(marker.get("branch_created", False)))
     raw["active_worktrees"][str(request.issue_number)].update(
         encode_active_worktree(replacement)
     )
-    raw["recovery_receipts"][_receipt_key(request, workspace)]["phase"] = "restarted"
+    raw["recovery_receipts"][_receipt_key(request, workspace)] = replace(
+        receipt, phase="restarted"
+    ).to_dict()
     try:
         _persist(workspace.run_state_path, raw)
     except OSError:
@@ -274,10 +307,10 @@ def _save_restart(
 
 
 def _planned_replacement(
-    active: ActiveWorktree, receipt: dict[str, Any]
+    active: ActiveWorktree, receipt: RestartBlockedReceipt
 ) -> ActiveWorktree:
     try:
-        replacement = decode_active_worktree(receipt["replacement"])
+        replacement = receipt.replacement.value
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("Invalid prepared restart replacement") from error
     expected = with_completion(
@@ -297,7 +330,7 @@ def _planned_replacement(
         replacement != expected
         or not replacement.claim.claim_id
         or replacement.claim.claim_id == active.claim.claim_id
-        or replacement.claim.claim_id != receipt.get("new_claim_id")
+        or replacement.claim.claim_id != receipt.new_claim_id
     ):
         raise ValueError("Prepared restart replacement differs")
     return replacement

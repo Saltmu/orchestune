@@ -15,11 +15,11 @@ claim is finalized, so an interrupted claim resumes with the same old/new pair.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from orchestune.claim.local_identity import (
     registered_claim_path,
@@ -28,17 +28,23 @@ from orchestune.claim.local_identity import (
 from orchestune.claim.workspace import ClaimWorkspace
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
-from orchestune.ledger.active_codec import decode_active_worktree
+from orchestune.ledger.completion_records import InvalidLedgerRecord
 from orchestune.ledger.completion_reservations import completion_handoff_matches_active
+from orchestune.ledger.recovery_receipts import (
+    GcReleaseReceipt,
+    ReclaimReceipt,
+    RecoveryReceiptValue,
+    invalid_recovery_receipt_identity,
+)
 from orchestune.ledger.run_state import GC_RELEASE_OPERATION, ActiveWorktree, RunState
 from orchestune.ownership_contracts import ClaimStage, ReservationKind
 from orchestune.worktree_ops.claim_marker import read_claim_marker
 from orchestune.worktree_ops.preparation import MarkerTakeover, resolve_worktree_path
 
-PHASE_PREPARED = "prepared"
-PHASE_ACTIVE_SAVED = "active_saved"
-PHASE_COMPLETED = "completed"
-_STAGE_PHASES = {
+PHASE_PREPARED: Literal["prepared"] = "prepared"
+PHASE_ACTIVE_SAVED: Literal["active_saved"] = "active_saved"
+PHASE_COMPLETED: Literal["completed"] = "completed"
+_STAGE_PHASES: dict[str, Literal["prepared", "active_saved", "completed"]] = {
     ClaimStage.ACTIVE_SAVED.value: PHASE_ACTIVE_SAVED,
     ClaimStage.COMPLETED.value: PHASE_COMPLETED,
 }
@@ -81,9 +87,17 @@ def assess_worktree_reclaim(
             )
         )
     key, receipt = matches[0]
+    if not isinstance(receipt, GcReleaseReceipt):
+        detail = (
+            "the GC release receipt snapshot is unreadable"
+            if isinstance(receipt, InvalidLedgerRecord)
+            and "active snapshot" in receipt.reason
+            else "GC release receipt is invalid"
+        )
+        return ReclaimAssessment(diagnostic=manual(detail))
     try:
         released = _released_generation(run_state, workspace, reservation, receipt)
-        if receipt.get("worktree_path") != str(path.resolve()):
+        if receipt.worktree_path != str(path.resolve()):
             raise ValueError("the retained worktree path differs from the receipt")
         previous = _previous_claim_ids(receipt, reservation)
     except ValueError as error:
@@ -137,7 +151,7 @@ def record_takeover_stage(run_state: RunState, reservation: ActiveWorktree) -> N
 def record_reclaim_phase(
     run_state: RunState,
     claim_id: str | None,
-    phase: str,
+    phase: Literal["prepared", "active_saved", "completed"],
     *,
     receipt_key: str | None = None,
 ) -> None:
@@ -149,24 +163,30 @@ def record_reclaim_phase(
         (
             k
             for k, r in run_state.recovery_receipts.items()
-            if r.get("operation") == GC_RELEASE_OPERATION
-            and (r.get("reclaim") or {}).get("new_claim_id") == claim_id
+            if isinstance(r, GcReleaseReceipt)
+            and r.reclaim is not None
+            and r.reclaim.new_claim_id == claim_id
         ),
         None,
     )
     if key is None or claim_id is None:
         return
     receipt = run_state.recovery_receipts[key]
-    previous = receipt.get("reclaim") or {}
-    superseded = list(previous.get("superseded_claim_ids", []))
-    if previous.get("new_claim_id") not in (None, claim_id):
-        superseded.append(previous["new_claim_id"])
-    receipt["reclaim"] = {
-        "new_claim_id": claim_id,
-        "phase": phase,
-        "recorded_at": datetime.now(UTC).isoformat(),
-        "superseded_claim_ids": superseded,
-    }
+    if not isinstance(receipt, GcReleaseReceipt):
+        return
+    previous = receipt.reclaim
+    superseded = list(previous.superseded_claim_ids if previous else ())
+    if previous is not None and previous.new_claim_id != claim_id:
+        superseded.append(previous.new_claim_id)
+    run_state.recovery_receipts[key] = replace(
+        receipt,
+        reclaim=ReclaimReceipt(
+            new_claim_id=claim_id,
+            phase=phase,
+            recorded_at=datetime.now(UTC).isoformat(),
+            superseded_claim_ids=tuple(superseded),
+        ),
+    )
 
 
 def _manual_review(path: Path, branch: str, marker_claim: Any, problem: str) -> str:
@@ -182,22 +202,43 @@ def _matching_receipts(
     workspace: ClaimWorkspace,
     reservation: ActiveWorktree,
     marker_claim: str,
-) -> list[tuple[str, dict[str, Any]]]:
+) -> list[tuple[str, RecoveryReceiptValue]]:
     """The receipt of the marker's own generation, else of a takeover it only
     prepared (a generation that went further has a receipt of its own)."""
     receipts = [
         (key, receipt)
         for key, receipt in run_state.recovery_receipts.items()
-        if receipt.get("operation") == GC_RELEASE_OPERATION
-        and receipt.get("repository_id") == workspace.repository_identity
-        and receipt.get("issue_number") == reservation.core.issue_number
+        if (
+            isinstance(receipt, GcReleaseReceipt)
+            and receipt.repository_id == workspace.repository_identity
+            and receipt.issue_number == reservation.core.issue_number
+        )
+        or invalid_recovery_receipt_identity(
+            receipt,
+            operation=GC_RELEASE_OPERATION,
+            repository_id=workspace.repository_identity,
+            issue_number=reservation.core.issue_number,
+        )
     ]
-    released = [(k, r) for k, r in receipts if r.get("claim_id") == marker_claim]
+    released = [
+        (key, receipt)
+        for key, receipt in receipts
+        if (isinstance(receipt, GcReleaseReceipt) and receipt.claim_id == marker_claim)
+        or invalid_recovery_receipt_identity(
+            receipt,
+            operation=GC_RELEASE_OPERATION,
+            repository_id=workspace.repository_identity,
+            issue_number=reservation.core.issue_number,
+            claim_id=marker_claim,
+        )
+    ]
     return released or [
         (key, receipt)
         for key, receipt in receipts
-        if (receipt.get("reclaim") or {}).get("new_claim_id") == marker_claim
-        and receipt["reclaim"].get("phase") == PHASE_PREPARED
+        if isinstance(receipt, GcReleaseReceipt)
+        and receipt.reclaim is not None
+        and receipt.reclaim.new_claim_id == marker_claim
+        and receipt.reclaim.phase == PHASE_PREPARED
     ]
 
 
@@ -205,23 +246,19 @@ def _released_generation(
     run_state: RunState,
     workspace: ClaimWorkspace,
     reservation: ActiveWorktree,
-    receipt: dict[str, Any],
+    receipt: GcReleaseReceipt,
 ) -> ActiveWorktree:
     """Bind the receipt to the immutable completion evidence it released."""
-    expected = {
-        "schema_version": 1,
-        "repository_id": workspace.repository_identity,
-        "issue_number": reservation.core.issue_number,
-        "branch": reservation.core.branch,
-        "worktree_action": "retain",
-        "stop_confirmed": True,
-    }
-    if any(receipt.get(name) != value for name, value in expected.items()):
+    if (
+        receipt.schema_version != 1
+        or receipt.repository_id != workspace.repository_identity
+        or receipt.issue_number != reservation.core.issue_number
+        or receipt.branch != reservation.core.branch
+        or receipt.worktree_action != "retain"
+        or receipt.stop_confirmed is not True
+    ):
         raise ValueError("the GC release receipt does not match this claim")
-    try:
-        released = decode_active_worktree(receipt["active"])
-    except (KeyError, TypeError, ValueError) as error:
-        raise ValueError("the GC release receipt snapshot is unreadable") from error
+    released = receipt.active.value
     if (
         released.core.issue_number,
         released.core.branch,
@@ -231,9 +268,9 @@ def _released_generation(
     ) != (
         reservation.core.issue_number,
         reservation.core.branch,
-        receipt.get("claim_id"),
-        receipt.get("base_sha"),
-        receipt.get("completion_id"),
+        receipt.claim_id,
+        receipt.base_sha,
+        receipt.completion_id,
     ):
         raise ValueError("the GC release receipt snapshot differs from the receipt")
     if not completion_handoff_matches_active(run_state, released):
@@ -252,18 +289,18 @@ def _released_generation(
 
 
 def _previous_claim_ids(
-    receipt: dict[str, Any], reservation: ActiveWorktree
+    receipt: GcReleaseReceipt, reservation: ActiveWorktree
 ) -> frozenset[str]:
     """Generations this claim may move the marker away from.
 
     A takeover that another claim only prepared never saved its reservation,
     so it never launched a provider and may be superseded. A saved one may not.
     """
-    previous = {str(receipt["claim_id"])}
-    pending = receipt.get("reclaim") or {}
-    pending_claim = pending.get("new_claim_id")
+    previous = {str(receipt.claim_id)}
+    pending = receipt.reclaim
+    pending_claim = pending.new_claim_id if pending else None
     if pending_claim not in (None, reservation.claim.claim_id):
-        if pending.get("phase") != PHASE_PREPARED:
+        if pending is None or pending.phase != PHASE_PREPARED:
             raise ValueError(f"claim {pending_claim} already took over this worktree")
         previous.add(str(pending_claim))
     return frozenset(previous)
