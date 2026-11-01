@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import orchestune.claim.workspace as claim_workspace
+from orchestune.claim.inspection import inspect_claim
 from orchestune.claim.local_identity import registered_claim_path
 from orchestune.claim.workspace import ClaimWorkspace
 from orchestune.infra.json_state import write_json_atomic
@@ -27,7 +28,6 @@ from orchestune.ledger.run_state import (
 from orchestune.recovery import external_execution
 from orchestune.recovery.contracts import RecoveryRequest, RecoveryResult
 from orchestune.recovery.external_completion import completion_retention
-from orchestune.recovery.inspection import inspect_claim
 from orchestune.worktree_ops.claim_marker import claim_lock_path
 
 

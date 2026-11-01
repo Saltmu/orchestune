@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from orchestune.claim.inspection import inspect_claim
 from orchestune.claim.issue_metadata import update_issue_claim_metadata
 from orchestune.claim.local_identity import (
     registered_claim_path,
@@ -37,7 +38,6 @@ from orchestune.ledger.status_labels import (
     TERMINAL_ESCALATION_LABELS,
 )
 from orchestune.recovery.contracts import RecoveryRequest, RecoveryResult
-from orchestune.recovery.inspection import inspect_claim
 from orchestune.worktree_ops.claim_marker import (
     claim_lock_path,
     read_claim_marker,

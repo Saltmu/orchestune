@@ -689,6 +689,54 @@ class StaleEntryDiscardedCompletion(_SerializedCompletion):
     )
 
 
+type InteractiveClosedTargetReleaseAction = Literal[
+    "gc_released_interactive_closed_target",
+    "gc_would_release_interactive_closed_target",
+]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InteractiveClosedTargetReleased(_SerializedCompletion):
+    """#1526: an interactive claim whose Issue/PR is closed left the ledger.
+
+    The worktree, branch and claim marker are retained; only the active entry
+    is released with a ``release`` recovery receipt.
+    """
+
+    issue_number: int
+    claim_id: str | None
+    target_state: str
+    reason: str
+    action: InteractiveClosedTargetReleaseAction = (
+        "gc_released_interactive_closed_target"
+    )
+    _SERIALIZE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "issue_number",
+        "claim_id",
+        "action",
+        "target_state",
+        "reason",
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InteractiveClosedTargetHeld(_SerializedCompletion):
+    """#1526: a closed-target release candidate that could not be verified."""
+
+    issue_number: int
+    claim_id: str | None
+    reason: str
+    action: Literal["gc_release_held_interactive_closed_target"] = field(
+        default="gc_release_held_interactive_closed_target", init=False
+    )
+    _SERIALIZE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "issue_number",
+        "claim_id",
+        "action",
+        "reason",
+    )
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AbandonmentPersistenceFailureCompletion(_SerializedCompletion):
     issue_number: int
@@ -769,6 +817,8 @@ type CompletionEvent = (
     | CompletingExcludedCompletion
     | ReclaimedCompletion
     | StaleEntryDiscardedCompletion
+    | InteractiveClosedTargetReleased
+    | InteractiveClosedTargetHeld
     | AbandonmentPersistenceFailureCompletion
     | ChangesRequestedEscalationCompletion
     | PriorMergeEvidenceCompletion

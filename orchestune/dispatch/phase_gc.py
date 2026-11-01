@@ -49,6 +49,7 @@ from orchestune.dispatch.execution_repair import (
     derive_execution_desired_state,
 )
 from orchestune.dispatch.gc import _apply_stale_active_entry_discard
+from orchestune.dispatch.gc.closed_target import release_closed_target_claims
 from orchestune.dispatch.gc.completion import is_completion_hold_event
 from orchestune.dispatch.gc.usage_limit import handle_usage_limit_reclaim
 from orchestune.dispatch.gc.zombies import (
@@ -390,10 +391,14 @@ def run_gc_phase(
 ) -> GcPhaseResult:
     observed_now = time.time() if now is None else now
     prs = tuple(open_prs or ())
+    # #1526: release closed-target interactive claims before reclaim and launch,
+    # so a task that only overlaps a merged PR's leftover claim starts this cycle.
+    events: list[CompletionEvent] = list(
+        release_closed_target_claims(run_state, config, now=observed_now, open_prs=prs)
+    )
     adapter = _GcReclaimAdapter(run_state, tasks_by_issue, config, prs, observed_now)
     supervisor = _gc_supervisor()
     initial_scan = supervisor.full_scan("gc-reclaim", observer=adapter, deriver=adapter)
-    events: list[CompletionEvent] = []
     executor = DispatchRepairExecutorAdapter(
         {
             COMMAND_RECLAIM: build_gc_reclaim_handler(
