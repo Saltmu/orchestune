@@ -26,10 +26,14 @@ def journal(active, stage="reserved", completion_id="completion"):
         "generation_id": active.claim.claim_id,
         "completion_id": completion_id,
         "owner_token_digest": active.claim.owner_token_digest,
-        "request_fingerprint": "request",
+        "request_fingerprint": "f" * 64,
         "result": "blocked",
         "target_label": "status:blocked-human-review",
-        "outcome_payload": {"reason": "stopped"},
+        "outcome_payload": {
+            "result": "blocked",
+            "issue": active.core.issue_number,
+            "reason": "stopped",
+        },
         "stage": stage,
         "posting_evidence": {
             "comment_id": "comment",

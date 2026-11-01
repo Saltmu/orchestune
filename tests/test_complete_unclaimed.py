@@ -38,7 +38,7 @@ def test_unclaimed_publication_has_independent_reservation_and_pending_review(
         "not-needed-review:pending",
     }
     record = next(iter(state.completion_journal.values()))
-    assert record["outcome_payload"]["body"] == forge.comments[0]["body"]
+    assert record.outcome_payload["body"] == forge.comments[0]["body"]
     assert record["generation_id"].startswith("unclaimed-")
     assert dependency_completion_blocked(state, 1111)
     assert (

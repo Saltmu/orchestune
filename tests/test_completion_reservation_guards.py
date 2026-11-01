@@ -321,20 +321,32 @@ def test_dependency_guard_reloads_reservation_created_after_snapshot(
 
 
 _RESERVATION_IDENTITY = {
+    "schema_version": 1,
     "repository_id": "repo",
     "issue_number": 10,
     "generation_id": "g",
     "completion_id": "c",
-    "owner_token_digest": "d",
-    "request_fingerprint": "f",
+    "owner_token_digest": "d" * 64,
+    "request_fingerprint": "f" * 64,
     "result": "done",
     "target_label": "status:done",
-    "outcome_payload": {},
+    "outcome_payload": {"result": "done", "issue": 10, "pr": 1},
 }
 
 
 def _journaled(stage: str, **extra):
     record = {**_RESERVATION_IDENTITY, "stage": stage, **extra}
+    if stage in {"outcome_posted", "label_confirmed", "handed_off"}:
+        record["posting_evidence"] = {
+            "comment_id": "1",
+            "comment_url": "https://x/1",
+        }
+    if stage in {"label_confirmed", "handed_off"}:
+        record["label_evidence"] = {
+            "status": "confirmed",
+            "target_label": "status:done",
+            "observed_labels": ["status:done"],
+        }
     return RunState(
         completion_reservations={"repo::10": dict(_RESERVATION_IDENTITY)},
         completion_journal={"repo::10::g::c": record},
@@ -385,5 +397,7 @@ def test_reservation_status_requires_handoff_evidence_and_receipt():
     state = _journaled("handed_off", **evidence)
     assert completion_reservation_status(state, 10) == "invalid"
     record = state.completion_journal["repo::10::g::c"]
-    state.completion_replay_receipts = {"repo::10::g::c": dict(record)}
+    from orchestune.ledger.completion_records import CompletionReplayReceipt
+
+    state.completion_replay_receipts["repo::10::g::c"] = CompletionReplayReceipt(record)
     assert completion_reservation_status(state, 10) == "handed_off"

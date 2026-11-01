@@ -48,9 +48,7 @@ def test_dispatcher_enumerates_unclaimed_review_pending_without_worktree(
     assert events[0].to_dict()["reason"] == "not-needed-review-pending"
     assert "worktree_path" not in events[0].to_dict()
     assert dependency_completion_blocked(state, 1111)
-    record = CompletionJournalRecord.from_dict(
-        next(iter(state.completion_journal.values()))
-    )
+    record = next(iter(state.completion_journal.values()))
     applied = replace(record.downstream_policy_records[0], status="applied")
     with completion_journal_lock(request.state_path):
         update_downstream_policy_locked(request.state_path, record, applied)

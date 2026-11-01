@@ -25,8 +25,32 @@ from orchestune.ledger.active_lifecycle import (
     lifecycle as lifecycle,
 )
 from orchestune.ledger.active_records import ActiveWorktree as ActiveWorktree
+from orchestune.ledger.completion_records import (
+    CompletionJournalValue,
+    CompletionReplayReceiptValue,
+    CompletionReservationValue,
+    decode_completion_journal,
+    decode_completion_replay_receipt,
+    decode_completion_reservation,
+    encode_completion_value,
+)
 from orchestune.models import Usage
 from orchestune.ownership_contracts import ClaimStage, OwnerKind, ReservationKind
+
+
+class _CompletionLedgerMap(dict):
+    """Typed mapping that also normalizes explicit raw JSON test fixtures."""
+
+    def __init__(self, values: dict[str, Any], decoder: Any) -> None:
+        self._decoder = decoder
+        super().__init__()
+        for key, value in values.items():
+            self[key] = value
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        if isinstance(value, dict):
+            value = self._decoder(value)
+        super().__setitem__(key, value)
 
 
 @dataclass
@@ -114,15 +138,32 @@ class RunState:
     # `to_unlock`に現れないため、ここに残さないとIssue上の通知が「ロック中」の
     # まま取り残される。投稿できた時点で消える。
     pending_lock_release_notices: list[int] = field(default_factory=list)
-    # #1108: versioned completion lifecycle state. These remain opaque JSON
-    # records here to keep the ledger independent from the completion package.
-    completion_journal: dict[str, dict[str, Any]] = field(default_factory=dict)
-    completion_reservations: dict[str, dict[str, Any]] = field(default_factory=dict)
-    completion_replay_receipts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # #1541: completion ledgers are typed values; JSON conversion stays at the
+    # run_state codec boundary. Recovery receipts remain Phase B raw JSON.
+    completion_journal: dict[str, CompletionJournalValue] = field(default_factory=dict)
+    completion_reservations: dict[str, CompletionReservationValue] = field(
+        default_factory=dict
+    )
+    completion_replay_receipts: dict[str, CompletionReplayReceiptValue] = field(
+        default_factory=dict
+    )
     recovery_receipts: dict[str, dict[str, Any]] = field(default_factory=dict)
     # #1270: dispatch target名 -> セッション上限の解除まで起動しない時刻（UTC epoch）。
     # accountの識別が無いため、同じ台帳を使うtargetを1つの制限scopeとして扱う。
     usage_limit_cooldowns: dict[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Normalize explicit JSON test fixtures at the in-memory construction boundary."""
+        codecs = (
+            ("completion_journal", decode_completion_journal),
+            ("completion_reservations", decode_completion_reservation),
+            ("completion_replay_receipts", decode_completion_replay_receipt),
+        )
+        for attribute, decode in codecs:
+            values = getattr(self, attribute)
+            if not isinstance(values, dict):
+                raise ValueError(f"{attribute} must be an object")
+            setattr(self, attribute, _CompletionLedgerMap(values, decode))
 
 
 def _parse_non_negative_int(value: object, default: int = 0) -> int:
@@ -578,6 +619,12 @@ def _parse_completion_records(
     return records
 
 
+def _parse_completion_ledger(data: dict[str, Any], key: str, decoder: Any) -> dict:
+    """Decode one structurally valid completion map into typed values."""
+    records = _parse_completion_records(data, key)
+    return {record_key: decoder(raw) for record_key, raw in records.items()}
+
+
 def _parse_completed_worktrees(data: dict) -> list[CompletedWorktree]:
     return [
         CompletedWorktree(
@@ -641,12 +688,14 @@ def _run_state_from_data(data: dict[str, Any]) -> RunState:
         pending_lock_release_notices=_parse_pending_lock_release_notices(
             data.get("pending_lock_release_notices")
         ),
-        completion_journal=_parse_completion_records(data, "completion_journal"),
-        completion_reservations=_parse_completion_records(
-            data, "completion_reservations"
+        completion_journal=_parse_completion_ledger(
+            data, "completion_journal", decode_completion_journal
         ),
-        completion_replay_receipts=_parse_completion_records(
-            data, "completion_replay_receipts"
+        completion_reservations=_parse_completion_ledger(
+            data, "completion_reservations", decode_completion_reservation
+        ),
+        completion_replay_receipts=_parse_completion_ledger(
+            data, "completion_replay_receipts", decode_completion_replay_receipt
         ),
         recovery_receipts=_parse_completion_records(data, "recovery_receipts"),
         usage_limit_cooldowns=_parse_usage_limit_cooldowns(
@@ -844,9 +893,18 @@ def _populated_optional_maps(state: RunState) -> dict[str, Any]:
     none of them is retention-pruned.
     """
     candidates: dict[str, Any] = {
-        "completion_journal": state.completion_journal,
-        "completion_reservations": state.completion_reservations,
-        "completion_replay_receipts": state.completion_replay_receipts,
+        "completion_journal": {
+            key: encode_completion_value(value)
+            for key, value in state.completion_journal.items()
+        },
+        "completion_reservations": {
+            key: encode_completion_value(value)
+            for key, value in state.completion_reservations.items()
+        },
+        "completion_replay_receipts": {
+            key: encode_completion_value(value)
+            for key, value in state.completion_replay_receipts.items()
+        },
         "recovery_receipts": state.recovery_receipts,
         "usage_limit_cooldowns": dict(state.usage_limit_cooldowns),
     }

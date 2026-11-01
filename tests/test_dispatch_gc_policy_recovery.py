@@ -153,7 +153,11 @@ def test_missing_receipt_and_pending_label_never_mutate(tmp_path):
     assert not process_completion_policies(state, config)
     forge.add_label.assert_not_called()
     record = next(iter(state.completion_journal.values()))
-    record["stage"] = "label_confirmed"
+    from orchestune.complete.contracts import CompleteStage
+
+    state.completion_journal[record.journal_key] = replace(
+        record, stage=CompleteStage.LABEL_CONFIRMED
+    )
     with run_state_lock(config.run_state_path.with_suffix(".lock")):
         save_run_state(state, config.run_state_path)
     assert not process_completion_policies(state, config)

@@ -17,6 +17,11 @@ from orchestune.ledger.completion_reservations import (
     completion_record,
     completion_reservation_status,
 )
+from orchestune.ledger.completion_records import (
+    CompletionJournalRecord,
+    CompletionReplayReceipt,
+    InvalidLedgerRecord,
+)
 from orchestune.ledger.run_state import RunState
 from orchestune.not_needed_review_contract import NotNeededReview, review_operation_id
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
@@ -25,7 +30,9 @@ from orchestune.outcome_record import OutcomeRecord, parse_from_comments
 def confirmed_records(state: RunState) -> list[CompletionJournalRecord]:
     records = []
     for reservation in state.completion_reservations.values():
-        issue = reservation["issue_number"]
+        if isinstance(reservation, InvalidLedgerRecord):
+            continue
+        issue = reservation.issue_number
         if completion_reservation_status(state, issue) != "handed_off":
             continue
         active = state.active_worktrees.get(str(issue))
@@ -37,7 +44,7 @@ def confirmed_records(state: RunState) -> list[CompletionJournalRecord]:
             continue
         raw = completion_record(state, issue)
         if raw is not None:
-            records.append(CompletionJournalRecord.from_dict(raw))
+            records.append(raw)
     return records
 
 
@@ -128,8 +135,10 @@ def ensure_policy(
 
 
 def update_record(state: RunState, record: CompletionJournalRecord) -> None:
-    state.completion_journal[record.journal_key] = record.to_dict()
-    state.completion_replay_receipts[record.receipt_key] = record.to_dict()
+    state.completion_journal[record.journal_key] = record
+    state.completion_replay_receipts[record.receipt_key] = CompletionReplayReceipt(
+        record
+    )
 
 
 def update_policy(
@@ -167,8 +176,10 @@ def reclaim_completed_tokens(
     """Reclaim a matching credential after receipt persistence and active release."""
     assert_run_state_lock_held(state_path.with_suffix(".lock"))
     events = []
-    for raw in state.completion_replay_receipts.values():
-        record = CompletionJournalRecord.from_dict(raw)
+    for receipt in state.completion_replay_receipts.values():
+        if isinstance(receipt, InvalidLedgerRecord):
+            continue
+        record = receipt.record
         active = state.active_worktrees.get(str(record.issue_number))
         if record.stage is not CompleteStage.HANDED_OFF:
             continue
@@ -177,7 +188,7 @@ def reclaim_completed_tokens(
         ):
             continue
         journal = state.completion_journal.get(record.journal_key)
-        if journal != raw or (record.label_evidence or {}).get("status") != "confirmed":
+        if journal != receipt or (record.label_evidence or {}).get("status") != "confirmed":
             continue
         context = (record.prepublication_policy_evidence or {}).get("context", {})
         unclaimed = context.get("unclaimed") is True

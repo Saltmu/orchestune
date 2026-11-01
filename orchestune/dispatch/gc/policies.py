@@ -39,6 +39,7 @@ from orchestune.infra.json_state import write_json_atomic
 from orchestune.infra.process_utils import assert_run_state_lock_held, run_state_lock
 from orchestune.infra.repository_config import find_and_load_config_file
 from orchestune.labels import StatusLabel
+from orchestune.ledger.completion_records import encode_completion_value
 from orchestune.ledger.run_state import (
     RunState,
     TaskReclaimRecord,
@@ -57,8 +58,14 @@ def save_run_state(state: RunState, path: Path) -> None:
     assert_run_state_lock_held(path.with_suffix(".lock"))
     raw = json.loads(path.read_text(encoding="utf-8"))
     raw.update(
-        completion_journal=state.completion_journal,
-        completion_replay_receipts=state.completion_replay_receipts,
+        completion_journal={
+            key: encode_completion_value(value)
+            for key, value in state.completion_journal.items()
+        },
+        completion_replay_receipts={
+            key: encode_completion_value(value)
+            for key, value in state.completion_replay_receipts.items()
+        },
     )
     previous = load_run_state_readonly(path).task_reclaim_counts
     counts = raw.setdefault("task_reclaim_counts", {})
