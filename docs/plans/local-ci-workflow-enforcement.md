@@ -2,11 +2,7 @@
 
 This document turns the approved design in [Issue #1417](https://github.com/Saltmu/orchestune/issues/1417) into an implementation contract for the follow-up issues. The first release is advisory and read-only. It derives a workflow stage from existing evidence; it does not add a second lifecycle state machine or weaken existing claim, CI, review, or completion requirements.
 
-The detailed comparison-study protocol belongs in [`workflow-adherence-eval.md`](workflow-adherence-eval.md), the sibling deliverable tracked by [Issue #1493](https://github.com/Saltmu/orchestune/issues/1493). Until that sibling document is integrated, this relative link is expected to be unresolved on this branch. This document gives only the evaluation summary and its handoff.
-
-### Merge prerequisite
-
-Integrate the PR for #1493 into `parent/issue-1417` before integrating this PR, or integrate both together. This makes the sibling evaluation document available when the relative link is checked on the parent branch. The dependency and order are also recorded in [Issue #1493](https://github.com/Saltmu/orchestune/issues/1493#issuecomment-6545421448).
+The detailed comparison-study protocol belongs in [`workflow-adherence-eval.md`](workflow-adherence-eval.md), the sibling deliverable tracked by [Issue #1493](https://github.com/Saltmu/orchestune/issues/1493). This document gives only the evaluation summary and its handoff.
 
 ## Goals and boundaries
 
@@ -296,5 +292,5 @@ The seven parent Issue acceptance criteria map to this document as follows:
 | Define next/check responsibilities, I/O, and minimum rollout. | [Gates](#gates-and-checks), [CLI contract](#cli-contract), [JSON result](#json-result), [Exit codes](#exit-codes), and advisory boundaries. |
 | Preserve claim/review/complete integration and define interruption, approval wait, blocked, and retry handling. | [Lifecycle](#lifecycle-interruption-and-retry) and [Read-only architecture](#read-only-architecture-and-integration). |
 | State bypass paths and the limits of enforcement. | [Enforcement boundary](#enforcement-boundary). |
-| Define and record target model configurations for the comparison. | Summary and link to [`workflow-adherence-eval.md` §2.2, “Fix and record execution conditions”](workflow-adherence-eval.md#22-fix-and-record-execution-conditions); the detailed study plan is maintained separately. |
+| Define comparison tasks, scoring criteria, recorded items, and trial method including Luna. | Summary and link to [`workflow-adherence-eval.md`](workflow-adherence-eval.md) (proposed default model in §1, execution conditions in §2.2); the detailed study plan is maintained separately. |
 | Propose implementable follow-up issues, order, compatibility, and migration. | [Compatibility, migration, and implementation order](#compatibility-migration-and-implementation-order). |

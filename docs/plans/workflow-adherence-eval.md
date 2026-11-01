@@ -9,7 +9,7 @@ The kit defines how to stage and score trials. It does not run the study, make m
 
 ## 1. Freeze the study before the first trial
 
-Fill and approve the agreement below before creating trial workspaces. An empty field means **do not start measurement**. Pre-filled values, including the C1/C4 regression-test path, are proposed defaults and require approval with the rest of the agreement; a populated row alone does not satisfy this gate. Keep the signed or linked agreement with the study records and do not change it mid-series. A change requires a new version, a reason, approver, timestamp, and a clear boundary between old and new series.
+Fill and approve the agreement below before creating trial workspaces. An empty field means **do not start measurement**. Pre-filled values, including the C1/C4 regression-test path and the initial target model (Luna), are proposed defaults and require approval with the rest of the agreement; a populated row alone does not satisfy this gate. Keep the signed or linked agreement with the study records and do not change it mid-series. A change requires a new version, a reason, approver, timestamp, and a clear boundary between old and new series.
 
 | Decision | Agreed value |
 | :--- | :--- |
@@ -19,7 +19,7 @@ Fill and approve the agreement below before creating trial workspaces. An empty 
 | Arm A repository SHA and skill SHA | |
 | Arm B repository SHA and skill SHA; `workflow next/check` revision | |
 | C4 review-barrier adapter revision/digest and C5 operator-trigger procedure revision | |
-| Model/provider identifiers for each arm | |
+| Model/provider identifiers for each arm | Proposed default: Luna (record effective provider/model identifier and effort per §2.2; requires approval before measurement) |
 | C1/C4 regression-test path | `tests/test_workflow_adherence_number.py` |
 | Reviewer provider/model/version | |
 | Execution profile name and effective target model/effort values | |
