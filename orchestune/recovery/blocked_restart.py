@@ -80,7 +80,7 @@ def _publish_metadata(forge: Any, active: ActiveWorktree) -> None:
     body = update_issue_claim_metadata(
         issue.body,
         active.claim.owner_kind,
-        active.claim.claim_id or "",
+        _required_claim_id(active),
         active.claim.reservation_kind,
     )
     if body != issue.body:
@@ -222,11 +222,18 @@ def _replacement(active: ActiveWorktree) -> ActiveWorktree:
 def _write_marker(target: Path, active: ActiveWorktree, branch_created: bool) -> None:
     write_claim_marker(
         target,
-        claim_id=active.claim.claim_id or "",
+        claim_id=_required_claim_id(active),
         branch=active.core.branch,
         base_sha=active.claim.base_sha,
         branch_created=branch_created,
     )
+
+
+def _required_claim_id(active: ActiveWorktree) -> str:
+    claim_id = active.claim.claim_id
+    if not isinstance(claim_id, str) or not claim_id.strip():
+        raise ValueError("Blocked restart requires a non-empty claim_id")
+    return claim_id
 
 
 def _persist(path: Path, raw: dict[str, Any]) -> None:
@@ -240,13 +247,8 @@ def _persist(path: Path, raw: dict[str, Any]) -> None:
 def _save_restart(
     request: RecoveryRequest, workspace: ClaimWorkspace, active: ActiveWorktree
 ) -> ActiveWorktree:
-    if (
-        not isinstance(request.claim_id, str)
-        or not request.claim_id.strip()
-        or not isinstance(active.claim.claim_id, str)
-        or not active.claim.claim_id.strip()
-        or request.claim_id != active.claim.claim_id
-    ):
+    active_claim_id = _required_claim_id(active)
+    if not isinstance(request.claim_id, str) or request.claim_id != active_claim_id:
         raise ValueError("Restart receipt requires a matching claim_id")
     if not isinstance(request.reason, str) or not request.reason.strip():
         raise ValueError("Restart receipt requires a reason")
@@ -271,7 +273,7 @@ def _save_restart(
         operation=RESTART_BLOCKED_OPERATION,
         phase="prepared",
         reason=request.reason,
-        new_claim_id=replacement.claim.claim_id or "",
+        new_claim_id=_required_claim_id(replacement),
         recorded_at=pending.recorded_at if pending else datetime.now(UTC).isoformat(),
         worktree_action="retain",
         active=RecoveryActiveSnapshot.from_json(original),

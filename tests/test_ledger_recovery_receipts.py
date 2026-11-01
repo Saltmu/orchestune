@@ -252,3 +252,49 @@ def test_missing_claim_id_rejects_typed_release_builder():
             operation="release",
             reason="released",
         )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {
+            "schema_version": 1,
+            "operation": "restart-blocked",
+            "repository_id": "Saltmu/orchestune",
+            "issue_number": 10,
+            "claim_id": "claim-10",
+            "phase": "prepared",
+            "reason": "resolved",
+            "new_claim_id": "",
+            "recorded_at": "2026-11-01T00:00:00+00:00",
+            "worktree_action": "retain",
+            "active": _serialized_current_active(),
+            "replacement": _serialized_current_active(claim_id="claim-next"),
+        },
+        {
+            "schema_version": 1,
+            "operation": "gc-release",
+            "repository_id": "Saltmu/orchestune",
+            "issue_number": 10,
+            "claim_id": "claim-10",
+            "branch": "claude/issue-10-x",
+            "worktree_path": "worktrees/claude-issue-10-x",
+            "worktree_action": "retain",
+            "stop_confirmed": True,
+            "recorded_at": "2026-11-01T00:00:00+00:00",
+            "active": _serialized_current_active(),
+            "reclaim": {"new_claim_id": "", "phase": "prepared"},
+        },
+    ],
+)
+def test_blank_persisted_generation_id_is_invalid_and_round_trips(raw, tmp_path):
+    key = "malformed-generation"
+    path = tmp_path / "run_state.json"
+    path.write_text(json.dumps({"recovery_receipts": {key: raw}}), encoding="utf-8")
+
+    state = load_run_state(path)
+    value = state.recovery_receipts[key]
+    assert isinstance(value, InvalidLedgerRecord)
+    save_run_state(state, path)
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["recovery_receipts"][key] == raw

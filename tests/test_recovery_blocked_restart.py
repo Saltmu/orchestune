@@ -15,7 +15,7 @@ from orchestune.ledger.run_state import (
     load_run_state_readonly,
     save_run_state,
 )
-from orchestune.recovery.blocked_restart import _replayed, _save_restart
+from orchestune.recovery.blocked_restart import _replayed, _save_restart, _write_marker
 from orchestune.recovery.contracts import RecoveryRequest
 from orchestune.recovery.service import recover_claim
 from orchestune.worktree_ops.claim_marker import claim_marker_path, read_claim_marker
@@ -141,6 +141,14 @@ def test_restart_writer_rejects_missing_claim_identity(blocked_claim):
 
     with pytest.raises(ValueError, match="claim_id"):
         _save_restart(request, workspace, malformed)
+
+
+def test_restart_marker_rejects_missing_claim_identity(local_claim, tmp_path):
+    _, active, _ = local_claim
+    malformed = replace(active, claim=replace(active.claim, claim_id=None))
+
+    with pytest.raises(ValueError, match="claim_id"):
+        _write_marker(tmp_path, malformed, branch_created=False)
 
 
 @pytest.mark.parametrize(
