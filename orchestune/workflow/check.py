@@ -547,7 +547,12 @@ def _terminal_records(c: WorkflowContext) -> list[CompletionJournalRecord]:
     return records
 
 
-def _terminal(c: WorkflowContext, gate: str) -> WorkflowResult | None:
+def _terminal(
+    c: WorkflowContext,
+    gate: str,
+    *,
+    stages: tuple[StageDefinition, ...] | None = None,
+) -> WorkflowResult | None:
     if _context(c).status != "ready":
         return None
     try:
@@ -582,13 +587,30 @@ def _terminal(c: WorkflowContext, gate: str) -> WorkflowResult | None:
         )
     if not blocked and not handed:
         return None
-    return _terminal_result(c, gate, (blocked or handed)[0], bool(blocked))
+    return _terminal_result(
+        c, gate, (blocked or handed)[0], bool(blocked), stages=stages
+    )
 
 
 def _terminal_result(
-    c: WorkflowContext, gate: str, record: CompletionJournalRecord, blocked: bool
+    c: WorkflowContext,
+    gate: str,
+    record: CompletionJournalRecord,
+    blocked: bool,
+    *,
+    stages: tuple[StageDefinition, ...] | None = None,
 ) -> WorkflowResult:
-    stage = "blocked" if blocked else "handed-off"
+    stage_id = "blocked" if blocked else "handed-off"
+    definitions = stages if stages is not None else load_stage_definitions()
+    stage = next((s for s in definitions if s.id == stage_id), None)
+    default_ref = (
+        (
+            "skills/local-ci-developer/references/worktree.md#restart-a-completed-blocked-local-task",
+        )
+        if blocked
+        else ("docs/operator-completion-lifecycle.md",)
+    )
+    references = stage.references if stage is not None else default_ref
     observation = _Observation(
         source="completion receipt",
         value={
@@ -596,7 +618,7 @@ def _terminal_result(
             "comment_url": (record.posting_evidence or {})["comment_url"],
         },
     )
-    result = _result(c, gate, stage, [(observation, "terminal_receipt")])
+    result = _result(c, gate, stage_id, [(observation, "terminal_receipt")])
     return replace(
         result,
         claim_id=record.generation_id,
@@ -612,9 +634,7 @@ def _terminal_result(
         )
         if blocked
         else (),
-        references=(
-            "skills/local-ci-developer/references/worktree.md#restart-a-completed-blocked-local-task",
-        ),
+        references=references,
         artifacts={**c.artifacts, "outcome": observation.value},
     )
 
@@ -688,6 +708,7 @@ def _derived_stage(
 def _included_stages(
     c: WorkflowContext, definitions: tuple[StageDefinition, ...], owner: StageDefinition
 ) -> tuple[StageDefinition, ...]:
+    context_ready = _context(c).status == "ready"
     return tuple(
         stage
         for stage in definitions
@@ -696,7 +717,7 @@ def _included_stages(
             and stage.id not in _TERMINALS
             or stage.id == owner.id
         )
-        and _matches(stage, c)
+        and (not context_ready or _matches(stage, c))
     )
 
 
@@ -710,7 +731,7 @@ def _check_gate(
     if gate not in GATES:
         raise ValueError(f"Unknown workflow gate: {gate}")
     definitions = stages if stages is not None else load_stage_definitions()
-    terminal = _terminal(context, gate)
+    terminal = _terminal(context, gate, stages=definitions)
     if terminal is not None:
         return terminal
     cache: dict[str, _Observation] = {}
@@ -735,7 +756,8 @@ def _check_gate(
         checks,
         tuple(dict.fromkeys(ref for stage in included for ref in stage.references)),
     )
-    if not _matches(owner, context):
+    context_ready = _context(context).status == "ready"
+    if context_ready and not _matches(owner, context):
         return replace(
             result,
             status="unmet",
