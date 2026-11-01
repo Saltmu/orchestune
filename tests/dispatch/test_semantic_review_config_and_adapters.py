@@ -555,3 +555,55 @@ class TestSemanticReviewOperations:
                 parent_issue_number=1033,
                 semantic_review_timeout_seconds=True,  # type: ignore[arg-type]
             )
+
+
+class TestFinalAcceptanceConfiguration:
+    @pytest.mark.parametrize(
+        ("cli", "toml", "env", "expected"),
+        [
+            ([], {}, None, "advisory"),
+            ([], {}, " off ", "off"),
+            ([], {"final-acceptance-review": "advisory"}, "off", "advisory"),
+            (
+                ["--final-acceptance-review", "off"],
+                {"final_acceptance_review": "advisory"},
+                "advisory",
+                "off",
+            ),
+        ],
+    )
+    def test_precedence(self, tmp_path, monkeypatch, cli, toml, env, expected):
+        if env is None:
+            monkeypatch.delenv("ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW", raising=False)
+        else:
+            monkeypatch.setenv("ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW", env)
+        assert _load(tmp_path, cli, toml).final_acceptance_review == expected
+
+    @pytest.mark.parametrize("value", ["", "required", "invalid", 1, True, None, []])
+    def test_invalid_toml_and_direct_configuration(self, tmp_path, value):
+        with pytest.raises(ConfigError):
+            _load(
+                tmp_path,
+                ["--final-acceptance-review", "off"],
+                {"final-acceptance-review": value},
+            )
+        with pytest.raises(ValueError):
+            DispatcherConfig(parent_issue_number=100, final_acceptance_review=value)
+
+    def test_invalid_environment_is_rejected_even_when_shadowed(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW", "required")
+        with pytest.raises(ConfigError, match="ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW"):
+            _load(tmp_path, ["--final-acceptance-review", "off"], {})
+
+    def test_independent_from_semantic_mode_and_legacy_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ORCHESTUNE_SEMANTIC_REVIEW", "0")
+        monkeypatch.setenv("ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW", "advisory")
+        config = _load(
+            tmp_path,
+            ["--semantic-review-mode", "off"],
+            {"semantic-review-trigger": "dispatch-target"},
+        )
+        assert config.final_acceptance_review == "advisory"
+        assert config.semantic_review_mode == "off"

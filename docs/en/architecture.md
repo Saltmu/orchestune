@@ -246,6 +246,8 @@ renamed or removed without a deprecation cycle.
 
 ### 4.1 The five layers
 
+The advisory final acceptance component `integrator.final_acceptance_review` belongs to L2 under the table's `integrator.*` rule; `integrator.parent_completion` calls it from L3.
+
 Every module in `orchestune/` belongs to exactly one layer. A module may import
 from its own layer or from any layer below it, never from a layer above.
 

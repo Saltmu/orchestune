@@ -173,6 +173,8 @@ def ensure_parent_final_pr(
     base_branch: str = "main",
     forge: Forge | None = None,
     children: Sequence[IssueRecord] | None = None,
+    *,
+    summaries: Sequence[ChildSummary] | None = None,
 ) -> int | None:
     """#170: 親Issue配下の全子Issueが完了した際、`parent/issue-{N}`から
     `base_branch`への最終統合PRを用意する。
@@ -183,12 +185,15 @@ def ensure_parent_final_pr(
     本文には非closingの親Issue参照と子Issue・サブタスクPR・レビュー結果の一覧を
     埋め込む（`final_pr_body`）。`children`は呼び出し元が既に取得済みの子Issue
     で、`find_children_by_parent`の二重呼び出しを避けるために受け取る。
+    `summaries`は依頼コメントと共有するスナップショット。Noneのときだけ収集し、
+    明示的な空リストでは従来の縮退経路（既存テーブルを保持）を維持する。
     """
     forge = forge or GitHubForge()
     try:
         head = f"parent/issue-{parent_issue_number}"
         title = _parent_final_pr_title(parent_issue_number, base_branch)
-        summaries = _final_pr_summaries(forge, parent_issue_number, children)
+        if summaries is None:
+            summaries = _final_pr_summaries(forge, parent_issue_number, children)
         body = render_final_pr_body(parent_issue_number, summaries)
 
         existing = _find_reusable_integration_pr(forge, head, base_branch)

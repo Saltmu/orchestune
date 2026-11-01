@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 from unittest.mock import ANY, MagicMock, patch
 
+import pytest
+
 from orchestune.integrator.parent_branch_state import is_current_parent_branch_merged
 from orchestune.integrator.parent_completion import process_parent_completion
 from orchestune.integrator.pr import ParentFinalPrMigrationError
@@ -20,10 +22,27 @@ def _issue(number: int, state: str) -> IssueRecord:
     )
 
 
+def _expected(legacy: dict) -> dict:
+    """Keep legacy lifecycle fields exact while checking the added report."""
+    status = legacy["status"]
+    reason = status
+    review_status = "not_applicable"
+    if status == "skipped":
+        review_status, reason = "skipped_dry_run", "dry_run"
+    elif status == "final_pr_ready":
+        review_status, reason = "reviewer_unresolved", "reviewer_unresolved"
+    elif status == "waiting_on_children" and not legacy["open_children"]:
+        reason = "no_children"
+    return {
+        **legacy,
+        "final_acceptance_review": {"status": review_status, "reason": reason},
+    }
+
+
 class TestProcessParentCompletion:
     def test_skips_when_not_apply(self):
         res = process_parent_completion(100, apply=False)
-        assert res == {"status": "skipped"}
+        assert res == _expected({"status": "skipped"})
 
     def test_closes_parent_issue_when_branch_still_exists_and_tip_verified(
         self, fake_forge: MagicMock
@@ -45,7 +64,7 @@ class TestProcessParentCompletion:
             "parent/issue-100", "main"
         )
         fake_forge.close_issue.assert_called_once_with(100, "completed", comment=ANY)
-        assert res == {"status": "parent_closed", "parent_issue_number": 100}
+        assert res == _expected({"status": "parent_closed", "parent_issue_number": 100})
 
     def test_closes_parent_issue_when_branch_deleted_after_merge(
         self, fake_forge: MagicMock
@@ -68,7 +87,7 @@ class TestProcessParentCompletion:
 
         fake_forge.branch_exists.assert_called_once_with("parent/issue-100")
         fake_forge.close_issue.assert_called_once_with(100, "completed", comment=ANY)
-        assert res == {"status": "parent_closed", "parent_issue_number": 100}
+        assert res == _expected({"status": "parent_closed", "parent_issue_number": 100})
 
     def test_does_not_double_close_already_closed_parent(self, fake_forge: MagicMock):
         fake_forge.list_sub_issues.return_value = [_issue(101, "CLOSED")]
@@ -80,7 +99,7 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
         fake_forge.close_issue.assert_not_called()
-        assert res == {"status": "already_closed"}
+        assert res == _expected({"status": "already_closed"})
 
     @patch(
         "orchestune.integrator.parent_completion.ensure_parent_final_pr", autospec=True
@@ -97,8 +116,10 @@ class TestProcessParentCompletion:
 
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
-        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge, children=ANY)
-        assert res == {"status": "final_pr_ready", "pr_number": 777}
+        mock_ensure_pr.assert_called_once_with(
+            100, forge=fake_forge, children=ANY, summaries=ANY
+        )
+        assert res == _expected({"status": "final_pr_ready", "pr_number": 777})
 
     @patch(
         "orchestune.integrator.parent_completion.ensure_parent_final_pr", autospec=True
@@ -132,7 +153,9 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
         mock_ensure_pr.assert_not_called()
-        assert res == {"status": "waiting_on_children", "open_children": [102]}
+        assert res == _expected(
+            {"status": "waiting_on_children", "open_children": [102]}
+        )
 
     @patch(
         "orchestune.integrator.parent_completion.ensure_parent_final_pr", autospec=True
@@ -156,7 +179,9 @@ class TestProcessParentCompletion:
 
         mock_migrate_legacy_pr.assert_called_once_with(100, forge=fake_forge)
         mock_ensure_pr.assert_not_called()
-        assert res == {"status": "waiting_on_children", "open_children": [102]}
+        assert res == _expected(
+            {"status": "waiting_on_children", "open_children": [102]}
+        )
 
     @patch(
         "orchestune.integrator.parent_completion.migrate_open_parent_final_pr",
@@ -172,11 +197,13 @@ class TestProcessParentCompletion:
 
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
-        assert res == {
-            "status": "unsafe_final_pr",
-            "pr_number": 321,
-            "reason": "transient API failure",
-        }
+        assert res == _expected(
+            {
+                "status": "unsafe_final_pr",
+                "pr_number": 321,
+                "reason": "transient API failure",
+            }
+        )
 
     @patch(
         "orchestune.integrator.parent_completion.ensure_parent_final_pr", autospec=True
@@ -190,7 +217,7 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
         mock_ensure_pr.assert_not_called()
-        assert res == {"status": "waiting_on_children", "open_children": []}
+        assert res == _expected({"status": "waiting_on_children", "open_children": []})
 
     @patch(
         "orchestune.integrator.parent_completion.ensure_parent_final_pr", autospec=True
@@ -208,11 +235,13 @@ class TestProcessParentCompletion:
 
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
-        assert res == {
-            "status": "unsafe_final_pr",
-            "pr_number": 321,
-            "reason": "transient API failure",
-        }
+        assert res == _expected(
+            {
+                "status": "unsafe_final_pr",
+                "pr_number": 321,
+                "reason": "transient API failure",
+            }
+        )
 
     def test_does_not_close_when_open_child_exists_despite_historical_merged_pr(
         self, fake_forge: MagicMock
@@ -229,7 +258,9 @@ class TestProcessParentCompletion:
 
         fake_forge.is_current_branch_tip_merged_into.assert_not_called()
         fake_forge.close_issue.assert_not_called()
-        assert res == {"status": "waiting_on_children", "open_children": [102]}
+        assert res == _expected(
+            {"status": "waiting_on_children", "open_children": [102]}
+        )
 
     @patch(
         "orchestune.integrator.parent_completion.ensure_parent_final_pr", autospec=True
@@ -249,8 +280,10 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
         fake_forge.close_issue.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge, children=ANY)
-        assert res == {"status": "final_pr_ready", "pr_number": 777}
+        mock_ensure_pr.assert_called_once_with(
+            100, forge=fake_forge, children=ANY, summaries=ANY
+        )
+        assert res == _expected({"status": "final_pr_ready", "pr_number": 777})
 
     def test_does_not_close_when_tip_verification_fails_for_unknown_reason(
         self, fake_forge: MagicMock
@@ -288,8 +321,10 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
         fake_forge.close_issue.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge, children=ANY)
-        assert res == {"status": "final_pr_ready", "pr_number": 777}
+        mock_ensure_pr.assert_called_once_with(
+            100, forge=fake_forge, children=ANY, summaries=ANY
+        )
+        assert res == _expected({"status": "final_pr_ready", "pr_number": 777})
 
     def test_closes_when_merge_happened_after_reopen(self, fake_forge: MagicMock):
         """reopen後に実際にマージされた場合は通常通りcloseする（回帰確認）。"""
@@ -302,7 +337,7 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
         fake_forge.close_issue.assert_called_once_with(100, "completed", comment=ANY)
-        assert res == {"status": "parent_closed", "parent_issue_number": 100}
+        assert res == _expected({"status": "parent_closed", "parent_issue_number": 100})
 
     @patch(
         "orchestune.integrator.parent_completion.ensure_parent_final_pr", autospec=True
@@ -323,8 +358,10 @@ class TestProcessParentCompletion:
 
         fake_forge.is_current_branch_tip_merged_into.assert_not_called()
         fake_forge.close_issue.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge, children=ANY)
-        assert res == {"status": "final_pr_ready", "pr_number": 777}
+        mock_ensure_pr.assert_called_once_with(
+            100, forge=fake_forge, children=ANY, summaries=ANY
+        )
+        assert res == _expected({"status": "final_pr_ready", "pr_number": 777})
 
     @patch(
         "orchestune.integrator.parent_completion.ensure_parent_final_pr", autospec=True
@@ -350,8 +387,10 @@ class TestProcessParentCompletion:
 
         fake_forge.branch_exists.assert_called_once_with("parent/issue-100")
         fake_forge.close_issue.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge, children=ANY)
-        assert res == {"status": "final_pr_ready", "pr_number": 777}
+        mock_ensure_pr.assert_called_once_with(
+            100, forge=fake_forge, children=ANY, summaries=ANY
+        )
+        assert res == _expected({"status": "final_pr_ready", "pr_number": 777})
 
     @patch(
         "orchestune.integrator.parent_completion.ensure_parent_final_pr", autospec=True
@@ -374,8 +413,10 @@ class TestProcessParentCompletion:
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
         fake_forge.close_issue.assert_not_called()
-        mock_ensure_pr.assert_called_once_with(100, forge=fake_forge, children=ANY)
-        assert res == {"status": "final_pr_ready", "pr_number": 777}
+        mock_ensure_pr.assert_called_once_with(
+            100, forge=fake_forge, children=ANY, summaries=ANY
+        )
+        assert res == _expected({"status": "final_pr_ready", "pr_number": 777})
 
 
 class TestProcessParentCompletionWithFakeForge:
@@ -389,7 +430,9 @@ class TestProcessParentCompletionWithFakeForge:
 
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
-        assert res == {"status": "waiting_on_children", "open_children": [101]}
+        assert res == _expected(
+            {"status": "waiting_on_children", "open_children": [101]}
+        )
         fake_forge.list_sub_issues.assert_called_once_with(100)
         fake_forge.get_merged_pr_timestamp.assert_not_called()
         fake_forge.close_issue.assert_not_called()
@@ -415,7 +458,9 @@ class TestProcessParentCompletionWithFakeForge:
 
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
-        assert res == {"status": "waiting_on_children", "open_children": [101]}
+        assert res == _expected(
+            {"status": "waiting_on_children", "open_children": [101]}
+        )
 
     @patch(
         "orchestune.integrator.parent_completion.ensure_parent_final_pr", autospec=True
@@ -437,7 +482,7 @@ class TestProcessParentCompletionWithFakeForge:
         mock_ensure_pr.assert_called_once()
         passed_children = mock_ensure_pr.call_args[1]["children"]
         assert [c.number for c in passed_children] == [101]
-        assert res == {"status": "final_pr_ready", "pr_number": 777}
+        assert res == _expected({"status": "final_pr_ready", "pr_number": 777})
 
 
 def _final_pr(body: str = "Parent issue: #100\n") -> PrRecord:
@@ -464,7 +509,9 @@ class TestPendingFinalPr:
 
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
-        assert res == {"status": "waiting_on_children", "open_children": [102]}
+        assert res == _expected(
+            {"status": "waiting_on_children", "open_children": [102]}
+        )
         fake_forge.create_pull_request.assert_not_called()
         body = fake_forge.update_pull_request.call_args.kwargs["body"]
         assert "⚠️ 未完了の子Issue #102 があります。" in body
@@ -506,7 +553,9 @@ class TestPendingFinalPr:
 
         first = process_parent_completion(100, apply=True, forge=fake_forge)
 
-        assert first == {"status": "waiting_on_children", "open_children": [102]}
+        assert first == _expected(
+            {"status": "waiting_on_children", "open_children": [102]}
+        )
         fake_forge.close_issue.assert_not_called()
 
         fake_forge.list_sub_issues.return_value = [
@@ -518,7 +567,7 @@ class TestPendingFinalPr:
 
         second = process_parent_completion(100, apply=True, forge=fake_forge)
 
-        assert second == {"status": "final_pr_ready", "pr_number": 777}
+        assert second == _expected({"status": "final_pr_ready", "pr_number": 777})
         fake_forge.close_issue.assert_not_called()
         assert (
             fake_forge.create_pull_request.call_args.kwargs["head"]
@@ -551,3 +600,91 @@ class TestParentBranchState:
         process_parent_completion(100, apply=True, forge=fake_forge)
 
         mock_merged.assert_called_once_with("parent/issue-100", 100, fake_forge)
+
+
+def test_acceptance_dry_run_has_no_forge_reads():
+    forge = MagicMock()
+    result = process_parent_completion(100, False, forge)
+    assert result["final_acceptance_review"]["status"] == "skipped_dry_run"
+    assert forge.mock_calls == []
+
+
+def test_acceptance_shares_one_summary_snapshot(fake_forge):
+    from orchestune.integrator.final_pr_body import ChildSummary
+
+    children = [_issue(102, "CLOSED"), _issue(101, "CLOSED"), _issue(100, "CLOSED")]
+    summaries = [ChildSummary(101, "Task"), ChildSummary(102, "Task")]
+    fake_forge.list_sub_issues.return_value = children
+    fake_forge.get_merged_pr_timestamp.return_value = None
+    with (
+        patch(
+            "orchestune.integrator.parent_completion.collect_child_summaries",
+            return_value=summaries,
+        ) as collect,
+        patch(
+            "orchestune.integrator.parent_completion.ensure_parent_final_pr",
+            return_value=777,
+        ) as ensure,
+        patch(
+            "orchestune.integrator.parent_completion.request_final_acceptance_review",
+            return_value={"status": "posted"},
+        ) as request,
+    ):
+        result = process_parent_completion(
+            100, True, fake_forge, final_acceptance_reviewer="claude"
+        )
+    assert [child.number for child in collect.call_args.args[2]] == [101, 102]
+    assert ensure.call_args.kwargs["summaries"] is summaries
+    assert request.call_args.kwargs["summaries"] is summaries
+    assert result["status"] == "final_pr_ready"
+    assert result["final_acceptance_review"]["status"] == "posted"
+
+
+@pytest.mark.parametrize(
+    ("mode", "reviewer", "status"),
+    [
+        ("off", "claude", "skipped_off"),
+        ("advisory", None, "reviewer_unresolved"),
+    ],
+)
+def test_acceptance_skips_without_request_reads(fake_forge, mode, reviewer, status):
+    fake_forge.list_sub_issues.return_value = [_issue(101, "CLOSED")]
+    fake_forge.get_merged_pr_timestamp.return_value = None
+    with (
+        patch(
+            "orchestune.integrator.parent_completion.ensure_parent_final_pr",
+            return_value=777,
+        ),
+        patch(
+            "orchestune.integrator.parent_completion.request_final_acceptance_review"
+        ) as request,
+    ):
+        result = process_parent_completion(
+            100,
+            True,
+            fake_forge,
+            final_acceptance_review=mode,
+            final_acceptance_reviewer=reviewer,
+        )
+    request.assert_not_called()
+    assert result["final_acceptance_review"]["status"] == status
+
+
+def test_acceptance_failure_keeps_ready_pr(fake_forge):
+    fake_forge.list_sub_issues.return_value = [_issue(101, "CLOSED")]
+    fake_forge.get_merged_pr_timestamp.return_value = None
+    with (
+        patch(
+            "orchestune.integrator.parent_completion.ensure_parent_final_pr",
+            return_value=777,
+        ),
+        patch(
+            "orchestune.integrator.parent_completion.request_final_acceptance_review",
+            side_effect=RuntimeError("boom"),
+        ),
+    ):
+        result = process_parent_completion(
+            100, True, fake_forge, final_acceptance_reviewer="claude"
+        )
+    assert result["status"] == "final_pr_ready" and result["pr_number"] == 777
+    assert result["final_acceptance_review"]["status"] == "failed"
