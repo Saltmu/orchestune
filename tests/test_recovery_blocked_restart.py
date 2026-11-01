@@ -10,6 +10,7 @@ import pytest
 from orchestune.complete.contracts import CompleteRequest
 from orchestune.complete.service import complete_task
 from orchestune.infra.process_utils import run_state_lock
+from orchestune.ledger.completion_records import CompletionReplayReceipt
 from orchestune.ledger.run_state import load_run_state_readonly, save_run_state
 from orchestune.recovery.contracts import RecoveryRequest
 from orchestune.recovery.service import recover_claim
@@ -90,8 +91,9 @@ def test_preview_restart_retry_and_historical_replay(blocked_claim):
         == "already_restarted_blocked"
     )
     receipt = next(iter(state.completion_replay_receipts.values()))
+    assert isinstance(receipt, CompletionReplayReceipt)
     replay = complete_task(
-        replace(old_request, completion_id=receipt["completion_id"]), forge=forge
+        replace(old_request, completion_id=receipt.record.completion_id), forge=forge
     )
     assert replay.success and replay.result == "blocked"
 

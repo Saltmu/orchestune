@@ -71,9 +71,10 @@ def test_semantically_invalid_record_is_typed_and_preserved_without_rejecting_st
     assert isinstance(invalid, InvalidLedgerRecord)
     assert invalid.raw_json == raw
     save_run_state(state, state_path)
-    assert json.loads(state_path.read_text(encoding="utf-8"))["completion_journal"][
-        "bad"
-    ] == raw
+    assert (
+        json.loads(state_path.read_text(encoding="utf-8"))["completion_journal"]["bad"]
+        == raw
+    )
 
 
 def test_reservation_and_replay_receipt_are_distinct_typed_values():
@@ -82,7 +83,10 @@ def test_reservation_and_replay_receipt_are_distinct_typed_values():
     handed_off = CompletionJournalRecord.from_dict(
         journal_json(
             stage="handed_off",
-            posting_evidence={"comment_id": "1", "comment_url": "https://example.test/1"},
+            posting_evidence={
+                "comment_id": "1",
+                "comment_url": "https://example.test/1",
+            },
             label_evidence={
                 "status": "confirmed",
                 "target_label": "status:done",

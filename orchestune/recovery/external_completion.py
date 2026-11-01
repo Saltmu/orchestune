@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from orchestune.ledger.completion_reservations import (
-    completion_record,
-    completion_reservation_status,
-)
 from orchestune.ledger.completion_records import (
     CompletionJournalRecord,
     InvalidLedgerRecord,
+)
+from orchestune.ledger.completion_reservations import (
+    completion_record,
+    completion_reservation_status,
 )
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 
@@ -29,7 +29,12 @@ def completion_retention(active: ActiveWorktree, state: RunState) -> tuple[bool,
             raise ValueError("completion_state_invalid")
         if record.issue_number != issue:
             continue
-        required = (record.repository_id, record.issue_number, record.generation_id, record.completion_id)
+        required = (
+            record.repository_id,
+            record.issue_number,
+            record.generation_id,
+            record.completion_id,
+        )
         if any(not value for value in required):
             raise ValueError("completion_state_invalid")
         if key != "::".join(str(value) for value in required):

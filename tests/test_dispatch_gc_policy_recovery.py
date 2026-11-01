@@ -406,7 +406,7 @@ def test_receipt_reclaims_token_only_after_active_release(tmp_path):
     )
     update_record(state, record)
     state.completion_reservations[record.reservation_key] = (
-        CompletionReservation.from_journal(record).to_dict()
+        CompletionReservation.from_journal(record)
     )
     directory = config.run_state_path.parent / ".orchestune" / "claim-tokens"
     _write_owner_token(directory, record.generation_id, "test-owned-token")

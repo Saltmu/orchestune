@@ -44,9 +44,7 @@ def _records(state: Any, issue_number: int) -> list[CompletionReservation]:
     return records
 
 
-def completion_record(
-    state: Any, issue_number: int
-) -> CompletionJournalRecord | None:
+def completion_record(state: Any, issue_number: int) -> CompletionJournalRecord | None:
     """Resolve an Issue reservation and require its immutable journal identity."""
     records = _records(state, issue_number)
     if not records:
@@ -105,7 +103,9 @@ def completion_reservation_status(state: Any, issue_number: int) -> str:
             or record.target_label not in labels.get("observed_labels", [])
         ):
             return "invalid"
-        receipt = getattr(state, "completion_replay_receipts", {}).get(record.receipt_key)
+        receipt = getattr(state, "completion_replay_receipts", {}).get(
+            record.receipt_key
+        )
         if not isinstance(receipt, CompletionReplayReceipt):
             return "invalid"
         if replace(receipt.record, downstream_policy_records=()) != replace(

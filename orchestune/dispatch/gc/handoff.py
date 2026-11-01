@@ -358,8 +358,7 @@ def _journal_proof_problem(
     assert record is not None
     if (
         active.completion.completion_result == "done"
-        and (record.get("prepublication_policy_evidence") or {}).get("decision")
-        != "allowed"
+        and (record.prepublication_policy_evidence or {}).get("decision") != "allowed"
     ):
         return "done_policy_evidence_missing"
     if active.claim.repository_id != workspace.repository_identity:

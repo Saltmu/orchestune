@@ -240,9 +240,8 @@ def test_review_pending_holds_dependencies_until_durable_policy_is_applied(
     assert complete_task(request, forge=forge).success
     state = load_run_state_readonly(request.state_path)
     assert dependency_completion_blocked(state, 1110)
-    record = CompletionJournalRecord.from_dict(
-        next(iter(state.completion_journal.values()))
-    )
+    record = next(iter(state.completion_journal.values()))
+    assert isinstance(record, CompletionJournalRecord)
     policy = replace(
         record.downstream_policy_records[0],
         status="applied",
@@ -254,7 +253,7 @@ def test_review_pending_holds_dependencies_until_durable_policy_is_applied(
     assert not dependency_completion_blocked(state, 1110)
     assert (
         state.completion_journal[record.journal_key]
-        == state.completion_replay_receipts[record.receipt_key]
+        == state.completion_replay_receipts[record.receipt_key].record
     )
 
 
@@ -335,6 +334,11 @@ _RESERVATION_IDENTITY = {
 
 
 def _journaled(stage: str, **extra):
+    from orchestune.ledger.completion_records import (
+        CompletionReservation,
+        decode_completion_journal,
+    )
+
     record = {**_RESERVATION_IDENTITY, "stage": stage, **extra}
     if stage in {"outcome_posted", "label_confirmed", "handed_off"}:
         record["posting_evidence"] = {
@@ -348,8 +352,10 @@ def _journaled(stage: str, **extra):
             "observed_labels": ["status:done"],
         }
     return RunState(
-        completion_reservations={"repo::10": dict(_RESERVATION_IDENTITY)},
-        completion_journal={"repo::10::g::c": record},
+        completion_reservations={
+            "repo::10": CompletionReservation.from_dict(_RESERVATION_IDENTITY)
+        },
+        completion_journal={"repo::10::g::c": decode_completion_journal(record)},
     )
 
 
@@ -397,7 +403,11 @@ def test_reservation_status_requires_handoff_evidence_and_receipt():
     state = _journaled("handed_off", **evidence)
     assert completion_reservation_status(state, 10) == "invalid"
     record = state.completion_journal["repo::10::g::c"]
-    from orchestune.ledger.completion_records import CompletionReplayReceipt
+    from orchestune.ledger.completion_records import (
+        CompletionJournalRecord,
+        CompletionReplayReceipt,
+    )
 
+    assert isinstance(record, CompletionJournalRecord)
     state.completion_replay_receipts["repo::10::g::c"] = CompletionReplayReceipt(record)
     assert completion_reservation_status(state, 10) == "handed_off"

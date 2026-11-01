@@ -13,7 +13,6 @@ from orchestune.complete.contracts import (
 from orchestune.complete.journal import (
     CompletionJournalError,
     CompletionJournalRecord,
-    CompletionReplayReceipt,
 )
 from orchestune.ledger.completion_records import CompletionReplayReceipt
 from orchestune.outcome_record import parse_from_comments

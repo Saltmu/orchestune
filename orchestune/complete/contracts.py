@@ -20,30 +20,21 @@ from orchestune.outcome_record import (
     ReviewSummary,
     is_known_reason,
 )
-from orchestune.ownership_contracts import CompleteStage as CompleteStage
-from orchestune.ownership_contracts import OwnerKind
-
-_VALID_STAGE_TRANSITIONS: dict[CompleteStage, frozenset[CompleteStage]] = {
-    CompleteStage.INITIALIZING: frozenset({CompleteStage.PREFLIGHT_VALIDATING}),
-    CompleteStage.PREFLIGHT_VALIDATING: frozenset({CompleteStage.EVIDENCE_VERIFYING}),
-    CompleteStage.EVIDENCE_VERIFYING: frozenset({CompleteStage.JOURNALING}),
-    CompleteStage.JOURNALING: frozenset(
-        {CompleteStage.POSTING, CompleteStage.RESERVED}
-    ),
-    CompleteStage.POSTING: frozenset({CompleteStage.HANDED_OFF_TO_GC}),
-    CompleteStage.HANDED_OFF_TO_GC: frozenset(),
-    CompleteStage.RESERVED: frozenset({CompleteStage.OUTCOME_POSTED}),
-    CompleteStage.OUTCOME_POSTED: frozenset({CompleteStage.LABEL_CONFIRMED}),
-    CompleteStage.LABEL_CONFIRMED: frozenset({CompleteStage.HANDED_OFF}),
-    CompleteStage.HANDED_OFF: frozenset(),
-}
-
-
-def can_transition(from_stage: CompleteStage, to_stage: CompleteStage) -> bool:
-    """Return whether transitioning directly from from_stage to to_stage is allowed."""
-    allowed = _VALID_STAGE_TRANSITIONS.get(from_stage, frozenset())
-    return to_stage in allowed
-
+from orchestune.ownership_contracts import (
+    CompleteStage as CompleteStage,
+)
+from orchestune.ownership_contracts import (
+    CompletionLabelStatus as CompletionLabelStatus,
+)
+from orchestune.ownership_contracts import (
+    DownstreamPolicyRecord as DownstreamPolicyRecord,
+)
+from orchestune.ownership_contracts import (
+    OwnerKind as OwnerKind,
+)
+from orchestune.ownership_contracts import (
+    can_transition as can_transition,
+)
 
 CompleteExitCode = TaskExitCode
 
@@ -84,16 +75,6 @@ def failure_reason_to_exit_code(reason: CompleteFailureReason) -> CompleteExitCo
     if not isinstance(reason, CompleteFailureReason):
         raise KeyError(f"Unmapped complete failure reason: {reason!r}")
     return complete_failure_exit_code(reason.value)
-
-
-class CompletionLabelStatus(str, Enum):
-    """Outcome of a live, completion-specific status-label transition."""
-
-    CONFIRMED = "confirmed"
-    ADD_FAILED = "add_failed"
-    CLEANUP_INCOMPLETE = "cleanup_incomplete"
-    UNKNOWN = "unknown"
-    CONFLICT = "conflict"
 
 
 @dataclass(frozen=True)
@@ -156,68 +137,6 @@ class CompletionLabelTransitionResult:
             raise ValueError(
                 f"{self.status.value} requires failure_reason={expected.value}"
             )
-
-
-@dataclass(frozen=True)
-class DownstreamPolicyRecord:
-    """A generation-scoped downstream policy action awaiting or confirming apply."""
-
-    repository_id: str
-    issue_number: int
-    generation_id: str
-    completion_id: str
-    policy_kind: str
-    status: str = "pending"
-    schema_version: int = 1
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        for name, value in (
-            ("repository_id", self.repository_id),
-            ("generation_id", self.generation_id),
-            ("completion_id", self.completion_id),
-            ("policy_kind", self.policy_kind),
-        ):
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{name} must be a non-empty string")
-        if not is_valid_issue_number(self.issue_number):
-            raise ValueError("issue_number must be a positive integer")
-        if not isinstance(self.metadata, dict):
-            raise ValueError("policy metadata must be an object")
-        try:
-            json.dumps(self.metadata, allow_nan=False)
-        except (TypeError, ValueError) as error:
-            raise ValueError("policy metadata must contain JSON data") from error
-        if self.status not in {"pending", "applied"}:
-            raise ValueError("status must be 'pending' or 'applied'")
-        if (
-            not isinstance(self.schema_version, int)
-            or isinstance(self.schema_version, bool)
-            or self.schema_version != 1
-        ):
-            raise ValueError(
-                f"unsupported downstream policy schema_version: {self.schema_version}"
-            )
-
-    @property
-    def policy_key(self) -> str:
-        return f"{self.repository_id}::{self.issue_number}::{self.generation_id}::{self.completion_id}::{self.policy_kind}"
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": self.schema_version,
-            "repository_id": self.repository_id,
-            "issue_number": self.issue_number,
-            "generation_id": self.generation_id,
-            "completion_id": self.completion_id,
-            "policy_kind": self.policy_kind,
-            "status": self.status,
-            "metadata": self.metadata,
-        }
-
-    @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> DownstreamPolicyRecord:
-        return cls(**value)
 
 
 def is_valid_positive_int(val: Any) -> bool:

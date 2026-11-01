@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, TypeVar
 
-from orchestune.complete.contracts import (
+from orchestune.outcome_record import VALID_RESULTS
+from orchestune.ownership_contracts import (
     CompleteStage,
     CompletionLabelStatus,
     DownstreamPolicyRecord,
-    _required_digest,
-    _required_text,
-    _validate_fixed_outcome,
     can_transition,
+    required_digest,
+    required_text,
+    validate_fixed_outcome,
 )
-from orchestune.outcome_record import VALID_RESULTS
 
 
 def _has_posting_evidence(comment_id: str | None, comment_url: str | None) -> bool:
@@ -89,12 +90,12 @@ class CompletionJournalRecord:
         self._validate_policies()
 
     def _validate_identity(self) -> None:
-        _required_text(self.repository_id, "repository_id")
-        _required_text(self.generation_id, "generation_id")
-        _required_text(self.completion_id, "completion_id")
-        _required_text(self.target_label, "target_label")
-        _required_digest(self.owner_token_digest, "owner_token_digest")
-        _required_digest(self.request_fingerprint, "request_fingerprint")
+        required_text(self.repository_id, "repository_id")
+        required_text(self.generation_id, "generation_id")
+        required_text(self.completion_id, "completion_id")
+        required_text(self.target_label, "target_label")
+        required_digest(self.owner_token_digest, "owner_token_digest")
+        required_digest(self.request_fingerprint, "request_fingerprint")
         if (
             not isinstance(self.issue_number, int)
             or isinstance(self.issue_number, bool)
@@ -107,7 +108,7 @@ class CompletionJournalRecord:
     def _validate_payload(self) -> None:
         if not isinstance(self.outcome_payload, dict):
             raise ValueError("outcome_payload must be an object")
-        _validate_fixed_outcome(self.outcome_payload, self.issue_number, self.result)
+        validate_fixed_outcome(self.outcome_payload, self.issue_number, self.result)
         if not isinstance(self.stage, CompleteStage):
             try:
                 object.__setattr__(self, "stage", CompleteStage(self.stage))
@@ -240,8 +241,7 @@ class CompletionJournalRecord:
         parsed = {
             key: item
             for key, item in value.items()
-            if key in cls.__dataclass_fields__
-            and not key.startswith("_codec_")
+            if key in cls.__dataclass_fields__ and not key.startswith("_codec_")
         }
         parsed["stage"] = CompleteStage(parsed["stage"])
         raw_policies = parsed.get("downstream_policy_records", {})
@@ -301,12 +301,12 @@ class CompletionReservation:
     )
 
     def __post_init__(self) -> None:
-        _required_text(self.repository_id, "repository_id")
-        _required_text(self.generation_id, "generation_id")
-        _required_text(self.completion_id, "completion_id")
-        _required_text(self.target_label, "target_label")
-        _required_digest(self.owner_token_digest, "owner_token_digest")
-        _required_digest(self.request_fingerprint, "request_fingerprint")
+        required_text(self.repository_id, "repository_id")
+        required_text(self.generation_id, "generation_id")
+        required_text(self.completion_id, "completion_id")
+        required_text(self.target_label, "target_label")
+        required_digest(self.owner_token_digest, "owner_token_digest")
+        required_digest(self.request_fingerprint, "request_fingerprint")
         if (
             not isinstance(self.issue_number, int)
             or isinstance(self.issue_number, bool)
@@ -317,7 +317,7 @@ class CompletionReservation:
             self.outcome_payload, dict
         ):
             raise ValueError("reservation result or outcome_payload is invalid")
-        _validate_fixed_outcome(self.outcome_payload, self.issue_number, self.result)
+        validate_fixed_outcome(self.outcome_payload, self.issue_number, self.result)
         if (
             not isinstance(self.schema_version, int)
             or isinstance(self.schema_version, bool)
@@ -409,9 +409,14 @@ CompletionReservationValue = CompletionReservation | InvalidLedgerRecord
 CompletionReplayReceiptValue = CompletionReplayReceipt | InvalidLedgerRecord
 
 
+_DecodedRecord = TypeVar("_DecodedRecord")
+
+
 def _decode_record(
-    record_type: str, raw: dict[str, Any], decoder: Any
-) -> Any:
+    record_type: str,
+    raw: dict[str, Any],
+    decoder: Callable[[dict[str, Any]], _DecodedRecord],
+) -> _DecodedRecord | InvalidLedgerRecord:
     try:
         return decoder(raw)
     except (KeyError, TypeError, ValueError) as error:
@@ -423,16 +428,24 @@ def decode_completion_journal(raw: dict[str, Any]) -> CompletionJournalValue:
 
 
 def decode_completion_reservation(raw: dict[str, Any]) -> CompletionReservationValue:
-    return _decode_record("completion_reservations", raw, CompletionReservation.from_dict)
+    return _decode_record(
+        "completion_reservations", raw, CompletionReservation.from_dict
+    )
 
 
-def decode_completion_replay_receipt(raw: dict[str, Any]) -> CompletionReplayReceiptValue:
-    return _decode_record("completion_replay_receipts", raw, CompletionReplayReceipt.from_dict)
+def decode_completion_replay_receipt(
+    raw: dict[str, Any],
+) -> CompletionReplayReceiptValue:
+    return _decode_record(
+        "completion_replay_receipts", raw, CompletionReplayReceipt.from_dict
+    )
 
 
 def encode_completion_value(value: Any) -> dict[str, Any]:
     if isinstance(value, InvalidLedgerRecord):
         return deepcopy(value.raw_json)
-    if isinstance(value, CompletionReplayReceipt | CompletionJournalRecord | CompletionReservation):
+    if isinstance(
+        value, CompletionReplayReceipt | CompletionJournalRecord | CompletionReservation
+    ):
         return value.to_dict()
     raise TypeError(f"unsupported completion ledger value: {type(value).__name__}")

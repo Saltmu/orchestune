@@ -3,12 +3,12 @@
 from typing import Any
 
 from orchestune.dispatch.cycle_events import UnclaimedReservationHold, freeze_json
+from orchestune.ledger.completion_records import InvalidLedgerRecord
 from orchestune.ledger.completion_reservations import (
     completion_record,
     completion_reservation_status,
     dependency_completion_blocked,
 )
-from orchestune.ledger.completion_records import InvalidLedgerRecord
 
 
 def unclaimed_completion_events(state: Any) -> list[UnclaimedReservationHold]:

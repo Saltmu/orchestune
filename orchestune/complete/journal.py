@@ -318,7 +318,7 @@ def completion_journal_lock(
         cm.__exit__(None, None, None)
 
 
-def _invalid_completion_state(message: str, error: Exception) -> CompletionJournalError:
+def _invalid_completion_state(message: str) -> CompletionJournalError:
     return CompletionJournalError(
         CompleteFailureReason.INVALID_COMPLETION_STATE,
         f"Invalid persisted completion state: {message}",
@@ -329,27 +329,25 @@ def _load_contract_state(state_path: Path) -> Any:
     try:
         return load_run_state(state_path)
     except (TypeError, ValueError) as error:
-        raise _invalid_completion_state(str(error), error) from error
+        raise _invalid_completion_state(str(error)) from error
 
 
 def _parse_contract_record(raw: Any) -> CompletionJournalRecord:
     if isinstance(raw, CompletionJournalRecord):
         return raw
     if isinstance(raw, InvalidLedgerRecord):
-        error = ValueError(raw.reason)
-        raise _invalid_completion_state(str(error), error) from error
-    error = TypeError("completion journal value is not a typed record")
-    raise _invalid_completion_state(str(error), error)
+        raise _invalid_completion_state(raw.reason)
+    raise _invalid_completion_state("completion journal value is not a typed record")
 
 
 def _parse_contract_reservation(raw: Any) -> CompletionReservation:
     if isinstance(raw, CompletionReservation):
         return raw
     if isinstance(raw, InvalidLedgerRecord):
-        error = ValueError(raw.reason)
-        raise _invalid_completion_state(str(error), error) from error
-    error = TypeError("completion reservation value is not a typed record")
-    raise _invalid_completion_state(str(error), error)
+        raise _invalid_completion_state(raw.reason)
+    raise _invalid_completion_state(
+        "completion reservation value is not a typed record"
+    )
 
 
 def _has_durable_handoff_receipt(state: Any, record: CompletionJournalRecord) -> bool:

@@ -103,6 +103,7 @@ def test_legacy_journal_backfills_hold_without_editing_fixed_outcome(
 ):
     from orchestune.dispatch.gc.policy_discovery import confirmed_records, update_record
     from orchestune.infra.process_utils import run_state_lock
+    from orchestune.ledger.completion_records import CompletionReservation
     from orchestune.ledger.run_state import load_run_state_readonly, save_run_state
     from orchestune.outcome_record import parse_from_comments
 
@@ -116,8 +117,10 @@ def test_legacy_journal_backfills_hold_without_editing_fixed_outcome(
     world.forge.labels.remove(PENDING)
     record = replace(record, outcome_payload={**record.outcome_payload, "body": body})
     update_record(state, record)
-    state.completion_reservations[record.reservation_key]["outcome_payload"] = (
-        record.outcome_payload
+    reservation = state.completion_reservations[record.reservation_key]
+    assert isinstance(reservation, CompletionReservation)
+    state.completion_reservations[record.reservation_key] = replace(
+        reservation, outcome_payload=record.outcome_payload
     )
     with run_state_lock(world.path.with_suffix(".lock")):
         save_run_state(state, world.path)

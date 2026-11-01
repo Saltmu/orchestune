@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 from test_complete_unclaimed import unclaimed as _unclaimed_fixture
 
-from orchestune.complete.journal import CompletionJournalRecord, completion_journal_lock
+from orchestune.complete.journal import completion_journal_lock
 from orchestune.complete.publication import update_downstream_policy_locked
 from orchestune.complete.service import complete_task
 from orchestune.dispatch.config import DispatcherConfig

@@ -8,19 +8,18 @@ from typing import Any
 
 from orchestune.claim.ownership import owner_token_digest
 from orchestune.complete.contracts import CompleteStage, DownstreamPolicyRecord
-from orchestune.complete.journal_models import CompletionJournalRecord
 from orchestune.dispatch.cycle_events import TokenHoldCompletion
 from orchestune.infra.private_tokens import read_owner_token, token_record_path
 from orchestune.infra.process_utils import assert_run_state_lock_held
-from orchestune.ledger.completion_reservations import (
-    completion_handoff_matches_active,
-    completion_record,
-    completion_reservation_status,
-)
 from orchestune.ledger.completion_records import (
     CompletionJournalRecord,
     CompletionReplayReceipt,
     InvalidLedgerRecord,
+)
+from orchestune.ledger.completion_reservations import (
+    completion_handoff_matches_active,
+    completion_record,
+    completion_reservation_status,
 )
 from orchestune.ledger.run_state import RunState
 from orchestune.not_needed_review_contract import NotNeededReview, review_operation_id
@@ -188,7 +187,10 @@ def reclaim_completed_tokens(
         ):
             continue
         journal = state.completion_journal.get(record.journal_key)
-        if journal != receipt or (record.label_evidence or {}).get("status") != "confirmed":
+        if (
+            journal != receipt.record
+            or (record.label_evidence or {}).get("status") != "confirmed"
+        ):
             continue
         context = (record.prepublication_policy_evidence or {}).get("context", {})
         unclaimed = context.get("unclaimed") is True

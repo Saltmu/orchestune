@@ -29,8 +29,8 @@ from orchestune.complete.replay import result_from_record
 from orchestune.complete.status_labels import transition_completion_status_label
 from orchestune.infra.process_utils import assert_run_state_lock_held
 from orchestune.labels import StatusLabel
-from orchestune.ledger.run_state import load_run_state_readonly
 from orchestune.ledger.completion_records import CompletionReservation
+from orchestune.ledger.run_state import load_run_state_readonly
 from orchestune.ledger.status_labels import PRIMARY_STATUS_LABELS
 from orchestune.outcome_record import parse_from_comments
 

@@ -27,7 +27,6 @@ from orchestune.complete.contracts import (
 )
 from orchestune.complete.journal import (
     CompletionJournalError,
-    CompletionJournalRecord,
     _save_or_raise,
     completion_journal_lock,
     reserve_completion_locked,
@@ -137,7 +136,7 @@ def _check(request: CompleteRequest, state: Any, worktree: Path, forge: Any) -> 
 def _pending(
     request: CompleteRequest, state: Any, repository: str, generation: str
 ) -> CompletionJournalRecord | None:
-    records = []
+    records: list[CompletionJournalRecord] = []
     for raw in state.completion_journal.values():
         if isinstance(raw, InvalidLedgerRecord):
             if raw.raw_json.get("issue_number") == request.issue_number:
@@ -145,6 +144,11 @@ def _pending(
                     CompleteFailureReason.INVALID_COMPLETION_STATE, raw.reason
                 )
             continue
+        if not isinstance(raw, CompletionJournalRecord):
+            raise CompletionJournalError(
+                CompleteFailureReason.INVALID_COMPLETION_STATE,
+                "Completion journal value is not a typed record",
+            )
         if (
             raw.repository_id == repository
             and raw.issue_number == request.issue_number

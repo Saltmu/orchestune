@@ -21,14 +21,14 @@ from orchestune.complete.ci_evidence import (
 from orchestune.complete.contracts import CompleteRequest, CompleteStage
 from orchestune.complete.journal import CompletionJournalError
 from orchestune.complete.journal_models import CompletionJournalRecord
-from orchestune.ledger.completion_records import (
-    CompletionReplayReceipt,
-    InvalidLedgerRecord,
-)
 from orchestune.complete.preflight import evaluate_complete_preflight
 from orchestune.complete.review_evidence import verify_review_evidence
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
 from orchestune.labels import StatusLabel
+from orchestune.ledger.completion_records import (
+    CompletionReplayReceipt,
+    InvalidLedgerRecord,
+)
 from orchestune.review.judgment import judgment_digest, parse_judgments
 from orchestune.workflow.contracts import (
     GATES,
@@ -545,10 +545,7 @@ def _terminal_records(c: WorkflowContext) -> list[CompletionJournalRecord]:
             record = value
         else:
             raise ValueError("terminal completion record has an unknown type")
-        if (
-            record.issue_number != c.issue_number
-            or record.generation_id != generation
-        ):
+        if record.issue_number != c.issue_number or record.generation_id != generation:
             continue
         if record.repository_id != c.repository_identity:
             raise ValueError(

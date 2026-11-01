@@ -39,11 +39,9 @@ def test_unclaimed_publication_has_independent_reservation_and_pending_review(
     }
     record = next(iter(state.completion_journal.values()))
     assert record.outcome_payload["body"] == forge.comments[0]["body"]
-    assert record["generation_id"].startswith("unclaimed-")
+    assert record.generation_id.startswith("unclaimed-")
     assert dependency_completion_blocked(state, 1111)
-    assert (
-        next(iter(record["downstream_policy_records"].values()))["status"] == "pending"
-    )
+    assert next(iter(record.downstream_policy_records)).status == "pending"
     tokens = list(
         request.state_path.parent.glob(".orchestune/completion-tokens/*.token")
     )
