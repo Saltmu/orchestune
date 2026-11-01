@@ -294,12 +294,26 @@ def terminal_record(c, result="blocked", generation=None):
     ).to_dict()
 
 
+def terminal_key(record):
+    return "::".join(
+        str(record[name])
+        for name in (
+            "repository_id",
+            "issue_number",
+            "generation_id",
+            "completion_id",
+        )
+    )
+
+
 @pytest.mark.parametrize("gate", ["pre-claim", "pre-edit", "pre-pr", "pre-complete"])
 def test_only_verified_current_terminal_block_returns_four(tmp_path, gate):
     c = prepared_context(tmp_path)
-    c.ledger.completion_journal["old"] = terminal_record(c, generation="old")
+    old = terminal_record(c, generation="old")
+    c.ledger.completion_journal[terminal_key(old)] = old
     assert check_gate(c, gate).exit_code != 4
-    c.ledger.completion_journal["current"] = terminal_record(c)
+    current = terminal_record(c)
+    c.ledger.completion_journal[terminal_key(current)] = current
     result = check_gate(c, gate)
     assert result.exit_code == 4
     assert result.stage_id == "blocked"
@@ -308,12 +322,14 @@ def test_only_verified_current_terminal_block_returns_four(tmp_path, gate):
 
 def test_conflicting_terminals_are_unmet_and_handoff_has_no_actions(tmp_path):
     c = prepared_context(tmp_path)
-    c.ledger.completion_replay_receipts["done"] = terminal_record(c, "done")
+    done = terminal_record(c, "done")
+    c.ledger.completion_replay_receipts[terminal_key(done)] = done
     result = check_gate(c, "pre-claim")
     assert result.status == "ready" and result.stage_id == "handed-off"
     assert not result.actions
     assert result.references == ("docs/operator-completion-lifecycle.md",)
-    c.ledger.completion_journal["blocked"] = terminal_record(c)
+    blocked = terminal_record(c)
+    c.ledger.completion_journal[terminal_key(blocked)] = blocked
     result = check_gate(c, "pre-claim")
     assert result.status == "unmet"
     assert "terminal_receipt_conflict" in result.reason_codes
@@ -323,7 +339,7 @@ def test_terminal_receipt_without_comment_url_is_unmet(tmp_path):
     c = prepared_context(tmp_path)
     record = terminal_record(c)
     record["posting_evidence"].pop("comment_url")
-    c.ledger.completion_journal["current"] = record
+    c.ledger.completion_journal[terminal_key(record)] = record
     result = check_gate(c, "pre-claim")
     assert result.status == "unmet"
     assert "terminal_receipt_conflict" in result.reason_codes

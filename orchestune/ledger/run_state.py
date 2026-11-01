@@ -25,8 +25,114 @@ from orchestune.ledger.active_lifecycle import (
     lifecycle as lifecycle,
 )
 from orchestune.ledger.active_records import ActiveWorktree as ActiveWorktree
+from orchestune.ledger.completion_records import (
+    CompletionJournalRecord,
+    CompletionJournalValue,
+    CompletionReplayReceipt,
+    CompletionReplayReceiptValue,
+    CompletionReservation,
+    CompletionReservationValue,
+    InvalidLedgerRecord,
+    decode_completion_journal,
+    decode_completion_replay_receipt,
+    decode_completion_reservation,
+    encode_completion_value,
+)
 from orchestune.models import Usage
 from orchestune.ownership_contracts import ClaimStage, OwnerKind, ReservationKind
+
+_COMPLETION_LEDGER_CODECS = {
+    "completion_journal": (
+        decode_completion_journal,
+        CompletionJournalRecord,
+        "completion_journal",
+        "journal_key",
+    ),
+    "completion_reservations": (
+        decode_completion_reservation,
+        CompletionReservation,
+        "completion_reservations",
+        "reservation_key",
+    ),
+    "completion_replay_receipts": (
+        decode_completion_replay_receipt,
+        CompletionReplayReceipt,
+        "completion_replay_receipts",
+        "receipt_key",
+    ),
+}
+
+
+class _CompletionLedgerMap(dict):
+    """Keep completion map values typed across standard dict mutation APIs.
+
+    Copy-like dict operations return ordinary dictionaries; assigning those back
+    to a RunState ledger wraps and validates them again.
+    """
+
+    def __init__(
+        self,
+        values: Any = (),
+        *,
+        decoder: Any = None,
+        expected_type: type[Any] | None = None,
+        record_type: str = "",
+        key_attribute: str = "",
+    ) -> None:
+        self._decoder = decoder
+        self._expected_type = expected_type
+        self._record_type = record_type
+        self._key_attribute = key_attribute
+        super().__init__()
+        self.update(values)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        raw: dict[str, Any] | None = None
+        if isinstance(value, dict):
+            raw = value
+        elif (
+            not isinstance(value, InvalidLedgerRecord)
+            and self._expected_type is not None
+            and not isinstance(value, self._expected_type)
+        ):
+            try:
+                raw = encode_completion_value(value)
+            except TypeError as error:
+                raise TypeError(
+                    f"{self.record_type} values must be typed completion records or JSON objects"
+                ) from error
+        if raw is not None:
+            if self._decoder is None:
+                raise TypeError("completion ledger map requires a decoder for raw JSON")
+            value = self._decoder(raw)
+        if not isinstance(value, InvalidLedgerRecord):
+            if getattr(value, self._key_attribute) != key:
+                if raw is None:
+                    # Only a correctly typed record can reach this branch.
+                    raw = encode_completion_value(value)
+                value = InvalidLedgerRecord(
+                    self._record_type,
+                    f"map key {key!r} does not match record identity",
+                    raw,
+                )
+        super().__setitem__(key, value)
+
+    @property
+    def record_type(self) -> str:
+        return self._record_type
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        for key, value in dict(*args, **kwargs).items():
+            self[key] = value
+
+    def setdefault(self, key: str, default: Any = None) -> Any:
+        if key not in self:
+            self[key] = default
+        return self[key]
+
+    def __ior__(self, other: Any) -> Any:  # type: ignore[override, misc]
+        self.update(other)
+        return self
 
 
 @dataclass
@@ -114,15 +220,38 @@ class RunState:
     # `to_unlock`に現れないため、ここに残さないとIssue上の通知が「ロック中」の
     # まま取り残される。投稿できた時点で消える。
     pending_lock_release_notices: list[int] = field(default_factory=list)
-    # #1108: versioned completion lifecycle state. These remain opaque JSON
-    # records here to keep the ledger independent from the completion package.
-    completion_journal: dict[str, dict[str, Any]] = field(default_factory=dict)
-    completion_reservations: dict[str, dict[str, Any]] = field(default_factory=dict)
-    completion_replay_receipts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # #1541: completion ledgers are typed values; JSON conversion stays at the
+    # run_state codec boundary. Recovery receipts remain Phase B raw JSON.
+    completion_journal: dict[str, CompletionJournalValue] = field(default_factory=dict)
+    completion_reservations: dict[str, CompletionReservationValue] = field(
+        default_factory=dict
+    )
+    completion_replay_receipts: dict[str, CompletionReplayReceiptValue] = field(
+        default_factory=dict
+    )
     recovery_receipts: dict[str, dict[str, Any]] = field(default_factory=dict)
     # #1270: dispatch target名 -> セッション上限の解除まで起動しない時刻（UTC epoch）。
     # accountの識別が無いため、同じ台帳を使うtargetを1つの制限scopeとして扱う。
     usage_limit_cooldowns: dict[str, float] = field(default_factory=dict)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in _COMPLETION_LEDGER_CODECS and (
+            not isinstance(value, _CompletionLedgerMap)
+            or value.record_type != _COMPLETION_LEDGER_CODECS[name][2]
+        ):
+            decoder, expected_type, record_type, key_attribute = (
+                _COMPLETION_LEDGER_CODECS[name]
+            )
+            if not isinstance(value, dict):
+                raise ValueError(f"{name} must be an object")
+            value = _CompletionLedgerMap(
+                value,
+                decoder=decoder,
+                expected_type=expected_type,
+                record_type=record_type,
+                key_attribute=key_attribute,
+            )
+        super().__setattr__(name, value)
 
 
 def _parse_non_negative_int(value: object, default: int = 0) -> int:
@@ -578,6 +707,12 @@ def _parse_completion_records(
     return records
 
 
+def _parse_completion_ledger(data: dict[str, Any], key: str, decoder: Any) -> dict:
+    """Decode one structurally valid completion map into typed values."""
+    records = _parse_completion_records(data, key)
+    return {record_key: decoder(raw) for record_key, raw in records.items()}
+
+
 def _parse_completed_worktrees(data: dict) -> list[CompletedWorktree]:
     return [
         CompletedWorktree(
@@ -641,12 +776,14 @@ def _run_state_from_data(data: dict[str, Any]) -> RunState:
         pending_lock_release_notices=_parse_pending_lock_release_notices(
             data.get("pending_lock_release_notices")
         ),
-        completion_journal=_parse_completion_records(data, "completion_journal"),
-        completion_reservations=_parse_completion_records(
-            data, "completion_reservations"
+        completion_journal=_parse_completion_ledger(
+            data, "completion_journal", decode_completion_journal
         ),
-        completion_replay_receipts=_parse_completion_records(
-            data, "completion_replay_receipts"
+        completion_reservations=_parse_completion_ledger(
+            data, "completion_reservations", decode_completion_reservation
+        ),
+        completion_replay_receipts=_parse_completion_ledger(
+            data, "completion_replay_receipts", decode_completion_replay_receipt
         ),
         recovery_receipts=_parse_completion_records(data, "recovery_receipts"),
         usage_limit_cooldowns=_parse_usage_limit_cooldowns(
@@ -844,9 +981,18 @@ def _populated_optional_maps(state: RunState) -> dict[str, Any]:
     none of them is retention-pruned.
     """
     candidates: dict[str, Any] = {
-        "completion_journal": state.completion_journal,
-        "completion_reservations": state.completion_reservations,
-        "completion_replay_receipts": state.completion_replay_receipts,
+        "completion_journal": {
+            key: encode_completion_value(value)
+            for key, value in state.completion_journal.items()
+        },
+        "completion_reservations": {
+            key: encode_completion_value(value)
+            for key, value in state.completion_reservations.items()
+        },
+        "completion_replay_receipts": {
+            key: encode_completion_value(value)
+            for key, value in state.completion_replay_receipts.items()
+        },
         "recovery_receipts": state.recovery_receipts,
         "usage_limit_cooldowns": dict(state.usage_limit_cooldowns),
     }
