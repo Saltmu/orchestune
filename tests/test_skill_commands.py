@@ -465,8 +465,8 @@ def test_local_ci_developer_structure():
         len(p.read_text(encoding="utf-8").splitlines()) for p in skill_dir.rglob("*.md")
     )
     assert (
-        total_lines <= 500
-    ), f"local-ci-developer total markdown lines must be <= 500, got {total_lines}"
+        total_lines <= 485
+    ), f"local-ci-developer must retain 15 lines below 500, got {total_lines}"
 
 
 def test_workflow_template_structure():
@@ -650,6 +650,10 @@ def test_local_ci_developer_preflight_and_backend_selection():
     assert "mcp" in skill_md_lower
     assert "backend" in skill_md_lower
     assert "selected backend" in skill_md_lower
+    assert "orchestune workflow next" in skill_md_lower
+    assert "orchestune workflow --help" in skill_md_lower
+    assert "next` is absent" in skill_md_lower
+    assert "follow these prose steps" in skill_md_lower
 
     # tdd.md prerequisites
     tdd_md_lower = tdd_md.lower()
@@ -996,13 +1000,24 @@ def test_review_loop_keeps_cli_body_file_contract_separate_from_mcp(skill_name: 
     assert "Exit 0\nmeans content for the round was fully acquired" in loop
 
 
-def test_review_loop_copies_match_except_ci_entrypoint():
+def test_review_loop_sources_preserve_shared_judgment_example():
     paths = [
         SKILLS_ROOT / name / "references/review-loop.md"
         for name in ("local-ci-developer", "workflow-template")
     ]
-    local_ci, template = (p.read_text(encoding="utf-8") for p in paths)
-    assert local_ci.replace(_CI_ENTRYPOINT_LINE, "`<CI_ENTRYPOINT>`") == template
+    from orchestune.review.judgment import parse_judgments
+
+    # Local repository procedures can evolve independently of the distributed
+    # template; preserve their machine-readable judgment contract, not prose copies.
+    examples = []
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        example = re.search(
+            r"````markdown\n(<!-- orchestune:review-reply -->\n.*?)````", text, re.S
+        )
+        assert example
+        examples.append(parse_judgments(example[1]))
+    assert examples[0] == examples[1]
 
 
 @pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
@@ -1017,15 +1032,16 @@ def test_skill_markdown_total_lines_stay_within_bloat_limit(skill_name: str):
 def test_agents_rules_allow_single_mcp_combined_post_only():
     """AGENTS.md の単一 CLI ルールへ、MCP の一度の結合投稿だけを限定例外にする。"""
     rules = (REPO_ROOT / ".agents/AGENTS.md").read_text(encoding="utf-8")
-    rule = rules.split("外部CI・PRレビュー待機", 1)[1].split("\n- **", 1)[0]
-    assert "uv run python scripts/wait_for_review.py --pr" in rule
-    assert "限定例外" in rule and "GitHub MCP" in rule
-    assert "結合" in rule and "一度だけ" in rule
-    assert "skills/local-ci-developer/references/review-loop.md" in rule
-    assert "別の trigger" in rule and "多重待機" in rule
-    assert "review-reply.md" in rule and "対象外" in rule
-    # 絶対ローカルパスを書かない
-    assert "file:///" not in rule
+    canonical = "../skills/local-ci-developer/references/review-loop.md"
+    assert canonical in rules
+    loop = (REPO_ROOT / ".agents" / canonical).resolve().read_text(encoding="utf-8")
+    assert "single wait process" in loop
+    assert "do not post a separate trigger comment" in loop
+    assert "MCP client, not the offline CLI" in loop
+    assert "one combined normal PR comment" in loop
+    assert "never resend while posting is unconfirmed" in loop
+    assert "double-posting ban does not apply" in loop
+    assert "file:///" not in rules
 
 
 @pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])

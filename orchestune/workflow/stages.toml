@@ -1,0 +1,111 @@
+# Schema v1 stage metadata. Procedures referenced here own the operational rules.
+# IDs are allowlisted in stages.py; changes require revising data and tests together.
+schema_version = 1
+
+[[stage]]
+id = "prepare"
+order = 10
+gate = "pre-claim"
+entry_conditions = ["context_incomplete"]
+exit_conditions = ["context_recorded", "footprint_valid", "reviewer_selected", "plan_approved"]
+references = ["skills/local-ci-developer/SKILL.md", "skills/local-ci-developer/references/worktree.md#initial-footprint-procedure"]
+artifacts = ["plan", "state", "footprint"]
+branches = { mode = ["interactive", "auto"], change_kind = ["code", "docs"], backend = ["gh", "mcp"] }
+actions = [{ id = "prepare", description = "Record mode, change kind, fixed backend, reviewer provenance, applicable plan approval, and initial footprint before claim.", references = ["skills/local-ci-developer/SKILL.md"] }]
+on_failure = [{ id = "reconcile", description = "Resolve missing or conflicting context; interactive approval/reviewer waits retain the claim and worktree when already claimed.", reason_codes = ["context_missing", "context_conflict", "waiting_human", "footprint_invalid"], references = ["skills/local-ci-developer/SKILL.md"] }]
+
+[[stage]]
+id = "claim"
+order = 20
+gate = ""
+entry_conditions = ["context_recorded", "footprint_valid", "reviewer_selected", "plan_approved"]
+exit_conditions = ["claim_current"]
+references = ["skills/local-ci-developer/references/worktree.md"]
+artifacts = ["claim", "plan", "state"]
+branches = { mode = ["interactive", "auto"], change_kind = ["code", "docs"], backend = ["gh", "mcp"] }
+actions = [{ id = "claim", description = "Use the existing claim operation, enter its worktree, and migrate the explicit session plan; an existing matching claim is reused.", argv = ["orchestune", "claim", "<issue>"], references = ["skills/local-ci-developer/references/worktree.md"] }]
+on_failure = [{ id = "recover", description = "Follow claim diagnostics for resume, ownership or reservation conflicts; do not manually create another worktree or change labels.", reason_codes = ["claim_missing", "claim_conflict", "ownership_mismatch"], references = ["skills/local-ci-developer/references/worktree.md#claim-failures-and-recovery"] }]
+
+[[stage]]
+id = "scope"
+order = 30
+gate = "pre-edit"
+entry_conditions = ["claim_current"]
+exit_conditions = ["claim_current", "impact_initial"]
+references = ["skills/local-ci-developer/references/impact-scope.md", "skills/local-ci-developer/references/measurement.md"]
+artifacts = ["impact_initial", "plan", "state"]
+branches = { mode = ["interactive", "auto"], change_kind = ["code", "docs"], backend = ["gh", "mcp"] }
+actions = [{ id = "scope", description = "Enumerate and classify references before edits, reconcile the held footprint, and preserve the initial table and digest.", references = ["skills/local-ci-developer/references/impact-scope.md"] }]
+on_failure = [{ id = "reconcile", description = "Use text search if symbol analysis is unavailable; reconcile identity or scope conflicts before editing outside the reservation.", reason_codes = ["impact_missing", "impact_invalid", "claim_conflict", "footprint_expansion_required"], references = ["skills/local-ci-developer/references/impact-scope.md", "skills/local-ci-developer/references/worktree.md"] }]
+
+[[stage]]
+id = "implement"
+order = 40
+gate = "pre-pr"
+entry_conditions = ["claim_current", "impact_initial"]
+exit_conditions = ["implementation_ready", "ci_current", "worktree_clean", "pr_body_ready", "base_correct"]
+references = ["skills/local-ci-developer/references/tdd.md", "skills/local-ci-developer/references/pr.md"]
+artifacts = ["baseline", "reproducer", "ci", "pr_body"]
+branches = { mode = ["interactive", "auto"], change_kind = ["code", "docs"], backend = ["gh", "mcp"] }
+actions = [{ id = "implement", description = "Apply the code Red/Green path or docs fast path, run mandatory local CI before commit/push, commit and refresh clean-HEAD CI evidence, then prepare the PR body and base.", references = ["skills/local-ci-developer/references/tdd.md", "skills/local-ci-developer/references/pr.md"] }]
+on_failure = [{ id = "rerun_ci", description = "A fix, amend or rebase invalidates CI bindings: repair and run local CI for the current clean HEAD. Apply the bounded failure-analysis and bloat recovery procedure.", reason_codes = ["ci_missing", "ci_stale", "ci_failed", "worktree_dirty", "pr_body_missing", "base_mismatch"], references = ["skills/local-ci-developer/references/tdd.md"] }]
+
+[[stage]]
+id = "pr"
+order = 50
+gate = ""
+entry_conditions = ["ci_current", "worktree_clean", "pr_body_ready", "base_correct"]
+exit_conditions = ["pr_current"]
+references = ["skills/local-ci-developer/references/pr.md"]
+artifacts = ["pr", "pr_body"]
+branches = { mode = ["interactive", "auto"], change_kind = ["code", "docs"], backend = ["gh", "mcp"] }
+actions = [{ id = "create_pr", description = "Create the PR through the fixed backend with the resolved stacked/parent/main base and verify its head diff against the tested worktree.", references = ["skills/local-ci-developer/references/pr.md"] }]
+on_failure = [{ id = "reconcile", description = "Re-fetch PR head/base/body and reconcile mismatches or uncertain writes before continuing; do not blindly duplicate the PR.", reason_codes = ["pr_missing", "pr_stale", "pr_head_mismatch", "base_mismatch"], references = ["skills/local-ci-developer/references/pr.md"] }]
+
+[[stage]]
+id = "review"
+order = 60
+gate = "pre-complete"
+entry_conditions = ["pr_current"]
+exit_conditions = ["claim_current", "ci_current", "worktree_clean", "pr_current", "review_acquired", "findings_judged", "review_current", "reply_posted", "completion_ready"]
+references = ["skills/local-ci-developer/references/review-loop.md"]
+artifacts = ["review_result", "review_reply", "pr", "ci"]
+branches = { mode = ["interactive", "auto"], change_kind = ["code", "docs"], backend = ["gh", "mcp"] }
+actions = [{ id = "review", description = "Use the selected reviewer and single bounded acquisition process, judge all current findings, post the required reply, and verify review_target_sha; skip records a choice and retains the human integration gate.", references = ["skills/local-ci-developer/references/review-loop.md"] }]
+on_failure = [{ id = "rereview", description = "Acquisition is not approval. Apply the review procedure for stale SHA, required fixes, unknown evidence, timeout or round limit; changes to HEAD require fresh CI and review.", reason_codes = ["review_unavailable", "review_in_progress", "review_head_mismatch", "judgments_missing", "reply_missing", "review_timeout", "review_round_limit"], references = ["skills/local-ci-developer/references/review-loop.md"] }]
+
+[[stage]]
+id = "complete"
+order = 70
+gate = ""
+entry_conditions = ["completion_ready"]
+exit_conditions = ["terminal_receipt"]
+references = ["skills/local-ci-developer/SKILL.md#completion-commands", "skills/local-ci-developer/references/worktree.md#worktree-completion-and-retention"]
+artifacts = ["outcome"]
+branches = { mode = ["interactive", "auto"], change_kind = ["code", "docs"], backend = ["gh", "mcp"] }
+actions = [{ id = "complete", description = "Run the existing complete command for the current claim, PR, reviewer and judgment table; confirm canonical Outcome publication and durable handoff.", references = ["skills/local-ci-developer/SKILL.md#completion-commands"] }]
+on_failure = [{ id = "recover", description = "Follow completion diagnostics; resume publication with its completion ID and claim marker, and re-review if the review head changed.", reason_codes = ["completion_pending", "evidence_missing", "review_head_mismatch", "terminal_receipt_conflict"], references = ["skills/local-ci-developer/SKILL.md#completion-commands"] }]
+
+[[stage]]
+id = "blocked"
+order = 80
+gate = ""
+entry_conditions = ["terminal_receipt"]
+exit_conditions = ["terminal_receipt"]
+references = ["skills/local-ci-developer/references/worktree.md#restart-a-completed-blocked-local-task"]
+artifacts = ["outcome"]
+branches = { mode = ["interactive", "auto"], change_kind = ["code", "docs"], backend = ["gh", "mcp"] }
+actions = [{ id = "recover", description = "Report the canonical blocked reason for the current generation and its recovery procedure; never restart it automatically.", references = ["skills/local-ci-developer/references/worktree.md#restart-a-completed-blocked-local-task"] }]
+on_failure = [{ id = "reconcile", description = "Contradictory or unknown terminal evidence is unmet, not a verified terminal block; reconcile receipt identity without choosing the convenient value.", reason_codes = ["terminal_receipt_conflict", "terminal_receipt_unavailable"], references = ["docs/plans/local-ci-workflow-enforcement.md#derived-stages"] }]
+
+[[stage]]
+id = "handed-off"
+order = 90
+gate = ""
+entry_conditions = ["terminal_receipt"]
+exit_conditions = ["terminal_receipt"]
+references = ["docs/operator-completion-lifecycle.md"]
+artifacts = ["outcome"]
+branches = { mode = ["interactive", "auto"], change_kind = ["code", "docs"], backend = ["gh", "mcp"] }
+actions = [{ id = "inspect_handoff", description = "Report the current-generation handed_off receipt and GC handoff; no further task action is required and the worktree is preserved.", references = ["docs/operator-completion-lifecycle.md"] }]
+on_failure = [{ id = "reconcile", description = "Treat conflicting blocked/handoff evidence as unmet; report the conflict and do not collect or restart the task.", reason_codes = ["terminal_receipt_conflict", "terminal_receipt_unavailable"], references = ["docs/plans/local-ci-workflow-enforcement.md#derived-stages"] }]

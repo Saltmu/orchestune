@@ -5,7 +5,7 @@ description: "Router skill orchestrating design/planning, issue filing, TDD, loc
 
 # Local CI & TDD Developer Skill
 
-This skill acts as a router orchestrating the standard development workflow: design planning, TDD implementation, local CI verification, PR creation, automated LLM review, and final outcome reporting.
+This skill routes the standard development workflow. [stages.toml](../../orchestune/workflow/stages.toml) owns stage metadata: entry conditions, actions, exit conditions and on-failure recovery, with mode/change/backend branches. Its [schema contract](../../docs/plans/local-ci-workflow-enforcement.md#stage-definitions-file) defines the fields; references below own action procedures. Stage data is guidance, never approval or executable state.
 
 > [!NOTE]
 > **User-Facing Response Language**:
@@ -55,23 +55,22 @@ At session start, inspect and record the execution environment:
 2. **GitHub Backend Selection**: Check `gh auth status` and GitHub MCP capabilities. Select either `gh` CLI or GitHub MCP as the fixed backend for all downstream GitHub operations throughout the session (Step 2 Issue Creation, Step 10 PR Creation, Step 12 Outcome Declaration), and record the choice in `<planning-session-dir>/implementation-plan.md`; migrate it to `<session-dir>/implementation-plan.md` after Step 2.5. If `gh` CLI is unauthenticated or unavailable, use GitHub MCP (or Web UI) without stalling.
 
 ## Initial Footprint (Before Issue Creation or Claim)
-In Step 1, list expected changed files; in Step 2, declare them as Footprint YAML in the Issue body. For existing Issues, check/correct the declaration before claim. Follow [the detailed procedure and YAML example](references/worktree.md#initial-footprint-procedure), including the explicit repository-reservation exception for unknown scope. Step 2.6 refines this initial declaration after claim.
+In Step 1, record design, preflight, selected backend/reviewer and expected changed files in the implementation plan; in Step 2, declare files as Footprint YAML in the Issue body. For existing Issues, check/correct the declaration before claim. Follow [the detailed procedure and YAML example](references/worktree.md#initial-footprint-procedure), including the explicit repository-reservation exception for unknown scope. Step 2.6 refines this initial declaration after claim.
 
 ## Development Steps
 During the #822 observation period, read [measurement.md](references/measurement.md)
 before Step 2.6 and maintain its record through Steps 10–12, including zero-finding PRs.
+Check `orchestune workflow --help` and use `workflow next` and `workflow check` when listed. If help fails or `next` is absent on an older CLI, follow these prose steps. When available, run `orchestune workflow next --issue <N> --session-dir <session-dir> --json`; pass `--pr` and applicable evidence paths when a PR exists. Status and actions are guidance; these commands never execute actions.
 
-| Step | Item | Summary / Command | Reference |
+| Step | Item | Contract / stage | Procedure (source of truth) |
 | :--- | :--- | :--- | :--- |
-| **0** | **Preflight & Requirement Check** | Verify uv, lockfile, gitleaks, `gh auth status`, and GitHub MCP; fix backend. If requirements are already met before claim, run `orchestune complete --issue <N> --result not-needed` from the current checkout and exit without creating a worktree. | - |
-| **1** | **Design & Implementation Plan** | Write `<planning-session-dir>/implementation-plan.md` (preflight, backend, reviewer bot, design, initial footprint above). Ask user for plan approval, then obtain explicit reviewer selection right after the start request, before claim (bypass approval for existing Issue / Auto-Dispatch). | - |
-| **2** | **GitHub Issue Creation** | For an existing Issue, verify/correct its footprint before claim. For a new Issue, include the Footprint YAML from the linked procedure and file via the selected backend (`gh issue create --title "..." --body "..."` or GitHub MCP/Web UI). | - |
-| **2.5** | **Worktree Preparation** | Verify the initial footprint above, then run `orchestune claim <issue_number>` to validate, prepare task worktree, and work there (proceed directly if already inside task worktree). Create worktree-local `<session-dir>` and migrate the approved plan before continuing. | [references/worktree.md](references/worktree.md) |
-| **2.6** | **Impact Scope Determination** | Before writing code, reconcile the initial footprint and held reservation, enumerate the references of every symbol you intend to change, classify each as in scope / out of scope with a stated reason, and record the table in `<session-dir>/implementation-plan.md` and the PR body. | [references/impact-scope.md](references/impact-scope.md) |
-| **3–9** | **TDD & Local CI** | Reproducer test, baseline recording, test-driven implementation, local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`). | [references/tdd.md](references/tdd.md) |
-| **10** | **Pull Request Creation** | Fill `.github/pull_request_template.md` and submit via selected backend (`gh pr create` or GitHub MCP/Web UI). | [references/pr.md](references/pr.md) |
-| **11** | **Automated LLM PR Review** | Atomic review trigger, wait, and feedback resolution loop via `scripts/wait_for_review.py` using selected reviewer bot; Step 12 requires per-finding procedure Step 5 and verified `review_target_sha` (Exit 0 is acquisition only; Exit 11/30 or unknown SHA forbids done); when any finding was judged, post `review-reply.md` as a PR comment. | [references/review-loop.md](references/review-loop.md) |
-| **12** | **Outcome Declaration** | From the claimed task worktree, run `orchestune complete --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md` after review (if any finding was judged, `review-reply.md` must already be posted as a PR comment); use the blocked command below if escalation is required. `complete` confirms the result label and saves durable handoff/replay evidence. GC performs downstream policy and physical collection separately. | - |
+| **0–2** | **Preparation / Issue** | `prepare`: mode, backend, plan, reviewer and footprint; if already satisfied before claim, use `not-needed` from this checkout without creating a worktree. | Preflight, Execution Modes, Initial Footprint above |
+| **2.5** | **Worktree Preparation** | `claim`: matching claim, footprint and worktree-local session. | [worktree.md](references/worktree.md) |
+| **2.6** | **Impact Scope Determination** | `scope`: preserved initial table and reservation reconciliation. | [impact-scope.md](references/impact-scope.md) |
+| **3–9** | **TDD & Local CI** | `implement`: code or docs path, current CI. | [tdd.md](references/tdd.md) (entrypoints: [local-ci.sh](../../scripts/local-ci.sh) / [local-ci.ps1](../../scripts/local-ci.ps1)) |
+| **10** | **Pull Request Creation** | `pr`: required template, base and tested head. | [pr.md](references/pr.md) |
+| **11** | **Automated LLM PR Review** | `review`: per-finding procedure and verified `review_target_sha`; when any finding was judged, `review-reply.md` must reach a PR comment. | [review-loop.md](references/review-loop.md) |
+| **12** | **Outcome Declaration** | `complete`: `--reviewer` and `--review-reply` required for done; any judged finding's reply must already be posted as a PR comment. | Completion commands below |
 
 ### Completion commands
 Use `orchestune complete` for every outcome. It creates or reuses the canonical

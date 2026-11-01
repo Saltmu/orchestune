@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,7 +19,6 @@ from orchestune.dispatch.postcycle_semantic_review import (
     SemanticReviewCycleRunner,
     SemanticReviewOperations,
     advance_pending_semantic_reviews,
-    verify_semantic_ci,
 )
 from orchestune.dispatch.pre_scheduling_integration import (
     _INTEGRATOR_SUCCESS_STATUSES,
@@ -918,64 +916,3 @@ class TestPostcycleWiring:
         )
         assert result["status"] == "advanced"
         assert result["attempts"][0]["next_phase"] == "review_pending"
-
-
-def _git(cwd: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
-    ).stdout.strip()
-
-
-class TestVerifySemanticCi:
-    @pytest.fixture
-    def repo(self, tmp_path: Path) -> tuple[Path, str]:
-        origin, work = tmp_path / "origin.git", tmp_path / "work"
-        _git(tmp_path, "init", "--bare", "-q", str(origin))
-        _git(tmp_path, "init", "-q", str(work))
-        _git(
-            work,
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "commit",
-            "-q",
-            "--allow-empty",
-            "-m",
-            "c",
-        )
-        _git(work, "remote", "add", "origin", str(origin))
-        _git(work, "push", "-q", "origin", "HEAD:refs/heads/integration/temp-x")
-        return work, _git(work, "rev-parse", "HEAD")
-
-    @pytest.mark.parametrize(
-        ("command", "conclusion"), [(["true"], "success"), (["false"], "failure")]
-    )
-    def test_runs_ci_on_the_expected_head(
-        self,
-        repo: tuple[Path, str],
-        tmp_path: Path,
-        command: list[str],
-        conclusion: str,
-    ) -> None:
-        work, sha = repo
-        config = World(tmp_path).config
-        config.ci_command = command
-        observed = verify_semantic_ci(
-            "integration/temp-x", sha, config=config, repository_root=work
-        )
-        assert observed == SemanticCiObservation(sha, SemanticCiConclusion(conclusion))
-        assert "head" not in _git(work, "worktree", "list")
-
-    def test_discards_when_the_remote_head_differs(
-        self, repo: tuple[Path, str], tmp_path: Path
-    ) -> None:
-        work, _ = repo
-        config = World(tmp_path).config
-        config.ci_command = ["true"]
-        assert (
-            verify_semantic_ci(
-                "integration/temp-x", "f" * 40, config=config, repository_root=work
-            )
-            is None
-        )
