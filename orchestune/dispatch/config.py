@@ -53,6 +53,7 @@ from orchestune.review.semantic_gate import (
 )
 
 VALID_SEMANTIC_REVIEW_PROVIDERS = frozenset({"auto", "claude", "codex"})
+VALID_FINAL_ACCEPTANCE_REVIEW_MODES = frozenset({"advisory", "off"})
 VALID_SEMANTIC_FIX_PROVIDERS = frozenset(
     {
         "auto",
@@ -163,6 +164,7 @@ class DispatcherConfig:
     # #1361: Layer-1 child review and not-needed review are independent from this
     # Layer-2 integration-PR semantic review policy.
     semantic_review_mode: str = "required"
+    final_acceptance_review: str = "advisory"
     force_integration_review: bool = False
     semantic_review_provider: str = "auto"
     semantic_fix_provider: str = "auto"
@@ -207,6 +209,11 @@ class DispatcherConfig:
     consistency_max_repair_passes: int = 1
 
     def __post_init__(self) -> None:
+        if (
+            not isinstance(self.final_acceptance_review, str)
+            or self.final_acceptance_review not in VALID_FINAL_ACCEPTANCE_REVIEW_MODES
+        ):
+            raise ValueError("final_acceptance_review must be 'advisory' or 'off'")
         if self.child_review_gate not in VALID_CHILD_REVIEW_GATE_MODES:
             raise ValueError(
                 f"child_review_gate must be 'required' or 'off', got {self.child_review_gate!r}"

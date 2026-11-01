@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from orchestune.integrator.final_pr_body import ChildSummary
 from orchestune.integrator.pr import (
     ParentFinalPrMigrationError,
     ensure_integration_pr,
@@ -622,3 +623,24 @@ class TestMarkParentFinalPrPending(_FakeForgeTest):
         self.forge.list_open_prs.side_effect = RuntimeError("transient API failure")
 
         assert mark_parent_final_pr_pending(100, self._children(), self.forge) is None
+
+
+@pytest.mark.parametrize("provided", [[], [ChildSummary(101, "Task")]])
+def test_supplied_final_pr_summaries_are_never_recollected(provided):
+    from unittest.mock import MagicMock, patch
+
+    forge = MagicMock()
+    forge.list_open_prs.return_value = []
+    forge.create_pull_request.return_value = 777
+    with patch(
+        "orchestune.integrator.pr._final_pr_summaries",
+        side_effect=AssertionError("must share the snapshot"),
+    ):
+        assert (
+            ensure_parent_final_pr(100, forge=forge, children=[], summaries=provided)
+            == 777
+        )
+    assert (
+        "子Issue・サブタスクPR一覧"
+        in forge.create_pull_request.call_args.kwargs["body"]
+    ) == bool(provided)

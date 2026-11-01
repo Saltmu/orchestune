@@ -243,6 +243,8 @@ record APIは外部I/Oを行わず、呼出側の成功確認済みの事実だ�
 
 ### 4.1 5つの層
 
+最終受け入れレビューの依頼部品 `integrator.final_acceptance_review` は、表の `integrator.*` に含まれるL2です。L3の `integrator.parent_completion` から呼び出します。
+
 `orchestune/` のすべてのモジュールは、ちょうど1つの層に属します。モジュールは
 自分と同じ層、または下位の層からのみimportでき、上位の層からはimportできません。
 

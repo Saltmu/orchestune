@@ -57,6 +57,9 @@ sequenceDiagram
 5. **親Issue配下の全完了検知と最終PR作成（Integratorの責務）**:
    親Issue配下の全子Issueがクローズされたことを検知すると、`orchestune/integrator/parent_completion.py`が`parent/issue-{N}` → `main`の最終PRを作成します。このPRは自動マージされません。
    最終PRの作成後に子Issueが追加され、openな子Issueがある間は、Integratorが毎サイクル既存の最終PRの本文を保留表示へ更新します（`orchestune/integrator/pr.py`の`mark_parent_final_pr_pending`）。冒頭が「⚠️ 未完了の子Issue #X があります。親ブランチへの反映までマージしないでください」に替わり、未完了の子Issueはこの警告に列挙されます（一覧表の列は変わりません）。PRは新規作成せず、子Issueの一覧を1件も作れなかったサイクルでは本文を書き換えません。全子Issueがクローズされると、通常の本文へ戻ります。保留中に人間が最終PRをマージしても、openな子Issueがあるため親Issueはクローズされず、追加分が親ブランチへ統合されると新しい最終PRが作られます。
+
+   最終PRの確保後、既定の `final-acceptance-review = "advisory"` によりPR/headごとに1件、親・子の条件と共有レビュー情報を添えて依頼します。結果の待機やマージ・クローズの制御は行わず、読取不明、情報不一致、必須情報だけで予算超過の場合は投稿を見送ります。設定・report・単一writer・bot起動の制約は [Usage §4.5](../usage.md#最終統合prの受け入れレビューadvisory) を参照してください。
+
 6. **検収マージと親Issueクローズ**:
    人間がこの最終PRをレビューしてマージします（唯一の人間クリック）。マージが検知されると、Integratorが親Issueを`completed`理由で自動的にクローズします。
 7. **二層レビューゲート（第1層・必須 ＋ 第2層・必須）**:

@@ -15,6 +15,7 @@ from orchestune.dag.models import (
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
 )
+from orchestune.dispatch.config import VALID_FINAL_ACCEPTANCE_REVIEW_MODES
 from orchestune.dispatch.execution_profiles import extract_execution_profile_config
 from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
 from orchestune.review.rounds import MAX_REVIEW_ROUNDS
@@ -230,6 +231,7 @@ def _validate_choice_entry(normalized_key: str, raw_key: str, value: Any) -> Any
         "consistency_mode": _CONSISTENCY_MODE_CHOICES,
         "child_review_gate": _CHILD_REVIEW_GATE_CHOICES,
         "semantic_review_mode": _SEMANTIC_REVIEW_MODE_CHOICES,
+        "final_acceptance_review": VALID_FINAL_ACCEPTANCE_REVIEW_MODES,
         "semantic_review_provider": _SEMANTIC_REVIEW_PROVIDER_CHOICES,
         "semantic_fix_provider": _SEMANTIC_FIX_PROVIDER_CHOICES,
         "semantic_review_trigger": _SEMANTIC_REVIEW_TRIGGER_CHOICES,
@@ -325,6 +327,7 @@ def _validate_single_entry(normalized_key: str, raw_key: str, value: Any) -> Any
         "consistency_mode",
         "child_review_gate",
         "semantic_review_mode",
+        "final_acceptance_review",
         "semantic_review_provider",
         "semantic_fix_provider",
         "semantic_review_trigger",

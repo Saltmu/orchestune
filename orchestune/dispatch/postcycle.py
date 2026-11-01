@@ -12,6 +12,7 @@ import json
 import sys
 from collections.abc import Callable
 from dataclasses import replace
+from typing import cast
 
 from orchestune.consistency.models import (
     ConsistencyFinding,
@@ -47,6 +48,7 @@ from orchestune.dispatch.cycle_events import (
     WorktreeCompletion,
 )
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
+from orchestune.dispatch.reviewer import ReviewerBotSetting, resolve_reviewer_bot
 from orchestune.dispatch.summary import (
     merge_skips,
     render_forge_warnings_markdown,
@@ -328,7 +330,11 @@ def _process_parent_completion(
 
     def work() -> dict:
         return process_parent_completion(
-            config.parent_issue_number, config.apply, forge=config.forge
+            config.parent_issue_number,
+            config.apply,
+            forge=config.forge,
+            final_acceptance_review=config.final_acceptance_review,
+            final_acceptance_reviewer=_final_acceptance_reviewer(config),
         )
 
     return _run_best_effort_phase(
@@ -338,6 +344,16 @@ def _process_parent_completion(
         auth_error=auth_error,
         auth_error_message="authentication failed while processing parent completion",
         failure_message="failed to process parent completion",
+    )
+
+
+def _final_acceptance_reviewer(config: DispatcherConfig) -> str | None:
+    if config.final_acceptance_review == "off":
+        return None
+    target = getattr(config.dispatch_target, "target_name", None)
+    return resolve_reviewer_bot(
+        cast(ReviewerBotSetting, config.semantic_review_provider),
+        target if isinstance(target, str) else "local",
     )
 
 

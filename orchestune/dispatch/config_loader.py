@@ -20,7 +20,10 @@ from orchestune.dag.models import (
     extract_dag_similarity_threshold,
 )
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config import (
+    VALID_FINAL_ACCEPTANCE_REVIEW_MODES,
+    DispatcherConfig,
+)
 from orchestune.dispatch.config_schema import (
     parse_ci_command,
     validate_toml_config,
@@ -129,6 +132,12 @@ def _add_execution_cli_arguments(parser: argparse.ArgumentParser) -> None:
         choices=["required", "advisory", "off"],
         default=None,
         help="統合PRの第2層セマンティックレビュー（既定: required）。",
+    )
+    parser.add_argument(
+        "--final-acceptance-review",
+        choices=["advisory", "off"],
+        default=None,
+        help="最終統合PRで受け入れ条件付きレビューを依頼（既定: advisory）。",
     )
     parser.add_argument(
         "--force-integration-review",
@@ -345,6 +354,21 @@ def _resolve_semantic_review_mode(args: Any, toml_data: dict[str, Any]) -> str:
     return "off" if os.environ.get("ORCHESTUNE_SEMANTIC_REVIEW") == "0" else "required"
 
 
+def _resolve_final_acceptance_review(args: Any, toml_data: dict[str, Any]) -> str:
+    key = "ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW"
+    env_mode = os.environ[key].strip() if key in os.environ else None
+    if env_mode is not None and env_mode not in VALID_FINAL_ACCEPTANCE_REVIEW_MODES:
+        raise config_contracts.ConfigError(
+            f"environment variable {key!r} must be 'advisory' or 'off'"
+        )
+    cli_mode = getattr(args, "final_acceptance_review", None)
+    return str(
+        cli_mode
+        if cli_mode is not None
+        else toml_data.get("final_acceptance_review", env_mode or "advisory")
+    )
+
+
 def _extract_semantic_config_kwargs(
     args: Any,
     toml_data: dict[str, Any],
@@ -403,6 +427,7 @@ def _assemble_dispatcher_config(
         "dispatch_target": dispatch_target,
         "profile": args.profile,
         "child_review_gate": _resolve_child_review_gate(args, toml_data),
+        "final_acceptance_review": _resolve_final_acceptance_review(args, toml_data),
         "ci_command": ci_cmd,
         "dag_ignore_patterns": dag_ignore_patterns,
         "dag_similarity_threshold": dag_similarity_threshold,

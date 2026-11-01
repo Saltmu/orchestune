@@ -124,6 +124,18 @@ def _render_row(summary: ChildSummary) -> str:
     return f"| #{summary.issue_number} | {title} | {prs} | {review} |"
 
 
+def render_child_summary_table(summaries: Sequence[ChildSummary]) -> str:
+    """The managed child table shared by the final PR and acceptance snapshot."""
+    return "\n".join(
+        [
+            "## 子Issue・サブタスクPR一覧",
+            "",
+            *_TABLE_HEADER,
+            *(_render_row(summary) for summary in summaries),
+        ]
+    )
+
+
 def render_final_pr_body(
     parent_issue_number: int,
     summaries: Sequence[ChildSummary],
@@ -160,8 +172,7 @@ def render_final_pr_body(
             "mainへの反映を確認した後に親Issueをクローズします。",
         ]
     if summaries:
-        lines += ["", "## 子Issue・サブタスクPR一覧", "", *_TABLE_HEADER]
-        lines += [_render_row(summary) for summary in summaries]
+        lines += ["", render_child_summary_table(summaries)]
     return "\n".join(lines) + "\n"
 
 
@@ -325,4 +336,5 @@ __all__ = [
     "collect_child_summaries",
     "migrate_generated_parent_closing_reference",
     "render_final_pr_body",
+    "render_child_summary_table",
 ]

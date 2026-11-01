@@ -193,6 +193,7 @@ class TestDispatcherCliSingleResponsibility:
             "child_review_gate",
             "allow_unsafe_agent_execution",
             "semantic_review_mode",
+            "final_acceptance_review",
             "force_integration_review",
         }
 

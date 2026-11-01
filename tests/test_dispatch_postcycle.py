@@ -681,7 +681,13 @@ class TestProcessParentCompletion:
             "status": "waiting_on_children",
             "open_children": [101],
         }
-        mock_process.assert_called_once_with(100, True, forge=ANY)
+        mock_process.assert_called_once_with(
+            100,
+            True,
+            forge=ANY,
+            final_acceptance_review="advisory",
+            final_acceptance_reviewer=None,
+        )
 
     def test_returns_none_and_warns_on_failure(self, capsys, tmp_path):
         config = DispatcherConfig(
@@ -1086,3 +1092,36 @@ class TestPostEventLogComment:
         assert result.status == PhaseStatus.SUCCESS
         posted_body = config.forge.add_comment.call_args.args[1]
         assert "Child Review Gate is OFF" in posted_body
+
+
+@pytest.mark.parametrize(
+    ("provider", "target", "mode", "expected"),
+    [
+        ("auto", "codex-cli", "advisory", "claude"),
+        ("auto", "claude-cli", "advisory", "codex"),
+        ("auto", "local", "advisory", None),
+        ("claude", "local", "advisory", "claude"),
+        ("codex", "local", "advisory", "codex"),
+        ("claude", "codex-cli", "off", None),
+    ],
+)
+def test_final_acceptance_reviewer_wiring(tmp_path, provider, target, mode, expected):
+    from types import SimpleNamespace
+
+    config = DispatcherConfig(
+        parent_issue_number=100,
+        apply=True,
+        forge=MagicMock(),
+        dispatch_target=SimpleNamespace(target_name=target),
+        semantic_review_provider=provider,
+        semantic_review_mode="off",
+        final_acceptance_review=mode,
+        events_log_path=tmp_path / "events.jsonl",
+    )
+    with patch(
+        "orchestune.dispatch.postcycle.process_parent_completion",
+        return_value={"status": "final_pr_ready"},
+    ) as process:
+        _process_parent_completion(config)
+    assert process.call_args.kwargs["final_acceptance_reviewer"] == expected
+    assert process.call_args.kwargs["final_acceptance_review"] == mode
