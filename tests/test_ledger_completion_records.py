@@ -147,6 +147,23 @@ def test_completion_map_mutation_apis_keep_values_typed_and_check_record_keys():
     )
 
 
+def test_typed_completion_map_assignment_does_not_encode_again(monkeypatch):
+    import orchestune.ledger.run_state as run_state_module
+
+    record = CompletionJournalRecord.from_dict(journal_json())
+    state = RunState()
+
+    def fail_encode(_value):
+        raise AssertionError("typed assignment must not encode the record")
+
+    monkeypatch.setattr(run_state_module, "encode_completion_value", fail_encode)
+    state.completion_journal[record.journal_key] = record
+    assert state.completion_journal[record.journal_key] is record
+    monkeypatch.undo()
+    with pytest.raises(TypeError, match="completion_journal values"):
+        state.completion_journal["unsupported"] = None
+
+
 def test_record_replace_and_reservation_copy_nested_mutable_fields():
     raw_payload = {"result": "done", "issue": 1541, "pr": 1542, "extra": []}
     record = CompletionJournalRecord.from_dict(

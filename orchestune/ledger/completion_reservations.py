@@ -39,6 +39,7 @@ _COMPLETION_IDENTITY_FIELDS = (
 def _invalid_reservation_applies(
     key: object, raw_json: dict[str, Any], issue_number: int
 ) -> bool:
+    """Fail closed globally when corrupt reservation identity cannot be attributed."""
     raw_issue = raw_json.get("issue_number")
     raw_is_valid = (
         isinstance(raw_issue, int) and not isinstance(raw_issue, bool) and raw_issue > 0
@@ -68,7 +69,10 @@ def _records(state: Any, issue_number: int) -> list[CompletionReservation]:
     for key, value in raw.items():
         if isinstance(value, InvalidLedgerRecord):
             if _invalid_reservation_applies(key, value.raw_json, issue_number):
-                raise ValueError("Invalid completion reservation")
+                raise ValueError(
+                    f"Invalid completion reservation at map key {key!r}; "
+                    "repair the run-state ledger before retrying"
+                )
             continue
         if not isinstance(value, CompletionReservation):
             raise ValueError("Invalid completion reservation")
@@ -88,17 +92,24 @@ def completion_record(state: Any, issue_number: int) -> CompletionJournalRecord 
         raise ValueError("Ambiguous completion reservation")
     reservation = records[0]
     journal = getattr(state, "completion_journal", {})
-    record = next(
-        (
-            value
-            for value in journal.values()
-            if isinstance(value, CompletionJournalRecord)
-            and value.reservation_key == reservation.reservation_key
-            and value.generation_id == reservation.generation_id
-            and value.completion_id == reservation.completion_id
-        ),
-        None,
+    journal_key = (
+        f"{reservation.repository_id}::{reservation.issue_number}::"
+        f"{reservation.generation_id}::{reservation.completion_id}"
     )
+    record = journal.get(journal_key)
+    if not isinstance(record, CompletionJournalRecord):
+        # Preserve a useful identity-mismatch diagnostic for corrupt map keys.
+        record = next(
+            (
+                value
+                for value in journal.values()
+                if isinstance(value, CompletionJournalRecord)
+                and value.reservation_key == reservation.reservation_key
+                and value.generation_id == reservation.generation_id
+                and value.completion_id == reservation.completion_id
+            ),
+            None,
+        )
     if not isinstance(record, CompletionJournalRecord):
         raise ValueError("Completion journal identity mismatch")
     if journal.get(record.journal_key) is not record:

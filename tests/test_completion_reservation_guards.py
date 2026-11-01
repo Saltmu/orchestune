@@ -379,6 +379,13 @@ def test_unattributable_invalid_reservation_fails_closed():
     assert completion_mutation_blocked(state, 10)
     assert completion_mutation_blocked(state, 99)
 
+    from orchestune.ledger.completion_reservations import _records
+
+    with pytest.raises(
+        ValueError, match="unparseable-key.*repair the run-state ledger"
+    ):
+        _records(state, 10)
+
 
 def test_invalid_reservation_uses_map_issue_as_attribution_fallback():
     from orchestune.ledger.completion_records import decode_completion_reservation

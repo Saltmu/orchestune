@@ -41,9 +41,34 @@ from orchestune.ledger.completion_records import (
 from orchestune.models import Usage
 from orchestune.ownership_contracts import ClaimStage, OwnerKind, ReservationKind
 
+_COMPLETION_LEDGER_CODECS = {
+    "completion_journal": (
+        decode_completion_journal,
+        CompletionJournalRecord,
+        "completion_journal",
+        "journal_key",
+    ),
+    "completion_reservations": (
+        decode_completion_reservation,
+        CompletionReservation,
+        "completion_reservations",
+        "reservation_key",
+    ),
+    "completion_replay_receipts": (
+        decode_completion_replay_receipt,
+        CompletionReplayReceipt,
+        "completion_replay_receipts",
+        "receipt_key",
+    ),
+}
+
 
 class _CompletionLedgerMap(dict):
-    """Keep completion map values typed across all standard dict mutation APIs."""
+    """Keep completion map values typed across standard dict mutation APIs.
+
+    Copy-like dict operations return ordinary dictionaries; assigning those back
+    to a RunState ledger wraps and validates them again.
+    """
 
     def __init__(
         self,
@@ -62,17 +87,28 @@ class _CompletionLedgerMap(dict):
         self.update(values)
 
     def __setitem__(self, key: str, value: Any) -> None:
-        raw = value if isinstance(value, dict) else encode_completion_value(value)
-        if isinstance(value, dict) or (
+        raw: dict[str, Any] | None = None
+        if isinstance(value, dict):
+            raw = value
+        elif (
             not isinstance(value, InvalidLedgerRecord)
             and self._expected_type is not None
             and not isinstance(value, self._expected_type)
         ):
+            try:
+                raw = encode_completion_value(value)
+            except TypeError as error:
+                raise TypeError(
+                    f"{self.record_type} values must be typed completion records or JSON objects"
+                ) from error
+        if raw is not None:
             if self._decoder is None:
                 raise TypeError("completion ledger map requires a decoder for raw JSON")
             value = self._decoder(raw)
         if not isinstance(value, InvalidLedgerRecord):
             if getattr(value, self._key_attribute) != key:
+                if raw is None:
+                    raw = encode_completion_value(value)
                 value = InvalidLedgerRecord(
                     self._record_type,
                     f"map key {key!r} does not match record identity",
@@ -198,31 +234,13 @@ class RunState:
     usage_limit_cooldowns: dict[str, float] = field(default_factory=dict)
 
     def __setattr__(self, name: str, value: Any) -> None:
-        codecs = {
-            "completion_journal": (
-                decode_completion_journal,
-                CompletionJournalRecord,
-                "completion_journal",
-                "journal_key",
-            ),
-            "completion_reservations": (
-                decode_completion_reservation,
-                CompletionReservation,
-                "completion_reservations",
-                "reservation_key",
-            ),
-            "completion_replay_receipts": (
-                decode_completion_replay_receipt,
-                CompletionReplayReceipt,
-                "completion_replay_receipts",
-                "receipt_key",
-            ),
-        }
-        if name in codecs and (
+        if name in _COMPLETION_LEDGER_CODECS and (
             not isinstance(value, _CompletionLedgerMap)
-            or value.record_type != codecs[name][2]
+            or value.record_type != _COMPLETION_LEDGER_CODECS[name][2]
         ):
-            decoder, expected_type, record_type, key_attribute = codecs[name]
+            decoder, expected_type, record_type, key_attribute = (
+                _COMPLETION_LEDGER_CODECS[name]
+            )
             if not isinstance(value, dict):
                 raise ValueError(f"{name} must be an object")
             value = _CompletionLedgerMap(
