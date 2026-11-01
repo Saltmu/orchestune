@@ -142,10 +142,13 @@ def _stage_actions(
                     "reason_codes": reasons,
                 },
             )
+        active_reasons = set(reasons)
+        if "context_invalid" in active_reasons:
+            active_reasons.update({"context_missing", "context_conflict"})
         recovery = tuple(
             action
             for action in stage.on_failure
-            if not action.reason_codes or set(action.reason_codes) & set(reasons)
+            if not action.reason_codes or set(action.reason_codes) & active_reasons
         )
         if recovery:
             return tuple(_action(action, issue_number, stage.id) for action in recovery)
@@ -247,9 +250,12 @@ def _stage_status_actions(
     decisions = _decision_actions(stage, checks)
     if invalid:
         actions = list(_stage_actions(stage, issue_number, reasons))
+        active_unsafe = set(unsafe)
+        if "context_invalid" in active_unsafe:
+            active_unsafe.update({"context_missing", "context_conflict"})
         for candidate in definitions:
             for action in candidate.on_failure:
-                if set(action.reason_codes) & set(unsafe):
+                if set(action.reason_codes) & active_unsafe:
                     for recovery in _stage_actions(candidate, issue_number, unsafe):
                         if recovery not in actions:
                             actions.append(recovery)

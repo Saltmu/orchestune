@@ -312,6 +312,7 @@ def test_conflicting_terminals_are_unmet_and_handoff_has_no_actions(tmp_path):
     result = check_gate(c, "pre-claim")
     assert result.status == "ready" and result.stage_id == "handed-off"
     assert not result.actions
+    assert result.references == ("docs/operator-completion-lifecycle.md",)
     c.ledger.completion_journal["blocked"] = terminal_record(c)
     result = check_gate(c, "pre-claim")
     assert result.status == "unmet"
@@ -329,9 +330,58 @@ def test_terminal_receipt_without_comment_url_is_unmet(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "field", ["mode", "backend", "change_kind", "reviewer", "plan_approval"]
+    "field,reason",
+    [
+        ("mode", "context_invalid"),
+        ("backend", "context_invalid"),
+        ("change_kind", "context_invalid"),
+        ("reviewer", "reviewer_invalid"),
+        ("plan_approval", "approval_invalid"),
+    ],
 )
-def test_malformed_state_values_are_evidence_errors(tmp_path, field):
+def test_malformed_state_values_are_evidence_errors(tmp_path, field, reason):
     c = prepared_context(tmp_path)
     c.state[field] = {"invalid": True}
-    assert check_gate(c, "pre-claim").status == "unmet"
+    result = check_gate(c, "pre-claim")
+    assert result.status == "unmet"
+    assert reason in result.reason_codes
+    assert "gate_not_applicable" not in result.reason_codes
+    if field in ("mode", "backend", "change_kind"):
+        check = next(ch for ch in result.checks if ch.id == "context_recorded")
+        assert check.status == "unmet"
+        assert "Record valid mode, change_kind and backend" in check.missing[0]
+
+
+def test_missing_or_invalid_plan_reports_context_invalid_without_gate_not_applicable(
+    tmp_path,
+):
+    c = prepared_context(tmp_path)
+    c.errors["context"] = "implementation-plan.md not found"
+    result = check_gate(c, "pre-claim")
+    assert result.status == "unmet"
+    assert "context_invalid" in result.reason_codes
+    assert "gate_not_applicable" not in result.reason_codes
+    check = next(ch for ch in result.checks if ch.id == "context_recorded")
+    assert check.status == "unmet"
+    assert "implementation-plan.md not found" in check.missing[0]
+
+
+def test_non_matching_branches_retains_gate_not_applicable_when_state_is_valid(
+    tmp_path,
+):
+    from dataclasses import replace
+
+    from orchestune.workflow.stages import load_stage_definitions
+
+    c = prepared_context(tmp_path)
+    c.state["change_kind"] = "docs"
+    # Create custom stage definitions where owner only accepts code
+    base_stages = list(load_stage_definitions())
+    for idx, stage in enumerate(base_stages):
+        if stage.gate == "pre-edit":
+            branches = replace(stage.branches, change_kind=("code",))
+            base_stages[idx] = replace(stage, branches=branches)
+    stages = tuple(base_stages)
+    result = check_gate(c, "pre-edit", stages=stages)
+    assert result.status == "unmet"
+    assert "gate_not_applicable" in result.reason_codes

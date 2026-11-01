@@ -305,3 +305,47 @@ def test_next_does_not_mutate_context_or_session_files(tmp_path):
     }
     assert after == before
     assert context.state == state
+
+
+@pytest.mark.parametrize(
+    "setup",
+    [
+        ("mode_invalid", lambda c: c.state.update(mode="Interactive")),
+        (
+            "plan_missing",
+            lambda c: c.errors.update(context="implementation-plan.md missing"),
+        ),
+    ],
+)
+def test_next_reports_prepare_exit_conditions_and_recovery_on_invalid_context(
+    tmp_path, setup
+):
+    _, modifier = setup
+    context = prepared_context(tmp_path)
+    modifier(context)
+
+    result = next_step(context)
+
+    assert result.stage_id == "prepare"
+    assert result.status == "unmet"
+    assert "context_invalid" in result.reason_codes
+    assert "gate_not_applicable" not in result.reason_codes
+    check_ids = tuple(check.id for check in result.checks)
+    assert check_ids == (
+        "context_recorded",
+        "footprint_valid",
+        "reviewer_selected",
+        "plan_approved",
+    )
+    context_check = next(ch for ch in result.checks if ch.id == "context_recorded")
+    assert context_check.status == "unmet"
+    assert any(
+        action["id"] == "reconcile"
+        and "Resolve missing or conflicting context" in action["description"]
+        for action in result.actions
+    )
+    assert not any(
+        "Reconcile the invalid workflow evidence before proceeding"
+        in action.get("description", "")
+        for action in result.actions
+    )
