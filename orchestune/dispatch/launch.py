@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.claim.adopt_pr import duplicate_marker
@@ -656,6 +656,45 @@ def _read_issue_for_counters(
     return issue, ""
 
 
+def _write_launching_phase(
+    issue_number: int,
+    key: str,
+    active_entry: ActiveWorktree,
+    held: LaunchResult,
+    issue: Any,
+    task_forced_serial: bool,
+    run_state: RunState,
+    config: DispatcherConfig,
+    now: float | None,
+    open_prs: Sequence[PrRecord] | None,
+) -> LaunchResult | None:
+    run_state.active_worktrees[key] = with_launch_phase(
+        with_launch(
+            active_entry,
+            launch_with_recovery_counters(
+                active_entry.launch, issue, task_forced_serial=task_forced_serial
+            ),
+        ),
+        "launching",
+    )
+    try:
+        save_run_state(
+            run_state,
+            config.run_state_path,
+            now=now,
+            launch_window_seconds=config.window_seconds,
+            open_prs=open_prs,
+        )
+        return None
+    except Exception as exc:
+        run_state.active_worktrees[key] = active_entry
+        print(
+            f"Holding launch of issue #{issue_number}: failed to persist launching phase: {exc}",
+            file=sys.stderr,
+        )
+        return replace(held, error_message=f"failed to persist launching phase: {exc}")
+
+
 def _persist_launching_phase(
     issue_number: int,
     outcome: ClaimOutcome,
@@ -688,31 +727,18 @@ def _persist_launching_phase(
     if issue is None:
         print(f"Holding launch of issue #{issue_number}: {reason}", file=sys.stderr)
         return replace(held, error_message=reason)
-    run_state.active_worktrees[key] = with_launch_phase(
-        with_launch(
-            active_entry,
-            launch_with_recovery_counters(
-                active_entry.launch, issue, task_forced_serial=task_forced_serial
-            ),
-        ),
-        "launching",
+    return _write_launching_phase(
+        issue_number,
+        key,
+        active_entry,
+        held,
+        issue,
+        task_forced_serial,
+        run_state,
+        config,
+        now,
+        open_prs,
     )
-    try:
-        save_run_state(
-            run_state,
-            config.run_state_path,
-            now=now,
-            launch_window_seconds=config.window_seconds,
-            open_prs=open_prs,
-        )
-        return None
-    except Exception as exc:
-        run_state.active_worktrees[key] = active_entry
-        print(
-            f"Holding launch of issue #{issue_number}: failed to persist launching phase: {exc}",
-            file=sys.stderr,
-        )
-        return replace(held, error_message=f"failed to persist launching phase: {exc}")
 
 
 def _with_claim_identity(launch: LaunchResult, outcome: ClaimOutcome) -> LaunchResult:
@@ -722,6 +748,33 @@ def _with_claim_identity(launch: LaunchResult, outcome: ClaimOutcome) -> LaunchR
         outcome.reservation_kind.value if outcome.reservation_kind else None
     )
     return launch
+
+
+def _commit_planned_launch(
+    task: TTask,
+    outcome: ClaimOutcome,
+    target: DispatchTarget,
+    plan: TaskLaunchPlan[TTask],
+) -> LaunchResult | None:
+    assert outcome.worktree_path is not None
+    assert outcome.branch is not None
+    try:
+        launch = _launch_on_prepared_worktree(
+            task,
+            outcome.branch,
+            outcome.worktree_path,
+            target,
+            outcome.base_ref,
+            execution_selection=plan.execution_selection,
+        )
+    except LaunchOutcomeUnknown as exc:
+        print(
+            f"Holding launch of issue #{plan.task.issue_number}: {exc}; reconcile durable attempt on next cycle",
+            file=sys.stderr,
+        )
+        return None
+
+    return _with_claim_identity(launch, outcome)
 
 
 def _try_planned_launch(
@@ -763,23 +816,7 @@ def _try_planned_launch(
     if hold is not None:
         return hold
 
-    try:
-        launch = _launch_on_prepared_worktree(
-            task,
-            outcome.branch,
-            outcome.worktree_path,
-            target,
-            outcome.base_ref,
-            execution_selection=plan.execution_selection,
-        )
-    except LaunchOutcomeUnknown as exc:
-        print(
-            f"Holding launch of issue #{plan.task.issue_number}: {exc}; reconcile durable attempt on next cycle",
-            file=sys.stderr,
-        )
-        return None
-
-    return _with_claim_identity(launch, outcome)
+    return _commit_planned_launch(task, outcome, target, plan)
 
 
 def _record_failed_launch_phase(
@@ -826,6 +863,40 @@ def _waits_for_usage_limit(
     )
 
 
+def _record_launched_task(
+    plan: TaskLaunchPlan[TTask],
+    launch: LaunchResult | None,
+    run_state: RunState,
+    now: float,
+    config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None,
+    on_launch_committed: LaunchCommitted | None,
+    commit: Callable[[], None],
+    emit: Callable[..., None],
+) -> TTask | None:
+    assert config.dispatch_target is not None
+    if launch is None:
+        emit("unknown", reason="provider outcome unknown")
+        run_state.launch_history.append(now)
+        return None
+    if launch.held is True:
+        emit("held", reason=launch.error_message)
+        return None
+    if not launch.launched:
+        emit("failed", reason="provider launch failed; see stderr")
+        _record_failed_launch_phase(
+            plan.task.issue_number, run_state, config, now=now, open_prs=open_prs
+        )
+        _handle_launch_failure(plan.task, launch, config)
+        return None
+    commit()
+    _commit_task_launch(
+        plan, launch, run_state, now, config, open_prs, on_launch_committed
+    )
+    emit("launched", reason=f"target={config.dispatch_target.target_name}")
+    return plan.task
+
+
 def _apply_single_task_launch(
     plan: TaskLaunchPlan[TTask],
     run_state: RunState,
@@ -856,26 +927,17 @@ def _apply_single_task_launch(
         launch = _try_launch_with_progress(
             plan, target, config, run_state, claim_fn, now=now, open_prs=open_prs
         )
-        if launch is None:
-            emit("unknown", reason="provider outcome unknown")
-            run_state.launch_history.append(now)
-            return None
-        if launch.held is True:
-            emit("held", reason=launch.error_message)
-            return None
-        if not launch.launched:
-            emit("failed", reason="provider launch failed; see stderr")
-            _record_failed_launch_phase(
-                plan.task.issue_number, run_state, config, now=now, open_prs=open_prs
-            )
-            _handle_launch_failure(plan.task, launch, config)
-            return None
-        commit()
-        _commit_task_launch(
-            plan, launch, run_state, now, config, open_prs, on_launch_committed
+        return _record_launched_task(
+            plan,
+            launch,
+            run_state,
+            now,
+            config,
+            open_prs,
+            on_launch_committed,
+            commit,
+            emit,
         )
-        emit("launched", reason=f"target={config.dispatch_target.target_name}")
-        return plan.task
 
 
 def _try_launch_with_progress(

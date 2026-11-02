@@ -12,9 +12,7 @@ same post-cycle.
 from __future__ import annotations
 
 import hashlib
-import os
 import re
-import socket
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -25,6 +23,11 @@ from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc.git import evaluate_worktree_removal
 from orchestune.dispatch.local_semantic_fix import cleanup_semantic_fix_worktree
+from orchestune.dispatch.postcycle_semantic_review_support import (
+    default_worker_id,
+    run_cycle_cleanup,
+    semantic_ci_verifier,
+)
 from orchestune.dispatch.semantic_review_ack import AckAction, AckAssessment
 from orchestune.dispatch.semantic_review_adapters import (
     SemanticOperationResult,
@@ -40,7 +43,6 @@ from orchestune.dispatch.semantic_review_ci import (
     remote_branch_sha,
     verify_semantic_ci,
 )
-from orchestune.dispatch.semantic_review_cleanup import run_attempt_cleanup
 from orchestune.dispatch.semantic_review_diagnostics import (
     ReviewDiagnostics,
     build_review_diagnostics,
@@ -1091,10 +1093,6 @@ class SemanticReviewCycleRunner:
         )
 
 
-def _default_worker_id() -> str:
-    return f"semantic-runner@{socket.gethostname()}:{os.getpid()}"
-
-
 def advance_pending_semantic_reviews(
     config: DispatcherConfig,
     *,
@@ -1109,44 +1107,33 @@ def advance_pending_semantic_reviews(
 ) -> dict[str, Any]:
     """Advance every pending attempt of ``config``'s parent by at most one phase."""
     root = (repository_root or Path(".")).resolve()
-
-    def verify(
-        temp_branch: str, expected_head_sha: str
-    ) -> SemanticCiObservation | None:
-        return verify_semantic_ci(
-            temp_branch,
-            expected_head_sha,
-            config=config,
-            repository_root=root,
-            remote_head_fn=remote_head_fn,
-        )
-
+    resolved_worker_id = worker_id or default_worker_id()
     runner = SemanticReviewCycleRunner(
         config,
         forge=config.resolved_forge,
         repository_root=root,
         now=now or datetime.now(UTC),
-        worker_id=worker_id or _default_worker_id(),
-        verify_ci_fn=verify_ci_fn or verify,
+        worker_id=resolved_worker_id,
+        verify_ci_fn=verify_ci_fn or semantic_ci_verifier(config, root, remote_head_fn),
         operations=operations,
         claims=claims,
         remote_head_fn=remote_head_fn,
     )
     reports = runner.run()
     statuses = sorted({report.status for report in reports})
+    cleanup = run_cycle_cleanup(
+        config,
+        repository_root=root,
+        worker_id=resolved_worker_id,
+        claims=claims,
+        poll=operations.poll if operations else None,
+        refs=cleanup_refs,
+    )
     return {
         "status": statuses[0] if len(statuses) == 1 else "mixed",
         "mode": config.semantic_review_mode,
         "attempts": [report.to_dict() for report in reports],
-        "cleanup": run_attempt_cleanup(
-            config,
-            forge=config.resolved_forge,
-            repository_root=root,
-            worker_id=worker_id or _default_worker_id(),
-            claims=claims,
-            poll=operations.poll if operations else None,
-            refs=cleanup_refs,
-        ),
+        "cleanup": cleanup,
     }
 
 

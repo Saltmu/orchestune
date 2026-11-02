@@ -274,6 +274,19 @@ def _review_binding(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _verify_skip_reviewer(
+    state: dict[str, Any], head_sha: str
+) -> tuple[ReviewSummary, dict[str, Any]]:
+    if not any(
+        parse_selection_marker(item.get("body") or "") == ("skip", head_sha)
+        for item in state["issue_comments"]
+    ):
+        raise _invalid("skip requires a review-selection marker for the current head")
+    summary = ReviewSummary(bot="skip", verdict="skipped", reviewed_head_sha=head_sha)
+    binding = {"selection": ("skip", head_sha)}
+    return summary, binding
+
+
 def verify_review_evidence(
     request: CompleteRequest,
     forge: ReviewEvidenceForge,
@@ -296,17 +309,7 @@ def verify_review_evidence(
         raise _head_mismatch()
     state = _fetch(forge, payload.pr, reviewer)
     if reviewer == "skip":
-        if not any(
-            parse_selection_marker(item.get("body") or "") == ("skip", head_sha)
-            for item in state["issue_comments"]
-        ):
-            raise _invalid(
-                "skip requires a review-selection marker for the current head"
-            )
-        summary = ReviewSummary(
-            bot="skip", verdict="skipped", reviewed_head_sha=head_sha
-        )
-        binding = {"selection": ("skip", head_sha)}
+        summary, binding = _verify_skip_reviewer(state, head_sha)
     else:
         result = _acquire(state, reviewer, pr.head_sha)
         digest, counts = _judgments(request, forge, result)

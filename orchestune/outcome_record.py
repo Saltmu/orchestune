@@ -278,6 +278,45 @@ def _not_needed_review_from_dict(
     return requirement
 
 
+def _optional_outcome_fields(
+    data: Mapping[str, Any], result: str
+) -> dict[str, Any] | None:
+    pr = _extract_optional_int(data.get("pr"))
+    reason = _extract_reason(data.get("reason"), result)
+    base_sha = _extract_optional_str(data.get("base_sha"))
+    attempt = _extract_optional_int(data.get("attempt"))
+    review = _review_from_value(data.get("review"))
+    ci = _extract_optional_str(data.get("ci"))
+    baseline_regressions = _baseline_regressions_from_value(
+        data.get("baseline_regressions")
+    )
+    identity = _identity_fields_from_dict(data)
+    if (
+        pr is _INVALID
+        or reason is _INVALID
+        or base_sha is _INVALID
+        or attempt is _INVALID
+        or review is _INVALID
+        or ci is _INVALID
+        or baseline_regressions is _INVALID
+        or identity is _INVALID
+    ):
+        return None
+    claim_id, head_sha, completion_id = cast("tuple[str | None, ...]", identity)
+    return {
+        "pr": cast(int | None, pr),
+        "reason": cast(str | None, reason),
+        "base_sha": cast(str | None, base_sha),
+        "attempt": cast(int | None, attempt),
+        "review": cast(ReviewSummary, review),
+        "ci": cast(str | None, ci),
+        "baseline_regressions": cast("tuple[str, ...]", baseline_regressions),
+        "claim_id": claim_id,
+        "head_sha": head_sha,
+        "completion_id": completion_id,
+    }
+
+
 def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
     result = cast(str, data.get("result"))
     requirement = _not_needed_review_from_dict(data)
@@ -288,55 +327,15 @@ def _record_from_dict(data: Mapping[str, Any]) -> OutcomeRecord | None:
     if issue is None:
         return None
 
-    pr = _extract_optional_int(data.get("pr"))
-    if pr is _INVALID:
+    fields = _optional_outcome_fields(data, result)
+    if fields is None:
         return None
-
-    reason = _extract_reason(data.get("reason"), result)
-    if reason is _INVALID:
-        return None
-
-    base_sha = _extract_optional_str(data.get("base_sha"))
-    if base_sha is _INVALID:
-        return None
-
-    attempt = _extract_optional_int(data.get("attempt"))
-    if attempt is _INVALID:
-        return None
-
-    review = _review_from_value(data.get("review"))
-    if review is _INVALID:
-        return None
-
-    ci = _extract_optional_str(data.get("ci"))
-    if ci is _INVALID:
-        return None
-
-    baseline_regressions = _baseline_regressions_from_value(
-        data.get("baseline_regressions")
-    )
-    if baseline_regressions is _INVALID:
-        return None
-
-    identity = _identity_fields_from_dict(data)
-    if identity is _INVALID:
-        return None
-    claim_id, head_sha, completion_id = cast("tuple[str | None, ...]", identity)
 
     return OutcomeRecord(
         result=result,
         issue=issue,
-        pr=cast(int | None, pr),
-        reason=cast(str | None, reason),
-        base_sha=cast(str | None, base_sha),
-        attempt=cast(int | None, attempt),
-        review=cast(ReviewSummary, review),
-        ci=cast(str | None, ci),
-        baseline_regressions=cast("tuple[str, ...]", baseline_regressions),
-        claim_id=claim_id,
-        head_sha=head_sha,
-        completion_id=completion_id,
         not_needed_review=cast(NotNeededReview | None, requirement),
+        **fields,
     )
 
 

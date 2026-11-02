@@ -59,6 +59,7 @@ from orchestune.dispatch.gc.git import (
     worktree_has_uncommitted_changes,
 )
 from orchestune.dispatch.gc.handoff import HandoffForge, _verify_outcome
+from orchestune.dispatch.gc.not_needed_close import confirm_not_needed_close
 from orchestune.dispatch.gc.orphaned_pr import (
     orphan_decision,
     orphan_message,
@@ -989,20 +990,7 @@ def _finalize_not_needed_worktree(
             StatusLabel.NOT_NEEDED,
             PRIMARY_STATUS_LABELS,
         )
-        config.resolved_forge.close_issue(
-            active.core.issue_number,
-            "not planned",
-            comment="対応不要（status:not-needed）と判定されたため、Orchestuneが自動的にクローズしました。",
-        )
-        issue = config.resolved_forge.get_issue(active.core.issue_number)
-        if (
-            issue is None
-            or issue.state.upper() != "CLOSED"
-            or StatusLabel.NOT_NEEDED.value not in issue.labels
-        ):
-            raise RuntimeError(
-                f"Could not confirm not-needed close for #{active.core.issue_number}; retrying"
-            )
+        confirm_not_needed_close(config.resolved_forge, active.core.issue_number)
         return _task_completion_event(active, subtask_id, "not_needed")
     config.resolved_forge.remove_label(
         active.core.issue_number, StatusLabel.IN_PROGRESS

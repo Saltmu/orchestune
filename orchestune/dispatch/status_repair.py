@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import yaml
@@ -55,7 +56,7 @@ from orchestune.ledger.status_machine import (
     is_allowed,
     status_repair_preserves_protection,
 )
-from orchestune.outcome_record import parse_from_comments
+from orchestune.outcome_record import OutcomeRecord, parse_from_comments
 
 _STATUS_REPAIR_OPERATION = "supervisor-status-repair"
 _LOGGER = logging.getLogger(__name__)
@@ -233,55 +234,73 @@ def _precondition_holds(
     return False
 
 
+def _load_blocked_outcome(
+    forge: Any, issue_number: int
+) -> tuple[OutcomeRecord | None, str | None]:
+    list_comments = getattr(forge, "list_all_issue_comments", None)
+    if not callable(list_comments):
+        list_comments = getattr(forge, "list_comments", None)
+    if not callable(list_comments):
+        return None, "forge comment listing method unavailable"
+    try:
+        comments = list_comments(issue_number)
+    except Exception as exc:
+        return None, f"failed to fetch issue comments: {exc}"
+    outcome = parse_from_comments(comments)
+    if outcome is None or outcome.result != "blocked":
+        return None, None
+    return outcome, None
+
+
+def _load_issue_claim(forge: Any, issue_number: int) -> tuple[str | None, str | None]:
+    get_issue = getattr(forge, "get_issue", None)
+    if not callable(get_issue):
+        return None, "forge get_issue method unavailable"
+    try:
+        issue = get_issue(issue_number)
+    except Exception as exc:
+        return None, f"failed to fetch issue: {exc}"
+    if issue is None:
+        return None, "issue record unavailable"
+
+    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
+    if not match:
+        return None, "blocked Outcome found but footprint block missing from issue"
+
+    try:
+        data = yaml.safe_load(match[1])
+    except Exception as exc:
+        return None, f"blocked Outcome found but footprint YAML parsing failed: {exc}"
+
+    if not isinstance(data, dict):
+        return None, "blocked Outcome found but footprint block is not a mapping"
+
+    claim_id = data.get("claim_id")
+    if claim_id is None:
+        return None, "blocked Outcome found but footprint has no claim_id"
+
+    return str(claim_id), None
+
+
 def _inspect_blocked_outcome(
     task: Task,
     config: DispatcherConfig,
 ) -> tuple[bool, str | None]:
     forge = config.resolved_forge
-    list_comments = getattr(forge, "list_all_issue_comments", None)
-    if not callable(list_comments):
-        list_comments = getattr(forge, "list_comments", None)
-    if not callable(list_comments):
-        return True, "forge comment listing method unavailable"
-    try:
-        comments = list_comments(task.issue_number)
-    except Exception as exc:
-        return True, f"failed to fetch issue comments: {exc}"
-
-    outcome = parse_from_comments(comments)
-    if outcome is None or outcome.result != "blocked":
+    outcome, outcome_err = _load_blocked_outcome(forge, task.issue_number)
+    if outcome_err is not None:
+        return True, outcome_err
+    if outcome is None:
         return False, None
 
-    get_issue = getattr(forge, "get_issue", None)
-    if not callable(get_issue):
-        return True, "forge get_issue method unavailable"
-    try:
-        issue = get_issue(task.issue_number)
-    except Exception as exc:
-        return True, f"failed to fetch issue: {exc}"
-    if issue is None:
-        return True, "issue record unavailable"
-
-    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
-    if not match:
-        return True, "blocked Outcome found but footprint block missing from issue"
-
-    try:
-        data = yaml.safe_load(match[1])
-    except Exception as exc:
-        return True, f"blocked Outcome found but footprint YAML parsing failed: {exc}"
-
-    if not isinstance(data, dict):
-        return True, "blocked Outcome found but footprint block is not a mapping"
-
-    claim_id = data.get("claim_id")
-    if claim_id is None:
-        return True, "blocked Outcome found but footprint has no claim_id"
+    claim_id, issue_err = _load_issue_claim(forge, task.issue_number)
+    if issue_err is not None:
+        return True, issue_err
 
     if outcome.claim_id is None:
         return True, "blocked Outcome found but it has no claim_id"
 
-    if str(claim_id) == str(outcome.claim_id):
+    if claim_id == str(outcome.claim_id):
         return (
             True,
             f"current blocked Outcome: reason={outcome.reason}, claim_id={outcome.claim_id}",

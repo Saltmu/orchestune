@@ -8,8 +8,9 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from orchestune.claim.contracts import ClaimOutcome, ClaimRequest
 from orchestune.claim.preflight import ClaimBaseResolutionView
@@ -381,6 +382,43 @@ def _skip_after_prior_merge_repair(
     )
 
 
+def _excluded_candidates(
+    candidates: tuple[TaskMetadata, ...],
+    run_state: RunState,
+    now: Any,
+    config: DispatcherConfig,
+    view: CycleContext,
+) -> tuple[list[TaskMetadata], list[tuple[TaskMetadata, str]]]:
+    eligible, excluded = _filter_retry_backoffs(
+        candidates,
+        run_state,
+        now,
+        getattr(config.dispatch_target, "target_name", None),
+    )
+    authorized, actor_excluded = _filter_actor_permissions(eligible, config)
+    excluded.extend(actor_excluded)
+    nonduplicates, duplicate_excluded = _filter_duplicate_candidates(
+        authorized, view, run_state, config
+    )
+    excluded.extend(duplicate_excluded)
+    serial_filtered, serial_excluded = _filter_forced_serial_candidates(
+        nonduplicates, run_state, view
+    )
+    excluded.extend(serial_excluded)
+    return serial_filtered, excluded
+
+
+def _active_subtask_ids(
+    active_worktrees: Mapping[str, ActiveWorktree], view: CycleContext
+) -> set[str]:
+    return {
+        active_task.subtask_id
+        for active in active_worktrees.values()
+        if (active_task := view.task(active.core.issue_number)) is not None
+        and active_task.subtask_id
+    }
+
+
 class CycleActionAdapter:
     """L3 `CycleActions`の全port実装。
 
@@ -478,30 +516,12 @@ class CycleActionAdapter:
         raw dependency declarationを選定処理へ渡さない。
         """
         view = self._bound_view()
-        eligible, excluded = _filter_retry_backoffs(
-            candidates,
-            self._run_state,
-            self._now,
-            getattr(self._config.dispatch_target, "target_name", None),
+        serial_filtered, excluded = _excluded_candidates(
+            candidates, self._run_state, self._now, self._config, view
         )
-        authorized, actor_excluded = _filter_actor_permissions(eligible, self._config)
-        excluded.extend(actor_excluded)
-        nonduplicates, duplicate_excluded = _filter_duplicate_candidates(
-            authorized, view, self._run_state, self._config
-        )
-        excluded.extend(duplicate_excluded)
-        serial_filtered, serial_excluded = _filter_forced_serial_candidates(
-            nonduplicates, self._run_state, view
-        )
-        excluded.extend(serial_excluded)
         all_tasks = view.tasks()
         rank_inputs, conflict_inputs = _scheduling_dag_inputs(view, all_tasks)
-        active_subtask_ids = {
-            active_task.subtask_id
-            for active in self._run_state.active_worktrees.values()
-            if (active_task := view.task(active.core.issue_number)) is not None
-            and active_task.subtask_id
-        }
+        active_subtask_ids = _active_subtask_ids(self._run_state.active_worktrees, view)
         result = select_tasks_with_decisions(
             serial_filtered,
             self._run_state,

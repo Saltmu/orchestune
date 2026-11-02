@@ -345,6 +345,28 @@ def _owned_dependencies(deps: TaskDependencies) -> TaskDependencies:
     )
 
 
+def _owned_cycle_records(
+    issue_records_by_number: Mapping[int, IssueRecord],
+    prs: Iterable[PrRecord],
+) -> tuple[tuple[IssueRecord, ...], tuple[PrRecord, ...]]:
+    issue_records = tuple(
+        sorted(
+            (
+                _owned_issue_record(record)
+                for record in issue_records_by_number.values()
+            ),
+            key=lambda record: record.number,
+        )
+    )
+    pull_requests = tuple(
+        sorted(
+            (_owned_pull_request(pr) for pr in prs),
+            key=lambda pr: pr.number,
+        )
+    )
+    return issue_records, pull_requests
+
+
 class _CycleState:
     """1サイクル分のLifecycle実効状態を所有する、`CycleContext`専用の内部型。
 
@@ -383,20 +405,8 @@ class _CycleState:
         self._prior_repair_attempted = frozenset(
             prior_parent_merge_repair_attempted_issue_numbers
         )
-        self._issue_records = tuple(
-            sorted(
-                (
-                    _owned_issue_record(record)
-                    for record in issue_records_by_number.values()
-                ),
-                key=lambda record: record.number,
-            )
-        )
-        self._pull_requests = tuple(
-            sorted(
-                (_owned_pull_request(pr) for pr in prs),
-                key=lambda pr: pr.number,
-            )
+        self._issue_records, self._pull_requests = _owned_cycle_records(
+            issue_records_by_number, prs
         )
         self._effective_labels: dict[int, tuple[str, ...]] = {}
         self._recorded_completions: set[int] = set()

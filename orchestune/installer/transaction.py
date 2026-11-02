@@ -226,6 +226,27 @@ def _validate_skill_manifest(skill_info: Any) -> None:
             raise TransactionError("Invalid uninstall file digest")
 
 
+def _reject_skill_directory(
+    directory_path: Path, skill_dir: Path, expected_directory_set: set[str]
+) -> bool:
+    if directory_path.is_symlink():
+        return True
+    relative_directory = directory_path.relative_to(skill_dir).as_posix()
+    return relative_directory not in expected_directory_set
+
+
+def _reject_skill_file(file_path: Path, skill_dir: Path, files: dict[str, Any]) -> bool:
+    if file_path.is_symlink() or not file_path.is_file():
+        return True
+    relative_path = file_path.relative_to(skill_dir).as_posix()
+    if relative_path not in files:
+        return True
+    file_info = files[relative_path]
+    if not isinstance(file_info, dict):
+        return True
+    return calculate_file_sha256(file_path) != file_info.get("sha256")
+
+
 def _skill_matches_manifest(
     skill_dir: Path, skill_info: dict[str, Any], *, allow_missing: bool = False
 ) -> bool:
@@ -244,25 +265,16 @@ def _skill_matches_manifest(
             current = Path(root)
             for name in child_directories:
                 directory_path = current / name
-                if directory_path.is_symlink():
+                if _reject_skill_directory(
+                    directory_path, skill_dir, expected_directory_set
+                ):
                     return False
-                relative_directory = directory_path.relative_to(skill_dir).as_posix()
-                if relative_directory not in expected_directory_set:
-                    return False
-                found_directories.add(relative_directory)
+                found_directories.add(directory_path.relative_to(skill_dir).as_posix())
             for filename in filenames:
                 file_path = current / filename
-                if file_path.is_symlink() or not file_path.is_file():
+                if _reject_skill_file(file_path, skill_dir, files):
                     return False
-                relative_path = file_path.relative_to(skill_dir).as_posix()
-                if relative_path not in expected:
-                    return False
-                found.add(relative_path)
-                file_info = files[relative_path]
-                if not isinstance(file_info, dict):
-                    return False
-                if calculate_file_sha256(file_path) != file_info.get("sha256"):
-                    return False
+                found.add(file_path.relative_to(skill_dir).as_posix())
     except OSError:
         return False
     if allow_missing:
@@ -834,6 +846,24 @@ def _cleanup_committed_uninstall(
         ) from err
 
 
+def _reject_transaction_entry(entry: Path) -> None:
+    if entry.name == "journal.json":
+        if entry.is_symlink() or not entry.is_file():
+            raise TransactionError("Uninstall journal is not a regular file")
+        return
+    if entry.name == "backup":
+        if entry.is_symlink() or not entry.is_dir() or any(entry.iterdir()):
+            raise TransactionError("Uninstall backup directory is not empty")
+        entry.rmdir()
+        return
+    if entry.name.startswith(".journal-") and entry.name.endswith(".tmp"):
+        if entry.is_symlink() or not entry.is_file():
+            raise TransactionError("Uninstall journal temporary path is invalid")
+        entry.unlink()
+        return
+    raise TransactionError(f"Unknown uninstall transaction entry: {entry.name}")
+
+
 def _remove_uninstall_journal_last(transaction_dir: Path) -> None:
     if not transaction_dir.exists():
         return
@@ -841,21 +871,7 @@ def _remove_uninstall_journal_last(transaction_dir: Path) -> None:
         raise TransactionError("Uninstall transaction path is not a directory")
     journal_path = transaction_dir / "journal.json"
     for entry in transaction_dir.iterdir():
-        if entry.name == "journal.json":
-            if entry.is_symlink() or not entry.is_file():
-                raise TransactionError("Uninstall journal is not a regular file")
-            continue
-        if entry.name == "backup":
-            if entry.is_symlink() or not entry.is_dir() or any(entry.iterdir()):
-                raise TransactionError("Uninstall backup directory is not empty")
-            entry.rmdir()
-            continue
-        if entry.name.startswith(".journal-") and entry.name.endswith(".tmp"):
-            if entry.is_symlink() or not entry.is_file():
-                raise TransactionError("Uninstall journal temporary path is invalid")
-            entry.unlink()
-            continue
-        raise TransactionError(f"Unknown uninstall transaction entry: {entry.name}")
+        _reject_transaction_entry(entry)
     if journal_path.exists() or journal_path.is_symlink():
         journal_path.unlink()
     try:

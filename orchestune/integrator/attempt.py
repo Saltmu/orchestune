@@ -506,8 +506,7 @@ def _single_fast_path(
     )
 
 
-def validate_finalization_context(ctx: Any) -> str | None:
-    """Revalidate durable state, checkout and live PR before finalization."""
+def _reject_finalization_identity(ctx: Any) -> str | None:
     identity = ctx.attempt_identity
     state = ctx.semantic_review_state
     if identity is None:
@@ -530,13 +529,10 @@ def validate_finalization_context(ctx: Any) -> str | None:
     current = run_git(["rev-parse", "HEAD"], cwd=ctx.repository_root).stdout.strip()
     if current and current != state.head_sha:
         return "checked out integration head differs from semantic review state"
-    matching = [
-        pr
-        for pr in list_open_attempt_prs(ctx.forge, identity.parent_issue_number)
-        if pr.number == state.pr_number
-    ]
-    if len(matching) != 1 or matching[0].head_sha != state.head_sha:
-        return "live integration PR does not match the passed semantic review head"
+    return None
+
+
+def _reject_skipped_review(ctx: Any, state: Any) -> str | None:
     if state.phase is SemanticReviewPhase.SKIPPED_BY_HUMAN:
         if ctx.config.semantic_review_mode != "off":
             override = ctx.semantic_review_override
@@ -545,6 +541,25 @@ def validate_finalization_context(ctx: Any) -> str | None:
             if override.head_sha != state.head_sha:
                 return "human override does not match the passed head"
     return None
+
+
+def validate_finalization_context(ctx: Any) -> str | None:
+    """Revalidate durable state, checkout and live PR before finalization."""
+    rejected = _reject_finalization_identity(ctx)
+    if rejected:
+        return rejected
+    identity = ctx.attempt_identity
+    state = ctx.semantic_review_state
+    if identity is None or state is None:
+        return None
+    matching = [
+        pr
+        for pr in list_open_attempt_prs(ctx.forge, identity.parent_issue_number)
+        if pr.number == state.pr_number
+    ]
+    if len(matching) != 1 or matching[0].head_sha != state.head_sha:
+        return "live integration PR does not match the passed semantic review head"
+    return _reject_skipped_review(ctx, state)
 
 
 def _semantic_finalization_exempt(ctx: Any) -> bool:
