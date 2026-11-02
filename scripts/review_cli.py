@@ -54,12 +54,7 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def build_parser(stall_grace_default: int) -> argparse.ArgumentParser:
-    """The CLI parser. Online-only numeric options default to None so that an
-    explicit value is distinguishable from the default (and rejected offline)."""
-    parser = argparse.ArgumentParser(
-        description="Trigger and detect AI review activity on a GitHub PR in a single blocking process."
-    )
+def _add_target_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--pr",
         type=int,
@@ -94,6 +89,11 @@ def build_parser(stall_grace_default: int) -> argparse.ArgumentParser:
             f"(positive; default {DEFAULT_MAX_SNAPSHOT_AGE_SECONDS})"
         ),
     )
+
+
+def _add_timing_arguments(
+    parser: argparse.ArgumentParser, stall_grace_default: int
+) -> None:
     parser.add_argument(
         "--timeout",
         type=int,
@@ -115,57 +115,86 @@ def build_parser(stall_grace_default: int) -> argparse.ArgumentParser:
         default=None,
         help=f"Online only: polling interval in seconds (default: {DEFAULT_INTERVAL_SECONDS})",
     )
-    parser.add_argument(
+
+
+_TRIGGER_ARGUMENTS: tuple[tuple[str, dict[str, Any]], ...] = (
+    (
         "--bot-name",
-        type=str,
-        required=True,
-        choices=("claude", "codex", "skip"),
-        help="Explicit reviewer selection (skip records a blocked human-review choice)",
-    )
-    parser.add_argument(
+        {
+            "type": str,
+            "required": True,
+            "choices": ("claude", "codex", "skip"),
+            "help": "Explicit reviewer selection (skip records a blocked human-review choice)",
+        },
+    ),
+    (
         "--body",
-        type=str,
-        default=None,
-        help="Online only: custom comment body to post when triggering review",
-    )
-    parser.add_argument(
+        {
+            "type": str,
+            "default": None,
+            "help": "Online only: custom comment body to post when triggering review",
+        },
+    ),
+    (
         "--body-file",
-        type=str,
-        default=None,
-        help=(
-            "Path to the review-reply file with the previous round's judgments "
-            "(online: also the trigger body to post)"
-        ),
-    )
-    parser.add_argument(
+        {
+            "type": str,
+            "default": None,
+            "help": (
+                "Path to the review-reply file with the previous round's judgments "
+                "(online: also the trigger body to post)"
+            ),
+        },
+    ),
+    (
         "--no-post",
-        action="store_true",
-        help="Skip posting a review trigger comment and only wait for activity",
-    )
-    parser.add_argument(
+        {
+            "action": "store_true",
+            "help": "Skip posting a review trigger comment and only wait for activity",
+        },
+    ),
+    (
         "--max-rounds",
-        type=int,
-        default=None,
-        help=(
-            f"Maximum number of review rounds allowed (default: {DEFAULT_MAX_ROUNDS}; "
-            f"offline accepts 1-{OFFLINE_MAX_ROUNDS}, counted PR-wide)"
-        ),
-    )
-    parser.add_argument(
+        {
+            "type": int,
+            "default": None,
+            "help": (
+                f"Maximum number of review rounds allowed (default: {DEFAULT_MAX_ROUNDS}; "
+                f"offline accepts 1-{OFFLINE_MAX_ROUNDS}, counted PR-wide)"
+            ),
+        },
+    ),
+    (
         "--max-retries",
-        type=int,
-        default=None,
-        help=f"Online only: maximum retry attempts on transient failures (default: {DEFAULT_MAX_RETRIES})",
-    )
-    parser.add_argument(
+        {
+            "type": int,
+            "default": None,
+            "help": (
+                "Online only: maximum retry attempts on transient failures "
+                f"(default: {DEFAULT_MAX_RETRIES})"
+            ),
+        },
+    ),
+    (
         "--round",
-        type=int,
-        default=None,
-        help=(
-            "Explicit review round number (default: auto-detected from PR comments; "
-            "offline: a posted round to evaluate, or the next round for --validate-request)"
-        ),
-    )
+        {
+            "type": int,
+            "default": None,
+            "help": (
+                "Explicit review round number (default: auto-detected from PR comments; "
+                "offline: a posted round to evaluate, or the next round for --validate-request)"
+            ),
+        },
+    ),
+)
+
+
+def _add_trigger_arguments(parser: argparse.ArgumentParser) -> None:
+    for name, kwargs in _TRIGGER_ARGUMENTS:
+        parser.add_argument(name, **kwargs)
+
+
+def _add_output_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--jev-threshold",
         type=float,
@@ -192,6 +221,18 @@ def build_parser(stall_grace_default: int) -> argparse.ArgumentParser:
         action="store_true",
         help="Online only: retry retiring verified replacement ancestors; never re-post the replacement",
     )
+
+
+def build_parser(stall_grace_default: int) -> argparse.ArgumentParser:
+    """The CLI parser. Online-only numeric options default to None so that an
+    explicit value is distinguishable from the default (and rejected offline)."""
+    parser = argparse.ArgumentParser(
+        description="Trigger and detect AI review activity on a GitHub PR in a single blocking process."
+    )
+    _add_target_arguments(parser)
+    _add_timing_arguments(parser, stall_grace_default)
+    _add_trigger_arguments(parser)
+    _add_output_arguments(parser)
     return parser
 
 

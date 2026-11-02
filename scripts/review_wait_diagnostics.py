@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from orchestune.review.acquisition import ACQUISITION_UNAVAILABLE, SCHEMA_VERSION
+from orchestune.review.acquisition import review_result_record
 
 EXIT_TIMEOUT = 20  # Timeout waiting for review activity
 EXIT_STALLED = 21  # In-progress tracker comment stopped changing; job likely ended
@@ -95,6 +95,28 @@ class StalledReviewError(ReviewWaitEnded, RuntimeError):
     exit_code = EXIT_STALLED
 
 
+def _wait_diagnostics(context: WaitContext | None) -> dict[str, Any]:
+    wait: dict[str, Any] = {
+        "elapsed_seconds": None,
+        "timeout_seconds": None,
+        "stall_grace_seconds": None,
+        "completed_grace_seconds": None,
+        "last_tracker": None,
+        "observed_items": [],
+    }
+    if context is None:
+        return wait
+    wait.update(
+        elapsed_seconds=context.elapsed_seconds,
+        timeout_seconds=context.timeout_seconds,
+        stall_grace_seconds=context.stall_grace_seconds,
+        completed_grace_seconds=context.completed_grace_seconds,
+        last_tracker=asdict(context.last_tracker) if context.last_tracker else None,
+        observed_items=list(context.observed_items),
+    )
+    return wait
+
+
 def diagnostic_result(
     error: BaseException,
     *,
@@ -112,48 +134,19 @@ def diagnostic_result(
     context = getattr(error, "context", None)
     stalled = isinstance(error, StalledReviewError)
     known = context is not None and context.last_poll_ok
-    wait: dict[str, Any] = {
-        "elapsed_seconds": None,
-        "timeout_seconds": None,
-        "stall_grace_seconds": None,
-        "completed_grace_seconds": None,
-        "last_tracker": None,
-        "observed_items": [],
-    }
-    if context is not None:
-        wait.update(
-            elapsed_seconds=context.elapsed_seconds,
-            timeout_seconds=context.timeout_seconds,
-            stall_grace_seconds=context.stall_grace_seconds,
-            completed_grace_seconds=context.completed_grace_seconds,
-            last_tracker=(
-                asdict(context.last_tracker) if context.last_tracker else None
-            ),
-            observed_items=list(context.observed_items),
-        )
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "acquisition_status": ACQUISITION_UNAVAILABLE,
-        "reason": str(error),
-        "reason_code": REASON_STALLED if stalled else REASON_TIMEOUT,
-        "exit_code": EXIT_STALLED if stalled else EXIT_TIMEOUT,
-        "repository": context.repository if context else None,
-        "pr_number": context.pr_number if context else pr_number,
-        "reviewer": context.reviewer if context else reviewer,
-        "round": context.round if context else round_num,
-        "trigger_id": context.trigger_id if context else None,
-        "triggered_at": context.triggered_at if context else None,
-        "requested_head_sha": context.requested_head_sha if context else None,
-        "reviewed_head_sha": None,
-        "current_head_sha": current_head_sha,
-        "review_target_sha": None,
-        "review_target_sha_source": "unknown",
-        "review_items": [],
-        "review_body": "",
-        "inline_comments": [],
-        "jev_evaluations": [],
-        # Sections are only "complete" when the last poll fetched all of them.
-        "completeness": dict.fromkeys(SECTIONS, "complete" if known else "unknown"),
-        "timestamp": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "wait_diagnostics": wait,
-    }
+    return review_result_record(
+        reason=str(error),
+        reason_code=REASON_STALLED if stalled else REASON_TIMEOUT,
+        exit_code=EXIT_STALLED if stalled else EXIT_TIMEOUT,
+        repository=context.repository if context else None,
+        pr_number=context.pr_number if context else pr_number,
+        reviewer=context.reviewer if context else reviewer,
+        round=context.round if context else round_num,
+        trigger_id=context.trigger_id if context else None,
+        triggered_at=context.triggered_at if context else None,
+        requested_head_sha=context.requested_head_sha if context else None,
+        current_head_sha=current_head_sha,
+        completeness=dict.fromkeys(SECTIONS, "complete" if known else "unknown"),
+        timestamp=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        wait_diagnostics=_wait_diagnostics(context),
+    )

@@ -5,18 +5,20 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from orchestune.infra.json_state import write_json_atomic
 from orchestune.infra.process_utils import FileLock
-from orchestune.review.markers import superseded_trigger_marker
+from orchestune.review.markers import parse_head_marker, superseded_trigger_marker
 from orchestune.review.rounds import (
     ReviewTrigger,
     build_restorable_trigger_body,
     effective_lines,
     parse_trigger,
     restore_triggers,
+    trigger_comment_ids,
     trigger_history,
     validate_replacement_target,
 )
@@ -24,6 +26,209 @@ from orchestune.review.snapshot import EvidenceContractError
 
 Comments = Callable[[], list[dict[str, Any]]]
 RunGh = Callable[[list[str]], str]
+
+
+@dataclass(frozen=True)
+class TriggerOps:
+    """GitHub operations supplied by `scripts.wait_for_review` at call time."""
+
+    fetch_head: Callable[[], str | None]
+    fetch_comments: Comments
+    run_gh: RunGh
+    publish: Callable[..., dict[str, Any]]
+    post_trigger: Callable[..., dict[str, Any]]
+    retire: Callable[..., None]
+
+
+def _read_trigger_body(body: str | None, body_file: str | None) -> str:
+    raw = body or ""
+    if body_file:
+        with open(body_file, encoding="utf-8") as stream:
+            raw = stream.read()
+    return raw
+
+
+def _replace_trigger(
+    pr_number: int,
+    existing_trigger: dict[str, Any],
+    bot_name: str,
+    requested_head_sha: str,
+    body: str | None,
+    body_file: str | None,
+    excluded_ids: set[int | str],
+    ops: TriggerOps,
+) -> tuple[str, int | str | None, str]:
+    trigger_info = ops.publish(
+        pr_number=pr_number,
+        previous=existing_trigger,
+        bot_name=bot_name,
+        head_sha=requested_head_sha,
+        reply_body=_read_trigger_body(body, body_file),
+        fetch_comments=ops.fetch_comments,
+        fetch_head=ops.fetch_head,
+        run_gh=ops.run_gh,
+    )
+    excluded_ids.add(trigger_info["id"])
+    return str(trigger_info["created_at"]), trigger_info["id"], requested_head_sha
+
+
+def _reuse_or_replace_trigger(
+    pr_number: int,
+    bot_name: str,
+    comments: list[dict[str, Any]],
+    existing_trigger: dict[str, Any],
+    active: list[ReviewTrigger],
+    excluded_ids: set[int | str],
+    current_round: int,
+    requested_head_sha: str | None,
+    body: str | None,
+    body_file: str | None,
+    repair_trigger_markers: bool,
+    ops: TriggerOps,
+) -> tuple[str, int | str | None, str | None]:
+    trigger_id = existing_trigger.get("id")
+    trigger_time = str(existing_trigger.get("created_at") or "")
+    existing_head = parse_head_marker(existing_trigger.get("body") or "")
+    if trigger_id is not None:
+        excluded_ids.add(trigger_id)
+    replacing = active[0].reviewer != bot_name or (
+        existing_head and requested_head_sha and existing_head != requested_head_sha
+    )
+    if repair_trigger_markers and replacing:
+        raise ValueError(
+            "marker repair cannot replace a reviewer or HEAD; resume the verified trigger"
+        )
+    if not replacing:
+        if repair_trigger_markers and active[0].replaces is not None:
+            ops.retire(comments, trigger_id, ops.run_gh)
+        print(
+            f"Review trigger for @{bot_name} (Round {current_round}) already exists "
+            f"(Comment ID: {trigger_id}); skipping post and waiting..."
+        )
+        return trigger_time, trigger_id, existing_head
+    if requested_head_sha is None:
+        raise ValueError("cannot replace trigger without current PR HEAD")
+    return _replace_trigger(
+        pr_number,
+        existing_trigger,
+        bot_name,
+        requested_head_sha,
+        body,
+        body_file,
+        excluded_ids,
+        ops,
+    )
+
+
+def _post_new_trigger(
+    pr_number: int,
+    bot_name: str,
+    initial_snapshot: dict[str, str],
+    excluded_ids: set[int | str],
+    current_round: int,
+    max_rounds: int,
+    body: str | None,
+    body_file: str | None,
+    requested_head_sha: str | None,
+    ops: TriggerOps,
+) -> tuple[str, int | str | None, str | None]:
+    print(
+        f"Posting review trigger comment (Round {current_round}/{max_rounds}) "
+        f"for @{bot_name} on PR #{pr_number}..."
+    )
+    trigger_info = ops.post_trigger(
+        pr_number,
+        bot_name=bot_name,
+        body=body,
+        body_file=body_file,
+        round_num=current_round,
+        head_sha=requested_head_sha,
+    )
+    trigger_id = trigger_info.get("id")
+    trigger_time = str(trigger_info.get("created_at") or "")
+    trigger_body = trigger_info.get("body") or ""
+    if trigger_id is not None:
+        excluded_ids.add(trigger_id)
+        initial_snapshot[f"comment_{trigger_id}"] = (
+            f"{trigger_time}:{len(trigger_body)}"
+        )
+    print(f"Trigger posted (Comment ID: {trigger_id}, time: {trigger_time})")
+    return (
+        trigger_time,
+        trigger_id,
+        parse_head_marker(trigger_body) or requested_head_sha,
+    )
+
+
+def _existing_round_trigger(
+    comments: list[dict[str, Any]],
+    excluded_ids: set[int | str],
+    current_round: int,
+    repair_trigger_markers: bool,
+) -> tuple[list[ReviewTrigger], dict[str, Any] | None]:
+    excluded_ids.update(trigger_comment_ids(comments))
+    active = [
+        item for item in restore_triggers(comments) if item.round == current_round
+    ]
+    existing_trigger = next(
+        (
+            item
+            for item in comments
+            if active and str(item.get("id")) == str(active[0].id)
+        ),
+        None,
+    )
+    if repair_trigger_markers and existing_trigger is None:
+        raise ValueError("marker repair requires an existing replacement trigger")
+    return active, existing_trigger
+
+
+def resolve_round_trigger(
+    pr_number: int,
+    bot_name: str,
+    initial_data: dict[str, list[dict[str, Any]]],
+    initial_snapshot: dict[str, str],
+    excluded_ids: set[int | str],
+    current_round: int,
+    max_rounds: int,
+    body: str | None,
+    body_file: str | None,
+    repair_trigger_markers: bool,
+    ops: TriggerOps,
+) -> tuple[str, int | str | None, str | None]:
+    """Post a head-bound trigger, or restore the recorded head when one exists."""
+    requested_head_sha = ops.fetch_head()
+    comments = initial_data.get("issue_comments", [])
+    active, existing_trigger = _existing_round_trigger(
+        comments, excluded_ids, current_round, repair_trigger_markers
+    )
+    if existing_trigger is not None:
+        return _reuse_or_replace_trigger(
+            pr_number,
+            bot_name,
+            comments,
+            existing_trigger,
+            active,
+            excluded_ids,
+            current_round,
+            requested_head_sha,
+            body,
+            body_file,
+            repair_trigger_markers,
+            ops,
+        )
+    return _post_new_trigger(
+        pr_number,
+        bot_name,
+        initial_snapshot,
+        excluded_ids,
+        current_round,
+        max_rounds,
+        body,
+        body_file,
+        requested_head_sha,
+        ops,
+    )
 
 
 def _read_comment(run_gh: RunGh, comment_id: object) -> dict[str, Any]:
@@ -181,6 +386,50 @@ def publish_replacement(
         )
 
 
+def _check_replacement_allowed(
+    comments: list[dict[str, Any]],
+    same_round: list[ReviewTrigger],
+    old: ReviewTrigger,
+    body: str,
+    head_sha: str,
+    fetch_head: Callable[[], str | None],
+    run_gh: RunGh,
+) -> None:
+    if str(same_round[0].id) != str(old.id) or same_round[0].body != old.body:
+        raise EvidenceContractError("replacement source changed; reload the request")
+    proposed = parse_trigger(
+        {"id": "candidate", "body": body, "created_at": old.created_at}
+    )
+    assert proposed is not None
+    validate_replacement_target(
+        trigger_history(comments), old.id, proposed.reviewer, head_sha
+    )
+    if old.round != max(t.round for t in trigger_history(comments)):
+        raise EvidenceContractError("historical rounds cannot be replaced")
+    if fetch_head() != head_sha:
+        raise EvidenceContractError("PR HEAD changed during replacement preparation")
+    identity = json.loads(run_gh(["api", "user"]))
+    if not old.author or str(identity.get("login") or "").lower() != old.author:
+        raise EvidenceContractError("replacement must be posted by the source author")
+
+
+def _verify_published(
+    candidate: dict[str, Any],
+    body: str,
+    run_gh: RunGh,
+    fetch_comments: Comments,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    verified = _read_comment(run_gh, candidate["id"])
+    if verified.get("body") != body or parse_trigger(verified) != parse_trigger(
+        candidate
+    ):
+        raise EvidenceContractError("replacement body/id was not verified by re-fetch")
+    comments = fetch_comments()
+    if not any(str(t.id) == str(verified["id"]) for t in restore_triggers(comments)):
+        raise EvidenceContractError("replacement is not the unique active tail")
+    return verified, comments
+
+
 def _publish_locked(
     pr_number: int,
     old: ReviewTrigger,
@@ -198,39 +447,13 @@ def _publish_locked(
         raise EvidenceContractError("replacement source round is no longer active")
     candidate = _confirmed_candidate(comments, body, old.author or "")
     if candidate is None:
-        if str(same_round[0].id) != str(old.id) or same_round[0].body != old.body:
-            raise EvidenceContractError(
-                "replacement source changed; reload the request"
-            )
-        proposed = parse_trigger(
-            {"id": "candidate", "body": body, "created_at": old.created_at}
+        _check_replacement_allowed(
+            comments, same_round, old, body, head_sha, fetch_head, run_gh
         )
-        assert proposed is not None
-        validate_replacement_target(
-            trigger_history(comments), old.id, proposed.reviewer, head_sha
-        )
-        if old.round != max(t.round for t in trigger_history(comments)):
-            raise EvidenceContractError("historical rounds cannot be replaced")
-        if fetch_head() != head_sha:
-            raise EvidenceContractError(
-                "PR HEAD changed during replacement preparation"
-            )
-        identity = json.loads(run_gh(["api", "user"]))
-        if not old.author or str(identity.get("login") or "").lower() != old.author:
-            raise EvidenceContractError(
-                "replacement must be posted by the source author"
-            )
         candidate = _post_once(
-            pr_number, body, old.author, run_gh, fetch_comments, journal
+            pr_number, body, old.author or "", run_gh, fetch_comments, journal
         )
-    verified = _read_comment(run_gh, candidate["id"])
-    if verified.get("body") != body or parse_trigger(verified) != parse_trigger(
-        candidate
-    ):
-        raise EvidenceContractError("replacement body/id was not verified by re-fetch")
-    comments = fetch_comments()
-    if not any(str(t.id) == str(verified["id"]) for t in restore_triggers(comments)):
-        raise EvidenceContractError("replacement is not the unique active tail")
+    verified, comments = _verify_published(candidate, body, run_gh, fetch_comments)
     write_json_atomic(journal, {"state": "verified", "trigger_id": verified["id"]})
     retire_replaced_triggers(comments, verified["id"], run_gh)
     return verified

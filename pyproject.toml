@@ -101,7 +101,7 @@ markers = [
 ]
 
 [tool.detect-bloat]
-code_paths = ["orchestune"]
+code_paths = ["orchestune", "scripts"]
 test_paths = ["tests"]
 skills_path = "skills"
 code_file_lines = 1000

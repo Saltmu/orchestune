@@ -295,6 +295,47 @@ def _bump(table: dict[str, dict[str, int]], key: str, label: str) -> None:
     cell[label] = cell.get(label, 0) + 1
 
 
+def _label_row(
+    row: dict[str, Any],
+    fetcher: Callable[[int], list[dict[str, Any]]],
+    cache: dict[int, list[Thread]],
+    fetch_errors: dict[str, str],
+) -> tuple[int | None, str, str]:
+    pr = _as_int(row.get("pr"))
+    label, why = "unmatched", "no_pr"
+    if pr is None:
+        return pr, label, why
+    if pr not in cache:
+        try:
+            cache[pr] = parse_threads(fetcher(pr))
+        except ThreadFetchError as exc:
+            fetch_errors[str(pr)] = str(exc)
+            cache[pr] = []
+    if str(pr) in fetch_errors:
+        return pr, label, "fetch_failed"
+    thread = match_thread(row, cache[pr])
+    if thread is None:
+        return pr, label, "no_match"
+    return pr, classify(thread), why
+
+
+def _summary(
+    rows: Sequence[dict[str, Any]],
+    matched: int,
+    skipped_lines: int,
+    duplicates_collapsed: int,
+    missing_files: Sequence[str],
+) -> dict[str, Any]:
+    return {
+        "evaluations": len(rows),
+        "matched": matched,
+        "unmatched": len(rows) - matched,
+        "log_lines_skipped": skipped_lines,
+        "duplicates_collapsed": duplicates_collapsed,
+        "missing_log_files": list(missing_files),
+    }
+
+
 def build_report(
     rows: Sequence[dict[str, Any]],
     fetcher: Callable[[int], list[dict[str, Any]]],
@@ -312,23 +353,7 @@ def build_report(
     matched = 0
 
     for row in rows:
-        pr = _as_int(row.get("pr"))
-        label, why = "unmatched", "no_pr"
-        if pr is not None:
-            if pr not in cache:
-                try:
-                    cache[pr] = parse_threads(fetcher(pr))
-                except ThreadFetchError as exc:
-                    fetch_errors[str(pr)] = str(exc)
-                    cache[pr] = []
-            if str(pr) in fetch_errors:
-                why = "fetch_failed"
-            else:
-                thread = match_thread(row, cache[pr])
-                if thread is None:
-                    why = "no_match"
-                else:
-                    label = classify(thread)
+        pr, label, why = _label_row(row, fetcher, cache, fetch_errors)
         if label == "unmatched":
             unmatched_reasons[why] = unmatched_reasons.get(why, 0) + 1
         else:
@@ -339,14 +364,9 @@ def build_report(
         _bump(by_pr, str(pr), label)
 
     return {
-        "summary": {
-            "evaluations": len(rows),
-            "matched": matched,
-            "unmatched": len(rows) - matched,
-            "log_lines_skipped": skipped_lines,
-            "duplicates_collapsed": duplicates_collapsed,
-            "missing_log_files": list(missing_files),
-        },
+        "summary": _summary(
+            rows, matched, skipped_lines, duplicates_collapsed, missing_files
+        ),
         "by_decision_reason": by_reason,
         "by_validity_band": by_band,
         "by_pr": by_pr,

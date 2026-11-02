@@ -18,49 +18,26 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, cast
 
 from orchestune.review.acquisition import (
-    ACQUISITION_ACQUIRED as ACQUISITION_ACQUIRED,
-)
-from orchestune.review.acquisition import (
-    ACQUISITION_IN_PROGRESS as ACQUISITION_IN_PROGRESS,
-)
-from orchestune.review.acquisition import (
-    ACQUISITION_UNAVAILABLE as ACQUISITION_UNAVAILABLE,
-)
-from orchestune.review.acquisition import (
-    EXIT_ACQUIRED as EXIT_ACQUIRED,
-)
-from orchestune.review.acquisition import (
-    EXIT_IN_PROGRESS as EXIT_IN_PROGRESS,
-)
-from orchestune.review.acquisition import (
-    EXIT_NO_RESULT as EXIT_NO_RESULT,
-)
-from orchestune.review.acquisition import (
-    SCHEMA_VERSION as SCHEMA_VERSION,
-)
-from orchestune.review.acquisition import (
-    _build_snapshot as _build_snapshot,
-)
-from orchestune.review.acquisition import (
-    _filter_bot_items as _filter_bot_items,
-)
-from orchestune.review.acquisition import (
-    _get_item_timestamp as _get_item_timestamp,
-)
-from orchestune.review.acquisition import (
-    _is_bot_user as _is_bot_user,
-)
-from orchestune.review.acquisition import (
+    ACQUISITION_ACQUIRED,
+    ACQUISITION_IN_PROGRESS,
+    ACQUISITION_UNAVAILABLE,
+    EXIT_ACQUIRED,
+    EXIT_IN_PROGRESS,
+    EXIT_NO_RESULT,
+    SCHEMA_VERSION,
+    _build_snapshot,
+    _filter_bot_items,
+    _get_item_timestamp,
+    _is_bot_user,
     _is_explicitly_in_progress,
     _latest_bot_activity_item,
+    _latest_bot_summary_item,
     collect_review_state,
     extract_review_result,
     normalize_review_state,
+    review_result_record,
+    reviewed_head_sha,
 )
-from orchestune.review.acquisition import (
-    _latest_bot_summary_item as _latest_bot_summary_item,
-)
-from orchestune.review.judgment import validate_previous_round_reply
 from orchestune.review.markers import (
     derive_review_target,
     ensure_review_trigger_mention,
@@ -71,7 +48,7 @@ from orchestune.review.markers import (
     review_selection_marker,
 )
 from orchestune.review.markers import (
-    parse_round_marker as _parse_review_round_marker,  # noqa: F401
+    parse_round_marker as _parse_review_round_marker,
 )
 from orchestune.review.offline import resolve_legacy_completeness
 from orchestune.review.rounds import (
@@ -81,24 +58,16 @@ from orchestune.review.rounds import (
     consumed_round,
     legacy_trigger_timestamp,
     parse_trigger,
-    previous_round_window,
     restore_triggers,
     trigger_comment_ids,
 )
 from orchestune.review.snapshot import InsufficientEvidenceError
-from orchestune.review.tracker_activity import (
-    DEFAULT_COMPLETED_GRACE_SECONDS,
-    CompletedGrace,
-)
+from orchestune.review.tracker_activity import DEFAULT_COMPLETED_GRACE_SECONDS
 from scripts.jev_context import JevReviewContext, collect_review_context
 from scripts.jev_filter import evaluate_review_findings
 from scripts.review_cli import (
-    EXIT_INTERNAL_ERROR as EXIT_INTERNAL_ERROR,
-)
-from scripts.review_cli import (
-    EXIT_MAX_ROUNDS as EXIT_MAX_ROUNDS,
-)
-from scripts.review_cli import (
+    EXIT_INTERNAL_ERROR,
+    EXIT_MAX_ROUNDS,
     parse_args,
     run_offline,
 )
@@ -109,29 +78,34 @@ from scripts.review_cli import (
     write_output_file as _write_output_file,
 )
 from scripts.review_poll import (
-    COMPLETENESS_SECTIONS,
-    PollState,
     StalledReviewError,
-    WaitRound,
-    poll_step,
+    WaitBindings,
+    execute_review_wait,
     summary_gate_open,
     track_stall,
-    unavailable_result,
-    wait_context,
+)
+from scripts.review_round_validation import (
+    MaxRoundsExceededError as MaxRoundsExceededError,
+)
+from scripts.review_round_validation import (
+    _check_round_limit,
+    _validate_online_operation,
+    _validate_resume_reply,
+    _validate_review_selection,
+)
+from scripts.review_round_validation import (
+    _validate_review_reply as _validate_review_reply,
 )
 from scripts.review_trigger_replacement import (
+    TriggerOps,
     publish_replacement,
+    resolve_round_trigger,
     retire_replaced_triggers,
 )
 from scripts.review_wait_diagnostics import (
-    EXIT_STALLED as EXIT_STALLED,
-)
-from scripts.review_wait_diagnostics import (
-    EXIT_TIMEOUT as EXIT_TIMEOUT,
-)
-from scripts.review_wait_diagnostics import (
+    EXIT_STALLED,
+    EXIT_TIMEOUT,
     ReviewTimeoutError,
-    WaitContext,
     diagnostic_result,
 )
 
@@ -142,6 +116,51 @@ _mark_review_trigger = mark_review_trigger
 _resolve_offline_completeness = resolve_legacy_completeness
 _review_round_marker = review_round_marker
 _track_stall = track_stall
+
+__all__ = [
+    "ACQUISITION_ACQUIRED",
+    "ACQUISITION_IN_PROGRESS",
+    "ACQUISITION_UNAVAILABLE",
+    "EXIT_ACQUIRED",
+    "EXIT_IN_PROGRESS",
+    "EXIT_INTERNAL_ERROR",
+    "EXIT_MAX_ROUNDS",
+    "EXIT_NO_RESULT",
+    "EXIT_STALLED",
+    "EXIT_TIMEOUT",
+    "SCHEMA_VERSION",
+    "StalledReviewError",
+    "_build_snapshot",
+    "_check_immediate_review_result",
+    "_ensure_review_trigger_mention",
+    "_extract_review_result",
+    "_filter_bot_items",
+    "_find_existing_trigger_comment",
+    "_get_initial_pr_data",
+    "_get_item_timestamp",
+    "_get_latest_review_round",
+    "_handle_review_trigger",
+    "_has_review_trigger_mention",
+    "_is_bot_user",
+    "_is_explicitly_in_progress",
+    "_is_trigger_comment",
+    "_latest_bot_summary_item",
+    "_latest_review_trigger_timestamp",
+    "_mark_review_trigger",
+    "_parse_review_round_marker",
+    "_print_review_result",
+    "_resolve_current_round",
+    "_review_round_marker",
+    "_run_gh",
+    "_run_gh_api",
+    "_run_online",
+    "_track_stall",
+    "_validate_review_reply",
+    "extract_review_result",
+    "main",
+    "post_review_trigger",
+    "wait_for_review",
+]
 
 GH_COMMAND_TIMEOUT_SECONDS = 30
 
@@ -156,8 +175,6 @@ def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
-_COMPLETENESS_SECTIONS = COMPLETENESS_SECTIONS
-
 # How long a bot's own "in progress" tracker comment may report the same
 # unchanged content before it is treated as stalled rather than merely slow.
 # A live job keeps editing that same comment (ticking off checklist items) as
@@ -167,10 +184,6 @@ _COMPLETENESS_SECTIONS = COMPLETENESS_SECTIONS
 # posted a "Review in progress" tracker, then finished successfully 2m26s
 # later without ever editing it again). See Issue #926.
 DEFAULT_STALL_GRACE_SECONDS = 600
-
-
-class MaxRoundsExceededError(RuntimeError):
-    """Raised when the maximum number of review rounds is exceeded."""
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -370,6 +383,83 @@ def _latest_review_trigger_timestamp(
     )
 
 
+def _evaluate_current_inlines(
+    result: dict[str, Any],
+    bot_name: str,
+    jev_threshold: float | None,
+    pr_number: int | None,
+    context_cache: dict[int, JevReviewContext] | None,
+) -> list[dict[str, Any]]:
+    current_inlines = [
+        item for item in result["inline_comments"] if item["provenance"] == "current"
+    ]
+    if not current_inlines:
+        return []
+    review_context = None
+    if os.environ.get("JEV_API_KEY") and pr_number is not None:
+        cache = context_cache if context_cache is not None else {}
+        if pr_number not in cache:
+            cache[pr_number] = collect_review_context(pr_number)
+        review_context = cache[pr_number]
+    jev_report = evaluate_review_findings(
+        current_inlines,
+        bot_name=bot_name,
+        threshold=jev_threshold,
+        pr=pr_number,
+        context=review_context,
+    )
+    return cast(list[dict[str, Any]], jev_report["jev_evaluations"])
+
+
+def _full_review_record(
+    result: dict[str, Any],
+    *,
+    replacement_proven: bool,
+    bot_name: str,
+    pr_number: int | None,
+    round_num: int | None,
+    trigger_id: int | str | None,
+    triggered_at: str,
+    requested_head_sha: str | None,
+    repository: str | None,
+    jev_threshold: float | None,
+    context_cache: dict[int, JevReviewContext] | None,
+) -> dict[str, Any]:
+    current_head_sha = _fetch_pr_head_sha(pr_number) if pr_number is not None else None
+    target_sha, target_source = derive_review_target(
+        result["review_items"], requested_head_sha, current_head_sha
+    )
+    return review_result_record(
+        acquisition_status=ACQUISITION_ACQUIRED
+        if replacement_proven
+        else ACQUISITION_UNAVAILABLE,
+        reason=result.get("reason", ""),
+        repository=repository,
+        pr_number=pr_number,
+        reviewer=bot_name,
+        round=round_num,
+        trigger_id=trigger_id,
+        triggered_at=triggered_at,
+        requested_head_sha=requested_head_sha,
+        reviewed_head_sha=reviewed_head_sha(result["review_items"]),
+        current_head_sha=current_head_sha,
+        review_target_sha=target_sha,
+        review_target_sha_source=target_source,
+        review_items=result["review_items"],
+        review_body=result["review_body"],
+        inline_comments=result["inline_comments"],
+        jev_evaluations=_evaluate_current_inlines(
+            result, bot_name, jev_threshold, pr_number, context_cache
+        ),
+        completeness={
+            "issue_comments": "complete",
+            "reviews": "complete",
+            "inline_comments": "complete",
+        },
+        timestamp=result["timestamp"],
+    )
+
+
 def _extract_review_result(
     current_data: dict[str, list[dict[str, Any]]],
     bot_name: str,
@@ -392,72 +482,21 @@ def _extract_review_result(
     )
     if result is None:
         return None
-    replacement_proven = bind_replacement_results(
-        current_data.get("issue_comments", []), trigger_id, result
+    full_result = _full_review_record(
+        result,
+        replacement_proven=bind_replacement_results(
+            current_data.get("issue_comments", []), trigger_id, result
+        ),
+        bot_name=bot_name,
+        pr_number=pr_number,
+        round_num=round_num,
+        trigger_id=trigger_id,
+        triggered_at=triggered_at,
+        requested_head_sha=requested_head_sha,
+        repository=repository,
+        jev_threshold=jev_threshold,
+        context_cache=context_cache,
     )
-
-    current_inlines = [
-        item for item in result["inline_comments"] if item["provenance"] == "current"
-    ]
-    jev_evaluations: list[dict[str, Any]] = []
-    if current_inlines:
-        review_context = None
-        if os.environ.get("JEV_API_KEY") and pr_number is not None:
-            cache = context_cache if context_cache is not None else {}
-            if pr_number not in cache:
-                cache[pr_number] = collect_review_context(pr_number)
-            review_context = cache[pr_number]
-        jev_report = evaluate_review_findings(
-            current_inlines,
-            bot_name=bot_name,
-            threshold=jev_threshold,
-            pr=pr_number,
-            context=review_context,
-        )
-        jev_evaluations = jev_report["jev_evaluations"]
-
-    reviewed_shas = {
-        item.get("commit_id")
-        for item in result["review_items"]
-        if item.get("kind") == "review"
-        and item.get("provenance") == "current"
-        and item.get("commit_id")
-    }
-    reviewed_head_sha = next(iter(reviewed_shas)) if len(reviewed_shas) == 1 else None
-
-    current_head_sha = _fetch_pr_head_sha(pr_number) if pr_number is not None else None
-
-    target_sha, target_source = derive_review_target(
-        result["review_items"], requested_head_sha, current_head_sha
-    )
-    full_result: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
-        "acquisition_status": ACQUISITION_ACQUIRED
-        if replacement_proven
-        else ACQUISITION_UNAVAILABLE,
-        "reason": result.get("reason", ""),
-        "repository": repository,
-        "pr_number": pr_number,
-        "reviewer": bot_name,
-        "round": round_num,
-        "trigger_id": trigger_id,
-        "triggered_at": triggered_at,
-        "requested_head_sha": requested_head_sha,
-        "reviewed_head_sha": reviewed_head_sha,
-        "current_head_sha": current_head_sha,
-        "review_target_sha": target_sha,
-        "review_target_sha_source": target_source,
-        "review_items": result["review_items"],
-        "review_body": result["review_body"],
-        "inline_comments": result["inline_comments"],
-        "jev_evaluations": jev_evaluations,
-        "completeness": {
-            "issue_comments": "complete",
-            "reviews": "complete",
-            "inline_comments": "complete",
-        },
-        "timestamp": result["timestamp"],
-    }
     _print_review_result(full_result, bot_name)
     return full_result
 
@@ -506,83 +545,27 @@ def _handle_review_trigger(
     Resume never guesses from the current head, which may have advanced since
     the trigger. Legacy triggers without a head marker keep requested SHA unknown.
     """
-    requested_head_sha = _fetch_pr_head_sha(pr_number)
-    comments = initial_data.get("issue_comments", [])
-    excluded_ids.update(trigger_comment_ids(comments))
-    active = [t for t in restore_triggers(comments) if t.round == current_round]
-    existing_trigger = next(
-        (i for i in comments if active and str(i.get("id")) == str(active[0].id)), None
-    )
-    if repair_trigger_markers and existing_trigger is None:
-        raise ValueError("marker repair requires an existing replacement trigger")
-    if existing_trigger is not None:
-        trigger_id = existing_trigger.get("id")
-        trigger_time = str(existing_trigger.get("created_at") or "")
-        existing_body = existing_trigger.get("body") or ""
-        existing_head = parse_head_marker(existing_body)
-        if trigger_id is not None:
-            excluded_ids.add(trigger_id)
-        replacing = active[0].reviewer != bot_name or (
-            existing_head and requested_head_sha and existing_head != requested_head_sha
-        )
-        if repair_trigger_markers and replacing:
-            raise ValueError(
-                "marker repair cannot replace a reviewer or HEAD; resume the verified trigger"
-            )
-        if not replacing:
-            if repair_trigger_markers and active[0].replaces is not None:
-                retire_replaced_triggers(comments, trigger_id, _run_gh)
-            print(
-                f"Review trigger for @{bot_name} (Round {current_round}) already exists "
-                f"(Comment ID: {trigger_id}); skipping post and waiting..."
-            )
-            return trigger_time, trigger_id, existing_head
-        if requested_head_sha is None:
-            raise ValueError("cannot replace trigger without current PR HEAD")
-        raw = body or ""
-        if body_file:
-            with open(body_file, encoding="utf-8") as stream:
-                raw = stream.read()
-        trigger_info = publish_replacement(
-            pr_number=pr_number,
-            previous=existing_trigger,
-            bot_name=bot_name,
-            head_sha=requested_head_sha,
-            reply_body=raw,
+    return resolve_round_trigger(
+        pr_number,
+        bot_name,
+        initial_data,
+        initial_snapshot,
+        excluded_ids,
+        current_round,
+        max_rounds,
+        body,
+        body_file,
+        repair_trigger_markers,
+        TriggerOps(
+            fetch_head=lambda: _fetch_pr_head_sha(pr_number),
             fetch_comments=lambda: _run_gh_api(
                 f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments"
             ),
-            fetch_head=lambda: _fetch_pr_head_sha(pr_number),
             run_gh=_run_gh,
-        )
-        excluded_ids.add(trigger_info["id"])
-        return str(trigger_info["created_at"]), trigger_info["id"], requested_head_sha
-
-    print(
-        f"Posting review trigger comment (Round {current_round}/{max_rounds}) "
-        f"for @{bot_name} on PR #{pr_number}..."
-    )
-    trigger_info = post_review_trigger(
-        pr_number,
-        bot_name=bot_name,
-        body=body,
-        body_file=body_file,
-        round_num=current_round,
-        head_sha=requested_head_sha,
-    )
-    trigger_id = trigger_info.get("id")
-    trigger_time = str(trigger_info.get("created_at") or "")
-    trigger_body = trigger_info.get("body") or ""
-    if trigger_id is not None:
-        excluded_ids.add(trigger_id)
-        initial_snapshot[f"comment_{trigger_id}"] = (
-            f"{trigger_time}:{len(trigger_body)}"
-        )
-    print(f"Trigger posted (Comment ID: {trigger_id}, time: {trigger_time})")
-    return (
-        trigger_time,
-        trigger_id,
-        parse_head_marker(trigger_body) or requested_head_sha,
+            publish=publish_replacement,
+            post_trigger=post_review_trigger,
+            retire=retire_replaced_triggers,
+        ),
     )
 
 
@@ -669,37 +652,6 @@ def _resolve_current_round(
     return latest_existing_round + 1
 
 
-def _validate_review_selection(
-    data: dict[str, Any], bot_name: str, switch: bool
-) -> None:
-    if bot_name not in {"claude", "codex", "skip"}:
-        raise ValueError("reviewer must be claude, codex or skip")
-    triggers = restore_triggers(data.get("issue_comments", []))
-    if not triggers:
-        return
-    reviewer = triggers[-1].reviewer
-    if reviewer != bot_name and not switch:
-        raise ValueError(
-            f"previous reviewer is {reviewer}; explicit --switch-reviewer required"
-        )
-
-
-def _validate_review_reply(
-    data: dict[str, Any], bot_name: str, round_num: int, body_file: str | None
-) -> None:
-    if round_num < 2:
-        return
-    if not body_file:
-        raise ValueError("round 2+ requires --body-file with review judgments")
-    with open(body_file, encoding="utf-8") as stream:
-        reply = stream.read()
-    # Legacy-tolerant reading of earlier triggers; the offline path is strict.
-    window = previous_round_window(
-        data.get("issue_comments", []), round_num, strict=False
-    )
-    validate_previous_round_reply(data, window, reply)
-
-
 def _record_skip(
     pr_number: int, data: dict[str, Any], repository: str | None
 ) -> dict[str, Any]:
@@ -741,31 +693,6 @@ def _record_skip(
     }
 
 
-def _check_round_limit(current_round: int, max_rounds: int) -> None:
-    effective_limit = min(max_rounds, MAX_REVIEW_ROUNDS)
-    if current_round > effective_limit:
-        raise MaxRoundsExceededError(
-            f"Maximum review rounds ({effective_limit}) exceeded (attempted round {current_round})."
-        )
-
-
-def _validate_resume_reply(data, current_round, existing, body_file):
-    if current_round < 2:
-        return
-    window = previous_round_window(data["issue_comments"], current_round, strict=True)
-    try:
-        posted = validate_previous_round_reply(data, window, existing.get("body") or "")
-        if body_file:
-            with open(body_file, encoding="utf-8") as stream:
-                given = validate_previous_round_reply(data, window, stream.read())
-            if given.judgment_digest != posted.judgment_digest:
-                raise ValueError("supplied table differs from the posted trigger table")
-    except ValueError as error:
-        raise ValueError(
-            "posted judgments are invalid or differ from --body-file; use a validated next round"
-        ) from error
-
-
 def _prepare_review_round(
     pr_number, initial_data, bot_name, round_num, post_trigger, body_file, max_rounds
 ):
@@ -794,17 +721,53 @@ def _prepare_review_round(
     return current_round
 
 
-def _validate_online_operation(
-    bot_name, post_trigger, repair_trigger_markers, round_num
-):
-    if not post_trigger and bot_name == "skip":
-        raise ValueError("--no-post is read-only and cannot publish a skip selection")
-    if repair_trigger_markers and not post_trigger:
-        raise ValueError("--no-post is read-only; marker repair requires posting mode")
-    if repair_trigger_markers and (round_num is None or bot_name == "skip"):
-        raise ValueError(
-            "marker repair requires an explicit posted --round and reviewer"
-        )
+def _restore_no_post_trigger(
+    initial_data: dict[str, list[dict[str, Any]]],
+    bot_name: str,
+    current_round: int,
+    excluded_ids: set[int | str],
+) -> tuple[str, int | str | None, str | None]:
+    requested_head_sha = None
+    latest_trigger_time = _latest_review_trigger_timestamp(initial_data, bot_name)
+    existing_trigger = _find_existing_trigger_comment(
+        initial_data, bot_name, current_round
+    )
+    trigger_id = None
+    if existing_trigger is not None:
+        trigger_id = existing_trigger.get("id")
+        requested_head_sha = parse_head_marker(existing_trigger.get("body") or "")
+        # Bot-authored triggers must not acquire their own request as a review.
+        # A trigger comment authored by the target bot itself (e.g. a
+        # hosted environment re-triggering its own review under its
+        # own bot identity) must not be read as the review it is
+        # asking for -- without this, the trigger's own text can
+        # satisfy the round-content gate before any real review
+        # arrives (Codex PR #1114 round 8 finding).
+        if trigger_id is not None:
+            excluded_ids.add(trigger_id)
+    return latest_trigger_time, trigger_id, requested_head_sha
+
+
+def _wait_bindings() -> WaitBindings:
+    """Resolve patchable helpers now, so later patches of this module apply."""
+    return WaitBindings(
+        validate_online=_validate_online_operation,
+        fetch_repository=_fetch_repository_slug,
+        get_initial=_get_initial_pr_data,
+        validate_selection=_validate_review_selection,
+        record_skip=_record_skip,
+        build_snapshot=_build_snapshot,
+        trigger_ids=trigger_comment_ids,
+        prepare_round=_prepare_review_round,
+        handle_trigger=_handle_review_trigger,
+        restore_no_post=_restore_no_post_trigger,
+        check_immediate=_check_immediate_review_result,
+        extract_review=_extract_review_result,
+        fetch_head=_fetch_pr_head_sha,
+        get_pr_data=_get_pr_data,
+        clock=_monotonic,
+        sleep=_sleep,
+    )
 
 
 def wait_for_review(
@@ -825,170 +788,24 @@ def wait_for_review(
     completed_grace_seconds: float = DEFAULT_COMPLETED_GRACE_SECONDS,
     repair_trigger_markers: bool = False,
 ) -> dict[str, Any]:
-    _validate_online_operation(
-        bot_name, post_trigger, repair_trigger_markers, round_num
+    return execute_review_wait(
+        _wait_bindings(),
+        pr_number,
+        timeout=timeout,
+        interval=interval,
+        bot_name=bot_name,
+        post_trigger=post_trigger,
+        body=body,
+        body_file=body_file,
+        max_rounds=max_rounds,
+        max_retries=max_retries,
+        round_num=round_num,
+        stall_grace_seconds=stall_grace_seconds,
+        jev_threshold=jev_threshold,
+        switch_reviewer=switch_reviewer,
+        completed_grace_seconds=completed_grace_seconds,
+        repair_trigger_markers=repair_trigger_markers,
     )
-    context_cache: dict[int, JevReviewContext] = {}
-    repository = _fetch_repository_slug()
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        initial_data = _get_initial_pr_data(
-            pr_number,
-            executor,
-            timeout,
-            interval,
-            max_retries=max_retries,
-        )
-        _validate_review_selection(
-            initial_data, bot_name, switch_reviewer and post_trigger
-        )
-        if bot_name == "skip":
-            return _record_skip(pr_number, initial_data, repository)
-        initial_snapshot = _build_snapshot(initial_data, bot_name)
-        excluded_ids: set[int | str] = trigger_comment_ids(
-            initial_data.get("issue_comments", [])
-        )
-
-        current_round = _prepare_review_round(
-            pr_number,
-            initial_data,
-            bot_name,
-            round_num,
-            post_trigger,
-            body_file,
-            max_rounds,
-        )
-
-        trigger_id: int | str | None = None
-        if post_trigger:
-            latest_trigger_time, trigger_id, requested_head_sha = (
-                _handle_review_trigger(
-                    pr_number,
-                    bot_name,
-                    initial_data,
-                    initial_snapshot,
-                    excluded_ids,
-                    current_round,
-                    max_rounds,
-                    body,
-                    body_file,
-                    repair_trigger_markers=repair_trigger_markers,
-                )
-            )
-        else:
-            requested_head_sha = None
-            latest_trigger_time = _latest_review_trigger_timestamp(
-                initial_data, bot_name
-            )
-            existing_trigger = _find_existing_trigger_comment(
-                initial_data, bot_name, current_round
-            )
-            if existing_trigger is not None:
-                trigger_id = existing_trigger.get("id")
-                requested_head_sha = parse_head_marker(
-                    existing_trigger.get("body") or ""
-                )
-                # Bot-authored triggers must not acquire their own request as a review.
-                # A trigger comment authored by the target bot itself (e.g. a
-                # hosted environment re-triggering its own review under its
-                # own bot identity) must not be read as the review it is
-                # asking for -- without this, the trigger's own text can
-                # satisfy the round-content gate before any real review
-                # arrives (Codex PR #1114 round 8 finding).
-                if trigger_id is not None:
-                    excluded_ids.add(trigger_id)
-            immediate = _check_immediate_review_result(
-                initial_data,
-                bot_name,
-                latest_trigger_time,
-                current_round,
-                jev_threshold=jev_threshold,
-                pr_number=pr_number,
-                context_cache=context_cache,
-                trigger_id=trigger_id,
-                requested_head_sha=requested_head_sha,
-                repository=repository,
-                exclude_ids=excluded_ids,
-            )
-            if immediate is not None:
-                return immediate
-
-        print(
-            f"Waiting for @{bot_name} activity on PR #{pr_number} (timeout: {timeout}s, interval: {interval}s)..."
-        )
-        round_ = WaitRound(
-            pr_number=pr_number,
-            bot_name=bot_name,
-            round_num=current_round,
-            trigger_id=trigger_id,
-            trigger_time=latest_trigger_time,
-            requested_head_sha=requested_head_sha,
-            repository=repository,
-            excluded_ids=excluded_ids,
-            jev_threshold=jev_threshold,
-            context_cache=context_cache,
-            extract_review=_extract_review_result,
-            fetch_head_sha=_fetch_pr_head_sha,
-        )
-        state = PollState(initial_snapshot, CompletedGrace(completed_grace_seconds))
-        start_time = _monotonic()
-        consecutive_errors = 0
-
-        def ended_context() -> WaitContext:
-            return wait_context(
-                round_,
-                state,
-                elapsed_seconds=_monotonic() - start_time,
-                timeout_seconds=timeout,
-                stall_grace_seconds=stall_grace_seconds,
-                completed_grace_seconds=completed_grace_seconds,
-            )
-
-        while True:
-            try:
-                current_data = _get_pr_data(pr_number, executor=executor)
-                consecutive_errors = 0
-                state.last_data, state.last_poll_ok = current_data, True
-                result = poll_step(
-                    round_,
-                    state,
-                    current_data,
-                    stall_grace_seconds=stall_grace_seconds,
-                    grace_seconds=completed_grace_seconds,
-                    timeout_remaining=timeout - (_monotonic() - start_time),
-                    clock=_monotonic,
-                )
-                if result is not None:
-                    return result
-            except StalledReviewError as e:
-                e.attach(ended_context())
-                raise
-            except Exception as e:
-                consecutive_errors += 1
-                state.last_poll_ok = False
-                print(f"Warning: Error checking PR review data: {e}", file=sys.stderr)
-                if consecutive_errors > max_retries:
-                    raise RuntimeError(
-                        f"Exceeded maximum retries ({max_retries}) during review polling: {e}"
-                    ) from e
-
-            # The deadline is monotonic, so it can be overrun only by the poll in
-            # flight (each gh call is bounded by GH_COMMAND_TIMEOUT_SECONDS).
-            remaining = timeout - (_monotonic() - start_time)
-            if remaining <= 0:
-                break
-            pause = min(interval, remaining)
-            grace_left = state.grace.remaining(_monotonic())
-            _sleep(pause if grace_left is None else min(pause, grace_left))
-
-        if state.grace.active:
-            # A Completed tracker was confirmed by a normal fetch, and no review
-            # content arrived before the overall timeout.
-            return unavailable_result(round_, state, completed_grace_seconds)
-        raise ReviewTimeoutError(
-            f"Timed out waiting for @{bot_name} activity on PR #{pr_number} "
-            f"after {timeout}s.",
-            ended_context(),
-        )
 
 
 def _run_online(args: Any) -> None:

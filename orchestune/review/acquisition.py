@@ -763,3 +763,88 @@ def collect_review_state(
         "reason": "",
         **result,
     }
+
+
+_RESULT_KEYS = (
+    "schema_version",
+    "acquisition_status",
+    "reason",
+    "repository",
+    "pr_number",
+    "reviewer",
+    "round",
+    "trigger_id",
+    "triggered_at",
+    "requested_head_sha",
+    "reviewed_head_sha",
+    "current_head_sha",
+    "review_target_sha",
+    "review_target_sha_source",
+    "review_items",
+    "review_body",
+    "inline_comments",
+    "jev_evaluations",
+    "completeness",
+    "timestamp",
+)
+_AFTER_REASON = ("reason_code", "exit_code")
+_TRAILING_RESULT_KEYS = ("wait_diagnostics",)
+_LIST_RESULT_KEYS = ("review_items", "inline_comments", "jev_evaluations")
+
+
+def reviewed_head_sha(review_items: list[dict[str, Any]]) -> str | None:
+    """The current review commit when every current review names the same one."""
+    shas = {
+        item.get("commit_id")
+        for item in review_items
+        if item.get("kind") == "review"
+        and item.get("provenance") == "current"
+        and item.get("commit_id")
+    }
+    if len(shas) == 1:
+        return next(iter(shas))
+    return None
+
+
+def _result_default(key: str) -> Any:
+    if key == "schema_version":
+        return SCHEMA_VERSION
+    if key == "acquisition_status":
+        return ACQUISITION_UNAVAILABLE
+    if key == "reason" or key == "review_body":
+        return ""
+    if key == "review_target_sha_source":
+        return "unknown"
+    if key in _LIST_RESULT_KEYS:
+        return []
+    return None
+
+
+def review_result_record(**fields: Any) -> dict[str, Any]:
+    """Canonical wait result: every key in schema order, unset ones at defaults.
+
+    `completeness` is required. `reason_code` and `exit_code` are inserted after
+    `reason` only when supplied. `wait_diagnostics` is the only trailing key.
+    """
+    allowed = set(_RESULT_KEYS) | set(_AFTER_REASON) | set(_TRAILING_RESULT_KEYS)
+    unknown = sorted(set(fields) - allowed)
+    if unknown:
+        raise ValueError(f"unknown review result field: {', '.join(unknown)}")
+    if "completeness" not in fields:
+        raise ValueError("completeness is required")
+    record = {
+        key: fields[key] if key in fields else _result_default(key)
+        for key in _RESULT_KEYS
+    }
+    extras = [key for key in _AFTER_REASON if key in fields]
+    if extras:
+        ordered: dict[str, Any] = {}
+        for key, value in record.items():
+            ordered[key] = value
+            if key == "reason":
+                for extra in extras:
+                    ordered[extra] = fields[extra]
+        record = ordered
+    if "wait_diagnostics" in fields:
+        record["wait_diagnostics"] = fields["wait_diagnostics"]
+    return record
