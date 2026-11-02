@@ -51,6 +51,27 @@ def _validate_blocked_dependency(
     )
 
 
+def _resume_blocked_by_label(
+    issue_number: int,
+    label_set: set[str],
+    view: Any,
+    default_base: str,
+) -> ClaimFailure | None:
+    if StatusLabel.DONE in label_set or StatusLabel.NOT_NEEDED in label_set:
+        return ClaimFailure(
+            reason=ClaimFailureReason.CLAIM_CONFLICT,
+            message=f"Issue #{issue_number} is already marked done/not-needed.",
+        )
+    if StatusLabel.EXTERNAL_LOCK in label_set:
+        return ClaimFailure(
+            reason=ClaimFailureReason.EXTERNAL_LOCK_CONFLICT,
+            message=f"Issue #{issue_number} is locked against external branches/PRs.",
+        )
+    if StatusLabel.BLOCKED in label_set:
+        return _validate_blocked_dependency(issue_number, view, default_base)
+    return None
+
+
 def _validate_issue_for_resume(
     issue: IssueRecord,
     view: Any = None,
@@ -89,19 +110,7 @@ def _validate_issue_for_resume(
             reason=ClaimFailureReason.TERMINAL_ESCALATION,
             message=f"Issue #{issue.number} has terminal escalation: {', '.join(terminal)}.",
         )
-    if StatusLabel.DONE in label_set or StatusLabel.NOT_NEEDED in label_set:
-        return ClaimFailure(
-            reason=ClaimFailureReason.CLAIM_CONFLICT,
-            message=f"Issue #{issue.number} is already marked done/not-needed.",
-        )
-    if StatusLabel.EXTERNAL_LOCK in label_set:
-        return ClaimFailure(
-            reason=ClaimFailureReason.EXTERNAL_LOCK_CONFLICT,
-            message=f"Issue #{issue.number} is locked against external branches/PRs.",
-        )
-    if StatusLabel.BLOCKED in label_set:
-        return _validate_blocked_dependency(issue.number, view, default_base)
-    return None
+    return _resume_blocked_by_label(issue.number, label_set, view, default_base)
 
 
 def _fetch_and_validate_resume_issue(

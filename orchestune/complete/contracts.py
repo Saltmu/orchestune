@@ -639,55 +639,53 @@ class CompleteResult:
             )
         _validate_record_reason(rec)
 
-    def _validate_stage_boundary(self) -> None:
-        if self.success:
-            if self.preview:
-                if self.stage != CompleteStage.PREFLIGHT_VALIDATING:
-                    raise ValueError(
-                        "Preview CompleteResult requires CompleteStage.PREFLIGHT_VALIDATING, "
-                        f"got: {self.stage!r}"
-                    )
-                if self.handed_off_to_gc:
-                    raise ValueError("Preview CompleteResult cannot claim GC handoff")
-            elif self.stage not in {
-                CompleteStage.HANDED_OFF_TO_GC,
-                CompleteStage.HANDED_OFF,
-            }:
+    def _validate_success_boundary(self) -> None:
+        if self.preview:
+            if self.stage != CompleteStage.PREFLIGHT_VALIDATING:
                 raise ValueError(
-                    "Successful CompleteResult requires CompleteStage.HANDED_OFF_TO_GC, "
+                    "Preview CompleteResult requires CompleteStage.PREFLIGHT_VALIDATING, "
                     f"got: {self.stage!r}"
                 )
-            elif not self.handed_off_to_gc:
-                raise ValueError(
-                    "Successful CompleteResult requires handed_off_to_gc=True"
-                )
-            if self.failure is not None:
-                raise ValueError(
-                    "Successful CompleteResult cannot have a failure object"
-                )
-        else:
-            if self.preview:
-                raise ValueError("Failed CompleteResult cannot be a preview")
-            if self.stage in {CompleteStage.HANDED_OFF_TO_GC, CompleteStage.HANDED_OFF}:
-                raise ValueError(
-                    f"Failed CompleteResult cannot be at CompleteStage.{self.stage.name}"
-                )
             if self.handed_off_to_gc:
-                raise ValueError(
-                    "Failed CompleteResult cannot have handed_off_to_gc=True"
-                )
-            if self.failure is None:
-                raise ValueError(
-                    "Failed CompleteResult requires a CompleteFailure object"
-                )
-            if (
-                self.failure.issue_number is not None
-                and self.failure.issue_number != self.issue_number
-            ):
-                raise ValueError(
-                    f"failure.issue_number ({self.failure.issue_number}) does not match "
-                    f"CompleteResult.issue_number ({self.issue_number})"
-                )
+                raise ValueError("Preview CompleteResult cannot claim GC handoff")
+        elif self.stage not in {
+            CompleteStage.HANDED_OFF_TO_GC,
+            CompleteStage.HANDED_OFF,
+        }:
+            raise ValueError(
+                "Successful CompleteResult requires CompleteStage.HANDED_OFF_TO_GC, "
+                f"got: {self.stage!r}"
+            )
+        elif not self.handed_off_to_gc:
+            raise ValueError("Successful CompleteResult requires handed_off_to_gc=True")
+        if self.failure is not None:
+            raise ValueError("Successful CompleteResult cannot have a failure object")
+
+    def _validate_failure_boundary(self) -> None:
+        if self.preview:
+            raise ValueError("Failed CompleteResult cannot be a preview")
+        if self.stage in {CompleteStage.HANDED_OFF_TO_GC, CompleteStage.HANDED_OFF}:
+            raise ValueError(
+                f"Failed CompleteResult cannot be at CompleteStage.{self.stage.name}"
+            )
+        if self.handed_off_to_gc:
+            raise ValueError("Failed CompleteResult cannot have handed_off_to_gc=True")
+        if self.failure is None:
+            raise ValueError("Failed CompleteResult requires a CompleteFailure object")
+        if (
+            self.failure.issue_number is not None
+            and self.failure.issue_number != self.issue_number
+        ):
+            raise ValueError(
+                f"failure.issue_number ({self.failure.issue_number}) does not match "
+                f"CompleteResult.issue_number ({self.issue_number})"
+            )
+
+    def _validate_stage_boundary(self) -> None:
+        if self.success:
+            self._validate_success_boundary()
+        else:
+            self._validate_failure_boundary()
 
     @classmethod
     def success_result(

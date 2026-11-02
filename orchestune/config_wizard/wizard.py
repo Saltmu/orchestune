@@ -170,6 +170,33 @@ def _handle_preview_and_save(
     return WizardResult(status="cancelled")
 
 
+def _wizard_action_loop(
+    doc: ConfigDocument,
+    prompt: PromptPort,
+    mode: Literal["init", "edit"],
+) -> WizardResult:
+    while True:
+        prompt.display_message("\n--- メインメニュー ---")
+        action = prompt.prompt_choice(
+            "次の操作を選択してください:",
+            choices=["preview", "advanced", "basic", "cancel"],
+            default="preview",
+        )
+        if action in ("cancel", None):
+            prompt.display_message("取消。設定は保存していません")
+            return WizardResult(status="cancelled")
+
+        if action == "basic":
+            prompt.display_message("\n--- 基本設定の再編集 ---")
+            _run_basic_questions(doc, prompt)
+        elif action == "advanced":
+            _run_advanced_menu(doc, prompt)
+        elif action == "preview":
+            res = _handle_preview_and_save(doc, prompt, mode)
+            if res is not None:
+                return res
+
+
 def run_config_wizard(
     mode: Literal["init", "edit"],
     project_dir: Path,
@@ -203,28 +230,7 @@ def run_config_wizard(
 
         prompt.display_message("\n--- 基本設定 ---")
         _run_basic_questions(doc, prompt)
-
-        while True:
-            prompt.display_message("\n--- メインメニュー ---")
-            action = prompt.prompt_choice(
-                "次の操作を選択してください:",
-                choices=["preview", "advanced", "basic", "cancel"],
-                default="preview",
-            )
-            if action in ("cancel", None):
-                prompt.display_message("取消。設定は保存していません")
-                return WizardResult(status="cancelled")
-
-            if action == "basic":
-                prompt.display_message("\n--- 基本設定の再編集 ---")
-                _run_basic_questions(doc, prompt)
-            elif action == "advanced":
-                _run_advanced_menu(doc, prompt)
-            elif action == "preview":
-                res = _handle_preview_and_save(doc, prompt, mode)
-                if res is not None:
-                    return res
-
+        return _wizard_action_loop(doc, prompt, mode)
     except (KeyboardInterrupt, EOFError):
         prompt.display_message("\n取消。設定は保存していません")
         return WizardResult(status="cancelled")

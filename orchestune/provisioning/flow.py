@@ -379,8 +379,8 @@ def _preflight_parent_fit(
     )
 
 
-def _apply_provisioning(
-    forge: IssueForge | None,
+def _provision_after_preflight(
+    resolved_forge: IssueForge,
     metadata: PlanMetadata,
     plan_path: str | Path,
     validated_parent: int | None,
@@ -389,13 +389,6 @@ def _apply_provisioning(
     resolved_repo_root: Path,
     on_progress: ProvisionProgressHook | None = None,
 ) -> ProvisionResult:
-    resolved_forge = _resolve_provision_forge(forge, on_progress)
-    _notify(on_progress, ProvisionProgress("parent"))
-    if preflight_failed := _preflight_parent_fit(
-        resolved_forge, metadata, plan_path, validated_parent
-    ):
-        return preflight_failed
-
     parent_issue_number, _ = _resolve_parent_issue(
         resolved_forge,
         metadata,
@@ -429,6 +422,34 @@ def _apply_provisioning(
         reused,
         degraded_subtask_ids=tuple(degraded_subtask_ids),
         plan_synced=plan_synced,
+    )
+
+
+def _apply_provisioning(
+    forge: IssueForge | None,
+    metadata: PlanMetadata,
+    plan_path: str | Path,
+    validated_parent: int | None,
+    dag: DagResult,
+    template: str,
+    resolved_repo_root: Path,
+    on_progress: ProvisionProgressHook | None = None,
+) -> ProvisionResult:
+    resolved_forge = _resolve_provision_forge(forge, on_progress)
+    _notify(on_progress, ProvisionProgress("parent"))
+    if preflight_failed := _preflight_parent_fit(
+        resolved_forge, metadata, plan_path, validated_parent
+    ):
+        return preflight_failed
+    return _provision_after_preflight(
+        resolved_forge,
+        metadata,
+        plan_path,
+        validated_parent,
+        dag,
+        template,
+        resolved_repo_root,
+        on_progress,
     )
 
 

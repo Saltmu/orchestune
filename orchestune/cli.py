@@ -50,15 +50,21 @@ def _dispatch_command(cmd: str) -> None:
         from orchestune.provisioning.cli import main as provision_main
 
         provision_main()
-    elif cmd == "replan":
+    elif not _dispatch_task_command(cmd) and not _dispatch_tool_command(cmd):
+        print(f"Unknown command: {cmd}")
+        sys.exit(1)
+
+
+def _dispatch_task_command(cmd: str) -> bool:
+    if cmd == "replan":
         from orchestune.replan.cli import main as replan_main
 
         sys.exit(replan_main())
-    elif cmd == "remediate":
+    if cmd == "remediate":
         from orchestune.remediation.cli import main as remediate_main
 
         sys.exit(remediate_main())
-    elif cmd == "claim":
+    if cmd == "claim":
         from orchestune.claim.cli import main as claim_main
 
         if any(
@@ -70,17 +76,15 @@ def _dispatch_command(cmd: str) -> None:
 
             sys.exit(claim_main(observe_external=read_runtime))
         sys.exit(claim_main())
-    elif cmd == "complete":
+    if cmd == "complete":
         from orchestune.complete.cli import main as complete_main
 
         sys.exit(complete_main())
-    elif cmd == "recover":
+    if cmd == "recover":
         from orchestune.recovery.cli import main as recover_main
 
         sys.exit(recover_main())
-    elif not _dispatch_tool_command(cmd):
-        print(f"Unknown command: {cmd}")
-        sys.exit(1)
+    return False
 
 
 def _dispatch_tool_command(cmd: str) -> bool:

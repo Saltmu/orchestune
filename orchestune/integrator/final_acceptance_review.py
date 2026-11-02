@@ -65,6 +65,59 @@ def _fence_open(text: str) -> tuple[str, int] | None:
     return None
 
 
+def _close_fence(
+    stripped: str,
+    indent: int,
+    fence: tuple[str, int],
+    container: int,
+) -> tuple[str, int] | None:
+    close = _FENCE.fullmatch(stripped)
+    if (
+        close
+        and indent <= container + 3
+        and close[1][0] == fence[0]
+        and len(close[1]) >= fence[1]
+        and not close[2].strip()
+    ):
+        return None
+    return fence
+
+
+def _update_heading_container(
+    line: str,
+    stripped: str,
+    indent: int,
+    fence: tuple[str, int] | None,
+    container: int,
+    list_indent: int,
+) -> tuple[tuple[str, int] | None, int, int, bool]:
+    if fence and container and stripped and indent < container:
+        fence = None
+    if fence:
+        fence = _close_fence(stripped, indent, fence, container)
+        return fence, container, list_indent, True
+    if stripped.startswith(">"):
+        return fence, container, list_indent, True
+    if stripped and indent < list_indent:
+        list_indent = 0
+    if re.fullmatch(r"(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}", stripped):
+        return fence, container, list_indent, True
+    item = _LIST.match(line)
+    if item:
+        list_indent = item.end()
+        fence = _fence_open(line[item.end() :])
+        return fence, list_indent, list_indent, True
+    if list_indent and indent >= list_indent:
+        fence = _fence_open(stripped)
+        return fence, list_indent, list_indent, True
+    if indent >= 4:
+        return fence, container, list_indent, True
+    fence = _fence_open(stripped)
+    if fence:
+        return fence, 0, list_indent, True
+    return fence, 0, list_indent, False
+
+
 def _heading_positions(lines: Sequence[str]) -> Iterator[tuple[int, int, str]]:
     """Top-level ATX headings, excluding code and list/quote containers."""
     fence: tuple[str, int] | None = None
@@ -74,41 +127,10 @@ def _heading_positions(lines: Sequence[str]) -> Iterator[tuple[int, int, str]]:
         line = raw.expandtabs(4)
         stripped = line.lstrip(" ")
         indent = len(line) - len(stripped)
-        if fence and container and stripped and indent < container:
-            fence = None
-        if fence:
-            close = _FENCE.fullmatch(stripped)
-            if (
-                close
-                and indent <= container + 3
-                and close[1][0] == fence[0]
-                and len(close[1]) >= fence[1]
-                and not close[2].strip()
-            ):
-                fence = None
-            continue
-        if stripped.startswith(">"):
-            continue
-        if stripped and indent < list_indent:
-            list_indent = 0
-        if re.fullmatch(r"(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}", stripped):
-            continue
-        item = _LIST.match(line)
-        if item:
-            list_indent = item.end()
-            inner = line[item.end() :]
-            fence = _fence_open(inner)
-            container = list_indent
-            continue
-        if list_indent and indent >= list_indent:
-            fence = _fence_open(stripped)
-            container = list_indent
-            continue
-        if indent >= 4:
-            continue
-        fence = _fence_open(stripped)
-        container = 0
-        if fence:
+        fence, container, list_indent, skip = _update_heading_container(
+            line, stripped, indent, fence, container, list_indent
+        )
+        if skip:
             continue
         match = _HEADING.match(line)
         if match:

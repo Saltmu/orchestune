@@ -195,11 +195,7 @@ def _print_preview_plain(result: ProvisionResult, output: CliOutput) -> None:
         _say(output, preview.body, multiline=True)
 
 
-def _print_result_plain(result: ProvisionResult, output: CliOutput) -> None:
-    if not result.applied:
-        _print_preview_plain(result, output)
-        return
-    _say(output, f"Parent issue: #{result.parent_issue_number}")
+def _print_provision_ids(result: ProvisionResult, output: CliOutput) -> None:
     _say(output, f"Created: {len(result.created)}")
     for subtask_id, number in result.created.items():
         _say(output, f"  + {subtask_id} -> #{number}")
@@ -207,6 +203,9 @@ def _print_result_plain(result: ProvisionResult, output: CliOutput) -> None:
     for subtask_id, number in result.reused.items():
         _say(output, f"  = {subtask_id} -> #{number}")
     _say(output)
+
+
+def _print_degraded_subtasks(result: ProvisionResult, output: CliOutput) -> None:
     if result.degraded_subtask_ids:
         _say(
             output,
@@ -220,6 +219,15 @@ def _print_result_plain(result: ProvisionResult, output: CliOutput) -> None:
             output,
             "Operating mode: full (native sub-issue/blocked_by relationships linked)",
         )
+
+
+def _print_result_plain(result: ProvisionResult, output: CliOutput) -> None:
+    if not result.applied:
+        _print_preview_plain(result, output)
+        return
+    _say(output, f"Parent issue: #{result.parent_issue_number}")
+    _print_provision_ids(result, output)
+    _print_degraded_subtasks(result, output)
     if result.parent_only_subtask_ids:
         _say(output)
         _say(

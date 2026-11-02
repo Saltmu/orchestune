@@ -332,13 +332,55 @@ class AttemptCleaner:
             steps.append(STEP_DELETE)
         return steps, kept
 
+    def _apply_cleanup_steps(
+        self,
+        target: _Target,
+        steps: list[str],
+        refs: dict[str, str] | None,
+        successor: OpenAttempt | None,
+        kept: str,
+    ) -> tuple[bool, AttemptCleanupReport | None, str, dict[str, str] | None, bool]:
+        state = target.state
+        was_open = target.pr.state.upper() == "OPEN"
+        try:
+            if steps:
+                if not self._settled(state, target.pr.number):
+                    raise _Hold("pending", "the old fix operation may still be running")
+                self._acquire(target)
+                steps, kept, refs = self._replan(target, successor)
+                was_open = target.pr.state.upper() == "OPEN"
+                if not steps and not kept:
+                    return True, None, kept, refs, was_open
+            self._carry_out(target, steps, refs, successor)
+            return False, None, kept, refs, was_open
+        except _Hold as hold:
+            return (
+                True,
+                self._report(target, hold.status, hold.detail),
+                kept,
+                refs,
+                was_open,
+            )
+        except ForgeAuthError:
+            raise
+        except Exception as error:  # noqa: BLE001 - reported, retried next cycle
+            return (
+                True,
+                self._report(target, "failed", f"{type(error).__name__}: {error}"),
+                kept,
+                refs,
+                was_open,
+            )
+        finally:
+            self._release(target)
+
     def _clean(
         self,
         target: _Target,
         refs: dict[str, str] | None,
         successor: OpenAttempt | None,
     ) -> AttemptCleanupReport | None:
-        pr, state = target.pr, target.state
+        pr = target.pr
         if pr.state.upper() == "MERGED" or pr.merged_at:
             return self._report(
                 target, "blocked", "the PR was merged; no destructive cleanup"
@@ -349,25 +391,11 @@ class AttemptCleaner:
             return None
         if not self._apply:
             return self._report(target, "planned", kept, done=tuple(steps))
-        was_open = pr.state.upper() == "OPEN"
-        try:
-            if steps:
-                if not self._settled(state, pr.number):
-                    raise _Hold("pending", "the old fix operation may still be running")
-                self._acquire(target)
-                steps, kept, refs = self._replan(target, successor)
-                was_open = target.pr.state.upper() == "OPEN"
-                if not steps and not kept:
-                    return None  # another cycle finished while this one waited
-            self._carry_out(target, steps, refs, successor)
-        except _Hold as hold:
-            return self._report(target, hold.status, hold.detail)
-        except ForgeAuthError:
-            raise
-        except Exception as error:  # noqa: BLE001 - reported, retried next cycle
-            return self._report(target, "failed", f"{type(error).__name__}: {error}")
-        finally:
-            self._release(target)
+        finished, report, kept, refs, was_open = self._apply_cleanup_steps(
+            target, steps, refs, successor, kept
+        )
+        if finished:
+            return report
         if kept:
             return self._report(target, "blocked", kept)
         if refs is None and was_open:

@@ -95,13 +95,24 @@ def diagnose_existing_document(doc_data: dict[str, Any]) -> list[str]:
     return diagnostics
 
 
-def validate_candidate_document(doc_str: str) -> tuple[bool, list[str]]:
-    """Validate full candidate TOML string against all existing schema validators."""
-    try:
-        data = tomllib.loads(doc_str)
-    except Exception as exc:
-        return False, [f"TOML syntax error: {exc}"]
+def _collect_dag_section_errors(data: dict[str, Any], errors: list[str]) -> None:
+    if any(k in data for k in ("dag_similarity_threshold", "dag-similarity-threshold")):
+        try:
+            extract_dag_similarity_threshold(data)
+        except ConfigError as exc:
+            if str(exc) not in errors:
+                errors.append(str(exc))
 
+    if any(k in data for k in ("dag_ignore_patterns", "dag-ignore-patterns")):
+        try:
+            patterns = extract_dag_ignore_patterns(data)
+            compile_extra_ignore_patterns(patterns)
+        except ConfigError as exc:
+            if str(exc) not in errors:
+                errors.append(str(exc))
+
+
+def _collect_candidate_section_errors(data: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     try:
         validate_toml_config(data)
@@ -127,19 +138,16 @@ def validate_candidate_document(doc_str: str) -> tuple[bool, list[str]]:
         except Exception as exc:
             errors.append(f"Profile error: {exc}")
 
-    if any(k in data for k in ("dag_similarity_threshold", "dag-similarity-threshold")):
-        try:
-            extract_dag_similarity_threshold(data)
-        except ConfigError as exc:
-            if str(exc) not in errors:
-                errors.append(str(exc))
+    _collect_dag_section_errors(data, errors)
+    return errors
 
-    if any(k in data for k in ("dag_ignore_patterns", "dag-ignore-patterns")):
-        try:
-            patterns = extract_dag_ignore_patterns(data)
-            compile_extra_ignore_patterns(patterns)
-        except ConfigError as exc:
-            if str(exc) not in errors:
-                errors.append(str(exc))
 
+def validate_candidate_document(doc_str: str) -> tuple[bool, list[str]]:
+    """Validate full candidate TOML string against all existing schema validators."""
+    try:
+        data = tomllib.loads(doc_str)
+    except Exception as exc:
+        return False, [f"TOML syntax error: {exc}"]
+
+    errors = _collect_candidate_section_errors(data)
     return len(errors) == 0, errors

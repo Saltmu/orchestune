@@ -169,6 +169,50 @@ def policy_candidates(state: RunState) -> list[CompletionJournalRecord]:
     return records
 
 
+def _reclaimable_record(
+    receipt: Any,
+    state: RunState,
+    repository_id: str,
+) -> Any | None:
+    if isinstance(receipt, InvalidLedgerRecord):
+        return None
+    record = receipt.record
+    active = state.active_worktrees.get(str(record.issue_number))
+    if record.stage is not CompleteStage.HANDED_OFF:
+        return None
+    if record.repository_id != repository_id or (
+        active and active.claim.claim_id == record.generation_id
+    ):
+        return None
+    journal = state.completion_journal.get(record.journal_key)
+    if (
+        journal != receipt.record
+        or (record.label_evidence or {}).get("status") != "confirmed"
+    ):
+        return None
+    return record
+
+
+def _unlink_owner_token(record: Any, state_path: Path) -> None:
+    context = (record.prepublication_policy_evidence or {}).get("context", {})
+    unclaimed = context.get("unclaimed") is True
+    directory = (
+        state_path.parent
+        / ".orchestune"
+        / ("completion-tokens" if unclaimed else "claim-tokens")
+    )
+    identifier = record.completion_id if unclaimed else record.generation_id
+    token_path = token_record_path(directory, identifier)
+    if not token_path.exists() and not token_path.is_symlink():
+        return
+    token = (
+        read_owner_token(directory, identifier) if not token_path.is_symlink() else None
+    )
+    if token is None or owner_token_digest(token) != record.owner_token_digest:
+        raise ValueError("owner_token_mismatch")
+    token_path.unlink()
+
+
 def reclaim_completed_tokens(
     state: RunState, state_path: Path, repository_id: str
 ) -> list[TokenHoldCompletion]:
@@ -176,42 +220,11 @@ def reclaim_completed_tokens(
     assert_run_state_lock_held(state_path.with_suffix(".lock"))
     events = []
     for receipt in state.completion_replay_receipts.values():
-        if isinstance(receipt, InvalidLedgerRecord):
+        record = _reclaimable_record(receipt, state, repository_id)
+        if record is None:
             continue
-        record = receipt.record
-        active = state.active_worktrees.get(str(record.issue_number))
-        if record.stage is not CompleteStage.HANDED_OFF:
-            continue
-        if record.repository_id != repository_id or (
-            active and active.claim.claim_id == record.generation_id
-        ):
-            continue
-        journal = state.completion_journal.get(record.journal_key)
-        if (
-            journal != receipt.record
-            or (record.label_evidence or {}).get("status") != "confirmed"
-        ):
-            continue
-        context = (record.prepublication_policy_evidence or {}).get("context", {})
-        unclaimed = context.get("unclaimed") is True
-        directory = (
-            state_path.parent
-            / ".orchestune"
-            / ("completion-tokens" if unclaimed else "claim-tokens")
-        )
-        identifier = record.completion_id if unclaimed else record.generation_id
         try:
-            token_path = token_record_path(directory, identifier)
-            if not token_path.exists() and not token_path.is_symlink():
-                continue
-            token = (
-                read_owner_token(directory, identifier)
-                if not token_path.is_symlink()
-                else None
-            )
-            if token is None or owner_token_digest(token) != record.owner_token_digest:
-                raise ValueError("owner_token_mismatch")
-            token_path.unlink()
+            _unlink_owner_token(record, state_path)
         except (OSError, ValueError) as error:
             events.append(
                 TokenHoldCompletion(

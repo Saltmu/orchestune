@@ -129,19 +129,10 @@ def _pairwise(ids: list[str]) -> list[tuple[str, str]]:
     ]
 
 
-def build_shared_contract_conflicts(
+def _explicit_contract_conflicts(
     subtasks: list[SubTask],
-    ignore_patterns: Iterable[re.Pattern[str]] = (),
-) -> list[ConflictEdge]:
-    """Return symmetric writer conflicts for declared and inferred contracts.
-
-    Unlike warning generation below, these constraints are retained even when
-    an explicit dependency also orders the pair. Precedence answers *when* a
-    task becomes ready; this graph independently records whether the two tasks
-    may run at the same time.
-    """
-    ignore_patterns = tuple(ignore_patterns)
-    conflicts: dict[tuple[str, str], ConflictEdge] = {}
+    conflicts: dict[tuple[str, str], ConflictEdge],
+) -> None:
     explicit_groups: dict[str, list[str]] = {}
     for subtask in subtasks:
         if subtask.shared_contract and is_contract_writer(subtask):
@@ -156,6 +147,12 @@ def build_shared_contract_conflicts(
                 resources=(f"shared_contract:{contract_id}",),
             )
 
+
+def _heuristic_contract_conflicts(
+    subtasks: list[SubTask],
+    ignore_patterns: tuple[re.Pattern[str], ...],
+    conflicts: dict[tuple[str, str], ConflictEdge],
+) -> None:
     heuristic_groups: dict[tuple[str, str], list[str]] = {}
     for subtask in subtasks:
         seen: set[tuple[str, str]] = set()
@@ -181,6 +178,22 @@ def build_shared_contract_conflicts(
                 resources=(f"shared_contract_hotspot:{category}:{scope or '.'}",),
             )
 
+
+def build_shared_contract_conflicts(
+    subtasks: list[SubTask],
+    ignore_patterns: Iterable[re.Pattern[str]] = (),
+) -> list[ConflictEdge]:
+    """Return symmetric writer conflicts for declared and inferred contracts.
+
+    Unlike warning generation below, these constraints are retained even when
+    an explicit dependency also orders the pair. Precedence answers *when* a
+    task becomes ready; this graph independently records whether the two tasks
+    may run at the same time.
+    """
+    patterns = tuple(ignore_patterns)
+    conflicts: dict[tuple[str, str], ConflictEdge] = {}
+    _explicit_contract_conflicts(subtasks, conflicts)
+    _heuristic_contract_conflicts(subtasks, patterns, conflicts)
     return list(conflicts.values())
 
 

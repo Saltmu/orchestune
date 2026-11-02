@@ -343,6 +343,30 @@ def _observe_forge(context: WorkflowContext, forge: WorkflowForge) -> None:
         context.pr_body = context.pr.body
 
 
+def _read_pr_context(
+    context: WorkflowContext,
+    snapshot: Path | None,
+    forge: WorkflowForge | None,
+    now: datetime | None,
+) -> None:
+    try:
+        if context.state.get("backend") == "mcp":
+            if snapshot is None:
+                raise ValueError("MCP backend requires --snapshot PATH")
+            forge = SnapshotForge(
+                read_object(snapshot),
+                issue=context.issue_number,
+                pr=context.pr_number,
+                now=now or datetime.now(UTC),
+            )
+        elif snapshot is not None:
+            raise ValueError("--snapshot requires backend=mcp in the explicit state")
+        context.forge = forge or GitHubForge(timeout_seconds=30)
+        _observe_forge(context, context.forge)
+    except Exception as error:
+        context.errors["forge"] = str(error)
+
+
 def _read_context(
     *,
     issue_number: int,
@@ -372,22 +396,7 @@ def _read_context(
         _observe_local(context)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         context.errors["local"] = str(error)
-    try:
-        if context.state.get("backend") == "mcp":
-            if snapshot is None:
-                raise ValueError("MCP backend requires --snapshot PATH")
-            forge = SnapshotForge(
-                read_object(snapshot),
-                issue=issue_number,
-                pr=pr_number,
-                now=now or datetime.now(UTC),
-            )
-        elif snapshot is not None:
-            raise ValueError("--snapshot requires backend=mcp in the explicit state")
-        context.forge = forge or GitHubForge(timeout_seconds=30)
-        _observe_forge(context, context.forge)
-    except Exception as error:
-        context.errors["forge"] = str(error)
+    _read_pr_context(context, snapshot, forge, now)
     if pr_body is not None:
         try:
             context.pr_body = pr_body.read_text(encoding="utf-8")

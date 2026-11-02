@@ -581,6 +581,43 @@ def _held_this_cycle(events: Sequence[CompletionEvent], issue: int) -> bool:
     )
 
 
+def _usage_limit_event(
+    command: RepairCommand,
+    run_state: RunState,
+    tasks_by_issue: Mapping[int, TaskMetadata],
+    config: DispatcherConfig,
+    open_prs: Sequence[PrRecord] | None,
+    held_worktree_paths: frozenset[str],
+    now: float,
+    all_events: Sequence[CompletionEvent],
+) -> tuple[CompletionEvent | None, str | None]:
+    if command.subject_id is None:
+        return None, None
+    found = _active_for_subject(run_state, command.subject_id)
+    if found is None:
+        return None, None
+    key, active = found
+    if _held_this_cycle(all_events, active.core.issue_number):
+        return None, "held earlier in this cycle"
+    if (
+        active.core.worktree_path in held_worktree_paths
+        or has_completion_reservation(active)
+        or _is_handoff_ready(active)
+        or _local_pr_completion_status(active, config) != "pending"
+    ):
+        return None, None
+    event = handle_usage_limit_exit(
+        run_state,
+        key,
+        active,
+        tasks_by_issue.get(active.core.issue_number),
+        config,
+        now=now,
+        open_prs=open_prs,
+    )
+    return event, None
+
+
 def handle_usage_limit_reclaim(
     command: RepairCommand,
     run_state: RunState,
@@ -605,28 +642,18 @@ def handle_usage_limit_reclaim(
         or LOCAL_PROCESS_DEAD not in command_finding_codes(command)
     ):
         return None
-    found = _active_for_subject(run_state, command.subject_id)
-    if found is None:
-        return None
-    key, active = found
-    if _held_this_cycle([*prior_events, *events], active.core.issue_number):
-        return _skipped(command, "held earlier in this cycle")
-    if (
-        active.core.worktree_path in held_worktree_paths
-        or has_completion_reservation(active)
-        or _is_handoff_ready(active)
-        or _local_pr_completion_status(active, config) != "pending"
-    ):
-        return None
-    event = handle_usage_limit_exit(
+    event, skip_reason = _usage_limit_event(
+        command,
         run_state,
-        key,
-        active,
-        tasks_by_issue.get(active.core.issue_number),
+        tasks_by_issue,
         config,
-        now=now,
-        open_prs=open_prs,
+        open_prs,
+        held_worktree_paths,
+        now,
+        [*prior_events, *events],
     )
+    if skip_reason is not None:
+        return _skipped(command, skip_reason)
     if event is None:
         return None
     events.append(event)

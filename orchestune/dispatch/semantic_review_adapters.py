@@ -131,6 +131,35 @@ def _fix_provider_error(
     return None
 
 
+def _backend_preflight_error(
+    config: DispatcherConfig,
+    target_name: str,
+    which_fn: Callable[[str], str | None],
+    repository_root: Path,
+    reviewer: str,
+    trigger: str,
+) -> SemanticReviewPreflightResult | None:
+    fix_provider = (
+        target_name
+        if config.semantic_fix_provider == "auto"
+        else config.semantic_fix_provider
+    )
+    provider_error = _fix_provider_error(config, fix_provider, which_fn)
+    if provider_error is not None:
+        return _preflight_error(
+            "fix_provider_unavailable", reviewer, trigger, provider_error
+        )
+    try:
+        claim_error = probe_claim_backend(repository_root)
+    except Exception as error:  # transport failure is not capability evidence
+        return _preflight_error("claim_backend_probe_failed", reviewer, trigger, error)
+    if claim_error is not None:
+        return _preflight_error(
+            "claim_backend_unsupported", reviewer, trigger, claim_error
+        )
+    return None
+
+
 def validate_semantic_review_preflight(
     config: DispatcherConfig,
     *,
@@ -163,24 +192,11 @@ def validate_semantic_review_preflight(
             trigger,
             "dispatch-target cannot correlate a launch by operation id",
         )
-    fix_provider = (
-        target_name
-        if config.semantic_fix_provider == "auto"
-        else config.semantic_fix_provider
+    backend_error = _backend_preflight_error(
+        config, target_name, which_fn, repository_root, reviewer, trigger
     )
-    provider_error = _fix_provider_error(config, fix_provider, which_fn)
-    if provider_error is not None:
-        return _preflight_error(
-            "fix_provider_unavailable", reviewer, trigger, provider_error
-        )
-    try:
-        claim_error = probe_claim_backend(repository_root)
-    except Exception as error:  # transport failure is not capability evidence
-        return _preflight_error("claim_backend_probe_failed", reviewer, trigger, error)
-    if claim_error is not None:
-        return _preflight_error(
-            "claim_backend_unsupported", reviewer, trigger, claim_error
-        )
+    if backend_error is not None:
+        return backend_error
     return SemanticReviewPreflightResult(True, reviewer, trigger)
 
 

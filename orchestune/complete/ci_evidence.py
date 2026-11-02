@@ -365,14 +365,12 @@ def _resolve_ref_tip(root: Path, ref: str) -> str | None:
     return None
 
 
-def _find_active_worktree_base(
+def _candidate_state_paths(
     root: Path,
     request: Any | None = None,
     *,
     state_path: Path | str | None = None,
-    issue_number: int | str | None = None,
-) -> tuple[str | None, str | None]:
-    """Look up (base_ref, base_sha) for root from request, state_path, or run_state.json."""
+) -> list[Path]:
     candidate_paths: list[Path] = []
     if state_path is not None:
         candidate_paths.append(Path(state_path).resolve())
@@ -383,6 +381,32 @@ def _find_active_worktree_base(
         candidate_paths.append(Path(request.state_path).resolve())
     for candidate_dir in [root] + list(root.parents)[:5]:
         candidate_paths.append(candidate_dir / "run_state.json")
+    return candidate_paths
+
+
+def _match_active_worktree(
+    active_trees: dict[str, Any],
+    root: Path,
+    req_issue: str | None,
+) -> tuple[str | None, str | None] | None:
+    for issue_str, entry in active_trees.items():
+        if req_issue and issue_str == req_issue:
+            return entry.get("base_ref"), entry.get("base_sha")
+        wt_path = entry.get("worktree_path")
+        if wt_path and Path(wt_path).resolve() == root.resolve():
+            return entry.get("base_ref"), entry.get("base_sha")
+    return None
+
+
+def _find_active_worktree_base(
+    root: Path,
+    request: Any | None = None,
+    *,
+    state_path: Path | str | None = None,
+    issue_number: int | str | None = None,
+) -> tuple[str | None, str | None]:
+    """Look up (base_ref, base_sha) for root from request, state_path, or run_state.json."""
+    candidate_paths = _candidate_state_paths(root, request, state_path=state_path)
 
     req_issue: str | None = None
     if issue_number is not None:
@@ -398,12 +422,9 @@ def _find_active_worktree_base(
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             active_trees = data.get("active_worktrees", {})
-            for issue_str, entry in active_trees.items():
-                if req_issue and issue_str == req_issue:
-                    return entry.get("base_ref"), entry.get("base_sha")
-                wt_path = entry.get("worktree_path")
-                if wt_path and Path(wt_path).resolve() == root.resolve():
-                    return entry.get("base_ref"), entry.get("base_sha")
+            matched = _match_active_worktree(active_trees, root, req_issue)
+            if matched is not None:
+                return matched
         except (OSError, json.JSONDecodeError):
             pass
     return None, None
