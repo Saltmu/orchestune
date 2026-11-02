@@ -225,6 +225,106 @@ def test_cli_setup_without_flag_defaults_to_false():
     mock_setup_skills.assert_called_once_with(with_workflow_skill=False)
 
 
+def _isolate_setup_home(monkeypatch: pytest.MonkeyPatch, home: object) -> None:
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_cli_setup_help_exits_0_without_calling_setup_skills(
+    tmp_path, monkeypatch, capsys, flag
+):
+    from orchestune.cli import main
+
+    _isolate_setup_home(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.argv", ["orchestune", "setup", flag])
+    with (
+        patch("orchestune.setup_skills.setup_skills", autospec=True) as mock_setup,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 0
+    mock_setup.assert_not_called()
+    output = " ".join(capsys.readouterr().out.split())
+    assert "orchestune setup" in output
+    assert "--with-workflow-skill" in output
+    assert "orchestune skills install" in output
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_setup_help_with_workflow_flag_still_skips_setup_skills(
+    tmp_path, monkeypatch, capsys
+):
+    from orchestune.cli import main
+
+    _isolate_setup_home(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "sys.argv", ["orchestune", "setup", "--help", "--with-workflow-skill"]
+    )
+    with (
+        patch("orchestune.setup_skills.setup_skills", autospec=True) as mock_setup,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 0
+    mock_setup.assert_not_called()
+    assert list(tmp_path.iterdir()) == []
+    output = " ".join(capsys.readouterr().out.split())
+    assert "orchestune skills install" in output
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [["--unknown"], ["extra"], ["--with-workflow-skill=true"]],
+)
+def test_cli_setup_rejects_unparsed_arguments(tmp_path, monkeypatch, extra):
+    from orchestune.cli import main
+
+    _isolate_setup_home(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.argv", ["orchestune", "setup", *extra])
+    with (
+        patch("orchestune.setup_skills.setup_skills", autospec=True) as mock_setup,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 2
+    mock_setup.assert_not_called()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_setup_help_creates_nothing_without_mocking_setup_skills(
+    tmp_path, monkeypatch, capsys
+):
+    from orchestune.cli import main
+
+    _isolate_setup_home(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.argv", ["orchestune", "setup", "--help"])
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 0
+    output = " ".join(capsys.readouterr().out.split())
+    assert "orchestune skills install" in output
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_cli_setup_unknown_option_creates_nothing_without_mocking_setup_skills(
+    tmp_path, monkeypatch
+):
+    from orchestune.cli import main
+
+    _isolate_setup_home(monkeypatch, tmp_path)
+    monkeypatch.setattr("sys.argv", ["orchestune", "setup", "--unknown"])
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 2
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_cli_delegates_to_skills_with_its_exit_code():
     from orchestune.cli import main
 

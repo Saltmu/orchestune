@@ -820,9 +820,6 @@ _DEFAULT_WORDS = {
     "en": {"Applies": "apply", "Preview": "preview"},
 }
 _PREVIEW_APPLY_FLAGS = ("--no-apply", "--apply", "--dry-run")
-# `orchestune setup` does not parse `--help`: it installs skill links under the
-# home directory. Never probe it; it has no preview/apply switch anyway.
-_HELP_UNSAFE_COMMANDS = {"setup"}
 _QUICK_REFERENCE_COMMANDS = {
     "claim",
     "complete",
@@ -871,7 +868,6 @@ def _command_help(
 ) -> str:
     from orchestune.cli import main
 
-    assert argv[0] not in _HELP_UNSAFE_COMMANDS, argv
     monkeypatch.setattr("sys.argv", ["orchestune", *argv, "--help"])
     with pytest.raises(SystemExit) as exit_info:
         main()
@@ -902,8 +898,6 @@ class TestPreviewApplyQuickReference:
 
         documented = {name.split()[0] for name in _quick_reference_rows(lang)}
         for name, _description in COMMANDS:
-            if name in _HELP_UNSAFE_COMMANDS:
-                continue
             help_text = _command_help([name], monkeypatch, capsys)
             if any(flag in help_text for flag in _PREVIEW_APPLY_FLAGS):
                 assert name in documented, f"{lang}: `{name}` is not in the table"

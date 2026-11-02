@@ -1,7 +1,30 @@
+import argparse
 import sys
 
 from orchestune.infra.cli_output import Block, make_output
 from orchestune.version import get_version
+
+
+def _run_setup(argv: list[str]) -> None:
+    parser = argparse.ArgumentParser(
+        prog="orchestune setup",
+        description=(
+            "Link project skills into assistant skill directories. "
+            "Deprecated: use 'orchestune skills install' instead."
+        ),
+    )
+    parser.add_argument(
+        "--with-workflow-skill",
+        action="store_true",
+        help=(
+            "Copy the workflow template skill into the current project "
+            "(not the user skill directory)."
+        ),
+    )
+    args = parser.parse_args(argv)
+    from orchestune.setup_skills import setup_skills
+
+    sys.exit(setup_skills(with_workflow_skill=args.with_workflow_skill))
 
 
 def _dispatch_command(cmd: str) -> None:
@@ -18,10 +41,7 @@ def _dispatch_command(cmd: str) -> None:
 
         monitor_main()
     elif cmd == "setup":
-        from orchestune.setup_skills import setup_skills
-
-        with_workflow_skill = "--with-workflow-skill" in sys.argv[1:]
-        sys.exit(setup_skills(with_workflow_skill=with_workflow_skill))
+        _run_setup(sys.argv[1:])
     elif cmd == "bootstrap":
         from orchestune.bootstrap import main as bootstrap_main
 
