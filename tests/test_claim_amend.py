@@ -730,3 +730,25 @@ def test_amend_conflict_check_keeps_forge_unavailable_for_the_cli() -> None:
         pytest.raises(ForgeGraphQLUnavailableError),
     ):
         _check_conflicts("key", MagicMock(), run_state, MagicMock())
+
+
+def test_post_amend_comment_handles_forge_exceptions_gracefully(capsys):
+    from unittest.mock import MagicMock
+
+    from orchestune.claim.amend import _post_amend_comment
+
+    forge = MagicMock()
+    forge.list_comments.side_effect = RuntimeError("network fail")
+    forge.add_comment.side_effect = RuntimeError("post fail")
+
+    _post_amend_comment(
+        forge=forge,
+        issue_number=100,
+        claim_id="claim-123",
+        added=("foo.py",),
+        amended_footprint=("foo.py",),
+        queued_warnings=(),
+    )
+    captured = capsys.readouterr()
+    assert "Warning: failed to list comments" in captured.err
+    assert "Warning: failed to post footprint amendment comment" in captured.err

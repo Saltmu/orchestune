@@ -268,7 +268,7 @@ def held_claim_next_actions(active: ActiveWorktree) -> tuple[str, ...]:
             )
         else:
             actions.append(
-                "If the task needs files outside its reservation, run: orchestune complete "
+                "If the task needs files outside its reservation (and amendment is unavailable due to claim stage), run: orchestune complete "
                 f"--issue {n} --result blocked --reason footprint-expansion-required"
             )
         return tuple(actions)

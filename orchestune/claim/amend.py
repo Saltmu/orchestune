@@ -273,24 +273,24 @@ def _post_amend_comment(
     exact_marker = (
         f"<!-- orchestune:footprint-amend claim_id={claim_id} added={added_str} -->"
     )
-    claim_marker = f"<!-- orchestune:footprint-amend claim_id={claim_id}"
+    generic_marker = f"<!-- orchestune:footprint-amend claim_id={claim_id} -->"
     try:
         existing_comments = forge.list_comments(issue_number)
-        has_claim_comment = any(
-            claim_marker in c.get("body", "") for c in existing_comments
+        has_generic = any(
+            generic_marker in c.get("body", "") for c in existing_comments
         )
-        if has_claim_comment and not added:
+        if not added and has_generic:
             return
-        for c in existing_comments:
-            body = c.get("body", "")
-            if exact_marker in body:
-                return
-    except Exception:
-        pass
+        if any(exact_marker in c.get("body", "") for c in existing_comments):
+            return
+    except Exception as exc:
+        sys.stderr.write(
+            f"Warning: failed to list comments for footprint amend on #{issue_number}: {exc}\n"
+        )
 
     lines = [
         exact_marker,
-        f"<!-- orchestune:footprint-amend claim_id={claim_id} -->",
+        generic_marker,
         "### Footprint amended",
         "",
         f"- **Claim ID**: `{claim_id}`",
@@ -301,8 +301,10 @@ def _post_amend_comment(
         lines.extend(["", "#### Warnings", *[f"- {w}" for w in queued_warnings]])
     try:
         forge.add_comment(issue_number, "\n".join(lines) + "\n")
-    except Exception:
-        pass
+    except Exception as exc:
+        sys.stderr.write(
+            f"Warning: failed to post footprint amendment comment on #{issue_number}: {exc}\n"
+        )
 
 
 def _validate_add_paths(add_paths: Sequence[str]) -> list[str]:
@@ -345,8 +347,10 @@ def _check_queued_overlaps(
                 warnings.append(
                     f"Overlaps with queued task #{q_issue.number}: {', '.join(overlap)}"
                 )
-    except Exception:
-        pass
+    except Exception as exc:
+        sys.stderr.write(
+            f"Warning: failed to check queued task overlaps on #{issue_number}: {exc}\n"
+        )
     return warnings
 
 
@@ -462,14 +466,17 @@ def amend_claim_footprint(
     """Widen a held file reservation to cover newly needed files.
 
     The footprint only grows: it becomes the union of the held footprint, the
-    Issue footprint, any explicit add_paths, and every file already changed in the worktree.
-    Overlap with another interactive reservation is reported as a warning; overlap with a
-    dispatch reservation and every other conflict reason still rejects it.
+    Issue footprint, any explicit add_paths, and every file already changed in
+    the worktree. Overlap with another interactive reservation is reported as a
+    warning; overlap with an active dispatch reservation and every other conflict
+    reason still rejects it.
     """
     workspace = resolve_claim_workspace(cwd, explicit_state_path=state_path)
     timeout = timeout_seconds
     if timeout is None:
         timeout = 0.0
+        # Best-effort inspection of run_state before lock to set a longer lock
+        # acquisition timeout (600s) for non-interactive claims.
         try:
             if workspace.run_state_path.exists():
                 pre_state = load_run_state(workspace.run_state_path)

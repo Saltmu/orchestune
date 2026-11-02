@@ -44,7 +44,10 @@ def _candidate_conflicts_with_forced_serial_active(
     if set(candidate.footprint) & active_footprint:
         return True
 
-    if not active.launch.forced_serial:
+    if not (
+        active.launch.forced_serial
+        or active.claim.claim_stage == ClaimStage.RESERVED.value
+    ):
         return False
 
     if active_task is None:

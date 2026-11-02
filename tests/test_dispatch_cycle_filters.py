@@ -12,6 +12,7 @@ import pytest
 
 from orchestune.claim.contracts import ClaimStage, ReservationKind
 from orchestune.dag.models import FootprintConflict
+from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import (
     run_dispatch_cycle,
@@ -689,3 +690,39 @@ class TestFilterCandidatesForReservationActives:
         )
 
         assert result == [conflicting_candidate]
+
+    def test_reserved_stage_non_forced_serial_blocks_dependent_candidate_without_footprint_overlap(
+        self,
+    ):
+        reservation_active = _active(
+            issue_number=5,
+            declared_footprint=("src/x.py",),
+            claim_stage=ClaimStage.RESERVED,
+            forced_serial=False,
+            owner_kind="dispatch",
+        )
+        run_state = RunState(active_worktrees={"5": reservation_active})
+        reserved_task = _task(
+            issue_number=5,
+            subtask_id="task-x",
+            footprint=("src/x.py",),
+            depends_on=["task-y"],
+        )
+        dependent_candidate = _task(
+            issue_number=6,
+            subtask_id="task-y",
+            footprint=("src/other.py",),
+        )
+        view = _cycle_context(
+            tasks_by_issue={5: reserved_task, 6: dependent_candidate},
+            dependency_resolution={
+                5: TaskDependencies(resolved=(6,)),
+                6: TaskDependencies(),
+            },
+        )
+
+        result = _filter_candidates_for_forced_serial(
+            [dependent_candidate], run_state, view
+        )
+
+        assert result == []
