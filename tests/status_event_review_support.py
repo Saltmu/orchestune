@@ -142,8 +142,8 @@ class LabeledReviewWorld:
     def post_verdict(self, verdict: str) -> None:
         record = completion_record(load_run_state_readonly(self.path), ISSUE)
         assert record is not None
-        (policy,) = record["downstream_policy_records"].values()
-        operation = policy["metadata"]["operation_id"]
+        (policy,) = record.downstream_policy_records
+        operation = policy.metadata["operation_id"]
         self.forge.add_comment(
             ISSUE, f"<!-- orchestune:policy-review {operation} verdict={verdict} -->"
         )
@@ -161,8 +161,8 @@ class LabeledReviewWorld:
             config=self.config,
         )
         record = completion_record(state, ISSUE)
-        policies = {} if record is None else record["downstream_policy_records"]
-        statuses = {p["status"] for p in policies.values()}
+        policies = () if record is None else record.downstream_policy_records
+        statuses = {policy.status for policy in policies}
         # The dependency guard and the cycle's completion are observed separately.
         assert dependency_completion_blocked(
             state, ISSUE, labels

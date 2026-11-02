@@ -166,12 +166,16 @@ def test_orphan_evidence_rejects_tampered_snapshot_and_ambiguous_generation(pr):
         pid=43210,
     )
     key, receipt = orphan_receipt(old, pr)
-    receipt["active"]["pid"] = "invalid"
+    raw = receipt.to_dict()
+    raw["active"]["pid"] = "invalid"
+    from orchestune.ledger.recovery_receipts import decode_recovery_receipt
+
+    receipt = decode_recovery_receipt(raw)
     state = RunState(recovery_receipts={key: receipt})
     with pytest.raises(ValueError):
         validate_orphan_evidence(state, "repo", 42, pr, lambda _: True)
     key, receipt = orphan_receipt(old, pr)
-    state.recovery_receipts = {key: receipt, "other": dict(receipt)}
+    state.recovery_receipts = {key: receipt, "other": receipt}
     with pytest.raises(ValueError):
         validate_orphan_evidence(state, "repo", 42, pr, lambda _: True)
 

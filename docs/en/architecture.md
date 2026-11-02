@@ -284,6 +284,8 @@ claim or dispatch.
 The responsibilities of each ledger module, the ownership contracts, and the
 boundaries of `targets`, repository configuration, and the consistency status
 kernel are described in [Shared Execution Ledger & Package Boundaries (ledger.md)](architecture/ledger.md).
+`ledger.recovery_receipts` owns the typed operation-specific recovery receipt
+records and their JSON codec.
 For detailed `ActiveWorktree` specifications and lifecycle priority rules, see
 [Stateless CI & Self-Healing State Recovery (state-recovery.md)](architecture/state-recovery.md#active-worktree-lifecycle).
 

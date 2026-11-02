@@ -25,6 +25,10 @@ from orchestune.complete.preflight import evaluate_complete_preflight
 from orchestune.complete.review_evidence import verify_review_evidence
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, parse_task_from_issue
 from orchestune.labels import StatusLabel
+from orchestune.ledger.completion_records import (
+    CompletionReplayReceipt,
+    InvalidLedgerRecord,
+)
 from orchestune.review.judgment import judgment_digest, parse_judgments
 from orchestune.workflow.contracts import (
     GATES,
@@ -528,12 +532,21 @@ def _terminal_records(c: WorkflowContext) -> list[CompletionJournalRecord]:
         *c.ledger.completion_replay_receipts.values(),
     ]
     for value in raw:
-        if (
-            value.get("issue_number") != c.issue_number
-            or value.get("generation_id") != generation
-        ):
+        if isinstance(value, InvalidLedgerRecord):
+            if (
+                value.raw_json.get("issue_number") == c.issue_number
+                and value.raw_json.get("generation_id") == generation
+            ):
+                raise ValueError("terminal completion record is invalid")
             continue
-        record = CompletionJournalRecord.from_dict(value)
+        if isinstance(value, CompletionReplayReceipt):
+            record = value.record
+        elif isinstance(value, CompletionJournalRecord):
+            record = value
+        else:
+            raise ValueError("terminal completion record has an unknown type")
+        if record.issue_number != c.issue_number or record.generation_id != generation:
+            continue
         if record.repository_id != c.repository_identity:
             raise ValueError(
                 "terminal receipt repository conflicts with current repository"

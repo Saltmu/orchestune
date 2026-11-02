@@ -240,9 +240,8 @@ def test_review_pending_holds_dependencies_until_durable_policy_is_applied(
     assert complete_task(request, forge=forge).success
     state = load_run_state_readonly(request.state_path)
     assert dependency_completion_blocked(state, 1110)
-    record = CompletionJournalRecord.from_dict(
-        next(iter(state.completion_journal.values()))
-    )
+    record = next(iter(state.completion_journal.values()))
+    assert isinstance(record, CompletionJournalRecord)
     policy = replace(
         record.downstream_policy_records[0],
         status="applied",
@@ -254,7 +253,7 @@ def test_review_pending_holds_dependencies_until_durable_policy_is_applied(
     assert not dependency_completion_blocked(state, 1110)
     assert (
         state.completion_journal[record.journal_key]
-        == state.completion_replay_receipts[record.receipt_key]
+        == state.completion_replay_receipts[record.receipt_key].record
     )
 
 
@@ -321,23 +320,42 @@ def test_dependency_guard_reloads_reservation_created_after_snapshot(
 
 
 _RESERVATION_IDENTITY = {
+    "schema_version": 1,
     "repository_id": "repo",
     "issue_number": 10,
     "generation_id": "g",
     "completion_id": "c",
-    "owner_token_digest": "d",
-    "request_fingerprint": "f",
+    "owner_token_digest": "d" * 64,
+    "request_fingerprint": "f" * 64,
     "result": "done",
     "target_label": "status:done",
-    "outcome_payload": {},
+    "outcome_payload": {"result": "done", "issue": 10, "pr": 1},
 }
 
 
 def _journaled(stage: str, **extra):
+    from orchestune.ledger.completion_records import (
+        CompletionReservation,
+        decode_completion_journal,
+    )
+
     record = {**_RESERVATION_IDENTITY, "stage": stage, **extra}
+    if stage in {"outcome_posted", "label_confirmed", "handed_off"}:
+        record["posting_evidence"] = {
+            "comment_id": "1",
+            "comment_url": "https://x/1",
+        }
+    if stage in {"label_confirmed", "handed_off"}:
+        record["label_evidence"] = {
+            "status": "confirmed",
+            "target_label": "status:done",
+            "observed_labels": ["status:done"],
+        }
     return RunState(
-        completion_reservations={"repo::10": dict(_RESERVATION_IDENTITY)},
-        completion_journal={"repo::10::g::c": record},
+        completion_reservations={
+            "repo::10": CompletionReservation.from_dict(_RESERVATION_IDENTITY)
+        },
+        completion_journal={"repo::10::g::c": decode_completion_journal(record)},
     )
 
 
@@ -345,6 +363,73 @@ def test_reservation_status_is_legacy_without_a_reservation():
     from orchestune.ledger.completion_reservations import completion_reservation_status
 
     assert completion_reservation_status(RunState(), 10) == "legacy"
+
+
+def test_unattributable_invalid_reservation_fails_closed():
+    from orchestune.ledger.completion_records import decode_completion_reservation
+    from orchestune.ledger.completion_reservations import completion_mutation_blocked
+
+    state = RunState(
+        completion_reservations={
+            "unparseable-key": decode_completion_reservation(
+                {"schema_version": 1, "issue_number": "10"}
+            )
+        }
+    )
+    assert completion_mutation_blocked(state, 10)
+    assert completion_mutation_blocked(state, 99)
+
+    from orchestune.ledger.completion_reservations import _records
+
+    with pytest.raises(
+        ValueError, match="unparseable-key.*repair the run-state ledger"
+    ):
+        _records(state, 10)
+
+
+def test_invalid_reservation_uses_map_issue_as_attribution_fallback():
+    from orchestune.ledger.completion_records import decode_completion_reservation
+    from orchestune.ledger.completion_reservations import completion_mutation_blocked
+
+    state = RunState(
+        completion_reservations={
+            "repo::10": decode_completion_reservation(
+                {"schema_version": 1, "issue_number": "10"}
+            )
+        }
+    )
+    assert completion_mutation_blocked(state, 10)
+    assert not completion_mutation_blocked(state, 99)
+
+
+def test_invalid_reservation_with_conflicting_issue_numbers_blocks_globally():
+    from orchestune.ledger.completion_records import decode_completion_reservation
+    from orchestune.ledger.completion_reservations import completion_mutation_blocked
+
+    state = RunState(
+        completion_reservations={
+            "repo::10": decode_completion_reservation(
+                {"schema_version": 1, "issue_number": 11}
+            )
+        }
+    )
+    assert completion_mutation_blocked(state, 10)
+    assert completion_mutation_blocked(state, 11)
+    assert completion_mutation_blocked(state, 99)
+
+
+def test_completion_record_rejects_non_dict_journal():
+    from orchestune.ledger.completion_records import CompletionReservation
+    from orchestune.ledger.completion_reservations import completion_record
+
+    state = SimpleNamespace(
+        completion_reservations={
+            "repo::10": CompletionReservation.from_dict(_RESERVATION_IDENTITY)
+        },
+        completion_journal=None,
+    )
+    with pytest.raises(ValueError, match="Invalid completion journal"):
+        completion_record(state, 10)
 
 
 @pytest.mark.parametrize("stage", ["reserved", "outcome_posted", "label_confirmed"])
@@ -385,5 +470,11 @@ def test_reservation_status_requires_handoff_evidence_and_receipt():
     state = _journaled("handed_off", **evidence)
     assert completion_reservation_status(state, 10) == "invalid"
     record = state.completion_journal["repo::10::g::c"]
-    state.completion_replay_receipts = {"repo::10::g::c": dict(record)}
+    from orchestune.ledger.completion_records import (
+        CompletionJournalRecord,
+        CompletionReplayReceipt,
+    )
+
+    assert isinstance(record, CompletionJournalRecord)
+    state.completion_replay_receipts["repo::10::g::c"] = CompletionReplayReceipt(record)
     assert completion_reservation_status(state, 10) == "handed_off"

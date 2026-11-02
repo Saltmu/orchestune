@@ -474,17 +474,21 @@ class LivenessWorld:
 
     def set_reservation(self, number: int, present: bool) -> None:
         """An unreleased completion reservation (``orchestune complete`` in flight)."""
+        from orchestune.ledger.completion_records import decode_completion_reservation
+
         state = self._ledger()
         key = f"repo::{number}"
         if present:
-            state.completion_reservations[key] = {
-                "schema_version": 1,
-                "repository_id": "repo",
-                "issue_number": number,
-                "generation_id": f"generation-{number}",
-                "completion_id": f"completion-{number}",
-                "stage": "reserved",
-            }
+            state.completion_reservations[key] = decode_completion_reservation(
+                {
+                    "schema_version": 1,
+                    "repository_id": "repo",
+                    "issue_number": number,
+                    "generation_id": f"generation-{number}",
+                    "completion_id": f"completion-{number}",
+                    "stage": "reserved",
+                }
+            )
         else:
             state.completion_reservations.pop(key, None)
         self._save_ledger(state)
@@ -509,9 +513,15 @@ class LivenessWorld:
     # ---- oracle ----------------------------------------------------------------
 
     def oracle(self) -> OracleView:
+        from orchestune.ledger.completion_records import InvalidLedgerRecord
+
         ledger = self._ledger()
         reserved = frozenset(
-            int(record["issue_number"])
+            int(
+                record.raw_json["issue_number"]
+                if isinstance(record, InvalidLedgerRecord)
+                else record.issue_number
+            )
             for record in ledger.completion_reservations.values()
         )
         valid: set[int] = set()

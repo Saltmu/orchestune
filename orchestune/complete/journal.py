@@ -38,6 +38,10 @@ from orchestune.ledger.active_records import (
     ActiveCompletionJournal,
     ActiveWorktree,
 )
+from orchestune.ledger.completion_records import (
+    InvalidLedgerRecord,
+    journal_key_for,
+)
 from orchestune.ledger.run_state import load_run_state, save_run_state
 
 
@@ -317,7 +321,7 @@ def completion_journal_lock(
         cm.__exit__(None, None, None)
 
 
-def _invalid_completion_state(message: str, error: Exception) -> CompletionJournalError:
+def _invalid_completion_state(message: str) -> CompletionJournalError:
     return CompletionJournalError(
         CompleteFailureReason.INVALID_COMPLETION_STATE,
         f"Invalid persisted completion state: {message}",
@@ -328,27 +332,32 @@ def _load_contract_state(state_path: Path) -> Any:
     try:
         return load_run_state(state_path)
     except (TypeError, ValueError) as error:
-        raise _invalid_completion_state(str(error), error) from error
+        raise _invalid_completion_state(str(error)) from error
 
 
-def _parse_contract_record(raw: dict[str, Any]) -> CompletionJournalRecord:
-    try:
-        return CompletionJournalRecord.from_dict(raw)
-    except (KeyError, TypeError, ValueError) as error:
-        raise _invalid_completion_state(str(error), error) from error
+def _parse_contract_record(raw: Any) -> CompletionJournalRecord:
+    if isinstance(raw, CompletionJournalRecord):
+        return raw
+    if isinstance(raw, InvalidLedgerRecord):
+        raise _invalid_completion_state(raw.reason)
+    raise _invalid_completion_state("completion journal value is not a typed record")
 
 
-def _parse_contract_reservation(raw: dict[str, Any]) -> CompletionReservation:
-    try:
-        return CompletionReservation.from_dict(raw)
-    except (KeyError, TypeError, ValueError) as error:
-        raise _invalid_completion_state(str(error), error) from error
+def _parse_contract_reservation(raw: Any) -> CompletionReservation:
+    if isinstance(raw, CompletionReservation):
+        return raw
+    if isinstance(raw, InvalidLedgerRecord):
+        raise _invalid_completion_state(raw.reason)
+    raise _invalid_completion_state(
+        "completion reservation value is not a typed record"
+    )
 
 
 def _has_durable_handoff_receipt(state: Any, record: CompletionJournalRecord) -> bool:
     return (
         record.stage is CompleteStage.HANDED_OFF
-        and state.completion_replay_receipts.get(record.receipt_key) == record.to_dict()
+        and state.completion_replay_receipts.get(record.receipt_key)
+        == CompletionReplayReceipt(record)
     )
 
 
@@ -359,18 +368,21 @@ def _new_contract_record(
     if raw is not None:
         return _parse_contract_record(raw)
     for key, value in state.completion_journal.items():
-        if (
-            not isinstance(value, dict)
-            or value.get("issue_number") != candidate.issue_number
-        ):
+        if isinstance(value, InvalidLedgerRecord):
+            if value.raw_json.get("issue_number") == candidate.issue_number:
+                raise _invalid_completion_state(value.reason)
             continue
-        if value.get("repository_id") != candidate.repository_id:
+        if not isinstance(value, CompletionJournalRecord):
+            raise _invalid_completion_state("completion journal value is invalid")
+        if value.issue_number != candidate.issue_number:
+            continue
+        if value.repository_id != candidate.repository_id:
             raise CompletionJournalError(
                 CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH,
                 "Completion repository identity does not match the persisted reservation",
             )
         persisted = _parse_contract_record(value)
-        if value.get("generation_id") != candidate.generation_id:
+        if value.generation_id != candidate.generation_id:
             if _has_durable_handoff_receipt(state, persisted):
                 continue
             raise CompletionJournalError(
@@ -427,7 +439,7 @@ def _validate_reservation_request(
 def _resume_reserved_contract(
     record: CompletionJournalRecord,
     current: CompletionJournalRecord | None,
-    raw_reservation: dict[str, Any],
+    raw_reservation: Any,
     owner_token: str,
 ) -> CompletionJournalRecord:
     reservation = _parse_contract_reservation(raw_reservation)
@@ -471,9 +483,11 @@ def _allow_terminal_generation_replacement(
             CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH,
             "Issue reservation belongs to a different repository or issue",
         )
-    old_key = (
-        f"{reservation.repository_id}::{reservation.issue_number}::"
-        f"{reservation.generation_id}::{reservation.completion_id}"
+    old_key = journal_key_for(
+        reservation.repository_id,
+        reservation.issue_number,
+        reservation.generation_id,
+        reservation.completion_id,
     )
     raw = state.completion_journal.get(old_key)
     if raw is None:
@@ -529,8 +543,8 @@ def reserve_completion_locked(
         _verify_contract_identity(record, current, owner_token)
         return current
     reservation = CompletionReservation.from_journal(record)
-    run_state.completion_reservations[reservation_key] = reservation.to_dict()
-    run_state.completion_journal[record.journal_key] = record.to_dict()
+    run_state.completion_reservations[reservation_key] = reservation
+    run_state.completion_journal[record.journal_key] = record
     _save_or_raise(run_state, state_path)
     return record
 
@@ -769,7 +783,7 @@ def record_posting_evidence(
         updated = persisted.advance(
             CompleteStage.OUTCOME_POSTED, posting_evidence=evidence
         )
-        run_state.completion_journal[updated.journal_key] = updated.to_dict()
+        run_state.completion_journal[updated.journal_key] = updated
         _save_or_raise(run_state, state_path)
         return updated
 
@@ -816,7 +830,7 @@ def record_label_confirmation(
         updated = persisted.advance(
             CompleteStage.LABEL_CONFIRMED, label_evidence=evidence
         )
-        run_state.completion_journal[updated.journal_key] = updated.to_dict()
+        run_state.completion_journal[updated.journal_key] = updated
         _save_or_raise(run_state, state_path)
         return updated
 
@@ -835,7 +849,7 @@ def _mark_contract_handoff_ready(
             raw_receipt = run_state.completion_replay_receipts.get(
                 persisted.receipt_key
             )
-            if raw_receipt != persisted.to_dict():
+            if raw_receipt != CompletionReplayReceipt(persisted):
                 raise CompletionJournalError(
                     CompleteFailureReason.STATE_SAVE_FAILED,
                     "Handed-off completion does not have a matching replay receipt",
@@ -848,8 +862,8 @@ def _mark_contract_handoff_ready(
             )
         handed_off = persisted.advance(CompleteStage.HANDED_OFF)
         receipt = CompletionReplayReceipt(handed_off)
-        run_state.completion_journal[handed_off.journal_key] = handed_off.to_dict()
-        run_state.completion_replay_receipts[receipt.receipt_key] = receipt.to_dict()
+        run_state.completion_journal[handed_off.journal_key] = handed_off
+        run_state.completion_replay_receipts[receipt.receipt_key] = receipt
         _save_or_raise(run_state, state_path)
         return handed_off
 

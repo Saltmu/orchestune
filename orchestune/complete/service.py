@@ -27,7 +27,6 @@ from orchestune.complete.contracts import (
 )
 from orchestune.complete.journal import (
     CompletionJournalError,
-    CompletionJournalRecord,
     _save_or_raise,
     completion_journal_lock,
     reserve_completion_locked,
@@ -51,6 +50,10 @@ from orchestune.forge import GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_codec import encode_active_worktree
+from orchestune.ledger.completion_records import (
+    CompletionJournalRecord,
+    InvalidLedgerRecord,
+)
 from orchestune.ledger.run_state import load_run_state_readonly
 from orchestune.outcome_record import ReviewSummary
 
@@ -133,20 +136,32 @@ def _check(request: CompleteRequest, state: Any, worktree: Path, forge: Any) -> 
 def _pending(
     request: CompleteRequest, state: Any, repository: str, generation: str
 ) -> CompletionJournalRecord | None:
-    records = [
-        raw
-        for raw in state.completion_journal.values()
-        if raw.get("repository_id") == repository
-        and raw.get("issue_number") == request.issue_number
-        and raw.get("generation_id") == generation
-    ]
+    records: list[CompletionJournalRecord] = []
+    for raw in state.completion_journal.values():
+        if isinstance(raw, InvalidLedgerRecord):
+            if raw.raw_json.get("issue_number") == request.issue_number:
+                raise CompletionJournalError(
+                    CompleteFailureReason.INVALID_COMPLETION_STATE, raw.reason
+                )
+            continue
+        if not isinstance(raw, CompletionJournalRecord):
+            raise CompletionJournalError(
+                CompleteFailureReason.INVALID_COMPLETION_STATE,
+                "Completion journal value is not a typed record",
+            )
+        if (
+            raw.repository_id == repository
+            and raw.issue_number == request.issue_number
+            and raw.generation_id == generation
+        ):
+            records.append(raw)
     if not records:
         return None
     if len(records) != 1:
         raise CompletionJournalError(
             CompleteFailureReason.CONCURRENT_COMPLETION, "Multiple pending completions"
         )
-    record = CompletionJournalRecord.from_dict(records[0])
+    record = records[0]
     if (
         request.completion_id is not None
         and request.completion_id != record.completion_id
@@ -305,7 +320,7 @@ def _reject_policy(
             record, prepublication_policy_evidence={**policy, "escalation": escalation}
         )
         state = load_run_state_readonly(context.state_path)
-        state.completion_journal[record.journal_key] = record.to_dict()
+        state.completion_journal[record.journal_key] = record
         _save_or_raise(state, context.state_path)
     raise CompletionJournalError(
         CompleteFailureReason.PUBLICATION_POLICY_FAILED,
@@ -480,7 +495,7 @@ def _select_record(
     if previous.get("decision") == "unknown":
         record = replace(record, prepublication_policy_evidence={**previous, **policy})
         state = load_run_state_readonly(context.state_path)
-        state.completion_journal[record.journal_key] = record.to_dict()
+        state.completion_journal[record.journal_key] = record
         _save_or_raise(state, context.state_path)
     progress.report(record)
     return record
@@ -615,8 +630,11 @@ def _failure_stage(progress: _Progress) -> CompleteStage:
         try:
             state = load_run_state_readonly(progress.state_path)
             for raw in state.completion_journal.values():
-                if raw.get("completion_id") == progress.completion_id:
-                    stage = CompleteStage(raw["stage"])
+                if (
+                    isinstance(raw, CompletionJournalRecord)
+                    and raw.completion_id == progress.completion_id
+                ):
+                    stage = raw.stage
                     return (
                         CompleteStage.LABEL_CONFIRMED
                         if stage is CompleteStage.HANDED_OFF

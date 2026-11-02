@@ -458,6 +458,10 @@ def test_legacy_reserved_journal_can_resume_without_new_review(tmp_path, monkeyp
 
     from orchestune.complete.journal import completion_journal_lock
     from orchestune.complete.service import complete_task
+    from orchestune.ledger.completion_records import (
+        CompletionJournalRecord,
+        CompletionReservation,
+    )
     from orchestune.ledger.run_state import load_run_state_readonly, save_run_state
 
     request, forge, _ = lifecycle_environment(tmp_path, monkeypatch, "done")
@@ -471,8 +475,23 @@ def test_legacy_reserved_journal_can_resume_without_new_review(tmp_path, monkeyp
     with completion_journal_lock(request.state_path):
         state = load_run_state_readonly(request.state_path)
         raw = next(iter(state.completion_journal.values()))
-        raw["prepublication_policy_evidence"]["validation"].pop("review")
-        raw["request_fingerprint"] = request.request_fingerprint
+        assert isinstance(raw, CompletionJournalRecord)
+        validation = dict(raw.prepublication_policy_evidence["validation"])
+        validation.pop("review")
+        prepublication = dict(raw.prepublication_policy_evidence)
+        prepublication["validation"] = validation
+        updated = replace(
+            raw,
+            prepublication_policy_evidence=prepublication,
+            request_fingerprint=request.request_fingerprint,
+        )
+        state.completion_journal[updated.journal_key] = updated
+        reservation = state.completion_reservations[updated.reservation_key]
+        assert isinstance(reservation, CompletionReservation)
+        state.completion_reservations[updated.reservation_key] = replace(
+            reservation,
+            request_fingerprint=updated.request_fingerprint,
+        )
         save_run_state(state, request.state_path)
     forge.inject = lambda *_: None
     assert complete_task(request, forge=forge).success

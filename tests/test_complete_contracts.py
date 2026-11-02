@@ -1023,9 +1023,9 @@ def test_complete_stage_keeps_persisted_names_values_and_order() -> None:
         CompleteStage("handed-off")
 
 
-def test_stage_transitions_stay_with_the_complete_contract() -> None:
+def test_stage_transitions_are_shared_with_the_ledger_contract() -> None:
     from orchestune import ownership_contracts
 
-    assert not hasattr(ownership_contracts, "can_transition")
+    assert ownership_contracts.can_transition is can_transition
     assert can_transition(CompleteStage.JOURNALING, CompleteStage.RESERVED)
     assert not can_transition(CompleteStage.RESERVED, CompleteStage.HANDED_OFF)

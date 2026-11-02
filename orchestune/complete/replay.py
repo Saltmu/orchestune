@@ -13,8 +13,8 @@ from orchestune.complete.contracts import (
 from orchestune.complete.journal import (
     CompletionJournalError,
     CompletionJournalRecord,
-    CompletionReplayReceipt,
 )
+from orchestune.ledger.completion_records import CompletionReplayReceipt
 from orchestune.outcome_record import parse_from_comments
 
 
@@ -42,18 +42,23 @@ def result_from_record(
 def find_replay(
     request: CompleteRequest, state: Any, repository_id: str
 ) -> CompleteResult | None:
-    receipts = list(state.completion_replay_receipts.values())
+    receipts = [
+        receipt
+        for receipt in state.completion_replay_receipts.values()
+        if isinstance(receipt, CompletionReplayReceipt)
+    ]
     explicit = request.completion_id
     matches = [
-        raw
-        for raw in receipts
+        receipt
+        for receipt in receipts
         if (
-            raw.get("completion_id") == explicit
+            receipt.record.completion_id == explicit
             if explicit
-            else raw.get("repository_id") == repository_id
-            and raw.get("issue_number") == request.issue_number
+            else receipt.record.repository_id == repository_id
+            and receipt.record.issue_number == request.issue_number
             and (
-                request.claim_id is None or raw.get("generation_id") == request.claim_id
+                request.claim_id is None
+                or receipt.record.generation_id == request.claim_id
             )
         )
     ]
@@ -64,7 +69,7 @@ def find_replay(
             CompleteFailureReason.GENERATION_MISMATCH,
             "Ambiguous completion history; specify --completion-id",
         )
-    record = CompletionReplayReceipt.from_dict(matches[0]).record
+    record = matches[0].record
     if (
         record.repository_id != repository_id
         or record.issue_number != request.issue_number

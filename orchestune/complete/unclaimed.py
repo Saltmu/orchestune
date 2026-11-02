@@ -29,6 +29,7 @@ from orchestune.complete.publication import (
 )
 from orchestune.complete.replay import find_replay
 from orchestune.labels import StatusLabel
+from orchestune.ledger.completion_records import InvalidLedgerRecord
 from orchestune.ledger.completion_reservations import (
     completion_record,
     completion_reservation_status,
@@ -61,7 +62,12 @@ def _validate_new_id(request: CompleteRequest, state: Any) -> None:
     assert request.completion_id is not None
     _validate_id(request.completion_id)
     if any(
-        raw.get("completion_id") == request.completion_id
+        (
+            raw.raw_json.get("completion_id")
+            if isinstance(raw, InvalidLedgerRecord)
+            else raw.completion_id
+        )
+        == request.completion_id
         for raw in state.completion_journal.values()
     ):
         _reject(
@@ -107,7 +113,7 @@ def _pending(
         ) from error
     if raw is None:
         return None
-    record = CompletionJournalRecord.from_dict(raw)
+    record = raw
     if record.repository_id != repository:
         _reject(
             CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH,

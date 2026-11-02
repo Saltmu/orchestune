@@ -69,6 +69,28 @@ def test_preview_atomic_release_and_idempotent_replay(external_claim):
     assert workspace.run_state_path.read_bytes() == before
 
 
+def test_invalid_typed_confirmation_active_identity_fails_closed(external_claim):
+    from orchestune.ledger.active_codec import encode_active_worktree
+    from orchestune.ledger.external_stop_receipts import (
+        confirmation_key,
+        confirmation_record,
+        valid_confirmation,
+    )
+    from orchestune.ledger.recovery_receipts import RecoveryActiveSnapshot
+
+    _, active, _, _ = external_claim
+    confirmation = confirmation_record(active, "operator verified terminal state")
+    malformed_active = replace_flat(active, external_id=None)
+    malformed = replace(
+        confirmation,
+        active=RecoveryActiveSnapshot.from_json(
+            encode_active_worktree(malformed_active)
+        ),
+    )
+
+    assert not valid_confirmation(confirmation_key(active), malformed)
+
+
 @pytest.mark.parametrize(
     "changes",
     [
@@ -125,9 +147,9 @@ def test_fresh_provider_state_wins(
         confirmation = next(
             r
             for r in receipts.values()
-            if r["operation"] == "external-stop-confirmation"
+            if getattr(r, "operation", None) == "external-stop-confirmation"
         )
-        assert confirmation["source"] == "operator"
+        assert confirmation.source == "operator"
 
 
 def test_atomic_save_failure_keeps_everything(external_claim, monkeypatch):
@@ -301,9 +323,13 @@ def test_replay_rejects_corrupt_ambiguous_or_new_generation(external_claim, case
     state = load_run_state_readonly(workspace.run_state_path)
     key = next(k for k in state.recovery_receipts if k.startswith("external-stop"))
     if case == "invalid":
-        state.recovery_receipts[key]["source"] = "provider"
+        raw = state.recovery_receipts[key].to_dict()
+        raw["source"] = "provider"
+        from orchestune.ledger.recovery_receipts import decode_recovery_receipt
+
+        state.recovery_receipts[key] = decode_recovery_receipt(raw)
     elif case == "ambiguous":
-        state.recovery_receipts["wrong-key"] = state.recovery_receipts[key].copy()
+        state.recovery_receipts["wrong-key"] = state.recovery_receipts[key]
     else:
         state.active_worktrees["7"] = replace_flat(active, started_at=9.0)
     with run_state_lock(workspace.lock_path):
@@ -323,7 +349,11 @@ def test_existing_invalid_key_is_never_repaired(external_claim):
     workspace, active, _, request = external_claim
     state = load_run_state_readonly(workspace.run_state_path)
     record = confirmation_record(active, "first")
-    record["active"]["owner_token_digest"] = "wrong"
+    raw = record.to_dict()
+    raw["active"]["owner_token_digest"] = "wrong"
+    from orchestune.ledger.recovery_receipts import decode_recovery_receipt
+
+    record = decode_recovery_receipt(raw)
     state.recovery_receipts[confirmation_key(active)] = record
     with run_state_lock(workspace.lock_path):
         save_run_state(state, workspace.run_state_path)
