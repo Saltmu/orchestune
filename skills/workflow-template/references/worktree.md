@@ -31,8 +31,10 @@ orchestune claim <issue_number> --resume <claim_id>
 
 If an interactively claimed task needs files outside its held file reservation,
 add them to the Issue `footprint` and run `orchestune claim <issue_number> --amend-footprint`. It widens
-the reservation, or reports the conflicting task and changes nothing. Dispatcher-
-launched tasks cannot amend; report `orchestune complete --issue <issue_number>
+the reservation, or reports the conflicting task and changes nothing. For a local
+dispatcher-launched task, run `orchestune claim <issue_number> --amend-footprint --add-path <path>...`
+instead of editing the Issue body. If rejected due to conflicts, or when running in the cloud where
+local claims are unavailable, report `orchestune complete --issue <issue_number>
 --result blocked --reason footprint-expansion-required` instead.
 
 If a claim or amend succeeds with `Warning: footprint overlaps issue #<N>`, another

@@ -35,6 +35,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="widen the held claim to the Issue footprint and files already changed",
     )
     mode.add_argument("--adopt-pr", type=int, metavar="PR", help="adopt an orphaned PR")
+    parser.add_argument(
+        "--add-path",
+        action="append",
+        dest="add_paths",
+        default=[],
+        metavar="PATH",
+        help="path to add to the held claim footprint (repeatable; requires --amend-footprint)",
+    )
     parser.add_argument("--state", type=Path, help="path to the local run_state.json")
     parser.add_argument(
         "--timeout", type=float, help="run-state lock timeout in seconds"
@@ -172,6 +180,7 @@ def _run_amend(args: argparse.Namespace, token_dir: Path) -> FootprintAmendOutco
     return amend_claim_footprint(
         args.issue_number,
         apply=not args.no_apply,
+        add_paths=tuple(args.add_paths or ()),
         state_path=args.state,
         timeout_seconds=args.timeout,
     )
@@ -232,7 +241,10 @@ def _report_forge_unavailable() -> int:
 
 def main(argv: Sequence[str] | None = None, *, observe_external=None) -> int:
     """Parse a claim request, invoke the service, and render safe diagnostics."""
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.add_paths and not args.amend_footprint:
+        parser.error("--add-path requires --amend-footprint")
     if args.timeout is not None and args.timeout < 0:
         _print_failure(
             ClaimFailure(

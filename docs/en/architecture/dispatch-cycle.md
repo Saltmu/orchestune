@@ -57,3 +57,10 @@ In apply mode, Dispatcher splits each execution into four distinct stages:
 
 Under `--no-apply` (dry-run mode), the pre-integration cycle and integration boundary are skipped; only a single scheduling cycle runs FULL without side-effect writes.
 
+## 7. Filtering Candidates for Active Reservation Overlaps (#1547)
+
+During candidate selection in the scheduling cycle (`_filter_candidates_for_forced_serial`), queued tasks whose Footprint overlaps with any active dispatch-owned reservation (Issue Footprint ∪ `declared_footprint`) or repository reservation are excluded from launch candidates.
+
+Excluded tasks remain in `status:queued` for the next cycle (recorded as `forced-serial` in skip records) and are dispatched safely once the preceding reservation is released upon task completion. This prevents unneeded `status:blocked` transitions from `CLAIM_CONFLICT` at claim time when active tasks widen their reservations via `--amend-footprint`. Consistent with claim conflict rules, overlaps with interactive reservations do not cause exclusion.
+
+

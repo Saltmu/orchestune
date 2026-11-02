@@ -57,3 +57,10 @@ Dispatcher は apply モードにおいて、1 回の実行を以下の 4 つの
 
 `--no-apply`（dry-run モード）では、統合前cycleおよび統合境界は実行されず、従来の単一 scheduling cycle のみが FULL で実行されます。
 
+## 7. 候補選定における active 予約との重複除外 (#1547)
+
+scheduling cycle のタスク候補選定（`_filter_candidates_for_forced_serial`）では、dispatch 所有の active 予約（Issue 本文の Footprint ∪ `declared_footprint`）またはリポジトリ予約と Footprint が重なる queued タスクを起動候補から除外します。
+
+除外されたタスクは `status:queued` のまま次サイクルへ回され（スキップ記録に `forced-serial` として記録）、先行タスクの完了・予約解放後に安全に起動されます。これにより、実行中タスクが `--amend-footprint` 等で予約を拡張した場合でも、起動時の `CLAIM_CONFLICT` による意図しない `status:blocked` への遷移を防ぎます。なお、claim の衝突規則と同様に、interactive 予約との重複では除外されません。
+
+

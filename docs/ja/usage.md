@@ -846,6 +846,7 @@ orchestune claim 123
 | `--resume <claim_id>` | なし | 途中停止した既存の claim を、期待する世代と登録worktreeを照合して再開する。 |
 | `--adopt-pr <番号>` | なし | 検証済みの孤立 PR を `status:blocked-human-review` から claim する。`--resume`、`--amend-footprint` とは併用不可。 |
 | `--amend-footprint` | 無効 | 保持中の claim のファイル予約を拡張する。`--resume` とは併用不可。詳細は後述。 |
+| `--add-path <path>` | なし | 保持中の claim のファイル予約に追加するパス（複数指定可。`--amend-footprint` と併用）。 |
 | `--state <path>` | `run_state.json` | 実行状態台帳ファイルのパスを指定。 |
 | `--timeout <seconds>` | なし | 台帳ロックのタイムアウト秒数。 |
 
@@ -888,14 +889,20 @@ dispatch の claim は、footprint が重なれば相手の種類に関わらず
 
 ### 予約の拡張（`--amend-footprint`）
 
-保持中のファイル予約の外にあるファイルの変更が必要になった場合は、Issue 本文の `footprint` に追記してから次を実行します。
+保持中のファイル予約の外にあるファイルの変更が必要になった場合は、次を実行します。
 
 ```bash
 orchestune claim <N> --amend-footprint --no-apply  # プレビュー
 orchestune claim <N> --amend-footprint
+# パスを明示して追加する場合
+orchestune claim <N> --amend-footprint --add-path path/to/file.py
 ```
 
-新しい footprint は、保持中の footprint・Issue の footprint・claim の基点以降に worktree で変更済みのすべてのファイル（コミット済み・未コミット・未追跡）の和集合です。縮小はしません。他のすべての active 予約との衝突を再判定し、衝突した場合は何も変更せずに相手の Issue を表示します。interactive な予約との footprint 重複は、新規 claim と同じく警告として表示し、拡張は行います。成功すると不足分を Issue の footprint に追記して台帳を更新します。worktree・ブランチ・claim ID・ラベルは変わりません。対象は、claim を作成したワークスペース（対応する claim marker がある場所）で完了済みの interactive なファイル予約のみです。リポジトリ予約への切り替えはサポートしません。
+新しい footprint は、保持中の footprint・Issue 本文の footprint・`--add-path` で指定されたパス・claim の基点以降に worktree で変更済みのすべてのファイル（コミット済み・未コミット・未追跡）の和集合です。縮小はしません。
+
+interactive タスクおよびローカル実行の dispatch タスクで利用できます。dispatch タスクでは Issue 本文を手で編集する必要はなく、`--add-path` を指定して実行することで、amend が Issue 本文の footprint を自動的に更新します（既存の他のフィールドは保持されます）。また、dispatch タスクにおける `--timeout` 未指定時の台帳ロック待機タイムアウトは既定で 600 秒です（interactive タスクの既定値は 0 秒）。
+
+他のすべての active 予約との衝突を再判定し、衝突した場合は何も変更せずに相手の Issue を表示します。interactive な予約との footprint 重複は、新規 claim と同じく警告として表示し、拡張は行います。また、未 claim の `status:queued` タスクと追加パスが重複する場合は標準エラー出力に警告を表示します。成功すると Issue 本文の footprint を更新し、記録マーカー付きコメント（`<!-- orchestune:footprint-amend claim_id=<id> -->`）を投稿して台帳を更新します（同じ claim ID で追加パスが変わらない再実行では重複コメントは投稿されません）。worktree・ブランチ・claim ID・ラベルは変わりません。対象は、claim を作成したワークスペース（対応する claim marker がある場所）で完了済みのローカルなファイル予約のみです。リポジトリ予約への切り替えはサポートしません。
 
 ### レビュートリガーの再開と置換
 

@@ -426,7 +426,9 @@ def test_registered_child_enters_cycle_dependency_and_conflict_evaluation(
         ctx=ctx, lock_result=ExternalLockScanResult([], []), deviation_events=[]
     )
     assert 42 not in {t.issue_number for t in scheduling.selected}
-    assert any(d.issue_number == 42 for d in scheduling.decisions)
+    assert any(d.issue_number == 42 for d in scheduling.decisions) or any(
+        s.issue_number == 42 for s in scheduling.skips
+    )
 
 
 def test_build_dag_subtasks_raises_for_missing_provisioned_child() -> None:

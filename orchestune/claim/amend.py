@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from orchestune.claim.workspace import (
     check_repository_identity_match,
     resolve_claim_workspace,
 )
-from orchestune.footprint_paths import canonicalize_footprint
+from orchestune.footprint_paths import canonicalize_footprint, normalize_footprint_path
 from orchestune.forge import Forge, ForgeGraphQLUnavailableError, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
@@ -37,6 +38,7 @@ from orchestune.issue_parsing import (
     dump_footprint_yaml,
     parse_task_from_issue,
 )
+from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
@@ -92,8 +94,6 @@ def _find_held_reservation(
 def _check_eligibility(active: ActiveWorktree, repository_identity: str) -> None:
     n = active.core.issue_number
     problems = []
-    if active.claim.owner_kind != OwnerKind.INTERACTIVE.value:
-        problems.append("it is owned by the dispatcher")
     if active.claim.claim_stage != ClaimStage.COMPLETED.value:
         problems.append(f"its claim stage is {active.claim.claim_stage}")
     if active.claim.reservation_kind != ReservationKind.FOOTPRINT.value:
@@ -261,11 +261,153 @@ def _publish_issue_footprint(
     return True
 
 
+def _post_amend_comment(
+    forge: Forge,
+    issue_number: int,
+    claim_id: str,
+    added: tuple[str, ...],
+    amended_footprint: tuple[str, ...],
+    queued_warnings: Sequence[str],
+) -> None:
+    added_str = ",".join(sorted(added))
+    exact_marker = (
+        f"<!-- orchestune:footprint-amend claim_id={claim_id} added={added_str} -->"
+    )
+    generic_marker = f"<!-- orchestune:footprint-amend claim_id={claim_id} -->"
+    try:
+        existing_comments = forge.list_comments(issue_number)
+        has_generic = any(
+            generic_marker in c.get("body", "") for c in existing_comments
+        )
+        if not added and has_generic:
+            return
+        if any(exact_marker in c.get("body", "") for c in existing_comments):
+            return
+    except Exception as exc:
+        sys.stderr.write(
+            f"Warning: failed to list comments for footprint amend on #{issue_number}: {exc}\n"
+        )
+
+    lines = [
+        exact_marker,
+        generic_marker,
+        "### Footprint amended",
+        "",
+        f"- **Claim ID**: `{claim_id}`",
+        f"- **Added paths**: {', '.join(f'`{p}`' for p in added) if added else 'none'}",
+        f"- **Amended footprint**: {', '.join(f'`{p}`' for p in amended_footprint)}",
+    ]
+    if queued_warnings:
+        lines.extend(["", "#### Warnings", *[f"- {w}" for w in queued_warnings]])
+    try:
+        forge.add_comment(issue_number, "\n".join(lines) + "\n")
+    except Exception as exc:
+        sys.stderr.write(
+            f"Warning: failed to post footprint amendment comment on #{issue_number}: {exc}\n"
+        )
+
+
+def _validate_add_paths(add_paths: Sequence[str]) -> list[str]:
+    validated = []
+    for p in add_paths:
+        try:
+            norm = normalize_footprint_path(p)
+        except ValueError as error:
+            raise _reject(
+                ClaimFailureReason.INVALID_FOOTPRINT,
+                f"Invalid --add-path '{p}': {error}",
+                "Specify repository-relative file paths within the worktree.",
+            ) from error
+        validated.append(norm)
+    return validated
+
+
+def _check_queued_overlaps(
+    forge: Forge, added: tuple[str, ...], issue_number: int, run_state: RunState
+) -> list[str]:
+    if not added:
+        return []
+    warnings: list[str] = []
+    try:
+        claimed_numbers = {
+            w.core.issue_number for w in run_state.active_worktrees.values()
+        }
+        queued_issues = forge.list_issues_by_label(StatusLabel.QUEUED, state="open")
+        for q_issue in queued_issues:
+            if q_issue.number in claimed_numbers or q_issue.number == issue_number:
+                continue
+            q_task = parse_task_from_issue(q_issue)
+            overlap = sorted(set(added) & set(q_task.footprint))
+            if overlap:
+                warn_msg = (
+                    f"Warning: added paths overlap with queued task #{q_issue.number}: "
+                    f"{', '.join(overlap)}"
+                )
+                sys.stderr.write(warn_msg + "\n")
+                warnings.append(
+                    f"Overlaps with queued task #{q_issue.number}: {', '.join(overlap)}"
+                )
+    except Exception as exc:
+        sys.stderr.write(
+            f"Warning: failed to check queued task overlaps on #{issue_number}: {exc}\n"
+        )
+    return warnings
+
+
+def _persist_amended_state(
+    forge: Forge,
+    issue: IssueRecord,
+    active: ActiveWorktree,
+    key: str,
+    amended: ActiveWorktree,
+    added: tuple[str, ...],
+    queued_warnings: Sequence[str],
+    run_state: RunState,
+    run_state_path: Path,
+) -> bool:
+    body_updated = _publish_issue_footprint(
+        forge, issue, amended.core.declared_footprint
+    )
+    _post_amend_comment(
+        forge,
+        issue.number,
+        active.claim.claim_id or "",
+        added,
+        amended.core.declared_footprint,
+        queued_warnings,
+    )
+    run_state.active_worktrees[key] = amended
+    try:
+        save_run_state(run_state, run_state_path)
+    except Exception as error:
+        raise _reject(
+            ClaimFailureReason.STATE_SAVE_FAILED,
+            f"Failed to persist the amended reservation: {error}",
+            "The Issue footprint may already be updated; retry the command.",
+        ) from error
+    return body_updated
+
+
+def _compute_amended_footprint(
+    active: ActiveWorktree, issue: IssueRecord, add_paths: Sequence[str]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    previous = tuple(active.core.declared_footprint)
+    candidates = (
+        *previous,
+        *parse_task_from_issue(issue).footprint,
+        *_validate_add_paths(add_paths),
+        *_changed_files(active),
+    )
+    amended = canonicalize_footprint(candidates)
+    return amended, tuple(p for p in amended if p not in previous)
+
+
 def _amend_in_lock(
     issue_number: int,
     caller_root: Path,
     *,
     apply: bool,
+    add_paths: Sequence[str],
     forge: Forge,
     run_state_path: Path,
     repository_identity: str,
@@ -277,30 +419,26 @@ def _amend_in_lock(
     issue = _issue_footprint(forge, active)
 
     previous = tuple(active.core.declared_footprint)
-    candidates = [
-        *previous,
-        *parse_task_from_issue(issue).footprint,
-        *_changed_files(active),
-    ]
-    amended_footprint = canonicalize_footprint(candidates)
-    added = tuple(p for p in amended_footprint if p not in previous)
+    amended_footprint, added = _compute_amended_footprint(active, issue, add_paths)
     amended = active.with_core(
         dataclasses.replace(active.core, declared_footprint=amended_footprint)
     )
     warnings = _check_conflicts(key, amended, run_state, forge)
+    queued_warnings = _check_queued_overlaps(forge, added, issue_number, run_state)
 
     body_updated = False
     if apply:
-        body_updated = _publish_issue_footprint(forge, issue, amended_footprint)
-        run_state.active_worktrees[key] = amended
-        try:
-            save_run_state(run_state, run_state_path)
-        except Exception as error:
-            raise _reject(
-                ClaimFailureReason.STATE_SAVE_FAILED,
-                f"Failed to persist the amended reservation: {error}",
-                "The Issue footprint may already be updated; retry the command.",
-            ) from error
+        body_updated = _persist_amended_state(
+            forge,
+            issue,
+            active,
+            key,
+            amended,
+            added,
+            queued_warnings,
+            run_state,
+            run_state_path,
+        )
     return FootprintAmendOutcome(
         success=True,
         issue_number=issue_number,
@@ -319,26 +457,43 @@ def amend_claim_footprint(
     *,
     read_owner_token: OwnerTokenReader | None = None,
     apply: bool = True,
+    add_paths: Sequence[str] = (),
     forge: Forge | None = None,
     cwd: str | Path | None = None,
     state_path: str | Path | None = None,
     timeout_seconds: float | None = None,
 ) -> FootprintAmendOutcome:
-    """Widen a held interactive file reservation to cover newly needed files.
+    """Widen a held file reservation to cover newly needed files.
 
     The footprint only grows: it becomes the union of the held footprint, the
-    Issue footprint and every file already changed in the worktree. Overlap with
-    another interactive reservation is reported as a warning; overlap with a
-    dispatch reservation and every other conflict reason still rejects it.
+    Issue footprint, any explicit add_paths, and every file already changed in
+    the worktree. Overlap with another interactive reservation is reported as a
+    warning; overlap with an active dispatch reservation and every other conflict
+    reason still rejects it.
     """
     workspace = resolve_claim_workspace(cwd, explicit_state_path=state_path)
-    timeout = timeout_seconds if timeout_seconds is not None else 0.0
+    timeout = timeout_seconds
+    if timeout is None:
+        timeout = 0.0
+        # Best-effort inspection of run_state before lock to set a longer lock
+        # acquisition timeout (600s) for non-interactive claims.
+        try:
+            if workspace.run_state_path.exists():
+                pre_state = load_run_state(workspace.run_state_path)
+                for pre_active in pre_state.active_worktrees.values():
+                    if pre_active.core.issue_number == issue_number:
+                        if pre_active.claim.owner_kind != OwnerKind.INTERACTIVE.value:
+                            timeout = 600.0
+                        break
+        except Exception:
+            pass
     try:
         with run_state_lock(workspace.lock_path, timeout=timeout):
             return _amend_in_lock(
                 issue_number,
                 workspace.repository_root,
                 apply=apply,
+                add_paths=add_paths,
                 forge=forge or GitHubForge(),
                 run_state_path=workspace.run_state_path,
                 repository_identity=workspace.repository_identity,
