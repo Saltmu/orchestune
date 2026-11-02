@@ -798,7 +798,7 @@ def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
         line for line in skill.splitlines() if "**Plan Approval (Step 1)**" in line
     )
     assert "right after the start request" in plan and "before claim" in plan
-    assert "explicit `claude` / `codex` / `skip`" in plan
+    assert "resolve reviewer bot" in plan.lower()
     assert "after PR creation" not in plan
     assert "bypass user approval" in plan and "existing Issue" in plan
     review = next(
@@ -806,15 +806,14 @@ def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
     )
     assert "without re-asking" in review
     assert "After Step 10 creates the PR" not in review
-    assert "explicit `claude` / `codex` / `skip`" in review
-    assert "no inference/default" in review
-    assert "review, merge, or completion before selection" in review
+    assert "resolved" in review.lower()
     assert "--bot-name skip" in review
     loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
         encoding="utf-8"
     )
     assert "right after the start request" in loop and "post-PR selection" not in loop
     assert "after PR creation require" not in loop
+    assert "resolve reviewer bot" in loop.lower()
     assert (
         "Only per-finding procedure Step 5 with Step 6 satisfied permits Step 12"
         in loop

@@ -350,7 +350,7 @@ def test_setup_skills_with_workflow_skill_distributes_modern_portability_procedu
     assert "plan approval (step 1)" in skill_md.lower()
     assert "right after the start request" in skill_md.lower()
     assert "after step 10 creates the pr" not in skill_md.lower()
-    assert "explicit `claude` / `codex` / `skip` selection" in skill_md
+    assert "resolve reviewer bot" in skill_md.lower()
     assert "bypass" in skill_md.lower()
 
     # tdd.md bloat baseline
