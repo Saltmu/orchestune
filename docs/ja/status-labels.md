@@ -458,6 +458,9 @@ stateDiagram-v2
 - 条件: `depends_on`の全てが`status:done`または`status:not-needed`の
   Issueで解決済みになった場合（このサイクルで新規に完了したタスクも
   `completed_subtask_ids`として加味される）。
+  ただし、現在のclaim世代で自ら`result=blocked`のOutcome Recordを報告したタスク（自停止タスク）は、
+  自動修復による昇格から除外され`status:blocked`で保留される（修復の前提条件`no-current-blocked-outcome`）。
+  人が`status:queued`へ再設定することで新しい世代として再投入できる。
 
 ### 3. `status:queued` / `status:blocked` → `status:in-progress`（起動）
 - 発生元: `orchestune/dispatch/launch.py`の`_apply_task_launches`

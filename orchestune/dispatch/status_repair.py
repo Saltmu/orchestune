@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+import yaml
+
 from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.invariants.status import (
     PROMOTION_HOLD_LABELS,
@@ -44,6 +46,7 @@ from orchestune.dispatch.status_repair_dependencies import (
     evaluate_fresh_dependencies,
     task_lifecycle,
 )
+from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
 from orchestune.labels import StatusLabel
 from orchestune.ledger.completion_reservations import completion_mutation_blocked_fresh
 from orchestune.ledger.run_state import RunState
@@ -52,6 +55,7 @@ from orchestune.ledger.status_machine import (
     is_allowed,
     status_repair_preserves_protection,
 )
+from orchestune.outcome_record import parse_from_comments
 
 _STATUS_REPAIR_OPERATION = "supervisor-status-repair"
 _LOGGER = logging.getLogger(__name__)
@@ -205,6 +209,7 @@ def _precondition_holds(
     labels: tuple[str, ...],
     dependencies_declared: bool,
     dependencies_resolved: bool,
+    has_current_blocked_outcome: bool = False,
 ) -> bool:
     primary = primary_status_labels(labels)
     if precondition in {"finding-certainty:known", "issue-open"}:
@@ -219,11 +224,64 @@ def _precondition_holds(
         return not dependencies_resolved
     if precondition == "no-promotion-hold":
         return not any(label in labels for label in PROMOTION_HOLD_LABELS)
+    if precondition == "no-current-blocked-outcome":
+        return not has_current_blocked_outcome
     if precondition.startswith("holds-primary-status:"):
         return precondition.removeprefix("holds-primary-status:") in primary
     if precondition.startswith("retains-primary-status:"):
         return precondition.removeprefix("retains-primary-status:") in primary
     return False
+
+
+def _inspect_blocked_outcome(
+    task: Task,
+    config: DispatcherConfig,
+) -> tuple[bool, str | None]:
+    forge = config.resolved_forge
+    list_comments = getattr(forge, "list_all_issue_comments", None)
+    if not callable(list_comments):
+        list_comments = getattr(forge, "list_comments", None)
+    if not callable(list_comments):
+        return False, None
+    try:
+        comments = list_comments(task.issue_number)
+    except Exception as exc:
+        return True, f"failed to fetch issue comments: {exc}"
+
+    outcome = parse_from_comments(comments)
+    if outcome is None or outcome.result != "blocked":
+        return False, None
+
+    get_issue = getattr(forge, "get_issue", None)
+    if not callable(get_issue):
+        return False, None
+    try:
+        issue = get_issue(task.issue_number)
+    except Exception as exc:
+        return True, f"failed to fetch issue: {exc}"
+    if issue is None:
+        return True, "issue record unavailable"
+
+    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
+    if not match:
+        return False, None
+
+    try:
+        data = yaml.safe_load(match[1])
+    except Exception:
+        return False, None
+
+    if not isinstance(data, dict):
+        return False, None
+
+    claim_id = data.get("claim_id")
+    if claim_id is not None and str(claim_id) == str(outcome.claim_id):
+        return (
+            True,
+            f"current blocked Outcome: reason={outcome.reason}, claim_id={outcome.claim_id}",
+        )
+
+    return False, None
 
 
 def _fresh_preconditions_hold(
@@ -232,6 +290,8 @@ def _fresh_preconditions_hold(
     tasks_by_issue: Mapping[int, Task],
     completion_evidence: CompletionEvidenceView,
     config: DispatcherConfig,
+    *,
+    diagnostic_sink: list[str] | None = None,
 ) -> FreshDependencyEvaluation | None:
     evaluation = evaluate_fresh_dependencies(
         task,
@@ -247,16 +307,37 @@ def _fresh_preconditions_hold(
         command, labels
     ):
         return None
-    holds = all(
-        _precondition_holds(
+
+    dependencies_declared = not evaluation.dependencies.is_empty
+    dependencies_resolved = dependencies_completed(evaluation.assessment)
+
+    for precondition in command.preconditions:
+        if precondition == "no-current-blocked-outcome":
+            continue
+        if not _precondition_holds(
             precondition,
             labels=labels,
-            dependencies_declared=not evaluation.dependencies.is_empty,
-            dependencies_resolved=dependencies_completed(evaluation.assessment),
+            dependencies_declared=dependencies_declared,
+            dependencies_resolved=dependencies_resolved,
+        ):
+            return None
+
+    if "no-current-blocked-outcome" in command.preconditions:
+        has_blocked_outcome, diagnostic = _inspect_blocked_outcome(
+            evaluation.task, config
         )
-        for precondition in command.preconditions
-    )
-    return evaluation if holds else None
+        if not _precondition_holds(
+            "no-current-blocked-outcome",
+            labels=labels,
+            dependencies_declared=dependencies_declared,
+            dependencies_resolved=dependencies_resolved,
+            has_current_blocked_outcome=has_blocked_outcome,
+        ):
+            if diagnostic_sink is not None and diagnostic is not None:
+                diagnostic_sink.append(diagnostic)
+            return None
+
+    return evaluation
 
 
 def _apply_command(
@@ -394,6 +475,31 @@ def reconcile_status_repair_intents(
     return tuple(verified)
 
 
+def _finalize_applied_transition(
+    config: DispatcherConfig,
+    current: TransitionIntent,
+    command: RepairCommand,
+    fresh_task: Task,
+    verified_labels: tuple[str, ...],
+    expected: str | None,
+    journal: IntentJournal,
+    now: datetime,
+) -> None:
+    journal.mark_applied(current.intent_id)
+    if is_reportable_promotion(current.operation, expected):
+        # #1343: only the promotion command re-checks the dependencies now.
+        # Another command (a conflict cleanup) finishes an earlier promotion.
+        _register_promotion_report(
+            config,
+            current,
+            verified_labels,
+            subtask_id=fresh_task.subtask_id or None,
+            recovered=not is_reportable_promotion_command(command),
+            observed_at=now,
+        )
+    journal.mark_verified(current.intent_id)
+
+
 def _execute(
     command: RepairCommand,
     task: Task,
@@ -403,12 +509,23 @@ def _execute(
     journal: IntentJournal,
     now: datetime,
     intent: TransitionIntent | None = None,
-) -> VerifiedStatusTransition | None:
-    fresh = _fresh_preconditions_hold(
-        command, task, tasks_by_issue, completion_evidence, config
-    )
+) -> tuple[VerifiedStatusTransition | None, str | None]:
+    diagnostics: list[str] = []
+    try:
+        fresh = _fresh_preconditions_hold(
+            command,
+            task,
+            tasks_by_issue,
+            completion_evidence,
+            config,
+            diagnostic_sink=diagnostics,
+        )
+    except TypeError:
+        fresh = _fresh_preconditions_hold(
+            command, task, tasks_by_issue, completion_evidence, config
+        )
     if fresh is None:
-        return None
+        return None, diagnostics[0] if diagnostics else None
     current = intent or journal.plan(_new_intent(command, now))
     _apply_command(command, fresh.task, current, journal, config)
     expected = _intent_expected_label(current)
@@ -418,25 +535,18 @@ def _execute(
         else _verified_status_labels(fresh.task.issue_number, expected, config)
     )
     if verified_labels is None:
-        return None
-    journal.mark_applied(current.intent_id)
-    if is_reportable_promotion(current.operation, expected):
-        # #1343: only the promotion command re-checks the dependencies now.
-        # Another command (a conflict cleanup) finishes an earlier promotion.
-        _register_promotion_report(
-            config,
-            current,
-            verified_labels,
-            subtask_id=fresh.task.subtask_id or None,
-            recovered=not is_reportable_promotion_command(command),
-            observed_at=now,
-        )
-    journal.mark_verified(current.intent_id)
-    return VerifiedStatusTransition(
-        issue_number=fresh.task.issue_number,
-        before_labels=tuple(fresh.task.status_labels),
-        verified_labels=verified_labels,
-        intent_id=current.intent_id,
+        return None, None
+    _finalize_applied_transition(
+        config, current, command, fresh.task, verified_labels, expected, journal, now
+    )
+    return (
+        VerifiedStatusTransition(
+            issue_number=fresh.task.issue_number,
+            before_labels=tuple(fresh.task.status_labels),
+            verified_labels=verified_labels,
+            intent_id=current.intent_id,
+        ),
+        None,
     )
 
 
@@ -500,7 +610,16 @@ def _status_command_preflight(
             diagnostics=(f"unsupported status repair command: {command.code}",),
         )
     if not config.apply:
-        return RepairResult(command=command, status=RepairStatus.SKIPPED)
+        task = _repair_subject_task(command, tasks_by_issue)
+        diagnostic = None
+        if task is not None and "no-current-blocked-outcome" in command.preconditions:
+            has_blocked, diag = _inspect_blocked_outcome(task, config)
+            if has_blocked:
+                diagnostic = diag
+        diagnostics = (diagnostic,) if diagnostic else ()
+        return RepairResult(
+            command=command, status=RepairStatus.SKIPPED, diagnostics=diagnostics
+        )
     if _repair_subject_task(command, tasks_by_issue) is None:
         return RepairResult(
             command=command,
@@ -531,7 +650,7 @@ def _execute_with_pending_intent(
             diagnostics=("another live status transition covers this subject",),
         )
     try:
-        evidence = _execute(
+        evidence, diagnostic = _execute(
             command,
             task,
             tasks_by_issue,
@@ -545,12 +664,13 @@ def _execute_with_pending_intent(
             on_verified(evidence)
     except Exception as exc:  # noqa: BLE001 - retain the Intent for restart
         return _failed_repair_result(command, exc)
+    default_diagnostic = (
+        diagnostic or "fresh status repair guard or live verification did not hold"
+    )
     return RepairResult(
         command=command,
         status=RepairStatus.APPLIED if evidence is not None else RepairStatus.SKIPPED,
-        diagnostics=()
-        if evidence is not None
-        else ("fresh status repair guard or live verification did not hold",),
+        diagnostics=() if evidence is not None else (default_diagnostic,),
     )
 
 
