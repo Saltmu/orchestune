@@ -8,6 +8,7 @@ dispatch_cycle.py経由の循環importを避けるため独立モジュールと
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -51,6 +52,7 @@ from orchestune.review.semantic_gate import (
     VALID_SEMANTIC_REVIEW_MODES,
     SemanticReviewLimits,
 )
+from orchestune.targets.contracts import ReviewerBot
 
 VALID_SEMANTIC_REVIEW_PROVIDERS = frozenset({"auto", "claude", "codex"})
 VALID_FINAL_ACCEPTANCE_REVIEW_MODES = frozenset({"advisory", "off"})
@@ -168,6 +170,8 @@ class DispatcherConfig:
     final_acceptance_review: str = "advisory"
     force_integration_review: bool = False
     semantic_review_provider: str = "auto"
+    # #1560: `[reviewer_by_target]` overrides of the `auto` reviewer, by target name.
+    reviewer_by_target: Mapping[str, ReviewerBot] = field(default_factory=dict)
     semantic_fix_provider: str = "auto"
     semantic_review_trigger: str = "pr-comment"
     max_semantic_review_rounds: int = 3

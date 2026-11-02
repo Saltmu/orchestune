@@ -354,6 +354,7 @@ def _final_acceptance_reviewer(config: DispatcherConfig) -> str | None:
     return resolve_reviewer_bot(
         cast(ReviewerBotSetting, config.semantic_review_provider),
         target if isinstance(target, str) else "local",
+        config.reviewer_by_target,
     )
 
 

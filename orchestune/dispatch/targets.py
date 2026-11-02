@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -603,6 +603,8 @@ class TargetBuildConfig:
     codex_cloud_env: str | None = None
     allow_unsafe_agent_execution: bool = False
     reviewer_bot: ReviewerBotSetting = "auto"
+    # #1560: `[reviewer_by_target]` overrides of the `auto` reviewer.
+    reviewer_by_target: Mapping[str, ReviewerBot] = field(default_factory=dict)
 
 
 def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
@@ -681,7 +683,9 @@ def _warn_unresolved_auto_reviewer(resolved_target_name: str) -> None:
 
 
 def _resolve_local_fallback_reviewer(config: TargetBuildConfig) -> ReviewerBot | None:
-    reviewer_bot = resolve_reviewer_bot(config.reviewer_bot, "local")
+    reviewer_bot = resolve_reviewer_bot(
+        config.reviewer_bot, "local", config.reviewer_by_target
+    )
     if reviewer_bot is None and config.local_cmd is not None:
         _warn_unresolved_auto_reviewer("local")
     return reviewer_bot
@@ -691,7 +695,9 @@ def build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
     target_name = _resolve_target_name(
         config.dispatch_target_name, config.allow_unsafe_agent_execution
     )
-    reviewer_bot = resolve_reviewer_bot(config.reviewer_bot, target_name)
+    reviewer_bot = resolve_reviewer_bot(
+        config.reviewer_bot, target_name, config.reviewer_by_target
+    )
     auto_dummy_fallback = (
         config.dispatch_target_name == "auto"
         and target_name == "local"

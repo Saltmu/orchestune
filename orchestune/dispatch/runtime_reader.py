@@ -9,7 +9,10 @@ from orchestune.claim.workspace import ClaimWorkspace
 from orchestune.config_contracts import ConfigError
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.config_loader import _resolve_cloud_settings
-from orchestune.dispatch.config_schema import validate_toml_config
+from orchestune.dispatch.config_schema import (
+    extract_reviewer_by_target,
+    validate_toml_config,
+)
 from orchestune.dispatch.external_execution import (
     RuntimeState,
     _attempt_matches_provider,
@@ -51,6 +54,7 @@ def provider_config(workspace: ClaimWorkspace) -> DispatcherConfig | None:
                 codex_cloud_env=environment,
                 log_dir=primary / "logs",
                 reviewer_bot=raw.get("reviewer_bot", "auto"),
+                reviewer_by_target=extract_reviewer_by_target(raw),
             )
         )
         if target.target_name != name:

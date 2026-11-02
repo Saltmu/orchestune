@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shlex
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import orchestune.config_contracts as config_contracts
@@ -20,6 +20,7 @@ from orchestune.dispatch.execution_profiles import extract_execution_profile_con
 from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
 from orchestune.review.rounds import MAX_REVIEW_ROUNDS
 from orchestune.targets.cloud_routine import ROUTINE_TOKEN_ENV_VAR
+from orchestune.targets.contracts import ReviewerBot
 
 PROHIBITED_TOML_KEYS: dict[str, str] = {
     "model_tiers": config_contracts.retired_model_tiers_message("model_tiers"),
@@ -175,6 +176,13 @@ _SEMANTIC_REVIEW_TRIGGER_CHOICES = frozenset({"pr-comment", "dispatch-target"})
 
 _EXECUTION_PROFILE_TABLE_KEYS = frozenset({"execution_profiles", "execution-profiles"})
 
+# #1560: `[reviewer_by_target]` maps a concrete execution target to the reviewer
+# vendor that `reviewer-bot = "auto"` / `semantic-review-provider = "auto"` asks.
+_REVIEWER_BY_TARGET_KEYS = frozenset({"reviewer_by_target", "reviewer-by-target"})
+# `auto` is resolved to a concrete target before the reviewer is chosen.
+_REVIEWER_BY_TARGET_TARGETS = _TARGET_CHOICES - {"auto"}
+_REVIEWER_BY_TARGET_VENDORS = _REVIEWER_BOT_CHOICES - {"auto"}
+
 
 def _normalize_key(key: str) -> str:
     return key.replace("-", "_")
@@ -290,7 +298,36 @@ def _validate_compound_entry(normalized_key: str, raw_key: str, value: Any) -> A
         if not isinstance(value, dict):
             raise config_contracts.ConfigError(f"{raw_key!r} must be a table")
         return value
+    if raw_key in _REVIEWER_BY_TARGET_KEYS:
+        return _validate_reviewer_by_target(raw_key, value)
     raise config_contracts.ConfigError(f"unknown key {raw_key!r}")
+
+
+def _validate_reviewer_by_target(raw_key: str, value: Any) -> dict[str, str]:
+    """Check ``{target: reviewer}``; target names are matched verbatim."""
+    if not isinstance(value, dict):
+        raise config_contracts.ConfigError(f"{raw_key!r} must be a table")
+    for target, vendor in value.items():
+        if target not in _REVIEWER_BY_TARGET_TARGETS:
+            targets = ", ".join(repr(t) for t in sorted(_REVIEWER_BY_TARGET_TARGETS))
+            raise config_contracts.ConfigError(
+                f"{raw_key!r} has unknown target {target!r}; expected one of: {targets}"
+            )
+        if not isinstance(vendor, str) or vendor not in _REVIEWER_BY_TARGET_VENDORS:
+            vendors = ", ".join(repr(v) for v in sorted(_REVIEWER_BY_TARGET_VENDORS))
+            raise config_contracts.ConfigError(
+                f"{raw_key!r}.{target} must be one of: {vendors}"
+            )
+    return dict(value)
+
+
+def extract_reviewer_by_target(config_data: dict[str, Any]) -> dict[str, ReviewerBot]:
+    """The validated ``[reviewer_by_target]`` table, or ``{}`` when absent."""
+    for key in ("reviewer_by_target", "reviewer-by-target"):
+        table = config_data.get(key)
+        if table:
+            return cast("dict[str, ReviewerBot]", dict(table))
+    return {}
 
 
 def _validate_timezone_entry(raw_key: str, value: Any) -> str:
@@ -341,6 +378,11 @@ def _validate_single_entry(normalized_key: str, raw_key: str, value: Any) -> Any
 def validate_toml_config(config_data: dict[str, Any]) -> dict[str, Any]:
     """Validate TOML dictionary against the Dispatcher configuration schema."""
     validated: dict[str, Any] = {}
+    if _REVIEWER_BY_TARGET_KEYS <= config_data.keys():
+        raise config_contracts.ConfigError(
+            "'reviewer_by_target' and 'reviewer-by-target' are the same table; "
+            "specify only one"
+        )
     for raw_key, value in config_data.items():
         if raw_key in PROHIBITED_TOML_KEYS:
             raise config_contracts.ConfigError(PROHIBITED_TOML_KEYS[raw_key])

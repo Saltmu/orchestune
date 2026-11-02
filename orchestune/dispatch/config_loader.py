@@ -25,6 +25,7 @@ from orchestune.dispatch.config import (
     DispatcherConfig,
 )
 from orchestune.dispatch.config_schema import (
+    extract_reviewer_by_target,
     parse_ci_command,
     validate_toml_config,
 )
@@ -301,6 +302,7 @@ def _resolve_and_build_target(
             codex_cloud_env=codex_cloud_env,
             allow_unsafe_agent_execution=bool(args.allow_unsafe_agent_execution),
             reviewer_bot=toml_data.get("reviewer_bot", "auto"),
+            reviewer_by_target=extract_reviewer_by_target(toml_data),
         )
     )
     if args.profile:
@@ -433,6 +435,7 @@ def _assemble_dispatcher_config(
         "dag_ignore_patterns": dag_ignore_patterns,
         "dag_similarity_threshold": dag_similarity_threshold,
         "execution_profile_config": execution_profile_config,
+        "reviewer_by_target": extract_reviewer_by_target(toml_data),
         "consistency_mode": ConsistencyMode(toml_data.get("consistency_mode", "off")),
         "consistency_repair_allowlist": frozenset(repair_codes),
         **runtime_tuning_overrides(toml_data),

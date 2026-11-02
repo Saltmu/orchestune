@@ -6,13 +6,13 @@ escalation notice, so a stopped attempt can be understood from the notice alone.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any, Literal, cast
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.reviewer import resolve_reviewer_bot
+from orchestune.dispatch.reviewer import ReviewerBot, resolve_reviewer_bot
 from orchestune.dispatch.semantic_review_ack import AckAssessment, assess_review_ack
 from orchestune.review.semantic_gate import SemanticReviewStateV1
 
@@ -26,7 +26,11 @@ class ReviewerResolution:
     origin: str
 
 
-def describe_reviewer(provider: str, target_name: str) -> ReviewerResolution:
+def describe_reviewer(
+    provider: str,
+    target_name: str,
+    overrides: Mapping[str, ReviewerBot] | None = None,
+) -> ReviewerResolution:
     """The reviewer Layer-2 asks and why (explicit setting or auto + target)."""
     if provider in {"claude", "codex"}:
         return ReviewerResolution(
@@ -34,10 +38,18 @@ def describe_reviewer(provider: str, target_name: str) -> ReviewerResolution:
         )
     if provider != "auto":
         return ReviewerResolution(None, f"unsupported provider `{provider}`")
-    reviewer = resolve_reviewer_bot(cast(Literal["auto"], provider), target_name)
+    reviewer = resolve_reviewer_bot(
+        cast(Literal["auto"], provider), target_name, overrides
+    )
     if reviewer is None:
         return ReviewerResolution(
             None, f"`auto` cannot be resolved for dispatch target `{target_name}`"
+        )
+    if overrides and target_name in overrides:
+        return ReviewerResolution(
+            reviewer,
+            f"`auto` with `reviewer_by_target` entry for dispatch target "
+            f"`{target_name}`",
         )
     return ReviewerResolution(
         reviewer,
@@ -131,7 +143,9 @@ def build_review_diagnostics(
     """
     target = getattr(config.dispatch_target, "target_name", None)
     resolution = describe_reviewer(
-        config.semantic_review_provider, target if isinstance(target, str) else "local"
+        config.semantic_review_provider,
+        target if isinstance(target, str) else "local",
+        config.reviewer_by_target,
     )
     ack = assess_review_ack(
         trigger_times=[at for _, at in requests],
