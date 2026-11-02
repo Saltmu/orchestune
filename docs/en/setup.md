@@ -152,7 +152,7 @@ orchestune skills doctor --target all --scope project --offline
 ```
 
 > [!TIP]
-> **Migrating legacy symlinks/copies**: If skills were previously linked or copied using the older `orchestune setup` command or manual symlinks, run `orchestune skills install --target all --scope user --migrate-legacy` to safely upgrade them into managed skill directories. The legacy `orchestune setup` command is deprecated and delegates directly to `orchestune skills install`.
+> **Migrating legacy symlinks/copies**: If skills were previously linked or copied using the older `orchestune setup` command or manual symlinks, run `orchestune skills install --target all --scope user --migrate-legacy` to safely upgrade them into managed skill directories. The legacy `orchestune setup` command is deprecated. It does not go through `orchestune skills install`: it links the skills straight into the Claude Code, Codex CLI and Antigravity user skill directories (copying them on Windows without symlink privilege), and nothing records them in a manifest. Use `orchestune skills install` instead.
 
 ### Creating Scratch Directories (`orchestune scratch create`)
 

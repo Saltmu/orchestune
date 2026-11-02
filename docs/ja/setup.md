@@ -152,7 +152,7 @@ orchestune skills doctor --target all --scope project --offline
 ```
 
 > [!TIP]
-> **旧セットアップからの移行**: 以前の `orchestune setup` コマンドや手動シンボリックリンクで配置していた場合は、`orchestune skills install --target all --scope user --migrate-legacy` を実行することで、管理された新形式へ安全に移行できます。旧 `orchestune setup` コマンドは非推奨となり、内部で `orchestune skills install` へ委譲されます。
+> **旧セットアップからの移行**: 以前の `orchestune setup` コマンドや手動シンボリックリンクで配置していた場合は、`orchestune skills install --target all --scope user --migrate-legacy` を実行することで、管理された新形式へ安全に移行できます。旧 `orchestune setup` コマンドは非推奨です。`orchestune skills install` は経由せず、Claude Code、Codex CLI、Antigravity のユーザー用スキルディレクトリへ直接リンクを作ります（シンボリックリンクの権限がない Windows ではコピー）。manifest では管理されないため、`orchestune skills install` を使ってください。
 
 ### 作業用セッションディレクトリの作成 (`orchestune scratch create`)
 
