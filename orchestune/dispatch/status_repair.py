@@ -209,7 +209,7 @@ def _precondition_holds(
     labels: tuple[str, ...],
     dependencies_declared: bool,
     dependencies_resolved: bool,
-    has_current_blocked_outcome: bool = False,
+    has_current_blocked_outcome: bool | None = None,
 ) -> bool:
     primary = primary_status_labels(labels)
     if precondition in {"finding-certainty:known", "issue-open"}:
@@ -225,7 +225,7 @@ def _precondition_holds(
     if precondition == "no-promotion-hold":
         return not any(label in labels for label in PROMOTION_HOLD_LABELS)
     if precondition == "no-current-blocked-outcome":
-        return not has_current_blocked_outcome
+        return has_current_blocked_outcome is False
     if precondition.startswith("holds-primary-status:"):
         return precondition.removeprefix("holds-primary-status:") in primary
     if precondition.startswith("retains-primary-status:"):
@@ -242,7 +242,7 @@ def _inspect_blocked_outcome(
     if not callable(list_comments):
         list_comments = getattr(forge, "list_comments", None)
     if not callable(list_comments):
-        return False, None
+        return True, "forge comment listing method unavailable"
     try:
         comments = list_comments(task.issue_number)
     except Exception as exc:
@@ -254,7 +254,7 @@ def _inspect_blocked_outcome(
 
     get_issue = getattr(forge, "get_issue", None)
     if not callable(get_issue):
-        return False, None
+        return True, "forge get_issue method unavailable"
     try:
         issue = get_issue(task.issue_number)
     except Exception as exc:
@@ -264,18 +264,21 @@ def _inspect_blocked_outcome(
 
     match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
     if not match:
-        return False, None
+        return True, "blocked Outcome found but footprint block missing from issue"
 
     try:
         data = yaml.safe_load(match[1])
-    except Exception:
-        return False, None
+    except Exception as exc:
+        return True, f"blocked Outcome found but footprint YAML parsing failed: {exc}"
 
     if not isinstance(data, dict):
-        return False, None
+        return True, "blocked Outcome found but footprint block is not a mapping"
 
     claim_id = data.get("claim_id")
-    if claim_id is not None and str(claim_id) == str(outcome.claim_id):
+    if claim_id is None:
+        return True, "blocked Outcome found but footprint has no claim_id"
+
+    if str(claim_id) == str(outcome.claim_id):
         return (
             True,
             f"current blocked Outcome: reason={outcome.reason}, claim_id={outcome.claim_id}",
@@ -290,8 +293,6 @@ def _fresh_preconditions_hold(
     tasks_by_issue: Mapping[int, Task],
     completion_evidence: CompletionEvidenceView,
     config: DispatcherConfig,
-    *,
-    diagnostic_sink: list[str] | None = None,
 ) -> FreshDependencyEvaluation | None:
     evaluation = evaluate_fresh_dependencies(
         task,
@@ -311,30 +312,18 @@ def _fresh_preconditions_hold(
     dependencies_declared = not evaluation.dependencies.is_empty
     dependencies_resolved = dependencies_completed(evaluation.assessment)
 
+    has_blocked = None
+    if "no-current-blocked-outcome" in command.preconditions:
+        has_blocked, _ = _inspect_blocked_outcome(evaluation.task, config)
+
     for precondition in command.preconditions:
-        if precondition == "no-current-blocked-outcome":
-            continue
         if not _precondition_holds(
             precondition,
             labels=labels,
             dependencies_declared=dependencies_declared,
             dependencies_resolved=dependencies_resolved,
+            has_current_blocked_outcome=has_blocked,
         ):
-            return None
-
-    if "no-current-blocked-outcome" in command.preconditions:
-        has_blocked_outcome, diagnostic = _inspect_blocked_outcome(
-            evaluation.task, config
-        )
-        if not _precondition_holds(
-            "no-current-blocked-outcome",
-            labels=labels,
-            dependencies_declared=dependencies_declared,
-            dependencies_resolved=dependencies_resolved,
-            has_current_blocked_outcome=has_blocked_outcome,
-        ):
-            if diagnostic_sink is not None and diagnostic is not None:
-                diagnostic_sink.append(diagnostic)
             return None
 
     return evaluation
@@ -510,22 +499,20 @@ def _execute(
     now: datetime,
     intent: TransitionIntent | None = None,
 ) -> tuple[VerifiedStatusTransition | None, str | None]:
-    diagnostics: list[str] = []
-    try:
-        fresh = _fresh_preconditions_hold(
-            command,
-            task,
-            tasks_by_issue,
-            completion_evidence,
-            config,
-            diagnostic_sink=diagnostics,
-        )
-    except TypeError:
-        fresh = _fresh_preconditions_hold(
-            command, task, tasks_by_issue, completion_evidence, config
-        )
+    fresh = _fresh_preconditions_hold(
+        command,
+        task,
+        tasks_by_issue,
+        completion_evidence,
+        config,
+    )
     if fresh is None:
-        return None, diagnostics[0] if diagnostics else None
+        diagnostic = None
+        if "no-current-blocked-outcome" in command.preconditions:
+            has_blocked, diag = _inspect_blocked_outcome(task, config)
+            if has_blocked:
+                diagnostic = diag
+        return None, diagnostic
     current = intent or journal.plan(_new_intent(command, now))
     _apply_command(command, fresh.task, current, journal, config)
     expected = _intent_expected_label(current)

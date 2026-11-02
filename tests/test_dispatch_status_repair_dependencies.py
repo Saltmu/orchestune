@@ -385,6 +385,12 @@ def test_precondition_holds_no_current_blocked_outcome():
         dependencies_resolved=True,
         has_current_blocked_outcome=True,
     )
+    assert not _precondition_holds(
+        "no-current-blocked-outcome",
+        labels=("status:blocked",),
+        dependencies_declared=True,
+        dependencies_resolved=True,
+    )
 
 
 def test_inspect_blocked_outcome_scenarios(tmp_path):
@@ -484,7 +490,7 @@ def test_inspect_blocked_outcome_scenarios(tmp_path):
     assert has_blocked is True
     assert "issue fetch error" in str(diag)
 
-    # 7. Footprint has no claim_id (e.g. operator removed claim_id) -> holds = False
+    # 7. Footprint has no claim_id -> fail closed: holds = True, diagnostic
     forge.get_issue.side_effect = None
     forge.get_issue.return_value = make_issue(
         2,
@@ -493,8 +499,30 @@ def test_inspect_blocked_outcome_scenarios(tmp_path):
         body="## Footprint\n```yaml\nsubtask_id: task-b\nfootprint:\n  - src/foo.py\n```\n",
     )
     has_blocked, diag = _inspect_blocked_outcome(task, config)
-    assert has_blocked is False
-    assert diag is None
+    assert has_blocked is True
+    assert "no claim_id" in str(diag)
+
+    # 8. Footprint missing entirely -> fail closed: holds = True
+    forge.get_issue.return_value = make_issue(
+        2,
+        subtask_id="task-b",
+        labels=("status:blocked",),
+        body="No footprint here at all",
+    )
+    has_blocked, diag = _inspect_blocked_outcome(task, config)
+    assert has_blocked is True
+    assert "footprint block missing" in str(diag)
+
+    # 9. Footprint invalid YAML -> fail closed: holds = True
+    forge.get_issue.return_value = make_issue(
+        2,
+        subtask_id="task-b",
+        labels=("status:blocked",),
+        body="## Footprint\n```yaml\n: invalid: [yaml\n```\n",
+    )
+    has_blocked, diag = _inspect_blocked_outcome(task, config)
+    assert has_blocked is True
+    assert "YAML parsing failed" in str(diag)
 
 
 def _make_transition_command(subject_id: str = "2") -> RepairCommand:
