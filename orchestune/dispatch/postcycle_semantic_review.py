@@ -12,9 +12,7 @@ same post-cycle.
 from __future__ import annotations
 
 import hashlib
-import os
 import re
-import socket
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -26,6 +24,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc.git import evaluate_worktree_removal
 from orchestune.dispatch.local_semantic_fix import cleanup_semantic_fix_worktree
 from orchestune.dispatch.postcycle_semantic_review_support import (
+    default_worker_id,
     run_cycle_cleanup,
     semantic_ci_verifier,
 )
@@ -1094,10 +1093,6 @@ class SemanticReviewCycleRunner:
         )
 
 
-def _default_worker_id() -> str:
-    return f"semantic-runner@{socket.gethostname()}:{os.getpid()}"
-
-
 def advance_pending_semantic_reviews(
     config: DispatcherConfig,
     *,
@@ -1112,7 +1107,7 @@ def advance_pending_semantic_reviews(
 ) -> dict[str, Any]:
     """Advance every pending attempt of ``config``'s parent by at most one phase."""
     root = (repository_root or Path(".")).resolve()
-    resolved_worker_id = worker_id or _default_worker_id()
+    resolved_worker_id = worker_id or default_worker_id()
     runner = SemanticReviewCycleRunner(
         config,
         forge=config.resolved_forge,
