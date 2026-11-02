@@ -510,14 +510,13 @@ def _execute(
     now: datetime,
     intent: TransitionIntent | None = None,
 ) -> tuple[VerifiedStatusTransition | None, str | None]:
-    res = _fresh_preconditions_hold(
+    fresh, diagnostic = _fresh_preconditions_hold(
         command,
         task,
         tasks_by_issue,
         completion_evidence,
         config,
     )
-    fresh, diagnostic = res if isinstance(res, tuple) else (res, None)
     if fresh is None:
         return None, diagnostic
     current = intent or journal.plan(_new_intent(command, now))
