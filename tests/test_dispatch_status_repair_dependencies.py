@@ -524,6 +524,23 @@ def test_inspect_blocked_outcome_scenarios(tmp_path):
     assert has_blocked is True
     assert "YAML parsing failed" in str(diag)
 
+    # 10. Outcome has no claim_id -> fail closed: holds = True
+    forge.list_all_issue_comments.return_value = [
+        {
+            "body": OutcomeRecord(
+                result="blocked",
+                issue=2,
+                reason="footprint-expansion-required",
+                claim_id=None,
+            ).render(),
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+    ]
+    forge.get_issue.return_value = blocked_issue
+    has_blocked, diag = _inspect_blocked_outcome(task, config)
+    assert has_blocked is True
+    assert "it has no claim_id" in str(diag)
+
 
 def _make_transition_command(subject_id: str = "2") -> RepairCommand:
     return RepairCommand(

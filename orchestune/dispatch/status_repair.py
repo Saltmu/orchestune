@@ -278,6 +278,9 @@ def _inspect_blocked_outcome(
     if claim_id is None:
         return True, "blocked Outcome found but footprint has no claim_id"
 
+    if outcome.claim_id is None:
+        return True, "blocked Outcome found but it has no claim_id"
+
     if str(claim_id) == str(outcome.claim_id):
         return (
             True,
@@ -293,7 +296,7 @@ def _fresh_preconditions_hold(
     tasks_by_issue: Mapping[int, Task],
     completion_evidence: CompletionEvidenceView,
     config: DispatcherConfig,
-) -> FreshDependencyEvaluation | None:
+) -> tuple[FreshDependencyEvaluation | None, str | None]:
     evaluation = evaluate_fresh_dependencies(
         task,
         tasks_by_issue,
@@ -301,32 +304,40 @@ def _fresh_preconditions_hold(
         forge=config.resolved_forge,
     )
     if evaluation is None:
-        return None
+        return None, None
     labels = tuple(evaluation.task.status_labels)
     _warn_illegal_transition(command, labels)
     if evaluation.task.issue_state.upper() != "OPEN" or not _repair_guard_holds(
         command, labels
     ):
-        return None
+        return None, None
 
     dependencies_declared = not evaluation.dependencies.is_empty
     dependencies_resolved = dependencies_completed(evaluation.assessment)
 
-    has_blocked = None
-    if "no-current-blocked-outcome" in command.preconditions:
-        has_blocked, _ = _inspect_blocked_outcome(evaluation.task, config)
-
     for precondition in command.preconditions:
+        if precondition == "no-current-blocked-outcome":
+            continue
         if not _precondition_holds(
             precondition,
             labels=labels,
             dependencies_declared=dependencies_declared,
             dependencies_resolved=dependencies_resolved,
+        ):
+            return None, None
+
+    if "no-current-blocked-outcome" in command.preconditions:
+        has_blocked, diag = _inspect_blocked_outcome(evaluation.task, config)
+        if not _precondition_holds(
+            "no-current-blocked-outcome",
+            labels=labels,
+            dependencies_declared=dependencies_declared,
+            dependencies_resolved=dependencies_resolved,
             has_current_blocked_outcome=has_blocked,
         ):
-            return None
+            return None, diag
 
-    return evaluation
+    return evaluation, None
 
 
 def _apply_command(
@@ -499,19 +510,15 @@ def _execute(
     now: datetime,
     intent: TransitionIntent | None = None,
 ) -> tuple[VerifiedStatusTransition | None, str | None]:
-    fresh = _fresh_preconditions_hold(
+    res = _fresh_preconditions_hold(
         command,
         task,
         tasks_by_issue,
         completion_evidence,
         config,
     )
+    fresh, diagnostic = res if isinstance(res, tuple) else (res, None)
     if fresh is None:
-        diagnostic = None
-        if "no-current-blocked-outcome" in command.preconditions:
-            has_blocked, diag = _inspect_blocked_outcome(task, config)
-            if has_blocked:
-                diagnostic = diag
         return None, diagnostic
     current = intent or journal.plan(_new_intent(command, now))
     _apply_command(command, fresh.task, current, journal, config)
