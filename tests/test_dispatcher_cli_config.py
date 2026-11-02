@@ -534,6 +534,7 @@ class TestDispatcherConfigLoading:
             "claude-cli",
             "agy-cli",
             "codex-cli",
+            "grok-cli",
             "auto",
         ],
     )

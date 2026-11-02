@@ -1,6 +1,6 @@
 # Setup Guide
 
-This guide describes how to install Orchestune, register its skills with various AI assistants (Claude Code, Codex CLI, Antigravity), and configure the cloud execution environment (Claude Code Cloud Routine).
+This guide describes how to install Orchestune, register its skills with various AI assistants (Claude Code, Codex CLI, Antigravity, Grok CLI), and configure the cloud execution environment (Claude Code Cloud Routine).
 
 ---
 
@@ -100,9 +100,12 @@ The AI agent needs to know that the `orchestune`, `orchestune-provision`, and `o
 - **Antigravity IDE**: `.agents/skills/` (project) or `~/.gemini/config/skills/` (user)
 - **Antigravity CLI**: `.agents/skills/` (project) or `~/.gemini/antigravity-cli/skills/` (user)
 - **Claude Code**: `.claude/skills/` (project) or `~/.claude/skills/` (user)
+- **Grok CLI**: `.grok/skills/` (project) or `~/.grok/skills/` (user)
 
 > [!NOTE]
 > Codex, Antigravity IDE, and Antigravity CLI share the canonical `.agents/skills/` directory at project scope. Orchestune automatically deduplicates targets to prevent redundant copies.
+>
+> Grok CLI also reads `~/.agents/skills/` (the Codex user location) and Claude Code skills, so skills installed for Codex or Claude can appear to Grok as well; the official documentation does not state which copy wins when names collide, and Orchestune does not skip any placement automatically. To place skills for Grok only, pass `--target grok`. `--target all` includes Grok. The deprecated `orchestune setup` does not install to Grok; use `orchestune skills install --target grok`.
 
 ### Installing Skills (`orchestune skills install`)
 
@@ -120,7 +123,7 @@ orchestune skills install --target all --scope user
 orchestune skills install --target codex --scope project
 ```
 
-Project-scoped skills (`.agents/skills/` and `.claude/skills/`) can be committed to Git so all team members have access to the same skills. Local transaction state and lock files are maintained under `.orchestune-installer/` and should remain gitignored.
+Project-scoped skills (`.agents/skills/`, `.claude/skills/` and `.grok/skills/`) can be committed to Git so all team members have access to the same skills. Local transaction state and lock files are maintained under `.orchestune-installer/` and should remain gitignored.
 
 #### `--with-workflow-skill`: Deploying a generic workflow skill project-locally
 
@@ -213,10 +216,10 @@ Before submission, Orchestune pushes the task branch to `origin`, then runs `cod
 
 ---
 
-## 5. Setting Up Local `claude` / `agy` / `codex` CLI Dispatch
+## 5. Setting Up Local `claude` / `agy` / `codex` / `grok` CLI Dispatch
 
 > [!NOTE]
-> When `--dispatch-target` is not explicitly specified, outside of GitHub Actions (local/interactive runs) the dispatcher automatically selects `auto`, which detects and dispatches to whichever of `claude`/`agy`/`codex` is installed on `PATH` (preferring `claude`, then `agy`, then `codex`). If none are installed, it warns and falls back to the no-op dummy. To pin a specific CLI instead, pass `claude-cli`/`agy-cli`/`codex-cli` from this section explicitly.
+> When `--dispatch-target` is not explicitly specified, outside of GitHub Actions (local/interactive runs) the dispatcher automatically selects `auto`, which detects and dispatches to whichever of `claude`/`agy`/`codex`/`grok` is installed on `PATH` (preferring `claude`, then `agy`, `codex`, `grok`). If none are installed, it warns and falls back to the no-op dummy. To pin a specific CLI instead, pass `claude-cli`/`agy-cli`/`codex-cli`/`grok-cli` from this section explicitly.
 
 ### Prerequisite: Installing the `claude` CLI (Claude Code)
 
@@ -229,7 +232,7 @@ npm install -g @anthropic-ai/claude-code
 
 After installing, confirm the CLI is recognized with `claude --version`.
 
-To dispatch subtasks to a local `claude`, `agy` (Antigravity), or `codex` (Codex CLI) session without hand-writing a `--local-cmd` template, use the built-in presets:
+To dispatch subtasks to a local `claude`, `agy` (Antigravity), `codex` (Codex CLI), or `grok` (Grok Build) session without hand-writing a `--local-cmd` template, use the built-in presets:
 
 ```bash
 orchestune dispatch --dispatch-target claude-cli
@@ -237,13 +240,15 @@ orchestune dispatch --dispatch-target claude-cli
 orchestune dispatch --dispatch-target agy-cli
 # or
 orchestune dispatch --dispatch-target codex-cli
+# or
+orchestune dispatch --dispatch-target grok-cli
 # to auto-detect whichever CLI is installed, omit --dispatch-target or pass auto
 orchestune dispatch --dispatch-target auto
 ```
 
-These run `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --add-dir . --print-timeout 60m --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` (non-interactive print/exec mode) in each subtask's own worktree. All presets always pass a permission-bypass flag so an unattended run never blocks on an interactive prompt.
+These run `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --add-dir . --print-timeout 60m --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` / `grok -p "..." --always-approve --no-plan --no-auto-update --output-format streaming-json` (non-interactive print/exec mode) in each subtask's own worktree. All presets always pass a permission-bypass flag so an unattended run never blocks on an interactive prompt.
 
-By default, the resolved execution target also determines a cross-vendor PR reviewer: `claude-cli` and `cloud-routine` request Codex, while `codex-cli`, `codex-cloud`, and `agy-cli` request Claude. This selection happens after `--dispatch-target auto` resolves to a concrete target. Use `reviewer-bot = "claude"` or `reviewer-bot = "codex"` in your configuration file (`orchestune.toml`) to override it. A custom `local-cmd` may use the `{reviewer_bot}` placeholder; arbitrary custom commands are otherwise left unchanged.
+By default, the resolved execution target also determines a cross-vendor PR reviewer: `claude-cli` and `cloud-routine` request Codex, while `codex-cli`, `codex-cloud`, `agy-cli`, and `grok-cli` request Claude. This selection happens after `--dispatch-target auto` resolves to a concrete target. Use `reviewer-bot = "claude"` or `reviewer-bot = "codex"` in your configuration file (`orchestune.toml`) to override it. A custom `local-cmd` may use the `{reviewer_bot}` placeholder; arbitrary custom commands are otherwise left unchanged.
 
 > [!IMPORTANT]
 > **Trust Model and Security Risks**
@@ -251,6 +256,15 @@ By default, the resolved execution target also determines a cross-vendor PR revi
 > These local CLI targets run with full permissions, bypassing interactive approvals and sandboxes. To prevent accidental unrestricted execution, you must explicitly opt in by passing the `--allow-unsafe-agent-execution` CLI flag (setting this in configuration files is prohibited for safety). If this option is not specified, Orchestune will fail to start (fail-closed).
 > 
 > Note that a dedicated `git worktree` is only a boundary for isolating source code changes; it is **not** an OS-level security boundary (sandbox). An agent process running with bypassed permissions can access anything the host user has access to, including your home directory, credentials, other repositories, and network resources. For untrusted codebases/issues, or when running in shared/production environments, we strongly recommend wrapping Orchestune in a secure container or VM isolation layer.
+
+### Using `grok-cli` (Grok Build)
+
+- **Authentication**: Orchestune never handles credentials. Sign in beforehand with `grok login` (add `--device-auth` on headless machines) or set `XAI_API_KEY` in the environment that runs the dispatcher.
+- **Permissions**: `--always-approve` bypasses approvals, so `--allow-unsafe-agent-execution` is required like the other local CLIs. Deny rules and `PreToolUse` hooks in your `~/.grok/config.toml` or the project's `.grok/config.toml` still apply; Orchestune does not override them. A task that stops waiting for an approval is reclaimed by the existing `task_timeout_seconds` zombie GC.
+- **Plan review**: `--always-approve` does not skip plan review, so the preset adds `--no-plan` to avoid unattended stalls.
+- **Profiles**: `[execution_profiles.<name>.grok-cli]` accepts `model` and `reasoning_effort`, passed as `--model` / `--effort`. The accepted `--effort` values are not published, so Orchestune does not validate them; an invalid value makes Grok exit with an error, which is handled by the existing early-death path. Without a `grok-cli` table, Grok runs with its default model, but an explicit `--profile X` still fails validation if `X` has no `grok-cli` entry.
+- **Logs and usage**: Output is written as NDJSON (`--output-format streaming-json`) to `logs/<branch-slug>.log`. The JSON schema is not published, so only the generic usage parser applies. If it finds no `usage.input_tokens` / `output_tokens`, usage is unavailable and a configured `max_tokens_per_task` evaluates to `unknown` (never `allowed`). Model names and costs are never guessed.
+- **Not supported**: session-limit detection (#1270) is `claude-cli` only, so a Grok limit is handled as a normal early-death / reclaim.
 
 There is no separate permission-file setup step required; `orchestune bootstrap` only ensures the required GitHub labels exist.
 
@@ -298,7 +312,7 @@ concurrency:
 - A pending run can be replaced by a newer run (GitHub's default queue behavior; FIFO and execution of every tick are not guaranteed). A running run is not interrupted thanks to `cancel-in-progress: false`, but manual cancellation, timeouts, and runner loss cannot be prevented. After an abnormal termination, check the state with the existing recovery procedure.
 - To make replacement of pending runs harmless, a single run processes all target parents sequentially in the same step (splitting runs per parent would let parent A's pending run be replaced by parent B's run, starving parent A). The target parents are only the one given by the optional `workflow_dispatch` input `parent_issue`, or otherwise (including `schedule`) all parents in the repository variable `ORCHESTUNE_PARENT_ISSUES` (whitespace-separated positive integers). A parent given only manually is not re-run if the run is replaced; register parents under continuous operation in the variable and remove them when they are done.
 - State `timeout-minutes` explicitly on the control job. One run handles all parents and the Integrator CI also runs for each parent, so leave headroom for "number of parents × Integrator timeout". A timeout can stop in the middle of post-processing, so check with the recovery procedure when it is exceeded.
-- Control execution on Actions must use only external targets (`cloud-routine`/`codex-cloud`). Do not use local-process targets (`local`/`claude-cli`/`agy-cli`/`codex-cli`/`auto`), because the process and worktree are lost when the job ends. An external target only warns and falls back to a local launch when credentials cannot be resolved, so pass them from secrets to the control step's `env:` (`cloud-routine`: `ORCHESTUNE_ROUTINE_ID`/`ORCHESTUNE_ROUTINE_TOKEN`; `codex-cloud`: `ORCHESTUNE_CODEX_CLOUD_ENV`. The ID and Codex environment may instead be set via `routine_id`/`codex_cloud_env` in the config, but the token only via env).
+- Control execution on Actions must use only external targets (`cloud-routine`/`codex-cloud`). Do not use local-process targets (`local`/`claude-cli`/`agy-cli`/`codex-cli`/`grok-cli`/`auto`), because the process and worktree are lost when the job ends. An external target only warns and falls back to a local launch when credentials cannot be resolved, so pass them from secrets to the control step's `env:` (`cloud-routine`: `ORCHESTUNE_ROUTINE_ID`/`ORCHESTUNE_ROUTINE_TOKEN`; `codex-cloud`: `ORCHESTUNE_CODEX_CLOUD_ENV`. The ID and Codex environment may instead be set via `routine_id`/`codex_cloud_env` in the config, but the token only via env).
 - Receive `inputs`/`vars` through the step's `env:` and do not expand them directly into the `run:` body with `${{ }}` (script injection protection).
 
 **Local state lost on the runner**: do not persist the following through caches or artifacts (`actions/cache` keys are immutable and last-writer-wins writes are not possible, so continuity of ownership cannot be proven). If the impact is not acceptable, use a persistent self-hosted runner or a local single-owner setup.

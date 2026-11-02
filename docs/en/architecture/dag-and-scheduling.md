@@ -92,6 +92,7 @@ graph LR
         T1["claude-cli / agy-cli: --model ..."]
         T2["codex-cli: --model ... -c model_reasoning_effort=..."]
         T3["cloud-routine / codex-cloud: API payload"]
+        T4["grok-cli: --model ... --effort ..."]
     end
 
     EP --> Resolver
@@ -107,6 +108,7 @@ graph LR
   * `claude-cli`: Attaches `--model <model>` and `--effort <effort>` to CLI invocations.
   * `agy-cli`: Attaches `--model <model>`. If `reasoning_effort` is configured, logs a warning and safely skips the unsupported setting.
   * `codex-cli`: Attaches `--model <model>` and `-c model_reasoning_effort=<effort>`.
+  * `grok-cli`: Attaches `--model <model>` and `--effort <effort>` (the effort value is passed through unvalidated).
   * `cloud-routine`: Sets `model` in the API fire payload.
   * `codex-cloud`: Configures Codex Cloud task parameters.
   Unsupported target options degrade safely (warning logged, parameter omitted) without aborting the dispatch cycle.

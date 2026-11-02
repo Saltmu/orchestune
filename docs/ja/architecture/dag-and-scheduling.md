@@ -92,6 +92,7 @@ graph LR
         T1["claude-cli / agy-cli: --model ..."]
         T2["codex-cli: --model ... -c model_reasoning_effort=..."]
         T3["cloud-routine / codex-cloud: API payload"]
+        T4["grok-cli: --model ... --effort ..."]
     end
 
     EP --> Resolver
@@ -107,6 +108,7 @@ graph LR
   * `claude-cli`: `--model <model>` と `--effort <effort>` をコマンドに付与します。
   * `agy-cli`: `--model <model>` をコマンドに付与。推論強度（`reasoning_effort`）が指定された場合は、警告ログを出力した上で非対応の設定を安全にスキップします。
   * `codex-cli`: `--model <model>` および `-c model_reasoning_effort=<effort>` を付与。
+  * `grok-cli`: `--model <model>` と `--effort <effort>` をコマンドに付与（effort の値は検証せずそのまま渡します）。
   * `cloud-routine`: APIリクエストペイロードの `model` フィールドに設定。
   * `codex-cloud`: Codex Cloudセッションのパラメータに設定。
   非対応のターゲット固有フラグが指定された場合でも、ディスパッチサイクルを中断させることなく安全に縮退（警告ログの出力＋スキップ）します。

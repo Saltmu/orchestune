@@ -96,6 +96,7 @@ class TestBuildArgParser:
             "claude-cli",
             "agy-cli",
             "codex-cli",
+            "grok-cli",
             "cloud-routine",
             "codex-cloud",
         ],

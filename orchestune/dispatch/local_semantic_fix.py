@@ -19,7 +19,7 @@ def build_local_semantic_fix_cmd(
 ) -> list[str] | None:
     """Build the CLI execution command for a semantic fix agent.
 
-    Built-in CLI templates (claude, codex, agy) substitute the prompt directly while
+    Built-in CLI templates (claude, codex, agy, grok) substitute the prompt directly while
     reusing permission and format flags. Custom user local_cmd is rejected because
     its command structure cannot safely substitute the prompt.
     """
@@ -55,6 +55,15 @@ def build_local_semantic_fix_cmd(
             "--print-timeout",
             "60m",
             "--dangerously-skip-permissions",
+        ]
+    if normalized == "grok":
+        return [
+            "grok",
+            "-p",
+            prompt,
+            "--always-approve",
+            "--no-plan",
+            "--no-auto-update",
         ]
     return None
 

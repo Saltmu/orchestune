@@ -48,6 +48,7 @@ _LOCAL_FIX_BINARIES = {
     "claude-cli": "claude",
     "codex-cli": "codex",
     "agy-cli": "agy",
+    "grok-cli": "grok",
     "codex-cloud": "codex",
 }
 _SECRET_ASSIGNMENT = re.compile(

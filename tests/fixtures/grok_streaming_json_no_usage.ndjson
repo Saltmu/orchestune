@@ -1,0 +1,4 @@
+{"type":"session_start","session_id":"synthetic-0001"}
+{"type":"assistant_message","content":"Synthetic placeholder event without usage fields."}
+{"type":"tool_call","name":"synthetic_tool","status":"completed"}
+{"type":"session_end","status":"completed"}

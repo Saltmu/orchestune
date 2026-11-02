@@ -60,6 +60,7 @@ VALID_SEMANTIC_FIX_PROVIDERS = frozenset(
         "claude-cli",
         "codex-cli",
         "agy-cli",
+        "grok-cli",
         "cloud-routine",
         "codex-cloud",
         "local",

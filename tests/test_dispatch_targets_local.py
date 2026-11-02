@@ -962,7 +962,7 @@ class TestBuildDispatchTarget:
         assert target._local_cmd == "custom-cmd"
 
     def test_unsafe_cli_without_allow_unsafe_flag_raises_error(self, tmp_path):
-        for target_name in ["claude-cli", "agy-cli", "codex-cli"]:
+        for target_name in ["claude-cli", "agy-cli", "codex-cli", "grok-cli"]:
             with pytest.raises(ValueError) as excinfo:
                 build_dispatch_target(
                     TargetBuildConfig(target_name, None, None, tmp_path / "logs")
@@ -984,7 +984,7 @@ class TestBuildDispatchTarget:
             assert "完全権限実行となります" in str(excinfo.value)
 
     def test_unsafe_cli_with_allow_unsafe_flag_succeeds(self, tmp_path):
-        for target_name in ["claude-cli", "agy-cli", "codex-cli"]:
+        for target_name in ["claude-cli", "agy-cli", "codex-cli", "grok-cli"]:
             target = build_dispatch_target(
                 TargetBuildConfig(
                     target_name,

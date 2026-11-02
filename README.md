@@ -55,7 +55,7 @@ uv tool install "orchestune==<RELEASE_VERSION>"
 uv tool install "git+https://github.com/Saltmu/orchestune.git"
 ```
 
-After installation, install Orchestune skills to your AI assistants (Claude Code, Codex CLI, Antigravity IDE, Antigravity CLI):
+After installation, install Orchestune skills to your AI assistants (Claude Code, Codex CLI, Antigravity IDE, Antigravity CLI, Grok CLI):
 
 ```bash
 # Install to current project (recommended for team sharing):

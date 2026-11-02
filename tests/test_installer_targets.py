@@ -54,6 +54,30 @@ def test_resolve_single_target_project_antigravity(tmp_path: Path):
     assert roots_cli[0].path == project_dir / ".agents" / "skills"
 
 
+def test_resolve_grok_project_and_user_roots(tmp_path: Path):
+    project_dir = tmp_path / "my_project"
+    project_dir.mkdir()
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+
+    project_roots = resolve_targets(
+        targets=[TargetType.GROK],
+        scope=ScopeType.PROJECT,
+        project_dir=project_dir,
+    )
+    assert len(project_roots) == 1
+    assert project_roots[0].target_types == [TargetType.GROK]
+    assert project_roots[0].path == project_dir / ".grok" / "skills"
+
+    user_roots = resolve_targets(
+        targets=[TargetType.GROK],
+        scope=ScopeType.USER,
+        home=fake_home,
+    )
+    assert len(user_roots) == 1
+    assert user_roots[0].path == fake_home / ".grok" / "skills"
+
+
 def test_resolve_project_deduplication(tmp_path: Path):
     project_dir = tmp_path / "my_project"
     project_dir.mkdir()
@@ -79,11 +103,12 @@ def test_resolve_all_project_roots(tmp_path: Path):
         scope=ScopeType.PROJECT,
         project_dir=project_dir,
     )
-    assert len(roots) == 2
+    assert len(roots) == 3
     paths = {r.path for r in roots}
     assert paths == {
         project_dir / ".agents" / "skills",
         project_dir / ".claude" / "skills",
+        project_dir / ".grok" / "skills",
     }
 
 
@@ -132,13 +157,14 @@ def test_resolve_all_user_targets(tmp_path: Path):
         scope=ScopeType.USER,
         home=fake_home,
     )
-    assert len(roots) == 4
+    assert len(roots) == 5
     paths = {r.path for r in roots}
     assert paths == {
         fake_home / ".agents" / "skills",
         fake_home / ".claude" / "skills",
         fake_home / ".gemini" / "config" / "skills",
         fake_home / ".gemini" / "antigravity-cli" / "skills",
+        fake_home / ".grok" / "skills",
     }
 
 

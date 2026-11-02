@@ -1,6 +1,6 @@
 # セットアップガイド
 
-Orchestuneのインストール方法、各種AIアシスタント（Claude Code, Codex CLI, Antigravity）へのスキル登録方法、およびクラウド実行（Claude Code Cloud Routine）の設定手順について説明します。
+Orchestuneのインストール方法、各種AIアシスタント（Claude Code, Codex CLI, Antigravity, Grok CLI）へのスキル登録方法、およびクラウド実行（Claude Code Cloud Routine）の設定手順について説明します。
 
 ---
 
@@ -100,9 +100,12 @@ AIエージェントに `orchestune` / `orchestune-provision` / `orchestune-disp
 - **Antigravity IDE**: `.agents/skills/`（プロジェクト）または `~/.gemini/config/skills/`（ユーザー）
 - **Antigravity CLI**: `.agents/skills/`（プロジェクト）または `~/.gemini/antigravity-cli/skills/`（ユーザー）
 - **Claude Code**: `.claude/skills/`（プロジェクト）または `~/.claude/skills/`（ユーザー）
+- **Grok CLI**: `.grok/skills/`（プロジェクト）または `~/.grok/skills/`（ユーザー）
 
 > [!NOTE]
 > Codex、Antigravity IDE、Antigravity CLI はプロジェクトスコープにおいて `.agents/skills/` ディレクトリを共有します。Orchestune は同一物理ディレクトリへの重複配置を自動で集約します。
+>
+> Grok CLI は `~/.agents/skills/`（Codex のユーザー配置先）や Claude Code のスキルも読み込むため、Codex／Claude 向けに入れたスキルが Grok からも見えることがあります。同名スキルがある場合にどちらが優先されるかは公式ドキュメントに記載がなく、Orchestune は配置を自動的に省略しません。Grok だけに入れたい場合は `--target grok` を指定してください。`--target all` には Grok も含まれます。非推奨の `orchestune setup` は Grok へ配置しないため、`orchestune skills install --target grok` を使ってください。
 
 ### スキルのインストール (`orchestune skills install`)
 
@@ -120,7 +123,7 @@ orchestune skills install --target all --scope user
 orchestune skills install --target codex --scope project
 ```
 
-プロジェクトスコープのスキル（`.agents/skills/` および `.claude/skills/`）は、チーム全体で共有するためにGitへコミットできます。ローカルのトランザクション状態やロックファイルは `.orchestune-installer/` 配下で管理され、`.gitignore` に含めて除外します。
+プロジェクトスコープのスキル（`.agents/skills/`、`.claude/skills/`、`.grok/skills/`）は、チーム全体で共有するためにGitへコミットできます。ローカルのトランザクション状態やロックファイルは `.orchestune-installer/` 配下で管理され、`.gitignore` に含めて除外します。
 
 #### `--with-workflow-skill`: 汎用ワークフロースキルのプロジェクトローカル配置
 
@@ -213,10 +216,10 @@ orchestune scratch create plan 1191
 
 ---
 
-## 5. ローカルの`claude` / `agy` / `codex` CLIへのディスパッチ設定
+## 5. ローカルの`claude` / `agy` / `codex` / `grok` CLIへのディスパッチ設定
 
 > [!NOTE]
-> `--dispatch-target` を明示指定しない場合、GitHub Actions以外（ローカル/対話実行）では `auto` が自動選択され、PATH上にインストールされている `claude`/`agy`/`codex` のいずれか（`claude`優先、次点`agy`、`codex`）へ自動的にディスパッチされます。いずれもインストールされていない場合は警告を出した上でダミー起動（no-op）にフォールバックします。特定のCLIに固定したい場合は、本セクションの `claude-cli`/`agy-cli`/`codex-cli` を明示指定してください。
+> `--dispatch-target` を明示指定しない場合、GitHub Actions以外（ローカル/対話実行）では `auto` が自動選択され、PATH上にインストールされている `claude`/`agy`/`codex`/`grok` のいずれか（`claude`優先、次点`agy`、`codex`、`grok`）へ自動的にディスパッチされます。いずれもインストールされていない場合は警告を出した上でダミー起動（no-op）にフォールバックします。特定のCLIに固定したい場合は、本セクションの `claude-cli`/`agy-cli`/`codex-cli`/`grok-cli` を明示指定してください。
 
 ### 前提: `claude` CLI（Claude Code）のインストール
 
@@ -229,7 +232,7 @@ npm install -g @anthropic-ai/claude-code
 
 インストール後、`claude --version` でCLIが認識されることを確認してください。
 
-`--local-cmd` テンプレートを手書きせずに、ローカルの`claude`・`agy`(Antigravity)・`codex`(Codex CLI) いずれかのCLIセッションへサブタスクをディスパッチするには、組み込みのプリセットを使用します：
+`--local-cmd` テンプレートを手書きせずに、ローカルの`claude`・`agy`(Antigravity)・`codex`(Codex CLI)・`grok`(Grok Build) いずれかのCLIセッションへサブタスクをディスパッチするには、組み込みのプリセットを使用します：
 
 ```bash
 orchestune dispatch --dispatch-target claude-cli
@@ -237,13 +240,15 @@ orchestune dispatch --dispatch-target claude-cli
 orchestune dispatch --dispatch-target agy-cli
 # または
 orchestune dispatch --dispatch-target codex-cli
+# または
+orchestune dispatch --dispatch-target grok-cli
 # インストール済みのCLIを自動検出させたい場合は --dispatch-target を省略するか auto を指定
 orchestune dispatch --dispatch-target auto
 ```
 
-これは各サブタスクの専用worktree内で `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --add-dir . --print-timeout 60m --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox`（非対話・print/execモード）を実行します。いずれのプリセットも、許可プロンプトのバイパスフラグを毎回付与することで無人実行がブロックされないようにしています。
+これは各サブタスクの専用worktree内で `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --add-dir . --print-timeout 60m --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` / `grok -p "..." --always-approve --no-plan --no-auto-update --output-format streaming-json`（非対話・print/execモード）を実行します。いずれのプリセットも、許可プロンプトのバイパスフラグを毎回付与することで無人実行がブロックされないようにしています。
 
-既定では、解決済みの実行ターゲットからベンダークロスレビューの担当も決定します。`claude-cli`と`cloud-routine`はCodex、`codex-cli`・`codex-cloud`・`agy-cli`はClaudeへレビューを依頼します。この選択は`--dispatch-target auto`が具体的なターゲットへ解決された後に行われます。設定ファイル（`orchestune.toml`）の `reviewer-bot = "claude"` または `reviewer-bot = "codex"` で上書きできます。カスタム `local-cmd` では `{reviewer_bot}` プレースホルダーを利用でき、それ以外の任意コマンドにはレビュー指示を自動追記しません。
+既定では、解決済みの実行ターゲットからベンダークロスレビューの担当も決定します。`claude-cli`と`cloud-routine`はCodex、`codex-cli`・`codex-cloud`・`agy-cli`・`grok-cli`はClaudeへレビューを依頼します。この選択は`--dispatch-target auto`が具体的なターゲットへ解決された後に行われます。設定ファイル（`orchestune.toml`）の `reviewer-bot = "claude"` または `reviewer-bot = "codex"` で上書きできます。カスタム `local-cmd` では `{reviewer_bot}` プレースホルダーを利用でき、それ以外の任意コマンドにはレビュー指示を自動追記しません。
 
 > [!IMPORTANT]
 > **信頼モデルとセキュリティ上の危険性について**
@@ -251,6 +256,15 @@ orchestune dispatch --dispatch-target auto
 > これらのローカルCLIターゲットは、承認やサンドボックスをバイパスする完全権限で起動されます。暗黙的な完全権限実行を防ぐため、実行の際は明示的に `--allow-unsafe-agent-execution` CLIオプションを指定してオプトインする必要があります（安全のため設定ファイルでの指定は禁止されています）。オプトインがない場合は、起動時に設定エラーとなり実行が拒否されます（Fail-Closed）。
 > 
 > また、サブタスクごとの `git worktree` はソースコードの差分を分離するための境界であり、OSレベルのセキュリティ境界（サンドボックス）ではありません。完全権限で起動されたCLIプロセスは、実行ユーザーがアクセス可能な範囲のホームディレクトリ、認証情報、他のプロジェクトフォルダ、ネットワーク等に自由にアクセスできます。信頼できないリポジトリやIssueを処理する場合、または本番・共有環境で実行する場合は、コンテナや仮想マシン（VM）などのOSレベルの隔離層を併用することを強く推奨します。
+
+### `grok-cli`（Grok Build）を使う場合
+
+- **認証**: Orchestuneは資格情報を扱いません。事前に `grok login`（ヘッドレス環境では `--device-auth` を併用）を実行するか、ディスパッチャを動かす環境に `XAI_API_KEY` を設定してください。
+- **権限**: `--always-approve` は承認をバイパスするため、他のローカルCLIと同様に `--allow-unsafe-agent-execution` が必須です。`~/.grok/config.toml` やプロジェクトの `.grok/config.toml` にある deny ルールと `PreToolUse` フックは引き続き有効で、Orchestuneは上書きしません。承認待ちで止まったタスクは、既存の `task_timeout_seconds` によるゾンビGCで回収されます。
+- **plan review**: `--always-approve` でも plan review はスキップされないため、プリセットは無人実行で停止しないよう `--no-plan` を付けます。
+- **プロファイル**: `[execution_profiles.<name>.grok-cli]` で `model` と `reasoning_effort` を指定でき、それぞれ `--model` / `--effort` として渡されます。`--effort` の受理値は公開されていないため、Orchestuneは値を検証しません。不正な値ではGrokがエラー終了し、既存の early-death 経路で扱われます。`grok-cli` のテーブルがなければGrokの既定モデルで動きますが、`--profile X` を明示した場合に `X` に `grok-cli` のエントリがなければ、これまでどおり検証エラーになります。
+- **ログと usage**: 出力はNDJSON（`--output-format streaming-json`）として `logs/<branch-slug>.log` に追記されます。JSONスキーマが公開されていないため、汎用の usage パーサだけが適用されます。`usage.input_tokens` / `output_tokens` が見つからなければ usage は取得できず、`max_tokens_per_task` を設定していても判定は `unknown`（`allowed` ではない）になります。モデル名や料金を推測で埋めることはありません。
+- **対象外**: セッション上限検知（#1270）は `claude-cli` 専用のため、Grokの上限到達は通常の early-death / reclaim として扱われます。
 
 別途、許可設定ファイルを準備するステップは不要です。`orchestune bootstrap`は必須のGitHubラベルの起票のみを行います。
 
@@ -298,7 +312,7 @@ concurrency:
 - 待機中のrunは新しいrunに置き換えられ得ます（GitHubの既定のqueue挙動で、FIFOや全tickの実行は保証されません）。実行中のrunは `cancel-in-progress: false` により中断されませんが、手動cancel・timeout・runner消失は防げません。異常終了後は既存のrecovery手順で状態を確認してください。
 - 待機runの置換を無害にするため、1つのrunが対象の全親を同じstepの中で順に処理します（親ごとにrunを分けると、親Aの待機runが親Bのrunに置き換えられて親Aが処理されない飢餓が起こります）。対象親は、`workflow_dispatch` の任意input `parent_issue` が指定されればその親だけ、それ以外（scheduleを含む）はリポジトリ変数 `ORCHESTUNE_PARENT_ISSUES`（空白区切りの正整数）の全親です。手動指定だけの親は、置き換えられると再実行されません。継続運用する親は変数へ登録し、完了したら外してください。
 - 制御jobには `timeout-minutes` を明示します。1 runで全親を処理し、各親でIntegratorのCIも走るため、「親の数 × Integratorのtimeout」に余裕を持たせてください。timeoutは後処理の途中で止まり得るので、超過時はrecovery手順で確認します。
-- Actions上の制御実行は外部target（`cloud-routine`／`codex-cloud`）だけにします。ローカルプロセスtarget（`local`／`claude-cli`／`agy-cli`／`codex-cli`／`auto`）は、ジョブ終了時にプロセスとworktreeが失われるため使いません。外部targetは資格情報が解決できないと警告だけでローカル起動へフォールバックするため、secretsから制御stepの `env:` へ渡します（`cloud-routine`: `ORCHESTUNE_ROUTINE_ID`／`ORCHESTUNE_ROUTINE_TOKEN`、`codex-cloud`: `ORCHESTUNE_CODEX_CLOUD_ENV`。IDとCodex環境は設定の `routine_id`／`codex_cloud_env` でもよいですが、tokenはenvだけです）。
+- Actions上の制御実行は外部target（`cloud-routine`／`codex-cloud`）だけにします。ローカルプロセスtarget（`local`／`claude-cli`／`agy-cli`／`codex-cli`／`grok-cli`／`auto`）は、ジョブ終了時にプロセスとworktreeが失われるため使いません。外部targetは資格情報が解決できないと警告だけでローカル起動へフォールバックするため、secretsから制御stepの `env:` へ渡します（`cloud-routine`: `ORCHESTUNE_ROUTINE_ID`／`ORCHESTUNE_ROUTINE_TOKEN`、`codex-cloud`: `ORCHESTUNE_CODEX_CLOUD_ENV`。IDとCodex環境は設定の `routine_id`／`codex_cloud_env` でもよいですが、tokenはenvだけです）。
 - `inputs`／`vars` はstepの `env:` で受け取り、`run:` 本文へ `${{ }}` で直接展開しません（script injection対策）。
 
 **runner上で失われるローカル状態**: 次の状態はキャッシュやartifactで永続化しません（`actions/cache` はキーが不変で後勝ちの書込ができず、所有権の継続を証明できないためです）。影響を許容できない場合は、永続するself-hosted runnerまたはローカルの単一所有者運用にしてください。

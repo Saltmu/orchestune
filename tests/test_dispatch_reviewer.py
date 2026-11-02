@@ -11,6 +11,7 @@ from orchestune.dispatch.reviewer import resolve_reviewer_bot
         ("codex-cli", "claude"),
         ("codex-cloud", "claude"),
         ("agy-cli", "claude"),
+        ("grok-cli", "claude"),
     ],
 )
 def test_auto_reviewer_uses_cross_vendor_mapping(target_name, expected):

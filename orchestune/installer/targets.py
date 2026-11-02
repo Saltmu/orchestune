@@ -21,6 +21,7 @@ def _normalize_targets(targets: list[TargetType]) -> list[TargetType]:
             TargetType.CLAUDE,
             TargetType.ANTIGRAVITY,
             TargetType.ANTIGRAVITY_CLI,
+            TargetType.GROK,
         ]
     return list(dict.fromkeys(targets))
 
@@ -40,6 +41,8 @@ def _resolve_target_path(
             return effective_project / ".agents" / "skills"
         if target == TargetType.CLAUDE:
             return effective_project / ".claude" / "skills"
+        if target == TargetType.GROK:
+            return effective_project / ".grok" / "skills"
         raise TargetResolutionError(f"Unsupported target for project scope: {target}")
 
     if scope == ScopeType.USER:
@@ -51,6 +54,8 @@ def _resolve_target_path(
             return effective_home / ".gemini" / "config" / "skills"
         if target == TargetType.ANTIGRAVITY_CLI:
             return effective_home / ".gemini" / "antigravity-cli" / "skills"
+        if target == TargetType.GROK:
+            return effective_home / ".grok" / "skills"
         raise TargetResolutionError(f"Unsupported target for user scope: {target}")
 
     raise TargetResolutionError(f"Unsupported scope: {scope}")
