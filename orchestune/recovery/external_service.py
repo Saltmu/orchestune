@@ -121,7 +121,7 @@ def _requested_confirmations(
     return matches
 
 
-def _valid_linked_release(key: str, release: Any) -> bool:
+def _valid_linked_release(key: str, release: RecoveryReceiptValue | None) -> bool:
     return (
         isinstance(release, ReleaseReceipt)
         and release.confirmation_receipt_key == key
@@ -261,7 +261,7 @@ def _save(
     if not retain:
         release_key = f"{workspace.repository_identity}::{request.issue_number}::{active.claim.claim_id}::release"
         if release_key in receipts and not _valid_linked_release(
-            confirmation, receipts[release_key]
+            confirmation, state.recovery_receipts.get(release_key)
         ):
             raise ValueError("external_release_receipt_invalid")
         release = _linked_release_record(confirmation_value, confirmation)

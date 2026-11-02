@@ -361,3 +361,49 @@ def test_existing_invalid_key_is_never_repaired(external_claim):
     result = recover_claim(replace(request, apply=True), cwd=workspace.repository_root)
     assert not result.success and result.reason == "external_confirmation_invalid"
     assert workspace.run_state_path.read_bytes() == before
+
+
+def _release_then_restore_active(external_claim):
+    workspace, active, _, request = external_claim
+    applied = replace(request, apply=True)
+    assert recover_claim(applied, cwd=workspace.repository_root).success
+    state = load_run_state_readonly(workspace.run_state_path)
+    key = next(k for k in state.recovery_receipts if k.endswith("::release"))
+    _persist(workspace, active)
+    return workspace, applied, key
+
+
+def test_release_rerun_keeps_existing_valid_release_receipt(external_claim):
+    workspace, applied, key = _release_then_restore_active(external_claim)
+    first = load_run_state_readonly(workspace.run_state_path).recovery_receipts[key]
+    result = recover_claim(
+        replace(applied, reason="second reason"), cwd=workspace.repository_root
+    )
+    assert result.success and result.action == "external_stop_confirmed_released"
+    state = load_run_state_readonly(workspace.run_state_path)
+    assert not state.active_worktrees
+    assert state.recovery_receipts[key] == first
+
+
+@pytest.mark.parametrize("case", ["other-confirmation", "no-identity", "invalid"])
+def test_release_rerun_rejects_unlinked_or_invalid_release_receipt(
+    external_claim, case
+):
+    from orchestune.ledger.recovery_receipts import decode_recovery_receipt
+
+    workspace, applied, key = _release_then_restore_active(external_claim)
+    state = load_run_state_readonly(workspace.run_state_path)
+    raw = state.recovery_receipts[key].to_dict()
+    if case == "other-confirmation":
+        raw["confirmation_receipt_key"] = "external-stop::other"
+    elif case == "no-identity":
+        del raw["execution_identity"]
+    else:
+        del raw["active"]
+    state.recovery_receipts[key] = decode_recovery_receipt(raw)
+    with run_state_lock(workspace.lock_path):
+        save_run_state(state, workspace.run_state_path)
+    before = workspace.run_state_path.read_bytes()
+    result = recover_claim(applied, cwd=workspace.repository_root)
+    assert not result.success and result.reason == "external_release_receipt_invalid"
+    assert workspace.run_state_path.read_bytes() == before
