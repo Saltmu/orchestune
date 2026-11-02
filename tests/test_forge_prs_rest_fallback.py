@@ -428,3 +428,135 @@ class TestMergedClosingEvidence:
 
         assert forge.get_pull_request(5).closes_issue_numbers == ()
         assert not any("timeline" in arg for call in fake.calls for arg in call)
+
+
+class TestListCommitChecks:
+    """#1554: the checks of one explicit SHA, always through REST."""
+
+    @staticmethod
+    def _rest(
+        runs: list[dict[str, Any]] | None = None,
+        statuses: list[dict[str, Any]] | None = None,
+        *,
+        runs_total: int | None = None,
+        statuses_total: int | None = None,
+        combined_state: str = "pending",
+    ) -> dict[str, Any]:
+        runs = runs or []
+        statuses = statuses or []
+        return {
+            CHECKS_PATH: [
+                {
+                    "total_count": len(runs) if runs_total is None else runs_total,
+                    "check_runs": runs,
+                }
+            ],
+            STATUS_PATH: [
+                {
+                    "total_count": (
+                        len(statuses) if statuses_total is None else statuses_total
+                    ),
+                    "state": combined_state,
+                    "statuses": statuses,
+                }
+            ],
+        }
+
+    def test_check_runs_and_statuses_are_listed_with_completion(
+        self, forge: GitHubForge, fake_gh
+    ):
+        fake = fake_gh(
+            rest=self._rest(
+                runs=[
+                    {
+                        "name": "ci",
+                        "status": "completed",
+                        "conclusion": "SUCCESS",
+                        "html_url": "https://github.com/o/r/runs/1",
+                    },
+                    {"name": "slow", "status": "in_progress", "conclusion": None},
+                ],
+                statuses=[
+                    {
+                        "context": "ext/done",
+                        "state": "failure",
+                        "target_url": "https://ci.example/1",
+                    },
+                    {"context": "ext/wait", "state": "pending", "target_url": None},
+                ],
+            )
+        )
+
+        checks = forge.list_commit_checks(SHA)
+
+        assert [(c.name, c.kind, c.completed, c.conclusion, c.url) for c in checks] == [
+            ("ci", "check_run", True, "success", "https://github.com/o/r/runs/1"),
+            ("slow", "check_run", False, "", ""),
+            ("ext/done", "status", True, "failure", "https://ci.example/1"),
+            ("ext/wait", "status", False, "pending", ""),
+        ]
+        assert fake.non_api_calls == []
+
+    def test_combined_state_pending_with_no_statuses_is_not_pending_work(
+        self, forge: GitHubForge, fake_gh
+    ):
+        """GitHub reports `pending` for a commit with zero statuses (#1553 head)."""
+        fake_gh(
+            rest=self._rest(
+                runs=[{"name": "ci", "status": "completed", "conclusion": "success"}],
+                combined_state="pending",
+            )
+        )
+
+        checks = forge.list_commit_checks(SHA)
+
+        assert [(c.name, c.completed) for c in checks] == [("ci", True)]
+
+    def test_no_checks_returns_an_empty_tuple(self, forge: GitHubForge, fake_gh):
+        fake_gh(rest=self._rest())
+
+        assert forge.list_commit_checks(SHA) == ()
+
+    @pytest.mark.parametrize(
+        "rest_kwargs",
+        [
+            {"runs": [{"name": "a", "status": "completed"}], "runs_total": 2},
+            {"statuses": [{"context": "a", "state": "success"}], "statuses_total": 2},
+        ],
+        ids=["check-runs-total", "statuses-total"],
+    )
+    def test_total_count_mismatch_fails(
+        self, forge: GitHubForge, fake_gh, rest_kwargs: dict[str, Any]
+    ):
+        fake_gh(rest=self._rest(**rest_kwargs))
+
+        with pytest.raises(ValueError):
+            forge.list_commit_checks(SHA)
+
+    @pytest.mark.parametrize("which", [CHECKS_PATH, STATUS_PATH])
+    def test_non_dict_pages_fail(self, forge: GitHubForge, fake_gh, which: str):
+        rest = self._rest()
+        rest[which] = [[{"name": "not-a-page"}]]
+        fake_gh(rest=rest)
+
+        with pytest.raises(ValueError):
+            forge.list_commit_checks(SHA)
+
+    @pytest.mark.parametrize("sha", ["", "abc", "g" * 40, "a" * 39, "A" * 41])
+    def test_invalid_sha_is_rejected_without_a_request(
+        self, forge: GitHubForge, fake_gh, sha: str
+    ):
+        fake = fake_gh(rest=self._rest())
+
+        with pytest.raises(ValueError):
+            forge.list_commit_checks(sha)
+
+        assert fake.calls == []
+
+    def test_rest_failures_propagate(self, forge: GitHubForge, fake_gh):
+        fake_gh(
+            rest=self._rest(), rest_errors={CHECKS_PATH: "gh: Server Error (HTTP 502)"}
+        )
+
+        with pytest.raises(subprocess.CalledProcessError):
+            forge.list_commit_checks(SHA)

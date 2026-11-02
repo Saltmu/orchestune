@@ -10,7 +10,7 @@ from typing import Any, Protocol
 from urllib.parse import quote
 
 import orchestune.forge.prs_rest as prs_rest
-from orchestune.models import PrRecord
+from orchestune.models import CommitCheck, PrRecord
 from orchestune.validation import validate_issue_number, validate_ref_name
 
 from .graphql_fallback import GraphQLFallbackMixin
@@ -319,6 +319,10 @@ class GitHubPullRequestMixin(GraphQLFallbackMixin):
                 self._run, number, self._is_check_passing
             ),
         )
+
+    def list_commit_checks(self, sha: str) -> tuple[CommitCheck, ...]:
+        """#1554: checks of an explicit SHA; REST only, so a moved PR head cannot leak in."""
+        return prs_rest.commit_checks(self._run, sha)
 
     def _get_pull_request_graphql(self, number: int) -> PrRecord:
         stdout = self._run(["gh", "pr", "view", str(number), "--json", _PR_JSON_FIELDS])

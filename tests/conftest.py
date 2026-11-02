@@ -26,7 +26,7 @@ from orchestune.infra.git_cli import (
     get_clean_git_env as get_clean_git_env,
 )
 from orchestune.integrator.types import IntegratorConfig
-from orchestune.models import IssueRecord, PrRecord
+from orchestune.models import CommitCheck, IssueRecord, PrRecord
 from tests.forge_event_support import (
     EventCommentForgeMixin,
     install_event_comment_store,
@@ -542,6 +542,9 @@ class FakeForge(EventCommentForgeMixin):
 
     def get_pull_request(self, pr_number: int | str) -> PrRecord:
         return self.prs[int(pr_number)]
+
+    def list_commit_checks(self, sha: str) -> tuple[CommitCheck, ...]:
+        return ()
 
     def close_pull_request(self, pr_number: int | str) -> None:
         """Close an open PR; closing a closed PR is a no-op and a merged PR stays merged."""

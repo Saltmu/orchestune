@@ -452,7 +452,7 @@ dry-run dispatchを使って各ターゲットの解決結果を確認します�
 | `reviewer-bot` | `"auto"` | 実装後に依頼するレビュアー（`"auto"`, `"claude"`, `"codex"`）。`auto`はターゲットから判定し、Claude系にはCodex、Codex/agy/Grok系にはClaudeを割り当てます。 |
 | `ci-command` | `"./scripts/local-ci.sh"` | Integratorが統合ブランチ上で実行するCIコマンド（shlex構文の文字列または文字列リスト。例: `"make ci"`）。導入先リポジトリのCIエントリーポイントが異なる場合は必ず設定してください。 |
 | `child-review-gate` | `"required"` | 子タスクのレビュー合格証跡（`verdict=pass`、SHA一致）を検証するゲート（`"required"`, `"off"`）。`"off"`で検証をスキップし警告を出力。 |
-| `final-acceptance-review` | `"advisory"` | 最終PR/headごとに1件依頼。`"off"` で無効。CLI > TOML > `ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW` > 既定。 |
+| `final-acceptance-review` | `"advisory"` | 最終PR/headごとに、そのheadのCI完了後に1件依頼。`"off"` で無効。CLI > TOML > `ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW` > 既定。 |
 | `semantic-review-mode` | `"required"` | 統合PRの第2層セマンティックレビューモード（`"required"`, `"advisory"`, `"off"`）。既定値は`"required"`。 |
 | `force-integration-review` | `false` | 単一タスクFast-Pathをバイパスし、子タスク1件の場合でも統合PRセマンティックレビュー（第2層）を強制実行するかどうか。 |
 | `semantic-review-provider` | `"auto"` | 第2層セマンティックレビューのレビュアープロバイダ（`"auto"`, `"claude"`, `"codex"`）。 |
@@ -747,15 +747,17 @@ Orchestuneでは、子タスクから親ブランチ（`parent/issue-{N}`）へ�
 
 #### 最終統合PRの受け入れレビュー（advisory）
 
-直属の全子Issueがクローズされ最終PRが用意されると、既定の `final-acceptance-review = "advisory"` はPR番号とhead SHAの組ごとに1件、レビューを依頼します。親・全子の条件と、最終PR本文と同じ子PR・レビュー結果をコメントに埋め込みます。レビュアーは `semantic-review-provider` と解決済みdispatch targetから選択します。Layer 1/2のモード、旧semantic環境変数、Fast-Pathとは独立しており、`semantic-review-trigger = "dispatch-target"` の場合も通常のPRコメントで依頼します。
+直属の全子Issueがクローズされ最終PRが用意されると、既定の `final-acceptance-review = "advisory"` はPR番号とhead SHAの組ごとに1件、レビューを依頼します。親・全子の条件と、最終PR本文と同じ子PR・レビュー結果、そのhead自身のCI結果をコメントに埋め込みます。レビュアーは `semantic-review-provider` と解決済みdispatch targetから選択します。Layer 1/2のモード、旧semantic環境変数、Fast-Pathとは独立しており、`semantic-review-trigger = "dispatch-target"` の場合も通常のPRコメントで依頼します。
 
 設定は `--final-acceptance-review {advisory,off}`、`orchestune.toml` のトップレベル／`pyproject.toml` の `[tool.orchestune]` に置く `final-acceptance-review`（underscore表記も可）、または `ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW` で指定します。優先順位はCLI > TOML > 環境変数 > 既定advisoryです。TOMLと環境変数の不正値は上位指定で隠れる場合も拒否し、`off` またはレビュアー未解決では投稿しません。
 
-結果の待機・解析、修正、ラベル操作、マージのブロックは行いません。人間が最終マージし、親Issueは既存の条件でクローズします。ネストした `final_acceptance_review` reportには `posted`、`already_requested`、`skipped_off`、`reviewer_unresolved`、`not_applicable`、`indeterminate`、`failed` と理由、取得済みのPR/head/comment識別子を記録します。関数の直接dry-runは `skipped_dry_run`、Dispatcherの `--no-apply` は従来どおりpostcycle全体を省略します。
+依頼の投稿はheadのCI完了を待ちますが、待機は投稿を見送ることで行います。head SHAのcheckが1件でも未完了（`waiting_for_ci / ci_pending`。未完了のcheck名は `pending_checks`）、またはcheckがまだ1件もない（`waiting_for_ci / no_checks`）間は投稿せず、次のDispatcherサイクルで再評価します。サイクルをブロックすることはありません。check一覧の取得失敗や不完全な `total_count` は `indeterminate / ci_status_unavailable` となり、やはり投稿しません。全checkが完了すれば結論にかかわらず投稿し、失敗したcheckも（advisoryのため）判断材料として埋め込みます。CI節にはcheckごとの名前・種別（`check_run` / `status`）・結論・URLを決定的な順序で載せ、名前と結論はエスケープし、URLは通常の `https://` のものだけを残します。依頼文はbotのsandboxでテストを実行させるのではなく、この結果を引用するよう求めます。CIのないリポジトリでは依頼が投稿されないため、`final-acceptance-review = "off"` を使ってください。他のcheckの完了後に作られるcheck（CodeQLの集約checkなど）は埋め込み一覧に含まれない場合があり、投稿後にCIを再実行しても同じheadへ再依頼はしません。
 
-条件は「受け入れ」または大小文字を区別しない「Acceptance」を含むレベル2～4のATX見出しから、同じか上位の次の見出しまでを抽出します。コード・引用・リスト内の見出しを除き、複数節、節なし、空の節を区別します。完成コメントはUTF-8で60,000 bytes以内とし、親の条件と全子の識別情報・レビュー結果を確保したうえで、子の条件だけをIssue番号順に省略します。出典と省略通知を残し、必須情報だけで超過する場合は `indeterminate / payload_budget_exceeded` として投稿を見送ります。条件の欠落や省略を合格と見なすことはできません。
+結果の待機・解析、修正、ラベル操作、マージのブロックは行いません。人間が最終マージし、親Issueは既存の条件でクローズします。ネストした `final_acceptance_review` reportには `posted`、`already_requested`、`waiting_for_ci`、`skipped_off`、`reviewer_unresolved`、`not_applicable`、`indeterminate`、`failed` と理由、取得済みのPR/head/comment識別子を記録します。関数の直接dry-runは `skipped_dry_run`、Dispatcherの `--no-apply` は従来どおりpostcycle全体を省略します。
 
-全ページのコメントと既存 `TrustContext` の作成者検証で、専用 `final-acceptance-review:v1` markerを照合します。信頼判定不明、取得失敗、古い子テーブル、head変更では投稿しません。投稿結果が不明なら即座に再送せず、次サイクルの全件取得で確認します。新しいheadでは再依頼しますが、条件文・設定・レビュアーだけの変更では再依頼しません。親ごとに単一writerで運用してください。`run_state_lock` 外のコメント確認は分散排他ではなく、marker削除後は重複防止の証跡も失われます。
+条件は「受け入れ」または大小文字を区別しない「Acceptance」を含むレベル2～4のATX見出しから、同じか上位の次の見出しまでを抽出します。コード・引用・リスト内の見出しを除き、複数節、節なし、空の節を区別します。完成コメントはUTF-8で60,000 bytes以内とし、親の条件・CI結果と全子の識別情報・レビュー結果を確保したうえで、子の条件だけをIssue番号順に省略します。出典と省略通知を残し、必須情報だけで超過する場合は `indeterminate / payload_budget_exceeded` として投稿を見送ります。条件の欠落や省略を合格と見なすことはできません。
+
+既存のmarkerがあればCIを読む前に `already_requested` とします。全ページのコメントと既存 `TrustContext` の作成者検証で、専用 `final-acceptance-review:v1` markerを照合します。信頼判定不明、取得失敗、古い子テーブル、head変更では投稿しません。投稿結果が不明なら即座に再送せず、次サイクルの全件取得で確認します。新しいheadでは再依頼しますが、条件文・設定・レビュアーだけの変更では再依頼しません。親ごとに単一writerで運用してください。`run_state_lock` 外のコメント確認は分散排他ではなく、marker削除後は重複防止の証跡も失われます。
 
 投稿成功はbot起動を保証しません。現在の `claude.yml` はbot actorを `claude[bot]` かつ通常のreview-trigger marker付きに限定しており、本機能はそのmarkerを付けないため、Claude自身を含むbot投稿では起動しません。人間actorのメンションは起動対象です。Actionsの `GITHUB_TOKEN` によるコメントも通常の後続workflowを起動しません。起動可能なレビュアー・投稿主体を用意するか `off` を指定してください。bot許可方針の変更は別作業です。
 

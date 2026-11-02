@@ -14,7 +14,7 @@ from orchestune.integrator.final_acceptance_review import (
     request_final_acceptance_review,
 )
 from orchestune.integrator.final_pr_body import ChildSummary, render_final_pr_body
-from orchestune.models import IssueRecord, PrRecord
+from orchestune.models import CommitCheck, IssueRecord, PrRecord
 from orchestune.review.rounds import (
     parse_trigger,
     restore_triggers,
@@ -29,6 +29,17 @@ def issue(number=100, body="## 受け入れ条件\n- [ ] 動作する\n", title=
     return IssueRecord(number, title, body, (), "", state="CLOSED")
 
 
+def check(
+    name,
+    conclusion="success",
+    *,
+    kind="check_run",
+    completed=True,
+    url="https://github.com/o/r/runs/1",
+):
+    return CommitCheck(name, kind, completed, conclusion, url)
+
+
 def render(parent=None, children=None, summaries=None, **kwargs):
     children = [issue(101)] if children is None else children
     summaries = (
@@ -36,6 +47,7 @@ def render(parent=None, children=None, summaries=None, **kwargs):
         if summaries is None
         else summaries
     )
+    kwargs.setdefault("ci_checks", (check("ci"),))
     return render_final_acceptance_review(
         parent=parent or issue(),
         children=children,
@@ -186,6 +198,7 @@ def request_context():
     forge.get_authenticated_user.return_value = "worker"
     forge.list_notice_trusted_authors.return_value = frozenset({"maintainer"})
     forge.create_issue_comment.return_value = {"id": 7}
+    forge.list_commit_checks.return_value = (check("ci"),)
     kwargs = dict(
         forge=forge,
         parent_issue_number=100,
@@ -458,3 +471,136 @@ def test_extra_rows_in_stale_pr_table_do_not_match_snapshot(request_context):
         request_final_acceptance_review(**kwargs)["reason"]
         == "final_pr_snapshot_mismatch"
     )
+
+
+def test_waits_for_pending_checks_then_posts_once(request_context, capsys):
+    forge, _, kwargs = request_context
+    forge.list_commit_checks.return_value = (
+        check("ci"),
+        check("b-slow", "", completed=False),
+        check("a-slow", "pending", kind="status", completed=False),
+    )
+    waiting = request_final_acceptance_review(**kwargs)
+    assert (waiting["status"], waiting["reason"]) == ("waiting_for_ci", "ci_pending")
+    assert waiting["pending_checks"] == ["a-slow", "b-slow"]
+    assert waiting["head_sha"] == SHA and waiting["pr_number"] == 500
+    forge.create_issue_comment.assert_not_called()
+    assert capsys.readouterr().err == ""
+    forge.list_commit_checks.assert_called_with(SHA)
+
+    forge.list_commit_checks.return_value = (check("ci"), check("slow"))
+    assert request_final_acceptance_review(**kwargs)["status"] == "posted"
+    forge.create_issue_comment.assert_called_once()
+
+
+def test_no_checks_waits_without_warning(request_context, capsys):
+    forge, _, kwargs = request_context
+    forge.list_commit_checks.return_value = ()
+    result = request_final_acceptance_review(**kwargs)
+    assert (result["status"], result["reason"]) == ("waiting_for_ci", "no_checks")
+    assert result["pending_checks"] == []
+    forge.create_issue_comment.assert_not_called()
+    assert capsys.readouterr().err == ""
+
+
+def test_unreadable_checks_are_indeterminate_not_absence(request_context, capsys):
+    forge, _, kwargs = request_context
+    forge.list_commit_checks.side_effect = ValueError("incomplete")
+    result = request_final_acceptance_review(**kwargs)
+    assert (result["status"], result["reason"]) == (
+        "indeterminate",
+        "ci_status_unavailable",
+    )
+    forge.create_issue_comment.assert_not_called()
+    assert "ci_status_unavailable" in capsys.readouterr().err
+
+
+def test_existing_marker_wins_without_reading_ci(request_context):
+    forge, _, kwargs = request_context
+    forge.list_all_issue_comments.return_value = [
+        {"id": 1, "body": final_acceptance_marker(SHA), "author": "worker"}
+    ]
+    forge.list_commit_checks.side_effect = RuntimeError("must not be read")
+    assert request_final_acceptance_review(**kwargs)["status"] == "already_requested"
+    forge.list_commit_checks.assert_not_called()
+
+
+def test_failed_ci_is_embedded_and_still_requested(request_context):
+    forge, _, kwargs = request_context
+    forge.list_commit_checks.return_value = (check("ci", "failure"),)
+    assert request_final_acceptance_review(**kwargs)["status"] == "posted"
+    body = forge.create_issue_comment.call_args.args[1]
+    assert f"CI results for head `{SHA}`" in body
+    assert "| ci | check_run | failure | https://github.com/o/r/runs/1 |" in body
+    assert "All 1 checks completed: 1 failure." in body
+
+
+def test_ci_section_is_ordered_and_summarized():
+    body = render(
+        ci_checks=(
+            check("z", "success"),
+            check("b", "failure", kind="status", url=""),
+            check("a", "success"),
+            check("b", "success"),
+        )
+    ).body
+    rows = [
+        line
+        for line in body.splitlines()
+        if line.startswith("| ") and "---" not in line
+    ]
+    assert [row.split(" | ")[0] + row.split(" | ")[1] for row in rows[1:]] == [
+        "| acheck_run",
+        "| bcheck_run",
+        "| bstatus",
+        "| zcheck_run",
+    ]
+    assert "All 4 checks completed: 1 failure, 3 success." in body
+    assert body.index("CI results") < body.index("### 親Issue #100")
+    assert "—" in body
+
+
+def test_ci_section_neutralizes_names_conclusions_and_urls():
+    body = render(
+        ci_checks=(
+            check("a|b\nc @team <x>", "su|cc\ness", url="https://ok.example/1"),
+            check("ext", url="javascript:alert(1)"),
+            check("sp", url="https://bad.example/a b"),
+            check("pipe", url="https://bad.example/a|b"),
+            check("angle", url="https://bad.example/<a>"),
+        )
+    ).body
+    assert "a\\|b c &#64;team &lt;x&gt;" in body
+    assert "su\\|cc ess" in body
+    assert "https://ok.example/1" in body
+    for bad in ("javascript:", "a b", "a|b\n", "<a>"):
+        assert bad not in body.split("### 親Issue")[0].split("| ext |")[1]
+    for name in ("ext", "sp", "pipe", "angle"):
+        assert f"| {name} | check_run | success | — |" in body
+
+
+def test_ci_section_survives_child_truncation_and_counts_toward_budget():
+    big = issue(101, body="## 受け入れ条件\n" + "子" * 30000)
+    full = render(children=[big]).body
+    limit = len(full.encode()) // 2
+    payload = render(children=[big], max_bytes=limit)
+    assert payload.truncated_issue_numbers == (101,)
+    assert (
+        "CI results for head" in payload.body and "| ci | check_run |" in payload.body
+    )
+    many = tuple(check(f"check-{i}") for i in range(400))
+    with pytest.raises(PayloadBudgetExceeded):
+        render(ci_checks=many, max_bytes=len(render().body.encode()) + 100)
+
+
+def test_intro_asks_for_ci_citation_not_bot_side_test_runs():
+    body = render().body
+    assert "State tests run and tests you could not run" not in body
+    assert "CI results" in body
+    assert "advisory" in body and "humans decide the final merge" in body
+    assert "not merge approval" in body
+
+
+def test_backslash_before_pipe_cannot_reopen_the_table_cell():
+    body = render(ci_checks=(check("a\\|b"),)).body
+    assert "| a\\\\\\|b | check_run |" in body
