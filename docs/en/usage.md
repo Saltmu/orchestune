@@ -1,5 +1,44 @@
 # Usage & Command Reference
 
+## Preview and apply quick reference
+
+The behavior of a command run with no extra option, and the option that switches between preview and apply, differ by command. Check this table before running one.
+
+| Command | With no option | Switching option |
+| :--- | :--- | :--- |
+| `orchestune claim` | Applies | `--no-apply` to preview |
+| `orchestune complete` | Applies | `--no-apply` to preview |
+| `orchestune gc` | Applies | `--no-apply` to preview |
+| `orchestune provision` | Applies | `--no-apply` to preview |
+| `orchestune dispatch` | Applies | `--no-apply` to preview |
+| `orchestune skills install` | Applies | `--dry-run` to preview |
+| `orchestune skills update` | Applies | `--dry-run` to preview |
+| `orchestune skills uninstall` | Applies | `--dry-run` to preview |
+| `orchestune replan` | Preview | `--apply` to apply (`--confirm-preview <token>` is also required) |
+| `orchestune remediate` | Preview | `--apply` to apply (`--confirm-preview <token>` is also required) |
+| `orchestune recover` | Preview | `--apply` to apply |
+| `orchestune review retry` | Preview | `--apply` to apply |
+| `orchestune review override` | Preview | `--apply` to apply |
+
+- A preview shows the result without changing Git, GitHub, or the ledger. The exception is `dispatch --no-apply`, which creates local results and a report directory and lock (section 4).
+- The `orchestune-dispatch` command takes the same options as `orchestune dispatch`.
+- Only `skills` uses `--dry-run`; every other command uses `--no-apply` / `--apply`.
+- A command not in this table has no option that switches between preview and apply.
+
+## Daily development flow
+
+The flow for one Issue. For command details see section 7 (`claim`), section 8 (`complete`), and section 9 (`gc`).
+
+```bash
+orchestune claim <N> --no-apply   # validate before starting (optional)
+orchestune claim <N>              # start and create the worktree
+# implement, run local CI, open the PR and handle review in the worktree
+orchestune complete --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md
+gh pr merge <PR> --merge --delete-branch   # merge from the primary checkout
+orchestune gc --no-apply          # inspect which reservations are released
+orchestune gc                     # release the reservations
+```
+
 ## Next workflow action (`orchestune workflow next`)
 
 Use `next` with the task's explicit session directory to derive its earliest
@@ -990,6 +1029,14 @@ Run `orchestune complete --issue <N> --pr <PR> --result done` from the claimed w
 ## 9. Garbage Collecting Handoff-Ready Tasks (`orchestune gc`)
 
 After `orchestune complete` records an Outcome and the related PR is merged, run the dedicated GC command from the primary checkout to release the reservation. It also supports interactive tasks that have no parent Issue.
+
+Merge the PR from the primary checkout with the following command (it creates a merge commit and deletes the branch).
+
+```bash
+gh pr merge <PR> --merge --delete-branch
+```
+
+Depending on the environment, this command also removes the worktree. If it does, `orchestune gc` reports the worktree as `absent` and still releases the reservation.
 
 ```bash
 orchestune gc --no-apply  # inspect decisions without changes
