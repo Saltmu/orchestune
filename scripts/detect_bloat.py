@@ -399,7 +399,7 @@ def _render_regression(regression: BloatRegression, root_dir: Path) -> str:
     )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=".", help="project root to scan")
     mode = parser.add_mutually_exclusive_group()
@@ -420,48 +420,61 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="PATH",
         help="fail only for warnings that are new or worse than this JSON baseline",
     )
-    args = parser.parse_args(argv)
-    root_dir = Path(args.root).resolve()
+    return parser
 
+
+def _record_baseline(
+    args: argparse.Namespace, reports: list[BloatReport], root_dir: Path
+) -> int:
+    try:
+        write_baseline(args.record_baseline, reports, root_dir)
+    except OSError as exc:
+        print(f"[detect-bloat] Baseline error: {exc}", file=sys.stderr)
+        return 2
+    print(f"[detect-bloat] Recorded baseline: {args.record_baseline}")
+    return 0
+
+
+def _check_baseline(
+    args: argparse.Namespace, reports: list[BloatReport], root_dir: Path
+) -> int:
+    try:
+        regressions = find_regressions(reports, load_baseline(args.baseline), root_dir)
+    except ValueError as exc:
+        print(f"[detect-bloat] Baseline error: {exc}", file=sys.stderr)
+        return 2
+    if not regressions:
+        print("[detect-bloat] No new or worsened bloat warnings.")
+        return 0
+    print("[detect-bloat] New or worsened bloat warnings:")
+    for regression in regressions:
+        print(_render_regression(regression, root_dir))
+    return 1
+
+
+def _report_all(reports: list[BloatReport], root_dir: Path, warn_only: bool) -> int:
+    if not reports:
+        print("[detect-bloat] No bloat detected.")
+        return 0
+    print("[detect-bloat] Bloat warnings:")
+    for report in reports:
+        print(_render_report(report, root_dir))
+    return 0 if warn_only else 1
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _build_arg_parser().parse_args(argv)
+    root_dir = Path(args.root).resolve()
     try:
         reports = scan_project(root_dir)
     except ValueError as exc:
         print(f"[detect-bloat] Configuration error: {exc}", file=sys.stderr)
         return 2
-
     if args.record_baseline:
-        try:
-            write_baseline(args.record_baseline, reports, root_dir)
-        except OSError as exc:
-            print(f"[detect-bloat] Baseline error: {exc}", file=sys.stderr)
-            return 2
-        print(f"[detect-bloat] Recorded baseline: {args.record_baseline}")
-        return 0
-
+        return _record_baseline(args, reports, root_dir)
     if args.baseline:
-        try:
-            regressions = find_regressions(
-                reports, load_baseline(args.baseline), root_dir
-            )
-        except ValueError as exc:
-            print(f"[detect-bloat] Baseline error: {exc}", file=sys.stderr)
-            return 2
-        if not regressions:
-            print("[detect-bloat] No new or worsened bloat warnings.")
-            return 0
-        print("[detect-bloat] New or worsened bloat warnings:")
-        for regression in regressions:
-            print(_render_regression(regression, root_dir))
-        return 1
-
-    if not reports:
-        print("[detect-bloat] No bloat detected.")
-        return 0
-
-    print("[detect-bloat] Bloat warnings:")
-    for report in reports:
-        print(_render_report(report, root_dir))
-    return 0 if args.warn_only else 1
+        return _check_baseline(args, reports, root_dir)
+    return _report_all(reports, root_dir, args.warn_only)
 
 
 if __name__ == "__main__":

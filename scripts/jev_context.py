@@ -192,10 +192,9 @@ def _module_description(text: str) -> str:
     return "\n".join(comments + [docstring]).strip()
 
 
-def collect_finding_context(
+def _code_context(
     item: dict[str, Any], review: JevReviewContext
-) -> JevFindingContext:
-    """Match a comment to its revision, otherwise keep the original review diff."""
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
     sha, line = _position(item, review)
     path = item.get("path", "")
     path = path if isinstance(path, str) else ""
@@ -209,6 +208,7 @@ def collect_finding_context(
         "start_line": item.get("start_line"),
         "text": item.get("diff_hunk") or "",
         "status": "missing",
+        "path": path,
     }
     evidence: list[dict[str, str]] = []
     if text is not None and line <= len(text.splitlines()):
@@ -226,14 +226,27 @@ def collect_finding_context(
                 {"source": "module_description", "commit_sha": sha, "text": description}
             )
     code["status"] = "available" if code["text"] else "missing"
+    return code, evidence
+
+
+def _rules_context(review: JevReviewContext) -> dict[str, Any]:
     base = review.pr.get("base_sha", "")
     rules_text = _blob(review, base, ".agents/AGENTS.md") if _valid_sha(base) else None
-    rules = {
+    return {
         "source": ".agents/AGENTS.md",
         "commit_sha": base,
         "text": rules_text or "",
         "status": "available" if rules_text else "missing",
     }
+
+
+def collect_finding_context(
+    item: dict[str, Any], review: JevReviewContext
+) -> JevFindingContext:
+    """Match a comment to its revision, otherwise keep the original review diff."""
+    code, evidence = _code_context(item, review)
+    rules = _rules_context(review)
+    path = code.pop("path")
     missing = list(review.missing)
     if code["status"] == "missing":
         missing.append("code")
@@ -265,39 +278,30 @@ def _markers(value: Any) -> list[str]:
     )
 
 
-def normalize_context(value: Any) -> JevFindingContext:
-    """Whitelist and bound offline/online context identically; invalid data is unknown."""
-    raw = value if isinstance(value, dict) else {}
-    context: JevFindingContext = {
-        "schema_version": SCHEMA_VERSION,
-        "pr": {},
-        "code": {},
-        "execution": {},
-        "repository_rules": {},
-        "missing": _markers(raw.get("missing")),
-        "truncated": _markers(raw.get("truncated")),
-    }
-    allowed = {
-        "pr": ("number", "title", "body", "head_sha", "base_sha"),
-        "code": (
-            "source",
-            "commit_sha",
-            "side",
-            "start_line",
-            "text",
-            "module_description",
-            "status",
-        ),
-        "execution": ("component_hint", "input_trust"),
-        "repository_rules": ("source", "commit_sha", "text", "status"),
-    }
+_ALLOWED_FIELDS = {
+    "pr": ("number", "title", "body", "head_sha", "base_sha"),
+    "code": (
+        "source",
+        "commit_sha",
+        "side",
+        "start_line",
+        "text",
+        "module_description",
+        "status",
+    ),
+    "execution": ("component_hint", "input_trust"),
+    "repository_rules": ("source", "commit_sha", "text", "status"),
+}
+
+
+def _copy_section_fields(raw: dict[str, Any], context: JevFindingContext) -> None:
     sections = {
         "pr": context["pr"],
         "code": context["code"],
         "execution": context["execution"],
         "repository_rules": context["repository_rules"],
     }
-    for section, keys in allowed.items():
+    for section, keys in _ALLOWED_FIELDS.items():
         data = raw.get(section)
         if not isinstance(data, dict):
             context["missing"].append(section)
@@ -312,21 +316,52 @@ def normalize_context(value: Any) -> JevFindingContext:
                     context["truncated"].append(marker)
             elif isinstance(item, int) and not isinstance(item, bool):
                 sections[section][key] = item
-    for key in ("missing", "truncated"):
-        if key in raw and (
+
+
+def _invalid_marker_keys(raw: dict[str, Any]) -> list[str]:
+    return [
+        key
+        for key in ("missing", "truncated")
+        if key in raw
+        and (
             not isinstance(raw[key], list)
-            or any(not isinstance(x, str) for x in raw[key])
-        ):
-            context["missing"].append(key)
+            or any(not isinstance(item, str) for item in raw[key])
+        )
+    ]
+
+
+def _section_unavailable(section: dict[str, Any]) -> bool:
+    return section.get("status") != "available" or not section.get("text")
+
+
+def _unavailable_sections(context: JevFindingContext) -> list[str]:
+    missing: list[str] = []
+    if _section_unavailable(context["code"]):
+        missing.append("code")
+    if _section_unavailable(context["repository_rules"]):
+        missing.append("repository_rules")
+    return missing
+
+
+def normalize_context(value: Any) -> JevFindingContext:
+    """Whitelist and bound offline/online context identically; invalid data is unknown."""
+    raw = value if isinstance(value, dict) else {}
+    context: JevFindingContext = {
+        "schema_version": SCHEMA_VERSION,
+        "pr": {},
+        "code": {},
+        "execution": {},
+        "repository_rules": {},
+        "missing": _markers(raw.get("missing")),
+        "truncated": _markers(raw.get("truncated")),
+    }
+    _copy_section_fields(raw, context)
+    context["missing"].extend(_invalid_marker_keys(raw))
     if "schema_version" in raw and raw["schema_version"] != SCHEMA_VERSION:
         context["missing"].append("schema_version")
     _normalize_evidence(raw, context)
     _validate_provenance(context)
-    for section in ("code", "repository_rules"):
-        if sections[section].get("status") != "available" or not sections[section].get(
-            "text"
-        ):
-            context["missing"].append(section)
+    context["missing"].extend(_unavailable_sections(context))
     context["missing"] = sorted(set(context["missing"]))
     context["truncated"] = sorted(set(context["truncated"]))
     return context

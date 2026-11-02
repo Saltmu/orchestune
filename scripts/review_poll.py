@@ -8,14 +8,14 @@ clock) is injected rather than imported, so those patches keep working.
 
 from __future__ import annotations
 
+import sys
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
 from orchestune.review.acquisition import (
-    ACQUISITION_UNAVAILABLE,
-    SCHEMA_VERSION,
     _activity_signature,
     _build_snapshot,
     _filter_bot_items,
@@ -26,6 +26,7 @@ from orchestune.review.acquisition import (
     _latest_bot_activity_item,
     _latest_bot_summary_item,
     _latest_current_tracker,
+    review_result_record,
 )
 from orchestune.review.progress_tracker import (
     CodexTrackerStatus,
@@ -35,6 +36,7 @@ from orchestune.review.tracker_activity import CompletedGrace
 from scripts.jev_context import JevReviewContext
 from scripts.review_cli import print_review_result
 from scripts.review_wait_diagnostics import (
+    ReviewTimeoutError,
     StalledReviewError,
     TrackerObservation,
     WaitContext,
@@ -265,33 +267,84 @@ def unavailable_result(
     The tracker table is telemetry and is not put into `review_body`; no reviewed
     SHA is claimed because no real review was acquired.
     """
-    result: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
-        "acquisition_status": ACQUISITION_UNAVAILABLE,
-        "reason": (
+    result = review_result_record(
+        reason=(
             f"@{round_.bot_name} reported Completed but posted no review content "
             f"within {grace_seconds:g}s"
         ),
-        "repository": round_.repository,
-        "pr_number": round_.pr_number,
-        "reviewer": round_.bot_name,
-        "round": round_.round_num,
-        "trigger_id": round_.trigger_id,
-        "triggered_at": round_.trigger_time,
-        "requested_head_sha": round_.requested_head_sha,
-        "reviewed_head_sha": None,
-        "current_head_sha": round_.fetch_head_sha(round_.pr_number),
-        "review_target_sha": None,
-        "review_target_sha_source": "unknown",
-        "review_items": [],
-        "review_body": "",
-        "inline_comments": [],
-        "jev_evaluations": [],
-        "completeness": dict.fromkeys(COMPLETENESS_SECTIONS, "complete"),
-        "timestamp": state.completed_timestamp,
-    }
+        repository=round_.repository,
+        pr_number=round_.pr_number,
+        reviewer=round_.bot_name,
+        round=round_.round_num,
+        trigger_id=round_.trigger_id,
+        triggered_at=round_.trigger_time,
+        requested_head_sha=round_.requested_head_sha,
+        current_head_sha=round_.fetch_head_sha(round_.pr_number),
+        completeness=dict.fromkeys(COMPLETENESS_SECTIONS, "complete"),
+        timestamp=state.completed_timestamp,
+    )
     print_review_result(result, round_.bot_name)
     return result
+
+
+def _track_activity_stall(
+    round_: WaitRound,
+    state: PollState,
+    activity: dict[str, Any] | None,
+    stall_grace_seconds: int,
+    clock: Callable[[], float],
+) -> None:
+    # A dead "in progress" tracker never trips the snapshot-diff gate
+    # (nothing about it looks new), so staleness is tracked on every poll.
+    state.stall_signature, state.stall_since = track_stall(
+        activity,
+        state.stall_signature,
+        state.stall_since,
+        stall_grace_seconds=stall_grace_seconds,
+        bot_name=round_.bot_name,
+        pr_number=round_.pr_number,
+        latest_trigger_time=round_.trigger_time,
+        requested_head_sha=round_.requested_head_sha,
+        clock=clock,
+    )
+
+
+def _snapshot_changed(state: PollState, current_snapshot: dict[str, str]) -> bool:
+    return any(
+        key not in state.snapshot or state.snapshot[key] != value
+        for key, value in current_snapshot.items()
+    )
+
+
+def _observe_completed_tracker(
+    round_: WaitRound,
+    state: PollState,
+    data: dict[str, list[dict[str, Any]]],
+    timeout_remaining: float,
+    clock: Callable[[], float],
+) -> bool:
+    tracker = (
+        _latest_current_tracker(
+            data,
+            round_.bot_name,
+            round_.excluded_ids,
+            round_started_at=round_.trigger_time,
+            requested_head_sha=round_.requested_head_sha,
+        )
+        if round_.trigger_time
+        else None
+    )
+    completed = (
+        tracker is not None
+        and parse_codex_tracker_status(str(tracker.get("body") or ""))
+        is CodexTrackerStatus.COMPLETED
+    )
+    if completed and tracker is not None:
+        state.grace.observe_completed(now=clock(), timeout_remaining=timeout_remaining)
+        state.completed_timestamp = _get_item_timestamp(tracker)
+        return True
+    state.grace.reset()
+    return False
 
 
 def poll_step(
@@ -318,24 +371,9 @@ def poll_step(
         round_started_at=round_.trigger_time,
         requested_head_sha=round_.requested_head_sha,
     )
-    # A dead "in progress" tracker never trips the snapshot-diff gate below
-    # (nothing about it looks new), so staleness is tracked on every poll.
-    state.stall_signature, state.stall_since = track_stall(
-        activity,
-        state.stall_signature,
-        state.stall_since,
-        stall_grace_seconds=stall_grace_seconds,
-        bot_name=bot_name,
-        pr_number=round_.pr_number,
-        latest_trigger_time=round_.trigger_time,
-        requested_head_sha=round_.requested_head_sha,
-        clock=clock,
-    )
+    _track_activity_stall(round_, state, activity, stall_grace_seconds, clock)
     current_snapshot = _build_snapshot(data, bot_name, exclude_ids=round_.excluded_ids)
-    has_changes = any(
-        k not in state.snapshot or state.snapshot[k] != v
-        for k, v in current_snapshot.items()
-    )
+    has_changes = _snapshot_changed(state, current_snapshot)
 
     if activity is not None and _is_explicitly_in_progress(activity):
         state.grace.reset()
@@ -344,28 +382,9 @@ def poll_step(
             print(f"@{bot_name} is still working; continuing to wait...")
         return None
 
-    tracker = (
-        _latest_current_tracker(
-            data,
-            bot_name,
-            round_.excluded_ids,
-            round_started_at=round_.trigger_time,
-            requested_head_sha=round_.requested_head_sha,
-        )
-        if round_.trigger_time
-        else None
+    completed = _observe_completed_tracker(
+        round_, state, data, timeout_remaining, clock
     )
-    completed = (
-        tracker is not None
-        and parse_codex_tracker_status(str(tracker.get("body") or ""))
-        is CodexTrackerStatus.COMPLETED
-    )
-    if completed and tracker is not None:
-        state.grace.observe_completed(now=clock(), timeout_remaining=timeout_remaining)
-        state.completed_timestamp = _get_item_timestamp(tracker)
-    else:
-        state.grace.reset()
-
     if has_changes or state.grace.active:
         if summary_gate_open(data, bot_name, round_.excluded_ids, round_.trigger_time):
             result = round_.extract(data)
@@ -380,3 +399,388 @@ def poll_step(
     if state.grace.expired(clock()):
         return unavailable_result(round_, state, grace_seconds)
     return None
+
+
+@dataclass(frozen=True)
+class PollBudget:
+    """Limits and injected clock for one blocking wait."""
+
+    pr_number: int
+    timeout: int
+    interval: int
+    max_retries: int
+    stall_grace_seconds: int
+    completed_grace_seconds: float
+    fetch_data: Callable[[], dict[str, list[dict[str, Any]]]]
+    clock: Callable[[], float]
+    sleep: Callable[[float], None]
+
+
+@dataclass(frozen=True)
+class ReviewWaitRequest:
+    """Scalar arguments of `wait_for_review`, kept off that function's body."""
+
+    pr_number: int
+    timeout: int
+    interval: int
+    bot_name: str
+    post_trigger: bool
+    body: str | None
+    body_file: str | None
+    max_rounds: int
+    max_retries: int
+    round_num: int | None
+    stall_grace_seconds: int
+    jev_threshold: float | None
+    switch_reviewer: bool
+    completed_grace_seconds: float
+    repair_trigger_markers: bool
+
+
+@dataclass(frozen=True)
+class WaitBindings:
+    """Callables resolved on `scripts.wait_for_review` when a wait starts.
+
+    Tests patch those module globals. Capturing them here, at call time, keeps
+    the patches in force after the loop body moves out of that module.
+    """
+
+    validate_online: Callable[..., None]
+    fetch_repository: Callable[[], str | None]
+    get_initial: Callable[..., dict[str, list[dict[str, Any]]]]
+    validate_selection: Callable[..., None]
+    record_skip: Callable[..., dict[str, Any]]
+    build_snapshot: Callable[..., dict[str, str]]
+    trigger_ids: Callable[[list[dict[str, Any]]], set[int | str]]
+    prepare_round: Callable[..., int]
+    handle_trigger: Callable[..., tuple[str, int | str | None, str | None]]
+    restore_no_post: Callable[..., tuple[str, int | str | None, str | None]]
+    check_immediate: Callable[..., dict[str, Any] | None]
+    extract_review: Callable[..., dict[str, Any] | None]
+    fetch_head: Callable[[int], str | None]
+    get_pr_data: Callable[..., dict[str, list[dict[str, Any]]]]
+    clock: Callable[[], float]
+    sleep: Callable[[float], None]
+
+
+def _ended_wait_context(
+    round_: WaitRound,
+    state: PollState,
+    budget: PollBudget,
+    start_time: float,
+) -> WaitContext:
+    return wait_context(
+        round_,
+        state,
+        elapsed_seconds=budget.clock() - start_time,
+        timeout_seconds=budget.timeout,
+        stall_grace_seconds=budget.stall_grace_seconds,
+        completed_grace_seconds=budget.completed_grace_seconds,
+    )
+
+
+def _poll_succeeded(
+    round_: WaitRound,
+    state: PollState,
+    budget: PollBudget,
+    start_time: float,
+    current_data: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any] | None:
+    return poll_step(
+        round_,
+        state,
+        current_data,
+        stall_grace_seconds=budget.stall_grace_seconds,
+        grace_seconds=budget.completed_grace_seconds,
+        timeout_remaining=budget.timeout - (budget.clock() - start_time),
+        clock=budget.clock,
+    )
+
+
+def _note_poll_error(
+    state: PollState, error: Exception, consecutive_errors: int, max_retries: int
+) -> int:
+    consecutive_errors += 1
+    state.last_poll_ok = False
+    print(f"Warning: Error checking PR review data: {error}", file=sys.stderr)
+    if consecutive_errors > max_retries:
+        raise RuntimeError(
+            f"Exceeded maximum retries ({max_retries}) during review polling: {error}"
+        ) from error
+    return consecutive_errors
+
+
+def _sleep_until_next(state: PollState, budget: PollBudget, start_time: float) -> bool:
+    """Return True once the monotonic overall deadline has passed.
+
+    The deadline can be overrun only by the poll in flight (each gh call is
+    bounded by GH_COMMAND_TIMEOUT_SECONDS).
+    """
+    remaining = budget.timeout - (budget.clock() - start_time)
+    if remaining <= 0:
+        return True
+    pause = min(budget.interval, remaining)
+    grace_left = state.grace.remaining(budget.clock())
+    budget.sleep(pause if grace_left is None else min(pause, grace_left))
+    return False
+
+
+def _timeout_result(
+    round_: WaitRound, state: PollState, budget: PollBudget, start_time: float
+) -> dict[str, Any]:
+    if state.grace.active:
+        # A Completed tracker was confirmed by a normal fetch, and no review
+        # content arrived before the overall timeout.
+        return unavailable_result(round_, state, budget.completed_grace_seconds)
+    raise ReviewTimeoutError(
+        f"Timed out waiting for @{round_.bot_name} activity on PR "
+        f"#{budget.pr_number} after {budget.timeout}s.",
+        _ended_wait_context(round_, state, budget, start_time),
+    )
+
+
+def poll_until(
+    round_: WaitRound, state: PollState, budget: PollBudget
+) -> dict[str, Any]:
+    """Block until a review result, a completed-tracker miss, or a timeout."""
+    start_time = budget.clock()
+    consecutive_errors = 0
+    while True:
+        try:
+            current_data = budget.fetch_data()
+            consecutive_errors = 0
+            state.last_data, state.last_poll_ok = current_data, True
+            result = _poll_succeeded(round_, state, budget, start_time, current_data)
+            if result is not None:
+                return result
+        except StalledReviewError as error:
+            error.attach(_ended_wait_context(round_, state, budget, start_time))
+            raise
+        except Exception as error:
+            consecutive_errors = _note_poll_error(
+                state, error, consecutive_errors, budget.max_retries
+            )
+        if _sleep_until_next(state, budget, start_time):
+            return _timeout_result(round_, state, budget, start_time)
+
+
+def _load_round_state(
+    bindings: WaitBindings,
+    request: ReviewWaitRequest,
+    executor: ThreadPoolExecutor,
+    repository: str | None,
+) -> dict[str, Any] | tuple[Any, dict[str, str], set[int | str]]:
+    initial_data = bindings.get_initial(
+        request.pr_number,
+        executor,
+        request.timeout,
+        request.interval,
+        max_retries=request.max_retries,
+    )
+    bindings.validate_selection(
+        initial_data, request.bot_name, request.switch_reviewer and request.post_trigger
+    )
+    if request.bot_name == "skip":
+        return bindings.record_skip(request.pr_number, initial_data, repository)
+    return (
+        initial_data,
+        bindings.build_snapshot(initial_data, request.bot_name),
+        bindings.trigger_ids(initial_data.get("issue_comments", [])),
+    )
+
+
+def _open_or_restore_round(
+    bindings: WaitBindings,
+    request: ReviewWaitRequest,
+    initial_data: dict[str, list[dict[str, Any]]],
+    initial_snapshot: dict[str, str],
+    excluded_ids: set[int | str],
+    current_round: int,
+    context_cache: dict[int, JevReviewContext],
+    repository: str | None,
+) -> dict[str, Any] | tuple[str, int | str | None, str | None]:
+    if request.post_trigger:
+        return bindings.handle_trigger(
+            request.pr_number,
+            request.bot_name,
+            initial_data,
+            initial_snapshot,
+            excluded_ids,
+            current_round,
+            request.max_rounds,
+            request.body,
+            request.body_file,
+            repair_trigger_markers=request.repair_trigger_markers,
+        )
+    latest_trigger_time, trigger_id, requested_head_sha = bindings.restore_no_post(
+        initial_data, request.bot_name, current_round, excluded_ids
+    )
+    immediate = bindings.check_immediate(
+        initial_data,
+        request.bot_name,
+        latest_trigger_time,
+        current_round,
+        jev_threshold=request.jev_threshold,
+        pr_number=request.pr_number,
+        context_cache=context_cache,
+        trigger_id=trigger_id,
+        requested_head_sha=requested_head_sha,
+        repository=repository,
+        exclude_ids=excluded_ids,
+    )
+    if immediate is not None:
+        return immediate
+    return latest_trigger_time, trigger_id, requested_head_sha
+
+
+def _poll_opened_round(
+    bindings: WaitBindings,
+    request: ReviewWaitRequest,
+    executor: ThreadPoolExecutor,
+    repository: str | None,
+    context_cache: dict[int, JevReviewContext],
+    initial_snapshot: dict[str, str],
+    excluded_ids: set[int | str],
+    current_round: int,
+    opened: tuple[str, int | str | None, str | None],
+) -> dict[str, Any]:
+    latest_trigger_time, trigger_id, requested_head_sha = opened
+    print(
+        f"Waiting for @{request.bot_name} activity on PR #{request.pr_number} "
+        f"(timeout: {request.timeout}s, interval: {request.interval}s)..."
+    )
+    round_ = WaitRound(
+        pr_number=request.pr_number,
+        bot_name=request.bot_name,
+        round_num=current_round,
+        trigger_id=trigger_id,
+        trigger_time=latest_trigger_time,
+        requested_head_sha=requested_head_sha,
+        repository=repository,
+        excluded_ids=excluded_ids,
+        jev_threshold=request.jev_threshold,
+        context_cache=context_cache,
+        extract_review=bindings.extract_review,
+        fetch_head_sha=bindings.fetch_head,
+    )
+    return poll_until(
+        round_,
+        PollState(initial_snapshot, CompletedGrace(request.completed_grace_seconds)),
+        PollBudget(
+            pr_number=request.pr_number,
+            timeout=request.timeout,
+            interval=request.interval,
+            max_retries=request.max_retries,
+            stall_grace_seconds=request.stall_grace_seconds,
+            completed_grace_seconds=request.completed_grace_seconds,
+            fetch_data=lambda: bindings.get_pr_data(
+                request.pr_number, executor=executor
+            ),
+            clock=bindings.clock,
+            sleep=bindings.sleep,
+        ),
+    )
+
+
+def _finish_round_wait(
+    bindings: WaitBindings,
+    request: ReviewWaitRequest,
+    executor: ThreadPoolExecutor,
+    repository: str | None,
+    context_cache: dict[int, JevReviewContext],
+    loaded: tuple[Any, dict[str, str], set[int | str]],
+) -> dict[str, Any]:
+    initial_data, initial_snapshot, excluded_ids = loaded
+    current_round = bindings.prepare_round(
+        request.pr_number,
+        initial_data,
+        request.bot_name,
+        request.round_num,
+        request.post_trigger,
+        request.body_file,
+        request.max_rounds,
+    )
+    opened = _open_or_restore_round(
+        bindings,
+        request,
+        initial_data,
+        initial_snapshot,
+        excluded_ids,
+        current_round,
+        context_cache,
+        repository,
+    )
+    if isinstance(opened, dict):
+        return opened
+    return _poll_opened_round(
+        bindings,
+        request,
+        executor,
+        repository,
+        context_cache,
+        initial_snapshot,
+        excluded_ids,
+        current_round,
+        opened,
+    )
+
+
+def _execute_review_wait(
+    bindings: WaitBindings, request: ReviewWaitRequest
+) -> dict[str, Any]:
+    bindings.validate_online(
+        request.bot_name,
+        request.post_trigger,
+        request.repair_trigger_markers,
+        request.round_num,
+    )
+    context_cache: dict[int, JevReviewContext] = {}
+    repository = bindings.fetch_repository()
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        loaded = _load_round_state(bindings, request, executor, repository)
+        if isinstance(loaded, dict):
+            return loaded
+        return _finish_round_wait(
+            bindings, request, executor, repository, context_cache, loaded
+        )
+
+
+def execute_review_wait(
+    bindings: WaitBindings,
+    pr_number: int,
+    *,
+    timeout: int,
+    interval: int,
+    bot_name: str,
+    post_trigger: bool,
+    body: str | None,
+    body_file: str | None,
+    max_rounds: int,
+    max_retries: int,
+    round_num: int | None,
+    stall_grace_seconds: int,
+    jev_threshold: float | None,
+    switch_reviewer: bool,
+    completed_grace_seconds: float,
+    repair_trigger_markers: bool,
+) -> dict[str, Any]:
+    return _execute_review_wait(
+        bindings,
+        ReviewWaitRequest(
+            pr_number,
+            timeout,
+            interval,
+            bot_name,
+            post_trigger,
+            body,
+            body_file,
+            max_rounds,
+            max_retries,
+            round_num,
+            stall_grace_seconds,
+            jev_threshold,
+            switch_reviewer,
+            completed_grace_seconds,
+            repair_trigger_markers,
+        ),
+    )

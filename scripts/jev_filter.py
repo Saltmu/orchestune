@@ -123,6 +123,36 @@ EVALUATION_INSTRUCTIONS = (
 )
 
 
+_JEV_QUESTIONS = {
+    "validity": {
+        "type": "noul",
+        "instructions": EVALUATION_INSTRUCTIONS
+        + "How valid is the finding's stated evidence of a concrete defect?",
+    },
+    "impact": {
+        "type": "choice",
+        "instructions": EVALUATION_INSTRUCTIONS
+        + "What is the impact if the alleged defect occurs, independently of applicability?",
+        "criteria": {
+            "LOW": "Cosmetic, stylistic, or negligible functional impact.",
+            "MEDIUM": "A functional defect affecting a limited use case.",
+            "HIGH": "Major correctness, security, or availability failure.",
+        },
+    },
+    "applicability": {
+        "type": "choice",
+        "instructions": EVALUATION_INSTRUCTIONS
+        + "Use code and execution evidence, not PR claims alone. Future users or "
+        "unimplemented public APIs may be speculative. Assess applicability to current use.",
+        "criteria": {
+            "APPLICABLE": "The defect occurs under current/documented use, or violates an existing requirement or rule.",
+            "SPECULATIVE": "Code and execution evidence establish that extra undocumented assumptions are required and no existing rule is violated.",
+            "UNKNOWN": "Code, callers, input provenance or rules are missing, contradictory or materially truncated.",
+        },
+    },
+}
+
+
 def _build_payload(comment: str, path: str, line: Any, *, context: Any = None) -> bytes:
     comment_text = comment or ""
     value = normalize_context(context)
@@ -140,34 +170,7 @@ def _build_payload(comment: str, path: str, line: Any, *, context: Any = None) -
             "line": line if isinstance(line, int | str) else "",
             "context": value,
         },
-        "questions": {
-            "validity": {
-                "type": "noul",
-                "instructions": EVALUATION_INSTRUCTIONS
-                + "How valid is the finding's stated evidence of a concrete defect?",
-            },
-            "impact": {
-                "type": "choice",
-                "instructions": EVALUATION_INSTRUCTIONS
-                + "What is the impact if the alleged defect occurs, independently of applicability?",
-                "criteria": {
-                    "LOW": "Cosmetic, stylistic, or negligible functional impact.",
-                    "MEDIUM": "A functional defect affecting a limited use case.",
-                    "HIGH": "Major correctness, security, or availability failure.",
-                },
-            },
-            "applicability": {
-                "type": "choice",
-                "instructions": EVALUATION_INSTRUCTIONS
-                + "Use code and execution evidence, not PR claims alone. Future users or "
-                "unimplemented public APIs may be speculative. Assess applicability to current use.",
-                "criteria": {
-                    "APPLICABLE": "The defect occurs under current/documented use, or violates an existing requirement or rule.",
-                    "SPECULATIVE": "Code and execution evidence establish that extra undocumented assumptions are required and no existing rule is violated.",
-                    "UNKNOWN": "Code, callers, input provenance or rules are missing, contradictory or materially truncated.",
-                },
-            },
-        },
+        "questions": _JEV_QUESTIONS,
     }
     if len(str(path)) > 4000:
         value["truncated"].append("path")
@@ -392,6 +395,155 @@ def _finding_id(item: dict[str, Any], index: int) -> Any:
     return value if value is not None else f"index:{index}"
 
 
+def _not_evaluated_report(
+    inline_comments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "kept": list(inline_comments),
+        "jev_evaluations": [
+            {
+                "finding_id": _finding_id(item, index),
+                "decision": "not_evaluated",
+                "validity": None,
+                "impact": None,
+                "applicability": None,
+                "applicability_confidence": None,
+                "decision_reason": "no_api_key",
+            }
+            for index, item in enumerate(inline_comments)
+        ],
+    }
+
+
+def _resolve_threshold(threshold: float | None) -> float:
+    if threshold is not None:
+        return threshold
+    try:
+        return float(os.environ.get("JEV_THRESHOLD", DEFAULT_VALIDITY_THRESHOLD))
+    except ValueError:
+        return DEFAULT_VALIDITY_THRESHOLD
+
+
+def _effective_context(
+    comment: str, path: str, line: Any, item: dict[str, Any], context: Any
+) -> Any:
+    finding_context = (
+        collect_finding_context(item, context)
+        if isinstance(context, JevReviewContext)
+        else item.get("context", context)
+    )
+    return json.loads(_build_payload(comment, path, line, context=finding_context))[
+        "state"
+    ]["context"]
+
+
+def _log_evaluation(entry: dict[str, Any], log_path: str | Path | None) -> None:
+    _append_jev_log(entry, log_path=log_path)
+    stderr_entry = {
+        key: value for key, value in entry.items() if key not in ("timestamp", "pr")
+    }
+    print(json.dumps(stderr_entry), file=sys.stderr)
+
+
+def _evaluation_log_entry(
+    evaluation: JevFindingEvaluation,
+    *,
+    bot_name: str,
+    pr: int | None,
+    path: str,
+    line: Any,
+    comment: str,
+    accepted: bool,
+    reason: str,
+    effective_context: Any,
+) -> dict[str, Any]:
+    return {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "reviewer": bot_name,
+        "pr": pr,
+        "path": path,
+        "line": line,
+        "comment": comment,
+        "validity": evaluation.validity,
+        "impact": evaluation.impact,
+        "accepted": accepted,
+        "bypassed": evaluation.bypassed,
+        "schema_version": 2,
+        "applicability": evaluation.applicability,
+        "applicability_confidence": evaluation.applicability_confidence,
+        "decision_reason": reason,
+        "context": context_summary(effective_context),
+    }
+
+
+def _finding_evaluation_entry(
+    item: dict[str, Any],
+    index: int,
+    evaluation: JevFindingEvaluation,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "finding_id": _finding_id(item, index),
+        "decision": _jev_decision(reason),
+        "validity": evaluation.validity,
+        "impact": evaluation.impact,
+        "applicability": evaluation.applicability,
+        "applicability_confidence": evaluation.applicability_confidence,
+        "decision_reason": reason,
+    }
+
+
+def _evaluate_finding(
+    item: dict[str, Any],
+    index: int,
+    *,
+    bot_name: str,
+    threshold: float,
+    api_key: str,
+    base_url: str | None,
+    log_path: str | Path | None,
+    pr: int | None,
+    context: Any,
+) -> tuple[bool, dict[str, Any]]:
+    comment = str(item.get("body") or "")
+    path = str(item.get("path") or "")
+    line = item.get("line") or ""
+    effective_context = _effective_context(comment, path, line, item, context)
+    evaluation = evaluate_finding_with_jev(
+        comment=comment,
+        path=path,
+        line=line,
+        api_key=api_key,
+        base_url=base_url,
+        context=effective_context,
+    )
+    reason = _decision_reason(
+        validity=evaluation.validity,
+        impact=evaluation.impact,
+        threshold=threshold,
+        bypassed=evaluation.bypassed,
+        applicability=evaluation.applicability,
+        applicability_confidence=evaluation.applicability_confidence,
+        context=effective_context,
+    )
+    accepted = reason in ("bypass", "accepted")
+    _log_evaluation(
+        _evaluation_log_entry(
+            evaluation,
+            bot_name=bot_name,
+            pr=pr,
+            path=path,
+            line=line,
+            comment=comment,
+            accepted=accepted,
+            reason=reason,
+            effective_context=effective_context,
+        ),
+        log_path,
+    )
+    return accepted, _finding_evaluation_entry(item, index, evaluation, reason)
+
+
 def evaluate_review_findings(
     inline_comments: list[dict[str, Any]],
     bot_name: str = "claude",
@@ -418,108 +570,25 @@ def evaluate_review_findings(
     """
     resolved_key = api_key or os.environ.get("JEV_API_KEY")
     if not resolved_key:
-        return {
-            "kept": list(inline_comments),
-            "jev_evaluations": [
-                {
-                    "finding_id": _finding_id(item, index),
-                    "decision": "not_evaluated",
-                    "validity": None,
-                    "impact": None,
-                    "applicability": None,
-                    "applicability_confidence": None,
-                    "decision_reason": "no_api_key",
-                }
-                for index, item in enumerate(inline_comments)
-            ],
-        }
-
-    if threshold is None:
-        try:
-            threshold = float(
-                os.environ.get("JEV_THRESHOLD", DEFAULT_VALIDITY_THRESHOLD)
-            )
-        except ValueError:
-            threshold = DEFAULT_VALIDITY_THRESHOLD
-
+        return _not_evaluated_report(inline_comments)
+    resolved_threshold = _resolve_threshold(threshold)
     kept: list[dict[str, Any]] = []
     jev_evaluations: list[dict[str, Any]] = []
-
     for index, item in enumerate(inline_comments):
-        comment = str(item.get("body") or "")
-        path = str(item.get("path") or "")
-        line = item.get("line") or ""
-
-        finding_context = (
-            collect_finding_context(item, context)
-            if isinstance(context, JevReviewContext)
-            else item.get("context", context)
-        )
-        effective_context = json.loads(
-            _build_payload(comment, path, line, context=finding_context)
-        )["state"]["context"]
-        evaluation = evaluate_finding_with_jev(
-            comment=comment,
-            path=path,
-            line=line,
+        accepted, entry = _evaluate_finding(
+            item,
+            index,
+            bot_name=bot_name,
+            threshold=resolved_threshold,
             api_key=resolved_key,
             base_url=base_url,
-            context=effective_context,
+            log_path=log_path,
+            pr=pr,
+            context=context,
         )
-
-        reason = _decision_reason(
-            validity=evaluation.validity,
-            impact=evaluation.impact,
-            threshold=threshold,
-            bypassed=evaluation.bypassed,
-            applicability=evaluation.applicability,
-            applicability_confidence=evaluation.applicability_confidence,
-            context=effective_context,
-        )
-        accepted = reason in ("bypass", "accepted")
-
-        now_iso = datetime.now(UTC).isoformat()
-        file_log_entry = {
-            "timestamp": now_iso,
-            "reviewer": bot_name,
-            "pr": pr,
-            "path": path,
-            "line": line,
-            "comment": comment,
-            "validity": evaluation.validity,
-            "impact": evaluation.impact,
-            "accepted": accepted,
-            "bypassed": evaluation.bypassed,
-            "schema_version": 2,
-            "applicability": evaluation.applicability,
-            "applicability_confidence": evaluation.applicability_confidence,
-            "decision_reason": reason,
-            "context": context_summary(effective_context),
-        }
-        _append_jev_log(file_log_entry, log_path=log_path)
-
-        stderr_entry = {
-            key: value
-            for key, value in file_log_entry.items()
-            if key not in ("timestamp", "pr")
-        }
-        print(json.dumps(stderr_entry), file=sys.stderr)
-
-        jev_evaluations.append(
-            {
-                "finding_id": _finding_id(item, index),
-                "decision": _jev_decision(reason),
-                "validity": evaluation.validity,
-                "impact": evaluation.impact,
-                "applicability": evaluation.applicability,
-                "applicability_confidence": evaluation.applicability_confidence,
-                "decision_reason": reason,
-            }
-        )
-
+        jev_evaluations.append(entry)
         if accepted:
             kept.append(item)
-
     return {"kept": kept, "jev_evaluations": jev_evaluations}
 
 

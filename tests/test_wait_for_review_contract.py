@@ -1091,3 +1091,150 @@ def test_reply_marker_coexists_with_trigger_markers_in_reused_body():
     assert _find_existing_trigger_comment(data, "claude", 2) is trigger
     assert extract_review_result(data, "claude", exclude_ids={7}) is None
     assert extract_review_result(data, "claude") is None
+
+
+_RESULT_KEYS = (
+    "schema_version acquisition_status reason repository pr_number reviewer "
+    "round trigger_id triggered_at requested_head_sha reviewed_head_sha "
+    "current_head_sha review_target_sha review_target_sha_source review_items "
+    "review_body inline_comments jev_evaluations completeness timestamp"
+).split()
+
+
+def test_review_result_record_keeps_key_order_and_defaults():
+    from orchestune.review.acquisition import (
+        ACQUISITION_UNAVAILABLE,
+        SCHEMA_VERSION,
+        review_result_record,
+        reviewed_head_sha,
+    )
+
+    record = review_result_record(completeness={"issue_comments": "unknown"})
+    assert tuple(record) == tuple(_RESULT_KEYS)
+    assert record["schema_version"] == SCHEMA_VERSION
+    assert record["acquisition_status"] == ACQUISITION_UNAVAILABLE
+    assert record["review_target_sha_source"] == "unknown"
+    assert record["review_body"] == "" and record["reason"] == ""
+    fresh = review_result_record(completeness={"issue_comments": "complete"})
+    record["review_items"].append({"id": 1})
+    assert (
+        fresh["review_items"] == []
+        and fresh["inline_comments"] is not record["inline_comments"]
+    )
+    with pytest.raises(ValueError, match="unknown"):
+        review_result_record(completeness={}, not_a_field=True)
+    with pytest.raises(ValueError, match="completeness"):
+        review_result_record()
+    diagnostic = review_result_record(
+        completeness={"issue_comments": "complete"},
+        reason_code="review_timeout",
+        exit_code=20,
+        wait_diagnostics={"elapsed_seconds": 1},
+    )
+    assert tuple(diagnostic) == (
+        *_RESULT_KEYS[:3],
+        "reason_code",
+        "exit_code",
+        *_RESULT_KEYS[3:],
+        "wait_diagnostics",
+    )
+    current = {"kind": "review", "provenance": "current", "commit_id": "a" * 40}
+    assert (
+        reviewed_head_sha(
+            [
+                current,
+                {"kind": "comment", "provenance": "current", "commit_id": "b" * 40},
+            ]
+        )
+        == "a" * 40
+    )
+    assert reviewed_head_sha([current, {**current, "commit_id": "b" * 40}]) is None
+
+
+def test_wait_for_review_help_text_is_unchanged():
+    """\
+    usage: wait_for_review.py [-h] [--pr PR]
+                              [--review-state-file REVIEW_STATE_FILE]
+                              [--validate-request]
+                              [--max-snapshot-age MAX_SNAPSHOT_AGE]
+                              [--timeout TIMEOUT] [--stall-grace STALL_GRACE]
+                              [--interval INTERVAL] --bot-name {claude,codex,skip}
+                              [--body BODY] [--body-file BODY_FILE] [--no-post]
+                              [--max-rounds MAX_ROUNDS]
+                              [--max-retries MAX_RETRIES] [--round ROUND]
+                              [--jev-threshold JEV_THRESHOLD]
+                              [--output-file OUTPUT_FILE] [--switch-reviewer]
+                              [--repair-trigger-markers]
+
+    Trigger and detect AI review activity on a GitHub PR in a single blocking
+    process.
+
+    options:
+      -h, --help            show this help message and exit
+      --pr PR               Pull Request number to watch (required unless
+                            --review-state-file is used)
+      --review-state-file REVIEW_STATE_FILE
+                            Path to a snapshot_version 1 review snapshot fetched
+                            through GitHub MCP (or a legacy raw snapshot); one
+                            non-posting, non-polling evaluation that never invokes
+                            gh
+      --validate-request    With --review-state-file: validate the previous
+                            round's judgments in --body-file before the MCP client
+                            posts one combined comment; writes a receipt and never
+                            posts
+      --max-snapshot-age MAX_SNAPSHOT_AGE
+                            Offline only: maximum snapshot age in seconds
+                            (positive; default 300)
+      --timeout TIMEOUT     Online only: maximum time to wait in seconds (default:
+                            1800)
+      --stall-grace STALL_GRACE
+                            Online only: seconds an in-progress tracker comment
+                            may stay unchanged before it is treated as stalled
+                            rather than slow (default: 600)
+      --interval INTERVAL   Online only: polling interval in seconds (default: 5)
+      --bot-name {claude,codex,skip}
+                            Explicit reviewer selection (skip records a blocked
+                            human-review choice)
+      --body BODY           Online only: custom comment body to post when
+                            triggering review
+      --body-file BODY_FILE
+                            Path to the review-reply file with the previous
+                            round's judgments (online: also the trigger body to
+                            post)
+      --no-post             Skip posting a review trigger comment and only wait
+                            for activity
+      --max-rounds MAX_ROUNDS
+                            Maximum number of review rounds allowed (default: 5;
+                            offline accepts 1-5, counted PR-wide)
+      --max-retries MAX_RETRIES
+                            Online only: maximum retry attempts on transient
+                            failures (default: 1)
+      --round ROUND         Explicit review round number (default: auto-detected
+                            from PR comments; offline: a posted round to evaluate,
+                            or the next round for --validate-request)
+      --jev-threshold JEV_THRESHOLD
+                            Validity threshold for Jev finding filter (default:
+                            0.7 or JEV_THRESHOLD env)
+      --output-file OUTPUT_FILE
+                            Write the complete machine-readable acquisition result
+                            (or the --validate-request receipt) as JSON to this
+                            path. A write failure exits non-zero, even if
+                            acquisition itself succeeded.
+      --switch-reviewer     With --validate-request only: allow a reviewer change
+                            on explicit user instruction
+      --repair-trigger-markers
+                            Online only: retry retiring verified replacement
+                            ancestors; never re-post the replacement
+    """
+    import inspect
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "scripts/wait_for_review.py", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    expected = inspect.cleandoc(test_wait_for_review_help_text_is_unchanged.__doc__)
+    assert result.stdout == expected + "\n"
