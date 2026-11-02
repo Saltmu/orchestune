@@ -47,7 +47,7 @@ def _add_common_arguments(sub: argparse.ArgumentParser) -> None:
         "--target",
         action="append",
         required=True,
-        choices=["codex", "claude", "antigravity", "antigravity-cli", "all"],
+        choices=["codex", "claude", "antigravity", "antigravity-cli", "grok", "all"],
         help="Target assistant (repeatable or 'all')",
     )
     sub.add_argument(

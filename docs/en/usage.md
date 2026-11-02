@@ -439,14 +439,14 @@ Routine dispatch execution uses strictly the following 7 options. Detailed param
 | :--- | :--- | :--- |
 | `--parent-issue <int>` / `-p <int>` | - | The parent GitHub Issue number coordinating this plan. If omitted, inferred from the current Git branch name (`parent/issue-<N>`). If neither is available, startup fails with an error. Created sub-issues will link to this parent. |
 | `--apply` / `--no-apply` | `--apply` | Choose whether to actually execute actions (worktree setup, API calls) or preview them (dry-run). |
-| `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | auto-selected (non-CI: `auto` / GitHub Actions: `cloud-routine`) | Target environment to launch agents. When unspecified, resolved from configuration file or auto-selected from runtime environment (`GITHUB_ACTIONS`). `auto` detects a local CLI on `PATH`. `local` gives the backward-compatible no-op dummy (for tests/dry-runs). |
+| `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,grok-cli,auto}` | auto-selected (non-CI: `auto` / GitHub Actions: `cloud-routine`) | Target environment to launch agents. When unspecified, resolved from configuration file or auto-selected from runtime environment (`GITHUB_ACTIONS`). `auto` detects a local CLI on `PATH`. `local` gives the backward-compatible no-op dummy (for tests/dry-runs). |
 | `--max-concurrent <int>` | `2` (when unset in config) | Maximum number of subtask agents running concurrently. CLI argument overrides configuration file setting. |
 | `--profile <name>` | - | Override the task execution profile (e.g. `balanced`, `fast-code`, `deep-reasoning`) for this entire run, taking precedence over the profile in task metadata. |
 | `--child-review-gate {required,off}` | - | Child sub-issue review gate mode (`required` or `off`). When omitted, falls back to config file (`child-review-gate`), env var (`ORCHESTUNE_CHILD_REVIEW_GATE`), or default `required`. `off` skips verification with a warning. See [§4.5](#45-child-review-evidence-gate-and-layer-2-semantic-review-gate). |
 | `--final-acceptance-review {advisory,off}` | - | Advisory final-PR acceptance request (default `advisory`); independent of Layer 1/2. See §4.5. |
 | `--semantic-review-mode {required,advisory,off}` | - | Layer-2 integration-PR semantic review mode (`required`, `advisory`, or `off`). When omitted, falls back to config file (`semantic-review-mode`), env var (`ORCHESTUNE_SEMANTIC_REVIEW_MODE`), or default `required`. `off` skips verification. See [§4.5](#45-child-review-evidence-gate-and-layer-2-semantic-review-gate). |
 | `--force-integration-review` | - | Forces layer-2 integration-PR review even when a single child task qualifies for the Fast-Path. |
-| `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`). For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error. |
+| `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`, `grok-cli`). For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error. |
 
 ### Configuration File (`orchestune.toml`) for Detailed Settings
 
@@ -465,7 +465,7 @@ Check each target's resolved values with a dry-run dispatch, for example `orches
 
 | Setting Key | Default | Description |
 | :--- | :--- | :--- |
-| `reviewer-bot` | `"auto"` | Reviewer requested after implementation (`"auto"`, `"claude"`, `"codex"`). `auto` evaluates target type and maps Claude targets to Codex, and Codex/agy targets to Claude. |
+| `reviewer-bot` | `"auto"` | Reviewer requested after implementation (`"auto"`, `"claude"`, `"codex"`). `auto` evaluates target type and maps Claude targets to Codex, and Codex/agy/Grok targets to Claude. |
 | `ci-command` | `"./scripts/local-ci.sh"` | The CI command the Integrator runs on the integration branch (a shell-like string parsed with shlex or string list, e.g. `"make ci"`). Set this explicitly if your repository's CI entrypoint differs. |
 | `child-review-gate` | `"required"` | Child sub-issue review gate mode (`"required"`, `"off"`). Verifies review evidence (`verdict=pass`, SHA match) before merging to parent branch. `"off"` skips verification with a warning. |
 | `final-acceptance-review` | `"advisory"` | One request per final PR/head; `"off"` disables it. CLI > TOML > `ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW` > default. |
@@ -647,7 +647,7 @@ reasoning_effort = "high"
 > If an option is explicitly specified as a command-line argument, it overrides the value in the configuration file.
 > Unknown keys and invalid values stop startup with an error rather than falling back to defaults. Parent issue (`parent_issue`), unsafe execution bypass (`allow_unsafe_agent_execution`), routine tokens (`routine_token`), and top-level `model`/`reasoning_effort` are prohibited in configuration files. Boolean settings must be TOML booleans, paths and string settings must be strings, and integer settings must be TOML integers. `consistency-repair-code` must be a list of non-empty strings. `max-concurrent`, `max-launches-per-window`, `deviation-buffer-lines`, `max-recompute-retries`, `task-timeout-seconds`, `max-task-reclaims`, `early-death-window-seconds`, `max-early-death-retries`, `early-death-backoff-seconds`, `not-needed-review-timeout-seconds`, and `max-integration-timeout-retries` must be at least `0`; `window-seconds` and the five `integration-*-seconds` settings (plus `integration-timeout-backoff-seconds`) must be at least `1`, and `consistency-max-repair-passes` must be between `1` and `5`.
 >
-> In `[execution_profiles]` (or `[tool.orchestune.execution_profiles]`), define target-specific tables (`claude-cli`, `agy-cli`, `codex-cli`, `cloud-routine`, `codex-cloud`) under each profile name (e.g. `balanced`, `deep-reasoning`, `fast-code`). Each target configuration accepts `model` (string) and `reasoning_effort` (`"low"` / `"medium"` / `"high"`). When defining the `execution_profiles` table, the entry corresponding to `default_execution_profile` (defaults to `"balanced"`) must be included.
+> In `[execution_profiles]` (or `[tool.orchestune.execution_profiles]`), define target-specific tables (`claude-cli`, `agy-cli`, `codex-cli`, `grok-cli`, `cloud-routine`, `codex-cloud`) under each profile name (e.g. `balanced`, `deep-reasoning`, `fast-code`). Each target configuration accepts `model` (string) and `reasoning_effort` (`"low"` / `"medium"` / `"high"`). When defining the `execution_profiles` table, the entry corresponding to `default_execution_profile` (defaults to `"balanced"`) must be included.
 
 ---
 
@@ -743,7 +743,7 @@ Orchestune uses a two-tier review gate architecture for integrating child tasks 
 
 #### Unresponsive Layer-2 reviewers (#1436)
 
-- **Which reviewer is asked**: `semantic-review-provider = "claude"` or `"codex"` names it explicitly. With `"auto"` it follows the dispatch target across vendors (`claude-cli` and `cloud-routine` → `codex`; `codex-cli`, `codex-cloud` and `agy-cli` → `claude`; a generic `local` target cannot be resolved). An `issue_comment` workflow always runs from the **default branch**, so a reviewer whose workflow or App is not enabled there never answers.
+- **Which reviewer is asked**: `semantic-review-provider = "claude"` or `"codex"` names it explicitly. With `"auto"` it follows the dispatch target across vendors (`claude-cli` and `cloud-routine` → `codex`; `codex-cli`, `codex-cloud`, `agy-cli` and `grok-cli` → `claude`; a generic `local` target cannot be resolved). An `issue_comment` workflow always runs from the **default branch**, so a reviewer whose workflow or App is not enabled there never answers.
 - **Early stop**: when the reviewer shows no activity for `semantic-review-ack-timeout-seconds` after the request, the attempt stops as `review_not_acknowledged` instead of waiting for `semantic-review-timeout-seconds`. The notice on the PR and the parent Issue names the attempt, head, round, reviewer and how it was chosen, the request comment, the elapsed time and the deadlines, and the commands to resume. It is posted once per attempt and reason.
 - **`orchestune review`** (`--pr` is an integration PR):
   - `orchestune review status --pr <PR> [--json]` is read-only and shows the same facts at any time.

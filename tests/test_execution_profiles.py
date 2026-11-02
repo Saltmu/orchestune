@@ -571,6 +571,23 @@ class TestResolveExecutionProfile:
         sel5 = resolve_execution_profile("balanced", "codex_cloud", custom_cfg)
         assert sel5.model == "o3-mini"
 
+    def test_grok_alias_and_target_name_extraction(self, tmp_path: Path) -> None:
+        cfg = ExecutionProfileConfig(
+            profiles={
+                "balanced": {
+                    "grok-cli": TargetExecutionConfig(model="m", reasoning_effort="e"),
+                }
+            }
+        )
+        for name in ("grok", "grok-cli"):
+            sel = resolve_execution_profile("balanced", name, cfg)
+            assert (sel.model, sel.reasoning_effort) == ("m", "e")
+
+        grok_target = LocalProcessDispatchTarget(
+            log_dir=tmp_path, local_cmd='grok -p "{issue_number}"'
+        )
+        assert resolve_execution_profile("balanced", grok_target, cfg).model == "m"
+
     def test_immutability_and_alias(self) -> None:
         assert TargetProfileConfig is TargetExecutionConfig
         selection = ExecutionSelection(

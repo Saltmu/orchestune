@@ -99,10 +99,20 @@ _CODEX_CLI_LOCAL_CMD_BASE = (
     "--dangerously-bypass-approvals-and-sandbox"
 )
 
+_GROK_CLI_LOCAL_CMD_BASE = (
+    'grok -p "GitHub Issue #{issue_number} を、'
+    "必ず作業ブランチ `{branch_name}` で、"
+    "標準開発ワークフローに従って実装してください。"
+    "PR作成時は必ずベースブランチに `{base_branch}` を指定してください（`gh pr create --base {base_branch}`）。"
+    f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
+    "--always-approve --no-plan --no-auto-update --output-format streaming-json"
+)
+
 _LOCAL_CMD_BASE_BY_TARGET = {
     "claude-cli": _CLAUDE_CLI_LOCAL_CMD_BASE,
     "agy-cli": _AGY_CLI_LOCAL_CMD_BASE,
     "codex-cli": _CODEX_CLI_LOCAL_CMD_BASE,
+    "grok-cli": _GROK_CLI_LOCAL_CMD_BASE,
 }
 
 
@@ -124,14 +134,17 @@ AGY_CLI_LOCAL_CMD_TEMPLATE = _default_local_cmd_template(
 CODEX_CLI_LOCAL_CMD_TEMPLATE = _default_local_cmd_template(
     "codex-cli", resolve_reviewer_bot("auto", "codex-cli")
 )
+GROK_CLI_LOCAL_CMD_TEMPLATE = _default_local_cmd_template(
+    "grok-cli", resolve_reviewer_bot("auto", "grok-cli")
+)
 
-LOCAL_CLI_CANDIDATES: tuple[str, ...] = ("claude", "agy", "codex")
+LOCAL_CLI_CANDIDATES: tuple[str, ...] = ("claude", "agy", "codex", "grok")
 
 
 def detect_installed_local_cli() -> str | None:
     """PATH上にインストールされているローカルCLIを検出する（`auto`モード用）。
 
-    `claude`を優先し、無ければ`agy`、それも無ければ`codex`にフォールバックする。
+    `claude`を優先し、無ければ`agy`、`codex`、`grok`の順にフォールバックする。
     いずれも見つからない場合は`None`を返す。
     """
     for candidate in LOCAL_CLI_CANDIDATES:
@@ -145,7 +158,7 @@ def resolve_default_dispatch_target_name(env: Mapping[str, str]) -> str:
 
     GitHub Actions実行環境（`GITHUB_ACTIONS=true`）ではクラウドルーチンへ、
     それ以外（ローカル/対話実行）では`auto`（PATH上のローカルCLI自動検出。
-    `claude`優先、次点`agy`、`codex`）へディスパッチする。
+    `claude`優先、次点`agy`、`codex`、`grok`）へディスパッチする。
     CLI未検出時・資格情報未設定時のフォールバックは`build_dispatch_target`側の
     既存ロジックに委ねる。
     """
@@ -208,6 +221,9 @@ def _format_local_cmd(
         if cli_name == "codex":
             cmd.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
         elif cli_name == "claude":
+            cmd.extend(["--effort", reasoning_effort])
+        elif cli_name == "grok":
+            # 受理値が非公開のため列挙検証せず、そのままGrok CLIへ渡す。
             cmd.extend(["--effort", reasoning_effort])
         elif cli_name == "agy":
             logger.warning(
@@ -590,7 +606,12 @@ class TargetBuildConfig:
 
 
 def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
-    is_unsafe = dispatch_target_name in {"claude-cli", "agy-cli", "codex-cli"}
+    is_unsafe = dispatch_target_name in {
+        "claude-cli",
+        "agy-cli",
+        "codex-cli",
+        "grok-cli",
+    }
     if dispatch_target_name == "auto":
         detected = detect_installed_local_cli()
         if detected is not None:
@@ -598,7 +619,7 @@ def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
             is_unsafe = True
         else:
             print(
-                "警告: PATH上にclaude/agy/codexのいずれのCLIも見つかりませんでした。"
+                "警告: PATH上にclaude/agy/codex/grokのいずれのCLIも見つかりませんでした。"
                 "ローカルのダミー起動にフォールバックします。",
                 file=sys.stderr,
             )

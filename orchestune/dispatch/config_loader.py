@@ -53,11 +53,11 @@ from orchestune.review.semantic_gate import VALID_SEMANTIC_REVIEW_MODES
 _DISPATCH_TARGET_HELP = (
     "#215/#163: エージェントの実ディスパッチ先。未指定時は実行環境から自動選択される"
     "（GitHub Actions実行時は'cloud-routine'、ローカル実行時は'auto'）。"
-    "'auto'はPATH上のローカルCLIを検出し（claude優先、次点agy、codex）、"
+    "'auto'はPATH上のローカルCLIを検出し（claude優先、次点agy、codex、grok）、"
     "見つかったCLIへディスパッチする。未検出時は警告を出しダミー起動にフォールバック。"
     "'local'はダミー起動（no-op）。'cloud-routine'はClaude Codeクラウドルーチンへディスパッチ。"
     "'codex-cloud'はCodex Cloud CLIへディスパッチ。"
-    "'claude-cli'/'agy-cli'/'codex-cli'はローカルCLIへディスパッチする。"
+    "'claude-cli'/'agy-cli'/'codex-cli'/'grok-cli'はローカルCLIへディスパッチする。"
 )
 
 
@@ -101,6 +101,7 @@ def _add_core_cli_arguments(parser: argparse.ArgumentParser) -> None:
             "claude-cli",
             "agy-cli",
             "codex-cli",
+            "grok-cli",
             "auto",
         ],
         default=None,
@@ -149,7 +150,7 @@ def _add_execution_cli_arguments(parser: argparse.ArgumentParser) -> None:
         "--allow-unsafe-agent-execution",
         action="store_true",
         default=False,
-        help="ローカルCLI（claude/agy/codex）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可します。",
+        help="ローカルCLI（claude/agy/codex/grok）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可します。",
     )
 
 

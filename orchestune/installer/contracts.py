@@ -11,6 +11,7 @@ class TargetType(str, Enum):
     CLAUDE = "claude"
     ANTIGRAVITY = "antigravity"
     ANTIGRAVITY_CLI = "antigravity-cli"
+    GROK = "grok"
     ALL = "all"
 
 

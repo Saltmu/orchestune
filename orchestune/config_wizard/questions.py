@@ -42,7 +42,7 @@ BASIC_QUESTIONS: list[QuestionSpec] = [
         label="実行先 (dispatch-target)",
         help_text=(
             "エージェントのディスパッチ先。未設定時は実行環境から自動選択。\n"
-            "選択肢: auto, local (no-op), claude-cli, agy-cli, codex-cli, cloud-routine, codex-cloud"
+            "選択肢: auto, local (no-op), claude-cli, agy-cli, codex-cli, grok-cli, cloud-routine, codex-cloud"
         ),
         input_kind="choice",
         category="basic",
@@ -52,6 +52,7 @@ BASIC_QUESTIONS: list[QuestionSpec] = [
             "claude-cli",
             "agy-cli",
             "codex-cli",
+            "grok-cli",
             "cloud-routine",
             "codex-cloud",
         ],

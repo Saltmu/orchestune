@@ -146,6 +146,7 @@ _TARGET_CHOICES = frozenset(
         "claude-cli",
         "agy-cli",
         "codex-cli",
+        "grok-cli",
         "auto",
     }
 )
@@ -164,6 +165,7 @@ _SEMANTIC_FIX_PROVIDER_CHOICES = frozenset(
         "claude-cli",
         "codex-cli",
         "agy-cli",
+        "grok-cli",
         "cloud-routine",
         "codex-cloud",
         "local",

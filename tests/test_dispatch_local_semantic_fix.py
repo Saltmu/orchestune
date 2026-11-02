@@ -44,6 +44,13 @@ class TestBuildLocalSemanticFixCmd:
         assert cmd[2] == "Fix this finding"
         assert "--dangerously-skip-permissions" in cmd
 
+    def test_grok_cli_command(self) -> None:
+        cmd = build_local_semantic_fix_cmd("grok-cli", prompt="Fix this finding")
+        assert cmd is not None
+        assert cmd[:3] == ["grok", "-p", "Fix this finding"]
+        assert "--always-approve" in cmd
+        assert "--no-plan" in cmd
+
     def test_custom_local_cmd_unsupported(self) -> None:
         cmd = build_local_semantic_fix_cmd(
             "claude-cli",
@@ -63,6 +70,7 @@ class TestBuildLocalSemanticFixCmd:
             ("claude-cli", "bypassPermissions"),
             ("codex-cli", "--dangerously-bypass-approvals-and-sandbox"),
             ("agy-cli", "--dangerously-skip-permissions"),
+            ("grok-cli", "--always-approve"),
         ]:
             cmd = build_local_semantic_fix_cmd(target_name, prompt="test")
             assert cmd is not None

@@ -15,6 +15,7 @@ _AUTO_REVIEWER_BY_TARGET: dict[str, ReviewerBot] = {
     "codex-cli": "claude",
     "codex-cloud": "claude",
     "agy-cli": "claude",
+    "grok-cli": "claude",
 }
 
 

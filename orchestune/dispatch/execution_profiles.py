@@ -255,6 +255,8 @@ def extract_target_name(target: str | Any) -> str:
                     "agy-cli": "agy-cli",
                     "codex": "codex-cli",
                     "codex-cli": "codex-cli",
+                    "grok": "grok-cli",
+                    "grok-cli": "grok-cli",
                 }
                 if executable in local_target_names:
                     return local_target_names[executable]
@@ -270,6 +272,8 @@ _TARGET_ALIASES: dict[str, tuple[str, ...]] = {
     "agy-cli": ("agy-cli", "agy"),
     "codex": ("codex", "codex-cli"),
     "codex-cli": ("codex-cli", "codex"),
+    "grok": ("grok", "grok-cli"),
+    "grok-cli": ("grok-cli", "grok"),
     "cloud-routine": ("cloud-routine", "cloud_routine"),
     "cloud_routine": ("cloud_routine", "cloud-routine"),
     "codex-cloud": ("codex-cloud", "codex_cloud"),

@@ -164,7 +164,7 @@ def test_no_apply_is_not_counted() -> None:
 
 
 @pytest.mark.parametrize(
-    "target", ["local", "claude-cli", "agy-cli", "codex-cli", "auto"]
+    "target", ["local", "claude-cli", "agy-cli", "codex-cli", "grok-cli", "auto"]
 )
 def test_local_process_target_argument_is_error(target: str) -> None:
     text = make_workflow(command=f"orchestune dispatch --dispatch-target {target}")

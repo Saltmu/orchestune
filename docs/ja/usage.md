@@ -423,14 +423,14 @@ else { Write-Warning 'report not created' }
 | :--- | :--- | :--- |
 | `--parent-issue <int>` / `-p <int>` | - | 開発対象をまとめている親の GitHub Issue 番号を指定。未指定時は現在のGitブランチ名（`parent/issue-<N>`）から推論されます。どちらからも特定できない場合は起動エラーとなります。起票される子Issueがすべてこの親Issueに紐付けられます。 |
 | `--apply` / `--no-apply` | `--apply` | 実際にタスク割り当てやGitブランチ作成を実行するか、プレビュー（ドライラン）のみにするかを選択。 |
-| `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,auto}` | 自動選択（非CI: `auto` / GitHub Actions: `cloud-routine`） | エージェントの起動先。未指定時は設定ファイルの値、または実行環境（`GITHUB_ACTIONS`環境変数）から自動選択されます。`auto`はPATH上のローカルCLIを検出します。`local`は後方互換のダミー起動（no-op、テスト・dry-run用途）になります。 |
+| `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,grok-cli,auto}` | 自動選択（非CI: `auto` / GitHub Actions: `cloud-routine`） | エージェントの起動先。未指定時は設定ファイルの値、または実行環境（`GITHUB_ACTIONS`環境変数）から自動選択されます。`auto`はPATH上のローカルCLIを検出します。`local`は後方互換のダミー起動（no-op、テスト・dry-run用途）になります。 |
 | `--max-concurrent <int>` | `2` (設定ファイル未指定時) | 同時に実行（起動）できるサブタスクエージェントの最大数。設定ファイルの値よりもCLI引数が優先されます。 |
 | `--profile <name>` | - | この実行全体で使用するタスクプロファイル（例: `balanced`, `fast-code`, `deep-reasoning`）をオーバーライドします。タスクメタデータのプロファイルより優先されます。 |
 | `--child-review-gate {required,off}` | - | 子サブIssueのレビュー合否検証モード（`required` または `off`）。未指定時は設定ファイル（`child-review-gate`）または環境変数（`ORCHESTUNE_CHILD_REVIEW_GATE`）、既定値は `required`。`off` 指定時は検証をスキップし警告を出力。[§4.5](#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)を参照。 |
 | `--final-acceptance-review {advisory,off}` | - | 最終PRの受け入れレビュー依頼（既定 `advisory`）。Layer 1/2と独立。§4.5参照。 |
 | `--semantic-review-mode {required,advisory,off}` | - | 統合PRの第2層セマンティックレビューモード（`required`、`advisory`、または `off`）。未指定時は設定ファイル（`semantic-review-mode`）または環境変数（`ORCHESTUNE_SEMANTIC_REVIEW_MODE`）、既定値は `required`。`off` でスキップ。[§4.5](#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)を参照。 |
 | `--force-integration-review` | - | 単一タスクFast-Pathをバイパスし、子タスク1件の場合でも統合PRセマンティックレビュー（第2層）を強制実行するフラグ。 |
-| `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。安全のためCLI引数でのみ指定可能（設定ファイルでの指定は禁止）です。未指定でローカルCLIターゲットを実行しようとした場合は設定エラーで拒否されます（Fail-Closed）。 |
+| `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`、`grok-cli`）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。安全のためCLI引数でのみ指定可能（設定ファイルでの指定は禁止）です。未指定でローカルCLIターゲットを実行しようとした場合は設定エラーで拒否されます（Fail-Closed）。 |
 
 ### 設定ファイル (`orchestune.toml`) による詳細設定
 
@@ -449,7 +449,7 @@ dry-run dispatchを使って各ターゲットの解決結果を確認します�
 
 | 設定キー | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
-| `reviewer-bot` | `"auto"` | 実装後に依頼するレビュアー（`"auto"`, `"claude"`, `"codex"`）。`auto`はターゲットから判定し、Claude系にはCodex、Codex/agy系にはClaudeを割り当てます。 |
+| `reviewer-bot` | `"auto"` | 実装後に依頼するレビュアー（`"auto"`, `"claude"`, `"codex"`）。`auto`はターゲットから判定し、Claude系にはCodex、Codex/agy/Grok系にはClaudeを割り当てます。 |
 | `ci-command` | `"./scripts/local-ci.sh"` | Integratorが統合ブランチ上で実行するCIコマンド（shlex構文の文字列または文字列リスト。例: `"make ci"`）。導入先リポジトリのCIエントリーポイントが異なる場合は必ず設定してください。 |
 | `child-review-gate` | `"required"` | 子タスクのレビュー合格証跡（`verdict=pass`、SHA一致）を検証するゲート（`"required"`, `"off"`）。`"off"`で検証をスキップし警告を出力。 |
 | `final-acceptance-review` | `"advisory"` | 最終PR/headごとに1件依頼。`"off"` で無効。CLI > TOML > `ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW` > 既定。 |
@@ -631,7 +631,7 @@ reasoning_effort = "high"
 > コマンドライン引数で明示的にオプションが指定された場合は、設定ファイルの値よりもコマンドライン引数の値が優先されます。
 > 未知のキーや不正な値がある場合は、既定値へフォールバックせず起動時にエラーで停止します。親Issue（`parent_issue`）、安全バイパス（`allow_unsafe_agent_execution`）、ルーチントークン（`routine_token`）、およびトップレベルの `model`/`reasoning_effort` は設定ファイルへの記述が禁止されています。真偽値は TOML の bool、パス・文字列の設定は文字列、整数の設定は TOML の整数で指定してください。`consistency-repair-code`は空でない文字列のlistです。`max-concurrent`、`max-launches-per-window`、`deviation-buffer-lines`、`max-recompute-retries`、`task-timeout-seconds`、`max-task-reclaims`、`early-death-window-seconds`、`max-early-death-retries`、`early-death-backoff-seconds`、`not-needed-review-timeout-seconds`、`max-integration-timeout-retries` は `0` 以上、`window-seconds` と`integration-*-seconds`の各設定（`integration-timeout-backoff-seconds`を含む）は `1` 以上、`consistency-max-repair-passes`は`1`～`5`です。
 >
-> `[execution_profiles]`（または `[tool.orchestune.execution_profiles]`）では、各プロファイル名（例: `balanced`, `deep-reasoning`, `fast-code`）配下にターゲット名（`claude-cli`, `agy-cli`, `codex-cli`, `cloud-routine`, `codex-cloud`）別のテーブルを定義します。各ターゲット設定では `model`（文字列）および `reasoning_effort`（`"low"` / `"medium"` / `"high"`）が指定可能です。`execution_profiles` テーブルを定義する場合、`default_execution_profile`（未指定時は `"balanced"`）のエントリが必ず含まれている必要があります。
+> `[execution_profiles]`（または `[tool.orchestune.execution_profiles]`）では、各プロファイル名（例: `balanced`, `deep-reasoning`, `fast-code`）配下にターゲット名（`claude-cli`, `agy-cli`, `codex-cli`, `grok-cli`, `cloud-routine`, `codex-cloud`）別のテーブルを定義します。各ターゲット設定では `model`（文字列）および `reasoning_effort`（`"low"` / `"medium"` / `"high"`）が指定可能です。`execution_profiles` テーブルを定義する場合、`default_execution_profile`（未指定時は `"balanced"`）のエントリが必ず含まれている必要があります。
 
 ---
 
@@ -727,7 +727,7 @@ Orchestuneでは、子タスクから親ブランチ（`parent/issue-{N}`）へ�
 
 #### 応答しない第2層 reviewer への対応（#1436）
 
-- **どの reviewer に依頼するか**: `semantic-review-provider = "claude"` / `"codex"` は明示指定です。`"auto"` は dispatch target から別ベンダーを選びます（`claude-cli`・`cloud-routine` → `codex`、`codex-cli`・`codex-cloud`・`agy-cli` → `claude`。汎用の `local` は解決できません）。`issue_comment` で動くワークフローは常に**デフォルトブランチ**の定義で動くため、そこでワークフローや App が有効でない reviewer は応答しません。
+- **どの reviewer に依頼するか**: `semantic-review-provider = "claude"` / `"codex"` は明示指定です。`"auto"` は dispatch target から別ベンダーを選びます（`claude-cli`・`cloud-routine` → `codex`、`codex-cli`・`codex-cloud`・`agy-cli`・`grok-cli` → `claude`。汎用の `local` は解決できません）。`issue_comment` で動くワークフローは常に**デフォルトブランチ**の定義で動くため、そこでワークフローや App が有効でない reviewer は応答しません。
 - **早期停止**: 依頼から `semantic-review-ack-timeout-seconds` の間、reviewer の活動がなければ、`semantic-review-timeout-seconds` を待たずに `review_not_acknowledged` で停止します。PR と親 Issue の通知に、attempt・head・round・reviewer とその決まり方・依頼コメント・経過時間と期限・再開コマンドを載せます。通知は attempt と理由ごとに1回だけです。
 - **`orchestune review`**（`--pr` は統合 PR）:
   - `orchestune review status --pr <PR> [--json]` は読み取り専用で、同じ情報をいつでも表示します。

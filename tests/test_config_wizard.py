@@ -148,3 +148,12 @@ class TestConfigWizardFlow:
         result = run_config_wizard(mode="init", project_dir=tmp_path, prompt=prompt)
         assert result.status == "cancelled"
         assert not (tmp_path / "orchestune.toml").exists()
+
+
+def test_dispatch_target_question_offers_grok_cli():
+    from orchestune.config_wizard.questions import BASIC_QUESTIONS
+
+    question = next(q for q in BASIC_QUESTIONS if q.key == "dispatch-target")
+    assert question.choices is not None
+    assert "grok-cli" in question.choices
+    assert "grok-cli" in question.help_text

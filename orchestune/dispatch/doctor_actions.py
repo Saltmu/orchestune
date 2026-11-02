@@ -39,7 +39,7 @@ from orchestune.dispatch.targets import (
 STANDARD_GROUP = "orchestune-control-${{ github.repository }}"
 EXTERNAL_TARGETS = frozenset({"cloud-routine", "codex-cloud"})
 LOCAL_PROCESS_TARGETS = frozenset(
-    {"local", "claude-cli", "agy-cli", "codex-cli", "auto"}
+    {"local", "claude-cli", "agy-cli", "codex-cli", "grok-cli", "auto"}
 )
 ACTIONS_DEFAULT_TARGET = resolve_default_dispatch_target_name(
     {"GITHUB_ACTIONS": "true"}

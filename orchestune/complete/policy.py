@@ -31,7 +31,14 @@ def _collect_policy_usage(active: Any, snapshot: dict[str, Any]) -> Usage | None
         started_at=active.launch.started_at,
         launch_attempt_id=active.launch.launch_attempt_id,
     )
-    supported_targets = {"auto", "local", "claude-cli", "agy-cli", "codex-cli"}
+    supported_targets = {
+        "auto",
+        "local",
+        "claude-cli",
+        "agy-cli",
+        "codex-cli",
+        "grok-cli",
+    }
     if (
         handle.external_id is None
         and snapshot.get("dispatch_target") in supported_targets

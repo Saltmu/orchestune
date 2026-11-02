@@ -161,6 +161,11 @@ class TestSemanticReviewConfiguration:
         with pytest.raises(ConfigError):
             validate_toml_config({key: value})
 
+    def test_toml_accepts_grok_cli_semantic_fix_provider(self) -> None:
+        validated = validate_toml_config({"semantic-fix-provider": "grok-cli"})
+
+        assert validated["semantic_fix_provider"] == "grok-cli"
+
     def test_toml_accepts_every_semantic_setting(self) -> None:
         values = {
             "semantic-review-mode": "advisory",
