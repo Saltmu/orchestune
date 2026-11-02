@@ -351,6 +351,15 @@ def test_setup_skills_with_workflow_skill_distributes_modern_portability_procedu
     assert "right after the start request" in skill_md.lower()
     assert "after step 10 creates the pr" not in skill_md.lower()
     assert "resolve reviewer bot" in skill_md.lower()
+    assert "reviewer-bot" in skill_md and "reviewer_by_target" in skill_md
+    assert (
+        "claude-cli" in skill_md
+        and "codex-cli" in skill_md
+        and "agy-cli" in skill_md
+        and "grok-cli" in skill_md
+    )
+    assert "`local` and unlisted targets have no default" in skill_md.lower()
+    assert "unresolved uses `--bot-name skip` without asking user" in skill_md
     assert "bypass" in skill_md.lower()
 
     # tdd.md bloat baseline

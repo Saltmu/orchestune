@@ -799,6 +799,19 @@ def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
     )
     assert "right after the start request" in plan and "before claim" in plan
     assert "resolve reviewer bot" in plan.lower()
+    assert "prompt explicit" in plan.lower() and "overrides config" in plan.lower()
+    assert "reviewer-bot" in plan and "reviewer_by_target" in plan
+    assert "orchestune.toml" in plan and "pyproject.toml" in plan
+    assert (
+        "claude-cli" in plan
+        and "codex-cli" in plan
+        and "agy-cli" in plan
+        and "grok-cli" in plan
+    )
+    assert "cloud-routine" in plan and "codex-cloud" in plan
+    assert "claude code" in plan.lower() and "antigravity" in plan.lower()
+    assert "`local` and unlisted targets have no default" in plan.lower()
+    assert "unresolved uses `--bot-name skip` without asking user" in plan
     assert "after PR creation" not in plan
     assert "bypass user approval" in plan and "existing Issue" in plan
     review = next(
@@ -814,6 +827,20 @@ def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
     assert "right after the start request" in loop and "post-PR selection" not in loop
     assert "after PR creation require" not in loop
     assert "resolve reviewer bot" in loop.lower()
+    assert "prompt explicit" in loop.lower() and "overrides config" in loop.lower()
+    assert "reviewer-bot" in loop and "reviewer_by_target" in loop
+    assert "orchestune.toml" in loop and "pyproject.toml" in loop
+    assert (
+        "claude-cli" in loop
+        and "codex-cli" in loop
+        and "agy-cli" in loop
+        and "grok-cli" in loop
+    )
+    assert "cloud-routine" in loop and "codex-cloud" in loop
+    assert "claude code" in loop.lower() and "antigravity" in loop.lower()
+    assert "`local` and unlisted targets have no default" in loop.lower()
+    assert "unresolved uses `--bot-name skip` without asking user" in loop
+    assert "without re-asking" in loop
     assert (
         "Only per-finding procedure Step 5 with Step 6 satisfied permits Step 12"
         in loop
