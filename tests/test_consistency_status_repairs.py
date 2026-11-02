@@ -226,6 +226,7 @@ def test_transition_command_carries_the_replaced_label() -> None:
     assert "dependencies-declared" in command.preconditions
     assert "dependencies-resolved" in command.preconditions
     assert "no-promotion-hold" in command.preconditions
+    assert "no-current-blocked-outcome" in command.preconditions
 
 
 def test_plan_ignores_findings_it_does_not_own() -> None:
@@ -416,7 +417,12 @@ def test_only_one_certain_reachable_forge_permits_a_plan(name: str) -> None:
         (
             BLOCKED_WITH_RESOLVED_DEPENDENCIES,
             "status:blocked",
-            ("dependencies-declared", "dependencies-resolved", "no-promotion-hold"),
+            (
+                "dependencies-declared",
+                "dependencies-resolved",
+                "no-promotion-hold",
+                "no-current-blocked-outcome",
+            ),
         ),
         (
             QUEUED_WITH_UNRESOLVED_DEPENDENCIES,

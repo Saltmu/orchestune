@@ -337,11 +337,14 @@ def test_a_command_that_changes_nothing_is_not_reported_applied(tmp_path, monkey
 
 
 def _always_fresh(command, task, tasks_by_issue, completion_evidence, config):
-    return status_repair.evaluate_fresh_dependencies(
-        task,
-        tasks_by_issue,
-        completion_evidence=completion_evidence,
-        forge=config.resolved_forge,
+    return (
+        status_repair.evaluate_fresh_dependencies(
+            task,
+            tasks_by_issue,
+            completion_evidence=completion_evidence,
+            forge=config.resolved_forge,
+        ),
+        None,
     )
 
 

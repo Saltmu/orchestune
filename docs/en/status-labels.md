@@ -472,6 +472,13 @@ independently of the lifecycle above (see "External lock" below).
 - Condition: every entry in `depends_on` is resolved, i.e. `status:done` or
   `status:not-needed` (subtasks completed earlier in the same cycle are also
   counted via `completed_subtask_ids`).
+  However, a task that self-stopped by reporting a blocked Outcome Record (`result=blocked`)
+  for its current claim generation is held in `status:blocked` and excluded from automatic promotion
+  (the `no-current-blocked-outcome` repair precondition).
+  An operator can re-queue it by resetting the label back to `status:queued`.
+  When re-queued and launched, the new execution writes a fresh `claim_id` into the footprint;
+  the previous blocked Outcome comment is not deleted, but is ignored by subsequent dispatch cycles
+  because its `claim_id` belongs to an older generation.
 
 ### 3. `status:queued` / `status:blocked` → `status:in-progress` (launch)
 - Source: `_apply_task_launches` in `orchestune/dispatch/launch.py`

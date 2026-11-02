@@ -75,7 +75,12 @@ _TRANSITION_PLANS: dict[str, tuple[str, str, tuple[str, ...]]] = {
     BLOCKED_WITH_RESOLVED_DEPENDENCIES: (
         StatusLabel.BLOCKED,
         StatusLabel.QUEUED,
-        ("dependencies-declared", "dependencies-resolved", "no-promotion-hold"),
+        (
+            "dependencies-declared",
+            "dependencies-resolved",
+            "no-promotion-hold",
+            "no-current-blocked-outcome",
+        ),
     ),
     QUEUED_WITH_UNRESOLVED_DEPENDENCIES: (
         StatusLabel.QUEUED,
