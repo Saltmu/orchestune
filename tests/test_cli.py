@@ -375,3 +375,58 @@ def test_cli_delegates_to_doctor_with_its_exit_code():
 
     assert exc_info.value.code == 1
     mock_doctor_main.assert_called_once()
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_cli_help_flag_lists_commands_and_exits_zero(flag, capsys):
+    """#1563: `orchestune --help` shows the same list as no arguments, but succeeds."""
+    from orchestune.cli import main
+
+    with patch("sys.argv", ["orchestune"]), pytest.raises(SystemExit):
+        main()
+    no_args_output = capsys.readouterr().out
+
+    with patch("sys.argv", ["orchestune", flag]):
+        main()  # returns normally: exit status 0
+
+    assert capsys.readouterr().out == no_args_output
+
+
+def test_cli_help_flag_does_not_delegate_to_a_command():
+    from orchestune.cli import main
+
+    with (
+        patch("sys.argv", ["orchestune", "--help"]),
+        patch("orchestune.cli._dispatch_command") as dispatch,
+    ):
+        main()
+
+    dispatch.assert_not_called()
+
+
+def test_cli_help_flag_after_a_command_still_reaches_that_command():
+    """Only the top-level flag lists commands; `claim --help` stays with claim."""
+    from orchestune.cli import main
+
+    with (
+        patch("sys.argv", ["orchestune", "claim", "--help"]),
+        patch("orchestune.claim.cli.main", return_value=0) as run,
+        pytest.raises(SystemExit),
+    ):
+        main()
+
+    run.assert_called_once_with()
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_cli_unknown_command_still_fails_after_help_flag_support(flag, capsys):
+    from orchestune.cli import main
+
+    with (
+        patch("sys.argv", ["orchestune", "invalid_cmd", flag]),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 1
+    assert "Unknown command: invalid_cmd" in capsys.readouterr().out

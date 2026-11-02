@@ -1,5 +1,44 @@
 # 使用方法とコマンドリファレンス
 
+## コマンドの早見表（プレビューと適用）
+
+コマンドによって、何もつけずに実行したときの動作と、プレビューと適用を切り替えるオプションが異なります。実行前にこの表で確認してください。
+
+| コマンド | 何もつけない場合 | 切り替えるオプション |
+| :--- | :--- | :--- |
+| `orchestune claim` | 適用 | `--no-apply` でプレビュー |
+| `orchestune complete` | 適用 | `--no-apply` でプレビュー |
+| `orchestune gc` | 適用 | `--no-apply` でプレビュー |
+| `orchestune provision` | 適用 | `--no-apply` でプレビュー |
+| `orchestune dispatch` | 適用 | `--no-apply` でプレビュー |
+| `orchestune skills install` | 適用 | `--dry-run` でプレビュー |
+| `orchestune skills update` | 適用 | `--dry-run` でプレビュー |
+| `orchestune skills uninstall` | 適用 | `--dry-run` でプレビュー |
+| `orchestune replan` | プレビュー | `--apply` で適用（`--confirm-preview <token>` も必要） |
+| `orchestune remediate` | プレビュー | `--apply` で適用（`--confirm-preview <token>` も必要） |
+| `orchestune recover` | プレビュー | `--apply` で適用 |
+| `orchestune review retry` | プレビュー | `--apply` で適用 |
+| `orchestune review override` | プレビュー | `--apply` で適用 |
+
+- 「プレビュー」は、Git・GitHub・台帳を変更せずに結果を表示するモードです。ただし `dispatch --no-apply` は、ローカルの結果と報告用のディレクトリ・lockを作ります（4節）。
+- `orchestune-dispatch` コマンドは `orchestune dispatch` と同じオプションです。
+- `--dry-run` を使うのは `skills` だけで、ほかのコマンドは `--no-apply` / `--apply` です。
+- この表に載っていないコマンドには、プレビューと適用を切り替えるオプションはありません。
+
+## 日常の開発フロー
+
+1つのIssueを進める流れです。各コマンドの詳細は、7節（`claim`）、8節（`complete`）、9節（`gc`）を参照してください。
+
+```bash
+orchestune claim <N> --no-apply   # 着手前の検証だけ行う（省略可）
+orchestune claim <N>              # 着手して worktree を作る
+# worktree で実装、ローカルCI、PR作成、レビュー対応を行う
+orchestune complete --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md
+gh pr merge <PR> --merge --delete-branch   # primary checkout からマージする
+orchestune gc --no-apply          # 解放される予約を確認する
+orchestune gc                     # 予約を解放する
+```
+
 ## 次のワークフロー操作（`orchestune workflow next`）
 
 `next` にタスク固有のsession directoryを指定すると、最も早く未完了の段階と、
@@ -969,6 +1008,14 @@ claim済みworktreeから `orchestune complete --issue <N> --pr <PR> --result do
 ## 9. handoff-readyタスクのGC（`orchestune gc`）
 
 `orchestune complete` がOutcome Recordを記録し、対象PRがマージされた後、primary checkoutからGC専用コマンドを実行して予約を解放できます。親Issueなしの対話タスクにも使用できます。
+
+PRのマージは、primary checkout から次のコマンドで行えます（merge commit を作り、ブランチを削除します）。
+
+```bash
+gh pr merge <PR> --merge --delete-branch
+```
+
+環境によっては、このコマンドが worktree も削除します。削除された場合も、`orchestune gc` は worktree を `absent` と表示して予約を解放します。
 
 ```bash
 orchestune gc --no-apply  # 判定を確認する（状態・worktree・lockは変更しない）

@@ -808,3 +808,132 @@ def test_reviewer_by_target_table_is_documented(relative_path):
     """#1560: every place that states the auto reviewer mapping names the table."""
     text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
     assert "reviewer_by_target" in text, relative_path
+
+
+# --- #1563: preview/apply quick reference and the daily flow in usage.md ---
+
+_PREVIEW_APPLY_ROW = re.compile(
+    r"^\|\s*`orchestune ([a-z]+(?: [a-z]+)?)`\s*\|\s*([^|]+?)\s*\|\s*`(--[a-z-]+)`"
+)
+_DEFAULT_WORDS = {
+    "ja": {"適用": "apply", "プレビュー": "preview"},
+    "en": {"Applies": "apply", "Preview": "preview"},
+}
+_PREVIEW_APPLY_FLAGS = ("--no-apply", "--apply", "--dry-run")
+# `orchestune setup` does not parse `--help`: it installs skill links under the
+# home directory. Never probe it; it has no preview/apply switch anyway.
+_HELP_UNSAFE_COMMANDS = {"setup"}
+_QUICK_REFERENCE_COMMANDS = {
+    "claim",
+    "complete",
+    "gc",
+    "provision",
+    "dispatch",
+    "skills install",
+    "skills update",
+    "skills uninstall",
+    "replan",
+    "remediate",
+    "recover",
+    "review retry",
+    "review override",
+}
+_QUICK_REFERENCE_HEADINGS = {
+    "ja": "## コマンドの早見表（プレビューと適用）",
+    "en": "## Preview and apply quick reference",
+}
+_DAILY_FLOW_HEADINGS = {
+    "ja": "## 日常の開発フロー",
+    "en": "## Daily development flow",
+}
+
+
+def _quick_reference_rows(lang: str) -> dict[str, tuple[str, str]]:
+    """早見表の行を `{コマンド: (既定の動作, 切り替えるオプション)}` で返す。"""
+    text = _read_usage(lang)
+    heading = _QUICK_REFERENCE_HEADINGS[lang]
+    assert heading in text, f"{lang}: usage.md に「{heading}」がありません"
+    block = text.split(heading, 1)[1].split("\n## ", 1)[0]
+    rows: dict[str, tuple[str, str]] = {}
+    for line in block.splitlines():
+        match = _PREVIEW_APPLY_ROW.match(line)
+        if match:
+            command, default_word, option = match.groups()
+            assert default_word in _DEFAULT_WORDS[lang], (lang, line)
+            rows[command] = (_DEFAULT_WORDS[lang][default_word], option)
+    return rows
+
+
+def _command_help(
+    argv: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> str:
+    from orchestune.cli import main
+
+    assert argv[0] not in _HELP_UNSAFE_COMMANDS, argv
+    monkeypatch.setattr("sys.argv", ["orchestune", *argv, "--help"])
+    with pytest.raises(SystemExit) as exit_info:
+        main()
+    assert exit_info.value.code == 0
+    return capsys.readouterr().out
+
+
+@pytest.mark.parametrize("lang", ["ja", "en"])
+class TestPreviewApplyQuickReference:
+    def test_lists_every_command_with_a_preview_apply_switch(self, lang):
+        assert set(_quick_reference_rows(lang)) == _QUICK_REFERENCE_COMMANDS
+
+    def test_each_row_matches_the_real_parser(self, lang, monkeypatch, capsys):
+        for command, (default, option) in _quick_reference_rows(lang).items():
+            help_text = _command_help(command.split(), monkeypatch, capsys)
+            assert option in help_text, f"{lang}: `{command}` has no {option}"
+            if default == "apply":
+                assert option in {"--no-apply", "--dry-run"}, (lang, command)
+            else:
+                assert option == "--apply", (lang, command)
+                for opposite in ("--no-apply", "--dry-run"):
+                    assert opposite not in help_text, (lang, command, opposite)
+
+    def test_no_top_level_command_with_a_switch_is_missing(
+        self, lang, monkeypatch, capsys
+    ):
+        from orchestune.cli import COMMANDS
+
+        documented = {name.split()[0] for name in _quick_reference_rows(lang)}
+        for name, _description in COMMANDS:
+            if name in _HELP_UNSAFE_COMMANDS:
+                continue
+            help_text = _command_help([name], monkeypatch, capsys)
+            if any(flag in help_text for flag in _PREVIEW_APPLY_FLAGS):
+                assert name in documented, f"{lang}: `{name}` is not in the table"
+
+    def test_daily_flow_names_the_steps_in_order(self, lang):
+        text = _read_usage(lang)
+        heading = _DAILY_FLOW_HEADINGS[lang]
+        assert heading in text, f"{lang}: usage.md に「{heading}」がありません"
+        block = text.split(heading, 1)[1].split("\n## ", 1)[0]
+        positions = [
+            block.find(step)
+            for step in (
+                "orchestune claim",
+                "orchestune complete",
+                "gh pr merge",
+                "orchestune gc",
+            )
+        ]
+        assert all(position >= 0 for position in positions), (lang, positions)
+        assert positions == sorted(positions), (lang, positions)
+
+    def test_merge_step_is_described_in_the_gc_section(self, lang):
+        assert "gh pr merge" in _section(lang, 9)
+
+    def test_new_sections_precede_the_numbered_sections(self, lang):
+        text = _read_usage(lang)
+        first_numbered = re.search(r"^## 1\.", text, re.MULTILINE)
+        assert first_numbered is not None
+        for heading in (
+            _QUICK_REFERENCE_HEADINGS[lang],
+            _DAILY_FLOW_HEADINGS[lang],
+        ):
+            assert 0 <= text.find(heading) < first_numbered.start()
