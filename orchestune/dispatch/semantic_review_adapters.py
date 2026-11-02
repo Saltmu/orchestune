@@ -148,7 +148,9 @@ def validate_semantic_review_preflight(
             "reviewer_unresolved", None, trigger, "reviewer could not be resolved"
         )
     reviewer = resolve_reviewer_bot(
-        cast(Literal["auto", "claude", "codex"], provider), target_name
+        cast(Literal["auto", "claude", "codex"], provider),
+        target_name,
+        config.reviewer_by_target,
     )
     if reviewer is None:
         return _preflight_error(

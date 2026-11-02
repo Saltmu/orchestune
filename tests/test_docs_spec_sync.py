@@ -790,3 +790,21 @@ class TestOrchestuneTomlExample:
         assert (
             "orchestune.toml.example" in content
         ), f"{doc_rel_path} に orchestune.toml.example への言及がありません"
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "docs/ja/setup.md",
+        "docs/en/setup.md",
+        "docs/ja/usage.md",
+        "docs/en/usage.md",
+        "skills/local-ci-developer/SKILL.md",
+        "skills/orchestune-dispatch/SKILL.md",
+        "orchestune.toml.example",
+    ],
+)
+def test_reviewer_by_target_table_is_documented(relative_path):
+    """#1560: every place that states the auto reviewer mapping names the table."""
+    text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+    assert "reviewer_by_target" in text, relative_path

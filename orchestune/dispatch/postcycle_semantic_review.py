@@ -19,13 +19,12 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc.git import evaluate_worktree_removal
 from orchestune.dispatch.local_semantic_fix import cleanup_semantic_fix_worktree
-from orchestune.dispatch.reviewer import resolve_reviewer_bot
 from orchestune.dispatch.semantic_review_ack import AckAction, AckAssessment
 from orchestune.dispatch.semantic_review_adapters import (
     SemanticOperationResult,
@@ -45,6 +44,7 @@ from orchestune.dispatch.semantic_review_cleanup import run_attempt_cleanup
 from orchestune.dispatch.semantic_review_diagnostics import (
     ReviewDiagnostics,
     build_review_diagnostics,
+    describe_reviewer,
 )
 from orchestune.dispatch.semantic_review_triggers import (
     parse_iso,
@@ -899,16 +899,14 @@ class SemanticReviewCycleRunner:
     def _reviewer(self) -> str:
         """The reviewer Preflight resolved (same setting and dispatch target)."""
         target = getattr(self._config.dispatch_target, "target_name", None)
-        provider = self._config.semantic_review_provider
-        reviewer = None
-        if provider in {"auto", "claude", "codex"}:
-            reviewer = resolve_reviewer_bot(
-                cast(Literal["auto", "claude", "codex"], provider),
-                target if isinstance(target, str) else "local",
-            )
-        if reviewer is None:
+        resolution = describe_reviewer(
+            self._config.semantic_review_provider,
+            target if isinstance(target, str) else "local",
+            self._config.reviewer_by_target,
+        )
+        if resolution.reviewer is None:
             raise _Stop("reviewer_unresolved")
-        return reviewer
+        return resolution.reviewer
 
     def _trigger_reply(self, ctx: _Attempt, nxt: SemanticReviewStateV1) -> str:
         """Round 1 asks for a review; later rounds carry the previous table and SHA."""

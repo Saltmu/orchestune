@@ -24,3 +24,27 @@ def test_reviewer_origin_distinguishes_explicit_from_auto(
     resolution = describe_reviewer(provider, target)
     assert resolution.reviewer == reviewer
     assert origin_has in resolution.origin
+
+
+def test_reviewer_origin_names_the_configured_override() -> None:
+    resolution = describe_reviewer("auto", "grok-cli", {"grok-cli": "codex"})
+    assert resolution.reviewer == "codex"
+    assert "reviewer_by_target" in resolution.origin
+    assert "grok-cli" in resolution.origin
+
+
+def test_reviewer_origin_for_unlisted_target_stays_cross_vendor_default() -> None:
+    resolution = describe_reviewer("auto", "codex-cli", {"grok-cli": "codex"})
+    assert resolution.reviewer == "claude"
+    assert "reviewer_by_target" not in resolution.origin
+
+
+def test_override_can_resolve_a_target_auto_cannot() -> None:
+    resolution = describe_reviewer("auto", "local", {"local": "claude"})
+    assert resolution.reviewer == "claude"
+
+
+def test_explicit_provider_ignores_overrides() -> None:
+    resolution = describe_reviewer("codex", "grok-cli", {"grok-cli": "claude"})
+    assert resolution.reviewer == "codex"
+    assert "explicit" in resolution.origin

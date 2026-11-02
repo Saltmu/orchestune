@@ -449,7 +449,7 @@ dry-run dispatchを使って各ターゲットの解決結果を確認します�
 
 | 設定キー | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
-| `reviewer-bot` | `"auto"` | 実装後に依頼するレビュアー（`"auto"`, `"claude"`, `"codex"`）。`auto`はターゲットから判定し、Claude系にはCodex、Codex/agy/Grok系にはClaudeを割り当てます。 |
+| `reviewer-bot` | `"auto"` | 実装後に依頼するレビュアー（`"auto"`, `"claude"`, `"codex"`）。`auto`はターゲットから判定し、Claude系にはCodex、Codex/agy/Grok系にはClaudeを割り当てます。割り当ては`[reviewer_by_target]`でターゲットごとに上書きできます（下記）。`"claude"`/`"codex"`の固定指定が常に優先されます。 |
 | `ci-command` | `"./scripts/local-ci.sh"` | Integratorが統合ブランチ上で実行するCIコマンド（shlex構文の文字列または文字列リスト。例: `"make ci"`）。導入先リポジトリのCIエントリーポイントが異なる場合は必ず設定してください。 |
 | `child-review-gate` | `"required"` | 子タスクのレビュー合格証跡（`verdict=pass`、SHA一致）を検証するゲート（`"required"`, `"off"`）。`"off"`で検証をスキップし警告を出力。 |
 | `final-acceptance-review` | `"advisory"` | 最終PR/headごとに、そのheadのCI完了後に1件依頼。`"off"` で無効。CLI > TOML > `ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW` > 既定。 |
@@ -633,6 +633,26 @@ reasoning_effort = "high"
 >
 > `[execution_profiles]`（または `[tool.orchestune.execution_profiles]`）では、各プロファイル名（例: `balanced`, `deep-reasoning`, `fast-code`）配下にターゲット名（`claude-cli`, `agy-cli`, `codex-cli`, `grok-cli`, `cloud-routine`, `codex-cloud`）別のテーブルを定義します。各ターゲット設定では `model`（文字列）および `reasoning_effort`（`"low"` / `"medium"` / `"high"`）が指定可能です。`execution_profiles` テーブルを定義する場合、`default_execution_profile`（未指定時は `"balanced"`）のエントリが必ず含まれている必要があります。
 
+#### ターゲット別のレビュアー（`[reviewer_by_target]`）
+
+`reviewer-bot = "auto"` と `semantic-review-provider = "auto"` が使う「実行ターゲット → レビュアー」の対応は、`[reviewer_by_target]` で上書きできます。
+
+```toml
+reviewer-bot = "auto"
+
+[reviewer_by_target]
+agy-cli    = "claude"
+claude-cli = "codex"
+grok-cli   = "codex"
+```
+
+- 書いたターゲットだけが既定から変わります。書かなかったターゲットは既定（`claude-cli`・`cloud-routine` → `codex`、`codex-cli`・`codex-cloud`・`agy-cli`・`grok-cli` → `claude`）のままです。
+- 汎用の `local` は既定では解決できませんが、`local = "claude"` のように書けば解決できます。
+- `reviewer-bot = "claude"` / `"codex"` と `semantic-review-provider = "claude"` / `"codex"` の固定指定は、この表より常に優先されます。
+- キーは実行ターゲット名をそのまま書きます（`auto` は不可。`grok_cli` のような綴り替えも不可）。値は `"claude"` か `"codex"` です。同じベンダーの組み合わせ（`claude-cli = "claude"`）も書けます。
+- 不正なキーや値は起動時に設定エラーになります。テーブル名は `reviewer-by-target` とも書けますが、同時に両方は書けません。
+- 設定ウィザードはこの表を質問しません。手で書いてください。
+
 ---
 
 ## 5. 統合（Integration）と自動リベース
@@ -727,7 +747,7 @@ Orchestuneでは、子タスクから親ブランチ（`parent/issue-{N}`）へ�
 
 #### 応答しない第2層 reviewer への対応（#1436）
 
-- **どの reviewer に依頼するか**: `semantic-review-provider = "claude"` / `"codex"` は明示指定です。`"auto"` は dispatch target から別ベンダーを選びます（`claude-cli`・`cloud-routine` → `codex`、`codex-cli`・`codex-cloud`・`agy-cli`・`grok-cli` → `claude`。汎用の `local` は解決できません）。`issue_comment` で動くワークフローは常に**デフォルトブランチ**の定義で動くため、そこでワークフローや App が有効でない reviewer は応答しません。
+- **どの reviewer に依頼するか**: `semantic-review-provider = "claude"` / `"codex"` は明示指定です。`"auto"` は dispatch target から別ベンダーを選びます（`claude-cli`・`cloud-routine` → `codex`、`codex-cli`・`codex-cloud`・`agy-cli`・`grok-cli` → `claude`。汎用の `local` は `[reviewer_by_target]` に書かない限り解決できません）。この対応は `[reviewer_by_target]` で `reviewer-bot = "auto"` と共通に上書きできます。`issue_comment` で動くワークフローは常に**デフォルトブランチ**の定義で動くため、そこでワークフローや App が有効でない reviewer は応答しません。
 - **早期停止**: 依頼から `semantic-review-ack-timeout-seconds` の間、reviewer の活動がなければ、`semantic-review-timeout-seconds` を待たずに `review_not_acknowledged` で停止します。PR と親 Issue の通知に、attempt・head・round・reviewer とその決まり方・依頼コメント・経過時間と期限・再開コマンドを載せます。通知は attempt と理由ごとに1回だけです。
 - **`orchestune review`**（`--pr` は統合 PR）:
   - `orchestune review status --pr <PR> [--json]` は読み取り専用で、同じ情報をいつでも表示します。

@@ -465,7 +465,7 @@ Check each target's resolved values with a dry-run dispatch, for example `orches
 
 | Setting Key | Default | Description |
 | :--- | :--- | :--- |
-| `reviewer-bot` | `"auto"` | Reviewer requested after implementation (`"auto"`, `"claude"`, `"codex"`). `auto` evaluates target type and maps Claude targets to Codex, and Codex/agy/Grok targets to Claude. |
+| `reviewer-bot` | `"auto"` | Reviewer requested after implementation (`"auto"`, `"claude"`, `"codex"`). `auto` evaluates target type and maps Claude targets to Codex, and Codex/agy/Grok targets to Claude. Override the mapping per target with `[reviewer_by_target]` (below); an explicit `"claude"`/`"codex"` always wins. |
 | `ci-command` | `"./scripts/local-ci.sh"` | The CI command the Integrator runs on the integration branch (a shell-like string parsed with shlex or string list, e.g. `"make ci"`). Set this explicitly if your repository's CI entrypoint differs. |
 | `child-review-gate` | `"required"` | Child sub-issue review gate mode (`"required"`, `"off"`). Verifies review evidence (`verdict=pass`, SHA match) before merging to parent branch. `"off"` skips verification with a warning. |
 | `final-acceptance-review` | `"advisory"` | One request per final PR/head, posted after that head's CI has finished; `"off"` disables it. CLI > TOML > `ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW` > default. |
@@ -649,6 +649,26 @@ reasoning_effort = "high"
 >
 > In `[execution_profiles]` (or `[tool.orchestune.execution_profiles]`), define target-specific tables (`claude-cli`, `agy-cli`, `codex-cli`, `grok-cli`, `cloud-routine`, `codex-cloud`) under each profile name (e.g. `balanced`, `deep-reasoning`, `fast-code`). Each target configuration accepts `model` (string) and `reasoning_effort` (`"low"` / `"medium"` / `"high"`). When defining the `execution_profiles` table, the entry corresponding to `default_execution_profile` (defaults to `"balanced"`) must be included.
 
+#### Reviewer per target (`[reviewer_by_target]`)
+
+The "execution target → reviewer" mapping used by `reviewer-bot = "auto"` and `semantic-review-provider = "auto"` can be overridden with `[reviewer_by_target]`.
+
+```toml
+reviewer-bot = "auto"
+
+[reviewer_by_target]
+agy-cli    = "claude"
+claude-cli = "codex"
+grok-cli   = "codex"
+```
+
+- Only the listed targets change. Unlisted targets keep the defaults (`claude-cli` and `cloud-routine` → `codex`; `codex-cli`, `codex-cloud`, `agy-cli` and `grok-cli` → `claude`).
+- A generic `local` target has no default, but `local = "claude"` resolves it.
+- An explicit `reviewer-bot = "claude"` / `"codex"` or `semantic-review-provider = "claude"` / `"codex"` always wins over this table.
+- Keys are execution target names written verbatim (`auto` is not allowed, and neither are respellings such as `grok_cli`). Values are `"claude"` or `"codex"`. A same-vendor pair (`claude-cli = "claude"`) is allowed.
+- An invalid key or value is a configuration error at startup. The table may also be spelled `reviewer-by-target`, but not both at once.
+- The configuration wizard does not ask about this table; write it by hand.
+
 ---
 
 ## 5. Integration & Auto-Rebase
@@ -743,7 +763,7 @@ Orchestune uses a two-tier review gate architecture for integrating child tasks 
 
 #### Unresponsive Layer-2 reviewers (#1436)
 
-- **Which reviewer is asked**: `semantic-review-provider = "claude"` or `"codex"` names it explicitly. With `"auto"` it follows the dispatch target across vendors (`claude-cli` and `cloud-routine` → `codex`; `codex-cli`, `codex-cloud`, `agy-cli` and `grok-cli` → `claude`; a generic `local` target cannot be resolved). An `issue_comment` workflow always runs from the **default branch**, so a reviewer whose workflow or App is not enabled there never answers.
+- **Which reviewer is asked**: `semantic-review-provider = "claude"` or `"codex"` names it explicitly. With `"auto"` it follows the dispatch target across vendors (`claude-cli` and `cloud-routine` → `codex`; `codex-cli`, `codex-cloud`, `agy-cli` and `grok-cli` → `claude`; a generic `local` target cannot be resolved unless `[reviewer_by_target]` lists it). The same `[reviewer_by_target]` overrides apply as for `reviewer-bot = "auto"`. An `issue_comment` workflow always runs from the **default branch**, so a reviewer whose workflow or App is not enabled there never answers.
 - **Early stop**: when the reviewer shows no activity for `semantic-review-ack-timeout-seconds` after the request, the attempt stops as `review_not_acknowledged` instead of waiting for `semantic-review-timeout-seconds`. The notice on the PR and the parent Issue names the attempt, head, round, reviewer and how it was chosen, the request comment, the elapsed time and the deadlines, and the commands to resume. It is posted once per attempt and reason.
 - **`orchestune review`** (`--pr` is an integration PR):
   - `orchestune review status --pr <PR> [--json]` is read-only and shows the same facts at any time.

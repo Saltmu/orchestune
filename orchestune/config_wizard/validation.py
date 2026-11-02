@@ -43,6 +43,7 @@ _KNOWN_SCALAR_KEYS = frozenset(
 _KNOWN_COMPOUND_KEYS = frozenset(
     {
         "execution_profiles",
+        "reviewer_by_target",
     }
     | DAG_TOOL_CONFIG_KEYS
 )

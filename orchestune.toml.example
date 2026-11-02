@@ -43,7 +43,7 @@ zombie-gc = true
 # locally). Uncomment only to pin a target.
 # dispatch-target = "auto"
 
-reviewer-bot = "auto"
+reviewer-bot = "auto"                       # per-target vendor mapping: see [reviewer_by_target] at the end
 
 # Default: unset. These are target-specific connection/command overrides.
 # Never commit credentials. For cloud routine tokens, use the
@@ -193,3 +193,18 @@ model = "claude-opus-5"
 [execution_profiles.deep-reasoning.codex-cloud]
 model = "gpt-5.6-sol"
 reasoning_effort = "high"
+
+# -----------------------------------------------------------------------------
+# Reviewer per execution target (optional)
+# -----------------------------------------------------------------------------
+# With `reviewer-bot = "auto"` (and `semantic-review-provider = "auto"`), the
+# reviewer vendor follows the resolved execution target. The built-in
+# cross-vendor defaults are claude-cli/cloud-routine -> codex and
+# codex-cli/codex-cloud/agy-cli/grok-cli -> claude; `local` has no default.
+# Entries here replace the default of that target only. An explicit
+# `reviewer-bot = "claude"` / "codex" still wins for every target.
+# Keys are target names written verbatim; values are "claude" or "codex".
+# [reviewer_by_target]
+# agy-cli = "claude"
+# claude-cli = "codex"
+# grok-cli = "codex"

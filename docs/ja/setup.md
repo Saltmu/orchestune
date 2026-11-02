@@ -248,7 +248,7 @@ orchestune dispatch --dispatch-target auto
 
 これは各サブタスクの専用worktree内で `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --add-dir . --print-timeout 60m --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` / `grok -p "..." --always-approve --no-plan --no-auto-update --output-format streaming-json`（非対話・print/execモード）を実行します。いずれのプリセットも、許可プロンプトのバイパスフラグを毎回付与することで無人実行がブロックされないようにしています。
 
-既定では、解決済みの実行ターゲットからベンダークロスレビューの担当も決定します。`claude-cli`と`cloud-routine`はCodex、`codex-cli`・`codex-cloud`・`agy-cli`・`grok-cli`はClaudeへレビューを依頼します。この選択は`--dispatch-target auto`が具体的なターゲットへ解決された後に行われます。設定ファイル（`orchestune.toml`）の `reviewer-bot = "claude"` または `reviewer-bot = "codex"` で上書きできます。カスタム `local-cmd` では `{reviewer_bot}` プレースホルダーを利用でき、それ以外の任意コマンドにはレビュー指示を自動追記しません。
+既定では、解決済みの実行ターゲットからベンダークロスレビューの担当も決定します。`claude-cli`と`cloud-routine`はCodex、`codex-cli`・`codex-cloud`・`agy-cli`・`grok-cli`はClaudeへレビューを依頼します。この選択は`--dispatch-target auto`が具体的なターゲットへ解決された後に行われます。設定ファイル（`orchestune.toml`）の `reviewer-bot = "claude"` または `reviewer-bot = "codex"` で、全ターゲットのレビュアーを固定できます。ターゲットごとに変えたい場合は `reviewer-bot = "auto"` のまま `[reviewer_by_target]` に `grok-cli = "codex"` のように書きます。書いたターゲットだけが既定から変わり、書かなかったターゲットは既定のままです。`local` もここで指定できます。キーは実行ターゲット名（`auto` 以外）、値は `"claude"` か `"codex"` です。カスタム `local-cmd` では `{reviewer_bot}` プレースホルダーを利用でき、それ以外の任意コマンドにはレビュー指示を自動追記しません。
 
 > [!IMPORTANT]
 > **信頼モデルとセキュリティ上の危険性について**
