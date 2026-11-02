@@ -79,6 +79,17 @@ class IssueRecord:
 
 
 @dataclass(frozen=True)
+class CommitCheck:
+    """#1554: one check run or commit status of an explicit commit SHA."""
+
+    name: str  # check run name / commit status context
+    kind: str  # "check_run" | "status"
+    completed: bool
+    conclusion: str  # lowercase; check run conclusion ("" if running) / status state
+    url: str  # check run html_url / status target_url ("" if none)
+
+
+@dataclass(frozen=True)
 class PrRecord:
     """A GitHub pull request represented as a domain data transfer object."""
 

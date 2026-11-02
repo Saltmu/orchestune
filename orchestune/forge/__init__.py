@@ -13,7 +13,7 @@ from orchestune.infra.execution_deadline import (
     scope_bound_applies,
     scoped_command_timeout,
 )
-from orchestune.models import IssueRecord, PrRecord, normalize_newlines
+from orchestune.models import CommitCheck, IssueRecord, PrRecord, normalize_newlines
 
 from .admin import _LABEL_LIST_LIMIT as _LABEL_LIST_LIMIT
 from .admin import (
@@ -136,6 +136,8 @@ class PullRequestForge(Protocol):
     def close_pull_request(self, pr_number: int | str) -> None: ...
 
     def get_pull_request(self, pr_number: int | str) -> PrRecord: ...
+
+    def list_commit_checks(self, sha: str) -> tuple[CommitCheck, ...]: ...
 
     def is_branch_merged_into(self, head: str, base: str) -> bool: ...
 

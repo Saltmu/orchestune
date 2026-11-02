@@ -20,7 +20,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from orchestune.models import PrRecord
+from orchestune.models import CommitCheck, PrRecord
 
 Runner = Callable[..., str]
 
@@ -92,6 +92,65 @@ def _status_contexts(run: Runner, sha: str) -> list[dict[str, object]]:
 def status_checks(run: Runner, sha: str) -> list[dict[str, object]]:
     """Check runs and commit statuses shaped like GraphQL's statusCheckRollup."""
     return _check_runs(run, sha) + _status_contexts(run, sha)
+
+
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def _counted_pages(run: Runner, path: str, items_key: str) -> list[dict[str, Any]]:
+    """Items of `total_count` pages; anything but a complete listing is an error."""
+    pages = json.loads(run(["gh", "api", "--paginate", "--slurp", path]))
+    if not isinstance(pages, list) or any(not isinstance(page, dict) for page in pages):
+        raise ValueError(f"GitHub returned incomplete pages for {path}")
+    items = [
+        item
+        for page in pages
+        for item in page.get(items_key, [])
+        if isinstance(item, dict)
+    ]
+    total = pages[0].get("total_count") if pages else 0
+    if not isinstance(total, int) or len(items) != total:
+        raise ValueError(f"GitHub returned an incomplete list for {path}")
+    return items
+
+
+def _text(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def commit_checks(run: Runner, sha: str) -> tuple[CommitCheck, ...]:
+    """Check runs and commit statuses of exactly `sha`, always through REST (#1554).
+
+    Completion comes from each item. The combined status `.state` is never used:
+    GitHub reports `pending` for a commit that has no statuses at all.
+    """
+    if not _FULL_SHA.fullmatch(sha):
+        raise ValueError("commit checks need a 40-character lowercase hex SHA")
+    base = f"repos/{{owner}}/{{repo}}/commits/{sha}"
+    runs = _counted_pages(run, f"{base}/check-runs?per_page=100", "check_runs")
+    statuses = _counted_pages(run, f"{base}/status?per_page=100", "statuses")
+    return tuple(
+        [
+            CommitCheck(
+                name=_text(item.get("name")),
+                kind="check_run",
+                completed=item.get("status") == "completed",
+                conclusion=_text(item.get("conclusion")).lower(),
+                url=_text(item.get("html_url")),
+            )
+            for item in runs
+        ]
+        + [
+            CommitCheck(
+                name=_text(item.get("context")),
+                kind="status",
+                completed=_text(item.get("state")).lower() != "pending",
+                conclusion=_text(item.get("state")).lower(),
+                url=_text(item.get("target_url")),
+            )
+            for item in statuses
+        ]
+    )
 
 
 #: GitHub's closing keywords followed by a same-repository `#N` (#1341). The
