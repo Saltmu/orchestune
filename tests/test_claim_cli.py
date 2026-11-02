@@ -366,6 +366,57 @@ def test_amend_success_prints_overlap_warnings_to_stderr(tmp_path, capsys):
     _assert_overlap_warning(capsys.readouterr().err)
 
 
+def test_amend_with_add_paths_passes_paths_to_amend_claim_footprint(tmp_path):
+    from unittest.mock import patch
+
+    from orchestune.claim.amend import FootprintAmendOutcome
+    from orchestune.claim.cli import main
+
+    outcome = FootprintAmendOutcome(
+        success=True,
+        issue_number=123,
+        claim_id="claim-123",
+        worktree_path=Path("/tmp/worktrees/claim-123"),
+        amended_footprint=("docs/ja/architecture.md", "src/foo.py", "src/bar.py"),
+    )
+    with (
+        patch(
+            "orchestune.claim.cli.amend_claim_footprint", return_value=outcome
+        ) as mock_amend,
+        patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
+    ):
+        assert (
+            main(
+                [
+                    "123",
+                    "--amend-footprint",
+                    "--add-path",
+                    "src/foo.py",
+                    "--add-path",
+                    "src/bar.py",
+                ]
+            )
+            == 0
+        )
+        mock_amend.assert_called_once_with(
+            123,
+            apply=True,
+            add_paths=("src/foo.py", "src/bar.py"),
+            state_path=None,
+            timeout_seconds=None,
+        )
+
+
+def test_add_path_without_amend_footprint_is_rejected():
+    import pytest
+
+    from orchestune.claim.cli import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["123", "--add-path", "src/foo.py"])
+    assert exc.value.code == 2
+
+
 _PREVIEW_STDOUT = (
     "Dry run: validation succeeded; no Git, Forge, or state changes were made.\n"
     "Issue: #123\n"

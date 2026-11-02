@@ -330,7 +330,6 @@ def test_amend_rejects_when_issue_has_no_active_claim(amend_env):
     "overrides",
     [
         {"claim_stage": ClaimStage.ACTIVE_SAVED.value},
-        {"owner_kind": OwnerKind.DISPATCH.value},
         {"reservation_kind": ReservationKind.REPOSITORY.value},
         {"completion_id": "completion-1"},
         {"repository_id": "/somewhere/else/.git"},
@@ -522,12 +521,7 @@ def test_amend_records_non_ascii_changed_paths_verbatim(amend_env):
     [
         (
             {"owner_kind": OwnerKind.DISPATCH.value},
-            "--result blocked --reason footprint-expansion-required",
             "--amend-footprint",
-        ),
-        (
-            {"owner_kind": OwnerKind.DISPATCH.value},
-            "--result blocked --reason footprint-expansion-required",
             "--resume",
         ),
         (
@@ -562,7 +556,7 @@ def test_held_claim_next_actions_offer_amend_only_when_eligible(
     assert unexpected not in actions
 
 
-def test_amend_rejection_for_dispatcher_claim_advises_blocked_outcome(amend_env):
+def test_dispatch_claim_can_amend_footprint(amend_env):
     state = load_run_state(amend_env["state_path"])
     active = state.active_worktrees["201"]
     active = with_claim(
@@ -572,11 +566,151 @@ def test_amend_rejection_for_dispatcher_claim_advises_blocked_outcome(amend_env)
 
     outcome = _amend(amend_env)
 
+    assert outcome.success is True, outcome.failure
+    assert outcome.issue_number == 201
+
+
+def test_amend_with_add_paths(amend_env):
+    state = load_run_state(amend_env["state_path"])
+    active = state.active_worktrees["201"]
+    active = with_claim(
+        active, replace(active.claim, owner_kind=OwnerKind.DISPATCH.value)
+    )
+    _save({"201": active}, amend_env["state_path"])
+
+    outcome = amend_claim_footprint(
+        201,
+        add_paths=["docs/new_doc.md", "src/new_file.py"],
+        forge=amend_env["forge"],
+        cwd=amend_env["worktree"],
+        state_path=amend_env["state_path"],
+    )
+
+    assert outcome.success is True, outcome.failure
+    assert "docs/new_doc.md" in outcome.amended_footprint
+    assert "src/new_file.py" in outcome.amended_footprint
+
+
+def test_amend_with_invalid_add_path_is_rejected(amend_env):
+    outcome = amend_claim_footprint(
+        201,
+        add_paths=["/absolute/path.py"],
+        forge=amend_env["forge"],
+        cwd=amend_env["worktree"],
+        state_path=amend_env["state_path"],
+    )
+    assert outcome.success is False
     assert outcome.failure is not None
-    actions = "\n".join(outcome.failure.next_actions)
-    assert "--result blocked --reason footprint-expansion-required" in actions
-    assert "--resume" not in actions
-    assert "--amend-footprint" not in actions
+    assert outcome.failure.reason == ClaimFailureReason.INVALID_FOOTPRINT
+
+
+def test_dispatch_claim_defaults_timeout_to_600s(amend_env, monkeypatch):
+    state = load_run_state(amend_env["state_path"])
+    active = state.active_worktrees["201"]
+    active = with_claim(
+        active, replace(active.claim, owner_kind=OwnerKind.DISPATCH.value)
+    )
+    _save({"201": active}, amend_env["state_path"])
+
+    recorded_timeouts = []
+    from orchestune.infra import process_utils
+
+    orig_lock = process_utils.run_state_lock
+
+    def mock_lock(lock_path, *, timeout=0.0):
+        recorded_timeouts.append(timeout)
+        return orig_lock(lock_path, timeout=timeout)
+
+    monkeypatch.setattr(process_utils, "run_state_lock", mock_lock)
+    monkeypatch.setattr("orchestune.claim.amend.run_state_lock", mock_lock)
+
+    outcome = _amend(amend_env)
+    assert outcome.success is True
+    assert recorded_timeouts == [600.0]
+
+
+def test_amend_warns_on_overlapping_queued_task(amend_env, capsys):
+    state = load_run_state(amend_env["state_path"])
+    active = state.active_worktrees["201"]
+    active = with_claim(
+        active, replace(active.claim, owner_kind=OwnerKind.DISPATCH.value)
+    )
+    _save({"201": active}, amend_env["state_path"])
+
+    amend_env["forge"].issues[300] = _make_issue(
+        number=300,
+        body=_issue_body(["src/queued.py"]),
+        labels=("status:queued",),
+    )
+
+    outcome = amend_claim_footprint(
+        201,
+        add_paths=["src/queued.py"],
+        forge=amend_env["forge"],
+        cwd=amend_env["worktree"],
+        state_path=amend_env["state_path"],
+    )
+
+    assert outcome.success is True
+    assert "src/queued.py" in outcome.amended_footprint
+    err = capsys.readouterr().err
+    assert "Warning:" in err
+    assert "#300" in err
+    assert "src/queued.py" in err
+
+    comments = amend_env["forge"].list_comments(201)
+    assert any(
+        "<!-- orchestune:footprint-amend" in c["body"] and "#300" in c["body"]
+        for c in comments
+    )
+
+
+def test_amend_comment_idempotent_on_rerun(amend_env):
+    outcome1 = amend_claim_footprint(
+        201,
+        add_paths=["src/added.py"],
+        forge=amend_env["forge"],
+        cwd=amend_env["worktree"],
+        state_path=amend_env["state_path"],
+    )
+    assert outcome1.success is True
+    comments = [
+        c
+        for c in amend_env["forge"].list_comments(201)
+        if "<!-- orchestune:footprint-amend" in c["body"]
+    ]
+    assert len(comments) == 1
+
+    outcome2 = amend_claim_footprint(
+        201,
+        add_paths=["src/added.py"],
+        forge=amend_env["forge"],
+        cwd=amend_env["worktree"],
+        state_path=amend_env["state_path"],
+    )
+    assert outcome2.success is True
+    comments_after = [
+        c
+        for c in amend_env["forge"].list_comments(201)
+        if "<!-- orchestune:footprint-amend" in c["body"]
+    ]
+    assert len(comments_after) == 1
+
+
+def test_amend_no_apply_does_not_modify_forge(amend_env):
+    orig_body = amend_env["forge"].issues[201].body
+    outcome = amend_claim_footprint(
+        201,
+        apply=False,
+        add_paths=["src/added.py"],
+        forge=amend_env["forge"],
+        cwd=amend_env["worktree"],
+        state_path=amend_env["state_path"],
+    )
+    assert outcome.success is True
+    assert amend_env["forge"].issues[201].body == orig_body
+    comments = amend_env["forge"].list_comments(201)
+    assert len(comments) == 0
 
 
 def test_amend_conflict_check_keeps_forge_unavailable_for_the_cli() -> None:

@@ -867,6 +867,7 @@ Upon success, the command prints the issue number, claim ID, branch name, prepar
 | `--resume <claim_id>` | none | Resumes an interrupted claim using its expected generation and verified local worktree. |
 | `--adopt-pr <number>` | none | Claims a verified orphaned PR from `status:blocked-human-review`; cannot be combined with `--resume` or `--amend-footprint`. |
 | `--amend-footprint` | disabled | Widens the held claim's file reservation. Cannot be combined with `--resume`. See below. |
+| `--add-path <path>` | none | Path to add to the held claim's file reservation (repeatable; requires `--amend-footprint`). |
 | `--state <path>` | `run_state.json` | Path to the run-state ledger file. |
 | `--timeout <seconds>` | none | Timeout in seconds for acquiring the run-state lock. |
 
@@ -909,14 +910,20 @@ A dispatch claim is rejected on any footprint overlap, whoever holds the other r
 
 ### Widening the reservation (`--amend-footprint`)
 
-If the task turns out to need files outside its held file reservation, add them to the `footprint` in the Issue body and run:
+If the task turns out to need files outside its held file reservation, run:
 
 ```bash
 orchestune claim <N> --amend-footprint --no-apply  # preview
 orchestune claim <N> --amend-footprint
+# Or explicitly specify paths to add:
+orchestune claim <N> --amend-footprint --add-path path/to/file.py
 ```
 
-The new footprint is the union of the held footprint, the Issue footprint, and every file already changed in the worktree since the claim base (committed, uncommitted, and untracked). It never shrinks. The command re-checks conflicts against every other active reservation and, on conflict, changes nothing and reports the conflicting issue. A footprint overlap with an interactive reservation is reported as a warning, as for a new claim, and the reservation is still widened. On success it adds missing files to the Issue footprint and updates the ledger; the worktree, branch, claim ID, and labels stay unchanged. Only completed interactive file reservations in the claiming workspace (with its matching claim marker) are eligible. Switching to a repository reservation is not supported.
+The new footprint is the union of the held footprint, the Issue footprint, any paths specified via `--add-path`, and every file already changed in the worktree since the claim base (committed, uncommitted, and untracked). It never shrinks.
+
+Both interactive tasks and locally executed dispatch tasks can use amend. For dispatch tasks, editing the Issue body by hand is not necessary: by specifying `--add-path`, amend automatically updates the Issue body footprint while preserving other fields. Furthermore, when `--timeout` is not specified for a dispatch task, the ledger lock acquisition timeout defaults to 600 seconds (compared to 0 seconds for interactive tasks).
+
+The command re-checks conflicts against every other active reservation and, on conflict, changes nothing and reports the conflicting issue. A footprint overlap with an interactive reservation is reported as a warning, as for a new claim, and the reservation is still widened. If added paths overlap with an unclaimed `status:queued` task, a warning is printed to stderr. On success it updates the Issue footprint, posts a record marker comment (`<!-- orchestune:footprint-amend claim_id=<id> -->`) to the task Issue, and updates the ledger (duplicate comments are not posted on reruns with the same claim ID and added paths). The worktree, branch, claim ID, and labels stay unchanged. Only completed local file reservations in the claiming workspace (with its matching claim marker) are eligible. Switching to a repository reservation is not supported.
 
 ### Resuming and replacing review triggers
 

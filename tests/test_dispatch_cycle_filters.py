@@ -636,15 +636,43 @@ class TestFilterCandidatesForReservationActives:
 
         assert result == [independent_candidate]
 
-    def test_ordinary_active_without_forced_serial_or_reservation_does_not_block(
+    def test_ordinary_dispatch_active_blocks_conflicting_footprint_candidate(
         self,
     ):
-        ordinary_active = _active(
+        dispatch_active = _active(
             issue_number=10,
             declared_footprint=("src/x.py",),
             forced_serial=False,
+            owner_kind="dispatch",
         )
-        run_state = RunState(active_worktrees={"10": ordinary_active})
+        run_state = RunState(active_worktrees={"10": dispatch_active})
+        active_task = _task(
+            issue_number=10, subtask_id="task-x", footprint=("src/x.py",)
+        )
+        conflicting_candidate = _task(
+            issue_number=11, subtask_id="task-y", footprint=("src/x.py",)
+        )
+        view = _cycle_context(
+            tasks_by_issue={10: active_task, 11: conflicting_candidate},
+            resolve_dependencies=True,
+        )
+
+        result = _filter_candidates_for_forced_serial(
+            [conflicting_candidate], run_state, view
+        )
+
+        assert result == []
+
+    def test_ordinary_interactive_active_does_not_block_candidate(
+        self,
+    ):
+        interactive_active = _active(
+            issue_number=10,
+            declared_footprint=("src/x.py",),
+            forced_serial=False,
+            owner_kind="interactive",
+        )
+        run_state = RunState(active_worktrees={"10": interactive_active})
         active_task = _task(
             issue_number=10, subtask_id="task-x", footprint=("src/x.py",)
         )

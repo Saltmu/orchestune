@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol, TypeVar
 
-from orchestune.claim.contracts import ClaimStage, ReservationKind
+from orchestune.claim.contracts import ClaimStage, OwnerKind, ReservationKind
 from orchestune.dependencies.resolution import (
     EMPTY_DEPENDENCIES,
     TaskDependencies,
@@ -31,15 +31,21 @@ def _candidate_conflicts_with_forced_serial_active(
     `active_task`が特定できない場合は、従来通り依存関係による判定は行わず
     footprintの重なりのみで判定する。
     """
+    if active.core.issue_number == candidate.issue_number:
+        return True
+
     if active.claim.reservation_kind == ReservationKind.REPOSITORY:
         return True
 
-    active_footprint = active.core.declared_footprint
-    if active_task is not None:
-        active_footprint = active_task.footprint or active.core.declared_footprint
+    active_footprint = set(active.core.declared_footprint)
+    if active_task is not None and active_task.footprint:
+        active_footprint.update(active_task.footprint)
 
-    if set(candidate.footprint) & set(active_footprint):
+    if set(candidate.footprint) & active_footprint:
         return True
+
+    if not active.launch.forced_serial:
+        return False
 
     if active_task is None:
         return False
@@ -58,6 +64,7 @@ def _is_serializing_active(active: ActiveWorktree) -> bool:
         active.launch.forced_serial
         or active.claim.reservation_kind == ReservationKind.REPOSITORY
         or active.claim.claim_stage == ClaimStage.RESERVED
+        or active.claim.owner_kind != OwnerKind.INTERACTIVE.value
     )
 
 
