@@ -5,8 +5,8 @@ import sys
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from orchestune.branch_naming import build_task_branch_name
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.execution_deadline import (
     ExecutionCommandTimeout,
@@ -14,9 +14,7 @@ from orchestune.infra.execution_deadline import (
     ExecutionScope,
 )
 from orchestune.infra.git_cli import (
-    fetch_remote_branch,
     is_ancestor_commit,
-    resolve_commit_sha,
     run_git,
 )
 from orchestune.infra.managed_process import ProcessRunner
@@ -32,8 +30,10 @@ from orchestune.integrator.execution import (
     IntegrationExecutionAbort,
     make_failure,
 )
+from orchestune.integrator.merge_workspace import MergeWorkspace
 from orchestune.integrator.pr import handle_merge_failure
 from orchestune.integrator.proofs import TaskIntegrationProof
+from orchestune.integrator.task_branch_source import TaskBranchSource
 from orchestune.integrator.tasks import DependencyIntegrationStates
 from orchestune.integrator.timeout_policy import (
     SIDE_EFFECT_UNKNOWN,
@@ -45,12 +45,12 @@ from orchestune.integrator.timeout_retry import Target
 from orchestune.ledger.status_labels import TERMINAL_ESCALATION_LABELS
 from orchestune.models import Task
 from orchestune.task_branch_resolution import (
-    BranchCapability,
-    CanonicalBranchState,
     TaskBranchResolution,
     TaskBranchResolver,
-    probe_canonical_state,
 )
+
+if TYPE_CHECKING:
+    from orchestune.task_branch_resolution import CanonicalBranchState
 
 
 class IntegrationMerger:
@@ -86,88 +86,33 @@ class IntegrationMerger:
         # The HEAD saved just before the current task's merge, kept on the merger so a
         # merge that times out (and never returns) can still be rolled back to it.
         self._pre_merge_sha: str | None = None
+        self._workspace = MergeWorkspace(repository_root)
+        self._branches = TaskBranchSource(
+            repository_root, self.forge, self.branch_resolver
+        )
 
     def create_temp_branch(
         self, temp_branch: str, base_branch: str, apply: bool
     ) -> bool:
-        if not apply:
-            return True
-        try:
-            run_git(
-                ["checkout", "-B", temp_branch, base_branch],
-                cwd=self.repository_root,
-                check=True,
-            )
-            return True
-        except subprocess.CalledProcessError:
-            return False
+        return self._workspace.create_temp_branch(temp_branch, base_branch, apply)
 
     def ensure_git_identity(self) -> None:
-        # CI環境（actions/checkout等）ではgit committer identityが未設定のことがあり、
-        # `git merge --no-ff`でマージコミットを作成する際に
-        # "Committer identity unknown" で必ず失敗するため、事前に設定しておく。
-        run_git(
-            ["config", "user.name", "orchestune-integrator"],
-            cwd=self.repository_root,
-            check=False,
-        )
-        run_git(
-            [
-                "config",
-                "user.email",
-                "orchestune-integrator@users.noreply.github.com",
-            ],
-            cwd=self.repository_root,
-            check=False,
-        )
+        self._workspace.ensure_git_identity()
 
     def ensure_full_history(self, base_branch: str) -> None:
-        # actions/checkout@v6 のデフォルト（浅い・単一ブランチのclone）のままだと、
-        # タスクブランチをrefspec指定でfetchしても取得されるのはそのブランチの
-        # 先端コミット1つのみ（親情報を持たない）になり、mainと共通の祖先が
-        # 見つからず `refusing to merge unrelated histories` でmergeが必ず
-        # 失敗する。浅いリポジトリの場合のみ、ベースブランチの履歴を深くしておく。
-        try:
-            result = run_git(
-                ["rev-parse", "--is-shallow-repository"],
-                cwd=self.repository_root,
-                check=True,
-            )
-        except subprocess.CalledProcessError:
-            return
-
-        if result.stdout.strip() != "true":
-            return
-
-        base_branch_name = base_branch.removeprefix("origin/")
-        try:
-            run_git(
-                ["fetch", "--unshallow", "origin", base_branch_name],
-                cwd=self.repository_root,
-                check=True,
-            )
-        except subprocess.CalledProcessError:
-            pass
+        self._workspace.ensure_full_history(base_branch)
 
     def current_head_sha(self) -> str:
-        result = run_git(["rev-parse", "HEAD"], cwd=self.repository_root, check=True)
-        return result.stdout.strip()
+        return self._workspace.current_head_sha()
 
     def rollback_to(self, sha: str) -> bool:
-        try:
-            run_git(["reset", "--hard", sha], cwd=self.repository_root, check=True)
-            return True
-        except (subprocess.CalledProcessError, OSError):
-            return False
+        return self._workspace.rollback_to(sha)
 
     def abort_merge(self) -> None:
-        # マージ失敗時にMERGE_HEADを残したままにすると、後続タスクのマージが
-        # 「進行中の未完了マージがある」ために巻き添えで失敗してしまうため、
-        # 一時ブランチの直前の状態へ確実に戻す。
-        try:
-            run_git(["merge", "--abort"], cwd=self.repository_root, check=False)
-        except (subprocess.CalledProcessError, OSError):
-            pass
+        self._workspace.abort_merge()
+
+    def abort_merge_quietly(self) -> None:
+        self._workspace.abort_merge_quietly()
 
     @property
     def scope(self) -> ExecutionScope | None:
@@ -270,120 +215,23 @@ class IntegrationMerger:
     def _fetch_task_branch(
         self, branch_name: str, base_branch: str
     ) -> tuple[bool, bool, str | None, str]:
-        """Fetch remote task branch into remote-tracking ref.
-
-        Returns `(success, already_merged, source_sha, error_message)`.
-        """
-        # actions/checkout のデフォルト（単一ブランチの浅いclone）では
-        # `origin/{branch_name}` のremote-trackingブランチが存在しないため、
-        # refspecを明示してfetchしないと後続のmergeが常に
-        # 「not something we can merge」で失敗する（内容衝突ではない）。
-        try:
-            remote_ref = fetch_remote_branch(self.repository_root, branch_name)
-            return True, False, resolve_commit_sha(self.repository_root, remote_ref), ""
-        except (subprocess.CalledProcessError, ValueError, OSError) as e:
-            # GitHub上の現在のbranch tip SHAがbaseに含まれると証明できた
-            # 場合だけ統合済みとして扱う。同名branchの過去PRだけでは、
-            # branch再利用後の新commitを見落とすため根拠にしない。
-            # branch削除/API障害を含む不確実なケースはfail closedにする。
-            base_branch_name = base_branch.removeprefix("origin/")
-            try:
-                source_sha = self.forge.get_current_branch_tip_sha_if_merged_into(
-                    branch_name, base_branch_name
-                )
-            except Exception as lookup_error:
-                source_sha = None
-                print(
-                    "Warning: Failed to verify whether "
-                    f"{branch_name} was merged into {base_branch_name}: "
-                    f"{lookup_error}",
-                    file=sys.stderr,
-                )
-
-            if source_sha is not None:
-                print(
-                    f"[Integrator] Branch {branch_name} could not be "
-                    "fetched, but its current remote tip is contained "
-                    f"in {base_branch_name}. "
-                    "Skipping integration merge."
-                )
-                return True, True, source_sha, ""
-
-            fetch_error = getattr(e, "stderr", None) or str(e)
-            return False, False, None, f"Failed to fetch branch: {fetch_error}"
+        return self._branches.fetch_task_branch(branch_name, base_branch)
 
     def _fetch_branch_tip(self, branch_name: str) -> tuple[str | None, str]:
-        try:
-            remote_ref = fetch_remote_branch(self.repository_root, branch_name)
-            return resolve_commit_sha(self.repository_root, remote_ref), ""
-        except (subprocess.CalledProcessError, ValueError, OSError) as error:
-            detail = getattr(error, "stderr", None) or str(error)
-            return None, f"Failed to fetch branch: {detail}"
+        return self._branches.fetch_branch_tip(branch_name)
 
     def _canonical_state(self, canonical_branch: str) -> CanonicalBranchState:
-        state = probe_canonical_state(canonical_branch, self.forge.branch_exists)
-        if state is CanonicalBranchState.INDETERMINATE:
-            print(
-                "Warning: canonical branch state is indeterminate for "
-                f"{canonical_branch}",
-                file=sys.stderr,
-            )
-        return state
+        return self._branches.canonical_state(canonical_branch)
 
     def _already_merged_canonical(
         self, resolution: TaskBranchResolution, base_branch: str
     ) -> str | None:
-        try:
-            return self.forge.get_current_branch_tip_sha_if_merged_into(
-                resolution.canonical_branch, base_branch.removeprefix("origin/")
-            )
-        except Exception as error:
-            print(
-                "Warning: failed to verify canonical branch containment for "
-                f"{resolution.canonical_branch}: {error}",
-                file=sys.stderr,
-            )
-            return None
+        return self._branches.already_merged_canonical(resolution, base_branch)
 
     def _resolve_and_fetch_task_branch(
         self, task: Task, base_branch: str
     ) -> tuple[TaskBranchResolution | None, bool, str | None, str]:
-        canonical = build_task_branch_name(task.issue_number, task.subtask_id)
-        source_sha, fetch_error = self._fetch_branch_tip(canonical)
-        if source_sha is not None:
-            resolution = self.branch_resolver.resolve(
-                task.issue_number, task.subtask_id, CanonicalBranchState.PRESENT
-            )
-            return resolution, False, source_sha, ""
-
-        state = self._canonical_state(canonical)
-        if state is CanonicalBranchState.INDETERMINATE:
-            return (
-                None,
-                False,
-                None,
-                f"Canonical branch state indeterminate: {fetch_error}",
-            )
-        resolution = self.branch_resolver.resolve(
-            task.issue_number, task.subtask_id, state
-        )
-        if state is CanonicalBranchState.PRESENT:
-            merged_sha = self._already_merged_canonical(resolution, base_branch)
-            if merged_sha is not None:
-                return resolution, True, merged_sha, ""
-            return None, False, None, fetch_error
-        if not resolution.allows(BranchCapability.FETCH_MERGE):
-            return None, False, None, f"No unique verified fallback PR: {fetch_error}"
-
-        rechecked = self._canonical_state(canonical)
-        if rechecked is CanonicalBranchState.PRESENT:
-            return None, False, None, "Canonical branch appeared before fallback fetch"
-        if rechecked is CanonicalBranchState.INDETERMINATE:
-            return None, False, None, "Canonical branch recheck is indeterminate"
-        fallback_sha, fallback_error = self._fetch_branch_tip(resolution.branch_name)
-        if fallback_sha is None:
-            return None, False, None, fallback_error
-        return resolution, False, fallback_sha, ""
+        return self._branches.resolve_and_fetch(task, base_branch)
 
     def _merge_task_branch(
         self, branch_name: str, source_sha: str
@@ -570,12 +418,6 @@ class IntegrationMerger:
                 hold=True,
                 status=STATUS_EXECUTION_INDETERMINATE,
             ) from error
-
-    def abort_merge_quietly(self) -> None:
-        try:
-            self.abort_merge()
-        except (ExecutionDeadlineExceeded, ExecutionCommandTimeout):
-            pass
 
     def _recover_from_unexpected_task_error(
         self,
