@@ -212,6 +212,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "integrator.not_needed_review_state",
             "integrator.attempt",
             "integrator.attempt_cleanup",
+            "integrator.attempt_cleanup_effects",
+            "integrator.attempt_cleanup_plan",
             "integrator.ci_execution",
             "integrator.execution",
             "integrator.finalization",
