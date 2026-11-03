@@ -8,7 +8,7 @@ import pytest
 
 from orchestune.claim.service import _execute_claim_in_lock
 from orchestune.dispatch.execution_repair import revalidate_reclaim_preconditions
-from orchestune.dispatch.gc import _resolve_completion
+from orchestune.dispatch.gc.rule_chain import _resolve_completion
 from orchestune.dispatch.gc_service import _is_standalone_gc_candidate
 from orchestune.ledger.run_state import RunState
 from tests.dispatch_test_support import flat_active_worktree
@@ -120,13 +120,13 @@ def test_recovery_requeue_holds_worktree_free_pending_reservation():
 
 
 def test_stale_gc_discard_preserves_pending_reservation(monkeypatch):
-    from orchestune.dispatch.gc import _apply_stale_active_entry_discard
+    from orchestune.dispatch.gc.rule_chain import _apply_stale_active_entry_discard
 
     active = _active()
     state = _pending(active)
     cleanup = Mock(return_value=True)
     monkeypatch.setattr(
-        "orchestune.dispatch.gc._cleanup_stale_active_worktree", cleanup
+        "orchestune.dispatch.gc.rule_chain._cleanup_stale_active_worktree", cleanup
     )
     assert not _apply_stale_active_entry_discard(
         state,

@@ -404,7 +404,7 @@ class TestCompleteGcHandoff:
 
     def test_completion_receipt_not_minted_if_state_save_fails(self, tmp_path):
         """障害注入: 台帳保存が失敗した場合、CompletionReceipt は確定されない。"""
-        from orchestune.dispatch.gc import _persist_and_confirm_completion
+        from orchestune.dispatch.gc.rule_chain import _persist_and_confirm_completion
 
         config = _make_config(tmp_path)
         run_state = RunState()
@@ -426,7 +426,8 @@ class TestCompleteGcHandoff:
         receipt = CompletionReceipt(issue_number=1004)
 
         with patch(
-            "orchestune.dispatch.gc.save_run_state", side_effect=OSError("Disk full")
+            "orchestune.dispatch.gc.rule_chain.save_run_state",
+            side_effect=OSError("Disk full"),
         ):
             success = _persist_and_confirm_completion(ctx, active, receipt)
 

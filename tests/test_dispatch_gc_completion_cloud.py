@@ -433,7 +433,7 @@ class TestFinalizeAbandonedCloudWorktree:
     def test_stale_active_entry_discard_settles_pending_reservation(
         self, tmp_path, fake_forge
     ):
-        from orchestune.dispatch.gc import _apply_stale_active_entry_discard
+        from orchestune.dispatch.gc.rule_chain import _apply_stale_active_entry_discard
 
         active = _active()
         config = DispatcherConfig(
@@ -452,7 +452,7 @@ class TestFinalizeAbandonedCloudWorktree:
 
         with (
             patch("os.path.exists", return_value=False),
-            patch("orchestune.dispatch.gc.remove_worktree", autospec=True),
+            patch("orchestune.dispatch.gc.rule_chain.remove_worktree", autospec=True),
         ):
             discarded = _apply_stale_active_entry_discard(
                 run_state,

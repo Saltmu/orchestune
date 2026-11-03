@@ -86,17 +86,17 @@ class TestConfirmedCompletionFacts:
 
         with (
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.gc._local_pr_completion_status",
+                "orchestune.dispatch.gc.rule_chain._local_pr_completion_status",
                 autospec=True,
                 return_value="completed",
             ),
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=WorktreeCompletion(
                     issue_number=280,
@@ -105,7 +105,7 @@ class TestConfirmedCompletionFacts:
                     subtask_id="",
                 ),
             ),
-            patch("orchestune.dispatch.gc.save_run_state", autospec=True),
+            patch("orchestune.dispatch.gc.rule_chain.save_run_state", autospec=True),
         ):
             result = ctx.process_active_worktrees()
 
@@ -128,7 +128,7 @@ class TestConfirmedCompletionFacts:
         )
 
         with patch(
-            "orchestune.dispatch.gc._is_worktree_complete",
+            "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
             autospec=True,
             return_value=False,
         ):

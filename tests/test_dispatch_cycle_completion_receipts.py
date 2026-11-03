@@ -29,11 +29,11 @@ from orchestune.dispatch.cycle_events import (
     WorktreeCompletionHold,
 )
 from orchestune.dispatch.cycle_records import CompletionReceipt
-from orchestune.dispatch.gc import (
+from orchestune.dispatch.gc.completion_disposition import UnclassifiedCompletionError
+from orchestune.dispatch.gc.rule_chain import (
     _handle_completed_event_outcome,
     _record_completed_worktree,
 )
-from orchestune.dispatch.gc.completion_disposition import UnclassifiedCompletionError
 from tests.dispatch_gc_test_support import _active, _task
 from tests.dispatch_gc_test_support import _rule_ctx as _ctx
 
@@ -68,7 +68,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
             ), "record_completion must not fire before save_run_state succeeds"
 
         with patch(
-            "orchestune.dispatch.gc.save_run_state", side_effect=_fake_save
+            "orchestune.dispatch.gc.rule_chain.save_run_state", side_effect=_fake_save
         ) as mock_save:
             _record_completed_worktree(
                 ctx,
@@ -99,7 +99,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
         active = _active()
         ctx.run_state.active_worktrees["1"] = active
 
-        with patch("orchestune.dispatch.gc.save_run_state", autospec=True):
+        with patch("orchestune.dispatch.gc.rule_chain.save_run_state", autospec=True):
             _record_completed_worktree(
                 ctx,
                 "1",
@@ -126,7 +126,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
             assert ctx.is_completion_confirmed(active.core.issue_number) is False
 
         with patch(
-            "orchestune.dispatch.gc.save_run_state", side_effect=save
+            "orchestune.dispatch.gc.rule_chain.save_run_state", side_effect=save
         ) as mock_save:
             _record_completed_worktree(
                 ctx,
@@ -159,7 +159,9 @@ class TestRecordCompletedWorktreeSuccessBoundary:
             action="not_needed",
         )
 
-        with patch("orchestune.dispatch.gc.save_run_state", autospec=True) as save:
+        with patch(
+            "orchestune.dispatch.gc.rule_chain.save_run_state", autospec=True
+        ) as save:
             outcome = _handle_completed_event_outcome(ctx, "1", active, task, event)
 
         save.assert_called_once()
@@ -175,7 +177,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
 
         with (
             patch(
-                "orchestune.dispatch.gc.save_run_state",
+                "orchestune.dispatch.gc.rule_chain.save_run_state",
                 side_effect=OSError("disk full"),
             ),
             pytest.raises(OSError, match="persist not-needed"),
@@ -203,7 +205,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
         active = _active()
         ctx.run_state.active_worktrees["1"] = active
 
-        with patch("orchestune.dispatch.gc.save_run_state", autospec=True):
+        with patch("orchestune.dispatch.gc.rule_chain.save_run_state", autospec=True):
             _record_completed_worktree(
                 ctx,
                 "1",
@@ -227,7 +229,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
         ctx.run_state.active_worktrees["1"] = active
 
         with patch(
-            "orchestune.dispatch.gc.save_run_state",
+            "orchestune.dispatch.gc.rule_chain.save_run_state",
             side_effect=RuntimeError("disk full"),
         ):
             _record_completed_worktree(
@@ -255,7 +257,9 @@ class TestRecordCompletedWorktreeSuccessBoundary:
         ctx.config.apply = False
         active = _active()
 
-        with patch("orchestune.dispatch.gc.save_run_state", autospec=True) as mock_save:
+        with patch(
+            "orchestune.dispatch.gc.rule_chain.save_run_state", autospec=True
+        ) as mock_save:
             outcome = _record_completed_worktree(
                 ctx,
                 "1",
@@ -296,7 +300,7 @@ class TestRecordCompletedWorktreeSuccessBoundary:
         assert before is not None
         assert before.resolved[0].state is DependencyState.WAITING
 
-        with patch("orchestune.dispatch.gc.save_run_state", autospec=True):
+        with patch("orchestune.dispatch.gc.rule_chain.save_run_state", autospec=True):
             _record_completed_worktree(
                 ctx,
                 "1",
@@ -378,7 +382,9 @@ class TestCompletedEventRoutes:
         ctx, task, active = self._setup()
         event = make_event(active)
 
-        with patch("orchestune.dispatch.gc.save_run_state", autospec=True) as save:
+        with patch(
+            "orchestune.dispatch.gc.rule_chain.save_run_state", autospec=True
+        ) as save:
             outcome = _handle_completed_event_outcome(ctx, "1", active, task, event)
 
         assert outcome is not None
@@ -397,7 +403,9 @@ class TestCompletedEventRoutes:
             action="escalated_token_limit_exceeded",
         )
 
-        with patch("orchestune.dispatch.gc.save_run_state", autospec=True) as save:
+        with patch(
+            "orchestune.dispatch.gc.rule_chain.save_run_state", autospec=True
+        ) as save:
             outcome = _handle_completed_event_outcome(ctx, "1", active, task, event)
 
         assert outcome is not None and outcome.completion_event is event
@@ -433,7 +441,9 @@ class TestCompletedEventRoutes:
         ctx, task, active = self._setup()
         event = make_event(active)
 
-        with patch("orchestune.dispatch.gc.save_run_state", autospec=True) as save:
+        with patch(
+            "orchestune.dispatch.gc.rule_chain.save_run_state", autospec=True
+        ) as save:
             outcome = _handle_completed_event_outcome(ctx, "1", active, task, event)
 
         assert outcome is not None and outcome.completion_event is event
@@ -450,7 +460,9 @@ class TestCompletedEventRoutes:
             action=cast(Any, "brand_new_action"),
         )
 
-        with patch("orchestune.dispatch.gc.save_run_state", autospec=True) as save:
+        with patch(
+            "orchestune.dispatch.gc.rule_chain.save_run_state", autospec=True
+        ) as save:
             with pytest.raises(UnclassifiedCompletionError):
                 _handle_completed_event_outcome(ctx, "1", active, task, event)
 

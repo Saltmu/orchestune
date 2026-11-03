@@ -48,9 +48,9 @@ from orchestune.dispatch.execution_repair import (
     command_finding_codes,
     derive_execution_desired_state,
 )
-from orchestune.dispatch.gc import _apply_stale_active_entry_discard
 from orchestune.dispatch.gc.closed_target import release_closed_target_claims
 from orchestune.dispatch.gc.completion import is_completion_hold_event
+from orchestune.dispatch.gc.rule_chain import _apply_stale_active_entry_discard
 from orchestune.dispatch.gc.usage_limit import handle_usage_limit_reclaim
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,

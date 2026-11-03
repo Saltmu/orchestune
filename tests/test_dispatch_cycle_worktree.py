@@ -99,7 +99,7 @@ class TestProcessActiveWorktrees:
 
         with (
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=False,
             ),
@@ -164,14 +164,14 @@ class TestProcessActiveWorktrees:
         fake_forge.list_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=True,
             ),
             # Completion now also consults the all-state PR list to rule out
             # an abandoned (closed-unmerged) PR before finalizing.
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=WorktreeCompletionHold(
                     issue_number=1,
@@ -248,7 +248,7 @@ class TestProcessActiveWorktrees:
                 return_value=ctx,
             ),
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=True,
             ),
@@ -339,7 +339,7 @@ class TestProcessActiveWorktrees:
                 return_value=ctx,
             ),
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=True,
             ),
@@ -483,7 +483,7 @@ class TestProcessActiveWorktrees:
 
         with (
             patch(
-                "orchestune.dispatch.gc._finalize_not_needed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_not_needed_worktree",
                 autospec=True,
                 return_value=TaskWorktreeCompletion(
                     issue_number=1,
@@ -549,7 +549,7 @@ class TestProcessActiveWorktrees:
         mock_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=False,
             ),
@@ -606,7 +606,7 @@ class TestProcessActiveWorktrees:
 
         with (
             patch(
-                "orchestune.dispatch.gc._finalize_not_needed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_not_needed_worktree",
                 autospec=True,
                 return_value=TaskWorktreeCompletion(
                     issue_number=1,
@@ -651,7 +651,7 @@ class TestProcessActiveWorktrees:
 
         with (
             patch(
-                "orchestune.dispatch.gc._finalize_not_needed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_not_needed_worktree",
                 autospec=True,
                 return_value=TaskWorktreeCompletion(
                     issue_number=1,
@@ -661,7 +661,7 @@ class TestProcessActiveWorktrees:
                 ),
             ),
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=False,
             ),

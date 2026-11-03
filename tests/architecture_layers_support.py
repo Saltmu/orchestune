@@ -152,6 +152,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.runtime_reader",
             "dispatch.filters",
             "dispatch.gc",
+            "dispatch.gc.rule_chain",
             "dispatch.gc.completion",
             "dispatch.gc.completion_status",
             "dispatch.gc.not_needed_close",

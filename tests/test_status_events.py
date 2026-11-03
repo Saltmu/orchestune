@@ -941,7 +941,7 @@ class TestCloudNotNeededReviewSequence:
         config = make_test_dispatcher_config(tmp_path, forge=forge, apply=True)
         env = CaseEnv(forge, config, monkeypatch, tmp_path, (P,), {"cloud": True})
         steps = [
-            ("dispatch/gc/__init__.py::_rule_not_needed", "cloud-review-dispatched"),
+            ("dispatch/gc/rule_chain.py::_rule_not_needed", "cloud-review-dispatched"),
             (source, condition),
         ]
         observed = rule_not_needed_outcome(env)

@@ -10,7 +10,7 @@ from orchestune.dispatch.external_execution import (
     hold_if_not_stopped,
     observe_runtime_state,
 )
-from orchestune.dispatch.gc import _apply_stale_active_entry_discard
+from orchestune.dispatch.gc.rule_chain import _apply_stale_active_entry_discard
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,
@@ -182,7 +182,7 @@ class TestCompletedCloudHoldNotice:
     """
 
     def _run(self, fake_forge, *, apply=True):
-        from orchestune.dispatch.gc import _rule_completed
+        from orchestune.dispatch.gc.rule_chain import _rule_completed
         from tests.dispatch_gc_test_support import _rule_ctx, _task
 
         active = _active(external_id="session-1")

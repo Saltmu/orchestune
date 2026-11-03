@@ -9,7 +9,7 @@ test_dispatch_gc_integration.py を参照。
 from unittest.mock import patch
 
 from orchestune.dispatch.cycle_events import WorktreeCompletion, WorktreeCompletionHold
-from orchestune.dispatch.gc import _rule_completed
+from orchestune.dispatch.gc.rule_chain import _rule_completed
 from orchestune.models import PrRecord
 from tests.dispatch_gc_test_support import _active, _task
 from tests.dispatch_gc_test_support import _rule_ctx as _ctx
@@ -193,7 +193,7 @@ class TestRuleCompleted:
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=WorktreeCompletion(
                     issue_number=280,
@@ -237,7 +237,7 @@ class TestRuleCompleted:
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=WorktreeCompletion(
                     issue_number=280,
@@ -272,7 +272,7 @@ class TestRuleCompleted:
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=WorktreeCompletion(
                     issue_number=280,
@@ -345,12 +345,12 @@ class TestRuleCompleted:
         ctx = _ctx(forge=fake_forge)
         with (
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=WorktreeCompletionHold(
                     issue_number=280,
@@ -377,12 +377,12 @@ class TestRuleCompleted:
 
         with (
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=WorktreeCompletion(
                     issue_number=280,
@@ -416,7 +416,7 @@ class TestRuleCompleted:
 
         with (
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=WorktreeCompletion(
                     issue_number=280,

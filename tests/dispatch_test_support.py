@@ -46,6 +46,7 @@ DEFAULT_CREATED_AT = "2026-01-01T00:00:00+00:00"
 GC_PROCESS_ALIVE_TARGETS = (
     "orchestune.dispatch.execution_repair.is_process_alive",
     "orchestune.dispatch.gc.is_process_alive",
+    "orchestune.dispatch.gc.rule_chain.is_process_alive",
     "orchestune.dispatch.gc.completion.is_process_alive",
     "orchestune.dispatch.gc.zombies.is_process_alive",
     "orchestune.dispatch.gc.usage_limit.is_process_alive",

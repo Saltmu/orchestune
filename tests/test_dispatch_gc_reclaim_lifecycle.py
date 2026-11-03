@@ -22,8 +22,8 @@ from orchestune.dispatch.cycle_events import (
     WorktreeCompletion,
     WorktreeCompletionHold,
 )
-from orchestune.dispatch.gc import _rule_completed, _rule_not_needed
 from orchestune.dispatch.gc.cloud_completion import _reserve_cloud_reclaim_record
+from orchestune.dispatch.gc.rule_chain import _rule_completed, _rule_not_needed
 from orchestune.ledger.run_state import (
     RunState,
     TaskReclaimRecord,
@@ -95,12 +95,12 @@ class TestReclaimCounterLifecycle:
         task = _task(status_labels=("status:in-progress",))
         with (
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=WorktreeCompletion(
                     issue_number=280,
@@ -150,7 +150,7 @@ class TestReclaimCounterLifecycle:
         task = _task(status_labels=("status:not-needed",))
 
         with patch(
-            "orchestune.dispatch.gc._finalize_not_needed_worktree",
+            "orchestune.dispatch.gc.rule_chain._finalize_not_needed_worktree",
             autospec=True,
             return_value=TaskWorktreeCompletion(
                 issue_number=280,
@@ -176,12 +176,12 @@ class TestDirtyWorktreeHoldLimit:
     def _hold_cycle(self, ctx, active, task):
         with (
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=WorktreeCompletionHold(
                     issue_number=280,
@@ -262,12 +262,12 @@ class TestDirtyWorktreeHoldLimit:
 
         with (
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=WorktreeCompletionHold(
                     issue_number=280,
@@ -306,12 +306,12 @@ class TestDirtyWorktreeHoldLimit:
 
         with (
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=WorktreeCompletionHold(
                     issue_number=280,
@@ -358,12 +358,12 @@ class TestDirtyWorktreeHoldLimit:
 
         with (
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=held,
             ),
@@ -852,7 +852,7 @@ class TestReclaimKeepsIndependentBudgets:
         ctx.run_state.task_reclaim_counts[280] = previous
 
         with patch(
-            "orchestune.dispatch.gc.save_run_state",
+            "orchestune.dispatch.gc.rule_chain.save_run_state",
             autospec=True,
             side_effect=OSError("disk full"),
         ):
@@ -925,6 +925,8 @@ class TestReclaimRecordReplacementIsDetected:
         self, monkeypatch, tmp_path, fake_forge
     ):
         _scenario_dirty_hold(tmp_path / "clean", fake_forge)
-        monkeypatch.setattr("orchestune.dispatch.gc.replace", self._replacing(replace))
+        monkeypatch.setattr(
+            "orchestune.dispatch.gc.rule_chain.replace", self._replacing(replace)
+        )
         with expect_violation("P3B-RECLAIM-BUDGET-PRESERVED"):
             _scenario_dirty_hold(tmp_path / "faulty", fake_forge)

@@ -170,8 +170,8 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `NOT_NEEDED` (`COMPLETION_REVIEW`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `complete/status_labels.py::_completion_mutate` |
 | `BLOCK` (`COMPLETION`) | `status:in-progress`, `status:queued` | `status:blocked` | `complete/status_labels.py::_completion_mutate` |
 | `COMPLETE_WITHOUT_LABEL` (`CYCLE`) | `status:blocked`, `status:blocked-human-review`, `status:done`, `status:in-progress`, `status:manual-merge-required`, `status:not-needed`, `status:queued` | - | `dispatch/cycle_context_state.py::_CycleState.record_completion` |
-| `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/__init__.py::_rule_not_needed` |
-| `AWAIT_REVIEW` (`PLAIN`) | `status:in-progress` | - | `dispatch/gc/__init__.py::_rule_not_needed` |
+| `NOT_NEEDED` (`PLAIN`) | `status:blocked`, `status:in-progress`, `status:queued` | `status:not-needed` | `dispatch/gc/rule_chain.py::_rule_not_needed` |
+| `AWAIT_REVIEW` (`PLAIN`) | `status:in-progress` | - | `dispatch/gc/rule_chain.py::_rule_not_needed` |
 | `RECLAIM` (`PLAIN`) | `status:blocked`, `status:in-progress` | `status:queued` | `dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim` |
 | `BLOCK` (`PLAIN`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_blocked_hold` |
 | `BLOCK` (`RECOMPUTE`) | `status:in-progress`, `status:queued` | `status:blocked` | `dispatch/gc/completion.py::_apply_blocked_hold` |
@@ -471,14 +471,14 @@ stateDiagram-v2
   （worktree作成・エージェント起動）が成功した場合。
 
 ### 4. `status:in-progress` → `status:done`（完了）
-- 発生元: `orchestune/dispatch/gc/__init__.py`の`_finalize_completed_worktree`
+- 発生元: `orchestune/dispatch/gc/completion.py`の`_finalize_completed_worktree`
 - 条件: エージェントプロセスが終了し、worktreeに未コミットの変更が無く、
   base_branchに対して実コミットが1件以上あり、かつ完了宣言レコード
   （`orchestune:outcome`、`result: done`）がPRまたはIssueコメントから
   確認できた場合。
 
 ### 5. `status:in-progress` → `status:blocked-human-review`（空コミット完了またはoutcome不在）
-- 発生元: `orchestune/dispatch/gc/__init__.py`の`_finalize_completed_worktree`
+- 発生元: `orchestune/dispatch/gc/completion.py`の`_finalize_completed_worktree`
 - 条件: プロセスは終了しworktreeもcleanだが、base_branchに対する新規コミットが
   0件の場合（空コミット完了、権限拒否等で実際には何も作業されなかった可能性があるため）、
   または新規コミットが存在しても完了宣言レコード（`orchestune:outcome`）が
@@ -547,14 +547,14 @@ stateDiagram-v2
     （`_apply_dirty_worktree_hold`。#212で導入された保留）
 
 ### 10. `status:in-progress` → クローズ or `not-needed-review:*`待ち
-- 発生元: `orchestune/dispatch/gc/__init__.py`の`_finalize_not_needed_worktree` / `_rule_not_needed`
+- 発生元: `orchestune/dispatch/gc/completion.py`の`_finalize_not_needed_worktree` / `orchestune/dispatch/gc/rule_chain.py`の`_rule_not_needed`
 - 条件: セッションが完了宣言レコード（`orchestune:outcome`、`result: not-needed`）を残したか、外部自動化等により`status:not-needed`ラベルが付与された場合（ワーカー自身による直接のラベル操作は禁止）。クラウド
   ルーチンが利用可能なら即座にクローズせず独立検証レビューを起動し
   （`orchestune/integration_coordinator.py`）、レビュー結果に応じて後続
   サイクルでクローズする。ローカル環境では従来通り即座にクローズする。
 
 ### 10-b. `status:in-progress` → `status:blocked` + `ci:base-branch-red`（ベースブランチ由来のCI失敗） / base_sha前進による再キュー（#555）
-- 発生元: `orchestune/dispatch/gc/__init__.py`の`_finalize_completed_worktree`（保留）、`orchestune/dispatch/reconciliation.py`の`_handle_base_branch_red_recovery`（再キュー）
+- 発生元: `orchestune/dispatch/gc/completion.py`の`_finalize_completed_worktree`（保留）、`orchestune/dispatch/reconciliation.py`の`_handle_base_branch_red_recovery`（再キュー）
 - 条件:
   - **保留**: エージェントが完了宣言レコード（`orchestune:outcome`、`result: blocked` / `reason: base-branch-red`）を残して終了した場合、`status:blocked`へ遷移させ、マーカーラベル`ci:base-branch-red`を付与して保留する。通常の依存解決による昇格（`_decide_blocked_promotions`）からは除外される。
   - **再キュー**: 対象ブランチのベースコミット（`base_sha`）の前進を検知した時点で`ci:base-branch-red`マーカーを除去し、依存関係が解決済みであれば`status:queued`へ戻す。
@@ -859,8 +859,8 @@ merged成果物ありのIssueは置換せず、manual reviewとしてpreviewに�
 | dispatch/gc/policy_effects.py::reconcile_labels | `cloud-review-timeout` | `escalate` / `plain` | no execution identity is passed as a launch fact at this event source | source-local status, operation, or freshness guards; no record_launch guard | not an execution launch; any operation/generation protection is source-specific | N/A: no launch identity enters this event source; the source-specific event effect is covered by its EVENT_BY_SOURCE case | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | launch identity does not apply to this Event/Kind route |
 | dispatch/gc/policy_review.py::reconcile_review | `cloud-review-passed` | `complete_without_label` / `review_passed` | no execution identity is passed as a launch fact at this event source | source-local status, operation, or freshness guards; no record_launch guard | not an execution launch; any operation/generation protection is source-specific | N/A: no launch identity enters this event source; the source-specific event effect is covered by its EVENT_BY_SOURCE case | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | launch identity does not apply to this Event/Kind route |
 | dispatch/gc/policy_review.py::reconcile_review | `review-passed` | `complete_without_label` / `review_passed` | no execution identity is passed as a launch fact at this event source | source-local status, operation, or freshness guards; no record_launch guard | not an execution launch; any operation/generation protection is source-specific | N/A: no launch identity enters this event source; the source-specific event effect is covered by its EVENT_BY_SOURCE case | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | launch identity does not apply to this Event/Kind route |
-| dispatch/gc/__init__.py::_rule_not_needed | `outcome-only` | `not_needed` / `plain` | no execution identity is passed as a launch fact at this event source | source-local status, operation, or freshness guards; no record_launch guard | not an execution launch; any operation/generation protection is source-specific | N/A: no launch identity enters this event source; the source-specific event effect is covered by its EVENT_BY_SOURCE case | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | launch identity does not apply to this Event/Kind route |
-| dispatch/gc/__init__.py::_rule_not_needed | `cloud-review-dispatched` | `await_review` / `plain` | no execution identity is passed as a launch fact at this event source | source-local status, operation, or freshness guards; no record_launch guard | not an execution launch; any operation/generation protection is source-specific | N/A: no launch identity enters this event source; the source-specific event effect is covered by its EVENT_BY_SOURCE case | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | launch identity does not apply to this Event/Kind route |
+| dispatch/gc/rule_chain.py::_rule_not_needed | `outcome-only` | `not_needed` / `plain` | no execution identity is passed as a launch fact at this event source | source-local status, operation, or freshness guards; no record_launch guard | not an execution launch; any operation/generation protection is source-specific | N/A: no launch identity enters this event source; the source-specific event effect is covered by its EVENT_BY_SOURCE case | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | launch identity does not apply to this Event/Kind route |
+| dispatch/gc/rule_chain.py::_rule_not_needed | `cloud-review-dispatched` | `await_review` / `plain` | no execution identity is passed as a launch fact at this event source | source-local status, operation, or freshness guards; no record_launch guard | not an execution launch; any operation/generation protection is source-specific | N/A: no launch identity enters this event source; the source-specific event effect is covered by its EVENT_BY_SOURCE case | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | launch identity does not apply to this Event/Kind route |
 | dispatch/status_repair.py::_apply_command | `dependency-resolved` | `queue` / `plain` | no execution identity is passed as a launch fact at this event source | source-local status, operation, or freshness guards; no record_launch guard | not an execution launch; any operation/generation protection is source-specific | N/A: no launch identity enters this event source; the source-specific event effect is covered by its EVENT_BY_SOURCE case | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | launch identity does not apply to this Event/Kind route |
 | dispatch/status_repair.py::_apply_command | `add-missing-queued` | `queue` / `plain` | no execution identity is passed as a launch fact at this event source | source-local status, operation, or freshness guards; no record_launch guard | not an execution launch; any operation/generation protection is source-specific | N/A: no launch identity enters this event source; the source-specific event effect is covered by its EVENT_BY_SOURCE case | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | launch identity does not apply to this Event/Kind route |
 | dispatch/status_repair.py::_apply_command | `remove-conflicting-blocked` | `queue` / `plain` | no execution identity is passed as a launch fact at this event source | source-local status, operation, or freshness guards; no record_launch guard | not an execution launch; any operation/generation protection is source-specific | N/A: no launch identity enters this event source; the source-specific event effect is covered by its EVENT_BY_SOURCE case | `tests/test_status_event_identity_conformance.py::test_source_protection_inventory_is_complete; tests/test_status_events.py::TestEventModelConformance::test_production_driver_matches_apply_event` | launch identity does not apply to this Event/Kind route |

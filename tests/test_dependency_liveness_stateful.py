@@ -75,7 +75,7 @@ def test_not_needed_save_failure_holds_cycle_and_retries(tmp_path):
     world.complete(11, CompletionPath.OUTCOME_NOT_NEEDED)
 
     with patch(
-        "orchestune.dispatch.gc.save_run_state",
+        "orchestune.dispatch.gc.rule_chain.save_run_state",
         side_effect=OSError("disk full"),
     ):
         failed = world.cycle()

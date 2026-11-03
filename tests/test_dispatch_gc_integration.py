@@ -61,7 +61,7 @@ class TestGC:
             patch.object(fake_forge, "list_open_prs", return_value=[]),
             # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=False,
             ),
@@ -155,7 +155,7 @@ class TestGC:
             patch.object(fake_forge, "list_open_prs", return_value=[]),
             # 完了判定によるdirty-worktree保留とは分離し、GC回収自体を検証する。
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=False,
             ),
@@ -238,7 +238,7 @@ class TestGC:
             ),
             patch.object(fake_forge, "list_open_prs", return_value=[]),
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=False,
             ),
@@ -319,7 +319,7 @@ class TestGC:
             ),
             patch.object(fake_forge, "list_open_prs", return_value=[]),
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=False,
             ),
@@ -397,7 +397,7 @@ class TestGC:
             patch.object(fake_forge, "list_open_prs", return_value=[]),
             # 完了判定によるdirty-worktree保留とは分離し、GC失敗時の保護を検証する。
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=False,
             ),

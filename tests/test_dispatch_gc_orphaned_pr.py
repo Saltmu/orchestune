@@ -38,7 +38,7 @@ def test_receipt_binds_pr_and_old_claim():
 
 
 def test_stopped_cloud_execution_with_open_pr_reaches_completion():
-    from orchestune.dispatch.gc import _resolve_cloud_completion
+    from orchestune.dispatch.gc.rule_chain import _resolve_cloud_completion
 
     active = _active(external_id="cloud-1")
     pr = PrRecord(
@@ -52,12 +52,14 @@ def test_stopped_cloud_execution_with_open_pr_reaches_completion():
     ctx = _rule_ctx(prs=[pr])
     with (
         patch(
-            "orchestune.dispatch.gc._cloud_worktree_completion_status",
+            "orchestune.dispatch.gc.rule_chain._cloud_worktree_completion_status",
             return_value="pending",
         ),
-        patch("orchestune.dispatch.gc.fresh_external_hold", return_value=None),
         patch(
-            "orchestune.dispatch.gc.run_git",
+            "orchestune.dispatch.gc.rule_chain.fresh_external_hold", return_value=None
+        ),
+        patch(
+            "orchestune.dispatch.gc.rule_chain.run_git",
             return_value=subprocess.CompletedProcess(
                 [], 0, stdout=f"{pr.head_sha}\trefs/heads/{pr.head_ref}\n"
             ),
@@ -68,7 +70,7 @@ def test_stopped_cloud_execution_with_open_pr_reaches_completion():
 
 
 def test_cloud_pr_stays_pending_when_stop_is_unconfirmed():
-    from orchestune.dispatch.gc import _resolve_cloud_completion
+    from orchestune.dispatch.gc.rule_chain import _resolve_cloud_completion
 
     active = _active(external_id="cloud-1")
     pr = PrRecord(
@@ -82,12 +84,15 @@ def test_cloud_pr_stays_pending_when_stop_is_unconfirmed():
     ctx = _rule_ctx(prs=[pr])
     with (
         patch(
-            "orchestune.dispatch.gc._cloud_worktree_completion_status",
+            "orchestune.dispatch.gc.rule_chain._cloud_worktree_completion_status",
             return_value="pending",
         ),
-        patch("orchestune.dispatch.gc.fresh_external_hold", return_value=object()),
         patch(
-            "orchestune.dispatch.gc.run_git",
+            "orchestune.dispatch.gc.rule_chain.fresh_external_hold",
+            return_value=object(),
+        ),
+        patch(
+            "orchestune.dispatch.gc.rule_chain.run_git",
             return_value=subprocess.CompletedProcess(
                 [], 0, stdout=f"{pr.head_sha}\trefs/heads/{pr.head_ref}\n"
             ),
