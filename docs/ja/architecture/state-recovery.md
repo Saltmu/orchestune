@@ -147,7 +147,7 @@ Orchestuneの実行台帳（`ledger`）は、各タスクの作業ディレク�
 
 - **メモリ上の唯一の正本**: `core`、`launch`、`claim`、`completion` の4つがメモリ上における状態の**唯一の正本**です。以前の後方互換フラット属性プロパティは全廃されており、`slots=True` が指定されているため、未定義属性への代入や読み出しは直ちに `AttributeError` となります。
 - **深層不変性とイミュータブルペイロード**: `completion.completion_payload` および `completion.completion_policy_config` は内部関数 `_freeze_json` により `MappingProxyType` や `tuple` へ変換され、深層不変化されます。これにより、`completion_payload` に対する辞書破壊操作（`update`、`pop`、`clear`、`setdefault`）は実行時に拒絶されます。
-- **不変更新境界**: サブレコードはすべて frozen であり、fieldの書き換えはできません。各所有者のコピーAPI（`with_claim`、`with_launch`、`with_completion`、`with_core`）でレコード全体を置換します。active objectのidentityを保持する利用側には `dispatch.launch_state.update_launch` / `ActiveWorktree.update_core` を提供します。復旧identityの実体化はmodelの `ActiveWorktree.materialize_claim_for_persistence` が所有します。
+- **不変更新境界**: サブレコードはすべて frozen であり、fieldの書き換えはできません。各所有者のコピーAPI（`with_claim`、`with_launch`、`with_completion`、`with_core`）でレコード全体を置換します。active objectのidentityを保持する利用側には `dispatch.launch.state.update_launch` / `ActiveWorktree.update_core` を提供します。復旧identityの実体化はmodelの `ActiveWorktree.materialize_claim_for_persistence` が所有します。
 
 ### 6.2 永続JSONのflat不変性と後方互換性
 
@@ -191,14 +191,14 @@ Orchestuneの実行台帳（`ledger`）は、各タスクの作業ディレク�
 
 - **所有者モジュールの限定**: `ActiveWorktree` の直接構築およびサブレコードの更新境界は、正規の所有者モジュールに厳格に制限されます：
   - `claim`: `orchestune.claim.ownership`, `orchestune.claim.service`, `orchestune.claim.amend` (`build_claim_info`, `with_claim`)
-  - `launch`: `orchestune.dispatch.launch_state` (`build_launch_record`, `with_launch`, `with_launch_phase`)
+  - `launch`: `orchestune.dispatch.launch.state` (`build_launch_record`, `with_launch`, `with_launch_phase`)
   - `completion`: `orchestune.complete.journal` (`active_completion_from_record`, `with_completion`)
   - `core` と永続化時の復旧identity: `orchestune.ledger.active_records` (`ActiveWorktree.from_records`, `with_core`, `update_core`, `materialize_claim_for_persistence`)
   - コーデック・モデル構築: `orchestune.ledger.active_codec` (`decode_active_worktree`), `orchestune.ledger.active_records` (`ActiveWorktree`)
 - **ASTガードによる機械的検証**: アーキテクチャテスト（`tests/test_active_worktree_ownership_architecture.py`）は AST 解析により以下を機械的に検査します：
   1. サブレコードのfieldへの代入、および所有者以外によるレコード全体の置換。利用側の例外を設けず、in-place owner APIでactive identityを維持する
   2. `dataclasses.replace` やそのエイリアスによる所有者外での書き換え。復旧PR headの採用もcore/launch owner APIを使う
-  3. `ALLOWED_CONSTRUCTOR_MODULES` 以外での `ActiveWorktree` / `ActiveWorktree.from_records` コンストラクタ呼び出し（許可対象はclaim所有者、`dispatch.launch_state`、`ledger.active_records`、`ledger.active_codec`。`complete.journal` はcompletion更新を所有し、全体の構築は所有しない）
+  3. `ALLOWED_CONSTRUCTOR_MODULES` 以外での `ActiveWorktree` / `ActiveWorktree.from_records` コンストラクタ呼び出し（許可対象はclaim所有者、`dispatch.launch.state`、`ledger.active_records`、`ledger.active_codec`。`complete.journal` はcompletion更新を所有し、全体の構築は所有しない）
   4. 不変ペイロードに対する破壊的メソッド（`update`, `pop`, `clear`, `setdefault`）の呼び出し
   5. 中央の `lifecycle` / `has_completion_reservation` 定義以外にある直接の `completion_id is (not) None` 段階判定
   6. model/codec境界以外からの `_legacy` 検証バイパス

@@ -6,7 +6,7 @@ from unittest.mock import patch
 from orchestune.branch_naming import build_task_branch_name, parse_task_branch_name
 from orchestune.dependencies.resolution import resolve_all_dependencies
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.launch import (
+from orchestune.dispatch.launch.service import (
     TaskLaunchPlan,
     _decide_duplicate_candidates,
     _decide_task_launch_plan,
@@ -356,7 +356,7 @@ class TestApplyTaskLaunches:
     def test_invalid_subtask_id_blocks_only_affected_task(self, tmp_path):
         from unittest.mock import MagicMock
 
-        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.launch.service import _apply_task_launches
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
@@ -423,7 +423,7 @@ class TestApplyTaskLaunches:
         既存PRまで新sessionの成果物と誤認する窓が生まれるため）。"""
         from unittest.mock import MagicMock
 
-        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.launch.service import _apply_task_launches
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
@@ -471,7 +471,7 @@ class TestApplyTaskLaunches:
     def test_apply_task_launches_passes_base_branch_to_target(self, tmp_path):
         from unittest.mock import MagicMock
 
-        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.launch.service import _apply_task_launches
         from orchestune.dispatch.targets import LocalProcessDispatchTarget
 
         task = Task(
@@ -534,7 +534,7 @@ class TestApplyTaskLaunches:
         from unittest.mock import MagicMock
 
         from orchestune.dispatch.execution_profiles import ExecutionSelection
-        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.launch.service import _apply_task_launches
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
@@ -613,7 +613,7 @@ class TestApplyTaskLaunches:
         from unittest.mock import MagicMock
 
         from orchestune.consistency.desired import TaskLifecycle
-        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.launch.service import _apply_task_launches
         from orchestune.dispatch.status_repair import task_lifecycle
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
@@ -696,7 +696,7 @@ class TestApplyTaskLaunchesLabelOrdering:
     def test_success_path_adds_in_progress_before_removing_queued(self, tmp_path):
         from unittest.mock import MagicMock
 
-        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.launch.service import _apply_task_launches
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
@@ -753,7 +753,7 @@ class TestApplyTaskLaunchesLabelOrdering:
         ]
 
     def test_failure_path_adds_new_status_before_removing_queued(self, tmp_path):
-        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.launch.service import _apply_task_launches
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
@@ -806,7 +806,7 @@ class TestApplyTaskLaunchesLabelOrdering:
 
 class TestApplyYamlErrorBlockingLabelOrdering:
     def test_adds_blocked_before_removing_queued(self, tmp_path):
-        from orchestune.dispatch.launch import _apply_yaml_error_blocking
+        from orchestune.dispatch.launch.service import _apply_yaml_error_blocking
 
         task = _task(1, subtask_id="task-1", yaml_error=True)
         config = DispatcherConfig(
@@ -841,7 +841,10 @@ class TestLaunchSelectedTasks:
     def test_launches_selected_task_via_launch_context(self, tmp_path):
         from unittest.mock import MagicMock
 
-        from orchestune.dispatch.launch import LaunchContext, _launch_selected_tasks
+        from orchestune.dispatch.launch.service import (
+            LaunchContext,
+            _launch_selected_tasks,
+        )
         from orchestune.dispatch.targets import (
             LocalProcessDispatchTarget,
             default_dry_run_command_builder,
@@ -889,7 +892,10 @@ class TestLaunchSelectedTasks:
         assert "1" in run_state.active_worktrees
 
     def test_blocks_yaml_error_candidate_not_included_in_selected(self, tmp_path):
-        from orchestune.dispatch.launch import LaunchContext, _launch_selected_tasks
+        from orchestune.dispatch.launch.service import (
+            LaunchContext,
+            _launch_selected_tasks,
+        )
 
         bad_task = _task(1, subtask_id="bad-task", yaml_error=True)
         config = DispatcherConfig(

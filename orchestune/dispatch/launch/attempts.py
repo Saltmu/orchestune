@@ -18,7 +18,7 @@ from orchestune.dispatch.attempt_record import (
     write_attempt,
 )
 from orchestune.dispatch.execution_profiles import resolve_task_execution_selection
-from orchestune.dispatch.launch_state import (
+from orchestune.dispatch.launch.state import (
     build_launch_record,
     launch_info_with_selection,
 )

@@ -60,10 +60,10 @@ from orchestune.dispatch.execution_repair import (
 from orchestune.dispatch.execution_repair import (
     skipped_repair as _skipped,
 )
-from orchestune.dispatch.launch_attempts import (
+from orchestune.dispatch.launch.attempts import (
     reconcile_attempt,
 )
-from orchestune.dispatch.launch_state import with_launch
+from orchestune.dispatch.launch.state import with_launch
 from orchestune.dispatch.recovery.counters import merged_recovery_counters
 from orchestune.dispatch.recovery.restoration import (
     _build_restored_active_worktree,

@@ -31,7 +31,6 @@ from orchestune.consistency.repairs.status import (
 )
 from orchestune.dependencies.resolution import build_legacy_dag_inputs
 from orchestune.dispatch import (
-    launch,
     phase_rebase,
     prior_parent_merge,
     rebase,
@@ -48,6 +47,7 @@ from orchestune.dispatch.gc import (
 from orchestune.dispatch.gc import rule_chain as dispatch_gc
 from orchestune.dispatch.gc import usage_limit as usage_limit_gc
 from orchestune.dispatch.gc.policy_effects import apply_effects
+from orchestune.dispatch.launch import service as launch
 from orchestune.dispatch.retry_policy import (
     RetryDisposition,
     RetryState,
@@ -217,13 +217,13 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
             "queued-and-blocked",
         ),
     ),
-    "dispatch/launch.py::_apply_yaml_error_blocking": (
+    "dispatch/launch/service.py::_apply_yaml_error_blocking": (
         _r(_E.BLOCK, _K.PLAIN, "queued", "replay", "stale-both"),
     ),
-    "dispatch/launch.py::_apply_invalid_footprint_blocking": (
+    "dispatch/launch/service.py::_apply_invalid_footprint_blocking": (
         _r(_E.ESCALATE, _K.PLAIN, "queued", "replay"),
     ),
-    "dispatch/launch.py::_handle_launch_failure": (
+    "dispatch/launch/service.py::_handle_launch_failure": (
         _r(
             _E.BLOCK,
             _K.PLAIN,
@@ -234,7 +234,7 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
         ),
         _r(_E.ESCALATE, _K.PLAIN, "invalid-after-claim", "invalid"),
     ),
-    "dispatch/launch.py::_record_successful_launch": (
+    "dispatch/launch/service.py::_record_successful_launch": (
         _r(
             _E.LAUNCH,
             _K.PLAIN,
@@ -245,7 +245,7 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
             "confirms-reservations",
         ),
     ),
-    "dispatch/launch_attempts.py::reconcile_attempt": (
+    "dispatch/launch/attempts.py::reconcile_attempt": (
         _r(
             _E.LAUNCH,
             _K.RECOVERY,

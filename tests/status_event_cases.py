@@ -387,7 +387,7 @@ def _completion_and_retry_cases() -> list[EventCase]:
             inputs=at_now,
         ),
         EventCase(
-            "dispatch/launch.py::_record_successful_launch",
+            "dispatch/launch/service.py::_record_successful_launch",
             "confirms-reservations",
             (Q,),
             launch_confirms_reservations,

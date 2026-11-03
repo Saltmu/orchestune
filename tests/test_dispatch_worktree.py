@@ -977,7 +977,7 @@ class TestLaunchAttributionPlumbing:
     def test_malformed_attribution_degrades_to_unknown_instead_of_raising(self):
         from types import SimpleNamespace
 
-        from orchestune.dispatch.launch import _launch_attribution
+        from orchestune.dispatch.launch.service import _launch_attribution
 
         bogus = SimpleNamespace(target_name=MagicMock(), log_path=3, log_offset=-1)
         assert _launch_attribution(bogus) == (None, None, None)

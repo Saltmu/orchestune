@@ -39,7 +39,7 @@ from orchestune.dispatch.gc.git import (
     backup_wip_commit,
     remove_worktree,
 )
-from orchestune.dispatch.launch_state import with_launch
+from orchestune.dispatch.launch.state import with_launch
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_lifecycle import ActiveWorktreeLifecycle, lifecycle

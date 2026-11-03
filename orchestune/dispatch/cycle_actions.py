@@ -59,7 +59,7 @@ from orchestune.dispatch.gc.rule_chain import (
     _rule_stale_entry_hold,
 )
 from orchestune.dispatch.gc.unclaimed import unclaimed_completion_events
-from orchestune.dispatch.launch import (
+from orchestune.dispatch.launch.service import (
     LaunchContext,
     _apply_duplicate_skip,
     _decide_duplicate_candidates,
@@ -314,7 +314,7 @@ class _DispatchClaimBaseView:
     claim_taskのpreflightを経由しても、既存の「stack-eligibleなstatus:blockedタスク」
     を誤って拒否しないために必要な最小限の橋渡しに留める（CycleContext自体の拡張は
     本Issueの対象外）。`parent_issue_number`は`config.parent_issue_number`という単一の
-    epicルートを返す — `orchestune.dispatch.launch._decide_task_launch_plan`の既存
+    epicルートを返す — `orchestune.dispatch.launch.service._decide_task_launch_plan`の既存
     フォールバックと同じ意味。
     """
 
@@ -340,7 +340,7 @@ def _bind_dispatch_claim_fn(
     config: DispatcherConfig, view: DependencyPolicyView
 ) -> Callable[[ClaimRequest, str], ClaimOutcome]:
     """#943: dispatchのlaunchフローから呼ぶ`claim_task`（owner_kind=dispatch）を
-    束縛する。`orchestune.claim.service`はL3、`orchestune.dispatch.launch`はL2
+    束縛する。`orchestune.claim.service`はL3、`orchestune.dispatch.launch.service`はL2
     のため、L2はこのcallableをDIで受け取るだけで`claim_task`を直接importしない
     （`tests/test_architecture.py`のレイヤー境界を参照）。
     """

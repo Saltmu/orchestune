@@ -11,8 +11,8 @@ from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.ledger.status_events import Event, ExecutionIdentity
 from tests.status_event_test_support import EVENT_BY_SOURCE
 
-_SUCCESSFUL_LAUNCH = "dispatch/launch.py::_record_successful_launch"
-_RECOVERED_LAUNCH = "dispatch/launch_attempts.py::reconcile_attempt"
+_SUCCESSFUL_LAUNCH = "dispatch/launch/service.py::_record_successful_launch"
+_RECOVERED_LAUNCH = "dispatch/launch/attempts.py::reconcile_attempt"
 _MANUAL_CLAIM = "claim/service.py::_apply_status_label"
 
 # Updating EVENT_BY_SOURCE requires reviewing the execution-protection contract
@@ -22,9 +22,9 @@ EXPECTED_SOURCES = frozenset(
     {
         "remediation/operations.py::ensure_initial_label",
         "claim/service.py::_apply_status_label",
-        "dispatch/launch.py::_apply_yaml_error_blocking",
-        "dispatch/launch.py::_apply_invalid_footprint_blocking",
-        "dispatch/launch.py::_handle_launch_failure",
+        "dispatch/launch/service.py::_apply_yaml_error_blocking",
+        "dispatch/launch/service.py::_apply_invalid_footprint_blocking",
+        "dispatch/launch/service.py::_handle_launch_failure",
         _SUCCESSFUL_LAUNCH,
         _RECOVERED_LAUNCH,
         "dispatch/reconciliation.py::_resolve_one_blocked_recompute_issue",

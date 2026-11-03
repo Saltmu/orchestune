@@ -13,7 +13,7 @@ This document describes the responsibilities and dependency rule of `ledger`, th
 - `ledger.active_records`: owns `ActiveWorktree` and its immutable structure. `ActiveWorktree` is the only in-memory source of truth, made of `core` plus three frozen subrecords (`launch`, `claim`, `completion`).
   - Historical flat attribute properties have been eliminated, and `slots=True` rejects stale writes or accesses.
   - `from_records()` is the typed nested construction path, while `with_core()` updates the shared fields; records are not stored twice.
-  - Owner fields are replaced only through their owner APIs: claim fields through `claim.ownership` (`build_claim_info()`, `with_claim()`), launch fields through `dispatch.launch_state` (`build_launch_record()`, `with_launch()`, `with_launch_phase()`), and completion fields through `complete.journal` (`active_completion_from_record()`, `with_completion()`).
+  - Owner fields are replaced only through their owner APIs: claim fields through `claim.ownership` (`build_claim_info()`, `with_claim()`), launch fields through `dispatch.launch.state` (`build_launch_record()`, `with_launch()`, `with_launch_phase()`), and completion fields through `complete.journal` (`active_completion_from_record()`, `with_completion()`).
   - For detailed specifications and lifecycle priority rules, see [Stateless CI & Self-Healing State Recovery (state-recovery.md)](state-recovery.md#active-worktree-lifecycle).
 - `ledger.active_codec`: explicit decoding and encoding of the established flat
   ActiveWorktree JSON shape. It preserves the field order and omission of a null

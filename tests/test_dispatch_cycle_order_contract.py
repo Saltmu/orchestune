@@ -37,7 +37,7 @@ from orchestune.dispatch.cycle_events import (
     WorktreeCompletion,
 )
 from orchestune.dispatch.cycle_report import CycleReport, build_event_log_entry
-from orchestune.dispatch.launch import TaskLaunchPlan, _record_successful_launch
+from orchestune.dispatch.launch.service import TaskLaunchPlan, _record_successful_launch
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
 from orchestune.dispatch.phase_scheduling import (
     SchedulingPhaseResult,
@@ -417,7 +417,7 @@ def test_successful_launch_partial_update_contract(
     label_error = RuntimeError("forge label failed")
     committed = MagicMock()
 
-    with patch("orchestune.dispatch.launch.save_run_state") as save:
+    with patch("orchestune.dispatch.launch.service.save_run_state") as save:
         if failure_surface == "run-state":
             save.side_effect = save_error
             expected = save_error

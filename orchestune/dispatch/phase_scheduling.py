@@ -27,7 +27,7 @@ from orchestune.dispatch.execution_profiles import (
     resolve_task_execution_selection,
 )
 from orchestune.dispatch.filters import _filter_deviation_blocked_candidates
-from orchestune.dispatch.launch import (
+from orchestune.dispatch.launch.service import (
     _get_stack_eligible_tasks,
     _is_task_stack_eligible,
 )
