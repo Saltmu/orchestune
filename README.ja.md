@@ -1,17 +1,44 @@
 # Orchestune
 
-> 承認済み親Issueの要件を保ったまま**未着手**の分解だけが陳腐化した場合、
-> `orchestune replan` は書き込みなしで置換世代をpreviewします。applyにはその
-> preview tokenが必須で、安全なqueued/blocked Issueだけを履歴を残して廃止します。
-> 初回のIssue作成は引き続き `orchestune provision` の責務です。
+**並列に動くAIコーディングエージェントの競合を、コードを書き始める前に検出し、すべてのタスクと結果をGitHub Issueで追跡するツールです。**
 
 [English](README.md) | [日本語](README.ja.md)
 
-⚠️ **β版**: Orchestuneの主要ワークフローは利用可能ですが、安定版までにAPI、CLIコマンド、ワークフローが変更される可能性があります。
+Orchestuneは、承認された分解計画を依存関係付きのGitHub Issueへ変換し、分離されたworktreeで動くエージェントの作業を調整します。ブランチ、プルリクエスト、CI結果は元のタスクに紐づきます。Claude Code、Codex CLI、AntigravityなどのAIコーディングアシスタント向けスキルとして動作します。
 
-**Orchestuneは、大きな開発タスクをAIエージェントに任せながら、すべてのサブタスク、依存関係、実行結果を追跡可能に保つための開発オーケストレーターです。**
+## 向いている用途
 
-承認された分解計画を依存関係付きのGitHub Issueへ変換し、複数のAIエージェントによる自律的な実装を協調します。生成されたブランチ、プルリクエスト、CI結果は元のタスクに紐づけられます。Orchestuneは**Agentic AI開発向けのスキル**（Claude Code、Codex CLI、Antigravityなど）として提供されます。
+複数モジュールにまたがる機能、共有インターフェースや依存関係のある変更、エージェント用スキル自体の開発に向いています。席を外している間もまとまった作業を進めたい個人開発者や少人数チームが対象です。
+
+簡単なWebアプリや、1回のプロンプトに収まる小さなタスクなら、エージェントに直接頼んだほうが速く、消費クオーターも少なくて済みます。作業同士の調整が必要になったときに、分解とディスパッチが役立ちます。
+
+## 実際の開発例
+
+Orchestune自身の[親Issue #1368](https://github.com/Saltmu/orchestune/issues/1368)では、CLIへのRich表示導入を**8つの子タスク**に分解しました。共通表示部品、status/doctor、dispatch進捗、provision、ライフサイクルコマンド、セットアップ、DAG/recovery/scratch、ルートhelp/READMEを分担しています。
+
+[最初の実装PR #1419](https://github.com/Saltmu/orchestune/pull/1419)の作成から[最終統合PR #1439](https://github.com/Saltmu/orchestune/pull/1439)のマージまでは、**約12時間41分**でした（UTCで2026-10-25 11:21〜2026-10-26 00:02）。待機を含む経過時間であり、エージェントの実行時間ではありません。
+
+通常のワークフローで人が判断するのは、分解計画の承認と最終PRのマージの2か所です。この実行では[統合中に人による復旧操作](https://github.com/Saltmu/orchestune/issues/1368#issuecomment-6398337132)も必要でした。
+
+## 最初の計画を試す
+
+Python 3.12以上、uv、認証済みのGitHub CLIを用意し、作業対象のリポジトリで実行します。
+
+```bash
+uv tool install "git+https://github.com/Saltmu/orchestune.git"
+orchestune skills install --target all --scope project
+orchestune config init
+```
+
+コーディングアシスタントに「この機能をorchestuneで分解し、計画の保存先を教えて」と依頼します。Issue起票やディスパッチを承認する前に、返された保存先で下の例のパスを置き換えて計画を検証します。
+
+```bash
+orchestune dag --plan "<saved-plan-path>"
+```
+
+実行前に[セットアップガイド](docs/ja/setup.md)で導入先リポジトリの前提条件を確認してください。他のインストール方法やエージェントの設定は、後述の[インストール方法](#インストール方法)を参照してください。
+
+⚠️ **β版**: 主要ワークフローは利用可能ですが、安定版までにAPI、CLIコマンド、ワークフローが変更される可能性があります。
 
 ## 主な機能
 
@@ -32,8 +59,6 @@
 ## 設計思想: クオーター効率
 
 Orchestuneは、AIコーディングエージェントを使う個人開発者と少人数チームのためのものです。ここでの希少資源は実時間ではなく、**AI利用クオーター（サブスクリプションのセッション/週次の使用枠）と、人間が席にいられる時間**です。
-
-小さなタスクなら、分解とディスパッチを経由するよりエージェントに直接頼んだほうが速く、消費クオーターも少なくて済みます。Orchestuneが割に合うのは、あなたが席を外している間も——夜間や、ステートレスなCIランナー上でも——走らせ続けたくなるだけの大きさを持ったタスクだけです。
 
 DAG検証も、GitHubからの状態自己修復も、人間の判断を2点に限る承認モデル（[アーキテクチャと設計思想](docs/ja/architecture.md)参照）も、すべて「無人で放置しても壊れない」ためだけに存在します。
 

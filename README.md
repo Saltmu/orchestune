@@ -1,18 +1,44 @@
 # Orchestune
 
-> When an approved parent Issue keeps its requirements but its **unstarted**
-> decomposition becomes stale, `orchestune replan` previews a replacement
-> generation without writes. Applying it requires the exact preview token and
-> retires only safe queued/blocked Issues, preserving the old Issues as history.
-> `orchestune provision` remains the initial Issue-creation command.
+**Detect conflicts between parallel AI coding agents before they write code, and keep every task and result traceable in GitHub Issues.**
 
 [English](README.md) | [日本語](README.ja.md)
 
-⚠️ **Beta**: Orchestune's core workflow is operational, but APIs, CLI commands, and workflows may still change before the stable release.
+Orchestune turns an approved decomposition plan into dependency-aware GitHub Issues, coordinates agents in isolated worktrees, and links their branches, pull requests, and CI results back to the original task. It runs as a skill for AI coding assistants such as Claude Code, Codex CLI, and Antigravity.
 
-**Orchestune lets you delegate large development tasks to AI agents while keeping every subtask, dependency, and result traceable.**
+## Is it for you?
 
-It turns an approved decomposition plan into dependency-aware GitHub Issues, coordinates autonomous implementation by multiple agents, and links the resulting branches, pull requests, and CI outcomes back to the original task. Orchestune is provided as a **Skill for Agentic AI development** (e.g., Claude Code, Codex CLI, and Antigravity).
+Use Orchestune for features spanning multiple modules, changes with shared interfaces or dependencies, or development of the agent skills themselves. It suits individual developers and small teams who want substantial work to continue while they are away.
+
+For a simple web app or a small task that fits in one prompt, asking an agent directly is faster and uses less quota. Decomposition and dispatch become useful when coordinating the work is itself a problem.
+
+## One real development run
+
+In Orchestune itself, [parent Issue #1368](https://github.com/Saltmu/orchestune/issues/1368) split the Rich CLI rollout into **8 child tasks**: shared output primitives, status/doctor, dispatch progress, provision, lifecycle commands, setup commands, DAG/recovery/scratch, and root help/README.
+
+From the creation of the [first implementation PR #1419](https://github.com/Saltmu/orchestune/pull/1419) to the merge of the [final integration PR #1439](https://github.com/Saltmu/orchestune/pull/1439), the run spanned **about 12 hours 41 minutes** (2026-10-25 11:21 to 2026-10-26 00:02 UTC). This is elapsed time, including waits, rather than agent execution time.
+
+The normal workflow has two human decision points: approve the decomposition and merge the final PR. This run also needed [operator recovery during integration](https://github.com/Saltmu/orchestune/issues/1368#issuecomment-6398337132).
+
+## Try your first plan
+
+With Python 3.12+, uv, and an authenticated GitHub CLI available, run these commands in the repository you want to work on:
+
+```bash
+uv tool install "git+https://github.com/Saltmu/orchestune.git"
+orchestune skills install --target all --scope project
+orchestune config init
+```
+
+Ask your coding assistant: “Use orchestune to decompose this feature and tell me the saved plan path.” Then validate it before approving Issue creation or dispatch, replacing the example path below with the path returned by the assistant:
+
+```bash
+orchestune dag --plan "<saved-plan-path>"
+```
+
+Check the repository prerequisites in the [Setup Guide](docs/en/setup.md) before proceeding. See [Installation](#installation) below for other installation options and agent configuration.
+
+⚠️ **Beta**: The core workflow is operational, but APIs, CLI commands, and workflows may change before the stable release.
 
 ## Key Features
 
@@ -33,8 +59,6 @@ It turns an approved decomposition plan into dependency-aware GitHub Issues, coo
 ## Design Philosophy: Quota Efficiency
 
 Orchestune is for individual developers and small teams working with AI coding agents. The scarce resource here is not wall-clock time — it is **your AI usage quota (a subscription's session/weekly allowance) and the hours a human can actually be at the desk.**
-
-For a small task, asking an agent directly is faster and cheaper than going through decomposition and dispatch. Orchestune pays for itself only on tasks large enough that you want them to keep running while you are away — overnight, or on a stateless CI runner.
 
 DAG validation, self-healing state recovery from GitHub, and the two-gate human approval model (see [Architecture & Design](docs/en/architecture.md)) all exist for one reason: so the pipeline holds together when nobody is watching.
 
