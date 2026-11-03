@@ -28,6 +28,7 @@ from orchestune.provisioning.rendering import (
     _subtask_id_from_body,
     validate_template_identity_marker,
 )
+from tests.test_issue_parsing import SUBTASK_ID_CASES
 from tests.test_provisioning_support import (
     _PLAN,
     _TEMPLATE,
@@ -1036,3 +1037,8 @@ class TestMainPlainErrorOutput:
             and node.func.id == "print"
         ]
         assert prints == []
+
+
+@pytest.mark.parametrize(("body", "expected"), SUBTASK_ID_CASES)
+def test_private_subtask_id_wrapper_keeps_the_public_contract(body, expected):
+    assert _subtask_id_from_body(body) == expected

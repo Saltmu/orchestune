@@ -621,11 +621,17 @@ def _rule_footprint_deviation(
     if not deviated:
         return ActiveWorktreeRuleOutcome(terminal=True)
 
+    tasks = ctx.queries.tasks()
+    tasks_by_issue = {task.issue_number: task for task in tasks}
+    # footprint逸脱時に対象Issueを遷移させるための逆引き。表示用ではない。
+    issue_number_by_subtask_id = {
+        task.subtask_id: task.issue_number for task in tasks if task.subtask_id
+    }
     event = _handle_footprint_deviation(
         active,
         deviated,
-        ctx.tasks_by_issue,
-        ctx.issue_number_by_subtask_id,
+        tasks_by_issue,
+        issue_number_by_subtask_id,
         ctx.config,
         ctx.dag_inputs,
     )

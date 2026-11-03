@@ -14,6 +14,7 @@ from orchestune.dag.symbol_verification import find_missing_symbols
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     parent_issue_number_from_body,
+    subtask_id_from_body,
 )
 from orchestune.labels import StatusLabel
 from orchestune.plan_identity import PlanGeneration
@@ -156,17 +157,7 @@ _build_subtask_issue_body = build_subtask_issue_body
 
 
 def _subtask_id_from_body(body: str) -> str | None:
-    match = FOOTPRINT_BLOCK_PATTERN.search(body or "")
-    if not match:
-        return None
-    try:
-        data = yaml.safe_load(match.group(1))
-    except yaml.YAMLError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    subtask_id = data.get("subtask_id")
-    return str(subtask_id) if subtask_id else None
+    return subtask_id_from_body(body)
 
 
 def _depends_on_from_body(body: str) -> tuple[str, ...]:

@@ -287,6 +287,25 @@ def _validated_parent_issue_number(value: object) -> int | None:
     return None
 
 
+def subtask_id_from_body(body: str) -> str | None:
+    """Footprint YAMLフェンスの`subtask_id`を文字列で返す（無い/不正ならNone）。
+
+    最初のYAMLフェンスだけを見る。空・null・false・0のidはNoneとし、
+    それ以外は`str(value)`をそのまま返す（空白は取り除かない）。
+    """
+    match = FOOTPRINT_BLOCK_PATTERN.search(body or "")
+    if not match:
+        return None
+    try:
+        data = yaml.load(match.group(1), Loader=yaml.SafeLoader)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    subtask_id = data.get("subtask_id")
+    return str(subtask_id) if subtask_id else None
+
+
 def parent_issue_number_from_body(body: str) -> int | None:
     """#485: ネイティブSub-issue関係が使えない環境向けに、Footprint YAML
     フェンスへ永続化された`parent_issue_number`を読み取るフォールバック。

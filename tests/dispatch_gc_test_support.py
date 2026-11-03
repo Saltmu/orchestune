@@ -161,8 +161,6 @@ def _rule_ctx(*, forge=None, **overrides):
         prs=tuple(prs),
         not_needed_review_dispatcher=query.not_needed_review_dispatcher,
         issue_records_by_number=overrides.get("issue_records_by_number", {}),
-        tasks_by_issue=tasks_by_issue,
-        issue_number_by_subtask_id=overrides.get("issue_number_by_subtask_id", {}),
     )
 
 

@@ -15,13 +15,13 @@ from orchestune.issue_parsing import (
     parent_issue_number_from_body,
     parse_footprint_block,
     parse_task_from_issue,
+    subtask_id_from_body,
 )
 from orchestune.models import IssueRecord
 from orchestune.provisioning.plan_manifest import (
     project_plan_manifest,
     project_single_subtask,
 )
-from orchestune.provisioning.rendering import _subtask_id_from_body
 from orchestune.remediation.models import RemediationTask
 from orchestune.remediation.preview import _record, expected_footprint
 
@@ -94,7 +94,7 @@ def validate_registered_body(
     parsed = parse_task_from_issue(issue)
     expected = task.subtask
     if (
-        _subtask_id_from_body(issue.body) != expected.id
+        subtask_id_from_body(issue.body) != expected.id
         or parent_issue_number_from_body(issue.body) != parent
         or parsed.yaml_error
         or parsed.footprint_error

@@ -14,7 +14,7 @@ import pytest
 from orchestune.dag.cli import _build_parser as _build_dag_arg_parser
 from orchestune.dag.contracts import _SHARED_CONTRACT_PATTERNS
 from orchestune.dag.models import DAG_TOOL_CONFIG_KEYS
-from orchestune.dag.parsing import _parse_subtask
+from orchestune.dag.parsing import parse_subtask
 from orchestune.dispatch.dispatcher import _build_arg_parser
 from orchestune.provisioning.cli import _build_arg_parser as _build_provision_arg_parser
 
@@ -132,8 +132,8 @@ def _schema_bullet_block(lang: str, field: str) -> str:
 
 
 def _supported_plan_fields() -> set[str]:
-    """`_parse_subtask` のソースから、受理される計画フィールド名を抽出する。"""
-    source = inspect.getsource(_parse_subtask)
+    """`parse_subtask` のソースから、受理される計画フィールド名を抽出する。"""
+    source = inspect.getsource(parse_subtask)
     fields = set(re.findall(r"""raw\.get\(\s*["']([a-z_]+)["']""", source))
     fields |= set(re.findall(r"""raw\[\s*["']([a-z_]+)["']\s*\]""", source))
     return fields - _RETIRED_PLAN_FIELDS
@@ -291,7 +291,7 @@ class TestDagConfigFileDocsConsistency:
 
 
 class TestDocsSchemaConsistency:
-    """#272: `_parse_subtask` がサポートするフィールドとUsageの乖離を検知する。"""
+    """#272: `parse_subtask` がサポートするフィールドとUsageの乖離を検知する。"""
 
     @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
     def test_all_supported_fields_are_documented(self, lang):

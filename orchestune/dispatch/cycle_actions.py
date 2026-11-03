@@ -461,16 +461,9 @@ class CycleActionAdapter:
             issue_records_by_number={
                 record.number: record for record in view.issue_records()
             },
-            tasks_by_issue={task.issue_number: task for task in view.tasks()},
             dag_inputs=view.dag_inputs(
                 tuple(task.issue_number for task in view.tasks())
             ),
-            # footprint逸脱時に対象Issueを遷移させるための逆引き。表示用ではない。
-            issue_number_by_subtask_id={
-                task.subtask_id: task.issue_number
-                for task in view.tasks()
-                if task.subtask_id
-            },
         )
 
     def process_active_worktrees(self) -> ActivePhaseResult:

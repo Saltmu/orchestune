@@ -170,8 +170,6 @@ PRODUCTION_EXCEPTIONS = frozenset(
                 ("_prepare_wip_backup_for_rebase", "run_state"),
                 ("_handle_rebase_failure", "run_state"),
                 ("_rule_auto_rebase", "run_state"),
-                ("_rule_footprint_deviation", "tasks_by_issue"),
-                ("_rule_footprint_deviation", "issue_number_by_subtask_id"),
             }
         },
         *{
