@@ -81,6 +81,10 @@ class LocalUsageProvider:
     def __init__(self, log_dir: str | Path):
         self._log_dir = Path(log_dir)
 
+    @property
+    def log_dir(self) -> Path:
+        return self._log_dir
+
     def collect_usage(self, handle: DispatchHandle) -> Usage | None:
         if not handle.branch_name:
             return None

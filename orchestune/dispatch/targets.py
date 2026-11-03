@@ -27,6 +27,10 @@ from orchestune.dispatch.reviewer import (
     resolve_reviewer_bot,
 )
 from orchestune.forge import Forge
+from orchestune.infra.detached_process import (
+    DetachedProcessStarter,
+    start_detached_process,
+)
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.targets.cloud_routine import (
@@ -250,12 +254,23 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
         local_cmd: str | None = None,
         reviewer_bot: ReviewerBot | None = None,
         target_name: str | None = None,
+        *,
+        start_process: DetachedProcessStarter = start_detached_process,
     ):
+        super().__init__(log_dir=log_dir)
         self._command_builder = command_builder
-        self._log_dir = Path(log_dir)
         self._local_cmd = local_cmd
         self._reviewer_bot = reviewer_bot
         self.target_name = target_name
+        self._start_process = start_process
+
+    @property
+    def local_cmd(self) -> str | None:
+        return self._local_cmd
+
+    @property
+    def start_process(self) -> DetachedProcessStarter:
+        return self._start_process
 
     def _resolve_command(
         self,
@@ -298,28 +313,23 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
         execution_selection: ExecutionSelection | None = None,
         base_branch: str | None = None,
     ) -> DispatchHandle:
-        self._log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
         cmd = self._resolve_command(
             task, branch_name, worktree_path, execution_selection, base_branch
         )
         slug = branch_name.replace("/", "-")
-        log_path = self._log_dir / f"{slug}.log"
-        with open(log_path, "ab") as log_fh:
-            # Append mode: this run owns the bytes written after the current end.
-            log_offset = log_fh.tell()
-            process = subprocess.Popen(
-                cmd,
-                cwd=str(worktree_path),
-                stdout=log_fh,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
+        log_path = self.log_dir / f"{slug}.log"
+        proc = self._start_process(
+            cmd,
+            cwd=worktree_path,
+            log_path=log_path,
+        )
         return DispatchHandle(
-            pid=process.pid,
+            pid=proc.pid,
             branch_name=branch_name,
             target_name=self.target_name,
-            log_path=str(log_path),
-            log_offset=log_offset,
+            log_path=str(proc.log_path),
+            log_offset=proc.log_offset,
         )
 
     def is_complete(self, handle: DispatchHandle, forge: Forge | None = None) -> bool:

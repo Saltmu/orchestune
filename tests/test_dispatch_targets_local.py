@@ -1,4 +1,5 @@
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -12,6 +13,7 @@ from orchestune.dispatch.targets import (
     _local_cli_name,
     default_dry_run_command_builder,
 )
+from orchestune.infra.detached_process import DetachedProcess
 from orchestune.models import Task
 from orchestune.task_metadata import TaskMetadata
 
@@ -105,54 +107,81 @@ class TestDispatchTargetContract:
 
 class TestLocalProcessDispatchTarget:
     def test_launch_starts_subprocess_and_returns_pid(self, tmp_path):
-        target = LocalProcessDispatchTarget(
-            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        mock_start = MagicMock(
+            return_value=DetachedProcess(
+                pid=4_204_242,
+                log_path=tmp_path / "logs" / "claude-issue-1-task-a.log",
+                log_offset=0,
+            )
         )
-        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 4_204_242
-            handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
+        target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder,
+            log_dir=tmp_path / "logs",
+            start_process=mock_start,
+        )
+        handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
 
         assert handle.pid == 4_204_242
         assert handle.external_id is None
         assert handle.branch_name == "claude/issue-1-task-a"
-        assert mock_popen.call_args.kwargs["cwd"] == str(tmp_path / "wt")
+        assert mock_start.call_args.kwargs["cwd"] == tmp_path / "wt"
 
     def test_launch_creates_log_file_under_log_dir(self, tmp_path):
         log_dir = tmp_path / "logs"
+
+        def _fake_start(args, *, cwd, log_path):
+            Path(log_path).touch()
+            return DetachedProcess(pid=4_200_001, log_path=Path(log_path), log_offset=0)
+
         target = LocalProcessDispatchTarget(
-            default_dry_run_command_builder, log_dir=log_dir
+            default_dry_run_command_builder,
+            log_dir=log_dir,
+            start_process=_fake_start,
         )
-        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 4_200_001
-            target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
+        target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
         assert (log_dir / "claude-issue-1-task-a.log").exists()
 
     def test_launch_records_target_log_path_and_start_offset(self, tmp_path):
         log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        log_path = log_dir / "claude-issue-1-task-a.log"
+        log_path.write_bytes(b"previous run error\n")
+        offset = len(b"previous run error\n")
+        mock_start = MagicMock(
+            return_value=DetachedProcess(
+                pid=4_200_007,
+                log_path=log_path,
+                log_offset=offset,
+            )
+        )
         target = LocalProcessDispatchTarget(
             default_dry_run_command_builder,
             log_dir=log_dir,
             target_name="claude-cli",
+            start_process=mock_start,
         )
-        log_dir.mkdir()
-        log_path = log_dir / "claude-issue-1-task-a.log"
-        log_path.write_bytes(b"previous run error\n")
-        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 4_200_007
-            handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
+        handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
 
         assert handle.target_name == "claude-cli"
         assert handle.log_path == str(log_path)
         # The appended log keeps earlier runs: the new run starts after them.
-        assert handle.log_offset == len(b"previous run error\n")
+        assert handle.log_offset == offset
 
     def test_launch_of_a_fresh_log_starts_at_offset_zero(self, tmp_path):
-        target = LocalProcessDispatchTarget(
-            default_dry_run_command_builder, log_dir=tmp_path / "logs"
+        log_path = tmp_path / "logs" / "claude-issue-1-task-a.log"
+        mock_start = MagicMock(
+            return_value=DetachedProcess(
+                pid=4_200_007,
+                log_path=log_path,
+                log_offset=0,
+            )
         )
-        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 4_200_007
-            handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
+        target = LocalProcessDispatchTarget(
+            default_dry_run_command_builder,
+            log_dir=tmp_path / "logs",
+            start_process=mock_start,
+        )
+        handle = target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
 
         assert handle.log_offset == 0
         assert handle.target_name is None
@@ -176,20 +205,26 @@ class TestLocalProcessDispatchTarget:
             assert target.is_complete(DispatchHandle(pid=4_200_123)) is False
 
     def test_launch_with_local_cmd_templates(self, tmp_path):
+        mock_start = MagicMock(
+            return_value=DetachedProcess(
+                pid=4_209_999,
+                log_path=tmp_path / "logs" / "claude-issue-42-sub-x.log",
+                log_offset=0,
+            )
+        )
         target = LocalProcessDispatchTarget(
             log_dir=tmp_path / "logs",
             local_cmd="agy --issue {issue_number} --subtask '{subtask_id}' --branch {branch_name} --path {worktree_path}",
+            start_process=mock_start,
         )
-        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 4_209_999
-            target.launch(
-                _task(issue_number=42, subtask_id="sub-x"),
-                "claude/issue-42-sub-x",
-                tmp_path / "wt",
-            )
+        target.launch(
+            _task(issue_number=42, subtask_id="sub-x"),
+            "claude/issue-42-sub-x",
+            tmp_path / "wt",
+        )
 
-        mock_popen.assert_called_once()
-        args, _ = mock_popen.call_args
+        mock_start.assert_called_once()
+        args, _ = mock_start.call_args
         cmd = args[0]
         assert cmd == [
             "agy",
@@ -204,16 +239,22 @@ class TestLocalProcessDispatchTarget:
         ]
 
     def test_launch_replaces_reviewer_bot_placeholder(self, tmp_path):
+        mock_start = MagicMock(
+            return_value=DetachedProcess(
+                pid=4_209_999,
+                log_path=tmp_path / "logs" / "agent-issue-42.log",
+                log_offset=0,
+            )
+        )
         target = LocalProcessDispatchTarget(
             log_dir=tmp_path / "logs",
             local_cmd="runner --reviewer {reviewer_bot} --issue {issue_number}",
             reviewer_bot="codex",
+            start_process=mock_start,
         )
-        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 4_209_999
-            target.launch(_task(issue_number=42), "agent/issue-42", tmp_path / "wt")
+        target.launch(_task(issue_number=42), "agent/issue-42", tmp_path / "wt")
 
-        assert mock_popen.call_args.args[0] == [
+        assert mock_start.call_args.args[0] == [
             "runner",
             "--reviewer",
             "codex",
@@ -222,20 +263,26 @@ class TestLocalProcessDispatchTarget:
         ]
 
     def test_launch_replaces_base_branch_placeholder(self, tmp_path):
+        mock_start = MagicMock(
+            return_value=DetachedProcess(
+                pid=4_209_999,
+                log_path=tmp_path / "logs" / "agent-issue-42.log",
+                log_offset=0,
+            )
+        )
         target = LocalProcessDispatchTarget(
             log_dir=tmp_path / "logs",
             local_cmd="runner --base {base_branch} --issue {issue_number}",
+            start_process=mock_start,
         )
-        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 4_209_999
-            target.launch(
-                _task(issue_number=42),
-                "agent/issue-42",
-                tmp_path / "wt",
-                base_branch="parent/issue-700",
-            )
+        target.launch(
+            _task(issue_number=42),
+            "agent/issue-42",
+            tmp_path / "wt",
+            base_branch="parent/issue-700",
+        )
 
-        assert mock_popen.call_args.args[0] == [
+        assert mock_start.call_args.args[0] == [
             "runner",
             "--base",
             "parent/issue-700",
@@ -244,15 +291,21 @@ class TestLocalProcessDispatchTarget:
         ]
 
     def test_launch_defaults_base_branch_to_main_when_unspecified(self, tmp_path):
+        mock_start = MagicMock(
+            return_value=DetachedProcess(
+                pid=4_209_999,
+                log_path=tmp_path / "logs" / "agent-issue-42.log",
+                log_offset=0,
+            )
+        )
         target = LocalProcessDispatchTarget(
             log_dir=tmp_path / "logs",
             local_cmd="runner --base {base_branch} --issue {issue_number}",
+            start_process=mock_start,
         )
-        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 4_209_999
-            target.launch(_task(issue_number=42), "agent/issue-42", tmp_path / "wt")
+        target.launch(_task(issue_number=42), "agent/issue-42", tmp_path / "wt")
 
-        assert mock_popen.call_args.args[0] == [
+        assert mock_start.call_args.args[0] == [
             "runner",
             "--base",
             "main",
@@ -265,15 +318,21 @@ class TestLocalProcessDispatchTarget:
         assert "--verbose" in CLAUDE_CLI_LOCAL_CMD_TEMPLATE
 
     def test_launch_claude_cli_includes_verbose_flag(self, tmp_path):
+        mock_start = MagicMock(
+            return_value=DetachedProcess(
+                pid=4_209_999,
+                log_path=tmp_path / "logs" / "claude-issue-42.log",
+                log_offset=0,
+            )
+        )
         target = LocalProcessDispatchTarget(
             log_dir=tmp_path / "logs",
             local_cmd=CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
+            start_process=mock_start,
         )
-        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 4_209_999
-            target.launch(_task(issue_number=42), "claude/issue-42", tmp_path / "wt")
+        target.launch(_task(issue_number=42), "claude/issue-42", tmp_path / "wt")
 
-        cmd = mock_popen.call_args.args[0]
+        cmd = mock_start.call_args.args[0]
         assert "--verbose" in cmd
         assert "--output-format" in cmd
         assert "stream-json" in cmd
@@ -285,9 +344,17 @@ class TestLocalProcessDispatchTarget:
 
         from orchestune.dispatch.execution_profiles import ExecutionSelection
 
+        mock_start = MagicMock(
+            return_value=DetachedProcess(
+                pid=4_201_001,
+                log_path=tmp_path / "logs" / "claude-issue-1-task-a.log",
+                log_offset=0,
+            )
+        )
         target = LocalProcessDispatchTarget(
             log_dir=tmp_path / "logs",
             local_cmd=CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
+            start_process=mock_start,
         )
         selection = ExecutionSelection(
             profile="deep",
@@ -295,11 +362,7 @@ class TestLocalProcessDispatchTarget:
             reasoning_effort="high",
             reason="test",
         )
-        with (
-            caplog.at_level(logging.WARNING),
-            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
-        ):
-            mock_popen.return_value.pid = 4_201_001
+        with caplog.at_level(logging.WARNING):
             target.launch(
                 _task(),
                 "claude/issue-1-task-a",
@@ -307,7 +370,7 @@ class TestLocalProcessDispatchTarget:
                 execution_selection=selection,
             )
 
-        cmd = mock_popen.call_args[0][0]
+        cmd = mock_start.call_args[0][0]
         assert "--model" in cmd
         model_idx = cmd.index("--model")
         assert cmd[model_idx + 1] == "claude-3-7-sonnet-20250219"
@@ -322,9 +385,17 @@ class TestLocalProcessDispatchTarget:
 
         from orchestune.dispatch.execution_profiles import ExecutionSelection
 
+        mock_start = MagicMock(
+            return_value=DetachedProcess(
+                pid=4_201_002,
+                log_path=tmp_path / "logs" / "claude-issue-1-task-a.log",
+                log_offset=0,
+            )
+        )
         target = LocalProcessDispatchTarget(
             log_dir=tmp_path / "logs",
             local_cmd=AGY_CLI_LOCAL_CMD_TEMPLATE,
+            start_process=mock_start,
         )
         selection = ExecutionSelection(
             profile="balanced",
@@ -332,11 +403,7 @@ class TestLocalProcessDispatchTarget:
             reasoning_effort="medium",
             reason="test",
         )
-        with (
-            caplog.at_level(logging.WARNING),
-            patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
-        ):
-            mock_popen.return_value.pid = 4_201_002
+        with caplog.at_level(logging.WARNING):
             target.launch(
                 _task(),
                 "claude/issue-1-task-a",
@@ -344,7 +411,7 @@ class TestLocalProcessDispatchTarget:
                 execution_selection=selection,
             )
 
-        cmd = mock_popen.call_args[0][0]
+        cmd = mock_start.call_args[0][0]
         assert "--model" in cmd
         model_idx = cmd.index("--model")
         assert cmd[model_idx + 1] == "gemini-2.5-pro"
@@ -355,9 +422,17 @@ class TestLocalProcessDispatchTarget:
     ):
         from orchestune.dispatch.execution_profiles import ExecutionSelection
 
+        mock_start = MagicMock(
+            return_value=DetachedProcess(
+                pid=4_201_003,
+                log_path=tmp_path / "logs" / "claude-issue-1-task-a.log",
+                log_offset=0,
+            )
+        )
         target = LocalProcessDispatchTarget(
             log_dir=tmp_path / "logs",
             local_cmd=CODEX_CLI_LOCAL_CMD_TEMPLATE,
+            start_process=mock_start,
         )
         selection = ExecutionSelection(
             profile="deep",
@@ -365,16 +440,14 @@ class TestLocalProcessDispatchTarget:
             reasoning_effort="high",
             reason="test",
         )
-        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 4_201_003
-            target.launch(
-                _task(),
-                "claude/issue-1-task-a",
-                tmp_path / "wt",
-                execution_selection=selection,
-            )
+        target.launch(
+            _task(),
+            "claude/issue-1-task-a",
+            tmp_path / "wt",
+            execution_selection=selection,
+        )
 
-        cmd = mock_popen.call_args[0][0]
+        cmd = mock_start.call_args[0][0]
         assert "--model" in cmd
         model_idx = cmd.index("--model")
         assert cmd[model_idx + 1] == "o3-mini"
@@ -387,9 +460,17 @@ class TestLocalProcessDispatchTarget:
     ):
         from orchestune.dispatch.execution_profiles import ExecutionSelection
 
+        mock_start = MagicMock(
+            return_value=DetachedProcess(
+                pid=4_201_004,
+                log_path=tmp_path / "logs" / "claude-issue-55-task-a.log",
+                log_offset=0,
+            )
+        )
         target = LocalProcessDispatchTarget(
             log_dir=tmp_path / "logs",
             local_cmd="custom-runner --model {model} --effort {reasoning_effort} --profile {profile} --issue {issue_number}",
+            start_process=mock_start,
         )
         selection = ExecutionSelection(
             profile="fast",
@@ -397,16 +478,14 @@ class TestLocalProcessDispatchTarget:
             reasoning_effort="low",
             reason="test",
         )
-        with patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen:
-            mock_popen.return_value.pid = 4_201_004
-            target.launch(
-                _task(issue_number=55),
-                "claude/issue-55-task-a",
-                tmp_path / "wt",
-                execution_selection=selection,
-            )
+        target.launch(
+            _task(issue_number=55),
+            "claude/issue-55-task-a",
+            tmp_path / "wt",
+            execution_selection=selection,
+        )
 
-        cmd = mock_popen.call_args[0][0]
+        cmd = mock_start.call_args[0][0]
         assert cmd == [
             "custom-runner",
             "--model",
@@ -418,6 +497,15 @@ class TestLocalProcessDispatchTarget:
             "--issue",
             "55",
         ]
+
+    def test_local_process_dispatch_target_properties(self, tmp_path):
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            local_cmd="my-cmd",
+        )
+        assert target.log_dir == tmp_path / "logs"
+        assert target.local_cmd == "my-cmd"
+        assert callable(target.start_process)
 
 
 class TestFormatLocalCmdEffort:

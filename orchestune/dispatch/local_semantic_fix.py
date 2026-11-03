@@ -2,14 +2,30 @@
 
 from __future__ import annotations
 
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
+from orchestune.infra.detached_process import DetachedProcessStarter
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.targets.contracts import DispatchHandle
+
+
+class LocalSemanticFixTarget(Protocol):
+    """Protocol for targets capable of launching a local semantic fix agent."""
+
+    @property
+    def log_dir(self) -> Path: ...
+
+    @property
+    def local_cmd(self) -> str | None: ...
+
+    @property
+    def target_name(self) -> str | None: ...
+
+    @property
+    def start_process(self) -> DetachedProcessStarter: ...
 
 
 def build_local_semantic_fix_cmd(
@@ -116,7 +132,7 @@ def cleanup_semantic_fix_worktree(
 
 
 def launch_local_semantic_fix(
-    target: Any,
+    target: LocalSemanticFixTarget,
     operation_id: str,
     prompt: str,
     expected_head_sha: str | None = None,
@@ -125,10 +141,10 @@ def launch_local_semantic_fix(
     worktree_root: Path | None = None,
 ) -> DispatchHandle | None:
     """Launch a semantic fix agent on a local CLI target."""
-    if getattr(target, "_local_cmd", None) is not None:
+    if target.local_cmd is not None:
         return None
 
-    target_name = getattr(target, "target_name", None) or ""
+    target_name = target.target_name or ""
     cmd = build_local_semantic_fix_cmd(target_name, prompt=prompt)
     if cmd is None:
         return None
@@ -144,28 +160,20 @@ def launch_local_semantic_fix(
         input_sha=input_sha,
     )
 
-    log_dir = getattr(target, "_log_dir", Path("logs"))
+    log_dir = target.log_dir
     log_dir.mkdir(parents=True, exist_ok=True)
     slug = f"semantic-fix-{operation_id}"
     log_path = log_dir / f"{slug}.log"
     try:
-        with open(log_path, "ab") as log_fh:
-            log_offset = log_fh.tell()
-            process = subprocess.Popen(
-                cmd,
-                cwd=str(wt_path),
-                stdout=log_fh,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
+        proc = target.start_process(cmd, cwd=wt_path, log_path=log_path)
     except Exception:
         cleanup_semantic_fix_worktree(wt_path, repo_root=resolved_repo_root)
         raise
 
     return DispatchHandle(
-        pid=process.pid,
+        pid=proc.pid,
         branch_name=f"semantic-fix-{operation_id}",
         target_name=target.target_name,
-        log_path=str(log_path),
-        log_offset=log_offset,
+        log_path=str(proc.log_path),
+        log_offset=proc.log_offset,
     )
