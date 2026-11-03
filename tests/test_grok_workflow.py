@@ -20,12 +20,20 @@ def _steps():
     return _job()["steps"]
 
 
-def test_grok_workflow_triggers_only_on_comment_creation():
+def test_grok_workflow_triggers_only_on_normal_pr_comment_creation():
     triggers = _load_workflow()[True]  # PyYAML parses the bare `on` key as True
 
-    assert set(triggers) == {"issue_comment", "pull_request_review_comment"}
+    # Inline review comments are excluded: fork PR review-comment runs get no
+    # secrets, so the API step could not run (issue #1599, PR #1608 review).
+    assert set(triggers) == {"issue_comment"}
     assert triggers["issue_comment"] == {"types": ["created"]}
-    assert triggers["pull_request_review_comment"] == {"types": ["created"]}
+
+
+def test_grok_workflow_ignores_inline_review_comments():
+    condition = _job()["if"]
+
+    assert "pull_request_review_comment" not in str(_load_workflow())
+    assert "pull_request_review_comment" not in condition
 
 
 def test_grok_workflow_does_not_run_on_pull_request_or_push():

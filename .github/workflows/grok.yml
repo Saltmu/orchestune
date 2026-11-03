@@ -4,11 +4,15 @@
 #   - secret XAI_API_KEY: xAI API key
 #   - variable XAI_MODEL: xAI model name to use for the review
 #
-# A user with write (or higher) permission writes `@grok review` in a PR comment
-# (a normal PR comment or an inline review comment). The workflow sends the PR
-# diff to xAI's OpenAI-compatible chat completions API and posts the answer as a
-# PR review comment. It never checks out the repository, so code from a PR (or a
-# fork) is never executed here; the diff is only read as text.
+# A user with write (or higher) permission writes `@grok review` in a normal PR
+# comment. The workflow sends the PR diff to xAI's OpenAI-compatible chat
+# completions API and posts the answer as a PR review comment. It never checks
+# out the repository, so code from a PR (or a fork) is never executed here; the
+# diff is only read as text.
+#
+# Inline review comments are not a trigger: GitHub withholds secrets from
+# `pull_request_review_comment` runs of fork PRs, so they could not reach the API
+# (issue #1599, review finding on PR #1608).
 #
 # Event values are passed to steps through `env:`, never interpolated into `run:`.
 
@@ -16,8 +20,6 @@ name: Grok Review
 
 on:
   issue_comment:
-    types: [created]
-  pull_request_review_comment:
     types: [created]
 
 permissions: {}
@@ -30,10 +32,7 @@ jobs:
   grok-review:
     if: |
       contains(github.event.comment.body, '@grok review') &&
-      (
-        github.event_name == 'pull_request_review_comment' ||
-        github.event.issue.pull_request
-      ) &&
+      github.event.issue.pull_request &&
       !endsWith(github.actor, '[bot]') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
