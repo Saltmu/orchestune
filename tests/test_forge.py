@@ -21,7 +21,12 @@ from orchestune.forge import (
     RepoAdminForge,
 )
 from orchestune.forge.admin import GitHubRepoAdminMixin
+from orchestune.forge.graphql_fallback import GraphQLFallbackMixin
+from orchestune.forge.issue_comments import GitHubIssueCommentMixin
+from orchestune.forge.issue_relationships import GitHubIssueRelationshipMixin
 from orchestune.forge.issues import GitHubIssueMixin
+from orchestune.forge.pr_merge_state import GitHubPullRequestMergeStateMixin
+from orchestune.forge.pr_reviews import GitHubPullRequestReviewMixin
 from orchestune.forge.prs import GitHubPullRequestMixin
 from orchestune.integrator.types import IntegratorConfig
 from orchestune.models import IssueRecord
@@ -323,6 +328,114 @@ class TestForgeProtocols:
         assert issubclass(GitHubForge, GitHubIssueMixin)
         assert issubclass(GitHubForge, GitHubPullRequestMixin)
         assert issubclass(GitHubForge, GitHubRepoAdminMixin)
+        assert issubclass(GitHubForge, GitHubIssueCommentMixin)
+        assert issubclass(GitHubForge, GitHubIssueRelationshipMixin)
+        assert issubclass(GitHubForge, GitHubPullRequestMergeStateMixin)
+        assert issubclass(GitHubForge, GitHubPullRequestReviewMixin)
+
+    def test_composite_mixins_inherit_focused_operation_mixins(self):
+        assert issubclass(GitHubIssueMixin, GitHubIssueCommentMixin)
+        assert issubclass(GitHubIssueMixin, GitHubIssueRelationshipMixin)
+        assert issubclass(GitHubIssueMixin, GraphQLFallbackMixin)
+
+        assert issubclass(GitHubPullRequestMixin, GitHubPullRequestMergeStateMixin)
+        assert issubclass(GitHubPullRequestMixin, GitHubPullRequestReviewMixin)
+        assert issubclass(GitHubPullRequestMixin, GraphQLFallbackMixin)
+
+        for mixin in (
+            GitHubIssueCommentMixin,
+            GitHubIssueRelationshipMixin,
+            GitHubPullRequestMergeStateMixin,
+            GitHubPullRequestReviewMixin,
+        ):
+            assert not issubclass(mixin, GraphQLFallbackMixin)
+
+    def test_focused_operation_mixins_method_ownership(self):
+        def _methods(cls: type) -> set[str]:
+            return {
+                name
+                for name, val in cls.__dict__.items()
+                if not name.startswith("__") and callable(val)
+            }
+
+        expected_issue_methods = {
+            "add_label",
+            "remove_label",
+            "_remove_label_rest",
+            "get_issue",
+            "_get_issue_graphql",
+            "_get_issue_rest",
+            "get_issue_state",
+            "get_issue_labels",
+            "create_issue",
+            "update_issue_body",
+            "update_issue_title",
+            "close_issue",
+            "list_issues_by_label",
+            "find_open_issues_by_exact_title",
+            "find_issues_by_parent_metadata",
+            "get_issue_reference",
+            "get_repository_slug",
+        }
+        expected_comment_methods = {
+            "add_comment",
+            "list_comments",
+            "list_all_issue_comments",
+            "create_issue_comment",
+            "list_notice_trusted_authors",
+            "get_authenticated_user",
+            "get_label_actor",
+            "get_actor_permission",
+            "get_issue_last_reopened_at",
+        }
+        expected_relationship_methods = {
+            "list_sub_issues",
+            "add_sub_issue",
+            "remove_sub_issue",
+            "set_blocked_by",
+            "remove_blocked_by",
+            "_get_issue_for_relationship",
+            "_run_relationship_command",
+        }
+        expected_pr_methods = {
+            "delete_branch",
+            "merge_pull_request",
+            "create_pull_request",
+            "update_pull_request",
+            "close_pull_request",
+            "get_pull_request",
+            "_get_pull_request_graphql",
+            "list_prs",
+            "list_merged_prs_for_base",
+            "list_open_prs",
+            "_fetch_all_pr_files",
+            "_parse_pr_record",
+            "_is_check_passing",
+            "_status_check_contexts",
+        }
+        expected_merge_state_methods = {
+            "is_branch_merged_into",
+            "get_merged_pr_timestamp",
+            "branch_exists",
+            "is_current_branch_tip_merged_into",
+            "get_current_branch_tip_sha_if_merged_into",
+            "is_merge_commit_reachable_from",
+        }
+        expected_review_methods = {
+            "list_commit_checks",
+            "_list_pr_review_items",
+            "list_pull_request_reviews",
+            "list_pull_request_review_comments",
+        }
+
+        assert _methods(GitHubIssueMixin) == expected_issue_methods
+        assert _methods(GitHubIssueCommentMixin) == expected_comment_methods
+        assert _methods(GitHubIssueRelationshipMixin) == expected_relationship_methods
+        assert _methods(GitHubPullRequestMixin) == expected_pr_methods
+        assert (
+            _methods(GitHubPullRequestMergeStateMixin) == expected_merge_state_methods
+        )
+        assert _methods(GitHubPullRequestReviewMixin) == expected_review_methods
 
     def test_legacy_facade_resolves_to_extracted_implementations(self):
         assert GitHubForge.list_issues_by_label is GitHubIssueMixin.list_issues_by_label
@@ -404,9 +517,13 @@ class TestForgeProtocols:
 
         assert modules_with_gh_commands == {
             "admin.py",
+            "issue_comments.py",
+            "issue_relationships.py",
             "issues.py",
             # #1334: REST fallbacks for issue operations when GraphQL is unavailable.
             "issues_rest.py",
+            "pr_merge_state.py",
+            "pr_reviews.py",
             "prs.py",
             # #1336: REST fallback for pull request evidence.
             "prs_rest.py",
