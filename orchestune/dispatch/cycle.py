@@ -120,8 +120,6 @@ from orchestune.dispatch.phase_scheduling import (
     run_scheduling_phase as run_scheduling_phase,
 )
 from orchestune.dispatch.prior_parent_merge import reconcile_prior_parent_merges
-from orchestune.dispatch.progress import progress_phase
-from orchestune.dispatch.promotion_reporting import deliver_cycle_promotion_reports
 from orchestune.dispatch.recovery import (
     LAUNCH_ATTEMPT_PENDING,
     LAUNCH_HISTORY_STALE,
@@ -131,6 +129,8 @@ from orchestune.dispatch.recovery import (
     plan_recovery_bookkeeping_repairs,
     recovery_bookkeeping_invariants,
 )
+from orchestune.dispatch.reporting.progress import progress_phase
+from orchestune.dispatch.reporting.promotion import deliver_cycle_promotion_reports
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.status_dependency_policy import (
     completed_dependency_ids,

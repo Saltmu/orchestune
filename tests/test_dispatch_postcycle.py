@@ -32,8 +32,8 @@ from orchestune.dispatch.pre_scheduling_integration import (
     _poll_pending_not_needed_reviews,
     _run_semantic_integrator,
 )
+from orchestune.dispatch.reporting.summary import REASON_EXTERNAL_LOCK, SkipRecord
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
-from orchestune.dispatch.summary import REASON_EXTERNAL_LOCK, SkipRecord
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     LocalProcessDispatchTarget,

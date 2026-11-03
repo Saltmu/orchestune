@@ -15,8 +15,8 @@ from orchestune.dispatch.cycle_execution_contracts import (
 )
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.phase_scheduling import SchedulingPhaseResult
-from orchestune.dispatch.progress import progress_phase
-from orchestune.dispatch.promotion_reporting import confirm_promotion_reports
+from orchestune.dispatch.reporting.progress import progress_phase
+from orchestune.dispatch.reporting.promotion import confirm_promotion_reports
 from orchestune.dispatch.timings import (
     CycleTimingCollector,
     TimingProgress,

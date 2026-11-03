@@ -22,7 +22,7 @@ from orchestune.consistency.models import (
 from orchestune.consistency.repairs.status import COMMAND_TRANSITION_LABEL
 from orchestune.consistency.vocabulary import DESIRED_STATUS_LABEL
 from orchestune.dispatch.cycle_events import PromotionEvent
-from orchestune.dispatch.promotion_reporting import (
+from orchestune.dispatch.reporting.promotion import (
     PromotionReportError,
     PromotionReportJournal,
     PromotionReportRecord,

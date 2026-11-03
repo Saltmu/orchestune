@@ -81,6 +81,15 @@ from orchestune.dispatch.recovery import (
     execute_bookkeeping_repair_command,
     execute_recovery_requeue_command,
 )
+from orchestune.dispatch.reporting.summary import (
+    REASON_ACTOR_UNVERIFIED,
+    REASON_DUPLICATE_PR,
+    REASON_EARLY_DEATH_BACKOFF,
+    REASON_FORCED_SERIAL,
+    REASON_REVIEW_TIMEOUT_BACKOFF,
+    REASON_USAGE_LIMIT_BACKOFF,
+    REASON_USAGE_LIMIT_COOLDOWN,
+)
 from orchestune.dispatch.rules import (
     CycleContext,
     RuleChain,
@@ -95,15 +104,6 @@ from orchestune.dispatch.scoring import (
     select_tasks_with_decisions,
 )
 from orchestune.dispatch.status_repair import execute_status_repair_command
-from orchestune.dispatch.summary import (
-    REASON_ACTOR_UNVERIFIED,
-    REASON_DUPLICATE_PR,
-    REASON_EARLY_DEATH_BACKOFF,
-    REASON_FORCED_SERIAL,
-    REASON_REVIEW_TIMEOUT_BACKOFF,
-    REASON_USAGE_LIMIT_BACKOFF,
-    REASON_USAGE_LIMIT_COOLDOWN,
-)
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_lifecycle import has_completion_reservation
 from orchestune.ledger.completion_reservations import (

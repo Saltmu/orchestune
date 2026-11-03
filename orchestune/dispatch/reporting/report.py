@@ -8,14 +8,14 @@ import sys
 
 from orchestune.consistency.supervisor import consistency_cycle_to_dict
 from orchestune.dispatch.cycle import CycleReport
-from orchestune.dispatch.result import PhaseResult, PhaseStatus
-from orchestune.dispatch.scoring import decision_to_dict
-from orchestune.dispatch.summary import (
+from orchestune.dispatch.reporting.summary import (
     merge_skips,
     render_forge_warnings_markdown,
     render_skipped_markdown,
     skip_record_to_dict,
 )
+from orchestune.dispatch.result import PhaseResult, PhaseStatus
+from orchestune.dispatch.scoring import decision_to_dict
 from orchestune.task_metadata import task_metadata_to_dict
 
 

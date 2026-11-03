@@ -36,7 +36,7 @@ from orchestune.dispatch.execution_profiles import (
     extract_target_name,
     validate_profile_for_target,
 )
-from orchestune.dispatch.report_output import _check_target
+from orchestune.dispatch.reporting.report_output import _check_target
 from orchestune.dispatch.targets import (
     ROUTINE_ID_ENV_VAR,
     ROUTINE_TOKEN_ENV_VAR,

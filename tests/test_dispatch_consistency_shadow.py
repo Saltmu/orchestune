@@ -20,7 +20,7 @@ from orchestune.dispatch.cycle_events import (
 )
 from orchestune.dispatch.cycle_report import CycleReport, build_event_log_entry
 from orchestune.dispatch.dispatcher import _build_arg_parser, main
-from orchestune.dispatch.report import _report_to_dict
+from orchestune.dispatch.reporting.report import _report_to_dict
 from orchestune.dispatch.rules import CycleContext
 from orchestune.ledger.run_state import RunState
 from tests.conftest import make_issue, make_task

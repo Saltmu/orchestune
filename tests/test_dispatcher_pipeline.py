@@ -36,12 +36,12 @@ from orchestune.dispatch.dispatcher import (
     _DispatcherRunResult,
     _emit_dispatcher_report,
 )
-from orchestune.dispatch.scoring import SchedulingDecision, ScoreComponents
-from orchestune.dispatch.summary import (
+from orchestune.dispatch.reporting.summary import (
     REASON_EXTERNAL_LOCK,
     SUMMARY_PREFIX,
     SkipRecord,
 )
+from orchestune.dispatch.scoring import SchedulingDecision, ScoreComponents
 from orchestune.ledger.run_state import (
     CompletedWorktree,
     RunState,

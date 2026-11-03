@@ -14,7 +14,7 @@ from orchestune.dispatch.locks import (
     scan_external_locks as _scan_external_locks,
 )
 from orchestune.dispatch.phase_rebase import _sync_external_locks
-from orchestune.dispatch.report import write_github_step_summary
+from orchestune.dispatch.reporting.report import write_github_step_summary
 from orchestune.dispatch.scoring import Task
 from orchestune.ledger.run_state import RunState
 from orchestune.models import PrRecord

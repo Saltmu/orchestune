@@ -44,6 +44,7 @@ from orchestune.dispatch.phase_scheduling import (
     _determine_candidate_tasks,
     run_scheduling_phase,
 )
+from orchestune.dispatch.reporting.summary import merge_skips
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import (
     REASON_LAUNCH_FAILED,
@@ -54,7 +55,6 @@ from orchestune.dispatch.scoring import (
     ScoreComponents,
     Task,
 )
-from orchestune.dispatch.summary import merge_skips
 from orchestune.dispatch.worktree import LaunchResult
 from orchestune.ledger.active_records import (
     ActiveCompletionJournal,

@@ -3,12 +3,12 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.progress import (
+from orchestune.dispatch.reporting.progress import (
     DispatchProgressSink,
     StdoutProgress,
     progress_phase,
 )
-from orchestune.dispatch.progress_output import (
+from orchestune.dispatch.reporting.progress_output import (
     RichDispatchProgress,
     select_progress_sink,
 )
@@ -80,7 +80,7 @@ def test_closed_stdout_pipe_preserves_process_exit_code():
             [
                 sys.executable,
                 "-c",
-                "from orchestune.dispatch.progress import StdoutProgress; s = StdoutProgress('run', 1070, True); s.emit('cycle', 'started'); s.emit('cycle', 'completed')",
+                "from orchestune.dispatch.reporting.progress import StdoutProgress; s = StdoutProgress('run', 1070, True); s.emit('cycle', 'started'); s.emit('cycle', 'completed')",
             ],
             stdout=write_fd,
             stderr=subprocess.PIPE,
@@ -260,7 +260,8 @@ def test_default_stream_is_read_from_stdout_at_call_time(monkeypatch):
     monkeypatch.setattr("sys.stdout", TtyStream(tty=False))
     owned = StringIO()
     with patch(
-        "orchestune.dispatch.progress._stdout_stream", return_value=(owned, True)
+        "orchestune.dispatch.reporting.progress._stdout_stream",
+        return_value=(owned, True),
     ):
         sink = select_progress_sink("run", env={})
     assert type(sink) is StdoutProgress
@@ -389,7 +390,7 @@ def test_rich_close_closes_only_the_owned_stream():
 
     owned = TtyStream()
     with patch(
-        "orchestune.dispatch.progress_output._stdout_stream",
+        "orchestune.dispatch.reporting.progress_output._stdout_stream",
         return_value=(owned, True),
     ):
         sink = RichDispatchProgress("run", None, None, env={})

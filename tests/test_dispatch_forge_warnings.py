@@ -21,7 +21,7 @@ from orchestune.dispatch.gc.rule_chain import (
     _completion_forge_error_hold,
     _resolve_local_completion,
 )
-from orchestune.dispatch.summary import WARN_PREFIX
+from orchestune.dispatch.reporting.summary import WARN_PREFIX
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeLookupState
 from tests.dispatch_test_support import make_test_active_worktree

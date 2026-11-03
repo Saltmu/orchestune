@@ -19,8 +19,8 @@ from orchestune.dispatch.cycle_events import (
     PromotionEvent,
     WorktreeCompletionHold,
 )
+from orchestune.dispatch.reporting.summary import SkipRecord, skip_record_to_dict
 from orchestune.dispatch.scoring import SchedulingDecision, decision_to_dict
-from orchestune.dispatch.summary import SkipRecord, skip_record_to_dict
 from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:

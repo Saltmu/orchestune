@@ -32,13 +32,7 @@ from orchestune.dispatch.launch import (
     _is_task_stack_eligible,
 )
 from orchestune.dispatch.locks import ExternalLockScanResult, describe_conflict
-from orchestune.dispatch.rules import CycleContext
-from orchestune.dispatch.scoring import (
-    SchedulingDecision,
-    SchedulingResult,
-    reconcile_decisions_with_launches,
-)
-from orchestune.dispatch.summary import (
+from orchestune.dispatch.reporting.summary import (
     REASON_ACTOR_UNVERIFIED,
     REASON_DEPENDENCY,
     REASON_DEVIATION_BLOCKED,
@@ -50,6 +44,12 @@ from orchestune.dispatch.summary import (
     REASON_USAGE_LIMIT_BACKOFF,
     REASON_USAGE_LIMIT_COOLDOWN,
     SkipRecord,
+)
+from orchestune.dispatch.rules import CycleContext
+from orchestune.dispatch.scoring import (
+    SchedulingDecision,
+    SchedulingResult,
+    reconcile_decisions_with_launches,
 )
 from orchestune.labels import StatusLabel
 from orchestune.task_metadata import TaskMetadata

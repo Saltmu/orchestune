@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from orchestune.dispatch.progress import StdoutProgress
+from orchestune.dispatch.reporting.progress import StdoutProgress
 from orchestune.dispatch.timings import (
     CycleTimingCollector,
     TimingProgress,
@@ -74,7 +74,7 @@ def test_metrics_failure_preserves_cli_exit_and_saved_json(
 ):
     from orchestune.dispatch import dispatcher
     from orchestune.dispatch.config import DispatcherConfig
-    from orchestune.dispatch.report import _report_to_dict
+    from orchestune.dispatch.reporting.report import _report_to_dict
     from orchestune.dispatch.result import PhaseResult, PhaseStatus
 
     config = DispatcherConfig(
@@ -251,7 +251,7 @@ def test_cycle_integration_preserves_report_progress_and_old_event_fields(
     from orchestune.dispatch.config import DispatcherConfig
     from orchestune.dispatch.cycle import run_dispatch_cycle
     from orchestune.dispatch.cycle_report import build_event_log_entry
-    from orchestune.dispatch.report import _report_to_dict
+    from orchestune.dispatch.reporting.report import _report_to_dict
 
     progress = Mock()
     config = DispatcherConfig(
