@@ -11,6 +11,8 @@ from orchestune.claim.workspace import (
     ClaimWorkspace,
     assert_repository_identity_match,
     check_repository_identity_match,
+    normalize_repository_identity,
+    repository_identities_equal,
     resolve_checkout_roots,
     resolve_claim_workspace,
     resolve_primary_root,
@@ -350,6 +352,28 @@ class TestPublicPathHelpers:
 
 
 class TestRepositoryIdentityValidation:
+    def test_normalize_repository_identity(self) -> None:
+        assert normalize_repository_identity("D:\\repo\\.git") == "D:/repo/.git"
+        assert normalize_repository_identity("d:/repo/.git") == "D:/repo/.git"
+        assert normalize_repository_identity("D:/repo\\.git") == "D:/repo/.git"
+        assert (
+            normalize_repository_identity("\\\\srv\\share\\repo\\.git")
+            == "//srv/share/repo/.git"
+        )
+        assert normalize_repository_identity("/tmp/a\\b/.git") == "/tmp/a\\b/.git"
+        assert (
+            normalize_repository_identity("unverified-recovery")
+            == "unverified-recovery"
+        )
+        assert normalize_repository_identity("owner/repo") == "owner/repo"
+        assert normalize_repository_identity(None) is None
+
+    def test_repository_identities_equal(self) -> None:
+        assert repository_identities_equal("D:/repo/.git", "D:\\repo\\.git") is True
+        assert repository_identities_equal("C:/repo/.git", "c:/repo/.git") is True
+        assert repository_identities_equal("D:/repo/.git", "D:/other/.git") is False
+        assert repository_identities_equal("D:/repo/.git", None) is False
+
     def test_check_repository_identity_match(self) -> None:
         ident_a = "/path/to/repo/.git"
         ident_b = "/path/to/other/.git"
@@ -362,6 +386,12 @@ class TestRepositoryIdentityValidation:
 
         # Mismatch
         assert check_repository_identity_match(ident_a, ident_b) is False
+
+        # Windows path separators and drive case normalization
+        assert check_repository_identity_match("D:/repo/.git", "D:\\repo\\.git") is True
+        assert check_repository_identity_match("C:/repo/.git", "c:/repo/.git") is True
+        assert check_repository_identity_match("D:/repo/.git", "D:/other/.git") is False
+        assert check_repository_identity_match("D:/repo/.git", None) is True
 
     def test_assert_repository_identity_match(self) -> None:
         ident_a = "/path/to/repo/.git"
