@@ -11,7 +11,7 @@ from unittest.mock import patch
 from orchestune.consistency.models import RepairStatus
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_events import TaskWorktreeCompletion
-from orchestune.dispatch.gc import (
+from orchestune.dispatch.gc.rule_chain import (
     _apply_stale_active_entry_discard,
     _rule_not_needed,
 )
@@ -37,18 +37,18 @@ class TestApplyStaleActiveEntryDiscard:
 
         with (
             patch(
-                "orchestune.dispatch.gc.backup_wip_commit",
+                "orchestune.dispatch.gc.rule_chain.backup_wip_commit",
                 autospec=True,
                 return_value=None,
             ) as mock_backup,
             patch(
-                "orchestune.dispatch.gc.is_process_alive",
+                "orchestune.dispatch.gc.rule_chain.is_process_alive",
                 autospec=True,
                 return_value=True,
             ),
-            patch("orchestune.dispatch.gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.rule_chain.os.kill") as mock_kill,
             patch(
-                "orchestune.dispatch.gc.remove_worktree", autospec=True
+                "orchestune.dispatch.gc.rule_chain.remove_worktree", autospec=True
             ) as mock_remove,
         ):
             discarded = _apply_stale_active_entry_discard(
@@ -77,18 +77,18 @@ class TestApplyStaleActiveEntryDiscard:
 
         with (
             patch(
-                "orchestune.dispatch.gc.backup_wip_commit",
+                "orchestune.dispatch.gc.rule_chain.backup_wip_commit",
                 autospec=True,
                 return_value=None,
             ),
             patch(
-                "orchestune.dispatch.gc.is_process_alive",
+                "orchestune.dispatch.gc.rule_chain.is_process_alive",
                 autospec=True,
                 return_value=False,
             ),
-            patch("orchestune.dispatch.gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.rule_chain.os.kill") as mock_kill,
             patch(
-                "orchestune.dispatch.gc.remove_worktree", autospec=True
+                "orchestune.dispatch.gc.rule_chain.remove_worktree", autospec=True
             ) as mock_remove,
         ):
             discarded = _apply_stale_active_entry_discard(
@@ -112,16 +112,16 @@ class TestApplyStaleActiveEntryDiscard:
 
         with (
             patch(
-                "orchestune.dispatch.gc.backup_wip_commit", autospec=True
+                "orchestune.dispatch.gc.rule_chain.backup_wip_commit", autospec=True
             ) as mock_backup,
             patch(
-                "orchestune.dispatch.gc.is_process_alive",
+                "orchestune.dispatch.gc.rule_chain.is_process_alive",
                 autospec=True,
                 return_value=True,
             ),
-            patch("orchestune.dispatch.gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.rule_chain.os.kill") as mock_kill,
             patch(
-                "orchestune.dispatch.gc.remove_worktree", autospec=True
+                "orchestune.dispatch.gc.rule_chain.remove_worktree", autospec=True
             ) as mock_remove,
         ):
             discarded = _apply_stale_active_entry_discard(
@@ -149,18 +149,18 @@ class TestApplyStaleActiveEntryDiscard:
 
         with (
             patch(
-                "orchestune.dispatch.gc.backup_wip_commit",
+                "orchestune.dispatch.gc.rule_chain.backup_wip_commit",
                 autospec=True,
                 return_value="fatal: unable to write new index file",
             ),
             patch(
-                "orchestune.dispatch.gc.is_process_alive",
+                "orchestune.dispatch.gc.rule_chain.is_process_alive",
                 autospec=True,
                 return_value=True,
             ),
-            patch("orchestune.dispatch.gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.rule_chain.os.kill") as mock_kill,
             patch(
-                "orchestune.dispatch.gc.remove_worktree", autospec=True
+                "orchestune.dispatch.gc.rule_chain.remove_worktree", autospec=True
             ) as mock_remove,
         ):
             discarded = _apply_stale_active_entry_discard(
@@ -187,11 +187,11 @@ class TestApplyStaleActiveEntryDiscard:
 
         with (
             patch(
-                "orchestune.dispatch.gc.backup_wip_commit", autospec=True
+                "orchestune.dispatch.gc.rule_chain.backup_wip_commit", autospec=True
             ) as mock_backup,
-            patch("orchestune.dispatch.gc.os.kill") as mock_kill,
+            patch("orchestune.dispatch.gc.rule_chain.os.kill") as mock_kill,
             patch(
-                "orchestune.dispatch.gc.remove_worktree", autospec=True
+                "orchestune.dispatch.gc.rule_chain.remove_worktree", autospec=True
             ) as mock_remove,
         ):
             discarded = _apply_stale_active_entry_discard(
@@ -231,17 +231,19 @@ class TestSupervisorOwnedStaleEntry:
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.gc.backup_wip_commit",
+                "orchestune.dispatch.gc.rule_chain.backup_wip_commit",
                 autospec=True,
                 return_value=None,
             ),
             patch(
-                "orchestune.dispatch.gc.is_process_alive",
+                "orchestune.dispatch.gc.rule_chain.is_process_alive",
                 autospec=True,
                 return_value=True,
             ),
-            patch("orchestune.dispatch.gc.os.kill") as kill,
-            patch("orchestune.dispatch.gc.remove_worktree", autospec=True) as remove,
+            patch("orchestune.dispatch.gc.rule_chain.os.kill") as kill,
+            patch(
+                "orchestune.dispatch.gc.rule_chain.remove_worktree", autospec=True
+            ) as remove,
         ):
             outcome = run_gc_phase(
                 run_state, {280: task}, config, [], open_prs=[], now=1_000.0
@@ -280,8 +282,10 @@ class TestSupervisorOwnedStaleEntry:
                 autospec=True,
                 return_value=True,
             ),
-            patch("orchestune.dispatch.gc.os.kill") as kill,
-            patch("orchestune.dispatch.gc.remove_worktree", autospec=True) as remove,
+            patch("orchestune.dispatch.gc.rule_chain.os.kill") as kill,
+            patch(
+                "orchestune.dispatch.gc.rule_chain.remove_worktree", autospec=True
+            ) as remove,
         ):
             outcome = run_gc_phase(
                 run_state,
@@ -324,8 +328,10 @@ class TestSupervisorOwnedStaleEntry:
                 autospec=True,
                 return_value=True,
             ),
-            patch("orchestune.dispatch.gc.os.kill") as kill,
-            patch("orchestune.dispatch.gc.remove_worktree", autospec=True) as remove,
+            patch("orchestune.dispatch.gc.rule_chain.os.kill") as kill,
+            patch(
+                "orchestune.dispatch.gc.rule_chain.remove_worktree", autospec=True
+            ) as remove,
         ):
             outcome = run_gc_phase(
                 run_state,
@@ -375,7 +381,7 @@ class TestRuleNotNeededOutcomeStaleness:
         ]
 
         with patch(
-            "orchestune.dispatch.gc._finalize_not_needed_worktree",
+            "orchestune.dispatch.gc.rule_chain._finalize_not_needed_worktree",
             autospec=True,
             return_value=TaskWorktreeCompletion(
                 issue_number=280,

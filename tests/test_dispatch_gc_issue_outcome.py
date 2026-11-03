@@ -7,11 +7,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.gc import _rule_completed, _rule_not_needed
 from orchestune.dispatch.gc.completion_status import (
     _fetch_outcome_for_active,
     _local_pr_completion_status,
 )
+from orchestune.dispatch.gc.rule_chain import _rule_completed, _rule_not_needed
 from orchestune.models import IssueRecord, PrRecord
 from orchestune.outcome_record import OutcomeLookupState, OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _rule_ctx, _task
@@ -152,7 +152,10 @@ def test_not_needed_finalization_failure_keeps_active_entry_for_retry(
         remove_worktree = patch("orchestune.dispatch.gc.completion.remove_worktree")
 
     with (
-        patch("orchestune.dispatch.gc._has_not_needed_outcome", return_value=True),
+        patch(
+            "orchestune.dispatch.gc.rule_chain._has_not_needed_outcome",
+            return_value=True,
+        ),
         patch(
             "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
             return_value=False,

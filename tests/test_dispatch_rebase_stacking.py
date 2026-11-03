@@ -712,7 +712,7 @@ class TestBranchStacking:
             ) as mock_launch,
             # タスクAの完了判定とGC処理のためのモック
             patch(
-                "orchestune.dispatch.gc._is_worktree_complete",
+                "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
                 autospec=True,
                 return_value=True,
             ),
@@ -720,7 +720,7 @@ class TestBranchStacking:
             # an abandoned (closed-unmerged) PR before finalizing.
             patch("fake_forge_proxy.active_fake_forge.list_prs", return_value=[]),
             patch(
-                "orchestune.dispatch.gc._finalize_completed_worktree",
+                "orchestune.dispatch.gc.rule_chain._finalize_completed_worktree",
                 autospec=True,
                 return_value=WorktreeCompletion(
                     issue_number=1,

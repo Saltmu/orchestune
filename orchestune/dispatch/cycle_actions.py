@@ -52,12 +52,12 @@ from orchestune.dispatch.cycle_records import _on_status_transition_verified
 from orchestune.dispatch.escalation import _rule_changes_requested
 from orchestune.dispatch.execution_repair import DispatchRepairExecutorAdapter
 from orchestune.dispatch.filters import _filter_candidates_for_forced_serial
-from orchestune.dispatch.gc import (
+from orchestune.dispatch.gc.policies import process_completion_policies
+from orchestune.dispatch.gc.rule_chain import (
     _rule_completed,
     _rule_not_needed,
     _rule_stale_entry_hold,
 )
-from orchestune.dispatch.gc.policies import process_completion_policies
 from orchestune.dispatch.gc.unclaimed import unclaimed_completion_events
 from orchestune.dispatch.launch import (
     LaunchContext,

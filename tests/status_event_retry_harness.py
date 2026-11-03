@@ -33,9 +33,9 @@ from typing import Any
 
 import pytest
 
-from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc import completion, policies, zombies
+from orchestune.dispatch.gc import rule_chain as dispatch_gc
 from orchestune.infra.process_utils import run_state_lock
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import (

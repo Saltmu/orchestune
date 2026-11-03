@@ -179,7 +179,9 @@ PRODUCTION_EXCEPTIONS = frozenset(
             for function in {"_handle_special_retry"}
         },
         *{
-            _exception("orchestune.dispatch.gc", function, attribute, _LOW_LEVEL)
+            _exception(
+                "orchestune.dispatch.gc.rule_chain", function, attribute, _LOW_LEVEL
+            )
             for function, attribute in {
                 ("_rule_not_needed", "run_state"),
                 ("_persist_run_state_best_effort", "run_state"),

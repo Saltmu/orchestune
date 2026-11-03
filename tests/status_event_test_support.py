@@ -30,7 +30,6 @@ from orchestune.consistency.repairs.status import (
     plan_status_repairs,
 )
 from orchestune.dependencies.resolution import build_legacy_dag_inputs
-from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch import (
     launch,
     phase_rebase,
@@ -46,6 +45,7 @@ from orchestune.dispatch.gc import (
     policy_review,
     zombies,
 )
+from orchestune.dispatch.gc import rule_chain as dispatch_gc
 from orchestune.dispatch.gc import usage_limit as usage_limit_gc
 from orchestune.dispatch.gc.policy_effects import apply_effects
 from orchestune.dispatch.retry_policy import (
@@ -168,7 +168,7 @@ LABEL_INVARIANT_COMPLETIONS: tuple[tuple[str, str, str], ...] = (
         "verified prior parent merge in a dry run (`completed_issue_numbers`)",
     ),
     (
-        "dispatch/gc/__init__.py",
+        "dispatch/gc/rule_chain.py",
         "_rule_not_needed",
         "not-needed Outcome record without the not-needed label",
     ),
@@ -380,7 +380,7 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
             "review-passed",
         ),
     ),
-    "dispatch/gc/__init__.py::_rule_not_needed": (
+    "dispatch/gc/rule_chain.py::_rule_not_needed": (
         _r(_E.NOT_NEEDED, _K.PLAIN, "outcome-only"),
         _r(_E.AWAIT_REVIEW, _K.PLAIN, "cloud-review-dispatched"),
     ),

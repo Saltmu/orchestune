@@ -6,10 +6,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.gc import (
-    _completion_forge_error_hold,
-    _resolve_local_completion,
-)
 from orchestune.dispatch.gc.cloud_completion import _cloud_worktree_completion_status
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
@@ -20,6 +16,10 @@ from orchestune.dispatch.gc.completion import (
 from orchestune.dispatch.gc.completion_status import (
     _fetch_outcome_for_active,
     _local_pr_completion_status,
+)
+from orchestune.dispatch.gc.rule_chain import (
+    _completion_forge_error_hold,
+    _resolve_local_completion,
 )
 from orchestune.dispatch.summary import WARN_PREFIX
 from orchestune.models import PrRecord
@@ -225,7 +225,7 @@ class TestIssueCommentFailures:
         active = _active(tmp_path)
 
         with patch(
-            "orchestune.dispatch.gc._is_worktree_complete",
+            "orchestune.dispatch.gc.rule_chain._is_worktree_complete",
             autospec=True,
             return_value=True,
         ):

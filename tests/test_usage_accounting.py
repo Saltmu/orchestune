@@ -396,7 +396,7 @@ class TestTaskTokenLimitEscalation:
     def test_escalated_worktree_is_recorded_in_completed_worktrees_and_throttles_window_quota(
         self, tmp_path
     ):
-        from orchestune.dispatch.gc import _rule_completed
+        from orchestune.dispatch.gc.rule_chain import _rule_completed
 
         active = make_test_active_worktree(
             issue_number=42,

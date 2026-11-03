@@ -319,14 +319,14 @@ def _completion_and_retry_cases() -> list[EventCase]:
             prior_merge_dry_run,
         ),
         EventCase(
-            "dispatch/gc/__init__.py::_rule_not_needed",
+            "dispatch/gc/rule_chain.py::_rule_not_needed",
             "outcome-only",
             (P,),
             rule_not_needed_outcome,
             model=_ACTIVE_RUN,
         ),
         EventCase(
-            "dispatch/gc/__init__.py::_rule_not_needed",
+            "dispatch/gc/rule_chain.py::_rule_not_needed",
             "cloud-review-dispatched",
             (P,),
             rule_not_needed_outcome,

@@ -743,7 +743,7 @@ class TestInteractiveOwnershipGcExclusion:
         """owner_kind=interactive は started_at=None や external_id の有無に関わらず、
         completion のあらゆるルーティング（クラウド判定・PR復元判定・ローカル判定）から除外され pending となる。
         """
-        from orchestune.dispatch.gc import _resolve_completion
+        from orchestune.dispatch.gc.rule_chain import _resolve_completion
         from orchestune.dispatch.rules import _RuleExecutionContext
         from orchestune.models import PrRecord
 
