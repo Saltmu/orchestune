@@ -1,7 +1,4 @@
-"""Active-worktree GC rule-chain orchestration.
-
-Implementation helpers are re-exported for backward-compatible imports.
-"""
+"""Active-worktree GC rule-chain orchestration."""
 
 from __future__ import annotations
 
@@ -36,13 +33,9 @@ from orchestune.dispatch.gc.cloud_completion import (
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
     ForgeFailure,
-    _apply_completed_worktree_outcome,
-    _decide_completed_worktree_outcome,
-    _decide_not_needed_dirty_worktree,
     _finalize_completed_worktree,
     _finalize_not_needed_worktree,
     _is_worktree_complete,
-    _parse_github_timestamp,
     failed_operations,
     failure_descriptions,
     is_completion_hold_event,
@@ -53,10 +46,7 @@ from orchestune.dispatch.gc.completion_disposition import (
     completion_handling,
 )
 from orchestune.dispatch.gc.completion_status import (
-    _active_dispatch_handle,
-    _call_is_complete,
     _fetch_outcome_for_active,
-    _is_stale_pr_for_active,
     _local_pr_completion_status,
 )
 from orchestune.dispatch.gc.confirmed import collect_confirmed_completion
@@ -81,7 +71,6 @@ from orchestune.dispatch.gc.records import (
 from orchestune.dispatch.gc.usage_limit import handle_usage_limit_exit
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
-    _apply_zombie_or_timeout_reclaim,
 )
 from orchestune.dispatch.launch_state import with_launch
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
@@ -106,33 +95,19 @@ from orchestune.task_metadata import TaskMetadata
 
 __all__ = [
     "CompletedWorktreeDecision",
+    "VerifiedWorktreeRemovalRequest",
+    "WorktreeRemovalEvaluation",
+    "WorktreeRemovalResult",
     "ZombieOrTimeoutReclaim",
-    "_active_dispatch_handle",
-    "_apply_completed_worktree_outcome",
-    "_apply_zombie_or_timeout_reclaim",
-    "_call_is_complete",
-    "_cloud_worktree_completion_status",
-    "_decide_completed_worktree_outcome",
-    "_decide_not_needed_dirty_worktree",
-    "_finalize_abandoned_cloud_worktree",
-    "_finalize_completed_worktree",
-    "_finalize_not_needed_worktree",
-    "_is_stale_pr_for_active",
-    "_is_worktree_complete",
-    "_local_pr_completion_status",
-    "_parse_github_timestamp",
-    "is_completion_hold_event",
     "backup_wip_commit",
     "evaluate_worktree_removal",
+    "is_completion_hold_event",
     "is_process_alive",
     "remote_branch_commit_sha_if_ahead",
     "remove_verified_worktree",
     "remove_worktree",
     "worktree_has_new_commits",
     "worktree_has_uncommitted_changes",
-    "VerifiedWorktreeRemovalRequest",
-    "WorktreeRemovalEvaluation",
-    "WorktreeRemovalResult",
 ]
 
 

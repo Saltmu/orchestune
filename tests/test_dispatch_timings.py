@@ -101,7 +101,7 @@ def test_metrics_failure_preserves_cli_exit_and_saved_json(
             return_value=False,
         ),
         patch(
-            "orchestune.dispatch.dispatcher._pre_scheduling_integration_steps",
+            "orchestune.dispatch.pre_scheduling_integration._pre_scheduling_integration_steps",
             return_value=[],
         ),
         patch(

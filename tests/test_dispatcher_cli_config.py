@@ -592,12 +592,12 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ),
             patch(
-                "orchestune.dispatch.dispatcher._poll_pending_not_needed_reviews",
+                "orchestune.dispatch.pre_scheduling_integration._poll_pending_not_needed_reviews",
                 autospec=True,
                 return_value=r1,
             ),
             patch(
-                "orchestune.dispatch.dispatcher._run_semantic_integrator",
+                "orchestune.dispatch.pre_scheduling_integration._run_semantic_integrator",
                 autospec=True,
                 return_value=r2,
             ),
@@ -644,12 +644,12 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ),
             patch(
-                "orchestune.dispatch.dispatcher._poll_pending_not_needed_reviews",
+                "orchestune.dispatch.pre_scheduling_integration._poll_pending_not_needed_reviews",
                 autospec=True,
                 return_value=r1,
             ),
             patch(
-                "orchestune.dispatch.dispatcher._run_semantic_integrator",
+                "orchestune.dispatch.pre_scheduling_integration._run_semantic_integrator",
                 autospec=True,
                 return_value=r2_retryable,
             ),
@@ -695,12 +695,12 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ),
             patch(
-                "orchestune.dispatch.dispatcher._poll_pending_not_needed_reviews",
+                "orchestune.dispatch.pre_scheduling_integration._poll_pending_not_needed_reviews",
                 autospec=True,
                 return_value=r1,
             ),
             patch(
-                "orchestune.dispatch.dispatcher._run_semantic_integrator",
+                "orchestune.dispatch.pre_scheduling_integration._run_semantic_integrator",
                 autospec=True,
                 return_value=r2_fatal,
             ),
@@ -776,14 +776,14 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ),
             patch(
-                "orchestune.dispatch.dispatcher._poll_pending_not_needed_reviews",
+                "orchestune.dispatch.pre_scheduling_integration._poll_pending_not_needed_reviews",
                 autospec=True,
                 return_value=PhaseResult(
                     "poll_pending_not_needed_reviews", PhaseStatus.SUCCESS
                 ),
             ),
             patch(
-                "orchestune.dispatch.dispatcher._run_semantic_integrator",
+                "orchestune.dispatch.pre_scheduling_integration._run_semantic_integrator",
                 autospec=True,
                 return_value=PhaseResult(
                     "run_semantic_integrator", PhaseStatus.SUCCESS
@@ -819,14 +819,14 @@ class TestDispatcherConfigLoading:
                 return_value=cycle_report,
             ),
             patch(
-                "orchestune.dispatch.dispatcher._poll_pending_not_needed_reviews",
+                "orchestune.dispatch.pre_scheduling_integration._poll_pending_not_needed_reviews",
                 autospec=True,
                 return_value=PhaseResult(
                     "poll_pending_not_needed_reviews", PhaseStatus.SUCCESS
                 ),
             ),
             patch(
-                "orchestune.dispatch.dispatcher._run_semantic_integrator",
+                "orchestune.dispatch.pre_scheduling_integration._run_semantic_integrator",
                 autospec=True,
                 return_value=PhaseResult(
                     "run_semantic_integrator", PhaseStatus.SUCCESS
@@ -870,14 +870,14 @@ class TestDispatcherConfigLoading:
                 return_value=cycle_report,
             ),
             patch(
-                "orchestune.dispatch.dispatcher._poll_pending_not_needed_reviews",
+                "orchestune.dispatch.pre_scheduling_integration._poll_pending_not_needed_reviews",
                 autospec=True,
                 return_value=PhaseResult(
                     "poll_pending_not_needed_reviews", PhaseStatus.SUCCESS
                 ),
             ),
             patch(
-                "orchestune.dispatch.dispatcher._run_semantic_integrator",
+                "orchestune.dispatch.pre_scheduling_integration._run_semantic_integrator",
                 autospec=True,
                 return_value=PhaseResult(
                     "run_semantic_integrator", PhaseStatus.SUCCESS

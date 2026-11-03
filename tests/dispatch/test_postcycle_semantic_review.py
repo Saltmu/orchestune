@@ -12,7 +12,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from orchestune.branch_naming import build_task_branch_name
-from orchestune.dispatch import dispatcher
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.postcycle_semantic_review import (
     SemanticClaimClient,
@@ -24,6 +23,7 @@ from orchestune.dispatch.pre_scheduling_integration import (
     _INTEGRATOR_SUCCESS_STATUSES,
     _advance_pending_semantic_reviews,
     _build_integrator_config,
+    _pre_scheduling_integration_steps,
 )
 from orchestune.dispatch.result import PhaseStatus
 from orchestune.dispatch.semantic_review_adapters import (
@@ -887,7 +887,7 @@ class TestPostcycleWiring:
     def test_runner_step_precedes_the_integrator_and_ignores_the_legacy_flag(
         self,
     ) -> None:
-        steps = dispatcher._pre_scheduling_integration_steps(MagicMock(), False, None)
+        steps = _pre_scheduling_integration_steps(MagicMock(), False, None)
         names = [name for name, _, _ in steps]
         index = names.index("advance_pending_semantic_reviews")
         assert names[index + 1] == "run_semantic_integrator"
