@@ -671,7 +671,7 @@ def test_control_replay_detects_a_dropped_promotion_report(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """The verified promotion is never recorded, so no later cycle reports it (#1296)."""
-    from orchestune.dispatch.promotion_reporting import PromotionReportJournal
+    from orchestune.dispatch.reporting.promotion import PromotionReportJournal
 
     replay_stored("lagged_chain_reported_later", tmp_path / "normal")
     monkeypatch.setattr(PromotionReportJournal, "register", lambda self, record: record)
@@ -683,11 +683,11 @@ def test_control_replay_detects_a_promotion_reported_twice(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A record that is never settled is delivered by every later apply cycle."""
-    from orchestune.dispatch import promotion_reporting
+    from orchestune.dispatch.reporting import promotion
 
     replay_stored("lagged_chain_reported_later", tmp_path / "normal")
     monkeypatch.setattr(
-        promotion_reporting, "confirmed_promotion_intent_ids", lambda path: frozenset()
+        promotion, "confirmed_promotion_intent_ids", lambda path: frozenset()
     )
     monkeypatch.setattr(
         cycle_execution, "confirm_promotion_reports", lambda config, events: None

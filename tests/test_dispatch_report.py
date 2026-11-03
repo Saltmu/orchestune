@@ -10,10 +10,13 @@ import json
 
 from orchestune.dispatch.cycle import CycleReport
 from orchestune.dispatch.cycle_events import ForgeFailureCompletion
-from orchestune.dispatch.report import _report_to_dict, write_github_step_summary
+from orchestune.dispatch.reporting.report import (
+    _report_to_dict,
+    write_github_step_summary,
+)
+from orchestune.dispatch.reporting.summary import REASON_EXTERNAL_LOCK, SkipRecord
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.scoring import SchedulingDecision, ScoreComponents, Task
-from orchestune.dispatch.summary import REASON_EXTERNAL_LOCK, SkipRecord
 
 
 def _task(**overrides):
@@ -206,7 +209,7 @@ class TestCycleReportSection:
     def test_renders_selected_tasks_with_execution_profile_and_model(self, tmp_path):
         from orchestune.dispatch.cycle_report import build_event_log_entry
         from orchestune.dispatch.execution_profiles import ExecutionSelection
-        from orchestune.dispatch.report import _report_to_dict
+        from orchestune.dispatch.reporting.report import _report_to_dict
 
         summary_file = tmp_path / "step_summary.md"
         task = _task(

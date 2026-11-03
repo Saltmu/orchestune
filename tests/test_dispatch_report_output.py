@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.report_output import reserve_report
+from orchestune.dispatch.reporting.report_output import reserve_report
 
 
 def config(tmp_path, path=None):
@@ -115,7 +115,7 @@ def _report():
 @pytest.mark.parametrize("apply", [False, True])
 def test_cli_saves_exact_old_schema_and_no_stdout_json(tmp_path, capsys, apply):
     from orchestune.dispatch.dispatcher import main
-    from orchestune.dispatch.report import _report_to_dict
+    from orchestune.dispatch.reporting.report import _report_to_dict
     from orchestune.dispatch.result import PhaseResult, PhaseStatus
 
     cfg = config(tmp_path, tmp_path / "result.json")
@@ -239,8 +239,8 @@ def test_output_failures_never_claim_saved(tmp_path, capsys, failure):
     cfg = config(tmp_path, tmp_path / "result.json")
     targets = {
         "mkdir": "pathlib.Path.mkdir",
-        "probe": "orchestune.dispatch.report_output.tempfile.mkstemp",
-        "atomic": "orchestune.dispatch.report_output.write_json_atomic",
+        "probe": "orchestune.dispatch.reporting.report_output.tempfile.mkstemp",
+        "atomic": "orchestune.dispatch.reporting.report_output.write_json_atomic",
         "convert": "orchestune.dispatch.dispatcher._report_to_dict",
     }
     with ExitStack() as stack:
@@ -312,7 +312,7 @@ def test_save_failure_overrides_retryable_and_reports_both(tmp_path, capsys):
             "orchestune.dispatch.dispatcher._post_finding_notices", return_value=success
         ),
         patch(
-            "orchestune.dispatch.report_output.write_json_atomic",
+            "orchestune.dispatch.reporting.report_output.write_json_atomic",
             side_effect=OSError("full"),
         ),
     ):
@@ -357,7 +357,8 @@ def test_cli_closes_owned_progress_stream_even_on_config_error(tmp_path, config_
     cfg = config(tmp_path, tmp_path / "result.json")
     with (
         patch(
-            "orchestune.dispatch.progress._stdout_stream", return_value=(stream, True)
+            "orchestune.dispatch.reporting.progress._stdout_stream",
+            return_value=(stream, True),
         ),
         patch(
             "orchestune.dispatch.dispatcher.load_and_resolve_config",
@@ -392,7 +393,7 @@ class _TtyStream(StringIO):
 
 def _run_main_with_tty_sink(tmp_path, stream, cycle):
     from orchestune.dispatch.dispatcher import main
-    from orchestune.dispatch.progress_output import RichDispatchProgress
+    from orchestune.dispatch.reporting.progress_output import RichDispatchProgress
 
     cfg = config(tmp_path, tmp_path / "result.json")
     sink = RichDispatchProgress("run-tty", None, None, stream=stream, env={})
@@ -420,7 +421,7 @@ def _phase_then(outcome):
 
 
 def test_tty_progress_saves_report_and_never_prints_json(tmp_path, capsys):
-    from orchestune.dispatch.report import _report_to_dict
+    from orchestune.dispatch.reporting.report import _report_to_dict
 
     report = _report()
     stream = _TtyStream()

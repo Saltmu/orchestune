@@ -47,13 +47,13 @@ from orchestune.dispatch.cycle_events import (
     UsageLimitCompletion,
     WorktreeCompletion,
 )
-from orchestune.dispatch.result import PhaseResult, PhaseStatus
-from orchestune.dispatch.reviewer import ReviewerBotSetting, resolve_reviewer_bot
-from orchestune.dispatch.summary import (
+from orchestune.dispatch.reporting.summary import (
     merge_skips,
     render_forge_warnings_markdown,
     render_skipped_markdown,
 )
+from orchestune.dispatch.result import PhaseResult, PhaseStatus
+from orchestune.dispatch.reviewer import ReviewerBotSetting, resolve_reviewer_bot
 from orchestune.forge import Forge, ForgeAuthError
 from orchestune.integrator.parent_completion import process_parent_completion
 from orchestune.issue_notice import NoticeOutcome, post_notice_if_changed

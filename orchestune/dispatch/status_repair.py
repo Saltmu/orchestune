@@ -33,7 +33,7 @@ from orchestune.consistency.repairs.status import (
 )
 from orchestune.consistency.vocabulary import DESIRED_STATUS_LABEL
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.promotion_reporting import (
+from orchestune.dispatch.reporting.promotion import (
     PromotionReportJournal,
     PromotionReportRecord,
     is_reportable_promotion,

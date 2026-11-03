@@ -29,7 +29,7 @@ from orchestune.dispatch.execution_profiles import (
     extract_execution_profile_config,
     resolve_execution_profile,
 )
-from orchestune.dispatch.report import write_github_step_summary
+from orchestune.dispatch.reporting.report import write_github_step_summary
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     CodexCloudDispatchTarget,

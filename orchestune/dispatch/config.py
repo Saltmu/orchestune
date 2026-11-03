@@ -24,7 +24,7 @@ from orchestune.consistency.repairs.execution import (
 from orchestune.consistency.supervisor import MAX_REPAIR_PASSES, ConsistencyMode
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.dispatch.execution_profiles import ExecutionProfileConfig
-from orchestune.dispatch.progress import NoopProgress, ProgressSink
+from orchestune.dispatch.reporting.progress import NoopProgress, ProgressSink
 from orchestune.dispatch.retry_policy import (
     DEFAULT_EARLY_DEATH_BACKOFF_SECONDS,
     DEFAULT_EARLY_DEATH_MAX_RETRIES,

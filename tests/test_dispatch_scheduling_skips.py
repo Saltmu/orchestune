@@ -16,7 +16,7 @@ from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
 from orchestune.dispatch.phase_scheduling import _determine_candidate_tasks
-from orchestune.dispatch.summary import (
+from orchestune.dispatch.reporting.summary import (
     REASON_DEPENDENCY,
     REASON_EXTERNAL_LOCK,
     REASON_REVIEW_TIMEOUT_BACKOFF,
@@ -420,7 +420,7 @@ class TestUsageLimitGate:
         return adapter.select_tasks((CycleTask.from_task(task),))
 
     def test_task_retry_wait_is_a_usage_limit_backoff(self, fake_forge):
-        from orchestune.dispatch.summary import REASON_USAGE_LIMIT_BACKOFF
+        from orchestune.dispatch.reporting.summary import REASON_USAGE_LIMIT_BACKOFF
 
         run_state = RunState(
             task_reclaim_counts={
@@ -451,7 +451,7 @@ class TestUsageLimitGate:
         ).selected
 
     def test_target_cooldown_excludes_every_task_of_that_target(self, fake_forge):
-        from orchestune.dispatch.summary import REASON_USAGE_LIMIT_COOLDOWN
+        from orchestune.dispatch.reporting.summary import REASON_USAGE_LIMIT_COOLDOWN
 
         run_state = RunState(usage_limit_cooldowns={"claude-cli": 100.0})
 

@@ -9,7 +9,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
-from orchestune.dispatch.progress import ProgressSink
+from orchestune.dispatch.reporting.progress import ProgressSink
 
 _TERMINAL_EVENTS = frozenset(
     {"completed", "failed", "held", "unknown", "launched", "warning"}

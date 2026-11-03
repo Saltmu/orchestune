@@ -33,7 +33,7 @@ from collections.abc import Mapping
 from contextlib import ExitStack
 from typing import TextIO
 
-from orchestune.dispatch.progress import (
+from orchestune.dispatch.reporting.progress import (
     DispatchProgressSink,
     StdoutProgress,
     _stdout_stream,
