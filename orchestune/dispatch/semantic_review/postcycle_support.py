@@ -9,12 +9,12 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.semantic_review_ci import (
+from orchestune.dispatch.semantic_review.ci import (
     RemoteHeadFn,
     SemanticCiObservation,
     verify_semantic_ci,
 )
-from orchestune.dispatch.semantic_review_cleanup import run_attempt_cleanup
+from orchestune.dispatch.semantic_review.cleanup import run_attempt_cleanup
 from orchestune.integrator.attempt_cleanup import RemoteRefPorts
 
 VerifyCiFn = Callable[[str, str], SemanticCiObservation | None]

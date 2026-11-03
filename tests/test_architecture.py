@@ -156,28 +156,28 @@ BOUNDED_RECOVERY_TERMINALS = {
         "apply_human_review_escalation",
     ),
     "semantic_review_timeout_seconds": (
-        "dispatch/semantic_review_adapters.py",
+        "dispatch/semantic_review/adapters.py",
         "apply_human_review_escalation",
     ),
     # #1436: an unanswered review request stops at the ack deadline.
     "semantic_review_ack_timeout_seconds": (
-        "dispatch/semantic_review_adapters.py",
+        "dispatch/semantic_review/adapters.py",
         "apply_human_review_escalation",
     ),
     "semantic_fix_timeout_seconds": (
-        "dispatch/semantic_review_adapters.py",
+        "dispatch/semantic_review/adapters.py",
         "apply_human_review_escalation",
     ),
     "semantic_ci_timeout_seconds": (
-        "dispatch/semantic_review_adapters.py",
+        "dispatch/semantic_review/adapters.py",
         "apply_human_review_escalation",
     ),
     "semantic_attempt_timeout_seconds": (
-        "dispatch/semantic_review_adapters.py",
+        "dispatch/semantic_review/adapters.py",
         "apply_human_review_escalation",
     ),
     "max_semantic_fix_retries": (
-        "dispatch/semantic_review_adapters.py",
+        "dispatch/semantic_review/adapters.py",
         "apply_human_review_escalation",
     ),
 }

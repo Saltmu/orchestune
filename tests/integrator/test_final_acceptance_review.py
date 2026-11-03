@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestune.dispatch.semantic_review_triggers import restore_round_triggers
+from orchestune.dispatch.semantic_review.triggers import restore_round_triggers
 from orchestune.integrator.final_acceptance_review import (
     PayloadBudgetExceeded,
     extract_acceptance_sections,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from orchestune.dispatch.semantic_review_diagnostics import describe_reviewer
+from orchestune.dispatch.semantic_review.diagnostics import describe_reviewer
 
 
 @pytest.mark.parametrize(

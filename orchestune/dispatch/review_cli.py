@@ -20,7 +20,7 @@ from pathlib import Path
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.config_loader import load_and_resolve_config
-from orchestune.dispatch.postcycle_semantic_review import SemanticReviewCycleRunner
+from orchestune.dispatch.semantic_review.postcycle import SemanticReviewCycleRunner
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.cli_output import CliOutput, make_output
 from orchestune.integrator.attempt import OpenAttempt, find_open_attempts

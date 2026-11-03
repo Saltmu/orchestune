@@ -10,16 +10,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.dispatch.postcycle_semantic_review import (
-    advance_pending_semantic_reviews,
-)
 from orchestune.dispatch.pre_scheduling_integration import (
     _advance_pending_semantic_reviews,
 )
 from orchestune.dispatch.result import PhaseStatus
-from orchestune.dispatch.semantic_review_adapters import (
+from orchestune.dispatch.semantic_review.adapters import (
     SemanticOperationResult,
     poll_semantic_operation,
+)
+from orchestune.dispatch.semantic_review.postcycle import (
+    advance_pending_semantic_reviews,
 )
 from orchestune.forge import ForgeAuthError
 from orchestune.infra.git_cli import ConditionalBranchDeletionResult as Deletion
@@ -222,7 +222,7 @@ class TestCleanupInThePostCycle:
         real poll answers RUNNING/artifact_pending for a job that has finished."""
         self._running_job(world, result_posted=True)
         with patch(
-            "orchestune.dispatch.semantic_review_adapters.fetch_remote_branch",
+            "orchestune.dispatch.semantic_review.adapters.fetch_remote_branch",
             side_effect=RuntimeError("no such branch"),
         ):
             (cleanup,) = world.advance(real_poll=True)["cleanup"]
@@ -245,7 +245,7 @@ class TestCleanupInThePostCycle:
             operation_status=SemanticOperationStatus.RUNNING,
         )
         with patch(
-            "orchestune.dispatch.semantic_review_cleanup.poll_semantic_operation",
+            "orchestune.dispatch.semantic_review.cleanup.poll_semantic_operation",
             side_effect=RuntimeError("provider down"),
         ):
             (cleanup,) = world.advance()["cleanup"]

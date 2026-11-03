@@ -13,12 +13,6 @@ import pytest
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.postcycle_semantic_review import (
-    SemanticClaimClient,
-    SemanticReviewCycleRunner,
-    SemanticReviewOperations,
-    advance_pending_semantic_reviews,
-)
 from orchestune.dispatch.pre_scheduling_integration import (
     _INTEGRATOR_SUCCESS_STATUSES,
     _advance_pending_semantic_reviews,
@@ -26,11 +20,17 @@ from orchestune.dispatch.pre_scheduling_integration import (
     _pre_scheduling_integration_steps,
 )
 from orchestune.dispatch.result import PhaseStatus
-from orchestune.dispatch.semantic_review_adapters import (
+from orchestune.dispatch.semantic_review.adapters import (
     SemanticOperationResult,
     SemanticReviewPreflightResult,
     escalate_semantic_review_to_human,
     trigger_semantic_review_round,
+)
+from orchestune.dispatch.semantic_review.postcycle import (
+    SemanticClaimClient,
+    SemanticReviewCycleRunner,
+    SemanticReviewOperations,
+    advance_pending_semantic_reviews,
 )
 from orchestune.integrator.semantic_claim import (
     ClaimResult,

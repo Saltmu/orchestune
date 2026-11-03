@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from orchestune.dispatch.semantic_review_ack import AckAction, assess_review_ack
+from orchestune.dispatch.semantic_review.ack import AckAction, assess_review_ack
 from orchestune.integrator.semantic_claim import ClaimResult
 from orchestune.review.semantic_gate import (
     SemanticReviewPhase,

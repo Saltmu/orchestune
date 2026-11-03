@@ -35,7 +35,7 @@ import pytest
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.semantic_review_adapters import (
+from orchestune.dispatch.semantic_review.adapters import (
     SemanticOperationResult,
     validate_semantic_review_preflight,
 )
