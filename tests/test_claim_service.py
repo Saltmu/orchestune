@@ -942,7 +942,10 @@ class TestInteractiveFootprintOverlapWarning:
 
         assert outcome.success is False
         assert outcome.failure is not None
-        assert outcome.stage == ClaimStage.RESERVED
+        assert outcome.stage == ClaimStage.RESERVED, (
+            f"stage={outcome.stage!r} reason={outcome.failure.reason!r} "
+            f"message={outcome.failure.message!r}"
+        )
         assert outcome.claim_id == "claim-resume-104"
         state = load_run_state(state_path)
         assert "104" in state.active_worktrees
