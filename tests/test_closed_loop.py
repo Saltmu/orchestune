@@ -10,8 +10,8 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.dispatch.targets import DispatchHandle, DispatchTarget
 from orchestune.integrator import Integrator, IntegratorConfig
 from orchestune.issue_parsing import PARENT_MARKER
@@ -482,11 +482,11 @@ def test_closed_loop_flow():
     # Git operations remain patched because they are not Forge methods.
     patches = [
         patch(
-            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            "orchestune.dispatch.phase.rebase.list_remote_branches",
             dummy_github.list_remote_branches,
         ),
         patch(
-            "orchestune.dispatch.phase_rebase.branch_changed_files",
+            "orchestune.dispatch.phase.rebase.branch_changed_files",
             dummy_github.branch_changed_files,
         ),
     ]
@@ -736,11 +736,11 @@ def test_closed_loop_dag_recomputation_serialization():
     # Git operations remain patched because they are not Forge methods.
     patches = [
         patch(
-            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            "orchestune.dispatch.phase.rebase.list_remote_branches",
             dummy_github.list_remote_branches,
         ),
         patch(
-            "orchestune.dispatch.phase_rebase.branch_changed_files",
+            "orchestune.dispatch.phase.rebase.branch_changed_files",
             dummy_github.branch_changed_files,
         ),
     ]

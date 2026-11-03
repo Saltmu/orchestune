@@ -9,9 +9,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from orchestune.config_contracts import ConfigError
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_schema import validate_toml_config
-from orchestune.dispatch.config_values import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.config.schema import validate_toml_config
+from orchestune.dispatch.config.values import (
     RUNTIME_TUNING_KEYS,
     runtime_tuning_overrides,
 )
@@ -19,7 +19,7 @@ from orchestune.dispatch.pre_scheduling_integration import (
     _build_integrator_config,
     _run_semantic_integrator,
 )
-from orchestune.dispatch.report import _format_integrator_summary
+from orchestune.dispatch.reporting.report import _format_integrator_summary
 from orchestune.dispatch.result import PhaseStatus
 from orchestune.integrator import IntegrationStatus, IntegratorConfig
 from orchestune.integrator.timeout_policy import (

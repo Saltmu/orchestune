@@ -98,7 +98,7 @@ def test_control_missing_hold_is_detected(tmp_path, monkeypatch, fault):
             "orchestune.complete.publication.ensure_review_pending", lambda *a: None
         )
     else:
-        from orchestune.dispatch.cycle_context_state import _CycleState
+        from orchestune.dispatch.cycle.context_state import _CycleState
 
         real = _CycleState._labels
         monkeypatch.setattr(

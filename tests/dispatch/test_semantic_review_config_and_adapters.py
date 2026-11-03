@@ -10,10 +10,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from orchestune.config_contracts import ConfigError
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_loader import build_arg_parser, load_and_resolve_config
-from orchestune.dispatch.config_schema import validate_toml_config
-from orchestune.dispatch.semantic_review_adapters import (
+from orchestune.dispatch.config.loader import build_arg_parser, load_and_resolve_config
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.config.schema import validate_toml_config
+from orchestune.dispatch.semantic_review.adapters import (
     SemanticOperationResult,
     dispatch_semantic_fix_agent,
     escalate_semantic_review_to_human,
@@ -296,7 +296,7 @@ class TestSemanticReviewPreflight:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setattr(
-            "orchestune.dispatch.semantic_review_adapters.probe_claim_backend",
+            "orchestune.dispatch.semantic_review.adapters.probe_claim_backend",
             lambda _: "claim_backend_unsupported",
         )
         result = validate_semantic_review_preflight(
@@ -311,7 +311,7 @@ class TestSemanticReviewPreflight:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         monkeypatch.setattr(
-            "orchestune.dispatch.semantic_review_adapters.probe_claim_backend",
+            "orchestune.dispatch.semantic_review.adapters.probe_claim_backend",
             lambda _: None,
         )
         config = self._config(
@@ -480,15 +480,15 @@ class TestSemanticReviewOperations:
         )
         forge = CommentForge([{"author": "orchestune[bot]", "body": marker}])
         monkeypatch.setattr(
-            "orchestune.dispatch.semantic_review_adapters.fetch_remote_branch",
+            "orchestune.dispatch.semantic_review.adapters.fetch_remote_branch",
             lambda _root, branch: f"origin/{branch}",
         )
         monkeypatch.setattr(
-            "orchestune.dispatch.semantic_review_adapters.resolve_commit_sha",
+            "orchestune.dispatch.semantic_review.adapters.resolve_commit_sha",
             lambda _root, _ref: FIXED,
         )
         monkeypatch.setattr(
-            "orchestune.dispatch.semantic_review_adapters.is_ancestor_commit",
+            "orchestune.dispatch.semantic_review.adapters.is_ancestor_commit",
             lambda _root, ancestor, ref: ancestor == HEAD and ref.endswith(OPERATION),
         )
 
@@ -510,11 +510,11 @@ class TestSemanticReviewOperations:
         notices: list[tuple[int, str, str]] = []
         transitions: list[tuple[int, tuple[str, ...], str]] = []
         monkeypatch.setattr(
-            "orchestune.dispatch.semantic_review_adapters.post_notice_if_changed",
+            "orchestune.dispatch.semantic_review.adapters.post_notice_if_changed",
             lambda _forge, number, kind, body: notices.append((number, kind, body)),
         )
         monkeypatch.setattr(
-            "orchestune.dispatch.semantic_review_adapters.apply_human_review_escalation",
+            "orchestune.dispatch.semantic_review.adapters.apply_human_review_escalation",
             lambda number, labels, comment, forge=None: transitions.append(
                 (number, labels, comment)
             ),
@@ -568,7 +568,7 @@ class TestSemanticReviewOperations:
     def test_redact_handles_bearer_tokens_and_long_env_values(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from orchestune.dispatch.semantic_review_adapters import _redact
+        from orchestune.dispatch.semantic_review.adapters import _redact
 
         monkeypatch.setenv("SHORT_TOKEN", "1")
         monkeypatch.setenv("MY_SECRET_TOKEN", "secret-token-12345")
@@ -592,7 +592,7 @@ class TestSemanticReviewOperations:
         )
         evaluations = [NoticePresence.UNKNOWN, NoticePresence.PRESENT]
         monkeypatch.setattr(
-            "orchestune.dispatch.semantic_review_adapters.TrustContext.evaluate_candidate_markers",
+            "orchestune.dispatch.semantic_review.adapters.TrustContext.evaluate_candidate_markers",
             lambda _self, _comments: (evaluations.pop(0), "evaluated"),
         )
         res = trigger_semantic_review_round(

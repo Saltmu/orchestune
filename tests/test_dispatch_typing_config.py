@@ -9,11 +9,11 @@ from pathlib import Path
 import pytest
 
 STRICT_MODULES = (
-    "orchestune.dispatch.cycle",
-    "orchestune.dispatch.cycle_execution",
-    "orchestune.dispatch.cycle_execution_contracts",
-    "orchestune.dispatch.cycle_actions",
-    "orchestune.dispatch.cycle_state_changes",
+    "orchestune.dispatch.cycle.run",
+    "orchestune.dispatch.cycle.execution",
+    "orchestune.dispatch.cycle.execution_contracts",
+    "orchestune.dispatch.cycle.actions",
+    "orchestune.dispatch.cycle.state_changes",
 )
 
 

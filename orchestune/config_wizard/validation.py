@@ -12,7 +12,7 @@ from orchestune.dag.models import (
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
 )
-from orchestune.dispatch.config_schema import (
+from orchestune.dispatch.config.schema import (
     BOOLEAN_CONFIG_KEYS,
     NON_NEGATIVE_INT_KEYS,
     PATH_CONFIG_KEYS,

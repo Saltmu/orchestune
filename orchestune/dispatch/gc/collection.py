@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.claim.workspace import ClaimWorkspace
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import WorktreeCompletion
-from orchestune.dispatch.cycle_records import CompletionReceipt
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import WorktreeCompletion
+from orchestune.dispatch.cycle.records import CompletionReceipt
 from orchestune.dispatch.gc.external_guard import (
     collection_stop_problem,
     same_execution,

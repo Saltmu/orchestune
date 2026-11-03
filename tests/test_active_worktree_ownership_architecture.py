@@ -86,7 +86,7 @@ def mutate(active: ActiveWorktree):
 
     # In launch owner module: only claim, completion, core are violations
     launch_violations = active_worktree_boundary_violations(
-        source, module="orchestune.dispatch.launch_state"
+        source, module="orchestune.dispatch.launch.state"
     )
     assert {(v.target, v.kind) for v in launch_violations} == {
         ("claim", "unauthorized-replace"),
@@ -133,7 +133,7 @@ def build(core, launch, claim, completion):
 
     # Allowed constructor modules
     assert not active_worktree_boundary_violations(
-        source, module="orchestune.dispatch.launch_state"
+        source, module="orchestune.dispatch.launch.state"
     )
     assert not active_worktree_boundary_violations(
         source, module="orchestune.claim.ownership"
@@ -505,7 +505,7 @@ def build():
     return LaunchInfo(launch_phase="unknown-old-value", _legacy=True)
 """
     violations = active_worktree_boundary_violations(
-        source, module="orchestune.dispatch.launch_state"
+        source, module="orchestune.dispatch.launch.state"
     )
     assert len(violations) == 1
     assert violations[0].kind == "unauthorized-legacy-construction"
@@ -523,7 +523,7 @@ def update(active: ActiveWorktree):
     active.claim = None
 """
     violations = active_worktree_boundary_violations(
-        source, module="orchestune.dispatch.launch_state"
+        source, module="orchestune.dispatch.launch.state"
     )
     assert {(item.target, item.kind) for item in violations} == {
         ("launch.pid", "subrecord-direct-assign"),

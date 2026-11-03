@@ -7,9 +7,9 @@ import os
 import orchestune.claim.workspace as claim_workspace
 from orchestune.claim.workspace import ClaimWorkspace
 from orchestune.config_contracts import ConfigError
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_loader import _resolve_cloud_settings
-from orchestune.dispatch.config_schema import (
+from orchestune.dispatch.config.loader import _resolve_cloud_settings
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.config.schema import (
     extract_reviewer_by_target,
     validate_toml_config,
 )

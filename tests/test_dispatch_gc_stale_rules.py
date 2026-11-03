@@ -9,13 +9,13 @@ test_dispatch_gc_integration.py を参照。
 from unittest.mock import patch
 
 from orchestune.consistency.models import RepairStatus
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import TaskWorktreeCompletion
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import TaskWorktreeCompletion
 from orchestune.dispatch.gc.rule_chain import (
     _apply_stale_active_entry_discard,
     _rule_not_needed,
 )
-from orchestune.dispatch.phase_gc import run_gc_phase
+from orchestune.dispatch.phase.gc import run_gc_phase
 from orchestune.ledger.run_state import RunState
 from orchestune.outcome_record import OutcomeRecord
 from tests.dispatch_gc_test_support import _active, _ctx, _task

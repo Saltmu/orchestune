@@ -19,8 +19,8 @@ from orchestune.dependencies.policy import (
     decide_stack_target,
 )
 from orchestune.dispatch import gc as dispatch_gc
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import (
     AlreadyForcedSerialDeviation,
     DeviationConflict,
     DeviationEvent,
@@ -29,9 +29,9 @@ from orchestune.dispatch.cycle_events import (
     UnknownSubtaskDeviation,
 )
 from orchestune.dispatch.execution_profiles import ExecutionSelection
-from orchestune.dispatch.launch_state import update_launch, with_launch
+from orchestune.dispatch.launch.state import update_launch, with_launch
 from orchestune.dispatch.locks import check_footprint_deviation
-from orchestune.dispatch.recovery_counters import merged_recovery_counters
+from orchestune.dispatch.recovery.counters import merged_recovery_counters
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.dispatch.worktree import _provision_and_launch
 from orchestune.forge import Forge, GitHubForge

@@ -4,8 +4,8 @@ from unittest.mock import patch
 import pytest
 
 import orchestune.dispatch.locks
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.run import CycleReport
 from orchestune.dispatch.locks import (
     ExternalLockConflict,
     check_footprint_deviation,
@@ -13,8 +13,8 @@ from orchestune.dispatch.locks import (
 from orchestune.dispatch.locks import (
     scan_external_locks as _scan_external_locks,
 )
-from orchestune.dispatch.phase_rebase import _sync_external_locks
-from orchestune.dispatch.report import write_github_step_summary
+from orchestune.dispatch.phase.rebase import _sync_external_locks
+from orchestune.dispatch.reporting.report import write_github_step_summary
 from orchestune.dispatch.scoring import Task
 from orchestune.ledger.run_state import RunState
 from orchestune.models import PrRecord
@@ -600,7 +600,7 @@ class TestCheckFootprintDeviation:
 
 
 class TestSyncExternalLocks:
-    @patch("orchestune.dispatch.phase_rebase.list_remote_branches", autospec=True)
+    @patch("orchestune.dispatch.phase.rebase.list_remote_branches", autospec=True)
     @patch("fake_forge_proxy.active_fake_forge.remove_label")
     @patch("fake_forge_proxy.active_fake_forge.add_label")
     def test_sync_external_locks_unlocks_without_requeue_for_done_tasks(

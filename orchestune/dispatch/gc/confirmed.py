@@ -8,8 +8,8 @@ from dataclasses import replace
 from typing import Any, Literal, cast
 
 from orchestune.claim.workspace import resolve_claim_workspace
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import (
     ActiveReservationHold,
     CompletionEvent,
     ForgeFailureCompletion,
@@ -17,7 +17,7 @@ from orchestune.dispatch.cycle_events import (
     HandoffPreviewCompletion,
     PolicyHoldCompletion,
 )
-from orchestune.dispatch.cycle_records import CompletionReceipt
+from orchestune.dispatch.cycle.records import CompletionReceipt
 from orchestune.dispatch.gc.collection import GcItemResult, _apply_candidate
 from orchestune.dispatch.gc.external_guard import fresh_external_hold, same_execution
 from orchestune.dispatch.gc.handoff import GcRequest, HandoffForge

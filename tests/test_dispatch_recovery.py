@@ -9,8 +9,8 @@ from orchestune.consistency.models import (
     RepairStatus,
 )
 from orchestune.consistency.repairs.execution import COMMAND_BOOKKEEPING
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.recovery import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.recovery.service import (
     RecoveryBookkeepingSnapshot,
     _counter_targets,
     _include_queued_attempts,
@@ -387,7 +387,7 @@ class TestRecoveryCounterBookkeepingExecution:
     def test_counter_bookkeeping_updates_via_launch_owner_api(
         self, tmp_path, fake_forge
     ):
-        from orchestune.dispatch.recovery import RECOVERY_COUNTERS_STALE
+        from orchestune.dispatch.recovery.service import RECOVERY_COUNTERS_STALE
         from tests.dispatch_test_support import make_test_active_worktree
 
         active = make_test_active_worktree(
@@ -437,7 +437,7 @@ class TestRecoveryCounterBookkeepingExecution:
     ):
         import pytest
 
-        from orchestune.dispatch.recovery import RECOVERY_COUNTERS_STALE
+        from orchestune.dispatch.recovery.service import RECOVERY_COUNTERS_STALE
         from tests.dispatch_test_support import make_test_active_worktree
 
         active = make_test_active_worktree(
@@ -470,7 +470,7 @@ class TestRecoveryCounterBookkeepingExecution:
         )
 
         with patch(
-            "orchestune.dispatch.recovery._persist_recovery_snapshot",
+            "orchestune.dispatch.recovery.service._persist_recovery_snapshot",
             side_effect=OSError("disk full"),
         ):
             with pytest.raises(IOError, match="disk full"):
@@ -490,7 +490,7 @@ class TestYamlParseDeduplication:
         import yaml
 
         from orchestune import issue_parsing
-        from orchestune.dispatch import recovery_restoration
+        from orchestune.dispatch.recovery import restoration as recovery_restoration
 
         counts = {"csafe": 0, "py": 0}
         orig_csafe = issue_parsing._yaml_safe_load
@@ -510,7 +510,7 @@ class TestYamlParseDeduplication:
         return counts
 
     def test_build_task_mappings_parses_yaml_once_per_issue(self, monkeypatch):
-        from orchestune.dispatch.cycle_context import _build_task_mappings
+        from orchestune.dispatch.cycle.context import _build_task_mappings
 
         counts = self._install_yaml_counters(monkeypatch)
         issues = [
@@ -523,7 +523,7 @@ class TestYamlParseDeduplication:
     def test_refresh_snapshot_parses_yaml_at_most_twice_per_issue(
         self, monkeypatch, tmp_path, fake_forge
     ):
-        from orchestune.dispatch.recovery import RecoveryBookkeepingAdapter
+        from orchestune.dispatch.recovery.service import RecoveryBookkeepingAdapter
 
         counts = self._install_yaml_counters(monkeypatch)
         fake_forge.list_issues_by_label.return_value = [
@@ -549,7 +549,7 @@ class TestYamlParseDeduplication:
         )
 
     def test_parse_claim_info_preserves_counters_with_malformed_metadata(self):
-        from orchestune.dispatch.recovery_restoration import (
+        from orchestune.dispatch.recovery.restoration import (
             _parse_claim_info_from_issue,
         )
 

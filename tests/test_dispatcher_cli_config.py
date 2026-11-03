@@ -19,8 +19,8 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import CycleReport, run_dispatch_cycle
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.run import CycleReport, run_dispatch_cycle
 from orchestune.dispatch.dispatcher import main
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.forge import ForgeAuthError
@@ -954,7 +954,7 @@ class TestDispatcherConfigLoading:
         fake_forge.list_open_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),

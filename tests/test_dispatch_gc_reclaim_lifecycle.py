@@ -12,12 +12,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_context import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.context import (
     IssuesByStatus,
     discard_reclaim_counts_for_closed_issues,
 )
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     TaskWorktreeCompletion,
     WorktreeCompletion,
     WorktreeCompletionHold,
@@ -68,7 +68,7 @@ def _run_timeout_cycles(run_state, config, cycles, task=None, tmp_path=None):
         run_state.active_worktrees["280"] = _active(
             worktree_path=str((tmp_path or config.log_dir) / "missing-280")
         )
-        with patch("orchestune.dispatch.phase_gc.time.time", return_value=_NOW):
+        with patch("orchestune.dispatch.phase.gc.time.time", return_value=_NOW):
             cycle_events = _collect_zombies_and_timeouts(run_state, {280: task}, config)
         assert len(cycle_events) == 1
         events.append(cycle_events[0])
@@ -338,7 +338,7 @@ class TestDirtyWorktreeHoldLimit:
         field・出力順・省略規則は従来のholdイベントの`replace`と同一でなければ
         ならない（events.jsonlの既存出力を維持する）。
         """
-        from orchestune.dispatch.cycle_events import DirtyWorktreeEscalatedCompletion
+        from orchestune.dispatch.cycle.events import DirtyWorktreeEscalatedCompletion
 
         ctx = _ctx(forge=fake_forge)
         ctx.config.apply = True
@@ -728,7 +728,7 @@ class TestReclaimKeepsIndependentBudgets:
             )
 
         with (
-            patch("orchestune.dispatch.phase_gc.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.phase.gc.time.time", return_value=_NOW),
             patch.object(
                 config.resolved_forge, "add_label", side_effect=_record_persisted
             ),

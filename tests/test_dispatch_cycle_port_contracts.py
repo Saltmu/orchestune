@@ -32,17 +32,17 @@ from orchestune.consistency.models import (
     RepairStatus,
 )
 from orchestune.consistency.supervisor import ConsistencyCycleReport, ConsistencyMode
-from orchestune.dispatch import phase_gc
-from orchestune.dispatch.cycle_action_contracts import (
+from orchestune.dispatch.cycle.action_contracts import (
     ActivePhaseResult,
     CycleActions,
     CycleQueries,
     GcPhaseResult,
     StackBase,
 )
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.cycle_events import CompletionEvent, PromotionEvent
+from orchestune.dispatch.cycle.actions import CycleActionAdapter
+from orchestune.dispatch.cycle.events import CompletionEvent, PromotionEvent
 from orchestune.dispatch.locks import ExternalLockScanResult
+from orchestune.dispatch.phase import gc as phase_gc
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import RunState
@@ -143,7 +143,7 @@ class TestPortValueTypes:
 
     def test_gc_phase_result_is_reexported_from_phase_gc(self):
         # 定義はL2へ移設した。L2からL3をimportしないための移設であり、既存の
-        # `from orchestune.dispatch.phase_gc import GcPhaseResult`は同じクラスを
+        # `from orchestune.dispatch.phase.gc import GcPhaseResult`は同じクラスを
         # 指し続ける。
         assert phase_gc.GcPhaseResult is GcPhaseResult
         assert "GcPhaseResult" in phase_gc.__all__
@@ -252,13 +252,13 @@ class TestPortProtocols:
 # `mypy orchestune tests`自体が落ちるため、tree には残さずここから注入する。
 _PROTOCOL_FIXTURE = """\
 from orchestune.consistency.models import RepairCommand, RepairResult
-from orchestune.dispatch.cycle_action_contracts import (
+from orchestune.dispatch.cycle.action_contracts import (
     ActivePhaseResult,
     CycleActions,
     GcPhaseResult,
     StackBase,
 )
-from orchestune.dispatch.cycle_events import CompletionEvent, PromotionEvent
+from orchestune.dispatch.cycle.events import CompletionEvent, PromotionEvent
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.task_metadata import TaskMetadata

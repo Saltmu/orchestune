@@ -19,29 +19,29 @@ import pytest
 
 from orchestune.consistency.models import RepairStatus
 from orchestune.consistency.repairs.execution import COMMAND_REQUEUE
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import (
-    CycleReport,
-    append_event_log,
-    build_event_log_entry,
-    run_dispatch_cycle,
-)
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import (
     ForgeFailureCompletion,
     PromotionEvent,
     RecomputedDeviation,
     WorktreeCompletion,
 )
+from orchestune.dispatch.cycle.run import (
+    CycleReport,
+    append_event_log,
+    build_event_log_entry,
+    run_dispatch_cycle,
+)
 from orchestune.dispatch.dispatcher import (
     _DispatcherRunResult,
     _emit_dispatcher_report,
 )
-from orchestune.dispatch.scoring import SchedulingDecision, ScoreComponents
-from orchestune.dispatch.summary import (
+from orchestune.dispatch.reporting.summary import (
     REASON_EXTERNAL_LOCK,
     SUMMARY_PREFIX,
     SkipRecord,
 )
+from orchestune.dispatch.scoring import SchedulingDecision, ScoreComponents
 from orchestune.ledger.run_state import (
     CompletedWorktree,
     RunState,
@@ -238,7 +238,7 @@ class TestRecoveredActiveTask:
         fake_forge.get_issue_labels.return_value = ("status:in-progress",)
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -321,7 +321,7 @@ class TestRecoveredActiveTask:
         mock_remove_label = fake_forge.remove_label
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -374,7 +374,7 @@ class TestDispatcherLocking:
                 fake_forge.list_open_prs.return_value = []
                 with (
                     patch(
-                        "orchestune.dispatch.phase_rebase.list_remote_branches",
+                        "orchestune.dispatch.phase.rebase.list_remote_branches",
                         autospec=True,
                         return_value=[],
                     ),
@@ -429,7 +429,7 @@ class TestLaunchOrderingCrashSafety:
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -519,7 +519,7 @@ class TestStaleActiveEntryReconciliation:
         mock_remove_label = fake_forge.remove_label
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -547,7 +547,7 @@ class TestStaleActiveEntryReconciliation:
 
 class TestPreventDuplicateSessions:
     @patch(
-        "orchestune.dispatch.phase_rebase.list_remote_branches",
+        "orchestune.dispatch.phase.rebase.list_remote_branches",
         autospec=True,
         return_value=[],
     )
@@ -609,7 +609,7 @@ class TestPreventDuplicateSessions:
         assert "重複起動防止" in mock_add_comment.call_args[0][1]
 
     @patch(
-        "orchestune.dispatch.phase_rebase.list_remote_branches",
+        "orchestune.dispatch.phase.rebase.list_remote_branches",
         autospec=True,
         return_value=[],
     )
@@ -751,7 +751,7 @@ class TestPreventDuplicateSessions:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -841,7 +841,7 @@ class TestPreventDuplicateSessions:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),

@@ -13,7 +13,7 @@ from dataclasses import replace
 
 import pytest
 
-from orchestune.dispatch.cycle_context_state import (
+from orchestune.dispatch.cycle.context_state import (
     REASON_EXECUTION_MISMATCH,
     REASON_INVALID_LAUNCH,
     REASON_INVALID_TRANSITION,

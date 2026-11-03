@@ -14,7 +14,7 @@ from enum import StrEnum
 from functools import cache
 from typing import cast
 
-from orchestune.dispatch.cycle_events import PriorMergeEvidenceCompletion
+from orchestune.dispatch.cycle.events import PriorMergeEvidenceCompletion
 from orchestune.issue_parsing import effective_parent_number
 from orchestune.labels import StatusLabel
 from orchestune.ledger.status_labels import (

@@ -19,12 +19,12 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from orchestune.dispatch.cycle_context_state import (
+from orchestune.dispatch.cycle.context_state import (
     REASON_STALE_OBSERVATION,
     REASON_TERMINAL_STATE,
     RecordStatus,
 )
-from orchestune.dispatch.cycle_records import (
+from orchestune.dispatch.cycle.records import (
     _authoritative_execution_active,
     apply_verified_transition,
 )

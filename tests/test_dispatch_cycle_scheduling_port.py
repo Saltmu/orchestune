@@ -11,8 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.cycle_action_contracts import StackBase
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
+from orchestune.dispatch.cycle.action_contracts import StackBase
+from orchestune.dispatch.cycle.actions import CycleActionAdapter
 from orchestune.ledger.run_state import RunState
 from orchestune.task_metadata import CycleTask
 from tests.dispatch_gc_test_support import _ctx, _task
@@ -28,7 +28,7 @@ class TestScanExternalLocks:
         adapter.bind_context(ctx)
 
         with patch(
-            "orchestune.dispatch.cycle_actions._sync_external_locks", autospec=True
+            "orchestune.dispatch.cycle.actions._sync_external_locks", autospec=True
         ) as mock_sync:
             result = adapter.scan_external_locks()
 
@@ -84,7 +84,7 @@ class TestSelectTasks:
         adapter.bind_context(ctx)
 
         with patch(
-            "orchestune.dispatch.cycle_actions.select_tasks_with_decisions",
+            "orchestune.dispatch.cycle.actions.select_tasks_with_decisions",
             autospec=True,
         ) as mock_select:
             adapter.select_tasks((candidate,))
@@ -110,7 +110,7 @@ class TestLaunchTasks:
         adapter = self._adapter(run_state, ctx)
 
         with patch(
-            "orchestune.dispatch.cycle_actions._launch_selected_tasks", autospec=True
+            "orchestune.dispatch.cycle.actions._launch_selected_tasks", autospec=True
         ) as mock_launch:
             result = adapter.launch_tasks((task,), (), (task,))
 
@@ -128,11 +128,11 @@ class TestLaunchTasks:
 
         with (
             patch(
-                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
+                "orchestune.dispatch.cycle.actions._launch_selected_tasks",
                 autospec=True,
                 return_value=[],
             ) as mock_launch,
-            patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
+            patch("orchestune.dispatch.cycle.actions.save_run_state", autospec=True),
         ):
             adapter.launch_tasks((), bases, ())
 
@@ -149,11 +149,11 @@ class TestLaunchTasks:
 
         with (
             patch(
-                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
+                "orchestune.dispatch.cycle.actions._launch_selected_tasks",
                 autospec=True,
                 return_value=[task],
             ) as mock_launch,
-            patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
+            patch("orchestune.dispatch.cycle.actions.save_run_state", autospec=True),
         ):
             result = adapter.launch_tasks((task,), (), (task,))
 
@@ -186,7 +186,7 @@ class TestLaunchTasks:
 
         with (
             patch(
-                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
+                "orchestune.dispatch.cycle.actions._launch_selected_tasks",
                 autospec=True,
                 side_effect=_launch,
             ),
@@ -217,7 +217,7 @@ class TestLaunchTasks:
 
         with (
             patch(
-                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
+                "orchestune.dispatch.cycle.actions._launch_selected_tasks",
                 autospec=True,
                 side_effect=_launch,
             ),

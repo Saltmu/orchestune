@@ -3,12 +3,12 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.progress import (
+from orchestune.dispatch.reporting.progress import (
     DispatchProgressSink,
     StdoutProgress,
     progress_phase,
 )
-from orchestune.dispatch.progress_output import (
+from orchestune.dispatch.reporting.progress_output import (
     RichDispatchProgress,
     select_progress_sink,
 )
@@ -80,7 +80,7 @@ def test_closed_stdout_pipe_preserves_process_exit_code():
             [
                 sys.executable,
                 "-c",
-                "from orchestune.dispatch.progress import StdoutProgress; s = StdoutProgress('run', 1070, True); s.emit('cycle', 'started'); s.emit('cycle', 'completed')",
+                "from orchestune.dispatch.reporting.progress import StdoutProgress; s = StdoutProgress('run', 1070, True); s.emit('cycle', 'started'); s.emit('cycle', 'completed')",
             ],
             stdout=write_fd,
             stderr=subprocess.PIPE,
@@ -95,8 +95,8 @@ def test_closed_stdout_pipe_preserves_process_exit_code():
 def test_cycle_failure_identifies_boundary_and_no_success(tmp_path, fake_forge):
     from unittest.mock import Mock, patch
 
-    from orchestune.dispatch.config import DispatcherConfig
-    from orchestune.dispatch.cycle import run_dispatch_cycle
+    from orchestune.dispatch.config.model import DispatcherConfig
+    from orchestune.dispatch.cycle.run import run_dispatch_cycle
 
     sink = Mock()
     config = DispatcherConfig(
@@ -108,7 +108,7 @@ def test_cycle_failure_identifies_boundary_and_no_success(tmp_path, fake_forge):
     )
     with (
         patch(
-            "orchestune.dispatch.cycle.load_run_state",
+            "orchestune.dispatch.cycle.run.load_run_state",
             side_effect=ValueError("broken state"),
         ),
         pytest.raises(ValueError),
@@ -127,8 +127,11 @@ def test_launch_progress_matches_actual_result(tmp_path, fake_forge, outcome):
     from contextlib import nullcontext
     from unittest.mock import Mock, patch
 
-    from orchestune.dispatch.config import DispatcherConfig
-    from orchestune.dispatch.launch import TaskLaunchPlan, _apply_single_task_launch
+    from orchestune.dispatch.config.model import DispatcherConfig
+    from orchestune.dispatch.launch.service import (
+        TaskLaunchPlan,
+        _apply_single_task_launch,
+    )
     from orchestune.ledger.run_state import RunState
 
     task = Mock(issue_number=42)
@@ -160,20 +163,23 @@ def test_launch_progress_matches_actual_result(tmp_path, fake_forge, outcome):
 
     with (
         patch(
-            "orchestune.dispatch.launch._launch_reservation",
+            "orchestune.dispatch.launch.service._launch_reservation",
             return_value=nullcontext(commit),
         ),
         patch(
-            "orchestune.dispatch.launch.prepare_journaled_target", return_value=target
+            "orchestune.dispatch.launch.service.prepare_journaled_target",
+            return_value=target,
         ),
         patch(
-            "orchestune.dispatch.launch._try_planned_launch", return_value=launch
+            "orchestune.dispatch.launch.service._try_planned_launch",
+            return_value=launch,
         ) as provider,
         patch(
-            "orchestune.dispatch.launch._record_successful_launch", side_effect=record
+            "orchestune.dispatch.launch.service._record_successful_launch",
+            side_effect=record,
         ) as saved,
-        patch("orchestune.dispatch.launch._record_failed_launch_phase"),
-        patch("orchestune.dispatch.launch._handle_launch_failure"),
+        patch("orchestune.dispatch.launch.service._record_failed_launch_phase"),
+        patch("orchestune.dispatch.launch.service._handle_launch_failure"),
     ):
         result = _apply_single_task_launch(
             plan, state, 10.0, config, Mock(), None, None
@@ -260,7 +266,8 @@ def test_default_stream_is_read_from_stdout_at_call_time(monkeypatch):
     monkeypatch.setattr("sys.stdout", TtyStream(tty=False))
     owned = StringIO()
     with patch(
-        "orchestune.dispatch.progress._stdout_stream", return_value=(owned, True)
+        "orchestune.dispatch.reporting.progress._stdout_stream",
+        return_value=(owned, True),
     ):
         sink = select_progress_sink("run", env={})
     assert type(sink) is StdoutProgress
@@ -389,7 +396,7 @@ def test_rich_close_closes_only_the_owned_stream():
 
     owned = TtyStream()
     with patch(
-        "orchestune.dispatch.progress_output._stdout_stream",
+        "orchestune.dispatch.reporting.progress_output._stdout_stream",
         return_value=(owned, True),
     ):
         sink = RichDispatchProgress("run", None, None, env={})

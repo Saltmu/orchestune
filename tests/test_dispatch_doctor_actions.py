@@ -5,14 +5,18 @@ from typing import Any
 
 import pytest
 
-from orchestune.dispatch.doctor import DoctorRequest, load_workflow_yaml, run_doctor
-from orchestune.dispatch.doctor_actions import (
+from orchestune.dispatch.doctor.actions import (
     STANDARD_GROUP,
     is_standard_group,
     normalize_group_expression,
     run_actions_checks,
 )
-from orchestune.dispatch.doctor_models import DoctorContext, WorkflowFile
+from orchestune.dispatch.doctor.check import (
+    DoctorRequest,
+    load_workflow_yaml,
+    run_doctor,
+)
+from orchestune.dispatch.doctor.models import DoctorContext, WorkflowFile
 
 GROUP = "orchestune-control-${{ github.repository }}"
 

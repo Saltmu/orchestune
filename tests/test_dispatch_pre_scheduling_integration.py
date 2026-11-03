@@ -7,9 +7,9 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from orchestune.dispatch import dispatcher, pre_scheduling_integration
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import CycleReport
-from orchestune.dispatch.cycle_execution import CycleStage, execute_pipeline
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.execution import CycleStage, execute_pipeline
+from orchestune.dispatch.cycle.run import CycleReport
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.infra.process_utils import is_run_state_lock_held, run_state_lock
 from tests.conftest import FakeForge
@@ -79,7 +79,7 @@ def test_dispatcher_executes_four_stages_in_order(tmp_path, monkeypatch):
         return PhaseResult(name, PhaseStatus.SUCCESS)
 
     # Monkeypatch the dispatcher and integration steps
-    from orchestune.dispatch import cycle
+    from orchestune.dispatch.cycle import run as cycle
 
     monkeypatch.setattr(
         cycle, "run_pre_integration_cycle", fake_pre_integration_cycle, raising=False
@@ -195,7 +195,7 @@ def test_run_state_lock_is_not_held_during_integration_boundary(tmp_path, monkey
         observed["other_thread_acquired"] = outcome
         return PhaseResult("run_semantic_integrator", PhaseStatus.SUCCESS)
 
-    from orchestune.dispatch import cycle
+    from orchestune.dispatch.cycle import run as cycle
 
     monkeypatch.setattr(cycle, "run_pre_integration_cycle", fake_cycle, raising=False)
     monkeypatch.setattr(
@@ -325,7 +325,7 @@ def test_post_event_log_combines_pre_integration_and_scheduling_events(
     tmp_path, fake_forge
 ):
     """Event log comment merges completion and deviation events from pre-integration and scheduling cycles."""
-    from orchestune.dispatch.cycle_events import RecomputedDeviation, WorktreeCompletion
+    from orchestune.dispatch.cycle.events import RecomputedDeviation, WorktreeCompletion
     from orchestune.dispatch.postcycle import _post_event_log_comment
 
     comp1 = WorktreeCompletion(

@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.gc import closed_target
 from orchestune.dispatch.gc.closed_target import (
     closed_target_candidates,
@@ -297,7 +297,7 @@ def test_gc_phase_releases_merged_pr_claim_before_an_overlapping_launch(local_cl
         OwnerKind,
     )
     from orchestune.claim.service import claim_task
-    from orchestune.dispatch.phase_gc import run_gc_phase
+    from orchestune.dispatch.phase.gc import run_gc_phase
     from tests.claim_helpers import MockForge, _make_issue
 
     workspace, active, worktree = local_claim

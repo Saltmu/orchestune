@@ -184,7 +184,7 @@ def test_metadata_and_policy_protocols_declare_no_raw_fields_or_escape_types() -
         REPO_ROOT / "orchestune" / "task_metadata.py",
         REPO_ROOT / "orchestune" / "dependencies" / "policy.py",
         REPO_ROOT / "orchestune" / "dispatch" / "status_dependency_policy.py",
-        REPO_ROOT / "orchestune" / "dispatch" / "cycle_action_contracts.py",
+        REPO_ROOT / "orchestune" / "dispatch" / "cycle" / "action_contracts.py",
     )
     raw_names = {"depends_on", "native_depends_on"}
 

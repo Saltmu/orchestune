@@ -74,7 +74,7 @@ class LockDependencyView(Protocol):
     """外部ロック除外判定(#869)が依存側を読むための最小限read-only view。
 
     `CycleContext`(#868)はこのProtocolを構造的に満たすため、実運用では
-    `phase_rebase`がそのまま`CycleContext`をこの型として渡す。構造的部分型
+    `phase.rebase`がそのまま`CycleContext`をこの型として渡す。構造的部分型
     として使うため実装側に継承も`@runtime_checkable`も要求しない。
     """
 
@@ -98,7 +98,7 @@ def _direct_dependency_canonical_branches(
     どの依存元も指すか分からないため、ここでは含めない
     （＝そのぶん通常の衝突判定からは除外されず、fail closedのまま残る）。
 
-    #796: スタッキング起動(`orchestune.dispatch.launch._get_stack_eligible_tasks`)
+    #796: スタッキング起動(`orchestune.dispatch.launch.service._get_stack_eligible_tasks`)
     は依存元ブランチをbaseに積むため、依存元のPR・ブランチとの重複は
     「Orchestune管理外の衝突」ではない。`_is_task_stack_eligible`はスタック時に
     baseへ入るのが直接依存1本だけであることを前提にしているため、除外もそれに
@@ -346,7 +346,7 @@ def scan_external_locks(
     | None = None,
 ) -> ExternalLockScanResult:
     """`view`(#869)は`depends_on`の依存識別・実効状態(`DependencyAssessment`)・
-    正規branchの参照に使う。実運用(`phase_rebase._decide_external_lock_sync`)
+    正規branchの参照に使う。実運用(`phase.rebase._decide_external_lock_sync`)
     は`CycleContext`自身を渡し、そこで既に構築済みの依存解決を再利用する。
     #1162: completed_dependency_evidenceは直接依存ごとの現在先端取り込み証拠。
     未指定なら従来の判定を維持する。純粋判定はForge/Gitを呼ばず、証拠の

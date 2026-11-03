@@ -150,7 +150,7 @@ Orchestune's execution ledger (`ledger`) is the L2 foundation responsible for im
 
 - **Only in-memory source of truth**: `core`, `launch`, `claim`, and `completion` constitute the **only in-memory source of truth**. Legacy flat attribute compatibility properties have been completely removed. `ActiveWorktree` defines `slots=True`, so attempting to read or assign to an unmapped flat attribute fails immediately with `AttributeError`.
 - **Deep immutability and immutable payload**: `completion.completion_payload` and `completion.completion_policy_config` are recursively converted by `_freeze_json` into `MappingProxyType` and nested tuples. Mutating dictionary operations (`update`, `pop`, `clear`, `setdefault`) on `completion_payload` are rejected at runtime.
-- **Immutable update boundaries**: All subrecords are frozen. Their fields cannot be mutated. Owner copy APIs (`with_claim`, `with_launch`, `with_completion`, `with_core`) replace whole records. When observers retain the active object's identity, `dispatch.launch_state.update_launch` and `ActiveWorktree.update_core` apply updates in place through the owning boundary. Recovery identity materialization belongs to `ActiveWorktree.materialize_claim_for_persistence`.
+- **Immutable update boundaries**: All subrecords are frozen. Their fields cannot be mutated. Owner copy APIs (`with_claim`, `with_launch`, `with_completion`, `with_core`) replace whole records. When observers retain the active object's identity, `dispatch.launch.state.update_launch` and `ActiveWorktree.update_core` apply updates in place through the owning boundary. Recovery identity materialization belongs to `ActiveWorktree.materialize_claim_for_persistence`.
 
 ### 6.2 Flat JSON Invariance and Backward Compatibility
 
@@ -187,21 +187,21 @@ While in-memory representations use nested subrecords, disk persistence strictly
 ### 6.5 Consistency Projection
 
 - **Decoupled consistency kernel**: The repository-wide `consistency` kernel does not depend directly on the internal structure of `ActiveWorktree`.
-- **Projection to ExecutionRecord**: `_DispatchConsistencyAdapter._executions()` (`orchestune.dispatch.cycle`) and `execution_repair.py` (`execution_record_from_active`) extract minimal fields (`issue_number`, `branch`, `worktree_path`, `pid`, `external_id`, `started_at`, `kind`, `owner_kind`, `claim_id`, `claim_stage`, `launch_phase`) from `ActiveWorktree` and map them into an immutable `ExecutionRecord` **projection**.
+- **Projection to ExecutionRecord**: `_DispatchConsistencyAdapter._executions()` (`orchestune.dispatch.cycle.run`) and `execution_repair.py` (`execution_record_from_active`) extract minimal fields (`issue_number`, `branch`, `worktree_path`, `pid`, `external_id`, `started_at`, `kind`, `owner_kind`, `claim_id`, `claim_stage`, `launch_phase`) from `ActiveWorktree` and map them into an immutable `ExecutionRecord` **projection**.
 - **Boundary preservation**: Consistency observation (`ObservationCollector`) interacts exclusively with projected records, inspecting facts and planning repairs without encroaching on ledger subrecord ownership boundaries.
 
 ### 6.6 Owner Boundaries and AST Guards
 
 - **Strict owner modules**: Constructing `ActiveWorktree` and updating subrecord boundaries is restricted to designated owner modules:
   - `claim`: `orchestune.claim.ownership`, `orchestune.claim.service`, `orchestune.claim.amend` (`build_claim_info`, `with_claim`)
-  - `launch`: `orchestune.dispatch.launch_state` (`build_launch_record`, `with_launch`, `with_launch_phase`)
+  - `launch`: `orchestune.dispatch.launch.state` (`build_launch_record`, `with_launch`, `with_launch_phase`)
   - `completion`: `orchestune.complete.journal` (`active_completion_from_record`, `with_completion`)
   - `core` and persistence recovery identity: `orchestune.ledger.active_records` (`ActiveWorktree.from_records`, `with_core`, `update_core`, `materialize_claim_for_persistence`)
   - codec and model construction: `orchestune.ledger.active_codec` (`decode_active_worktree`), `orchestune.ledger.active_records` (`ActiveWorktree`)
 - **Mechanical enforcement via AST guards**: Architecture tests (`tests/test_active_worktree_ownership_architecture.py`) statically inspect source ASTs to enforce:
   1. No assignment to subrecord fields or replacement of whole records outside their owner modules; in-place owner APIs preserve active identity without caller exemptions
   2. No unauthorized replacement via `dataclasses.replace` or import aliases; recovered PR adoption uses the core and launch owner APIs
-  3. No construction of `ActiveWorktree` / `ActiveWorktree.from_records` outside `ALLOWED_CONSTRUCTOR_MODULES` (the claim owner modules, `dispatch.launch_state`, `ledger.active_records`, and `ledger.active_codec`; `complete.journal` owns completion updates, not full-record construction)
+  3. No construction of `ActiveWorktree` / `ActiveWorktree.from_records` outside `ALLOWED_CONSTRUCTOR_MODULES` (the claim owner modules, `dispatch.launch.state`, `ledger.active_records`, and `ledger.active_codec`; `complete.journal` owns completion updates, not full-record construction)
   4. No mutating method calls (`update`, `pop`, `clear`, `setdefault`) on frozen payloads
   5. No raw `completion_id is (not) None` stage checks outside the central `lifecycle` and `has_completion_reservation` definitions
   6. No `_legacy` validation bypass outside the model/codec boundary

@@ -15,10 +15,10 @@ from orchestune.dependencies.policy import (
     decide_stack_target,
     has_pending_dependencies,
 )
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_context_state import RecordStatus
-from orchestune.dispatch.cycle_events import PromotionEvent
-from orchestune.dispatch.cycle_records import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.context_state import RecordStatus
+from orchestune.dispatch.cycle.events import PromotionEvent
+from orchestune.dispatch.cycle.records import (
     _authoritative_execution_active,
     apply_verified_transition,
 )

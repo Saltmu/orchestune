@@ -2,8 +2,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import WorktreeCompletion
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import WorktreeCompletion
 from orchestune.dispatch.gc.completion import _apply_completed_worktree_outcome
 from orchestune.dispatch.postcycle import _format_event_log_comment
 from orchestune.dispatch.scoring import quota_available
@@ -504,7 +504,7 @@ class TestTaskTokenLimitEscalation:
 
 class TestPostcycleCycleReportFormatting:
     def test_format_cycle_report_renders_model_and_tokens(self):
-        from orchestune.dispatch.cycle import CycleReport
+        from orchestune.dispatch.cycle.run import CycleReport
 
         report = CycleReport(
             selected=[],

@@ -4,9 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from orchestune.dispatch.doctor import DoctorRequest, load_workflow_yaml, run_doctor
-from orchestune.dispatch.doctor_models import Diagnostic, DoctorContext, WorkflowFile
-from orchestune.dispatch.doctor_repository import run_repository_checks
+from orchestune.dispatch.doctor.check import (
+    DoctorRequest,
+    load_workflow_yaml,
+    run_doctor,
+)
+from orchestune.dispatch.doctor.models import Diagnostic, DoctorContext, WorkflowFile
+from orchestune.dispatch.doctor.repository import run_repository_checks
 
 GROUP = "orchestune-control-${{ github.repository }}"
 LEGACY_GROUP = (

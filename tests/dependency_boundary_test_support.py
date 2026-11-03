@@ -68,9 +68,11 @@ PRODUCTION_EXCEPTIONS = frozenset(
         _exception("orchestune.task_metadata", "<module>", "Task", _COMPAT),
         _exception("orchestune.dependencies.resolution", "<module>", "Task", _IDENTITY),
         _exception(
-            "orchestune.dispatch.cycle_context_state", "<module>", "Task", _IDENTITY
+            "orchestune.dispatch.cycle.context_state", "<module>", "Task", _IDENTITY
         ),
-        _exception("orchestune.dispatch.recovery", "<module>", "Task", _LOW_LEVEL),
+        _exception(
+            "orchestune.dispatch.recovery.service", "<module>", "Task", _LOW_LEVEL
+        ),
         _exception("orchestune.dispatch.rules", "<module>", "Task", _IDENTITY),
         _exception("orchestune.dispatch.scoring", "<module>", "Task", _COMPAT),
         _exception("orchestune.dispatch.status_repair", "<module>", "Task", _LOW_LEVEL),
@@ -87,13 +89,13 @@ PRODUCTION_EXCEPTIONS = frozenset(
             "SubTask contains the derived semantic DAG edge.",
         ),
         _exception(
-            "orchestune.dispatch.cycle_context_state",
+            "orchestune.dispatch.cycle.context_state",
             "_owned_task",
             "depends_on",
             _IDENTITY,
         ),
         _exception(
-            "orchestune.dispatch.cycle_context_state",
+            "orchestune.dispatch.cycle.context_state",
             "_owned_task",
             "native_depends_on",
             _IDENTITY,
@@ -114,23 +116,23 @@ PRODUCTION_EXCEPTIONS = frozenset(
             }
         },
         _exception(
-            "orchestune.dispatch.cycle", "execute", "tasks_by_issue", _PRIVATE_VIEW
+            "orchestune.dispatch.cycle.run", "execute", "tasks_by_issue", _PRIVATE_VIEW
         ),
         _exception(
-            "orchestune.dispatch.cycle",
+            "orchestune.dispatch.cycle.run",
             "_promotion_events",
             "tasks_by_issue",
             _PRIVATE_VIEW,
         ),
         _exception(
-            "orchestune.dispatch.cycle_actions",
+            "orchestune.dispatch.cycle.actions",
             "_run_active_worktree_rules",
             "run_state",
             _LOW_LEVEL,
         ),
         *{
             _exception(
-                "orchestune.dispatch.phase_gc", function, attribute, _PRIVATE_VIEW
+                "orchestune.dispatch.phase.gc", function, attribute, _PRIVATE_VIEW
             )
             for function, attribute in {
                 ("observe", "run_state"),
@@ -140,7 +142,7 @@ PRODUCTION_EXCEPTIONS = frozenset(
         },
         *{
             _exception(
-                "orchestune.dispatch.recovery",
+                "orchestune.dispatch.recovery.service",
                 function,
                 "tasks_by_issue",
                 _PRIVATE_VIEW,
@@ -159,7 +161,7 @@ PRODUCTION_EXCEPTIONS = frozenset(
             _LOW_LEVEL,
         ),
         _exception(
-            "orchestune.dispatch.launch",
+            "orchestune.dispatch.launch.service",
             "_launch_selected_tasks",
             "run_state",
             _LOW_LEVEL,

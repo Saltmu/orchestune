@@ -9,19 +9,19 @@ from unittest.mock import patch
 import pytest
 
 from orchestune.claim.contracts import ClaimOutcome
-from orchestune.dispatch.launch import (
+from orchestune.dispatch.launch.service import (
     TaskLaunchPlan,
     _build_active_worktree_from_launch,
     _try_planned_launch,
 )
-from orchestune.dispatch.launch_state import (
+from orchestune.dispatch.launch.state import (
     build_launch_record,
     launch_info_with_selection,
     launch_info_with_token_estimate,
     with_launch,
     with_launch_phase,
 )
-from orchestune.dispatch.recovery_counters import (
+from orchestune.dispatch.recovery.counters import (
     launch_with_recovery_counters,
     merged_recovery_counters,
 )
@@ -181,8 +181,8 @@ class TestUsageLimitLaunchGate:
 
     @staticmethod
     def _plan_and_config(tmp_path, target_name):
-        from orchestune.dispatch.config import DispatcherConfig
-        from orchestune.dispatch.launch import TaskLaunchPlan
+        from orchestune.dispatch.config.model import DispatcherConfig
+        from orchestune.dispatch.launch.service import TaskLaunchPlan
         from orchestune.dispatch.targets import LocalProcessDispatchTarget
         from tests.conftest import FakeForge, make_task
 
@@ -216,7 +216,7 @@ class TestUsageLimitLaunchGate:
     def test_waiting_task_is_not_claimed_or_launched(self, tmp_path, state_kwargs):
         from unittest.mock import MagicMock
 
-        from orchestune.dispatch.launch import _apply_task_launches
+        from orchestune.dispatch.launch.service import _apply_task_launches
 
         plan, config = self._plan_and_config(tmp_path, "claude-cli")
         claim_fn = MagicMock()
@@ -370,7 +370,9 @@ def _drive_launch(
         base_ref="main",
     )
     provider = _Launched()
-    with patch("orchestune.dispatch.launch._launch_on_prepared_worktree", provider):
+    with patch(
+        "orchestune.dispatch.launch.service._launch_on_prepared_worktree", provider
+    ):
         result = _try_planned_launch(
             plan,
             cast(Any, object()),
@@ -447,7 +449,7 @@ def test_the_provider_is_not_called_when_the_counters_cannot_be_saved(
     tmp_path,
 ) -> None:
     with patch(
-        "orchestune.dispatch.launch.save_run_state", side_effect=OSError("disk")
+        "orchestune.dispatch.launch.service.save_run_state", side_effect=OSError("disk")
     ):
         result, provider, run_state, *_ = _drive_launch(tmp_path, _issue(2, True))
 

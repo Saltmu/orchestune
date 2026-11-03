@@ -12,7 +12,7 @@
 - `ledger.active_records`: `ActiveWorktree` とその不変構造を所有します。`ActiveWorktree` はメモリ上の唯一の情報源で、`core` と3つの frozen サブレコード（`launch`, `claim`, `completion`）から成ります。
   - 過去のフラット属性プロパティは全廃されており、`slots=True` により不正なアクセスを拒絶します。
   - `from_records()` は型付きのnested構築経路、`with_core()` は共通fieldを更新する関数です。recordを二重に保存しません。
-  - 所有者fieldは所有者APIだけで置き換えます。claim fieldは `claim.ownership`（`build_claim_info()`・`with_claim()`）、launch fieldは `dispatch.launch_state`（`build_launch_record()`・`with_launch()`・`with_launch_phase()`）、completion fieldは `complete.journal`（`active_completion_from_record()`・`with_completion()`）です。
+  - 所有者fieldは所有者APIだけで置き換えます。claim fieldは `claim.ownership`（`build_claim_info()`・`with_claim()`）、launch fieldは `dispatch.launch.state`（`build_launch_record()`・`with_launch()`・`with_launch_phase()`）、completion fieldは `complete.journal`（`active_completion_from_record()`・`with_completion()`）です。
   - 詳細な仕様とライフサイクルの優先順位は [ステートレスCIと自己修復 (state-recovery.md)](state-recovery.md#active-worktree-lifecycle) を参照してください。
 - `ledger.active_codec`: 既存のフラットなActiveWorktree JSON形式を明示的にdecode/encodeします。
   field順と、`completion_policy_config`がnullの場合の省略を維持し、台帳の検証処理からcodecの詳細を分離します。

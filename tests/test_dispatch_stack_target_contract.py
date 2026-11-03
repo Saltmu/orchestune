@@ -10,8 +10,8 @@ from orchestune.dependencies.assessment import (
     DependencyAssessment,
     DependencyState,
 )
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.launch import _is_task_stack_eligible
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.launch.service import _is_task_stack_eligible
 from orchestune.dispatch.rebase import _decide_rebase_target
 from orchestune.dispatch.reconciliation import _resolve_base_branch_for_task
 from orchestune.forge import Forge

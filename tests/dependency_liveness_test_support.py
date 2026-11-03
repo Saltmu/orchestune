@@ -25,17 +25,17 @@ from unittest.mock import patch
 
 from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.dependencies.assessment import DependencyAssessment, DependencyState
-from orchestune.dispatch import cycle as cycle_module
-from orchestune.dispatch import cycle_execution
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.cycle_context import IssuesByStatus
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle import execution as cycle_execution
+from orchestune.dispatch.cycle import run as cycle_module
+from orchestune.dispatch.cycle.actions import CycleActionAdapter
+from orchestune.dispatch.cycle.context import IssuesByStatus
+from orchestune.dispatch.cycle.events import (
     DeviationEvent,
     PromotionEvent,
 )
-from orchestune.dispatch.cycle_execution_contracts import CycleExecutionDependencies
-from orchestune.dispatch.phase_scheduling import SchedulingPhaseResult
+from orchestune.dispatch.cycle.execution_contracts import CycleExecutionDependencies
+from orchestune.dispatch.phase.scheduling import SchedulingPhaseResult
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.status_repair import status_intent_journal_path
 from orchestune.labels import StatusLabel
@@ -657,8 +657,8 @@ def _environment_stubs() -> Iterator[None]:
         for target in GC_PROCESS_ALIVE_TARGETS:
             stack.enter_context(patch(target, return_value=False))
         for target, value in (
-            ("orchestune.dispatch.cycle.ensure_parent_branch_ready", None),
-            ("orchestune.dispatch.phase_rebase.list_remote_branches", []),
+            ("orchestune.dispatch.cycle.run.ensure_parent_branch_ready", None),
+            ("orchestune.dispatch.phase.rebase.list_remote_branches", []),
             ("orchestune.dispatch.gc.completion.remove_worktree", None),
             (
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",

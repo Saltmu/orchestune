@@ -5,8 +5,8 @@ from __future__ import annotations
 from orchestune.dependencies.resolution import build_legacy_dag_inputs
 from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.critical_path import compute_precedence_ranks
-from orchestune.dispatch.cycle_report import CycleReport
-from orchestune.dispatch.report import _report_to_dict
+from orchestune.dispatch.cycle.report import CycleReport
+from orchestune.dispatch.reporting.report import _report_to_dict
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import select_tasks_with_decisions
 from orchestune.labels import StatusLabel

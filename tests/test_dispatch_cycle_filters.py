@@ -13,11 +13,11 @@ import pytest
 from orchestune.claim.contracts import ClaimStage, ReservationKind
 from orchestune.dag.models import FootprintConflict
 from orchestune.dependencies.resolution import TaskDependencies
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import DeviationConflict, RecomputedDeviation
+from orchestune.dispatch.cycle.run import (
     run_dispatch_cycle,
 )
-from orchestune.dispatch.cycle_events import DeviationConflict, RecomputedDeviation
 from orchestune.dispatch.filters import (
     _filter_candidates_for_forced_serial,
     _filter_deviation_blocked_candidates,
@@ -185,10 +185,10 @@ class TestRunDispatchCycleFootprintRecompute:
         fake_forge.remove_label.reset_mock(side_effect=True)
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+                "orchestune.dispatch.phase.rebase.ensure_parent_branch", autospec=True
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -275,7 +275,7 @@ class TestRunDispatchCycleFootprintRecompute:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -369,16 +369,16 @@ class TestRunDispatchCycleFootprintRecompute:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+                "orchestune.dispatch.phase.rebase.ensure_parent_branch", autospec=True
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
+                "orchestune.dispatch.cycle.actions._launch_selected_tasks",
                 autospec=True,
                 side_effect=_launch_stub,
             ),
@@ -470,16 +470,16 @@ class TestRunDispatchCycleFootprintRecompute:
         fake_forge.list_issues_by_label.return_value = []
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+                "orchestune.dispatch.phase.rebase.ensure_parent_branch", autospec=True
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
+                "orchestune.dispatch.cycle.actions._launch_selected_tasks",
                 autospec=True,
                 side_effect=_launch_stub,
             ),
@@ -541,10 +541,10 @@ class TestRunDispatchCycleFootprintRecompute:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+                "orchestune.dispatch.phase.rebase.ensure_parent_branch", autospec=True
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),

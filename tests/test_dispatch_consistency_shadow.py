@@ -10,17 +10,17 @@ from unittest.mock import patch
 import pytest
 
 from orchestune.consistency.supervisor import ConsistencyMode, ScanKind
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
-from orchestune.dispatch.cycle_context import IssuesByStatus
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.context import IssuesByStatus
+from orchestune.dispatch.cycle.events import (
     PromotionEvent,
     RecomputedDeviation,
     WorktreeCompletion,
 )
-from orchestune.dispatch.cycle_report import CycleReport, build_event_log_entry
+from orchestune.dispatch.cycle.report import CycleReport, build_event_log_entry
+from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.dispatch.dispatcher import _build_arg_parser, main
-from orchestune.dispatch.report import _report_to_dict
+from orchestune.dispatch.reporting.report import _report_to_dict
 from orchestune.dispatch.rules import CycleContext
 from orchestune.ledger.run_state import RunState
 from tests.conftest import make_issue, make_task
@@ -76,22 +76,22 @@ def _run_patched_cycle(
     ctx = _ctx(config, run_state, task)
     with (
         patch(
-            "orchestune.dispatch.cycle.load_run_state",
+            "orchestune.dispatch.cycle.run.load_run_state",
             autospec=True,
             return_value=run_state,
         ),
         patch(
-            "orchestune.dispatch.cycle._prepare_cycle_issues",
+            "orchestune.dispatch.cycle.run._prepare_cycle_issues",
             autospec=True,
             return_value=issues,
         ),
         patch(
-            "orchestune.dispatch.cycle._build_cycle_context",
+            "orchestune.dispatch.cycle.run._build_cycle_context",
             autospec=True,
             return_value=ctx,
         ),
         patch(
-            "orchestune.dispatch.cycle._execute_cycle_pipeline",
+            "orchestune.dispatch.cycle.run._execute_cycle_pipeline",
             autospec=True,
             return_value=pipeline_report,
         ),

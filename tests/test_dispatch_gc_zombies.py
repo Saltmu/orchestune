@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.ledger.run_state import RunState
 from tests.dispatch_gc_test_support import _active, _task
 from tests.dispatch_gc_test_support import (
@@ -44,7 +44,7 @@ class TestCollectZombiesAndTimeouts:
         )
 
         with (
-            patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
+            patch("orchestune.dispatch.phase.gc.time.time", return_value=2_000.0),
         ):
             events = _collect_zombies_and_timeouts(
                 run_state, {active.core.issue_number: task}, config
@@ -84,7 +84,7 @@ class TestCollectZombiesAndTimeouts:
         )
 
         with (
-            patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
+            patch("orchestune.dispatch.phase.gc.time.time", return_value=2_000.0),
             patch(
                 "orchestune.dispatch.gc.zombies.backup_wip_commit", return_value=None
             ),
@@ -127,7 +127,7 @@ class TestCollectZombiesAndTimeouts:
             forge=fake_forge,
         )
 
-        with patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0):
+        with patch("orchestune.dispatch.phase.gc.time.time", return_value=2_000.0):
             events = _collect_zombies_and_timeouts(
                 run_state, {active.core.issue_number: task}, config
             )
@@ -157,7 +157,7 @@ class TestCollectZombiesAndTimeouts:
         )
 
         with (
-            patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
+            patch("orchestune.dispatch.phase.gc.time.time", return_value=2_000.0),
             patch(
                 "orchestune.dispatch.execution_repair.is_process_alive",
                 autospec=True,
@@ -525,7 +525,7 @@ class TestInteractiveOwnershipGcExclusion:
         )
 
         with (
-            patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
+            patch("orchestune.dispatch.phase.gc.time.time", return_value=2_000.0),
             patch(
                 "orchestune.dispatch.execution_repair.is_process_alive",
                 autospec=True,
@@ -576,7 +576,7 @@ class TestInteractiveOwnershipGcExclusion:
         )
 
         with (
-            patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0),
+            patch("orchestune.dispatch.phase.gc.time.time", return_value=2_000.0),
             patch(
                 "orchestune.dispatch.execution_repair.is_process_alive",
                 autospec=True,
@@ -686,7 +686,7 @@ class TestInteractiveOwnershipGcExclusion:
     ):
         """短命なclaimプロセスが終了した直後の active（PID死亡）が、
         GCサイクルを複数回実行しても生存扱いとなり消えずに残る。"""
-        from orchestune.dispatch.phase_gc import run_gc_phase
+        from orchestune.dispatch.phase.gc import run_gc_phase
 
         worktree_path = tmp_path / "interactive-wt"
         worktree_path.mkdir(parents=True)
@@ -824,7 +824,7 @@ class TestLegacyCompletionGcExclusion:
             forge=fake_forge,
         )
 
-        with patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0):
+        with patch("orchestune.dispatch.phase.gc.time.time", return_value=2_000.0):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {active.core.issue_number: task}, config, None, now=2_000.0
             )
@@ -853,7 +853,7 @@ class TestLegacyCompletionGcExclusion:
             forge=fake_forge,
         )
 
-        with patch("orchestune.dispatch.phase_gc.time.time", return_value=2_000.0):
+        with patch("orchestune.dispatch.phase.gc.time.time", return_value=2_000.0):
             reclaims = _decide_zombie_or_timeout_reclaims(
                 run_state, {active.core.issue_number: task}, config, None, now=2_000.0
             )

@@ -9,9 +9,9 @@ import subprocess
 from dataclasses import replace
 from unittest.mock import ANY, MagicMock, patch
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
-from orchestune.dispatch.cycle_events import WorktreeCompletion
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import WorktreeCompletion
+from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.ledger.run_state import RunState, load_run_state
 from orchestune.models import PrRecord
@@ -77,7 +77,7 @@ class TestBranchStacking:
                 "fake_forge_proxy.active_fake_forge.list_issues_by_label"
             ) as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=["origin/claude/issue-1-task-1"],
             ),
@@ -127,7 +127,7 @@ class TestBranchStacking:
             # worktree.pyの既存`_launch_on_prepared_worktree`をそのまま再利用する
             # ため、そこをmockして起動時のbase_branchを検証する。
             patch(
-                "orchestune.dispatch.launch._launch_on_prepared_worktree",
+                "orchestune.dispatch.launch.service._launch_on_prepared_worktree",
                 autospec=True,
             ) as mock_launch,
         ):
@@ -223,7 +223,7 @@ class TestBranchStacking:
                 "fake_forge_proxy.active_fake_forge.list_issues_by_label"
             ) as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=["origin/claude/issue-1-task-1"],
             ),
@@ -266,7 +266,7 @@ class TestBranchStacking:
                 return_value="deadbeefcafe",
             ),
             patch(
-                "orchestune.dispatch.launch._launch_on_prepared_worktree",
+                "orchestune.dispatch.launch.service._launch_on_prepared_worktree",
                 autospec=True,
             ) as mock_launch,
         ):
@@ -340,7 +340,7 @@ class TestBranchStacking:
                 "fake_forge_proxy.active_fake_forge.list_issues_by_label"
             ) as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=["origin/claude/issue-1-task-1"],
             ),
@@ -464,7 +464,7 @@ class TestBranchStacking:
             ) as mock_list,
             patch("orchestune.dispatch.rebase.is_process_alive", return_value=False),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=["origin/claude/issue-1-task-1"],
             ),
@@ -548,7 +548,7 @@ class TestBranchStacking:
                 "fake_forge_proxy.active_fake_forge.list_issues_by_label"
             ) as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[
                     "origin/claude/issue-1-task-1",
@@ -580,7 +580,7 @@ class TestBranchStacking:
             patch("fake_forge_proxy.active_fake_forge.remove_label"),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch.launch._launch_on_prepared_worktree",
+                "orchestune.dispatch.launch.service._launch_on_prepared_worktree",
                 autospec=True,
             ) as mock_launch,
         ):
@@ -657,7 +657,7 @@ class TestBranchStacking:
                 "fake_forge_proxy.active_fake_forge.list_issues_by_label"
             ) as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[
                     "origin/claude/issue-1-task-1",
@@ -707,7 +707,7 @@ class TestBranchStacking:
                 return_value="deadbeefcafe",
             ),
             patch(
-                "orchestune.dispatch.launch._launch_on_prepared_worktree",
+                "orchestune.dispatch.launch.service._launch_on_prepared_worktree",
                 autospec=True,
             ) as mock_launch,
             # タスクAの完了判定とGC処理のためのモック
@@ -810,7 +810,7 @@ class TestBranchStacking:
             ),
             patch("orchestune.dispatch.rebase.is_process_alive", return_value=False),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=["origin/claude/issue-1-task-1"],
             ),
@@ -935,7 +935,7 @@ class TestBranchStacking:
                 ),
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=["origin/claude/issue-1-task-1"],
             ),

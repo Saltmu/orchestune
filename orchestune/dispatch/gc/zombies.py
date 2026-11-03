@@ -18,8 +18,8 @@ from orchestune.consistency.invariants.execution import (
 )
 from orchestune.consistency.models import RepairCommand, RepairResult, RepairStatus
 from orchestune.consistency.repairs.execution import COMMAND_RECLAIM
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import (
     CompletingExcludedCompletion,
     CompletionEvent,
     ExternalExecutionHeldCompletion,
@@ -39,7 +39,7 @@ from orchestune.dispatch.gc.git import (
     backup_wip_commit,
     remove_worktree,
 )
-from orchestune.dispatch.launch_state import with_launch
+from orchestune.dispatch.launch.state import with_launch
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_lifecycle import ActiveWorktreeLifecycle, lifecycle

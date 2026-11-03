@@ -8,7 +8,7 @@ from typing import Any
 
 from orchestune.claim.ownership import owner_token_digest
 from orchestune.complete.contracts import CompleteStage, DownstreamPolicyRecord
-from orchestune.dispatch.cycle_events import TokenHoldCompletion
+from orchestune.dispatch.cycle.events import TokenHoldCompletion
 from orchestune.infra.private_tokens import read_owner_token, token_record_path
 from orchestune.infra.process_utils import assert_run_state_lock_held
 from orchestune.ledger.completion_records import (

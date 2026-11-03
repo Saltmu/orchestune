@@ -11,8 +11,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import UsageLimitCompletion
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import UsageLimitCompletion
 from orchestune.dispatch.gc.usage_limit import handle_usage_limit_exit
 from orchestune.infra.process_utils import run_state_lock
 from orchestune.ledger.run_state import (
@@ -687,7 +687,7 @@ class TestTypedReclaimDiversion:
 
     def test_a_hold_reported_earlier_in_the_cycle_is_not_retried(self, world, effects):
         from orchestune.consistency.models import RepairStatus
-        from orchestune.dispatch.cycle_events import UsageLimitCompletion
+        from orchestune.dispatch.cycle.events import UsageLimitCompletion
         from orchestune.dispatch.gc.usage_limit import handle_usage_limit_reclaim
 
         _write_run(world, f"{LIMIT_LINE}\n")
@@ -724,8 +724,8 @@ class TestTypedReclaimDiversion:
         self, world, effects
     ):
         from orchestune.consistency.models import RepairStatus
-        from orchestune.dispatch.cycle_events import UsageLimitCompletion
-        from orchestune.dispatch.phase_gc import build_gc_reclaim_handler
+        from orchestune.dispatch.cycle.events import UsageLimitCompletion
+        from orchestune.dispatch.phase.gc import build_gc_reclaim_handler
 
         _write_run(world, f"{LIMIT_LINE}\n")
         held = UsageLimitCompletion(
@@ -799,7 +799,7 @@ class TestThroughTheDispatchCycle:
     def test_limit_exit_is_requeued_even_for_dirty_worktrees_with_commits(
         self, tmp_path, fake_forge, dirty_commits
     ):
-        from orchestune.dispatch.cycle import run_dispatch_cycle
+        from orchestune.dispatch.cycle.run import run_dispatch_cycle
         from tests.dispatch_test_support import (
             make_footprint_issue,
             patch_gc_process_alive,
@@ -834,7 +834,7 @@ class TestThroughTheDispatchCycle:
 
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),

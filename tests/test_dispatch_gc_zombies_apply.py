@@ -17,7 +17,7 @@ from orchestune.consistency.models import (
     RepairStatus,
 )
 from orchestune.consistency.repairs.execution import COMMAND_RECLAIM
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _apply_zombie_or_timeout_reclaim,

@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from unittest.mock import patch
 
-import orchestune.dispatch.phase_reconciliation as phase_reconciliation
+import orchestune.dispatch.phase.reconciliation as phase_reconciliation
 import orchestune.dispatch.reconciliation as reconciliation
 import orchestune.dispatch.status_repair as status_repair
 from orchestune.consistency.desired import (
@@ -35,7 +35,7 @@ from orchestune.consistency.repairs.status import (
     COMMAND_TRANSITION_LABEL,
     plan_status_repairs,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.status_repair import (
     execute_status_repair_command,
     status_intent_journal_path,

@@ -4,9 +4,9 @@ from dataclasses import replace
 
 from orchestune.consistency.models import ConsistencyScope, RepairCommand
 from orchestune.dispatch.attempt_record import LaunchAttempt
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.launch_attempts import reconcile_attempt
-from orchestune.dispatch.recovery import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.launch.attempts import reconcile_attempt
+from orchestune.dispatch.recovery.service import (
     RecoveryBookkeepingSnapshot,
     _apply_missing_entry_bookkeeping,
 )
@@ -34,7 +34,9 @@ def test_release_prevents_both_restoration_routes(
         events_log_path=workspace.repository_root / "events.jsonl",
     )
     snapshot = RecoveryBookkeepingSnapshot({}, (), (("7", "task", active),), (), ())
-    monkeypatch.setattr("orchestune.dispatch.recovery._restorable", lambda _: True)
+    monkeypatch.setattr(
+        "orchestune.dispatch.recovery.service._restorable", lambda _: True
+    )
     command = RepairCommand(
         code="execution.update-bookkeeping",
         scope=ConsistencyScope.TASK,

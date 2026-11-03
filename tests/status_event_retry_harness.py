@@ -33,7 +33,7 @@ from typing import Any
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.gc import completion, policies, zombies
 from orchestune.dispatch.gc import rule_chain as dispatch_gc
 from orchestune.infra.process_utils import run_state_lock

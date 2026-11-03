@@ -6,8 +6,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from orchestune.consistency.models import RepairCommand, RepairResult, RepairStatus
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_action_contracts import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.action_contracts import (
     ActivePhaseResult,
     GcPhaseResult,
     StackBase,
@@ -59,7 +59,7 @@ def test_context_delegates_all_seven_action_ports(tmp_path: Path) -> None:
     command = repair.command
 
     assert ctx.process_active_worktrees() is active
-    from orchestune.dispatch.cycle_events import WorktreeCompletion
+    from orchestune.dispatch.cycle.events import WorktreeCompletion
 
     event = WorktreeCompletion(issue_number=1, worktree_path="w", action="completed")
     assert ctx.run_gc((event,)) is gc

@@ -10,8 +10,8 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.models import PrRecord
 from orchestune.pr_link_notice import (
     KIND_CREATED,
@@ -582,7 +582,7 @@ class TestDispatchCycleWiring:
             )
         ]
         with patch(
-            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            "orchestune.dispatch.phase.rebase.list_remote_branches",
             autospec=True,
             return_value=[],
         ):

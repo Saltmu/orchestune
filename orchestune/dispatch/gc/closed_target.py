@@ -22,8 +22,8 @@ from typing import Literal, Protocol
 from orchestune.claim.inspection import inspect_claim
 from orchestune.claim.local_identity import registered_claim_path
 from orchestune.claim.workspace import ClaimWorkspace, resolve_claim_workspace
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import (
     InteractiveClosedTargetHeld,
     InteractiveClosedTargetReleased,
 )

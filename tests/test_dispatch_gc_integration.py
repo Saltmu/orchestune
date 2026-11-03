@@ -9,8 +9,8 @@ test_dispatch_gc_stale_rules.py、完了ルールは test_dispatch_gc_completed_
 import subprocess
 from unittest.mock import patch
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.ledger.run_state import (
     RunState,
     load_run_state,
@@ -54,7 +54,7 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -148,7 +148,7 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -232,7 +232,7 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -313,7 +313,7 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -390,7 +390,7 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),

@@ -24,9 +24,11 @@ import pytest
 from orchestune.claim.contracts import ClaimOutcome, OwnerKind, ReservationKind
 from orchestune.claim.issue_metadata import publish_claim_ownership_to_issue
 from orchestune.dependencies.resolution import build_legacy_dag_inputs
-from orchestune.dispatch import launch, rebase, recovery_restoration
+from orchestune.dispatch import rebase
 from orchestune.dispatch.gc import policies, zombies
-from orchestune.dispatch.launch_state import with_launch
+from orchestune.dispatch.launch import service as launch
+from orchestune.dispatch.launch.state import with_launch
+from orchestune.dispatch.recovery import restoration as recovery_restoration
 from orchestune.dispatch.worktree import LaunchResult
 from orchestune.issue_parsing import recovery_counters_from_body
 from orchestune.labels import StatusLabel

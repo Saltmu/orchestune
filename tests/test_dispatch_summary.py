@@ -2,15 +2,8 @@
 
 from __future__ import annotations
 
-from orchestune.dispatch.cycle_events import ForgeFailureCompletion
-from orchestune.dispatch.scoring import (
-    REASON_INVALID_FOOTPRINT,
-    REASON_QUOTA_EXHAUSTED,
-    REASON_SELECTED,
-    SchedulingDecision,
-    ScoreComponents,
-)
-from orchestune.dispatch.summary import (
+from orchestune.dispatch.cycle.events import ForgeFailureCompletion
+from orchestune.dispatch.reporting.summary import (
     REASON_DEPENDENCY,
     REASON_EXTERNAL_LOCK,
     SUMMARY_PREFIX,
@@ -21,6 +14,13 @@ from orchestune.dispatch.summary import (
     render_skipped_markdown,
     render_skipped_text,
     skip_record_to_dict,
+)
+from orchestune.dispatch.scoring import (
+    REASON_INVALID_FOOTPRINT,
+    REASON_QUOTA_EXHAUSTED,
+    REASON_SELECTED,
+    SchedulingDecision,
+    ScoreComponents,
 )
 
 

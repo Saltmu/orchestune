@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from orchestune.dispatch import doctor_cli
-from orchestune.dispatch.doctor import DoctorInputError
-from orchestune.dispatch.doctor_models import (
+from orchestune.dispatch.doctor import cli as doctor_cli
+from orchestune.dispatch.doctor.check import DoctorInputError
+from orchestune.dispatch.doctor.models import (
     OWNERSHIP_NOTICE,
     Diagnostic,
     DoctorReport,

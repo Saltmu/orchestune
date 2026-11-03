@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.recovery import _restoration_candidates
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.recovery.service import _restoration_candidates
 from orchestune.ledger.run_state import RunState
 from orchestune.models import IssueRecord, PrRecord
 from tests.dispatch_recovery_test_support import _issue_with_footprint

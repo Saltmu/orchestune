@@ -13,9 +13,9 @@ from typing import Any, Literal
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.complete.contracts import DownstreamPolicyRecord
 from orchestune.complete.journal_models import CompletionJournalRecord
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_values import completion_policy_overrides
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.config.values import completion_policy_overrides
+from orchestune.dispatch.cycle.events import (
     PolicyHoldCompletion,
     PolicyProgressCompletion,
 )

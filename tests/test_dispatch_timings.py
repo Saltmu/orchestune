@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from orchestune.dispatch.progress import StdoutProgress
+from orchestune.dispatch.reporting.progress import StdoutProgress
 from orchestune.dispatch.timings import (
     CycleTimingCollector,
     TimingProgress,
@@ -21,8 +21,8 @@ def collector_at(values):
 
 @pytest.mark.uses_real_forge
 def test_cycle_gh_counts_are_isolated_and_freeze_before_event_io(tmp_path, fake_forge):
-    from orchestune.dispatch import cycle
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
+    from orchestune.dispatch.cycle import run as cycle
     from orchestune.forge import GitHubForge
 
     original_fetch = cycle._fetch_issues
@@ -44,9 +44,9 @@ def test_cycle_gh_counts_are_isolated_and_freeze_before_event_io(tmp_path, fake_
         original_append(entry, path)
 
     with (
-        patch("orchestune.dispatch.cycle.ensure_parent_branch_ready"),
-        patch("orchestune.dispatch.cycle._fetch_issues", side_effect=fetch),
-        patch("orchestune.dispatch.cycle.append_event_log", side_effect=append),
+        patch("orchestune.dispatch.cycle.run.ensure_parent_branch_ready"),
+        patch("orchestune.dispatch.cycle.run._fetch_issues", side_effect=fetch),
+        patch("orchestune.dispatch.cycle.run.append_event_log", side_effect=append),
         patch(
             "orchestune.forge.subprocess.run",
             return_value=subprocess.CompletedProcess([], 0, ""),
@@ -73,8 +73,8 @@ def test_metrics_failure_preserves_cli_exit_and_saved_json(
     tmp_path, fake_forge, status, expected
 ):
     from orchestune.dispatch import dispatcher
-    from orchestune.dispatch.config import DispatcherConfig
-    from orchestune.dispatch.report import _report_to_dict
+    from orchestune.dispatch.config.model import DispatcherConfig
+    from orchestune.dispatch.reporting.report import _report_to_dict
     from orchestune.dispatch.result import PhaseResult, PhaseStatus
 
     config = DispatcherConfig(
@@ -91,9 +91,9 @@ def test_metrics_failure_preserves_cli_exit_and_saved_json(
             "orchestune.dispatch.dispatcher.load_and_resolve_config",
             return_value=config,
         ),
-        patch("orchestune.dispatch.cycle.ensure_parent_branch_ready"),
+        patch("orchestune.dispatch.cycle.run.ensure_parent_branch_ready"),
         patch(
-            "orchestune.dispatch.cycle_execution.CycleTimingCollector",
+            "orchestune.dispatch.cycle.execution.CycleTimingCollector",
             side_effect=RuntimeError("metrics"),
         ),
         patch(
@@ -248,10 +248,10 @@ def test_broken_stdout_does_not_disable_collection(capsys):
 def test_cycle_integration_preserves_report_progress_and_old_event_fields(
     tmp_path, fake_forge
 ):
-    from orchestune.dispatch.config import DispatcherConfig
-    from orchestune.dispatch.cycle import run_dispatch_cycle
-    from orchestune.dispatch.cycle_report import build_event_log_entry
-    from orchestune.dispatch.report import _report_to_dict
+    from orchestune.dispatch.config.model import DispatcherConfig
+    from orchestune.dispatch.cycle.report import build_event_log_entry
+    from orchestune.dispatch.cycle.run import run_dispatch_cycle
+    from orchestune.dispatch.reporting.report import _report_to_dict
 
     progress = Mock()
     config = DispatcherConfig(
@@ -263,7 +263,7 @@ def test_cycle_integration_preserves_report_progress_and_old_event_fields(
         apply=True,
         worktree_root=tmp_path / "worktrees",
     )
-    with patch("orchestune.dispatch.cycle.ensure_parent_branch_ready"):
+    with patch("orchestune.dispatch.cycle.run.ensure_parent_branch_ready"):
         report = run_dispatch_cycle(config)
     entry = json.loads(config.events_log_path.read_text())
     timings = entry.pop("timings")
@@ -288,8 +288,8 @@ def test_cycle_integration_preserves_report_progress_and_old_event_fields(
 def test_metrics_failure_keeps_cycle_result_and_executes_once(
     tmp_path, fake_forge, failure
 ):
-    from orchestune.dispatch.config import DispatcherConfig
-    from orchestune.dispatch.cycle import run_dispatch_cycle
+    from orchestune.dispatch.config.model import DispatcherConfig
+    from orchestune.dispatch.cycle.run import run_dispatch_cycle
 
     config = DispatcherConfig(
         parent_issue_number=1164,
@@ -299,15 +299,15 @@ def test_metrics_failure_keeps_cycle_result_and_executes_once(
         events_log_path=tmp_path / "events.jsonl",
     )
     target = {
-        "setup": "orchestune.dispatch.cycle_execution.CycleTimingCollector",
+        "setup": "orchestune.dispatch.cycle.execution.CycleTimingCollector",
         "observe": "orchestune.dispatch.timings.CycleTimingCollector.observe",
         "snapshot": "orchestune.dispatch.timings.CycleTimingCollector.snapshot",
     }[failure]
     with (
-        patch("orchestune.dispatch.cycle.ensure_parent_branch_ready"),
+        patch("orchestune.dispatch.cycle.run.ensure_parent_branch_ready"),
         patch(target, side_effect=RuntimeError("metrics")),
         patch(
-            "orchestune.dispatch.cycle.load_run_state",
+            "orchestune.dispatch.cycle.run.load_run_state",
             wraps=__import__(
                 "orchestune.ledger.run_state", fromlist=["load_run_state"]
             ).load_run_state,
@@ -323,8 +323,8 @@ def test_metrics_failure_keeps_cycle_result_and_executes_once(
 def test_dry_run_and_business_exception_do_not_create_event_records(
     tmp_path, fake_forge
 ):
-    from orchestune.dispatch.config import DispatcherConfig
-    from orchestune.dispatch.cycle import run_dispatch_cycle
+    from orchestune.dispatch.config.model import DispatcherConfig
+    from orchestune.dispatch.cycle.run import run_dispatch_cycle
 
     config = DispatcherConfig(
         parent_issue_number=1164,
@@ -332,13 +332,13 @@ def test_dry_run_and_business_exception_do_not_create_event_records(
         run_state_path=tmp_path / "state.json",
         events_log_path=tmp_path / "events.jsonl",
     )
-    with patch("orchestune.dispatch.cycle.ensure_parent_branch_ready"):
+    with patch("orchestune.dispatch.cycle.run.ensure_parent_branch_ready"):
         run_dispatch_cycle(config)
     assert not config.events_log_path.exists()
     config.apply = True
     failure = ValueError("business")
     with (
-        patch("orchestune.dispatch.cycle.load_run_state", side_effect=failure),
+        patch("orchestune.dispatch.cycle.run.load_run_state", side_effect=failure),
         pytest.raises(ValueError) as caught,
     ):
         run_dispatch_cycle(config)

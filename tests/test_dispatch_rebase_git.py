@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.rebase import RebaseContext
 from orchestune.dispatch.scoring import Task
 from orchestune.ledger.run_state import ActiveWorktree, RunState

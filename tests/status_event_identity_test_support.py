@@ -6,13 +6,13 @@ import json
 import math
 from dataclasses import dataclass
 
-from orchestune.dispatch.cycle_context_state import LaunchFact
+from orchestune.dispatch.cycle.context_state import LaunchFact
 from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.ledger.status_events import Event, ExecutionIdentity
 from tests.status_event_test_support import EVENT_BY_SOURCE
 
-_SUCCESSFUL_LAUNCH = "dispatch/launch.py::_record_successful_launch"
-_RECOVERED_LAUNCH = "dispatch/launch_attempts.py::reconcile_attempt"
+_SUCCESSFUL_LAUNCH = "dispatch/launch/service.py::_record_successful_launch"
+_RECOVERED_LAUNCH = "dispatch/launch/attempts.py::reconcile_attempt"
 _MANUAL_CLAIM = "claim/service.py::_apply_status_label"
 
 # Updating EVENT_BY_SOURCE requires reviewing the execution-protection contract
@@ -22,9 +22,9 @@ EXPECTED_SOURCES = frozenset(
     {
         "remediation/operations.py::ensure_initial_label",
         "claim/service.py::_apply_status_label",
-        "dispatch/launch.py::_apply_yaml_error_blocking",
-        "dispatch/launch.py::_apply_invalid_footprint_blocking",
-        "dispatch/launch.py::_handle_launch_failure",
+        "dispatch/launch/service.py::_apply_yaml_error_blocking",
+        "dispatch/launch/service.py::_apply_invalid_footprint_blocking",
+        "dispatch/launch/service.py::_handle_launch_failure",
         _SUCCESSFUL_LAUNCH,
         _RECOVERED_LAUNCH,
         "dispatch/reconciliation.py::_resolve_one_blocked_recompute_issue",
@@ -37,7 +37,7 @@ EXPECTED_SOURCES = frozenset(
         "dispatch/rebase.py::_apply_recomputed_event",
         "dispatch/rebase.py::_prepare_wip_backup_for_rebase",
         "dispatch/rebase.py::_handle_rebase_failure",
-        "dispatch/phase_rebase.py::_apply_external_lock_sync",
+        "dispatch/phase/rebase.py::_apply_external_lock_sync",
         "dispatch/gc/zombies.py::_notify_requeued_reclaim",
         "dispatch/prior_parent_merge.py::_apply_verified_repair",
         "dispatch/prior_parent_merge.py::_normalize_closed_issue_label",
@@ -53,8 +53,8 @@ EXPECTED_SOURCES = frozenset(
         "dispatch/gc/policy_review.py::reconcile_review",
         "dispatch/gc/rule_chain.py::_rule_not_needed",
         "dispatch/status_repair.py::_apply_command",
-        "dispatch/recovery.py::execute_recovery_requeue_command",
-        "dispatch/cycle_context_state.py::_CycleState.record_completion",
+        "dispatch/recovery/service.py::execute_recovery_requeue_command",
+        "dispatch/cycle/context_state.py::_CycleState.record_completion",
         "complete/status_labels.py::_completion_mutate",
         "replan/operations.py::_transition_to_not_needed",
         "integrator/pr.py::handle_merge_failure",

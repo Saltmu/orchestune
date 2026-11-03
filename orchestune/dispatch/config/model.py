@@ -1,0 +1,316 @@
+"""ディスパッチャー全体の設定（DispatcherConfig）。
+
+act側モジュール（dispatch_gc/dispatch_rebase/dispatch_escalation等）が
+dispatch_rules.pyのRule/CycleContext経由でこの設定型を参照する際に、
+dispatch_cycle.py経由の循環importを避けるため独立モジュールとして切り出す。
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from orchestune.consistency.invariants.status import (
+    BLOCKED_WITH_RESOLVED_DEPENDENCIES,
+    PRIMARY_STATUS_CONFLICT,
+)
+from orchestune.consistency.repairs.execution import (
+    COMMAND_BOOKKEEPING,
+    COMMAND_RECLAIM,
+    COMMAND_REQUEUE,
+)
+from orchestune.consistency.supervisor import MAX_REPAIR_PASSES, ConsistencyMode
+from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
+from orchestune.dispatch.execution_profiles import ExecutionProfileConfig
+from orchestune.dispatch.reporting.progress import NoopProgress, ProgressSink
+from orchestune.dispatch.retry_policy import (
+    DEFAULT_EARLY_DEATH_BACKOFF_SECONDS,
+    DEFAULT_EARLY_DEATH_MAX_RETRIES,
+    DEFAULT_MAX_USAGE_LIMIT_RETRIES,
+    DEFAULT_REVIEW_TIMEOUT_BACKOFF_SECONDS,
+    DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS,
+    DEFAULT_USAGE_LIMIT_BACKOFF_SECONDS,
+    DEFAULT_USAGE_LIMIT_RESET_GRACE_SECONDS,
+)
+from orchestune.dispatch.targets import DispatchTarget, LocalProcessDispatchTarget
+from orchestune.forge import Forge, GitHubForge
+from orchestune.integrator.timeout_policy import (
+    DEFAULT_INTEGRATION_CI_TIMEOUT_SECONDS,
+    DEFAULT_INTEGRATION_CLEANUP_TIMEOUT_SECONDS,
+    DEFAULT_INTEGRATION_COMMAND_TIMEOUT_SECONDS,
+    DEFAULT_INTEGRATION_CYCLE_TIMEOUT_SECONDS,
+    DEFAULT_INTEGRATION_DEPENDENCY_TIMEOUT_SECONDS,
+    DEFAULT_INTEGRATION_TIMEOUT_BACKOFF_SECONDS,
+    DEFAULT_MAX_INTEGRATION_TIMEOUT_RETRIES,
+    IntegrationExecutionPolicy,
+    build_integration_execution_policy,
+)
+from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
+from orchestune.review.rounds import MAX_REVIEW_ROUNDS
+from orchestune.review.semantic_gate import (
+    VALID_SEMANTIC_REVIEW_MODES,
+    SemanticReviewLimits,
+)
+from orchestune.targets.contracts import ReviewerBot
+
+VALID_SEMANTIC_REVIEW_PROVIDERS = frozenset({"auto", "claude", "codex"})
+VALID_FINAL_ACCEPTANCE_REVIEW_MODES = frozenset({"advisory", "off"})
+VALID_SEMANTIC_FIX_PROVIDERS = frozenset(
+    {
+        "auto",
+        "claude-cli",
+        "codex-cli",
+        "agy-cli",
+        "grok-cli",
+        "cloud-routine",
+        "codex-cloud",
+        "local",
+    }
+)
+VALID_SEMANTIC_REVIEW_TRIGGERS = frozenset({"pr-comment", "dispatch-target"})
+
+DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST = frozenset(
+    {
+        BLOCKED_WITH_RESOLVED_DEPENDENCIES,
+        PRIMARY_STATUS_CONFLICT,
+        COMMAND_BOOKKEEPING,
+        COMMAND_RECLAIM,
+        COMMAND_REQUEUE,
+    }
+)
+
+
+@dataclass(kw_only=True)
+class DispatcherConfig:
+    parent_issue_number: int
+    max_concurrent: int = 2
+    # #1154: `None`は時間単位の起動数上限なし、`0`は起動禁止、正数は期間内上限。
+    max_launches_per_window: int | None = None
+    window_seconds: int = 7200
+    run_state_path: Path = Path("run_state.json")
+    worktree_root: Path = Path("worktrees")
+    log_dir: Path = Path("logs")
+    events_log_path: Path = Path("events.jsonl")
+    apply: bool = False
+    report_dir: Path = Path(".orchestune/reports/dispatch")
+    report_path: Path | None = None
+    progress: ProgressSink = field(default_factory=NoopProgress)
+    dispatch_target: DispatchTarget | None = None
+    forge: Forge | None = None
+    deviation_buffer_lines: int = 5
+    max_recompute_retries: int = 2
+    task_timeout_seconds: int = 7200
+    zombie_gc: bool = True
+    # #512: ゾンビ/タイムアウトGCが同一タスクを`status:queued`へ差し戻せる回数の上限。
+    # 超過したタスクは`status:blocked-human-review`へ遷移し、再投入されなくなる。
+    # 「無制限」を表す値は用意しない（終端のない経路を作らないため）。`0`は
+    # 「1回目の回収で即エスカレーション」を意味する。
+    max_task_reclaims: int = 3
+    # #675: 起動直後（コミット作成前）にプロセスが終了した場合だけ、一時的な
+    # API/ストリーム障害として再投入する。回数はRunStateに永続化し、無限再試行を
+    # 防ぐため有限の既定値を持つ。
+    early_death_window_seconds: int = 120
+    max_early_death_retries: int = DEFAULT_EARLY_DEATH_MAX_RETRIES
+    early_death_backoff_seconds: int = DEFAULT_EARLY_DEATH_BACKOFF_SECONDS
+    # #795: AIレビュー待機タイムアウト（Exit 20）時に自動再投入できる上限回数と
+    # 指数バックオフ秒数。2回に達したタスクはstatus:blocked-human-reviewへエスカレーションされる。
+    max_review_timeout_retries: int = DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS
+    review_timeout_backoff_seconds: int = DEFAULT_REVIEW_TIMEOUT_BACKOFF_SECONDS
+    # #1270: claude-cliのセッション上限（usage limit）で終了した実行の専用再投入枠。
+    # 通常の回収・early-death・review-timeoutの回数とは混ぜない。
+    # `max_usage_limit_retries`は追加起動の最大回数（0は自動再投入なし）。
+    # リセット時刻が確定しない場合は`usage_limit_backoff_seconds`の有限指数バックオフ、
+    # 確定した場合はリセット+`usage_limit_reset_grace_seconds`まで待つ。
+    # `usage_limit_timezone`は`resets 1pm`のような壁時計表記を解釈するIANA名で、
+    # 未指定ならUTCとは解釈せずリセット不明として扱う。
+    max_usage_limit_retries: int = DEFAULT_MAX_USAGE_LIMIT_RETRIES
+    usage_limit_backoff_seconds: int = DEFAULT_USAGE_LIMIT_BACKOFF_SECONDS
+    usage_limit_reset_grace_seconds: int = DEFAULT_USAGE_LIMIT_RESET_GRACE_SECONDS
+    usage_limit_timezone: str | None = None
+
+    # #438: ウィンドウ内の総トークン消費上限およびサブタスクごとの消費上限
+    max_tokens_per_window: int | None = None
+    max_tokens_per_task: int | None = None
+    # #282: status:not-needed判定の独立検証レビュー（保留分）の永続化先。
+    not_needed_review_state_path: Path = Path("not_needed_review_state.json")
+    # #511: 上記の保留エントリが、どちらの結果ラベル
+    # （not-needed-review:passed/failed）も付かないまま保持され続ける秒数の上限。
+    # レビューセッションのクラッシュ等で結果が返らなかった場合に永久pending化
+    # しないための終端。#512の`max_task_reclaims`と同じ理由で「無制限」を表す
+    # 値は用意しない（終端のない経路を作らないため）。
+    not_needed_review_timeout_seconds: int = 86400
+    # #394: Integratorが統合ブランチ上で実行するCIコマンド。未指定（None）の場合、
+    # IntegratorはOrchestune自身のリポジトリ固有の既定値（./scripts/local-ci.sh）
+    # にフォールバックする。導入先リポジトリのCIエントリーポイントに合わせて
+    # 明示的に設定することを推奨する（セットアップガイドの「導入要件」参照）。
+    ci_command: list[str] | None = None
+    # #398/#404: orchestune-dag CLIと同じorchestune.toml/[tool.orchestune]の
+    # dag_ignore_patternsから読み込んだ追加の無視パターン。Conflict Graph再計算
+    # （_decide_footprint_deviation_outcome/_collect_active_conflict_subtask_ids）
+    # にも一貫して適用し、初回検証で無視されたファイルが実行中の再計算で
+    # 誤って競合として検知されないようにする。
+    dag_ignore_patterns: tuple[re.Pattern[str], ...] = ()
+    # #407レビュー(#415): orchestune-dag CLIと同じorchestune.toml/[tool.orchestune]の
+    # dag_similarity_thresholdから読み込んだ閾値。dag_ignore_patternsと同様、
+    # 実行時Conflict Graph再計算（_decide_footprint_deviation_outcome/
+    # _collect_active_conflict_subtask_ids）とpost-cycle integratorにも
+    # 一貫して適用し、orchestune-dagで意図的に消したエッジが既定閾値の
+    # 再計算で復活してしまわないようにする。
+    dag_similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD
+    # #668: リポジトリ定義の実行プロファイル設定（モデル・推論強度解決用）
+    execution_profile_config: ExecutionProfileConfig | None = None
+    # #1035: CLI実行時プロファイルオーバーライド
+    profile: str | None = None
+    # #1031: 子タスクのレビュー合格証跡（verdict=pass, SHA一致）を検証するゲート
+    child_review_gate: str = "required"
+    # #1361: Layer-1 child review and not-needed review are independent from this
+    # Layer-2 integration-PR semantic review policy.
+    semantic_review_mode: str = "required"
+    final_acceptance_review: str = "advisory"
+    force_integration_review: bool = False
+    semantic_review_provider: str = "auto"
+    # #1560: `[reviewer_by_target]` overrides of the `auto` reviewer, by target name.
+    reviewer_by_target: Mapping[str, ReviewerBot] = field(default_factory=dict)
+    semantic_fix_provider: str = "auto"
+    semantic_review_trigger: str = "pr-comment"
+    max_semantic_review_rounds: int = 3
+    max_semantic_fix_retries: int = 2
+    semantic_review_timeout_seconds: int = 1800
+    # #1436: a reviewer without any activity this long after the request is
+    # treated as unresponsive (`review_not_acknowledged`), before
+    # `semantic_review_timeout_seconds` (the shorter of the two applies). The opt-in retry posts one more request
+    # after the backoff and then stops at the next ack deadline.
+    semantic_review_ack_timeout_seconds: int = 600
+    semantic_review_auto_retry: bool = False
+    semantic_review_retry_backoff_seconds: int = 300
+    semantic_fix_timeout_seconds: int = 1800
+    semantic_ci_timeout_seconds: int = 1800
+    semantic_attempt_timeout_seconds: int = 7200
+    # #820: Integratorの依存準備・CI・親Issue単位の統合サイクル・期限後の後始末・
+    # 補助git/ghコマンドの待機上限（秒）と、確認済みtimeout後の自動再試行回数。
+    # 既定値はIntegratorConfigと共通のポリシー定数から取る。0による無期限化は
+    # 認めない（終端のない経路を作らないため）。
+    integration_dependency_timeout_seconds: int = (
+        DEFAULT_INTEGRATION_DEPENDENCY_TIMEOUT_SECONDS
+    )
+    integration_ci_timeout_seconds: int = DEFAULT_INTEGRATION_CI_TIMEOUT_SECONDS
+    integration_cycle_timeout_seconds: int = DEFAULT_INTEGRATION_CYCLE_TIMEOUT_SECONDS
+    integration_cleanup_timeout_seconds: int = (
+        DEFAULT_INTEGRATION_CLEANUP_TIMEOUT_SECONDS
+    )
+    integration_command_timeout_seconds: int = (
+        DEFAULT_INTEGRATION_COMMAND_TIMEOUT_SECONDS
+    )
+    max_integration_timeout_retries: int = DEFAULT_MAX_INTEGRATION_TIMEOUT_RETRIES
+    integration_timeout_backoff_seconds: int = (
+        DEFAULT_INTEGRATION_TIMEOUT_BACKOFF_SECONDS
+    )
+    # #706/#709/#746: modeは追加のrepository-wide loopを段階化する。
+    # Supervisor配下へ移行済みの安全なstatus/recovery/GC自己修復は、後方互換の
+    # default動作としてこのmodeおよび追加allowlistとは独立して維持する。
+    consistency_mode: ConsistencyMode = ConsistencyMode.OFF
+    consistency_repair_allowlist: frozenset[str] = frozenset()
+    consistency_max_repair_passes: int = 1
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.final_acceptance_review, str)
+            or self.final_acceptance_review not in VALID_FINAL_ACCEPTANCE_REVIEW_MODES
+        ):
+            raise ValueError("final_acceptance_review must be 'advisory' or 'off'")
+        if self.child_review_gate not in VALID_CHILD_REVIEW_GATE_MODES:
+            raise ValueError(
+                f"child_review_gate must be 'required' or 'off', got {self.child_review_gate!r}"
+            )
+        self._validate_semantic_review_settings()
+        _ = self.integration_execution_policy  # validates the seven #820 settings
+        if not isinstance(self.consistency_mode, ConsistencyMode):
+            self.consistency_mode = ConsistencyMode(self.consistency_mode)
+        self.consistency_repair_allowlist = frozenset(self.consistency_repair_allowlist)
+        if not 1 <= self.consistency_max_repair_passes <= MAX_REPAIR_PASSES:
+            raise ValueError(
+                "consistency_max_repair_passes must be between "
+                f"1 and {MAX_REPAIR_PASSES}"
+            )
+        if self.execution_profile_config is None:
+            self.execution_profile_config = ExecutionProfileConfig()
+        if self.dispatch_target is None:
+            self.dispatch_target = LocalProcessDispatchTarget(log_dir=self.log_dir)
+        if self.forge is None:
+            self.forge = GitHubForge()
+
+    @property
+    def integration_execution_policy(self) -> IntegrationExecutionPolicy:
+        return build_integration_execution_policy(self)
+
+    @property
+    def semantic_review_limits(self) -> SemanticReviewLimits:
+        return SemanticReviewLimits(
+            max_rounds=self.max_semantic_review_rounds,
+            max_fix_retries=self.max_semantic_fix_retries,
+            review_timeout_seconds=self.semantic_review_timeout_seconds,
+            fix_timeout_seconds=self.semantic_fix_timeout_seconds,
+            ci_timeout_seconds=self.semantic_ci_timeout_seconds,
+            attempt_timeout_seconds=self.semantic_attempt_timeout_seconds,
+        )
+
+    @property
+    def semantic_review_ack_deadline_seconds(self) -> int:
+        """The ack window, never longer than the review timeout it precedes."""
+        return min(
+            self.semantic_review_ack_timeout_seconds,
+            self.semantic_review_timeout_seconds,
+        )
+
+    def _validate_semantic_review_settings(self) -> None:
+        choices = (
+            ("semantic_review_mode", VALID_SEMANTIC_REVIEW_MODES),
+            ("semantic_review_provider", VALID_SEMANTIC_REVIEW_PROVIDERS),
+            ("semantic_fix_provider", VALID_SEMANTIC_FIX_PROVIDERS),
+            ("semantic_review_trigger", VALID_SEMANTIC_REVIEW_TRIGGERS),
+        )
+        for name, allowed in choices:
+            value = getattr(self, name)
+            if value not in allowed:
+                raise ValueError(f"{name} has unsupported value {value!r}")
+        for key in (
+            "max_semantic_review_rounds",
+            "max_semantic_fix_retries",
+            "semantic_review_timeout_seconds",
+            "semantic_review_ack_timeout_seconds",
+            "semantic_review_retry_backoff_seconds",
+            "semantic_fix_timeout_seconds",
+            "semantic_ci_timeout_seconds",
+            "semantic_attempt_timeout_seconds",
+        ):
+            val = getattr(self, key)
+            if not isinstance(val, int) or isinstance(val, bool):
+                raise ValueError(f"{key} must be an integer, got {val!r}")
+        if not isinstance(self.force_integration_review, bool):
+            raise ValueError("force_integration_review must be a boolean")
+        if not isinstance(self.semantic_review_auto_retry, bool):
+            raise ValueError("semantic_review_auto_retry must be a boolean")
+        if self.semantic_review_ack_timeout_seconds < 1:
+            raise ValueError("semantic_review_ack_timeout_seconds must be positive")
+        if self.semantic_review_retry_backoff_seconds < 0:
+            raise ValueError(
+                "semantic_review_retry_backoff_seconds must be non-negative"
+            )
+        if not 1 <= self.max_semantic_review_rounds <= MAX_REVIEW_ROUNDS:
+            raise ValueError(
+                "max_semantic_review_rounds must be between "
+                f"1 and {MAX_REVIEW_ROUNDS}"
+            )
+        if self.max_semantic_fix_retries < 0:
+            raise ValueError("max_semantic_fix_retries must be non-negative")
+        _ = self.semantic_review_limits
+
+    @property
+    def resolved_forge(self) -> Forge:
+        """`__post_init__`が常に既定値を設定するため、`self.forge`自体は
+        `Forge | None`型だがここでは非Noneであることが保証される。
+        呼び出し側での重複した`is not None`チェックを避ける。"""
+        assert self.forge is not None
+        return self.forge

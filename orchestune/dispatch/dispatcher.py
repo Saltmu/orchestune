@@ -11,19 +11,19 @@ from typing import Any, NoReturn
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.config_contracts import ConfigError
 from orchestune.dispatch import pre_scheduling_integration
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_loader import (
+from orchestune.dispatch.config.loader import (
     build_arg_parser as build_arg_parser,
 )
-from orchestune.dispatch.config_loader import (
+from orchestune.dispatch.config.loader import (
     load_and_resolve_config as load_and_resolve_config,
 )
-from orchestune.dispatch.config_schema import validate_toml_config
-from orchestune.dispatch.cycle import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.config.schema import validate_toml_config
+from orchestune.dispatch.cycle.report import CycleReport
+from orchestune.dispatch.cycle.run import (
     run_dispatch_cycle,
     run_pre_integration_cycle,
 )
-from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.postcycle import (
     _post_event_log_comment,
     _post_finding_notices,
@@ -32,20 +32,27 @@ from orchestune.dispatch.postcycle import (
 from orchestune.dispatch.pre_scheduling_integration import (
     _decide_semantic_review_enabled as _decide_semantic_review_enabled,
 )
-from orchestune.dispatch.progress import (
+from orchestune.dispatch.reporting.progress import (
     DispatchProgressSink,
     progress_phase,
     safe_stderr,
 )
-from orchestune.dispatch.progress_output import select_progress_sink
-from orchestune.dispatch.report import _report_to_dict, write_github_step_summary
-from orchestune.dispatch.report_output import ReportOutput, new_run_id, reserve_report
-from orchestune.dispatch.result import PhaseResult, PhaseStatus
-from orchestune.dispatch.summary import (
+from orchestune.dispatch.reporting.progress_output import select_progress_sink
+from orchestune.dispatch.reporting.report import (
+    _report_to_dict,
+    write_github_step_summary,
+)
+from orchestune.dispatch.reporting.report_output import (
+    ReportOutput,
+    new_run_id,
+    reserve_report,
+)
+from orchestune.dispatch.reporting.summary import (
     merge_skips,
     render_forge_warnings_text,
     render_skipped_text,
 )
+from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.targets import (
     build_dispatch_target as build_dispatch_target,  # compatibility patch surface
 )

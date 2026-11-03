@@ -10,17 +10,17 @@ from unittest.mock import MagicMock
 import pytest
 
 from orchestune.config_contracts import ConfigError
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_loader import load_and_resolve_config
-from orchestune.dispatch.config_schema import (
+from orchestune.dispatch.config.loader import load_and_resolve_config
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.config.schema import (
     extract_reviewer_by_target,
     validate_toml_config,
 )
 from orchestune.dispatch.postcycle import _final_acceptance_reviewer
-from orchestune.dispatch.postcycle_semantic_review import SemanticReviewCycleRunner
-from orchestune.dispatch.semantic_review_adapters import (
+from orchestune.dispatch.semantic_review.adapters import (
     validate_semantic_review_preflight,
 )
+from orchestune.dispatch.semantic_review.postcycle import SemanticReviewCycleRunner
 from orchestune.dispatch.targets import TargetBuildConfig, build_dispatch_target
 
 MAPPING = {"agy-cli": "claude", "claude-cli": "codex", "grok-cli": "codex"}

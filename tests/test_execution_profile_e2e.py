@@ -20,8 +20,8 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.dispatch.execution_profiles import (
     DEFAULT_EXECUTION_PROFILE,
     ExecutionProfileConfig,
@@ -29,7 +29,7 @@ from orchestune.dispatch.execution_profiles import (
     extract_execution_profile_config,
     resolve_execution_profile,
 )
-from orchestune.dispatch.report import write_github_step_summary
+from orchestune.dispatch.reporting.report import write_github_step_summary
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     CodexCloudDispatchTarget,
@@ -269,10 +269,10 @@ Testing full lifecycle of execution profiles.
                 autospec=True,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+                "orchestune.dispatch.phase.rebase.ensure_parent_branch", autospec=True
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -393,10 +393,10 @@ Testing full lifecycle of execution profiles.
                 autospec=True,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+                "orchestune.dispatch.phase.rebase.ensure_parent_branch", autospec=True
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -539,7 +539,7 @@ Testing full lifecycle of execution profiles.
                 autospec=True,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -629,7 +629,7 @@ Testing full lifecycle of execution profiles.
                 autospec=True,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -772,7 +772,7 @@ model_tier: null
                 autospec=True,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -844,7 +844,7 @@ model_tier: null
                 autospec=True,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),

@@ -6,8 +6,8 @@ import inspect
 from typing import get_type_hints
 from unittest.mock import MagicMock
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.launch import _decide_task_launch_plan
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.launch.service import _decide_task_launch_plan
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     default_dry_run_command_builder,
@@ -21,7 +21,7 @@ def _task() -> Task:
     return Task(
         issue_number=889,
         subtask_id="cycle-launch-metadata-consumers",
-        footprint=("orchestune/dispatch/launch.py",),
+        footprint=("orchestune/dispatch/launch/service.py",),
         symbols=("TaskMetadata",),
         risk=False,
         priority="medium",
@@ -39,12 +39,12 @@ def test_metadata_consumer_annotations_do_not_require_raw_task() -> None:
     from orchestune.dispatch import (
         escalation,
         filters,
-        launch,
         locks,
         rebase,
         targets,
         worktree,
     )
+    from orchestune.dispatch.launch import service as launch
 
     task_parameters = (
         (launch._is_task_stack_eligible, "task"),

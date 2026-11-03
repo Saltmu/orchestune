@@ -20,8 +20,8 @@ from orchestune.consistency.repairs.status import (
     COMMAND_TRANSITION_LABEL,
 )
 from orchestune.consistency.supervisor import ConsistencyMode
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.run import (
     run_dispatch_cycle,
 )
 from orchestune.dispatch.locks import ExternalLockScanResult
@@ -172,7 +172,7 @@ class TestRunDispatchCycleBlockedPromotion:
         _track_forge_labels(fake_forge, done_issue, blocked_issue)
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -219,7 +219,7 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_remove_label = fake_forge.remove_label
         _track_forge_labels(fake_forge, done_issue, blocked_issue)
         with patch(
-            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            "orchestune.dispatch.phase.rebase.list_remote_branches",
             autospec=True,
             return_value=[],
         ):
@@ -264,7 +264,7 @@ class TestRunDispatchCycleBlockedPromotion:
         _track_forge_labels(fake_forge, done_issue, blocked_issue)
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -306,7 +306,7 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_remove_label = fake_forge.remove_label
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -369,7 +369,7 @@ class TestRunDispatchCycleBlockedPromotion:
         _track_forge_labels(fake_forge, in_progress_issue, blocked_issue)
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -456,7 +456,7 @@ class TestRunDispatchCycleBlockedPromotion:
         _track_forge_labels(fake_forge, dependency_issue, blocked_issue)
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -498,7 +498,7 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_remove_label = fake_forge.remove_label
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -572,7 +572,7 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_close_issue = fake_forge.close_issue
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -627,17 +627,17 @@ class TestRunDispatchCycleBlockedPromotion:
 
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.cycle_actions.execute_status_repair_command",
+                "orchestune.dispatch.cycle.actions.execute_status_repair_command",
                 autospec=True,
                 side_effect=execute,
             ),
             patch(
-                "orchestune.dispatch.cycle_actions._sync_external_locks",
+                "orchestune.dispatch.cycle.actions._sync_external_locks",
                 autospec=True,
                 side_effect=sync_locks,
             ),
@@ -689,7 +689,7 @@ class TestRunDispatchCycleBlockedPromotion:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -730,7 +730,7 @@ class TestRunDispatchCycleBlockedPromotion:
                 return_value=False,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -802,7 +802,7 @@ class TestRunDispatchCycleBlockedPromotion:
         )
         self._reserve_completion(config, 1)
         with patch(
-            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            "orchestune.dispatch.phase.rebase.list_remote_branches",
             autospec=True,
             return_value=[],
         ):
@@ -828,7 +828,7 @@ class TestRunDispatchCycleBlockedPromotion:
         applied = self._config(tmp_path, apply=True, max_concurrent=0)
         self._reserve_completion(preview, 1)
         with patch(
-            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            "orchestune.dispatch.phase.rebase.list_remote_branches",
             autospec=True,
             return_value=[],
         ):
@@ -859,7 +859,7 @@ class TestRunDispatchCycleBlockedPromotion:
         config = self._config(tmp_path, apply=False, max_concurrent=0)
         self._reserve_completion(config, 2)
         with patch(
-            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            "orchestune.dispatch.phase.rebase.list_remote_branches",
             autospec=True,
             return_value=[],
         ):
@@ -909,7 +909,7 @@ class TestBaseBranchRedCycleReconciliation:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -967,7 +967,7 @@ class TestBaseBranchRedCycleReconciliation:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),

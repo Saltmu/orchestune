@@ -6,14 +6,17 @@ from unittest.mock import patch
 import pytest
 
 from orchestune.claim.adopt_pr import orphan_marker
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.gc.completion import (
     _apply_completed_worktree_outcome,
     _decide_completed_worktree_outcome,
 )
 from orchestune.dispatch.gc.completion_contracts import CompletedWorktreeDecision
 from orchestune.dispatch.gc.orphaned_pr import orphan_receipt
-from orchestune.dispatch.launch import DuplicateCandidateDecision, _apply_duplicate_skip
+from orchestune.dispatch.launch.service import (
+    DuplicateCandidateDecision,
+    _apply_duplicate_skip,
+)
 from orchestune.ledger.run_state import RunState
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord
@@ -398,7 +401,9 @@ def test_duplicate_pr_diagnostics_provide_adoption_steps(tmp_path, fake_forge, c
         run_state_path=tmp_path / "state.json",
         events_log_path=tmp_path / "events.jsonl",
     )
-    with patch("orchestune.dispatch.launch.apply_human_review_escalation") as escalate:
+    with patch(
+        "orchestune.dispatch.launch.service.apply_human_review_escalation"
+    ) as escalate:
         assert (
             _apply_duplicate_skip([DuplicateCandidateDecision(task, True, pr)], config)
             == []

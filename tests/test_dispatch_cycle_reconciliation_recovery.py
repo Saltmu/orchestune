@@ -9,12 +9,12 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.action_contracts import ActivePhaseResult
+from orchestune.dispatch.cycle.events import DeviationConflict, RecomputedDeviation
+from orchestune.dispatch.cycle.run import (
     run_dispatch_cycle,
 )
-from orchestune.dispatch.cycle_action_contracts import ActivePhaseResult
-from orchestune.dispatch.cycle_events import DeviationConflict, RecomputedDeviation
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.ledger.run_state import (
@@ -110,38 +110,38 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         fake_forge.get_actor_permission.return_value = "write"
         with (
             patch(
-                "orchestune.dispatch.cycle.load_run_state",
+                "orchestune.dispatch.cycle.run.load_run_state",
                 autospec=True,
                 return_value=run_state,
             ),
             patch(
-                "orchestune.dispatch.cycle._fetch_issues",
+                "orchestune.dispatch.cycle.run._fetch_issues",
                 autospec=True,
                 return_value=MockIssues(),
             ),
             patch(
-                "orchestune.dispatch.cycle_actions.CycleActionAdapter.process_active_worktrees",
+                "orchestune.dispatch.cycle.actions.CycleActionAdapter.process_active_worktrees",
                 autospec=True,
                 return_value=ActivePhaseResult((), tuple(deviation_events), False),
             ),
             patch(
-                "orchestune.dispatch.cycle._run_status_repair_boundary",
+                "orchestune.dispatch.cycle.run._run_status_repair_boundary",
                 autospec=True,
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.cycle_actions._sync_external_locks",
+                "orchestune.dispatch.cycle.actions._sync_external_locks",
                 autospec=True,
                 return_value=ExternalLockScanResult([], []),
             ),
-            patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
+            patch("orchestune.dispatch.cycle.actions.save_run_state", autospec=True),
             patch(
-                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.phase.scheduling._determine_candidate_tasks",
                 autospec=True,
                 return_value=([blocked_task, normal_task], {}, []),
             ),
             patch(
-                "orchestune.dispatch.cycle_actions.select_tasks_with_decisions",
+                "orchestune.dispatch.cycle.actions.select_tasks_with_decisions",
                 autospec=True,
                 return_value=SchedulingResult([normal_task], []),
             ) as mock_select,
@@ -221,18 +221,18 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         fake_forge.get_actor_permission.return_value = "write"
         with (
             patch(
-                "orchestune.dispatch.cycle.load_run_state",
+                "orchestune.dispatch.cycle.run.load_run_state",
                 autospec=True,
                 return_value=run_state,
             ),
             patch(
-                "orchestune.dispatch.cycle._fetch_issues",
+                "orchestune.dispatch.cycle.run._fetch_issues",
                 autospec=True,
                 return_value=MockIssues(),
             ),
-            patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
+            patch("orchestune.dispatch.cycle.actions.save_run_state", autospec=True),
             patch(
-                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.phase.scheduling._determine_candidate_tasks",
                 autospec=True,
                 return_value=([], {}, []),
             ),
@@ -331,23 +331,23 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         fake_forge.get_actor_permission.return_value = "write"
         with (
             patch(
-                "orchestune.dispatch.cycle.load_run_state",
+                "orchestune.dispatch.cycle.run.load_run_state",
                 autospec=True,
                 return_value=run_state,
             ),
             patch(
-                "orchestune.dispatch.cycle._fetch_issues",
+                "orchestune.dispatch.cycle.run._fetch_issues",
                 autospec=True,
                 return_value=MockIssues(),
             ),
             patch(
-                "orchestune.dispatch.cycle_actions.CycleActionAdapter.process_active_worktrees",
+                "orchestune.dispatch.cycle.actions.CycleActionAdapter.process_active_worktrees",
                 autospec=True,
                 return_value=ActivePhaseResult((), (), False),
             ),
-            patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
+            patch("orchestune.dispatch.cycle.actions.save_run_state", autospec=True),
             patch(
-                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.phase.scheduling._determine_candidate_tasks",
                 autospec=True,
                 return_value=([], {}, []),
             ),
@@ -449,23 +449,23 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
         fake_forge.get_actor_permission.return_value = "write"
         with (
             patch(
-                "orchestune.dispatch.cycle.load_run_state",
+                "orchestune.dispatch.cycle.run.load_run_state",
                 autospec=True,
                 return_value=run_state,
             ),
             patch(
-                "orchestune.dispatch.cycle._fetch_issues",
+                "orchestune.dispatch.cycle.run._fetch_issues",
                 autospec=True,
                 return_value=MockIssues(),
             ),
             patch(
-                "orchestune.dispatch.cycle_actions.CycleActionAdapter.process_active_worktrees",
+                "orchestune.dispatch.cycle.actions.CycleActionAdapter.process_active_worktrees",
                 autospec=True,
                 return_value=ActivePhaseResult((), (), False),
             ),
-            patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
+            patch("orchestune.dispatch.cycle.actions.save_run_state", autospec=True),
             patch(
-                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.phase.scheduling._determine_candidate_tasks",
                 autospec=True,
                 return_value=([], {}, []),
             ),

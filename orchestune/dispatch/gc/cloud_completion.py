@@ -9,8 +9,8 @@ from dataclasses import replace
 from typing import Literal, cast
 
 from orchestune.bounded_limit import exceeds_limit
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import (
     AbandonedExternalExecutionHeldCompletion,
     CompletionEvent,
     TaskWorktreeCompletion,

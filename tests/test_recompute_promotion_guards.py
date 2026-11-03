@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from orchestune.dispatch import reconciliation
-from orchestune.dispatch.cycle_context import _build_task_mappings
+from orchestune.dispatch.cycle.context import _build_task_mappings
 from orchestune.ledger.run_state import RunState
 from tests.conftest import make_issue
 from tests.dependency_liveness_test_support import (

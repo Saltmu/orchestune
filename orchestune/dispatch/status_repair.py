@@ -32,8 +32,8 @@ from orchestune.consistency.repairs.status import (
     COMMAND_TRANSITION_LABEL,
 )
 from orchestune.consistency.vocabulary import DESIRED_STATUS_LABEL
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.promotion_reporting import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.reporting.promotion import (
     PromotionReportJournal,
     PromotionReportRecord,
     is_reportable_promotion,

@@ -26,17 +26,17 @@ from orchestune.consistency.repairs.status import (
     plan_status_repairs,
 )
 from orchestune.dispatch import (
-    launch,
-    launch_attempts,
     prior_parent_merge,
     rebase,
     reconciliation,
-    recovery,
     status_repair,
 )
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import CompletionEvent
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import CompletionEvent
 from orchestune.dispatch.gc import cloud_completion, completion, zombies
+from orchestune.dispatch.launch import attempts as launch_attempts
+from orchestune.dispatch.launch import service as launch
+from orchestune.dispatch.recovery import service as recovery
 from orchestune.integrator.steps import AutoMergeChildIntegrationStep
 from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import RunState
@@ -253,7 +253,7 @@ def completion_requeue(env: Env) -> None:
 
 
 def usage_limit_requeue(env: Env) -> None:
-    from orchestune.dispatch.cycle_events import UsageLimitCompletion
+    from orchestune.dispatch.cycle.events import UsageLimitCompletion
     from orchestune.dispatch.gc import usage_limit
 
     for name in ("remove_worktree", "backup_wip_commit", "save_run_state"):

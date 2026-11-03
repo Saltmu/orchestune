@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.cycle.run import CycleReport
 from orchestune.dispatch.dispatcher import main
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from tests.dispatch_test_support import (
@@ -216,7 +216,7 @@ class TestDispatcherCliSingleResponsibility:
 
 class TestConfigDefaults:
     def test_config_defaults_load(self):
-        from orchestune.dispatch.config_schema import validate_toml_config
+        from orchestune.dispatch.config.schema import validate_toml_config
 
         config_data = {
             "task-timeout-seconds": 1200,

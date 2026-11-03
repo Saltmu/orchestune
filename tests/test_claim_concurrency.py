@@ -135,9 +135,9 @@ def _run_dispatch_claim(
     footprint: tuple[str, ...],
 ):
     """Exercise #943's dispatch request construction before calling claim_task."""
-    from orchestune.dispatch.config import DispatcherConfig
-    from orchestune.dispatch.cycle_actions import _bind_dispatch_claim_fn
-    from orchestune.dispatch.launch import TaskLaunchPlan, _try_planned_launch
+    from orchestune.dispatch.config.model import DispatcherConfig
+    from orchestune.dispatch.cycle.actions import _bind_dispatch_claim_fn
+    from orchestune.dispatch.launch.service import TaskLaunchPlan, _try_planned_launch
     from orchestune.dispatch.scoring import Task
     from orchestune.dispatch.worktree import LaunchResult
     from orchestune.ledger.run_state import load_run_state
@@ -185,7 +185,9 @@ def _run_dispatch_claim(
             launched=True,
         )
 
-    with patch("orchestune.dispatch.launch._launch_on_prepared_worktree", launched):
+    with patch(
+        "orchestune.dispatch.launch.service._launch_on_prepared_worktree", launched
+    ):
         os.chdir(repo)
         launch = _try_planned_launch(
             plan,

@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from orchestune.dispatch.cycle_events import UnclaimedReservationHold, freeze_json
+from orchestune.dispatch.cycle.events import UnclaimedReservationHold, freeze_json
 from orchestune.ledger.completion_records import InvalidLedgerRecord
 from orchestune.ledger.completion_reservations import (
     completion_record,

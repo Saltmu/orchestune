@@ -78,7 +78,7 @@ ALLOWED_L4_DEPENDENTS = {
     "recovery.cli": frozenset({"cli"}),
     "dag.cli": frozenset({"cli"}),
     "dispatch.dispatcher": frozenset({"cli"}),
-    "dispatch.doctor_cli": frozenset({"cli"}),
+    "dispatch.doctor.cli": frozenset({"cli"}),
     "dispatch.review_cli": frozenset({"cli"}),
     "dispatch.gc_cli": frozenset({"cli"}),
     "monitor": frozenset({"cli"}),
@@ -156,28 +156,28 @@ BOUNDED_RECOVERY_TERMINALS = {
         "apply_human_review_escalation",
     ),
     "semantic_review_timeout_seconds": (
-        "dispatch/semantic_review_adapters.py",
+        "dispatch/semantic_review/adapters.py",
         "apply_human_review_escalation",
     ),
     # #1436: an unanswered review request stops at the ack deadline.
     "semantic_review_ack_timeout_seconds": (
-        "dispatch/semantic_review_adapters.py",
+        "dispatch/semantic_review/adapters.py",
         "apply_human_review_escalation",
     ),
     "semantic_fix_timeout_seconds": (
-        "dispatch/semantic_review_adapters.py",
+        "dispatch/semantic_review/adapters.py",
         "apply_human_review_escalation",
     ),
     "semantic_ci_timeout_seconds": (
-        "dispatch/semantic_review_adapters.py",
+        "dispatch/semantic_review/adapters.py",
         "apply_human_review_escalation",
     ),
     "semantic_attempt_timeout_seconds": (
-        "dispatch/semantic_review_adapters.py",
+        "dispatch/semantic_review/adapters.py",
         "apply_human_review_escalation",
     ),
     "max_semantic_fix_retries": (
-        "dispatch/semantic_review_adapters.py",
+        "dispatch/semantic_review/adapters.py",
         "apply_human_review_escalation",
     ),
 }
@@ -725,7 +725,7 @@ def _source_has_terminal_marker(source: str, marker: str) -> bool:
 
 def test_bounded_recovery_limit_registry_covers_every_finite_config_setting() -> None:
     """#566: 新たな有限リトライ／回収上限には終端動作を必ず宣言させる。"""
-    config_tree = _source_ast(PACKAGE_ROOT / "dispatch" / "config.py")
+    config_tree = _source_ast(PACKAGE_ROOT / "dispatch" / "config" / "model.py")
     retry_tree = _source_ast(PACKAGE_ROOT / "dispatch" / "retry_policy.py")
     policy_tree = _source_ast(PACKAGE_ROOT / "integrator" / "timeout_policy.py")
     constants = _module_int_constants_ast(retry_tree) | _module_int_constants_ast(

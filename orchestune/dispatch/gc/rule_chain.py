@@ -11,8 +11,8 @@ from functools import partial
 from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import (
     AbandonmentPersistenceFailureCompletion,
     ActiveReservationHold,
     CompletionEvent,
@@ -20,7 +20,7 @@ from orchestune.dispatch.cycle_events import (
     ForgeFailureCompletion,
     WorktreeCompletionHold,
 )
-from orchestune.dispatch.cycle_records import CompletionReceipt
+from orchestune.dispatch.cycle.records import CompletionReceipt
 from orchestune.dispatch.external_execution import (
     is_external_execution,
     notify_completed_hold,
@@ -59,7 +59,7 @@ from orchestune.dispatch.gc.records import (
     _completed_worktree_record as _completed_worktree_record,
 )
 from orchestune.dispatch.gc.usage_limit import handle_usage_limit_exit
-from orchestune.dispatch.launch_state import with_launch
+from orchestune.dispatch.launch.state import with_launch
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive

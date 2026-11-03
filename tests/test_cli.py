@@ -467,7 +467,7 @@ def test_cli_delegates_to_doctor_with_its_exit_code():
     with (
         patch("sys.argv", ["orchestune", "doctor", "--execution-mode", "local"]),
         patch(
-            "orchestune.dispatch.doctor_cli.main", autospec=True, return_value=1
+            "orchestune.dispatch.doctor.cli.main", autospec=True, return_value=1
         ) as mock_doctor_main,
         pytest.raises(SystemExit) as exc_info,
     ):

@@ -12,13 +12,13 @@ footprint）への薄い上書きと、GC固有の実行ヘルパーだけを持
 
 from collections.abc import Sequence
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import CompletionEvent, WorktreeCompletionHold
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import CompletionEvent, WorktreeCompletionHold
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _reclaim_candidate_from_command,
 )
-from orchestune.dispatch.phase_gc import (
+from orchestune.dispatch.phase.gc import (
     _gc_supervisor,
     _GcReclaimAdapter,
     run_gc_phase,

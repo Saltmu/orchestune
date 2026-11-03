@@ -20,8 +20,8 @@ from orchestune.dag.models import (
     compile_extra_ignore_patterns,
 )
 from orchestune.dependencies.resolution import TaskDependencies
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import _DispatchConsistencyAdapter
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.run import _DispatchConsistencyAdapter
 from orchestune.dispatch.reconciliation import (
     _collect_active_conflict_subtask_ids,
     _handle_blocked_recompute_recovery,

@@ -5,8 +5,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal, NamedTuple, TypeGuard
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.cycle.events import (
     CompletionEvent,
     ForgeFailureCompletion,
     TaskWorktreeCompletion,
@@ -15,8 +15,8 @@ from orchestune.dispatch.cycle_events import (
     WorktreeCompletionHoldAction,
 )
 from orchestune.dispatch.gc.completion_disposition import completion_handling
+from orchestune.dispatch.reporting.summary import WARN_PREFIX, ascii_safe
 from orchestune.dispatch.rules import NotNeededReviewDispatcher
-from orchestune.dispatch.summary import WARN_PREFIX, ascii_safe
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord

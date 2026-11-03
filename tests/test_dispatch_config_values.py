@@ -11,10 +11,11 @@ from unittest.mock import Mock
 
 import pytest
 
-from orchestune.dispatch import config_values, retry_policy
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_loader import _assemble_dispatcher_config
-from orchestune.dispatch.config_values import (
+from orchestune.dispatch import retry_policy
+from orchestune.dispatch.config import values as config_values
+from orchestune.dispatch.config.loader import _assemble_dispatcher_config
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.config.values import (
     COMPLETION_POLICY_KEYS,
     RUNTIME_TUNING_KEYS,
     completion_policy_overrides,
@@ -22,7 +23,7 @@ from orchestune.dispatch.config_values import (
 )
 from orchestune.dispatch.execution_profiles import ExecutionProfileConfig
 
-PACKAGE = Path(config_values.__file__).parent
+PACKAGE = Path(config_values.__file__).parent.parent
 
 
 def _field_default(name: str) -> Any:
@@ -249,7 +250,7 @@ def test_entry_points_do_not_restate_numeric_defaults():
     keys = set(RUNTIME_TUNING_KEYS) | set(COMPLETION_POLICY_KEYS)
     restated = [
         hit
-        for name in ("config_loader.py", "gc/policies.py")
+        for name in ("config/loader.py", "gc/policies.py")
         for hit in _numeric_default_restatements(PACKAGE / name, keys)
     ]
     assert restated == []

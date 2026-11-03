@@ -13,15 +13,15 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.postcycle_semantic_review import (
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.result import PhaseResult, PhaseStatus
+from orchestune.dispatch.semantic_review.postcycle import (
     SUCCESS_STATUSES as SEMANTIC_SUCCESS_STATUSES,
 )
-from orchestune.dispatch.postcycle_semantic_review import (
+from orchestune.dispatch.semantic_review.postcycle import (
     WARNING_STATUSES,
     advance_pending_semantic_reviews,
 )
-from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget
 from orchestune.forge import Forge, ForgeAuthError
 from orchestune.integrator import IntegrationStatus, Integrator, IntegratorConfig
