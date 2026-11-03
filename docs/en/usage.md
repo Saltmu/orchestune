@@ -266,7 +266,7 @@ The top level supports the following fields:
 
 - **`title`** (string, required): A one-line summary of the "big rock" as a whole. `orchestune provision` (see below) uses it to create the parent issue (`[EPIC] <title>`).
 - **`parent_issue_number`** (integer or `null`, optional, defaults to `null`): The parent issue's number. When decomposing an existing issue, set this to that issue's number. Otherwise, `orchestune provision` writes it back after creating (or reusing) the parent issue.
-- **`parent_issue_source`** (string, optional, defaults to `derived`): Provenance of the parent issue: either `adopted` (adopted a pre-existing issue as parent) or `derived` (created/resolved from the plan's `title`). When `adopted`, title matching is bypassed and the issue is verified and reused based on the issue number and parent marker.
+- **`parent_issue_source`** (string, optional, defaults to `derived`): Provenance of the parent issue: either `adopted` (adopted a pre-existing issue as parent) or `derived` (created/resolved from the plan's `title`). When `adopted`, title matching is bypassed and the issue is verified and reused based on the issue number and parent marker. Note that frontmatter adoption alone only reuses issues that are already in Orchestune EPIC format; adopting a plain issue for the first time requires `--parent-issue <number>`.
 - **`subtasks`** (list of subtasks, required): Each item supports the following fields.
 
 Each subtask item supports the following fields:
@@ -348,13 +348,13 @@ orchestune provision --plan decomposition_plan.md
 
 ### Attaching to a pre-existing EPIC issue (`--parent-issue`)
 
-If the EPIC issue was already filed ahead of time (by hand, or via plain GitHub — not by Orchestune), either specify `parent_issue_number: <number>` and `parent_issue_source: adopted` in the plan frontmatter, or pass `--parent-issue <number>` on the command line:
+If the parent issue already has the Orchestune EPIC format (title starting with `[EPIC] ` and the parent marker embedded in the body), specifying `parent_issue_number: <number>` and `parent_issue_source: adopted` in the plan frontmatter is sufficient. If the existing issue is not yet an Orchestune EPIC, the first provision run requires `--parent-issue <number>` on the command line (including for `--no-apply` preview):
 
 ```bash
 orchestune provision --plan decomposition_plan.md --parent-issue 123
 ```
 
-If the target issue doesn't already look like an Orchestune EPIC (title starting with `[EPIC] ` and the parent marker embedded in the body), it is normalized in place — its existing content is preserved, and the `[EPIC] ` prefix / parent marker are added as needed. No title match against the `title` frontmatter field is required.
+When `--parent-issue` is passed, the target issue is normalized in place if it doesn't already look like an Orchestune EPIC — its existing content is preserved, and the `[EPIC] ` prefix / parent marker are added as needed. No title match against the `title` frontmatter field is required.
 
 Running with `--parent-issue` automatically persists `parent_issue_source: adopted` into `decomposition_plan.md`'s frontmatter. **Subsequent `orchestune provision` runs therefore no longer require `--parent-issue` to be passed again**; they will automatically reuse the adopted parent and existing child issues. If an adopted parent issue does not exist, provisioning halts with an error instead of silently creating a duplicate parent.
 
