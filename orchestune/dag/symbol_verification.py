@@ -11,9 +11,22 @@
 from __future__ import annotations
 
 import ast
+import functools
 from pathlib import Path
+from typing import Any
 
 from orchestune.dag.models import SubTask
+
+try:
+    import tree_sitter
+    import tree_sitter_go
+    import tree_sitter_javascript
+    import tree_sitter_rust
+    import tree_sitter_typescript
+
+    _TREE_SITTER_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _TREE_SITTER_AVAILABLE = False
 
 
 def _flatten_scope_statements(statements: list[ast.stmt]) -> list[ast.stmt]:
@@ -317,6 +330,451 @@ def _symbol_matches(
     return len(parts) >= 2 and parts[-1] in top_level_names
 
 
+_EXTENSION_TO_LANGUAGE: dict[str, str] = {
+    ".py": "python",
+    ".ts": "typescript",
+    ".mts": "typescript",
+    ".cts": "typescript",
+    ".tsx": "tsx",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".rs": "rust",
+    ".go": "go",
+}
+
+_NON_CODE_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".md",
+        ".markdown",
+        ".txt",
+        ".rst",
+        ".toml",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".ini",
+        ".cfg",
+        ".lock",
+        ".svg",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".ico",
+        ".css",
+        ".scss",
+        ".sass",
+        ".less",
+        ".html",
+        ".htm",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".ps1",
+        ".bat",
+        ".cmd",
+        ".dockerignore",
+        ".gitignore",
+        ".gitattributes",
+        ".editorconfig",
+        ".env",
+    }
+)
+
+_NON_CODE_FILENAMES: frozenset[str] = frozenset(
+    {
+        "dockerfile",
+        "makefile",
+        "license",
+        "gemfile",
+        "procfile",
+    }
+)
+
+
+def _node_text(node: Any, content: bytes) -> str:
+    return content[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
+
+
+@functools.cache
+def _get_tree_sitter_parser(language_name: str) -> Any | None:
+    if not _TREE_SITTER_AVAILABLE:
+        return None
+    if language_name == "typescript":
+        return tree_sitter.Parser(
+            tree_sitter.Language(tree_sitter_typescript.language_typescript())
+        )
+    if language_name == "tsx":
+        return tree_sitter.Parser(
+            tree_sitter.Language(tree_sitter_typescript.language_tsx())
+        )
+    if language_name == "javascript":
+        return tree_sitter.Parser(
+            tree_sitter.Language(tree_sitter_javascript.language())
+        )
+    if language_name == "rust":
+        return tree_sitter.Parser(tree_sitter.Language(tree_sitter_rust.language()))
+    if language_name == "go":
+        return tree_sitter.Parser(tree_sitter.Language(tree_sitter_go.language()))
+    return None
+
+
+def _extract_ts_js_export_specifiers(
+    node: Any, content: bytes, defined: set[str], top: set[str]
+) -> None:
+    for child in node.children:
+        if child.type == "export_clause":
+            for spec in child.children:
+                if spec.type == "export_specifier":
+                    alias_node = spec.child_by_field_name(
+                        "alias"
+                    ) or spec.child_by_field_name("name")
+                    if alias_node:
+                        name = _node_text(alias_node, content)
+                        defined.add(name)
+                        top.add(name)
+
+
+def _extract_ts_class(
+    decl: Any, content: bytes, defined: set[str], top: set[str]
+) -> None:
+    name_node = decl.child_by_field_name("name")
+    if not name_node:
+        return
+    class_name = _node_text(name_node, content)
+    defined.add(class_name)
+    top.add(class_name)
+    body = decl.child_by_field_name("body")
+    if not body:
+        return
+    for member in body.children:
+        if member.type in (
+            "method_definition",
+            "field_definition",
+            "public_field_definition",
+        ):
+            mname_node = member.child_by_field_name("name")
+            if mname_node:
+                mname = _node_text(mname_node, content)
+                defined.add(mname)
+                defined.add(f"{class_name}.{mname}")
+
+
+def _extract_ts_type_or_enum(
+    decl: Any, content: bytes, defined: set[str], top: set[str]
+) -> None:
+    name_node = decl.child_by_field_name("name")
+    if not name_node:
+        return
+    tname = _node_text(name_node, content)
+    defined.add(tname)
+    top.add(tname)
+    body = decl.child_by_field_name("body")
+    if not body:
+        return
+    for member in body.children:
+        if member.type in ("method_signature", "property_signature"):
+            mname_node = member.child_by_field_name("name")
+            if mname_node:
+                mname = _node_text(mname_node, content)
+                defined.add(mname)
+                defined.add(f"{tname}.{mname}")
+        elif member.type == "enum_assignment":
+            mname_node = member.child_by_field_name("name")
+            if mname_node:
+                mname = _node_text(mname_node, content)
+                defined.add(mname)
+                defined.add(f"{tname}.{mname}")
+        elif member.type == "property_identifier":
+            mname = _node_text(member, content)
+            defined.add(mname)
+            defined.add(f"{tname}.{mname}")
+
+
+def _extract_ts_variables(
+    decl: Any, content: bytes, defined: set[str], top: set[str]
+) -> None:
+    for child in decl.children:
+        if child.type == "variable_declarator":
+            name_node = child.child_by_field_name("name")
+            if name_node and name_node.type == "identifier":
+                name = _node_text(name_node, content)
+                defined.add(name)
+                top.add(name)
+
+
+def _extract_ts_js_declaration(
+    decl: Any, content: bytes, defined: set[str], top: set[str]
+) -> None:
+    if decl.type in ("function_declaration", "generator_function_declaration"):
+        name_node = decl.child_by_field_name("name")
+        if name_node:
+            name = _node_text(name_node, content)
+            defined.add(name)
+            top.add(name)
+    elif decl.type == "class_declaration":
+        _extract_ts_class(decl, content, defined, top)
+    elif decl.type in (
+        "interface_declaration",
+        "type_alias_declaration",
+        "enum_declaration",
+    ):
+        _extract_ts_type_or_enum(decl, content, defined, top)
+    elif decl.type in ("lexical_declaration", "variable_declaration"):
+        _extract_ts_variables(decl, content, defined, top)
+
+
+def _collect_ts_js_names(tree: Any, content: bytes) -> tuple[set[str], set[str]]:
+    defined_names: set[str] = set()
+    top_level_names: set[str] = set()
+    for child in tree.root_node.children:
+        decl = child
+        if child.type == "export_statement":
+            inner = child.child_by_field_name("declaration")
+            if inner:
+                decl = inner
+            else:
+                _extract_ts_js_export_specifiers(
+                    child, content, defined_names, top_level_names
+                )
+        _extract_ts_js_declaration(decl, content, defined_names, top_level_names)
+    return defined_names, top_level_names
+
+
+def _extract_rust_enum_or_trait(
+    item: Any, content: bytes, defined: set[str], top: set[str]
+) -> None:
+    name_node = item.child_by_field_name("name")
+    if not name_node:
+        return
+    tname = _node_text(name_node, content)
+    defined.add(tname)
+    top.add(tname)
+    body = item.child_by_field_name("body")
+    if not body:
+        return
+    for member in body.children:
+        mname_node = member.child_by_field_name("name")
+        if mname_node:
+            mname = _node_text(mname_node, content)
+            defined.add(mname)
+            defined.add(f"{tname}.{mname}")
+
+
+def _extract_rust_impl(item: Any, content: bytes, defined: set[str]) -> None:
+    type_node = item.child_by_field_name("type")
+    type_name = _node_text(type_node, content) if type_node else None
+    trait_node = item.child_by_field_name("trait")
+    trait_name = _node_text(trait_node, content) if trait_node else None
+    body = item.child_by_field_name("body")
+    if not body:
+        return
+    for member in body.children:
+        mname_node = member.child_by_field_name("name")
+        if mname_node:
+            mname = _node_text(mname_node, content)
+            defined.add(mname)
+            if type_name:
+                defined.add(f"{type_name}.{mname}")
+            if trait_name:
+                defined.add(f"{trait_name}.{mname}")
+
+
+def _extract_rust_use_tree(
+    node: Any, content: bytes, defined: set[str], top: set[str]
+) -> None:
+    if node.type == "identifier":
+        name = _node_text(node, content)
+        defined.add(name)
+        top.add(name)
+    elif node.type == "use_as_clause":
+        alias = node.child_by_field_name("alias")
+        if alias:
+            name = _node_text(alias, content)
+            defined.add(name)
+            top.add(name)
+    elif node.type == "scoped_identifier":
+        name_node = node.child_by_field_name("name")
+        if name_node:
+            name = _node_text(name_node, content)
+            defined.add(name)
+            top.add(name)
+    elif node.type in ("use_list", "scoped_use_list"):
+        for child in node.children:
+            if child.type not in ("::", "{", "}", ","):
+                _extract_rust_use_tree(child, content, defined, top)
+
+
+def _extract_rust_item(
+    item: Any, content: bytes, defined: set[str], top: set[str]
+) -> None:
+    if item.type in (
+        "function_item",
+        "struct_item",
+        "type_item",
+        "const_item",
+        "static_item",
+        "mod_item",
+    ):
+        name_node = item.child_by_field_name("name")
+        if name_node:
+            name = _node_text(name_node, content)
+            defined.add(name)
+            top.add(name)
+    elif item.type in ("enum_item", "trait_item"):
+        _extract_rust_enum_or_trait(item, content, defined, top)
+    elif item.type == "impl_item":
+        _extract_rust_impl(item, content, defined)
+    elif item.type == "use_declaration":
+        for child in item.children:
+            if child.type in (
+                "scoped_identifier",
+                "identifier",
+                "use_as_clause",
+                "use_list",
+                "scoped_use_list",
+            ):
+                _extract_rust_use_tree(child, content, defined, top)
+
+
+def _collect_rust_names(tree: Any, content: bytes) -> tuple[set[str], set[str]]:
+    defined_names: set[str] = set()
+    top_level_names: set[str] = set()
+    for child in tree.root_node.children:
+        _extract_rust_item(child, content, defined_names, top_level_names)
+    return defined_names, top_level_names
+
+
+def _extract_go_receiver_type(receiver: Any, content: bytes) -> str | None:
+    for child in receiver.children:
+        if child.type == "parameter_declaration":
+            for sub in child.children:
+                if sub.type == "type_identifier":
+                    return _node_text(sub, content)
+                if sub.type == "pointer_type":
+                    for psub in sub.children:
+                        if psub.type == "type_identifier":
+                            return _node_text(psub, content)
+    return None
+
+
+def _extract_go_method(item: Any, content: bytes, defined: set[str]) -> None:
+    name_node = item.child_by_field_name("name")
+    if not name_node:
+        return
+    mname = _node_text(name_node, content)
+    defined.add(mname)
+    receiver = item.child_by_field_name("receiver")
+    if receiver:
+        rec_type = _extract_go_receiver_type(receiver, content)
+        if rec_type:
+            defined.add(f"{rec_type}.{mname}")
+
+
+def _extract_go_type_members(
+    type_body: Any, tname: str, content: bytes, defined: set[str]
+) -> None:
+    if type_body.type == "interface_type":
+        for member in type_body.children:
+            if member.type in ("method_elem", "method_spec"):
+                mname_node = member.child_by_field_name("name")
+                if mname_node:
+                    mname = _node_text(mname_node, content)
+                    defined.add(mname)
+                    defined.add(f"{tname}.{mname}")
+    elif type_body.type == "struct_type":
+        fields = type_body.child_by_field_name("fields")
+        if fields:
+            for field in fields.children:
+                if field.type == "field_declaration":
+                    fname_node = field.child_by_field_name("name")
+                    if fname_node:
+                        fname = _node_text(fname_node, content)
+                        defined.add(fname)
+                        defined.add(f"{tname}.{fname}")
+
+
+def _extract_go_type(
+    item: Any, content: bytes, defined: set[str], top: set[str]
+) -> None:
+    for spec in item.children:
+        if spec.type == "type_spec":
+            tname_node = spec.child_by_field_name("name")
+            if not tname_node:
+                continue
+            tname = _node_text(tname_node, content)
+            defined.add(tname)
+            top.add(tname)
+            type_body = spec.child_by_field_name("type")
+            if type_body:
+                _extract_go_type_members(type_body, tname, content, defined)
+
+
+def _extract_go_vars(
+    item: Any, content: bytes, defined: set[str], top: set[str]
+) -> None:
+    for spec in item.children:
+        if spec.type in ("const_spec", "var_spec"):
+            name_node = spec.child_by_field_name("name")
+            if name_node:
+                name = _node_text(name_node, content)
+                defined.add(name)
+                top.add(name)
+
+
+def _extract_go_item(
+    item: Any, content: bytes, defined: set[str], top: set[str]
+) -> None:
+    if item.type == "function_declaration":
+        name_node = item.child_by_field_name("name")
+        if name_node:
+            name = _node_text(name_node, content)
+            defined.add(name)
+            top.add(name)
+    elif item.type == "method_declaration":
+        _extract_go_method(item, content, defined)
+    elif item.type == "type_declaration":
+        _extract_go_type(item, content, defined, top)
+    elif item.type in ("const_declaration", "var_declaration"):
+        _extract_go_vars(item, content, defined, top)
+
+
+def _collect_go_names(tree: Any, content: bytes) -> tuple[set[str], set[str]]:
+    defined_names: set[str] = set()
+    top_level_names: set[str] = set()
+    for child in tree.root_node.children:
+        _extract_go_item(child, content, defined_names, top_level_names)
+    return defined_names, top_level_names
+
+
+def _parse_with_tree_sitter(
+    path: Path, language_name: str
+) -> tuple[set[str], set[str]] | None:
+    parser = _get_tree_sitter_parser(language_name)
+    if parser is None:
+        return None
+    try:
+        content = path.read_bytes()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+    try:
+        tree = parser.parse(content)
+        if tree.root_node.has_error:
+            return None
+        if language_name in ("typescript", "tsx", "javascript"):
+            return _collect_ts_js_names(tree, content)
+        if language_name == "rust":
+            return _collect_rust_names(tree, content)
+        if language_name == "go":
+            return _collect_go_names(tree, content)
+    except Exception:
+        return None
+    return None
+
+
 def find_missing_footprint_paths(
     subtask: SubTask, repo_root: str | Path
 ) -> tuple[str, ...]:
@@ -333,17 +791,20 @@ def find_missing_footprint_paths(
 
 
 def find_missing_symbols(subtask: SubTask, repo_root: str | Path) -> tuple[str, ...]:
-    """`subtask.symbols`のうち、`subtask.footprint`のPythonファイル群に
+    """`subtask.symbols`のうち、`subtask.footprint`のソースコードファイル群に
     実在しないものを返す。
 
-    footprintに実在する`.py`ファイルが1つも無い場合（新規作成予定の
+    Python（`.py`）、TypeScript / JavaScript（`.ts`, `.tsx`, `.js`等）、
+    Rust（`.rs`）、Go（`.go`）の構文解析をサポートする。
+
+    footprintに実在する検査対象ファイルが1つも無い場合（新規作成予定の
     footprintのみのsubtask等）は検証材料が無いため空タプルを返す —
     「存在しない」と機械的に断定してfalse positiveを出すよりは、
     判定を保留する方が安全なため。footprint中の一部のファイルだけが
-    パース不能（構文エラー等）だった場合も同様に空タプルを返す:
-    パースできたファイルだけを基準に判定すると、パースできなかった
-    ファイル側で定義されていたはずのシンボルまで「見つからない」と
-    誤検出してしまう（レビュー指摘 #372）。
+    パース不能（構文エラー等）だった場合、あるいは未対応言語のソースファイル
+    が含まれる場合も同様に空タプルを返す: パースできたファイルだけを基準に
+    判定すると、他のファイル側で定義されていたはずのシンボルまで
+    「見つからない」と誤検出してしまう（レビュー指摘 #372, #1543）。
 
     **既存ファイルへの新規追加との区別はしない**: `docs/en/usage.md`が
     `symbols`を「このsubtaskが定義または変更するシンボル」と定義している
@@ -361,24 +822,37 @@ def find_missing_symbols(subtask: SubTask, repo_root: str | Path) -> tuple[str, 
     top_level_names: set[str] = set()
     any_file_checked = False
     any_file_unparseable = False
+    any_file_unsupported = False
 
     for relative_path in subtask.footprint:
-        if not relative_path.endswith(".py"):
-            continue
         path = repo_root / relative_path
         if not path.is_file():
             continue
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError):
-            any_file_unparseable = True
+        ext = path.suffix.lower()
+        if ext in _EXTENSION_TO_LANGUAGE:
+            lang = _EXTENSION_TO_LANGUAGE[ext]
+            if lang == "python":
+                try:
+                    tree = ast.parse(path.read_text(encoding="utf-8"))
+                except (SyntaxError, UnicodeDecodeError):
+                    any_file_unparseable = True
+                    continue
+                file_names, file_top_level_names = _collect_defined_names(tree)
+            else:
+                names = _parse_with_tree_sitter(path, lang)
+                if names is None:
+                    any_file_unparseable = True
+                    continue
+                file_names, file_top_level_names = names
+            any_file_checked = True
+            defined_names |= file_names
+            top_level_names |= file_top_level_names
+        elif ext in _NON_CODE_EXTENSIONS or path.name.lower() in _NON_CODE_FILENAMES:
             continue
-        any_file_checked = True
-        file_names, file_top_level_names = _collect_defined_names(tree)
-        defined_names |= file_names
-        top_level_names |= file_top_level_names
+        else:
+            any_file_unsupported = True
 
-    if not any_file_checked or any_file_unparseable:
+    if not any_file_checked or any_file_unparseable or any_file_unsupported:
         return ()
 
     return tuple(

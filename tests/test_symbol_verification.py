@@ -550,6 +550,256 @@ class TestImportFromReexports:
         assert not marker.exists()
 
 
+class TestPolyglotFindMissingSymbols:
+    def test_typescript_symbols_found(self, tmp_path):
+        ts_code = (
+            "export class MyClass {\n"
+            "    myMethod(x: number): void {}\n"
+            "}\n"
+            "export interface MyInterface {\n"
+            "    run(): void;\n"
+            "}\n"
+            "export type MyType = string;\n"
+            "export enum MyEnum { A, B }\n"
+            "export function myFunc(): void {}\n"
+            "export const MY_CONST = 10;\n"
+        )
+        _write(tmp_path, "src/index.ts", ts_code)
+        subtask = _subtask(
+            footprint=("src/index.ts",),
+            symbols=(
+                "MyClass",
+                "MyClass.myMethod",
+                "MyInterface",
+                "MyInterface.run",
+                "MyType",
+                "MyEnum",
+                "myFunc",
+                "MY_CONST",
+            ),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_typescript_missing_symbol_reported(self, tmp_path):
+        _write(tmp_path, "src/index.ts", "export class MyClass {}\n")
+        subtask = _subtask(
+            footprint=("src/index.ts",),
+            symbols=("MyClass", "NonExistent"),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ("NonExistent",)
+
+    def test_typescript_method_qualifier_not_matched_to_unrelated_leaf(self, tmp_path):
+        _write(
+            tmp_path,
+            "src/index.ts",
+            "export class OldParser {\n    parse(): void {}\n}\n",
+        )
+        subtask = _subtask(
+            footprint=("src/index.ts",),
+            symbols=("NewParser.parse",),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ("NewParser.parse",)
+
+    def test_typescript_local_variable_not_treated_as_top_level(self, tmp_path):
+        _write(
+            tmp_path,
+            "src/index.ts",
+            "export function testFunc() {\n    const secretVar = 42;\n}\n",
+        )
+        subtask = _subtask(
+            footprint=("src/index.ts",),
+            symbols=("secretVar",),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ("secretVar",)
+
+    def test_tsx_symbols_found(self, tmp_path):
+        tsx_code = "export function App() {\n" "    return <div>Hello</div>;\n" "}\n"
+        _write(tmp_path, "src/App.tsx", tsx_code)
+        subtask = _subtask(
+            footprint=("src/App.tsx",),
+            symbols=("App",),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_javascript_symbols_found(self, tmp_path):
+        js_code = (
+            "class Component {\n"
+            "    render() {}\n"
+            "}\n"
+            "function helper() {}\n"
+            "const VERSION = '1.0';\n"
+        )
+        _write(tmp_path, "src/lib.js", js_code)
+        subtask = _subtask(
+            footprint=("src/lib.js",),
+            symbols=("Component", "Component.render", "helper", "VERSION"),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_rust_symbols_found(self, tmp_path):
+        rs_code = (
+            "pub struct MyStruct;\n"
+            "pub enum MyEnum {\n    VariantA,\n}\n"
+            "pub trait MyTrait {\n    fn trait_method(&self);\n}\n"
+            "pub type MyType = i32;\n"
+            "pub const MY_CONST: i32 = 42;\n"
+            'pub static MY_STATIC: &str = "hi";\n'
+            "pub fn my_func() {}\n"
+            "impl MyStruct {\n"
+            "    pub fn new() -> Self { Self }\n"
+            "    pub fn compute(&self) {}\n"
+            "}\n"
+        )
+        _write(tmp_path, "src/lib.rs", rs_code)
+        subtask = _subtask(
+            footprint=("src/lib.rs",),
+            symbols=(
+                "MyStruct",
+                "MyStruct.new",
+                "MyStruct.compute",
+                "MyEnum",
+                "MyTrait",
+                "MyType",
+                "MY_CONST",
+                "MY_STATIC",
+                "my_func",
+            ),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_rust_local_variable_not_treated_as_top_level(self, tmp_path):
+        _write(
+            tmp_path,
+            "src/lib.rs",
+            "pub fn test_fn() {\n    let local_var = 100;\n}\n",
+        )
+        subtask = _subtask(
+            footprint=("src/lib.rs",),
+            symbols=("local_var",),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ("local_var",)
+
+    def test_go_symbols_found(self, tmp_path):
+        go_code = (
+            "package main\n\n"
+            "type Server struct {\n    Port int\n}\n\n"
+            "type Handler interface {\n    Handle() error\n}\n\n"
+            "const DefaultTimeout = 30\n"
+            "var Running = true\n\n"
+            "func NewServer() *Server {\n    return &Server{}\n}\n\n"
+            "func (s *Server) Start() error {\n    return nil\n}\n"
+        )
+        _write(tmp_path, "main.go", go_code)
+        subtask = _subtask(
+            footprint=("main.go",),
+            symbols=(
+                "Server",
+                "Server.Start",
+                "Handler",
+                "Handler.Handle",
+                "DefaultTimeout",
+                "Running",
+                "NewServer",
+            ),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_go_local_variable_not_treated_as_top_level(self, tmp_path):
+        _write(
+            tmp_path,
+            "main.go",
+            "package main\n\nfunc main() {\n    localVar := 42\n}\n",
+        )
+        subtask = _subtask(
+            footprint=("main.go",),
+            symbols=("localVar",),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ("localVar",)
+
+    def test_unparseable_non_python_file_skips_entire_subtask(self, tmp_path):
+        _write(tmp_path, "src/broken.ts", "export class Broken { parse( }\n")
+        subtask = _subtask(
+            footprint=("src/broken.ts",),
+            symbols=("Broken", "MissingSymbol"),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_mixed_footprint_python_and_typescript_both_checked(self, tmp_path):
+        _write(tmp_path, "pkg/mod.py", "def py_func():\n    pass\n")
+        _write(tmp_path, "src/app.ts", "export function tsFunc(): void {}\n")
+        subtask_ok = _subtask(
+            footprint=("pkg/mod.py", "src/app.ts"),
+            symbols=("py_func", "tsFunc"),
+        )
+        assert find_missing_symbols(subtask_ok, tmp_path) == ()
+
+        subtask_missing = _subtask(
+            footprint=("pkg/mod.py", "src/app.ts"),
+            symbols=("py_func", "tsFunc", "missing_sym"),
+        )
+        assert find_missing_symbols(subtask_missing, tmp_path) == ("missing_sym",)
+
+    def test_mixed_footprint_unparseable_typescript_causes_retention_even_if_python_valid(
+        self, tmp_path
+    ):
+        _write(tmp_path, "pkg/mod.py", "def py_func():\n    pass\n")
+        _write(tmp_path, "src/broken.ts", "class Broken { def ( }\n")
+        subtask = _subtask(
+            footprint=("pkg/mod.py", "src/broken.ts"),
+            symbols=("py_func", "missing_sym"),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_mixed_footprint_unsupported_source_file_causes_retention(self, tmp_path):
+        _write(tmp_path, "pkg/mod.py", "def py_func():\n    pass\n")
+        _write(tmp_path, "src/native.cpp", "void cpp_func() {}\n")
+        subtask = _subtask(
+            footprint=("pkg/mod.py", "src/native.cpp"),
+            symbols=("py_func", "cpp_func"),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_mixed_footprint_non_code_files_ignored(self, tmp_path):
+        _write(tmp_path, "pkg/mod.py", "def py_func():\n    pass\n")
+        _write(tmp_path, "docs/README.md", "# Docs\n")
+        _write(tmp_path, "config.toml", "key = 'val'\n")
+        subtask = _subtask(
+            footprint=("pkg/mod.py", "docs/README.md", "config.toml"),
+            symbols=("py_func",),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_dag_validation_warning_emitted_for_missing_polyglot_symbols(
+        self, tmp_path
+    ):
+        from orchestune.dag.graph import _footprint_and_symbol_warnings
+
+        _write(tmp_path, "src/index.ts", "export class Server {}\n")
+        subtask = _subtask(
+            footprint=("src/index.ts",),
+            symbols=("Server", "MissingMethod"),
+        )
+        warnings = _footprint_and_symbol_warnings([subtask], tmp_path)
+        assert len(warnings) == 1
+        assert "symbolsが実コードベースに見つかりません" in warnings[0]
+        assert "MissingMethod" in warnings[0]
+
+    def test_provision_rendering_warning_note_appended_for_missing_polyglot_symbols(
+        self, tmp_path
+    ):
+        from orchestune.provisioning.rendering import build_subtask_issue_body
+
+        _write(tmp_path, "main.go", "package main\ntype Handler struct {}\n")
+        subtask = _subtask(
+            footprint=("main.go",),
+            symbols=("Handler", "MissingFunc"),
+        )
+        template = "## Subtask: {id}\n\nDescription: {description}\n"
+        body = build_subtask_issue_body(subtask, template, tmp_path)
+        assert "⚠️ **symbols未検出**" in body
+        assert "`MissingFunc`" in body
+
+
 class TestFindMissingFootprintPaths:
     def test_existing_file_is_not_reported(self, tmp_path):
         _write(tmp_path, "pkg/mod.py", "x = 1\n")
