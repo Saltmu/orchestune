@@ -11,7 +11,7 @@ from orchestune.consistency.repairs.execution import (
 from orchestune.dependencies.resolution import EMPTY_DEPENDENCIES
 from orchestune.dispatch.attempt_record import LaunchAttempt
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.recovery import (
+from orchestune.dispatch.recovery.service import (
     RecoveryBookkeepingSnapshot,
     _build_restored_active_worktree,
     _parse_subtask_info_from_issue,
@@ -425,8 +425,13 @@ class TestRestorationPreservesClaimOwnership:
         )
 
         with (
-            patch("orchestune.dispatch.recovery.read_attempt", return_value=attempt),
-            patch("orchestune.dispatch.recovery.reconcile_attempt") as mock_reconcile,
+            patch(
+                "orchestune.dispatch.recovery.service.read_attempt",
+                return_value=attempt,
+            ),
+            patch(
+                "orchestune.dispatch.recovery.service.reconcile_attempt"
+            ) as mock_reconcile,
         ):
             result = execute_bookkeeping_repair_command(
                 command,

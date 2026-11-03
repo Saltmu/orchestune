@@ -120,7 +120,7 @@ from orchestune.dispatch.phase_scheduling import (
     run_scheduling_phase as run_scheduling_phase,
 )
 from orchestune.dispatch.prior_parent_merge import reconcile_prior_parent_merges
-from orchestune.dispatch.recovery import (
+from orchestune.dispatch.recovery.service import (
     LAUNCH_ATTEMPT_PENDING,
     LAUNCH_HISTORY_STALE,
     RecoveryBookkeepingAdapter,

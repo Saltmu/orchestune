@@ -108,7 +108,7 @@ def test_status_repair_holds_before_any_forge_operation(monkeypatch):
 
 def test_recovery_requeue_holds_worktree_free_pending_reservation():
     from orchestune.consistency.repairs.execution import COMMAND_REQUEUE
-    from orchestune.dispatch.recovery import execute_recovery_requeue_command
+    from orchestune.dispatch.recovery.service import execute_recovery_requeue_command
 
     command = SimpleNamespace(subject_id="10", code=COMMAND_REQUEUE)
     snapshot = SimpleNamespace(tasks_by_issue={}, restorations=())

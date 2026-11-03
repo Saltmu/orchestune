@@ -103,7 +103,7 @@ CALL_SITES: dict[str, int] = {
     "dispatch/gc/completion.py::_finalize_not_needed_worktree": 1,
     "dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim": 1,
     "dispatch/status_repair.py::_apply_command": 1,
-    "dispatch/recovery.py::execute_recovery_requeue_command": 1,
+    "dispatch/recovery/service.py::execute_recovery_requeue_command": 1,
     "ledger/escalation.py::apply_human_review_escalation": 1,
     "integrator/steps.py::AutoMergeChildIntegrationStep._restore_blocked_label": 1,
 }
@@ -412,7 +412,8 @@ def _prior_parent_and_completion() -> list[Case]:
 def _repair_recovery_escalation() -> list[Case]:
     repair = _for("dispatch/status_repair.py::_apply_command", "status_repair_command")
     recovery = _for(
-        "dispatch/recovery.py::execute_recovery_requeue_command", "recovery_requeue"
+        "dispatch/recovery/service.py::execute_recovery_requeue_command",
+        "recovery_requeue",
     )
     esc = _for("ledger/escalation.py::apply_human_review_escalation", "escalation")
     restore = _for(
@@ -721,7 +722,7 @@ class TestEscalationProtectionStaysWithTheCallers:
         self, terminal: StatusLabel, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         env = _env(FakeForge(), monkeypatch, tmp_path, (P, terminal), expect="skipped")
-        calls = _spy("orchestune.dispatch.recovery", monkeypatch)
+        calls = _spy("orchestune.dispatch.recovery.service", monkeypatch)
 
         DRIVERS["recovery_requeue"](env)
 

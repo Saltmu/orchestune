@@ -53,7 +53,7 @@ EXPECTED_SOURCES = frozenset(
         "dispatch/gc/policy_review.py::reconcile_review",
         "dispatch/gc/rule_chain.py::_rule_not_needed",
         "dispatch/status_repair.py::_apply_command",
-        "dispatch/recovery.py::execute_recovery_requeue_command",
+        "dispatch/recovery/service.py::execute_recovery_requeue_command",
         "dispatch/cycle_context_state.py::_CycleState.record_completion",
         "complete/status_labels.py::_completion_mutate",
         "replan/operations.py::_transition_to_not_needed",

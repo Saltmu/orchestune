@@ -59,7 +59,7 @@
     "orchestune.dispatch.rebase.subprocess": 19,
     "orchestune.dispatch.rebase.time": 4,
     "orchestune.dispatch.reconciliation": 20,
-    "orchestune.dispatch.recovery": 6,
+    "orchestune.dispatch.recovery.service": 6,
     "orchestune.dispatch.reporting.report_output": 1,
     "orchestune.dispatch.semantic_review_adapters": 8,
     "orchestune.dispatch.semantic_review_adapters.TrustContext": 1,
