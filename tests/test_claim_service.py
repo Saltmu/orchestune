@@ -910,7 +910,7 @@ class TestInteractiveFootprintOverlapWarning:
             branch="claude/issue-104-test-task",
             base_ref="origin/main",
             owner_token_digest=owner_token_digest(token),
-            repository_id=str(repo_root / ".git"),
+            repository_id=(repo_root / ".git").as_posix(),
         )
         with run_state_lock(state_path.with_suffix(".lock")):
             run_state = load_run_state(state_path)
