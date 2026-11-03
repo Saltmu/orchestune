@@ -20,8 +20,22 @@ class RecoveryRequest:
     launch_attempt_id: str | None = None
     confirm_external_stopped: bool = False
     restart_blocked: bool = False
+    release_to_review: bool = False
 
     def validate(self) -> None:
+        if self.release_to_review:
+            if (
+                self.restore_marker
+                or self.confirm_external_stopped
+                or self.restart_blocked
+                or not self.claim_id
+                or not self.claim_id.strip()
+                or not self.reason
+                or not self.reason.strip()
+            ):
+                raise ValueError(
+                    "--release-to-review requires --claim-id and --reason; cannot mix recovery modes"
+                )
         if self.restart_blocked and (
             self.restore_marker
             or self.confirm_external_stopped

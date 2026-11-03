@@ -182,6 +182,10 @@ _EXPECTED: dict[tuple[str, str], tuple[str, bool, bool]] = {
         False,
         False,
     ),
+    (
+        "InteractiveClaimInspectionRequired",
+        "interactive_claim_inspection_required",
+    ): (KEEP, False, False),
 }
 
 

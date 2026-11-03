@@ -104,6 +104,7 @@ CALL_SITES: dict[str, int] = {
     "dispatch/gc/cloud_completion.py::_handle_abandoned_cloud_reclaim": 1,
     "dispatch/status_repair.py::_apply_command": 1,
     "dispatch/recovery/service.py::execute_recovery_requeue_command": 1,
+    "recovery/release_review.py::apply_release_review_label": 1,
     "ledger/escalation.py::apply_human_review_escalation": 1,
     "integrator/steps.py::AutoMergeChildIntegrationStep._restore_blocked_label": 1,
 }
@@ -418,6 +419,10 @@ def _repair_recovery_escalation() -> list[Case]:
         "recovery_requeue",
     )
     esc = _for("ledger/escalation.py::apply_human_review_escalation", "escalation")
+    release = _for(
+        "recovery/release_review.py::apply_release_review_label",
+        "recovery_release_review",
+    )
     restore = _for(
         "integrator/steps.py::AutoMergeChildIntegrationStep._restore_blocked_label",
         "integrator_restore_blocked_label",
@@ -439,6 +444,9 @@ def _repair_recovery_escalation() -> list[Case]:
         ),
         esc("replay", (H,), H, (), SLF, {H}, True, current=()),
         esc("no-lifecycle", (), H, (), INI, {H}, True, current=()),
+        release("in-progress", (P,), H, (P,), NRM, {H}, current=(P,)),
+        release("replay", (H,), H, (), SLF, {H}, current=()),
+        release("in-progress-and-blocked", (P, B), H, (P, B), REP, {H}, current=(P, B)),
         restore("in-progress", (P,), H, (P,), NRM, {H}, current=(P,)),
         restore("queued-and-blocked", (Q, B), H, (Q, B), REP, {H}, current=(Q, B)),
     ]

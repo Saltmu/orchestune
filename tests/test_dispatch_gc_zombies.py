@@ -551,9 +551,13 @@ class TestInteractiveOwnershipGcExclusion:
         assert run_state.active_worktrees["280"].claim.owner_kind == "interactive"
         fake_forge.remove_label.assert_not_called()
         fake_forge.add_label.assert_not_called()
-        assert len(events) == 1
-        assert events[0].to_dict()["action"] == "gc_reclaim_excluded_interactive"
-        assert events[0].to_dict()["issue_number"] == 280
+        exclusion_events = [
+            e
+            for e in events
+            if e.to_dict()["action"] == "gc_reclaim_excluded_interactive"
+        ]
+        assert len(exclusion_events) == 1
+        assert exclusion_events[0].to_dict()["issue_number"] == 280
 
     def test_dispatch_active_is_reclaimed_as_usual(self, tmp_path, fake_forge):
         """owner_kind=dispatch の active は従来どおりプロセス死亡で回収される（対で検証）。"""

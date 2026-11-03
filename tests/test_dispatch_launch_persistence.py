@@ -803,6 +803,57 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         assert run_state.launch_history == []
         assert not forge.add_label.called
 
+    def test_footprint_overlap_conflict_does_not_consume_quota_or_modify_labels(
+        self, tmp_path
+    ):
+        """#1643: footprint overlap during claim launch is held and must not consume quota,
+        post failure comments, or modify status labels."""
+        from unittest.mock import MagicMock
+
+        from orchestune.claim.contracts import (
+            ClaimConflictReason,
+            ClaimFailure,
+            ClaimFailureReason,
+            ClaimOutcome,
+        )
+        from orchestune.dispatch.launch.service import _apply_task_launches
+
+        now = 5_000_000.0
+        forge = MagicMock()
+        forge.get_issue.return_value = MagicMock(body="EPIC body")
+
+        plans, dispatch_target = self._launch_plan(tmp_path)
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=dispatch_target,
+            forge=forge,
+        )
+
+        def _conflict_claim_fn(request, default_base):
+            return ClaimOutcome(
+                success=False,
+                issue_number=request.issue_number,
+                claim_id=None,
+                failure=ClaimFailure(
+                    reason=ClaimFailureReason.CLAIM_CONFLICT,
+                    message="Claim conflict with issue #1629: footprint_overlap",
+                    conflict_reason=ClaimConflictReason.FOOTPRINT_OVERLAP,
+                ),
+            )
+
+        run_state = RunState(active_worktrees={})
+        selected = _apply_task_launches(
+            plans, run_state, now, config, claim_fn=_conflict_claim_fn
+        )
+
+        assert selected == []
+        assert run_state.launch_history == []
+        assert not forge.add_label.called
+        assert not forge.add_comment.called
+
     def test_releases_the_reservation_before_reporting_to_the_forge(self, tmp_path):
         """#519レビュー7巡目(P2): 解放をGitHubへの報告より**後**に置くと、
         `transition_status_label`/`add_comment`が一時的なforgeエラーで送出した

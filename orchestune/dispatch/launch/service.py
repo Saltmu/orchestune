@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.claim.adopt_pr import duplicate_marker
 from orchestune.claim.contracts import (
+    ClaimConflictReason,
     ClaimFailureReason,
     ClaimOutcome,
     ClaimRequest,
@@ -594,6 +595,11 @@ def _resolve_claim_failure_launch_result(
     if (
         failure.reason is ClaimFailureReason.STATE_LOCK_FAILED
         or outcome.stage is ClaimStage.ACTIVE_SAVED
+        or (
+            failure.reason is ClaimFailureReason.CLAIM_CONFLICT
+            and failure.conflict_reason is ClaimConflictReason.FOOTPRINT_OVERLAP
+            and outcome.claim_id is None
+        )
     ):
         print(
             f"Holding launch of issue #{plan.task.issue_number}: {failure.message}; retry next cycle",

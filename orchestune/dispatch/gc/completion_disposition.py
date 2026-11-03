@@ -34,6 +34,7 @@ from orchestune.dispatch.cycle.events import (
     ForgeFailureCompletion,
     HandoffCollectionCompletion,
     HandoffPreviewCompletion,
+    InteractiveClaimInspectionRequired,
     InteractiveClosedTargetHeld,
     InteractiveClosedTargetReleased,
     InteractiveExcludedCompletion,
@@ -208,6 +209,11 @@ _declare(
         "indeterminate",
         "prior_merge_changed_before_repair",
     ),
+    _KEEP,
+)
+_declare(
+    InteractiveClaimInspectionRequired,
+    ("interactive_claim_inspection_required",),
     _KEEP,
 )
 

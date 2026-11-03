@@ -481,6 +481,9 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
         _r(_E.REQUEUE, _K.EARLY_DEATH, "early-death-exhausted"),
         _r(_E.REQUEUE, _K.USAGE_LIMIT, "usage-limit-exhausted"),
     ),
+    "recovery/release_review.py::apply_release_review_label": (
+        _r(_E.ESCALATE, _K.PLAIN, "in-progress", "replay", "in-progress-and-blocked"),
+    ),
     "integrator/steps.py::AutoMergeChildIntegrationStep._restore_blocked_label": (
         _r(_E.ESCALATE, _K.PLAIN, "in-progress", "queued-and-blocked"),
     ),

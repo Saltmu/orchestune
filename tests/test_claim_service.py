@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from orchestune.claim.contracts import (
+    ClaimConflictReason,
     ClaimExitCode,
     ClaimFailureReason,
     ClaimOverlapWarning,
@@ -200,6 +201,7 @@ class TestClaimPreflightAndConflictRejections:
 
         assert outcome.success is False
         assert outcome.failure is not None
+        assert outcome.failure.conflict_reason == ClaimConflictReason.SAME_ISSUE
         assert outcome.failure.reason in (
             ClaimFailureReason.CLAIM_CONFLICT,
             ClaimFailureReason.EXISTING_CLAIM_UNRECOVERED,
@@ -766,6 +768,7 @@ class TestInteractiveFootprintOverlapWarning:
         assert outcome.success is False
         assert outcome.failure is not None
         assert outcome.failure.reason == ClaimFailureReason.CLAIM_CONFLICT
+        assert outcome.failure.conflict_reason == ClaimConflictReason.FOOTPRINT_OVERLAP
         assert outcome.failure.conflicting_issue_number == 90
         assert "footprint_overlap" in outcome.failure.message
         assert outcome.warnings == ()

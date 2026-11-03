@@ -85,6 +85,7 @@ def _conflict_to_outcome(issue_number: int, conflict: ClaimConflict) -> ClaimOut
         if conflict.active.core.worktree_path
         else None,
         next_actions=next_actions,
+        conflict_reason=conflict.reason,
     )
     return ClaimOutcome(success=False, issue_number=issue_number, failure=failure)
 

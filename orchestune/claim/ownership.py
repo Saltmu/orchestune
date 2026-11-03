@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from enum import Enum
 from hashlib import sha256
 from pathlib import Path
 from secrets import token_urlsafe
@@ -11,6 +10,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from orchestune.claim.contracts import (
+    ClaimConflictReason,
     ClaimOverlapWarning,
     ClaimRequest,
     ClaimStage,
@@ -48,14 +48,23 @@ class OwnerToken:
         return "***redacted***"
 
 
-class ClaimConflictReason(str, Enum):
-    """Machine-readable reasons that prevent a new reservation."""
-
-    SAME_ISSUE = "same_issue"
-    REPOSITORY_RESERVATION = "repository_reservation"
-    FOOTPRINT_OVERLAP = "footprint_overlap"
-    FORCED_SERIAL = "forced_serial"
-    SHARED_CONTRACT = "shared_contract"
+__all__ = [
+    "ClaimConflict",
+    "ClaimConflictAssessment",
+    "ClaimConflictReason",
+    "ClaimConflictView",
+    "OwnerToken",
+    "assess_claim_conflicts",
+    "build_claim_info",
+    "build_reservation",
+    "evaluate_claim_conflicts",
+    "has_completion_reservation",
+    "held_claim_next_actions",
+    "new_claim_id",
+    "new_owner_token",
+    "owner_token_digest",
+    "with_claim",
+]
 
 
 @dataclass(frozen=True, slots=True)

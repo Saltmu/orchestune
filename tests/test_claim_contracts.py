@@ -110,6 +110,32 @@ class TestClaimContracts:
         assert req.resume_claim_id is None
         assert req.owner_token is None
 
+    def test_claim_conflict_reason_enum_and_failure_conflict_reason(self) -> None:
+        from orchestune.claim.contracts import ClaimConflictReason as ContractsReason
+        from orchestune.claim.ownership import ClaimConflictReason as OwnershipReason
+
+        assert ContractsReason is OwnershipReason
+        assert {r.value for r in ContractsReason} == {
+            "same_issue",
+            "repository_reservation",
+            "forced_serial",
+            "footprint_overlap",
+            "shared_contract",
+        }
+
+        failure = ClaimFailure(
+            reason=ClaimFailureReason.CLAIM_CONFLICT,
+            message="conflict",
+            conflict_reason=ContractsReason.FOOTPRINT_OVERLAP,
+        )
+        assert failure.conflict_reason == ContractsReason.FOOTPRINT_OVERLAP
+
+        failure_none = ClaimFailure(
+            reason=ClaimFailureReason.CLAIM_CONFLICT,
+            message="conflict",
+        )
+        assert failure_none.conflict_reason is None
+
     def test_claim_failure_and_exit_code_property(self) -> None:
         failure = ClaimFailure(
             reason=ClaimFailureReason.ISSUE_NOT_FOUND,

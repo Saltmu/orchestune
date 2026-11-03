@@ -1153,6 +1153,19 @@ command when Issue, claim creation time, head, expected base, repository, merge
 reachability and reopening history match. CI and publication requirements still
 apply, including merges into a parent branch. Missing proof holds completion.
 
+### Operator recovery to human review (`--release-to-review`) (#1643)
+
+When an abandoned interactive claim blocks dispatch due to footprint overlap (`ClaimConflictReason.FOOTPRINT_OVERLAP`), the Dispatcher GC phase diagnoses unattended interactive claims (`InteractiveClaimInspectionRequired`) without mutating state. An operator can explicitly inspect and release the claim to human review:
+
+```bash
+# Preview
+orchestune recover --issue <N> --claim-id <ID> --release-to-review --reason "abandoned interactive claim inspection"
+# Apply
+orchestune recover --issue <N> --claim-id <ID> --release-to-review --reason "abandoned interactive claim inspection" --apply
+```
+
+This verifies that the target Issue is `OPEN`, checks that `claim_id` matches the Issue footprint if present, refuses completed (`status:done`), cancelled (`status:not-needed`), or already-escalated issues, transitions the status label to `status:blocked-human-review`, cleans up the active worktree entry, and records a durable recovery receipt with reason `operator:release-to-review`. If the claim was already released previously, `--release-to-review --apply` updates the status label on GitHub and reconciles the receipt without error.
+
 
 ## Launch control defaults and migration (#1154)
 
