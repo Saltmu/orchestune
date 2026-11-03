@@ -352,10 +352,9 @@ class TestApplyAutoRebase:
             subprocess.CompletedProcess(
                 args=["git", "rebase", "main"], returncode=0, stdout="", stderr=""
             ),
-            subprocess.CompletedProcess(
-                args=mock_ci_command.return_value,
-                returncode=1,
-                stdout="",
+            subprocess.CalledProcessError(
+                1,
+                mock_ci_command.return_value,
                 stderr="CI failed",
             ),
         ]
@@ -383,6 +382,7 @@ class TestApplyAutoRebase:
         posted_message = mock_comment.call_args.args[1]
         assert "自動リベース後のローカルCI実行に失敗しました" in posted_message
         assert "自動リベース中にコンフリクトが発生しました" not in posted_message
+        assert "CI failed" not in posted_message
         assert "1" not in run_state.active_worktrees
 
     @patch("orchestune.dispatch.rebase.os.kill")
@@ -420,10 +420,9 @@ class TestApplyAutoRebase:
             subprocess.CompletedProcess(
                 args=["git", "rebase", "main"], returncode=0, stdout="", stderr=""
             ),
-            subprocess.CompletedProcess(
-                args=mock_ci_command.return_value,
-                returncode=1,
-                stdout="",
+            subprocess.CalledProcessError(
+                1,
+                mock_ci_command.return_value,
                 stderr="CI failed",
             ),
         ]
@@ -451,6 +450,7 @@ class TestApplyAutoRebase:
         posted_message = mock_comment.call_args.args[1]
         assert "自動リベース後のローカルCI実行に失敗しました" in posted_message
         assert "自動リベース中にコンフリクトが発生しました" not in posted_message
+        assert "CI failed" not in posted_message
         assert "1" not in run_state.active_worktrees
 
     @patch("orchestune.dispatch.rebase.os.kill")
@@ -668,3 +668,294 @@ class TestApplyAutoRebase:
             ("add", "status:manual-merge-required"),
             ("remove", "status:in-progress"),
         ]
+
+    @patch("orchestune.dispatch.rebase.os.kill")
+    @patch("orchestune.dispatch.rebase.subprocess.run")
+    @patch(
+        "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+        autospec=True,
+        return_value="main",
+    )
+    def test_configured_ci_command_failure_is_not_misclassified_as_conflict(
+        self, mock_resolve, mock_run, mock_kill, tmp_path
+    ):
+        """設定された ci_command が失敗したとき、cmd と default_ci_command() の不一致によって
+        コンフリクトと誤認されず、CI失敗メッセージが投稿されること。"""
+        import subprocess
+
+        from orchestune.dispatch.rebase import _apply_auto_rebase
+
+        active = _active(base_branch="origin/main")
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+
+        custom_ci = ["uv", "run", "pytest", "-q"]
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(
+                args=["git", "status", "--porcelain"], returncode=0, stdout=""
+            ),
+            subprocess.CompletedProcess(
+                args=["git", "rebase", "main"], returncode=0, stdout=""
+            ),
+            subprocess.CalledProcessError(1, custom_ci, stderr="Tests failed"),
+        ]
+
+        from unittest.mock import MagicMock
+
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=MagicMock(),
+            ci_command=custom_ci,
+            apply=True,
+        )
+
+        with (
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment,
+        ):
+            _apply_auto_rebase(
+                _context(active, task, run_state, config), "parent-branch"
+            )
+
+        posted_message = mock_comment.call_args.args[1]
+        assert "自動リベース後のローカルCI実行に失敗しました" in posted_message
+        assert "自動リベース中にコンフリクトが発生しました" not in posted_message
+        assert "CI failed" not in posted_message
+        assert "1" not in run_state.active_worktrees
+
+    @patch("orchestune.dispatch.rebase.os.kill")
+    @patch("orchestune.dispatch.rebase.subprocess.run")
+    @patch(
+        "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+        autospec=True,
+        return_value="main",
+    )
+    def test_rebase_ci_uses_configured_ci_command(
+        self, mock_resolve, mock_run, mock_kill, tmp_path
+    ):
+        """DispatcherConfig.ci_command が設定されている場合、そのコマンドが実行されること。"""
+        import subprocess
+
+        from orchestune.dispatch.rebase import _apply_auto_rebase
+
+        active = _active(base_branch="origin/main")
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+
+        custom_ci = ["my-ci-runner", "--fast"]
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(
+                args=["git", "status", "--porcelain"], returncode=0, stdout=""
+            ),
+            subprocess.CompletedProcess(
+                args=["git", "rebase", "main"], returncode=0, stdout=""
+            ),
+            subprocess.CompletedProcess(args=custom_ci, returncode=0, stdout=""),
+        ]
+
+        from unittest.mock import MagicMock
+
+        mock_target = MagicMock()
+        mock_target.launch.return_value = MagicMock(
+            pid=4_200_222, external_id="ext-1", external_url="url-1"
+        )
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=mock_target,
+            ci_command=custom_ci,
+            apply=True,
+        )
+
+        _apply_auto_rebase(_context(active, task, run_state, config), "parent-branch")
+
+        ci_call_args = mock_run.call_args_list[-1][0][0]
+        assert ci_call_args == custom_ci
+
+    @patch("orchestune.dispatch.rebase.os.kill")
+    @patch("orchestune.dispatch.rebase.subprocess.run")
+    @patch(
+        "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+        autospec=True,
+        return_value="main",
+    )
+    def test_rebase_ci_timeout_reported_as_ci_failure(
+        self, mock_resolve, mock_run, mock_kill, tmp_path
+    ):
+        """CIタイムアウトが発生した場合、プロセスが停止しCI失敗コメントが投稿されること。サイクルは中断しない。"""
+        import subprocess
+
+        from orchestune.dispatch.rebase import _apply_auto_rebase
+
+        active = _active(base_branch="origin/main")
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(
+                args=["git", "status", "--porcelain"], returncode=0, stdout=""
+            ),
+            subprocess.CompletedProcess(
+                args=["git", "rebase", "main"], returncode=0, stdout=""
+            ),
+            subprocess.TimeoutExpired(cmd=["ci"], timeout=10.0),
+        ]
+
+        from unittest.mock import MagicMock
+
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=MagicMock(),
+            apply=True,
+        )
+
+        with (
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment,
+            patch("orchestune.dispatch.rebase.logger.warning") as mock_log_warn,
+        ):
+            _apply_auto_rebase(
+                _context(active, task, run_state, config), "parent-branch"
+            )
+
+        posted_message = mock_comment.call_args.args[1]
+        assert "自動リベース後のローカルCI実行に失敗しました" in posted_message
+        assert "1" not in run_state.active_worktrees
+        mock_log_warn.assert_called()
+
+    @patch("orchestune.dispatch.rebase.os.kill")
+    @patch("orchestune.dispatch.rebase.subprocess.run")
+    @patch(
+        "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+        autospec=True,
+        return_value="main",
+    )
+    def test_rebase_ci_sync_dependencies_failure_reported_as_ci_failure(
+        self, mock_resolve, mock_run, mock_kill, tmp_path
+    ):
+        """pyproject.toml が存在して uv sync が失敗した場合も、CI失敗コメントとして処理されること。"""
+        import subprocess
+
+        from orchestune.dispatch.rebase import _apply_auto_rebase
+
+        wt_path = tmp_path / "wt"
+        wt_path.mkdir(parents=True, exist_ok=True)
+        (wt_path / "pyproject.toml").write_text("[project]\nname = 'test'\n")
+
+        active = _active(
+            base_branch="origin/main",
+            worktree_path=str(wt_path),
+        )
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(
+                args=["git", "status", "--porcelain"], returncode=0, stdout=""
+            ),
+            subprocess.CompletedProcess(
+                args=["git", "rebase", "main"], returncode=0, stdout=""
+            ),
+            # uv sync failure
+            subprocess.CalledProcessError(1, ["uv", "sync"], stderr="sync failed"),
+        ]
+
+        from unittest.mock import MagicMock
+
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=MagicMock(),
+            apply=True,
+        )
+
+        with (
+            patch("fake_forge_proxy.active_fake_forge.remove_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_label"),
+            patch("fake_forge_proxy.active_fake_forge.add_comment") as mock_comment,
+        ):
+            _apply_auto_rebase(
+                _context(active, task, run_state, config), "parent-branch"
+            )
+
+        posted_message = mock_comment.call_args.args[1]
+        assert "自動リベース後のローカルCI実行に失敗しました" in posted_message
+        assert "1" not in run_state.active_worktrees
+
+    @patch("orchestune.dispatch.rebase.os.kill")
+    @patch("orchestune.dispatch.rebase.subprocess.run")
+    @patch(
+        "orchestune.dispatch.rebase.resolve_local_or_remote_branch",
+        autospec=True,
+        return_value="main",
+    )
+    def test_rebase_ci_environment_variables(
+        self, mock_resolve, mock_run, mock_kill, tmp_path, monkeypatch
+    ):
+        """ORCHESTUNE_* は ORCHESTUNE_TEST_WORKERS 以外が除去され、PYTHON_KEYRING_BACKEND が設定されること。"""
+        import subprocess
+
+        from orchestune.dispatch.rebase import _apply_auto_rebase
+
+        monkeypatch.setenv("ORCHESTUNE_FOO", "secret")
+        monkeypatch.setenv("ORCHESTUNE_TEST_WORKERS", "4")
+
+        active = _active(base_branch="origin/main")
+        task = _task()
+        run_state = RunState(active_worktrees={"1": active})
+
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(
+                args=["git", "status", "--porcelain"], returncode=0, stdout=""
+            ),
+            subprocess.CompletedProcess(
+                args=["git", "rebase", "main"], returncode=0, stdout=""
+            ),
+            subprocess.CompletedProcess(args=["local-ci"], returncode=0, stdout=""),
+        ]
+
+        from unittest.mock import MagicMock
+
+        mock_target = MagicMock()
+        mock_target.launch.return_value = MagicMock(
+            pid=4_200_222, external_id="ext-1", external_url="url-1"
+        )
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+            dispatch_target=mock_target,
+            apply=True,
+        )
+
+        _apply_auto_rebase(_context(active, task, run_state, config), "parent-branch")
+
+        ci_call = mock_run.call_args_list[-1]
+        ci_env = ci_call[1].get("env") or {}
+        assert "ORCHESTUNE_FOO" not in ci_env
+        assert ci_env.get("ORCHESTUNE_TEST_WORKERS") == "4"
+        assert ci_env.get("PYTHON_KEYRING_BACKEND") == "keyring.backends.null.Keyring"
+
+
+def test_rebase_py_does_not_contain_subprocess_run_or_get_ci_env():
+    """rebase.py に subprocess.run および _get_ci_env が残っていないこと。"""
+    import inspect
+
+    import orchestune.dispatch.rebase as rebase_mod
+
+    assert not hasattr(rebase_mod, "_get_ci_env")
+    source = inspect.getsource(rebase_mod)
+    assert "subprocess.run(" not in source

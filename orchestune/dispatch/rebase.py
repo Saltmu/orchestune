@@ -37,6 +37,7 @@ from orchestune.dispatch.worktree import _provision_and_launch
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.infra.process_utils import default_ci_command, is_process_alive
+from orchestune.integrator.ci_execution import run_ci_stages
 from orchestune.issue_parsing import backfill_recovery_counters
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import ActiveWorktree, RunState
@@ -324,22 +325,6 @@ def _handle_footprint_deviation(
     )
 
 
-def _get_ci_env(repository_root: Path) -> dict[str, str]:
-    env = os.environ.copy()
-    venv_path = repository_root / ".venv"
-    if "tools/orchestune" in str(venv_path):
-        parent_venv = venv_path.parent.parent.parent / ".venv"
-        if parent_venv.exists():
-            venv_path = parent_venv
-
-    if venv_path.exists():
-        env["VIRTUAL_ENV"] = str(venv_path.resolve())
-        bin_path = venv_path / "bin"
-        if bin_path.exists():
-            env["PATH"] = f"{bin_path.resolve()}{os.pathsep}{env.get('PATH', '')}"
-    return env
-
-
 def _wait_for_process_terminate(pid: int, timeout: float = 5.0) -> None:
     """指定されたPIDのプロセスが終了するまで待機する。"""
     start = time.time()
@@ -449,7 +434,7 @@ def _handle_rebase_failure(
         (StatusLabel.IN_PROGRESS,),
     )
     cmd_args = getattr(e, "cmd", [])
-    if cmd_args == default_ci_command():
+    if isinstance(e, RebaseCiCheckError):
         msg = "自動リベース後のローカルCI実行に失敗しました。手動で修正を行ってください。\n"
     elif cmd_args and "push" in cmd_args:
         msg = (
@@ -467,23 +452,34 @@ def _handle_rebase_failure(
     del ctx.run_state.active_worktrees[ctx.key]
 
 
-def _run_rebase_ci_check(worktree_path: str, worktree_root: Path | str) -> None:
-    env = _get_ci_env(Path(worktree_root).resolve().parent)
-    ci_res = subprocess.run(
-        default_ci_command(),
-        cwd=worktree_path,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
+class RebaseCiCheckError(subprocess.CalledProcessError):
+    """Raised when post-rebase CI check fails."""
+
+
+def _run_rebase_ci_check(worktree_path: str, config: DispatcherConfig) -> None:
+    command = config.ci_command or default_ci_command()
+    original_root = Path(config.worktree_root).resolve().parent
+    result = run_ci_stages(
+        command,
+        Path(worktree_path),
+        original_root,
+        policy=config.integration_execution_policy,
     )
-    if ci_res.returncode != 0:
-        raise subprocess.CalledProcessError(
-            ci_res.returncode,
-            ci_res.args,
-            output=ci_res.stdout,
-            stderr=ci_res.stderr,
+    if not result.ok:
+        logger.warning("Post-rebase CI failed: %s", result.message)
+        process = result.process
+        returncode = (
+            process.returncode
+            if process is not None and process.returncode is not None
+            else 1
+        )
+        output = process.stdout_tail if process is not None else ""
+        stderr = process.stderr_tail if process is not None else ""
+        raise RebaseCiCheckError(
+            returncode,
+            command,
+            output=output,
+            stderr=stderr,
         )
 
 
@@ -544,7 +540,7 @@ def _apply_auto_rebase(ctx: RebaseContext, parent_branch: str) -> None:
 
     try:
         run_git(["rebase", resolved_parent], cwd=active.core.worktree_path, check=True)
-        _run_rebase_ci_check(active.core.worktree_path, config.worktree_root)
+        _run_rebase_ci_check(active.core.worktree_path, config)
         rebased = _relaunch_rebased_worktree(active, active_task, config, parent_branch)
         update_launch(
             active,
