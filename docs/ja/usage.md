@@ -250,7 +250,7 @@ subtasks:
 
 - **`title`** (文字列, 必須): 「大きな石」全体を表す一行要約。`orchestune provision`（後述）が親Issue（`[EPIC] <title>`）の起票に使用します。
 - **`parent_issue_number`** (整数または`null`, 任意, 既定値 `null`): 親Issueの番号。起票済みIssueを起点とする場合はその番号を指定します。手動で設定しない場合、`orchestune provision`が親Issue作成（または既存Issueの再利用）後にこのファイルへ書き戻します。部分失敗からの再実行時に、この値が設定済みであれば親Issueは重複作成されません。
-- **`parent_issue_source`** (文字列, 任意, 既定値 `derived`): 親Issueの由来。`adopted`（既存Issueを採用）または `derived`（計画の `title` から自動生成・解決）のいずれか。`adopted` の場合、タイトル一致検証をスキップして親Issue番号と親マーカーで検証・再利用します。
+- **`parent_issue_source`** (文字列, 任意, 既定値 `derived`): 親Issueの由来。`adopted`（既存Issueを採用）または `derived`（計画の `title` から自動生成・解決）のいずれか。`adopted` の場合、タイトル一致検証をスキップして親Issue番号と親マーカーで検証・再利用します（フロントマターの指定だけで採用されるのは、すでにOrchestune EPIC形式のIssueに限られます。通常の既存Issueを初回採用する際は `--parent-issue <番号>` の指定が必要です）。
 - **`subtasks`** (サブタスクのリスト, 必須): 各サブタスクは以下のフィールドを持ちます。
 
 各サブタスクは以下のフィールドを持ちます：
@@ -332,13 +332,13 @@ orchestune provision --plan decomposition_plan.md
 
 ### 既存EPIC Issueへの紐付け（`--parent-issue`）
 
-EPIC Issueを先に（手動、またはOrchestuneを使わず普通に）起票しておき、サブタスクの分解・起票だけにOrchestuneを使いたい場合は、計画ファイルのフロントマターで `parent_issue_number: <番号>` と `parent_issue_source: adopted` を指定するか、CLIで `--parent-issue <番号>` を指定します。
+親IssueがすでにOrchestune形式（タイトルが `[EPIC] ` で始まり、本文に親マーカーが埋め込まれている状態）になっている場合は、計画ファイルのフロントマターで `parent_issue_number: <番号>` と `parent_issue_source: adopted` を指定するだけで再利用されます。既存IssueがまだOrchestune形式でない場合は、初回の起票時（`--no-apply` のプレビューも含む）にCLIで `--parent-issue <番号>` を指定する必要があります。
 
 ```bash
 orchestune provision --plan decomposition_plan.md --parent-issue 123
 ```
 
-指定したIssueがまだOrchestune形式（タイトルが `[EPIC] ` で始まり、本文に親マーカーが埋め込まれている状態）になっていなければ、既存の内容は保持したままその場で正規化されます（タイトルへの `[EPIC] ` プレフィックス付与、本文へのマーカー追記）。`title` フロントマターとのタイトル一致チェックは行われません。
+`--parent-issue` を指定すると、対象IssueがまだOrchestune形式になっていなくても、既存の内容は保持したままその場で正規化されます（タイトルへの `[EPIC] ` プレフィックス付与、本文へのマーカー追記）。`title` フロントマターとのタイトル一致チェックは行われません。
 
 `--parent-issue` を指定して実行すると、計画ファイルのフロントマターへ `parent_issue_source: adopted` が自動的に永続化されます。そのため、**2回目以降の `orchestune provision` では `--parent-issue` を再指定しなくても自動的に同じ親Issueが採用・再利用されます**。もし採用済みの親Issueが存在しない場合は、重複起票を防ぐために新規作成へ倒れずエラーで停止します。
 

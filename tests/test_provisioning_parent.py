@@ -261,8 +261,15 @@ class TestResolveParentIssue:
             parent_issue_source="adopted",
             description="",
         )
-        with pytest.raises(RuntimeError, match="is not an Orchestune EPIC issue"):
+        with pytest.raises(
+            RuntimeError, match="is not an Orchestune EPIC issue"
+        ) as exc_info:
             _resolve_parent_issue(forge, metadata, plan_path)
+        err_msg = str(exc_info.value)
+        assert f"--parent-issue {unconfirmed_number}" in err_msg
+        assert "prefix" in err_msg and "[EPIC] " in err_msg
+        assert "parent marker" in err_msg
+        assert "preserving existing content" in err_msg
 
     def test_adopted_parent_issue_closed_raises_runtime_error(self, tmp_path: Path):
         """#533: parent_issue_source: adopted の親が CLOSED の場合、エラーで停止する。"""
