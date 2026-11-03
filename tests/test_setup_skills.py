@@ -484,6 +484,8 @@ def test_setup_skills_dynamic_discovery(tmp_path):
     (skills_dir / "skill-b" / "SKILL.md").touch()
     (skills_dir / "local-ci-developer").mkdir()
     (skills_dir / "local-ci-developer" / "SKILL.md").touch()
+    (skills_dir / "issue-design-review").mkdir()
+    (skills_dir / "issue-design-review" / "SKILL.md").touch()
 
     # 検出されないべきスキル（SKILL.mdなし）
     (skills_dir / "ignored-folder").mkdir()
@@ -499,6 +501,7 @@ def test_setup_skills_dynamic_discovery(tmp_path):
     assert (mock_home / ".claude" / "skills" / "skill-a" / "SKILL.md").is_file()
     assert (mock_home / ".claude" / "skills" / "skill-b" / "SKILL.md").is_file()
     assert not (mock_home / ".claude" / "skills" / "local-ci-developer").exists()
+    assert not (mock_home / ".claude" / "skills" / "issue-design-review").exists()
     assert not (mock_home / ".claude" / "skills" / "ignored-folder").exists()
 
 

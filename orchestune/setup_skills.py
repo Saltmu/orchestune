@@ -6,7 +6,11 @@ from pathlib import Path
 
 from orchestune.infra.cli_output import Level, make_output
 
-SKILLS_EXCLUDED_FROM_SETUP = {"local-ci-developer", "workflow-template"}
+SKILLS_EXCLUDED_FROM_SETUP = {
+    "local-ci-developer",
+    "issue-design-review",
+    "workflow-template",
+}
 WORKFLOW_TEMPLATE_SKILL_NAME = "workflow-template"
 
 

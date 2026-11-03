@@ -16,7 +16,7 @@ from orchestune.version import get_version
 
 STANDARD_SKILLS = ("orchestune", "orchestune-provision", "orchestune-dispatch")
 WORKFLOW_SKILL = "workflow-template"
-EXCLUDED_SKILLS = ("local-ci-developer",)
+EXCLUDED_SKILLS = ("local-ci-developer", "issue-design-review")
 
 
 def calculate_file_sha256(path: Path) -> str:

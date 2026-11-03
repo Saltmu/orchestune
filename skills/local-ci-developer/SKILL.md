@@ -55,6 +55,7 @@ At session start, inspect and record the execution environment:
 2. **GitHub Backend Selection**: Check `gh auth status` and GitHub MCP capabilities. Select either `gh` CLI or GitHub MCP as the fixed backend for all downstream GitHub operations throughout the session (Step 2 Issue Creation, Step 10 PR Creation, Step 12 Outcome Declaration), and record the choice in `<planning-session-dir>/implementation-plan.md`; migrate it to `<session-dir>/implementation-plan.md` after Step 2.5. If `gh` CLI is unauthenticated or unavailable, use GitHub MCP (or Web UI) without stalling.
 
 ## Initial Footprint (Before Issue Creation or Claim)
+To check a design draft against existing code and tests before Issue creation or claim, follow [issue-design-review](../issue-design-review/SKILL.md).
 In Step 1, record design, preflight, selected backend/reviewer and expected changed files in the implementation plan; in Step 2, declare files as Footprint YAML in the Issue body. For existing Issues, check/correct the declaration before claim. Follow [the detailed procedure and YAML example](references/worktree.md#initial-footprint-procedure), including the explicit repository-reservation exception for unknown scope. Step 2.6 refines this initial declaration after claim.
 
 ## Development Steps

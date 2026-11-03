@@ -19,7 +19,7 @@ DISTRIBUTABLE_SKILLS = frozenset(
         "workflow-template",
     }
 )
-EXCLUDED_SKILLS = frozenset({"local-ci-developer"})
+EXCLUDED_SKILLS = frozenset({"local-ci-developer", "issue-design-review"})
 EXPECTED_ENTRY_POINTS = {
     "orchestune": "orchestune.cli:main",
     "orchestune-dispatch": "orchestune.dispatch.dispatcher:main",

@@ -39,6 +39,7 @@ def test_resolve_payload_from_source_dir(tmp_path: Path):
         "orchestune-provision",
         "orchestune-dispatch",
         "local-ci-developer",
+        "issue-design-review",
         "workflow-template",
     ]:
         s_dir = skills_dir / skill
@@ -57,6 +58,7 @@ def test_resolve_payload_from_source_dir(tmp_path: Path):
     assert payload.source_kind == "source_directory"
     assert set(payload.skills.keys()) == set(STANDARD_SKILLS)
     assert "local-ci-developer" not in payload.skills
+    assert "issue-design-review" not in payload.skills
     assert "workflow-template" not in payload.skills
     assert len(payload.bundle_digest) == 64
 
