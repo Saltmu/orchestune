@@ -485,7 +485,7 @@ Routine dispatch execution uses strictly the following 7 options. Detailed param
 | `--final-acceptance-review {advisory,off}` | - | Advisory final-PR acceptance request (default `advisory`); independent of Layer 1/2. See §4.5. |
 | `--semantic-review-mode {required,advisory,off}` | - | Layer-2 integration-PR semantic review mode (`required`, `advisory`, or `off`). When omitted, falls back to config file (`semantic-review-mode`), env var (`ORCHESTUNE_SEMANTIC_REVIEW_MODE`), or default `required`. `off` skips verification. See [§4.5](#45-child-review-evidence-gate-and-layer-2-semantic-review-gate). |
 | `--force-integration-review` | - | Forces layer-2 integration-PR review even when a single child task qualifies for the Fast-Path. |
-| `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`, `grok-cli`). For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error. |
+| `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`, `grok-cli`, and when `auto` detects an installed CLI). Required on all runs including `--no-apply`. For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error explaining why the target was selected. |
 
 ### Configuration File (`orchestune.toml`) for Detailed Settings
 

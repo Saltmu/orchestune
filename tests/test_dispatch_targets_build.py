@@ -578,6 +578,61 @@ class TestBuildDispatchTarget:
                 )
             assert "完全権限実行となります" in str(excinfo.value)
 
+    def test_auto_detected_unsafe_cli_error_message_diagnostics(
+        self, tmp_path, monkeypatch
+    ):
+        import shutil
+
+        monkeypatch.setattr(
+            shutil,
+            "which",
+            lambda name: "/usr/bin/codex" if name == "codex" else None,
+        )
+        with pytest.raises(ValueError) as excinfo:
+            build_dispatch_target(
+                TargetBuildConfig("auto", None, None, tmp_path / "logs")
+            )
+        msg = str(excinfo.value)
+        assert "codex" in msg
+        assert "claude" in msg
+        assert "agy" in msg
+        assert "--allow-unsafe-agent-execution" in msg
+        assert "cloud-routine" in msg
+        assert "--no-apply" in msg
+
+    def test_auto_detected_claude_unsafe_cli_error_message(self, tmp_path, monkeypatch):
+        import shutil
+
+        monkeypatch.setattr(
+            shutil,
+            "which",
+            lambda name: "/usr/bin/claude" if name == "claude" else None,
+        )
+        with pytest.raises(ValueError) as excinfo:
+            build_dispatch_target(
+                TargetBuildConfig("auto", None, None, tmp_path / "logs")
+            )
+        msg = str(excinfo.value)
+        assert "`claude` を選択しました。" in msg
+        assert "PATH にありません" not in msg
+
+    def test_unsafe_execution_error_with_unknown_candidate(self):
+        from orchestune.dispatch.targets import _unsafe_execution_error
+
+        err = _unsafe_execution_error("custom-cli", auto_detected=True)
+        assert "`custom` を選択しました。" in str(err)
+
+    def test_explicit_unsafe_cli_error_message_diagnostics(self, tmp_path):
+        with pytest.raises(ValueError) as excinfo:
+            build_dispatch_target(
+                TargetBuildConfig("claude-cli", None, None, tmp_path / "logs")
+            )
+        msg = str(excinfo.value)
+        assert "--dispatch-target" in msg
+        assert "dispatch_target" in msg
+        assert "--no-apply" in msg
+        assert "cloud-routine" in msg
+
     def test_unsafe_cli_with_allow_unsafe_flag_succeeds(self, tmp_path):
         for target_name in ["claude-cli", "agy-cli", "codex-cli", "grok-cli"]:
             target = build_dispatch_target(
