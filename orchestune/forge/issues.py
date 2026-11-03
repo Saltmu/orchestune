@@ -6,60 +6,26 @@ import json
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeVar
+from typing import TypeVar
 
 import orchestune.forge.issues_rest as issues_rest
-from orchestune.models import IssueRecord, normalize_newlines
+from orchestune.models import IssueRecord
 from orchestune.validation import (
     validate_issue_number,
     validate_label,
-    validate_username,
 )
 
-from .admin import ForgeGraphQLUnavailableError, RelationshipUnavailableError
-from .graphql_fallback import GraphQLFallbackMixin
+from .admin import ForgeGraphQLUnavailableError
+from .graphql_fallback import GhRunner, GraphQLFallbackMixin
 from .graphql_fallback import error_detail as _error_detail
+from .issue_comments import GitHubIssueCommentMixin
+from .issue_relationships import GitHubIssueRelationshipMixin
 
 _T = TypeVar("_T")
 _ISSUE_VIEW_FIELDS = "number,title,body,state,labels,createdAt,parent,blockedBy"
 
 _VALID_ISSUE_STATES = frozenset({"open", "closed", "all"})
 _VALID_CLOSE_REASONS = frozenset({"completed", "not planned"})
-
-_SUB_ISSUES_QUERY = """
-query($owner: String!, $name: String!, $number: Int!, $after: String) {
-  repository(owner: $owner, name: $name) {
-    issue(number: $number) {
-      subIssues(first: 100, after: $after) {
-        pageInfo { hasNextPage endCursor }
-        nodes {
-          number
-          title
-          body
-          state
-          createdAt
-          labels(first: 50) { nodes { name } }
-          parent { number }
-          blockedBy(first: 50) { nodes { number } }
-        }
-      }
-    }
-  }
-}
-"""
-
-
-def _is_relationship_unavailable_error(exc: subprocess.CalledProcessError) -> bool:
-    detail = _error_detail(exc)
-    return any(
-        marker in detail
-        for marker in (
-            "unknown flag",
-            "unknown option",
-            "not supported",
-            "unknown field",
-        )
-    )
 
 
 @dataclass(frozen=True)
@@ -71,46 +37,17 @@ class IssueReference:
     is_pull_request: bool
 
 
-class _Runner(Protocol):
-    def __call__(self, args: list[str], input_text: str | None = None) -> str: ...
-
-
 def _is_not_found(exc: subprocess.CalledProcessError) -> bool:
     detail = _error_detail(exc)
     return "404" in detail or "not found" in detail
 
 
-def _extract_trusted_collaborator(item: Any) -> str | None:
-    if not isinstance(item, dict):
-        raise ValueError("invalid collaborator schema: item is not a dict")
-    login = item.get("login")
-    if not isinstance(login, str) or not login:
-        raise ValueError("invalid collaborator schema: missing or invalid login")
-    permissions = item.get("permissions")
-    if not isinstance(permissions, dict):
-        raise ValueError("invalid collaborator schema: missing or invalid permissions")
-    for req_key in ("pull", "push", "admin"):
-        if req_key not in permissions or not isinstance(permissions[req_key], bool):
-            raise ValueError(
-                f"invalid collaborator schema: missing or non-boolean {req_key}"
-            )
-    for opt_key in ("triage", "maintain"):
-        if opt_key in permissions and not isinstance(permissions[opt_key], bool):
-            raise ValueError(f"invalid collaborator schema: non-boolean {opt_key}")
-    if (
-        permissions.get("triage") is True
-        or permissions["push"] is True
-        or permissions.get("maintain") is True
-        or permissions["admin"] is True
-    ):
-        return login
-    return None
-
-
-class GitHubIssueMixin(GraphQLFallbackMixin):
+class GitHubIssueMixin(
+    GitHubIssueCommentMixin, GitHubIssueRelationshipMixin, GraphQLFallbackMixin
+):
     """Issue-specific implementation mixed into :class:`GitHubForge`."""
 
-    _run: _Runner
+    _run: GhRunner
 
     def list_issues_by_label(
         self, label: str, state: str = "open", limit: int = 1000
@@ -151,54 +88,6 @@ class GitHubIssueMixin(GraphQLFallbackMixin):
             for raw in raw_issues
         ]
 
-    def list_sub_issues(self, parent_issue_number: int | str) -> list[IssueRecord]:
-        """親Issue配下のサブタスクIssueをGraphQLで取得する。"""
-        number = validate_issue_number(parent_issue_number)
-        records: list[IssueRecord] = []
-        after: str | None = None
-        while True:
-            args = [
-                "gh",
-                "api",
-                "graphql",
-                "-F",
-                "owner={owner}",
-                "-F",
-                "name={repo}",
-                "-F",
-                f"number={number}",
-                "-f",
-                f"query={_SUB_ISSUES_QUERY}",
-            ]
-            if after is not None:
-                args += ["-F", f"after={after}"]
-            stdout = self._run(args)
-            sub_issues = json.loads(stdout)["data"]["repository"]["issue"]["subIssues"]
-            for node in sub_issues["nodes"]:
-                records.append(
-                    IssueRecord(
-                        number=node["number"],
-                        title=node["title"],
-                        body=node["body"],
-                        labels=tuple(
-                            entry["name"]
-                            for entry in node.get("labels", {}).get("nodes", [])
-                        ),
-                        created_at=node["createdAt"],
-                        state=node.get("state", "OPEN"),
-                        parent=node.get("parent"),
-                        blocked_by=tuple(
-                            blocked["number"]
-                            for blocked in node.get("blockedBy", {}).get("nodes", [])
-                        ),
-                    )
-                )
-            page_info = sub_issues["pageInfo"]
-            if not page_info["hasNextPage"]:
-                break
-            after = page_info["endCursor"]
-        return records
-
     def add_label(self, issue_number: int | str, label: str) -> None:
         number = validate_issue_number(issue_number)
         validate_label(label)
@@ -238,119 +127,6 @@ class GitHubIssueMixin(GraphQLFallbackMixin):
             args.extend(["--comment", comment])
         self._run(args)
 
-    def add_comment(self, issue_number: int | str, body: str) -> None:
-        number = validate_issue_number(issue_number)
-        self._run(
-            ["gh", "issue", "comment", str(number), "--body-file", "-"],
-            input_text=body,
-        )
-
-    def list_comments(self, issue_number: int | str) -> list[dict[str, Any]]:
-        """#552: Issue/PRのコメント一覧を取得する。"""
-        number = validate_issue_number(issue_number)
-        try:
-            stdout = self._run(
-                ["gh", "issue", "view", str(number), "--json", "comments"]
-            )
-        except subprocess.CalledProcessError:
-            stdout = self._run(["gh", "pr", "view", str(number), "--json", "comments"])
-        raw = json.loads(stdout)
-        comments = raw.get("comments", [])
-        return [
-            {
-                # #664: 本文と同様、コメントもGitHubからCRLFで返る。読み出しの
-                # 時点でLFへ揃え、マーカー検索を改行コードに依存させない。
-                "body": normalize_newlines(c.get("body", "")),
-                "created_at": c.get("createdAt") or c.get("created_at") or "",
-                "author": c.get("author", {}).get("login", "")
-                if isinstance(c.get("author"), dict)
-                else (c.get("author") or ""),
-            }
-            for c in comments
-            if isinstance(c, dict)
-        ]
-
-    def list_all_issue_comments(self, issue_number: int | str) -> list[dict[str, Any]]:
-        """Return every native Issue comment, including durable API evidence."""
-        number = validate_issue_number(issue_number)
-        stdout = self._run(
-            [
-                "gh",
-                "api",
-                "--paginate",
-                "--slurp",
-                f"repos/{{owner}}/{{repo}}/issues/{number}/comments?per_page=100",
-            ]
-        )
-        pages = json.loads(stdout)
-        if not isinstance(pages, list) or not all(
-            isinstance(page, list) for page in pages
-        ):
-            raise ValueError("GitHub comments response has an invalid page")
-        return [
-            comment for page in pages for comment in page if isinstance(comment, dict)
-        ]
-
-    def create_issue_comment(
-        self, issue_number: int | str, body: str
-    ) -> dict[str, Any]:
-        """Create an Issue comment and return GitHub's durable response object."""
-        number = validate_issue_number(issue_number)
-        stdout = self._run(
-            [
-                "gh",
-                "api",
-                "--method",
-                "POST",
-                f"repos/{{owner}}/{{repo}}/issues/{number}/comments",
-                "--input",
-                "-",
-            ],
-            input_text=json.dumps({"body": body}),
-        )
-        response = json.loads(stdout)
-        if not isinstance(response, dict):
-            raise ValueError("GitHub did not return an Issue comment object")
-        return response
-
-    def list_notice_trusted_authors(self) -> frozenset[str]:
-        """Return the logins of collaborators trusted to post PR link notices.
-
-        Fetches all collaborators with permissions.triage, push, maintain, or admin.
-        Requires pull/push/admin as boolean values in the GitHub API schema; triage and
-        maintain are optional (default to False).
-        """
-        stdout = self._run(
-            [
-                "gh",
-                "api",
-                "--paginate",
-                "--slurp",
-                "repos/{owner}/{repo}/collaborators?affiliation=all&per_page=100",
-            ]
-        )
-        pages = json.loads(stdout)
-        if not isinstance(pages, list) or not all(
-            isinstance(page, list) for page in pages
-        ):
-            raise ValueError("GitHub collaborators response has an invalid page")
-
-        trusted: set[str] = set()
-        for page in pages:
-            for item in page:
-                login = _extract_trusted_collaborator(item)
-                if login is not None:
-                    trusted.add(login)
-
-        return frozenset(trusted)
-
-    def get_authenticated_user(self) -> str:
-        """Return the GitHub identity that will author Forge writes."""
-        login = self._run(["gh", "api", "user", "--jq", ".login"]).strip()
-        if not login:
-            raise ValueError("GitHub returned an empty authenticated user")
-        return login
-
     def get_issue_state(self, issue_number: int | str) -> str:
         number = validate_issue_number(issue_number)
         return self._graphql_or_rest(
@@ -375,68 +151,6 @@ class GitHubIssueMixin(GraphQLFallbackMixin):
             ),
         )
 
-    def get_label_actor(self, issue_number: int | str, label: str) -> str:
-        number = validate_issue_number(issue_number)
-        validate_label(label)
-        stdout = self._run(
-            [
-                "gh",
-                "api",
-                f"repos/{{owner}}/{{repo}}/issues/{number}/events",
-                "--paginate",
-                "--slurp",
-            ]
-        )
-        pages = json.loads(stdout)
-        events = [event for page in pages for event in page]
-        labeled_actors = [
-            event["actor"]["login"]
-            for event in events
-            if event.get("event") == "labeled"
-            and event.get("label", {}).get("name") == label
-        ]
-        if labeled_actors:
-            return str(labeled_actors[-1])
-        stdout = self._run(["gh", "issue", "view", str(number), "--json", "author"])
-        author = json.loads(stdout).get("author") or {}
-        return str(author.get("login", ""))
-
-    def get_actor_permission(self, username: str) -> str:
-        if not username:
-            return "none"
-        login = validate_username(username)
-        try:
-            stdout = self._run(
-                [
-                    "gh",
-                    "api",
-                    f"repos/{{owner}}/{{repo}}/collaborators/{login}/permission",
-                ]
-            )
-        except subprocess.CalledProcessError:
-            return "none"
-        return str(json.loads(stdout).get("permission", "none"))
-
-    def get_issue_last_reopened_at(self, issue_number: int | str) -> str | None:
-        number = validate_issue_number(issue_number)
-        stdout = self._run(
-            [
-                "gh",
-                "api",
-                f"repos/{{owner}}/{{repo}}/issues/{number}/events",
-                "--paginate",
-                "--slurp",
-            ]
-        )
-        pages = json.loads(stdout)
-        events = [event for page in pages for event in page]
-        reopened_at = [
-            event.get("created_at")
-            for event in events
-            if event.get("event") == "reopened"
-        ]
-        return str(reopened_at[-1]) if reopened_at else None
-
     def create_issue(self, title: str, body: str, labels: Sequence[str] = ()) -> int:
         args = ["gh", "issue", "create", "--title", title, "--body-file", "-"]
         for label in labels:
@@ -459,79 +173,6 @@ class GitHubIssueMixin(GraphQLFallbackMixin):
     def update_issue_title(self, issue_number: int | str, title: str) -> None:
         number = validate_issue_number(issue_number)
         self._run(["gh", "issue", "edit", str(number), "--title", title])
-
-    def _get_issue_for_relationship(self, issue_number: int) -> IssueRecord | None:
-        try:
-            return self.get_issue(issue_number)
-        except subprocess.CalledProcessError as exc:
-            if _is_relationship_unavailable_error(exc):
-                raise RelationshipUnavailableError(
-                    "native issue relationships are unavailable"
-                ) from exc
-            raise
-
-    def add_sub_issue(
-        self, parent_issue_number: int | str, child_issue_number: int | str
-    ) -> None:
-        parent = validate_issue_number(parent_issue_number)
-        child = validate_issue_number(child_issue_number)
-        current = self._get_issue_for_relationship(child)
-        if current is not None and current.parent is not None:
-            if current.parent.get("number") == parent:
-                return
-        self._run_relationship_command(
-            ["gh", "issue", "edit", str(child), "--parent", str(parent)]
-        )
-
-    def remove_sub_issue(
-        self, parent_issue_number: int | str, child_issue_number: int | str
-    ) -> None:
-        parent = validate_issue_number(parent_issue_number)
-        child = validate_issue_number(child_issue_number)
-        current = self._get_issue_for_relationship(child)
-        if current is None or current.parent is None:
-            return
-        if current.parent.get("number") != parent:
-            raise ValueError(
-                f"Issue #{child} has parent #{current.parent.get('number')}, not #{parent}"
-            )
-        self._run_relationship_command(
-            ["gh", "issue", "edit", str(child), "--remove-parent"]
-        )
-
-    def set_blocked_by(
-        self, issue_number: int | str, blocking_issue_number: int | str
-    ) -> None:
-        number = validate_issue_number(issue_number)
-        blocker = validate_issue_number(blocking_issue_number)
-        current = self._get_issue_for_relationship(number)
-        if current is not None and blocker in current.blocked_by:
-            return
-        self._run_relationship_command(
-            ["gh", "issue", "edit", str(number), "--add-blocked-by", str(blocker)]
-        )
-
-    def remove_blocked_by(
-        self, issue_number: int | str, blocking_issue_number: int | str
-    ) -> None:
-        number = validate_issue_number(issue_number)
-        blocker = validate_issue_number(blocking_issue_number)
-        current = self._get_issue_for_relationship(number)
-        if current is None or blocker not in current.blocked_by:
-            return
-        self._run_relationship_command(
-            ["gh", "issue", "edit", str(number), "--remove-blocked-by", str(blocker)]
-        )
-
-    def _run_relationship_command(self, args: list[str]) -> None:
-        try:
-            self._run(args)
-        except subprocess.CalledProcessError as exc:
-            if _is_relationship_unavailable_error(exc):
-                raise RelationshipUnavailableError(
-                    "native issue relationships are unavailable"
-                ) from exc
-            raise
 
     def find_open_issues_by_exact_title(self, title: str) -> list[IssueRecord]:
         stdout = self._run(

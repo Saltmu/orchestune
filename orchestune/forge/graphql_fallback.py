@@ -10,11 +10,17 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Callable
-from typing import TypeVar
+from typing import Protocol, TypeVar
 
 from .issues_rest import is_graphql_unavailable, is_unsupported_issue_field
 
 _T = TypeVar("_T")
+
+
+class GhRunner(Protocol):
+    """Protocol for executing gh CLI commands."""
+
+    def __call__(self, args: list[str], input_text: str | None = None) -> str: ...
 
 
 def error_detail(exc: subprocess.CalledProcessError) -> str:

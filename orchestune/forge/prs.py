@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
-from typing import Any, Protocol
+from typing import Any
 from urllib.parse import quote
 
 import orchestune.forge.prs_rest as prs_rest
-from orchestune.models import CommitCheck, PrRecord
+from orchestune.models import PrRecord
 from orchestune.validation import validate_issue_number, validate_ref_name
 
-from .graphql_fallback import GraphQLFallbackMixin
+from .graphql_fallback import GhRunner, GraphQLFallbackMixin
+from .pr_merge_state import GitHubPullRequestMergeStateMixin
+from .pr_reviews import GitHubPullRequestReviewMixin
 
 _PR_JSON_FIELDS = (
     "number,headRefName,headRefOid,baseRefName,isCrossRepository,state,createdAt,closedAt,"
@@ -41,14 +42,12 @@ query($owner: String!, $name: String!, $number: Int!, $after: String) {
 """
 
 
-class _Runner(Protocol):
-    def __call__(self, args: list[str], input_text: str | None = None) -> str: ...
-
-
-class GitHubPullRequestMixin(GraphQLFallbackMixin):
+class GitHubPullRequestMixin(
+    GitHubPullRequestMergeStateMixin, GitHubPullRequestReviewMixin, GraphQLFallbackMixin
+):
     """Pull-request-specific implementation mixed into :class:`GitHubForge`."""
 
-    _run: _Runner
+    _run: GhRunner
 
     def delete_branch(self, branch: str) -> None:
         validate_ref_name(branch)
@@ -113,117 +112,6 @@ class GitHubPullRequestMixin(GraphQLFallbackMixin):
 
     def close_pull_request(self, pr_number: int | str) -> None:
         prs_rest.close_pull_request(self._run, validate_issue_number(pr_number))
-
-    def is_branch_merged_into(self, head: str, base: str) -> bool:
-        validate_ref_name(head)
-        validate_ref_name(base)
-        stdout = self._run(
-            [
-                "gh",
-                "pr",
-                "list",
-                "--state",
-                "merged",
-                "--head",
-                head,
-                "--base",
-                base,
-                "--json",
-                "number",
-                "--limit",
-                "1",
-            ]
-        )
-        return bool(json.loads(stdout))
-
-    def get_merged_pr_timestamp(self, head: str, base: str) -> str | None:
-        validate_ref_name(head)
-        validate_ref_name(base)
-        stdout = self._run(
-            [
-                "gh",
-                "pr",
-                "list",
-                "--state",
-                "merged",
-                "--head",
-                head,
-                "--base",
-                base,
-                "--json",
-                "mergedAt",
-                "--limit",
-                "1000",
-            ]
-        )
-        timestamps = [
-            result.get("mergedAt")
-            for result in json.loads(stdout)
-            if result.get("mergedAt")
-        ]
-        return str(max(timestamps)) if timestamps else None
-
-    def branch_exists(self, branch: str) -> bool:
-        validate_ref_name(branch)
-        encoded_branch = quote(branch, safe="")
-        try:
-            self._run(
-                ["gh", "api", f"repos/{{owner}}/{{repo}}/branches/{encoded_branch}"]
-            )
-        except subprocess.CalledProcessError as exc:
-            detail = (exc.stderr or "").lower()
-            if "404" in detail or "not found" in detail:
-                return False
-            raise
-        return True
-
-    def is_current_branch_tip_merged_into(self, head: str, base: str) -> bool:
-        return self.get_current_branch_tip_sha_if_merged_into(head, base) is not None
-
-    def get_current_branch_tip_sha_if_merged_into(
-        self, head: str, base: str
-    ) -> str | None:
-        """Return the observed tip only when that exact commit is in ``base``."""
-        validate_ref_name(head)
-        validate_ref_name(base)
-        encoded_head = quote(head, safe="")
-        tip_sha = self._run(
-            [
-                "gh",
-                "api",
-                f"repos/{{owner}}/{{repo}}/branches/{encoded_head}",
-                "--jq",
-                ".commit.sha",
-            ]
-        ).strip()
-        if not re.fullmatch(r"[0-9a-fA-F]{40}", tip_sha):
-            raise ValueError(f"GitHub returned an invalid branch tip SHA: {tip_sha!r}")
-        status = self._run(
-            [
-                "gh",
-                "api",
-                f"repos/{{owner}}/{{repo}}/compare/{tip_sha}...{base}",
-                "--jq",
-                ".status",
-            ]
-        ).strip()
-        return tip_sha if status in {"ahead", "identical"} else None
-
-    def is_merge_commit_reachable_from(self, commit_oid: str, base: str) -> bool:
-        """Whether a historical PR merge commit remains in the current base tip."""
-        if not re.fullmatch(r"[0-9a-fA-F]{40}", commit_oid):
-            raise ValueError(f"invalid merge commit SHA: {commit_oid!r}")
-        validate_ref_name(base)
-        status = self._run(
-            [
-                "gh",
-                "api",
-                f"repos/{{owner}}/{{repo}}/compare/{commit_oid}...{base}",
-                "--jq",
-                ".status",
-            ]
-        ).strip()
-        return status in {"ahead", "identical"}
 
     def _fetch_all_pr_files(self, pr_number: int) -> tuple[tuple[str, ...], bool]:
         paths: list[str] = []
@@ -320,48 +208,12 @@ class GitHubPullRequestMixin(GraphQLFallbackMixin):
             ),
         )
 
-    def list_commit_checks(self, sha: str) -> tuple[CommitCheck, ...]:
-        """#1554: checks of an explicit SHA; REST only, so a moved PR head cannot leak in."""
-        return prs_rest.commit_checks(self._run, sha)
-
     def _get_pull_request_graphql(self, number: int) -> PrRecord:
         stdout = self._run(["gh", "pr", "view", str(number), "--json", _PR_JSON_FIELDS])
         raw = json.loads(stdout)
         if not isinstance(raw, dict):
             raise ValueError("GitHub did not return a pull request object")
         return self._parse_pr_record(raw, state="all", paginate_files=False)
-
-    def _list_pr_review_items(
-        self, pr_number: int | str, section: str
-    ) -> list[dict[str, Any]]:
-        number = validate_issue_number(pr_number)
-        raw = json.loads(
-            self._run(
-                [
-                    "gh",
-                    "api",
-                    "--paginate",
-                    "--slurp",
-                    f"repos/{{owner}}/{{repo}}/pulls/{number}/{section}?per_page=100",
-                ]
-            )
-        )
-        if not isinstance(raw, list) or any(not isinstance(page, list) for page in raw):
-            raise ValueError("GitHub review response must contain complete pages")
-        items = [item for page in raw for item in page]
-        if any(not isinstance(item, dict) for item in items):
-            raise ValueError("GitHub review items must be objects")
-        return items
-
-    def list_pull_request_reviews(self, pr_number: int | str) -> list[dict[str, Any]]:
-        """Fetch every native PR review, failing rather than returning partial pages."""
-        return self._list_pr_review_items(pr_number, "reviews")
-
-    def list_pull_request_review_comments(
-        self, pr_number: int | str
-    ) -> list[dict[str, Any]]:
-        """Fetch all inline review comments, with native source and review IDs."""
-        return self._list_pr_review_items(pr_number, "comments")
 
     def list_prs(
         self,
