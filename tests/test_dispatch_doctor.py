@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from orchestune.dispatch.doctor import (
+from orchestune.dispatch.doctor.check import (
     DoctorInputError,
     DoctorRequest,
     check_workflow_readable,
@@ -20,7 +20,7 @@ from orchestune.dispatch.doctor import (
     resolve_repository_root,
     run_doctor,
 )
-from orchestune.dispatch.doctor_models import (
+from orchestune.dispatch.doctor.models import (
     ALL_CODES,
     OWNERSHIP_NOTICE,
     Diagnostic,
@@ -162,7 +162,9 @@ def test_resolve_repository_root_maps_errors(
     def boom(cwd: object = None) -> None:
         raise subprocess.CalledProcessError(128, "git")
 
-    monkeypatch.setattr("orchestune.dispatch.doctor.get_git_repository_paths", boom)
+    monkeypatch.setattr(
+        "orchestune.dispatch.doctor.check.get_git_repository_paths", boom
+    )
     with pytest.raises(DoctorInputError):
         resolve_repository_root(tmp_path)
 

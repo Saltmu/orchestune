@@ -13,13 +13,13 @@ from typing import Any
 import pytest
 
 from orchestune.cli import main as cli_main
-from orchestune.dispatch.doctor import (
+from orchestune.dispatch.doctor.check import (
     DoctorRequest,
     discover_workflow_files,
     load_workflow_yaml,
     run_doctor,
 )
-from orchestune.dispatch.doctor_models import ALL_CODES
+from orchestune.dispatch.doctor.models import ALL_CODES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = REPO_ROOT / "docs/examples/dispatch-single-executor.yml"

@@ -93,7 +93,7 @@ def _dispatch_tool_command(cmd: str) -> bool:
 
         sys.exit(gc_main())
     elif cmd == "doctor":
-        from orchestune.dispatch.doctor_cli import main as doctor_main
+        from orchestune.dispatch.doctor.cli import main as doctor_main
 
         sys.exit(doctor_main())
     elif cmd == "review":

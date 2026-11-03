@@ -9,18 +9,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestune.dispatch.doctor_actions import (
+from orchestune.dispatch.doctor.actions import (
     MIGRATION_DOC_REF,
     STANDARD_GROUP,
     is_standard_group,
 )
-from orchestune.dispatch.doctor_entrypoints import (
+from orchestune.dispatch.doctor.entrypoints import (
     DispatchEntrypoint,
     StepLocation,
     WorkflowScan,
     scan_workflow,
 )
-from orchestune.dispatch.doctor_models import (
+from orchestune.dispatch.doctor.models import (
     CODE_OTHER_CONTROL_ENTRYPOINTS,
     CODE_OTHER_ENTRYPOINTS,
     Diagnostic,
