@@ -47,6 +47,49 @@ def test_preview_release_and_replay_preserve_work(local_claim):
     )
 
 
+def test_replay_reports_release_origin_and_worktree_state(local_claim):
+    import shutil
+
+    from orchestune.recovery.contracts import RecoveryRequest
+    from orchestune.recovery.service import recover_claim
+
+    workspace, active, worktree = local_claim
+    request = RecoveryRequest(
+        7, claim_id=active.claim.claim_id, reason="worker stopped", apply=True
+    )
+    assert recover_claim(request, cwd=workspace.repository_root).action == "released"
+    replay = recover_claim(request, cwd=workspace.repository_root)
+    assert replay.action == "already_released"
+    diagnostics = replay.diagnostics
+    assert diagnostics["release_operation"] == "release"
+    assert diagnostics["release_reason"] == "worker stopped"
+    assert diagnostics["released_at"]
+    assert diagnostics["worktree"] == str(worktree)
+    assert diagnostics["worktree_action"] == "retain"
+    assert diagnostics["worktree_status"] in ("clean", "dirty")
+    shutil.rmtree(worktree)
+    gone = recover_claim(request, cwd=workspace.repository_root)
+    assert gone.action == "already_released"
+    assert gone.diagnostics["worktree_status"] == "absent"
+
+
+def test_replay_reports_closed_target_release_reason(local_claim):
+    from orchestune.recovery.contracts import RecoveryRequest
+    from orchestune.recovery.service import recover_claim
+
+    workspace, active, _worktree = local_claim
+    request = RecoveryRequest(
+        7,
+        claim_id=active.claim.claim_id,
+        reason="closed-target:CLOSED",
+        apply=True,
+    )
+    assert recover_claim(request, cwd=workspace.repository_root).success
+    replay = recover_claim(request, cwd=workspace.repository_root)
+    assert replay.action == "already_released"
+    assert replay.diagnostics["release_reason"] == "closed-target:CLOSED"
+
+
 def test_changed_generation_and_live_process_hold(local_claim):
     from orchestune.recovery.contracts import RecoveryRequest
     from orchestune.recovery.service import recover_claim

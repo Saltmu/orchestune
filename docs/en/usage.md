@@ -1098,6 +1098,15 @@ other claims, counters, intents and completion evidence. It leaves GitHub state
 unchanged; use the existing engine/Outcome lifecycle for requeue, completion or
 closure. Dispatcher does not resurrect the explicitly released generation.
 Repeated release is idempotent. Do not delete the entire `run_state.json`.
+A repeated release with the same claim ID returns `already_released` with diagnostics
+from the saved receipt: `release_operation`, `release_reason`, `released_at`, `worktree`,
+`worktree_action` and the current `worktree_status` (`clean`, `dirty`, `unknown` or `absent`).
+Use them to tell whether the worktree still exists and who released it. Every worktree
+removal by Orchestune GC also appends one line to `worktrees/worktree-removals.jsonl` before
+deleting it (`removed_at`, `worktree_path`, `branch`, `claim_id`, `reason`, `pid`, `argv0`,
+and `ignored_entries`, the count of items under `.orchestune/tmp/`, which are git-ignored
+session files that the removal also deletes). If a worktree is missing and no line exists
+for it, the removal happened outside Orchestune GC.
 
 ### Operator-confirmed external stop
 

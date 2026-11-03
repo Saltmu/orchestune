@@ -154,7 +154,9 @@ def _remove_verified_worktree(
     if not evaluation.can_remove or evaluation.request is None:
         return evaluation.rejection_reason or "worktree_unverified"
     try:
-        removed = remove_verified_worktree(evaluation.request)
+        removed = remove_verified_worktree(
+            replace(evaluation.request, reason="gc_collection")
+        )
     except Exception:
         return "worktree_remove_failed"
     if not removed.success or target.exists():

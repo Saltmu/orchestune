@@ -10,6 +10,8 @@ Zombie・Timeout回収（dispatch_gc_zombies）は`test_dispatch_gc_zombies.py`�
 へそれぞれ分割している（#345）。
 """
 
+import json
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -1072,3 +1074,100 @@ class TestRemoveVerifiedWorktree:
         assert result.removed is False
         assert wt_path.exists()
         assert claim_marker_path(wt_path).exists()
+
+
+class TestWorktreeRemovalLog:
+    """#1655: every Orchestune worktree removal leaves an audit line before deletion."""
+
+    @staticmethod
+    def _removal_request(tmp_path, name):
+        from orchestune.dispatch.gc.git import VerifiedWorktreeRemovalRequest
+
+        wt_path = tmp_path / "worktrees" / name
+        wt_path.mkdir(parents=True)
+        return wt_path, VerifiedWorktreeRemovalRequest(
+            worktree_path=wt_path,
+            branch="claude/issue-1655-task",
+            claim_id="claim-1655",
+            reason="gc_collection",
+        )
+
+    @staticmethod
+    def _git_remove_side_effect(wt_path, before_remove=None):
+        def side_effect(args, cwd=None, check=True):
+            if args[:3] == ["worktree", "remove", str(wt_path)]:
+                if before_remove is not None:
+                    before_remove()
+                import shutil
+
+                shutil.rmtree(wt_path)
+                return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+            raise AssertionError(f"Unexpected git call: {args}")
+
+        return side_effect
+
+    def test_records_reason_and_ignored_entries_before_removal(self, tmp_path):
+        from orchestune.dispatch.gc import git as git_module
+        from orchestune.dispatch.gc.git import remove_verified_worktree
+
+        wt_path, request = self._removal_request(tmp_path, "wt-audited")
+        (wt_path / ".orchestune" / "tmp").mkdir(parents=True)
+        (wt_path / ".orchestune" / "tmp" / "review-reply.md").write_text("kept?")
+        (wt_path / ".orchestune" / "tmp" / "plan.md").write_text("kept?")
+        log_path = tmp_path / "worktrees" / "worktree-removals.jsonl"
+        seen_before_removal = []
+
+        def assert_logged_first():
+            seen_before_removal.append(log_path.read_text(encoding="utf-8"))
+
+        with patch.object(git_module, "run_git") as mock_git:
+            mock_git.side_effect = self._git_remove_side_effect(
+                wt_path, before_remove=assert_logged_first
+            )
+            result = remove_verified_worktree(request)
+
+        assert result.success is True
+        assert len(seen_before_removal) == 1
+        record = json.loads(seen_before_removal[0].splitlines()[-1])
+        assert record["worktree_path"] == str(wt_path)
+        assert record["branch"] == "claude/issue-1655-task"
+        assert record["claim_id"] == "claim-1655"
+        assert record["reason"] == "gc_collection"
+        assert record["ignored_entries"] == 2
+        assert record["pid"] == os.getpid()
+        assert record["removed_at"]
+
+    def test_removal_proceeds_when_log_cannot_be_written(self, tmp_path, capsys):
+        from orchestune.dispatch.gc import git as git_module
+        from orchestune.dispatch.gc.git import remove_verified_worktree
+
+        wt_path, request = self._removal_request(tmp_path, "wt-unlogged")
+        # A directory at the log path makes the append fail with an OSError.
+        (tmp_path / "worktrees" / "worktree-removals.jsonl").mkdir()
+
+        with patch.object(git_module, "run_git") as mock_git:
+            mock_git.side_effect = self._git_remove_side_effect(wt_path)
+            result = remove_verified_worktree(request)
+
+        assert result.success is True
+        assert not wt_path.exists()
+        assert "failed to record worktree removal" in capsys.readouterr().err
+
+    def test_log_keeps_newest_half_when_over_limit(self, tmp_path, monkeypatch):
+        from orchestune.dispatch.gc import git as git_module
+        from orchestune.dispatch.gc.git import remove_verified_worktree
+
+        monkeypatch.setattr(git_module, "WORKTREE_REMOVALS_LOG_MAX_BYTES", 200)
+        wt_path, request = self._removal_request(tmp_path, "wt-trimmed")
+        log_path = tmp_path / "worktrees" / "worktree-removals.jsonl"
+        old_lines = [f'{{"old": {index}, "pad": "{"x" * 100}"}}' for index in range(10)]
+        log_path.write_text("\n".join(old_lines) + "\n", encoding="utf-8")
+
+        with patch.object(git_module, "run_git") as mock_git:
+            mock_git.side_effect = self._git_remove_side_effect(wt_path)
+            remove_verified_worktree(request)
+
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+        assert lines[0] == old_lines[5]
+        assert len(lines) == 6
+        assert json.loads(lines[-1])["worktree_path"] == str(wt_path)

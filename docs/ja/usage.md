@@ -1073,6 +1073,7 @@ dirtyな変更・commit・worktree・branch、他claim、回数、intent、compl
 GitHubのラベルやIssue状態は変更しません。再queue・完了・closeは既存のengine / Outcome経路で行います。
 Dispatcherは明示解放された旧世代を復元しません。同じ解放の再実行は冪等です。
 `run_state.json`全体を削除する必要はありません。
+同じ claim ID での再解放は `already_released` を返し、保存済み receipt から `release_operation`、`release_reason`、`released_at`、`worktree`、`worktree_action` と現在の `worktree_status`（`clean` / `dirty` / `unknown` / `absent`）を診断として表示します。worktree がまだあるか、誰が解放したかはこれで判断できます。Orchestune の GC が worktree を削除するたびに、削除の前に `worktrees/worktree-removals.jsonl` へ 1 行追記します（`removed_at`、`worktree_path`、`branch`、`claim_id`、`reason`、`pid`、`argv0`、`ignored_entries`。`ignored_entries` は、削除と同時に消える git 無視対象のセッションファイル `.orchestune/tmp/` 直下の件数です）。worktree が無く該当行もなければ、Orchestune GC の外で削除されています。
 
 merge済みPRも通常のcompleteコマンドで事後完了できます。Issue、claim作成時刻、head、予定base、
 repository、merge commitの到達性、Issue再open時刻を照合します。親branchへのmergeも対象です。

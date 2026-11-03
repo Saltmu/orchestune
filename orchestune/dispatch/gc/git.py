@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -27,6 +30,11 @@ class VerifiedWorktreeRemovalRequest:
     worktree_path: Path
     branch: str | None = None
     claim_id: str | None = None
+    reason: str | None = None
+
+
+WORKTREE_REMOVALS_LOG = "worktree-removals.jsonl"
+WORKTREE_REMOVALS_LOG_MAX_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -380,6 +388,43 @@ def evaluate_worktree_removal(
     )
 
 
+def _append_worktree_removal_log(request: VerifiedWorktreeRemovalRequest) -> None:
+    """#1655: keep a pre-removal audit line; failures warn and never block removal."""
+    path = request.worktree_path
+    ignored_dir = path / ".orchestune" / "tmp"
+    record = {
+        "removed_at": datetime.now(UTC).isoformat(),
+        "worktree_path": str(path),
+        "branch": request.branch,
+        "claim_id": request.claim_id,
+        "reason": request.reason,
+        "pid": os.getpid(),
+        "argv0": Path(sys.argv[0]).name if sys.argv else None,
+        "ignored_entries": (
+            len(list(ignored_dir.iterdir())) if ignored_dir.is_dir() else 0
+        ),
+    }
+    log_path = path.parent / WORKTREE_REMOVALS_LOG
+    try:
+        lines = (
+            log_path.read_text(encoding="utf-8").splitlines()
+            if log_path.exists()
+            else []
+        )
+        if (
+            log_path.exists()
+            and log_path.stat().st_size > WORKTREE_REMOVALS_LOG_MAX_BYTES
+        ):
+            lines = lines[len(lines) // 2 :]
+        lines.append(json.dumps(record, ensure_ascii=False, sort_keys=True))
+        log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except OSError as exc:
+        print(
+            f"Warning: failed to record worktree removal in {log_path}: {exc}",
+            file=sys.stderr,
+        )
+
+
 def remove_verified_worktree(
     request: VerifiedWorktreeRemovalRequest,
 ) -> WorktreeRemovalResult:
@@ -387,9 +432,10 @@ def remove_verified_worktree(
 
     git worktree remove が例外を送出しても（すでに別経路で削除済みなど）、
     ディスク上からディレクトリが消えていれば所有権マーカーを片付けて
-    後日の再claimを妨げないようにする。
+    後日の再claimを妨げないようにする。削除前に監査行を残す（#1655）。
     """
     path = request.worktree_path
+    _append_worktree_removal_log(request)
     removal_error: str | None = None
     try:
         run_git(["worktree", "remove", str(path)], cwd=None, check=True)
@@ -417,6 +463,7 @@ def remove_worktree(
     expected_branch: str | None = None,
     expected_claim_id: str | None = None,
     repo_root: str | Path | None = None,
+    reason: str | None = None,
 ) -> WorktreeRemovalResult:
     """#193 / #1004: 完了したworktreeを検証した上で安全に撤去する。"""
     path = Path(worktree_path)
@@ -434,4 +481,4 @@ def remove_worktree(
             rejection_reason=eval_res.rejection_reason,
             error=str(eval_res.details) if eval_res.details else None,
         )
-    return remove_verified_worktree(eval_res.request)
+    return remove_verified_worktree(replace(eval_res.request, reason=reason))
