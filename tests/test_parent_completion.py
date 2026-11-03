@@ -5,10 +5,21 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
+import orchestune.integrator.parent_completion as parent_completion
+from orchestune.infra.git_cli import MergeProbeResult, MergeProbeStatus
 from orchestune.integrator.parent_branch_state import is_current_parent_branch_merged
 from orchestune.integrator.parent_completion import process_parent_completion
 from orchestune.integrator.pr import ParentFinalPrMigrationError
 from orchestune.models import IssueRecord, PrRecord
+
+
+@pytest.fixture(autouse=True)
+def _stub_probe_merge_conflicts_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        parent_completion,
+        "probe_merge_conflicts",
+        lambda base, head, **kwargs: MergeProbeResult(MergeProbeStatus.clean, (), ""),
+    )
 
 
 def _issue(number: int, state: str) -> IssueRecord:
@@ -688,3 +699,171 @@ def test_acceptance_failure_keeps_ready_pr(fake_forge):
         )
     assert result["status"] == "final_pr_ready" and result["pr_number"] == 777
     assert result["final_acceptance_review"]["status"] == "failed"
+
+
+def test_prepare_final_pr_stops_on_merge_conflict_and_notifies_issue(
+    fake_forge, monkeypatch: pytest.MonkeyPatch
+):
+    fake_forge.list_sub_issues.return_value = [_issue(101, "CLOSED")]
+    fake_forge.get_merged_pr_timestamp.return_value = None
+    fake_forge.list_comments.return_value = []
+
+    ensure_pr = MagicMock()
+    request_review = MagicMock()
+    monkeypatch.setattr(
+        parent_completion,
+        "probe_merge_conflicts",
+        lambda base, head, **kwargs: MergeProbeResult(
+            MergeProbeStatus.conflict, ("conftest.py",), "conflict"
+        ),
+    )
+    monkeypatch.setattr(parent_completion, "ensure_parent_final_pr", ensure_pr)
+    monkeypatch.setattr(
+        parent_completion, "request_final_acceptance_review", request_review
+    )
+
+    result = process_parent_completion(
+        100, True, fake_forge, final_acceptance_reviewer="claude"
+    )
+
+    ensure_pr.assert_not_called()
+    request_review.assert_not_called()
+    assert result["status"] == "final_pr_conflict"
+    assert result["conflicting_files"] == ["conftest.py"]
+    assert result["final_acceptance_review"] == {
+        "status": "not_applicable",
+        "reason": "final_pr_conflict",
+    }
+    fake_forge.add_comment.assert_called_once()
+    comment_args = fake_forge.add_comment.call_args[0]
+    assert comment_args[0] == 100
+    assert "<!-- orchestune:notice:final-pr-base-conflict -->" in comment_args[1]
+    assert "conftest.py" in comment_args[1]
+
+
+def test_prepare_final_pr_conflict_notice_dedup(
+    fake_forge, monkeypatch: pytest.MonkeyPatch
+):
+    fake_forge.list_sub_issues.return_value = [_issue(101, "CLOSED")]
+    fake_forge.get_merged_pr_timestamp.return_value = None
+
+    # First call posts the comment
+    fake_forge.list_comments.return_value = []
+    monkeypatch.setattr(
+        parent_completion,
+        "probe_merge_conflicts",
+        lambda base, head, **kwargs: MergeProbeResult(
+            MergeProbeStatus.conflict, ("conftest.py",), "conflict"
+        ),
+    )
+    monkeypatch.setattr(parent_completion, "ensure_parent_final_pr", MagicMock())
+
+    res1 = process_parent_completion(100, True, fake_forge)
+    assert res1["status"] == "final_pr_conflict"
+    assert fake_forge.add_comment.call_count == 1
+    posted_body = fake_forge.add_comment.call_args[0][1]
+
+    # Second call with the same notice already in comments
+    fake_forge.list_comments.return_value = [{"body": posted_body}]
+    fake_forge.add_comment.reset_mock()
+
+    res2 = process_parent_completion(100, True, fake_forge)
+    assert res2["status"] == "final_pr_conflict"
+    fake_forge.add_comment.assert_not_called()
+
+
+def test_prepare_final_pr_conflict_does_not_update_existing_pr(
+    fake_forge, monkeypatch: pytest.MonkeyPatch
+):
+    fake_forge.list_sub_issues.return_value = [_issue(101, "CLOSED")]
+    fake_forge.get_merged_pr_timestamp.return_value = None
+    fake_forge.list_open_prs.return_value = [
+        PrRecord(
+            number=777,
+            head_ref="parent/issue-100",
+            changed_files=(),
+            title="Final PR",
+            body="Existing body",
+            state="OPEN",
+            head_sha="sha1",
+            base_ref="main",
+        )
+    ]
+
+    ensure_pr = MagicMock()
+    monkeypatch.setattr(
+        parent_completion,
+        "probe_merge_conflicts",
+        lambda base, head, **kwargs: MergeProbeResult(
+            MergeProbeStatus.conflict, ("foo.py",), "conflict"
+        ),
+    )
+    monkeypatch.setattr(parent_completion, "ensure_parent_final_pr", ensure_pr)
+
+    result = process_parent_completion(100, True, fake_forge)
+
+    assert result["status"] == "final_pr_conflict"
+    ensure_pr.assert_not_called()
+    fake_forge.update_pull_request.assert_not_called()
+
+
+def test_prepare_final_pr_conflict_then_clean_resolves_notice(
+    fake_forge, monkeypatch: pytest.MonkeyPatch
+):
+    fake_forge.list_sub_issues.return_value = [_issue(101, "CLOSED")]
+    fake_forge.get_merged_pr_timestamp.return_value = None
+    # Prior conflict notice in comments
+    fake_forge.list_comments.return_value = [
+        {"body": "<!-- orchestune:notice:final-pr-base-conflict -->\nPrior conflict"}
+    ]
+
+    monkeypatch.setattr(
+        parent_completion,
+        "probe_merge_conflicts",
+        lambda base, head, **kwargs: MergeProbeResult(MergeProbeStatus.clean, (), ""),
+    )
+    monkeypatch.setattr(
+        parent_completion,
+        "ensure_parent_final_pr",
+        MagicMock(return_value=777),
+    )
+
+    result = process_parent_completion(100, True, fake_forge)
+
+    assert result["status"] == "final_pr_ready"
+    assert result["pr_number"] == 777
+    # Resolution notice posted
+    fake_forge.add_comment.assert_called_once()
+    comment_args = fake_forge.add_comment.call_args[0]
+    assert comment_args[0] == 100
+    assert "<!-- orchestune:notice:final-pr-base-conflict -->" in comment_args[1]
+    assert "解消" in comment_args[1]
+
+
+def test_prepare_final_pr_unknown_warns_and_proceeds(
+    fake_forge, capsys, monkeypatch: pytest.MonkeyPatch
+):
+    fake_forge.list_sub_issues.return_value = [_issue(101, "CLOSED")]
+    fake_forge.get_merged_pr_timestamp.return_value = None
+
+    monkeypatch.setattr(
+        parent_completion,
+        "probe_merge_conflicts",
+        lambda base, head, **kwargs: MergeProbeResult(
+            MergeProbeStatus.unknown, (), "simulated fetch failure"
+        ),
+    )
+    monkeypatch.setattr(
+        parent_completion,
+        "ensure_parent_final_pr",
+        MagicMock(return_value=777),
+    )
+
+    result = process_parent_completion(100, True, fake_forge)
+
+    assert result["status"] == "final_pr_ready"
+    assert result["pr_number"] == 777
+    assert result["base_merge_probe"] == "unknown"
+    captured = capsys.readouterr()
+    assert "Warning" in captured.err
+    assert "unknown" in captured.err
