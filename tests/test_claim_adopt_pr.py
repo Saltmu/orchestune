@@ -442,3 +442,26 @@ def test_interrupted_adoption_revalidates_before_resume(claim_env):
             state_path=state_path,
         )
     assert result.success, result.failure
+
+
+def test_escalated_lock_notices_do_not_break_orphan_adoption(pr):
+    """#1654 の再現: 孤立PRの通知 → エスカレーション版のロック通知 → 解除通知の順でも
+    --adopt-pr の検証が通る。ロック通知が marker 文字列を含むと、孤立PR通知より後の
+    コメントとして拒否されてしまう。"""
+    from orchestune.dispatch.locks import (
+        render_external_lock_notice,
+        render_external_lock_release_notice,
+    )
+    from orchestune.lock_contracts import ExternalLockConflict
+
+    marker = orphan_marker("claim-1", pr)
+    conflicts = (
+        ExternalLockConflict(kind="pr", source="#1646", files=("orchestune/x.py",)),
+    )
+    comments = [
+        {"body": f"{marker}\ncompleted_orphaned_pr: PR #{pr.number}"},
+        {"body": render_external_lock_notice(conflicts, escalated=True)},
+        {"body": render_external_lock_release_notice(escalated=True)},
+    ]
+
+    validate_escalation_reason(comments, marker, lambda _: True)

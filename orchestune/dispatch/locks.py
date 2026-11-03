@@ -16,6 +16,7 @@ from orchestune.dependencies.assessment import (
 )
 from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.labels import StatusLabel
+from orchestune.ledger.status_labels import TERMINAL_ESCALATION_LABELS
 from orchestune.lock_contracts import (
     KIND_BRANCH,
     KIND_PR,
@@ -333,6 +334,15 @@ def _collect_task_conflicts(
     return tuple(conflicts)
 
 
+def _escalated_issue_numbers(tasks: Iterable[TaskMetadata]) -> frozenset[int]:
+    """#1654: 人の確認待ち（ESCALATIONラベル付き）のIssue番号。done/not-neededも含む。"""
+    return frozenset(
+        task.issue_number
+        for task in tasks
+        if any(label in task.status_labels for label in TERMINAL_ESCALATION_LABELS)
+    )
+
+
 def scan_external_locks(
     queued_tasks: list[TaskMetadata],
     remote_branches: Iterable[tuple[str, tuple[str, ...] | None]],
@@ -388,9 +398,8 @@ def scan_external_locks(
         elif currently_locked:
             to_unlock.append(task)
 
-    return ExternalLockScanResult(
-        to_lock=to_lock, to_unlock=to_unlock, conflicts=conflicts_by_issue
-    )
+    escalated = _escalated_issue_numbers(queued_tasks)
+    return ExternalLockScanResult(to_lock, to_unlock, conflicts_by_issue, escalated)
 
 
 _CONFLICT_KIND_LABELS = {
@@ -404,6 +413,24 @@ _RELEASE_NOTICE = (
     "🔓 外部ロックを解除しました（`status:external-lock` を外しました）。\n\n"
     "衝突していた変更が解消されたため、次のディスパッチサイクルから"
     "起動候補に戻ります。"
+)
+
+# #1654: エスカレーション中のタスクには「起動候補に戻ります」が事実と違う。
+# 本文に `status:blocked-human-review` や孤立PR/重複PRのmarkerを書かない。
+# validate_escalation_reason がそれらを含むコメントを「エスカレーション通知」と
+# みなし、孤立PRの通知より後にあると --adopt-pr が拒否されるため。
+_ESCALATED_LOCK_NOTICE_NOTE = (
+    "このタスクは人の確認待ち（エスカレーション）です。"
+    "ロックが解除されても自動では起動しません。"
+    "ロック中は孤立 PR の採用（`orchestune claim --adopt-pr`）も受け付けられないため、"
+    "解除を待ってから直前のエスカレーション通知の手順に従ってください。"
+)
+
+_ESCALATED_RELEASE_NOTICE = (
+    "🔓 外部ロックを解除しました（`status:external-lock` を外しました）。\n\n"
+    "ただし、このタスクは人の確認待ち（エスカレーション）のため、自動では起動しません。"
+    "直前のエスカレーション通知の手順に従ってください"
+    "（孤立 PR の案内がある場合は、ここから `orchestune claim --adopt-pr` を実行できます）。"
 )
 
 
@@ -442,7 +469,9 @@ def _fail_closed_lines(conflicts: tuple[ExternalLockConflict, ...]) -> list[str]
     return lines
 
 
-def render_external_lock_notice(conflicts: tuple[ExternalLockConflict, ...]) -> str:
+def render_external_lock_notice(
+    conflicts: tuple[ExternalLockConflict, ...], *, escalated: bool = False
+) -> str:
     """ロック理由をIssueコメント本文（Markdown）へ整形する。"""
     lines = [
         "🔒 このタスクは外部ロック中です（`status:external-lock`）。",
@@ -470,11 +499,13 @@ def render_external_lock_notice(conflicts: tuple[ExternalLockConflict, ...]) -> 
     lines.append(
         "衝突相手がマージ・削除されると、次のディスパッチサイクルで自動的に解除されます。"
     )
+    if escalated:
+        lines.extend(["", _ESCALATED_LOCK_NOTICE_NOTE])
     return "\n".join(lines)
 
 
-def render_external_lock_release_notice() -> str:
-    return _RELEASE_NOTICE
+def render_external_lock_release_notice(*, escalated: bool = False) -> str:
+    return _ESCALATED_RELEASE_NOTICE if escalated else _RELEASE_NOTICE
 
 
 def _parse_numstat_line(

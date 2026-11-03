@@ -165,7 +165,9 @@ def _notify_external_locks(
             forge,
             issue_number,
             NOTICE_KIND_EXTERNAL_LOCK,
-            render_external_lock_notice(conflicts),
+            render_external_lock_notice(
+                conflicts, escalated=issue_number in lock_result.escalated_issues
+            ),
         )
         if issue_number in pending:
             pending.remove(issue_number)
@@ -175,7 +177,9 @@ def _notify_external_locks(
             forge,
             issue_number,
             NOTICE_KIND_EXTERNAL_LOCK,
-            render_external_lock_release_notice(),
+            render_external_lock_release_notice(
+                escalated=issue_number in lock_result.escalated_issues
+            ),
             update_only=True,
         )
         if outcome.settled:

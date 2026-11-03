@@ -771,3 +771,74 @@ class TestDispatchCycleRunStateLock:
             assert "retry" in error_msg
         finally:
             external_lock.release()
+
+
+class TestEscalatedExternalLockNotice:
+    """#1654: エスカレーション中のタスクには「自動起動しない」旨の本文を投稿する。"""
+
+    def _config(self, tmp_path):
+        return DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+        )
+
+    def _conflicts(self):
+        return {
+            1654: (
+                ExternalLockConflict(
+                    kind="branch",
+                    source="fix/issue-777-branch-naming",
+                    files=("tests/conftest.py",),
+                ),
+            )
+        }
+
+    def test_escalated_task_gets_no_auto_start_notice(self, tmp_path, fake_forge):
+        lock_result = ExternalLockScanResult(
+            to_lock=[],
+            to_unlock=[],
+            conflicts=self._conflicts(),
+            escalated_issues=frozenset({1654}),
+        )
+
+        _apply_external_lock_sync(lock_result, self._config(tmp_path))
+
+        body = fake_forge.add_comment.call_args.args[1]
+        assert "自動では起動しません" in body
+        assert "人の確認待ち" in body
+        assert "status:blocked-human-review" not in body
+
+    def test_non_escalated_task_keeps_existing_notice(self, tmp_path, fake_forge):
+        lock_result = ExternalLockScanResult(
+            to_lock=[],
+            to_unlock=[],
+            conflicts=self._conflicts(),
+        )
+
+        _apply_external_lock_sync(lock_result, self._config(tmp_path))
+
+        body = fake_forge.add_comment.call_args.args[1]
+        assert "人の確認待ち" not in body
+        assert "自動では起動しません" not in body
+
+    def test_escalated_release_notice_is_used_for_escalated_task(
+        self, tmp_path, fake_forge
+    ):
+        unlocked = _task(
+            status_labels=("status:blocked-human-review", "status:external-lock")
+        )
+        lock_result = ExternalLockScanResult(
+            to_lock=[],
+            to_unlock=[unlocked],
+            escalated_issues=frozenset({unlocked.issue_number}),
+        )
+        fake_forge.list_comments.return_value = [
+            {"body": render_notice("external-lock", "ロック中です")}
+        ]
+
+        _apply_external_lock_sync(lock_result, self._config(tmp_path))
+
+        body = fake_forge.add_comment.call_args.args[1]
+        assert "起動候補に戻ります" not in body
+        assert "自動では起動しません" in body
