@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -14,6 +15,23 @@ from orchestune.infra.detached_process import (
     DetachedProcess,
     start_detached_process,
 )
+
+
+def _wait_for_log_bytes(log_path: Path, *needles: bytes, timeout: float = 5.0) -> bytes:
+    """Wait until every needle appears in the log, then return its bytes.
+
+    Fails with the last observed content if the wait times out, instead of
+    returning early and letting a later assertion fail without context.
+    """
+    deadline = time.monotonic() + timeout
+    raw = b""
+    while True:
+        raw = log_path.read_bytes() if log_path.exists() else b""
+        if all(needle in raw for needle in needles):
+            return raw
+        if time.monotonic() >= deadline:
+            pytest.fail(f"timed out waiting for {needles!r} in {log_path}: {raw!r}")
+        time.sleep(0.05)
 
 
 class TestDetachedProcessDataClass:
@@ -47,17 +65,11 @@ class TestStartDetachedProcess:
         assert proc.log_path == log_path
         assert proc.log_offset == 0
 
-        # Wait for the detached process to finish writing
-        # In testing we can wait on the pid via os.waitpid or polling
-        import time
-
-        deadline = time.time() + 5.0
-        while time.time() < deadline:
-            if log_path.exists() and b"err_line" in log_path.read_bytes():
-                break
-            time.sleep(0.05)
-
-        content = log_path.read_text(encoding="utf-8")
+        # stdout is block-buffered when redirected to a file, so err_line can
+        # land first. Wait for both streams before asserting on the merge.
+        content = _wait_for_log_bytes(log_path, b"out_line", b"err_line").decode(
+            "utf-8"
+        )
         assert "out_line" in content
         assert "err_line" in content
 
@@ -77,15 +89,7 @@ class TestStartDetachedProcess:
 
         assert proc.log_offset == initial_len
 
-        import time
-
-        deadline = time.time() + 5.0
-        while time.time() < deadline:
-            if b"second_run" in log_path.read_bytes():
-                break
-            time.sleep(0.05)
-
-        raw = log_path.read_bytes()
+        raw = _wait_for_log_bytes(log_path, b"second_run")
         assert raw[:initial_len] == initial_data
         assert b"second_run" in raw[initial_len:]
 

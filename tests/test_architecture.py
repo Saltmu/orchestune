@@ -540,6 +540,11 @@ def test_pyproject_uses_pep621_metadata_and_hatchling() -> None:
             "rich>=13.7.0,<16.0.0",
             "tomlkit>=0.13.0,<1.0.0",
             "tzdata>=2024.1; sys_platform == 'win32'",
+            "tree-sitter>=0.22.0,<1.0.0",
+            "tree-sitter-javascript>=0.23.0,<1.0.0",
+            "tree-sitter-typescript>=0.23.0,<1.0.0",
+            "tree-sitter-rust>=0.23.0,<1.0.0",
+            "tree-sitter-go>=0.23.0,<1.0.0",
         ],
         "scripts": {
             "orchestune": "orchestune.cli:main",

@@ -266,7 +266,7 @@ The top level supports the following fields:
 
 - **`title`** (string, required): A one-line summary of the "big rock" as a whole. `orchestune provision` (see below) uses it to create the parent issue (`[EPIC] <title>`).
 - **`parent_issue_number`** (integer or `null`, optional, defaults to `null`): The parent issue's number. When decomposing an existing issue, set this to that issue's number. Otherwise, `orchestune provision` writes it back after creating (or reusing) the parent issue.
-- **`parent_issue_source`** (string, optional, defaults to `derived`): Provenance of the parent issue: either `adopted` (adopted a pre-existing issue as parent) or `derived` (created/resolved from the plan's `title`). When `adopted`, title matching is bypassed and the issue is verified and reused based on the issue number and parent marker.
+- **`parent_issue_source`** (string, optional, defaults to `derived`): Provenance of the parent issue: either `adopted` (adopted a pre-existing issue as parent) or `derived` (created/resolved from the plan's `title`). When `adopted`, title matching is bypassed and the issue is verified and reused based on the issue number and parent marker. Note that frontmatter adoption alone only reuses issues that are already in Orchestune EPIC format; adopting a plain issue for the first time requires `--parent-issue <number>`.
 - **`subtasks`** (list of subtasks, required): Each item supports the following fields.
 
 Each subtask item supports the following fields:
@@ -348,13 +348,13 @@ orchestune provision --plan decomposition_plan.md
 
 ### Attaching to a pre-existing EPIC issue (`--parent-issue`)
 
-If the EPIC issue was already filed ahead of time (by hand, or via plain GitHub — not by Orchestune), either specify `parent_issue_number: <number>` and `parent_issue_source: adopted` in the plan frontmatter, or pass `--parent-issue <number>` on the command line:
+If the parent issue already has the Orchestune EPIC format (title starting with `[EPIC] ` and the parent marker embedded in the body), specifying `parent_issue_number: <number>` and `parent_issue_source: adopted` in the plan frontmatter is sufficient. If the existing issue is not yet an Orchestune EPIC, the first provision run requires `--parent-issue <number>` on the command line (including for `--no-apply` preview):
 
 ```bash
 orchestune provision --plan decomposition_plan.md --parent-issue 123
 ```
 
-If the target issue doesn't already look like an Orchestune EPIC (title starting with `[EPIC] ` and the parent marker embedded in the body), it is normalized in place — its existing content is preserved, and the `[EPIC] ` prefix / parent marker are added as needed. No title match against the `title` frontmatter field is required.
+When `--parent-issue` is passed, the target issue is normalized in place if it doesn't already look like an Orchestune EPIC — its existing content is preserved, and the `[EPIC] ` prefix / parent marker are added as needed. No title match against the `title` frontmatter field is required.
 
 Running with `--parent-issue` automatically persists `parent_issue_source: adopted` into `decomposition_plan.md`'s frontmatter. **Subsequent `orchestune provision` runs therefore no longer require `--parent-issue` to be passed again**; they will automatically reuse the adopted parent and existing child issues. If an adopted parent issue does not exist, provisioning halts with an error instead of silently creating a duplicate parent.
 
@@ -413,7 +413,7 @@ A single `Warnings:` output can combine more than one of the warning types below
 * **`DagCycleError`**: Raised if there is a circular dependency within `depends_on`.
 * **Conflict edges**: Similarity across `footprint` / `symbols`, shared-contract writer detection, and exact normalized-path matches of `.md` documents under the repository-root `docs/` (`reason=shared-document`, `resources` = the shared document paths) produce symmetric exclusions independent of priority or ID. Different documents (another file in the same directory, or the other language's file) are not exclusive from document detection alone: to keep a contract from being edited concurrently, declare the same `shared_contract` as an explicit writer, and add `depends_on` if ordering is also required. Document conflicts never generate `depends_on` and do not change the similarity threshold. Text output lists dependency and conflict edges in one `Edges` table, told apart by its `Kind` column (`dependency` or `conflict`; a conflict's `From`/`To` pair is unordered); `--json` separates `precedence_edges` from `conflict_edges` (the compatibility `edges` key contains precedence only).
 * **Shared-contract writer warning**: A non-blocking warning accompanies the Conflict Edge when writers are not ordered in the Precedence DAG.
-* **Existence Verification (`footprint`/`symbols`)**: Warns when a declared `footprint` path or `symbols` entry cannot be confirmed to exist in the current codebase (e.g. `<subtask-id>: footprintに実在しないパスがあります` / `<subtask-id>: symbolsが実コードベースに見つかりません`). This is not necessarily an error — a `footprint` path about to be created for the first time is always reported this way, but a not-yet-existing `symbols` entry is only reported when verification actually ran, which requires an existing, successfully-parsed `.py` file in the footprint *and* no unparseable existing `.py` file anywhere in it (even one file with a syntax/encoding error means verification is silently skipped for the whole subtask). When verification didn't run, no `symbols` warning appears at all — that silence does not mean the symbol was confirmed. See the [`orchestune` skill](../../skills/orchestune/SKILL.md)'s Stage 2 for the full triage guidance (typo/wrong path vs. a missed `footprint` declaration).
+* **Existence Verification (`footprint`/`symbols`)**: Warns when a declared `footprint` path or `symbols` entry cannot be confirmed to exist in the current codebase (e.g. `<subtask-id>: footprintに実在しないパスがあります` / `<subtask-id>: symbolsが実コードベースに見つかりません`). This is not necessarily an error — a `footprint` path about to be created for the first time is always reported this way, but a not-yet-existing `symbols` entry is only reported when verification actually ran, which requires an existing, successfully-parsed supported source file (Python `.py`, TypeScript/JavaScript `.ts`/`.tsx`/`.js`, Rust `.rs`, or Go `.go`) in the footprint *and* no unparseable existing file anywhere in it (even one file with a syntax/encoding error means verification is silently skipped for the whole subtask). When verification didn't run, no `symbols` warning appears at all — that silence does not mean the symbol was confirmed. See the [`orchestune` skill](../../skills/orchestune/SKILL.md)'s Stage 2 for the full triage guidance (typo/wrong path vs. a missed `footprint` declaration).
 * **Risk Flags**: Flags are set if potential security risks (credentials, subprocesses) are detected.
 
 ---
@@ -485,7 +485,7 @@ Routine dispatch execution uses strictly the following 7 options. Detailed param
 | `--final-acceptance-review {advisory,off}` | - | Advisory final-PR acceptance request (default `advisory`); independent of Layer 1/2. See §4.5. |
 | `--semantic-review-mode {required,advisory,off}` | - | Layer-2 integration-PR semantic review mode (`required`, `advisory`, or `off`). When omitted, falls back to config file (`semantic-review-mode`), env var (`ORCHESTUNE_SEMANTIC_REVIEW_MODE`), or default `required`. `off` skips verification. See [§4.5](#45-child-review-evidence-gate-and-layer-2-semantic-review-gate). |
 | `--force-integration-review` | - | Forces layer-2 integration-PR review even when a single child task qualifies for the Fast-Path. |
-| `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`, `grok-cli`). For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error. |
+| `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`, `grok-cli`, and when `auto` detects an installed CLI). Required on all runs including `--no-apply`. For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error explaining why the target was selected. |
 
 ### Configuration File (`orchestune.toml`) for Detailed Settings
 
@@ -951,6 +951,8 @@ Comments mentioning `status:blocked-human-review` after the orphan notice can ma
 ### Failure Handling
 
 If a claim cannot proceed due to unmet dependencies, conflicts, or environmental errors, the command exits with a non-zero exit code and outputs the failure reason along with recommended next actions to stderr. Follow the diagnostic instructions to resolve conflicts or resume an interrupted claim using `--resume`. If already working inside the claimed task worktree, running claim again is not needed.
+
+When a claimed child task references a `parent/issue-<N>` base branch that does not yet exist, claim checks whether the parent is an EPIC issue and automatically creates `parent/issue-<N>` from `main` on origin before creating the worktree. If the parent issue is not an EPIC or branch creation fails, claim stops with `base_resolution_failed` without persisting reservations or altering labels. Furthermore, if `git worktree add` fails during a new claim and no worktree directory was created on disk, the initial reservation is discarded immediately so that the issue can be retried directly without requiring `--resume`.
 
 When re-running `orchestune claim <N>` for an issue you already hold, it fails with `existing_claim_unrecovered` and prints the worktree path, the `--resume` command, and the `--amend-footprint` command as next actions.
 

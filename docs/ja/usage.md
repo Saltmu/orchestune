@@ -250,7 +250,7 @@ subtasks:
 
 - **`title`** (文字列, 必須): 「大きな石」全体を表す一行要約。`orchestune provision`（後述）が親Issue（`[EPIC] <title>`）の起票に使用します。
 - **`parent_issue_number`** (整数または`null`, 任意, 既定値 `null`): 親Issueの番号。起票済みIssueを起点とする場合はその番号を指定します。手動で設定しない場合、`orchestune provision`が親Issue作成（または既存Issueの再利用）後にこのファイルへ書き戻します。部分失敗からの再実行時に、この値が設定済みであれば親Issueは重複作成されません。
-- **`parent_issue_source`** (文字列, 任意, 既定値 `derived`): 親Issueの由来。`adopted`（既存Issueを採用）または `derived`（計画の `title` から自動生成・解決）のいずれか。`adopted` の場合、タイトル一致検証をスキップして親Issue番号と親マーカーで検証・再利用します。
+- **`parent_issue_source`** (文字列, 任意, 既定値 `derived`): 親Issueの由来。`adopted`（既存Issueを採用）または `derived`（計画の `title` から自動生成・解決）のいずれか。`adopted` の場合、タイトル一致検証をスキップして親Issue番号と親マーカーで検証・再利用します（フロントマターの指定だけで採用されるのは、すでにOrchestune EPIC形式のIssueに限られます。通常の既存Issueを初回採用する際は `--parent-issue <番号>` の指定が必要です）。
 - **`subtasks`** (サブタスクのリスト, 必須): 各サブタスクは以下のフィールドを持ちます。
 
 各サブタスクは以下のフィールドを持ちます：
@@ -332,13 +332,13 @@ orchestune provision --plan decomposition_plan.md
 
 ### 既存EPIC Issueへの紐付け（`--parent-issue`）
 
-EPIC Issueを先に（手動、またはOrchestuneを使わず普通に）起票しておき、サブタスクの分解・起票だけにOrchestuneを使いたい場合は、計画ファイルのフロントマターで `parent_issue_number: <番号>` と `parent_issue_source: adopted` を指定するか、CLIで `--parent-issue <番号>` を指定します。
+親IssueがすでにOrchestune形式（タイトルが `[EPIC] ` で始まり、本文に親マーカーが埋め込まれている状態）になっている場合は、計画ファイルのフロントマターで `parent_issue_number: <番号>` と `parent_issue_source: adopted` を指定するだけで再利用されます。既存IssueがまだOrchestune形式でない場合は、初回の起票時（`--no-apply` のプレビューも含む）にCLIで `--parent-issue <番号>` を指定する必要があります。
 
 ```bash
 orchestune provision --plan decomposition_plan.md --parent-issue 123
 ```
 
-指定したIssueがまだOrchestune形式（タイトルが `[EPIC] ` で始まり、本文に親マーカーが埋め込まれている状態）になっていなければ、既存の内容は保持したままその場で正規化されます（タイトルへの `[EPIC] ` プレフィックス付与、本文へのマーカー追記）。`title` フロントマターとのタイトル一致チェックは行われません。
+`--parent-issue` を指定すると、対象IssueがまだOrchestune形式になっていなくても、既存の内容は保持したままその場で正規化されます（タイトルへの `[EPIC] ` プレフィックス付与、本文へのマーカー追記）。`title` フロントマターとのタイトル一致チェックは行われません。
 
 `--parent-issue` を指定して実行すると、計画ファイルのフロントマターへ `parent_issue_source: adopted` が自動的に永続化されます。そのため、**2回目以降の `orchestune provision` では `--parent-issue` を再指定しなくても自動的に同じ親Issueが採用・再利用されます**。もし採用済みの親Issueが存在しない場合は、重複起票を防ぐために新規作成へ倒れずエラーで停止します。
 
@@ -397,7 +397,7 @@ dag_similarity_threshold = 0.35
 * **`DagCycleError`**: 依存関係（`depends_on`）に循環参照がある場合にエラーを出力します。
 * **競合辺**: `footprint` / `symbols` の類似度、shared-contract writer判定、およびルート`docs/`配下の`.md`文書の正規化パス完全一致（`reason=shared-document`、`resources`は共有文書パス）から、priorityやIDに依存しない対称な排他制約を生成します。別文書（同じディレクトリの別ファイルや日英の別ファイル）は文書検出だけでは排他になりません。同時に更新させたくない契約は同じ`shared_contract`を宣言してwriterとして明示し、先行順序まで必要なら`depends_on`を指定してください。文書競合から`depends_on`は自動生成されず、類似度閾値も変わりません。テキスト出力では依存辺と競合辺を1つの`Edges`表に並べ、`Kind`列（`dependency`＝依存辺、`conflict`＝競合辺）で区別します。競合辺の`From`/`To`は順序に意味のない対称な組です。`--json`では`precedence_edges`と`conflict_edges`として分離されます（後方互換の`edges`はprecedenceだけです）。
 * **Shared-contract writer警告**: writer同士がPrecedence DAGで順序付けられていない場合は、Conflict Edgeに加えて非ブロッキング警告を表示します。
-* **実在検証（`footprint`/`symbols`）**: 宣言された `footprint` のパスや `symbols` のエントリが、現在のコードベース上に実在すると確認できない場合に警告します（例: `<subtask-id>: footprintに実在しないパスがあります` / `<subtask-id>: symbolsが実コードベースに見つかりません`）。これは必ずしもエラーではありません — ただし挙動は`footprint`と`symbols`で異なります: これから新規作成する`footprint`パスは常にこの警告が出ますが、新規追加予定の`symbols`エントリが警告されるのは検証が実際に実行された場合のみです。検証の実行には、footprint中に実在しparseに成功した`.py`ファイルが少なくとも1つあり、かつfootprint中の既存`.py`ファイルにparse失敗（構文エラー・エンコーディングエラー）が1件も無いことの両方が必要です（1件でもparse失敗ファイルがあると、そのsubtask全体で検証自体がスキップされます）。検証が実行されなかった場合、`symbols`の警告は一切出ません。警告が出ないことを「確認済み」と読み替えないでください。typo・パス誤りなのか、`footprint` の記載漏れ（衝突検知の見逃し）を疑うべきかの判断基準は [`orchestune` スキル](../../skills/orchestune/SKILL.md) のStage 2を参照してください。
+* **実在検証（`footprint`/`symbols`）**: 宣言された `footprint` のパスや `symbols` のエントリが、現在のコードベース上に実在すると確認できない場合に警告します（例: `<subtask-id>: footprintに実在しないパスがあります` / `<subtask-id>: symbolsが実コードベースに見つかりません`）。これは必ずしもエラーではありません — ただし挙動は`footprint`と`symbols`で異なります: これから新規作成する`footprint`パスは常にこの警告が出ますが、新規追加予定の`symbols`エントリが警告されるのは検証が実際に実行された場合のみです。検証の実行には、footprint中に実在しparseに成功した対応ソースファイル（Python `.py`、TypeScript/JavaScript `.ts`/`.tsx`/`.js`等、Rust `.rs`、Go `.go`）が少なくとも1つあり、かつfootprint中の既存検査対象ファイルにparse失敗（構文エラー・エンコーディングエラー）が1件も無いことの両方が必要です（1件でもparse失敗ファイルがあると、そのsubtask全体で検証自体がスキップされます）。検証が実行されなかった場合、`symbols`の警告は一切出ません。警告が出ないことを「確認済み」と読み替えないでください。typo・パス誤りなのか、`footprint` の記載漏れ（衝突検知の見逃し）を疑うべきかの判断基準は [`orchestune` スキル](../../skills/orchestune/SKILL.md) のStage 2を参照してください。
 * **リスク検出**: 認証情報の露出や危険なコマンド実行の記述がある場合にフラグを設定します。
 
 ---
@@ -469,7 +469,7 @@ else { Write-Warning 'report not created' }
 | `--final-acceptance-review {advisory,off}` | - | 最終PRの受け入れレビュー依頼（既定 `advisory`）。Layer 1/2と独立。§4.5参照。 |
 | `--semantic-review-mode {required,advisory,off}` | - | 統合PRの第2層セマンティックレビューモード（`required`、`advisory`、または `off`）。未指定時は設定ファイル（`semantic-review-mode`）または環境変数（`ORCHESTUNE_SEMANTIC_REVIEW_MODE`）、既定値は `required`。`off` でスキップ。[§4.5](#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)を参照。 |
 | `--force-integration-review` | - | 単一タスクFast-Pathをバイパスし、子タスク1件の場合でも統合PRセマンティックレビュー（第2層）を強制実行するフラグ。 |
-| `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`、`grok-cli`）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。安全のためCLI引数でのみ指定可能（設定ファイルでの指定は禁止）です。未指定でローカルCLIターゲットを実行しようとした場合は設定エラーで拒否されます（Fail-Closed）。 |
+| `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`、`grok-cli`、および `auto` がローカルCLIを検出した場合を含む）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。`--no-apply`（ドライラン）を含むすべての実行で必要です。安全のためCLI引数でのみ指定可能（設定ファイルでの指定は禁止）です。未指定でローカルCLIターゲットを実行しようとした場合は設定エラーで拒否され（Fail-Closed）、選択理由と代替ターゲットが通知されます。 |
 
 ### 設定ファイル (`orchestune.toml`) による詳細設定
 
@@ -930,6 +930,8 @@ orchestune complete --issue <issue> --pr <pr> --result done --reviewer <bot> --r
 ### 失敗時の対応
 
 前提条件の未達（先行タスク未完了など）や競合、環境エラーが発生した場合は、非ゼロの終了コードとともにエラー理由と推奨される次のアクションが標準エラー出力に表示されます。指示に従って競合を解消するか、中断された claim を `--resume` で復旧してください。なお、すでに着手済みで作業ツリー内にいる場合は、再度の claim は不要です。
+
+子タスクの claim で基点ブランチ `parent/issue-<N>` がまだ存在しない場合、親が EPIC Issue であれば claim は worktree 作成前に origin 上の `main` から `parent/issue-<N>` を自動作成します。親が EPIC でない場合やブランチ作成に失敗した場合は、台帳への予約やラベル変更を残さずに `base_resolution_failed` で終了します。また、新規 claim で `git worktree add` が例外で失敗しディスク上に worktree ディレクトリが残らなかった場合は、初期予約が自動的に取り消されるため、`--resume` を介さずにそのまま claim を再試行できます。
 
 すでに保持している Issue に対して `orchestune claim <N>` を再実行すると `existing_claim_unrecovered` で失敗し、次のアクションとして worktree のパス、`--resume` コマンド、`--amend-footprint` コマンドが表示されます。
 

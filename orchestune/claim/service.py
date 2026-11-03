@@ -24,6 +24,7 @@ from orchestune.claim.adopt_pr import (
     revalidate_if_adopted,
     verify_adopted_head,
 )
+from orchestune.claim.base_branch import ensure_claim_base_ref
 from orchestune.claim.contracts import (
     ClaimFailure,
     ClaimFailureReason,
@@ -84,6 +85,7 @@ from orchestune.models import IssueRecord, PrRecord
 from orchestune.worktree_ops.preparation import (
     WorktreePreparation,
     prepare_task_worktree,
+    resolve_worktree_path,
 )
 
 
@@ -113,6 +115,114 @@ def _perform_git_fetch(repo_root: Path, issue_number: int) -> ClaimFailure | Non
     return None
 
 
+def _rollback_reservation_on_prep_failure(
+    workspace: ClaimWorkspace,
+    reservation: ActiveWorktree,
+    canonical_branch: str,
+    run_state: RunState,
+    raw_token: str,
+    reason: ClaimFailureReason,
+    message: str,
+) -> ClaimOutcome:
+    run_state.active_worktrees.pop(str(reservation.core.issue_number), None)
+    try:
+        save_run_state(run_state, workspace.run_state_path)
+    except Exception:
+        pass
+    return ClaimOutcome(
+        success=False,
+        issue_number=reservation.core.issue_number,
+        claim_id=None,
+        branch=canonical_branch,
+        stage=ClaimStage.VALIDATING,
+        failure=ClaimFailure(reason=reason, message=message),
+        owner_token=raw_token,
+    )
+
+
+def _handle_worktree_prep_exception(
+    workspace: ClaimWorkspace,
+    reservation: ActiveWorktree,
+    canonical_branch: str,
+    run_state: RunState,
+    raw_token: str,
+    reclaim_takeover: Any,
+    is_resume: bool,
+    reason: ClaimFailureReason,
+    message: str,
+) -> ClaimOutcome:
+    try:
+        worktree_path = resolve_worktree_path(workspace.worktree_root, canonical_branch)
+        worktree_exists = worktree_path.exists()
+    except ValueError:
+        worktree_exists = False
+    if not is_resume and reclaim_takeover is None and not worktree_exists:
+        return _rollback_reservation_on_prep_failure(
+            workspace,
+            reservation,
+            canonical_branch,
+            run_state,
+            raw_token,
+            reason,
+            message,
+        )
+    return _worktree_reservation_failure(
+        reason,
+        message,
+        issue_number=reservation.core.issue_number,
+        claim_id=reservation.claim.claim_id,
+        canonical_branch=canonical_branch,
+        raw_token=raw_token,
+    )
+
+
+def _execute_prepare_worktree(
+    workspace: ClaimWorkspace,
+    reservation: ActiveWorktree,
+    canonical_branch: str,
+    base_ref: str,
+    run_state: RunState,
+    raw_token: str,
+    reclaim_takeover: Any,
+    is_resume: bool,
+) -> tuple[WorktreePreparation | None, ClaimOutcome | None]:
+    try:
+        prep = prepare_task_worktree(
+            canonical_branch,
+            workspace.worktree_root,
+            base_ref,
+            reservation.claim.claim_id or "",
+            cwd=workspace.repository_root,
+            trust_unclaimed_branch=True,
+            takeover=reclaim_takeover,
+        )
+        return prep, None
+    except ValueError as e:
+        return None, _handle_worktree_prep_exception(
+            workspace,
+            reservation,
+            canonical_branch,
+            run_state,
+            raw_token,
+            reclaim_takeover,
+            is_resume,
+            ClaimFailureReason.INVALID_BRANCH_NAME,
+            f"invalid branch name: {e}",
+        )
+    except Exception as e:
+        return None, _handle_worktree_prep_exception(
+            workspace,
+            reservation,
+            canonical_branch,
+            run_state,
+            raw_token,
+            reclaim_takeover,
+            is_resume,
+            ClaimFailureReason.WORKTREE_CREATION_FAILED,
+            f"prepare_task_worktree raised exception: {e}",
+        )
+
+
 def _prepare_worktree_for_reservation(
     workspace: ClaimWorkspace,
     canonical_branch: str,
@@ -120,6 +230,7 @@ def _prepare_worktree_for_reservation(
     raw_token: str,
     reservation: ActiveWorktree,
     run_state: RunState,
+    is_resume: bool = False,
 ) -> tuple[WorktreePreparation | None, ClaimOutcome | None]:
     """Execute worktree preparation, returning structured failure on exception or rejection.
 
@@ -138,37 +249,20 @@ def _prepare_worktree_for_reservation(
     )
     if save_error is not None:
         return None, fail(ClaimFailureReason.STATE_SAVE_FAILED, save_error)
-    try:
-        prep = prepare_task_worktree(
-            canonical_branch,
-            workspace.worktree_root,
-            base_ref,
-            reservation.claim.claim_id or "",
-            cwd=workspace.repository_root,
-            # #943: この時点で`_validate_preflight_and_conflict`
-            # (`evaluate_claim_conflicts`)が同じロック内で`run_state`全体を
-            # 走査済みであり、`issue_number`を現在保持しているactiveが無いことを
-            # 既に確認している。staleなマーカーより強い根拠が既にあるため、
-            # 完了・巻き戻し後の正当な再claimが、ブランチだけが残っている
-            # ことを理由に永久拒否されないようにする。
-            trust_unclaimed_branch=True,
-            takeover=reclaim.takeover,
-        )
-    except ValueError as e:
-        # #943レビュー対応(Codex P2): `validate_ref_name`が送出する不正な
-        # branch/subtask_id名は恒久的な入力不備（人手の修正が必要）であり、
-        # OSError/git実行エラーのような一時的なインフラ障害とは扱いを分ける
-        # 必要がある——launch.py側でこの理由だけを`status:blocked-human-review`
-        # へ振り分け、それ以外の`WORKTREE_CREATION_FAILED`は再試行可能な
-        # `status:blocked`のままにするため。
-        return None, fail(
-            ClaimFailureReason.INVALID_BRANCH_NAME, f"invalid branch name: {e}"
-        )
-    except Exception as e:
-        return None, fail(
-            ClaimFailureReason.WORKTREE_CREATION_FAILED,
-            f"prepare_task_worktree raised exception: {e}",
-        )
+
+    prep, exc_failure = _execute_prepare_worktree(
+        workspace,
+        reservation,
+        canonical_branch,
+        base_ref,
+        run_state,
+        raw_token,
+        reclaim.takeover,
+        is_resume,
+    )
+    if exc_failure is not None:
+        return None, exc_failure
+    assert prep is not None
 
     if not prep.accepted:
         return None, fail(
@@ -194,6 +288,7 @@ def _prepare_and_persist_worktree(
     base_ref: str,
     run_state: RunState,
     raw_token: str,
+    is_resume: bool = False,
 ) -> tuple[ActiveWorktree, ClaimOutcome | None]:
     """Create (or take over) the worktree and update reservation to ACTIVE_SAVED."""
     prep, prep_failure = _prepare_worktree_for_reservation(
@@ -203,6 +298,7 @@ def _prepare_and_persist_worktree(
         raw_token,
         reservation,
         run_state,
+        is_resume=is_resume,
     )
     if prep_failure is not None or prep is None:
         return reservation, prep_failure
@@ -483,6 +579,51 @@ def _persist_initial_reservation(
     return reservation, None
 
 
+def _preclaim_fetch_and_base_check(
+    workspace: ClaimWorkspace,
+    issue_number: int,
+    base_ref: str,
+    forge: Forge,
+) -> ClaimFailure | None:
+    fetch_failure = _perform_git_fetch(workspace.repository_root, issue_number)
+    if fetch_failure is not None:
+        return fetch_failure
+    return ensure_claim_base_ref(
+        base_ref,
+        forge=forge,
+        repository_root=workspace.repository_root,
+        git_runner=run_git,
+    )
+
+
+def _persist_and_prepare_initial(
+    workspace: ClaimWorkspace,
+    request: ClaimRequest,
+    issue: IssueRecord,
+    preflight: PreflightDecision,
+    canonical_branch: str,
+    base_ref: str,
+    run_state: RunState,
+    raw_token: str,
+    adopted_head: str | None,
+) -> tuple[ActiveWorktree | None, ClaimOutcome | None]:
+    reservation, save_error = _persist_initial_reservation(
+        workspace,
+        request,
+        issue,
+        preflight.subtask_id,
+        base_ref,
+        run_state,
+        raw_token,
+        adopted_head,
+    )
+    if save_error is not None or reservation is None:
+        return None, save_error
+    return _prepare_and_persist_worktree(
+        workspace, reservation, canonical_branch, base_ref, run_state, raw_token
+    )
+
+
 def _apply_claim_side_effects(
     workspace: ClaimWorkspace,
     request: ClaimRequest,
@@ -500,28 +641,25 @@ def _apply_claim_side_effects(
     | None = None,
 ) -> ClaimOutcome:
     """Apply Git fetch, reservation persistence, worktree creation, and labeling."""
-    fetch_failure = _perform_git_fetch(workspace.repository_root, issue.number)
-    if fetch_failure is not None:
-        return _claim_failure(issue.number, fetch_failure)
+    preclaim_err = _preclaim_fetch_and_base_check(
+        workspace, issue.number, base_ref, forge
+    )
+    if preclaim_err is not None:
+        return _claim_failure(issue.number, preclaim_err)
 
-    reservation, save_error = _persist_initial_reservation(
+    reservation, prep_error = _persist_and_prepare_initial(
         workspace,
         request,
         issue,
-        preflight.subtask_id,
+        preflight,
+        canonical_branch,
         base_ref,
         run_state,
         raw_token,
         adopted_head,
     )
-    if save_error is not None or reservation is None:
-        assert save_error is not None
-        return save_error
-
-    reservation, prep_error = _prepare_and_persist_worktree(
-        workspace, reservation, canonical_branch, base_ref, run_state, raw_token
-    )
-    if prep_error is not None:
+    if prep_error is not None or reservation is None:
+        assert prep_error is not None
         return prep_error
 
     return _transition_labels_and_finalize(
@@ -838,6 +976,7 @@ def _prepare_resume(
             active.claim.base_ref or default_base,
             state,
             token,
+            is_resume=True,
         )
     return active, None
 

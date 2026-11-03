@@ -159,24 +159,31 @@ Because of IDF weighting, a document touched by many tasks carries little relati
 
 Where the two subsections above both deal with conflicts **between subtasks**, this one reconciles the **decomposition plan against the current repository**. It is a different axis.
 
-A plan written before a refactor (files split, functions moved or renamed) can point at a code snapshot that no longer exists. At Issue-creation time, `orchestune/dag/symbol_verification.py` uses the AST to check whether the declared `symbols` can be found in the Python files listed in `footprint` (`provisioning.py` calls `find_missing_symbols`).
+A plan written before a refactor (files split, functions moved or renamed) can point at a code snapshot that no longer exists. At Issue-creation time, `orchestune/dag/symbol_verification.py` verifies whether declared `symbols` can be found in the source code files listed in `footprint` (`provisioning.py` calls `find_missing_symbols`). Python (`.py`) is verified using the standard `ast` module, while TypeScript/JavaScript (`.ts`, `.tsx`, `.js`, etc.), Rust (`.rs`), and Go (`.go`) are verified via in-process static syntax parsing with Tree-sitter.
 
-Whether the `footprint` paths themselves exist is checked separately, by `find_missing_footprint_paths` against the filesystem, when `orchestune-dag` runs with a repository root — not through the AST, and not at Issue-creation time.
+Whether the `footprint` paths themselves exist is checked separately, by `find_missing_footprint_paths` against the filesystem, when `orchestune-dag` runs with a repository root — not through syntax parsing, and not at Issue-creation time.
+
+### Rationale for Tree-sitter for Multi-Language Parsing
+For polyglot support, in-process **Tree-sitter** is chosen over background LSP (Language Server Protocol) processes or external CLI tools:
+- **Determinism and Speed**: Deterministic C-FFI syntax parsing runs in sub-milliseconds on single files. It introduces zero server-startup or project-wide re-indexing overhead in stateless CI environments or short-lived CLI invocations.
+- **Portability**: Pre-built binary wheels are available across Windows, Linux, and macOS for `tree-sitter` and the language grammar packages (TypeScript, JavaScript, Rust, Go), without requiring a local C compiler.
+- **Architectural Boundary (L2 Domain Layer)**: `symbol_verification.py` belongs to Layer 2 (Domain layer). Running pure in-process library calls satisfies L2 architectural invariants without spawning subprocesses or reaching across to Layer 1 (`orchestune/infra/`).
 
 Symbol collection combines **two walks with different purposes**:
 
-1. **The full set of defined names (`_collect_all_names`)**:
-   Walks the entire tree with `ast.walk`. It deliberately includes class names, `Class.method` qualified names, and nested functions (closure helpers and the like), so a plan may name a bare method and still match.
-2. **The module-scope-only candidate set (`_collect_top_level_names`)**:
-   Used to loosely match module-qualified notation (`db.get_connection`) on its final segment. This one is **restricted to module scope**, because `ast.walk` loses scope information: used here it would mistake a function-local variable, or a bare method name, for a module-level definition.
+1. **The full set of defined names (`defined_names` / `_collect_all_names`)**:
+   Includes class/type names, `Type.method` (`Class.method`) qualified names, and all top-level identifiers. Rust `impl` block methods and Go receiver methods (`ReceiverType.Method`) are also collected with type qualification so that planned methods and struct members match.
+2. **The top-level / module-scope candidate set (`top_level_names` / `_collect_top_level_names`)**:
+   Used to loosely match module-qualified notation (`db.get_connection`) on its final segment. Local variables inside functions or methods are strictly excluded from this set to prevent unoccurring bare symbols from matching unrelated local variables.
 
 The restricted walk follows Python's scoping rules. `if` / `try` / `with` / loops / `match` bind what they contain into the *enclosing* scope, so their bodies are flattened into it (a conditionally defined top-level function, or a conditional assignment, are the typical cases). Function and class definitions open a new scope of their own and are not recursed into. A conditionally defined *method* is therefore not picked up here, but by the first, whole-tree walk, which flattens each class body separately.
 
 **When the check is skipped**:
-Two conditions skip verification entirely. Both return an empty result and leave no note, because declaring a symbol "missing" without the material to judge would be a false positive.
+Any of the following conditions skips verification entirely, returning an empty result (`()`) without leaving a note, because declaring a symbol "missing" without sufficient material to judge would be a false positive:
 
-* The `footprint` contains no existing `.py` file at all.
-* Any `.py` file in the `footprint` cannot be parsed (a syntax error, say).
+* The `footprint` contains no existing supported source code file at all.
+* Any supported file in the `footprint` cannot be parsed (a syntax error or decoding error).
+* The `footprint` contains a source code file of an unsupported language, preventing completeness guarantees (non-code files like Markdown or TOML configs are ignored).
 
 Note, though, that **right after a refactor splits or renames files, the `footprint` paths may be exactly the ones that no longer exist**. The check tends to go quiet in precisely the situation it is meant for.
 

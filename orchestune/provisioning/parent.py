@@ -56,7 +56,9 @@ def _inspect_adopted_parent(
         raise RuntimeError(
             f"Adopted parent issue #{metadata.parent_issue_number} is not an Orchestune EPIC issue "
             "(missing '[EPIC] ' prefix or parent marker); refusing to automatically mutate an unconfirmed issue. "
-            f"If you intended to adopt this issue, pass '--parent-issue {metadata.parent_issue_number}' explicitly."
+            f"If you intended to adopt this issue, pass '--parent-issue {metadata.parent_issue_number}' explicitly "
+            f"(passing '--parent-issue {metadata.parent_issue_number}' will add the '[EPIC] ' prefix to the title "
+            "and append the parent marker to the issue body while preserving existing content)."
         )
     return metadata.parent_issue_number, candidate.body
 

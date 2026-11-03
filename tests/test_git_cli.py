@@ -413,6 +413,31 @@ class TestEnsureParentBranch:
                 "+refs/heads/parent/issue-129:refs/remotes/origin/parent/issue-129",
             ]
 
+    def test_ensure_parent_branch_passes_cwd(self):
+        import orchestune.infra.git_cli as git_cli
+
+        with patch.object(git_cli.subprocess, "run") as mock_run:
+            mock_run.side_effect = [
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="", stderr=""
+                ),
+                subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout="", stderr=""
+                ),
+            ]
+
+            ensure_parent_branch(129, cwd="/some/repo")
+
+            assert mock_run.call_count == 4
+            for c in mock_run.call_args_list:
+                assert c.kwargs.get("cwd") == "/some/repo"
+
     def test_ensure_parent_branch_handles_push_error_without_crashing(self):
         # fetch または push が失敗しても、警告を出力してクラッシュしない
         with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
