@@ -10,6 +10,7 @@ from pathlib import Path
 
 import yaml
 
+from orchestune.claim.admission import _DefaultConflictView
 from orchestune.claim.contracts import (
     ClaimFailure,
     ClaimFailureReason,
@@ -24,7 +25,7 @@ from orchestune.claim.ownership import (
     has_completion_reservation,
     held_claim_next_actions,
 )
-from orchestune.claim.service import _DefaultConflictView, _validate_issue_for_resume
+from orchestune.claim.service import _validate_issue_for_resume
 from orchestune.claim.workspace import (
     check_repository_identity_match,
     resolve_claim_workspace,

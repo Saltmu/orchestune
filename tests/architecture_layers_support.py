@@ -74,6 +74,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "config_wizard.questions",
             "config_wizard.storage",
             "config_wizard.validation",
+            "claim.admission",
             "claim.ownership",
             "claim.preflight",
             "claim.workspace",
