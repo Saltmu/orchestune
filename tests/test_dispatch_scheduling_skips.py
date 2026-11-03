@@ -12,7 +12,7 @@ from orchestune.dependencies.resolution import (
     TaskDependencies,
     UnresolvedDependency,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.actions import CycleActionAdapter
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
 from orchestune.dispatch.phase.scheduling import _determine_candidate_tasks

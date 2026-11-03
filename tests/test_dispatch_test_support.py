@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.ledger.active_records import (
     ActiveCompletionJournal,

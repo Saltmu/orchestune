@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from orchestune.branch_naming import build_task_branch_name
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.dispatch.locks import (
     ExternalLockConflict,

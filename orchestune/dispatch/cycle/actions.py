@@ -28,7 +28,7 @@ from orchestune.dispatch.actor_verification import (
     _apply_actor_verification,
     _decide_actor_verification,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.critical_path import pending_tasks
 from orchestune.dispatch.cycle.action_contracts import (

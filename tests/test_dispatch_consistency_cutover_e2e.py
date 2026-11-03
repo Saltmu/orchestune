@@ -31,7 +31,7 @@ from orchestune.consistency.supervisor import (
     RepairDisposition,
     ScanKind,
 )
-from orchestune.dispatch.config import (
+from orchestune.dispatch.config.model import (
     DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST,
     DispatcherConfig,
 )

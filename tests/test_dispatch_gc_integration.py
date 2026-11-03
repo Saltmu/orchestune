@@ -9,7 +9,7 @@ test_dispatch_gc_stale_rules.py、完了ルールは test_dispatch_gc_completed_
 import subprocess
 from unittest.mock import patch
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.ledger.run_state import (
     RunState,

@@ -4,7 +4,7 @@ from dataclasses import replace
 
 from orchestune.consistency.models import ConsistencyScope, RepairCommand
 from orchestune.dispatch.attempt_record import LaunchAttempt
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.launch.attempts import reconcile_attempt
 from orchestune.dispatch.recovery.service import (
     RecoveryBookkeepingSnapshot,

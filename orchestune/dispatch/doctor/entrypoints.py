@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, NoReturn
 
-from orchestune.dispatch.config_loader import _add_cli_arguments
+from orchestune.dispatch.config.loader import _add_cli_arguments
 
 EntrypointVia = Literal["orchestune", "orchestune-dispatch", "python-m"]
 ControlKind = Literal["gc", "recover"]

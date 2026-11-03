@@ -11,14 +11,14 @@ from typing import Any, NoReturn
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.config_contracts import ConfigError
 from orchestune.dispatch import pre_scheduling_integration
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_loader import (
+from orchestune.dispatch.config.loader import (
     build_arg_parser as build_arg_parser,
 )
-from orchestune.dispatch.config_loader import (
+from orchestune.dispatch.config.loader import (
     load_and_resolve_config as load_and_resolve_config,
 )
-from orchestune.dispatch.config_schema import validate_toml_config
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.config.schema import validate_toml_config
 from orchestune.dispatch.cycle.report import CycleReport
 from orchestune.dispatch.cycle.run import (
     run_dispatch_cycle,

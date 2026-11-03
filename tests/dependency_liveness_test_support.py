@@ -25,7 +25,7 @@ from unittest.mock import patch
 
 from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.dependencies.assessment import DependencyAssessment, DependencyState
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle import execution as cycle_execution
 from orchestune.dispatch.cycle import run as cycle_module
 from orchestune.dispatch.cycle.actions import CycleActionAdapter

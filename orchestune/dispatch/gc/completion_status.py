@@ -6,7 +6,7 @@ This module does not import ``completion``.
 
 from __future__ import annotations
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.gc.completion_contracts import (
     CompletedWorktreeDecision,
     ForgeFailure,

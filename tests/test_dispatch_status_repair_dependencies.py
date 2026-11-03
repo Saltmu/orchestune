@@ -26,7 +26,7 @@ from orchestune.consistency.supervisor import (
 )
 from orchestune.dependencies.assessment import DependencyState
 from orchestune.dependencies.resolution import REASON_MISSING
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.run import _status_repair_commands
 from orchestune.dispatch.status_dependency_policy import dependencies_completed
 from orchestune.dispatch.status_repair import (

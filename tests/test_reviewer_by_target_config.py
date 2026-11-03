@@ -10,9 +10,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from orchestune.config_contracts import ConfigError
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_loader import load_and_resolve_config
-from orchestune.dispatch.config_schema import (
+from orchestune.dispatch.config.loader import load_and_resolve_config
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.config.schema import (
     extract_reviewer_by_target,
     validate_toml_config,
 )

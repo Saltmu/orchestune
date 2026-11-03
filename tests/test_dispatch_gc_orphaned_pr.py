@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from orchestune.claim.adopt_pr import orphan_marker
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.gc.completion import (
     _apply_completed_worktree_outcome,
     _decide_completed_worktree_outcome,

@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from orchestune.branch_naming import build_task_branch_name, parse_task_branch_name
 from orchestune.dependencies.resolution import resolve_all_dependencies
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.launch.service import (
     TaskLaunchPlan,
     _decide_duplicate_candidates,

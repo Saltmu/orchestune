@@ -26,7 +26,7 @@ from orchestune.consistency.supervisor import (
     RepairDisposition,
     extract_evaluated_findings,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.events import (
     AbandonedExternalExecutionHeldCompletion,
     AbandonmentPersistenceFailureCompletion,

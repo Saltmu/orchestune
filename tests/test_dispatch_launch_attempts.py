@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.launch.service import TaskLaunchPlan, _apply_task_launches
 from orchestune.dispatch.targets import CodexCloudDispatchTarget, DispatchHandle
 from orchestune.ledger.run_state import RunState, load_run_state, save_run_state

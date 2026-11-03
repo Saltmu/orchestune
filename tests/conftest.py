@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.scoring import Task
 from orchestune.forge import BootstrapResult, Forge, GitHubForge
 from orchestune.infra.git_cli import (
@@ -254,7 +254,7 @@ _FAKE_FORGE_MIGRATION_TESTS = frozenset(
 )
 _FAKE_FORGE_MIGRATION_MODULES = (
     "orchestune.dispatch.actor_verification",
-    "orchestune.dispatch.config",
+    "orchestune.dispatch.config.model",
     "orchestune.ledger.escalation",
     "orchestune.dispatch.rebase",
 )

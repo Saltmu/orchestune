@@ -5,7 +5,7 @@ from orchestune.dispatch.actor_verification import (
     _apply_actor_verification,
     _decide_actor_verification,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.scoring import Task
 
 

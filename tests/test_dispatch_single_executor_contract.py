@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from orchestune.dispatch import dispatcher
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle import execution as cycle_execution
 from orchestune.dispatch.cycle import run as cycle
 from orchestune.dispatch.launch.service import _persist_launch_history

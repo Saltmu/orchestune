@@ -18,8 +18,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_loader import load_and_resolve_config
+from orchestune.dispatch.config.loader import load_and_resolve_config
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.semantic_review.postcycle import SemanticReviewCycleRunner
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.cli_output import CliOutput, make_output

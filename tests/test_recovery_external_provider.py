@@ -7,7 +7,7 @@ import pytest
 
 from orchestune.dispatch import runtime_reader as external_execution
 from orchestune.dispatch.attempt_record import LaunchAttempt
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from tests.dispatch_test_support import replace_flat
 
 pytest_plugins = ["tests.test_local_claim_identity"]

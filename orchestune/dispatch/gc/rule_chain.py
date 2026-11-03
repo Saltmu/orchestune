@@ -11,7 +11,7 @@ from functools import partial
 from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.events import (
     AbandonmentPersistenceFailureCompletion,
     ActiveReservationHold,

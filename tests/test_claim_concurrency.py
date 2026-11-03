@@ -135,7 +135,7 @@ def _run_dispatch_claim(
     footprint: tuple[str, ...],
 ):
     """Exercise #943's dispatch request construction before calling claim_task."""
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
     from orchestune.dispatch.cycle.actions import _bind_dispatch_claim_fn
     from orchestune.dispatch.launch.service import TaskLaunchPlan, _try_planned_launch
     from orchestune.dispatch.scoring import Task

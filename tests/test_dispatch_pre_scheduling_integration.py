@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from orchestune.dispatch import dispatcher, pre_scheduling_integration
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.execution import CycleStage, execute_pipeline
 from orchestune.dispatch.cycle.run import CycleReport
 from orchestune.dispatch.result import PhaseResult, PhaseStatus

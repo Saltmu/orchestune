@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from orchestune.branch_naming import build_task_branch_name
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.gc.git import evaluate_worktree_removal
 from orchestune.dispatch.local_semantic_fix import cleanup_semantic_fix_worktree
 from orchestune.dispatch.semantic_review.ack import AckAction, AckAssessment

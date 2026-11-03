@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from orchestune.complete.contracts import CompleteStage
 from orchestune.consistency.models import RepairCommand, RepairStatus
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.records import CompletionReceipt
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,

@@ -62,7 +62,7 @@ from orchestune.consistency.supervisor import (
     RepairDisposition,
     repair_command_finding_codes,
 )
-from orchestune.dispatch.config import (
+from orchestune.dispatch.config.model import (
     DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST,
     DispatcherConfig,
 )

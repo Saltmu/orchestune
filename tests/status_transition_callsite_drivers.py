@@ -31,7 +31,7 @@ from orchestune.dispatch import (
     reconciliation,
     status_repair,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.events import CompletionEvent
 from orchestune.dispatch.gc import cloud_completion, completion, zombies
 from orchestune.dispatch.launch import attempts as launch_attempts

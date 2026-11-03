@@ -45,7 +45,7 @@ from orchestune.ledger.status_labels import (
 from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
     from orchestune.dispatch.execution_profiles import ExecutionSelection
     from orchestune.forge import Forge
 

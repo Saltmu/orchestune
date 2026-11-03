@@ -10,9 +10,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from orchestune.config_contracts import ConfigError
-from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.config_loader import build_arg_parser, load_and_resolve_config
-from orchestune.dispatch.config_schema import validate_toml_config
+from orchestune.dispatch.config.loader import build_arg_parser, load_and_resolve_config
+from orchestune.dispatch.config.model import DispatcherConfig
+from orchestune.dispatch.config.schema import validate_toml_config
 from orchestune.dispatch.semantic_review.adapters import (
     SemanticOperationResult,
     dispatch_semantic_fix_agent,

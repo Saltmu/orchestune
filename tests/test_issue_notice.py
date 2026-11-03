@@ -20,7 +20,7 @@ from orchestune.consistency.supervisor import (
     RepairDisposition,
     ScanKind,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.report import CycleReport
 from orchestune.dispatch.postcycle import _post_finding_notices, post_finding_notices
 from orchestune.dispatch.result import PhaseStatus

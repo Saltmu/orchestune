@@ -36,7 +36,7 @@ from orchestune.dispatch import (
     reconciliation,
     status_repair,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.gc import (
     completion,
     policies,

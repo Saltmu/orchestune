@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.action_contracts import ActivePhaseResult
 from orchestune.dispatch.cycle.events import DeviationConflict, RecomputedDeviation
 from orchestune.dispatch.cycle.run import (

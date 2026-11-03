@@ -53,7 +53,7 @@ from orchestune.task_branch_resolution import (
 from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
 
 _YAML_SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 

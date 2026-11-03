@@ -45,7 +45,7 @@ def _test_workspace_roots() -> tuple[Path, Path]:
 def test_report_env_resolves_from_explicit_cwd(tmp_path, monkeypatch, value):
     import json
 
-    from orchestune.dispatch.config_loader import load_and_resolve_config
+    from orchestune.dispatch.config.loader import load_and_resolve_config
 
     report_path = tmp_path / "absolute.json" if value == "absolute" else Path(value)
     monkeypatch.setenv("ORCHESTUNE_DISPATCH_REPORT_PATH", str(report_path))
@@ -55,7 +55,7 @@ def test_report_env_resolves_from_explicit_cwd(tmp_path, monkeypatch, value):
             return_value=(tmp_path / "primary", tmp_path),
         ),
         patch(
-            "orchestune.dispatch.config_loader._default_resolve_dispatch_shared_paths",
+            "orchestune.dispatch.config.loader._default_resolve_dispatch_shared_paths",
             return_value=(tmp_path / "state.json", tmp_path / "worktrees"),
         ),
     ):
@@ -88,7 +88,7 @@ def test_report_env_resolves_from_explicit_cwd(tmp_path, monkeypatch, value):
 )
 def test_invalid_report_env_is_config_error(tmp_path, monkeypatch, value):
     from orchestune.config_contracts import ConfigError
-    from orchestune.dispatch.config_loader import load_and_resolve_config
+    from orchestune.dispatch.config.loader import load_and_resolve_config
 
     monkeypatch.setenv("ORCHESTUNE_DISPATCH_REPORT_PATH", value)
     with (
@@ -97,7 +97,7 @@ def test_invalid_report_env_is_config_error(tmp_path, monkeypatch, value):
             return_value=(tmp_path, tmp_path),
         ),
         patch(
-            "orchestune.dispatch.config_loader._default_resolve_dispatch_shared_paths",
+            "orchestune.dispatch.config.loader._default_resolve_dispatch_shared_paths",
             return_value=(tmp_path / "state.json", tmp_path / "worktrees"),
         ),
         pytest.raises(ConfigError),

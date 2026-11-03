@@ -12,7 +12,7 @@ from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
 
 _AUTHORIZED_PERMISSIONS = frozenset({"admin", "maintain", "write", "triage"})
 

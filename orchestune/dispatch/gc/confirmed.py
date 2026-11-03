@@ -8,7 +8,7 @@ from dataclasses import replace
 from typing import Any, Literal, cast
 
 from orchestune.claim.workspace import resolve_claim_workspace
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.events import (
     ActiveReservationHold,
     CompletionEvent,

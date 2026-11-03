@@ -21,7 +21,7 @@ def collector_at(values):
 
 @pytest.mark.uses_real_forge
 def test_cycle_gh_counts_are_isolated_and_freeze_before_event_io(tmp_path, fake_forge):
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
     from orchestune.dispatch.cycle import run as cycle
     from orchestune.forge import GitHubForge
 
@@ -73,7 +73,7 @@ def test_metrics_failure_preserves_cli_exit_and_saved_json(
     tmp_path, fake_forge, status, expected
 ):
     from orchestune.dispatch import dispatcher
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
     from orchestune.dispatch.reporting.report import _report_to_dict
     from orchestune.dispatch.result import PhaseResult, PhaseStatus
 
@@ -248,7 +248,7 @@ def test_broken_stdout_does_not_disable_collection(capsys):
 def test_cycle_integration_preserves_report_progress_and_old_event_fields(
     tmp_path, fake_forge
 ):
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
     from orchestune.dispatch.cycle.report import build_event_log_entry
     from orchestune.dispatch.cycle.run import run_dispatch_cycle
     from orchestune.dispatch.reporting.report import _report_to_dict
@@ -288,7 +288,7 @@ def test_cycle_integration_preserves_report_progress_and_old_event_fields(
 def test_metrics_failure_keeps_cycle_result_and_executes_once(
     tmp_path, fake_forge, failure
 ):
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
     from orchestune.dispatch.cycle.run import run_dispatch_cycle
 
     config = DispatcherConfig(
@@ -323,7 +323,7 @@ def test_metrics_failure_keeps_cycle_result_and_executes_once(
 def test_dry_run_and_business_exception_do_not_create_event_records(
     tmp_path, fake_forge
 ):
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
     from orchestune.dispatch.cycle.run import run_dispatch_cycle
 
     config = DispatcherConfig(

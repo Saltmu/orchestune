@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.external_execution import (
     ACTION_EXTERNAL_EXECUTION_HELD,
     hold_if_not_stopped,

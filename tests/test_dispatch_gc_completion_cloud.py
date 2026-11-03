@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.gc.cloud_completion import _finalize_abandoned_cloud_worktree
 from orchestune.dispatch.gc.completion_status import _local_pr_completion_status
 from orchestune.ledger.run_state import RunState, TaskReclaimRecord

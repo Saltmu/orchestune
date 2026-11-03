@@ -25,7 +25,7 @@ from pathlib import Path
 from orchestune.consistency.invariants.execution import LOCAL_PROCESS_DEAD
 from orchestune.consistency.models import RepairCommand, RepairResult, RepairStatus
 from orchestune.consistency.repairs.execution import COMMAND_RECLAIM
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.events import (
     CompletionEvent,
     UsageLimitAction,

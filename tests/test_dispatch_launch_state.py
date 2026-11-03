@@ -181,7 +181,7 @@ class TestUsageLimitLaunchGate:
 
     @staticmethod
     def _plan_and_config(tmp_path, target_name):
-        from orchestune.dispatch.config import DispatcherConfig
+        from orchestune.dispatch.config.model import DispatcherConfig
         from orchestune.dispatch.launch.service import TaskLaunchPlan
         from orchestune.dispatch.targets import LocalProcessDispatchTarget
         from tests.conftest import FakeForge, make_task
