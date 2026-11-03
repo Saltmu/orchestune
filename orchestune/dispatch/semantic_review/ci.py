@@ -1,6 +1,6 @@
 """Remote-head and CI observations of a Layer-2 integration attempt (#1362).
 
-Split from :mod:`orchestune.dispatch.postcycle_semantic_review` (#1436) to keep
+Split from :mod:`orchestune.dispatch.semantic_review.postcycle` (#1436) to keep
 that runner within the file-size limit; it re-exports both names.
 """
 

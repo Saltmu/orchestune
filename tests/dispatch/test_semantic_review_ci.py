@@ -1,7 +1,7 @@
 """Real-process CI observation of a Layer-2 integration attempt (#1362, #1499).
 
 Moved out of ``test_postcycle_semantic_review.py`` to mirror the
-:mod:`orchestune.dispatch.semantic_review_ci` split and keep both files within the
+:mod:`orchestune.dispatch.semantic_review.ci` split and keep both files within the
 test file-size limit.
 
 The CI commands are the running Python interpreter rather than the POSIX ``true`` /
@@ -24,7 +24,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.postcycle_semantic_review import verify_semantic_ci
+from orchestune.dispatch.semantic_review.postcycle import verify_semantic_ci
 from orchestune.infra.managed_process import (
     ManagedProcessResult,
     ManagedProcessRunner,

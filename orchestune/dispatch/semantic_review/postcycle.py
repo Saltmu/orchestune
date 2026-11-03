@@ -22,13 +22,8 @@ from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc.git import evaluate_worktree_removal
 from orchestune.dispatch.local_semantic_fix import cleanup_semantic_fix_worktree
-from orchestune.dispatch.postcycle_semantic_review_support import (
-    default_worker_id,
-    run_cycle_cleanup,
-    semantic_ci_verifier,
-)
-from orchestune.dispatch.semantic_review_ack import AckAction, AckAssessment
-from orchestune.dispatch.semantic_review_adapters import (
+from orchestune.dispatch.semantic_review.ack import AckAction, AckAssessment
+from orchestune.dispatch.semantic_review.adapters import (
     SemanticOperationResult,
     SemanticReviewPreflightResult,
     dispatch_semantic_fix_agent,
@@ -37,27 +32,32 @@ from orchestune.dispatch.semantic_review_adapters import (
     trigger_semantic_review_round,
     validate_semantic_review_preflight,
 )
-from orchestune.dispatch.semantic_review_ci import (
+from orchestune.dispatch.semantic_review.ci import (
     RemoteHeadFn,
     remote_branch_sha,
     verify_semantic_ci,
 )
-from orchestune.dispatch.semantic_review_diagnostics import (
+from orchestune.dispatch.semantic_review.diagnostics import (
     ReviewDiagnostics,
     build_review_diagnostics,
     describe_reviewer,
 )
-from orchestune.dispatch.semantic_review_evidence import (
+from orchestune.dispatch.semantic_review.evidence import (
     SemanticReviewEvidence as SemanticReviewEvidence,
 )
-from orchestune.dispatch.semantic_review_evidence import (
+from orchestune.dispatch.semantic_review.evidence import (
     _Attempt,
     _authored,
     _Review,
     _state_authors,
     _Stop,
 )
-from orchestune.dispatch.semantic_review_triggers import (
+from orchestune.dispatch.semantic_review.postcycle_support import (
+    default_worker_id,
+    run_cycle_cleanup,
+    semantic_ci_verifier,
+)
+from orchestune.dispatch.semantic_review.triggers import (
     parse_iso,
     round_trigger,
     round_triggers,

@@ -12,8 +12,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, cast
 
-from orchestune.dispatch.semantic_review_ack import AckAssessment
-from orchestune.dispatch.semantic_review_triggers import (
+from orchestune.dispatch.semantic_review.ack import AckAssessment
+from orchestune.dispatch.semantic_review.triggers import (
     restore_round_triggers,
 )
 from orchestune.forge import Forge

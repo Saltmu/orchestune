@@ -1,6 +1,6 @@
 """Post-cycle wiring of the invalidated-attempt cleanup (#1440).
 
-Kept out of :mod:`orchestune.dispatch.postcycle_semantic_review`: the cleanup is
+Kept out of :mod:`orchestune.dispatch.semantic_review.postcycle`: the cleanup is
 its own diagnostic, so a failure here is reported next to the review pass and
 never changes how an attempt's review is judged.
 """
@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.semantic_review_adapters import poll_semantic_operation
+from orchestune.dispatch.semantic_review.adapters import poll_semantic_operation
 from orchestune.forge import Forge, ForgeAuthError
 from orchestune.integrator.attempt_cleanup import (
     UNSETTLED_OPERATION_STATUSES,
