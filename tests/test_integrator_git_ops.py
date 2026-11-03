@@ -27,6 +27,8 @@ from orchestune.infra.managed_process import ManagedProcessRunner
 from orchestune.integrator import Integrator, IntegratorConfig
 from orchestune.integrator.ci_execution import CiStageResult
 from orchestune.integrator.git_ops import IntegrationMerger
+from orchestune.integrator.merge_workspace import MergeWorkspace
+from orchestune.integrator.task_branch_source import TaskBranchSource
 from orchestune.integrator.tasks import DependencyIntegrationStates
 from orchestune.models import PrRecord, Task
 from orchestune.task_branch_resolution import (
@@ -462,12 +464,12 @@ class TestFetchTaskBranch:
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
         with (
             patch(
-                "orchestune.integrator.git_ops.fetch_remote_branch",
+                "orchestune.integrator.task_branch_source.fetch_remote_branch",
                 autospec=True,
                 return_value="origin/feature",
             ),
             patch(
-                "orchestune.integrator.git_ops.resolve_commit_sha",
+                "orchestune.integrator.task_branch_source.resolve_commit_sha",
                 autospec=True,
                 return_value="a" * 40,
             ),
@@ -489,7 +491,7 @@ class TestFetchTaskBranch:
                 return_value="a" * 40,
             ),
             patch(
-                "orchestune.integrator.git_ops.fetch_remote_branch",
+                "orchestune.integrator.task_branch_source.fetch_remote_branch",
                 autospec=True,
                 side_effect=subprocess.CalledProcessError(
                     1, ["fetch"], stderr=b"fetch error"
@@ -550,7 +552,7 @@ class TestFetchTaskBranch:
                 return_value=None,
             ),
             patch(
-                "orchestune.integrator.git_ops.fetch_remote_branch",
+                "orchestune.integrator.task_branch_source.fetch_remote_branch",
                 autospec=True,
                 side_effect=subprocess.CalledProcessError(
                     1, ["fetch"], stderr=b"fetch error"
@@ -596,12 +598,12 @@ class TestResolveAndFetchTaskBranch:
 
         with (
             patch(
-                "orchestune.integrator.git_ops.fetch_remote_branch",
+                "orchestune.integrator.task_branch_source.fetch_remote_branch",
                 autospec=True,
                 side_effect=fetch,
             ) as fetch_branch,
             patch(
-                "orchestune.integrator.git_ops.resolve_commit_sha",
+                "orchestune.integrator.task_branch_source.resolve_commit_sha",
                 autospec=True,
                 return_value="a" * 40,
             ),
@@ -638,7 +640,7 @@ class TestResolveAndFetchTaskBranch:
         fake_forge.branch_exists.side_effect = RuntimeError("rate limited")
 
         with patch(
-            "orchestune.integrator.git_ops.fetch_remote_branch",
+            "orchestune.integrator.task_branch_source.fetch_remote_branch",
             autospec=True,
             side_effect=subprocess.CalledProcessError(
                 1, ["fetch"], stderr=b"authentication failed"
@@ -670,7 +672,7 @@ class TestResolveAndFetchTaskBranch:
         fake_forge.branch_exists.side_effect = [False, True]
 
         with patch(
-            "orchestune.integrator.git_ops.fetch_remote_branch",
+            "orchestune.integrator.task_branch_source.fetch_remote_branch",
             autospec=True,
             side_effect=subprocess.CalledProcessError(1, ["fetch"], stderr=b"missing"),
         ) as fetch_branch:
@@ -690,7 +692,10 @@ class TestResolveAndFetchTaskBranch:
 class TestMergeTaskBranch:
     def test_merge_success(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch("orchestune.integrator.git_ops.run_git", autospec=True) as mock_git:
+        with (
+            patch("orchestune.integrator.git_ops.run_git", autospec=True) as mock_git,
+            patch("orchestune.integrator.merge_workspace.run_git", new=mock_git),
+        ):
             mock_git.side_effect = [
                 _ok(["rev-parse", "HEAD"], stdout="sha123\n"),
                 _ok(["merge"]),
@@ -703,7 +708,10 @@ class TestMergeTaskBranch:
 
     def test_merge_conflict_aborts(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch("orchestune.integrator.git_ops.run_git", autospec=True) as mock_git:
+        with (
+            patch("orchestune.integrator.git_ops.run_git", autospec=True) as mock_git,
+            patch("orchestune.integrator.merge_workspace.run_git", new=mock_git),
+        ):
             mock_git.side_effect = [
                 _ok(["rev-parse", "HEAD"], stdout="sha123\n"),
                 subprocess.CalledProcessError(1, ["merge"], stderr=b"CONFLICT"),
@@ -716,12 +724,15 @@ class TestMergeTaskBranch:
 
     def test_head_capture_failure_returns_none_sha(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch(
-            "orchestune.integrator.git_ops.run_git",
-            autospec=True,
-            side_effect=subprocess.CalledProcessError(
-                1, ["rev-parse", "HEAD"], stderr=b"HEAD error"
-            ),
+        with (
+            patch(
+                "orchestune.integrator.git_ops.run_git",
+                autospec=True,
+                side_effect=subprocess.CalledProcessError(
+                    1, ["rev-parse", "HEAD"], stderr=b"HEAD error"
+                ),
+            ) as mock_git,
+            patch("orchestune.integrator.merge_workspace.run_git", new=mock_git),
         ):
             success, pre_merge_sha, err = merger._merge_task_branch("feature", "a" * 40)
         assert success is False
@@ -730,7 +741,10 @@ class TestMergeTaskBranch:
 
     def test_merge_oserror_aborts_and_fails(self, tmp_path: Path):
         merger = IntegrationMerger(tmp_path, tmp_path, ["echo", "1"])
-        with patch("orchestune.integrator.git_ops.run_git", autospec=True) as mock_git:
+        with (
+            patch("orchestune.integrator.git_ops.run_git", autospec=True) as mock_git,
+            patch("orchestune.integrator.merge_workspace.run_git", new=mock_git),
+        ):
             mock_git.side_effect = [
                 _ok(["rev-parse", "HEAD"], stdout="sha123\n"),
                 OSError("git process failed to start"),
@@ -962,3 +976,38 @@ class TestRealGitAndRealProcess:
             if e is not None and e.event == "finished"
         ]
         assert outcomes == ["success"]
+
+
+class TestMergeWorkspaceDirect:
+    def test_create_temp_branch_dry_run_noop(self, tmp_path: Path):
+        ws = MergeWorkspace(tmp_path)
+        with patch("orchestune.integrator.merge_workspace.run_git") as mock_git:
+            assert ws.create_temp_branch("temp", "main", apply=False) is True
+            mock_git.assert_not_called()
+
+    def test_create_temp_branch_success_and_failure(self, tmp_path: Path):
+        ws = MergeWorkspace(tmp_path)
+        with patch("orchestune.integrator.merge_workspace.run_git") as mock_git:
+            mock_git.return_value = _ok(["checkout"])
+            assert ws.create_temp_branch("temp", "main", apply=True) is True
+            mock_git.side_effect = subprocess.CalledProcessError(1, ["checkout"])
+            assert ws.create_temp_branch("temp", "main", apply=True) is False
+
+    def test_rollback_to_success_and_failure(self, tmp_path: Path):
+        ws = MergeWorkspace(tmp_path)
+        with patch("orchestune.integrator.merge_workspace.run_git") as mock_git:
+            mock_git.return_value = _ok(["reset"])
+            assert ws.rollback_to("sha123") is True
+            mock_git.side_effect = OSError("git missing")
+            assert ws.rollback_to("sha123") is False
+
+
+class TestTaskBranchSourceDirect:
+    def test_canonical_state_indeterminate_warning(
+        self, tmp_path: Path, fake_forge, capsys
+    ):
+        source = TaskBranchSource(tmp_path, fake_forge, TaskBranchResolver(()))
+        fake_forge.branch_exists.side_effect = RuntimeError("network fail")
+        state = source.canonical_state("claude/task-1")
+        assert state is CanonicalBranchState.INDETERMINATE
+        assert "indeterminate" in capsys.readouterr().err
