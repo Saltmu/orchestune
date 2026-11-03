@@ -56,6 +56,11 @@ def _already_released_result(
         receipt = raw["recovery_receipts"][receipt_key]
         released_active = decode_active_worktree(receipt["active"])
         worktree = released_active.core.worktree_path
+        worktree_path = (
+            registered_claim_path(released_active, workspace.run_state_path)
+            if worktree
+            else None
+        )
         diagnostics: dict[str, Any] = {
             "release_operation": RELEASE_OPERATION,
             "release_reason": receipt.get("reason"),
@@ -64,8 +69,8 @@ def _already_released_result(
             "worktree_action": receipt.get("worktree_action"),
             "worktree_status": (
                 "absent"
-                if not worktree or not Path(worktree).is_dir()
-                else inspect_worktree_status(worktree).value
+                if worktree_path is None or not worktree_path.is_dir()
+                else inspect_worktree_status(worktree_path).value
             ),
         }
     except (KeyError, TypeError, ValueError, OSError):

@@ -389,23 +389,23 @@ def evaluate_worktree_removal(
 
 
 def _append_worktree_removal_log(request: VerifiedWorktreeRemovalRequest) -> None:
-    """#1655: keep a pre-removal audit line; failures warn and never block removal."""
+    """#1655: keep a pre-removal audit line; any failure warns and never blocks removal."""
     path = request.worktree_path
-    ignored_dir = path / ".orchestune" / "tmp"
-    record = {
-        "removed_at": datetime.now(UTC).isoformat(),
-        "worktree_path": str(path),
-        "branch": request.branch,
-        "claim_id": request.claim_id,
-        "reason": request.reason,
-        "pid": os.getpid(),
-        "argv0": Path(sys.argv[0]).name if sys.argv else None,
-        "ignored_entries": (
-            len(list(ignored_dir.iterdir())) if ignored_dir.is_dir() else 0
-        ),
-    }
     log_path = path.parent / WORKTREE_REMOVALS_LOG
     try:
+        ignored_dir = path / ".orchestune" / "tmp"
+        record = {
+            "removed_at": datetime.now(UTC).isoformat(),
+            "worktree_path": str(path),
+            "branch": request.branch,
+            "claim_id": request.claim_id,
+            "reason": request.reason,
+            "pid": os.getpid(),
+            "argv0": Path(sys.argv[0]).name if sys.argv else None,
+            "ignored_entries": (
+                len(list(ignored_dir.iterdir())) if ignored_dir.is_dir() else 0
+            ),
+        }
         lines = (
             log_path.read_text(encoding="utf-8").splitlines()
             if log_path.exists()
@@ -418,7 +418,7 @@ def _append_worktree_removal_log(request: VerifiedWorktreeRemovalRequest) -> Non
             lines = lines[len(lines) // 2 :]
         lines.append(json.dumps(record, ensure_ascii=False, sort_keys=True))
         log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         print(
             f"Warning: failed to record worktree removal in {log_path}: {exc}",
             file=sys.stderr,

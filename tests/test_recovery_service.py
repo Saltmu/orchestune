@@ -273,3 +273,26 @@ def test_replay_marks_unreadable_release_receipt(local_claim):
     replay = recover_claim(request, cwd=workspace.repository_root)
     assert replay.action == "already_released"
     assert replay.diagnostics == {"release_reason": "unreadable"}
+
+
+def test_replay_resolves_relative_receipt_path_from_ledger(local_claim):
+    import os
+
+    from orchestune.recovery.contracts import RecoveryRequest
+    from orchestune.recovery.service import recover_claim
+
+    workspace, active, worktree = local_claim
+    request = RecoveryRequest(
+        7, claim_id=active.claim.claim_id, reason="worker stopped", apply=True
+    )
+    assert recover_claim(request, cwd=workspace.repository_root).success
+    raw = json.loads(workspace.run_state_path.read_text(encoding="utf-8"))
+    (receipt_key,) = (
+        key for key in raw["recovery_receipts"] if key.endswith("::release")
+    )
+    relative = os.path.relpath(worktree, workspace.run_state_path.parent)
+    raw["recovery_receipts"][receipt_key]["active"]["worktree_path"] = relative
+    workspace.run_state_path.write_text(json.dumps(raw), encoding="utf-8")
+    replay = recover_claim(request, cwd=workspace.repository_root)
+    assert replay.diagnostics["worktree"] == relative
+    assert replay.diagnostics["worktree_status"] in ("clean", "dirty")

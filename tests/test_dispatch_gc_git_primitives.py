@@ -1171,3 +1171,35 @@ class TestWorktreeRemovalLog:
         assert lines[0] == old_lines[5]
         assert len(lines) == 6
         assert json.loads(lines[-1])["worktree_path"] == str(wt_path)
+
+    def test_removal_proceeds_when_existing_log_is_not_utf8(self, tmp_path, capsys):
+        from orchestune.dispatch.gc import git as git_module
+        from orchestune.dispatch.gc.git import remove_verified_worktree
+
+        wt_path, request = self._removal_request(tmp_path, "wt-bad-log")
+        (tmp_path / "worktrees" / "worktree-removals.jsonl").write_bytes(b"\xff\xfe\n")
+
+        with patch.object(git_module, "run_git") as mock_git:
+            mock_git.side_effect = self._git_remove_side_effect(wt_path)
+            result = remove_verified_worktree(request)
+
+        assert result.success is True
+        assert not wt_path.exists()
+        assert "failed to record worktree removal" in capsys.readouterr().err
+
+    def test_removal_proceeds_when_ignored_dir_vanishes(self, tmp_path):
+        from orchestune.dispatch.gc import git as git_module
+        from orchestune.dispatch.gc.git import remove_verified_worktree
+
+        wt_path, request = self._removal_request(tmp_path, "wt-racy")
+        (wt_path / ".orchestune" / "tmp").mkdir(parents=True)
+
+        with (
+            patch.object(git_module, "run_git") as mock_git,
+            patch("pathlib.Path.iterdir", side_effect=FileNotFoundError("gone")),
+        ):
+            mock_git.side_effect = self._git_remove_side_effect(wt_path)
+            result = remove_verified_worktree(request)
+
+        assert result.success is True
+        assert not wt_path.exists()
