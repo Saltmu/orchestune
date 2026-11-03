@@ -1112,7 +1112,7 @@ class TestYamlParseDeduplication:
         import yaml
 
         from orchestune import issue_parsing
-        from orchestune.dispatch import recovery
+        from orchestune.dispatch import recovery_restoration
 
         counts = {"csafe": 0, "py": 0}
         orig_csafe = issue_parsing._yaml_safe_load
@@ -1127,7 +1127,7 @@ class TestYamlParseDeduplication:
             return orig_py(stream)
 
         monkeypatch.setattr(issue_parsing, "_yaml_safe_load", count_csafe)
-        monkeypatch.setattr(recovery, "_yaml_safe_load", count_csafe)
+        monkeypatch.setattr(recovery_restoration, "_yaml_safe_load", count_csafe)
         monkeypatch.setattr(yaml, "safe_load", count_py)
         return counts
 
@@ -1171,7 +1171,9 @@ class TestYamlParseDeduplication:
         )
 
     def test_parse_claim_info_preserves_counters_with_malformed_metadata(self):
-        from orchestune.dispatch.recovery import _parse_claim_info_from_issue
+        from orchestune.dispatch.recovery_restoration import (
+            _parse_claim_info_from_issue,
+        )
 
         body = (
             "## Summary\n\n<!-- orchestune:subtask-footprint -->\n"
