@@ -10,6 +10,7 @@ from typing import Any, NoReturn
 
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.config_contracts import ConfigError
+from orchestune.dispatch import pre_scheduling_integration
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.config_loader import (
     build_arg_parser as build_arg_parser,
@@ -29,19 +30,7 @@ from orchestune.dispatch.postcycle import (
     _process_parent_completion,
 )
 from orchestune.dispatch.pre_scheduling_integration import (
-    _advance_pending_semantic_reviews as _advance_pending_semantic_reviews,
-)
-from orchestune.dispatch.pre_scheduling_integration import (
-    _build_integrator_config as _build_integrator_config,
-)
-from orchestune.dispatch.pre_scheduling_integration import (
     _decide_semantic_review_enabled as _decide_semantic_review_enabled,
-)
-from orchestune.dispatch.pre_scheduling_integration import (
-    _poll_pending_not_needed_reviews as _poll_pending_not_needed_reviews,
-)
-from orchestune.dispatch.pre_scheduling_integration import (
-    _run_semantic_integrator as _run_semantic_integrator,
 )
 from orchestune.dispatch.progress import (
     DispatchProgressSink,
@@ -107,39 +96,6 @@ def _resolve_dispatch_shared_paths(
     return workspace.run_state_path, workspace.worktree_root
 
 
-def _pre_scheduling_integration_steps(
-    config: DispatcherConfig,
-    semantic_review_enabled: bool,
-    auth_error: ForgeAuthError | None = None,
-) -> list[tuple[str, Callable[[], PhaseResult], bool]]:
-    return [
-        (
-            "poll_pending_not_needed_reviews",
-            lambda: _poll_pending_not_needed_reviews(
-                config.not_needed_review_state_path,
-                forge=config.forge,
-                auth_error=auth_error,
-                timeout_seconds=config.not_needed_review_timeout_seconds,
-            ),
-            semantic_review_enabled,
-        ),
-        (
-            "advance_pending_semantic_reviews",
-            lambda: _advance_pending_semantic_reviews(config, auth_error=auth_error),
-            True,
-        ),
-        (
-            "run_semantic_integrator",
-            lambda: _run_semantic_integrator(
-                config,
-                semantic_review_enabled,
-                auth_error=auth_error,
-            ),
-            True,
-        ),
-    ]
-
-
 def _post_cycle_steps(
     config: DispatcherConfig,
     report: Any,
@@ -198,15 +154,10 @@ def _run_post_cycle_step(
     return result, fatal_exception
 
 
-def _run_integration_boundary(
+def _prepare_integration_boundary(
     config: DispatcherConfig, decide_review_fn: Callable[[], bool]
-) -> tuple[list[PhaseResult], Any | None, bool, ForgeAuthError | None, bool]:
+) -> tuple[bool, ForgeAuthError | None, PhaseResult | None]:
     auth_error = None
-    semantic_review_enabled = False
-    preparation_failed = False
-    integration_results: list[PhaseResult] = []
-    integrator_report = None
-
     try:
         with progress_phase(config.progress, "integration_preparation"):
             try:
@@ -214,20 +165,35 @@ def _run_integration_boundary(
             except ForgeAuthError as exc:
                 auth_error = exc
             semantic_review_enabled = decide_review_fn()
+        return semantic_review_enabled, auth_error, None
     except Exception as exc:
-        integration_results.append(
-            PhaseResult(
-                "integration_preparation",
-                PhaseStatus.FATAL_FAILURE,
-                error_message=str(exc),
-                stage="integration_boundary",
-            )
+        failure = PhaseResult(
+            "integration_preparation",
+            PhaseStatus.FATAL_FAILURE,
+            error_message=str(exc),
+            stage="integration_boundary",
         )
         safe_stderr(f"integration_preparation: {exc}")
-        preparation_failed = True
+        return False, None, failure
 
-    stopped = preparation_failed
-    for name, call, enabled in _pre_scheduling_integration_steps(
+
+def _run_integration_boundary(
+    config: DispatcherConfig, decide_review_fn: Callable[[], bool]
+) -> tuple[list[PhaseResult], Any | None, bool, ForgeAuthError | None, bool]:
+    semantic_review_enabled, auth_error, prep_failure = _prepare_integration_boundary(
+        config, decide_review_fn
+    )
+    integration_results: list[PhaseResult] = (
+        [prep_failure] if prep_failure is not None else []
+    )
+    integrator_report = None
+    stopped = prep_failure is not None
+
+    for (
+        name,
+        call,
+        enabled,
+    ) in pre_scheduling_integration._pre_scheduling_integration_steps(  # noqa: SLF001 - attribute access preserves test patch targets
         config, semantic_review_enabled, auth_error
     ):
         if stopped or not enabled:

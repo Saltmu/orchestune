@@ -6,7 +6,7 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from orchestune.dispatch import dispatcher
+from orchestune.dispatch import dispatcher, pre_scheduling_integration
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle import CycleReport
 from orchestune.dispatch.cycle_execution import CycleStage, execute_pipeline
@@ -93,7 +93,7 @@ def test_dispatcher_executes_four_stages_in_order(tmp_path, monkeypatch):
     monkeypatch.setattr(dispatcher, "run_dispatch_cycle", fake_scheduling_cycle)
 
     monkeypatch.setattr(
-        dispatcher,
+        pre_scheduling_integration,
         "_pre_scheduling_integration_steps",
         lambda *a, **k: [
             (
@@ -204,7 +204,7 @@ def test_run_state_lock_is_not_held_during_integration_boundary(tmp_path, monkey
     monkeypatch.setattr(dispatcher, "run_dispatch_cycle", fake_cycle)
 
     monkeypatch.setattr(
-        dispatcher,
+        pre_scheduling_integration,
         "_pre_scheduling_integration_steps",
         lambda *a, **k: [("run_semantic_integrator", probe_integration, True)],
         raising=False,
@@ -288,7 +288,7 @@ def test_scheduling_cycle_lock_contended_defers_scheduling_and_exits_code_2(
 
     monkeypatch.setattr(dispatcher, "run_dispatch_cycle", lock_contended_cycle)
     monkeypatch.setattr(
-        dispatcher,
+        pre_scheduling_integration,
         "_pre_scheduling_integration_steps",
         lambda *a, **k: [
             (

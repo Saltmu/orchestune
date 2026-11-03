@@ -136,11 +136,11 @@ def test_cli_saves_exact_old_schema_and_no_stdout_json(tmp_path, capsys, apply):
             return_value=False,
         ),
         patch(
-            "orchestune.dispatch.dispatcher._advance_pending_semantic_reviews",
+            "orchestune.dispatch.pre_scheduling_integration._advance_pending_semantic_reviews",
             return_value=phase,
         ),
         patch(
-            "orchestune.dispatch.dispatcher._run_semantic_integrator",
+            "orchestune.dispatch.pre_scheduling_integration._run_semantic_integrator",
             return_value=phase,
         ),
         patch(
@@ -187,19 +187,19 @@ def test_postcycle_exception_keeps_completed_results_and_skips_rest(tmp_path, ca
             return_value=True,
         ),
         patch(
-            "orchestune.dispatch.dispatcher._poll_pending_not_needed_reviews",
+            "orchestune.dispatch.pre_scheduling_integration._poll_pending_not_needed_reviews",
             return_value=PhaseResult(
                 "poll_pending_not_needed_reviews", PhaseStatus.SUCCESS
             ),
         ),
         patch(
-            "orchestune.dispatch.dispatcher._advance_pending_semantic_reviews",
+            "orchestune.dispatch.pre_scheduling_integration._advance_pending_semantic_reviews",
             return_value=PhaseResult(
                 "advance_pending_semantic_reviews", PhaseStatus.SUCCESS
             ),
         ),
         patch(
-            "orchestune.dispatch.dispatcher._run_semantic_integrator",
+            "orchestune.dispatch.pre_scheduling_integration._run_semantic_integrator",
             side_effect=ValueError("unexpected"),
         ),
         patch("orchestune.dispatch.dispatcher._process_parent_completion") as later,
@@ -297,7 +297,7 @@ def test_save_failure_overrides_retryable_and_reports_both(tmp_path, capsys):
             return_value=False,
         ),
         patch(
-            "orchestune.dispatch.dispatcher._run_semantic_integrator",
+            "orchestune.dispatch.pre_scheduling_integration._run_semantic_integrator",
             return_value=retry,
         ),
         patch(

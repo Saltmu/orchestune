@@ -18,7 +18,6 @@ import pytest
 
 from orchestune.dispatch.gc import (
     ZombieOrTimeoutReclaim,
-    _finalize_completed_worktree,
     backup_wip_commit,
     remote_branch_commit_sha_if_ahead,
     remove_worktree,
@@ -27,9 +26,6 @@ from orchestune.dispatch.gc import (
 )
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision as ExtractedCompletedWorktreeDecision,
-)
-from orchestune.dispatch.gc.completion import (
-    _finalize_completed_worktree as extracted_finalize_completed_worktree,
 )
 from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim as ExtractedZombieOrTimeoutReclaim,
@@ -46,7 +42,6 @@ def test_extracted_gc_symbols_remain_available_from_legacy_module():
     from orchestune.dispatch.gc import CompletedWorktreeDecision
 
     assert CompletedWorktreeDecision is ExtractedCompletedWorktreeDecision
-    assert _finalize_completed_worktree is extracted_finalize_completed_worktree
     assert ZombieOrTimeoutReclaim is ExtractedZombieOrTimeoutReclaim
 
 
