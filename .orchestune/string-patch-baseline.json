@@ -41,7 +41,7 @@
     "orchestune.dispatch.gc.zombies.os": 14,
     "orchestune.dispatch.gc_cli": 3,
     "orchestune.dispatch.gc_service": 1,
-    "orchestune.dispatch.launch": 24,
+    "orchestune.dispatch.launch.service": 24,
     "orchestune.dispatch.local_semantic_fix": 7,
     "orchestune.dispatch.locks": 2,
     "orchestune.dispatch.locks.subprocess": 8,

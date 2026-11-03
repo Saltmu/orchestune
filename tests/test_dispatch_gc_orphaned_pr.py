@@ -13,7 +13,10 @@ from orchestune.dispatch.gc.completion import (
 )
 from orchestune.dispatch.gc.completion_contracts import CompletedWorktreeDecision
 from orchestune.dispatch.gc.orphaned_pr import orphan_receipt
-from orchestune.dispatch.launch import DuplicateCandidateDecision, _apply_duplicate_skip
+from orchestune.dispatch.launch.service import (
+    DuplicateCandidateDecision,
+    _apply_duplicate_skip,
+)
 from orchestune.ledger.run_state import RunState
 from orchestune.models import PrRecord
 from orchestune.outcome_record import OutcomeRecord
@@ -398,7 +401,9 @@ def test_duplicate_pr_diagnostics_provide_adoption_steps(tmp_path, fake_forge, c
         run_state_path=tmp_path / "state.json",
         events_log_path=tmp_path / "events.jsonl",
     )
-    with patch("orchestune.dispatch.launch.apply_human_review_escalation") as escalate:
+    with patch(
+        "orchestune.dispatch.launch.service.apply_human_review_escalation"
+    ) as escalate:
         assert (
             _apply_duplicate_skip([DuplicateCandidateDecision(task, True, pr)], config)
             == []

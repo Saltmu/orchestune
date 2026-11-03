@@ -35,7 +35,7 @@ import pytest
 from orchestune.claim import preflight as claim_preflight
 from orchestune.consistency.desired import TaskLifecycle
 from orchestune.consistency.repairs.status import plan_status_repairs
-from orchestune.dispatch import launch_attempts
+from orchestune.dispatch.launch import attempts as launch_attempts
 from orchestune.labels import StatusLabel
 from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.status_labels import (
@@ -83,11 +83,11 @@ CI_RED = "ci:base-branch-red"
 CALL_SITES: dict[str, int] = {
     "remediation/operations.py::ensure_initial_label": 1,
     "claim/service.py::_apply_status_label": 1,
-    "dispatch/launch.py::_apply_yaml_error_blocking": 1,
-    "dispatch/launch.py::_apply_invalid_footprint_blocking": 1,
-    "dispatch/launch.py::_handle_launch_failure": 2,
-    "dispatch/launch.py::_record_successful_launch": 1,
-    "dispatch/launch_attempts.py::reconcile_attempt": 1,
+    "dispatch/launch/service.py::_apply_yaml_error_blocking": 1,
+    "dispatch/launch/service.py::_apply_invalid_footprint_blocking": 1,
+    "dispatch/launch/service.py::_handle_launch_failure": 2,
+    "dispatch/launch/service.py::_record_successful_launch": 1,
+    "dispatch/launch/attempts.py::reconcile_attempt": 1,
     "dispatch/reconciliation.py::_resolve_one_blocked_recompute_issue": 1,
     "dispatch/reconciliation.py::_apply_base_branch_red_requeue": 1,
     "dispatch/rebase.py::notify_recompute": 1,
@@ -271,13 +271,15 @@ def _claim() -> list[Case]:
 
 
 def _launch() -> list[Case]:
-    yaml = _for("dispatch/launch.py::_apply_yaml_error_blocking", "launch_yaml_error")
+    yaml = _for(
+        "dispatch/launch/service.py::_apply_yaml_error_blocking", "launch_yaml_error"
+    )
     footprint = _for(
-        "dispatch/launch.py::_apply_invalid_footprint_blocking",
+        "dispatch/launch/service.py::_apply_invalid_footprint_blocking",
         "launch_invalid_footprint",
     )
-    fail = _for("dispatch/launch.py::_handle_launch_failure", "launch_failure")
-    ok = _for("dispatch/launch.py::_record_successful_launch", "launch_success")
+    fail = _for("dispatch/launch/service.py::_handle_launch_failure", "launch_failure")
+    ok = _for("dispatch/launch/service.py::_record_successful_launch", "launch_success")
     return [
         yaml("queued", (Q,), B, (Q,), NRM, {B}),
         yaml("replay", (B,), B, (Q,), SLF, {B}),
@@ -309,7 +311,7 @@ def _launch() -> list[Case]:
 
 def _attempt_and_reconciliation() -> list[Case]:
     attempt = _for(
-        "dispatch/launch_attempts.py::reconcile_attempt", "attempt_reconcile"
+        "dispatch/launch/attempts.py::reconcile_attempt", "attempt_reconcile"
     )
     blocked = _for(
         "dispatch/reconciliation.py::_resolve_one_blocked_recompute_issue",

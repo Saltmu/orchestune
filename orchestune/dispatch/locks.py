@@ -98,7 +98,7 @@ def _direct_dependency_canonical_branches(
     どの依存元も指すか分からないため、ここでは含めない
     （＝そのぶん通常の衝突判定からは除外されず、fail closedのまま残る）。
 
-    #796: スタッキング起動(`orchestune.dispatch.launch._get_stack_eligible_tasks`)
+    #796: スタッキング起動(`orchestune.dispatch.launch.service._get_stack_eligible_tasks`)
     は依存元ブランチをbaseに積むため、依存元のPR・ブランチとの重複は
     「Orchestune管理外の衝突」ではない。`_is_task_stack_eligible`はスタック時に
     baseへ入るのが直接依存1本だけであることを前提にしているため、除外もそれに

@@ -26,8 +26,6 @@ from orchestune.consistency.repairs.status import (
     plan_status_repairs,
 )
 from orchestune.dispatch import (
-    launch,
-    launch_attempts,
     prior_parent_merge,
     rebase,
     reconciliation,
@@ -36,6 +34,8 @@ from orchestune.dispatch import (
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_events import CompletionEvent
 from orchestune.dispatch.gc import cloud_completion, completion, zombies
+from orchestune.dispatch.launch import attempts as launch_attempts
+from orchestune.dispatch.launch import service as launch
 from orchestune.dispatch.recovery import service as recovery
 from orchestune.integrator.steps import AutoMergeChildIntegrationStep
 from orchestune.ledger.escalation import apply_human_review_escalation

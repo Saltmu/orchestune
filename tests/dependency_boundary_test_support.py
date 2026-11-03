@@ -161,7 +161,7 @@ PRODUCTION_EXCEPTIONS = frozenset(
             _LOW_LEVEL,
         ),
         _exception(
-            "orchestune.dispatch.launch",
+            "orchestune.dispatch.launch.service",
             "_launch_selected_tasks",
             "run_state",
             _LOW_LEVEL,

@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.launch import TaskLaunchPlan, _apply_task_launches
+from orchestune.dispatch.launch.service import TaskLaunchPlan, _apply_task_launches
 from orchestune.dispatch.targets import CodexCloudDispatchTarget, DispatchHandle
 from orchestune.ledger.run_state import RunState, load_run_state, save_run_state
 from tests.conftest import FakeForge, make_issue, make_task, real_claim_fn
@@ -101,7 +101,7 @@ def test_saved_handle_restored_after_crash_without_pr(launch_env, stop):
 
         with (
             patch(
-                "orchestune.dispatch.launch.save_run_state",
+                "orchestune.dispatch.launch.service.save_run_state",
                 side_effect=fail_after_launch,
             ),
             pytest.raises(OSError, match="crash"),
@@ -140,7 +140,7 @@ def test_reconcile_attempt_adopts_confirmed_launch_over_claim_placeholder(launch
     扱いし、実際には成功しているagent実行をhuman-reviewへエスカレーション
     してはならない——プレースホルダーは採用してよい。"""
     from orchestune.dispatch.attempt_record import LaunchAttempt
-    from orchestune.dispatch.launch_attempts import reconcile_attempt
+    from orchestune.dispatch.launch.attempts import reconcile_attempt
     from orchestune.ledger.run_state import RunState
     from tests.dispatch_test_support import make_test_active_worktree
 
@@ -190,7 +190,7 @@ def test_reconcile_attempt_adopts_confirmed_launch_over_claim_placeholder(launch
 def test_reconcile_attempt_uses_validated_in_memory_state(launch_env):
     """An unrelated corrupt ledger entry must not affect attempt reconciliation."""
     from orchestune.dispatch.attempt_record import LaunchAttempt
-    from orchestune.dispatch.launch_attempts import reconcile_attempt
+    from orchestune.dispatch.launch.attempts import reconcile_attempt
 
     _forge, config, plan, _launch = launch_env
     config.run_state_path.write_text('{"active_worktrees": {"other": {}}}')
@@ -571,7 +571,9 @@ def test_launch_phase_launching_persisted_before_provider_and_failure_holds_laun
         base_ref="main",
         changed_files=(),
     )
-    with patch("orchestune.dispatch.launch.save_run_state", side_effect=mock_save):
+    with patch(
+        "orchestune.dispatch.launch.service.save_run_state", side_effect=mock_save
+    ):
         selected = _apply_task_launches(
             [plan],
             state,
@@ -610,7 +612,7 @@ def test_clear_launch_failure_persists_failed_phase(launch_env):
     )
 
     with patch(
-        "orchestune.dispatch.launch._launch_on_prepared_worktree",
+        "orchestune.dispatch.launch.service._launch_on_prepared_worktree",
         return_value=failed_result,
     ):
         selected = _apply_task_launches(
@@ -652,7 +654,9 @@ def test_launched_record_keeps_the_reservation_claim_identity(launch_env):
             reservations.append(active)
         return original_save(rs, path, **kwargs)
 
-    with patch("orchestune.dispatch.launch.save_run_state", side_effect=capture_save):
+    with patch(
+        "orchestune.dispatch.launch.service.save_run_state", side_effect=capture_save
+    ):
         selected = _apply_task_launches(
             [plan], state, 100.0, config, claim_fn=real_claim_fn(config)
         )
@@ -671,7 +675,7 @@ def test_launched_record_keeps_the_reservation_claim_identity(launch_env):
 
 def test_released_attempt_is_not_recovered_or_relaunched(launch_env):
     from orchestune.dispatch.attempt_record import LaunchAttempt
-    from orchestune.dispatch.launch_attempts import reconcile_attempt
+    from orchestune.dispatch.launch.attempts import reconcile_attempt
 
     _, config, plan, launch = launch_env
     attempt = LaunchAttempt(
@@ -712,7 +716,7 @@ def test_attempt_recovery_uses_the_shared_counter_rule(
     from dataclasses import replace
 
     from orchestune.dispatch.attempt_record import LaunchAttempt
-    from orchestune.dispatch.launch_attempts import active_from_attempt
+    from orchestune.dispatch.launch.attempts import active_from_attempt
     from orchestune.issue_parsing import backfill_recovery_counters
 
     forge, config, plan, _launch = launch_env

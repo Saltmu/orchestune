@@ -24,7 +24,7 @@ from orchestune.dependencies.resolution import (
     resolve_stackable_dependency_issue,
 )
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.launch import _is_task_stack_eligible
+from orchestune.dispatch.launch.service import _is_task_stack_eligible
 from orchestune.dispatch.rebase import _decide_rebase_target
 from orchestune.dispatch.reconciliation import _resolve_base_branch_for_task
 from orchestune.models import Task

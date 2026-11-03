@@ -56,7 +56,7 @@ def _task(
 
 class TestDependencyExclusion:
     """#796: `depends_on`で指した依存元のPR・ブランチは、スタッキング起動
-    （`orchestune/dispatch/launch.py`の`_get_stack_eligible_tasks`）で
+    （`orchestune/dispatch/launch/service.py`の`_get_stack_eligible_tasks`）で
     base取り込みが前提の変更であり、「Orchestune管理外の衝突」ではない。
     依存元由来の重複だけを外部ロックの対象から除外する。
 

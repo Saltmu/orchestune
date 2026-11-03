@@ -442,7 +442,7 @@ KNOWN_UPDATE_ISSUE_BODY_CALLERS = {
     ("orchestune/claim/amend.py", "child"),
     ("orchestune/claim/issue_metadata.py", "child"),
     ("orchestune/dispatch/attempt_record.py", "child"),
-    ("orchestune/dispatch/launch.py", "child"),
+    ("orchestune/dispatch/launch/service.py", "child"),
     ("orchestune/dispatch/rebase.py", "child"),
     ("orchestune/provisioning/subtasks.py", "child"),
     ("orchestune/recovery/blocked_restart.py", "child"),

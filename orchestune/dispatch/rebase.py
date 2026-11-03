@@ -29,7 +29,7 @@ from orchestune.dispatch.cycle_events import (
     UnknownSubtaskDeviation,
 )
 from orchestune.dispatch.execution_profiles import ExecutionSelection
-from orchestune.dispatch.launch_state import update_launch, with_launch
+from orchestune.dispatch.launch.state import update_launch, with_launch
 from orchestune.dispatch.locks import check_footprint_deviation
 from orchestune.dispatch.recovery.counters import merged_recovery_counters
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext

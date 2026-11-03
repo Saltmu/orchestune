@@ -5,7 +5,7 @@ claim成功後にagent起動が失敗した場合のラベル遷移に関する�
 """
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.launch import TaskLaunchPlan
+from orchestune.dispatch.launch.service import TaskLaunchPlan
 from orchestune.dispatch.scoring import Task
 from tests.conftest import register_task_issue
 
@@ -47,7 +47,9 @@ class TestResolveClaimFailureLaunchResult:
 
     def test_invalid_branch_name_is_a_validation_error(self, tmp_path):
         from orchestune.claim.contracts import ClaimFailureReason
-        from orchestune.dispatch.launch import _resolve_claim_failure_launch_result
+        from orchestune.dispatch.launch.service import (
+            _resolve_claim_failure_launch_result,
+        )
 
         outcome = self._outcome(
             ClaimFailureReason.INVALID_BRANCH_NAME, "invalid branch name"
@@ -57,7 +59,9 @@ class TestResolveClaimFailureLaunchResult:
 
     def test_worktree_creation_failed_is_not_a_validation_error(self, tmp_path):
         from orchestune.claim.contracts import ClaimFailureReason
-        from orchestune.dispatch.launch import _resolve_claim_failure_launch_result
+        from orchestune.dispatch.launch.service import (
+            _resolve_claim_failure_launch_result,
+        )
 
         outcome = self._outcome(
             ClaimFailureReason.WORKTREE_CREATION_FAILED, "disk full"
@@ -67,7 +71,9 @@ class TestResolveClaimFailureLaunchResult:
 
     def test_invalid_footprint_is_a_validation_error(self, tmp_path):
         from orchestune.claim.contracts import ClaimFailureReason
-        from orchestune.dispatch.launch import _resolve_claim_failure_launch_result
+        from orchestune.dispatch.launch.service import (
+            _resolve_claim_failure_launch_result,
+        )
 
         outcome = self._outcome(
             ClaimFailureReason.INVALID_FOOTPRINT, "invalid footprint"
@@ -88,7 +94,10 @@ class TestTryPlannedLaunchPassesWorktreeRoot:
             ClaimFailureReason,
             ClaimOutcome,
         )
-        from orchestune.dispatch.launch import TaskLaunchPlan, _try_planned_launch
+        from orchestune.dispatch.launch.service import (
+            TaskLaunchPlan,
+            _try_planned_launch,
+        )
         from orchestune.ledger.run_state import RunState
 
         custom_root = tmp_path / "custom-worktrees"
@@ -123,7 +132,7 @@ class TestHandleLaunchFailureStripsClaimLabel:
     def test_strips_in_progress_when_launch_carries_a_claim_id(self, tmp_path):
         from unittest.mock import patch
 
-        from orchestune.dispatch.launch import _handle_launch_failure
+        from orchestune.dispatch.launch.service import _handle_launch_failure
         from orchestune.dispatch.worktree import LaunchResult
         from orchestune.labels import StatusLabel
 
@@ -156,7 +165,7 @@ class TestDecideInvalidFootprintTasks:
     """decide層: 副作用なしでFootprint不正のタスクのみを判定する。"""
 
     def test_returns_only_invalid_footprint_tasks(self):
-        from orchestune.dispatch.launch import _decide_invalid_footprint_tasks
+        from orchestune.dispatch.launch.service import _decide_invalid_footprint_tasks
 
         ok_task = _task(1)
         bad_task = _task(2, footprint_error="invalid path")
@@ -166,7 +175,7 @@ class TestDecideInvalidFootprintTasks:
         ]
 
     def test_returns_empty_when_no_errors(self):
-        from orchestune.dispatch.launch import _decide_invalid_footprint_tasks
+        from orchestune.dispatch.launch.service import _decide_invalid_footprint_tasks
 
         assert _decide_invalid_footprint_tasks([_task(1)]) == []
 
@@ -175,7 +184,7 @@ class TestApplyInvalidFootprintBlocking:
     def test_transitions_to_blocked_and_posts_comment(self, tmp_path):
         from unittest.mock import patch
 
-        from orchestune.dispatch.launch import _apply_invalid_footprint_blocking
+        from orchestune.dispatch.launch.service import _apply_invalid_footprint_blocking
 
         task = _task(
             1, subtask_id="task-1", footprint_error="invalid path: /etc/passwd"
@@ -215,7 +224,10 @@ class TestLaunchSelectedTasksInvalidFootprint:
     ):
         from unittest.mock import patch
 
-        from orchestune.dispatch.launch import LaunchContext, _launch_selected_tasks
+        from orchestune.dispatch.launch.service import (
+            LaunchContext,
+            _launch_selected_tasks,
+        )
         from orchestune.ledger.run_state import RunState
         from tests.conftest import real_claim_fn
 
@@ -276,7 +288,7 @@ class TestRetiredModelTierBlocksLaunchAndClaim:
         from unittest.mock import MagicMock, patch
 
         from orchestune.config_contracts import retired_model_tier_message
-        from orchestune.dispatch.launch import (
+        from orchestune.dispatch.launch.service import (
             LaunchContext,
             _decide_invalid_footprint_tasks,
             _launch_selected_tasks,

@@ -67,7 +67,7 @@ COMPLETE_OWNER_MODULES = frozenset(
 
 LAUNCH_OWNER_MODULES = frozenset(
     {
-        "orchestune.dispatch.launch_state",
+        "orchestune.dispatch.launch.state",
     }
 )
 
@@ -92,7 +92,7 @@ ALLOWED_CONSTRUCTOR_MODULES = frozenset(
         "orchestune.claim.reservation",
         "orchestune.claim.service",
         "orchestune.claim.amend",
-        "orchestune.dispatch.launch_state",
+        "orchestune.dispatch.launch.state",
     }
 )
 

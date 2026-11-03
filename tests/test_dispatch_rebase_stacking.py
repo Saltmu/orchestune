@@ -127,7 +127,7 @@ class TestBranchStacking:
             # worktree.pyの既存`_launch_on_prepared_worktree`をそのまま再利用する
             # ため、そこをmockして起動時のbase_branchを検証する。
             patch(
-                "orchestune.dispatch.launch._launch_on_prepared_worktree",
+                "orchestune.dispatch.launch.service._launch_on_prepared_worktree",
                 autospec=True,
             ) as mock_launch,
         ):
@@ -266,7 +266,7 @@ class TestBranchStacking:
                 return_value="deadbeefcafe",
             ),
             patch(
-                "orchestune.dispatch.launch._launch_on_prepared_worktree",
+                "orchestune.dispatch.launch.service._launch_on_prepared_worktree",
                 autospec=True,
             ) as mock_launch,
         ):
@@ -580,7 +580,7 @@ class TestBranchStacking:
             patch("fake_forge_proxy.active_fake_forge.remove_label"),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch.launch._launch_on_prepared_worktree",
+                "orchestune.dispatch.launch.service._launch_on_prepared_worktree",
                 autospec=True,
             ) as mock_launch,
         ):
@@ -707,7 +707,7 @@ class TestBranchStacking:
                 return_value="deadbeefcafe",
             ),
             patch(
-                "orchestune.dispatch.launch._launch_on_prepared_worktree",
+                "orchestune.dispatch.launch.service._launch_on_prepared_worktree",
                 autospec=True,
             ) as mock_launch,
             # タスクAの完了判定とGC処理のためのモック

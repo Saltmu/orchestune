@@ -128,7 +128,10 @@ def test_launch_progress_matches_actual_result(tmp_path, fake_forge, outcome):
     from unittest.mock import Mock, patch
 
     from orchestune.dispatch.config import DispatcherConfig
-    from orchestune.dispatch.launch import TaskLaunchPlan, _apply_single_task_launch
+    from orchestune.dispatch.launch.service import (
+        TaskLaunchPlan,
+        _apply_single_task_launch,
+    )
     from orchestune.ledger.run_state import RunState
 
     task = Mock(issue_number=42)
@@ -160,20 +163,23 @@ def test_launch_progress_matches_actual_result(tmp_path, fake_forge, outcome):
 
     with (
         patch(
-            "orchestune.dispatch.launch._launch_reservation",
+            "orchestune.dispatch.launch.service._launch_reservation",
             return_value=nullcontext(commit),
         ),
         patch(
-            "orchestune.dispatch.launch.prepare_journaled_target", return_value=target
+            "orchestune.dispatch.launch.service.prepare_journaled_target",
+            return_value=target,
         ),
         patch(
-            "orchestune.dispatch.launch._try_planned_launch", return_value=launch
+            "orchestune.dispatch.launch.service._try_planned_launch",
+            return_value=launch,
         ) as provider,
         patch(
-            "orchestune.dispatch.launch._record_successful_launch", side_effect=record
+            "orchestune.dispatch.launch.service._record_successful_launch",
+            side_effect=record,
         ) as saved,
-        patch("orchestune.dispatch.launch._record_failed_launch_phase"),
-        patch("orchestune.dispatch.launch._handle_launch_failure"),
+        patch("orchestune.dispatch.launch.service._record_failed_launch_phase"),
+        patch("orchestune.dispatch.launch.service._handle_launch_failure"),
     ):
         result = _apply_single_task_launch(
             plan, state, 10.0, config, Mock(), None, None

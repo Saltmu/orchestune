@@ -25,7 +25,7 @@ from orchestune.dispatch.attempt_record import (
 from orchestune.dispatch.execution_profiles import (
     resolve_task_execution_selection,
 )
-from orchestune.dispatch.launch_attempts import (
+from orchestune.dispatch.launch.attempts import (
     _completed_claim,
     active_from_attempt,
     restored_active_record,

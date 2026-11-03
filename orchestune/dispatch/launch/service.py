@@ -30,11 +30,11 @@ from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
     resolve_task_execution_selection,
 )
-from orchestune.dispatch.launch_attempts import (
+from orchestune.dispatch.launch.attempts import (
     LaunchOutcomeUnknown,
     prepare_journaled_target,
 )
-from orchestune.dispatch.launch_state import (
+from orchestune.dispatch.launch.state import (
     build_launch_record,
     launch_info_with_selection,
     launch_info_with_token_estimate,
@@ -77,7 +77,7 @@ if TYPE_CHECKING:
 LaunchCommitted = Callable[[ActiveWorktree], None]
 TTask = TypeVar("TTask", bound=TaskMetadata)
 
-# #943: `orchestune.claim.service`はL3（`dispatch.launch`はL2）のため、この
+# #943: `orchestune.claim.service`はL3（`dispatch.launch.service`はL2）のため、この
 # モジュールは`claim_task`を直接importしない（`tests/test_architecture.py`の
 # レイヤー境界を参照）。呼び出し元のL3層（`orchestune.dispatch.cycle_actions`）
 # が`claim_task`を束縛した`ClaimFn`をDIで渡す。第2引数は`plan.base_branch_for_launch`

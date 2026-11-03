@@ -346,7 +346,7 @@ def stub_claim_workspace_git_repo(
 
 
 def real_claim_fn(config: DispatcherConfig) -> Callable[[Any, str], Any]:
-    """#943: `orchestune.dispatch.launch`はL2、`orchestune.claim.service`はL3の
+    """#943: `orchestune.dispatch.launch.service`はL2、`orchestune.claim.service`はL3の
     ため、本番コードは`orchestune.dispatch.cycle_actions`（L3）でclaim_taskを
     束縛したcallableをDIで渡す（`tests/test_architecture.py`のレイヤー境界を
     参照）。テストは同じ理由で`_apply_task_launches`/`LaunchContext`へ
