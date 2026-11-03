@@ -30,7 +30,7 @@ from orchestune.dispatch.launch_attempts import (
     active_from_attempt,
     restored_active_record,
 )
-from orchestune.dispatch.recovery_counters import merged_recovery_counters
+from orchestune.dispatch.recovery.counters import merged_recovery_counters
 from orchestune.issue_parsing import (
     FOOTPRINT_BLOCK_PATTERN,
     parse_task_from_issue,

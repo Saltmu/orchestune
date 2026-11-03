@@ -22,7 +22,7 @@ from orchestune.dispatch.launch_state import (
     build_launch_record,
     launch_info_with_selection,
 )
-from orchestune.dispatch.recovery_counters import launch_with_recovery_counters
+from orchestune.dispatch.recovery.counters import launch_with_recovery_counters
 from orchestune.dispatch.targets import DispatchHandle, DispatchTarget
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_records import (

@@ -41,7 +41,7 @@ from orchestune.dispatch.launch_state import (
     with_launch,
     with_launch_phase,
 )
-from orchestune.dispatch.recovery_counters import launch_with_recovery_counters
+from orchestune.dispatch.recovery.counters import launch_with_recovery_counters
 from orchestune.dispatch.worktree import LaunchResult, _launch_on_prepared_worktree
 from orchestune.infra.git_cli import run_git
 from orchestune.issue_parsing import (

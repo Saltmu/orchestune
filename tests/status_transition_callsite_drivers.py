@@ -31,12 +31,12 @@ from orchestune.dispatch import (
     prior_parent_merge,
     rebase,
     reconciliation,
-    recovery,
     status_repair,
 )
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_events import CompletionEvent
 from orchestune.dispatch.gc import cloud_completion, completion, zombies
+from orchestune.dispatch.recovery import service as recovery
 from orchestune.integrator.steps import AutoMergeChildIntegrationStep
 from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import RunState

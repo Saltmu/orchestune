@@ -64,8 +64,8 @@ from orchestune.dispatch.launch_attempts import (
     reconcile_attempt,
 )
 from orchestune.dispatch.launch_state import with_launch
-from orchestune.dispatch.recovery_counters import merged_recovery_counters
-from orchestune.dispatch.recovery_restoration import (
+from orchestune.dispatch.recovery.counters import merged_recovery_counters
+from orchestune.dispatch.recovery.restoration import (
     _build_restored_active_worktree,
     _parse_subtask_info_from_issue,
 )

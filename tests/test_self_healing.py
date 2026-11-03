@@ -68,7 +68,7 @@ def test_restart_retries_when_crash_happens_before_bookkeeping_persistence(
     interrupted = RunState()
 
     with patch(
-        "orchestune.dispatch.recovery.save_run_state",
+        "orchestune.dispatch.recovery.service.save_run_state",
         autospec=True,
         side_effect=RuntimeError("crash before persistence"),
     ):
@@ -99,7 +99,7 @@ def test_restart_does_not_duplicate_when_crash_happens_after_persistence(
         raise RuntimeError("crash after persistence")
 
     with patch(
-        "orchestune.dispatch.recovery.save_run_state",
+        "orchestune.dispatch.recovery.service.save_run_state",
         autospec=True,
         side_effect=persist_then_crash,
     ):

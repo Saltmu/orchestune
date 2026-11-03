@@ -484,7 +484,7 @@ class TestAdditionalClaimServiceEdgeCases:
     def test_claim_task_publishes_claim_ownership_to_issue_body(
         self, claim_env: dict[str, Path]
     ) -> None:
-        from orchestune.dispatch.recovery_restoration import (
+        from orchestune.dispatch.recovery.restoration import (
             _parse_claim_info_from_issue,
         )
 

@@ -397,7 +397,7 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
         _r(_E.COMPLETE, _K.PLAIN, "remove-stale-queued-from-done"),
         _r(_E.REQUEUE, _K.RECOVERY, "remove-stale-in-progress"),
     ),
-    "dispatch/recovery.py::execute_recovery_requeue_command": (
+    "dispatch/recovery/service.py::execute_recovery_requeue_command": (
         _r(
             _E.REQUEUE,
             _K.RECOVERY,

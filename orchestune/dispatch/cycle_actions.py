@@ -76,7 +76,7 @@ from orchestune.dispatch.reconciliation import (
     _handle_base_branch_red_recovery,
     _handle_blocked_recompute_recovery,
 )
-from orchestune.dispatch.recovery import (
+from orchestune.dispatch.recovery.service import (
     RecoveryBookkeepingAdapter,
     execute_bookkeeping_repair_command,
     execute_recovery_requeue_command,

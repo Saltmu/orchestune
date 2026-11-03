@@ -21,7 +21,7 @@ from orchestune.dispatch.launch_state import (
     with_launch,
     with_launch_phase,
 )
-from orchestune.dispatch.recovery_counters import (
+from orchestune.dispatch.recovery.counters import (
     launch_with_recovery_counters,
     merged_recovery_counters,
 )

@@ -70,7 +70,9 @@ PRODUCTION_EXCEPTIONS = frozenset(
         _exception(
             "orchestune.dispatch.cycle_context_state", "<module>", "Task", _IDENTITY
         ),
-        _exception("orchestune.dispatch.recovery", "<module>", "Task", _LOW_LEVEL),
+        _exception(
+            "orchestune.dispatch.recovery.service", "<module>", "Task", _LOW_LEVEL
+        ),
         _exception("orchestune.dispatch.rules", "<module>", "Task", _IDENTITY),
         _exception("orchestune.dispatch.scoring", "<module>", "Task", _COMPAT),
         _exception("orchestune.dispatch.status_repair", "<module>", "Task", _LOW_LEVEL),
@@ -140,7 +142,7 @@ PRODUCTION_EXCEPTIONS = frozenset(
         },
         *{
             _exception(
-                "orchestune.dispatch.recovery",
+                "orchestune.dispatch.recovery.service",
                 function,
                 "tasks_by_issue",
                 _PRIVATE_VIEW,
