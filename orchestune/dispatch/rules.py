@@ -164,8 +164,6 @@ class _RuleExecutionContext:
 
     Ruleの判定は`queries`だけを通じて状態を読み、actは`run_state`を更新する。
     追加fieldは既存Ruleの局所的な入力であり、公開query APIではない。
-    `issue_number_by_subtask_id`はfootprint逸脱時に対象Issueを遷移させるための
-    逆引きで、依存解決や表示のための値ではない。
 
     Rule実装がL2にあり、`gc`は`escalation`をimportするため、このadapterも
     `rules.py`に置く。`gc`、`escalation`、`rebase`のいずれかへ置くと、Ruleが
@@ -178,9 +176,7 @@ class _RuleExecutionContext:
     prs: tuple[PrRecord, ...] = ()
     not_needed_review_dispatcher: NotNeededReviewDispatcher | None = None
     issue_records_by_number: dict[int, IssueRecord] = field(default_factory=dict)
-    tasks_by_issue: dict[int, TaskMetadata] = field(default_factory=dict)
     dag_inputs: tuple[SubTask, ...] = ()
-    issue_number_by_subtask_id: dict[str, int] = field(default_factory=dict)
 
     def completion_reserved(self, issue_number: int) -> bool:
         return completion_mutation_blocked_fresh(

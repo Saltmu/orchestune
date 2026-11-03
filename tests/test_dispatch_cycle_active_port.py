@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from dataclasses import replace
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.cycle_events import WorktreeCompletion, WorktreeCompletionHold
+from orchestune.dispatch.cycle_events import (
+    AlreadyForcedSerialDeviation,
+    ForcedSerialDeviation,
+    RecomputedDeviation,
+    WorktreeCompletion,
+    WorktreeCompletionHold,
+)
 from orchestune.dispatch.gc.completion import is_completion_hold_event
+from orchestune.dispatch.rebase import _rule_footprint_deviation
 from orchestune.ledger.run_state import RunState
 from orchestune.models import PrRecord
 from orchestune.task_metadata import CycleTask
@@ -91,30 +101,111 @@ class TestProcessActiveWorktrees:
         assert is_completion_hold_event(passed_events[0])
 
 
-class TestExecutionContext:
-    def test_issue_number_by_subtask_id_is_populated_from_the_bound_view(self):
-        """Codex #900 review: this map is not display-only -- footprint
-        deviation handling (`rebase.notify_recompute`) uses it to find and
-        transition the actually-blocked issue, so it must be reconstructed
-        from the bound view rather than left empty.
-        """
+class TestFootprintDeviationRule:
+    """`_rule_footprint_deviation` builds both lookup maps from `ctx.queries`.
+
+    Codex #900 review: `issue_number_by_subtask_id` is not display-only --
+    footprint deviation handling (`rebase.notify_recompute`) uses it to find
+    and transition the actually-blocked issue, so it must be reconstructed
+    from the bound view rather than left empty.
+    """
+
+    @staticmethod
+    def _rule_inputs(tasks_by_issue):
         run_state = RunState(active_worktrees={})
-        upstream = _task(issue_number=280, subtask_id="task-a")
-        downstream = _task(issue_number=281, subtask_id="task-b")
-        no_subtask = _task(issue_number=282, subtask_id="")
-        ctx = _ctx(
-            tasks_by_issue={280: upstream, 281: downstream, 282: no_subtask},
-            run_state=run_state,
-        )
+        ctx = _ctx(tasks_by_issue=tasks_by_issue, run_state=run_state)
         adapter = CycleActionAdapter(run_state, ctx.config, now=0.0)
         adapter.bind_context(ctx)
+        queries = MagicMock(wraps=ctx)
+        execution_ctx = replace(adapter._execution_context(), queries=queries)
+        return ctx, queries, execution_ctx
 
-        execution_ctx = adapter._execution_context()
+    @pytest.mark.parametrize(
+        ("event", "forced_serial"),
+        [
+            (
+                ForcedSerialDeviation(
+                    issue_number=280, deviated_files=("a.py",), recompute_count=1
+                ),
+                True,
+            ),
+            (
+                AlreadyForcedSerialDeviation(
+                    issue_number=280, deviated_files=("a.py",)
+                ),
+                True,
+            ),
+            (
+                RecomputedDeviation(
+                    issue_number=280, deviated_files=("a.py",), conflicts=()
+                ),
+                False,
+            ),
+        ],
+    )
+    def test_maps_are_built_from_one_queries_snapshot(self, event, forced_serial):
+        # Inserted in descending order; #282 has no subtask_id; #285 repeats
+        # task-a, and the highest issue number must win (query order is ascending).
+        ctx, queries, execution_ctx = self._rule_inputs(
+            {
+                285: _task(issue_number=285, subtask_id="task-a"),
+                282: _task(issue_number=282, subtask_id=""),
+                281: _task(issue_number=281, subtask_id="task-b"),
+                280: _task(issue_number=280, subtask_id="task-a"),
+            }
+        )
+        active = _active()
 
-        assert execution_ctx.issue_number_by_subtask_id == {
-            "task-a": 280,
-            "task-b": 281,
-        }
+        with (
+            patch(
+                "orchestune.dispatch.rebase.check_footprint_deviation",
+                autospec=True,
+                return_value=["a.py"],
+            ),
+            patch(
+                "orchestune.dispatch.rebase._handle_footprint_deviation",
+                autospec=True,
+                return_value=event,
+            ) as handler,
+        ):
+            outcome = _rule_footprint_deviation(execution_ctx, "1", active, None)
+
+        queries.tasks.assert_called_once_with()
+        args = handler.call_args.args
+        assert args[0] is active
+        assert args[1] == ["a.py"]
+        assert args[2] == {task.issue_number: task for task in ctx.tasks()}
+        assert sorted(args[2]) == [280, 281, 282, 285]
+        assert all(isinstance(task, CycleTask) for task in args[2].values())
+        assert args[3] == {"task-a": 285, "task-b": 281}
+        assert args[4] is execution_ctx.config
+        assert args[5] is execution_ctx.dag_inputs
+        assert outcome.deviation_event is event
+        assert outcome.forced_serial is forced_serial
+        assert outcome.terminal is True
+
+    @pytest.mark.parametrize("deviated", [[], None])
+    def test_no_deviation_returns_before_reading_tasks(self, deviated):
+        _, queries, execution_ctx = self._rule_inputs({280: _task()})
+
+        with (
+            patch(
+                "orchestune.dispatch.rebase.check_footprint_deviation",
+                autospec=True,
+                return_value=deviated,
+            ),
+            patch(
+                "orchestune.dispatch.rebase._handle_footprint_deviation",
+                autospec=True,
+            ) as handler,
+        ):
+            outcome = _rule_footprint_deviation(execution_ctx, "1", _active(), None)
+
+        handler.assert_not_called()
+        queries.tasks.assert_not_called()
+        assert outcome.deviation_event is None
+        assert outcome.forced_serial is False
+        assert outcome.terminal is True
 
 
 class TestRunGc:

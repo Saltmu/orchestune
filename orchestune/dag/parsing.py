@@ -166,7 +166,7 @@ def reject_retired_model_tier(value: object) -> None:
         raise ValueError(retired_model_tier_message())
 
 
-def _parse_subtask(raw: dict[str, Any]) -> SubTask:
+def parse_subtask(raw: dict[str, Any]) -> SubTask:
     subtask_id = _parse_subtask_id(raw)
     footprint = _parse_footprint(raw.get("footprint"), subtask_id)
     symbols = _parse_sequence_field(raw.get("symbols"), "symbols", subtask_id)
@@ -226,7 +226,7 @@ def parse_decomposition_plan(path: str | Path) -> list[SubTask]:
     subtasks: list[SubTask] = []
     seen_ids: set[str] = set()
     for raw in raw_subtasks:
-        subtask = _parse_subtask(raw)
+        subtask = parse_subtask(raw)
         if subtask.id in seen_ids:
             raise ValueError(f"サブタスクIDが重複しています: {subtask.id}")
         seen_ids.add(subtask.id)

@@ -561,7 +561,7 @@ def test_provision_initial_sync_failure_sticks_even_when_subtask_sync_succeeds(
 
 @pytest.mark.parametrize("issue_number", [None, 2])
 def test_restore_parent_rejects_tier_and_normalizes_null(tmp_path, issue_number):
-    from orchestune.dag.parsing import _parse_subtask
+    from orchestune.dag.parsing import parse_subtask
     from orchestune.provisioning.plan_restoration import restore_plan_from_parent
     from orchestune.provisioning.rendering import _render_issue_body
 
@@ -581,7 +581,7 @@ def test_restore_parent_rejects_tier_and_normalizes_null(tmp_path, issue_number)
             "issue_number": issue_number,
         }
         child_body = _render_issue_body(
-            _parse_subtask({k: v for k, v in entry.items() if k != "model_tier"}),
+            parse_subtask({k: v for k, v in entry.items() if k != "model_tier"}),
             template.read_text(encoding="utf-8"),
             1,
         )

@@ -11,8 +11,8 @@ from typing import Any
 import yaml
 
 from orchestune.dag.parsing import (
-    _parse_subtask,
     extract_frontmatter,
+    parse_subtask,
     reject_retired_model_tier,
 )
 from orchestune.provisioning.body_parsing import validate_reversible_subtask
@@ -64,7 +64,7 @@ def _task(raw: object) -> RemediationTask:
     raw = {k: v for k, v in raw.items() if k != "model_tier"}
     if unknown := raw.keys() - _SUBTASK_KEYS - _REMEDIATION_KEYS:
         raise ValueError(f"unknown task keys: {sorted(map(str, unknown))}")
-    subtask = _parse_subtask({k: v for k, v in raw.items() if k in _SUBTASK_KEYS})
+    subtask = parse_subtask({k: v for k, v in raw.items() if k in _SUBTASK_KEYS})
     if "issue_number" in raw:
         subtask = replace(
             subtask, issue_number=positive_number(raw["issue_number"], "issue_number")

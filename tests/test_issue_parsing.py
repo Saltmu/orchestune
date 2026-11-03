@@ -18,6 +18,7 @@ from orchestune.issue_parsing import (
     launch_history_in_window,
     parent_issue_number_from_body,
     recovery_counters_from_body,
+    subtask_id_from_body,
 )
 from orchestune.models import IssueRecord
 
@@ -1001,3 +1002,36 @@ class TestBackfillKeepsFootprintLayout:
     def test_recovery_counters_only_append_the_keys(self):
         result = backfill_recovery_counters(_readable_body(), 2, True)
         assert result == _readable_body("recompute_count: 2", "forced_serial: true")
+
+
+SUBTASK_ID_CASES: list[tuple[str, str | None]] = [
+    ("", None),
+    ("no fence here", None),
+    ("```yaml\nsubtask_id: [unclosed\n```\n", None),
+    ("```yaml\n- a\n- b\n```\n", None),
+    ("```yaml\n{}\n```\n", None),
+    ("```yaml\ndescription: no id\n```\n", None),
+    ("```yaml\nsubtask_id: null\n```\n", None),
+    ('```yaml\nsubtask_id: ""\n```\n', None),
+    ("```yaml\nsubtask_id: false\n```\n", None),
+    ("```yaml\nsubtask_id: 0\n```\n", None),
+    ("```yaml\nsubtask_id: task-a\n```\n", "task-a"),
+    ('```yaml\nsubtask_id: "007"\n```\n', "007"),
+    ('```yaml\nsubtask_id: "a: b"\n```\n', "a: b"),
+    ('```yaml\nsubtask_id: " pad "\n```\n', " pad "),
+    ("```yaml\nsubtask_id: 7\n```\n", "7"),
+    ("```yaml\nsubtask_id: true\n```\n", "True"),
+    (
+        "```yaml\nsubtask_id: first\n```\n\n```yaml\nsubtask_id: second\n```\n",
+        "first",
+    ),
+]
+
+
+class TestSubtaskIdFromBody:
+    @pytest.mark.parametrize(("body", "expected"), SUBTASK_ID_CASES)
+    def test_public_contract(self, body, expected):
+        assert subtask_id_from_body(body) == expected
+
+    def test_none_body_is_treated_as_empty(self):
+        assert subtask_id_from_body(None) is None  # type: ignore[arg-type]
