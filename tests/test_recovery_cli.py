@@ -108,6 +108,66 @@ def test_restart_cli_requires_operator_identity_and_reason(monkeypatch, capsys):
     assert requests[0].restart_blocked and not requests[0].apply
 
 
+def test_release_to_review_cli_requires_claim_id_and_reason(monkeypatch, capsys):
+    from orchestune.recovery import cli
+    from orchestune.recovery.contracts import RecoveryResult
+
+    requests = []
+
+    def capture(request, forge=None):
+        requests.append(request)
+        return RecoveryResult(
+            True, request.issue_number, "would_release_to_review", "preview"
+        )
+
+    monkeypatch.setattr(cli, "recover_claim", capture)
+    # Missing claim-id and reason
+    with pytest.raises(SystemExit):
+        cli.main(["--issue", "7", "--release-to-review"])
+    capsys.readouterr()
+
+    # Missing reason
+    with pytest.raises(SystemExit):
+        cli.main(["--issue", "7", "--release-to-review", "--claim-id", "claim-1"])
+    capsys.readouterr()
+
+    # Mixing with restore-marker
+    with pytest.raises(SystemExit):
+        cli.main(
+            [
+                "--issue",
+                "7",
+                "--release-to-review",
+                "--claim-id",
+                "claim-1",
+                "--reason",
+                "test",
+                "--restore-marker",
+            ]
+        )
+    capsys.readouterr()
+
+    # Valid invocation
+    assert (
+        cli.main(
+            [
+                "--issue",
+                "7",
+                "--release-to-review",
+                "--claim-id",
+                "claim-1",
+                "--reason",
+                "test",
+            ]
+        )
+        == 0
+    )
+    assert requests[0].release_to_review is True
+    assert requests[0].claim_id == "claim-1"
+    assert requests[0].reason == "test"
+    assert not requests[0].apply
+
+
 def test_recovery_output_is_identical_on_tty(local_claim, monkeypatch, capsys):
     # #1409: the JSON default and the failure note keep one machine stream, so a
     # TTY must receive the same bytes as a pipe, with no Rich decoration.

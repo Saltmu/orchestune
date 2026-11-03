@@ -50,6 +50,9 @@ from orchestune.dispatch.execution_repair import (
 )
 from orchestune.dispatch.gc.closed_target import release_closed_target_claims
 from orchestune.dispatch.gc.completion import is_completion_hold_event
+from orchestune.dispatch.gc.interactive_diagnostics import (
+    diagnose_unattended_interactive_claims,
+)
 from orchestune.dispatch.gc.rule_chain import _apply_stale_active_entry_discard
 from orchestune.dispatch.gc.usage_limit import handle_usage_limit_reclaim
 from orchestune.dispatch.gc.zombies import (
@@ -395,6 +398,9 @@ def run_gc_phase(
     # so a task that only overlaps a merged PR's leftover claim starts this cycle.
     events: list[CompletionEvent] = list(
         release_closed_target_claims(run_state, config, now=observed_now, open_prs=prs)
+    )
+    events.extend(
+        diagnose_unattended_interactive_claims(run_state, config, open_prs=prs)
     )
     adapter = _GcReclaimAdapter(run_state, tasks_by_issue, config, prs, observed_now)
     supervisor = _gc_supervisor()

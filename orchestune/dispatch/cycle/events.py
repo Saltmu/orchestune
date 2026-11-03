@@ -793,6 +793,35 @@ class PriorMergeEvidenceCompletion(_SerializedCompletion):
     _OMIT_NONE: ClassVar[frozenset[str]] = frozenset()
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class InteractiveClaimInspectionRequired(_SerializedCompletion):
+    """#1643: diagnostic notification for an OPEN interactive claim requiring operator inspection."""
+
+    issue_number: int
+    claim_id: str
+    branch: str
+    worktree: str
+    pid: int | None
+    process_state: Literal["alive", "dead", "unknown"]
+    reason: str
+    recovery_command: str
+    action: Literal["interactive_claim_inspection_required"] = field(
+        default="interactive_claim_inspection_required", init=False
+    )
+    _SERIALIZE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "issue_number",
+        "claim_id",
+        "branch",
+        "worktree",
+        "pid",
+        "process_state",
+        "reason",
+        "recovery_command",
+        "action",
+    )
+    _OMIT_NONE: ClassVar[frozenset[str]] = frozenset()
+
+
 type CompletionEvent = (
     WorktreeCompletion
     | EarlyDeathRequeuedCompletion
@@ -822,4 +851,5 @@ type CompletionEvent = (
     | AbandonmentPersistenceFailureCompletion
     | ChangesRequestedEscalationCompletion
     | PriorMergeEvidenceCompletion
+    | InteractiveClaimInspectionRequired
 )

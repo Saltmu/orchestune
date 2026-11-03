@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 
+from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.cli_output import make_output
 from orchestune.recovery.contracts import RecoveryRequest
 from orchestune.recovery.service import recover_claim
@@ -29,6 +30,11 @@ def _parser() -> argparse.ArgumentParser:
         help="restart a handed-off blocked local claim with a new generation",
     )
     parser.add_argument(
+        "--release-to-review",
+        action="store_true",
+        help="release an abandoned interactive claim to human review and update status label",
+    )
+    parser.add_argument(
         "--apply", action="store_true", help="apply the previewed recovery"
     )
     parser.add_argument(
@@ -41,7 +47,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, forge: Forge | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     request = RecoveryRequest(
@@ -56,10 +62,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         launch_attempt_id=args.launch_attempt_id,
         confirm_external_stopped=args.confirm_external_stopped,
         restart_blocked=args.restart_blocked,
+        release_to_review=args.release_to_review,
     )
     if (
         args.confirm_external_stopped
         or args.restart_blocked
+        or args.release_to_review
         or args.external_id is not None
         or args.launch_attempt_id is not None
     ):
@@ -67,7 +75,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             request.validate()
         except ValueError as error:
             parser.error(str(error))
-    result = recover_claim(request)
+    active_forge = forge
+    if request.release_to_review and active_forge is None:
+        active_forge = GitHubForge()
+    if active_forge is not None:
+        result = recover_claim(request, forge=active_forge)
+    else:
+        result = recover_claim(request)
     # The default output is JSON even without --json, and the failure note joins
     # that same stream. A machine stream never goes through Rich, so the bytes are
     # identical on a TTY and in a pipe.

@@ -1119,6 +1119,20 @@ GC は unknown の場合だけ、同じ repository と固定実行 identity に�
 completion の進行では失効せず、所有権・claim 時刻・branch・attempt・起動時刻が変われば使用できません。
 TTL は設けず、fresh な running を覆しません。Outcome・マージ・所有権・completion・WIP 保全の条件も維持します。
 
+### 人手レビューへの明示的解放（`--release-to-review`）（#1643）
+
+残存 interactive claim による footprint 重複（`ClaimConflictReason.FOOTPRINT_OVERLAP`）でディスパッチがブロックされている場合、Dispatcher の GC フェーズは未監視の interactive claim を診断（`InteractiveClaimInspectionRequired`）しますが、自動解放や状態変更は行いません。操作者は明示的に対象を確認し、人手レビューへ解放できます:
+
+```bash
+# プレビュー
+orchestune recover --issue <N> --claim-id <ID> --release-to-review --reason "残存interactive claimを確認・人手レビューへ移行"
+# 適用
+orchestune recover --issue <N> --claim-id <ID> --release-to-review --reason "残存interactive claimを確認・人手レビューへ移行" --apply
+```
+
+これは対象の Issue が `OPEN` であることを確認し、Issue 本文に `claim_id` がある場合は一致を検証し、完了済み（`status:done`）、不要（`status:not-needed`）、他の終端エスカレーション状態の Issue は拒絶します。検証通過後、ラベルを `status:blocked-human-review` へ遷移させ、active worktree エントリを削除して理由 `operator:release-to-review` の recovery receipt を記録します。すでに claim が解放済みの場合でも、`--release-to-review --apply` は GitHub のラベル更新と receipt の突合をエラーなく完了します。
+
+
 ## 起動制御の既定値と移行（#1154）
 
 起動制御の主軸は並行数 `max-concurrent`（既定`2`。対話型claimを含む`active_worktrees`の件数）です。

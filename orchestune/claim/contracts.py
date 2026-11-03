@@ -38,6 +38,16 @@ class ClaimFailureReason(str, Enum):
     NOT_AN_ISSUE = "not_an_issue"
 
 
+class ClaimConflictReason(str, Enum):
+    """Machine-readable reasons that prevent a new reservation."""
+
+    SAME_ISSUE = "same_issue"
+    REPOSITORY_RESERVATION = "repository_reservation"
+    FOOTPRINT_OVERLAP = "footprint_overlap"
+    FORCED_SERIAL = "forced_serial"
+    SHARED_CONTRACT = "shared_contract"
+
+
 def failure_reason_to_exit_code(reason: ClaimFailureReason) -> ClaimExitCode:
     """Map a ClaimFailureReason to its corresponding ClaimExitCode."""
     if not isinstance(reason, ClaimFailureReason):
@@ -55,6 +65,7 @@ class ClaimFailure:
     conflicting_branch: str | None = None
     conflicting_path: Path | None = None
     next_actions: tuple[str, ...] = ()
+    conflict_reason: ClaimConflictReason | None = None
 
     @property
     def exit_code(self) -> ClaimExitCode:

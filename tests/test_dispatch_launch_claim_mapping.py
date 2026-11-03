@@ -4,6 +4,9 @@ claim成功後にagent起動が失敗した場合のラベル遷移に関する�
 `test_dispatch_launch_basic.py`の肥大化検知回避のため分離。
 """
 
+import pytest
+
+from orchestune.claim.contracts import ClaimConflictReason, ClaimFailureReason
 from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.launch.service import TaskLaunchPlan
 from orchestune.dispatch.scoring import Task
@@ -80,6 +83,82 @@ class TestResolveClaimFailureLaunchResult:
         )
         result = _resolve_claim_failure_launch_result(self._plan(tmp_path), outcome)
         assert result.validation_error is True
+
+    def test_footprint_overlap_conflict_without_claim_is_held(self, tmp_path):
+        from orchestune.claim.contracts import (
+            ClaimConflictReason,
+            ClaimFailure,
+            ClaimFailureReason,
+            ClaimOutcome,
+        )
+        from orchestune.dispatch.launch.service import (
+            _resolve_claim_failure_launch_result,
+        )
+
+        outcome = ClaimOutcome(
+            success=False,
+            issue_number=1,
+            failure=ClaimFailure(
+                reason=ClaimFailureReason.CLAIM_CONFLICT,
+                message="Claim conflict with issue #1629: footprint_overlap",
+                conflict_reason=ClaimConflictReason.FOOTPRINT_OVERLAP,
+            ),
+            claim_id=None,
+        )
+        result = _resolve_claim_failure_launch_result(self._plan(tmp_path), outcome)
+        assert result.held is True
+        assert result.launched is False
+        assert (
+            result.error_message == "Claim conflict with issue #1629: footprint_overlap"
+        )
+
+    @pytest.mark.parametrize(
+        ("reason", "conflict_reason", "claim_id"),
+        [
+            (ClaimFailureReason.CLAIM_CONFLICT, ClaimConflictReason.SAME_ISSUE, None),
+            (
+                ClaimFailureReason.CLAIM_CONFLICT,
+                ClaimConflictReason.REPOSITORY_RESERVATION,
+                None,
+            ),
+            (
+                ClaimFailureReason.CLAIM_CONFLICT,
+                ClaimConflictReason.FORCED_SERIAL,
+                None,
+            ),
+            (
+                ClaimFailureReason.CLAIM_CONFLICT,
+                ClaimConflictReason.SHARED_CONTRACT,
+                None,
+            ),
+            (ClaimFailureReason.CLAIM_CONFLICT, None, None),
+            (
+                ClaimFailureReason.CLAIM_CONFLICT,
+                ClaimConflictReason.FOOTPRINT_OVERLAP,
+                "claim-acquired",
+            ),
+        ],
+    )
+    def test_other_claim_conflicts_are_not_held(
+        self, tmp_path, reason, conflict_reason, claim_id
+    ):
+        from orchestune.claim.contracts import ClaimFailure, ClaimOutcome
+        from orchestune.dispatch.launch.service import (
+            _resolve_claim_failure_launch_result,
+        )
+
+        outcome = ClaimOutcome(
+            success=False,
+            issue_number=1,
+            failure=ClaimFailure(
+                reason=reason,
+                message="some conflict",
+                conflict_reason=conflict_reason,
+            ),
+            claim_id=claim_id,
+        )
+        result = _resolve_claim_failure_launch_result(self._plan(tmp_path), outcome)
+        assert result.held is False
 
 
 class TestTryPlannedLaunchPassesWorktreeRoot:

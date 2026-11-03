@@ -405,6 +405,13 @@ def remediation_init(env: Env) -> None:
     )
 
 
+def recovery_release_review(env: Env) -> None:
+    from orchestune.recovery.release_review import apply_release_review_label
+
+    current = env.params.get("current", env.held)
+    apply_release_review_label(env.forge, ISSUE, current)
+
+
 DRIVERS: dict[str, Driver] = {
     "remediation_init": remediation_init,
     "claim_apply_status_label": claim_apply_status_label,
@@ -429,6 +436,7 @@ DRIVERS: dict[str, Driver] = {
     "completion_abandoned_reclaim": completion_abandoned_reclaim,
     "status_repair_command": status_repair_command,
     "recovery_requeue": recovery_requeue,
+    "recovery_release_review": recovery_release_review,
     "escalation": escalation,
     "integrator_restore_blocked_label": integrator_restore_blocked_label,
 }
