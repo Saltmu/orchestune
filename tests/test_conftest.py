@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.forge import (
     BootstrapResult,
     Forge,

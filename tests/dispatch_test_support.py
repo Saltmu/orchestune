@@ -21,7 +21,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from orchestune.dependencies.resolution import resolve_all_dependencies
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.actions import CycleActionAdapter
 from orchestune.dispatch.rules import CycleContext
 from orchestune.forge import Forge

@@ -5,7 +5,7 @@ from __future__ import annotations
 from orchestune.claim.workspace import ClaimWorkspace, resolve_claim_workspace
 from orchestune.dispatch import external_execution as runtime_observation
 from orchestune.dispatch import runtime_reader as external_execution
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.external_execution import (
     ExternalExecutionHold,
     HoldReason,

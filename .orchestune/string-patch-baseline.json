@@ -17,7 +17,7 @@
     "orchestune.consistency.intents": 1,
     "orchestune.dag.cli": 1,
     "orchestune.dispatch.actor_verification": 4,
-    "orchestune.dispatch.config_loader": 5,
+    "orchestune.dispatch.config.loader": 5,
     "orchestune.dispatch.cycle.run": 47,
     "orchestune.dispatch.cycle.actions": 41,
     "orchestune.dispatch.cycle.actions.CycleActionAdapter": 3,

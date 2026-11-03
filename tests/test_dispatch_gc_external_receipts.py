@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.external_execution import hold_if_not_stopped
 from orchestune.infra.process_utils import run_state_lock
 from orchestune.ledger.external_stop_receipts import (

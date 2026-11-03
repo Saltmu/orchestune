@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.ledger.run_state import RunState
 from tests.dispatch_gc_test_support import _active, _task
 from tests.dispatch_gc_test_support import (

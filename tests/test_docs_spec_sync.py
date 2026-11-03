@@ -678,7 +678,7 @@ class TestOrchestuneTomlExample:
 
     def test_every_dispatcher_setting_is_present_or_commented(self):
         raw_toml = (REPO_ROOT / "orchestune.toml.example").read_text(encoding="utf-8")
-        from orchestune.dispatch.config_schema import (
+        from orchestune.dispatch.config.schema import (
             BOOLEAN_CONFIG_KEYS,
             NON_NEGATIVE_INT_KEYS,
             PATH_CONFIG_KEYS,

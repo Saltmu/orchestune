@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.gc.cloud_completion import _cloud_worktree_completion_status
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,

@@ -98,7 +98,7 @@ from orchestune.task_branch_resolution import (
 )
 
 if TYPE_CHECKING:
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
 
 
 FACT_RECOVERY_COUNTERS = "dispatch.recovery-counters"

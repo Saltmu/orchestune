@@ -20,16 +20,16 @@ from orchestune.dag.models import (
     extract_dag_similarity_threshold,
 )
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
-from orchestune.dispatch.config import (
+from orchestune.dispatch.config.model import (
     VALID_FINAL_ACCEPTANCE_REVIEW_MODES,
     DispatcherConfig,
 )
-from orchestune.dispatch.config_schema import (
+from orchestune.dispatch.config.schema import (
     extract_reviewer_by_target,
     parse_ci_command,
     validate_toml_config,
 )
-from orchestune.dispatch.config_values import runtime_tuning_overrides
+from orchestune.dispatch.config.values import runtime_tuning_overrides
 from orchestune.dispatch.execution_profiles import (
     ExecutionProfileConfig,
     extract_execution_profile_config,

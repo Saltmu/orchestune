@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Generic, Protocol, TypeVar
 
 if TYPE_CHECKING:
     from orchestune.consistency.supervisor import ConsistencyCycleReport
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
     from orchestune.dispatch.cycle.context import IssuesByStatus
     from orchestune.dispatch.cycle.events import (
         CompletionEvent,

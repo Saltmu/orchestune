@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.events import UsageLimitCompletion
 from orchestune.dispatch.gc.usage_limit import handle_usage_limit_exit
 from orchestune.infra.process_utils import run_state_lock

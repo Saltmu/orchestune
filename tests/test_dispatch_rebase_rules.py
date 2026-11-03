@@ -18,7 +18,7 @@ from orchestune.dependencies.resolution import (
     UnresolvedDependency,
     build_legacy_dag_inputs,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.rebase import (
     FootprintDeviationDecision,
     RebaseContext,

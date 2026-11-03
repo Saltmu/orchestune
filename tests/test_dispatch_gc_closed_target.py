@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.gc import closed_target
 from orchestune.dispatch.gc.closed_target import (
     closed_target_candidates,

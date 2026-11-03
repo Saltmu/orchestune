@@ -10,7 +10,7 @@ from orchestune.consistency.repairs.execution import (
 )
 from orchestune.dependencies.resolution import EMPTY_DEPENDENCIES
 from orchestune.dispatch.attempt_record import LaunchAttempt
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.recovery.service import (
     RecoveryBookkeepingSnapshot,
     _build_restored_active_worktree,

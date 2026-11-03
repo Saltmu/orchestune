@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from orchestune.dependencies.resolution import TaskDependencies
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.actions import CycleActionAdapter
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task

@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.locks import (
     NOTICE_KIND_EXTERNAL_LOCK,
     ExternalLockScanResult,

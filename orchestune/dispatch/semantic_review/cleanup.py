@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.semantic_review.adapters import poll_semantic_operation
 from orchestune.forge import Forge, ForgeAuthError
 from orchestune.integrator.attempt_cleanup import (

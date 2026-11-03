@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.ledger.run_state import load_run_state_readonly
 from orchestune.outcome_record import OutcomeRecord
 from tests.dispatch_test_support import replace_flat

@@ -16,7 +16,7 @@ from typing import Any
 import yaml
 
 from orchestune.config_contracts import ConfigError
-from orchestune.dispatch.config_schema import validate_toml_config
+from orchestune.dispatch.config.schema import validate_toml_config
 from orchestune.dispatch.doctor.actions import run_actions_checks
 from orchestune.dispatch.doctor.models import (
     CODE_CONFIG_READABLE,

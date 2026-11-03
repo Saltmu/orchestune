@@ -199,7 +199,7 @@ def test_mypy_rejects_wrong_callback_arguments_and_returns() -> None:
 # single mypy subprocess invocation.
 _COMBINED_FIXTURE = """\
 from orchestune.consistency.supervisor import ConsistencyCycleReport
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.run import (
     _ConsistencyRuntime,
     _RepairCycleState,

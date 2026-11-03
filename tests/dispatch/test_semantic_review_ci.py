@@ -23,7 +23,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.semantic_review.postcycle import verify_semantic_ci
 from orchestune.infra.managed_process import (
     ManagedProcessResult,

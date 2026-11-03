@@ -13,7 +13,7 @@ import pytest
 from orchestune.claim.contracts import ClaimStage, ReservationKind
 from orchestune.dag.models import FootprintConflict
 from orchestune.dependencies.resolution import TaskDependencies
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.events import DeviationConflict, RecomputedDeviation
 from orchestune.dispatch.cycle.run import (
     run_dispatch_cycle,

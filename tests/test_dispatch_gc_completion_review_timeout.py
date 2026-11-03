@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.gc.completion import _finalize_completed_worktree
 from orchestune.ledger.run_state import RunState, TaskReclaimRecord
 from orchestune.outcome_record import OutcomeRecord, ReviewSummary

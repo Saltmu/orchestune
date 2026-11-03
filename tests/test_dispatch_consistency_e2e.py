@@ -26,7 +26,7 @@ from orchestune.consistency.supervisor import (
     consistency_cycle_to_dict,
 )
 from orchestune.dependencies.resolution import TaskDependencies
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.actions import CycleActionAdapter
 from orchestune.dispatch.cycle.context import IssuesByStatus
 from orchestune.dispatch.cycle.report import CycleReport

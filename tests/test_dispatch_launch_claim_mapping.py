@@ -4,7 +4,7 @@ claim成功後にagent起動が失敗した場合のラベル遷移に関する�
 `test_dispatch_launch_basic.py`の肥大化検知回避のため分離。
 """
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.launch.service import TaskLaunchPlan
 from orchestune.dispatch.scoring import Task
 from tests.conftest import register_task_issue

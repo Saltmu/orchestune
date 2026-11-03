@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from orchestune.consistency.supervisor import ConsistencyMode, ScanKind
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.context import IssuesByStatus
 from orchestune.dispatch.cycle.events import (
     PromotionEvent,

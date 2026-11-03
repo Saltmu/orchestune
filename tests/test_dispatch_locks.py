@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 import orchestune.dispatch.locks
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.run import CycleReport
 from orchestune.dispatch.locks import (
     ExternalLockConflict,

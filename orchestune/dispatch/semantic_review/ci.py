@@ -12,7 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import default_ci_command
 from orchestune.integrator.ci_execution import run_ci_stages

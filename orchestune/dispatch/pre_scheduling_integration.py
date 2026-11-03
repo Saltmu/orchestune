@@ -13,7 +13,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.semantic_review.postcycle import (
     SUCCESS_STATUSES as SEMANTIC_SUCCESS_STATUSES,

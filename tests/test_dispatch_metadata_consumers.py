@@ -6,7 +6,7 @@ import inspect
 from typing import get_type_hints
 from unittest.mock import MagicMock
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.launch.service import _decide_task_launch_plan
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,

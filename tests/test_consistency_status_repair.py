@@ -35,7 +35,7 @@ from orchestune.consistency.repairs.status import (
     COMMAND_TRANSITION_LABEL,
     plan_status_repairs,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.status_repair import (
     execute_status_repair_command,
     status_intent_journal_path,

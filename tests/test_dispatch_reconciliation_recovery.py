@@ -18,7 +18,7 @@ from orchestune.dependencies.resolution import (
     TaskDependencies,
     UnresolvedDependency,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.reconciliation import (
     BaseBranchRedRecoveryDecision,
     _apply_base_branch_red_recovery,

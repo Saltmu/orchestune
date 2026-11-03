@@ -3,7 +3,7 @@
 import pytest
 
 from orchestune.config_contracts import ConfigError, retired_model_tier_message
-from orchestune.dispatch.config_schema import (
+from orchestune.dispatch.config.schema import (
     parse_ci_command,
     validate_toml_config,
 )

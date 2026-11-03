@@ -19,7 +19,7 @@ from orchestune.dependencies.policy import (
     decide_stack_target,
 )
 from orchestune.dispatch import gc as dispatch_gc
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.events import (
     AlreadyForcedSerialDeviation,
     DeviationConflict,

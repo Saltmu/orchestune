@@ -14,7 +14,7 @@ from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.dag.models import SubTask
 from orchestune.dependencies.assessment import DependencyAssessment
 from orchestune.dependencies.resolution import TaskDependencies
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.action_contracts import (
     ActivePhaseResult,
     CycleActions,

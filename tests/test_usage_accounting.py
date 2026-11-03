@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.events import WorktreeCompletion
 from orchestune.dispatch.gc.completion import _apply_completed_worktree_outcome
 from orchestune.dispatch.postcycle import _format_event_log_comment

@@ -23,7 +23,7 @@ from orchestune.dependencies.resolution import (
     UnresolvedDependency,
     resolve_all_dependencies,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.action_contracts import ActivePhaseResult, GcPhaseResult
 from orchestune.dispatch.cycle.actions import CycleActionAdapter
 from orchestune.dispatch.cycle.context import IssuesByStatus

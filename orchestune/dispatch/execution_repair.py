@@ -55,7 +55,7 @@ from orchestune.consistency.repairs.status import (
     COMMAND_REMOVE_LABEL,
     COMMAND_TRANSITION_LABEL,
 )
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.external_execution import probe_runtime_status
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel

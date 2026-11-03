@@ -19,7 +19,7 @@ import pytest
 
 from orchestune.consistency.models import RepairStatus
 from orchestune.consistency.repairs.execution import COMMAND_REQUEUE
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.events import (
     ForgeFailureCompletion,
     PromotionEvent,

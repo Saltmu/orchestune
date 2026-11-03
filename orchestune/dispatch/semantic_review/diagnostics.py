@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any, Literal, cast
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.reviewer import ReviewerBot, resolve_reviewer_bot
 from orchestune.dispatch.semantic_review.ack import AckAssessment, assess_review_ack
 from orchestune.review.semantic_gate import SemanticReviewStateV1

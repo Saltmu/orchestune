@@ -15,7 +15,7 @@ from orchestune.dag.models import (
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
 )
-from orchestune.dispatch.config import VALID_FINAL_ACCEPTANCE_REVIEW_MODES
+from orchestune.dispatch.config.model import VALID_FINAL_ACCEPTANCE_REVIEW_MODES
 from orchestune.dispatch.execution_profiles import extract_execution_profile_config
 from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
 from orchestune.review.rounds import MAX_REVIEW_ROUNDS

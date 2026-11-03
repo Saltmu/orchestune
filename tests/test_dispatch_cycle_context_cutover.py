@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from orchestune.consistency.models import RepairCommand, RepairResult, RepairStatus
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.action_contracts import (
     ActivePhaseResult,
     GcPhaseResult,

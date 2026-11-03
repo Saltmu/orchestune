@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from orchestune.branch_naming import build_task_branch_name
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.pre_scheduling_integration import (
     _INTEGRATOR_SUCCESS_STATUSES,
     _advance_pending_semantic_reviews,

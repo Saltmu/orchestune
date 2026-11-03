@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.reporting.report_output import reserve_report
 
 

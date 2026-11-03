@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from orchestune.dispatch.attempt_record import read_attempt
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.events import ExternalExecutionHeldCompletion
 from orchestune.issue_notice import post_notice_if_changed
 from orchestune.labels import StatusLabel

@@ -9,7 +9,7 @@ from orchestune.consistency.models import (
     RepairStatus,
 )
 from orchestune.consistency.repairs.execution import COMMAND_BOOKKEEPING
-from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.recovery.service import (
     RecoveryBookkeepingSnapshot,
     _counter_targets,

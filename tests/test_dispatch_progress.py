@@ -95,7 +95,7 @@ def test_closed_stdout_pipe_preserves_process_exit_code():
 def test_cycle_failure_identifies_boundary_and_no_success(tmp_path, fake_forge):
     from unittest.mock import Mock, patch
 
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
     from orchestune.dispatch.cycle.run import run_dispatch_cycle
 
     sink = Mock()
@@ -127,7 +127,7 @@ def test_launch_progress_matches_actual_result(tmp_path, fake_forge, outcome):
     from contextlib import nullcontext
     from unittest.mock import Mock, patch
 
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
     from orchestune.dispatch.launch.service import (
         TaskLaunchPlan,
         _apply_single_task_launch,

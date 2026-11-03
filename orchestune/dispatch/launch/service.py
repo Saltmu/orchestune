@@ -70,7 +70,7 @@ from orchestune.task_branch_resolution import BranchCapability
 from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:
-    from orchestune.dispatch.config import DispatcherConfig
+    from orchestune.dispatch.config.model import DispatcherConfig
     from orchestune.dispatch.targets import DispatchTarget
 
 

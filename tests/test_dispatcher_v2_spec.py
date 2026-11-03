@@ -6,11 +6,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from orchestune.config_contracts import ConfigError
-from orchestune.dispatch.config_loader import (
+from orchestune.dispatch.config.loader import (
     load_and_resolve_config,
     resolve_parent_issue,
 )
-from orchestune.dispatch.config_schema import validate_toml_config
+from orchestune.dispatch.config.schema import validate_toml_config
 from orchestune.dispatch.dispatcher import _build_arg_parser
 from orchestune.dispatch.execution_profiles import (
     ExecutionProfileConfig,
@@ -247,7 +247,7 @@ class TestParentIssueResolution:
 
     def test_cli_explicit_parent_issue_overrides_branch_name(self, monkeypatch):
         monkeypatch.setattr(
-            "orchestune.dispatch.config_loader._get_current_git_branch",
+            "orchestune.dispatch.config.loader._get_current_git_branch",
             lambda cwd: "parent/issue-9999",
         )
         resolved = resolve_parent_issue(cli_parent_issue=1035, cwd=Path.cwd())
@@ -255,7 +255,7 @@ class TestParentIssueResolution:
 
     def test_branch_inference_matches_parent_issue_pattern(self, monkeypatch):
         monkeypatch.setattr(
-            "orchestune.dispatch.config_loader._get_current_git_branch",
+            "orchestune.dispatch.config.loader._get_current_git_branch",
             lambda cwd: "parent/issue-1035",
         )
         resolved = resolve_parent_issue(cli_parent_issue=None, cwd=Path.cwd())
@@ -276,7 +276,7 @@ class TestParentIssueResolution:
         self, branch, monkeypatch
     ):
         monkeypatch.setattr(
-            "orchestune.dispatch.config_loader._get_current_git_branch",
+            "orchestune.dispatch.config.loader._get_current_git_branch",
             lambda cwd: branch,
         )
         with pytest.raises(ConfigError, match="-p / --parent-issue"):
