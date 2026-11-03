@@ -35,7 +35,7 @@ from orchestune.dispatch.config import (
     DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST,
     DispatcherConfig,
 )
-from orchestune.dispatch.cycle import (
+from orchestune.dispatch.cycle.run import (
     _DispatchRepairExecutor,
     _merge_consistency_reports,
     _RepairCycleState,
@@ -175,7 +175,7 @@ def test_user_allowlisted_execution_requeue_uses_a_bound_handler(
     # Isolate the optional repository-wide loop from the built-in startup
     # boundary so this test proves that the former has its own real handler.
     with patch(
-        "orchestune.dispatch.cycle._run_recovery_bookkeeping_boundary",
+        "orchestune.dispatch.cycle.run._run_recovery_bookkeeping_boundary",
         autospec=True,
         return_value=ConsistencyCycleReport(mode=ConsistencyMode.REPAIR),
     ):

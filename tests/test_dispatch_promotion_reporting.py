@@ -21,7 +21,7 @@ from orchestune.consistency.models import (
 )
 from orchestune.consistency.repairs.status import COMMAND_TRANSITION_LABEL
 from orchestune.consistency.vocabulary import DESIRED_STATUS_LABEL
-from orchestune.dispatch.cycle_events import PromotionEvent
+from orchestune.dispatch.cycle.events import PromotionEvent
 from orchestune.dispatch.reporting.promotion import (
     PromotionReportError,
     PromotionReportJournal,
@@ -586,7 +586,7 @@ def test_a_cycle_interrupted_before_the_log_append_reports_again(tmp_path):
     log = world.config(apply=True).events_log_path
 
     with patch(
-        "orchestune.dispatch.cycle.append_event_log", side_effect=OSError("disk")
+        "orchestune.dispatch.cycle.run.append_event_log", side_effect=OSError("disk")
     ):
         interrupted = world.cycle(apply=True)
     assert isinstance(interrupted.error, OSError)
@@ -604,7 +604,7 @@ def test_a_cycle_interrupted_after_the_log_append_does_not_report_twice(tmp_path
     world = _chain_world(tmp_path)
 
     with patch(
-        "orchestune.dispatch.cycle_execution.confirm_promotion_reports",
+        "orchestune.dispatch.cycle.execution.confirm_promotion_reports",
         side_effect=OSError("killed before the cleanup"),
     ):
         interrupted = world.cycle(apply=True)
@@ -642,8 +642,8 @@ def test_a_dry_run_between_the_cycles_changes_nothing_about_the_report(tmp_path)
 
 def test_a_late_report_is_projected_like_any_other_promotion_event(tmp_path):
     """#1296: the projection is a re-observation notice, not proof of a change now."""
-    from orchestune.dispatch.cycle_report import CycleReport
-    from orchestune.dispatch.cycle_state_changes import _pipeline_state_changes
+    from orchestune.dispatch.cycle.report import CycleReport
+    from orchestune.dispatch.cycle.state_changes import _pipeline_state_changes
 
     report = CycleReport(
         selected=[],
@@ -665,7 +665,7 @@ def test_a_late_report_is_projected_like_any_other_promotion_event(tmp_path):
 
 
 def test_the_event_log_line_carries_the_report_fields(tmp_path):
-    from orchestune.dispatch.cycle_report import CycleReport, build_event_log_entry
+    from orchestune.dispatch.cycle.report import CycleReport, build_event_log_entry
 
     event = PromotionEvent(
         issue_number=12, subtask_id="t", recovered=True, intent_id="i-1"

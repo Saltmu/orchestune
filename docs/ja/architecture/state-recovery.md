@@ -184,7 +184,7 @@ Orchestuneの実行台帳（`ledger`）は、各タスクの作業ディレク�
 ### 6.5 整合性プロジェクション（Consistency Projection）
 
 - **疎結合な整合性カーネル**: リポジトリ全体の整合性を保つ `consistency` カーネルは、ディスパッチ台帳の `ActiveWorktree` に直接依存しません。
-- **ExecutionRecordへの射影**: `_DispatchConsistencyAdapter._executions()`（`orchestune.dispatch.cycle`）および `execution_repair.py`（`execution_record_from_active`）は、`ActiveWorktree` から必要最小限のフィールド（`issue_number`, `branch`, `worktree_path`, `pid`, `external_id`, `started_at`, `kind`, `owner_kind`, `claim_id`, `claim_stage`, `launch_phase`）を抽出し、不変な `ExecutionRecord` へ**射影**（projection）します。
+- **ExecutionRecordへの射影**: `_DispatchConsistencyAdapter._executions()`（`orchestune.dispatch.cycle.run`）および `execution_repair.py`（`execution_record_from_active`）は、`ActiveWorktree` から必要最小限のフィールド（`issue_number`, `branch`, `worktree_path`, `pid`, `external_id`, `started_at`, `kind`, `owner_kind`, `claim_id`, `claim_stage`, `launch_phase`）を抽出し、不変な `ExecutionRecord` へ**射影**（projection）します。
 - **境界の尊重**: `ObservationCollector` などの整合性観測処理は、この射影されたレコードのみを取り扱うため、台帳の内部サブレコード構造を侵食することなく独立したモデル突合・修復計画を遂行できます。
 
 ### 6.6 所有者境界とASTガード

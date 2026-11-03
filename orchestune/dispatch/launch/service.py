@@ -25,7 +25,7 @@ from orchestune.dependencies.policy import (
     decide_stack_target,
 )
 from orchestune.dispatch.cost_model import build_cost_model
-from orchestune.dispatch.cycle_action_contracts import CycleQueries
+from orchestune.dispatch.cycle.action_contracts import CycleQueries
 from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
     resolve_task_execution_selection,
@@ -79,7 +79,7 @@ TTask = TypeVar("TTask", bound=TaskMetadata)
 
 # #943: `orchestune.claim.service`はL3（`dispatch.launch.service`はL2）のため、この
 # モジュールは`claim_task`を直接importしない（`tests/test_architecture.py`の
-# レイヤー境界を参照）。呼び出し元のL3層（`orchestune.dispatch.cycle_actions`）
+# レイヤー境界を参照）。呼び出し元のL3層（`orchestune.dispatch.cycle.actions`）
 # が`claim_task`を束縛した`ClaimFn`をDIで渡す。第2引数は`plan.base_branch_for_launch`
 # 由来のdefault_base。
 ClaimFn = Callable[[ClaimRequest, str], ClaimOutcome]
@@ -1025,7 +1025,7 @@ class LaunchContext(Generic[TTask]):
     open_prs: Sequence[PrRecord] | None = None
     on_launch_committed: LaunchCommitted | None = None
     # #943: `orchestune.claim.service`はL3のため、`claim_task`を束縛した
-    # `ClaimFn`をL3層（`orchestune.dispatch.cycle_actions`）からDIで受け取る
+    # `ClaimFn`をL3層（`orchestune.dispatch.cycle.actions`）からDIで受け取る
     # （このモジュールの`ClaimFn`定義を参照）。
     claim_fn: ClaimFn | None = None
 

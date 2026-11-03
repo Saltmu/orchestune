@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from orchestune.dispatch.cycle_events import ForgeFailureCompletion
+from orchestune.dispatch.cycle.events import ForgeFailureCompletion
 from orchestune.dispatch.reporting.summary import (
     REASON_DEPENDENCY,
     REASON_EXTERNAL_LOCK,

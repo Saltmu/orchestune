@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dependencies.resolution import resolve_all_dependencies
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_action_contracts import CycleActions
+from orchestune.dispatch.cycle.action_contracts import CycleActions
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import parse_task_from_issue
 from orchestune.dispatch.targets import ClaudeCodeCloudRoutineDispatchTarget

@@ -1,7 +1,7 @@
 import tempfile
 from pathlib import Path
 
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     ChangesRequestedEscalationCompletion,
     RecomputedDeviation,
 )

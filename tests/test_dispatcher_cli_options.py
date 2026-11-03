@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.cycle.run import CycleReport
 from orchestune.dispatch.dispatcher import main
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from tests.dispatch_test_support import (

@@ -24,19 +24,19 @@ from orchestune.dependencies.resolution import (
     resolve_all_dependencies,
 )
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import (
+from orchestune.dispatch.cycle.action_contracts import ActivePhaseResult, GcPhaseResult
+from orchestune.dispatch.cycle.actions import CycleActionAdapter
+from orchestune.dispatch.cycle.context import IssuesByStatus
+from orchestune.dispatch.cycle.events import (
+    PriorMergeEvidenceCompletion,
+    WorktreeCompletion,
+)
+from orchestune.dispatch.cycle.report import CycleReport, build_event_log_entry
+from orchestune.dispatch.cycle.run import (
     _execute_cycle_pipeline,
     _pipeline_state_changes,
     _RepairCycleState,
 )
-from orchestune.dispatch.cycle_action_contracts import ActivePhaseResult, GcPhaseResult
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.cycle_context import IssuesByStatus
-from orchestune.dispatch.cycle_events import (
-    PriorMergeEvidenceCompletion,
-    WorktreeCompletion,
-)
-from orchestune.dispatch.cycle_report import CycleReport, build_event_log_entry
 from orchestune.dispatch.launch.service import TaskLaunchPlan, _record_successful_launch
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
 from orchestune.dispatch.phase.scheduling import (
@@ -177,12 +177,12 @@ def test_cycle_phase_order_and_batch_selection_contract(tmp_path, fake_forge) ->
 
     with (
         patch.object(ctx, "process_active_worktrees", side_effect=process),
-        patch("orchestune.dispatch.cycle._notify_pr_links", notify),
+        patch("orchestune.dispatch.cycle.run._notify_pr_links", notify),
         patch.object(ctx, "run_gc", side_effect=gc),
         patch.object(ctx, "reconcile_recovery", side_effect=reconcile),
         patch.object(ctx, "scan_external_locks", side_effect=scan),
         patch(
-            "orchestune.dispatch.cycle.run_scheduling_phase", side_effect=schedule
+            "orchestune.dispatch.cycle.run.run_scheduling_phase", side_effect=schedule
         ) as mocked,
     ):
         report = _execute_cycle_pipeline(
@@ -306,7 +306,7 @@ def test_dry_run_and_launch_failure_observation_contract(tmp_path, fake_forge) -
     ctx = _context(config, [task], run_state=run_state)
 
     with patch(
-        "orchestune.dispatch.cycle_actions.select_tasks_with_decisions",
+        "orchestune.dispatch.cycle.actions.select_tasks_with_decisions",
         return_value=SchedulingResult([task], [_decision(task)]),
     ):
         preview = run_scheduling_phase(ctx, ExternalLockScanResult([], []), [])
@@ -318,11 +318,11 @@ def test_dry_run_and_launch_failure_observation_contract(tmp_path, fake_forge) -
     config.apply = True
     with (
         patch(
-            "orchestune.dispatch.cycle_actions.select_tasks_with_decisions",
+            "orchestune.dispatch.cycle.actions.select_tasks_with_decisions",
             return_value=SchedulingResult([task], [_decision(task)]),
         ),
         patch(
-            "orchestune.dispatch.cycle_actions._launch_selected_tasks", return_value=[]
+            "orchestune.dispatch.cycle.actions._launch_selected_tasks", return_value=[]
         ),
     ):
         failed = run_scheduling_phase(ctx, ExternalLockScanResult([], []), [])

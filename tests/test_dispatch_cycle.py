@@ -19,11 +19,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
-from orchestune.dispatch.cycle_context import (
+from orchestune.dispatch.cycle.context import (
     _fetch_issues,
     _group_by_status,
 )
+from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase.scheduling import (
     _determine_candidate_tasks,
@@ -477,7 +477,7 @@ class TestFinalizeLaunch:
         ctx = _ctx(run_state=RunState(active_worktrees={}), prs=[pr], config=config)
 
         with patch(
-            "orchestune.dispatch.cycle_actions._launch_selected_tasks",
+            "orchestune.dispatch.cycle.actions._launch_selected_tasks",
             autospec=True,
             return_value=[],
         ) as mock_launch:

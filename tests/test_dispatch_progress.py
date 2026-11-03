@@ -96,7 +96,7 @@ def test_cycle_failure_identifies_boundary_and_no_success(tmp_path, fake_forge):
     from unittest.mock import Mock, patch
 
     from orchestune.dispatch.config import DispatcherConfig
-    from orchestune.dispatch.cycle import run_dispatch_cycle
+    from orchestune.dispatch.cycle.run import run_dispatch_cycle
 
     sink = Mock()
     config = DispatcherConfig(
@@ -108,7 +108,7 @@ def test_cycle_failure_identifies_boundary_and_no_success(tmp_path, fake_forge):
     )
     with (
         patch(
-            "orchestune.dispatch.cycle.load_run_state",
+            "orchestune.dispatch.cycle.run.load_run_state",
             side_effect=ValueError("broken state"),
         ),
         pytest.raises(ValueError),

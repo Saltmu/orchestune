@@ -10,8 +10,8 @@ from dataclasses import replace
 from unittest.mock import ANY, MagicMock, patch
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
-from orchestune.dispatch.cycle_events import WorktreeCompletion
+from orchestune.dispatch.cycle.events import WorktreeCompletion
+from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.dispatch.targets import DispatchHandle
 from orchestune.ledger.run_state import RunState, load_run_state
 from orchestune.models import PrRecord

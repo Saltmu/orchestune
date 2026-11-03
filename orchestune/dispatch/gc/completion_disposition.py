@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TypeGuard, get_args
 
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     AbandonedExternalExecutionHeldCompletion,
     AbandonmentPersistenceFailureCompletion,
     ActiveReservationHold,

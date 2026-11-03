@@ -3,7 +3,7 @@ from unittest.mock import patch
 from orchestune.consistency.models import RepairStatus
 from orchestune.consistency.repairs.execution import COMMAND_BOOKKEEPING
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import _run_recovery_bookkeeping_boundary
+from orchestune.dispatch.cycle.run import _run_recovery_bookkeeping_boundary
 from orchestune.ledger.run_state import RunState, load_run_state
 from tests.conftest import make_issue, make_pr
 from tests.dispatch_test_support import save_locked_run_state as save_run_state

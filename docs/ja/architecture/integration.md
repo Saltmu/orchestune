@@ -78,7 +78,7 @@ sequenceDiagram
 >
 > この制約に対する標準サポート構成の要件は、`orchestune dispatch`をGitHub Actions上で定期実行する場合に、リポジトリ単位のconcurrency group（`orchestune-control-${{ github.repository }}`）で制御実行者を1つに直列化することです（詳細は[セットアップガイド §6](../setup.md#6-github-actions上での定期実行とcross-runner直列化)を参照）。この直列化はコード変更を伴わない運用上の予防策です。
 >
-> run-stateロックが覆うのは統合前cycleとscheduling cycleの実行区間だけです（`dispatch/cycle_execution.py:execute_cycle`）。統合境界（not-needed review、第2層セマンティックレビュー、Integrator、#1377）およびpost-cycle（親Issue完了、報告）はロック解放後に動きます。これにより、同期CI検証中も他エージェントプロセスの完了報告（`complete`）がロック競合で失敗しない設計になっています。Integratorには親単位の実行ロック、一時ブランチのラン別分離、親ref更新時の競合検出がありますが、これらは選出・起動予約をランナー間で一意にする仕組みではありません。そのため、後処理を含むCLI全体の直列化は、単一所有者またはActionsのgroupによる運用で担保する必要があります。
+> run-stateロックが覆うのは統合前cycleとscheduling cycleの実行区間だけです（`dispatch/cycle/execution.py:execute_cycle`）。統合境界（not-needed review、第2層セマンティックレビュー、Integrator、#1377）およびpost-cycle（親Issue完了、報告）はロック解放後に動きます。これにより、同期CI検証中も他エージェントプロセスの完了報告（`complete`）がロック競合で失敗しない設計になっています。Integratorには親単位の実行ロック、一時ブランチのラン別分離、親ref更新時の競合検出がありますが、これらは選出・起動予約をランナー間で一意にする仕組みではありません。そのため、後処理を含むCLI全体の直列化は、単一所有者またはActionsのgroupによる運用で担保する必要があります。
 >
 > さらにこれとは独立に、一時ブランチのラン別分離と親ブランチ更新のcompare-and-swap化（#435）が施されています。そのため、万一この制約下で衝突が発生しても、無言のデータレースにはならず必ずpush失敗として検出できる多層防御構造になっています。
 

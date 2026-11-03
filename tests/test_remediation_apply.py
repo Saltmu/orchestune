@@ -366,7 +366,7 @@ def test_registered_child_enters_cycle_dependency_and_conflict_evaluation(
     fake_forge: Any,
 ) -> None:
     from orchestune.dependencies.assessment import DependencyState
-    from orchestune.dispatch.cycle_context import _build_task_mappings
+    from orchestune.dispatch.cycle.context import _build_task_mappings
     from orchestune.dispatch.locks import ExternalLockScanResult
     from orchestune.dispatch.phase.scheduling import run_scheduling_phase
     from orchestune.ledger.run_state import RunState

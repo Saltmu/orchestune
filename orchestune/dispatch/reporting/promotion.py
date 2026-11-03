@@ -25,7 +25,7 @@ from typing import Any, Protocol
 from orchestune.consistency.invariants.status import BLOCKED_WITH_RESOLVED_DEPENDENCIES
 from orchestune.consistency.repairs.status import COMMAND_TRANSITION_LABEL
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import PromotionEvent
+from orchestune.dispatch.cycle.events import PromotionEvent
 from orchestune.infra.json_state import write_json_atomic
 from orchestune.labels import StatusLabel
 

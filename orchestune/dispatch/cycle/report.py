@@ -12,7 +12,7 @@ from orchestune.consistency.supervisor import (
     ConsistencyMode,
     consistency_cycle_to_dict,
 )
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     CompletionEvent,
     DeviationEvent,
     ForgeFailureCompletion,

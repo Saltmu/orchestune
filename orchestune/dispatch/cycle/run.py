@@ -66,14 +66,14 @@ from orchestune.dispatch.config import (
     DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST,
     DispatcherConfig,
 )
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.cycle_context import (
+from orchestune.dispatch.cycle.actions import CycleActionAdapter
+from orchestune.dispatch.cycle.context import (
     _build_cycle_context,
     _build_task_mappings,
     _fetch_issues,
     discard_reclaim_counts_for_closed_issues,
 )
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     CompletionEvent,
     DeviationEvent,
     ForgeFailureCompletion,
@@ -81,31 +81,31 @@ from orchestune.dispatch.cycle_events import (
     PromotionEvent,
     WorktreeCompletionHold,
 )
-from orchestune.dispatch.cycle_execution import (
+from orchestune.dispatch.cycle.execution import (
     CycleStage,
     execute_cycle,
     execute_pipeline,
 )
-from orchestune.dispatch.cycle_execution_contracts import CycleExecutionDependencies
-from orchestune.dispatch.cycle_report import (
+from orchestune.dispatch.cycle.execution_contracts import CycleExecutionDependencies
+from orchestune.dispatch.cycle.report import (
     CycleReport,
 )
-from orchestune.dispatch.cycle_report import (
+from orchestune.dispatch.cycle.report import (
     append_event_log as append_event_log,
 )
-from orchestune.dispatch.cycle_report import (
+from orchestune.dispatch.cycle.report import (
     build_event_log_entry as build_event_log_entry,
 )
-from orchestune.dispatch.cycle_state_changes import (
+from orchestune.dispatch.cycle.state_changes import (
     _event_changes as _event_changes,
 )
-from orchestune.dispatch.cycle_state_changes import (
+from orchestune.dispatch.cycle.state_changes import (
     _lock_state_changes as _lock_state_changes,
 )
-from orchestune.dispatch.cycle_state_changes import (
+from orchestune.dispatch.cycle.state_changes import (
     _pipeline_state_changes as _pipeline_state_changes,
 )
-from orchestune.dispatch.cycle_state_changes import (
+from orchestune.dispatch.cycle.state_changes import (
     _scheduling_state_changes as _scheduling_state_changes,
 )
 from orchestune.dispatch.execution_repair import (
@@ -163,7 +163,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from orchestune.consistency.supervisor import ConsistencyScanResult
-    from orchestune.dispatch.cycle_context import IssuesByStatus
+    from orchestune.dispatch.cycle.context import IssuesByStatus
     from orchestune.dispatch.phase.scheduling import SchedulingPhaseResult
     from orchestune.dispatch.prior_parent_merge import PriorParentMergeReconciliation
     from orchestune.ledger.run_state import RunState

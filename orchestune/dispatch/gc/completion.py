@@ -11,7 +11,7 @@ from typing import cast
 
 from orchestune.claim.adopt_pr import orphan_marker, validate_escalation_reason
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     CompletionEvent,
     EarlyDeathRequeuedCompletion,
     ReviewTimeoutRequeuedCompletion,

@@ -18,8 +18,8 @@ from unittest.mock import patch
 
 from orchestune.consistency.intents import IntentJournal
 from orchestune.consistency.models import ConsistencyScope, RepairCommand
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.cycle_events import PromotionEvent
+from orchestune.dispatch.cycle.actions import CycleActionAdapter
+from orchestune.dispatch.cycle.events import PromotionEvent
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import RunState
 from tests.conftest import FakeForge, make_issue, make_task
@@ -116,7 +116,7 @@ class TestExecuteRepair:
         command = _plan({1: task})[1][0]
 
         with patch(
-            "orchestune.dispatch.cycle_actions.execute_status_repair_command"
+            "orchestune.dispatch.cycle.actions.execute_status_repair_command"
         ) as execute:
             result = adapter.execute_repair(command)
 
@@ -163,7 +163,7 @@ class TestExecuteRepair:
         ]
 
         with patch(
-            "orchestune.dispatch.cycle_actions._run_active_worktree_rules",
+            "orchestune.dispatch.cycle.actions._run_active_worktree_rules",
             return_value=([], [], False),
         ):
             adapter.process_active_worktrees()

@@ -15,7 +15,7 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import (
+from orchestune.dispatch.cycle.run import (
     run_dispatch_cycle,
 )
 from orchestune.ledger.run_state import (

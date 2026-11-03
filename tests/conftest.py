@@ -347,7 +347,7 @@ def stub_claim_workspace_git_repo(
 
 def real_claim_fn(config: DispatcherConfig) -> Callable[[Any, str], Any]:
     """#943: `orchestune.dispatch.launch.service`はL2、`orchestune.claim.service`はL3の
-    ため、本番コードは`orchestune.dispatch.cycle_actions`（L3）でclaim_taskを
+    ため、本番コードは`orchestune.dispatch.cycle.actions`（L3）でclaim_taskを
     束縛したcallableをDIで渡す（`tests/test_architecture.py`のレイヤー境界を
     参照）。テストは同じ理由で`_apply_task_launches`/`LaunchContext`へ
     `claim_fn=`を明示的に渡す必要があるため、本番と同じ束縛をここに集約する。
@@ -657,7 +657,7 @@ def _stub_file_lock_by_default(request: pytest.FixtureRequest):
 
     with (
         patch(
-            "orchestune.dispatch.cycle.run_state_lock",
+            "orchestune.dispatch.cycle.run.run_state_lock",
             _in_memory_run_state_lock,
         ),
         patch(
@@ -794,7 +794,7 @@ def _guard_dispatch_cycle_ensure_parent_branch(
         request.node.cls.__name__ != "TestRunDispatchCycleParentIssueValidation"
     ):
         monkeypatch.setattr(
-            "orchestune.dispatch.cycle.ensure_parent_branch_ready",
+            "orchestune.dispatch.cycle.run.ensure_parent_branch_ready",
             isolate_parent_branch_ready,
         )
     yield

@@ -10,7 +10,7 @@ import subprocess
 from unittest.mock import patch
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.ledger.run_state import (
     RunState,
     load_run_state,

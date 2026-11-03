@@ -187,7 +187,7 @@ While in-memory representations use nested subrecords, disk persistence strictly
 ### 6.5 Consistency Projection
 
 - **Decoupled consistency kernel**: The repository-wide `consistency` kernel does not depend directly on the internal structure of `ActiveWorktree`.
-- **Projection to ExecutionRecord**: `_DispatchConsistencyAdapter._executions()` (`orchestune.dispatch.cycle`) and `execution_repair.py` (`execution_record_from_active`) extract minimal fields (`issue_number`, `branch`, `worktree_path`, `pid`, `external_id`, `started_at`, `kind`, `owner_kind`, `claim_id`, `claim_stage`, `launch_phase`) from `ActiveWorktree` and map them into an immutable `ExecutionRecord` **projection**.
+- **Projection to ExecutionRecord**: `_DispatchConsistencyAdapter._executions()` (`orchestune.dispatch.cycle.run`) and `execution_repair.py` (`execution_record_from_active`) extract minimal fields (`issue_number`, `branch`, `worktree_path`, `pid`, `external_id`, `started_at`, `kind`, `owner_kind`, `claim_id`, `claim_stage`, `launch_phase`) from `ActiveWorktree` and map them into an immutable `ExecutionRecord` **projection**.
 - **Boundary preservation**: Consistency observation (`ObservationCollector`) interacts exclusively with projected records, inspecting facts and planning repairs without encroaching on ledger subrecord ownership boundaries.
 
 ### 6.6 Owner Boundaries and AST Guards

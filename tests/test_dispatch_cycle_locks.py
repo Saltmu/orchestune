@@ -10,7 +10,7 @@ import pytest
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.dispatch.locks import (
     ExternalLockConflict,
     ExternalLockScanResult,
@@ -729,7 +729,8 @@ class TestDispatchCycleRunStateLock:
             return RunState()
 
         with patch(
-            "orchestune.dispatch.cycle.load_run_state", side_effect=hook_load_run_state
+            "orchestune.dispatch.cycle.run.load_run_state",
+            side_effect=hook_load_run_state,
         ):
             run_dispatch_cycle(config)
 

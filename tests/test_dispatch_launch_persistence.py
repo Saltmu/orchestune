@@ -5,7 +5,7 @@ import pytest
 
 from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
+from orchestune.dispatch.cycle.actions import CycleActionAdapter
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.ledger.run_state import CompletedWorktree, RunState
@@ -140,11 +140,11 @@ class TestFinalizeLaunchContextRecording:
 
         with (
             patch(
-                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
+                "orchestune.dispatch.cycle.actions._launch_selected_tasks",
                 autospec=True,
                 side_effect=launch,
             ),
-            patch("orchestune.dispatch.cycle_actions.save_run_state"),
+            patch("orchestune.dispatch.cycle.actions.save_run_state"),
         ):
             selected = ctx.launch_tasks((task,), (), (task,))
 
@@ -180,7 +180,7 @@ class TestFinalizeLaunchContextRecording:
 
         with (
             patch(
-                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
+                "orchestune.dispatch.cycle.actions._launch_selected_tasks",
                 autospec=True,
                 side_effect=launch,
             ),

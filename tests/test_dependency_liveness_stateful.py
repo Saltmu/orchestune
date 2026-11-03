@@ -888,7 +888,7 @@ def _dry_run_preview_of(topology, dependency, reserved, subject) -> None:
 
 @pytest.mark.parametrize("intermediate", [False, True], ids=["target", "intermediate"])
 def test_control_dry_run_own_reservation_bypass_is_detected(monkeypatch, intermediate):
-    from orchestune.dispatch import cycle as cycle_module
+    from orchestune.dispatch.cycle import run as cycle_module
 
     topology = _INTERMEDIATE if intermediate else None
     dependency = 12 if intermediate else 11

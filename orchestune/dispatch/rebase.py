@@ -20,7 +20,7 @@ from orchestune.dependencies.policy import (
 )
 from orchestune.dispatch import gc as dispatch_gc
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     AlreadyForcedSerialDeviation,
     DeviationConflict,
     DeviationEvent,

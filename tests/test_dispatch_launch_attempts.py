@@ -314,7 +314,7 @@ def test_handle_save_failure_holds_and_preserves_quota_and_worktree(launch_env):
 def test_startup_recovery_without_pr_never_requeues_a_possible_launch(
     launch_env, known, status
 ):
-    from orchestune.dispatch.cycle import _run_recovery_bookkeeping_boundary
+    from orchestune.dispatch.cycle.run import _run_recovery_bookkeeping_boundary
 
     forge, config, plan, launch = launch_env
     if known:
@@ -379,7 +379,7 @@ def test_lookup_never_implies_permission_to_relaunch(launch_env, result):
 
 
 def test_dry_run_recovery_has_no_writes_or_launches(launch_env):
-    from orchestune.dispatch.cycle import _run_recovery_bookkeeping_boundary
+    from orchestune.dispatch.cycle.run import _run_recovery_bookkeeping_boundary
 
     forge, config, plan, launch = launch_env
     _apply_task_launches(
@@ -435,7 +435,7 @@ def test_ambiguous_provider_result_is_reported_only_once(launch_env):
 
 
 def test_recovery_does_not_take_over_another_parents_attempt(launch_env):
-    from orchestune.dispatch.cycle import _run_recovery_bookkeeping_boundary
+    from orchestune.dispatch.cycle.run import _run_recovery_bookkeeping_boundary
 
     forge, config, plan, launch = launch_env
     _apply_task_launches(
@@ -449,7 +449,7 @@ def test_recovery_does_not_take_over_another_parents_attempt(launch_env):
 
 
 def test_journal_does_not_override_recovery_counter_bookkeeping(launch_env):
-    from orchestune.dispatch.cycle import _run_recovery_bookkeeping_boundary
+    from orchestune.dispatch.cycle.run import _run_recovery_bookkeeping_boundary
 
     forge, config, plan, launch = launch_env
     state = RunState()
@@ -519,7 +519,7 @@ def test_unknown_launch_does_not_abort_other_selected_tasks(launch_env):
 
 
 def test_other_parent_counters_remain_monotonic(launch_env):
-    from orchestune.dispatch.cycle import _run_recovery_bookkeeping_boundary
+    from orchestune.dispatch.cycle.run import _run_recovery_bookkeeping_boundary
 
     forge, config, plan, launch = launch_env
     state = RunState()

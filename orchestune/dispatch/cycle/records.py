@@ -25,7 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from orchestune.consistency.invariants.status import primary_status_labels
-from orchestune.dispatch.cycle_context_state import RecordResult, RecordStatus
+from orchestune.dispatch.cycle.context_state import RecordResult, RecordStatus
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.status_repair import VerifiedStatusTransition
 from orchestune.labels import StatusLabel

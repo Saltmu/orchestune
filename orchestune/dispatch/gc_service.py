@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any, cast
 
 from orchestune.claim.workspace import ClaimWorkspace, resolve_claim_workspace
-from orchestune.dispatch.cycle_events import TokenHoldCompletion
-from orchestune.dispatch.cycle_records import CompletionReceipt
+from orchestune.dispatch.cycle.events import TokenHoldCompletion
+from orchestune.dispatch.cycle.records import CompletionReceipt
 from orchestune.dispatch.gc.closed_target import (
     IssueStateReader,
     apply_closed_target_items,

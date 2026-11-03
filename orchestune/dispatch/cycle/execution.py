@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_execution_contracts import (
+from orchestune.dispatch.cycle.execution_contracts import (
     CycleExecutionDependencies,
     RepairCycleAccumulator,
 )
-from orchestune.dispatch.cycle_report import CycleReport
+from orchestune.dispatch.cycle.report import CycleReport
 from orchestune.dispatch.phase.scheduling import SchedulingPhaseResult
 from orchestune.dispatch.reporting.progress import progress_phase
 from orchestune.dispatch.reporting.promotion import confirm_promotion_reports
@@ -32,8 +32,8 @@ class CycleStage(str, Enum):
 
 
 if TYPE_CHECKING:
-    from orchestune.dispatch.cycle_context import IssuesByStatus
-    from orchestune.dispatch.cycle_events import PriorMergeEvidenceCompletion
+    from orchestune.dispatch.cycle.context import IssuesByStatus
+    from orchestune.dispatch.cycle.events import PriorMergeEvidenceCompletion
     from orchestune.dispatch.rules import CycleContext
     from orchestune.ledger.run_state import RunState
 

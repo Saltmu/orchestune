@@ -32,7 +32,7 @@ from orchestune.dispatch import (
     status_repair,
 )
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import CompletionEvent
+from orchestune.dispatch.cycle.events import CompletionEvent
 from orchestune.dispatch.gc import cloud_completion, completion, zombies
 from orchestune.dispatch.launch import attempts as launch_attempts
 from orchestune.dispatch.launch import service as launch
@@ -253,7 +253,7 @@ def completion_requeue(env: Env) -> None:
 
 
 def usage_limit_requeue(env: Env) -> None:
-    from orchestune.dispatch.cycle_events import UsageLimitCompletion
+    from orchestune.dispatch.cycle.events import UsageLimitCompletion
     from orchestune.dispatch.gc import usage_limit
 
     for name in ("remove_worktree", "backup_wip_commit", "save_run_state"):

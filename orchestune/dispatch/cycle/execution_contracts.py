@@ -11,13 +11,13 @@ from typing import TYPE_CHECKING, Generic, Protocol, TypeVar
 if TYPE_CHECKING:
     from orchestune.consistency.supervisor import ConsistencyCycleReport
     from orchestune.dispatch.config import DispatcherConfig
-    from orchestune.dispatch.cycle_context import IssuesByStatus
-    from orchestune.dispatch.cycle_events import (
+    from orchestune.dispatch.cycle.context import IssuesByStatus
+    from orchestune.dispatch.cycle.events import (
         CompletionEvent,
         DeviationEvent,
         PromotionEvent,
     )
-    from orchestune.dispatch.cycle_report import CycleReport
+    from orchestune.dispatch.cycle.report import CycleReport
     from orchestune.dispatch.phase.scheduling import SchedulingPhaseResult
     from orchestune.dispatch.prior_parent_merge import PriorParentMergeReconciliation
     from orchestune.dispatch.rules import CycleContext

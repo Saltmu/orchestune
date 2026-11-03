@@ -7,7 +7,7 @@ from orchestune.dependencies.resolution import (
     EMPTY_DEPENDENCIES,
     TaskDependencies,
 )
-from orchestune.dispatch.cycle_events import DeviationEvent, RecomputedDeviation
+from orchestune.dispatch.cycle.events import DeviationEvent, RecomputedDeviation
 from orchestune.ledger.run_state import ActiveWorktree, RunState
 from orchestune.task_metadata import TaskMetadata
 

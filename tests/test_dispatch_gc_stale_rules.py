@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from orchestune.consistency.models import RepairStatus
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import TaskWorktreeCompletion
+from orchestune.dispatch.cycle.events import TaskWorktreeCompletion
 from orchestune.dispatch.gc.rule_chain import (
     _apply_stale_active_entry_discard,
     _rule_not_needed,

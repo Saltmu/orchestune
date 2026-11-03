@@ -33,8 +33,8 @@ from orchestune.dispatch.config import (
     DEFAULT_SELF_HEALING_REPAIR_ALLOWLIST,
     DispatcherConfig,
 )
-from orchestune.dispatch.cycle_action_contracts import GcPhaseResult
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.action_contracts import GcPhaseResult
+from orchestune.dispatch.cycle.events import (
     CompletionEvent,
     ForgeFailureCompletion,
     StaleEntryDiscardedCompletion,

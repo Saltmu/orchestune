@@ -8,7 +8,7 @@ test_dispatch_gc_integration.py を参照。
 
 from unittest.mock import patch
 
-from orchestune.dispatch.cycle_events import WorktreeCompletion, WorktreeCompletionHold
+from orchestune.dispatch.cycle.events import WorktreeCompletion, WorktreeCompletionHold
 from orchestune.dispatch.gc.rule_chain import _rule_completed
 from orchestune.models import PrRecord
 from tests.dispatch_gc_test_support import _active, _task

@@ -284,7 +284,7 @@ def _dispatch_direct_cases() -> list[EventCase]:
 
 def _completion_and_retry_cases() -> list[EventCase]:
     record = _cases(
-        "dispatch/cycle_context_state.py::_CycleState.record_completion",
+        "dispatch/cycle/context_state.py::_CycleState.record_completion",
         cycle_record_completion,
     )
     reclaim = _cases("dispatch/gc/zombies.py::_notify_requeued_reclaim", gc_reclaim)

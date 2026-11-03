@@ -11,8 +11,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from orchestune.dispatch import cycle, cycle_execution, dispatcher
+from orchestune.dispatch import dispatcher
 from orchestune.dispatch.config import DispatcherConfig
+from orchestune.dispatch.cycle import execution as cycle_execution
+from orchestune.dispatch.cycle import run as cycle
 from orchestune.dispatch.launch.service import _persist_launch_history
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.infra.process_utils import is_run_state_lock_held, run_state_lock

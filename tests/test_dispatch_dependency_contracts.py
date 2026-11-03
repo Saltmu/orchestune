@@ -20,7 +20,7 @@ from orchestune.dependencies.resolution import (
     resolve_all_dependencies,
 )
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_context import _build_pr_mappings, _build_task_mappings
+from orchestune.dispatch.cycle.context import _build_pr_mappings, _build_task_mappings
 from orchestune.dispatch.launch.service import _is_task_stack_eligible
 from orchestune.dispatch.phase.reconciliation import _MAIN_ACTIVE_WORKTREE_RULES
 from orchestune.dispatch.rebase import _decide_rebase_target

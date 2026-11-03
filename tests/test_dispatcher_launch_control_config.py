@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.cycle.run import CycleReport
 from orchestune.dispatch.dispatcher import main
 from tests.dispatch_test_support import (
     stub_forge_check_auth,

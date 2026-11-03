@@ -13,13 +13,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
-from orchestune.dispatch.cycle_context import _group_by_status
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.context import _group_by_status
+from orchestune.dispatch.cycle.events import (
     RecomputedDeviation,
     TaskWorktreeCompletion,
     WorktreeCompletionHold,
 )
+from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.ledger.run_state import (
     RunState,
@@ -233,17 +233,17 @@ class TestProcessActiveWorktrees:
         fake_forge.list_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch.cycle.load_run_state",
+                "orchestune.dispatch.cycle.run.load_run_state",
                 autospec=True,
                 return_value=run_state,
             ),
             patch(
-                "orchestune.dispatch.cycle._fetch_issues",
+                "orchestune.dispatch.cycle.run._fetch_issues",
                 autospec=True,
                 return_value=_group_by_status([]),
             ),
             patch(
-                "orchestune.dispatch.cycle._build_cycle_context",
+                "orchestune.dispatch.cycle.run._build_cycle_context",
                 autospec=True,
                 return_value=ctx,
             ),
@@ -261,27 +261,27 @@ class TestProcessActiveWorktrees:
             # Completion now also consults the all-state PR list to rule out
             # an abandoned (closed-unmerged) PR before finalizing.
             patch(
-                "orchestune.dispatch.cycle._run_status_repair_boundary",
+                "orchestune.dispatch.cycle.run._run_status_repair_boundary",
                 autospec=True,
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.cycle_actions._handle_blocked_recompute_recovery",
+                "orchestune.dispatch.cycle.actions._handle_blocked_recompute_recovery",
                 autospec=True,
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.cycle_actions._sync_external_locks",
+                "orchestune.dispatch.cycle.actions._sync_external_locks",
                 autospec=True,
                 return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
             ),
             patch(
-                "orchestune.dispatch.cycle_actions._decide_actor_verification",
+                "orchestune.dispatch.cycle.actions._decide_actor_verification",
                 autospec=True,
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
+                "orchestune.dispatch.cycle.actions._launch_selected_tasks",
                 autospec=True,
                 return_value=[],
             ),
@@ -324,17 +324,17 @@ class TestProcessActiveWorktrees:
 
         with (
             patch(
-                "orchestune.dispatch.cycle.load_run_state",
+                "orchestune.dispatch.cycle.run.load_run_state",
                 autospec=True,
                 return_value=run_state,
             ),
             patch(
-                "orchestune.dispatch.cycle._fetch_issues",
+                "orchestune.dispatch.cycle.run._fetch_issues",
                 autospec=True,
                 return_value=_group_by_status([]),
             ),
             patch(
-                "orchestune.dispatch.cycle._build_cycle_context",
+                "orchestune.dispatch.cycle.run._build_cycle_context",
                 autospec=True,
                 return_value=ctx,
             ),
@@ -355,27 +355,27 @@ class TestProcessActiveWorktrees:
                 return_value=True,
             ),
             patch(
-                "orchestune.dispatch.cycle._run_status_repair_boundary",
+                "orchestune.dispatch.cycle.run._run_status_repair_boundary",
                 autospec=True,
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.cycle_actions._handle_blocked_recompute_recovery",
+                "orchestune.dispatch.cycle.actions._handle_blocked_recompute_recovery",
                 autospec=True,
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.cycle_actions._sync_external_locks",
+                "orchestune.dispatch.cycle.actions._sync_external_locks",
                 autospec=True,
                 return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
             ),
             patch(
-                "orchestune.dispatch.cycle_actions._decide_actor_verification",
+                "orchestune.dispatch.cycle.actions._decide_actor_verification",
                 autospec=True,
                 return_value=[],
             ),
             patch(
-                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
+                "orchestune.dispatch.cycle.actions._launch_selected_tasks",
                 autospec=True,
                 return_value=[],
             ),
