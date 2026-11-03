@@ -185,10 +185,10 @@ class TestRunDispatchCycleFootprintRecompute:
         fake_forge.remove_label.reset_mock(side_effect=True)
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+                "orchestune.dispatch.phase.rebase.ensure_parent_branch", autospec=True
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -275,7 +275,7 @@ class TestRunDispatchCycleFootprintRecompute:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -369,10 +369,10 @@ class TestRunDispatchCycleFootprintRecompute:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+                "orchestune.dispatch.phase.rebase.ensure_parent_branch", autospec=True
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -470,10 +470,10 @@ class TestRunDispatchCycleFootprintRecompute:
         fake_forge.list_issues_by_label.return_value = []
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+                "orchestune.dispatch.phase.rebase.ensure_parent_branch", autospec=True
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -541,10 +541,10 @@ class TestRunDispatchCycleFootprintRecompute:
         mock_add_comment = fake_forge.add_comment
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+                "orchestune.dispatch.phase.rebase.ensure_parent_branch", autospec=True
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),

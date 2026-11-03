@@ -13,7 +13,7 @@ from orchestune.dependencies.assessment import (
 )
 from orchestune.dependencies.resolution import UnresolvedDependency
 from orchestune.dispatch.locks import scan_external_locks
-from orchestune.dispatch.phase_rebase import _decide_external_lock_sync
+from orchestune.dispatch.phase.rebase import _decide_external_lock_sync
 from orchestune.ledger.run_state import RunState
 from orchestune.lock_contracts import CompletedDependencyBranchEvidence
 from orchestune.models import PrRecord
@@ -198,11 +198,11 @@ def _decide(
 ):
     with (
         patch(
-            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            "orchestune.dispatch.phase.rebase.list_remote_branches",
             return_value=list(remote_branches),
         ),
         patch(
-            "orchestune.dispatch.phase_rebase.branch_changed_files",
+            "orchestune.dispatch.phase.rebase.branch_changed_files",
             return_value=["src/foo.py"],
         ),
     ):

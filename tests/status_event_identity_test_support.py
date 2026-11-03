@@ -37,7 +37,7 @@ EXPECTED_SOURCES = frozenset(
         "dispatch/rebase.py::_apply_recomputed_event",
         "dispatch/rebase.py::_prepare_wip_backup_for_rebase",
         "dispatch/rebase.py::_handle_rebase_failure",
-        "dispatch/phase_rebase.py::_apply_external_lock_sync",
+        "dispatch/phase/rebase.py::_apply_external_lock_sync",
         "dispatch/gc/zombies.py::_notify_requeued_reclaim",
         "dispatch/prior_parent_merge.py::_apply_verified_repair",
         "dispatch/prior_parent_merge.py::_normalize_closed_issue_label",

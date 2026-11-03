@@ -18,7 +18,7 @@ if TYPE_CHECKING:
         PromotionEvent,
     )
     from orchestune.dispatch.cycle_report import CycleReport
-    from orchestune.dispatch.phase_scheduling import SchedulingPhaseResult
+    from orchestune.dispatch.phase.scheduling import SchedulingPhaseResult
     from orchestune.dispatch.prior_parent_merge import PriorParentMergeReconciliation
     from orchestune.dispatch.rules import CycleContext
     from orchestune.ledger.run_state import RunState

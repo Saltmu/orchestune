@@ -201,7 +201,7 @@ def _dispatch_direct_cases() -> list[EventCase]:
         "dispatch/status_repair.py::_apply_command", status_repair_add_remove
     )
     lock = _cases(
-        "dispatch/phase_rebase.py::_apply_external_lock_sync", external_lock_sync
+        "dispatch/phase/rebase.py::_apply_external_lock_sync", external_lock_sync
     )
     reconcile = "dispatch/reconciliation.py::"
     finalize = _cases(

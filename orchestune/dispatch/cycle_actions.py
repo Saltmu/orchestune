@@ -66,8 +66,8 @@ from orchestune.dispatch.launch.service import (
     _launch_selected_tasks,
 )
 from orchestune.dispatch.locks import ExternalLockScanResult
-from orchestune.dispatch.phase_gc import build_gc_reclaim_handler, run_gc_phase
-from orchestune.dispatch.phase_rebase import _sync_external_locks
+from orchestune.dispatch.phase.gc import build_gc_reclaim_handler, run_gc_phase
+from orchestune.dispatch.phase.rebase import _sync_external_locks
 from orchestune.dispatch.rebase import (
     _rule_auto_rebase,
     _rule_footprint_deviation,

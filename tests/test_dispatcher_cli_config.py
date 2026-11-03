@@ -954,7 +954,7 @@ class TestDispatcherConfigLoading:
         fake_forge.list_open_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),

@@ -136,7 +136,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             ),
             patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
             patch(
-                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.phase.scheduling._determine_candidate_tasks",
                 autospec=True,
                 return_value=([blocked_task, normal_task], {}, []),
             ),
@@ -232,7 +232,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             ),
             patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
             patch(
-                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.phase.scheduling._determine_candidate_tasks",
                 autospec=True,
                 return_value=([], {}, []),
             ),
@@ -347,7 +347,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             ),
             patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
             patch(
-                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.phase.scheduling._determine_candidate_tasks",
                 autospec=True,
                 return_value=([], {}, []),
             ),
@@ -465,7 +465,7 @@ class TestDispatchCycleRecomputeExclusionAndRecovery:
             ),
             patch("orchestune.dispatch.cycle_actions.save_run_state", autospec=True),
             patch(
-                "orchestune.dispatch.phase_scheduling._determine_candidate_tasks",
+                "orchestune.dispatch.phase.scheduling._determine_candidate_tasks",
                 autospec=True,
                 return_value=([], {}, []),
             ),

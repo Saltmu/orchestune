@@ -582,7 +582,7 @@ class TestDispatchCycleWiring:
             )
         ]
         with patch(
-            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            "orchestune.dispatch.phase.rebase.list_remote_branches",
             autospec=True,
             return_value=[],
         ):

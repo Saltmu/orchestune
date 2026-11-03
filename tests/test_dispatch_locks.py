@@ -13,7 +13,7 @@ from orchestune.dispatch.locks import (
 from orchestune.dispatch.locks import (
     scan_external_locks as _scan_external_locks,
 )
-from orchestune.dispatch.phase_rebase import _sync_external_locks
+from orchestune.dispatch.phase.rebase import _sync_external_locks
 from orchestune.dispatch.reporting.report import write_github_step_summary
 from orchestune.dispatch.scoring import Task
 from orchestune.ledger.run_state import RunState
@@ -600,7 +600,7 @@ class TestCheckFootprintDeviation:
 
 
 class TestSyncExternalLocks:
-    @patch("orchestune.dispatch.phase_rebase.list_remote_branches", autospec=True)
+    @patch("orchestune.dispatch.phase.rebase.list_remote_branches", autospec=True)
     @patch("fake_forge_proxy.active_fake_forge.remove_label")
     @patch("fake_forge_proxy.active_fake_forge.add_label")
     def test_sync_external_locks_unlocks_without_requeue_for_done_tasks(

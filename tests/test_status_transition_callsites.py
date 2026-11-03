@@ -143,7 +143,7 @@ OUT_OF_SCOPE_PATHS: tuple[tuple[str, str, str], ...] = (
         "adds the auxiliary force-serial directly",
     ),
     (
-        "dispatch/phase_rebase.py",
+        "dispatch/phase/rebase.py",
         "_apply_external_lock_sync",
         "auxiliary external-lock and queued re-add",
     ),

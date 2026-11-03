@@ -35,7 +35,7 @@ from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.cycle_context import IssuesByStatus
 from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.locks import ExternalLockScanResult
-from orchestune.dispatch.phase_gc import run_gc_phase
+from orchestune.dispatch.phase.gc import run_gc_phase
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.status_repair import status_intent_journal_path
 from orchestune.ledger.active_records import (
@@ -697,7 +697,7 @@ def test_cycle_resumes_partial_forge_failure_once_on_the_next_cycle(
 
     with (
         patch(
-            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            "orchestune.dispatch.phase.rebase.list_remote_branches",
             autospec=True,
             return_value=[],
         ),
@@ -796,7 +796,7 @@ def test_user_allowlisted_status_repair_resumes_when_first_forge_write_fails(
 
     with (
         patch(
-            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            "orchestune.dispatch.phase.rebase.list_remote_branches",
             autospec=True,
             return_value=[],
         ),
@@ -898,7 +898,7 @@ def test_applied_status_intent_is_verified_next_cycle_after_read_failure(
 
     with (
         patch(
-            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            "orchestune.dispatch.phase.rebase.list_remote_branches",
             autospec=True,
             return_value=[],
         ),

@@ -18,7 +18,7 @@ from orchestune.dispatch.gc.zombies import (
     ZombieOrTimeoutReclaim,
     _reclaim_candidate_from_command,
 )
-from orchestune.dispatch.phase_gc import (
+from orchestune.dispatch.phase.gc import (
     _gc_supervisor,
     _GcReclaimAdapter,
     run_gc_phase,

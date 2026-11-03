@@ -132,7 +132,7 @@ PRODUCTION_EXCEPTIONS = frozenset(
         ),
         *{
             _exception(
-                "orchestune.dispatch.phase_gc", function, attribute, _PRIVATE_VIEW
+                "orchestune.dispatch.phase.gc", function, attribute, _PRIVATE_VIEW
             )
             for function, attribute in {
                 ("observe", "run_state"),

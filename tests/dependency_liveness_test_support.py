@@ -35,7 +35,7 @@ from orchestune.dispatch.cycle_events import (
     PromotionEvent,
 )
 from orchestune.dispatch.cycle_execution_contracts import CycleExecutionDependencies
-from orchestune.dispatch.phase_scheduling import SchedulingPhaseResult
+from orchestune.dispatch.phase.scheduling import SchedulingPhaseResult
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.status_repair import status_intent_journal_path
 from orchestune.labels import StatusLabel
@@ -658,7 +658,7 @@ def _environment_stubs() -> Iterator[None]:
             stack.enter_context(patch(target, return_value=False))
         for target, value in (
             ("orchestune.dispatch.cycle.ensure_parent_branch_ready", None),
-            ("orchestune.dispatch.phase_rebase.list_remote_branches", []),
+            ("orchestune.dispatch.phase.rebase.list_remote_branches", []),
             ("orchestune.dispatch.gc.completion.remove_worktree", None),
             (
                 "orchestune.dispatch.gc.completion.worktree_has_uncommitted_changes",
