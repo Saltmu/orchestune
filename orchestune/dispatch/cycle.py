@@ -113,10 +113,10 @@ from orchestune.dispatch.execution_repair import (
     RepairCommandHandler,
 )
 from orchestune.dispatch.external_execution import probe_runtime_status
-from orchestune.dispatch.phase_rebase import (
+from orchestune.dispatch.phase.rebase import (
     ensure_parent_branch_ready,
 )
-from orchestune.dispatch.phase_scheduling import (
+from orchestune.dispatch.phase.scheduling import (
     run_scheduling_phase as run_scheduling_phase,
 )
 from orchestune.dispatch.prior_parent_merge import reconcile_prior_parent_merges
@@ -164,7 +164,7 @@ if TYPE_CHECKING:
 
     from orchestune.consistency.supervisor import ConsistencyScanResult
     from orchestune.dispatch.cycle_context import IssuesByStatus
-    from orchestune.dispatch.phase_scheduling import SchedulingPhaseResult
+    from orchestune.dispatch.phase.scheduling import SchedulingPhaseResult
     from orchestune.dispatch.prior_parent_merge import PriorParentMergeReconciliation
     from orchestune.ledger.run_state import RunState
     from orchestune.lock_contracts import ExternalLockScanResult

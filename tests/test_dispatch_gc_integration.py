@@ -54,7 +54,7 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -148,7 +148,7 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -232,7 +232,7 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -313,7 +313,7 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -390,7 +390,7 @@ class TestGC:
         with (
             patch.object(fake_forge, "list_issues_by_label") as mock_list,
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),

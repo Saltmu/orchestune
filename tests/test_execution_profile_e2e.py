@@ -269,10 +269,10 @@ Testing full lifecycle of execution profiles.
                 autospec=True,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+                "orchestune.dispatch.phase.rebase.ensure_parent_branch", autospec=True
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -393,10 +393,10 @@ Testing full lifecycle of execution profiles.
                 autospec=True,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.ensure_parent_branch", autospec=True
+                "orchestune.dispatch.phase.rebase.ensure_parent_branch", autospec=True
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -539,7 +539,7 @@ Testing full lifecycle of execution profiles.
                 autospec=True,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -629,7 +629,7 @@ Testing full lifecycle of execution profiles.
                 autospec=True,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -772,7 +772,7 @@ model_tier: null
                 autospec=True,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -844,7 +844,7 @@ model_tier: null
                 autospec=True,
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),

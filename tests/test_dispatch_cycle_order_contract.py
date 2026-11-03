@@ -39,7 +39,7 @@ from orchestune.dispatch.cycle_events import (
 from orchestune.dispatch.cycle_report import CycleReport, build_event_log_entry
 from orchestune.dispatch.launch.service import TaskLaunchPlan, _record_successful_launch
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
-from orchestune.dispatch.phase_scheduling import (
+from orchestune.dispatch.phase.scheduling import (
     SchedulingPhaseResult,
     _determine_candidate_tasks,
     run_scheduling_phase,

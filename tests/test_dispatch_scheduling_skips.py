@@ -15,7 +15,7 @@ from orchestune.dependencies.resolution import (
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.cycle_actions import CycleActionAdapter
 from orchestune.dispatch.locks import ExternalLockConflict, ExternalLockScanResult
-from orchestune.dispatch.phase_scheduling import _determine_candidate_tasks
+from orchestune.dispatch.phase.scheduling import _determine_candidate_tasks
 from orchestune.dispatch.reporting.summary import (
     REASON_DEPENDENCY,
     REASON_EXTERNAL_LOCK,

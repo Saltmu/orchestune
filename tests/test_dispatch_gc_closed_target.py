@@ -297,7 +297,7 @@ def test_gc_phase_releases_merged_pr_claim_before_an_overlapping_launch(local_cl
         OwnerKind,
     )
     from orchestune.claim.service import claim_task
-    from orchestune.dispatch.phase_gc import run_gc_phase
+    from orchestune.dispatch.phase.gc import run_gc_phase
     from tests.claim_helpers import MockForge, _make_issue
 
     workspace, active, worktree = local_claim

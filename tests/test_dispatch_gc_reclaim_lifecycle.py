@@ -68,7 +68,7 @@ def _run_timeout_cycles(run_state, config, cycles, task=None, tmp_path=None):
         run_state.active_worktrees["280"] = _active(
             worktree_path=str((tmp_path or config.log_dir) / "missing-280")
         )
-        with patch("orchestune.dispatch.phase_gc.time.time", return_value=_NOW):
+        with patch("orchestune.dispatch.phase.gc.time.time", return_value=_NOW):
             cycle_events = _collect_zombies_and_timeouts(run_state, {280: task}, config)
         assert len(cycle_events) == 1
         events.append(cycle_events[0])
@@ -728,7 +728,7 @@ class TestReclaimKeepsIndependentBudgets:
             )
 
         with (
-            patch("orchestune.dispatch.phase_gc.time.time", return_value=_NOW),
+            patch("orchestune.dispatch.phase.gc.time.time", return_value=_NOW),
             patch.object(
                 config.resolved_forge, "add_label", side_effect=_record_persisted
             ),

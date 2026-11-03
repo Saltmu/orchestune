@@ -209,7 +209,7 @@ from orchestune.dispatch.cycle_context import CycleContext, IssuesByStatus
 from orchestune.dispatch.cycle_events import CompletionEvent, DeviationEvent, PromotionEvent
 from orchestune.dispatch.cycle_execution_contracts import CycleExecutionDependencies
 from orchestune.dispatch.cycle_report import CycleReport
-from orchestune.dispatch.phase_scheduling import SchedulingPhaseResult
+from orchestune.dispatch.phase.scheduling import SchedulingPhaseResult
 from orchestune.dispatch.prior_parent_merge import PriorParentMergeReconciliation
 from orchestune.lock_contracts import ExternalLockScanResult
 from orchestune.ledger.run_state import RunState

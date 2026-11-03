@@ -725,7 +725,7 @@ class TestTypedReclaimDiversion:
     ):
         from orchestune.consistency.models import RepairStatus
         from orchestune.dispatch.cycle_events import UsageLimitCompletion
-        from orchestune.dispatch.phase_gc import build_gc_reclaim_handler
+        from orchestune.dispatch.phase.gc import build_gc_reclaim_handler
 
         _write_run(world, f"{LIMIT_LINE}\n")
         held = UsageLimitCompletion(
@@ -834,7 +834,7 @@ class TestThroughTheDispatchCycle:
 
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),

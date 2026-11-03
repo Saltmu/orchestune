@@ -31,7 +31,6 @@ from orchestune.consistency.repairs.status import (
 )
 from orchestune.dependencies.resolution import build_legacy_dag_inputs
 from orchestune.dispatch import (
-    phase_rebase,
     prior_parent_merge,
     rebase,
     reconciliation,
@@ -48,6 +47,7 @@ from orchestune.dispatch.gc import rule_chain as dispatch_gc
 from orchestune.dispatch.gc import usage_limit as usage_limit_gc
 from orchestune.dispatch.gc.policy_effects import apply_effects
 from orchestune.dispatch.launch import service as launch
+from orchestune.dispatch.phase import rebase as phase_rebase
 from orchestune.dispatch.retry_policy import (
     RetryDisposition,
     RetryState,
@@ -287,7 +287,7 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
     "dispatch/rebase.py::_handle_rebase_failure": (
         _r(_E.ESCALATE, _K.MANUAL_MERGE, "in-progress", "replay"),
     ),
-    "dispatch/phase_rebase.py::_apply_external_lock_sync": (
+    "dispatch/phase/rebase.py::_apply_external_lock_sync": (
         _r(_E.HOLD, _K.EXTERNAL_LOCK, "lock"),
         _r(_E.QUEUE, _K.EXTERNAL_LOCK, "unlock-queued", "unlock-restores-queued"),
         _r(_E.RELEASE_HOLD, _K.EXTERNAL_LOCK, "unlock-blocked"),

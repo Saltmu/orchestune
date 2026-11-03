@@ -14,7 +14,7 @@ from orchestune.dispatch.cycle_execution_contracts import (
     RepairCycleAccumulator,
 )
 from orchestune.dispatch.cycle_report import CycleReport
-from orchestune.dispatch.phase_scheduling import SchedulingPhaseResult
+from orchestune.dispatch.phase.scheduling import SchedulingPhaseResult
 from orchestune.dispatch.reporting.progress import progress_phase
 from orchestune.dispatch.reporting.promotion import confirm_promotion_reports
 from orchestune.dispatch.timings import (

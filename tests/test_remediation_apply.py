@@ -368,7 +368,7 @@ def test_registered_child_enters_cycle_dependency_and_conflict_evaluation(
     from orchestune.dependencies.assessment import DependencyState
     from orchestune.dispatch.cycle_context import _build_task_mappings
     from orchestune.dispatch.locks import ExternalLockScanResult
-    from orchestune.dispatch.phase_scheduling import run_scheduling_phase
+    from orchestune.dispatch.phase.scheduling import run_scheduling_phase
     from orchestune.ledger.run_state import RunState
     from orchestune.task_metadata import TaskMetadata
     from tests.dispatch_test_support import (

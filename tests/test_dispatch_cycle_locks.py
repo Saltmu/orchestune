@@ -15,12 +15,12 @@ from orchestune.dispatch.locks import (
     ExternalLockConflict,
     ExternalLockScanResult,
 )
-from orchestune.dispatch.phase_rebase import (
+from orchestune.dispatch.phase.rebase import (
     _apply_external_lock_sync,
     _is_base_or_parent_branch,
     _sync_external_locks,
 )
-from orchestune.dispatch.phase_rebase import (
+from orchestune.dispatch.phase.rebase import (
     _decide_external_lock_sync as _decide_external_lock_sync_impl,
 )
 from orchestune.infra.process_utils import (
@@ -82,13 +82,13 @@ def test_sync_completed_dependency_unlock_uses_config_and_existing_apply(
     )
     with (
         patch(
-            "orchestune.dispatch.phase_rebase.list_remote_branches",
+            "orchestune.dispatch.phase.rebase.list_remote_branches",
             return_value=["origin/" + branch],
         ),
         patch(
-            "orchestune.dispatch.phase_rebase.branch_changed_files", return_value=None
+            "orchestune.dispatch.phase.rebase.branch_changed_files", return_value=None
         ),
-        patch("orchestune.dispatch.phase_rebase._notify_external_locks") as notify,
+        patch("orchestune.dispatch.phase.rebase._notify_external_locks") as notify,
     ):
         result = _sync_external_locks(
             {1: task, 2: dep},
@@ -157,7 +157,7 @@ class TestDecideExternalLockSync:
         run_state = RunState(active_worktrees={})
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=[],
             ),
@@ -171,7 +171,7 @@ class TestDecideExternalLockSync:
         task = _task(issue_number=1, footprint=("src/foo.py",))
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=["origin/feature/foo@bar"],
             ),
@@ -192,12 +192,12 @@ class TestDecideExternalLockSync:
         queued_task = _task(issue_number=2, footprint=("src/bar.py",))
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=["origin/feat/x"],
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.branch_changed_files",
+                "orchestune.dispatch.phase.rebase.branch_changed_files",
                 autospec=True,
                 return_value=None,
             ),
@@ -219,12 +219,12 @@ class TestDecideExternalLockSync:
         queued_task = _task(issue_number=2, footprint=("src/shared.py",))
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=["origin/parent/issue-181"],
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.branch_changed_files", autospec=True
+                "orchestune.dispatch.phase.rebase.branch_changed_files", autospec=True
             ) as mock_branch_files,
         ):
             result = _decide_external_lock_sync({2: queued_task}, [], run_state)
@@ -334,12 +334,12 @@ class TestRunDispatchCycleBranchNormalization:
         fake_forge.list_open_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=["origin/claude/issue-1-task-a"],
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.branch_changed_files",
+                "orchestune.dispatch.phase.rebase.branch_changed_files",
                 autospec=True,
                 return_value=["src/shared.py"],
             ),
@@ -379,12 +379,12 @@ class TestRunDispatchCycleBranchNormalization:
         ]
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=["origin/feature/foo"],
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.branch_changed_files", autospec=True
+                "orchestune.dispatch.phase.rebase.branch_changed_files", autospec=True
             ) as mock_branch_files,
         ):
             run_dispatch_cycle(config)
@@ -418,12 +418,12 @@ class TestRunDispatchCycleBranchNormalization:
         fake_forge.list_open_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=["origin/parent/issue-181"],
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.branch_changed_files", autospec=True
+                "orchestune.dispatch.phase.rebase.branch_changed_files", autospec=True
             ) as mock_branch_files,
         ):
             mock_list.side_effect = lambda label, **_: (
@@ -457,12 +457,12 @@ class TestRunDispatchCycleBranchNormalization:
         fake_forge.list_open_prs.return_value = []
         with (
             patch(
-                "orchestune.dispatch.phase_rebase.list_remote_branches",
+                "orchestune.dispatch.phase.rebase.list_remote_branches",
                 autospec=True,
                 return_value=["origin/someone-elses-branch"],
             ),
             patch(
-                "orchestune.dispatch.phase_rebase.branch_changed_files",
+                "orchestune.dispatch.phase.rebase.branch_changed_files",
                 autospec=True,
                 return_value=["src/shared.py"],
             ),
