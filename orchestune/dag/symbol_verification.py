@@ -332,6 +332,7 @@ def _symbol_matches(
 
 _EXTENSION_TO_LANGUAGE: dict[str, str] = {
     ".py": "python",
+    ".pyi": "python",
     ".ts": "typescript",
     ".mts": "typescript",
     ".cts": "typescript",
@@ -344,52 +345,32 @@ _EXTENSION_TO_LANGUAGE: dict[str, str] = {
     ".go": "go",
 }
 
-_NON_CODE_EXTENSIONS: frozenset[str] = frozenset(
+_UNSUPPORTED_SOURCE_EXTENSIONS: frozenset[str] = frozenset(
     {
-        ".md",
-        ".markdown",
-        ".txt",
-        ".rst",
-        ".toml",
-        ".json",
-        ".yaml",
-        ".yml",
-        ".ini",
-        ".cfg",
-        ".lock",
-        ".svg",
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".gif",
-        ".ico",
-        ".css",
-        ".scss",
-        ".sass",
-        ".less",
-        ".html",
-        ".htm",
-        ".sh",
-        ".bash",
-        ".zsh",
-        ".ps1",
-        ".bat",
-        ".cmd",
-        ".dockerignore",
-        ".gitignore",
-        ".gitattributes",
-        ".editorconfig",
-        ".env",
-    }
-)
-
-_NON_CODE_FILENAMES: frozenset[str] = frozenset(
-    {
-        "dockerfile",
-        "makefile",
-        "license",
-        "gemfile",
-        "procfile",
+        ".c",
+        ".cc",
+        ".cpp",
+        ".cxx",
+        ".h",
+        ".hpp",
+        ".hxx",
+        ".java",
+        ".kt",
+        ".kts",
+        ".scala",
+        ".cs",
+        ".swift",
+        ".rb",
+        ".php",
+        ".clj",
+        ".cljs",
+        ".dart",
+        ".lua",
+        ".zig",
+        ".ex",
+        ".exs",
+        ".erl",
+        ".hs",
     }
 )
 
@@ -454,6 +435,7 @@ def _extract_ts_class(
             "method_definition",
             "field_definition",
             "public_field_definition",
+            "abstract_method_signature",
         ):
             mname_node = member.child_by_field_name("name")
             if mname_node:
@@ -508,13 +490,24 @@ def _extract_ts_variables(
 def _extract_ts_js_declaration(
     decl: Any, content: bytes, defined: set[str], top: set[str]
 ) -> None:
-    if decl.type in ("function_declaration", "generator_function_declaration"):
+    if decl.type == "export_statement":
+        inner = decl.child_by_field_name("declaration")
+        if inner:
+            decl = inner
+        else:
+            _extract_ts_js_export_specifiers(decl, content, defined, top)
+            return
+    if decl.type in (
+        "function_declaration",
+        "generator_function_declaration",
+        "function_signature",
+    ):
         name_node = decl.child_by_field_name("name")
         if name_node:
             name = _node_text(name_node, content)
             defined.add(name)
             top.add(name)
-    elif decl.type == "class_declaration":
+    elif decl.type in ("class_declaration", "abstract_class_declaration"):
         _extract_ts_class(decl, content, defined, top)
     elif decl.type in (
         "interface_declaration",
@@ -524,6 +517,28 @@ def _extract_ts_js_declaration(
         _extract_ts_type_or_enum(decl, content, defined, top)
     elif decl.type in ("lexical_declaration", "variable_declaration"):
         _extract_ts_variables(decl, content, defined, top)
+    elif decl.type == "ambient_declaration":
+        for child in decl.children:
+            if child.type != "declare":
+                _extract_ts_js_declaration(child, content, defined, top)
+    elif decl.type in ("internal_module", "module"):
+        _extract_ts_module(decl, content, defined, top)
+
+
+def _extract_ts_module(
+    decl: Any, content: bytes, defined: set[str], top: set[str]
+) -> None:
+    name_node = decl.child_by_field_name("name")
+    if not name_node:
+        return
+    ns_name = _node_text(name_node, content)
+    defined.add(ns_name)
+    top.add(ns_name)
+    body = decl.child_by_field_name("body")
+    if not body:
+        return
+    for member in body.children:
+        _extract_ts_js_declaration(member, content, defined, top)
 
 
 def _collect_ts_js_names(tree: Any, content: bytes) -> tuple[set[str], set[str]]:
@@ -539,6 +554,12 @@ def _collect_ts_js_names(tree: Any, content: bytes) -> tuple[set[str], set[str]]
                 _extract_ts_js_export_specifiers(
                     child, content, defined_names, top_level_names
                 )
+        elif (
+            child.type == "expression_statement"
+            and child.children
+            and child.children[0].type == "internal_module"
+        ):
+            decl = child.children[0]
         _extract_ts_js_declaration(decl, content, defined_names, top_level_names)
     return defined_names, top_level_names
 
@@ -563,11 +584,21 @@ def _extract_rust_enum_or_trait(
             defined.add(f"{tname}.{mname}")
 
 
+def _extract_rust_type_name(type_node: Any, content: bytes) -> str | None:
+    if not type_node:
+        return None
+    if type_node.type == "generic_type":
+        base = type_node.child_by_field_name("type")
+        return _extract_rust_type_name(base, content)
+    if type_node.type == "scoped_type_identifier":
+        name = type_node.child_by_field_name("name")
+        return _extract_rust_type_name(name, content)
+    return _node_text(type_node, content)
+
+
 def _extract_rust_impl(item: Any, content: bytes, defined: set[str]) -> None:
     type_node = item.child_by_field_name("type")
-    type_name = _node_text(type_node, content) if type_node else None
-    trait_node = item.child_by_field_name("trait")
-    trait_name = _node_text(trait_node, content) if trait_node else None
+    type_name = _extract_rust_type_name(type_node, content)
     body = item.child_by_field_name("body")
     if not body:
         return
@@ -578,8 +609,6 @@ def _extract_rust_impl(item: Any, content: bytes, defined: set[str]) -> None:
             defined.add(mname)
             if type_name:
                 defined.add(f"{type_name}.{mname}")
-            if trait_name:
-                defined.add(f"{trait_name}.{mname}")
 
 
 def _extract_rust_use_tree(
@@ -628,15 +657,16 @@ def _extract_rust_item(
     elif item.type == "impl_item":
         _extract_rust_impl(item, content, defined)
     elif item.type == "use_declaration":
-        for child in item.children:
-            if child.type in (
-                "scoped_identifier",
-                "identifier",
-                "use_as_clause",
-                "use_list",
-                "scoped_use_list",
-            ):
-                _extract_rust_use_tree(child, content, defined, top)
+        if any(c.type == "visibility_modifier" for c in item.children):
+            for child in item.children:
+                if child.type in (
+                    "scoped_identifier",
+                    "identifier",
+                    "use_as_clause",
+                    "use_list",
+                    "scoped_use_list",
+                ):
+                    _extract_rust_use_tree(child, content, defined, top)
 
 
 def _collect_rust_names(tree: Any, content: bytes) -> tuple[set[str], set[str]]:
@@ -647,16 +677,27 @@ def _collect_rust_names(tree: Any, content: bytes) -> tuple[set[str], set[str]]:
     return defined_names, top_level_names
 
 
+def _extract_go_base_type(node: Any, content: bytes) -> str | None:
+    if not node:
+        return None
+    if node.type == "generic_type":
+        base = node.child_by_field_name("type")
+        return _extract_go_base_type(base, content)
+    if node.type == "type_identifier":
+        return _node_text(node, content)
+    if node.type == "pointer_type":
+        for child in node.children:
+            if child.type != "*":
+                return _extract_go_base_type(child, content)
+    return None
+
+
 def _extract_go_receiver_type(receiver: Any, content: bytes) -> str | None:
     for child in receiver.children:
         if child.type == "parameter_declaration":
             for sub in child.children:
-                if sub.type == "type_identifier":
-                    return _node_text(sub, content)
-                if sub.type == "pointer_type":
-                    for psub in sub.children:
-                        if psub.type == "type_identifier":
-                            return _node_text(psub, content)
+                if sub.type in ("type_identifier", "pointer_type", "generic_type"):
+                    return _extract_go_base_type(sub, content)
     return None
 
 
@@ -700,7 +741,7 @@ def _extract_go_type(
     item: Any, content: bytes, defined: set[str], top: set[str]
 ) -> None:
     for spec in item.children:
-        if spec.type == "type_spec":
+        if spec.type in ("type_spec", "type_alias"):
             tname_node = spec.child_by_field_name("name")
             if not tname_node:
                 continue
@@ -715,11 +756,18 @@ def _extract_go_type(
 def _extract_go_vars(
     item: Any, content: bytes, defined: set[str], top: set[str]
 ) -> None:
-    for spec in item.children:
-        if spec.type in ("const_spec", "var_spec"):
-            name_node = spec.child_by_field_name("name")
-            if name_node:
-                name = _node_text(name_node, content)
+    specs: list[Any] = []
+    for child in item.children:
+        if child.type in ("const_spec", "var_spec"):
+            specs.append(child)
+        elif child.type in ("const_spec_list", "var_spec_list"):
+            for sub in child.children:
+                if sub.type in ("const_spec", "var_spec"):
+                    specs.append(sub)
+    for spec in specs:
+        for sub in spec.children:
+            if sub.type == "identifier":
+                name = _node_text(sub, content)
                 defined.add(name)
                 top.add(name)
 
@@ -757,6 +805,7 @@ def _parse_with_tree_sitter(
         return None
     try:
         content = path.read_bytes()
+        content.decode("utf-8")
     except (OSError, UnicodeDecodeError):
         return None
 
@@ -847,10 +896,10 @@ def find_missing_symbols(subtask: SubTask, repo_root: str | Path) -> tuple[str, 
             any_file_checked = True
             defined_names |= file_names
             top_level_names |= file_top_level_names
-        elif ext in _NON_CODE_EXTENSIONS or path.name.lower() in _NON_CODE_FILENAMES:
-            continue
-        else:
+        elif ext in _UNSUPPORTED_SOURCE_EXTENSIONS:
             any_file_unsupported = True
+        else:
+            continue
 
     if not any_file_checked or any_file_unparseable or any_file_unsupported:
         return ()

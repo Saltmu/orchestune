@@ -799,6 +799,130 @@ class TestPolyglotFindMissingSymbols:
         assert "⚠️ **symbols未検出**" in body
         assert "`MissingFunc`" in body
 
+    def test_generic_rust_impl_qualifies_base_type(self, tmp_path):
+        rs_code = (
+            "pub struct Stack<T> { items: Vec<T> }\n"
+            "impl<T> Stack<T> {\n"
+            "    pub fn push(&mut self, item: T) {}\n"
+            "}\n"
+        )
+        _write(tmp_path, "src/stack.rs", rs_code)
+        subtask = _subtask(
+            footprint=("src/stack.rs",),
+            symbols=("Stack", "Stack.push"),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_generic_go_receiver_qualifies_base_type(self, tmp_path):
+        go_code = (
+            "package main\n\n"
+            "type Stack[T any] struct {}\n\n"
+            "func (s *Stack[T]) Push(item T) {}\n"
+        )
+        _write(tmp_path, "stack.go", go_code)
+        subtask = _subtask(
+            footprint=("stack.go",),
+            symbols=("Stack", "Stack.Push"),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_rust_private_use_not_treated_as_top_level_symbol(self, tmp_path):
+        rs_code = "use external::PrivateHelper;\n" "pub use external::PublicReexport;\n"
+        _write(tmp_path, "src/lib.rs", rs_code)
+        subtask_private = _subtask(
+            footprint=("src/lib.rs",),
+            symbols=("PrivateHelper",),
+        )
+        assert find_missing_symbols(subtask_private, tmp_path) == ("PrivateHelper",)
+
+        subtask_public = _subtask(
+            footprint=("src/lib.rs",),
+            symbols=("PublicReexport",),
+        )
+        assert find_missing_symbols(subtask_public, tmp_path) == ()
+
+    def test_go_grouped_vars_and_multiple_identifiers(self, tmp_path):
+        go_code = (
+            "package main\n\n"
+            "var (\n"
+            "    GroupedA = 1\n"
+            "    GroupedB = 2\n"
+            ")\n"
+            "const (\n"
+            "    ConstA = 10\n"
+            "    ConstB = 20\n"
+            ")\n"
+            "var MultiX, MultiY int = 3, 4\n"
+            "type StringAlias = string\n"
+        )
+        _write(tmp_path, "vars.go", go_code)
+        subtask = _subtask(
+            footprint=("vars.go",),
+            symbols=(
+                "GroupedA",
+                "GroupedB",
+                "ConstA",
+                "ConstB",
+                "MultiX",
+                "MultiY",
+                "StringAlias",
+            ),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_typescript_abstract_ambient_and_namespace(self, tmp_path):
+        ts_code = (
+            "export abstract class AbstractWorker {\n"
+            "    abstract work(): void;\n"
+            "    stop() {}\n"
+            "}\n"
+            "declare function ambientCall(): void;\n"
+            "namespace AppNamespace {\n"
+            "    export function service() {}\n"
+            "}\n"
+        )
+        _write(tmp_path, "src/worker.ts", ts_code)
+        subtask = _subtask(
+            footprint=("src/worker.ts",),
+            symbols=(
+                "AbstractWorker",
+                "AbstractWorker.work",
+                "AbstractWorker.stop",
+                "ambientCall",
+                "AppNamespace",
+                "service",
+            ),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_pyi_file_verified_as_python(self, tmp_path):
+        _write(tmp_path, "src/typing.pyi", "def typed_stub() -> None: ...\n")
+        subtask = _subtask(
+            footprint=("src/typing.pyi",),
+            symbols=("typed_stub",),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
+    def test_sql_and_codeowners_do_not_cause_retention(self, tmp_path):
+        _write(tmp_path, "pkg/mod.py", "def py_fn(): pass\n")
+        _write(tmp_path, "migrations/001.sql", "CREATE TABLE t (id INT);\n")
+        _write(tmp_path, ".github/CODEOWNERS", "* @team\n")
+        subtask = _subtask(
+            footprint=("pkg/mod.py", "migrations/001.sql", ".github/CODEOWNERS"),
+            symbols=("py_fn", "missing_fn"),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ("missing_fn",)
+
+    def test_invalid_utf8_in_tree_sitter_file_causes_retention(self, tmp_path):
+        bad_file = tmp_path / "src" / "bad.ts"
+        bad_file.parent.mkdir(parents=True, exist_ok=True)
+        bad_file.write_bytes(b"class Bad \xff\xfe { }")
+        subtask = _subtask(
+            footprint=("src/bad.ts",),
+            symbols=("Bad", "Other"),
+        )
+        assert find_missing_symbols(subtask, tmp_path) == ()
+
 
 class TestFindMissingFootprintPaths:
     def test_existing_file_is_not_reported(self, tmp_path):
