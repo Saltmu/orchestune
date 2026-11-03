@@ -50,6 +50,7 @@ def _extract_frontmatter(content: str) -> dict:
 
 def test_project_local_skills_are_concrete_wrappers_referencing_sot():
     expected_skills = [
+        "issue-design-review",
         "local-ci-developer",
         "orchestune",
         "orchestune-dispatch",

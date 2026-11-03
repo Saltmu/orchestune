@@ -47,10 +47,11 @@ SKILLS_ROOT = (REPO_ROOT / "skills").resolve()
 DOCS_ROOT = (REPO_ROOT / "docs").resolve()
 DOC_LANGUAGES = ("en", "ja")
 # `local-ci-developer` documents this repo's own dev workflow (TDD/local CI
-# rules) and is deliberately never linked into other projects by
-# `setup_skills` (see `SKILLS_EXCLUDED_FROM_SETUP`), so it has no reason to
-# ship in the distributed package either.
-PACKAGING_EXCLUDED_SKILLS = frozenset({"local-ci-developer"})
+# rules) and `issue-design-review` names this repo's own tests and paths; both
+# are deliberately never linked into other projects by `setup_skills` (see
+# `SKILLS_EXCLUDED_FROM_SETUP`), so they have no reason to ship in the
+# distributed package either.
+PACKAGING_EXCLUDED_SKILLS = frozenset({"local-ci-developer", "issue-design-review"})
 
 
 def test_dispatch_dependency_boundary() -> None:
