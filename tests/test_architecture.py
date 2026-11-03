@@ -78,7 +78,7 @@ ALLOWED_L4_DEPENDENTS = {
     "recovery.cli": frozenset({"cli"}),
     "dag.cli": frozenset({"cli"}),
     "dispatch.dispatcher": frozenset({"cli"}),
-    "dispatch.doctor_cli": frozenset({"cli"}),
+    "dispatch.doctor.cli": frozenset({"cli"}),
     "dispatch.review_cli": frozenset({"cli"}),
     "dispatch.gc_cli": frozenset({"cli"}),
     "monitor": frozenset({"cli"}),

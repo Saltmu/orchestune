@@ -17,8 +17,8 @@ import yaml
 
 from orchestune.config_contracts import ConfigError
 from orchestune.dispatch.config_schema import validate_toml_config
-from orchestune.dispatch.doctor_actions import run_actions_checks
-from orchestune.dispatch.doctor_models import (
+from orchestune.dispatch.doctor.actions import run_actions_checks
+from orchestune.dispatch.doctor.models import (
     CODE_CONFIG_READABLE,
     CODE_EXTERNAL_OWNERSHIP,
     CODE_LOCAL_SERIALIZATION,
@@ -30,7 +30,7 @@ from orchestune.dispatch.doctor_models import (
     ExecutionMode,
     WorkflowFile,
 )
-from orchestune.dispatch.doctor_repository import run_repository_checks
+from orchestune.dispatch.doctor.repository import run_repository_checks
 from orchestune.infra.git_cli import get_git_repository_paths
 from orchestune.infra.repository_config import find_and_load_config_file
 

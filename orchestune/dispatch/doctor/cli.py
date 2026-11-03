@@ -7,14 +7,14 @@ import json
 import sys
 from pathlib import Path
 
-from orchestune.dispatch.doctor import (
+from orchestune.dispatch.doctor.check import (
     DoctorInputError,
     DoctorRequest,
     normalize_workflow_path,
     resolve_repository_root,
     run_doctor,
 )
-from orchestune.dispatch.doctor_models import (
+from orchestune.dispatch.doctor.models import (
     OWNERSHIP_NOTICE,
     Diagnostic,
     DoctorReport,

@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from orchestune.dispatch.doctor_entrypoints import scan_workflow
+from orchestune.dispatch.doctor.entrypoints import scan_workflow
 
 
 def _scan(run: str):

@@ -11,13 +11,13 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from orchestune.dispatch.doctor_entrypoints import (
+from orchestune.dispatch.doctor.entrypoints import (
     DispatchEntrypoint,
     JobScan,
     WorkflowScan,
     scan_workflow,
 )
-from orchestune.dispatch.doctor_models import (
+from orchestune.dispatch.doctor.models import (
     CODE_ACTIONS_CANCEL,
     CODE_ACTIONS_CREDENTIALS,
     CODE_ACTIONS_ENTRYPOINT,
