@@ -931,6 +931,8 @@ orchestune complete --issue <issue> --pr <pr> --result done --reviewer <bot> --r
 
 前提条件の未達（先行タスク未完了など）や競合、環境エラーが発生した場合は、非ゼロの終了コードとともにエラー理由と推奨される次のアクションが標準エラー出力に表示されます。指示に従って競合を解消するか、中断された claim を `--resume` で復旧してください。なお、すでに着手済みで作業ツリー内にいる場合は、再度の claim は不要です。
 
+子タスクの claim で基点ブランチ `parent/issue-<N>` がまだ存在しない場合、親が EPIC Issue であれば claim は worktree 作成前に origin 上の `main` から `parent/issue-<N>` を自動作成します。親が EPIC でない場合やブランチ作成に失敗した場合は、台帳への予約やラベル変更を残さずに `base_resolution_failed` で終了します。また、新規 claim で `git worktree add` が例外で失敗しディスク上に worktree ディレクトリが残らなかった場合は、初期予約が自動的に取り消されるため、`--resume` を介さずにそのまま claim を再試行できます。
+
 すでに保持している Issue に対して `orchestune claim <N>` を再実行すると `existing_claim_unrecovered` で失敗し、次のアクションとして worktree のパス、`--resume` コマンド、`--amend-footprint` コマンドが表示されます。
 
 GitHub GraphQL が使えない環境（例: Claude Code のクラウドセッションは HTTP 403 を返す。古い `gh` は `parent` / `blockedBy` フィールドを受け付けない）では、claim は REST API（`gh api`）で Issue を読み書きします。対象は Issue の本文・状態・ラベル・ネイティブの親と blocked-by 依存、リポジトリ名です。依存は、REST API が件数を返し、取得した一覧がその件数と一致した場合にだけ受け入れます。確認できない場合は「依存なし」とはみなさず、`forge_unavailable`（終了コード `35`）で止まります。それ以外の想定外のエラーは従来どおり詳細を出さずに `generic_error` と表示し、例外のクラス名だけを `error_type=` として出します。`orchestune complete` も、PR の証跡（head・base・状態・マージコミット・変更ファイル・CI のチェック）を REST で取得します。REST API は「その PR が閉じる Issue」とレビュー判定を返さないため、レビュー判定は記録されません。マージ済みの PR で完了する場合は、対象の Issue のタイムラインで、そのマージが Issue を閉じたことを確かめます。条件は、PR 本文の closing keyword（`Closes #N` など、同じリポジトリの `#N` の形）がその Issue を指し、GitHub がその PR と Issue を結び付けていて（`cross-referenced`）、マージした人がマージ直後にその Issue を閉じ、その後に再オープンされていないことです。確かめられない場合（サイドバーでの手動リンク、既定以外のブランチ宛ての PR、マージから時間がたってから手で閉じたなど）は拒否されるので、GitHub GraphQL が使える環境で完了してください。なお、REST の `closed` イベントは誰が閉じたか（PR かどうか）を返さないため、マージした人がマージ直後に手で閉じた場合は、自動クローズと区別できません。

@@ -302,8 +302,11 @@ class TestInterruptionAndPreservation:
         assert outcome.success is False
         assert outcome.failure is not None
         assert outcome.failure.reason == ClaimFailureReason.WORKTREE_CREATION_FAILED
-        assert outcome.stage == ClaimStage.RESERVED
+        assert outcome.stage == ClaimStage.VALIDATING
+        assert outcome.claim_id is None
         assert outcome.owner_token is not None
+        state = load_run_state(state_path)
+        assert "120" not in state.active_worktrees
 
     def test_invalid_branch_name_is_distinguished_from_infra_failure(
         self, claim_env: dict[str, Path]
@@ -334,7 +337,10 @@ class TestInterruptionAndPreservation:
         assert outcome.success is False
         assert outcome.failure is not None
         assert outcome.failure.reason == ClaimFailureReason.INVALID_BRANCH_NAME
-        assert outcome.stage == ClaimStage.RESERVED
+        assert outcome.stage == ClaimStage.VALIDATING
+        assert outcome.claim_id is None
+        state = load_run_state(state_path)
+        assert "121" not in state.active_worktrees
 
     def test_label_update_failure_preserves_reservation_and_worktree(
         self, claim_env: dict[str, Path]
@@ -764,3 +770,179 @@ class TestInteractiveFootprintOverlapWarning:
         assert "footprint_overlap" in outcome.failure.message
         assert outcome.warnings == ()
         assert set(load_run_state(state_path).active_worktrees) == {"90"}
+
+    def test_claim_provisions_missing_parent_base_branch_for_epic(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        repo_root = claim_env["repo_root"]
+        state_path = claim_env["state_path"]
+        child_body = (
+            "## Footprint\n\n"
+            "```yaml\n"
+            "subtask_id: child-task\n"
+            "footprint: [orchestune/foo.py]\n"
+            "parent_issue_number: 50\n"
+            "```\n"
+        )
+        child_issue = _make_issue(number=102, body=child_body)
+        parent_issue = _make_issue(
+            number=50,
+            title="[EPIC] Parent Epic",
+            body="<!-- orchestune:decomposition-plan-parent -->\nPlan",
+        )
+        forge = MockForge({102: child_issue, 50: parent_issue})
+
+        state = {"branch_exists": False, "ensured": False}
+
+        def fake_git_runner(cmd: list[str], **kwargs: object) -> MagicMock:
+            if "show-ref" in cmd:
+                if state["branch_exists"]:
+                    return MagicMock(returncode=0, stdout="abc1234")
+                return MagicMock(returncode=1, stdout="")
+            return MagicMock(returncode=0, stdout="abc1234")
+
+        def fake_ensure(parent_issue_number: int, *, cwd: object = None) -> None:
+            assert parent_issue_number == 50
+            state["branch_exists"] = True
+            state["ensured"] = True
+
+        worktree_path = claim_env["worktrees_dir"] / "claude-issue-102-child-task"
+
+        def mock_prepare_worktree(
+            branch, worktree_root, base_branch, claim_id, **kwargs
+        ):
+            assert base_branch == "parent/issue-50"
+            worktree_path.mkdir(parents=True, exist_ok=True)
+            return WorktreePreparation(
+                worktree_path=worktree_path,
+                branch=branch,
+                accepted=True,
+                created=True,
+                base_sha="abc1234",
+            )
+
+        import orchestune.claim.base_branch as base_branch
+        import orchestune.claim.service as claim_service
+
+        with (
+            patch.object(claim_service, "run_git", side_effect=fake_git_runner),
+            patch.object(
+                base_branch,
+                "ensure_parent_branch",
+                side_effect=fake_ensure,
+            ),
+            patch.object(
+                claim_service,
+                "prepare_task_worktree",
+                side_effect=mock_prepare_worktree,
+            ),
+        ):
+            outcome = claim_task(
+                ClaimRequest(issue_number=102, state_path=state_path),
+                forge=forge,
+                cwd=repo_root,
+            )
+
+        assert outcome.success is True, outcome.failure
+        assert state["ensured"] is True
+        assert (102, StatusLabel.IN_PROGRESS) in forge.labels_added
+
+    def test_claim_fails_when_parent_base_branch_missing_and_parent_not_epic(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        repo_root = claim_env["repo_root"]
+        state_path = claim_env["state_path"]
+        child_body = (
+            "## Footprint\n\n"
+            "```yaml\n"
+            "subtask_id: child-task\n"
+            "footprint: [orchestune/foo.py]\n"
+            "parent_issue_number: 51\n"
+            "```\n"
+        )
+        child_issue = _make_issue(number=103, body=child_body)
+        parent_issue = _make_issue(
+            number=51,
+            title="Non-epic Task",
+            body="No marker",
+        )
+        forge = MockForge({103: child_issue, 51: parent_issue})
+
+        def fake_git_runner(cmd: list[str], **kwargs: object) -> MagicMock:
+            if "show-ref" in cmd:
+                return MagicMock(returncode=1, stdout="")
+            return MagicMock(returncode=0, stdout="abc1234")
+
+        import orchestune.claim.base_branch as base_branch
+        import orchestune.claim.service as claim_service
+
+        with (
+            patch.object(claim_service, "run_git", side_effect=fake_git_runner),
+            patch.object(base_branch, "ensure_parent_branch") as mock_ensure,
+        ):
+            outcome = claim_task(
+                ClaimRequest(issue_number=103, state_path=state_path),
+                forge=forge,
+                cwd=repo_root,
+            )
+
+        assert outcome.success is False
+        assert outcome.failure is not None
+        assert outcome.failure.reason == ClaimFailureReason.BASE_RESOLUTION_FAILED
+        mock_ensure.assert_not_called()
+        state = load_run_state(state_path)
+        assert "103" not in state.active_worktrees
+        assert (103, StatusLabel.IN_PROGRESS) not in forge.labels_added
+
+    def test_resume_worktree_exception_preserves_reservation(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        repo_root = claim_env["repo_root"]
+        state_path = claim_env["state_path"]
+        issue = _make_issue(number=104)
+        forge = MockForge({104: issue})
+
+        token = new_owner_token().value
+        active = make_test_active_worktree(
+            issue_number=104,
+            claim_id="claim-resume-104",
+            claim_stage="reserved",
+            branch="claude/issue-104-test-task",
+            base_ref="origin/main",
+            owner_token_digest=owner_token_digest(token),
+            repository_id=str(repo_root / ".git"),
+        )
+        with run_state_lock(state_path.with_suffix(".lock")):
+            run_state = load_run_state(state_path)
+            run_state.active_worktrees["104"] = active
+            save_run_state(run_state, state_path)
+
+        import orchestune.claim.service as claim_service
+
+        with (
+            patch.object(
+                claim_service, "run_git", return_value=MagicMock(returncode=0)
+            ),
+            patch.object(
+                claim_service,
+                "prepare_task_worktree",
+                side_effect=RuntimeError("transient disk error"),
+            ),
+        ):
+            outcome = claim_task(
+                ClaimRequest(
+                    issue_number=104,
+                    resume_claim_id="claim-resume-104",
+                    owner_token=token,
+                    state_path=state_path,
+                ),
+                forge=forge,
+                cwd=repo_root,
+            )
+
+        assert outcome.success is False
+        assert outcome.failure is not None
+        assert outcome.stage == ClaimStage.RESERVED
+        assert outcome.claim_id == "claim-resume-104"
+        state = load_run_state(state_path)
+        assert "104" in state.active_worktrees

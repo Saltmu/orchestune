@@ -193,11 +193,14 @@ def branch_changed_files(branch: str, base: str = "origin/main") -> list[str] | 
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def ensure_parent_branch(parent_issue_number: int) -> None:
+def ensure_parent_branch(
+    parent_issue_number: int,
+    cwd: str | Path | None = None,
+) -> None:
     parent_branch = f"parent/issue-{parent_issue_number}"
     try:
         result = run_git(
-            ["ls-remote", "origin", f"refs/heads/{parent_branch}"], cwd=None
+            ["ls-remote", "origin", f"refs/heads/{parent_branch}"], cwd=cwd
         )
         remote_exists = bool(result.stdout.strip())
     except Exception:
@@ -212,7 +215,7 @@ def ensure_parent_branch(parent_issue_number: int) -> None:
                     "origin",
                     f"+refs/heads/{parent_branch}:refs/remotes/origin/{parent_branch}",
                 ],
-                cwd=None,
+                cwd=cwd,
             )
         except Exception as e:
             print(
@@ -225,10 +228,10 @@ def ensure_parent_branch(parent_issue_number: int) -> None:
     try:
         # 競合やローカル変更を避けるため、checkoutを行わずにリモートmainの最新状態をfetchし、
         # FETCH_HEADを指定して直接リモートに親ブランチをプッシュして作成する。
-        run_git(["fetch", "origin", "main"], cwd=None)
+        run_git(["fetch", "origin", "main"], cwd=cwd)
         run_git(
             ["push", "origin", f"FETCH_HEAD:refs/heads/{parent_branch}"],
-            cwd=None,
+            cwd=cwd,
         )
         # プッシュ完了後、リモート追跡ブランチ参照を確実にローカルにフェッチする
         run_git(
@@ -237,7 +240,7 @@ def ensure_parent_branch(parent_issue_number: int) -> None:
                 "origin",
                 f"+refs/heads/{parent_branch}:refs/remotes/origin/{parent_branch}",
             ],
-            cwd=None,
+            cwd=cwd,
         )
     except Exception as e:
         print(
