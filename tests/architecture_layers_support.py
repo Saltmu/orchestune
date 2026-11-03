@@ -185,6 +185,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.promotion_reporting",
             "dispatch.reviewer",
             "dispatch.semantic_review_ack",
+            "dispatch.semantic_review_evidence",
             "dispatch.semantic_review_adapters",
             "dispatch.semantic_review_ci",
             "dispatch.semantic_review_cleanup",
