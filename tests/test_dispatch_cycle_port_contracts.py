@@ -32,15 +32,15 @@ from orchestune.consistency.models import (
     RepairStatus,
 )
 from orchestune.consistency.supervisor import ConsistencyCycleReport, ConsistencyMode
-from orchestune.dispatch.cycle_action_contracts import (
+from orchestune.dispatch.cycle.action_contracts import (
     ActivePhaseResult,
     CycleActions,
     CycleQueries,
     GcPhaseResult,
     StackBase,
 )
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.cycle_events import CompletionEvent, PromotionEvent
+from orchestune.dispatch.cycle.actions import CycleActionAdapter
+from orchestune.dispatch.cycle.events import CompletionEvent, PromotionEvent
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase import gc as phase_gc
 from orchestune.dispatch.scoring import SchedulingResult
@@ -252,13 +252,13 @@ class TestPortProtocols:
 # `mypy orchestune tests`自体が落ちるため、tree には残さずここから注入する。
 _PROTOCOL_FIXTURE = """\
 from orchestune.consistency.models import RepairCommand, RepairResult
-from orchestune.dispatch.cycle_action_contracts import (
+from orchestune.dispatch.cycle.action_contracts import (
     ActivePhaseResult,
     CycleActions,
     GcPhaseResult,
     StackBase,
 )
-from orchestune.dispatch.cycle_events import CompletionEvent, PromotionEvent
+from orchestune.dispatch.cycle.events import CompletionEvent, PromotionEvent
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.scoring import SchedulingResult
 from orchestune.task_metadata import TaskMetadata

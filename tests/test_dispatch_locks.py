@@ -5,7 +5,7 @@ import pytest
 
 import orchestune.dispatch.locks
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.cycle.run import CycleReport
 from orchestune.dispatch.locks import (
     ExternalLockConflict,
     check_footprint_deviation,

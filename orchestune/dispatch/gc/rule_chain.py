@@ -12,7 +12,7 @@ from typing import Literal
 
 from orchestune.bounded_limit import exceeds_limit
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     AbandonmentPersistenceFailureCompletion,
     ActiveReservationHold,
     CompletionEvent,
@@ -20,7 +20,7 @@ from orchestune.dispatch.cycle_events import (
     ForgeFailureCompletion,
     WorktreeCompletionHold,
 )
-from orchestune.dispatch.cycle_records import CompletionReceipt
+from orchestune.dispatch.cycle.records import CompletionReceipt
 from orchestune.dispatch.external_execution import (
     is_external_execution,
     notify_completed_hold,

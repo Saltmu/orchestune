@@ -13,11 +13,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_context import (
+from orchestune.dispatch.cycle.context import (
     IssuesByStatus,
     discard_reclaim_counts_for_closed_issues,
 )
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     TaskWorktreeCompletion,
     WorktreeCompletion,
     WorktreeCompletionHold,
@@ -338,7 +338,7 @@ class TestDirtyWorktreeHoldLimit:
         field・出力順・省略規則は従来のholdイベントの`replace`と同一でなければ
         ならない（events.jsonlの既存出力を維持する）。
         """
-        from orchestune.dispatch.cycle_events import DirtyWorktreeEscalatedCompletion
+        from orchestune.dispatch.cycle.events import DirtyWorktreeEscalatedCompletion
 
         ctx = _ctx(forge=fake_forge)
         ctx.config.apply = True

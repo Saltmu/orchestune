@@ -16,7 +16,7 @@ import dataclasses
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     ForgeFailureCompletion,
     WorktreeCompletionHold,
 )

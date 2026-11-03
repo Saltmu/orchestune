@@ -30,7 +30,8 @@ import pytest
 from hypothesis import given, settings
 
 from orchestune.consistency.invariants import status as invariants
-from orchestune.dispatch import cycle_execution, reconciliation, status_repair
+from orchestune.dispatch import reconciliation, status_repair
+from orchestune.dispatch.cycle import execution as cycle_execution
 from orchestune.dispatch.rules import CycleContext
 from tests.dependency_liveness_test_support import (
     DEPENDENT,

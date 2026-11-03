@@ -20,8 +20,8 @@ from orchestune.dependencies.policy import (
 from orchestune.dependencies.resolution import (
     describe_unresolved_dependency,
 )
-from orchestune.dispatch.cycle_action_contracts import StackBase
-from orchestune.dispatch.cycle_events import DeviationEvent
+from orchestune.dispatch.cycle.action_contracts import StackBase
+from orchestune.dispatch.cycle.events import DeviationEvent
 from orchestune.dispatch.execution_profiles import (
     ExecutionSelection,
     resolve_task_execution_selection,

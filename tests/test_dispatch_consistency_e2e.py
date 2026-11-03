@@ -27,13 +27,13 @@ from orchestune.consistency.supervisor import (
 )
 from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import (
+from orchestune.dispatch.cycle.actions import CycleActionAdapter
+from orchestune.dispatch.cycle.context import IssuesByStatus
+from orchestune.dispatch.cycle.report import CycleReport
+from orchestune.dispatch.cycle.run import (
     _run_recovery_bookkeeping_boundary,
     run_dispatch_cycle,
 )
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.cycle_context import IssuesByStatus
-from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.locks import ExternalLockScanResult
 from orchestune.dispatch.phase.gc import run_gc_phase
 from orchestune.dispatch.rules import CycleContext
@@ -474,22 +474,22 @@ def test_repair_mode_applies_simultaneous_allowlisted_repairs_and_reobserves(
 
     with (
         patch(
-            "orchestune.dispatch.cycle.load_run_state",
+            "orchestune.dispatch.cycle.run.load_run_state",
             autospec=True,
             return_value=run_state,
         ),
         patch(
-            "orchestune.dispatch.cycle._prepare_cycle_issues",
+            "orchestune.dispatch.cycle.run._prepare_cycle_issues",
             autospec=True,
             return_value=issues,
         ),
         patch(
-            "orchestune.dispatch.cycle._build_cycle_context",
+            "orchestune.dispatch.cycle.run._build_cycle_context",
             autospec=True,
             return_value=ctx,
         ),
         patch(
-            "orchestune.dispatch.cycle._execute_cycle_pipeline",
+            "orchestune.dispatch.cycle.run._execute_cycle_pipeline",
             autospec=True,
             return_value=_pipeline_report(),
         ),
@@ -598,22 +598,22 @@ def test_repair_failure_is_reported_and_intent_remains_resumable(tmp_path, fake_
 
     with (
         patch(
-            "orchestune.dispatch.cycle.load_run_state",
+            "orchestune.dispatch.cycle.run.load_run_state",
             autospec=True,
             return_value=run_state,
         ),
         patch(
-            "orchestune.dispatch.cycle._prepare_cycle_issues",
+            "orchestune.dispatch.cycle.run._prepare_cycle_issues",
             autospec=True,
             return_value=issues,
         ),
         patch(
-            "orchestune.dispatch.cycle._build_cycle_context",
+            "orchestune.dispatch.cycle.run._build_cycle_context",
             autospec=True,
             return_value=ctx,
         ),
         patch(
-            "orchestune.dispatch.cycle._execute_cycle_pipeline",
+            "orchestune.dispatch.cycle.run._execute_cycle_pipeline",
             autospec=True,
             return_value=_pipeline_report(),
         ),
@@ -702,7 +702,7 @@ def test_cycle_resumes_partial_forge_failure_once_on_the_next_cycle(
             return_value=[],
         ),
         patch(
-            "orchestune.dispatch.cycle_actions._sync_external_locks",
+            "orchestune.dispatch.cycle.actions._sync_external_locks",
             autospec=True,
             return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
         ),
@@ -801,7 +801,7 @@ def test_user_allowlisted_status_repair_resumes_when_first_forge_write_fails(
             return_value=[],
         ),
         patch(
-            "orchestune.dispatch.cycle_actions._sync_external_locks",
+            "orchestune.dispatch.cycle.actions._sync_external_locks",
             autospec=True,
             return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
         ),
@@ -903,7 +903,7 @@ def test_applied_status_intent_is_verified_next_cycle_after_read_failure(
             return_value=[],
         ),
         patch(
-            "orchestune.dispatch.cycle_actions._sync_external_locks",
+            "orchestune.dispatch.cycle.actions._sync_external_locks",
             autospec=True,
             return_value=ExternalLockScanResult(to_lock=[], to_unlock=[]),
         ),

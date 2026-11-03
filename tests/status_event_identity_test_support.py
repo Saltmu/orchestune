@@ -6,7 +6,7 @@ import json
 import math
 from dataclasses import dataclass
 
-from orchestune.dispatch.cycle_context_state import LaunchFact
+from orchestune.dispatch.cycle.context_state import LaunchFact
 from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.ledger.status_events import Event, ExecutionIdentity
 from tests.status_event_test_support import EVENT_BY_SOURCE
@@ -54,7 +54,7 @@ EXPECTED_SOURCES = frozenset(
         "dispatch/gc/rule_chain.py::_rule_not_needed",
         "dispatch/status_repair.py::_apply_command",
         "dispatch/recovery/service.py::execute_recovery_requeue_command",
-        "dispatch/cycle_context_state.py::_CycleState.record_completion",
+        "dispatch/cycle/context_state.py::_CycleState.record_completion",
         "complete/status_labels.py::_completion_mutate",
         "replan/operations.py::_transition_to_not_needed",
         "integrator/pr.py::handle_merge_failure",

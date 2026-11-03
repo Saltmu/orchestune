@@ -14,10 +14,10 @@ from orchestune.claim.contracts import ClaimStage, ReservationKind
 from orchestune.dag.models import FootprintConflict
 from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import (
+from orchestune.dispatch.cycle.events import DeviationConflict, RecomputedDeviation
+from orchestune.dispatch.cycle.run import (
     run_dispatch_cycle,
 )
-from orchestune.dispatch.cycle_events import DeviationConflict, RecomputedDeviation
 from orchestune.dispatch.filters import (
     _filter_candidates_for_forced_serial,
     _filter_deviation_blocked_candidates,
@@ -378,7 +378,7 @@ class TestRunDispatchCycleFootprintRecompute:
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
+                "orchestune.dispatch.cycle.actions._launch_selected_tasks",
                 autospec=True,
                 side_effect=_launch_stub,
             ),
@@ -479,7 +479,7 @@ class TestRunDispatchCycleFootprintRecompute:
             ),
             _patch_gc_process_alive(return_value=True),
             patch(
-                "orchestune.dispatch.cycle_actions._launch_selected_tasks",
+                "orchestune.dispatch.cycle.actions._launch_selected_tasks",
                 autospec=True,
                 side_effect=_launch_stub,
             ),

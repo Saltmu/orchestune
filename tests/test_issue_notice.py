@@ -21,7 +21,7 @@ from orchestune.consistency.supervisor import (
     ScanKind,
 )
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_report import CycleReport
+from orchestune.dispatch.cycle.report import CycleReport
 from orchestune.dispatch.postcycle import _post_finding_notices, post_finding_notices
 from orchestune.dispatch.result import PhaseStatus
 from orchestune.forge import ForgeAuthError

@@ -15,7 +15,7 @@ from orchestune.complete.contracts import DownstreamPolicyRecord
 from orchestune.complete.journal_models import CompletionJournalRecord
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.config_values import completion_policy_overrides
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     PolicyHoldCompletion,
     PolicyProgressCompletion,
 )

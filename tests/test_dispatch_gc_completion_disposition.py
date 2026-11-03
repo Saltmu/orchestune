@@ -15,8 +15,8 @@ from typing import Any, cast, get_args, get_type_hints
 
 import pytest
 
-from orchestune.dispatch import cycle_events
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle import events as cycle_events
+from orchestune.dispatch.cycle.events import (
     CompletionEvent,
     DirtyWorktreeEscalatedCompletion,
     EarlyDeathRequeuedCompletion,
@@ -370,4 +370,4 @@ def test_disposition_module_has_no_effectful_dependencies() -> None:
         for alias in node.names
     }
     internal = {name for name in imported if name.startswith("orchestune")}
-    assert internal <= {"orchestune.dispatch.cycle_events"}, internal
+    assert internal <= {"orchestune.dispatch.cycle.events"}, internal

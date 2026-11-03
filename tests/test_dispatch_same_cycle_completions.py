@@ -9,10 +9,10 @@ from unittest.mock import MagicMock, patch
 
 from orchestune.consistency.supervisor import ConsistencyMode
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import _finish_consistency_runtime, _RepairCycleState
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.cycle_events import WorktreeCompletion
-from orchestune.dispatch.cycle_report import CycleReport
+from orchestune.dispatch.cycle.actions import CycleActionAdapter
+from orchestune.dispatch.cycle.events import WorktreeCompletion
+from orchestune.dispatch.cycle.report import CycleReport
+from orchestune.dispatch.cycle.run import _finish_consistency_runtime, _RepairCycleState
 from orchestune.dispatch.rules import CycleContext
 from orchestune.forge import Forge
 from orchestune.ledger.run_state import RunState
@@ -160,7 +160,7 @@ class TestFinalConsistencyRepairExecutor:
             forge=MagicMock(spec=Forge),
         )
 
-        with patch("orchestune.dispatch.cycle._ContextRepairExecutor") as factory:
+        with patch("orchestune.dispatch.cycle.run._ContextRepairExecutor") as factory:
             _finish_consistency_runtime(
                 runtime, report, ctx, 0.0, config, _RepairCycleState()
             )

@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.dispatch.cycle_actions import CycleActionAdapter
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.actions import CycleActionAdapter
+from orchestune.dispatch.cycle.events import (
     AlreadyForcedSerialDeviation,
     ForcedSerialDeviation,
     RecomputedDeviation,
@@ -94,7 +94,7 @@ class TestProcessActiveWorktrees:
         assert is_completion_hold_event(result.completion_events[0])
 
         with patch(
-            "orchestune.dispatch.cycle_actions.run_gc_phase", autospec=True
+            "orchestune.dispatch.cycle.actions.run_gc_phase", autospec=True
         ) as mock_run_gc:
             adapter.run_gc(result.completion_events)
 
@@ -228,7 +228,7 @@ class TestRunGc:
         )
 
         with patch(
-            "orchestune.dispatch.cycle_actions.run_gc_phase", autospec=True
+            "orchestune.dispatch.cycle.actions.run_gc_phase", autospec=True
         ) as mock_run_gc:
             result = adapter.run_gc(events)
 

@@ -11,7 +11,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.models import PrRecord
 from orchestune.pr_link_notice import (
     KIND_CREATED,

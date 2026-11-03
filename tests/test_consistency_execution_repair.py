@@ -31,7 +31,7 @@ from orchestune.consistency.repairs.status import (
 )
 from orchestune.consistency.supervisor import ConsistencySupervisor
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import run_dispatch_cycle
+from orchestune.dispatch.cycle.run import run_dispatch_cycle
 from orchestune.dispatch.execution_repair import (
     REPAIR_COMMAND_BINDINGS,
     DispatchRepairExecutorAdapter,

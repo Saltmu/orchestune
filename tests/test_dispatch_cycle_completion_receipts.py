@@ -18,8 +18,8 @@ import pytest
 
 from orchestune.dependencies.assessment import DependencyState
 from orchestune.dependencies.resolution import TaskDependencies
-from orchestune.dispatch.cycle_context_state import RecordStatus
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.context_state import RecordStatus
+from orchestune.dispatch.cycle.events import (
     DirtyWorktreeEscalatedCompletion,
     EarlyDeathRequeuedCompletion,
     ForgeFailureCompletion,
@@ -28,7 +28,7 @@ from orchestune.dispatch.cycle_events import (
     WorktreeCompletion,
     WorktreeCompletionHold,
 )
-from orchestune.dispatch.cycle_records import CompletionReceipt
+from orchestune.dispatch.cycle.records import CompletionReceipt
 from orchestune.dispatch.gc.completion_disposition import UnclassifiedCompletionError
 from orchestune.dispatch.gc.rule_chain import (
     _handle_completed_event_outcome,

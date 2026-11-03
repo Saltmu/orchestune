@@ -19,11 +19,11 @@ from orchestune.dispatch.config_loader import (
     load_and_resolve_config as load_and_resolve_config,
 )
 from orchestune.dispatch.config_schema import validate_toml_config
-from orchestune.dispatch.cycle import (
+from orchestune.dispatch.cycle.report import CycleReport
+from orchestune.dispatch.cycle.run import (
     run_dispatch_cycle,
     run_pre_integration_cycle,
 )
-from orchestune.dispatch.cycle_report import CycleReport
 from orchestune.dispatch.postcycle import (
     _post_event_log_comment,
     _post_finding_notices,

@@ -15,8 +15,8 @@ from orchestune.consistency.supervisor import ConsistencyCycleReport
 from orchestune.dag.models import SubTask
 from orchestune.dependencies.assessment import DependencyAssessment
 from orchestune.dependencies.resolution import TaskDependencies
-from orchestune.dispatch.cycle_context_state import LaunchFact, RecordResult
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.context_state import LaunchFact, RecordResult
+from orchestune.dispatch.cycle.events import (
     CompletionEvent,
     DeviationEvent,
     PromotionEvent,

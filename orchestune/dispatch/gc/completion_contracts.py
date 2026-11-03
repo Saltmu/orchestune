@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Literal, NamedTuple, TypeGuard
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     CompletionEvent,
     ForgeFailureCompletion,
     TaskWorktreeCompletion,

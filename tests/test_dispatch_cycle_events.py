@@ -6,7 +6,7 @@ from typing import cast
 import pytest
 
 from orchestune.dag.models import FootprintConflict
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     AbandonedExternalExecutionHeldCompletion,
     AbandonmentPersistenceFailureCompletion,
     ActiveReservationHold,

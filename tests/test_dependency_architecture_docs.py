@@ -357,8 +357,8 @@ def test_documented_active_worktree_subrecords_and_lifecycle_exist() -> None:
         with_completion,
     )
     from orchestune.consistency.observation import ExecutionRecord
-    from orchestune.dispatch.cycle import _DispatchConsistencyAdapter
-    from orchestune.dispatch.cycle_records import CompletionReceipt
+    from orchestune.dispatch.cycle.records import CompletionReceipt
+    from orchestune.dispatch.cycle.run import _DispatchConsistencyAdapter
     from orchestune.dispatch.execution_repair import execution_record_from_active
     from orchestune.ledger.active_codec import (
         decode_active_worktree,

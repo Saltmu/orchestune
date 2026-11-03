@@ -9,7 +9,7 @@ from orchestune.dependencies.assessment import (
     DependencyState,
 )
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_events import ChangesRequestedEscalationCompletion
+from orchestune.dispatch.cycle.events import ChangesRequestedEscalationCompletion
 from orchestune.dispatch.rules import ActiveWorktreeRuleOutcome, _RuleExecutionContext
 from orchestune.labels import StatusLabel
 from orchestune.ledger.escalation import apply_human_review_escalation

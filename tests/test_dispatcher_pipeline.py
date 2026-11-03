@@ -20,17 +20,17 @@ import pytest
 from orchestune.consistency.models import RepairStatus
 from orchestune.consistency.repairs.execution import COMMAND_REQUEUE
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import (
-    CycleReport,
-    append_event_log,
-    build_event_log_entry,
-    run_dispatch_cycle,
-)
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     ForgeFailureCompletion,
     PromotionEvent,
     RecomputedDeviation,
     WorktreeCompletion,
+)
+from orchestune.dispatch.cycle.run import (
+    CycleReport,
+    append_event_log,
+    build_event_log_entry,
+    run_dispatch_cycle,
 )
 from orchestune.dispatch.dispatcher import (
     _DispatcherRunResult,

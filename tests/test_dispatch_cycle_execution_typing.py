@@ -21,8 +21,8 @@ def _cache_digest(source: str, repo_root: Path = _REPO_ROOT) -> str:
     h.update(sys.version.encode("utf-8"))
     for rel in (
         "pyproject.toml",
-        "orchestune/dispatch/cycle.py",
-        "orchestune/dispatch/cycle_execution_contracts.py",
+        "orchestune/dispatch/cycle/run.py",
+        "orchestune/dispatch/cycle/execution_contracts.py",
     ):
         target = repo_root / rel
         if target.is_file():
@@ -122,11 +122,11 @@ def test_cache_digest_invalidates_on_checked_code_or_source_change(
     fake_root = tmp_path / "repo"
     fake_root.mkdir()
     (fake_root / "pyproject.toml").write_text("[tool.mypy]\nstrict = true\n")
-    cycle_dir = fake_root / "orchestune" / "dispatch"
+    cycle_dir = fake_root / "orchestune" / "dispatch" / "cycle"
     cycle_dir.mkdir(parents=True)
-    cycle_file = cycle_dir / "cycle.py"
+    cycle_file = cycle_dir / "run.py"
     cycle_file.write_text("# version 1\n")
-    contracts_file = cycle_dir / "cycle_execution_contracts.py"
+    contracts_file = cycle_dir / "execution_contracts.py"
     contracts_file.write_text("# version 1\n")
 
     d_v1 = _cache_digest("source_a", repo_root=fake_root)
@@ -141,10 +141,10 @@ def test_cache_digest_invalidates_on_checked_code_or_source_change(
 def test_cycle_dependency_builder_returns_frozen_contract() -> None:
     from dataclasses import FrozenInstanceError
 
-    from orchestune.dispatch.cycle import _build_execution_dependencies
-    from orchestune.dispatch.cycle_execution_contracts import (
+    from orchestune.dispatch.cycle.execution_contracts import (
         CycleExecutionDependencies,
     )
+    from orchestune.dispatch.cycle.run import _build_execution_dependencies
 
     dependencies = _build_execution_dependencies()
     assert isinstance(dependencies, CycleExecutionDependencies)
@@ -200,15 +200,15 @@ def test_mypy_rejects_wrong_callback_arguments_and_returns() -> None:
 _COMBINED_FIXTURE = """\
 from orchestune.consistency.supervisor import ConsistencyCycleReport
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import (
+from orchestune.dispatch.cycle.run import (
     _ConsistencyRuntime,
     _RepairCycleState,
     _build_execution_dependencies,
 )
-from orchestune.dispatch.cycle_context import CycleContext, IssuesByStatus
-from orchestune.dispatch.cycle_events import CompletionEvent, DeviationEvent, PromotionEvent
-from orchestune.dispatch.cycle_execution_contracts import CycleExecutionDependencies
-from orchestune.dispatch.cycle_report import CycleReport
+from orchestune.dispatch.cycle.context import CycleContext, IssuesByStatus
+from orchestune.dispatch.cycle.events import CompletionEvent, DeviationEvent, PromotionEvent
+from orchestune.dispatch.cycle.execution_contracts import CycleExecutionDependencies
+from orchestune.dispatch.cycle.report import CycleReport
 from orchestune.dispatch.phase.scheduling import SchedulingPhaseResult
 from orchestune.dispatch.prior_parent_merge import PriorParentMergeReconciliation
 from orchestune.lock_contracts import ExternalLockScanResult

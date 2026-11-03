@@ -10,7 +10,7 @@ from orchestune.complete.journal import completion_journal_lock
 from orchestune.complete.publication import update_downstream_policy_locked
 from orchestune.complete.service import complete_task
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_actions import _run_active_worktree_rules
+from orchestune.dispatch.cycle.actions import _run_active_worktree_rules
 from orchestune.dispatch.gc.unclaimed import unclaimed_completion_events
 from orchestune.ledger.completion_reservations import dependency_completion_blocked
 from orchestune.ledger.run_state import load_run_state_readonly

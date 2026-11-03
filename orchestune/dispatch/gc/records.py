@@ -2,7 +2,7 @@
 
 import time
 
-from orchestune.dispatch.cycle_events import CompletionEvent, WorktreeCompletion
+from orchestune.dispatch.cycle.events import CompletionEvent, WorktreeCompletion
 from orchestune.ledger.run_state import ActiveWorktree, CompletedWorktree
 from orchestune.models import Usage
 from orchestune.task_metadata import TaskMetadata

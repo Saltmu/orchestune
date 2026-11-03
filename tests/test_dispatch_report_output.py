@@ -99,7 +99,7 @@ def test_save_rechecks_file_and_preserves_external_result(tmp_path):
 
 
 def _report():
-    from orchestune.dispatch.cycle_report import CycleReport
+    from orchestune.dispatch.cycle.report import CycleReport
 
     return CycleReport(
         selected=[],

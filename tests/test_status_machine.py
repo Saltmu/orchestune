@@ -217,9 +217,9 @@ class TestAllowedTransitions:
         assert not is_allowed("", "")
 
     def test_cycle_context_non_terminal_table_is_a_subset(self) -> None:
-        # dispatch/cycle_context_state keeps its own cycle-local table; it must
+        # dispatch/cycle/context_state keeps its own cycle-local table; it must
         # never allow a transition the status-machine policy forbids.
-        from orchestune.dispatch.cycle_context_state import _NON_TERMINAL_TRANSITIONS
+        from orchestune.dispatch.cycle.context_state import _NON_TERMINAL_TRANSITIONS
 
         for source, targets in _NON_TERMINAL_TRANSITIONS.items():
             for target in targets:

@@ -14,14 +14,14 @@ from orchestune.consistency.observation import (
     FACT_PULL_REQUEST_STATE,
     FACT_WORKTREE_PATH,
 )
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     CompletionEvent,
     DeviationEvent,
     PromotionEvent,
 )
 
 if TYPE_CHECKING:
-    from orchestune.dispatch.cycle_report import CycleReport
+    from orchestune.dispatch.cycle.report import CycleReport
 
 
 def _event_changes(

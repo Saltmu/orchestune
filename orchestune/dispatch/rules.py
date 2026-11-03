@@ -15,18 +15,18 @@ from orchestune.dag.models import SubTask
 from orchestune.dependencies.assessment import DependencyAssessment
 from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle_action_contracts import (
+from orchestune.dispatch.cycle.action_contracts import (
     ActivePhaseResult,
     CycleActions,
     CycleQueries,
     GcPhaseResult,
     StackBase,
 )
-from orchestune.dispatch.cycle_context_state import (
+from orchestune.dispatch.cycle.context_state import (
     RecordResult,
     _CycleState,
 )
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     CompletionEvent,
     DeviationEvent,
     PromotionEvent,

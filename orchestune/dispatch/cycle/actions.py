@@ -31,24 +31,24 @@ from orchestune.dispatch.actor_verification import (
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.conflicts import build_task_conflict_graph
 from orchestune.dispatch.critical_path import pending_tasks
-from orchestune.dispatch.cycle_action_contracts import (
+from orchestune.dispatch.cycle.action_contracts import (
     ActivePhaseResult,
     GcPhaseResult,
     StackBase,
 )
-from orchestune.dispatch.cycle_context import (
+from orchestune.dispatch.cycle.context import (
     _build_task_mappings,
     _dispatch_not_needed_review,
     _fetch_issues,
 )
-from orchestune.dispatch.cycle_context_state import RecordStatus
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.context_state import RecordStatus
+from orchestune.dispatch.cycle.events import (
     ActiveReservationHold,
     CompletionEvent,
     DeviationEvent,
     PromotionEvent,
 )
-from orchestune.dispatch.cycle_records import _on_status_transition_verified
+from orchestune.dispatch.cycle.records import _on_status_transition_verified
 from orchestune.dispatch.escalation import _rule_changes_requested
 from orchestune.dispatch.execution_repair import DispatchRepairExecutorAdapter
 from orchestune.dispatch.filters import _filter_candidates_for_forced_serial

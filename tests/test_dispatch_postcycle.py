@@ -13,8 +13,7 @@ import pytest
 
 from orchestune.dag.models import compile_extra_ignore_patterns
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.cycle import CycleReport
-from orchestune.dispatch.cycle_events import (
+from orchestune.dispatch.cycle.events import (
     AlreadyForcedSerialDeviation,
     ForcedSerialDeviation,
     PromotionEvent,
@@ -22,6 +21,7 @@ from orchestune.dispatch.cycle_events import (
     UnknownSubtaskDeviation,
     WorktreeCompletion,
 )
+from orchestune.dispatch.cycle.run import CycleReport
 from orchestune.dispatch.postcycle import (
     _post_event_log_comment,
     _process_parent_completion,

@@ -158,7 +158,7 @@ class Route:
 #: (file, qualified function, how the completion is evidenced).
 LABEL_INVARIANT_COMPLETIONS: tuple[tuple[str, str, str], ...] = (
     (
-        "dispatch/cycle_context_state.py",
+        "dispatch/cycle/context_state.py",
         "_CycleState.record_completion",
         "same-cycle completion; Forge labels stay as observed",
     ),
@@ -406,7 +406,7 @@ EVENT_BY_SOURCE: dict[str, tuple[Route, ...]] = {
             "aux-force-serial-kept",
         ),
     ),
-    "dispatch/cycle_context_state.py::_CycleState.record_completion": (
+    "dispatch/cycle/context_state.py::_CycleState.record_completion": (
         _r(
             _E.COMPLETE_WITHOUT_LABEL,
             _K.CYCLE,

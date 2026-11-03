@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestune.dispatch.cycle_context_state import RecordStatus
+from orchestune.dispatch.cycle.context_state import RecordStatus
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import RunState
 from orchestune.ledger.status_events import (

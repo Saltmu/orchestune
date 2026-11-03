@@ -7,7 +7,7 @@ import os
 import sys
 
 from orchestune.consistency.supervisor import consistency_cycle_to_dict
-from orchestune.dispatch.cycle import CycleReport
+from orchestune.dispatch.cycle.run import CycleReport
 from orchestune.dispatch.reporting.summary import (
     merge_skips,
     render_forge_warnings_markdown,

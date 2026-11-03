@@ -510,7 +510,7 @@ class TestYamlParseDeduplication:
         return counts
 
     def test_build_task_mappings_parses_yaml_once_per_issue(self, monkeypatch):
-        from orchestune.dispatch.cycle_context import _build_task_mappings
+        from orchestune.dispatch.cycle.context import _build_task_mappings
 
         counts = self._install_yaml_counters(monkeypatch)
         issues = [
