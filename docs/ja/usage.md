@@ -469,7 +469,7 @@ else { Write-Warning 'report not created' }
 | `--final-acceptance-review {advisory,off}` | - | 最終PRの受け入れレビュー依頼（既定 `advisory`）。Layer 1/2と独立。§4.5参照。 |
 | `--semantic-review-mode {required,advisory,off}` | - | 統合PRの第2層セマンティックレビューモード（`required`、`advisory`、または `off`）。未指定時は設定ファイル（`semantic-review-mode`）または環境変数（`ORCHESTUNE_SEMANTIC_REVIEW_MODE`）、既定値は `required`。`off` でスキップ。[§4.5](#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)を参照。 |
 | `--force-integration-review` | - | 単一タスクFast-Pathをバイパスし、子タスク1件の場合でも統合PRセマンティックレビュー（第2層）を強制実行するフラグ。 |
-| `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`、`grok-cli`）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。安全のためCLI引数でのみ指定可能（設定ファイルでの指定は禁止）です。未指定でローカルCLIターゲットを実行しようとした場合は設定エラーで拒否されます（Fail-Closed）。 |
+| `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`、`grok-cli`、および `auto` がローカルCLIを検出した場合を含む）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。`--no-apply`（ドライラン）を含むすべての実行で必要です。安全のためCLI引数でのみ指定可能（設定ファイルでの指定は禁止）です。未指定でローカルCLIターゲットを実行しようとした場合は設定エラーで拒否され（Fail-Closed）、選択理由と代替ターゲットが通知されます。 |
 
 ### 設定ファイル (`orchestune.toml`) による詳細設定
 

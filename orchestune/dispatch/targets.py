@@ -617,6 +617,42 @@ class TargetBuildConfig:
     reviewer_by_target: Mapping[str, ReviewerBot] = field(default_factory=dict)
 
 
+def _unsafe_execution_error(target_name: str, auto_detected: bool) -> ValueError:
+    lines = [
+        f"設定エラー: `{target_name}` によるローカル無人実行は、承認やサンドボックスのバイパスを伴う完全権限実行となります。",
+        "この実行を許可するには、信頼できる実行環境であることを確認の上、明示的に `--allow-unsafe-agent-execution` オプションを指定してください。",
+    ]
+    if auto_detected:
+        cli_name = target_name.removesuffix("-cli")
+        order_str = " → ".join(LOCAL_CLI_CANDIDATES)
+        if cli_name in LOCAL_CLI_CANDIDATES:
+            idx = LOCAL_CLI_CANDIDATES.index(cli_name)
+            earlier = LOCAL_CLI_CANDIDATES[:idx]
+            if earlier:
+                missing_str = ", ".join(earlier)
+                reason = (
+                    f"`auto` は PATH 上の CLI を {order_str} の順に探し、"
+                    f"`{cli_name}` を選択しました（{missing_str} は PATH にありません）。"
+                )
+            else:
+                reason = (
+                    f"`auto` は PATH 上の CLI を {order_str} の順に探し、"
+                    f"`{cli_name}` を選択しました。"
+                )
+        else:
+            reason = f"`auto` は PATH 上の CLI を検出して `{cli_name}` を選択しました。"
+        lines.append(reason)
+    else:
+        lines.append(
+            f"実行ターゲット `{target_name}` は `--dispatch-target` または `orchestune.toml` の `dispatch_target` で指定されています。"
+        )
+    lines.append(
+        "この確認は `--no-apply`（ドライラン）を含むすべての実行で必要です。\n"
+        "完全権限実行を避ける場合は `--dispatch-target cloud-routine` または `codex-cloud` を、エージェントを起動しない確認のみの場合は `--dispatch-target local` を指定してください。"
+    )
+    return ValueError("\n".join(lines))
+
+
 def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
     is_unsafe = dispatch_target_name in {
         "claude-cli",
@@ -624,11 +660,13 @@ def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
         "codex-cli",
         "grok-cli",
     }
+    auto_detected = False
     if dispatch_target_name == "auto":
         detected = detect_installed_local_cli()
         if detected is not None:
             dispatch_target_name = f"{detected}-cli"
             is_unsafe = True
+            auto_detected = True
         else:
             print(
                 "警告: PATH上にclaude/agy/codex/grokのいずれのCLIも見つかりませんでした。"
@@ -638,10 +676,7 @@ def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
             dispatch_target_name = "local"
 
     if is_unsafe and not allow_unsafe:
-        raise ValueError(
-            f"設定エラー: `{dispatch_target_name}` によるローカル無人実行は、承認やサンドボックスのバイパスを伴う完全権限実行となります。\n"
-            "この実行を許可するには、信頼できる実行環境であることを確認の上、明示的に `--allow-unsafe-agent-execution` オプションを指定してください。"
-        )
+        raise _unsafe_execution_error(dispatch_target_name, auto_detected=auto_detected)
     return dispatch_target_name
 
 
