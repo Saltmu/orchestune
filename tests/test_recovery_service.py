@@ -253,3 +253,23 @@ def test_missing_active_claim_points_to_orphan_adoption(local_claim):
     result = recover_claim(RecoveryRequest(7), cwd=workspace.repository_root)
     assert not result.success
     assert "orchestune claim 7 --adopt-pr <PR>" in result.reason
+
+
+def test_replay_marks_unreadable_release_receipt(local_claim):
+    from orchestune.recovery.contracts import RecoveryRequest
+    from orchestune.recovery.service import recover_claim
+
+    workspace, active, _worktree = local_claim
+    request = RecoveryRequest(
+        7, claim_id=active.claim.claim_id, reason="worker stopped", apply=True
+    )
+    assert recover_claim(request, cwd=workspace.repository_root).success
+    raw = json.loads(workspace.run_state_path.read_text(encoding="utf-8"))
+    (receipt_key,) = (
+        key for key in raw["recovery_receipts"] if key.endswith("::release")
+    )
+    raw["recovery_receipts"][receipt_key]["active"] = {"damaged": True}
+    workspace.run_state_path.write_text(json.dumps(raw), encoding="utf-8")
+    replay = recover_claim(request, cwd=workspace.repository_root)
+    assert replay.action == "already_released"
+    assert replay.diagnostics == {"release_reason": "unreadable"}
