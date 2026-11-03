@@ -66,7 +66,7 @@ from orchestune.ledger.run_state import (
     save_run_state,
 )
 from orchestune.ledger.status_labels import (
-    PRIMARY_STATUS_LABELS,
+    recorded_primary_status_labels,
     transition_status_label,
 )
 from orchestune.models import PrRecord
@@ -150,16 +150,6 @@ def _classify(
         timezone=config.usage_limit_timezone,
     )
     return _Finding(reset)
-
-
-def _stale_labels(active_task: TaskMetadata | None) -> tuple[str, ...]:
-    if active_task is not None:
-        return tuple(
-            label
-            for label in PRIMARY_STATUS_LABELS
-            if label in active_task.status_labels
-        )
-    return (StatusLabel.IN_PROGRESS,)
 
 
 def _cooldown_until(
@@ -469,7 +459,7 @@ def _requeue(
             config.resolved_forge,
             issue,
             StatusLabel.QUEUED,
-            _stale_labels(active_task),
+            recorded_primary_status_labels(active_task),
             on_label_added=on_label_added,
         )
     except Exception as error:  # noqa: BLE001 - the reservation stays pending
@@ -521,7 +511,7 @@ def _escalate(
     try:
         apply_human_review_escalation(
             issue,
-            _stale_labels(active_task),
+            recorded_primary_status_labels(active_task),
             _escalation_comment(event, config),
             forge=config.resolved_forge,
             on_label_applied=on_label_applied,

@@ -28,6 +28,7 @@ from orchestune.consistency.models import (
     RepairResult,
     RepairStatus,
     StateChanged,
+    describe_exception,
 )
 
 _SCOPE_ORDER = {
@@ -117,11 +118,6 @@ class ConsistencyCycleReport:
 
 
 MAX_REPAIR_PASSES = 5
-
-
-def _describe(exc: Exception) -> str:
-    detail = str(exc).strip()
-    return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
 
 
 def _scope_key(scope: ConsistencyScope, subject_id: str | None) -> tuple[int, str]:
@@ -266,7 +262,7 @@ def _failure_scan(
     exc: Exception,
     state_changes: tuple[StateChanged, ...] = (),
 ) -> ConsistencyScanResult:
-    description = _describe(exc)
+    description = describe_exception(exc)
     return ConsistencyScanResult(
         boundary=boundary,
         kind=kind,
@@ -358,7 +354,7 @@ def _execute_repair(executor: RepairExecutor, command: RepairCommand) -> RepairR
         return RepairResult(
             command=command,
             status=RepairStatus.FAILED,
-            diagnostics=(_describe(exc),),
+            diagnostics=(describe_exception(exc),),
         )
 
 
@@ -500,7 +496,7 @@ class ConsistencySupervisor:
             try:
                 commands.extend(planner.plan(report))
             except Exception as exc:  # noqa: BLE001 - shadow diagnostics are best effort
-                diagnostics.append(f"repair planning failed: {_describe(exc)}")
+                diagnostics.append(f"repair planning failed: {describe_exception(exc)}")
         return _deduplicated_commands(commands), tuple(diagnostics)
 
     def _evaluate(

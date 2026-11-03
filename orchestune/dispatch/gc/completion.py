@@ -103,6 +103,7 @@ from orchestune.ledger.run_state import (
 )
 from orchestune.ledger.status_labels import (
     PRIMARY_STATUS_LABELS,
+    recorded_primary_status_labels,
     transition_status_label,
 )
 from orchestune.models import IssueRecord, PrRecord, Usage
@@ -263,16 +264,6 @@ def _decide_clean_outcome(
     )
 
 
-def _stale_status_labels(active_task: TaskMetadata | None) -> tuple[str, ...]:
-    if active_task is not None:
-        return tuple(
-            label
-            for label in PRIMARY_STATUS_LABELS
-            if label in active_task.status_labels
-        )
-    return (StatusLabel.IN_PROGRESS,)
-
-
 def _prepare_apply_escalation(
     active: ActiveWorktree,
     config: DispatcherConfig,
@@ -290,7 +281,7 @@ def _prepare_apply_escalation(
         if fresh_external_hold(active, config, "completion") is not None:
             return None
         remove_worktree(active.core.worktree_path)
-    return _stale_status_labels(active_task)
+    return recorded_primary_status_labels(active_task)
 
 
 def _apply_escalation(
@@ -492,7 +483,7 @@ def _publish_requeue(
         config.resolved_forge,
         active.core.issue_number,
         StatusLabel.QUEUED,
-        _stale_status_labels(active_task),
+        recorded_primary_status_labels(active_task),
         on_label_added=on_requeue_applied,
     )
     config.resolved_forge.add_comment(active.core.issue_number, comment)
@@ -621,7 +612,7 @@ def _apply_done_worktree_cleanup(ctx: _CompletionContext) -> str | None:
         ctx.config.resolved_forge,
         ctx.active.core.issue_number,
         StatusLabel.DONE,
-        _stale_status_labels(ctx.active_task),
+        recorded_primary_status_labels(ctx.active_task),
     )
     return commit_sha
 

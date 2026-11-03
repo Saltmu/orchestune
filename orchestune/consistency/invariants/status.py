@@ -29,6 +29,7 @@ from dataclasses import dataclass
 
 from orchestune.consistency.contracts import Invariant
 from orchestune.consistency.intents import intent_is_live
+from orchestune.consistency.invariants.facts import _fact, _observation_details
 from orchestune.consistency.models import (
     ConsistencyFinding,
     ConsistencyScope,
@@ -149,12 +150,6 @@ REQUIRED_OBSERVED_FACT_NAMES_BY_SCOPE = {
 # ---------------------------------------------------------------------------
 
 
-def _fact(scope: ScopedObservations, name: str) -> Observation | None:
-    """One uniquely named fact; a duplicated name is not a usable reading."""
-    matches = tuple(fact for fact in scope.facts if fact.name == name)
-    return matches[0] if len(matches) == 1 else None
-
-
 type _Predicate = Callable[[FactValue], bool]
 
 
@@ -236,15 +231,6 @@ def _tasks(
             ),
             key=lambda item: item[0],
         )
-    )
-
-
-def _observation_details(fact: Observation) -> tuple[str, ...]:
-    return (
-        f"fact={fact.name}",
-        f"source={fact.source}",
-        f"certainty={fact.certainty.value}",
-        *fact.diagnostics,
     )
 
 

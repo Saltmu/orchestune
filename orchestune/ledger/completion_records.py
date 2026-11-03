@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from typing import Any, TypeVar
 
+from orchestune.ledger.preserved_json import _preserved_json
 from orchestune.outcome_record import VALID_RESULTS
 from orchestune.ownership_contracts import (
     CompleteStage,
@@ -50,23 +51,6 @@ class InvalidLedgerRecord:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "raw_json", deepcopy(self.raw_json))
-
-
-def _preserved_json(
-    source: dict[str, Any] | None,
-    original: dict[str, Any] | None,
-    current: dict[str, Any],
-) -> dict[str, Any]:
-    if source is None or original is None:
-        return current
-    result = deepcopy(source)
-    for key, value in current.items():
-        if key in result or original.get(key, _MISSING) != value:
-            result[key] = value
-    return result
-
-
-_MISSING = object()
 
 
 @dataclass(frozen=True, slots=True)

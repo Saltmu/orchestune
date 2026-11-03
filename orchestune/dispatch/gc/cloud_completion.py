@@ -16,9 +16,12 @@ from orchestune.dispatch.cycle_events import (
     TaskWorktreeCompletion,
 )
 from orchestune.dispatch.gc.completion_contracts import ForgeFailure, warn_forge_failure
+from orchestune.dispatch.gc.completion_status import (
+    _active_dispatch_handle,
+    _call_is_complete,
+)
 from orchestune.dispatch.gc.external_guard import fresh_external_hold
 from orchestune.dispatch.gc.git import remove_worktree, worktree_has_uncommitted_changes
-from orchestune.dispatch.targets import DispatchHandle
 from orchestune.labels import StatusLabel
 from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import ActiveWorktree, RunState, TaskReclaimRecord
@@ -28,25 +31,6 @@ from orchestune.ledger.status_labels import (
     transition_status_label,
 )
 from orchestune.task_metadata import TaskMetadata
-
-
-def _active_dispatch_handle(active: ActiveWorktree) -> DispatchHandle:
-    return DispatchHandle(
-        pid=active.launch.pid,
-        external_id=active.launch.external_id,
-        external_url=active.launch.external_url,
-        branch_name=active.core.branch,
-        issue_number=active.core.issue_number,
-        started_at=active.launch.started_at,
-    )
-
-
-def _call_is_complete(config: DispatcherConfig, handle: DispatchHandle) -> bool:
-    assert config.dispatch_target is not None
-    try:
-        return config.dispatch_target.is_complete(handle, forge=config.resolved_forge)
-    except TypeError:
-        return config.dispatch_target.is_complete(handle)
 
 
 def _cloud_worktree_completion_status(

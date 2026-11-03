@@ -31,6 +31,7 @@ from orchestune.integrator.timeout_policy import (
     STATUS_EXECUTION_RETRY_EXHAUSTED,
     STATUS_EXECUTION_TIMED_OUT,
     IntegrationExecutionPolicy,
+    build_integration_execution_policy,
 )
 from orchestune.models import Task
 from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
@@ -171,15 +172,7 @@ class IntegratorConfig:
 
     def build_execution_policy(self) -> IntegrationExecutionPolicy:
         """Validate and return the execution policy from the explicit fields."""
-        return IntegrationExecutionPolicy(
-            integration_dependency_timeout_seconds=self.integration_dependency_timeout_seconds,
-            integration_ci_timeout_seconds=self.integration_ci_timeout_seconds,
-            integration_cycle_timeout_seconds=self.integration_cycle_timeout_seconds,
-            integration_cleanup_timeout_seconds=self.integration_cleanup_timeout_seconds,
-            integration_command_timeout_seconds=self.integration_command_timeout_seconds,
-            max_integration_timeout_retries=self.max_integration_timeout_retries,
-            integration_timeout_backoff_seconds=self.integration_timeout_backoff_seconds,
-        )
+        return build_integration_execution_policy(self)
 
 
 @dataclass

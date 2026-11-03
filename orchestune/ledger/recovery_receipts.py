@@ -16,6 +16,7 @@ from orchestune.ledger.active_codec import (
 )
 from orchestune.ledger.active_records import ActiveWorktree
 from orchestune.ledger.completion_records import InvalidLedgerRecord
+from orchestune.ledger.preserved_json import _preserved_json
 
 RELEASE_OPERATION = "release"
 GC_RELEASE_OPERATION = "gc-release"
@@ -25,8 +26,6 @@ ORPHANED_PR_OPERATION = "orphaned-pr"
 RESTORE_MARKER_OPERATION = "restore-marker"
 RECLAIM_PHASES = frozenset({"prepared", "active_saved", "completed"})
 RESTART_PHASES = frozenset({"prepared", "restarted"})
-
-_MISSING = object()
 
 
 def recovery_receipt_key(
@@ -48,20 +47,6 @@ def legacy_active_snapshot(active: ActiveWorktree) -> dict[str, Any]:
     snapshot = encode_active_worktree(active)
     snapshot.setdefault("completion_policy_config", None)
     return snapshot
-
-
-def _preserved_json(
-    source: dict[str, Any] | None,
-    original: dict[str, Any] | None,
-    current: dict[str, Any],
-) -> dict[str, Any]:
-    if source is None or original is None:
-        return current
-    result = deepcopy(source)
-    for key, value in current.items():
-        if key in result or original.get(key, _MISSING) != value:
-            result[key] = value
-    return result
 
 
 @dataclass(frozen=True, slots=True)
