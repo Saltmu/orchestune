@@ -8,7 +8,7 @@ import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
 from orchestune.dispatch.gc import _rule_completed, _rule_not_needed
-from orchestune.dispatch.gc.completion import (
+from orchestune.dispatch.gc.completion_status import (
     _fetch_outcome_for_active,
     _local_pr_completion_status,
 )

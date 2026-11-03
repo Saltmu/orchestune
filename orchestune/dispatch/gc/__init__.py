@@ -36,17 +36,12 @@ from orchestune.dispatch.gc.cloud_completion import (
 from orchestune.dispatch.gc.completion import (
     CompletedWorktreeDecision,
     ForgeFailure,
-    _active_dispatch_handle,
     _apply_completed_worktree_outcome,
-    _call_is_complete,
     _decide_completed_worktree_outcome,
     _decide_not_needed_dirty_worktree,
-    _fetch_outcome_for_active,
     _finalize_completed_worktree,
     _finalize_not_needed_worktree,
-    _is_stale_pr_for_active,
     _is_worktree_complete,
-    _local_pr_completion_status,
     _parse_github_timestamp,
     failed_operations,
     failure_descriptions,
@@ -56,6 +51,13 @@ from orchestune.dispatch.gc.completion import (
 from orchestune.dispatch.gc.completion_disposition import (
     PostCompletionRoute,
     completion_handling,
+)
+from orchestune.dispatch.gc.completion_status import (
+    _active_dispatch_handle,
+    _call_is_complete,
+    _fetch_outcome_for_active,
+    _is_stale_pr_for_active,
+    _local_pr_completion_status,
 )
 from orchestune.dispatch.gc.confirmed import collect_confirmed_completion
 from orchestune.dispatch.gc.external_guard import fresh_external_hold

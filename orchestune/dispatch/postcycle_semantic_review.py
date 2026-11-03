@@ -12,7 +12,6 @@ same post-cycle.
 from __future__ import annotations
 
 import hashlib
-import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -48,9 +47,18 @@ from orchestune.dispatch.semantic_review_diagnostics import (
     build_review_diagnostics,
     describe_reviewer,
 )
+from orchestune.dispatch.semantic_review_evidence import (
+    SemanticReviewEvidence as SemanticReviewEvidence,
+)
+from orchestune.dispatch.semantic_review_evidence import (
+    _Attempt,
+    _authored,
+    _Review,
+    _state_authors,
+    _Stop,
+)
 from orchestune.dispatch.semantic_review_triggers import (
     parse_iso,
-    restore_round_triggers,
     round_trigger,
     round_triggers,
 )
@@ -66,7 +74,6 @@ from orchestune.integrator.semantic_claim import (
     ClaimStatus,
     PushResult,
     PushStatus,
-    SemanticClaim,
     acquire_semantic_claim,
     delete_attempt_fix_branches,
     promote_fix_output,
@@ -75,12 +82,10 @@ from orchestune.integrator.semantic_claim import (
 )
 from orchestune.issue_notice import latest_notice_body, post_notice_if_changed
 from orchestune.labels import StatusLabel
-from orchestune.pr_link_notice_trust import NoticePresence, TrustContext
 from orchestune.review.acquisition import collect_review_state, has_reviewer_activity
 from orchestune.review.markers import build_trigger_body, derive_review_target
 from orchestune.review.rounds import (
     ReviewTrigger,
-    build_restorable_trigger_body,
     precise_created_at,
     trigger_comment_ids,
 )
@@ -89,47 +94,33 @@ from orchestune.review.semantic_gate import (
     IN_FLIGHT_OPERATION_STATUSES,
     IntegrationAttemptIdentity,
     SemanticCiObservation,
-    SemanticJudgmentDecision,
     SemanticOperationObservation,
     SemanticOperationStatus,
-    SemanticReviewHumanOverrideV1,
     SemanticReviewMode,
     SemanticReviewPhase,
-    SemanticReviewRetryV1,
     SemanticReviewStateV1,
     SemanticTransitionDecision,
     SemanticTransitionObservation,
-    evaluate_semantic_judgments,
     evaluate_semantic_review_transition,
     format_semantic_review_state_marker,
-    restore_latest_fix_result,
-    restore_latest_human_override,
-    restore_latest_retry_request,
     restore_latest_semantic_review_state,
     semantic_fix_output_branch,
 )
-from orchestune.review.snapshot import EvidenceContractError, normalize_timestamp
+from orchestune.review.snapshot import normalize_timestamp
 
 _P = SemanticReviewPhase
-#: The head check of `find_open_attempts`; a promoted fix output trips it until
-#: the runner records the new head, so that one error is re-restored here.
-_HEAD_MISMATCH = "semantic state head does not match the PR head"
 _TARGET_PHASES = ACTIVE_PENDING_PHASES | {_P.ESCALATED}
 _REVIEW_PHASES = frozenset({_P.REVIEW_PENDING, _P.FIX_IN_PROGRESS, _P.CI_VERIFICATION})
 _UNSETTLED_OPERATIONS = IN_FLIGHT_OPERATION_STATUSES | {
     SemanticOperationStatus.INDETERMINATE
 }
 _CLAIM_TTL_SECONDS = 300
-_WRITE_PERMISSIONS = frozenset({"admin", "maintain", "write"})
 #: A reviewer that showed no activity after its request (#1436).
 _ACK_REASON = "review_not_acknowledged"
 _SEMANTIC_MARKERS = (
     "orchestune:semantic-review-",
     "orchestune:semantic-fix-result",
     "```orchestune-review-judgments",
-)
-_JUDGMENT_BLOCK = re.compile(
-    r"^```orchestune-review-judgments[^\n]*\n.*?^```[^\S\n]*$", re.M | re.S
 )
 #: Report statuses of a cycle that went as designed (another worker holding
 #: the claim is progress, not a failure).
@@ -197,67 +188,6 @@ class SemanticClaimClient:
     delete_fix_branches: Callable[[str | Path, str], None] = delete_attempt_fix_branches
 
 
-@dataclass(frozen=True)
-class _Review:
-    complete: bool = False
-    acknowledged: bool = False
-    result: dict[str, Any] | None = None
-    #: Trusted requests of this round and head: (comment id, creation time).
-    requests: tuple[tuple[str, datetime], ...] = ()
-
-
-@dataclass
-class _Attempt:
-    """One attempt being advanced; ``claim`` is set once the claim is held."""
-
-    pr: OpenAttempt
-    state: SemanticReviewStateV1
-    override: SemanticReviewHumanOverrideV1 | None
-    comments: list[dict[str, Any]]
-    trust: TrustContext
-    review: _Review = _Review()
-    obs: SemanticTransitionObservation | None = None
-    claim: SemanticClaim | None = None
-    ack: AckAssessment | None = None
-
-
-class _Stop(Exception):
-    """Stop advancing one attempt with a report status (nothing more is written)."""
-
-    def __init__(self, status: str, **details: Any) -> None:
-        super().__init__(status)
-        self.status = status
-        self.details = details
-
-
-def _state_authors(trust: TrustContext) -> frozenset[str]:
-    """Orchestune itself and configured bot collaborators (the #1360 state rule)."""
-    trusted: set[str] = set()
-    identity = trust.get_self_identity()
-    if identity:
-        trusted.add(identity.casefold())
-    trusted.update(
-        author.casefold()
-        for author in trust.get_trusted_collaborators() or ()
-        if author.casefold().endswith("[bot]")
-    )
-    return frozenset(trusted)
-
-
-def _authored(
-    comments: list[dict[str, Any]],
-    trust: TrustContext,
-    accept: Callable[[str], bool],
-) -> list[tuple[str, str]]:
-    """``(body, author)`` of the comments whose author ``accept`` admits."""
-    selected = []
-    for comment in comments:
-        author, body = trust.extract_author(comment), comment.get("body")
-        if author and isinstance(body, str) and accept(author.casefold()):
-            selected.append((body, author))
-    return selected
-
-
 def _is_target(attempt: OpenAttempt) -> bool:
     if attempt.state_error is not None:
         return True
@@ -323,6 +253,7 @@ class SemanticReviewCycleRunner:
             raise ValueError("now must be timezone-aware")
         self._config = config
         self._forge = forge
+        self._evidence = SemanticReviewEvidence(forge)
         self._root = repository_root
         self._now = now.astimezone(UTC)
         self._worker = worker_id
@@ -355,7 +286,7 @@ class SemanticReviewCycleRunner:
         self, pr: OpenAttempt
     ) -> tuple[SemanticReviewStateV1, ReviewDiagnostics]:
         """Read-only state and diagnostics of one attempt (`review status`)."""
-        ctx = self._restore(pr)
+        ctx = self._evidence.restore(pr)
         return ctx.state, self._diagnose(ctx, ctx.state, self._acquire_review(ctx))[0]
 
     def _diagnose(
@@ -376,7 +307,7 @@ class SemanticReviewCycleRunner:
         """One attempt's failure is reported and never stops the others."""
         ctx: _Attempt | None = None
         try:
-            ctx = self._restore(pr)
+            ctx = self._evidence.restore(pr)
             if ctx.state.phase not in _TARGET_PHASES:
                 return self._report(ctx, "not_pending", ctx.state)
             return self._carry_out(ctx, self._decide(ctx))
@@ -392,47 +323,6 @@ class SemanticReviewCycleRunner:
                     status, pr_number=pr.pr_number, details=details
                 )
             return self._report(ctx, status, ctx.state, **details)
-
-    def _restore(self, pr: OpenAttempt) -> _Attempt:
-        comments = self._forge.list_all_issue_comments(pr.pr_number)
-        trust = TrustContext(self._forge)
-        if pr.state is not None:
-            return _Attempt(pr, pr.state, pr.override, comments, trust)
-        if pr.state_error != _HEAD_MISMATCH:
-            raise _Stop("state_unreadable", error=pr.state_error)
-        try:
-            trusted = _state_authors(trust)
-            state = restore_latest_semantic_review_state(
-                [body for body, _ in _authored(comments, trust, trusted.__contains__)]
-            )
-        except ValueError as error:
-            raise _Stop("state_unreadable", error=str(error)) from error
-        if state is None or state.pr_number != pr.pr_number:
-            raise _Stop("state_unreadable", error=pr.state_error)
-        override = None
-        for body, actor in reversed(self._human_bodies(comments, trust)):
-            found = restore_latest_human_override(
-                [body], attempt_id=state.attempt_id, head_sha=state.head_sha
-            )
-            if found is not None:
-                override = replace(found, actor=actor)
-                break
-        return _Attempt(pr, state, override, comments, trust)
-
-    def _human_bodies(
-        self, comments: list[dict[str, Any]], trust: TrustContext
-    ) -> list[tuple[str, str]]:
-        """Bodies of humans with write access (the #1360 override rule)."""
-        permissions: dict[str, str] = {}
-
-        def allowed(author: str) -> bool:
-            if author.casefold().endswith("[bot]"):
-                return False
-            if author not in permissions:
-                permissions[author] = self._forge.get_actor_permission(author)
-            return permissions[author].casefold() in _WRITE_PERMISSIONS
-
-        return _authored(comments, trust, allowed)
 
     def _current_identity(
         self, state: SemanticReviewStateV1
@@ -466,7 +356,7 @@ class SemanticReviewCycleRunner:
             _P.FIX_IN_PROGRESS,
             _P.CI_VERIFICATION,
         ):
-            judgments = self._judgments(ctx)
+            judgments = self._evidence.judgments(ctx)
         return SemanticTransitionObservation(
             identity=self._current_identity(state),
             observed_head_sha=ctx.pr.head_sha,
@@ -474,7 +364,7 @@ class SemanticReviewCycleRunner:
             mode=self._mode,
             limits=self._config.semantic_review_limits,
             override=ctx.override,
-            retry_request=self._retry_request(ctx)
+            retry_request=self._evidence.retry_request(ctx)
             if state.phase == _P.ESCALATED
             else None,
             review_complete=ctx.review.complete,
@@ -495,7 +385,7 @@ class SemanticReviewCycleRunner:
     def _acquire_review(self, ctx: _Attempt) -> _Review:
         """The current round's review of the requested head, by its reviewer only."""
         state, comments = ctx.state, ctx.comments
-        triggers = self._trusted_triggers(ctx)
+        triggers = self._evidence.trusted_triggers(ctx)
         requested = round_triggers(triggers, state, fresh=True)
         if not requested:
             return _Review()
@@ -573,66 +463,6 @@ class SemanticReviewCycleRunner:
             self._ops.cleanup_fix_worktree(
                 wt, repo_root=self._root, evaluate_fn=evaluate_worktree_removal, pid=pid
             )
-
-    def _trusted(self, ctx: _Attempt, comment: dict[str, Any]) -> bool:
-        presence, _ = ctx.trust.evaluate_candidate_markers([comment])
-        if presence is NoticePresence.UNKNOWN:
-            raise _Stop("inputs_unknown", error="comment author trust is unknown")
-        return presence is NoticePresence.PRESENT
-
-    def _trusted_triggers(self, ctx: _Attempt) -> list[ReviewTrigger]:
-        """Only trusted requests open or bound a round's review window."""
-        return restore_round_triggers(
-            [c for c in ctx.comments if self._trusted(ctx, c)]
-        )
-
-    def _judgment_comment(self, ctx: _Attempt) -> dict[str, Any] | None:
-        """The trusted table the round's job named in its trusted result marker."""
-        state = ctx.state
-        bodies = [
-            str(c["body"])
-            for c in ctx.comments
-            if isinstance(c.get("body"), str) and self._trusted(ctx, c)
-        ]
-        try:
-            result = restore_latest_fix_result(
-                bodies,
-                attempt_id=state.attempt_id,
-                operation_id=str(state.operation_id),
-            )
-        except ValueError:
-            return None
-        if result is None or result.judgment_comment_id is None:
-            return None
-        for comment in ctx.comments:
-            if comment.get("id") == result.judgment_comment_id:
-                return comment if self._trusted(ctx, comment) else None
-        return None
-
-    def _judgments(self, ctx: _Attempt) -> SemanticJudgmentDecision | None:
-        comment = self._judgment_comment(ctx)
-        if comment is None:
-            return None
-        return evaluate_semantic_judgments(
-            str(comment.get("body") or ""),
-            ctx.review.result if ctx.review.complete else None,
-            expected_round=ctx.state.round,
-        )
-
-    def _retry_request(self, ctx: _Attempt) -> SemanticReviewRetryV1 | None:
-        """The latest unconsumed retry/restart a collaborator posted for this head."""
-        state = ctx.state
-        bodies = [body for body, _ in self._human_bodies(ctx.comments, ctx.trust)]
-        consumed = {state.last_retry_request_id} - {None}
-        try:
-            return restore_latest_retry_request(
-                bodies,
-                attempt_id=state.attempt_id,
-                head_sha=state.head_sha,
-                consumed_request_ids=cast(set[str], consumed),
-            )
-        except ValueError:
-            return None
 
     # -- decision -----------------------------------------------------------
 
@@ -910,37 +740,9 @@ class SemanticReviewCycleRunner:
             raise _Stop("reviewer_unresolved")
         return resolution.reviewer
 
-    def _trigger_reply(self, ctx: _Attempt, nxt: SemanticReviewStateV1) -> str:
-        """Round 1 asks for a review; later rounds carry the previous table and SHA."""
-        intro = (
-            f"Layer-2 semantic review of integration attempt `{nxt.attempt_id[:12]}` "
-            f"for parent #{nxt.parent_issue_number}: review the combined diff "
-            "for cross-task defects."
-        )
-        comment = self._judgment_comment(ctx) if ctx.state.operation_id else None
-        block = (
-            _JUDGMENT_BLOCK.search(str(comment.get("body") or "")) if comment else None
-        )
-        if nxt.round <= 1 or block is None:
-            return f"{intro}\n\nReview head: `{nxt.head_sha}`."
-        return (
-            f"{intro}\n\nRound {ctx.state.round} judgments, addressed at "
-            f"`{nxt.head_sha}`:\n\n{block.group(0)}\n"
-        )
-
-    def _safe_reply(
-        self, ctx: _Attempt, nxt: SemanticReviewStateV1, reviewer: str
-    ) -> str:
-        reply = self._trigger_reply(ctx, nxt)
-        try:
-            build_restorable_trigger_body(reply, reviewer, nxt.round, nxt.head_sha)
-        except EvidenceContractError:
-            reply = f"Review head: `{nxt.head_sha}`."
-        return reply
-
     def _trigger_body(self, ctx: _Attempt, nxt: SemanticReviewStateV1) -> str:
         reviewer = self._reviewer()
-        reply = self._safe_reply(ctx, nxt, reviewer)
+        reply = self._evidence.safe_reply(ctx, nxt, reviewer)
         return build_trigger_body(reply, reviewer, nxt.round, nxt.head_sha)
 
     def _resumed_trigger(
@@ -965,8 +767,8 @@ class SemanticReviewCycleRunner:
 
     def _post_trigger(self, ctx: _Attempt, nxt: SemanticReviewStateV1) -> None:
         reviewer = self._reviewer()
-        reply = self._safe_reply(ctx, nxt, reviewer)
-        triggers = self._trusted_triggers(ctx)
+        reply = self._evidence.safe_reply(ctx, nxt, reviewer)
+        triggers = self._evidence.trusted_triggers(ctx)
         if self._resumed_trigger(ctx, nxt, triggers):
             return
         if round_trigger(triggers, nxt, fresh=True) is not None:

@@ -484,7 +484,9 @@ class TestAdditionalClaimServiceEdgeCases:
     def test_claim_task_publishes_claim_ownership_to_issue_body(
         self, claim_env: dict[str, Path]
     ) -> None:
-        from orchestune.dispatch.recovery import _parse_claim_info_from_issue
+        from orchestune.dispatch.recovery_restoration import (
+            _parse_claim_info_from_issue,
+        )
 
         repo_root = claim_env["repo_root"]
         state_path = claim_env["state_path"]
@@ -727,12 +729,12 @@ def test_conflict_check_keeps_forge_unavailable_for_the_cli() -> None:
     """#1334 review: another task's metadata lookup may hit the REST fallback's
     fail-closed error; it must reach the CLI as forge_unavailable, not as a
     claim conflict."""
-    from orchestune.claim.service import _evaluate_conflict_step
+    from orchestune.claim.admission import _evaluate_conflict_step
     from orchestune.forge import ForgeGraphQLUnavailableError
 
     with (
         patch(
-            "orchestune.claim.service.assess_claim_conflicts",
+            "orchestune.claim.admission.assess_claim_conflicts",
             side_effect=ForgeGraphQLUnavailableError("dependencies unavailable"),
         ),
         pytest.raises(ForgeGraphQLUnavailableError),
@@ -741,10 +743,10 @@ def test_conflict_check_keeps_forge_unavailable_for_the_cli() -> None:
 
 
 def test_conflict_check_still_maps_other_lookup_failures_to_claim_conflict() -> None:
-    from orchestune.claim.service import _evaluate_conflict_step
+    from orchestune.claim.admission import _evaluate_conflict_step
 
     with patch(
-        "orchestune.claim.service.assess_claim_conflicts",
+        "orchestune.claim.admission.assess_claim_conflicts",
         side_effect=RuntimeError("lookup failed"),
     ):
         outcome, warnings = _evaluate_conflict_step(

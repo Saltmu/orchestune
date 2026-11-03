@@ -24,7 +24,7 @@ import pytest
 from orchestune.claim.contracts import ClaimOutcome, OwnerKind, ReservationKind
 from orchestune.claim.issue_metadata import publish_claim_ownership_to_issue
 from orchestune.dependencies.resolution import build_legacy_dag_inputs
-from orchestune.dispatch import launch, rebase, recovery
+from orchestune.dispatch import launch, rebase, recovery_restoration
 from orchestune.dispatch.gc import policies, zombies
 from orchestune.dispatch.launch_state import with_launch
 from orchestune.dispatch.worktree import LaunchResult
@@ -285,7 +285,7 @@ class TestRecomputeBudget:
         assert _body_counters(forge) == (2, False)
         issue = forge.get_issue(ISSUE)
         assert issue is not None
-        count, serial = recovery._recovery_counters_for_issue(issue)
+        count, serial = recovery_restoration._recovery_counters_for_issue(issue)
         restored = make_test_active_worktree(
             ISSUE, pid=None, recompute_count=count, forced_serial=serial
         )
@@ -320,7 +320,7 @@ class TestRecomputeBudget:
         forge.issues[ISSUE] = replace(stripped, labels=(P,))  # (LAUNCH, CLAIM) strip
         issue = forge.get_issue(ISSUE)
         assert issue is not None
-        count, serial = recovery._recovery_counters_for_issue(issue)
+        count, serial = recovery_restoration._recovery_counters_for_issue(issue)
         restored = make_test_active_worktree(
             ISSUE, pid=None, recompute_count=count, forced_serial=serial
         )
