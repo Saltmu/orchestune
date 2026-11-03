@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from orchestune.dispatch.config import DispatcherConfig
-from orchestune.dispatch.gc.completion import _local_pr_completion_status
+from orchestune.dispatch.gc.completion_status import _local_pr_completion_status
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
     DispatchHandle,

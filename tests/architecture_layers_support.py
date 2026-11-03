@@ -151,6 +151,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.filters",
             "dispatch.gc",
             "dispatch.gc.completion",
+            "dispatch.gc.completion_status",
             "dispatch.gc.not_needed_close",
             "dispatch.gc.closed_target",
             "dispatch.gc.orphaned_pr",

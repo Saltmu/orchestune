@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal
 
 from orchestune.complete.contracts import CompleteStage
 from orchestune.dispatch.retry_policy import (
     DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS,
     RetryDisposition,
+    RetryPolicy,
     RetryState,
+    plan_retry,
     retry_disposition,
     review_timeout_policy,
 )
@@ -138,6 +141,30 @@ def _get_review_timeout_retry_state(
     record = run_state.task_reclaim_counts.get(issue_number) if run_state else None
     state = read_retry_state(record, "review_timeout")
     return state.count, state.pending
+
+
+@dataclass(frozen=True, slots=True)
+class _BackoffRetryReservation:
+    kind: RetryKind
+    subtask_id: str
+    retry_at: float
+
+
+def _reserve_backoff_retry(
+    run_state: RunState,
+    issue_number: int,
+    now: float,
+    kind: RetryKind,
+    policy: RetryPolicy,
+) -> RetryState | None:
+    previous = run_state.task_reclaim_counts.get(issue_number)
+    plan = plan_retry(policy, read_retry_state(previous, kind), now=now)
+    if plan.disposition is RetryDisposition.EXHAUSTED:
+        return None
+    record = previous or TaskReclaimRecord()
+    write_retry_state(record, kind, plan.state)
+    run_state.task_reclaim_counts[issue_number] = record
+    return plan.state
 
 
 __all__ = [

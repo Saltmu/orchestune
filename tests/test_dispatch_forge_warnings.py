@@ -16,6 +16,8 @@ from orchestune.dispatch.gc.completion import (
     ForgeFailure,
     _apply_completed_worktree_outcome,
     _decide_completed_worktree_outcome,
+)
+from orchestune.dispatch.gc.completion_status import (
     _fetch_outcome_for_active,
     _local_pr_completion_status,
 )

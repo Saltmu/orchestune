@@ -6,7 +6,6 @@ import contextlib
 import sys
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -47,6 +46,12 @@ from orchestune.dispatch.gc.completion_contracts import (
     warn_forge_failure as warn_forge_failure,
 )
 from orchestune.dispatch.gc.completion_disposition import is_decision_hold_action
+from orchestune.dispatch.gc.completion_status import (
+    _active_dispatch_handle,
+    _call_is_complete,
+    _fetch_outcome_for_active,
+    _prior_merge_decision,
+)
 from orchestune.dispatch.gc.external_guard import (
     ExternalExecutionChanged,
     fresh_external_hold,
@@ -68,27 +73,22 @@ from orchestune.dispatch.gc.orphaned_pr import (
 )
 from orchestune.dispatch.gc.outcome_decision import (
     RetryKind,
+    _BackoffRetryReservation,
     _decide_action_from_outcome,
     _get_review_timeout_retry_state,
     _is_handoff_ready,
     _is_handoff_retained_dirty,
-    read_retry_state,
-    write_retry_state,
+    _reserve_backoff_retry,
 )
-from orchestune.dispatch.gc.prior_merge import decide_prior_parent_merge_completion
 from orchestune.dispatch.retry_policy import (
     DEFAULT_REVIEW_TIMEOUT_MAX_ATTEMPTS,
-    RetryDisposition,
     RetryPolicy,
-    RetryState,
     early_death_policy,
-    plan_retry,
     review_timeout_policy,
 )
 from orchestune.dispatch.rules import NotNeededReviewDispatcher
 from orchestune.dispatch.targets import (
     ClaudeCodeCloudRoutineDispatchTarget,
-    DispatchHandle,
 )
 from orchestune.forge import Forge
 from orchestune.infra.git_cli import run_git
@@ -99,7 +99,6 @@ from orchestune.ledger.escalation import apply_human_review_escalation
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     RunState,
-    TaskReclaimRecord,
     save_run_state,
 )
 from orchestune.ledger.status_labels import (
@@ -108,47 +107,15 @@ from orchestune.ledger.status_labels import (
 )
 from orchestune.models import IssueRecord, PrRecord, Usage
 from orchestune.outcome_record import (
-    OutcomeLookupResult,
     OutcomeLookupState,
     OutcomeRecord,
-    parse_from_comments,
 )
 from orchestune.pr_freshness import (  # noqa: F401 - gc package re-exports the old name
     parse_github_timestamp as _parse_github_timestamp,
 )
-from orchestune.pr_freshness import should_exclude_pr
-from orchestune.pr_link_notice import pr_matches_issue
 from orchestune.pr_link_notice_trust import NoticePresence, TrustContext
 from orchestune.targets.completion_policy import token_limit_decision
 from orchestune.task_metadata import TaskMetadata
-
-
-@dataclass(frozen=True, slots=True)
-class _BackoffRetryReservation:
-    kind: RetryKind
-    subtask_id: str
-    retry_at: float
-
-
-def _fetch_outcome_for_active(
-    active: ActiveWorktree, forge: Forge, error_sink: list[ForgeFailure] | None = None
-) -> OutcomeLookupResult:
-    """Read the active task's Issue-only Outcome declaration.
-
-    `ABSENT` means the complete Issue comment history was read and contains no
-    declaration for this session.  A failed read is deliberately `UNKNOWN`, so
-    every GC caller can hold rather than turn an API outage into a missing
-    Outcome escalation or a reclaim.
-    """
-    try:
-        comments = list(forge.list_comments(active.core.issue_number))
-    except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
-        warn_forge_failure("list_comments", active.core.issue_number, error, error_sink)
-        return OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN)
-    outcome = parse_from_comments(comments, since=active.launch.started_at)
-    if outcome is None:
-        return OutcomeLookupResult(state=OutcomeLookupState.ABSENT)
-    return OutcomeLookupResult(state=OutcomeLookupState.FOUND, record=outcome)
 
 
 def _detect_worktree_commits(
@@ -167,25 +134,6 @@ def _detect_worktree_commits(
     if active.launch.external_id is None and sha is None:
         return None, None
     return sha is not None, sha
-
-
-def _prior_merge_decision(
-    active: ActiveWorktree,
-    active_task: TaskMetadata | None,
-    forge: Forge | None,
-    issue: IssueRecord | None,
-) -> CompletedWorktreeDecision | None:
-    prior_merge = decide_prior_parent_merge_completion(
-        active.core.issue_number, active_task, forge, issue
-    )
-    if prior_merge is None:
-        return None
-    return CompletedWorktreeDecision(
-        action=prior_merge.action,
-        subtask_id=active_task.subtask_id if active_task else "",
-        operation="prior_parent_merge",
-        error=prior_merge.error,
-    )
 
 
 def _resolve_active_outcome(
@@ -517,23 +465,6 @@ def _apply_orphaned_pr_escalation(
                 )
             return
     _apply_escalation(ctx.active, ctx.config, message, ctx.active_task)
-
-
-def _reserve_backoff_retry(
-    run_state: RunState,
-    issue_number: int,
-    now: float,
-    kind: RetryKind,
-    policy: RetryPolicy,
-) -> RetryState | None:
-    previous = run_state.task_reclaim_counts.get(issue_number)
-    plan = plan_retry(policy, read_retry_state(previous, kind), now=now)
-    if plan.disposition is RetryDisposition.EXHAUSTED:
-        return None
-    record = previous or TaskReclaimRecord()
-    write_retry_state(record, kind, plan.state)
-    run_state.task_reclaim_counts[issue_number] = record
-    return plan.state
 
 
 def _publish_requeue(
@@ -999,75 +930,6 @@ def _finalize_not_needed_worktree(
         raise RuntimeError("not-needed review dispatcher is not configured")
     dispatch_not_needed_review(active.core.issue_number, subtask_id, config)
     return _task_completion_event(active, subtask_id, "not_needed_review_dispatched")
-
-
-def _active_dispatch_handle(active: ActiveWorktree) -> DispatchHandle:
-    return DispatchHandle(
-        pid=active.launch.pid,
-        external_id=active.launch.external_id,
-        external_url=active.launch.external_url,
-        branch_name=active.core.branch,
-        issue_number=active.core.issue_number,
-        started_at=active.launch.started_at,
-    )
-
-
-def _is_stale_pr_for_active(pr: PrRecord, active: ActiveWorktree) -> bool:
-    """#1306: 起動前に作成された、または`created_at`を確認できないPRは現在の実行の
-    証拠にしない。targets側と同じ`pr_freshness`の規則で、CLOSEDも`created_at`で
-    判定する（起動前から存在したPRが起動後に閉じられても放棄の根拠にしない）。"""
-    return should_exclude_pr(
-        created_at=pr.created_at, started_at=active.launch.started_at
-    )
-
-
-def _local_pr_completion_status(
-    active: ActiveWorktree,
-    config: DispatcherConfig,
-    error_sink: list[ForgeFailure] | None = None,
-) -> str:
-    lookup = _fetch_outcome_for_active(active, config.resolved_forge, error_sink)
-    if lookup.state is OutcomeLookupState.FOUND:
-        return "completed"
-    if lookup.state is OutcomeLookupState.UNKNOWN:
-        return "unknown"
-
-    handle = _active_dispatch_handle(active)
-    try:
-        candidate_prs = config.resolved_forge.list_prs(state="all")
-    except Exception as error:  # noqa: BLE001 - 判定を保留し、事実だけ表に出す
-        warn_forge_failure("list_prs", active.core.issue_number, error, error_sink)
-        return "unknown"
-    matching_prs = [
-        pr
-        for pr in candidate_prs
-        if (
-            (handle.branch_name is not None and pr.head_ref == handle.branch_name)
-            or (
-                handle.issue_number is not None
-                and pr_matches_issue(pr, handle.issue_number)
-            )
-        )
-        and not _is_stale_pr_for_active(pr, active)
-    ]
-    for state, status in (
-        ("MERGED", "completed"),
-        ("OPEN", "pending"),
-        ("CLOSED", "abandoned"),
-    ):
-        if any(pr.state == state for pr in matching_prs):
-            return status
-    return "pending"
-
-
-def _call_is_complete(config: DispatcherConfig, handle: DispatchHandle) -> bool:
-    """#315レビュー対応: 旧is_completeシグネチャとの互換性を保つ。"""
-    assert config.dispatch_target is not None
-    try:
-        return config.dispatch_target.is_complete(handle, forge=config.resolved_forge)
-    except TypeError:
-        # `forge`引数なしの旧dispatch_target実装は、引数なしで再試行する。
-        return config.dispatch_target.is_complete(handle)
 
 
 def _is_worktree_complete(active: ActiveWorktree, config: DispatcherConfig) -> bool:

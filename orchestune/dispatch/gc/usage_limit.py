@@ -32,7 +32,7 @@ from orchestune.dispatch.cycle_events import (
     UsageLimitCompletion,
 )
 from orchestune.dispatch.execution_repair import command_finding_codes
-from orchestune.dispatch.gc.completion import _local_pr_completion_status
+from orchestune.dispatch.gc.completion_status import _local_pr_completion_status
 from orchestune.dispatch.gc.external_guard import fresh_external_hold
 from orchestune.dispatch.gc.git import backup_wip_commit, remove_worktree
 from orchestune.dispatch.gc.outcome_decision import (
