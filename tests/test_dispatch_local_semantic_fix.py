@@ -195,7 +195,9 @@ class TestLocalProcessDispatchTargetLaunchSemanticFix:
         )
         assert handle is None
 
-    def test_popen_failure_cleans_up_created_worktree(self, tmp_path: Path) -> None:
+    def test_start_process_failure_cleans_up_created_worktree(
+        self, tmp_path: Path
+    ) -> None:
         import pytest
 
         from orchestune.dispatch.local_semantic_fix import launch_local_semantic_fix
@@ -203,15 +205,12 @@ class TestLocalProcessDispatchTargetLaunchSemanticFix:
         target = LocalProcessDispatchTarget(
             log_dir=tmp_path / "logs",
             target_name="claude-cli",
+            start_process=MagicMock(side_effect=OSError("executable not found")),
         )
         with (
             patch(
                 "orchestune.dispatch.local_semantic_fix.create_semantic_fix_worktree",
                 return_value=tmp_path / "worktrees" / "semantic-fix-op-err",
-            ),
-            patch(
-                "orchestune.dispatch.local_semantic_fix.subprocess.Popen",
-                side_effect=OSError("executable not found"),
             ),
             patch(
                 "orchestune.dispatch.local_semantic_fix.cleanup_semantic_fix_worktree"

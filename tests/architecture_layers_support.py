@@ -294,6 +294,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "forge.pr_reviews",
             "infra.cli_output",
             "infra.cli_progress",
+            "infra.detached_process",
             "infra.git_cli",
             "infra.managed_process",
             "infra.managed_process_posix",

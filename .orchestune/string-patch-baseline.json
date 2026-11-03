@@ -43,7 +43,6 @@
     "orchestune.dispatch.gc_service": 1,
     "orchestune.dispatch.launch": 24,
     "orchestune.dispatch.local_semantic_fix": 7,
-    "orchestune.dispatch.local_semantic_fix.subprocess": 1,
     "orchestune.dispatch.locks": 2,
     "orchestune.dispatch.locks.subprocess": 8,
     "orchestune.dispatch.phase_gc.time": 32,
@@ -68,7 +67,7 @@
     "orchestune.dispatch.status_repair": 3,
     "orchestune.dispatch.targets": 5,
     "orchestune.dispatch.targets.shutil": 19,
-    "orchestune.dispatch.targets.subprocess": 58,
+    "orchestune.dispatch.targets.subprocess": 45,
     "orchestune.dispatch.worktree": 32,
     "orchestune.dispatch.worktree.dispatch_gc": 5,
     "orchestune.dispatch.worktree.subprocess": 19,
@@ -127,6 +126,6 @@
     "orchestune.worktree_ops.preparation": 46,
     "orchestune.worktree_ops.temp_branches": 3
   },
-  "total": 1855,
+  "total": 1841,
   "version": 1
 }
