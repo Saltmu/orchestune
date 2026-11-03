@@ -245,6 +245,7 @@ _FAKE_FORGE_MIGRATION_TESTS = frozenset(
         "test_dispatch_rebase_git.py",
         "test_dispatch_rebase_stacking.py",
         "test_dispatch_recovery.py",
+        "test_dispatch_recovery_restoration.py",
         "test_dispatch_locks.py",
         "test_dispatch_launch_basic.py",
         "test_dispatch_launch_persistence.py",
