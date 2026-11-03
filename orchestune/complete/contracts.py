@@ -160,28 +160,6 @@ def _required_text(value: object, name: str) -> str:
     return value
 
 
-def _required_digest(value: object, name: str) -> str:
-    if (
-        not isinstance(value, str)
-        or len(value) != 64
-        or any(char not in "0123456789abcdef" for char in value)
-    ):
-        raise ValueError(f"{name} must be a 64-character lowercase SHA-256 digest")
-    return value
-
-
-def _validate_fixed_outcome(
-    payload: dict[str, Any], issue_number: int, result: str
-) -> None:
-    if payload.get("result") != result:
-        raise ValueError("outcome_payload result must match the reserved result")
-    issue_values = [payload[key] for key in ("issue", "issue_number") if key in payload]
-    if not issue_values or any(
-        value != issue_number or isinstance(value, bool) for value in issue_values
-    ):
-        raise ValueError("outcome_payload issue must match the reserved issue")
-
-
 def is_valid_attempt_number(attempt: Any) -> bool:
     """Return whether attempt is None or a valid non-boolean positive integer."""
     if attempt is None:

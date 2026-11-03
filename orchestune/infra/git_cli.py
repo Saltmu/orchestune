@@ -21,9 +21,9 @@ from orchestune.infra.execution_deadline import (
     command_timeout_signal,
     scoped_command_timeout,
 )
+from orchestune.validation import validate_ref_name
 
 # git CLIのadapter境界でrefを検証し、不正な値をsubprocessへ渡さない。
-_REF_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./-]*$")
 _COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 
 # Git hooksや外部環境からリークして意図しないリポジトリを操作する危険な環境変数一覧 (Issue #507)
@@ -46,17 +46,6 @@ def get_clean_git_env(extra_env: dict[str, str] | None = None) -> dict[str, str]
     if extra_env:
         env.update(extra_env)
     return env
-
-
-def _validate_ref_name(ref: str) -> str:
-    if (
-        not ref
-        or not _REF_NAME_PATTERN.match(ref)
-        or ref.startswith("-")
-        or ".." in ref
-    ):
-        raise ValueError(f"ブランチ名が不正です: {ref!r}")
-    return ref
 
 
 @dataclass(frozen=True)
@@ -175,8 +164,8 @@ def branch_changed_files(branch: str, base: str = "origin/main") -> list[str] | 
     - git実行障害(OSError): `None`。
     """
     try:
-        _validate_ref_name(branch)
-        _validate_ref_name(base)
+        validate_ref_name(branch)
+        validate_ref_name(base)
         result = run_git(["diff", "--name-only", f"{base}...{branch}"], cwd=None)
     except ValueError as exc:
         print(
@@ -263,7 +252,7 @@ def resolve_local_or_remote_branch(
     """指定されたブランチ名を解決して返す。
     prefer_remote=True の場合はリモート追跡ブランチを最優先し、
     False の場合はローカルブランチを最優先する。"""
-    _validate_ref_name(branch)
+    validate_ref_name(branch)
     worktree_path = Path(worktree_path)
 
     def check_remote() -> str | None:
@@ -306,7 +295,7 @@ def resolve_local_or_remote_branch(
 
 def fetch_remote_branch(repository_root: str | Path, branch: str) -> str:
     """指定ブランチのリモート追跡参照を最新化して、その参照名を返す。"""
-    _validate_ref_name(branch)
+    validate_ref_name(branch)
     run_git(
         ["fetch", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
         cwd=repository_root,
@@ -316,7 +305,7 @@ def fetch_remote_branch(repository_root: str | Path, branch: str) -> str:
 
 def resolve_commit_sha(repository_root: str | Path, ref: str) -> str:
     """Resolve ``ref`` to a full commit SHA after it has been fetched."""
-    _validate_ref_name(ref)
+    validate_ref_name(ref)
     result = run_git(
         ["rev-parse", "--verify", f"{ref}^{{commit}}"], cwd=repository_root
     )
@@ -339,7 +328,7 @@ def is_ancestor_commit(
     """
     if not _COMMIT_SHA_PATTERN.fullmatch(ancestor_sha):
         raise ValueError(f"期待commit SHAが不正です: {ancestor_sha!r}")
-    _validate_ref_name(ref)
+    validate_ref_name(ref)
     result = run_git(
         ["merge-base", "--is-ancestor", ancestor_sha.lower(), ref],
         cwd=repository_root,
@@ -358,7 +347,7 @@ def delete_remote_branch_if_matches(
     leave a race window.  Callers must distinguish a moved tip from a deletion
     error and never finalize the related Issue after either result.
     """
-    branch = _validate_ref_name(branch)
+    branch = validate_ref_name(branch)
     if not _COMMIT_SHA_PATTERN.fullmatch(expected_sha):
         raise ValueError(f"期待commit SHAが不正です: {expected_sha!r}")
     ref = f"refs/heads/{branch}"
@@ -429,7 +418,7 @@ def read_remote_branch_tip(repository_root: str | Path, branch: str) -> str | No
     without attempting another write (#827). A failed lookup raises
     ``RemoteBranchReadError`` so it is never mistaken for an absent branch.
     """
-    ref = f"refs/heads/{_validate_ref_name(branch)}"
+    ref = f"refs/heads/{validate_ref_name(branch)}"
     try:
         result = run_git(
             ["ls-remote", "--exit-code", "--heads", "origin", ref],
@@ -453,7 +442,7 @@ def normalize_remote_branch_name(branch: str) -> str:
     """`origin/` 接頭辞の有無を吸収し、リモートのブランチ名を返す。"""
     if branch.startswith("origin/"):
         branch = branch.removeprefix("origin/")
-    return _validate_ref_name(branch)
+    return validate_ref_name(branch)
 
 
 def get_git_repository_paths(cwd: str | Path | None = None) -> tuple[Path, Path]:

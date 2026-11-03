@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from orchestune.consistency.contracts import Invariant
+from orchestune.consistency.invariants.facts import _fact, _observation_details
 from orchestune.consistency.models import (
     ConsistencyFinding,
     ConsistencyScope,
@@ -103,11 +104,6 @@ REQUIRED_OBSERVED_FACT_NAMES_BY_SCOPE = {
 }
 
 
-def _fact(scope: ScopedObservations, name: str) -> Observation | None:
-    matches = tuple(fact for fact in scope.facts if fact.name == name)
-    return matches[0] if len(matches) == 1 else None
-
-
 def _desired_fact(
     desired: DesiredRepositoryState, subject_id: str, name: str
 ) -> DesiredFact | None:
@@ -156,15 +152,6 @@ def _repository_scope(
         if scope.scope is ConsistencyScope.REPOSITORY
     )
     return matches[0] if len(matches) == 1 else None
-
-
-def _observation_details(fact: Observation) -> tuple[str, ...]:
-    return (
-        f"fact={fact.name}",
-        f"source={fact.source}",
-        f"certainty={fact.certainty.value}",
-        *fact.diagnostics,
-    )
 
 
 def _unknown_finding(

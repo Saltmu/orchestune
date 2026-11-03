@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 DEFAULT_INTEGRATION_DEPENDENCY_TIMEOUT_SECONDS = 600
 DEFAULT_INTEGRATION_CI_TIMEOUT_SECONDS = 1800
@@ -120,6 +121,19 @@ class IntegrationExecutionPolicy:
         return 1 + self.max_integration_timeout_retries
 
 
+def build_integration_execution_policy(source: Any) -> IntegrationExecutionPolicy:
+    """Build an IntegrationExecutionPolicy from an object providing the 7 integration fields."""
+    return IntegrationExecutionPolicy(
+        integration_dependency_timeout_seconds=source.integration_dependency_timeout_seconds,
+        integration_ci_timeout_seconds=source.integration_ci_timeout_seconds,
+        integration_cycle_timeout_seconds=source.integration_cycle_timeout_seconds,
+        integration_cleanup_timeout_seconds=source.integration_cleanup_timeout_seconds,
+        integration_command_timeout_seconds=source.integration_command_timeout_seconds,
+        max_integration_timeout_retries=source.max_integration_timeout_retries,
+        integration_timeout_backoff_seconds=source.integration_timeout_backoff_seconds,
+    )
+
+
 __all__ = [
     "COUNTED_TIMEOUT_CAUSES",
     "DEFAULT_INTEGRATION_CI_TIMEOUT_SECONDS",
@@ -141,4 +155,5 @@ __all__ = [
     "STATUS_EXECUTION_TIMED_OUT",
     "ExecutionFailureCause",
     "IntegrationExecutionPolicy",
+    "build_integration_execution_policy",
 ]

@@ -45,6 +45,7 @@ from orchestune.integrator.timeout_policy import (
     DEFAULT_INTEGRATION_TIMEOUT_BACKOFF_SECONDS,
     DEFAULT_MAX_INTEGRATION_TIMEOUT_RETRIES,
     IntegrationExecutionPolicy,
+    build_integration_execution_policy,
 )
 from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
 from orchestune.review.rounds import MAX_REVIEW_ROUNDS
@@ -242,15 +243,7 @@ class DispatcherConfig:
 
     @property
     def integration_execution_policy(self) -> IntegrationExecutionPolicy:
-        return IntegrationExecutionPolicy(
-            integration_dependency_timeout_seconds=self.integration_dependency_timeout_seconds,
-            integration_ci_timeout_seconds=self.integration_ci_timeout_seconds,
-            integration_cycle_timeout_seconds=self.integration_cycle_timeout_seconds,
-            integration_cleanup_timeout_seconds=self.integration_cleanup_timeout_seconds,
-            integration_command_timeout_seconds=self.integration_command_timeout_seconds,
-            max_integration_timeout_retries=self.max_integration_timeout_retries,
-            integration_timeout_backoff_seconds=self.integration_timeout_backoff_seconds,
-        )
+        return build_integration_execution_policy(self)
 
     @property
     def semantic_review_limits(self) -> SemanticReviewLimits:

@@ -36,6 +36,7 @@ from orchestune.consistency.models import (
     RepairCommand,
     RepairResult,
     RepairStatus,
+    describe_exception,
 )
 from orchestune.consistency.observation import (
     EXECUTION_KIND_CLOUD,
@@ -132,11 +133,6 @@ def _failed_result(command: RepairCommand, diagnostic: str) -> RepairResult:
     )
 
 
-def _describe_exception(exc: Exception) -> str:
-    detail = str(exc).strip()
-    return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
-
-
 @dataclass(frozen=True, slots=True)
 class DispatchRepairExecutorAdapter:
     """Route typed commands to bound domain handlers and fail closed."""
@@ -161,7 +157,7 @@ class DispatchRepairExecutorAdapter:
         try:
             result = handler(command)
         except Exception as exc:  # noqa: BLE001 - report through RepairResult
-            return _failed_result(command, _describe_exception(exc))
+            return _failed_result(command, describe_exception(exc))
         if result.command != command:
             return _failed_result(
                 command, "repair handler returned a result for another command"

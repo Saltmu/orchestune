@@ -186,3 +186,9 @@ class RepairResult:
     command: RepairCommand
     status: RepairStatus
     diagnostics: tuple[str, ...] = ()
+
+
+def describe_exception(exc: Exception) -> str:
+    """Format an exception as 'TypeName: detail' or just 'TypeName' if detail is empty."""
+    detail = str(exc).strip()
+    return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__

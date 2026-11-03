@@ -5,11 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from orchestune.forge import Forge
+from orchestune.labels import StatusLabel
 from orchestune.ledger.status_machine import (
     ACTIVE_LABELS,
     ESCALATION_LABELS,
     plan_transition,
 )
+from orchestune.task_metadata import TaskMetadata
 
 #: 一次status:*ラベル（他のプライマリラベルと排他的に遷移すべきもの）。
 #: 中断した`transition_status_label`呼び出しの取り残しを一括除去する際に使う。
@@ -63,8 +65,22 @@ def transition_status_label(
             forge.remove_label(issue_number, label)
 
 
+def recorded_primary_status_labels(
+    active_task: TaskMetadata | None,
+) -> tuple[str, ...]:
+    """Return primary status labels currently held by the task, or (StatusLabel.IN_PROGRESS,) if absent."""
+    if active_task is not None:
+        return tuple(
+            label
+            for label in PRIMARY_STATUS_LABELS
+            if label in active_task.status_labels
+        )
+    return (StatusLabel.IN_PROGRESS,)
+
+
 __all__ = [
     "PRIMARY_STATUS_LABELS",
     "TERMINAL_ESCALATION_LABELS",
+    "recorded_primary_status_labels",
     "transition_status_label",
 ]
