@@ -10,6 +10,7 @@ from typing import Any
 from orchestune.claim.inspection import inspect_claim
 from orchestune.claim.local_identity import registered_claim_path
 from orchestune.claim.workspace import ClaimWorkspace, resolve_claim_workspace
+from orchestune.forge import Forge
 from orchestune.infra.json_state import write_json_atomic
 from orchestune.infra.process_utils import FileLock, run_state_lock
 from orchestune.ledger.active_lifecycle import has_completion_reservation
@@ -42,9 +43,13 @@ def _release_key(workspace: ClaimWorkspace, request: RecoveryRequest) -> str:
     )
 
 
-def _handle_existing_receipt(request: RecoveryRequest, forge: Any) -> RecoveryResult:
+def _handle_existing_receipt(
+    request: RecoveryRequest, forge: Forge | None
+) -> RecoveryResult:
     if request.release_to_review:
         assert request.claim_id is not None
+        if forge is None:
+            raise ValueError("Forge is required for release-to-review")
         _issue, old_labels = verify_release_review_target(
             forge, request.issue_number, request.claim_id
         )
@@ -68,31 +73,39 @@ def _handle_existing_receipt(request: RecoveryRequest, forge: Any) -> RecoveryRe
 
 
 def _validate_release_review_active(
-    active: ActiveWorktree, request: RecoveryRequest, forge: Any
-) -> RecoveryResult | None:
+    active: ActiveWorktree, request: RecoveryRequest, forge: Forge | None
+) -> tuple[RecoveryResult | None, tuple[str, ...]]:
     if has_completion_reservation(active):
-        return RecoveryResult(
-            False, request.issue_number, "held", "claim is undergoing completion"
+        return (
+            RecoveryResult(
+                False, request.issue_number, "held", "claim is undergoing completion"
+            ),
+            (),
         )
     if active.launch and active.launch.external_id:
-        return RecoveryResult(
-            False,
-            request.issue_number,
-            "held",
-            "external execution claims must use --confirm-external-stopped",
+        return (
+            RecoveryResult(
+                False,
+                request.issue_number,
+                "held",
+                "external execution claims must use --confirm-external-stopped",
+            ),
+            (),
         )
     assert active.claim.claim_id is not None
-    _issue, _old = verify_release_review_target(
+    if forge is None:
+        raise ValueError("Forge is required for release-to-review")
+    _issue, old = verify_release_review_target(
         forge, request.issue_number, active.claim.claim_id
     )
-    return None
+    return None, old
 
 
 def _find_active_or_held(
     request: RecoveryRequest,
     state: RunState,
     workspace: ClaimWorkspace,
-    forge: Any,
+    forge: Forge | None,
 ) -> tuple[str, ActiveWorktree] | RecoveryResult:
     matches = [
         (key, active)
@@ -121,8 +134,46 @@ def _find_active_or_held(
     return key, active
 
 
+def _recover_release_to_review(
+    request: RecoveryRequest,
+    workspace: ClaimWorkspace,
+    cwd: Path,
+    key: str,
+    active: ActiveWorktree,
+    state: RunState,
+    forge: Forge | None,
+    diagnostics: dict[str, Any],
+) -> RecoveryResult:
+    validation_failure, old_labels = _validate_release_review_active(
+        active, request, forge
+    )
+    if validation_failure is not None:
+        return validation_failure
+    if not request.apply:
+        return RecoveryResult(
+            True,
+            request.issue_number,
+            "would_release_to_review",
+            "verified local claim; worktree and artifacts will be retained; label will transition to status:blocked-human-review",
+            diagnostics,
+        )
+    return _apply_recovery(
+        request,
+        workspace,
+        cwd,
+        key,
+        active,
+        state,
+        forge=forge,
+        old_labels=old_labels,
+    )
+
+
 def _recover(
-    request: RecoveryRequest, workspace: ClaimWorkspace, cwd: Path, forge: Any = None
+    request: RecoveryRequest,
+    workspace: ClaimWorkspace,
+    cwd: Path,
+    forge: Forge | None = None,
 ) -> RecoveryResult:
     if request.restart_blocked:
         return restart_blocked(request, workspace, cwd, forge)
@@ -133,10 +184,6 @@ def _recover(
     if isinstance(active_result, RecoveryResult):
         return active_result
     key, active = active_result
-    if request.release_to_review:
-        validation_failure = _validate_release_review_active(active, request, forge)
-        if validation_failure is not None:
-            return validation_failure
 
     diagnostics, problem = inspect_claim(
         active, state, workspace, cwd, restore_marker=request.restore_marker
@@ -144,15 +191,9 @@ def _recover(
     if problem:
         return RecoveryResult(False, request.issue_number, "held", problem, diagnostics)
     if request.release_to_review:
-        if not request.apply:
-            return RecoveryResult(
-                True,
-                request.issue_number,
-                "would_release_to_review",
-                "verified local claim; worktree and artifacts will be retained; label will transition to status:blocked-human-review",
-                diagnostics,
-            )
-        return _apply_recovery(request, workspace, cwd, key, active, state, forge=forge)
+        return _recover_release_to_review(
+            request, workspace, cwd, key, active, state, forge, diagnostics
+        )
 
     operation = "restore-marker" if request.restore_marker else "release"
     if not request.apply:
@@ -170,13 +211,19 @@ def _apply_operation_side_effects(
     request: RecoveryRequest,
     target: Path,
     active: ActiveWorktree,
-    forge: Any,
+    forge: Forge | None,
+    old_labels: tuple[str, ...] | None = None,
 ) -> None:
     if request.release_to_review:
         assert active.claim.claim_id is not None
-        _issue, old_labels = verify_release_review_target(
-            forge, request.issue_number, active.claim.claim_id
-        )
+        if forge is None:
+            raise ValueError("Forge is required for release-to-review")
+        if old_labels is None:
+            _issue, old_labels = verify_release_review_target(
+                forge, request.issue_number, active.claim.claim_id
+            )
+        # Note: Label transition occurs before saving receipt; if saving receipt fails,
+        # retry is idempotent since verify_release_review_target permits status:blocked-human-review.
         apply_release_review_label(forge, request.issue_number, old_labels)
     elif request.restore_marker:
         assert active.claim.claim_id is not None
@@ -197,7 +244,8 @@ def _apply_recovery(
     active: ActiveWorktree,
     state: RunState,
     *,
-    forge: Any = None,
+    forge: Forge | None = None,
+    old_labels: tuple[str, ...] | None = None,
 ) -> RecoveryResult:
     operation = "restore-marker" if request.restore_marker else "release"
     target = registered_claim_path(active, workspace.run_state_path)
@@ -213,7 +261,7 @@ def _apply_recovery(
             return RecoveryResult(
                 False, request.issue_number, "held", problem, diagnostics
             )
-        _apply_operation_side_effects(request, target, active, forge)
+        _apply_operation_side_effects(request, target, active, forge, old_labels)
         _save_recovery(request, workspace, key, active, operation)
     status = (
         "released_to_review"
@@ -256,7 +304,10 @@ def _save_recovery(
 
 
 def recover_claim(
-    request: RecoveryRequest, *, cwd: str | Path | None = None, forge: Any = None
+    request: RecoveryRequest,
+    *,
+    cwd: str | Path | None = None,
+    forge: Forge | None = None,
 ) -> RecoveryResult:
     try:
         request.validate()

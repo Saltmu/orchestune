@@ -11,6 +11,7 @@ from typing import Any
 
 import yaml
 
+from orchestune.forge import Forge
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN
 from orchestune.labels import StatusLabel
 from orchestune.ledger.status_labels import (
@@ -51,20 +52,18 @@ def _check_footprint_claim_id(body: str | None, claim_id: str) -> None:
         return
     try:
         data = yaml.safe_load(match.group(1))
-        if isinstance(data, dict):
-            issue_claim_id = data.get("claim_id")
-            if issue_claim_id and issue_claim_id != claim_id:
-                raise ValueError(
-                    f"Issue body claim_id mismatch: expected {claim_id}, found {issue_claim_id}"
-                )
-    except ValueError:
-        raise
-    except Exception:
-        pass
+    except yaml.YAMLError as exc:
+        raise ValueError(f"Malformed footprint YAML in issue: {exc}") from exc
+    if isinstance(data, dict):
+        issue_claim_id = data.get("claim_id")
+        if issue_claim_id and issue_claim_id != claim_id:
+            raise ValueError(
+                f"Issue body claim_id mismatch: expected {claim_id}, found {issue_claim_id}"
+            )
 
 
 def verify_release_review_target(
-    forge: Any, issue_number: int, claim_id: str
+    forge: Forge, issue_number: int, claim_id: str
 ) -> tuple[Any, tuple[str, ...]]:
     """Validate that the Issue is eligible for release-to-review transition."""
     if forge is None:
@@ -73,19 +72,11 @@ def verify_release_review_target(
     if issue is None:
         raise ValueError(f"Issue #{issue_number} not found")
 
-    state = (
-        forge.get_issue_state(issue_number)
-        if hasattr(forge, "get_issue_state")
-        else getattr(issue, "state", "OPEN")
-    )
+    state = forge.get_issue_state(issue_number)
     if str(state).upper() != "OPEN":
         raise ValueError(f"Release to review requires an OPEN issue, got {state}")
 
-    labels = (
-        tuple(forge.get_issue_labels(issue_number))
-        if hasattr(forge, "get_issue_labels")
-        else tuple(getattr(issue, "labels", ()))
-    )
+    labels = tuple(forge.get_issue_labels(issue_number))
     _check_target_labels(labels)
     _check_footprint_claim_id(getattr(issue, "body", None), claim_id)
 
@@ -94,7 +85,7 @@ def verify_release_review_target(
 
 
 def apply_release_review_label(
-    forge: Any, issue_number: int, old_labels: Iterable[str]
+    forge: Forge, issue_number: int, old_labels: Iterable[str]
 ) -> None:
     """Transition the issue to status:blocked-human-review, removing old primary status labels."""
     transition_status_label(

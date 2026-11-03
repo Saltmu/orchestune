@@ -16,65 +16,54 @@ from orchestune.ledger.recovery_receipts import (
     recovery_receipt_key,
 )
 from orchestune.ledger.run_state import ActiveWorktree, RunState, save_run_state
+from orchestune.models import IssueRecord
 from orchestune.recovery.contracts import RecoveryRequest
 from orchestune.recovery.release_review import (
     apply_release_review_label,
     verify_release_review_target,
 )
 from orchestune.recovery.service import recover_claim
+from tests.conftest import FakeForge
 from tests.dispatch_test_support import make_test_active_worktree
 
 
-class MockIssue:
-    def __init__(
-        self,
-        number: int,
-        labels: list[str],
-        state: str = "OPEN",
-        body: str = "",
-    ) -> None:
-        self.number = number
-        self.labels = list(labels)
-        self.state = state
-        self.body = body
+def _issue(
+    number: int,
+    labels: list[str] | tuple[str, ...],
+    state: str = "OPEN",
+    body: str = "",
+) -> IssueRecord:
+    return IssueRecord(
+        number=number,
+        title=f"Issue {number}",
+        body=body,
+        labels=tuple(labels),
+        created_at="2026-11-03T00:00:00Z",
+        state=state,
+    )
 
 
-class MockForge:
-    def __init__(self, issues: dict[int, MockIssue] | None = None) -> None:
-        self.issues = issues or {}
+class MockForge(FakeForge):
+    def __init__(self, issues: dict[int, IssueRecord] | None = None) -> None:
+        super().__init__()
         self.labels_added: list[tuple[int, str]] = []
         self.labels_removed: list[tuple[int, str]] = []
-        self.fail_add_label: bool = False
-        self.fail_remove_label: bool = False
+        if issues:
+            for num, issue in issues.items():
+                self.issues[num] = issue
+                self.issue_states[num] = issue.state
 
-    def get_issue(self, issue_number: int | str) -> MockIssue | None:
-        return self.issues.get(int(issue_number))
-
-    def get_issue_state(self, issue_number: int | str) -> str:
-        issue = self.get_issue(issue_number)
-        return issue.state if issue else "CLOSED"
-
-    def get_issue_labels(self, issue_number: int | str) -> list[str]:
-        issue = self.get_issue(issue_number)
-        return list(issue.labels) if issue else []
-
-    def add_label(self, issue_number: int | str, label: str) -> None:
-        if self.fail_add_label:
-            raise RuntimeError("API failure: add_label failed")
+    def add_label(
+        self, issue_number: int | str, label: str, actor: str = "bot"
+    ) -> None:
         num = int(issue_number)
         self.labels_added.append((num, label))
-        issue = self.get_issue(num)
-        if issue and label not in issue.labels:
-            issue.labels.append(label)
+        super().add_label(issue_number, label, actor=actor)
 
     def remove_label(self, issue_number: int | str, label: str) -> None:
-        if self.fail_remove_label:
-            raise RuntimeError("API failure: remove_label failed")
         num = int(issue_number)
         self.labels_removed.append((num, label))
-        issue = self.get_issue(num)
-        if issue and label in issue.labels:
-            issue.labels.remove(label)
+        super().remove_label(issue_number, label)
 
 
 def _setup_workspace(tmp_path: Path) -> tuple[ClaimWorkspace, Path, Path]:
@@ -117,20 +106,20 @@ def _active_with_claim(
 
 
 def test_apply_release_review_label_transitions_label() -> None:
-    issue = MockIssue(1629, [StatusLabel.IN_PROGRESS])
+    issue = _issue(1629, [StatusLabel.IN_PROGRESS])
     forge = MockForge({1629: issue})
 
     apply_release_review_label(forge, 1629, (StatusLabel.IN_PROGRESS,))
 
     assert (1629, StatusLabel.BLOCKED_HUMAN_REVIEW) in forge.labels_added
     assert (1629, StatusLabel.IN_PROGRESS) in forge.labels_removed
-    assert StatusLabel.BLOCKED_HUMAN_REVIEW in issue.labels
-    assert StatusLabel.IN_PROGRESS not in issue.labels
+    assert StatusLabel.BLOCKED_HUMAN_REVIEW in forge.get_issue_labels(1629)
+    assert StatusLabel.IN_PROGRESS not in forge.get_issue_labels(1629)
 
 
 def test_verify_release_review_target_accepts_open_in_progress() -> None:
     body = "## Footprint\n```yaml\nsubtask_id: task\nclaim_id: claim-1629\nfootprint: [a.py]\n```"
-    issue = MockIssue(1629, [StatusLabel.IN_PROGRESS], state="OPEN", body=body)
+    issue = _issue(1629, [StatusLabel.IN_PROGRESS], state="OPEN", body=body)
     forge = MockForge({1629: issue})
 
     verified, old_labels = verify_release_review_target(forge, 1629, "claim-1629")
@@ -139,9 +128,9 @@ def test_verify_release_review_target_accepts_open_in_progress() -> None:
 
 
 def test_verify_release_review_target_rejects_closed_or_final_labels() -> None:
-    closed_issue = MockIssue(101, [StatusLabel.IN_PROGRESS], state="CLOSED")
-    done_issue = MockIssue(102, [StatusLabel.DONE], state="OPEN")
-    not_needed_issue = MockIssue(103, [StatusLabel.NOT_NEEDED], state="OPEN")
+    closed_issue = _issue(101, [StatusLabel.IN_PROGRESS], state="CLOSED")
+    done_issue = _issue(102, [StatusLabel.DONE], state="OPEN")
+    not_needed_issue = _issue(103, [StatusLabel.NOT_NEEDED], state="OPEN")
     forge = MockForge({101: closed_issue, 102: done_issue, 103: not_needed_issue})
 
     with pytest.raises(ValueError, match="OPEN"):
@@ -156,7 +145,7 @@ def test_verify_release_review_target_rejects_closed_or_final_labels() -> None:
 
 def test_verify_release_review_target_rejects_claim_mismatch() -> None:
     body = "## Footprint\n```yaml\nsubtask_id: task\nclaim_id: claim-different\n```"
-    issue = MockIssue(1629, [StatusLabel.IN_PROGRESS], state="OPEN", body=body)
+    issue = _issue(1629, [StatusLabel.IN_PROGRESS], state="OPEN", body=body)
     forge = MockForge({1629: issue})
 
     with pytest.raises(ValueError, match="claim"):
@@ -180,7 +169,7 @@ def test_recover_claim_release_to_review_preview(tmp_path: Path) -> None:
     save_run_state(RunState(active_worktrees={"1629": active}), state_file)
 
     body = "## Footprint\n```yaml\nclaim_id: claim-1629\n```"
-    issue = MockIssue(1629, [StatusLabel.IN_PROGRESS], state="OPEN", body=body)
+    issue = _issue(1629, [StatusLabel.IN_PROGRESS], state="OPEN", body=body)
     forge = MockForge({1629: issue})
 
     req = RecoveryRequest(
@@ -221,7 +210,7 @@ def test_recover_claim_release_to_review_apply(tmp_path: Path) -> None:
     save_run_state(RunState(active_worktrees={"1629": active}), state_file)
 
     body = "## Footprint\n```yaml\nclaim_id: claim-1629\n```"
-    issue = MockIssue(1629, [StatusLabel.IN_PROGRESS], state="OPEN", body=body)
+    issue = _issue(1629, [StatusLabel.IN_PROGRESS], state="OPEN", body=body)
     forge = MockForge({1629: issue})
 
     req = RecoveryRequest(
@@ -286,7 +275,7 @@ def test_recover_claim_release_to_review_already_released_receipt(
     )
 
     body = "## Footprint\n```yaml\nclaim_id: claim-1629\n```"
-    issue = MockIssue(1629, [StatusLabel.IN_PROGRESS], state="OPEN", body=body)
+    issue = _issue(1629, [StatusLabel.IN_PROGRESS], state="OPEN", body=body)
     forge = MockForge({1629: issue})
 
     req = RecoveryRequest(
@@ -304,3 +293,34 @@ def test_recover_claim_release_to_review_already_released_receipt(
     assert result.action == "released_to_review"
     assert (1629, StatusLabel.BLOCKED_HUMAN_REVIEW) in forge.labels_added
     assert (1629, StatusLabel.IN_PROGRESS) in forge.labels_removed
+
+
+def test_verify_release_review_target_rejects_malformed_yaml() -> None:
+    body = "## Footprint\n```yaml\n: invalid: yaml: [\n```"
+    issue = _issue(1629, [StatusLabel.IN_PROGRESS], state="OPEN", body=body)
+    forge = MockForge({1629: issue})
+
+    with pytest.raises(ValueError, match="Malformed footprint YAML"):
+        verify_release_review_target(forge, 1629, "claim-1629")
+
+
+def test_recovery_request_validate_rejects_release_to_review_with_external_id() -> None:
+    req = RecoveryRequest(
+        issue_number=1629,
+        claim_id="claim-1629",
+        reason="test",
+        release_to_review=True,
+        external_id="ext-123",
+    )
+    with pytest.raises(ValueError, match="cannot mix recovery modes"):
+        req.validate()
+
+    req2 = RecoveryRequest(
+        issue_number=1629,
+        claim_id="claim-1629",
+        reason="test",
+        release_to_review=True,
+        launch_attempt_id="launch-123",
+    )
+    with pytest.raises(ValueError, match="cannot mix recovery modes"):
+        req2.validate()

@@ -9,10 +9,11 @@ guide operators to explicit recovery.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Literal
 
 from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.events import InteractiveClaimInspectionRequired
+from orchestune.forge import Forge
 from orchestune.infra import process_utils
 from orchestune.ledger.active_lifecycle import (
     ActiveWorktreeLifecycle,
@@ -26,25 +27,21 @@ from orchestune.ownership_contracts import OwnerKind
 _CLOSED_STATES = frozenset({"CLOSED", "MERGED"})
 
 
-def _check_issue_state(forge: Any, issue_number: int) -> tuple[str | None, str | None]:
+def _check_issue_state(
+    forge: Forge | None, issue_number: int
+) -> tuple[str | None, str | None]:
     """Return (state, error_message). state is None on error."""
     if forge is None:
-        return "OPEN", None
+        return None, "Forge is not configured"
     try:
-        if hasattr(forge, "get_issue_state"):
-            state = forge.get_issue_state(issue_number)
-        elif hasattr(forge, "get_issue"):
-            issue = forge.get_issue(issue_number)
-            state = getattr(issue, "state", "OPEN")
-        else:
-            state = "OPEN"
+        state = forge.get_issue_state(issue_number)
         return str(state).upper(), None
     except Exception as exc:
         return None, str(exc)
 
 
 def _diagnose_single_interactive_claim(
-    active: ActiveWorktree, forge: Any
+    active: ActiveWorktree, forge: Forge | None
 ) -> InteractiveClaimInspectionRequired | None:
     issue_number = active.core.issue_number
     claim_id = active.claim.claim_id or ""
@@ -61,18 +58,18 @@ def _diagnose_single_interactive_claim(
         reason = f"Forge check failed ({forge_error}); claim retained"
     elif pid is None:
         process_state = "unknown"
-        reason = "PID未記録のため停止確認が必要; 停止確認後に明示的に解放可能"
+        reason = "PID not recorded; process state unknown; manual inspection required"
     elif process_utils.is_process_alive(pid):
         process_state = "alive"
         reason = f"Worker process {pid} is running; claim retained"
     else:
         process_state = "dead"
-        reason = f"Worker process {pid} is not running; 停止確認後に明示的に解放可能"
+        reason = f"Worker process {pid} is not running; inspect and release if safe"
 
     recovery_command = (
         f"orchestune recover --issue {issue_number} "
         f"--claim-id {claim_id} --release-to-review "
-        f'--reason "ワーカーの停止を確認" --apply'
+        f'--reason "worker stopped" --apply'
     )
 
     return InteractiveClaimInspectionRequired(
@@ -92,7 +89,7 @@ def diagnose_unattended_interactive_claims(
     config: DispatcherConfig,
     open_prs: Sequence[PrRecord] | None = None,
     *,
-    forge: Any = None,
+    forge: Forge | None = None,
 ) -> list[InteractiveClaimInspectionRequired]:
     """Diagnose OPEN interactive claims requiring operator inspection."""
     active_forge = forge if forge is not None else config.forge
