@@ -30,13 +30,13 @@ orchestune skills install --target all --scope project
 orchestune config init
 ```
 
-Ask your coding assistant: “Use orchestune to decompose this feature and save the plan as decomposition_plan.md.” Then validate it before approving Issue creation or dispatch:
+Ask your coding assistant: “Use orchestune to decompose this feature and tell me the saved plan path.” Then validate it before approving Issue creation or dispatch, replacing the example path below with the path returned by the assistant:
 
 ```bash
-orchestune dag --plan decomposition_plan.md
+orchestune dag --plan "<saved-plan-path>"
 ```
 
-See the [Setup Guide](docs/en/setup.md) for repository prerequisites, agent configuration, and installation options.
+Check the repository prerequisites in the [Setup Guide](docs/en/setup.md) before proceeding. See [Installation](#installation) below for other installation options and agent configuration.
 
 ⚠️ **Beta**: The core workflow is operational, but APIs, CLI commands, and workflows may change before the stable release.
 

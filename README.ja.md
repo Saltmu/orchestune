@@ -30,13 +30,13 @@ orchestune skills install --target all --scope project
 orchestune config init
 ```
 
-コーディングアシスタントに「この機能をorchestuneで分解し、decomposition_plan.mdに保存して」と依頼します。Issue起票やディスパッチを承認する前に、計画を検証します。
+コーディングアシスタントに「この機能をorchestuneで分解し、計画の保存先を教えて」と依頼します。Issue起票やディスパッチを承認する前に、返された保存先で下の例のパスを置き換えて計画を検証します。
 
 ```bash
-orchestune dag --plan decomposition_plan.md
+orchestune dag --plan "<saved-plan-path>"
 ```
 
-導入先リポジトリの前提条件、エージェントの設定、インストール方法の詳細は[セットアップガイド](docs/ja/setup.md)を参照してください。
+実行前に[セットアップガイド](docs/ja/setup.md)で導入先リポジトリの前提条件を確認してください。他のインストール方法やエージェントの設定は、後述の[インストール方法](#インストール方法)を参照してください。
 
 ⚠️ **β版**: 主要ワークフローは利用可能ですが、安定版までにAPI、CLIコマンド、ワークフローが変更される可能性があります。
 
