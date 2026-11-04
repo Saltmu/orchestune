@@ -101,7 +101,9 @@ def test_claim_wins_before_not_needed_without_post_or_completion_token(
 
     monkeypatch.setattr("orchestune.complete.service.complete_unclaimed", delayed)
 
-    def apply(workspace, req, issue, preflight, branch, base, state, forge, token, **_):
+    def apply(effects, req, issue, preflight, branch, base, **_):
+        state = effects.run_state
+        token = effects.raw_token
         state.active_worktrees["1111"] = flat_active_worktree(
             1111,
             branch,
