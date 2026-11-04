@@ -11,8 +11,10 @@ from orchestune.claim.inspection import inspect_claim
 from orchestune.claim.local_identity import registered_claim_path
 from orchestune.claim.workspace import ClaimWorkspace, resolve_claim_workspace
 from orchestune.forge import Forge
+from orchestune.infra.git_cli import inspect_worktree_status
 from orchestune.infra.json_state import write_json_atomic
 from orchestune.infra.process_utils import FileLock, run_state_lock
+from orchestune.ledger.active_codec import decode_active_worktree
 from orchestune.ledger.active_lifecycle import has_completion_reservation
 from orchestune.ledger.recovery_receipts import (
     RELEASE_OPERATION,
@@ -43,8 +45,50 @@ def _release_key(workspace: ClaimWorkspace, request: RecoveryRequest) -> str:
     )
 
 
+def _already_released_result(
+    request: RecoveryRequest,
+    workspace: ClaimWorkspace,
+    receipt_key: str,
+) -> RecoveryResult:
+    """#1655: report who released the claim and whether its worktree still exists."""
+    try:
+        raw = json.loads(workspace.run_state_path.read_text(encoding="utf-8"))
+        receipt = raw["recovery_receipts"][receipt_key]
+        released_active = decode_active_worktree(receipt["active"])
+        worktree = released_active.core.worktree_path
+        worktree_path = (
+            registered_claim_path(released_active, workspace.run_state_path)
+            if worktree
+            else None
+        )
+        diagnostics: dict[str, Any] = {
+            "release_operation": RELEASE_OPERATION,
+            "release_reason": receipt.get("reason"),
+            "released_at": receipt.get("recorded_at"),
+            "worktree": worktree,
+            "worktree_action": receipt.get("worktree_action"),
+            "worktree_status": (
+                "absent"
+                if worktree_path is None or not worktree_path.is_dir()
+                else inspect_worktree_status(worktree_path).value
+            ),
+        }
+    except (KeyError, TypeError, ValueError, OSError):
+        diagnostics = {"release_reason": "unreadable"}
+    return RecoveryResult(
+        True,
+        request.issue_number,
+        "already_released",
+        "saved release receipt",
+        diagnostics,
+    )
+
+
 def _handle_existing_receipt(
-    request: RecoveryRequest, forge: Forge | None
+    request: RecoveryRequest,
+    forge: Forge | None,
+    workspace: ClaimWorkspace,
+    receipt_key: str,
 ) -> RecoveryResult:
     if request.release_to_review:
         assert request.claim_id is not None
@@ -67,9 +111,7 @@ def _handle_existing_receipt(
             "released_to_review",
             "status transitioned to status:blocked-human-review; release receipt verified; worktree retained",
         )
-    return RecoveryResult(
-        True, request.issue_number, "already_released", "saved release receipt"
-    )
+    return _already_released_result(request, workspace, receipt_key)
 
 
 def _validate_release_review_active(
@@ -115,7 +157,7 @@ def _find_active_or_held(
     receipt_key = _release_key(workspace, request)
     if not matches:
         if request.claim_id and receipt_key in state.recovery_receipts:
-            return _handle_existing_receipt(request, forge)
+            return _handle_existing_receipt(request, forge, workspace, receipt_key)
         return RecoveryResult(
             False,
             request.issue_number,
