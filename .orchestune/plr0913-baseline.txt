@@ -8,9 +8,6 @@ orchestune/dispatch/rules.py:CycleContext.__init__
 orchestune/dispatch/scoring.py:select_next_tasks
 orchestune/dispatch/scoring.py:select_tasks_with_decisions
 orchestune/dispatch/semantic_review/postcycle.py:SemanticReviewCycleRunner.__init__
-orchestune/integrator/attempt_cleanup.py:AttemptCleaner.__init__
-orchestune/integrator/git_ops.py:IntegrationMerger._merge_one_task
-orchestune/integrator/git_ops.py:IntegrationMerger._merge_task_list
 scripts/review_poll.py:execute_review_wait
 scripts/review_trigger_replacement.py:_post_new_trigger
 scripts/review_trigger_replacement.py:_reuse_or_replace_trigger

@@ -18,6 +18,7 @@ from orchestune.forge import Forge, ForgeAuthError
 from orchestune.integrator.attempt_cleanup import (
     UNSETTLED_OPERATION_STATUSES,
     AttemptCleaner,
+    AttemptCleanupPorts,
     CleanupClaims,
     RemoteRefPorts,
 )
@@ -78,6 +79,13 @@ def run_attempt_cleanup(
         if claims is None
         else CleanupClaims(claims.acquire, claims.renew, claims.release)
     )
+    ports = AttemptCleanupPorts(
+        refs=refs or RemoteRefPorts(),
+        claims=cleanup_claims,
+        operation_settled=_settler(
+            forge, repository_root, poll or poll_semantic_operation
+        ),
+    )
     try:
         reports = AttemptCleaner(
             forge,
@@ -86,11 +94,7 @@ def run_attempt_cleanup(
             apply=config.apply,
             holder=worker_id,
             clock=clock or (lambda: datetime.now(UTC)),
-            refs=refs,
-            claims=cleanup_claims,
-            operation_settled=_settler(
-                forge, repository_root, poll or poll_semantic_operation
-            ),
+            ports=ports,
         ).run()
     except ForgeAuthError:
         raise

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -154,10 +154,19 @@ def _operation_settled(state: SemanticReviewStateV1, _pr_number: int) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class AttemptCleanupPorts:
+    """Grouped collaborator ports for AttemptCleaner."""
+
+    refs: RemoteRefPorts = field(default_factory=RemoteRefPorts)
+    claims: CleanupClaims = field(default_factory=CleanupClaims)
+    operation_settled: Callable[[SemanticReviewStateV1, int], bool] = _operation_settled
+
+
 class AttemptCleaner:
     """Close and clean up every invalidated attempt of one parent."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         forge: Forge,
         repository_root: Path,
@@ -166,19 +175,27 @@ class AttemptCleaner:
         apply: bool,
         holder: str,
         clock: Callable[[], datetime],
-        refs: RemoteRefPorts | None = None,
-        claims: CleanupClaims | None = None,
-        operation_settled: Callable[[SemanticReviewStateV1, int], bool] | None = None,
+        ports: AttemptCleanupPorts | None = None,
+        **kwargs: Any,
     ) -> None:
+        refs = kwargs.pop("refs", None)
+        claims = kwargs.pop("claims", None)
+        operation_settled = kwargs.pop("operation_settled", None)
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs.keys()))
+            raise TypeError(
+                f"AttemptCleaner() got unexpected keyword argument(s): {unexpected}"
+            )
+        resolved_ports = ports or AttemptCleanupPorts()
         self._forge = forge
         self._root = repository_root
         self._parent = parent_issue_number
         self._apply = apply
         self._holder = holder
         self._clock = clock
-        self._refs = refs or RemoteRefPorts()
-        self._claims = claims or CleanupClaims()
-        self._settled = operation_settled or _operation_settled
+        self._refs = refs or resolved_ports.refs
+        self._claims = claims or resolved_ports.claims
+        self._settled = operation_settled or resolved_ports.operation_settled
         self._trust = TrustContext(forge)
         self._authors = trusted_state_authors(forge, self._trust)
         self._plan = AttemptCleanupPlan(
@@ -387,6 +404,7 @@ class AttemptCleaner:
 
 __all__ = [
     "AttemptCleaner",
+    "AttemptCleanupPorts",
     "AttemptCleanupReport",
     "CleanupClaims",
     "RemoteRefPorts",
