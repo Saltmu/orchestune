@@ -214,7 +214,7 @@ class Case:
         return f"{name}-{self.kind.value}-{held}-to-{target}-{self.condition}"
 
 
-def _case(
+def _case(  # noqa: PLR0913
     site: str,
     driver: str,
     condition: str,

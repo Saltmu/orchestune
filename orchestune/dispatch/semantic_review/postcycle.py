@@ -232,7 +232,7 @@ def _escalated(
 class SemanticReviewCycleRunner:
     """Advance each pending integration attempt by at most one phase per cycle."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         config: DispatcherConfig,
         *,

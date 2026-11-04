@@ -1150,7 +1150,7 @@ def _conflicting_versions(issue_number: int, view: _IssueView) -> str:
     )
 
 
-def build_observed_repository_state(
+def build_observed_repository_state(  # noqa: PLR0913
     *,
     repository_id: str,
     forge: ForgeSnapshot | None = None,

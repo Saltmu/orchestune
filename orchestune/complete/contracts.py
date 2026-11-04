@@ -315,7 +315,7 @@ class CompleteRequest:
             )
 
     @classmethod
-    def done(
+    def done(  # noqa: PLR0913
         cls,
         issue_number: int,
         pr: int,
@@ -383,7 +383,7 @@ class CompleteRequest:
         )
 
     @classmethod
-    def blocked(
+    def blocked(  # noqa: PLR0913
         cls,
         issue_number: int,
         reason: str,

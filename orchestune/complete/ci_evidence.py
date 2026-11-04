@@ -603,7 +603,7 @@ def _record_and_save_evidence(
     return evidence
 
 
-def record_ci_evidence(
+def record_ci_evidence(  # noqa: PLR0913
     worktree_root: Path | str | None = None,
     *,
     started_at: str | None = None,

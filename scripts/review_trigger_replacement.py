@@ -72,7 +72,7 @@ def _replace_trigger(
     return str(trigger_info["created_at"]), trigger_info["id"], requested_head_sha
 
 
-def _reuse_or_replace_trigger(
+def _reuse_or_replace_trigger(  # noqa: PLR0913
     pr_number: int,
     bot_name: str,
     comments: list[dict[str, Any]],
@@ -120,7 +120,7 @@ def _reuse_or_replace_trigger(
     )
 
 
-def _post_new_trigger(
+def _post_new_trigger(  # noqa: PLR0913
     pr_number: int,
     bot_name: str,
     initial_snapshot: dict[str, str],
@@ -183,7 +183,7 @@ def _existing_round_trigger(
     return active, existing_trigger
 
 
-def resolve_round_trigger(
+def resolve_round_trigger(  # noqa: PLR0913
     pr_number: int,
     bot_name: str,
     initial_data: dict[str, list[dict[str, Any]]],

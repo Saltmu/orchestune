@@ -92,7 +92,7 @@ def validate_adoption_pr(
     return pr
 
 
-def inspect_adoption(
+def inspect_adoption(  # noqa: PLR0913
     issue: Any,
     preflight: Any,
     number: int | None,

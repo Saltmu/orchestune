@@ -35,7 +35,7 @@ class InMemoryForge(FakeForge):
         return super().get_issue(num)
 
 
-def _make_child_body(
+def _make_child_body(  # noqa: PLR0913
     subtask_id: str,
     desc: str,
     overview: str = "Child overview",
