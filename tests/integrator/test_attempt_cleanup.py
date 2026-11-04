@@ -13,6 +13,7 @@ import pytest
 from orchestune.infra.git_cli import ConditionalBranchDeletionResult as Deletion
 from orchestune.integrator.attempt_cleanup import (
     AttemptCleaner,
+    AttemptCleanupPorts,
     AttemptCleanupReport,
     CleanupClaims,
     RemoteRefPorts,
@@ -233,6 +234,11 @@ class Repo:
             self.settled_asked.append(pr_number)
             return self.settled
 
+        ports = AttemptCleanupPorts(
+            refs=self.ports(),
+            claims=self.claims(),
+            operation_settled=settled,
+        )
         return AttemptCleaner(
             self,  # type: ignore[arg-type]
             Path("."),
@@ -240,9 +246,7 @@ class Repo:
             apply=apply,
             holder="w1",
             clock=lambda: NOW,
-            refs=self.ports(),
-            claims=self.claims(),
-            operation_settled=settled,
+            ports=ports,
         )
 
     def run(self, *, apply: bool = True) -> list[AttemptCleanupReport]:
@@ -726,3 +730,74 @@ class TestRemoteRefs:
         self._git(work, "remote", "add", "origin", str(tmp_path / "missing.git"))
 
         assert list_remote_attempt_refs(work, PARENT) is None
+
+
+def test_attempt_cleanup_ports_dataclass_and_defaults() -> None:
+    from orchestune.integrator.attempt_cleanup import (
+        AttemptCleanupPorts,
+        CleanupClaims,
+        RemoteRefPorts,
+    )
+
+    ports = AttemptCleanupPorts()
+    assert isinstance(ports.refs, RemoteRefPorts)
+    assert isinstance(ports.claims, CleanupClaims)
+    assert callable(ports.operation_settled)
+
+
+def test_attempt_cleaner_accepts_ports_parameter(repo: Repo) -> None:
+    from orchestune.integrator.attempt_cleanup import (
+        AttemptCleaner,
+        AttemptCleanupPorts,
+    )
+
+    ports = AttemptCleanupPorts(
+        refs=repo.ports(),
+        claims=repo.claims(),
+        operation_settled=lambda state, pr: repo.settled,
+    )
+    cleaner = AttemptCleaner(
+        repo,  # type: ignore[arg-type]
+        Path("."),
+        PARENT,
+        apply=True,
+        holder="w1",
+        clock=lambda: NOW,
+        ports=ports,
+    )
+    assert cleaner._refs is ports.refs
+    assert cleaner._claims is ports.claims
+
+
+def test_attempt_cleaner_backward_compatibility_kwargs(repo: Repo) -> None:
+    from orchestune.integrator.attempt_cleanup import AttemptCleaner
+
+    ports = repo.ports()
+    claims = repo.claims()
+    cleaner = AttemptCleaner(
+        repo,  # type: ignore[arg-type]
+        Path("."),
+        PARENT,
+        apply=True,
+        holder="w1",
+        clock=lambda: NOW,
+        refs=ports,
+        claims=claims,
+    )
+    assert cleaner._refs is ports
+    assert cleaner._claims is claims
+
+
+def test_attempt_cleaner_rejects_unexpected_kwargs(repo: Repo) -> None:
+    from orchestune.integrator.attempt_cleanup import AttemptCleaner
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        AttemptCleaner(
+            repo,  # type: ignore[arg-type]
+            Path("."),
+            PARENT,
+            apply=True,
+            holder="w1",
+            clock=lambda: NOW,
+            invalid_arg=True,
+        )
