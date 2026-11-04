@@ -11,7 +11,10 @@ from uuid import uuid4
 
 from orchestune.claim.local_identity import validate_local_claim
 from orchestune.claim.ownership import owner_token_digest
-from orchestune.claim.workspace import resolve_claim_workspace
+from orchestune.claim.workspace import (
+    repository_identities_equal,
+    resolve_claim_workspace,
+)
 from orchestune.complete.ci_evidence import (
     CiEvidenceError,
     run_local_ci_if_needed,
@@ -90,7 +93,7 @@ def _validate_claim_context(
 ) -> None:
     if active is None:
         return
-    if active.claim.repository_id != repository:
+    if not repository_identities_equal(repository, active.claim.repository_id):
         raise CompletionJournalError(
             CompleteFailureReason.REPOSITORY_IDENTITY_MISMATCH,
             "Claim belongs to another repository",

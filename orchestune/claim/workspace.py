@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from orchestune.infra.git_cli import get_git_repository_paths, run_git
 
@@ -166,6 +167,33 @@ def resolve_claim_workspace(
     )
 
 
+def normalize_repository_identity(value: str | None) -> str | None:
+    """Normalize Windows path separators and drive-letter casing for repository identity.
+
+    Leaves POSIX paths, unverified-recovery markers, owner/repo strings, and None intact.
+    """
+    if value is None:
+        return None
+    if re.match(r"^[A-Za-z]:[\\/]", value) or value.startswith(r"\\"):
+        posix = PureWindowsPath(value).as_posix()
+        if len(posix) >= 2 and posix[1] == ":" and posix[0].islower():
+            posix = posix[0].upper() + posix[1:]
+        return posix
+    return value
+
+
+def repository_identities_equal(expected: str, recorded: str | None) -> bool:
+    """Compare expected and recorded repository identities with Windows path normalization.
+
+    A None recorded identity is strictly non-equal (unlike check_repository_identity_match).
+    """
+    if recorded is None:
+        return False
+    return normalize_repository_identity(expected) == normalize_repository_identity(
+        recorded
+    )
+
+
 def check_repository_identity_match(
     expected_identity: str,
     recorded_identity: str | None,
@@ -176,7 +204,7 @@ def check_repository_identity_match(
     """
     if recorded_identity is None:
         return True
-    return expected_identity == recorded_identity
+    return repository_identities_equal(expected_identity, recorded_identity)
 
 
 def assert_repository_identity_match(

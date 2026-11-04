@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orchestune.claim.workspace import resolve_claim_workspace
+from orchestune.claim.workspace import (
+    repository_identities_equal,
+    resolve_claim_workspace,
+)
 from orchestune.infra.git_cli import run_git
 from orchestune.ledger.run_state import ActiveWorktree
 from orchestune.worktree_ops.claim_marker import read_claim_marker
@@ -36,7 +39,9 @@ def validate_claim_worktree(
     if path.is_symlink() or not path.is_dir():
         raise ValueError("Registered claim worktree is missing or a symlink")
     workspace = resolve_claim_workspace(path, explicit_state_path=state_path)
-    if active.claim.repository_id != workspace.repository_identity:
+    if not repository_identities_equal(
+        workspace.repository_identity, active.claim.repository_id
+    ):
         raise ValueError("Claim repository identity differs")
     if workspace.repository_root.resolve() != path.resolve():
         raise ValueError("Claim path is not a Git worktree root")
@@ -74,7 +79,9 @@ def validate_local_claim(
     if not expected_claim_id or expected_claim_id != active.claim.claim_id:
         raise ValueError("Claim generation differs or was not supplied")
     workspace = resolve_claim_workspace(cwd, explicit_state_path=state_path)
-    if active.claim.repository_id != workspace.repository_identity:
+    if not repository_identities_equal(
+        workspace.repository_identity, active.claim.repository_id
+    ):
         raise ValueError("Claim belongs to another repository")
     target = registered_claim_path(active, state_path)
     caller = workspace.repository_root.resolve()

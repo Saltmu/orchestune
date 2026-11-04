@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -670,6 +671,66 @@ class TestAdditionalClaimServiceEdgeCases:
         )
         request = ClaimRequest(
             issue_number=129,
+            state_path=state_path,
+            resume_claim_id=claim_id,
+            owner_token=token.value,
+            dry_run=True,
+        )
+        outcome = claim_task(request, forge=forge, cwd=repo_root)
+
+        assert outcome.success is True
+        assert outcome.claim_id == claim_id
+        assert outcome.stage == ClaimStage.ACTIVE_SAVED
+        assert len(forge.labels_added) == 0
+        assert len(forge.bodies_updated) == 0
+
+    @pytest.mark.skipif(os.name != "nt", reason="Windows-specific path separator test")
+    def test_claim_task_resume_dry_run_with_backslash_repository_id(
+        self, claim_env: dict[str, Path]
+    ) -> None:
+        repo_root = claim_env["repo_root"]
+        state_path = claim_env["state_path"]
+        issue = _make_issue(number=130)
+        forge = MockForge({130: issue})
+        token = new_owner_token()
+        claim_id = "claim-130-dryrun"
+
+        active = make_test_active_worktree(
+            issue_number=130,
+            branch="claude/issue-130-task",
+            worktree_path=str(claim_env["worktrees_dir"] / "claude-issue-130-task"),
+            pid=None,
+            started_at=None,
+            declared_footprint=(),
+            reservation_kind=ReservationKind.FOOTPRINT.value,
+            claim_id=claim_id,
+            claim_stage=ClaimStage.ACTIVE_SAVED.value,
+            owner_token_digest=owner_token_digest(token.value),
+        )
+        with run_state_lock(state_path.with_suffix(".lock")):
+            save_run_state(RunState(active_worktrees={"130": active}), state_path)
+
+        from orchestune.infra.git_cli import run_git
+        from orchestune.worktree_ops.claim_marker import write_claim_marker
+
+        run_git(
+            ["worktree", "add", "-b", active.core.branch, active.core.worktree_path],
+            cwd=repo_root,
+        )
+        active.claim = replace(
+            active.claim, repository_id=str((repo_root / ".git").resolve())
+        )
+        with run_state_lock(state_path.with_suffix(".lock")):
+            save_run_state(RunState(active_worktrees={"130": active}), state_path)
+        write_claim_marker(
+            Path(active.core.worktree_path),
+            claim_id=claim_id,
+            branch=active.core.branch,
+            base_sha=None,
+            branch_created=True,
+        )
+        request = ClaimRequest(
+            issue_number=130,
             state_path=state_path,
             resume_claim_id=claim_id,
             owner_token=token.value,

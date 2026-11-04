@@ -9,7 +9,7 @@ from orchestune.claim.local_identity import (
     registered_claim_path,
     validate_claim_worktree,
 )
-from orchestune.claim.workspace import ClaimWorkspace
+from orchestune.claim.workspace import ClaimWorkspace, repository_identities_equal
 from orchestune.infra.git_cli import inspect_worktree_status
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.ledger.completion_reservations import completion_reservation_status
@@ -64,7 +64,9 @@ def _worktree_problem(
 ) -> str | None:
     target = registered_claim_path(active, workspace.run_state_path)
     marker = read_claim_marker(target) if active.core.worktree_path else None
-    if active.claim.repository_id != workspace.repository_identity:
+    if not repository_identities_equal(
+        workspace.repository_identity, active.claim.repository_id
+    ):
         return "repository identity differs"
     if external and target.is_symlink():
         return "claim worktree is a symlink"
