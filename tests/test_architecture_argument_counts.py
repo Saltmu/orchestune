@@ -7,8 +7,6 @@ import re
 import tokenize
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = REPO_ROOT / ".orchestune" / "plr0913-baseline.txt"
 SCAN_DIRECTORIES = ["orchestune", "scripts"]
@@ -99,9 +97,12 @@ def collect_plr0913_noqa_functions(base_dirs: list[str]) -> list[str]:
 
 
 def load_plr0913_baseline(path: Path = BASELINE_PATH) -> list[str]:
-    """Load baseline list of functions from text file."""
+    """Load baseline list of functions from text file.
+
+    If baseline file does not exist, returns empty list (all baselined functions refactored).
+    """
     if not path.exists():
-        raise FileNotFoundError(f"Baseline file not found at {path}")
+        return []
     lines = [
         line.strip()
         for line in path.read_text(encoding="utf-8").splitlines()
@@ -142,8 +143,7 @@ class TestPlr0913CollectorUnit:
 
     def test_load_plr0913_baseline_missing_file(self, tmp_path: Path) -> None:
         missing_file = tmp_path / "nonexistent.txt"
-        with pytest.raises(FileNotFoundError):
-            load_plr0913_baseline(missing_file)
+        assert load_plr0913_baseline(missing_file) == []
 
     def test_load_plr0913_baseline_skips_empty_and_comment_lines(
         self, tmp_path: Path

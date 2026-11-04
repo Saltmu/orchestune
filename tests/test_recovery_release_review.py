@@ -187,7 +187,7 @@ def test_recover_claim_release_to_review_preview(tmp_path: Path) -> None:
     # No label changes in preview
     assert forge.labels_added == []
     # Active claim remains
-    state = json.loads(state_file.read_text())
+    state = json.loads(state_file.read_text(encoding="utf-8"))
     assert "1629" in state["active_worktrees"]
 
 
@@ -232,7 +232,7 @@ def test_recover_claim_release_to_review_apply(tmp_path: Path) -> None:
     assert (1629, StatusLabel.IN_PROGRESS) in forge.labels_removed
 
     # Active claim removed
-    state = json.loads(state_file.read_text())
+    state = json.loads(state_file.read_text(encoding="utf-8"))
     assert "1629" not in state["active_worktrees"]
 
     # Release receipt recorded
@@ -243,7 +243,7 @@ def test_recover_claim_release_to_review_apply(tmp_path: Path) -> None:
     assert state["recovery_receipts"][receipt_key]["operation"] == RELEASE_OPERATION
 
     # Worktree retained
-    assert (wt / "untracked.txt").read_text() == "retained work"
+    assert (wt / "untracked.txt").read_text(encoding="utf-8") == "retained work"
 
 
 def test_recover_claim_release_to_review_already_released_receipt(
