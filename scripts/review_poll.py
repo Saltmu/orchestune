@@ -32,9 +32,14 @@ from orchestune.review.progress_tracker import (
     CodexTrackerStatus,
     parse_codex_tracker_status,
 )
-from orchestune.review.tracker_activity import CompletedGrace
+from orchestune.review.rounds import MAX_REVIEW_ROUNDS
+from orchestune.review.tracker_activity import (
+    DEFAULT_COMPLETED_GRACE_SECONDS,
+    CompletedGrace,
+)
 from scripts.jev_context import JevReviewContext
 from scripts.review_cli import print_review_result
+from scripts.review_trigger_replacement import RoundTriggerRequest
 from scripts.review_wait_diagnostics import (
     ReviewTimeoutError,
     StalledReviewError,
@@ -44,8 +49,15 @@ from scripts.review_wait_diagnostics import (
 )
 
 COMPLETENESS_SECTIONS = ("issue_comments", "reviews", "inline_comments")
+DEFAULT_STALL_GRACE_SECONDS = 600
 
-__all__ = ["StalledReviewError"]
+__all__ = [
+    "ReviewExtractContext",
+    "ReviewRecordContext",
+    "ReviewWaitRequest",
+    "StalledReviewError",
+    "execute_review_wait",
+]
 
 
 def summary_gate_open(
@@ -421,20 +433,51 @@ class ReviewWaitRequest:
     """Scalar arguments of `wait_for_review`, kept off that function's body."""
 
     pr_number: int
-    timeout: int
-    interval: int
-    bot_name: str
-    post_trigger: bool
-    body: str | None
-    body_file: str | None
-    max_rounds: int
-    max_retries: int
-    round_num: int | None
-    stall_grace_seconds: int
-    jev_threshold: float | None
-    switch_reviewer: bool
-    completed_grace_seconds: float
-    repair_trigger_markers: bool
+    timeout: int = 1800
+    interval: int = 5
+    bot_name: str = "claude"
+    post_trigger: bool = True
+    body: str | None = None
+    body_file: str | None = None
+    max_rounds: int = MAX_REVIEW_ROUNDS
+    max_retries: int = 1
+    round_num: int | None = None
+    stall_grace_seconds: int = DEFAULT_STALL_GRACE_SECONDS
+    jev_threshold: float | None = None
+    switch_reviewer: bool = False
+    completed_grace_seconds: float = DEFAULT_COMPLETED_GRACE_SECONDS
+    repair_trigger_markers: bool = False
+
+
+@dataclass(frozen=True)
+class ReviewExtractContext:
+    """Context and filters for extracting a review round result (#1667)."""
+
+    latest_trigger_time: str = ""
+    round_num: int | None = None
+    jev_threshold: float | None = None
+    pr_number: int | None = None
+    context_cache: dict[int, JevReviewContext] | None = None
+    trigger_id: int | str | None = None
+    triggered_at: str = ""
+    requested_head_sha: str | None = None
+    repository: str | None = None
+
+
+@dataclass(frozen=True)
+class ReviewRecordContext:
+    """Metadata bound to an acquired review record (#1667)."""
+
+    replacement_proven: bool = False
+    bot_name: str = ""
+    pr_number: int | None = None
+    round_num: int | None = None
+    trigger_id: int | str | None = None
+    triggered_at: str = ""
+    requested_head_sha: str | None = None
+    repository: str | None = None
+    jev_threshold: float | None = None
+    context_cache: dict[int, JevReviewContext] | None = None
 
 
 @dataclass(frozen=True)
@@ -589,6 +632,42 @@ def _load_round_state(
     )
 
 
+def _restore_existing_round(
+    bindings: WaitBindings,
+    request: ReviewWaitRequest,
+    initial_data: dict[str, list[dict[str, Any]]],
+    excluded_ids: set[int | str],
+    current_round: int,
+    context_cache: dict[int, JevReviewContext],
+    repository: str | None,
+) -> dict[str, Any] | tuple[str, int | str | None, str | None]:
+    latest_trigger_time, trigger_id, requested_head_sha = bindings.restore_no_post(
+        initial_data, request.bot_name, current_round, excluded_ids
+    )
+    extract_context = ReviewExtractContext(
+        latest_trigger_time=latest_trigger_time,
+        round_num=current_round,
+        jev_threshold=request.jev_threshold,
+        pr_number=request.pr_number,
+        context_cache=context_cache,
+        trigger_id=trigger_id,
+        triggered_at=latest_trigger_time,
+        requested_head_sha=requested_head_sha,
+        repository=repository,
+    )
+    immediate = bindings.check_immediate(
+        initial_data,
+        request.bot_name,
+        latest_trigger_time,
+        current_round,
+        context=extract_context,
+        exclude_ids=excluded_ids,
+    )
+    if immediate is not None:
+        return immediate
+    return latest_trigger_time, trigger_id, requested_head_sha
+
+
 def _open_or_restore_round(
     bindings: WaitBindings,
     request: ReviewWaitRequest,
@@ -600,37 +679,30 @@ def _open_or_restore_round(
     repository: str | None,
 ) -> dict[str, Any] | tuple[str, int | str | None, str | None]:
     if request.post_trigger:
-        return bindings.handle_trigger(
-            request.pr_number,
-            request.bot_name,
-            initial_data,
-            initial_snapshot,
-            excluded_ids,
-            current_round,
-            request.max_rounds,
-            request.body,
-            request.body_file,
+        trigger_request = RoundTriggerRequest(
+            pr_number=request.pr_number,
+            bot_name=request.bot_name,
+            current_round=current_round,
+            max_rounds=request.max_rounds,
+            body=request.body,
+            body_file=request.body_file,
             repair_trigger_markers=request.repair_trigger_markers,
         )
-    latest_trigger_time, trigger_id, requested_head_sha = bindings.restore_no_post(
-        initial_data, request.bot_name, current_round, excluded_ids
-    )
-    immediate = bindings.check_immediate(
+        return bindings.handle_trigger(
+            trigger_request,
+            initial_data=initial_data,
+            initial_snapshot=initial_snapshot,
+            excluded_ids=excluded_ids,
+        )
+    return _restore_existing_round(
+        bindings,
+        request,
         initial_data,
-        request.bot_name,
-        latest_trigger_time,
+        excluded_ids,
         current_round,
-        jev_threshold=request.jev_threshold,
-        pr_number=request.pr_number,
-        context_cache=context_cache,
-        trigger_id=trigger_id,
-        requested_head_sha=requested_head_sha,
-        repository=repository,
-        exclude_ids=excluded_ids,
+        context_cache,
+        repository,
     )
-    if immediate is not None:
-        return immediate
-    return latest_trigger_time, trigger_id, requested_head_sha
 
 
 def _poll_opened_round(
@@ -745,42 +817,15 @@ def _execute_review_wait(
         )
 
 
-def execute_review_wait(  # noqa: PLR0913
+def execute_review_wait(
     bindings: WaitBindings,
-    pr_number: int,
+    request: ReviewWaitRequest | None = None,
     *,
-    timeout: int,
-    interval: int,
-    bot_name: str,
-    post_trigger: bool,
-    body: str | None,
-    body_file: str | None,
-    max_rounds: int,
-    max_retries: int,
-    round_num: int | None,
-    stall_grace_seconds: int,
-    jev_threshold: float | None,
-    switch_reviewer: bool,
-    completed_grace_seconds: float,
-    repair_trigger_markers: bool,
+    pr_number: int | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any]:
-    return _execute_review_wait(
-        bindings,
-        ReviewWaitRequest(
-            pr_number,
-            timeout,
-            interval,
-            bot_name,
-            post_trigger,
-            body,
-            body_file,
-            max_rounds,
-            max_retries,
-            round_num,
-            stall_grace_seconds,
-            jev_threshold,
-            switch_reviewer,
-            completed_grace_seconds,
-            repair_trigger_markers,
-        ),
-    )
+    if request is None:
+        if pr_number is None:
+            raise ValueError("execute_review_wait requires request or pr_number")
+        request = ReviewWaitRequest(pr_number=pr_number, **kwargs)
+    return _execute_review_wait(bindings, request)

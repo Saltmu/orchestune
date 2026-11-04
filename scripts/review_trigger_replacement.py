@@ -29,6 +29,19 @@ RunGh = Callable[[list[str]], str]
 
 
 @dataclass(frozen=True)
+class RoundTriggerRequest:
+    """Request options for resolving, posting, or reusing a review trigger (#1667)."""
+
+    pr_number: int
+    bot_name: str
+    current_round: int
+    max_rounds: int = 5
+    body: str | None = None
+    body_file: str | None = None
+    repair_trigger_markers: bool = False
+
+
+@dataclass(frozen=True)
 class TriggerOps:
     """GitHub operations supplied by `scripts.wait_for_review` at call time."""
 
@@ -72,18 +85,13 @@ def _replace_trigger(
     return str(trigger_info["created_at"]), trigger_info["id"], requested_head_sha
 
 
-def _reuse_or_replace_trigger(  # noqa: PLR0913
-    pr_number: int,
-    bot_name: str,
+def _reuse_or_replace_trigger(
+    request: RoundTriggerRequest,
     comments: list[dict[str, Any]],
     existing_trigger: dict[str, Any],
     active: list[ReviewTrigger],
     excluded_ids: set[int | str],
-    current_round: int,
     requested_head_sha: str | None,
-    body: str | None,
-    body_file: str | None,
-    repair_trigger_markers: bool,
     ops: TriggerOps,
 ) -> tuple[str, int | str | None, str | None]:
     trigger_id = existing_trigger.get("id")
@@ -91,57 +99,52 @@ def _reuse_or_replace_trigger(  # noqa: PLR0913
     existing_head = parse_head_marker(existing_trigger.get("body") or "")
     if trigger_id is not None:
         excluded_ids.add(trigger_id)
-    replacing = active[0].reviewer != bot_name or (
+    replacing = active[0].reviewer != request.bot_name or (
         existing_head and requested_head_sha and existing_head != requested_head_sha
     )
-    if repair_trigger_markers and replacing:
+    if request.repair_trigger_markers and replacing:
         raise ValueError(
             "marker repair cannot replace a reviewer or HEAD; resume the verified trigger"
         )
     if not replacing:
-        if repair_trigger_markers and active[0].replaces is not None:
+        if request.repair_trigger_markers and active[0].replaces is not None:
             ops.retire(comments, trigger_id, ops.run_gh)
         print(
-            f"Review trigger for @{bot_name} (Round {current_round}) already exists "
+            f"Review trigger for @{request.bot_name} (Round {request.current_round}) already exists "
             f"(Comment ID: {trigger_id}); skipping post and waiting..."
         )
         return trigger_time, trigger_id, existing_head
     if requested_head_sha is None:
         raise ValueError("cannot replace trigger without current PR HEAD")
     return _replace_trigger(
-        pr_number,
+        request.pr_number,
         existing_trigger,
-        bot_name,
+        request.bot_name,
         requested_head_sha,
-        body,
-        body_file,
+        request.body,
+        request.body_file,
         excluded_ids,
         ops,
     )
 
 
-def _post_new_trigger(  # noqa: PLR0913
-    pr_number: int,
-    bot_name: str,
+def _post_new_trigger(
+    request: RoundTriggerRequest,
     initial_snapshot: dict[str, str],
     excluded_ids: set[int | str],
-    current_round: int,
-    max_rounds: int,
-    body: str | None,
-    body_file: str | None,
     requested_head_sha: str | None,
     ops: TriggerOps,
 ) -> tuple[str, int | str | None, str | None]:
     print(
-        f"Posting review trigger comment (Round {current_round}/{max_rounds}) "
-        f"for @{bot_name} on PR #{pr_number}..."
+        f"Posting review trigger comment (Round {request.current_round}/{request.max_rounds}) "
+        f"for @{request.bot_name} on PR #{request.pr_number}..."
     )
     trigger_info = ops.post_trigger(
-        pr_number,
-        bot_name=bot_name,
-        body=body,
-        body_file=body_file,
-        round_num=current_round,
+        request.pr_number,
+        bot_name=request.bot_name,
+        body=request.body,
+        body_file=request.body_file,
+        round_num=request.current_round,
         head_sha=requested_head_sha,
     )
     trigger_id = trigger_info.get("id")
@@ -183,49 +186,33 @@ def _existing_round_trigger(
     return active, existing_trigger
 
 
-def resolve_round_trigger(  # noqa: PLR0913
-    pr_number: int,
-    bot_name: str,
+def resolve_round_trigger(
+    request: RoundTriggerRequest,
     initial_data: dict[str, list[dict[str, Any]]],
     initial_snapshot: dict[str, str],
     excluded_ids: set[int | str],
-    current_round: int,
-    max_rounds: int,
-    body: str | None,
-    body_file: str | None,
-    repair_trigger_markers: bool,
     ops: TriggerOps,
 ) -> tuple[str, int | str | None, str | None]:
     """Post a head-bound trigger, or restore the recorded head when one exists."""
     requested_head_sha = ops.fetch_head()
     comments = initial_data.get("issue_comments", [])
     active, existing_trigger = _existing_round_trigger(
-        comments, excluded_ids, current_round, repair_trigger_markers
+        comments, excluded_ids, request.current_round, request.repair_trigger_markers
     )
     if existing_trigger is not None:
         return _reuse_or_replace_trigger(
-            pr_number,
-            bot_name,
+            request,
             comments,
             existing_trigger,
             active,
             excluded_ids,
-            current_round,
             requested_head_sha,
-            body,
-            body_file,
-            repair_trigger_markers,
             ops,
         )
     return _post_new_trigger(
-        pr_number,
-        bot_name,
+        request,
         initial_snapshot,
         excluded_ids,
-        current_round,
-        max_rounds,
-        body,
-        body_file,
         requested_head_sha,
         ops,
     )
