@@ -128,3 +128,51 @@ class TestRuleChainRun:
             RecomputedDeviation(issue_number=42, deviated_files=(), conflicts=())
         ]
         assert aggregates.any_forced_serial is True
+
+
+class TestCycleContextObservations:
+    """#1666: CycleContext accepts CycleObservations re-exported from rules."""
+
+    def test_cycle_context_with_observations_and_unexpected_kwargs(self, fake_forge):
+        import pytest
+
+        from orchestune.dispatch.config.model import DispatcherConfig
+        from orchestune.dispatch.rules import CycleContext, CycleObservations
+        from orchestune.ledger.run_state import RunState
+
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            apply=False,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "state.json",
+            worktree_root=tmp_path / "worktrees",
+            forge=fake_forge,
+        )
+        from orchestune.models import Task
+
+        task = Task(
+            issue_number=7,
+            subtask_id="task-a",
+            footprint=(),
+            symbols=(),
+            risk=False,
+            priority="medium",
+            progress_partial=False,
+            status_labels=("status:in-progress",),
+            created_at="2026-01-01T00:00:00+00:00",
+        )
+        obs = CycleObservations(
+            tasks_by_issue={7: task},
+            ci_passed_pr_issue_numbers={7},
+            branch_by_issue_number={7: "claude/issue-7-task-a"},
+        )
+        ctx = CycleContext(
+            RunState(),
+            observations=obs,
+            config=config,
+        )
+        assert ctx.is_ci_passed(7) is True
+        assert ctx.canonical_branch(7) == "claude/issue-7-task-a"
+
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            CycleContext(RunState(), observations=obs, config=config, bogus=1)

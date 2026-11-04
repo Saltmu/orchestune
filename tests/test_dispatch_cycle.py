@@ -1105,3 +1105,48 @@ class TestRunDispatchCycleActorVerification:
         ]
         assert queued_calls_102 == []
         assert report.selected == []
+
+
+class TestCycleObservationsParameterObject:
+    """#1666: _CycleState and CycleContext accept CycleObservations."""
+
+    def test_cycle_state_and_context_accept_cycle_observations(self, tmp_path):
+        from orchestune.dispatch.cycle.context_state import (
+            CycleObservations,
+            _CycleState,
+        )
+        from orchestune.dispatch.rules import CycleContext
+
+        task = _task(issue_number=10, subtask_id="task-10")
+        obs = CycleObservations(
+            tasks_by_issue={10: task},
+            ci_passed_pr_issue_numbers={10},
+            changes_requested_issue_numbers={10},
+            branch_by_issue_number={10: "claude/issue-10-task-10"},
+        )
+        state = _CycleState(obs)
+        assert [t.issue_number for t in state.tasks()] == [10]
+        assert state.is_ci_passed(10) is True
+        assert state.has_changes_requested(10) is True
+        assert state.canonical_branch(10) == "claude/issue-10-task-10"
+
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            apply=False,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        ctx = CycleContext(
+            run_state=RunState(),
+            observations=obs,
+            config=config,
+        )
+        assert [t.issue_number for t in ctx.tasks()] == [10]
+        assert ctx.is_ci_passed(10) is True
+
+    def test_cycle_state_rejects_unexpected_kwargs(self):
+        from orchestune.dispatch.cycle.context_state import _CycleState
+
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            _CycleState(unknown_arg=1)

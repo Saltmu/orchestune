@@ -736,3 +736,96 @@ def test_attempt_recovery_uses_the_shared_counter_rule(
     active = active_from_attempt(attempt, task, config)
 
     assert (active.launch.recompute_count, active.launch.forced_serial) == expected
+
+
+def test_restored_active_record_and_launching_subject_parameter_objects(launch_env):
+    """#1666: restored_active_record accepts ActiveWorktreeCore, LaunchInfo, RestoredClaimIdentity; _write_launching_phase accepts LaunchingSubject."""
+    from orchestune.dispatch.launch.attempts import (
+        RestoredClaimIdentity,
+        restored_active_record,
+    )
+    from orchestune.dispatch.launch.service import (
+        LaunchingSubject,
+        LaunchResult,
+        _write_launching_phase,
+    )
+    from orchestune.ledger.active_records import (
+        ActiveWorktreeCore,
+        LaunchInfo,
+    )
+    from orchestune.ledger.run_state import RunState
+
+    _forge, config, plan, _launch = launch_env
+    core = ActiveWorktreeCore(
+        issue_number=1,
+        branch=plan.branch_name,
+        worktree_path="worktrees/w1",
+        declared_footprint=plan.task.footprint,
+        base_branch="origin/main",
+    )
+    launch_info = LaunchInfo(
+        recompute_count=1,
+        forced_serial=True,
+        external_id="ext-1",
+        launch_attempt_id="attempt-1",
+        launch_phase="launching",
+    )
+    claim = RestoredClaimIdentity(
+        owner_kind="dispatch",
+        claim_id="claim-1",
+        reservation_kind="footprint",
+        repository_id="repo-1",
+        owner_token_digest="digest-1",
+    )
+    active = restored_active_record(core=core, launch=launch_info, claim=claim)
+    assert active.core == core
+    assert active.launch == launch_info
+    assert active.claim.claim_id == "claim-1"
+    assert active.claim.claimed_at == 0.0
+    assert active.claim.base_sha is None
+    assert active.claim.base_ref == "origin/main"
+
+    held = LaunchResult(
+        issue_number=1,
+        branch=plan.branch_name,
+        worktree_path="worktrees/w1",
+        pid=None,
+        launched=False,
+        held=True,
+    )
+    subject = LaunchingSubject(
+        issue_number=1,
+        key="1",
+        active_entry=active,
+        held=held,
+        issue=_forge.issues[1],
+        task_forced_serial=True,
+    )
+    state = RunState()
+    res = _write_launching_phase(subject, state, config, now=100.0, open_prs=())
+    assert res is None
+    assert state.active_worktrees["1"].launch.launch_phase == "launching"
+
+    legacy_active = restored_active_record(
+        issue_number=1,
+        branch=plan.branch_name,
+        worktree_path="worktrees/w1",
+        footprint=plan.task.footprint,
+        recompute_count=1,
+        forced_serial=True,
+        external_id="ext-1",
+        external_url=None,
+        base_branch="origin/main",
+        profile=None,
+        model=None,
+        reasoning_effort=None,
+        selection_reason=None,
+        owner_kind="dispatch",
+        claim_id="claim-1",
+        reservation_kind="footprint",
+        repository_id="repo-1",
+        owner_token_digest="digest-1",
+    )
+    assert legacy_active.core == core
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        restored_active_record(core=core, launch=launch_info, claim=claim, extra=1)

@@ -6,6 +6,7 @@ This module does not import ``recovery``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +27,7 @@ from orchestune.dispatch.execution_profiles import (
     resolve_task_execution_selection,
 )
 from orchestune.dispatch.launch.attempts import (
+    RestoredClaimIdentity,
     _completed_claim,
     active_from_attempt,
     restored_active_record,
@@ -36,6 +38,10 @@ from orchestune.issue_parsing import (
     parse_task_from_issue,
 )
 from orchestune.labels import StatusLabel
+from orchestune.ledger.active_records import (
+    ActiveWorktreeCore,
+    LaunchInfo,
+)
 from orchestune.ledger.run_state import (
     ActiveWorktree,
     recovered_claim_id,
@@ -304,53 +310,97 @@ def _counters_from_claim_or_issue(
     return _recovery_counters_for_issue(issue)
 
 
-def _build_restored_standard_worktree(  # noqa: PLR0913
-    issue: IssueRecord,
-    subtask_id: str,
-    declared_footprint: tuple[str, ...],
-    resolver: TaskBranchResolver,
-    resolutions: dict[int, TaskBranchResolution],
-    issue_to_subtask_id: dict[int, str],
-    dependency_resolution: dict[int, TaskDependencies],
-    owner_kind: str,
-    claim_id: str | None,
-    reservation_kind: str,
-    config: DispatcherConfig,
-    task: TaskMetadata | None = None,
-    claim_info: ClaimInfo | None = None,
-) -> ActiveWorktree:
-    if owner_kind == "interactive" and subtask_id == f"issue-{issue.number}":
-        subtask_id = resolve_claim_subtask_id(issue)
-    branch, worktree_path, external_id, external_url = _restored_worktree_workspace(
-        issue, subtask_id, resolver, resolutions, config
-    )
-    restored_base = _restored_base_branch(
-        issue, issue_to_subtask_id, dependency_resolution, resolver, resolutions, config
-    )
-    rc, fs = _counters_from_claim_or_issue(issue, claim_info)
-    selection = resolve_task_execution_selection(
-        task if task is not None else parse_task_from_issue(issue), config
-    )
-    return restored_active_record(
-        issue_number=issue.number,
-        branch=branch,
-        worktree_path=worktree_path,
-        footprint=declared_footprint,
-        recompute_count=rc,
-        forced_serial=fs,
-        external_id=external_id,
-        external_url=external_url,
-        base_branch=restored_base,
-        profile=selection.profile,
-        model=selection.model,
-        reasoning_effort=selection.reasoning_effort,
-        selection_reason=selection.reason,
+@dataclass(frozen=True)
+class RecoveryResolutionContext:
+    """復元時のブランチ・依存解決コンテキスト（#1666）。"""
+
+    resolver: TaskBranchResolver
+    resolutions: dict[int, TaskBranchResolution]
+    issue_to_subtask_id: dict[int, str]
+    dependency_resolution: dict[int, TaskDependencies]
+
+
+def _restored_claim_identity(
+    issue: IssueRecord, claim_info: ClaimInfo, config: DispatcherConfig
+) -> RestoredClaimIdentity:
+    owner_kind, claim_id, reservation_kind = claim_info
+    return RestoredClaimIdentity(
         owner_kind=owner_kind,
         claim_id=claim_id or recovered_claim_id(issue.number),
         reservation_kind=reservation_kind,
         repository_id=recovery_repository_id(config.run_state_path),
         owner_token_digest=recovered_owner_token_digest(issue.number, claim_id),
     )
+
+
+def _build_restored_standard_worktree(
+    issue: IssueRecord,
+    subtask_id: str,
+    declared_footprint: tuple[str, ...],
+    resolution: RecoveryResolutionContext,
+    claim_info: ClaimInfo,
+    config: DispatcherConfig,
+    task: TaskMetadata | None = None,
+) -> ActiveWorktree:
+    if claim_info.owner_kind == "interactive" and subtask_id == f"issue-{issue.number}":
+        subtask_id = resolve_claim_subtask_id(issue)
+    branch, worktree_path, external_id, external_url = _restored_worktree_workspace(
+        issue, subtask_id, resolution.resolver, resolution.resolutions, config
+    )
+    restored_base = _restored_base_branch(
+        issue,
+        resolution.issue_to_subtask_id,
+        vars(resolution)["dependency_resolution"],
+        resolution.resolver,
+        resolution.resolutions,
+        config,
+    )
+    rc, fs = _counters_from_claim_or_issue(issue, claim_info)
+    selection = resolve_task_execution_selection(
+        task if task is not None else parse_task_from_issue(issue), config
+    )
+    return restored_active_record(
+        core=ActiveWorktreeCore(
+            issue_number=issue.number,
+            branch=branch,
+            worktree_path=worktree_path,
+            declared_footprint=tuple(declared_footprint),
+            base_branch=restored_base,
+        ),
+        launch=LaunchInfo(
+            recompute_count=rc,
+            forced_serial=fs,
+            external_id=external_id,
+            external_url=external_url,
+            profile=selection.profile,
+            model=selection.model,
+            reasoning_effort=selection.reasoning_effort,
+            selection_reason=selection.reason,
+        ),
+        claim=_restored_claim_identity(issue, claim_info, config),
+    )
+
+
+def _normalize_claim_footprint(
+    claim_info: ClaimInfo,
+    parsed: TaskMetadata,
+    declared_footprint: tuple[str, ...],
+) -> tuple[ClaimInfo, tuple[str, ...]]:
+    owner_kind, claim_id, reservation_kind = claim_info
+    if (
+        parsed.footprint_error or parsed.yaml_error
+    ) and reservation_kind == "footprint":
+        return (
+            ClaimInfo(
+                owner_kind,
+                claim_id,
+                "repository",
+                recompute_count=claim_info.recompute_count,
+                forced_serial=claim_info.forced_serial,
+            ),
+            (),
+        )
+    return claim_info, declared_footprint
 
 
 def _build_restored_active_worktree(
@@ -364,14 +414,11 @@ def _build_restored_active_worktree(
     config: DispatcherConfig,
     task: TaskMetadata | None = None,
 ) -> ActiveWorktree:
-    claim_info = _parse_claim_info_from_issue(issue)
-    owner_kind, claim_id, reservation_kind = claim_info
     parsed = task if task is not None else parse_task_from_issue(issue)
-    if (
-        parsed.footprint_error or parsed.yaml_error
-    ) and reservation_kind == "footprint":
-        reservation_kind = "repository"
-        declared_footprint = ()
+    claim_info, declared_footprint = _normalize_claim_footprint(
+        _parse_claim_info_from_issue(issue), parsed, declared_footprint
+    )
+    owner_kind, claim_id, reservation_kind = claim_info
     attempt = attempt_from_body(issue.body)
     if (
         owner_kind != "interactive"
@@ -391,14 +438,13 @@ def _build_restored_active_worktree(
         issue,
         subtask_id,
         declared_footprint,
-        resolver,
-        resolutions,
-        issue_to_subtask_id,
-        dependency_resolution,
-        owner_kind,
-        claim_id,
-        reservation_kind,
+        RecoveryResolutionContext(
+            resolver=resolver,
+            resolutions=resolutions,
+            issue_to_subtask_id=issue_to_subtask_id,
+            dependency_resolution=dependency_resolution,
+        ),
+        claim_info,
         config,
         task=parsed,
-        claim_info=claim_info,
     )
