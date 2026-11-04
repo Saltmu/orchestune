@@ -1,6 +1,3 @@
-orchestune/complete/ci_evidence.py:record_ci_evidence
-orchestune/complete/contracts.py:CompleteRequest.blocked
-orchestune/complete/contracts.py:CompleteRequest.done
 orchestune/consistency/observation.py:build_observed_repository_state
 orchestune/dispatch/cycle/context_state.py:_CycleState.__init__
 orchestune/dispatch/gc/completion.py:_apply_completed_worktree_outcome
