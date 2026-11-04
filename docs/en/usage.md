@@ -734,6 +734,7 @@ Integration is two-tiered: "child branches → parent branch" and "parent branch
 1. **Child branches → parent branch (automatic)**: Child PRs are automatically integrated into the `parent/issue-{N}` branch. Once the integration PR passes CI it is auto-merged without waiting for human approval, and the corresponding child issues are closed automatically. The individual child PRs opened by agents therefore do not need to be merged by a human; they remain as a review record.
    - If the auto-merge fails (branch protection, permissions, and so on), a comment is posted on the affected issues and the merge is retried automatically on the next dispatch cycle.
 2. **Parent branch → main (merged by a human)**: Once every child issue under the parent is closed, a final integration PR from `parent/issue-{N}` to `main` is prepared automatically. **Deciding whether to merge that final PR, and performing the merge, is always done by a human.** When the final PR's merge is detected, the parent issue is closed automatically.
+   - Before preparing the final PR, Orchestune probes `origin/main` against `parent/issue-{N}` using a dry merge-tree check. If merge conflicts are detected, Orchestune halts final PR creation and acceptance review, posts a conflict notification listing the conflicting files to the parent issue, and reports `final_pr_conflict`. Once the conflicts are resolved by merging `main` into the parent branch, the resolution is detected and final PR creation resumes automatically.
 
 ### 4.3 Auto-Rebase
 

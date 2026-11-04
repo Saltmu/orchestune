@@ -68,6 +68,19 @@ class ConditionalBranchDeletionResult(StrEnum):
     FAILED = "failed"
 
 
+class MergeProbeStatus(StrEnum):
+    clean = "clean"
+    conflict = "conflict"
+    unknown = "unknown"
+
+
+@dataclass(frozen=True)
+class MergeProbeResult:
+    status: MergeProbeStatus
+    conflicting_files: tuple[str, ...]
+    detail: str = ""
+
+
 def run_git(
     args: list[str],
     *,
@@ -144,6 +157,109 @@ def list_remote_branches() -> list[str]:
         )
     result = run_git(["branch", "-r", "--format=%(refname:short)"], cwd=None)
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def _fetch_probe_refs(
+    base: str, head: str, cwd: str | Path | None
+) -> MergeProbeResult | None:
+    try:
+        run_git(
+            [
+                "fetch",
+                "origin",
+                f"+refs/heads/{base}:refs/remotes/origin/{base}",
+                f"+refs/heads/{head}:refs/remotes/origin/{head}",
+            ],
+            cwd=cwd,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        detail = exc.stderr.strip() if exc.stderr else str(exc)
+        return MergeProbeResult(
+            MergeProbeStatus.unknown,
+            (),
+            detail=f"failed to fetch refs for probe_merge_conflicts: {detail}",
+        )
+    except OSError as exc:
+        return MergeProbeResult(
+            MergeProbeStatus.unknown,
+            (),
+            detail=f"unable to fetch refs for probe_merge_conflicts: {exc}",
+        )
+    return None
+
+
+def _parse_merge_tree_output(result: GitResult) -> MergeProbeResult:
+    if result.returncode == 0:
+        return MergeProbeResult(MergeProbeStatus.clean, (), detail="")
+    if result.returncode == 1:
+        lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if not lines:
+            detail = (
+                result.stderr.strip()
+                if result.stderr
+                else "merge-tree failed with exit code 1 and no stdout"
+            )
+            return MergeProbeResult(MergeProbeStatus.unknown, (), detail=detail)
+        return MergeProbeResult(
+            MergeProbeStatus.conflict,
+            tuple(lines[1:]),
+            detail=result.stderr.strip(),
+        )
+    detail = (
+        result.stderr.strip()
+        if result.stderr
+        else f"merge-tree exited with code {result.returncode}"
+    )
+    return MergeProbeResult(MergeProbeStatus.unknown, (), detail=detail)
+
+
+def probe_merge_conflicts(
+    base: str,
+    head: str,
+    *,
+    cwd: str | Path | None = None,
+) -> MergeProbeResult:
+    """Probe whether `base` and `head` merge cleanly without conflicts.
+
+    Uses `git fetch` to ensure remote tracking refs are up to date, then runs
+    `git merge-tree --write-tree --name-only --no-messages origin/<base> origin/<head>`
+    without touching index or working tree.
+    """
+    try:
+        validate_ref_name(base)
+        validate_ref_name(head)
+    except ValueError as exc:
+        return MergeProbeResult(
+            MergeProbeStatus.unknown,
+            (),
+            detail=f"invalid ref name for probe_merge_conflicts: {exc}",
+        )
+
+    if fetch_error := _fetch_probe_refs(base, head, cwd):
+        return fetch_error
+
+    try:
+        result = run_git(
+            [
+                "merge-tree",
+                "--write-tree",
+                "--name-only",
+                "--no-messages",
+                f"origin/{base}",
+                f"origin/{head}",
+            ],
+            cwd=cwd,
+            check=False,
+        )
+    except OSError as exc:
+        return MergeProbeResult(
+            MergeProbeStatus.unknown,
+            (),
+            detail=f"unable to run git merge-tree: {exc}",
+        )
+
+    return _parse_merge_tree_output(result)
 
 
 def branch_changed_files(branch: str, base: str = "origin/main") -> list[str] | None:

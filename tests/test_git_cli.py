@@ -6,11 +6,13 @@ import pytest
 
 from orchestune.infra.git_cli import (
     GitResult,
+    MergeProbeStatus,
     branch_changed_files,
     ensure_parent_branch,
     get_git_repository_paths,
     is_ancestor_commit,
     list_remote_branches,
+    probe_merge_conflicts,
     resolve_local_or_remote_branch,
     run_git,
 )
@@ -1061,3 +1063,143 @@ class TestRunGitExecutionScope:
         ):
             with pytest.raises(subprocess.TimeoutExpired):
                 run_git(["status"], cwd=tmp_path)
+
+
+class TestProbeMergeConflicts:
+    @pytest.fixture
+    def git_repo_with_remote(self, tmp_path):
+        """Create a bare remote and cloned working repo with an initial commit."""
+        remote = tmp_path / "remote.git"
+        subprocess.run(
+            ["git", "init", "--bare", str(remote)], check=True, capture_output=True
+        )
+
+        clone = tmp_path / "work"
+        subprocess.run(
+            ["git", "clone", str(remote), str(clone)], check=True, capture_output=True
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"], cwd=clone, check=True
+        )
+        subprocess.run(["git", "config", "user.name", "Tester"], cwd=clone, check=True)
+
+        init_file = clone / "README.md"
+        init_file.write_text("initial\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=clone, check=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=clone, check=True)
+        subprocess.run(["git", "branch", "-M", "main"], cwd=clone, check=True)
+        subprocess.run(["git", "push", "-u", "origin", "main"], cwd=clone, check=True)
+
+        return clone
+
+    def test_probe_clean_merge(self, git_repo_with_remote):
+        clone = git_repo_with_remote
+        # create parent branch with a non-conflicting change
+        subprocess.run(
+            ["git", "checkout", "-b", "parent/issue-100", "main"], cwd=clone, check=True
+        )
+        (clone / "parent.txt").write_text("from parent\n", encoding="utf-8")
+        subprocess.run(["git", "add", "parent.txt"], cwd=clone, check=True)
+        subprocess.run(["git", "commit", "-m", "parent commit"], cwd=clone, check=True)
+        subprocess.run(
+            ["git", "push", "-u", "origin", "parent/issue-100"], cwd=clone, check=True
+        )
+
+        # advance main with another change
+        subprocess.run(["git", "checkout", "main"], cwd=clone, check=True)
+        (clone / "main.txt").write_text("from main\n", encoding="utf-8")
+        subprocess.run(["git", "add", "main.txt"], cwd=clone, check=True)
+        subprocess.run(["git", "commit", "-m", "main commit"], cwd=clone, check=True)
+        subprocess.run(["git", "push", "origin", "main"], cwd=clone, check=True)
+
+        result = probe_merge_conflicts("main", "parent/issue-100", cwd=clone)
+        assert result.status == MergeProbeStatus.clean
+        assert result.conflicting_files == ()
+        assert result.detail == ""
+
+    def test_probe_conflicting_merge(self, git_repo_with_remote):
+        clone = git_repo_with_remote
+        # create parent branch modifying README.md
+        subprocess.run(
+            ["git", "checkout", "-b", "parent/issue-200", "main"], cwd=clone, check=True
+        )
+        (clone / "README.md").write_text("parent change\n", encoding="utf-8")
+        (clone / "unique_parent.txt").write_text("parent only\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=clone, check=True)
+        subprocess.run(["git", "commit", "-m", "parent edit"], cwd=clone, check=True)
+        subprocess.run(
+            ["git", "push", "-u", "origin", "parent/issue-200"], cwd=clone, check=True
+        )
+
+        # advance main modifying README.md differently
+        subprocess.run(["git", "checkout", "main"], cwd=clone, check=True)
+        (clone / "README.md").write_text("main change\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=clone, check=True)
+        subprocess.run(["git", "commit", "-m", "main edit"], cwd=clone, check=True)
+        subprocess.run(["git", "push", "origin", "main"], cwd=clone, check=True)
+
+        result = probe_merge_conflicts("main", "parent/issue-200", cwd=clone)
+        assert result.status == MergeProbeStatus.conflict
+        assert result.conflicting_files == ("README.md",)
+
+    def test_probe_invalid_ref_returns_unknown(self, git_repo_with_remote):
+        clone = git_repo_with_remote
+        result = probe_merge_conflicts("main..bad", "parent/issue-100", cwd=clone)
+        assert result.status == MergeProbeStatus.unknown
+        assert "invalid" in result.detail.lower()
+
+    def test_probe_nonexistent_ref_returns_unknown(self, git_repo_with_remote):
+        clone = git_repo_with_remote
+        result = probe_merge_conflicts("main", "parent/issue-nonexistent", cwd=clone)
+        assert result.status == MergeProbeStatus.unknown
+        assert result.conflicting_files == ()
+        assert result.detail != ""
+
+    @pytest.mark.parametrize(
+        ("ret_or_exc", "expected_fragment"),
+        [
+            (OSError("git not found"), "git not found"),
+            (OSError("merge-tree exec error"), "merge-tree exec error"),
+            (
+                subprocess.CompletedProcess(
+                    args=[], returncode=1, stdout="", stderr="fatal error"
+                ),
+                "fatal error",
+            ),
+            (
+                subprocess.CompletedProcess(
+                    args=[], returncode=129, stdout="", stderr="usage error"
+                ),
+                "usage error",
+            ),
+        ],
+    )
+    def test_probe_merge_tree_failures_return_unknown(
+        self,
+        git_repo_with_remote,
+        monkeypatch: pytest.MonkeyPatch,
+        ret_or_exc,
+        expected_fragment,
+    ):
+        import orchestune.infra.git_cli as git_cli
+
+        clone = git_repo_with_remote
+        real_run = subprocess.run
+
+        def fake_run(args, **kwargs):
+            if (
+                isinstance(ret_or_exc, Exception)
+                and "fetch" in args
+                and "git not found" in str(ret_or_exc)
+            ):
+                raise ret_or_exc
+            if "merge-tree" in args:
+                if isinstance(ret_or_exc, Exception):
+                    raise ret_or_exc
+                return ret_or_exc
+            return real_run(args, **kwargs)
+
+        monkeypatch.setattr(git_cli.subprocess, "run", fake_run)
+        result = probe_merge_conflicts("main", "main", cwd=clone)
+        assert result.status == MergeProbeStatus.unknown
+        assert expected_fragment in result.detail
