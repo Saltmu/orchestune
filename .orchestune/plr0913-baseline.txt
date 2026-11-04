@@ -1,6 +1,3 @@
-orchestune/claim/adopt_pr.py:inspect_adoption
-orchestune/claim/service.py:_apply_claim_side_effects
-orchestune/claim/service.py:_transition_labels_and_finalize
 orchestune/complete/ci_evidence.py:record_ci_evidence
 orchestune/complete/contracts.py:CompleteRequest.blocked
 orchestune/complete/contracts.py:CompleteRequest.done
