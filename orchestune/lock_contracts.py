@@ -44,3 +44,7 @@ class ExternalLockScanResult:
     # タスク」も収録する。継続ロックはto_lock/to_unlockのどちらにも現れず、
     # 理由を引ける場所が他に無いため(#695の実例)。
     conflicts: dict[int, tuple[ExternalLockConflict, ...]] = field(default_factory=dict)
+    # #1654: 人の確認待ち（ESCALATIONラベル付き）のタスク。ロック・解除の通知文を
+    # 「解除されても自動起動しない」版へ切り替えるために使う。既定値付きなので
+    # 既存の生成箇所（本体・テスト）は変更不要。
+    escalated_issues: frozenset[int] = field(default_factory=frozenset)

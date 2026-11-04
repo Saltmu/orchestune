@@ -656,6 +656,12 @@ conflicts require manual resolution.
 - This is a cross-cutting state that can be applied/removed at any point,
   independently of the rest of the lifecycle.
 
+- For a task awaiting human review (`status:blocked-human-review` /
+  `status:manual-merge-required`), the lock and release notices say it does not
+  start automatically ([#1654](https://github.com/Saltmu/orchestune/issues/1654)).
+  After the lock is released the label stays `status:blocked-human-review`; a person
+  adopts an orphaned PR with `orchestune claim --adopt-pr`.
+
 ### 14. Parent Issue → `status:blocked-human-review` (child review gate stop)
 - Source: `AutoMergeChildIntegrationStep._handle_review_gate_block` in `orchestune/integrator/steps.py`
 - Target: the **parent Issue** (`--parent-issue`), not the child Issue.

@@ -925,3 +925,58 @@ class TestExternalLockConflicts:
             active_branches=[],
         )
         assert result.conflicts == {}
+
+
+class TestEscalatedExternalLockScan:
+    """#1654: 人の確認待ちのタスクを判定結果に載せ、通知文を切り替えられるようにする。"""
+
+    @pytest.mark.parametrize(
+        "label", ["status:blocked-human-review", "status:manual-merge-required"]
+    )
+    def test_escalated_task_is_recorded(self, label):
+        locked = [
+            _task(
+                1654,
+                footprint=("tests/conftest.py",),
+                status_labels=(label, "status:external-lock"),
+            )
+        ]
+        result = scan_external_locks(
+            locked,
+            remote_branches=[("fix/issue-777-branch-naming", ("tests/conftest.py",))],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.escalated_issues == frozenset({1654})
+        assert result.conflicts[1654]
+
+    @pytest.mark.parametrize(
+        "label", ["status:queued", "status:blocked", "status:in-progress"]
+    )
+    def test_non_escalated_task_is_not_recorded(self, label):
+        queued = [_task(1654, footprint=("tests/conftest.py",), status_labels=(label,))]
+        result = scan_external_locks(
+            queued,
+            remote_branches=[("fix/issue-777-branch-naming", ("tests/conftest.py",))],
+            prs=[],
+            active_branches=[],
+        )
+        assert result.escalated_issues == frozenset()
+        assert result.conflicts[1654]
+
+    def test_escalated_task_that_is_unlocked_is_still_recorded(self):
+        unlocked = [
+            _task(
+                1654,
+                footprint=("tests/conftest.py",),
+                status_labels=("status:blocked-human-review", "status:external-lock"),
+            )
+        ]
+        result = scan_external_locks(
+            unlocked,
+            remote_branches=[],
+            prs=[],
+            active_branches=[],
+        )
+        assert [task.issue_number for task in result.to_unlock] == [1654]
+        assert result.escalated_issues == frozenset({1654})

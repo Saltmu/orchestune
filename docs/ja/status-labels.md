@@ -625,6 +625,11 @@ queued保持とpromotion hold不在を確認してdoneだけを除去します�
 - 他のライフサイクルとは独立に、任意のタイミングで付与・解除され得る
   横断的な状態。
 
+- 人の確認待ち（`status:blocked-human-review` / `status:manual-merge-required`）の
+  タスクでは、解除時の通知は「自動では起動しません」と書きます（[#1654](https://github.com/Saltmu/orchestune/issues/1654)）。
+  ロックが解除されてもラベルは `status:blocked-human-review` のまま残り、
+  孤立PRの採用は人が `orchestune claim --adopt-pr` で行います。
+
 ### 14. 親Issue → `status:blocked-human-review`（子レビューゲートによる停止）
 - 発生元: `orchestune/integrator/steps.py`の`AutoMergeChildIntegrationStep._handle_review_gate_block`
 - 対象: 子Issueではなく**親Issue**（`--parent-issue`）。
