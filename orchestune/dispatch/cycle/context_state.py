@@ -373,7 +373,7 @@ class _CycleState:
     公開窓口は`CycleContext`のメソッドのみ。この型を他モジュールへ公開しない。
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         tasks_by_issue: Mapping[int, Task],

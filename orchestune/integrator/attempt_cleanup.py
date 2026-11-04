@@ -157,7 +157,7 @@ def _operation_settled(state: SemanticReviewStateV1, _pr_number: int) -> bool:
 class AttemptCleaner:
     """Close and clean up every invalidated attempt of one parent."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         forge: Forge,
         repository_root: Path,

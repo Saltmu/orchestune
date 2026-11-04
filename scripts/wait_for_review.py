@@ -411,7 +411,7 @@ def _evaluate_current_inlines(
     return cast(list[dict[str, Any]], jev_report["jev_evaluations"])
 
 
-def _full_review_record(
+def _full_review_record(  # noqa: PLR0913
     result: dict[str, Any],
     *,
     replacement_proven: bool,
@@ -460,7 +460,7 @@ def _full_review_record(
     )
 
 
-def _extract_review_result(
+def _extract_review_result(  # noqa: PLR0913
     current_data: dict[str, list[dict[str, Any]]],
     bot_name: str,
     exclude_ids: set[int | str] | None = None,
@@ -528,7 +528,7 @@ def _get_initial_pr_data(
             _sleep(min(interval, remaining))
 
 
-def _handle_review_trigger(
+def _handle_review_trigger(  # noqa: PLR0913
     pr_number: int,
     bot_name: str,
     initial_data: dict[str, list[dict[str, Any]]],
@@ -569,7 +569,7 @@ def _handle_review_trigger(
     )
 
 
-def _check_immediate_review_result(
+def _check_immediate_review_result(  # noqa: PLR0913
     initial_data: dict[str, list[dict[str, Any]]],
     bot_name: str,
     latest_trigger_time: str,
@@ -770,7 +770,7 @@ def _wait_bindings() -> WaitBindings:
     )
 
 
-def wait_for_review(
+def wait_for_review(  # noqa: PLR0913
     pr_number: int,
     *,
     timeout: int = 1800,

@@ -304,7 +304,7 @@ def _counters_from_claim_or_issue(
     return _recovery_counters_for_issue(issue)
 
 
-def _build_restored_standard_worktree(
+def _build_restored_standard_worktree(  # noqa: PLR0913
     issue: IssueRecord,
     subtask_id: str,
     declared_footprint: tuple[str, ...],

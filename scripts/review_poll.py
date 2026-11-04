@@ -745,7 +745,7 @@ def _execute_review_wait(
         )
 
 
-def execute_review_wait(
+def execute_review_wait(  # noqa: PLR0913
     bindings: WaitBindings,
     pr_number: int,
     *,

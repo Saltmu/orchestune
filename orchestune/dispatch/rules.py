@@ -62,7 +62,7 @@ class CycleContext(_CycleState):
     semantic queries and perform effects only through delegated action ports.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         run_state: RunState,
         tasks_by_issue: dict[int, Task],

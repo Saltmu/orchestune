@@ -639,7 +639,7 @@ def _append_excluded_decisions(
     )
 
 
-def select_tasks_with_decisions(
+def select_tasks_with_decisions(  # noqa: PLR0913
     candidate_tasks: Sequence[TaskMetadata],
     run_state: RunState,
     now: float,
@@ -691,7 +691,7 @@ def select_tasks_with_decisions(
     return _append_excluded_decisions(result, excluded, inputs)
 
 
-def select_next_tasks(
+def select_next_tasks(  # noqa: PLR0913
     candidate_tasks: Sequence[TaskMetadata],
     run_state: RunState,
     now: float,

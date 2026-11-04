@@ -662,7 +662,7 @@ def _read_issue_for_counters(
     return issue, ""
 
 
-def _write_launching_phase(
+def _write_launching_phase(  # noqa: PLR0913
     issue_number: int,
     key: str,
     active_entry: ActiveWorktree,

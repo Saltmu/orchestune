@@ -488,7 +488,7 @@ class IntegrationMerger:
             blocked_reasons,
         )
 
-    def _merge_task_list(
+    def _merge_task_list(  # noqa: PLR0913
         self,
         tasks: list[Task],
         base_branch: str,
@@ -515,7 +515,7 @@ class IntegrationMerger:
                 dependency_states,
             )
 
-    def _merge_one_task(
+    def _merge_one_task(  # noqa: PLR0913
         self,
         task: Task,
         base_branch: str,

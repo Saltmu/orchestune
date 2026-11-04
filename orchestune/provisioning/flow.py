@@ -137,7 +137,7 @@ def _preview_only(
     return ProvisionResult(parent_issue_number, False, {}, {}, previews=previews)
 
 
-def _provision_and_link_one_subtask(
+def _provision_and_link_one_subtask(  # noqa: PLR0913
     resolved_forge: IssueForge,
     subtask: SubTask,
     template: str,

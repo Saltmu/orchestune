@@ -25,7 +25,7 @@ def scan_external_locks(queued_tasks, remote_branches, prs, active_branches):
     )
 
 
-def _task(
+def _task(  # noqa: PLR0913
     issue_number,
     priority="medium",
     risk=False,

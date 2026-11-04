@@ -783,7 +783,7 @@ def _apply_completed_decision(
     )
 
 
-def _apply_completed_worktree_outcome(
+def _apply_completed_worktree_outcome(  # noqa: PLR0913
     active: ActiveWorktree,
     decision: CompletedWorktreeDecision,
     config: DispatcherConfig,
@@ -824,7 +824,7 @@ def _apply_completed_worktree_outcome(
         return error.hold.event()
 
 
-def _finalize_completed_worktree(
+def _finalize_completed_worktree(  # noqa: PLR0913
     active: ActiveWorktree,
     active_task: TaskMetadata | None,
     config: DispatcherConfig,

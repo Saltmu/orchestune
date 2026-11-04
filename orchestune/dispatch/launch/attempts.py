@@ -132,7 +132,7 @@ def _completed_claim(
     )
 
 
-def restored_active_record(
+def restored_active_record(  # noqa: PLR0913
     *,
     issue_number: int,
     branch: str,

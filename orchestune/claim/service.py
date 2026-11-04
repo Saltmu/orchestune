@@ -413,7 +413,7 @@ def _validate_and_publish_issue_finalization(
     return fresh_issue, None
 
 
-def _transition_labels_and_finalize(
+def _transition_labels_and_finalize(  # noqa: PLR0913
     workspace: ClaimWorkspace,
     reservation: ActiveWorktree,
     run_state: RunState,
@@ -624,7 +624,7 @@ def _persist_and_prepare_initial(
     )
 
 
-def _apply_claim_side_effects(
+def _apply_claim_side_effects(  # noqa: PLR0913
     workspace: ClaimWorkspace,
     request: ClaimRequest,
     issue: IssueRecord,
