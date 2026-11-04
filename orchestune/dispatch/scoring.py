@@ -15,6 +15,7 @@ import itertools
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
+from typing import Any, cast
 
 from orchestune.dag.models import ConflictGraph, SubTask
 from orchestune.dependencies.resolution import build_legacy_dag_inputs
@@ -45,6 +46,7 @@ __all__ = [
     "parse_task_from_issue",
     "quota_available",
     "remaining_token_budget",
+    "ScheduleRequest",
     "select_next_tasks",
     "select_tasks_with_decisions",
     "decision_to_dict",
@@ -639,82 +641,153 @@ def _append_excluded_decisions(
     )
 
 
-def select_tasks_with_decisions(  # noqa: PLR0913
-    candidate_tasks: Sequence[TaskMetadata],
-    run_state: RunState,
-    now: float,
-    max_concurrent: int,
+@dataclass(frozen=True)
+class ScheduleRequest:
+    """タスク選出入力パラメータオブジェクト（#1666）。"""
+
+    candidate_tasks: Sequence[TaskMetadata]
+    run_state: RunState
+    now: float
+    max_concurrent: int
+    max_launches_per_window: int | None
+    window_seconds: int
+    max_tokens_per_window: int | None = None
+    conflict_graph: ConflictGraph | None = None
+    active_subtask_ids: set[str] | None = None
+    known_tasks: Iterable[TaskMetadata] | None = None
+    derived_inputs: tuple[SubTask, ...] | None = None
+
+
+_SCHEDULE_OPTIONAL_FIELDS = frozenset(
+    (
+        "max_tokens_per_window",
+        "conflict_graph",
+        "active_subtask_ids",
+        "known_tasks",
+        "derived_inputs",
+    )
+)
+
+
+def _resolve_schedule_request(
+    request: ScheduleRequest | Sequence[TaskMetadata] | None,
+    run_state: RunState | None,
+    now: float | None,
+    max_concurrent: int | None,
     max_launches_per_window: int | None,
-    window_seconds: int,
-    max_tokens_per_window: int | None = None,
-    conflict_graph: ConflictGraph | None = None,
-    active_subtask_ids: set[str] | None = None,
-    known_tasks: Iterable[TaskMetadata] | None = None,
-    derived_inputs: tuple[SubTask, ...] | None = None,
+    window_seconds: int | None,
+    kwargs: dict[str, Any],
+    fn_name: str,
+) -> ScheduleRequest:
+    opt = {k: kwargs.pop(k) for k in _SCHEDULE_OPTIONAL_FIELDS if k in kwargs}
+    if isinstance(request, ScheduleRequest):
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs))
+            raise TypeError(
+                f"{fn_name}() got unexpected keyword argument(s): {unexpected}"
+            )
+        return replace(request, **opt) if opt else request
+    candidates = kwargs.pop("candidate_tasks") if request is None else request
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"{fn_name}() got unexpected keyword argument(s): {unexpected}")
+    assert run_state is not None and now is not None
+    assert max_concurrent is not None and window_seconds is not None
+    return ScheduleRequest(
+        candidate_tasks=cast(Sequence[TaskMetadata], candidates),
+        run_state=run_state,
+        now=now,
+        max_concurrent=max_concurrent,
+        max_launches_per_window=max_launches_per_window,
+        window_seconds=window_seconds,
+        **opt,
+    )
+
+
+def _execute_schedule_request(req: ScheduleRequest) -> SchedulingResult:
+    run_state = cast(RunState, vars(req)["run_state"])
+    eligible, excluded = _partition_candidates(req.candidate_tasks, run_state)
+    slots = quota_available(
+        run_state,
+        req.now,
+        req.max_concurrent,
+        req.max_launches_per_window,
+        req.window_seconds,
+        max_tokens_per_window=req.max_tokens_per_window,
+    )
+    ranked, inputs, cost_model = _prepare_ranked_candidates(
+        eligible,
+        req.candidate_tasks,
+        run_state,
+        req.now,
+        req.window_seconds,
+        req.known_tasks,
+        req.derived_inputs,
+    )
+    result = _apply_resource_constraints(
+        ranked,
+        slots,
+        _token_budget(
+            run_state,
+            req.now,
+            req.window_seconds,
+            req.max_tokens_per_window,
+            cost_model,
+        ),
+        req.conflict_graph,
+        req.active_subtask_ids,
+        slot_exhausted_reason=_slot_exhausted_reason(
+            run_state, req.now, req.window_seconds, req.max_tokens_per_window
+        ),
+    )
+    return _append_excluded_decisions(result, excluded, inputs)
+
+
+def select_tasks_with_decisions(
+    request: ScheduleRequest | Sequence[TaskMetadata] | None = None,
+    run_state: RunState | None = None,
+    now: float | None = None,
+    max_concurrent: int | None = None,
+    max_launches_per_window: int | None = None,
+    window_seconds: int | None = None,
+    **kwargs: Any,
 ) -> SchedulingResult:
     """起動するタスクを選び、全候補分の選定理由付き内訳を併せて返す。
 
     `known_tasks`はPrecedence DAGを組み立てる母集団（通常はサイクルが見ている
     全タスク）。省略時は候補集合そのものを使う。
     """
-    eligible, excluded = _partition_candidates(candidate_tasks, run_state)
-    slots = quota_available(
+    req = _resolve_schedule_request(
+        request,
         run_state,
         now,
         max_concurrent,
         max_launches_per_window,
         window_seconds,
-        max_tokens_per_window=max_tokens_per_window,
+        kwargs,
+        "select_tasks_with_decisions",
     )
-    ranked, inputs, cost_model = _prepare_ranked_candidates(
-        eligible,
-        candidate_tasks,
-        run_state,
-        now,
-        window_seconds,
-        known_tasks,
-        derived_inputs,
-    )
-    result = _apply_resource_constraints(
-        ranked,
-        slots,
-        _token_budget(
-            run_state, now, window_seconds, max_tokens_per_window, cost_model
-        ),
-        conflict_graph,
-        active_subtask_ids,
-        slot_exhausted_reason=_slot_exhausted_reason(
-            run_state, now, window_seconds, max_tokens_per_window
-        ),
-    )
-    # スコアリング対象外の候補は、ランク付き判定の後ろにissue番号順で並べる。
-    return _append_excluded_decisions(result, excluded, inputs)
+    return _execute_schedule_request(req)
 
 
-def select_next_tasks(  # noqa: PLR0913
-    candidate_tasks: Sequence[TaskMetadata],
-    run_state: RunState,
-    now: float,
-    max_concurrent: int,
-    max_launches_per_window: int | None,
-    window_seconds: int,
-    max_tokens_per_window: int | None = None,
-    conflict_graph: ConflictGraph | None = None,
-    active_subtask_ids: set[str] | None = None,
-    known_tasks: Iterable[TaskMetadata] | None = None,
-    derived_inputs: tuple[SubTask, ...] | None = None,
+def select_next_tasks(
+    request: ScheduleRequest | Sequence[TaskMetadata] | None = None,
+    run_state: RunState | None = None,
+    now: float | None = None,
+    max_concurrent: int | None = None,
+    max_launches_per_window: int | None = None,
+    window_seconds: int | None = None,
+    **kwargs: Any,
 ) -> list[TaskMetadata]:
     """選出されたタスクだけを返す薄いラッパー（選定理由が不要な呼び出し向け）。"""
-    return select_tasks_with_decisions(
-        candidate_tasks,
+    req = _resolve_schedule_request(
+        request,
         run_state,
         now,
         max_concurrent,
         max_launches_per_window,
         window_seconds,
-        max_tokens_per_window=max_tokens_per_window,
-        conflict_graph=conflict_graph,
-        active_subtask_ids=active_subtask_ids,
-        known_tasks=known_tasks,
-        derived_inputs=derived_inputs,
-    ).selected
+        kwargs,
+        "select_next_tasks",
+    )
+    return select_tasks_with_decisions(req).selected

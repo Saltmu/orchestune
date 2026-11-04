@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import sys
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from orchestune.claim.adopt_pr import orphan_marker, validate_escalation_reason
 from orchestune.dispatch.config.model import DispatcherConfig
@@ -783,18 +785,58 @@ def _apply_completed_decision(
     )
 
 
-def _apply_completed_worktree_outcome(  # noqa: PLR0913
+@dataclass(frozen=True)
+class CompletionProgress:
+    """完了処理の再投入・PR照合用進行コンテキスト（#1666）。"""
+
+    run_state: RunState | None = None
+    now: float | None = None
+    open_prs: Sequence[PrRecord] | None = None
+    on_early_death_requeue: Callable[[], None] | None = None
+    on_review_timeout_requeue: Callable[[], None] | None = None
+
+
+_PROGRESS_FIELDS = frozenset(
+    (
+        "run_state",
+        "now",
+        "open_prs",
+        "on_early_death_requeue",
+        "on_review_timeout_requeue",
+    )
+)
+
+
+def _resolve_completion_progress(
+    progress: CompletionProgress | RunState | None,
+    kwargs: dict[str, Any],
+    fn_name: str,
+) -> CompletionProgress:
+    base = (
+        CompletionProgress(run_state=progress)
+        if isinstance(progress, RunState)
+        else (progress or CompletionProgress())
+    )
+    overrides = {k: kwargs.pop(k) for k in _PROGRESS_FIELDS if k in kwargs}
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"{fn_name}() got unexpected keyword argument(s): {unexpected}")
+    return dataclasses.replace(base, **overrides) if overrides else base
+
+
+def _apply_completed_worktree_outcome(
     active: ActiveWorktree,
     decision: CompletedWorktreeDecision,
     config: DispatcherConfig,
     active_task: TaskMetadata | None = None,
     dispatch_not_needed_review: NotNeededReviewDispatcher | None = None,
-    run_state: RunState | None = None,
-    now: float | None = None,
-    open_prs: Sequence[PrRecord] | None = None,
-    on_early_death_requeue: Callable[[], None] | None = None,
-    on_review_timeout_requeue: Callable[[], None] | None = None,
+    progress: CompletionProgress | RunState | None = None,
+    **kwargs: Any,
 ) -> CompletionEvent:
+    resolved = _resolve_completion_progress(
+        progress, kwargs, "_apply_completed_worktree_outcome"
+    )
+    run_state = cast(RunState | None, vars(resolved)["run_state"])
     if hold := fresh_external_hold(active, config, "completion", run_state):
         return hold.event()
     if config.apply and decision.action == "completed_orphaned_pr":
@@ -813,10 +855,10 @@ def _apply_completed_worktree_outcome(  # noqa: PLR0913
         config,
         dispatch_not_needed_review,
         run_state,
-        time.time() if now is None else now,
-        open_prs,
-        on_early_death_requeue,
-        on_review_timeout_requeue,
+        time.time() if resolved.now is None else resolved.now,
+        resolved.open_prs,
+        resolved.on_early_death_requeue,
+        resolved.on_review_timeout_requeue,
     )
     try:
         return _apply_completed_decision(ctx, decision)
@@ -824,18 +866,20 @@ def _apply_completed_worktree_outcome(  # noqa: PLR0913
         return error.hold.event()
 
 
-def _finalize_completed_worktree(  # noqa: PLR0913
+def _finalize_completed_worktree(
     active: ActiveWorktree,
     active_task: TaskMetadata | None,
     config: DispatcherConfig,
     dispatch_not_needed_review: NotNeededReviewDispatcher | None = None,
-    run_state: RunState | None = None,
-    now: float | None = None,
-    open_prs: Sequence[PrRecord] | None = None,
-    on_early_death_requeue: Callable[[], None] | None = None,
-    on_review_timeout_requeue: Callable[[], None] | None = None,
+    progress: CompletionProgress | RunState | None = None,
+    *,
     issue: IssueRecord | None = None,
+    **kwargs: Any,
 ) -> CompletionEvent:
+    resolved = _resolve_completion_progress(
+        progress, kwargs, "_finalize_completed_worktree"
+    )
+    run_state = cast(RunState | None, vars(resolved)["run_state"])
     repo_root = Path(config.worktree_root).parent if config.worktree_root else None
     decision = _decide_completed_worktree_outcome(
         active,
@@ -845,7 +889,7 @@ def _finalize_completed_worktree(  # noqa: PLR0913
         run_state=run_state,
         max_review_timeout_retries=config.max_review_timeout_retries,
         issue=issue,
-        open_prs=open_prs,
+        open_prs=resolved.open_prs,
     )
     return _apply_completed_worktree_outcome(
         active,
@@ -853,11 +897,7 @@ def _finalize_completed_worktree(  # noqa: PLR0913
         config,
         active_task,
         dispatch_not_needed_review,
-        run_state,
-        now,
-        open_prs,
-        on_early_death_requeue,
-        on_review_timeout_requeue,
+        resolved,
     )
 
 

@@ -30,6 +30,7 @@ from orchestune.dispatch.semantic_review.postcycle import (
     SemanticClaimClient,
     SemanticReviewCycleRunner,
     SemanticReviewOperations,
+    SemanticReviewPorts,
     advance_pending_semantic_reviews,
 )
 from orchestune.integrator.semantic_claim import (
@@ -305,17 +306,20 @@ class World:
 
     def cycle(self, *, worker: str = "w1", minutes: float = 1) -> dict[str, Any]:
         self.clock += timedelta(minutes=minutes)
-        runner = SemanticReviewCycleRunner(
-            self.config,
+        ports = SemanticReviewPorts(
             forge=self.config.resolved_forge,
-            repository_root=Path("."),
-            now=self.clock,
-            worker_id=worker,
             verify_ci_fn=self.verify_ci,
             operations=replace(self.operations(), **self.ops_overrides),
             claims=replace(self.claims(), **self.claim_overrides),
             remote_head_fn=self.refs.get,
             clock=lambda: self.clock,
+        )
+        runner = SemanticReviewCycleRunner(
+            self.config,
+            ports=ports,
+            repository_root=Path("."),
+            now=self.clock,
+            worker_id=worker,
         )
         reports = runner.run()
         assert len(reports) == 1
@@ -942,3 +946,34 @@ class TestPostcycleWiring:
         world.finish_job(output=None)
         world.cycle()
         assert wt_dir in world.cleaned_worktrees
+
+    def test_runner_accepts_legacy_kwargs_and_rejects_unknown_kwargs(
+        self, world: World
+    ) -> None:
+        world.seed()
+        runner = SemanticReviewCycleRunner(
+            world.config,
+            forge=world.config.resolved_forge,
+            repository_root=Path("."),
+            now=world.clock + timedelta(minutes=1),
+            worker_id="w1",
+            verify_ci_fn=world.verify_ci,
+            operations=world.operations(),
+            claims=world.claims(),
+            remote_head_fn=world.refs.get,
+            clock=lambda: world.clock,
+        )
+        assert runner.run()[0].to_dict()["status"] == "advanced"
+
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            SemanticReviewCycleRunner(
+                world.config,
+                ports=SemanticReviewPorts(
+                    forge=world.config.resolved_forge,
+                    verify_ci_fn=world.verify_ci,
+                ),
+                repository_root=Path("."),
+                now=world.clock,
+                worker_id="w1",
+                unknown_kwarg=1,
+            )

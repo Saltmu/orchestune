@@ -188,6 +188,37 @@ class SemanticClaimClient:
     delete_fix_branches: Callable[[str | Path, str], None] = delete_attempt_fix_branches
 
 
+@dataclass(frozen=True)
+class SemanticReviewPorts:
+    """Layer-2 semantic review runner port dependencies (#1666)."""
+
+    forge: Forge
+    verify_ci_fn: VerifyCiFn
+    operations: SemanticReviewOperations | None = None
+    claims: SemanticClaimClient | None = None
+    remote_head_fn: RemoteHeadFn | None = None
+    clock: Callable[[], datetime] | None = None
+
+
+_PORT_FIELDS = frozenset(
+    ("forge", "verify_ci_fn", "operations", "claims", "remote_head_fn", "clock")
+)
+
+
+def _resolve_semantic_review_ports(
+    ports: SemanticReviewPorts | None, kwargs: dict[str, Any]
+) -> SemanticReviewPorts:
+    overrides = {k: kwargs.pop(k) for k in _PORT_FIELDS if k in kwargs}
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(
+            f"SemanticReviewCycleRunner.__init__() got unexpected keyword argument(s): {unexpected}"
+        )
+    if ports is None:
+        return SemanticReviewPorts(**overrides)
+    return replace(ports, **overrides) if overrides else ports
+
+
 def _is_target(attempt: OpenAttempt) -> bool:
     if attempt.state_error is not None:
         return True
@@ -232,36 +263,33 @@ def _escalated(
 class SemanticReviewCycleRunner:
     """Advance each pending integration attempt by at most one phase per cycle."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         config: DispatcherConfig,
         *,
-        forge: Forge,
+        ports: SemanticReviewPorts | None = None,
         repository_root: Path,
         now: datetime,
         worker_id: str,
-        verify_ci_fn: VerifyCiFn,
-        operations: SemanticReviewOperations | None = None,
-        claims: SemanticClaimClient | None = None,
-        remote_head_fn: RemoteHeadFn | None = None,
-        clock: Callable[[], datetime] | None = None,
+        **kwargs: Any,
     ) -> None:
         """``now`` fixes what this cycle observes and decides; claims are
         acquired, renewed and released at the ``clock`` time of each write,
         so a long CI run cannot leave a lease that expired before it began."""
         if now.tzinfo is None:
             raise ValueError("now must be timezone-aware")
+        resolved_ports = _resolve_semantic_review_ports(ports, kwargs)
         self._config = config
-        self._forge = forge
-        self._evidence = SemanticReviewEvidence(forge)
+        self._forge = resolved_ports.forge
+        self._evidence = SemanticReviewEvidence(resolved_ports.forge)
         self._root = repository_root
         self._now = now.astimezone(UTC)
         self._worker = worker_id
-        self._clock = clock or (lambda: datetime.now(UTC))
-        self._verify_ci = verify_ci_fn
-        self._ops = operations or SemanticReviewOperations()
-        self._claims = claims or SemanticClaimClient()
-        self._remote_head = remote_head_fn or (
+        self._clock = resolved_ports.clock or (lambda: datetime.now(UTC))
+        self._verify_ci = resolved_ports.verify_ci_fn
+        self._ops = resolved_ports.operations or SemanticReviewOperations()
+        self._claims = resolved_ports.claims or SemanticClaimClient()
+        self._remote_head = resolved_ports.remote_head_fn or (
             lambda name: remote_branch_sha(repository_root, name)
         )
         self._mode = SemanticReviewMode(config.semantic_review_mode)
@@ -912,14 +940,17 @@ def advance_pending_semantic_reviews(
     resolved_worker_id = worker_id or default_worker_id()
     runner = SemanticReviewCycleRunner(
         config,
-        forge=config.resolved_forge,
+        ports=SemanticReviewPorts(
+            forge=config.resolved_forge,
+            verify_ci_fn=verify_ci_fn
+            or semantic_ci_verifier(config, root, remote_head_fn),
+            operations=operations,
+            claims=claims,
+            remote_head_fn=remote_head_fn,
+        ),
         repository_root=root,
         now=now or datetime.now(UTC),
         worker_id=resolved_worker_id,
-        verify_ci_fn=verify_ci_fn or semantic_ci_verifier(config, root, remote_head_fn),
-        operations=operations,
-        claims=claims,
-        remote_head_fn=remote_head_fn,
     )
     reports = runner.run()
     statuses = sorted({report.status for report in reports})
@@ -944,6 +975,7 @@ __all__ = [
     "SemanticReviewCycleReport",
     "SemanticReviewCycleRunner",
     "SemanticReviewOperations",
+    "SemanticReviewPorts",
     "SUCCESS_STATUSES",
     "WARNING_STATUSES",
     "advance_pending_semantic_reviews",

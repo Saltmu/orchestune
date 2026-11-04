@@ -694,3 +694,34 @@ class TestSharedDocumentConflictsInSelection:
         )
 
         assert selected == []
+
+
+class TestScheduleRequestParameterObject:
+    """#1666: select_next_tasks and select_tasks_with_decisions accept ScheduleRequest."""
+
+    def test_select_with_schedule_request(self):
+        import pytest
+
+        from orchestune.dispatch.scoring import (
+            ScheduleRequest,
+            select_tasks_with_decisions,
+        )
+
+        state = RunState(active_worktrees={}, launch_history=[])
+        high = _task(1, priority="high")
+        low = _task(2, priority="low")
+        request = ScheduleRequest(
+            candidate_tasks=[low, high],
+            run_state=state,
+            now=1_700_000_000.0,
+            max_concurrent=1,
+            max_launches_per_window=5,
+            window_seconds=3600,
+        )
+        assert select_next_tasks(request) == [high]
+        result = select_tasks_with_decisions(request)
+        assert result.selected == [high]
+        assert len(result.decisions) == 2
+
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            select_next_tasks(request, unexpected=1)

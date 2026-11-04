@@ -5,10 +5,10 @@ from __future__ import annotations
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 from uuid import uuid4
 
 from orchestune.claim.ownership import with_claim
@@ -132,54 +132,79 @@ def _completed_claim(
     )
 
 
-def restored_active_record(  # noqa: PLR0913
-    *,
-    issue_number: int,
-    branch: str,
-    worktree_path: str,
-    footprint: tuple[str, ...],
-    recompute_count: int,
-    forced_serial: bool,
-    external_id: str | None,
-    external_url: str | None,
-    base_branch: str,
-    profile: str | None,
-    model: str | None,
-    reasoning_effort: str | None,
-    selection_reason: str | None,
-    owner_kind: str,
-    claim_id: str,
-    reservation_kind: str,
-    repository_id: str,
-    owner_token_digest: str,
+@dataclass(frozen=True)
+class RestoredClaimIdentity:
+    """復元済みワークツリーのclaim識別（#1666）。"""
+
+    owner_kind: str
+    claim_id: str
+    reservation_kind: str
+    repository_id: str
+    owner_token_digest: str
+
+
+def _resolve_restored_active_args(
+    core: ActiveWorktreeCore | None,
+    launch: LaunchInfo | None,
+    claim: RestoredClaimIdentity | None,
+    kwargs: dict[str, Any],
+) -> tuple[ActiveWorktreeCore, LaunchInfo, RestoredClaimIdentity]:
+    if core is None:
+        core = ActiveWorktreeCore(
+            issue_number=kwargs.pop("issue_number"),
+            branch=kwargs.pop("branch"),
+            worktree_path=kwargs.pop("worktree_path"),
+            declared_footprint=tuple(kwargs.pop("footprint")),
+            base_branch=kwargs.pop("base_branch"),
+        )
+    if launch is None:
+        launch = LaunchInfo(
+            recompute_count=kwargs.pop("recompute_count", 0),
+            forced_serial=kwargs.pop("forced_serial", False),
+            external_id=kwargs.pop("external_id", None),
+            external_url=kwargs.pop("external_url", None),
+            profile=kwargs.pop("profile", None),
+            model=kwargs.pop("model", None),
+            reasoning_effort=kwargs.pop("reasoning_effort", None),
+            selection_reason=kwargs.pop("selection_reason", None),
+        )
+    if claim is None:
+        claim = RestoredClaimIdentity(
+            owner_kind=kwargs.pop("owner_kind"),
+            claim_id=kwargs.pop("claim_id"),
+            reservation_kind=kwargs.pop("reservation_kind"),
+            repository_id=kwargs.pop("repository_id"),
+            owner_token_digest=kwargs.pop("owner_token_digest"),
+        )
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(
+            f"restored_active_record() got unexpected keyword argument(s): {unexpected}"
+        )
+    return core, launch, claim
+
+
+def restored_active_record(
+    core: ActiveWorktreeCore | None = None,
+    launch: LaunchInfo | None = None,
+    claim: RestoredClaimIdentity | None = None,
+    **kwargs: Any,
 ) -> ActiveWorktree:
     """Construct a non-resumable record recovered without an owner secret."""
+    resolved_core, resolved_launch, resolved_claim = _resolve_restored_active_args(
+        core, launch, claim, kwargs
+    )
     return build_launch_record(
-        core=ActiveWorktreeCore(
-            issue_number=issue_number,
-            branch=branch,
-            worktree_path=worktree_path,
-            declared_footprint=tuple(footprint),
-            base_branch=base_branch,
-        ),
-        launch=LaunchInfo(
-            recompute_count=recompute_count,
-            forced_serial=forced_serial,
-            external_id=external_id,
-            external_url=external_url,
-            profile=profile,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            selection_reason=selection_reason,
-        ),
+        core=resolved_core,
+        launch=resolved_launch,
         claim=_completed_claim(
-            owner_kind=owner_kind,
-            claim_id=claim_id,
-            base_ref=base_branch,
-            reservation_kind=reservation_kind,
-            repository_id=repository_id,
+            owner_kind=resolved_claim.owner_kind,
+            claim_id=resolved_claim.claim_id,
+            base_ref=resolved_core.base_branch,
+            reservation_kind=resolved_claim.reservation_kind,
+            repository_id=resolved_claim.repository_id,
             claimed_at=0.0,
-            owner_token_digest=owner_token_digest,
+            owner_token_digest=resolved_claim.owner_token_digest,
         ),
     )
 
