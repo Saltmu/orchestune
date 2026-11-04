@@ -20,6 +20,7 @@ from orchestune.complete.ci_evidence import (
     CiEvidenceMismatchError,
     CiEvidenceMissingError,
     CiExecutionError,
+    CiRecordOptions,
     _resolve_runner_environment,
     compute_lockfile_digest,
     invalidate_ci_evidence,
@@ -1180,3 +1181,23 @@ class TestEdgeCasesAndBoundaryConditions:
 
         assert "Failed to resolve initial base SHA before starting CI." in sh_text
         assert "Failed to resolve initial base SHA before starting CI." in ps1_text
+
+    def test_record_ci_evidence_with_options_object(self, git_worktree: Path):
+        options = CiRecordOptions(
+            started_at="2026-11-05T00:00:00Z",
+            completed_at="2026-11-05T00:01:00Z",
+            exit_code=0,
+            base_sha="0" * 40,
+        )
+        ev = record_ci_evidence(
+            worktree_root=git_worktree,
+            options=options,
+        )
+        assert ev.succeeded is True
+        assert ev.base_sha == "0" * 40
+        assert ev.started_at == "2026-11-05T00:00:00Z"
+        assert ev.completed_at == "2026-11-05T00:01:00Z"
+
+    def test_record_ci_evidence_rejects_unexpected_kwargs(self, git_worktree: Path):
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            record_ci_evidence(worktree_root=git_worktree, invalid_kwarg="val")

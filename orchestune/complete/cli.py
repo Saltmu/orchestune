@@ -9,7 +9,12 @@ from pathlib import Path
 
 from orchestune.claim.local_identity import caller_claim_id
 from orchestune.claim.workspace import resolve_claim_workspace
-from orchestune.complete.contracts import CompleteRequest, CompleteResult, CompleteStage
+from orchestune.complete.contracts import (
+    CompleteRequest,
+    CompleteResult,
+    CompleteStage,
+    CompletionEvidence,
+)
 from orchestune.complete.service import complete_task
 from orchestune.infra.cli_output import CliOutput, make_output
 
@@ -66,11 +71,14 @@ def _request_from_args(args: argparse.Namespace) -> CompleteRequest:
             raise ValueError("--reviewer is required when --result=done")
         if args.reviewer != "skip" and args.review_reply is None:
             raise ValueError("--review-reply is required for claude/codex")
+        evidence = CompletionEvidence(
+            reviewer=args.reviewer,
+            review_reply=args.review_reply,
+        )
         return CompleteRequest.done(
             args.issue,
             args.pr,
-            reviewer=args.reviewer,
-            review_reply=args.review_reply,
+            evidence=evidence,
             **common,
         )
     if args.reviewer is not None or args.review_reply is not None:
