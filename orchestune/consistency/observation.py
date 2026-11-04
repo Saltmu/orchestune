@@ -25,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from orchestune.consistency.models import (
     ConsistencyScope,
@@ -211,6 +211,37 @@ class ExternalExecutionProbe(Protocol):
     """Reports the status of a cloud execution, which has no local pid."""
 
     def status(self, external_id: str) -> str: ...
+
+
+@dataclass(frozen=True)
+class ObservationProbes:
+    """Probes injected into repository observation."""
+
+    forge: ForgeProbe | None = None
+    git: GitProbe | None = None
+    worktree: WorktreeProbe | None = None
+    process: ProcessProbe | None = None
+    external: ExternalExecutionProbe | None = None
+
+    @property
+    def forge_probe(self) -> ForgeProbe | None:
+        return self.forge
+
+    @property
+    def git_probe(self) -> GitProbe | None:
+        return self.git
+
+    @property
+    def worktree_probe(self) -> WorktreeProbe | None:
+        return self.worktree
+
+    @property
+    def process_probe(self) -> ProcessProbe | None:
+        return self.process
+
+    @property
+    def external_probe(self) -> ExternalExecutionProbe | None:
+        return self.external
 
 
 Clock = Callable[[], datetime]
@@ -703,20 +734,34 @@ class ObservationCollector:
         self,
         *,
         repository_id: str,
-        forge_probe: ForgeProbe | None = None,
-        git_probe: GitProbe | None = None,
-        worktree_probe: WorktreeProbe | None = None,
-        process_probe: ProcessProbe | None = None,
-        external_probe: ExternalExecutionProbe | None = None,
+        probes: ObservationProbes | None = None,
         clock: Clock | None = None,
         freshness_budget: timedelta | None = None,
+        **kwargs: Any,
     ) -> None:
         self._repository_id = repository_id
-        self._forge_probe = forge_probe
-        self._git_probe = git_probe
-        self._worktree_probe = worktree_probe
-        self._process_probe = process_probe
-        self._external_probe = external_probe
+        forge_probe = kwargs.pop("forge_probe", None)
+        git_probe = kwargs.pop("git_probe", None)
+        worktree_probe = kwargs.pop("worktree_probe", None)
+        process_probe = kwargs.pop("process_probe", None)
+        external_probe = kwargs.pop("external_probe", None)
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs.keys()))
+            raise TypeError(
+                f"ObservationCollector() got unexpected keyword argument(s): {unexpected}"
+            )
+        if probes is not None:
+            self._forge_probe = forge_probe or probes.forge
+            self._git_probe = git_probe or probes.git
+            self._worktree_probe = worktree_probe or probes.worktree
+            self._process_probe = process_probe or probes.process
+            self._external_probe = external_probe or probes.external
+        else:
+            self._forge_probe = forge_probe
+            self._git_probe = git_probe
+            self._worktree_probe = worktree_probe
+            self._process_probe = process_probe
+            self._external_probe = external_probe
         self._clock = clock or _default_clock
         self._freshness_budget = freshness_budget
 
@@ -1150,28 +1195,46 @@ def _conflicting_versions(issue_number: int, view: _IssueView) -> str:
     )
 
 
-def build_observed_repository_state(  # noqa: PLR0913
+def build_observed_repository_state(
     *,
     repository_id: str,
     forge: ForgeSnapshot | None = None,
     executions: Sequence[ExecutionRecord] = (),
     branches_by_issue: Mapping[int, str] | None = None,
-    forge_probe: ForgeProbe | None = None,
-    git_probe: GitProbe | None = None,
-    worktree_probe: WorktreeProbe | None = None,
-    process_probe: ProcessProbe | None = None,
-    external_probe: ExternalExecutionProbe | None = None,
+    probes: ObservationProbes | None = None,
     clock: Clock | None = None,
     freshness_budget: timedelta | None = None,
+    **kwargs: Any,
 ) -> ObservedRepositoryState:
     """Collect one snapshot without holding on to a collector."""
+    probe_keys = {
+        "forge_probe",
+        "git_probe",
+        "worktree_probe",
+        "process_probe",
+        "external_probe",
+        "forge",
+        "git",
+        "worktree",
+        "process",
+        "external",
+    }
+    if probes is None and any(k in kwargs for k in probe_keys):
+        probes = ObservationProbes(
+            forge=kwargs.pop("forge_probe", kwargs.pop("forge", None)),
+            git=kwargs.pop("git_probe", kwargs.pop("git", None)),
+            worktree=kwargs.pop("worktree_probe", kwargs.pop("worktree", None)),
+            process=kwargs.pop("process_probe", kwargs.pop("process", None)),
+            external=kwargs.pop("external_probe", kwargs.pop("external", None)),
+        )
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs.keys()))
+        raise TypeError(
+            f"build_observed_repository_state() got unexpected keyword argument(s): {unexpected}"
+        )
     return ObservationCollector(
         repository_id=repository_id,
-        forge_probe=forge_probe,
-        git_probe=git_probe,
-        worktree_probe=worktree_probe,
-        process_probe=process_probe,
-        external_probe=external_probe,
+        probes=probes,
         clock=clock,
         freshness_budget=freshness_budget,
     ).collect(forge=forge, executions=executions, branches_by_issue=branches_by_issue)

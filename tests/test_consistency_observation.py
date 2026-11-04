@@ -49,6 +49,7 @@ from orchestune.consistency.observation import (
     ExecutionRecord,
     ForgeSnapshot,
     ObservationCollector,
+    ObservationProbes,
     build_observed_repository_state,
 )
 from orchestune.models import IssueRecord, PrRecord
@@ -1260,3 +1261,46 @@ def test_execution_claim_and_launch_facts_are_observed_from_execution_record() -
     assert _task_fact(state, 964, FACT_EXECUTION_CLAIM_ID).value == "claim-964"
     assert _task_fact(state, 964, FACT_EXECUTION_CLAIM_STAGE).value == "completed"
     assert _task_fact(state, 964, FACT_EXECUTION_LAUNCH_PHASE).value == "failed"
+
+
+def test_observation_probes_construction_and_properties() -> None:
+    process_probe = FakeProcessProbe({4_204_242})
+    probes = ObservationProbes(process=process_probe)
+
+    assert probes.process is process_probe
+    assert probes.process_probe is process_probe
+    assert probes.forge is None
+    assert probes.forge_probe is None
+    assert probes.git is None
+    assert probes.git_probe is None
+    assert probes.worktree is None
+    assert probes.worktree_probe is None
+    assert probes.external is None
+    assert probes.external_probe is None
+
+
+def test_build_observed_repository_state_with_observation_probes() -> None:
+    snapshot, executions = _full_inputs()
+    process_probe = FakeProcessProbe({4_204_242})
+    probes = ObservationProbes(process=process_probe)
+
+    built = build_observed_repository_state(
+        repository_id=REPOSITORY_ID,
+        forge=snapshot,
+        executions=executions,
+        probes=probes,
+        clock=_clock,
+    )
+    collected = _collector(process_probe=process_probe).collect(
+        forge=snapshot, executions=executions
+    )
+
+    assert built == collected
+
+
+def test_build_observed_repository_state_rejects_unexpected_kwargs() -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        build_observed_repository_state(
+            repository_id=REPOSITORY_ID,
+            invalid_kwarg=True,
+        )
