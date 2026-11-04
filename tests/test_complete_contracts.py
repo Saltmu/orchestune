@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 
 import pytest
 
@@ -15,6 +16,7 @@ from orchestune.complete import (
     CompleteRequest,
     CompleteResult,
     CompleteStage,
+    CompletionEvidence,
     DonePayload,
     NotNeededPayload,
     can_transition,
@@ -59,6 +61,81 @@ class TestCompletePayloadsAndRequests:
 
         # Validation succeeds
         req.validate()
+
+    def test_completion_evidence_parameter_object(self):
+        evidence = CompletionEvidence(
+            review=ReviewSummary(bot="codex", rounds=2, verdict="pass"),
+            reviewer="codex",
+            review_reply=Path("reply.md"),
+            ci="passed",
+            baseline_regressions=("reg1",),
+            base_sha="base123",
+            attempt=2,
+        )
+        assert evidence.reviewer == "codex"
+        assert evidence.review.verdict == "pass"
+        assert evidence.review_reply == Path("reply.md")
+        assert evidence.ci == "passed"
+        assert evidence.baseline_regressions == ("reg1",)
+        assert evidence.base_sha == "base123"
+        assert evidence.attempt == 2
+
+    def test_done_request_with_completion_evidence(self):
+        evidence = CompletionEvidence(
+            review=ReviewSummary(bot="codex", rounds=1, verdict="pass"),
+            reviewer="codex",
+            review_reply=Path(".orchestune/reply.md"),
+            ci="passed",
+            baseline_regressions=("test_b",),
+        )
+        req = CompleteRequest.done(
+            issue_number=1663,
+            pr=2001,
+            evidence=evidence,
+            owner_token="token-evidence",
+            claim_id="claim-evidence",
+        )
+        assert req.issue_number == 1663
+        assert req.result == RESULT_DONE
+        assert req.owner_token == "token-evidence"
+        assert req.claim_id == "claim-evidence"
+        assert isinstance(req.payload, DonePayload)
+        assert req.payload.pr == 2001
+        assert req.payload.reviewer == "codex"
+        assert req.payload.review_reply == Path(".orchestune/reply.md")
+        assert req.payload.review.verdict == "pass"
+        assert req.payload.ci == "passed"
+        assert req.payload.baseline_regressions == ("test_b",)
+        req.validate()
+
+    def test_blocked_request_with_completion_evidence(self):
+        evidence = CompletionEvidence(
+            review=ReviewSummary(bot="claude", rounds=2, verdict="timeout"),
+            ci="failed",
+            base_sha="base-sha-456",
+            attempt=3,
+        )
+        req = CompleteRequest.blocked(
+            issue_number=1663,
+            reason="ci-failed",
+            evidence=evidence,
+            claim_id="claim-blocked",
+        )
+        assert req.issue_number == 1663
+        assert req.result == RESULT_BLOCKED
+        assert isinstance(req.payload, BlockedPayload)
+        assert req.payload.reason == "ci-failed"
+        assert req.payload.base_sha == "base-sha-456"
+        assert req.payload.attempt == 3
+        assert req.payload.review.verdict == "timeout"
+        assert req.payload.ci == "failed"
+        req.validate()
+
+    def test_done_and_blocked_reject_unexpected_kwargs(self):
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            CompleteRequest.done(1663, 1, invalid_arg="bad")
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            CompleteRequest.blocked(1663, "reason", invalid_arg="bad")
 
     def test_not_needed_request_construction_and_validation(self):
         req = CompleteRequest.not_needed(

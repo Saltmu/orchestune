@@ -671,3 +671,88 @@ class TestFinalizeBaseBranchRedWorktree:
         fake_forge.add_label.assert_called_once_with(280, "status:blocked-human-review")
         fake_forge.remove_label.assert_any_call(280, "status:in-progress")
         fake_forge.add_comment.assert_called_once()
+
+
+class TestCompletionProgressParameterObject:
+    """#1666: _finalize_completed_worktree and _apply_completed_worktree_outcome accept CompletionProgress."""
+
+    def test_finalize_completed_worktree_accepts_completion_progress(
+        self, tmp_path, fake_forge
+    ):
+        import orchestune.dispatch.gc.completion as completion_mod
+        import orchestune.dispatch.gc.git as gc_git_mod
+        from orchestune.dispatch.gc.completion import (
+            CompletedWorktreeDecision,
+            CompletionProgress,
+            _apply_completed_worktree_outcome,
+        )
+
+        active = _active(base_branch="origin/main")
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=True,
+            forge=fake_forge,
+        )
+        outcome = OutcomeRecord(result="done", issue=280)
+        fake_forge.list_comments.return_value = [
+            {"body": outcome.render(), "created_at": "2026-01-01T00:00:00Z"}
+        ]
+        progress = CompletionProgress(
+            run_state=RunState(),
+            now=1234.0,
+            open_prs=(),
+        )
+        with (
+            patch.object(
+                completion_mod,
+                "worktree_has_uncommitted_changes",
+                autospec=True,
+                return_value=False,
+            ),
+            patch.object(
+                completion_mod,
+                "worktree_has_new_commits",
+                autospec=True,
+                return_value=True,
+            ),
+            patch.object(gc_git_mod.subprocess, "run") as mock_run,
+            patch.object(completion_mod, "remove_worktree", autospec=True),
+        ):
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="deadbeef\n", stderr=""
+            )
+            event = _finalize_completed_worktree(
+                active,
+                task,
+                config,
+                progress=progress,
+            )
+            direct_event = _apply_completed_worktree_outcome(
+                active,
+                CompletedWorktreeDecision(
+                    action="completed",
+                    subtask_id="task-a",
+                    commit_sha="deadbeef",
+                    outcome=outcome,
+                ),
+                config,
+                active_task=task,
+                progress=progress,
+            )
+
+        assert event.to_dict()["action"] == "completed"
+        assert direct_event.to_dict()["action"] == "completed"
+
+    def test_completion_functions_reject_unexpected_kwargs(self, tmp_path, fake_forge):
+        active = _active(base_branch="origin/main")
+        task = _task(status_labels=("status:in-progress",))
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            apply=False,
+            forge=fake_forge,
+        )
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            _finalize_completed_worktree(active, task, config, unknown_kwarg=1)

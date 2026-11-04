@@ -4,8 +4,9 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.execution_deadline import (
@@ -51,6 +52,53 @@ from orchestune.task_branch_resolution import (
 
 if TYPE_CHECKING:
     from orchestune.task_branch_resolution import CanonicalBranchState
+
+
+@dataclass
+class MergeProgress:
+    """Mutable container for task merge and test outcomes."""
+
+    merged: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
+    blocked: list[str] = field(default_factory=list)
+    failed_reasons: dict[str, str] = field(default_factory=dict)
+    blocked_reasons: dict[str, str] = field(default_factory=dict)
+    unavailable: set[str] = field(default_factory=set)
+
+    @property
+    def merged_tasks(self) -> list[str]:
+        return self.merged
+
+    @property
+    def failed_tasks(self) -> list[str]:
+        return self.failed
+
+    @property
+    def blocked_tasks(self) -> list[str]:
+        return self.blocked
+
+    @property
+    def unavailable_ids(self) -> set[str]:
+        return self.unavailable
+
+
+def _resolve_merge_progress(
+    progress: MergeProgress | None, kwargs: dict[str, Any], fn_name: str
+) -> MergeProgress:
+    if progress is not None:
+        return progress
+    progress = MergeProgress(
+        merged=kwargs.pop("merged", []),
+        failed=kwargs.pop("failed", []),
+        blocked=kwargs.pop("blocked", []),
+        failed_reasons=kwargs.pop("failed_reasons", {}),
+        blocked_reasons=kwargs.pop("blocked_reasons", {}),
+        unavailable=kwargs.pop("unavailable", set()),
+    )
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs.keys()))
+        raise TypeError(f"{fn_name}() got unexpected keyword argument(s): {unexpected}")
+    return progress
 
 
 class IntegrationMerger:
@@ -459,12 +507,7 @@ class IntegrationMerger:
         dependency_states: DependencyIntegrationStates | None = None,
     ) -> tuple[list[str], list[str], list[str], dict[str, str], dict[str, str]]:
         self.merged_task_proofs = {}
-        merged_tasks: list[str] = []
-        failed_tasks: list[str] = []
-        blocked_tasks: list[str] = []
-        failed_reasons: dict[str, str] = {}
-        blocked_reasons: dict[str, str] = {}
-        unavailable_ids: set[str] = set()
+        progress = MergeProgress()
         if apply:
             self.ensure_git_identity()
             self.ensure_full_history(base_branch)
@@ -472,20 +515,15 @@ class IntegrationMerger:
             sorted_done_tasks,
             base_branch,
             apply,
-            merged_tasks,
-            failed_tasks,
-            blocked_tasks,
-            failed_reasons,
-            blocked_reasons,
-            unavailable_ids,
-            dependency_states,
+            progress=progress,
+            dependency_states=dependency_states,
         )
         return (
-            merged_tasks,
-            failed_tasks,
-            blocked_tasks,
-            failed_reasons,
-            blocked_reasons,
+            progress.merged,
+            progress.failed,
+            progress.blocked,
+            progress.failed_reasons,
+            progress.blocked_reasons,
         )
 
     def _merge_task_list(
@@ -493,26 +531,18 @@ class IntegrationMerger:
         tasks: list[Task],
         base_branch: str,
         apply: bool,
-        merged: list[str],
-        failed: list[str],
-        blocked: list[str],
-        failed_reasons: dict[str, str],
-        blocked_reasons: dict[str, str],
-        unavailable: set[str],
+        progress: MergeProgress | None = None,
         dependency_states: DependencyIntegrationStates | None = None,
+        **kwargs: Any,
     ) -> None:
+        progress = _resolve_merge_progress(progress, kwargs, "_merge_task_list")
         for task in tasks:
             self._merge_one_task(
                 task,
                 base_branch,
                 apply,
-                merged,
-                failed,
-                blocked,
-                failed_reasons,
-                blocked_reasons,
-                unavailable,
-                dependency_states,
+                progress=progress,
+                dependency_states=dependency_states,
             )
 
     def _merge_one_task(
@@ -520,51 +550,65 @@ class IntegrationMerger:
         task: Task,
         base_branch: str,
         apply: bool,
-        merged: list[str],
-        failed: list[str],
-        blocked: list[str],
-        failed_reasons: dict[str, str],
-        blocked_reasons: dict[str, str],
-        unavailable: set[str],
+        progress: MergeProgress | None = None,
         dependency_states: DependencyIntegrationStates | None = None,
+        **kwargs: Any,
     ) -> None:
+        progress = _resolve_merge_progress(progress, kwargs, "_merge_one_task")
         pre_merge_sha: str | None = None
         self._pre_merge_sha = None
         try:
             blocked_reason = self._check_task_blocking(
                 task,
-                unavailable,
+                progress.unavailable,
                 dependency_states,
-                merged_ids=set(merged),
+                merged_ids=set(progress.merged),
             )
             if blocked_reason:
                 print(
                     f"[Integrator] Skipping {task.subtask_id}: {blocked_reason}",
                     file=sys.stderr,
                 )
-                blocked_reasons[task.subtask_id] = blocked_reason
-                blocked.append(task.subtask_id)
-                unavailable.add(task.subtask_id)
+                progress.blocked_reasons[task.subtask_id] = blocked_reason
+                progress.blocked.append(task.subtask_id)
+                progress.unavailable.add(task.subtask_id)
                 return
             pre_merge_sha = self._merge_task_if_needed(
-                task, base_branch, apply, merged, failed, failed_reasons, unavailable
+                task,
+                base_branch,
+                apply,
+                progress.merged,
+                progress.failed,
+                progress.failed_reasons,
+                progress.unavailable,
             )
         except (ExecutionDeadlineExceeded, ExecutionCommandTimeout) as error:
             raise self._abort_for_timeout(
                 error, pre_merge_sha, Target(task.issue_number, task.subtask_id)
             ) from error
         except Exception as error:
-
-            def handle_failure(failed_task: Task, reason: str) -> None:
-                failed_reasons[failed_task.subtask_id] = reason
-                with self._failure_write(failed_task):
-                    handle_merge_failure(failed_task, reason, apply, forge=self.forge)
-
-            self._recover_from_unexpected_task_error(
-                task, error, pre_merge_sha, handle_failure
+            self._handle_unexpected_merge_error(
+                task, error, pre_merge_sha, apply, progress
             )
-            failed.append(task.subtask_id)
-            unavailable.add(task.subtask_id)
+
+    def _handle_unexpected_merge_error(
+        self,
+        task: Task,
+        error: Exception,
+        pre_merge_sha: str | None,
+        apply: bool,
+        progress: MergeProgress,
+    ) -> None:
+        def handle_failure(failed_task: Task, reason: str) -> None:
+            progress.failed_reasons[failed_task.subtask_id] = reason
+            with self._failure_write(failed_task):
+                handle_merge_failure(failed_task, reason, apply, forge=self.forge)
+
+        self._recover_from_unexpected_task_error(
+            task, error, pre_merge_sha, handle_failure
+        )
+        progress.failed.append(task.subtask_id)
+        progress.unavailable.add(task.subtask_id)
 
     def _merge_task_if_needed(
         self,

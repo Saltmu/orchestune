@@ -99,7 +99,7 @@ def _observation(
     )
 
 
-def _task_scope(
+def _task_scope(  # noqa: PLR0913
     subject_id: str,
     *,
     kind: str = EXECUTION_KIND_LOCAL,

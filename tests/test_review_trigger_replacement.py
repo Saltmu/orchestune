@@ -113,3 +113,137 @@ def test_retiring_marker_preserves_quoted_examples_and_exact_reply_text():
         + "<!-- orchestune:superseded-trigger bot=codex -->\nend\n"
     )
     assert _supersede_body(body, "codex") == expected
+
+
+def test_round_trigger_request_fields():
+    from scripts.review_trigger_replacement import (
+        RoundTriggerRequest,
+        TriggerOps,
+        resolve_round_trigger,
+    )
+
+    req = RoundTriggerRequest(
+        pr_number=42,
+        bot_name="codex",
+        current_round=2,
+        max_rounds=5,
+        body="sample body",
+        body_file=None,
+        repair_trigger_markers=False,
+    )
+    assert req.pr_number == 42
+    assert req.bot_name == "codex"
+    assert req.current_round == 2
+    assert req.max_rounds == 5
+    assert req.body == "sample body"
+    assert req.body_file is None
+    assert req.repair_trigger_markers is False
+
+    ops = TriggerOps(
+        fetch_head=lambda: "d" * 40,
+        fetch_comments=lambda: [],
+        run_gh=lambda args: "{}",
+        publish=lambda **kwargs: {"id": 1, "created_at": "2026-01-01T00:00:00Z"},
+        post_trigger=lambda pr, **kwargs: {
+            "id": 10,
+            "created_at": "2026-01-01T00:00:00Z",
+            "body": f"<!-- orchestune:review-head {'d' * 40} -->",
+        },
+        retire=lambda comments, id_, run_gh: None,
+    )
+    t_time, t_id, head = resolve_round_trigger(
+        req,
+        initial_data={},
+        initial_snapshot={},
+        excluded_ids=set(),
+        ops=ops,
+    )
+    assert t_id == 10
+    assert head == "d" * 40
+
+
+class TestParameterObjectsScripts:
+    """#1667: verify parameter objects for scripts functions."""
+
+    def test_review_wait_request_defaults(self):
+        from scripts.wait_for_review import ReviewWaitRequest
+
+        req = ReviewWaitRequest(pr_number=10)
+        assert req.pr_number == 10
+        assert req.timeout == 1800
+        assert req.interval == 5
+        assert req.bot_name == "claude"
+        assert req.post_trigger is True
+        assert req.body is None
+        assert req.body_file is None
+        assert req.max_rounds == 5
+        assert req.max_retries == 1
+        assert req.round_num is None
+        assert req.stall_grace_seconds == 600
+        assert req.jev_threshold is None
+        assert req.switch_reviewer is False
+        assert req.completed_grace_seconds == 30.0
+        assert req.repair_trigger_markers is False
+
+    def test_review_extract_and_record_context_fields(self):
+        from scripts.wait_for_review import (
+            ReviewExtractContext,
+            ReviewRecordContext,
+            _extract_review_result,
+        )
+
+        extract_ctx = ReviewExtractContext(
+            latest_trigger_time="2026-01-01T00:00:00Z",
+            round_num=2,
+            jev_threshold=0.5,
+            pr_number=123,
+            trigger_id=456,
+            requested_head_sha="a" * 40,
+            repository="Saltmu/orchestune",
+        )
+        assert extract_ctx.latest_trigger_time == "2026-01-01T00:00:00Z"
+        assert extract_ctx.round_num == 2
+        assert extract_ctx.jev_threshold == 0.5
+        assert extract_ctx.pr_number == 123
+        assert extract_ctx.trigger_id == 456
+        assert extract_ctx.requested_head_sha == "a" * 40
+        assert extract_ctx.repository == "Saltmu/orchestune"
+
+        rec_ctx = ReviewRecordContext(
+            replacement_proven=True,
+            bot_name="codex",
+            pr_number=123,
+            round_num=2,
+            trigger_id=456,
+            triggered_at="2026-01-01T00:00:00Z",
+            requested_head_sha="a" * 40,
+            repository="Saltmu/orchestune",
+            jev_threshold=0.5,
+        )
+        assert rec_ctx.replacement_proven is True
+        assert rec_ctx.bot_name == "codex"
+        assert rec_ctx.pr_number == 123
+        assert rec_ctx.round_num == 2
+
+        # Verify _extract_review_result accepts context
+        result = _extract_review_result(
+            {"issue_comments": []},
+            "claude",
+            context=extract_ctx,
+        )
+        assert result is None
+
+    def test_wait_for_review_accepts_request_object(self):
+        from unittest.mock import patch
+
+        from scripts.wait_for_review import ReviewWaitRequest, wait_for_review
+
+        req = ReviewWaitRequest(pr_number=99, bot_name="skip", post_trigger=False)
+        with patch("scripts.wait_for_review.execute_review_wait") as mock_execute:
+            mock_execute.return_value = {"status": "ok"}
+            result = wait_for_review(99, request=req)
+            assert result == {"status": "ok"}
+            mock_execute.assert_called_once()
+            _, passed_req = mock_execute.call_args[0]
+            assert passed_req.pr_number == 99
+            assert passed_req.bot_name == "skip"

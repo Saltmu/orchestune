@@ -18,6 +18,7 @@ from orchestune.claim.admission import (
     _worktree_reservation_failure,
 )
 from orchestune.claim.adopt_pr import (
+    ClaimEffects,
     consume_adoption_receipt,
     inspect_adoption,
     revalidate_adoption,
@@ -414,52 +415,52 @@ def _validate_and_publish_issue_finalization(
 
 
 def _transition_labels_and_finalize(
-    workspace: ClaimWorkspace,
+    effects: ClaimEffects,
     reservation: ActiveWorktree,
-    run_state: RunState,
-    forge: Forge,
-    raw_token: str,
     owner_kind: OwnerKind,
     reservation_kind: ReservationKind,
-    view: Any = None,
-    default_base: str = "origin/main",
-    observe_external: Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]]
-    | None = None,
 ) -> ClaimOutcome:
     """Transition status:in-progress label and mark claim stage as COMPLETED."""
     if reservation.claim.adopted_pr_number is not None:
+        alive = effects.alive or is_process_alive
+        git = effects.git or run_git
         failure = revalidate_adoption(
             reservation,
-            workspace,
-            run_state,
-            forge,
-            observe_external,
-            is_process_alive,
-            run_git,
+            effects.workspace,
+            effects.run_state,
+            effects.forge,
+            effects.observe_external,
+            alive,
+            git,
         )
         if failure is not None:
-            return _make_active_saved_failure(reservation, failure, raw_token)
+            return _make_active_saved_failure(reservation, failure, effects.raw_token)
     fresh_issue, prep_outcome = _validate_and_publish_issue_finalization(
-        forge,
+        effects.forge,
         reservation,
         owner_kind,
         reservation_kind,
-        raw_token,
-        view=view,
-        default_base=default_base,
+        effects.raw_token,
+        view=effects.view,
+        default_base=effects.default_base,
     )
     if prep_outcome is not None or fresh_issue is None:
         assert prep_outcome is not None
         return prep_outcome
 
     label_failure = _apply_status_label(
-        forge, reservation.core.issue_number, fresh_issue.labels
+        effects.forge, reservation.core.issue_number, fresh_issue.labels
     )
     if label_failure is not None:
-        return _make_active_saved_failure(reservation, label_failure, raw_token)
+        return _make_active_saved_failure(reservation, label_failure, effects.raw_token)
 
     return _persist_finalized_reservation(
-        workspace, reservation, run_state, raw_token, owner_kind, reservation_kind
+        effects.workspace,
+        reservation,
+        effects.run_state,
+        effects.raw_token,
+        owner_kind,
+        reservation_kind,
     )
 
 
@@ -625,37 +626,30 @@ def _persist_and_prepare_initial(
 
 
 def _apply_claim_side_effects(
-    workspace: ClaimWorkspace,
+    effects: ClaimEffects,
     request: ClaimRequest,
     issue: IssueRecord,
     preflight: PreflightDecision,
     canonical_branch: str,
     base_ref: str,
-    run_state: RunState,
-    forge: Forge,
-    raw_token: str,
-    view: Any = None,
-    default_base: str = "origin/main",
     adopted_head: str | None = None,
-    observe_external: Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]]
-    | None = None,
 ) -> ClaimOutcome:
     """Apply Git fetch, reservation persistence, worktree creation, and labeling."""
     preclaim_err = _preclaim_fetch_and_base_check(
-        workspace, issue.number, base_ref, forge
+        effects.workspace, issue.number, base_ref, effects.forge
     )
     if preclaim_err is not None:
         return _claim_failure(issue.number, preclaim_err)
 
     reservation, prep_error = _persist_and_prepare_initial(
-        workspace,
+        effects.workspace,
         request,
         issue,
         preflight,
         canonical_branch,
         base_ref,
-        run_state,
-        raw_token,
+        effects.run_state,
+        effects.raw_token,
         adopted_head,
     )
     if prep_error is not None or reservation is None:
@@ -663,17 +657,42 @@ def _apply_claim_side_effects(
         return prep_error
 
     return _transition_labels_and_finalize(
-        workspace,
+        effects,
         reservation,
-        run_state,
-        forge,
-        raw_token,
         request.owner_kind,
         preflight.reservation_kind,
-        view=view,
-        default_base=default_base,
-        observe_external=observe_external,
     )
+
+
+def _finalize_adoption_outcome(
+    plan: tuple[
+        PreflightDecision,
+        IssueRecord,
+        tuple[ClaimOverlapWarning, ...],
+        str,
+        str,
+        PrRecord,
+    ],
+    request: ClaimRequest,
+    effects: ClaimEffects,
+    apply: bool,
+) -> ClaimOutcome:
+    preflight, issue, warnings, branch, base, pr = plan
+    if apply:
+        result = _apply_claim_side_effects(
+            effects,
+            request,
+            issue,
+            preflight,
+            branch,
+            base,
+            adopted_head=pr.head_sha,
+        )
+    else:
+        result = _build_dry_run_outcome(
+            issue, preflight, branch, base, request, effects.raw_token
+        )
+    return _with_warnings(result, warnings)
 
 
 def _preview_adoption(
@@ -696,7 +715,6 @@ def _preview_adoption(
         if error is not None:
             return error
         assert plan is not None
-        preflight, issue, warnings, branch, base, pr = plan
     except Exception as error:
         return _claim_failure(
             request.issue_number,
@@ -705,25 +723,18 @@ def _preview_adoption(
                 message=f"Orphan PR adoption rejected: {error}",
             ),
         )
-    if apply:
-        result = _apply_claim_side_effects(
-            workspace,
-            request,
-            issue,
-            preflight,
-            branch,
-            base,
-            state,
-            forge,
-            token,
-            view=view,
-            default_base=default_base,
-            adopted_head=pr.head_sha,
-            observe_external=observe_external,
-        )
-    else:
-        result = _build_dry_run_outcome(issue, preflight, branch, base, request, token)
-    return _with_warnings(result, warnings)
+    effects = ClaimEffects(
+        workspace=workspace,
+        run_state=state,
+        forge=forge,
+        raw_token=token,
+        view=view,
+        default_base=default_base,
+        observe_external=observe_external,
+        alive=is_process_alive,
+        git=run_git,
+    )
+    return _finalize_adoption_outcome(plan, request, effects, apply)
 
 
 def _prepare_adoption(
@@ -753,17 +764,21 @@ def _prepare_adoption(
     if error is not None or preflight is None or issue is None:
         assert error is not None
         return None, error
+    effects = ClaimEffects(
+        workspace=workspace,
+        run_state=state,
+        forge=forge,
+        view=view,
+        default_base=default_base,
+        observe_external=observe_external,
+        alive=is_process_alive,
+        git=run_git,
+    )
     branch, base, pr = inspect_adoption(
         issue,
         preflight,
         request.adopt_pr,
-        default_base,
-        workspace,
-        state,
-        forge,
-        observe_external,
-        is_process_alive,
-        run_git,
+        effects,
     )
     return (preflight, issue, warnings, branch, base, pr), None
 
@@ -839,18 +854,23 @@ def _claim_new_reservation(
             issue, preflight, canonical_branch, base_ref, request, raw_token
         )
     else:
+        effects = ClaimEffects(
+            workspace=workspace,
+            run_state=run_state,
+            forge=forge,
+            raw_token=raw_token,
+            view=view,
+            default_base=default_base,
+            alive=is_process_alive,
+            git=run_git,
+        )
         outcome = _apply_claim_side_effects(
-            workspace,
+            effects,
             request,
             issue,
             preflight,
             canonical_branch,
             base_ref,
-            run_state,
-            forge,
-            raw_token,
-            view=view,
-            default_base=default_base,
         )
     return _with_warnings(outcome, warnings)
 
@@ -938,17 +958,22 @@ def _resume_from_active(
     if prep_error is not None:
         return prep_error
 
-    return _transition_labels_and_finalize(
-        workspace,
-        active,
-        run_state,
-        forge,
-        owner_token,
-        owner_kind,
-        reservation_kind,
+    effects = ClaimEffects(
+        workspace=workspace,
+        run_state=run_state,
+        forge=forge,
+        raw_token=owner_token,
         view=view,
         default_base=default_base,
         observe_external=observe_external,
+        alive=is_process_alive,
+        git=run_git,
+    )
+    return _transition_labels_and_finalize(
+        effects,
+        active,
+        owner_kind,
+        reservation_kind,
     )
 
 
@@ -1069,4 +1094,4 @@ def resume_claim(
         cm.__exit__(None, None, None)
 
 
-__all__ = ["claim_task", "resume_claim"]
+__all__ = ["ClaimEffects", "claim_task", "resume_claim"]

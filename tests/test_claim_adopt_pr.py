@@ -465,3 +465,11 @@ def test_escalated_lock_notices_do_not_break_orphan_adoption(pr):
     ]
 
     validate_escalation_reason(comments, marker, lambda _: True)
+
+
+def test_claim_effects_parameter_object():
+    """Verify ClaimEffects parameter object structure and re-export."""
+    from orchestune.claim.adopt_pr import ClaimEffects as AdoptClaimEffects
+    from orchestune.claim.service import ClaimEffects as ServiceClaimEffects
+
+    assert AdoptClaimEffects is ServiceClaimEffects

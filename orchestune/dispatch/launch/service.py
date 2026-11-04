@@ -662,23 +662,32 @@ def _read_issue_for_counters(
     return issue, ""
 
 
+@dataclass(frozen=True)
+class LaunchingSubject:
+    """launchingフェーズ永続化対象のIssue・ワークツリー識別（#1666）。"""
+
+    issue_number: int
+    key: str
+    active_entry: ActiveWorktree
+    held: LaunchResult
+    issue: Any
+    task_forced_serial: bool = False
+
+
 def _write_launching_phase(
-    issue_number: int,
-    key: str,
-    active_entry: ActiveWorktree,
-    held: LaunchResult,
-    issue: Any,
-    task_forced_serial: bool,
+    subject: LaunchingSubject,
     run_state: RunState,
     config: DispatcherConfig,
-    now: float | None,
-    open_prs: Sequence[PrRecord] | None,
+    now: float | None = None,
+    open_prs: Sequence[PrRecord] | None = None,
 ) -> LaunchResult | None:
-    run_state.active_worktrees[key] = with_launch_phase(
+    run_state.active_worktrees[subject.key] = with_launch_phase(
         with_launch(
-            active_entry,
+            subject.active_entry,
             launch_with_recovery_counters(
-                active_entry.launch, issue, task_forced_serial=task_forced_serial
+                subject.active_entry.launch,
+                subject.issue,
+                task_forced_serial=subject.task_forced_serial,
             ),
         ),
         "launching",
@@ -693,12 +702,14 @@ def _write_launching_phase(
         )
         return None
     except Exception as exc:
-        run_state.active_worktrees[key] = active_entry
+        run_state.active_worktrees[subject.key] = subject.active_entry
         print(
-            f"Holding launch of issue #{issue_number}: failed to persist launching phase: {exc}",
+            f"Holding launch of issue #{subject.issue_number}: failed to persist launching phase: {exc}",
             file=sys.stderr,
         )
-        return replace(held, error_message=f"failed to persist launching phase: {exc}")
+        return replace(
+            subject.held, error_message=f"failed to persist launching phase: {exc}"
+        )
 
 
 def _persist_launching_phase(
@@ -734,12 +745,14 @@ def _persist_launching_phase(
         print(f"Holding launch of issue #{issue_number}: {reason}", file=sys.stderr)
         return replace(held, error_message=reason)
     return _write_launching_phase(
-        issue_number,
-        key,
-        active_entry,
-        held,
-        issue,
-        task_forced_serial,
+        LaunchingSubject(
+            issue_number=issue_number,
+            key=key,
+            active_entry=active_entry,
+            held=held,
+            issue=issue,
+            task_forced_serial=task_forced_serial,
+        ),
         run_state,
         config,
         now,

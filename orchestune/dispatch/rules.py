@@ -8,12 +8,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from orchestune.consistency.models import RepairCommand, RepairResult
 from orchestune.dag.models import SubTask
 from orchestune.dependencies.assessment import DependencyAssessment
-from orchestune.dependencies.resolution import TaskDependencies
 from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.cycle.action_contracts import (
     ActivePhaseResult,
@@ -23,8 +22,10 @@ from orchestune.dispatch.cycle.action_contracts import (
     StackBase,
 )
 from orchestune.dispatch.cycle.context_state import (
+    CycleObservations,
     RecordResult,
     _CycleState,
+    _resolve_cycle_observations,
 )
 from orchestune.dispatch.cycle.events import (
     CompletionEvent,
@@ -43,8 +44,8 @@ from orchestune.ledger.run_state import (
     RunState,
     load_run_state_readonly,
 )
-from orchestune.models import IssueRecord, PrRecord, Task
-from orchestune.task_branch_resolution import TaskBranchResolution
+from orchestune.models import IssueRecord, PrRecord
+from orchestune.models import Task as Task
 from orchestune.task_metadata import TaskMetadata
 
 if TYPE_CHECKING:
@@ -65,38 +66,21 @@ class CycleContext(_CycleState):
     def __init__(
         self,
         run_state: RunState,
-        tasks_by_issue: dict[int, Task],
-        dependency_resolution: dict[int, TaskDependencies],
-        ci_passed_pr_issue_numbers: set[int],
-        changes_requested_issue_numbers: set[int],
-        branch_by_issue_number: dict[int, str],
-        prs: list[PrRecord],
-        config: DispatcherConfig,
-        branch_resolutions_by_issue: dict[int, TaskBranchResolution] | None = None,
+        observations: CycleObservations | None = None,
+        *,
+        config: DispatcherConfig | None = None,
         not_needed_review_dispatcher: NotNeededReviewDispatcher | None = None,
-        issue_records_by_number: dict[int, IssueRecord] | None = None,
-        prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset(),
-        prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset(),
-        prior_parent_merge_repair_attempted_issue_numbers: frozenset[int] = frozenset(),
         actions: CycleActions | None = None,
+        **kwargs: Any,
     ) -> None:
-        super().__init__(
-            tasks_by_issue=tasks_by_issue,
-            dependency_resolution=dependency_resolution,
-            ci_passed_pr_issue_numbers=ci_passed_pr_issue_numbers,
-            changes_requested_issue_numbers=changes_requested_issue_numbers,
-            branch_by_issue_number=branch_by_issue_number,
-            active_worktrees=run_state.active_worktrees,
-            prior_parent_merge_completed_issue_numbers=prior_parent_merge_completed_issue_numbers,
-            prior_parent_merge_hold_issue_numbers=prior_parent_merge_hold_issue_numbers,
-            prior_parent_merge_repair_attempted_issue_numbers=(
-                prior_parent_merge_repair_attempted_issue_numbers
-            ),
-            issue_records_by_number=issue_records_by_number or {},
-            prs=prs,
-            branch_resolutions_by_issue=branch_resolutions_by_issue or {},
+        resolved = _resolve_cycle_observations(
+            observations,
+            kwargs,
+            "CycleContext.__init__",
+            default_active_worktrees=run_state.active_worktrees,
         )
-        self.config = config
+        super().__init__(resolved)
+        self.config: DispatcherConfig = cast(DispatcherConfig, config)
         self._completion_reservation_state = run_state
         self.not_needed_review_dispatcher = not_needed_review_dispatcher
         self._actions = actions
@@ -266,3 +250,15 @@ class RuleChain:
             if outcome.terminal:
                 return True
         return False
+
+
+__all__ = [
+    "ActiveWorktreeRuleOutcome",
+    "CycleContext",
+    "CycleObservations",
+    "NotNeededReviewDispatcher",
+    "Rule",
+    "RuleChain",
+    "_ActiveWorktreeAggregates",
+    "_RuleExecutionContext",
+]

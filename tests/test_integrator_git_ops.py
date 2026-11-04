@@ -1011,3 +1011,81 @@ class TestTaskBranchSourceDirect:
         state = source.canonical_state("claude/task-1")
         assert state is CanonicalBranchState.INDETERMINATE
         assert "indeterminate" in capsys.readouterr().err
+
+
+def test_merge_progress_dataclass_fields_and_properties():
+    from orchestune.integrator.git_ops import MergeProgress
+
+    progress = MergeProgress()
+    assert progress.merged == []
+    assert progress.failed == []
+    assert progress.blocked == []
+    assert progress.failed_reasons == {}
+    assert progress.blocked_reasons == {}
+    assert progress.unavailable == set()
+    assert progress.merged_tasks is progress.merged
+    assert progress.failed_tasks is progress.failed
+    assert progress.blocked_tasks is progress.blocked
+    assert progress.unavailable_ids is progress.unavailable
+
+    progress.merged.append("t1")
+    progress.failed.append("t2")
+    progress.blocked.append("t3")
+    progress.failed_reasons["t2"] = "error"
+    progress.blocked_reasons["t3"] = "blocked"
+    progress.unavailable.add("t2")
+    progress.unavailable.add("t3")
+
+    assert progress.merged_tasks == ["t1"]
+    assert progress.failed_tasks == ["t2"]
+    assert progress.blocked_tasks == ["t3"]
+    assert progress.failed_reasons == {"t2": "error"}
+    assert progress.blocked_reasons == {"t3": "blocked"}
+    assert progress.unavailable_ids == {"t2", "t3"}
+
+
+def test_merge_task_list_accepts_merge_progress(tmp_path: Path):
+    from orchestune.integrator.git_ops import IntegrationMerger, MergeProgress
+
+    merger = IntegrationMerger(Path(tmp_path), Path(tmp_path), ["true"])
+    progress = MergeProgress()
+    task = _task(subtask_id="t1")
+    # apply=False so it succeeds without real git operations
+    merger._merge_task_list([task], "main", False, progress=progress)
+    assert progress.merged == ["t1"]
+
+
+def test_merge_task_list_backward_compatibility_kwargs(tmp_path: Path):
+    from orchestune.integrator.git_ops import IntegrationMerger
+
+    merger = IntegrationMerger(Path(tmp_path), Path(tmp_path), ["true"])
+    merged: list[str] = []
+    failed: list[str] = []
+    blocked: list[str] = []
+    failed_reasons: dict[str, str] = {}
+    blocked_reasons: dict[str, str] = {}
+    unavailable: set[str] = set()
+    task = _task(subtask_id="t1")
+
+    merger._merge_task_list(
+        [task],
+        "main",
+        False,
+        merged=merged,
+        failed=failed,
+        blocked=blocked,
+        failed_reasons=failed_reasons,
+        blocked_reasons=blocked_reasons,
+        unavailable=unavailable,
+    )
+    assert merged == ["t1"]
+
+
+def test_merge_task_list_rejects_unexpected_kwargs(tmp_path: Path):
+    from orchestune.integrator.git_ops import IntegrationMerger
+
+    merger = IntegrationMerger(Path(tmp_path), Path(tmp_path), ["true"])
+    task = _task(subtask_id="t1")
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        merger._merge_task_list([task], "main", False, invalid_arg=True)

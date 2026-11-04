@@ -588,3 +588,52 @@ class TestRestorationCandidateProjection:
         active_by_key = {key: active for key, _, active in result}
         assert active_by_key["710"].core.base_branch == "codex/issue-709-task-a"
         mock_branch_exists.assert_called_once_with("claude/issue-709-task-a")
+
+    def test_build_restored_standard_worktree_accepts_resolution_and_claim_info(
+        self, tmp_path
+    ):
+        """#1666: _build_restored_standard_worktree accepts RecoveryResolutionContext and ClaimInfo."""
+        from orchestune.dispatch.recovery.restoration import (
+            ClaimInfo,
+            RecoveryResolutionContext,
+            _build_restored_standard_worktree,
+        )
+        from orchestune.issue_parsing import parse_task_from_issue
+        from orchestune.task_branch_resolution import TaskBranchResolver
+
+        issue = _issue_with_footprint(101, subtask_id="task-a", parent={"number": 100})
+        task = parse_task_from_issue(issue)
+        config = DispatcherConfig(
+            parent_issue_number=100,
+            events_log_path=tmp_path / "events.jsonl",
+            run_state_path=tmp_path / "run_state.json",
+            worktree_root=tmp_path / "worktrees",
+        )
+        resolver = TaskBranchResolver(())
+        resolution = RecoveryResolutionContext(
+            resolver=resolver,
+            resolutions={},
+            issue_to_subtask_id={101: "task-a"},
+            dependency_resolution={},
+        )
+        claim_info = ClaimInfo(
+            "dispatch",
+            "claim-101",
+            "footprint",
+            recompute_count=2,
+            forced_serial=True,
+        )
+        with patch("fake_forge_proxy.active_fake_forge.list_open_prs", return_value=[]):
+            active = _build_restored_standard_worktree(
+                issue,
+                "task-a",
+                task.footprint,
+                resolution,
+                claim_info,
+                config,
+                task=task,
+            )
+        assert active.core.issue_number == 101
+        assert active.claim.claim_id == "claim-101"
+        assert active.launch.recompute_count == 2
+        assert active.launch.forced_serial is True

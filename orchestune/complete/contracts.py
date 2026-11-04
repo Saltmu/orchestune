@@ -206,6 +206,19 @@ def _validate_record_reason(rec: OutcomeRecord) -> None:
 
 
 @dataclass(frozen=True)
+class CompletionEvidence:
+    """Evidence and verification data bound to a task outcome."""
+
+    review: ReviewSummary = field(default_factory=ReviewSummary)
+    reviewer: str | None = None
+    review_reply: Path | None = None
+    ci: str | None = None
+    baseline_regressions: tuple[str, ...] = ()
+    base_sha: str | None = None
+    attempt: int | None = None
+
+
+@dataclass(frozen=True)
 class DonePayload:
     """Input payload specific to successful done outcomes."""
 
@@ -293,6 +306,74 @@ class CompleteFailure:
         return failure_reason_to_exit_code(self.reason)
 
 
+def _resolve_done_payload(
+    pr: int,
+    evidence: CompletionEvidence | None,
+    kwargs: dict[str, Any],
+) -> DonePayload:
+    reviewer = kwargs.pop("reviewer", None)
+    review_reply = kwargs.pop("review_reply", None)
+    review = kwargs.pop("review", None)
+    ci = kwargs.pop("ci", None)
+    baseline_regressions = kwargs.pop("baseline_regressions", ())
+    if evidence is not None:
+        resolved_review = evidence.review if review is None else review
+        resolved_reviewer = evidence.reviewer if reviewer is None else reviewer
+        resolved_review_reply = (
+            evidence.review_reply if review_reply is None else review_reply
+        )
+        resolved_ci = evidence.ci if ci is None else ci
+        resolved_regressions = (
+            evidence.baseline_regressions
+            if not baseline_regressions
+            else tuple(baseline_regressions)
+        )
+    else:
+        resolved_review = review or ReviewSummary()
+        resolved_reviewer = reviewer
+        resolved_review_reply = review_reply
+        resolved_ci = ci
+        resolved_regressions = tuple(baseline_regressions)
+
+    return DonePayload(
+        pr=pr,
+        review=resolved_review,
+        reviewer=resolved_reviewer,
+        review_reply=resolved_review_reply,
+        ci=resolved_ci,
+        baseline_regressions=resolved_regressions,
+    )
+
+
+def _resolve_blocked_payload(
+    reason: str,
+    evidence: CompletionEvidence | None,
+    kwargs: dict[str, Any],
+) -> BlockedPayload:
+    base_sha = kwargs.pop("base_sha", None)
+    attempt = kwargs.pop("attempt", None)
+    review = kwargs.pop("review", None)
+    ci = kwargs.pop("ci", None)
+    if evidence is not None:
+        resolved_base_sha = evidence.base_sha if base_sha is None else base_sha
+        resolved_attempt = evidence.attempt if attempt is None else attempt
+        resolved_review = evidence.review if review is None else review
+        resolved_ci = evidence.ci if ci is None else ci
+    else:
+        resolved_base_sha = base_sha
+        resolved_attempt = attempt
+        resolved_review = review or ReviewSummary()
+        resolved_ci = ci
+
+    return BlockedPayload(
+        reason=reason,
+        base_sha=resolved_base_sha,
+        attempt=resolved_attempt,
+        review=resolved_review,
+        ci=resolved_ci,
+    )
+
+
 @dataclass(frozen=True)
 class CompleteRequest:
     """Parameters required to complete a task."""
@@ -320,28 +401,23 @@ class CompleteRequest:
         issue_number: int,
         pr: int,
         *,
+        evidence: CompletionEvidence | None = None,
         owner_token: str | None = None,
         claim_id: str | None = None,
         completion_id: str | None = None,
         owner_kind: OwnerKind = OwnerKind.INTERACTIVE,
-        review: ReviewSummary | None = None,
-        reviewer: str | None = None,
-        review_reply: Path | None = None,
-        ci: str | None = None,
-        baseline_regressions: tuple[str, ...] = (),
         dry_run: bool = False,
-        state_path: Path | None = None,
-        worktree_root: Path | None = None,
+        **kwargs: Any,
     ) -> CompleteRequest:
         """Construct a validated request for done outcomes."""
-        payload = DonePayload(
-            pr=pr,
-            review=review or ReviewSummary(),
-            reviewer=reviewer,
-            review_reply=review_reply,
-            ci=ci,
-            baseline_regressions=tuple(baseline_regressions),
-        )
+        state_path: Path | None = kwargs.pop("state_path", None)
+        worktree_root: Path | None = kwargs.pop("worktree_root", None)
+        payload = _resolve_done_payload(pr, evidence, kwargs)
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs.keys()))
+            raise TypeError(
+                f"CompleteRequest.done() got unexpected keyword argument(s): {unexpected}"
+            )
         return cls(
             issue_number=issue_number,
             result=RESULT_DONE,
@@ -388,26 +464,23 @@ class CompleteRequest:
         issue_number: int,
         reason: str,
         *,
-        base_sha: str | None = None,
-        attempt: int | None = None,
+        evidence: CompletionEvidence | None = None,
         owner_token: str | None = None,
         claim_id: str | None = None,
         completion_id: str | None = None,
         owner_kind: OwnerKind = OwnerKind.INTERACTIVE,
-        review: ReviewSummary | None = None,
-        ci: str | None = None,
         dry_run: bool = False,
-        state_path: Path | None = None,
-        worktree_root: Path | None = None,
+        **kwargs: Any,
     ) -> CompleteRequest:
         """Construct a validated request for blocked outcomes."""
-        payload = BlockedPayload(
-            reason=reason,
-            base_sha=base_sha,
-            attempt=attempt,
-            review=review or ReviewSummary(),
-            ci=ci,
-        )
+        state_path: Path | None = kwargs.pop("state_path", None)
+        worktree_root: Path | None = kwargs.pop("worktree_root", None)
+        payload = _resolve_blocked_payload(reason, evidence, kwargs)
+        if kwargs:
+            unexpected = ", ".join(sorted(kwargs.keys()))
+            raise TypeError(
+                f"CompleteRequest.blocked() got unexpected keyword argument(s): {unexpected}"
+            )
         return cls(
             issue_number=issue_number,
             result=RESULT_BLOCKED,

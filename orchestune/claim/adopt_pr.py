@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,8 @@ from orchestune.branch_naming import build_task_branch_name
 from orchestune.claim.contracts import ClaimFailure, ClaimFailureReason
 from orchestune.claim.workspace import ClaimWorkspace
 from orchestune.forge import Forge
+from orchestune.infra.git_cli import run_git
+from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_codec import (
     encode_active_worktree,
@@ -92,18 +95,28 @@ def validate_adoption_pr(
     return pr
 
 
+@dataclass(frozen=True)
+class ClaimEffects:
+    """Side-effect dependencies and execution context for task claiming and adoption."""
+
+    workspace: ClaimWorkspace
+    run_state: RunState
+    forge: Forge
+    raw_token: str = ""
+    view: Any = None
+    default_base: str = "origin/main"
+    observe_external: (
+        Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]] | None
+    ) = None
+    alive: Callable[[int | None], bool] | None = None
+    git: Callable[..., Any] | None = None
+
+
 def inspect_adoption(
     issue: Any,
     preflight: Any,
     number: int | None,
-    default_base: str,
-    workspace: ClaimWorkspace,
-    state: RunState,
-    forge: Forge,
-    observe_external: Callable[[ActiveWorktree, ClaimWorkspace], tuple[str, str]]
-    | None,
-    alive: Callable[[int | None], bool],
-    git: Callable[..., Any],
+    effects: ClaimEffects,
 ) -> tuple[str, str, PrRecord]:
     if {label for label in issue.labels if label.startswith("status:")} != {
         StatusLabel.BLOCKED_HUMAN_REVIEW
@@ -112,13 +125,22 @@ def inspect_adoption(
     if number is None:
         raise ValueError("PR number is required")
     branch = build_task_branch_name(issue.number, preflight.subtask_id)
-    base = preflight.base_ref or default_base
+    base = preflight.base_ref or effects.default_base
     base_name = base.removeprefix("refs/remotes/origin/").removeprefix("origin/")
     pr = validate_adoption_pr(
-        forge.list_prs(state="open"), issue.number, number, branch, base_name
+        effects.forge.list_prs(state="open"), issue.number, number, branch, base_name
     )
+    alive = effects.alive or is_process_alive
+    git = effects.git or run_git
     validate_adoption_evidence(
-        pr, issue.number, workspace, state, forge, observe_external, alive, git
+        pr,
+        issue.number,
+        effects.workspace,
+        effects.run_state,
+        effects.forge,
+        effects.observe_external,
+        alive,
+        git,
     )
     return branch, base, pr
 

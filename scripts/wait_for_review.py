@@ -62,7 +62,6 @@ from orchestune.review.rounds import (
     trigger_comment_ids,
 )
 from orchestune.review.snapshot import InsufficientEvidenceError
-from orchestune.review.tracker_activity import DEFAULT_COMPLETED_GRACE_SECONDS
 from scripts.jev_context import JevReviewContext, collect_review_context
 from scripts.jev_filter import evaluate_review_findings
 from scripts.review_cli import (
@@ -78,6 +77,10 @@ from scripts.review_cli import (
     write_output_file as _write_output_file,
 )
 from scripts.review_poll import (
+    COMPLETENESS_SECTIONS,
+    ReviewExtractContext,
+    ReviewRecordContext,
+    ReviewWaitRequest,
     StalledReviewError,
     WaitBindings,
     execute_review_wait,
@@ -97,6 +100,7 @@ from scripts.review_round_validation import (
     _validate_review_reply as _validate_review_reply,
 )
 from scripts.review_trigger_replacement import (
+    RoundTriggerRequest,
     TriggerOps,
     publish_replacement,
     resolve_round_trigger,
@@ -156,6 +160,10 @@ __all__ = [
     "_run_online",
     "_track_stall",
     "_validate_review_reply",
+    "ReviewExtractContext",
+    "ReviewRecordContext",
+    "ReviewWaitRequest",
+    "RoundTriggerRequest",
     "extract_review_result",
     "main",
     "post_review_trigger",
@@ -413,49 +421,48 @@ def _evaluate_current_inlines(
 
 def _full_review_record(
     result: dict[str, Any],
+    context: ReviewRecordContext | None = None,
     *,
-    replacement_proven: bool,
-    bot_name: str,
-    pr_number: int | None,
-    round_num: int | None,
-    trigger_id: int | str | None,
-    triggered_at: str,
-    requested_head_sha: str | None,
-    repository: str | None,
-    jev_threshold: float | None,
-    context_cache: dict[int, JevReviewContext] | None,
+    replacement_proven: bool = False,
+    bot_name: str = "",
+    **kwargs: Any,
 ) -> dict[str, Any]:
-    current_head_sha = _fetch_pr_head_sha(pr_number) if pr_number is not None else None
+    ctx = context or ReviewRecordContext(
+        replacement_proven=replacement_proven, bot_name=bot_name, **kwargs
+    )
+    current_head = (
+        _fetch_pr_head_sha(ctx.pr_number) if ctx.pr_number is not None else None
+    )
     target_sha, target_source = derive_review_target(
-        result["review_items"], requested_head_sha, current_head_sha
+        result["review_items"], ctx.requested_head_sha, current_head
+    )
+    status = ACQUISITION_ACQUIRED if ctx.replacement_proven else ACQUISITION_UNAVAILABLE
+    inlines = _evaluate_current_inlines(
+        result,
+        ctx.bot_name,
+        ctx.jev_threshold,
+        ctx.pr_number,
+        ctx.context_cache,
     )
     return review_result_record(
-        acquisition_status=ACQUISITION_ACQUIRED
-        if replacement_proven
-        else ACQUISITION_UNAVAILABLE,
+        acquisition_status=status,
         reason=result.get("reason", ""),
-        repository=repository,
-        pr_number=pr_number,
-        reviewer=bot_name,
-        round=round_num,
-        trigger_id=trigger_id,
-        triggered_at=triggered_at,
-        requested_head_sha=requested_head_sha,
+        repository=ctx.repository,
+        pr_number=ctx.pr_number,
+        reviewer=ctx.bot_name,
+        round=ctx.round_num,
+        trigger_id=ctx.trigger_id,
+        triggered_at=ctx.triggered_at,
+        requested_head_sha=ctx.requested_head_sha,
         reviewed_head_sha=reviewed_head_sha(result["review_items"]),
-        current_head_sha=current_head_sha,
+        current_head_sha=current_head,
         review_target_sha=target_sha,
         review_target_sha_source=target_source,
         review_items=result["review_items"],
         review_body=result["review_body"],
         inline_comments=result["inline_comments"],
-        jev_evaluations=_evaluate_current_inlines(
-            result, bot_name, jev_threshold, pr_number, context_cache
-        ),
-        completeness={
-            "issue_comments": "complete",
-            "reviews": "complete",
-            "inline_comments": "complete",
-        },
+        jev_evaluations=inlines,
+        completeness={sec: "complete" for sec in COMPLETENESS_SECTIONS},
         timestamp=result["timestamp"],
     )
 
@@ -463,39 +470,38 @@ def _full_review_record(
 def _extract_review_result(
     current_data: dict[str, list[dict[str, Any]]],
     bot_name: str,
+    context: ReviewExtractContext | None = None,
+    *,
     exclude_ids: set[int | str] | None = None,
-    latest_trigger_time: str = "",
-    jev_threshold: float | None = None,
-    pr_number: int | None = None,
-    context_cache: dict[int, JevReviewContext] | None = None,
-    round_num: int | None = None,
-    trigger_id: int | str | None = None,
-    triggered_at: str = "",
-    requested_head_sha: str | None = None,
-    repository: str | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any] | None:
+    if context is None:
+        context = ReviewExtractContext(**kwargs)
     result = extract_review_result(
         normalize_review_state(current_data),
         bot_name,
         exclude_ids=exclude_ids,
-        round_started_at=latest_trigger_time,
+        round_started_at=context.latest_trigger_time,
     )
     if result is None:
         return None
-    full_result = _full_review_record(
-        result,
+    record_context = ReviewRecordContext(
         replacement_proven=bind_replacement_results(
-            current_data.get("issue_comments", []), trigger_id, result
+            current_data.get("issue_comments", []), context.trigger_id, result
         ),
         bot_name=bot_name,
-        pr_number=pr_number,
-        round_num=round_num,
-        trigger_id=trigger_id,
-        triggered_at=triggered_at,
-        requested_head_sha=requested_head_sha,
-        repository=repository,
-        jev_threshold=jev_threshold,
-        context_cache=context_cache,
+        pr_number=context.pr_number,
+        round_num=context.round_num,
+        trigger_id=context.trigger_id,
+        triggered_at=context.triggered_at or context.latest_trigger_time,
+        requested_head_sha=context.requested_head_sha,
+        repository=context.repository,
+        jev_threshold=context.jev_threshold,
+        context_cache=context.context_cache,
+    )
+    full_result = _full_review_record(
+        result,
+        context=record_context,
     )
     _print_review_result(full_result, bot_name)
     return full_result
@@ -528,38 +534,73 @@ def _get_initial_pr_data(
             _sleep(min(interval, remaining))
 
 
-def _handle_review_trigger(
-    pr_number: int,
-    bot_name: str,
-    initial_data: dict[str, list[dict[str, Any]]],
-    initial_snapshot: dict[str, str],
-    excluded_ids: set[int | str],
-    current_round: int,
-    max_rounds: int,
-    body: str | None,
-    body_file: str | None,
-    repair_trigger_markers: bool = False,
-) -> tuple[str, int | str | None, str | None]:
-    """Post a head-bound trigger, or restore its recorded head on resume.
+def _parse_trigger_request(
+    request: RoundTriggerRequest | int | None,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> tuple[
+    RoundTriggerRequest,
+    dict[str, list[dict[str, Any]]],
+    dict[str, str],
+    set[int | str],
+]:
+    if isinstance(request, RoundTriggerRequest):
+        req = request
+        data = args[0] if len(args) > 0 else kwargs.pop("initial_data", {})
+        snapshot = args[1] if len(args) > 1 else kwargs.pop("initial_snapshot", {})
+        excluded = args[2] if len(args) > 2 else kwargs.pop("excluded_ids", set())
+        return req, data, snapshot, excluded
 
-    Resume never guesses from the current head, which may have advanced since
-    the trigger. Legacy triggers without a head marker keep requested SHA unknown.
-    """
+    pr_num = request if isinstance(request, int) else kwargs.pop("pr_number")
+    bot_name = args[0] if len(args) > 0 else kwargs.pop("bot_name", "claude")
+    data = args[1] if len(args) > 1 else kwargs.pop("initial_data", {})
+    snapshot = args[2] if len(args) > 2 else kwargs.pop("initial_snapshot", {})
+    excluded = args[3] if len(args) > 3 else kwargs.pop("excluded_ids", set())
+    current_round = args[4] if len(args) > 4 else kwargs.pop("current_round", 1)
+    max_rounds = (
+        args[5] if len(args) > 5 else kwargs.pop("max_rounds", MAX_REVIEW_ROUNDS)
+    )
+    body = args[6] if len(args) > 6 else kwargs.pop("body", None)
+    body_file = args[7] if len(args) > 7 else kwargs.pop("body_file", None)
+    repair = kwargs.pop("repair_trigger_markers", False)
+    req = RoundTriggerRequest(
+        pr_number=pr_num,
+        bot_name=bot_name,
+        current_round=current_round,
+        max_rounds=max_rounds,
+        body=body,
+        body_file=body_file,
+        repair_trigger_markers=repair,
+    )
+    return req, data, snapshot, excluded
+
+
+def _handle_review_trigger(
+    request: RoundTriggerRequest | int | None = None,
+    *args: Any,
+    initial_data: dict[str, list[dict[str, Any]]] | None = None,
+    initial_snapshot: dict[str, str] | None = None,
+    excluded_ids: set[int | str] | None = None,
+    **kwargs: Any,
+) -> tuple[str, int | str | None, str | None]:
+    """Post a head-bound trigger, or restore its recorded head on resume."""
+    if initial_data is not None:
+        kwargs["initial_data"] = initial_data
+    if initial_snapshot is not None:
+        kwargs["initial_snapshot"] = initial_snapshot
+    if excluded_ids is not None:
+        kwargs["excluded_ids"] = excluded_ids
+    req, data, snapshot, excluded = _parse_trigger_request(request, args, kwargs)
+    pr_num = req.pr_number
     return resolve_round_trigger(
-        pr_number,
-        bot_name,
-        initial_data,
-        initial_snapshot,
-        excluded_ids,
-        current_round,
-        max_rounds,
-        body,
-        body_file,
-        repair_trigger_markers,
+        req,
+        data,
+        snapshot,
+        excluded,
         TriggerOps(
-            fetch_head=lambda: _fetch_pr_head_sha(pr_number),
+            fetch_head=lambda: _fetch_pr_head_sha(pr_num),
             fetch_comments=lambda: _run_gh_api(
-                f"repos/{{owner}}/{{repo}}/issues/{pr_number}/comments"
+                f"repos/{{owner}}/{{repo}}/issues/{pr_num}/comments"
             ),
             run_gh=_run_gh,
             publish=publish_replacement,
@@ -574,13 +615,10 @@ def _check_immediate_review_result(
     bot_name: str,
     latest_trigger_time: str,
     current_round: int,
-    jev_threshold: float | None = None,
-    pr_number: int | None = None,
-    context_cache: dict[int, JevReviewContext] | None = None,
-    trigger_id: int | str | None = None,
-    requested_head_sha: str | None = None,
-    repository: str | None = None,
+    context: ReviewExtractContext | None = None,
+    *,
     exclude_ids: set[int | str] | None = None,
+    **kwargs: Any,
 ) -> dict[str, Any] | None:
     """Acquire an already-posted round, unless its tracker is still running.
 
@@ -592,12 +630,19 @@ def _check_immediate_review_result(
         initial_data, bot_name, exclude_ids, latest_trigger_time
     ):
         return None
+    if context is None:
+        context = ReviewExtractContext(
+            latest_trigger_time=latest_trigger_time,
+            round_num=current_round,
+            triggered_at=latest_trigger_time,
+            **kwargs,
+        )
     latest_bot_activity = _latest_bot_activity_item(
         initial_data,
         bot_name,
         exclude_ids,
         round_started_at=latest_trigger_time,
-        requested_head_sha=requested_head_sha,
+        requested_head_sha=context.requested_head_sha,
     )
     if latest_bot_activity is not None and _is_explicitly_in_progress(
         latest_bot_activity
@@ -606,16 +651,8 @@ def _check_immediate_review_result(
     return _extract_review_result(
         initial_data,
         bot_name,
+        context=context,
         exclude_ids=exclude_ids,
-        latest_trigger_time=latest_trigger_time,
-        jev_threshold=jev_threshold,
-        pr_number=pr_number,
-        context_cache=context_cache,
-        round_num=current_round,
-        trigger_id=trigger_id,
-        triggered_at=latest_trigger_time,
-        requested_head_sha=requested_head_sha,
-        repository=repository,
     )
 
 
@@ -772,40 +809,16 @@ def _wait_bindings() -> WaitBindings:
 
 def wait_for_review(
     pr_number: int,
+    request: ReviewWaitRequest | None = None,
     *,
-    timeout: int = 1800,
-    interval: int = 5,
-    bot_name: str = "claude",
-    post_trigger: bool = True,
-    body: str | None = None,
-    body_file: str | None = None,
     max_rounds: int = MAX_REVIEW_ROUNDS,
-    max_retries: int = 1,
-    round_num: int | None = None,
-    stall_grace_seconds: int = DEFAULT_STALL_GRACE_SECONDS,
-    jev_threshold: float | None = None,
-    switch_reviewer: bool = False,
-    completed_grace_seconds: float = DEFAULT_COMPLETED_GRACE_SECONDS,
-    repair_trigger_markers: bool = False,
+    **kwargs: Any,
 ) -> dict[str, Any]:
-    return execute_review_wait(
-        _wait_bindings(),
-        pr_number,
-        timeout=timeout,
-        interval=interval,
-        bot_name=bot_name,
-        post_trigger=post_trigger,
-        body=body,
-        body_file=body_file,
-        max_rounds=max_rounds,
-        max_retries=max_retries,
-        round_num=round_num,
-        stall_grace_seconds=stall_grace_seconds,
-        jev_threshold=jev_threshold,
-        switch_reviewer=switch_reviewer,
-        completed_grace_seconds=completed_grace_seconds,
-        repair_trigger_markers=repair_trigger_markers,
-    )
+    if request is None:
+        request = ReviewWaitRequest(
+            pr_number=pr_number, max_rounds=max_rounds, **kwargs
+        )
+    return execute_review_wait(_wait_bindings(), request)
 
 
 def _run_online(args: Any) -> None:

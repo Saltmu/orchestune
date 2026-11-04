@@ -11,8 +11,9 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 from orchestune.consistency.desired import TaskLifecycle
 from orchestune.consistency.invariants.status import (
@@ -367,6 +368,64 @@ def _owned_cycle_records(
     return issue_records, pull_requests
 
 
+@dataclass(frozen=True)
+class CycleObservations:
+    """1サイクル分の観測スナップショット（#1666）。"""
+
+    tasks_by_issue: Mapping[int, Task] = field(default_factory=dict)
+    dependency_resolution: Mapping[int, TaskDependencies] = field(default_factory=dict)
+    ci_passed_pr_issue_numbers: Iterable[int] = ()
+    changes_requested_issue_numbers: Iterable[int] = ()
+    branch_by_issue_number: Mapping[int, str] = field(default_factory=dict)
+    active_worktrees: Mapping[str, ActiveWorktree] = field(default_factory=dict)
+    prior_parent_merge_completed_issue_numbers: frozenset[int] = frozenset()
+    prior_parent_merge_hold_issue_numbers: frozenset[int] = frozenset()
+    prior_parent_merge_repair_attempted_issue_numbers: frozenset[int] = frozenset()
+    issue_records_by_number: Mapping[int, IssueRecord] = field(default_factory=dict)
+    prs: Iterable[PrRecord] = ()
+    branch_resolutions_by_issue: Mapping[int, TaskBranchResolution] = field(
+        default_factory=dict
+    )
+
+
+_OBSERVATION_FIELDS = frozenset(f.name for f in dataclasses.fields(CycleObservations))
+
+
+def _resolve_cycle_observations(
+    observations: CycleObservations | None,
+    kwargs: dict[str, Any],
+    fn_name: str,
+    *,
+    default_active_worktrees: Mapping[str, ActiveWorktree] | None = None,
+) -> CycleObservations:
+    base = observations or CycleObservations(
+        active_worktrees=(
+            {} if default_active_worktrees is None else default_active_worktrees
+        )
+    )
+    if (
+        observations is not None
+        and not base.active_worktrees
+        and default_active_worktrees
+    ):
+        base = dataclasses.replace(base, active_worktrees=default_active_worktrees)
+    overrides: dict[str, Any] = {}
+    for name in _OBSERVATION_FIELDS:
+        if name in kwargs:
+            val = kwargs.pop(name)
+            if val is None and name in (
+                "branch_resolutions_by_issue",
+                "issue_records_by_number",
+            ):
+                overrides[name] = {}
+            else:
+                overrides[name] = val
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs))
+        raise TypeError(f"{fn_name}() got unexpected keyword argument(s): {unexpected}")
+    return dataclasses.replace(base, **overrides) if overrides else base
+
+
 class _CycleState:
     """1サイクル分のLifecycle実効状態を所有する、`CycleContext`専用の内部型。
 
@@ -375,42 +434,36 @@ class _CycleState:
 
     def __init__(
         self,
-        *,
-        tasks_by_issue: Mapping[int, Task],
-        dependency_resolution: Mapping[int, TaskDependencies],
-        ci_passed_pr_issue_numbers: Iterable[int],
-        changes_requested_issue_numbers: Iterable[int],
-        branch_by_issue_number: Mapping[int, str],
-        active_worktrees: Mapping[str, ActiveWorktree],
-        prior_parent_merge_completed_issue_numbers: frozenset[int],
-        prior_parent_merge_hold_issue_numbers: frozenset[int],
-        prior_parent_merge_repair_attempted_issue_numbers: frozenset[int],
-        issue_records_by_number: Mapping[int, IssueRecord],
-        prs: Iterable[PrRecord],
-        branch_resolutions_by_issue: Mapping[int, TaskBranchResolution],
+        observations: CycleObservations | None = None,
+        **kwargs: Any,
     ) -> None:
+        obs = vars(
+            _resolve_cycle_observations(observations, kwargs, "_CycleState.__init__")
+        )
         self._tasks = {
-            number: _owned_task(task) for number, task in tasks_by_issue.items()
+            number: _owned_task(task) for number, task in obs["tasks_by_issue"].items()
         }
         self._dependency_resolution = {
             number: _owned_dependencies(deps)
-            for number, deps in dependency_resolution.items()
+            for number, deps in obs["dependency_resolution"].items()
         }
-        self._ci_passed = set(ci_passed_pr_issue_numbers)
-        self._changes_requested = set(changes_requested_issue_numbers)
-        self._branch_by_issue = dict(branch_by_issue_number)
-        self._branch_resolutions = dict(branch_resolutions_by_issue)
-        self._prior_completed = frozenset(prior_parent_merge_completed_issue_numbers)
-        self._prior_held = frozenset(prior_parent_merge_hold_issue_numbers)
+        self._ci_passed = set(obs["ci_passed_pr_issue_numbers"])
+        self._changes_requested = set(obs["changes_requested_issue_numbers"])
+        self._branch_by_issue = dict(obs["branch_by_issue_number"])
+        self._branch_resolutions = dict(obs["branch_resolutions_by_issue"])
+        self._prior_completed = frozenset(
+            obs["prior_parent_merge_completed_issue_numbers"]
+        )
+        self._prior_held = frozenset(obs["prior_parent_merge_hold_issue_numbers"])
         self._prior_repair_attempted = frozenset(
-            prior_parent_merge_repair_attempted_issue_numbers
+            obs["prior_parent_merge_repair_attempted_issue_numbers"]
         )
         self._issue_records, self._pull_requests = _owned_cycle_records(
-            issue_records_by_number, prs
+            obs["issue_records_by_number"], obs["prs"]
         )
         self._effective_labels: dict[int, tuple[str, ...]] = {}
         self._recorded_completions: set[int] = set()
-        self._launch_states = _build_launch_states(active_worktrees)
+        self._launch_states = _build_launch_states(obs["active_worktrees"])
 
     # ---- read-only queries -------------------------------------------------
 

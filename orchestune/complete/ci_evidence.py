@@ -93,6 +93,21 @@ class CiEvidence:
         )
 
 
+@dataclass(frozen=True)
+class CiRecordOptions:
+    """Options and boundary constraints for recording CI evidence."""
+
+    started_at: str | None = None
+    completed_at: str | None = None
+    exit_code: int = 0
+    base_sha: str | None = None
+    base_ref: str | None = None
+    state_path: Path | str | None = None
+    issue_number: int | str | None = None
+    expected_head: str | None = None
+    expected_tree: str | None = None
+
+
 def _validate_raw_evidence_data(data: dict[str, Any]) -> None:
     schema_version = data.get("schema_version")
     if schema_version != CURRENT_SCHEMA_VERSION:
@@ -603,20 +618,70 @@ def _record_and_save_evidence(
     return evidence
 
 
+def _resolve_record_ci_options(
+    options: CiRecordOptions | None,
+    started_at: str | None,
+    completed_at: str | None,
+    exit_code: int,
+    base_sha: str | None,
+    base_ref: str | None,
+    kwargs: dict[str, Any],
+) -> CiRecordOptions:
+    state_path = kwargs.pop("state_path", None)
+    issue_number = kwargs.pop("issue_number", None)
+    expected_head = kwargs.pop("expected_head", None)
+    expected_tree = kwargs.pop("expected_tree", None)
+    if kwargs:
+        unexpected = ", ".join(sorted(kwargs.keys()))
+        raise TypeError(
+            f"record_ci_evidence() got unexpected keyword argument(s): {unexpected}"
+        )
+
+    if options is not None:
+        return CiRecordOptions(
+            started_at=options.started_at if started_at is None else started_at,
+            completed_at=options.completed_at if completed_at is None else completed_at,
+            exit_code=options.exit_code if exit_code == 0 else exit_code,
+            base_sha=options.base_sha if base_sha is None else base_sha,
+            base_ref=options.base_ref if base_ref is None else base_ref,
+            state_path=options.state_path if state_path is None else state_path,
+            issue_number=options.issue_number if issue_number is None else issue_number,
+            expected_head=options.expected_head
+            if expected_head is None
+            else expected_head,
+            expected_tree=options.expected_tree
+            if expected_tree is None
+            else expected_tree,
+        )
+    return CiRecordOptions(
+        started_at=started_at,
+        completed_at=completed_at,
+        exit_code=exit_code,
+        base_sha=base_sha,
+        base_ref=base_ref,
+        state_path=state_path,
+        issue_number=issue_number,
+        expected_head=expected_head,
+        expected_tree=expected_tree,
+    )
+
+
 def record_ci_evidence(
     worktree_root: Path | str | None = None,
+    options: CiRecordOptions | None = None,
     *,
     started_at: str | None = None,
     completed_at: str | None = None,
     exit_code: int = 0,
     base_sha: str | None = None,
     base_ref: str | None = None,
-    state_path: Path | str | None = None,
-    issue_number: int | str | None = None,
-    expected_head: str | None = None,
-    expected_tree: str | None = None,
+    **kwargs: Any,
 ) -> CiEvidence:
     """Atomically record successful CI evidence outside the worktree tracking area."""
+    opts = _resolve_record_ci_options(
+        options, started_at, completed_at, exit_code, base_sha, base_ref, kwargs
+    )
+
     root = (
         Path(worktree_root).resolve()
         if worktree_root is not None
@@ -626,20 +691,22 @@ def record_ci_evidence(
     tree_sha = _resolve_tree_sha(root)
     resolved_base = _resolve_base_sha(
         root,
-        base_sha=base_sha,
-        base_ref=base_ref,
-        state_path=state_path,
-        issue_number=issue_number,
+        base_sha=opts.base_sha,
+        base_ref=opts.base_ref,
+        state_path=opts.state_path,
+        issue_number=opts.issue_number,
     )
-    _check_run_boundaries(expected_head, expected_tree, current_head, tree_sha)
+    _check_run_boundaries(
+        opts.expected_head, opts.expected_tree, current_head, tree_sha
+    )
     return _record_and_save_evidence(
         root,
         current_head,
         tree_sha,
         resolved_base,
-        started_at,
-        completed_at,
-        exit_code,
+        opts.started_at,
+        opts.completed_at,
+        opts.exit_code,
     )
 
 
@@ -887,8 +954,7 @@ def _cli_resolve_base(args: argparse.Namespace) -> None:
 
 
 def _cli_record(args: argparse.Namespace) -> None:
-    record_ci_evidence(
-        worktree_root=args.worktree,
+    options = CiRecordOptions(
         started_at=args.started_at,
         exit_code=args.exit_code,
         base_sha=args.base_sha,
@@ -897,6 +963,10 @@ def _cli_record(args: argparse.Namespace) -> None:
         issue_number=args.issue,
         expected_head=args.expected_head,
         expected_tree=args.expected_tree,
+    )
+    record_ci_evidence(
+        worktree_root=args.worktree,
+        options=options,
     )
 
 
