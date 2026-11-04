@@ -102,6 +102,27 @@ class ProvisionResult:
     parent_only_subtask_ids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class ProvisionContext:
+    """Loop-external context for subtask provisioning and relationship linking."""
+
+    resolved_forge: IssueForge
+    template: str
+    resolved_repo_root: Path
+    plan_path: str | Path
+    parent_issue_number: int
+    existing_by_subtask_id: dict[str, IssueRecord]
+    metadata_search_supported: bool
+
+    @property
+    def forge(self) -> IssueForge:
+        return self.resolved_forge
+
+    @property
+    def repo_root(self) -> Path:
+        return self.resolved_repo_root
+
+
 def _build_provisioning_dag(subtasks: list[SubTask], repo_root: Path) -> DagResult:
     config = find_and_load_config_file(repo_root)
     threshold = extract_dag_similarity_threshold(config)
@@ -137,38 +158,32 @@ def _preview_only(
     return ProvisionResult(parent_issue_number, False, {}, {}, previews=previews)
 
 
-def _provision_and_link_one_subtask(  # noqa: PLR0913
-    resolved_forge: IssueForge,
+def _provision_and_link_one_subtask(
+    context: ProvisionContext,
     subtask: SubTask,
-    template: str,
-    resolved_repo_root: Path,
-    plan_path: str | Path,
-    parent_issue_number: int,
-    existing_by_subtask_id: dict[str, IssueRecord],
     dependencies_done: dict[str, bool],
     resolved_numbers: dict[str, int],
-    metadata_search_supported: bool,
 ) -> tuple[int, bool, bool, bool]:
     subtask_id = subtask.id
     number, is_reused, is_done, has_parent_metadata = _provision_subtask(
-        resolved_forge,
+        context.resolved_forge,
         subtask,
-        template,
-        resolved_repo_root,
-        plan_path,
-        existing_by_subtask_id,
+        context.template,
+        context.resolved_repo_root,
+        context.plan_path,
+        context.existing_by_subtask_id,
         dependencies_done,
-        parent_issue_number,
+        context.parent_issue_number,
     )
     link_result = _link_subtask_relationships(
-        resolved_forge,
-        parent_issue_number,
+        context.resolved_forge,
+        context.parent_issue_number,
         number,
         subtask.depends_on,
         resolved_numbers,
     )
     if (
-        not (has_parent_metadata and metadata_search_supported)
+        not (has_parent_metadata and context.metadata_search_supported)
         and not link_result.parent_linked
     ):
         raise RelationshipUnavailableError(
@@ -221,22 +236,26 @@ def _provision_subtasks_loop(
     degraded: list[str] = []
     total = len(dag.topological_order)
 
+    context = ProvisionContext(
+        resolved_forge=resolved_forge,
+        template=template,
+        resolved_repo_root=resolved_repo_root,
+        plan_path=plan_path,
+        parent_issue_number=parent_issue_number,
+        existing_by_subtask_id=existing_by_subtask_id,
+        metadata_search_supported=metadata_search_supported,
+    )
+
     for index, subtask_id in enumerate(dag.topological_order):
         event = ProvisionProgress("subtask", subtask_id, index + 1, total)
         _notify(on_progress, event)
         result = _with_progress_diagnostic(
             partial(
                 _provision_and_link_one_subtask,
-                resolved_forge,
+                context,
                 dag.subtasks[subtask_id],
-                template,
-                resolved_repo_root,
-                plan_path,
-                parent_issue_number,
-                existing_by_subtask_id,
                 dependencies_done,
                 resolved_numbers,
-                metadata_search_supported,
             ),
             created,
             reused,

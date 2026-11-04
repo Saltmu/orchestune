@@ -278,3 +278,25 @@ def test_main_passes_hook_only_for_decorated_output(decorated, monkeypatch, plan
         cli.main(["--plan", str(plan_path)])
     assert result.value.code == 0
     assert (seen[0] is not None) == decorated
+
+
+def test_provision_context_fields(plan_path):
+    forge = FakeForge()
+    ctx = flow.ProvisionContext(
+        resolved_forge=forge,
+        template="template",
+        resolved_repo_root=plan_path.parent,
+        plan_path=plan_path,
+        parent_issue_number=100,
+        existing_by_subtask_id={},
+        metadata_search_supported=True,
+    )
+    assert ctx.resolved_forge is forge
+    assert ctx.forge is forge
+    assert ctx.template == "template"
+    assert ctx.resolved_repo_root == plan_path.parent
+    assert ctx.repo_root == plan_path.parent
+    assert ctx.plan_path == plan_path
+    assert ctx.parent_issue_number == 100
+    assert ctx.existing_by_subtask_id == {}
+    assert ctx.metadata_search_supported is True
