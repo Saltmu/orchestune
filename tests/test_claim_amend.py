@@ -736,10 +736,11 @@ def test_post_amend_comment_handles_forge_exceptions_gracefully(capsys):
     from unittest.mock import MagicMock
 
     from orchestune.claim.amend import _post_amend_comment
+    from orchestune.forge import ForgeError
 
     forge = MagicMock()
-    forge.list_comments.side_effect = RuntimeError("network fail")
-    forge.add_comment.side_effect = RuntimeError("post fail")
+    forge.list_comments.side_effect = ForgeError("network fail")
+    forge.add_comment.side_effect = ForgeError("post fail")
 
     _post_amend_comment(
         forge=forge,

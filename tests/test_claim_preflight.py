@@ -262,7 +262,9 @@ class TestEvaluateClaimPreflight:
 
         issue = _make_issue()
         forge = MagicMock()
-        forge.get_issue_reference.side_effect = RuntimeError("network timeout")
+        from orchestune.forge import ForgeError
+
+        forge.get_issue_reference.side_effect = ForgeError("network timeout")
         decision = evaluate_claim_preflight(issue, forge=forge)
         assert decision.allowed is False
         assert decision.failure is not None

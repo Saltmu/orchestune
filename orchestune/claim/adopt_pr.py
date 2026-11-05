@@ -327,7 +327,7 @@ def revalidate_adoption(
             git,
             active.claim.claim_id,
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 boundary: keep adoption revalidation fail-closed
         return ClaimFailure(
             reason=ClaimFailureReason.INVALID_RESUME,
             message=f"Adopted PR revalidation failed: {error}",

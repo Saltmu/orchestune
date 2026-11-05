@@ -221,7 +221,7 @@ class TestInterruptionAndPreservation:
 
         def mock_run_git(args, **kwargs):
             if "fetch" in args:
-                raise RuntimeError("Network failure during fetch")
+                raise OSError("Network failure during fetch")
             return MagicMock(returncode=0)
 
         with patch("orchestune.claim.service.run_git", side_effect=mock_run_git):
