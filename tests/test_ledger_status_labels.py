@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orchestune.forge import Forge
+from orchestune.forge import Forge, ForgeError
 from orchestune.labels import StatusLabel
 from orchestune.ledger.status_labels import (
     PRIMARY_STATUS_LABELS,
@@ -92,14 +92,14 @@ class TestCompletionTransition:
             if not add_error or lost:
                 live.add(label)
             if add_error:
-                raise RuntimeError("lost add")
+                raise ForgeError("lost add")
 
         def remove(number, label):
             operations.append(("remove", label))
             if not remove_error or lost:
                 live.discard(label)
             if remove_error:
-                raise RuntimeError("lost remove")
+                raise ForgeError("lost remove")
 
         forge.add_label.side_effect = add
         forge.remove_label.side_effect = remove
@@ -170,7 +170,7 @@ class TestCompletionTransition:
 
     def test_final_get_failure_is_unknown(self):
         result, _, _ = self.run(
-            ["status:done"], reads=[("status:done",), RuntimeError("get")]
+            ["status:done"], reads=[("status:done",), ForgeError("get")]
         )
         assert result.status.value == "unknown"
 
@@ -186,14 +186,14 @@ class TestCompletionTransition:
         assert ops == [("add", "status:done")]
 
     def test_initial_get_failure_is_unknown_without_writes(self):
-        result, ops, _ = self.run([], reads=[RuntimeError("unavailable")])
+        result, ops, _ = self.run([], reads=[ForgeError("unavailable")])
         assert result.status.value == "unknown"
         assert result.failed_operation == "get"
         assert ops == []
 
     def test_generation_callback_failure_is_unknown(self):
         def unavailable():
-            raise RuntimeError("cannot reconcile reservation")
+            raise OSError("cannot reconcile reservation")
 
         result, ops, _ = self.run(["status:queued"], generation=unavailable)
         assert result.status.value == "unknown"

@@ -168,7 +168,9 @@ class TestEvaluateCompletePreflight:
 
         class UnavailableForge:
             def get_pull_request(self, pr_number: int) -> Any:
-                raise RuntimeError("HTTP 502")
+                from orchestune.forge import ForgeError
+
+                raise ForgeError("HTTP 502")
 
         result = evaluate_complete_preflight(
             request,

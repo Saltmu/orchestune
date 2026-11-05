@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -13,6 +14,7 @@ from orchestune.complete.contracts import (
     DonePayload,
 )
 from orchestune.complete.journal import CompletionJournalError
+from orchestune.forge import ForgeError
 from orchestune.outcome_record import ReviewSummary
 from orchestune.review.acquisition import collect_review_state, normalize_review_state
 from orchestune.review.judgment import (
@@ -89,7 +91,7 @@ def _fetch(forge: ReviewEvidenceForge, pr: int, reviewer: str) -> dict[str, Any]
         # Every method returns only fully paginated results, or raises.
         normalized = normalize_review_state(state)
         return {**normalized, "completeness": dict.fromkeys(normalized, "complete")}
-    except Exception as error:
+    except (ForgeError, OSError, ValueError, subprocess.CalledProcessError) as error:
         raise CompletionJournalError(
             CompleteFailureReason.EVIDENCE_MISSING,
             "Complete PR review snapshot is unavailable",
@@ -186,14 +188,39 @@ class _FollowUps:
 
     forge: ReviewEvidenceForge
     own_numbers: frozenset[int]
-    cache: dict[int, IssueReference | None | Exception] = field(default_factory=dict)
+    cache: dict[
+        int,
+        IssueReference
+        | None
+        | ForgeError
+        | OSError
+        | ValueError
+        | subprocess.CalledProcessError
+        | subprocess.TimeoutExpired,
+    ] = field(default_factory=dict)
     slug: str | None = None
 
-    def _lookup(self, number: int) -> IssueReference | None | Exception:
+    def _lookup(
+        self, number: int
+    ) -> (
+        IssueReference
+        | None
+        | ForgeError
+        | OSError
+        | ValueError
+        | subprocess.CalledProcessError
+        | subprocess.TimeoutExpired
+    ):
         if number not in self.cache:
             try:
                 self.cache[number] = self.forge.get_issue_reference(number)
-            except Exception as error:
+            except (
+                ForgeError,
+                OSError,
+                ValueError,
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+            ) as error:
                 self.cache[number] = error
         return self.cache[number]
 
@@ -201,7 +228,12 @@ class _FollowUps:
         if self.slug is None and _URL.search(evidence):
             try:
                 self.slug = self.forge.get_repository_slug()
-            except Exception as error:
+            except (
+                ForgeError,
+                OSError,
+                ValueError,
+                subprocess.CalledProcessError,
+            ) as error:
                 raise _missing("Repository identity is unavailable") from error
         return self.slug
 
@@ -211,7 +243,14 @@ class _FollowUps:
         unknown = False
         for number in sorted(candidates - self.own_numbers):
             found = self._lookup(number)
-            if isinstance(found, Exception):
+            if isinstance(
+                found,
+                ForgeError
+                | OSError
+                | ValueError
+                | subprocess.CalledProcessError
+                | subprocess.TimeoutExpired,
+            ):
                 unknown = True
             elif (
                 found is not None

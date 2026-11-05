@@ -162,7 +162,7 @@ def _to_journal(active: Any) -> CompletionJournal:
 def _save_or_raise(run_state: Any, state_path: Path) -> None:
     try:
         save_run_state(run_state, state_path)
-    except Exception as e:
+    except (OSError, TypeError, ValueError) as e:
         raise CompletionJournalError(
             CompleteFailureReason.STATE_SAVE_FAILED,
             f"Failed to persist completion journal: {e}",

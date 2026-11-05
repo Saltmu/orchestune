@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -28,6 +29,7 @@ from orchestune.complete.publication import (
     publish_reserved_completion_locked,
 )
 from orchestune.complete.replay import find_replay
+from orchestune.forge import ForgeError
 from orchestune.labels import StatusLabel
 from orchestune.ledger.completion_records import InvalidLedgerRecord
 from orchestune.ledger.completion_reservations import (
@@ -80,7 +82,7 @@ def _issue_evidence(forge: Any, issue_number: int, *, pending: bool) -> dict[str
     try:
         labels = tuple(forge.get_issue_labels(issue_number))
         state = forge.get_issue_state(issue_number)
-    except Exception as error:
+    except (ForgeError, OSError, subprocess.CalledProcessError) as error:
         raise CompletionJournalError(
             CompleteFailureReason.EVIDENCE_MISSING, "Issue evidence is unavailable"
         ) from error
