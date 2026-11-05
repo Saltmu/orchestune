@@ -46,7 +46,7 @@ def write_json_atomic(path: str | Path, data: Any) -> None:
                 if attempt == max_attempts - 1:
                     raise
                 time.sleep(0.01 * (attempt + 1))
-    except BaseException:
+    except BaseException:  # cleanup: must run on BaseException
         with contextlib.suppress(OSError):
             tmp_path.unlink()
         raise

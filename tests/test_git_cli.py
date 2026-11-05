@@ -1,9 +1,11 @@
 import subprocess
 from io import StringIO
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
+import orchestune.infra.git_cli as git_cli
 from orchestune.infra.git_cli import (
     GitResult,
     MergeProbeStatus,
@@ -374,12 +376,12 @@ class TestEnsureParentBranch:
     def test_ensure_parent_branch_handles_ls_remote_error(self):
         # ls-remote が例外を投げた場合、存在しないものとみなして作成処理へ進む
         with patch("orchestune.infra.git_cli.subprocess.run") as mock_run:
-            # 1. ls-remote -> Exception
+            # 1. ls-remote -> CalledProcessError
             # 2. fetch main -> ""
             # 3. push -> ""
             # 4. fetch parent -> ""
             mock_run.side_effect = [
-                Exception("network error"),
+                subprocess.CalledProcessError(1, ["git", "ls-remote"]),
                 subprocess.CompletedProcess(
                     args=[], returncode=0, stdout="", stderr=""
                 ),
@@ -449,7 +451,7 @@ class TestEnsureParentBranch:
                 subprocess.CompletedProcess(
                     args=[], returncode=0, stdout="", stderr=""
                 ),
-                Exception("fetch failed"),
+                subprocess.CalledProcessError(1, ["git", "fetch"]),
             ]
 
             # 例外がスローされないことを確認
@@ -457,6 +459,16 @@ class TestEnsureParentBranch:
 
             called_commands = [call.args[0] for call in mock_run.call_args_list]
             assert len(called_commands) == 2
+
+    def test_unexpected_parent_branch_error_is_not_hidden(self):
+        with patch.object(git_cli, "run_git") as mock_run:
+            mock_run.side_effect = [
+                SimpleNamespace(stdout=""),
+                TypeError("unexpected git adapter bug"),
+            ]
+
+            with pytest.raises(TypeError, match="unexpected git adapter bug"):
+                ensure_parent_branch(129)
 
     @pytest.mark.integration
     def test_ensure_parent_branch_real_git_fetch_head(self, tmp_path):
@@ -1053,7 +1065,7 @@ class TestRunGitExecutionScope:
             with pytest.raises(ExecutionCommandTimeout):
                 try:
                     run_git(["push"], cwd=tmp_path)
-                except Exception:  # noqa: BLE001 - this is what best-effort code does
+                except Exception:  # noqa: BLE001 - boundary: test_a_scoped_timeout_cannot_be_swallowed_by_except_exception fails on a swallowed timeout
                     pytest.fail("the timeout was swallowed by `except Exception`")
 
     def test_an_unscoped_timeout_keeps_its_plain_exception(self, tmp_path):

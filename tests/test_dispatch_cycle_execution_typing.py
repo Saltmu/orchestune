@@ -45,7 +45,7 @@ def _run_mypy(source: str) -> subprocess.CompletedProcess[str]:
                 stdout=data["stdout"],
                 stderr=data["stderr"],
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: test_mypy_rejects_wrong_callback_arguments_and_returns ignores invalid cache data
             pass
 
     # If another worker is already running mypy for this exact fixture, wait for it
@@ -71,14 +71,14 @@ def _run_mypy(source: str) -> subprocess.CompletedProcess[str]:
                         stdout=data["stdout"],
                         stderr=data["stderr"],
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001 - boundary: test_mypy_rejects_wrong_callback_arguments_and_returns ignores invalid cache data
                     pass
             if not lock_file.is_file():
                 break
 
     try:
         lock_file.write_text(str(sys.argv), encoding="utf-8")
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: test_mypy_rejects_wrong_callback_arguments_and_returns runs without a cache lock
         pass
 
     try:
@@ -101,14 +101,14 @@ def _run_mypy(source: str) -> subprocess.CompletedProcess[str]:
                 encoding="utf-8",
             )
             tmp_file.replace(cache_file)
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: test_mypy_rejects_wrong_callback_arguments_and_returns uses the mypy result without cache persistence
             pass
         return proc
     finally:
         try:
             if lock_file.is_file():
                 lock_file.unlink()
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: test_mypy_rejects_wrong_callback_arguments_and_returns keeps cleanup best effort
             pass
 
 

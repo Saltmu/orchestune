@@ -8,6 +8,8 @@ clock) is injected rather than imported, so those patches keep working.
 
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -591,18 +593,27 @@ def poll_until(
     while True:
         try:
             current_data = budget.fetch_data()
-            consecutive_errors = 0
-            state.last_data, state.last_poll_ok = current_data, True
-            result = _poll_succeeded(round_, state, budget, start_time, current_data)
-            if result is not None:
-                return result
-        except StalledReviewError as error:
-            error.attach(_ended_wait_context(round_, state, budget, start_time))
-            raise
-        except Exception as error:
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            RuntimeError,
+            json.JSONDecodeError,
+        ) as error:
             consecutive_errors = _note_poll_error(
                 state, error, consecutive_errors, budget.max_retries
             )
+        else:
+            consecutive_errors = 0
+            state.last_data, state.last_poll_ok = current_data, True
+            try:
+                result = _poll_succeeded(
+                    round_, state, budget, start_time, current_data
+                )
+            except StalledReviewError as error:
+                error.attach(_ended_wait_context(round_, state, budget, start_time))
+                raise
+            if result is not None:
+                return result
         if _sleep_until_next(state, budget, start_time):
             return _timeout_result(round_, state, budget, start_time)
 

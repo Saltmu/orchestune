@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+import orchestune.infra.repository_config as repository_config
 from orchestune.config_contracts import ConfigError
 from orchestune.infra.repository_config import (
     find_and_load_config_file,
@@ -47,6 +48,19 @@ class TestFindAndLoadConfigFile:
             "not valid toml [[[", encoding="utf-8"
         )
         with pytest.raises(ConfigError, match="orchestune.toml"):
+            find_and_load_config_file(tmp_path)
+
+    def test_unexpected_toml_loader_error_is_not_normalized(
+        self, tmp_path, monkeypatch
+    ):
+        (tmp_path / "orchestune.toml").write_text("value = 1\n", encoding="utf-8")
+
+        def fail_load(_file):
+            raise TypeError("unexpected parser bug")
+
+        monkeypatch.setattr(repository_config.tomllib, "load", fail_load)
+
+        with pytest.raises(TypeError, match="unexpected parser bug"):
             find_and_load_config_file(tmp_path)
 
     def test_non_table_tool_orchestune_section_raises_value_error(self, tmp_path):

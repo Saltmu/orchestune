@@ -519,7 +519,13 @@ def _get_initial_pr_data(
     while True:
         try:
             return _get_pr_data(pr_number, executor=executor)
-        except Exception as e:
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            RuntimeError,
+            TimeoutError,
+            json.JSONDecodeError,
+        ) as e:
             retries += 1
             print(
                 f"Warning: Error capturing initial PR review data: {e}",
@@ -898,7 +904,7 @@ def main() -> None:
     except InsufficientEvidenceError as e:
         print(f"Insufficient evidence: {e}", file=sys.stderr)
         sys.exit(EXIT_NO_RESULT)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary: convert uncaught CLI failures to the documented internal-error exit
         print(f"Unexpected error: {e}", file=sys.stderr)
         sys.exit(EXIT_INTERNAL_ERROR)
 
