@@ -6,6 +6,7 @@ and filters out low-impact or low-validity findings based on a simple threshold.
 
 from __future__ import annotations
 
+import http.client
 import json
 import math
 import os
@@ -271,6 +272,7 @@ def _evaluate_request(
             )
             break
         except (
+            http.client.HTTPException,
             json.JSONDecodeError,
             UnicodeDecodeError,
             ValueError,
