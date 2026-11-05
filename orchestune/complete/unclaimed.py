@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -81,7 +82,7 @@ def _issue_evidence(forge: Any, issue_number: int, *, pending: bool) -> dict[str
     try:
         labels = tuple(forge.get_issue_labels(issue_number))
         state = forge.get_issue_state(issue_number)
-    except (ForgeError, OSError) as error:
+    except (ForgeError, OSError, subprocess.CalledProcessError) as error:
         raise CompletionJournalError(
             CompleteFailureReason.EVIDENCE_MISSING, "Issue evidence is unavailable"
         ) from error

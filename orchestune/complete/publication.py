@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -121,7 +122,7 @@ def _confirm_labels(
 def _publication_labels(context: PublicationContext, issue: int) -> tuple[str, ...]:
     try:
         return tuple(context.forge.get_issue_labels(issue))
-    except (ForgeError, OSError) as error:
+    except (ForgeError, OSError, subprocess.CalledProcessError) as error:
         raise CompletionJournalError(
             CompleteFailureReason.LABEL_STATE_UNKNOWN,
             "Issue labels are unavailable before publication",
@@ -147,7 +148,7 @@ def _ensure_review_hold(
         ):
             try:
                 ensure_review_pending(context.forge, record.issue_number)
-            except (ForgeError, OSError) as error:
+            except (ForgeError, OSError, subprocess.CalledProcessError) as error:
                 raise CompletionJournalError(
                     CompleteFailureReason.LABEL_STATE_UNKNOWN,
                     "Review hold is unavailable before publication",

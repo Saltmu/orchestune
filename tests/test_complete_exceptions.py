@@ -1,6 +1,7 @@
 """Completion exception boundaries preserve expected failures and expose bugs."""
 
 import logging
+import subprocess
 
 import pytest
 
@@ -59,6 +60,21 @@ def test_status_mutation_forge_error_is_observed_by_readback():
         )
         == ()
     )
+
+
+def test_status_mutation_subprocess_error_is_observed_by_readback():
+    from orchestune.complete.status_labels import _completion_mutate
+
+    class UnavailableForge:
+        def add_label(self, issue_number, label):
+            raise subprocess.CalledProcessError(1, ["gh", "issue", "edit"])
+
+        def get_issue_labels(self, issue_number):
+            return ("status:done",)
+
+    assert _completion_mutate(
+        UnavailableForge(), 1, "status:done", lambda: True, "add", "status:done"
+    ) == ("status:done",)
 
 
 def test_follow_up_lookup_does_not_swallow_unexpected_forge_runtime_error():

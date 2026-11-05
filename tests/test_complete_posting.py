@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -90,6 +91,50 @@ class TestPostIssueOutcome:
         assert result.reused is True
         assert forge.create_issue_comment.call_count == 1
         assert forge.list_all_issue_comments.call_count == 2
+
+    def test_incomplete_post_response_rechecks_for_accepted_comment(self) -> None:
+        from orchestune.complete.posting import PostingRequest, post_issue_outcome
+
+        matching = {
+            "id": 14,
+            "html_url": "https://example.test/comments/14",
+            "body": _record().render(),
+        }
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(side_effect=[[], [matching]]),
+            create_issue_comment=Mock(return_value={"id": None, "html_url": None}),
+        )
+
+        result = post_issue_outcome(
+            PostingRequest(issue_number=1003, outcome_record=_record()), forge=forge
+        )
+
+        assert result.comment_id == "14"
+        assert result.reused is True
+        forge.create_issue_comment.assert_called_once()
+        assert forge.list_all_issue_comments.call_count == 2
+
+    def test_subprocess_post_failure_rechecks_before_a_second_post(self) -> None:
+        from orchestune.complete.posting import PostingRequest, post_issue_outcome
+
+        matching = {
+            "id": 15,
+            "html_url": "https://example.test/comments/15",
+            "body": _record().render(),
+        }
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(side_effect=[[], [matching]]),
+            create_issue_comment=Mock(
+                side_effect=subprocess.CalledProcessError(1, ["gh", "api"])
+            ),
+        )
+
+        result = post_issue_outcome(
+            PostingRequest(issue_number=1003, outcome_record=_record()), forge=forge
+        )
+
+        assert result.comment_id == "15"
+        assert result.reused is True
 
     def test_unknown_lookup_never_posts_blindly(self) -> None:
         from orchestune.complete.posting import (

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -232,7 +233,7 @@ def _initial_issue_evidence(forge: Any, issue: int) -> dict[str, Any]:
             "labels": list(forge.get_issue_labels(issue)),
             "state": forge.get_issue_state(issue),
         }
-    except (ForgeError, OSError) as error:
+    except (ForgeError, OSError, subprocess.CalledProcessError) as error:
         raise CompletionJournalError(
             CompleteFailureReason.EVIDENCE_MISSING,
             "Initial Issue evidence is unavailable",
