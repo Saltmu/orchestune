@@ -47,7 +47,7 @@ def _settler(
             )
         except ForgeAuthError:
             raise
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - boundary: an unknown poll result is not settled
             return False
         if result.status not in UNSETTLED_OPERATION_STATUSES:
             return True

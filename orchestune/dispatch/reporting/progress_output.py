@@ -167,7 +167,8 @@ class RichDispatchProgress:
         self.disabled = True
         try:
             self._stop_live()
-        except Exception:  # noqa: BLE001 - restoring the terminal is best-effort
+        except Exception as error:  # noqa: BLE001 - restoring the terminal is best-effort
+            safe_stderr(f"swallowed broad exception: {error}")
             pass
         if self.owns_stream:
             try:

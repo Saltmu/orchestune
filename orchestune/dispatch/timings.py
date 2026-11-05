@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import time
 from collections.abc import Callable
@@ -14,6 +15,9 @@ from orchestune.dispatch.reporting.progress import ProgressSink
 _TERMINAL_EVENTS = frozenset(
     {"completed", "failed", "held", "unknown", "launched", "warning"}
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def unavailable_timings() -> dict[str, Any]:
@@ -161,7 +165,8 @@ class TimingProgress:
         except Exception:  # noqa: BLE001 - boundary: optional timing collector failures degrade data to partial/unavailable
             try:
                 self.collector.phase_unavailable()
-            except Exception:  # noqa: BLE001 - boundary: optional timing collector failures degrade data to partial/unavailable
+            except Exception as error:  # noqa: BLE001 - boundary: optional timing collector failures degrade data to partial/unavailable
+                logger.warning("swallowed broad exception: %s", error)
                 pass
         self.sink.emit(phase, event, task_issue=task_issue, reason=reason)
 
@@ -172,6 +177,7 @@ def timing_snapshot(collector: CycleTimingCollector | None) -> dict[str, Any]:
             result = collector.snapshot()
             json.dumps(result, allow_nan=False)
             return result
-        except Exception:  # noqa: BLE001 - boundary: optional timing collector failures degrade data to partial/unavailable
+        except Exception as error:  # noqa: BLE001 - boundary: optional timing collector failures degrade data to partial/unavailable
+            logger.warning("swallowed broad exception: %s", error)
             pass
     return unavailable_timings()

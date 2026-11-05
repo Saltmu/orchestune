@@ -311,9 +311,7 @@ class SkillTransaction:
                 self.skills_root, skip_tx_id=self.tx_id
             )
             self.tx_dir.mkdir(parents=True, exist_ok=True)
-        except (
-            BaseException
-        ):  # cleanup: release the lock even when interrupted during transaction setup
+        except BaseException:  # cleanup: must run on BaseException; release the lock even when interrupted during transaction setup
             if self.lock is not None:
                 self.lock.release()
                 self.lock = None

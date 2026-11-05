@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,8 @@ from orchestune.outcome_record import (
     parse_from_comments,
 )
 from orchestune.task_metadata import TaskMetadata
+
+logger = logging.getLogger(__name__)
 
 
 def _collect_active_conflict_subtask_ids(
@@ -122,7 +125,8 @@ def _live_verify_queued_transition(
         if config.resolved_forge.get_issue_state(issue_number).upper() != "OPEN":
             return None
         labels = tuple(config.resolved_forge.get_issue_labels(issue_number))
-    except Exception:  # noqa: BLE001 - fail-closed: no receipt, cycle continues
+    except Exception as error:  # noqa: BLE001 - fail-closed: no receipt, cycle continues
+        logger.warning("swallowed broad exception: %s", error)
         return None
     if primary_status_labels(labels) != (StatusLabel.QUEUED,):
         return None
@@ -317,7 +321,8 @@ def _release_recompute_for_promotion(
         ):
             return None
         return evaluation
-    except Exception:  # fail closed on marker mutation or fresh-read failure  # noqa: BLE001 - boundary: unavailable conflict/Forge/Git evidence fails closed and retains recovery state
+    except Exception as error:  # fail closed on marker mutation or fresh-read failure  # noqa: BLE001 - boundary: unavailable conflict/Forge/Git evidence fails closed and retains recovery state
+        logger.warning("swallowed broad exception: %s", error)
         return None
 
 
@@ -340,7 +345,8 @@ def _get_branch_commit_sha(
         )
         result = run_git(["rev-parse", resolved], cwd=repository_root, check=True)
         return result.stdout.strip() or None
-    except Exception:  # noqa: BLE001 - boundary: unavailable conflict/Forge/Git evidence fails closed and retains recovery state
+    except Exception as error:  # noqa: BLE001 - boundary: unavailable conflict/Forge/Git evidence fails closed and retains recovery state
+        logger.warning("swallowed broad exception: %s", error)
         return None
 
 
@@ -496,7 +502,8 @@ def _apply_base_branch_red_escalate(
     )
     try:
         config.resolved_forge.remove_label(decision.issue_number, "ci:base-branch-red")
-    except Exception:  # noqa: BLE001 - boundary: unavailable conflict/Forge/Git evidence fails closed and retains recovery state
+    except Exception as error:  # noqa: BLE001 - boundary: unavailable conflict/Forge/Git evidence fails closed and retains recovery state
+        logger.warning("swallowed broad exception: %s", error)
         pass
 
 

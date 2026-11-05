@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import shutil
 import subprocess
 import sys
@@ -49,6 +50,9 @@ from orchestune.worktree_ops.preparation import (
 
 if TYPE_CHECKING:
     from orchestune.dispatch.execution_profiles import ExecutionSelection
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -134,7 +138,8 @@ def _cleanup_existing_worktree(
         )
         if worktree_path.exists():
             shutil.rmtree(worktree_path)
-    except Exception:  # noqa: BLE001 - boundary: rollback cleanup is best-effort after worktree creation failure
+    except Exception as error:  # noqa: BLE001 - boundary: rollback cleanup is best-effort after worktree creation failure
+        logger.warning("swallowed broad exception: %s", error)
         pass
     return None
 
@@ -226,7 +231,8 @@ def _cleanup_failed_worktree(worktree_path: Path) -> None:
         if worktree_path.exists():
             shutil.rmtree(worktree_path)
         run_git(["worktree", "prune"], cwd=None, check=False)
-    except Exception:  # noqa: BLE001 - boundary: rollback cleanup is best-effort after worktree creation failure
+    except Exception as error:  # noqa: BLE001 - boundary: rollback cleanup is best-effort after worktree creation failure
+        logger.warning("swallowed broad exception: %s", error)
         pass
 
 
