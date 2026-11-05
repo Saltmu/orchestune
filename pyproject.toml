@@ -67,7 +67,6 @@ max-args = 9
 # Temporary BLE001 coverage for packages not yet included in the exception audit.
 # Each package is removed here by its dedicated follow-up Issue.
 "orchestune/*.py" = ["BLE001"]
-"orchestune/claim/**" = ["BLE001"]
 "orchestune/complete/**" = ["BLE001"]
 "orchestune/config_wizard/**" = ["BLE001"]
 "orchestune/dag/**" = ["BLE001"]

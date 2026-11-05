@@ -10,7 +10,7 @@ from orchestune.claim.contracts import (
     OwnerKind,
     ReservationKind,
 )
-from orchestune.forge import Forge
+from orchestune.forge import Forge, ForgeError
 from orchestune.issue_parsing import FOOTPRINT_BLOCK_PATTERN, dump_footprint_yaml
 from orchestune.labels import StatusLabel
 from orchestune.models import IssueRecord
@@ -36,7 +36,8 @@ def update_issue_claim_metadata(
             data = yaml.safe_load(match.group(1))
             if not isinstance(data, dict):
                 data = {}
-        except Exception:
+        except yaml.YAMLError:
+            # test_claim_issue_metadata.py::test_malformed_footprint_yaml_falls_back_to_claim_metadata
             data = {}
         data["owner_kind"] = owner_kind
         data["claim_id"] = claim_id
@@ -82,7 +83,7 @@ def publish_claim_ownership_to_issue(
         if new_body != issue.body:
             forge.update_issue_body(issue.number, new_body)
         return None
-    except Exception as e:
+    except ForgeError as e:
         return ClaimFailure(
             reason=ClaimFailureReason.STATE_SAVE_FAILED,
             message=f"Failed to publish claim ownership metadata to issue #{issue.number}: {e}",

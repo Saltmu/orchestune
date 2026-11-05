@@ -261,7 +261,7 @@ def main(argv: Sequence[str] | None = None, *, observe_external=None) -> int:
             outcome = _run_claim(args, token_dir, observe_external)
     except ForgeGraphQLUnavailableError:
         return _report_forge_unavailable()
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 boundary: render unexpected command failures safely
         # Only the class name is shown: messages may carry tokens or local paths.
         _write_lines(
             _stderr(),

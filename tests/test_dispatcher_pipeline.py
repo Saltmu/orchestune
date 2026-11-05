@@ -408,7 +408,9 @@ class TestLaunchOrderingCrashSafety:
 
         def remove_label_side_effect(issue_number, label):
             if label == "status:queued":
-                raise RuntimeError("simulated crash during label transition")
+                from orchestune.forge import ForgeError
+
+                raise ForgeError("simulated crash during label transition")
 
         fake_forge.list_issues_by_label.reset_mock(side_effect=True)
         mock_list = fake_forge.list_issues_by_label

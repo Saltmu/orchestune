@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from orchestune.forge import ForgeError
 from orchestune.infra.process_utils import run_state_lock
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import RunState, save_run_state
@@ -30,7 +31,7 @@ class MockForge(FakeForge):
 
     def add_label(self, issue_number: int | str, label: str, actor: str = "") -> None:
         if self.fail_add_label:
-            raise RuntimeError("GitHub API error: add_label failed")
+            raise ForgeError("GitHub API error: add_label failed")
         self.labels_added.append((int(issue_number), label))
         super().add_label(issue_number, label, actor=actor)
 
@@ -40,7 +41,7 @@ class MockForge(FakeForge):
 
     def update_issue_body(self, issue_number: int | str, body: str) -> None:
         if self.fail_update_body:
-            raise RuntimeError("GitHub API error: update_issue_body failed")
+            raise ForgeError("GitHub API error: update_issue_body failed")
         self.bodies_updated.append((int(issue_number), body))
         super().update_issue_body(issue_number, body)
 

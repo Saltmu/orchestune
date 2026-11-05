@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import subprocess
 from collections.abc import Callable, Sequence
 from functools import partial
 from pathlib import Path
@@ -66,7 +67,7 @@ from orchestune.claim.worktree_reclaim import (
     record_takeover_stage,
     takeover_rejection_message,
 )
-from orchestune.forge import Forge, GitHubForge
+from orchestune.forge import Forge, ForgeError, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import (
     FileLockContentionError,
@@ -89,6 +90,13 @@ from orchestune.worktree_ops.preparation import (
     resolve_worktree_path,
 )
 
+_ADOPTED_HEAD_ERRORS = (
+    ForgeError,
+    OSError,
+    subprocess.CalledProcessError,
+    ValueError,
+)
+
 
 def _resolve_owner_token(request: ClaimRequest) -> tuple[ClaimRequest, str]:
     """Ensure the claim request carries a valid owner token, generating one if needed."""
@@ -108,7 +116,7 @@ def _perform_git_fetch(repo_root: Path, issue_number: int) -> ClaimFailure | Non
                 reason=ClaimFailureReason.GIT_FETCH_FAILED,
                 message=f"git fetch origin failed: {err.strip()}",
             )
-    except Exception as e:
+    except OSError as e:
         return ClaimFailure(
             reason=ClaimFailureReason.GIT_FETCH_FAILED,
             message=f"git fetch origin raised exception: {e}",
@@ -128,7 +136,8 @@ def _rollback_reservation_on_prep_failure(
     run_state.active_worktrees.pop(str(reservation.core.issue_number), None)
     try:
         save_run_state(run_state, workspace.run_state_path)
-    except Exception:
+    except (OSError, TypeError, ValueError):
+        # test_claim_service_edge_cases.py::test_rollback_save_failure_preserves_primary_failure
         pass
     return ClaimOutcome(
         success=False,
@@ -210,7 +219,7 @@ def _execute_prepare_worktree(
             ClaimFailureReason.INVALID_BRANCH_NAME,
             f"invalid branch name: {e}",
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 boundary: convert worktree preparation failures to claim outcomes
         return None, _handle_worktree_prep_exception(
             workspace,
             reservation,
@@ -319,7 +328,7 @@ def _prepare_and_persist_worktree(
     record_takeover_stage(run_state, reservation)
     try:
         save_run_state(run_state, workspace.run_state_path)
-    except Exception as e:
+    except (OSError, TypeError, ValueError) as e:
         return reservation, ClaimOutcome(
             success=False,
             issue_number=reservation.core.issue_number,
@@ -352,7 +361,7 @@ def _apply_status_label(
             old_labels,
         )
         return None
-    except Exception as e:
+    except ForgeError as e:
         return ClaimFailure(
             reason=ClaimFailureReason.LABEL_UPDATE_FAILED,
             message=f"Failed to transition label: {e}",
@@ -391,7 +400,7 @@ def _validate_and_publish_issue_finalization(
     if reservation.claim.adopted_pr_number is not None:
         try:
             verify_adopted_head(reservation, forge, run_git)
-        except Exception as error:
+        except _ADOPTED_HEAD_ERRORS as error:
             return None, _make_active_saved_failure(
                 reservation,
                 ClaimFailure(
@@ -482,7 +491,7 @@ def _persist_finalized_reservation(
     consumed = consume_adoption_receipt(run_state, reservation)
     try:
         save_run_state(run_state, workspace.run_state_path)
-    except Exception as e:
+    except (OSError, TypeError, ValueError) as e:
         run_state.recovery_receipts.update(consumed)
         failure = ClaimFailure(
             reason=ClaimFailureReason.STATE_SAVE_FAILED,
@@ -566,7 +575,7 @@ def _persist_initial_reservation(
     run_state.active_worktrees[str(issue.number)] = reservation
     try:
         save_run_state(run_state, workspace.run_state_path)
-    except Exception as e:
+    except (OSError, TypeError, ValueError) as e:
         return None, ClaimOutcome(
             success=False,
             issue_number=issue.number,
@@ -715,7 +724,7 @@ def _preview_adoption(
         if error is not None:
             return error
         assert plan is not None
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 boundary: keep orphan adoption fail-closed
         return _claim_failure(
             request.issue_number,
             ClaimFailure(
