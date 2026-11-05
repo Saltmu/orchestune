@@ -103,7 +103,7 @@ def _validated_candidate(
         return None, ""
     try:
         reachable = merge_commit_is_reachable(pr.merge_commit_oid, expected_base)
-    except Exception:  # pragma: no cover - contract treats Forge failures uniformly
+    except Exception:  # pragma: no cover - contract treats Forge failures uniformly  # noqa: BLE001 - boundary: unreadable merge evidence cannot prove parent integration
         reachable = None
     if reachable is None:
         return None, "could not verify merge commit in current parent tip"

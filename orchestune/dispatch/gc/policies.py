@@ -288,7 +288,7 @@ def process_completion_policies(
                 if record.repository_id != expected_repository:
                     raise ValueError("repository_mismatch")
                 events.append(_process_one(state, config, record, observed))
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - boundary: isolate one malformed policy record and restore its pre-operation state
                 _restore_after_failure(state, config, before)
                 events.append(
                     PolicyHoldCompletion(

@@ -247,7 +247,7 @@ def write_github_step_summary(
     try:
         with open(summary_path, "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary: optional CI summary output failure does not change dispatch result
         print(f"Warning: Failed to write to GITHUB_STEP_SUMMARY: {e}", file=sys.stderr)
 
 

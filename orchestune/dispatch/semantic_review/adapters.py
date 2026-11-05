@@ -151,7 +151,7 @@ def _backend_preflight_error(
         )
     try:
         claim_error = probe_claim_backend(repository_root)
-    except Exception as error:  # transport failure is not capability evidence
+    except Exception as error:  # transport failure is not capability evidence  # noqa: BLE001 - boundary: transport/launch/Git uncertainty remains indeterminate and cannot duplicate work
         return _preflight_error("claim_backend_probe_failed", reviewer, trigger, error)
     if claim_error is not None:
         return _preflight_error(
@@ -381,7 +381,7 @@ def _launch_fix_agent(
             worktree_root=worktree_root,
             repo_root=repo_root,
         )
-    except Exception:  # an unknown launch response must never cause a second launch
+    except Exception:  # an unknown launch response must never cause a second launch  # noqa: BLE001 - boundary: transport/launch/Git uncertainty remains indeterminate and cannot duplicate work
         return _make_fix_op_result(
             operation_id,
             SemanticOperationStatus.INDETERMINATE,
@@ -461,7 +461,7 @@ def _verify_remote_fix_artifact(
         ref = fetch_remote_branch(repository_root, branch)
         tip = resolve_commit_sha(repository_root, ref)
         descends = is_ancestor_commit(repository_root, result.input_sha, ref)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: transport/launch/Git uncertainty remains indeterminate and cannot duplicate work
         return SemanticOperationResult(
             operation_id,
             SemanticOperationStatus.RUNNING,

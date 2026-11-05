@@ -357,7 +357,7 @@ def _decide_rebase_needed(
             parent_branch,
             prefer_remote=parent_branch.startswith("parent/"),
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary: preserve safe rebase outcome when Git resolution or cleanup fails
         logger.warning(
             f"Failed to resolve branch '{parent_branch}' in {worktree_path}: {e}"
         )
@@ -390,7 +390,7 @@ def _prepare_wip_backup_for_rebase(
         try:
             os.kill(active.launch.pid, 9)
             _wait_for_process_terminate(active.launch.pid)
-        except Exception:
+        except Exception:  # noqa: BLE001 - cleanup: a process may exit between the liveness check and SIGKILL
             pass
 
     backup_error = dispatch_gc.backup_wip_commit(
@@ -424,7 +424,7 @@ def _handle_rebase_failure(
 ) -> None:
     try:
         run_git(["rebase", "--abort"], cwd=active.core.worktree_path, check=False)
-    except Exception:
+    except Exception:  # noqa: BLE001 - cleanup: best-effort abort must not hide the original rebase failure
         pass
 
     transition_status_label(

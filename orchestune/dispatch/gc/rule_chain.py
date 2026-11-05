@@ -358,7 +358,7 @@ def _cleanup_stale_active_worktree(
     if active.launch.pid and is_process_alive(active.launch.pid):
         try:
             os.kill(active.launch.pid, 9)
-        except Exception:
+        except Exception:  # noqa: BLE001 - cleanup: the process may exit between liveness check and signal
             pass
 
     if worktree_exists:
@@ -466,7 +466,7 @@ def _abandoned_worktree_outcome(
             on_label_applied=release_entry,
             on_reclaim_reserved=reserve_reclaim,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary: failed reclaim persistence is reported and the task remains held
         print(
             f"Warning: skipping abandonment of issue #{active.core.issue_number}: "
             f"failed to persist the reclaim count: {e}",

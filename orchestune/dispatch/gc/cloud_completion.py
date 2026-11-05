@@ -127,7 +127,7 @@ def _handle_abandoned_cloud_reclaim(
             "タスクのPRがマージされずにクローズされたか、Cloudタスクが終了したため、完了扱いにはせず、"
             f"GCによりタスクを再キューイング（status:queued）しました（回収{reclaim_count}回目 / 上限{config.max_task_reclaims}回）。",
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report Forge comment failure while preserving the requeue result
         print(
             f"Warning: requeued issue #{active.core.issue_number} but failed to post comment: {error}",
             file=sys.stderr,

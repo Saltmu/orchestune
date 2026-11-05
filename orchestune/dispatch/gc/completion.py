@@ -367,7 +367,7 @@ def _apply_escalated_base_branch_red(
         ctx.config.resolved_forge.remove_label(
             ctx.active.core.issue_number, "ci:base-branch-red"
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: optional status-label cleanup must not undo verified completion
         pass
 
 

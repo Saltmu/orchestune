@@ -101,7 +101,7 @@ def _verify_outcome(
         return None, "handoff_evidence_missing"
     try:
         comments = forge.list_all_issue_comments(active.core.issue_number)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: incomplete remote/Git observations keep handoff evidence unknown
         return None, "outcome_unknown"
 
     comment = next(
@@ -164,7 +164,7 @@ def _verify_merged_pr(
         return "done_pr_missing"
     try:
         pr = forge.get_pull_request(pr_number)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: incomplete remote/Git observations keep handoff evidence unknown
         return "pr_unknown"
     try:
         remote_names = frozenset(
@@ -217,7 +217,7 @@ def _verify_done_head(outcome: OutcomeRecord, worktree: Path) -> str | None:
         return None
     try:
         head = run_git(["rev-parse", "HEAD"], cwd=worktree, check=True).stdout.strip()
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: incomplete remote/Git observations keep handoff evidence unknown
         return "head_unknown"
     return None if head == outcome.head_sha else "head_changed"
 

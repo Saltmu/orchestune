@@ -70,7 +70,7 @@ def provider_config(workspace: ClaimWorkspace) -> DispatcherConfig | None:
             events_log_path=primary / "events.jsonl",
             not_needed_review_state_path=primary / "not_needed_review_state.json",
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: malformed or unavailable optional runtime state is treated as absent
         return None
 
 
